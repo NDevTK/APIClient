@@ -75,6 +75,7 @@
 #include "core/css/css_at_rule_prelude.h"
 #include "core/css/css_computed_value.h"   /* css-display-3 §2.8's root rule, asserted where a page could otherwise abort the engine */
 #include "core/css/css_property_syntax.h"
+#include "core/css/css_var.h"   /* css-variables-1 §3's var() substitution, the syntax half */
 #include "core/css/css_math.h"   /* css-values-4 §10's grammar, §10.9's type algebra and §10.10.1's reduction */
 #include "core/css/css_numeric_value.h"   /* CSS Typed OM 1 §4.3.2's create-a-type, and §5.4.1's ratio */
 #include "core/css/css_syntax_match.h"
@@ -4550,6 +4551,93 @@ static const char *HTML_POPOVER =
    explores on every page that carries a policy. What §3.8 pins is WHICH attributes are sinks at all: get that
    set too wide and every setAttribute on a policy-carrying page throws, too narrow and the solver reports
    `script.src = attackerUrl` as reachable on a document where the assignment dies. */
+/* css-variables-1 §3 "Using Cascading Variables: the var() notation" — THE SYNTAX HALF, over a resolver that
+ * is a three-row table and no element at all. That is the whole reason the component was split: the questions
+ * below are about strings, nesting and ident boundaries, and every one of them is answerable before a runtime
+ * exists. What this fixture CANNOT reach is the policy half — the cycle STACK, §7.2's inheritance of a custom
+ * property and the `unset` a failed substitution becomes — because each of those needs a tree; they are
+ * exercised by a document, and `CSS_VAR_CYCLE` below stands in only for what the syntax does with that answer.
+ */
+static CssVarResolution tf_var_resolve(void *ud, const char *name, size_t name_n, char **out)
+{
+    (void)ud;
+    /* `--set` is declared and holds `rgb(1, 2, 3)`; `--loop` reports a cycle; everything else is
+       css-variables-1 §2.2's guaranteed-invalid value, which is what an undeclared custom property is. */
+    if (name_n == 3 && strncmp(name, "set", 3) == 0) {
+        *out = strdup("rgb(1, 2, 3)");
+        CHECK(*out != NULL, "OOM in the var() fixture's resolver");
+        return CSS_VAR_RESOLVED;
+    }
+    if (name_n == 4 && strncmp(name, "loop", 4) == 0) return CSS_VAR_CYCLE;
+    return CSS_VAR_GUARANTEED_INVALID;
+}
+
+static void tf_var_is(const char *in, const char *want)
+{
+    char *got = css_var_substitute(in, tf_var_resolve, NULL);
+
+    if (want == NULL) {
+        CHECKF(got == NULL,
+               "css-variables-1 §3: `%s` must be INVALID AT COMPUTED-VALUE TIME and this substitution answered "
+               "`%s`. A NULL here is what core/css/css_computed_value.c turns into CSS Cascade 5 §7.3.3's "
+               "`unset`; a value instead would reach a property grammar that cannot parse it", in, got);
+        return;
+    }
+    CHECKF(got != NULL,
+           "css-variables-1 §3: `%s` must substitute to `%s` and answered INVALID AT COMPUTED-VALUE TIME. That "
+           "is the arm that makes a whole declaration fall to its initial value, so answering it for a value "
+           "that HAS a substitution is how a styled page renders unstyled", in, want);
+    CHECKF(strcmp(got, want) == 0,
+           "css-variables-1 §3: `%s` substituted to `%s` and must be `%s`", in, got, want);
+    free(got);
+}
+
+static void css_var_selftest(void)
+{
+    /* THE SCAN. A `var(` is a FUNCTION TOKEN, so it is one only at an ident boundary and only outside a
+       string — and each of these would otherwise corrupt a value that has nothing to do with this file. */
+    CHECK(!css_var_references("rgb(1, 2, 3)"), "a value with no var() must not be reported as having one");
+    CHECK(!css_var_references("\"var(--x)\""), "a var( inside a STRING is not a function token");
+    CHECK(!css_var_references("-var(--x)"), "the tail of a longer ident is not a `var` function token");
+    CHECK(css_var_references("var(--x)"), "a bare var() must be found");
+    CHECK(css_var_references("calc(var(--w) * 2)"), "a nested var() must be found");
+    CHECK(css_var_references("url(a) var(--x)"), "a var() after a url() must be found");
+
+    /* §3's two shapes, which is the whole of what this landing claims. */
+    tf_var_is("var(--set)", "rgb(1, 2, 3)");
+    tf_var_is("var(--unset, rgb(1, 2, 3))", "rgb(1, 2, 3)");
+    /* A DECLARED property WINS over the fallback — the fallback is used "instead", not as a default. */
+    tf_var_is("var(--set, red)", "rgb(1, 2, 3)");
+    /* §2.2: guaranteed-invalid with nothing to fall back to is where the DECLARATION dies. */
+    tf_var_is("var(--unset)", NULL);
+    /* …and a cycle dies the same way and does NOT reach the fallback, which is why the resolver has three
+       answers rather than two. */
+    tf_var_is("var(--loop, red)", NULL);
+
+    /* SUBSTITUTION IS INTO A VALUE AND NOT OVER ONE, so the text around it survives and a var() inside a
+       function is spliced where it stood. */
+    tf_var_is("1px solid var(--set)", "1px solid rgb(1, 2, 3)");
+    tf_var_is("rgb(var(--unset, 1), 2, 3)", "rgb(1, 2, 3)");
+    tf_var_is("var(--set) var(--set)", "rgb(1, 2, 3) rgb(1, 2, 3)");
+    /* A value may legitimately name one property twice; only the POLICY half's chain calls a repeat a cycle,
+       and it must not — which is why that half keeps a STACK and not a seen-set. */
+
+    /* The fallback is `<declaration-value>`, so it carries its own commas and its own var()s. */
+    tf_var_is("var(--unset, a, b)", "a, b");
+    tf_var_is("var(--unset, var(--set))", "rgb(1, 2, 3)");
+    tf_var_is("var(--unset, var(--alsounset, fine))", "fine");
+
+    /* A STRING IS NOT SCANNED, so a page's own text is never rewritten. */
+    tf_var_is("\"var(--set)\"", "\"var(--set)\"");
+
+    /* §3's first argument is a `<custom-property-name>` and nothing else. Each of these is a value this
+       engine cannot compute, and passing the text through would hand a property grammar a function it will
+       read as a keyword rather than as the failure it is. */
+    tf_var_is("var(width)", NULL);
+    tf_var_is("var(--)", NULL);
+    tf_var_is("var()", NULL);
+}
+
 static void trusted_types_selftest(void)
 {
     /* "No Content-Security-Policy" is the overwhelmingly common case, and a wrong default here would throw a
@@ -26981,6 +27069,7 @@ int main(int argc, char **argv) {
        it is the state SECURITY.md's one-instance-per-cluster rule exists to prevent, with the frontier's own
        registry initialised twice. So this is a return, not a branch. */
     if (arg_has(argc, argv, "--abi")) return abi_main(argc, argv);
+    css_var_selftest();        /* css-variables-1 §3's substitution — no runtime, no tree, no realm */
     trusted_types_selftest();
     policy_container_selftest();
     /* BEFORE the CSP element matching, because that check's hash arm is this primitive: a failure here would

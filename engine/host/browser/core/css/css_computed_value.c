@@ -16,6 +16,7 @@
 #include "core/css/css_shorthand.h"
 #include "core/css/css_style_declaration.h"
 #include "core/css/css_transform_function.h"
+#include "core/css/css_var.h"
 #include "core/css/font_metrics.h"
 #include "core/css/font_size_functions.h"
 #include "core/dom/document.h"
@@ -80,9 +81,13 @@ lxb_dom_element_t *css_parent_element(lxb_dom_element_t *el)
    one where there is one: a property this file models goes to `css_computed_value`, and a property it does not
    takes its computed value to BE its specified value (css_computed_value.h says why that is the majority of
    CSS's own `Computed value:` lines and what ends the assumption), which is this same entry one node up. */
+/* CSS Cascade §6's cascaded value with css-variables-1 §3's SUBSTITUTION already performed — see the
+   definition below for why every one of this file's four cascaded-value reads goes through it. */
+static char *css_cv_cascaded(lxb_dom_element_t *el, const char *name);
+
 static char *css_cv_specified(lxb_dom_element_t *el, const char *name)
 {
-    char *cascaded = cssom_cascaded_value(el, name);
+    char *cascaded = css_cv_cascaded(el, name);
     lxb_dom_element_t *parent;
 
     switch (css_defaulting_of(name, cascaded)) {
@@ -104,6 +109,113 @@ static char *css_cv_specified(lxb_dom_element_t *el, const char *name)
         break;
     }
     return cssom_initial_value(name);
+}
+
+/* ---- css-variables-1 §3's SUBSTITUTION, the policy half ------------------------------------------------- */
+
+/* THE NAMES CURRENTLY BEING SUBSTITUTED, which is css-values-5's `cyclic substitution contexts` reduced to the
+   one question this engine can ask: is the property we are about to resolve already on the chain that asked
+   for it. It is a STACK and not a seen-set — a value may legitimately reference one custom property twice
+   (`margin: var(--gap) var(--gap)`), and a set would call the second reference a cycle. */
+typedef struct {
+    lxb_dom_element_t *el;
+    char  **names;
+    size_t  n, cap;
+} CssVarChain;
+
+static CssVarResolution css_cv_var_resolve(void *ud, const char *name, size_t name_n, char **out)
+{
+    CssVarChain *chain = ud;
+    char *full, *raw, *sub;
+    size_t k;
+
+    full = malloc(name_n + 3);
+    CHECK(full != NULL, "css-variables-1 §3: OOM naming the custom property a `var()` references");
+    full[0] = '-';
+    full[1] = '-';
+    memcpy(full + 2, name, name_n);
+    full[name_n + 2] = '\0';
+
+    for (k = 0; k < chain->n; k++)
+        if (strcmp(chain->names[k], full) == 0) { free(full); return CSS_VAR_CYCLE; }
+
+    /* §7's DEFAULTING over the custom property, which is where its INHERITANCE happens: core/css/
+       css_defaulting.h answers INHERITED for the whole `--*` family, so this one call walks to whichever
+       ancestor declared it. A NULL is css-variables-1 §2.2's guaranteed-invalid value — "The initial value of
+       a custom property is a guaranteed-invalid value" — and css_style_declaration.h already answers NULL for
+       a property with no initial value anywhere, which is exactly a custom property nobody set. */
+    raw = css_cv_specified(chain->el, full);
+    if (raw == NULL) { free(full); return CSS_VAR_GUARANTEED_INVALID; }
+    if (!css_var_references(raw)) { free(full); *out = raw; return CSS_VAR_RESOLVED; }
+
+    if (chain->n == chain->cap) {
+        size_t want = chain->cap ? chain->cap * 2 : 8;
+
+        chain->names = realloc(chain->names, want * sizeof *chain->names);
+        CHECK(chain->names != NULL, "css-variables-1 §3: OOM recording the substitution chain — without it a "
+                                    "cyclic reference recurses instead of being answered");
+        chain->cap = want;
+    }
+    chain->names[chain->n++] = full;           /* the chain owns `full` from here */
+    sub = css_var_substitute(raw, css_cv_var_resolve, chain);
+    free(raw);
+    free(chain->names[--chain->n]);
+
+    /* A CUSTOM PROPERTY WHOSE OWN VALUE DID NOT SUBSTITUTE IS GUARANTEED-INVALID, NOT A CYCLE — so the var()
+       that asked for it may still use ITS fallback, which is what a browser does for `--a: var(--missing);
+       color: var(--a, red)`. The DIRECT cycle is already answered above, before any recursion, so the two
+       states only meet here and collapsing them at this point changes no observable: a cycle reported from
+       one level down leaves every var() on the chain without a value, and each of those either has a fallback
+       the standard says to use or makes the declaration invalid at computed-value time anyway. */
+    if (sub == NULL) return CSS_VAR_GUARANTEED_INVALID;
+    *out = sub;
+    return CSS_VAR_RESOLVED;
+}
+
+/* THE ONE PLACE THIS FILE READS A CASCADED VALUE, so §3's substitution is a step of the pipeline rather than a
+ * call four sites have to remember. The four reads are the four SHAPES a computed value comes in (text, an
+ * absolute length, css-inline-3's line-height union, CSS 2.1 §17.6.1's border-spacing pair) and every one of
+ * them feeds core/css/css_defaulting.h next, so this sits exactly between §6 and §7 — which is where
+ * css-variables-1 §3 puts it, since substitution happens at computed-value time and the cascaded value is
+ * what it operates on.
+ *
+ * A CUSTOM PROPERTY'S OWN VALUE IS RETURNED UNSUBSTITUTED, and that is the load-bearing asymmetry rather than
+ * an omission. §3 substitutes a custom property into ANOTHER property's value; the referenced property's own
+ * `var()`s are resolved by the resolver above, one chain-frame deeper, because only there is the cycle stack
+ * in hand. Substituting here as well would run the same text twice and would do it with no chain, so
+ * `--a: var(--a)` would recurse instead of answering.
+ *
+ * A FAILED SUBSTITUTION ANSWERS `unset`, WHICH IS THE WHOLE FAILURE ARM AND IS NOT A FALL BACK TO THE PARENT.
+ * css-variables-1 §2.2 "Guaranteed-Invalid Values" makes such a property "invalid at computed-value time",
+ * and css-values-5 — which defines that term in "Appendix A: Arbitrary Substitution Functions" — states the
+ * consequence in its own Note: "the property falls back (essentially) to unset behavior, rather than falling
+ * back to an earlier value in the cascade the way declarations invalid at parse time do". So the answer is
+ * CSS Cascade 5 §7.3.3's keyword, handed to the arm css_defaulting.c already has for it, and the inherited
+ * half of that keyword is reached only because the property inherits — never because substitution failed.
+ * Returning the text unchanged instead would hand a property grammar a `var(...)` it cannot parse, which is
+ * the same wrong answer wearing a value's clothes. */
+static char *css_cv_cascaded(lxb_dom_element_t *el, const char *name)
+{
+    char *cascaded = cssom_cascaded_value(el, name);
+    CssVarChain chain;
+    char *sub;
+
+    DCHECK(name != NULL, "css-variables-1 §3's substitution step was asked for no property");
+    if (name[0] == '-' && name[1] == '-') return cascaded;
+    if (cascaded == NULL || !css_var_references(cascaded)) return cascaded;
+
+    chain.el = el;
+    chain.names = NULL;
+    chain.n = 0;
+    chain.cap = 0;
+    sub = css_var_substitute(cascaded, css_cv_var_resolve, &chain);
+    DCHECK(chain.n == 0,
+           "css-variables-1 §3's substitution returned with names still on its chain — every push is paired "
+           "with a pop at the same frame, so a survivor is a resolver arm that returned without unwinding and "
+           "the next declaration on this element would be told it is in a cycle");
+    free(chain.names);
+    free(cascaded);
+    return sub != NULL ? sub : css_cv_strdup("unset");
 }
 
 /* ---- css-overflow-3 §3.1 "Managing Overflow: the overflow-x, overflow-y, and overflow properties" ------- */
@@ -1164,7 +1276,7 @@ CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
            "whole of the property; `css_computed_border_spacing` answers the pair");
     css_cv_modelled(el, name);
     side = css_border_side_of(name, "width");
-    cascaded = cssom_cascaded_value(el, name);
+    cascaded = css_cv_cascaded(el, name);
     switch (css_defaulting_of(name, cascaded)) {
     case CSS_DEFAULTING_DECLARED:
         break;
@@ -1238,7 +1350,7 @@ CssLineHeight css_computed_line_height(lxb_dom_element_t *el)
     CssLength len;
 
     css_cv_modelled(el, "line-height");
-    cascaded = cssom_cascaded_value(el, "line-height");
+    cascaded = css_cv_cascaded(el, "line-height");
     switch (css_defaulting_of("line-height", cascaded)) {
     case CSS_DEFAULTING_DECLARED:
         break;
@@ -1324,7 +1436,7 @@ CssBorderSpacing css_computed_border_spacing(lxb_dom_element_t *el)
     CssLength h, v;
 
     css_cv_modelled(el, "border-spacing");
-    cascaded = cssom_cascaded_value(el, "border-spacing");
+    cascaded = css_cv_cascaded(el, "border-spacing");
     switch (css_defaulting_of("border-spacing", cascaded)) {
     case CSS_DEFAULTING_DECLARED:
         break;
