@@ -7595,10 +7595,6 @@ static void paint_mark_standing_members(void) {
     }
 }
 
-void engine_request_paint(void) {
-    paint_mark_standing_members();
-}
-
 /* ONE PICTURE PER WORLD, FOR EVERY WORLD THIS RUN GOES ON TO MINT — @PERWORLD, and engine.h holds the contract.
    TWO POPULATIONS AND THEREFORE TWO LINES, which is the whole of this entry: the members STANDING right now,
    which only a walk of the frontier can name, and the members NOT YET BORN, which only the mint can. Either

@@ -154,13 +154,6 @@ QJS_EXPORT const char *qjs_paint_forced(void);
 QJS_EXPORT void qjs_request_dump(const char *program);
 QJS_EXPORT const char *qjs_dumps(void);
 
-/* WHICH WORLDS `qjs_paint` GETS TO RENDER — @PERWORLD, and it is a declaration with no answer because it
-   produces nothing. It marks every live timeline as owing the host an image; the scheduler discharges a mark by
-   handing the thread back with that timeline switched in, and the picture is taken by the `qjs_paint` above,
-   unchanged. So this is not a second painter and not a second register: it is the one thing a host could not
-   say for itself, which is WHOSE page it is about to be given. The contract is at solver/engine.h's
-   engine_request_paint and what is true of the entry is at its body in main.c. */
-QJS_EXPORT void qjs_request_paint(void);
 
 /* …AND EVERY WORLD THIS RUN GOES ON TO MINT, WHICH THE ASK ABOVE CANNOT COVER AT ANY CADENCE — @PERWORLD. The
    ask above names the timelines alive when it is called; a host reaches this engine only BETWEEN two steps, so

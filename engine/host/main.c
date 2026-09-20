@@ -2503,40 +2503,22 @@ QJS_EXPORT void qjs_request_dump(const char *program)
     engine_request_dump(program);
 }
 
-/* AN IMAGE OF EVERY LIVE TIMELINE, ASKED — @PERWORLD. solver/engine.h states the whole contract at
-   engine_request_paint; what belongs here is what is true of this ENTRY.
-   IT PRODUCES NO IMAGE AND ANSWERS NOTHING, WHICH IS THE OPPOSITE OF `qjs_paint` ONE SCREEN UP AND IS THE
-   POINT. `qjs_paint` PERFORMS a render and hands back the world the engine is standing in; this entry changes
-   WHICH world that will be. It marks every member of the frontier as owing the host a picture, and the
-   scheduler discharges a mark by returning the thread with that member switched in — so the pictures are taken
-   by the ordinary `qjs_paint` calls the host was already free to make, one per return, in whatever order the
-   WFQ reaches those members.
-   WHAT IT BUYS IS REACH AND NOTHING ELSE, and `qjs_paint`'s own residual is where that gap is stated: a host
-   reaches this engine only BETWEEN two steps, so the only worlds it could render were the ones the scheduler
-   happened to leave standing, and a run whose frontier drained renders the word `baseline` however many flows
-   it explored. The `if (__FLAGS.admin)` sibling — the picture this engine exists to be able to take and a
-   browser cannot — was reachable through that entry only by luck. It is reachable by ASKING now.
-   ASKING IS NOT RENDERING FOR THE SAME REASON ASKING IS NOT RUNNING ABOVE, and the constraint is the same one:
-   this entry is called between two steps, where the slice is closed and the flow stamp is down. A member's
-   pixels exist only while its COW and DOM deltas are applied, which is a state only the scheduler can put the
-   heap and the DOM into, so an entry that rendered here would render whatever happened to be applied — which
-   is precisely the luck this ask exists to remove.
-   IT DOES NOT CHOOSE A FLOW AND MUST NOT. Choosing one would mean switching it in from here, and
-   solver/engine.c's flow_switch_in writes the record of what a member was ranked on when it took the thread —
-   the record preempt_hook's own assertion reads — so a switch performed for a picture would forge a ranking
-   for a pick the WFQ never made, and the second scheduler §THERE-IS-NO-GRIND forbids would be standing beside
-   the first. The ask rides the ONE order: a marked member is photographed when that order reaches it.
-   A PRODUCTION HOST MAY CALL THIS, WHICH IS WHERE IT PARTS COMPANY WITH `qjs_request_dump` ABOVE. That entry
-   evaluates the trusted zone's own program in the analysed document's realm and therefore WRITES there; this
-   one adds no work to any timeline and evaluates nothing — a picture is of the state a member is already in.
-   What it costs is one extra return to the host per member alive at the ask, which is the host's own time. */
-QJS_EXPORT void qjs_request_paint(void)
-{
-    DCHECK(g_begun, "an image of every world was asked of an engine whose frontier was never seeded — there is "
-                    "no timeline to be switched in, so every picture the host went on to take would be of the "
-                    "baseline, which is the one reach this ask exists to widen");
-    engine_request_paint();
-}
+/* AN IMAGE OF EVERY LIVE TIMELINE, ASKED, USED TO STAND HERE AND IS DELETED — @PERWORLD. `qjs_request_paint`
+   marked the members alive AT THE ASK and nothing forked after it, which made it a photograph of a FRONTIER;
+   the entry below photographs a RUN. Both were exported for one commit, on the argument that they were
+   different questions rather than two strengths of one, and that argument described a host that does not
+   exist: after the driver was redirected the frontier-only entry had ZERO callers in this tree and zero in the
+   extension, which is a capability nothing exercises and therefore untested code wearing an ABI export.
+   §Testing already names what happens to one of those — the shipped ABI entry rotted the last time a
+   translation unit was in the program and in nobody's build, and an entry nobody calls is the same defect one
+   level up.
+   WHAT WOULD JUSTIFY REBUILDING IT, so the next reader builds it deliberately instead of re-deriving it by
+   accident: the mode below is ONE-WAY BY DESIGN (flow.h's `flow_paint_every_world` says why — a mode that
+   could be turned off would let a run write a world-named image for some arms and not others, so a directory
+   that reads as a document's complete set of worlds would be a sample of them). So a host that wants ONE
+   snapshot of the worlds standing right now, without committing every later world to a picture, genuinely
+   cannot say that any more. When such a host exists, that ask comes back — and it comes back with that host,
+   never ahead of it. */
 
 /* …AND THE SAME ASK STANDING, SO IT COVERS THE WORLDS THIS RUN HAS NOT MINTED YET — @PERWORLD. Everything the
    entry above says about this one is true unchanged: it renders nothing, answers nothing, chooses no flow and

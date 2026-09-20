@@ -308,31 +308,18 @@ const char *engine_take_dumps(void);
  * lives here rather than in a host entry that chooses a flow and switches it in — flow_switch_in writes the
  * record of what a member was ranked on when it took the thread (the record preempt_hook's assertion reads), so
  * a switch performed for a picture would forge a ranking for a pick the WFQ never made.
- *   THE MEMBERS ALIVE AT THE ASK, AND NO FORK AFTER IT. A newborn arm owes nothing from THIS entry, and a host
- * that wants the arms a run has since grown has two ways to get them of which only one is this one's. It may
- * ASK AGAIN, which re-walks the frontier and is what the clause below makes safe; or, where what it wants is
- * one picture per timeline for the whole run rather than a photograph of the frontier as it stands, it calls
- * `engine_request_paint_every_world` and never asks twice. The two are not a choice of cadence — a re-ask,
- * however often it is taken, CANNOT reach a member forked, run and ended between two host returns, because a
- * host exists only at a round boundary. flow.h's `paint_owed` carries that measurement and the refusal it
- * overturned.
- *   AND THAT SENTENCE USED TO BE AN INVITATION TO AN ABORT, which is why it now carries the clause below
- * rather than standing alone. A re-ask taken while the thread is with the host re-marks the member whose finish this session
- * DEFERRED for a picture, and the deferred-finish path asserts against exactly that. So `engine_request_paint`
- * skips that one member, the assert stays, and asking again is a thing a host can do on EVERY round: a mark is
- * one bit, spent at a member's end or free at any yield it is standing for, so the price of the renewal is one
- * extra return per member that ever ends — one picture per world — and never one per round per member.
- *   THE HALF THAT IS THE HOST'S IS STILL THE HOST'S, and it is an ORDER rather than a cadence: the renewal
- * goes AFTER the render of the standing world, because the member the skip protects is one whose image the
- * host is holding at that instant. A host that asks before it paints has asked the engine to reason about a
- * deferral it has not yet been paid for.
- *   AT MOST ONE IMAGE IS EVER UN-DRAINED, WHICH IS WHAT KEEPS THIS OUT OF §NO BOUNDS. The scheduler renders
- * nothing and holds nothing, so there is no register to overwrite and no world that can be silently not
- * painted: each mark costs exactly one return to the host, and the host that asked is the party that renders.
- *   A MARK A MEMBER NEVER GETS TO DISCHARGE IS THE SAME FACT AS A MEMBER THAT NEVER RUNS AGAIN. A flow parked
- * on a reply the zone refused is not offered the thread, so it is not offered the picture either; that is the
- * frontier's own answer about that member and not a loss this entry may paper over. */
-void engine_request_paint(void);
+ *   THE MEMBERS ALIVE AT THE ASK IS NOT A QUESTION THIS ENGINE ANSWERS ANY MORE, and the entry that answered
+ * it is deleted rather than kept. `engine_request_paint` marked the members standing at the call and nothing
+ * forked after it; once the driver moved to the entry below, it had no caller anywhere. main.c holds the
+ * record of what went and what would justify bringing it back, at the ABI entry that wrapped it.
+ *   WHAT THE DELETION DOES NOT RETRACT is the reasoning that produced it, because a reader re-derives it. A
+ * mark is ONE BIT, spent at a member's END or FREE at any yield it is standing for, so laying it down twice
+ * writes a bit the member already has. The one member that may NOT be re-marked is the one whose finish this
+ * session DEFERRED for a picture: it is still in the frontier, its world has already ended, and the
+ * deferred-finish path asserts against exactly that state in as many words. `paint_mark_standing_members`
+ * skips that member, the assert stays, and the party that knows a finish is deferred is this one rather than
+ * a host that has no entry reporting it.
+ */
 /* ONE PICTURE PER WORLD, FOR EVERY WORLD THIS RUN MINTS FROM HERE ON — the entry above photographs a FRONTIER
  * and this one photographs a RUN, and they are different questions rather than two strengths of one.
  *   IT IS THE ENTRY ABOVE PLUS THE MINT, and it has to be both. The walk names the members standing now — on a
