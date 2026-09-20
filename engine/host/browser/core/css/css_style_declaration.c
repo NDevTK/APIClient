@@ -3463,8 +3463,20 @@ static void cssd_taint_empty(JSContext *ctx, JSValueConst block)
    page could not spell". `owned` is the JS_ToCString to free. */
 typedef struct { const char *bytes; JSValueConst taint; const char *owned; } CssdValue;
 
-static bool cssd_value(JSContext *ctx, JSValueConst value, CssdValue *out)
+/* `member` NAMES THE §6.6.1 SPELLING THE PAGE WROTE AND `property` THE CSS PROPERTY IT WROTE IT TO, and they
+   are parameters rather than anything this body could derive: THREE members answer through here, so the abort
+   below used to stamp this helper's own line for all of them and name an action with no object. What a reader
+   met was a correct spec claim and a remedy — "the three value writes here" — with no way to tell which of the
+   three they were standing in or which property's grammar step 5 was about, and the property is not decoration:
+   it is what decides whether step 5's parse is the permissive css-variables-1 §2.1 "Custom Property Value
+   Syntax" one or a longhand's own. Establishing it cost a lane a fetch of a third party's bundle. */
+static bool cssd_value(JSContext *ctx, JSValueConst value, const char *member, const char *property,
+                       CssdValue *out)
 {
+    DCHECK(member != NULL && property != NULL,
+           "a declaration's value was resolved without naming the §6.6.1 member that wrote it or the property "
+           "it was written to — the abort below is reached from three members and stamps this one line for "
+           "all of them, so a caller that does not name itself makes that crash unactionable");
     /* EVERY FIELD BEFORE THE FIRST THING THAT CAN FAIL, because the failure path is the caller's `_free`, which
        frees exactly what this struct holds and nothing else — the same rule quickjs-step.h's step states owe. */
     out->bytes = NULL;
@@ -3482,16 +3494,38 @@ static bool cssd_value(JSContext *ctx, JSValueConst value, CssdValue *out)
             const char *shape = concolic_shape_c(value);
 
             JS_FreeValue(ctx, example);
-            DFAILF("CSSOM §6.6.1 The CSSStyleDeclaration Interface's setProperty step 5 was asked to parse "
-                   "a value that is UNKNOWN EXTERNAL INPUT WITH NO EXAMPLE (`%s`), so there are no bytes to "
+            DFAILF("CSSOM §6.6.1 The CSSStyleDeclaration Interface's %s reached step 5, \"Let component value "
+                   "list be the result of parsing value for property property\", for the property `%s` with a "
+                   "value that is UNKNOWN EXTERNAL INPUT WITH NO EXAMPLE (`%s`) — so there are no bytes to "
                    "parse and no way to decide step 6's \"If component value list is null, then return\". BOTH "
                    "OUTCOMES ARE FEASIBLE and neither may be picked: the block gains this declaration, or it is "
-                   "left exactly as it was. WHAT IS MISSING is the OUTCOME FORK at this member's own seam — the "
-                   "three value writes here are plain C bodies, so building it means making them step machines "
-                   "and asking quickjs-step.h's step_fork_run which of its own completions the parse reached, "
-                   "the way core/idl_args.h's IDL_CONCOLIC_FORKS types already do at their resolution site. "
+                   "left exactly as it was. "
+                   "WHAT IS MISSING IS A DECLARATION THAT CAN HOLD AN UNKNOWN WITH NO BYTES, AND IT IS OWED "
+                   "BEFORE ANY FORK. This crash used to name the OUTCOME FORK as the next diff — these three "
+                   "bodies as step machines asking quickjs-step.h's step_fork_run which completion the parse "
+                   "reached — and that clause is RETIRED AS FIRST rather than as wrong: it is the SECOND diff, "
+                   "and built first it would produce two arms that write the IDENTICAL block. The reason is one "
+                   "line below, at the write: `cssd_write_declaration` takes the value as a `const char *` and "
+                   "reads NULL as REMOVE, and all three callers spell the argument `*v.bytes ? v.bytes : NULL`, "
+                   "so an arm that has no bytes is the arm that removes the declaration — which is the other "
+                   "arm. The fork would stop this abort, run both worlds, and leave them byte-identical. "
+                   "THE STORE IS WHAT HAS TO EXIST FIRST, and the block's own unknown record above cannot be "
+                   "it as written: `cssd_taint_write` asserts its value is a concolic and `cssd_taint_read` "
+                   "validates an entry by strcmp of that concolic's EXAMPLE against the bytes the block "
+                   "declares, so the record is KEYED BY AN EXAMPLE and this value is the one kind that has "
+                   "none. THE SIBLING SEAM ANSWERS THE SAME QUESTION WITH NO EXAMPLE AT ALL and is the "
+                   "precedent to read: core/dom/element.c's `el_attr_value` stores `concolic_shape_c`'s SHAPE "
+                   "as the bytes in the tree and files the concolic itself in the (element, name) shadow, so "
+                   "the read gives the same concolic back and nothing is invented — a shape is a derivation, "
+                   "not a value this engine made up. That is why `setAttribute('data-theme', <this same "
+                   "unknown>)` does not abort and this write does. "
+                   "HOW ITS ABSENCE WOULD SHOW, as an observation: a run carries this abort at a value derived "
+                   "on an arm the run FORCED rather than observed — a forced sibling drops the example its "
+                   "branch contradicted, so every value computed downstream of one has no example, and a page "
+                   "that reads prior-session state and styles itself from it meets that on its first write. "
                    "This is NOT the crash for an unknown that HAS an example: that one parses its own computed "
-                   "bytes and keeps its domain in the block's unknown record above.", shape ? shape : "{}");
+                   "bytes and keeps its domain in the block's unknown record above.",
+                   member, property, shape ? shape : "{}");
             return false;   /* release: no capability to add, so step 6's own answer — the call is abandoned */
         }
         DCHECK(!JS_IsObject(example),
@@ -3727,8 +3761,16 @@ static JSValue js_cssd_set_property(JSContext *ctx, JSValueConst this_val, int a
        same reason; the VALUE is the one argument whose unknown has somewhere to GO, and cssd_value decides
        what it stores and what it leaves behind. */
     name = concolic_name_cstr(ctx, argv[0]);
-    if (!cssd_value(ctx, argv[1], &v)) {
-        if (name) JS_FreeCString(ctx, name);
+    /* THE NAME IS TAKEN BEFORE THE VALUE IS RESOLVED, because step 5 parses "for property property" and a value
+       cannot be parsed for a property this call could not name — and because the abort inside `cssd_value`
+       names that property, which requires it to be in hand there. It used to be tested below in one condition
+       with the priority conversion, which made it reachable only after the value had been resolved. */
+    if (!name) {
+        JS_FreeValue(ctx, block);
+        return JS_EXCEPTION;
+    }
+    if (!cssd_value(ctx, argv[1], "setProperty", name, &v)) {
+        JS_FreeCString(ctx, name);
         JS_FreeValue(ctx, block);
         return JS_HasException(ctx) ? JS_EXCEPTION : JS_UNDEFINED;
     }
@@ -3752,8 +3794,9 @@ static JSValue js_cssd_set_property(JSContext *ctx, JSValueConst this_val, int a
        the silent loss §Offensive-programming says must crash instead. It crashes for an unknown that HAS an
        example as much as for one that has not, and that is the same rule and not a stricter one. */
     if (argc >= 3 && concolic_is(argv[2]))
-        DFAILF("CSSOM §6.6.1 The CSSStyleDeclaration Interface's setProperty step 4 tests its PRIORITY argument "
-               "against the string \"important\", and this one is UNKNOWN EXTERNAL INPUT (`%s`). The two "
+        DFAILF("CSSOM §6.6.1 The CSSStyleDeclaration Interface's setProperty step 4 tests the PRIORITY argument "
+               "of a write to the property `%s` against the string \"important\", and this one is UNKNOWN "
+               "EXTERNAL INPUT (`%s`). The two "
                "outcomes are two worlds — the declaration is written IMPORTANT, or step 4 returns and the block "
                "is left exactly as it was — and the answer decides a BIT, which has nowhere to keep the domain "
                "the way a declaration's value does. WHAT IS MISSING is the same OUTCOME FORK the no-example "
@@ -3761,10 +3804,10 @@ static JSValue js_cssd_set_property(JSContext *ctx, JSValueConst this_val, int a
                "which completion the ASCII case-insensitive match reached. ITS ABSENCE WOULD SHOW as a page "
                "that reads its priority out of injected state (`el.style.setProperty('color', c, "
                "cfg.emphasis)`) exploring neither arm.",
-               concolic_shape_c(argv[2]) ? concolic_shape_c(argv[2]) : "{}");
+               name, concolic_shape_c(argv[2]) ? concolic_shape_c(argv[2]) : "{}");
     priority = (argc >= 3 && !JS_IsUndefined(argv[2])) ? JS_ToCString(ctx, argv[2]) : NULL;
-    if (!name || (argc >= 3 && !JS_IsUndefined(argv[2]) && !priority)) {
-        if (name) JS_FreeCString(ctx, name);
+    if (argc >= 3 && !JS_IsUndefined(argv[2]) && !priority) {
+        JS_FreeCString(ctx, name);
         cssd_value_free(ctx, &v);
         if (priority) JS_FreeCString(ctx, priority);
         JS_FreeValue(ctx, block);
@@ -3853,7 +3896,7 @@ static JSValue js_cssd_property_set(JSContext *ctx, JSValueConst this_val, JSVal
         JS_FreeValue(ctx, block);
         return cssd_readonly_throw(ctx);
     }
-    if (!cssd_value(ctx, val, &v)) {
+    if (!cssd_value(ctx, val, "per-property IDL attribute setter", pname, &v)) {
         JS_FreeValue(ctx, block);
         return JS_HasException(ctx) ? JS_EXCEPTION : JS_UNDEFINED;
     }
@@ -4308,7 +4351,7 @@ static JSValue js_cssd_descriptor_set(JSContext *ctx, JSValueConst this_val, JSV
         return cssd_readonly_throw(ctx);
     }
     /* null is "" — the IDL says [LegacyNullToEmptyString] — and an unknown is what cssd_value decides. */
-    if (!cssd_value(ctx, val, &v)) {
+    if (!cssd_value(ctx, val, "descriptor IDL attribute setter", name, &v)) {
         JS_FreeValue(ctx, block);
         return JS_HasException(ctx) ? JS_EXCEPTION : JS_UNDEFINED;
     }
