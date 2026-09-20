@@ -66,7 +66,10 @@ static const IdlArgType IDL_1ULONG[1] = { IDL_UNSIGNED_LONG };
 
 /* ---- the object's own state ---------------------------------------------------------------------------- */
 
-/* §12.2.1: "A Storage object has an associated map (a storage proxy map) and type ('local' or 'session')."
+/* §12.2.1 states these as a DEFINITION LIST rather than as a sentence — "A Storage object has an associated:"
+   `map` ("A storage proxy map") and `type` ("local" or "session"). The one-sentence rendering that stood here
+   quoted a sentence the section does not contain; what it CLAIMED about this engine was right, which is why
+   only the transcription moved.
    Both live in one slot record under the private Symbol, so they are property writes the COW delta captures
    and a page cannot forge the brand. OWNED, or JS_UNDEFINED for an object that is not a Storage. */
 static JSValue st_slots(JSContext *ctx, JSValueConst obj)
