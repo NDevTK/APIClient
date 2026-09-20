@@ -2780,6 +2780,25 @@ JS_EXTERN int      JS_IntrinsicName(JSContext *ctx, JSValueConst v, char *buf, s
    one without the other stops the build instead of silently shortening a name — and a shortened intrinsic name
    is two intrinsics under one key. */
 #define JS_INTRINSIC_NAME_MAX 96
+/* THE NAME OF A SYMBOL THE PAGE REGISTERED — the THIRD name source, for the one value JS_IntrinsicName above
+   refuses by name: a `Symbol.for` symbol belongs to a registry that is not this realm's, and its name is the
+   key the PAGE registered it under.
+   IT IS PAGE-CREATED AND NEEDS NO ORDINAL BESIDE IT, which is what separates it from a creation SITE. A site
+   is 1:N with the values made there, so a site alone names a SET and a constraint about one member would
+   refine a branch over another; §20.4.2.4 "Symbol.for ( key )" step 4's loop over the GlobalSymbolRegistry
+   returns the EXISTING symbol for a key already in it and only step 7 appends a new record, so a key denotes
+   exactly one symbol and is its whole name. In this engine that List is the ATOM TABLE, so the 1:1 is a fact
+   about this heap and not only about the standard's model.
+   REPRODUCIBLE BY THE REPLAY A RESUMED FLOW PERFORMS, which is the requirement rather than
+   uniqueness-in-a-heap: the key is text the page's own bytes produced, so a replay registers under the same
+   key and reaches the same symbol. Not an address, which is reused, and not a position in the atom table.
+   ALLOCATION-FREE and side-effect-free: the atom struct is the key's string, so the answer is a refcount bump,
+   no property is read and no trap runs — which is what lets a caller with no flow base under it ask at all.
+   Returns the key as a String, OWNED by the caller, or JS_UNDEFINED where `v` is not a registered symbol —
+   the same "no name" answer JS_IntrinsicName's -1 is, and never an error. It is the value §20.4.2.8
+   "Symbol.keyFor ( symbol )" returns, reached without running a builtin. `v` is BORROWED and may be any
+   value. */
+JS_EXTERN JSValue  JS_SymbolRegistryKey(JSContext *ctx, JSValueConst v);
 /* MODULE sources: a graph to link and evaluate, not a program to wrap. Returns the evaluation PROMISE. */
 JS_EXTERN JSValue  JS_FlowEvalModule(JSContext *ctx, const char *src, size_t len, const char *filename, int eval_flags);   /* eval_flags: JS_EVAL_FLAG_STRICT threaded through; opaque flow handle (NULL on error) */
 /* 1 = suspended (preempted), 0 = completed. *pres receives the program's COMPLETION VALUE (or JS_EXCEPTION) on

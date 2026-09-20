@@ -107693,7 +107693,7 @@ static const JSCFunctionListEntry js_symbol_proto_funcs[] = {
     JS_CGETSET_DEF("description", js_symbol_get_description, NULL ),
 };
 
-/* 20.4.2.2 Symbol.for as a STEP MACHINE. Its step 1 is `? ToString(key)`, which for an OBJECT argument is the
+/* §20.4.2.4 "Symbol.for ( key )" as a STEP MACHINE. Its step 1 is `? ToString(key)`, which for an OBJECT argument is the
    page's @@toPrimitive/valueOf/toString — JS_ToString ran it from C, so `Symbol.for({toString(){ while(x){} }})`
    had no flow base. The registry lookup that follows invokes nothing. */
 typedef struct JSSymbolFor {
@@ -107704,8 +107704,8 @@ _Static_assert(offsetof(JSSymbolFor, hdr) == 0, "JSStepHdr must be first in JSSy
 
 /* ONE list expanded twice, so a renumber carries its label with it (JSTrampStepDef.steps). */
 #define SYMFOR_STAGES(X) \
-    X(SYMFOR_ENTRY,    "20.4.2.2, entered: the machine has its key and nothing has been coerced yet") \
-    X(SYMFOR_TOSTRING, "20.4.2.2 step 1 (stringKey is ToString(key)) - and steps 2-5, the GlobalSymbolRegistry " \
+    X(SYMFOR_ENTRY,    "§20.4.2.4, entered: the machine has its key and nothing has been coerced yet") \
+    X(SYMFOR_TOSTRING, "§20.4.2.4 step 1 (stringKey is ToString(key)) - and steps 2-8, the GlobalSymbolRegistry " \
                        "lookup and the new Symbol it records")
 enum { SYMFOR_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_symbol_for_steps[] = { SYMFOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -107753,7 +107753,7 @@ static JSValue js_symbol_for_fini(JSContext *ctx, void *st, bool take_result)
 
 static const JSTrampStepDef js_symbol_for_def = {
     sizeof(JSSymbolFor), js_symbol_for_step, js_symbol_for_fini, 0, .visit = js_symbol_for_visit,
-    .algorithm = "20.4.2.2 Symbol.for", .steps = js_symbol_for_steps };
+    .algorithm = "§20.4.2.4 Symbol.for", .steps = js_symbol_for_steps };
 
 static JSValue js_symbol_keyFor(JSContext *ctx, JSValueConst this_val,
                                 int argc, JSValueConst *argv)
@@ -111324,6 +111324,100 @@ int JS_IntrinsicName(JSContext *ctx, JSValueConst v, char *buf, size_t buf_size)
            "which puts two intrinsics under one constraint key and one property atom");
     if (strchr(name, '.') || !strcmp(name, "globalThis")) return -1;
     return snprintf(buf, buf_size, want_proto ? "%%%s.prototype%%" : "%%%s%%", name);
+}
+
+/* ── A REGISTERED SYMBOL'S KEY ────────────────────────────────────────────────────────────────────────────────
+ *
+ * THE THIRD NAME SOURCE, AND THE ONE JS_IntrinsicName ABOVE REFUSES BY NAME. Its own comment already says
+ * where this belongs — a registered symbol "is named by the key the PAGE registered it under, which is a
+ * page-created name source and not this registry" — and until this function existed that source was STATED
+ * and not BUILT, so every `Symbol.for(k)` a page holds answered absent, rendered `?`, and composed no
+ * identity at all for any branch over it.
+ *
+ * IT IS PAGE-CREATED AND IT STILL NEEDS NO ORDINAL, which is the whole reason it can land ahead of the
+ * creation-site namer concolic.c's literal_ident still carries a residual for. A creation SITE is 1:N with the
+ * values made there — one `{}` in a loop is one site and a thousand objects — so a site alone names a SET, and
+ * a constraint recorded about one member would refine a branch over another and the arm would be LOST rather
+ * than duplicated. The GlobalSymbolRegistry is 1:1 by the standard's own construction: §20.4.2.4
+ * "Symbol.for ( key )" step 4's loop over that List returns the EXISTING symbol for a key already in it, and
+ * only step 7 appends a new record — so a key denotes exactly one symbol and the key is its WHOLE name.
+ * IN THIS ENGINE THAT LIST IS THE ATOM TABLE, which is what makes the 1:1 a fact about THIS heap rather than
+ * a fact about the standard's model: __JS_NewAtom takes its interning path for every atom_type below
+ * JS_ATOM_TYPE_SYMBOL, JS_ATOM_TYPE_GLOBAL_SYMBOL is one of them, and the hash-chain walk it performs IS the
+ * registry lookup. The standard scopes that List to one AGENT and the atom table is per RUNTIME, so the two
+ * boundaries are the engine's to keep aligned; the name is 1:1 with the OBJECT either way, because two keys
+ * the intern calls equal are one object here, and the assert below is what says so at the site.
+ *
+ * WHAT MAKES IT REPRODUCIBLE BY THE REPLAY A RESUMED FLOW PERFORMS, which is the actual requirement rather
+ * than uniqueness-in-a-heap: the key is TEXT THE PAGE'S OWN BYTES PRODUCED, so a session that replays the
+ * document registers under the same key and reaches the same symbol. Not the address — symbol storage goes
+ * back through `js_free_rt` and addresses are REUSED, and no park carries one — and not a position in the
+ * atom table, which is a fact about one runtime's intern order at one instant.
+ *
+ * WHAT IT REFUSES, AND WHY NO VALUE CAN BE NAMED TWICE. A well-known symbol is JS_ATOM_TYPE_SYMBOL below
+ * JS_ATOM_END and belongs to JS_IntrinsicName; a `Symbol("x")` the page minted is JS_ATOM_TYPE_SYMBOL above
+ * it and is named by its creation like any other page-created value, which is NOT built; a private brand is
+ * TYPE_SYMBOL carrying hash 1. All three are disjoint from this one BY atom_type rather than by an ordering
+ * its callers have to remember.
+ *
+ * ALLOCATION-FREE and side-effect-free — the atom struct IS the key's JSString, so the answer is a refcount
+ * bump; no property is read, so no accessor and no Proxy trap runs — which is what lets a caller with no flow
+ * base under it (a comparison hook is one) ask at all. It is the same value §20.4.2.8
+ * "Symbol.keyFor ( symbol )" returns and js_symbol_keyFor composes, reached without running a builtin, so it
+ * is not a second answer to one question.
+ *
+ * Returns the key as a String, OWNED by the caller, or JS_UNDEFINED where `v` is not a registered symbol —
+ * the same "no name" answer JS_IntrinsicName's -1 is, and never an error. `v` is BORROWED. */
+JSValue JS_SymbolRegistryKey(JSContext *ctx, JSValueConst v)
+{
+    JSAtomStruct *p;
+
+    if (JS_VALUE_GET_TAG(v) != JS_TAG_SYMBOL)
+        return JS_UNDEFINED;
+    p = JS_VALUE_GET_PTR(v);
+    if (p->atom_type != JS_ATOM_TYPE_GLOBAL_SYMBOL)
+        return JS_UNDEFINED;
+#if APICLIENT_DEV
+    /* ONE NAME MUST DENOTE ONE SYMBOL, ASSERTED AND NOT ASSUMED — the obligation JS_IntrinsicName states for
+       its own registry, owed here for the same reason and answerable by the same chain the intern walks. This
+       key is about to be spent TWICE, once as a constraint identity and once as a property atom, so a SECOND
+       global-symbol atom carrying these characters would put two DISTINCT symbols under one name and the loss
+       is the silent one the creation-site residual warns about — a constraint recorded about one refines a
+       branch over the other, and the arm is gone rather than duplicated. __JS_NewAtom's interning lookup is
+       what makes that impossible; this is that lookup re-run WITHOUT the refcount bump, so it reads the state
+       rather than trusting the history that produced it. */
+    {
+        JSRuntime *rt = ctx->rt;
+        uint32_t i = rt->atom_hash[p->hash & (rt->atom_hash_size - 1)];
+        JSAtomStruct *first = NULL;
+
+        while (i != 0) {
+            JSAtomStruct *q = rt->atom_array[i];
+            if (q->hash == p->hash && q->atom_type == JS_ATOM_TYPE_GLOBAL_SYMBOL &&
+                q->len == p->len && js_string_memcmp(q, p, p->len) == 0) {
+                first = q;
+                break;
+            }
+            i = q->hash_next;
+        }
+        DCHECK(first == p,
+               "a registered symbol is not the first entry its own key resolves to in the atom table — "
+               "§20.4.2.4 \"Symbol.for ( key )\" makes the GlobalSymbolRegistry 1:1 and this engine holds "
+               "that through __JS_NewAtom's interning path, so a second global-symbol atom with these "
+               "characters means two distinct symbols are about to wear one name, one constraint identity and "
+               "one property atom");
+        /* AND IT MUST NOT HAVE ARRIVED IN THE RANGE THE OTHER NAMER OWNS, which is what keeps the two
+           disjoint by atom_type rather than by an order somebody maintains: JS_InitAtoms builds every
+           predefined atom as STRING, SYMBOL or PRIVATE and never as GLOBAL_SYMBOL, so a name from this
+           registry below JS_ATOM_END would be a value both functions could answer for. `i` is this symbol's
+           own atom index, established by the walk above rather than re-derived. */
+        DCHECK(i >= JS_ATOM_END,
+               "a registered symbol was interned below JS_ATOM_END — JS_InitAtoms creates no GLOBAL_SYMBOL "
+               "atom in that range, so this value is now answerable by BOTH this registry and "
+               "JS_IntrinsicName's, and the two namers are no longer disjoint by atom_type");
+    }
+#endif
+    return js_dup(JS_MKPTR(JS_TAG_STRING, p));
 }
 
 static JSValue promise_reaction_job(JSContext *ctx, int argc,

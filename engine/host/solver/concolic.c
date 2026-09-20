@@ -489,6 +489,48 @@ static char *intrinsic_name(JSContext *ctx, JSValueConst v)
     return r;
 }
 
+/* A REGISTERED SYMBOL'S KEY, OWNED BY THE CALLER — the THIRD name source, spelled here for the same reason
+   intrinsic_name is spelled here: the key is spent TWICE, once as an operand's IDENTITY and once as its
+   DISPLAY SHAPE, and a second speller cannot be right about one and wrong about the other.
+   THE REGISTRY IS THE STANDARD'S AND NOT THIS FILE'S (JS_SymbolRegistryKey): §20.4.2.4
+   "Symbol.for ( key )" step 4's loop returns the symbol already registered under a key and only step 7
+   appends a new record, so the registry is 1:1 and the key is the symbol's WHOLE name — which is what lets a
+   PAGE-CREATED value be named here with no ordinal beside it, where a creation SITE, being 1:N with the
+   values made there, cannot be.
+   A KEY CARRYING AN EMBEDDED NUL IS REFUSED, NOT ASSERTED, and that is the one design decision in this
+   function. The key is bytes the PAGE stated, so a DCHECK over its content would hand any document an abort
+   switch (CLAUDE.md §WHOSE-BYTES-STATE-THE-VALUE); and a NUL-terminated copy of it would TRUNCATE, which is
+   two symbols under one name — the exact collision this whole mechanism exists to prevent. Refusing answers
+   ABSENT, which is what every registered symbol answered before this function existed, so both arms of every
+   branch over such a symbol stay and nothing is lost beyond the naming. The encoded length JS_ToCStringLen
+   hands back is what makes that decidable without looking at the characters.
+   NULL WHERE THE VALUE IS NOT A REGISTERED SYMBOL — a well-known symbol is intrinsic_name's, and a
+   `Symbol("x")` the page minted is named by its creation, which is literal_ident's named residual. */
+static char *registry_key(JSContext *ctx, JSValueConst v)
+{
+    JSValue k = JS_SymbolRegistryKey(ctx, v);
+    const char *s;
+    size_t len;
+    char *r;
+
+    if (JS_IsUndefined(k)) return NULL;
+    DCHECK(JS_IsString(k),
+           "the symbol registry answered with something that is not the key's String — the atom struct IS "
+           "that string, so a value of any other type here was composed somewhere other than the registry "
+           "and the name about to be built from it names nothing");
+    s = JS_ToCStringLen(ctx, &len, k);
+    JS_FreeValue(ctx, k);
+    if (!s) return NULL;
+    if (len != strlen(s)) {   /* an embedded NUL — see above; ABSENT rather than a truncated name */
+        JS_FreeCString(ctx, s);
+        return NULL;
+    }
+    r = strdup(s);
+    CHECK(r, "concolic: OOM copying a registered symbol's key");
+    JS_FreeCString(ctx, s);
+    return r;
+}
+
 /* A CONCRETE OPERAND'S IDENTITY IS ITS VALUE, AND ITS TYPE IS PART OF THAT — `x === 5` and `x === "5"` are two
    predicates and their operands print the same.
    AN OBJECT OR A SYMBOL HAS NO IDENTITY IN THAT SENSE — its address does not survive the park a resumed flow
@@ -517,14 +559,52 @@ static char *literal_ident(JSContext *ctx, JSValueConst v)
            concolic_cmp_hook mints no token, and §7.2.14 IsStrictlyEqual step 1 is why — SameType(x, y) is
            false for every string this solver could substitute, so there is nothing an object operand could
            pin the unknown TO. The predicate is named; the value is not determined.
-           NAMED RESIDUAL — A PAGE-CREATED OBJECT IS STILL UNNAMED, so `var o = {}; o[k]` keeps both arms and
-           its bare site row. What the next diff builds is the OTHER name source: the object's creation site
+           …AND SO IS A SYMBOL THE PAGE REGISTERED, which is the same argument reaching a value that is
+           page-created rather than built in. `Symbol.for("v-fgt")` is not a singleton of a REALM, so
+           intrinsic_name answers nothing for it; it is a singleton of the GLOBAL SYMBOL REGISTRY, and
+           §20.4.2.4 "Symbol.for ( key )" makes that registry 1:1 — its step 4 loop returns the existing
+           symbol for a key already in it and only step 7 appends — so the key the PAGE wrote is its whole
+           name and needs no ordinal beside it.
+           That is exactly the property a creation SITE lacks, which is why this arm could land while the
+           residual below still stands. The two registries are disjoint by atom_type, so a value cannot be
+           named twice and the order of these two arms decides nothing.
+           NAMED RESIDUAL — A PAGE-CREATED OBJECT, AND A `Symbol("x")` THE PAGE MINTED, ARE STILL UNNAMED, so
+           `var o = {}; o[k]` keeps both arms and its bare site row. What the next diff builds is the OTHER
+           name source: the value's creation site
            (which quickjs already composes for a function body at JS_OrphanHash) PLUS THE CREATING FLOW'S OWN
            COUNT OF PRIOR CREATIONS AT THAT SITE, because a site is 1:N with the objects made there and one
            `{}` in a loop is one site and a thousand objects — a fact about the EXECUTED PREFIX, so a replay
            reproduces it by reproducing the prefix and a fork carries it as it carries every other prefix
-           quantity. ITS ABSENCE SHOWS as a `~` site row whose subject renders `?` — derived_operand_shape's
-           answer for an operand with no name — climbing across a session while `replayHits` stays flat.
+           quantity. ITS ABSENCE SHOWS as a `?` — derived_operand_shape's answer for an operand with no name —
+           at ANY operand position of a rendered shape, with a `~` site row climbing across a session while
+           `replayHits` stays flat.
+           THAT CLAUSE USED TO SAY `a site row whose SUBJECT renders ?`, AND NAMING ONE POSITION UNDERSTATED
+           THE POPULATION IN THE DIRECTION THAT HIDES THE WORST OF IT — recorded here rather than quietly
+           widened, because a reader who re-derives the clause from `o[k]` will re-derive the subject. An
+           unnameable operand in an ARGUMENT position does not merely leave its own branch unrefined: the
+           call's identity is composed over the callee AND every argument, and concolic_ident_compose makes
+           the whole identity absent when any field is, so ONE `?` argument unnames an otherwise perfectly
+           named chain and every value derived from that call inherits the absence. concolic_call states that
+           at its own site. So the sharpest observation is not a census row at all — it is
+           concolic_exotic_own_names' `c->ident == NULL` arm, which aborts on a record whose shape is fully
+           spelled except for a `?` in one argument position, and that abort is a live wall on a real bundle
+           rather than a number climbing.
+           AND THE KIND OF THE UNNAMEABLE ARGUMENT SPLITS THIS RESIDUAL IN TWO, ONLY ONE HALF OF WHICH NEEDS
+           THE ORDINAL — measured over the bare site rows of a real minified bundle, where every one of them
+           is a CALL whose RECEIVER is named and whose argument is a page-created FUNCTION or a REGEXP
+           (`.some(?)`, `.match(?)`, a hook registration taking a callback). A FUNCTION needs it: quickjs
+           composes a body locator at JS_OrphanHash and says in its own words that it names the BYTECODE and
+           NOT the closure, so a factory called three times is one locator and three functions — which is the
+           1:N this ordinal exists for, arriving in the population that is actually blocking.
+           A REGEXP MAY NOT NEED IT AT ALL, and that is the next ordinal-free half rather than a smaller
+           version of this one: its source and its flags are text the PAGE wrote, so they are reproducible by
+           the replay a resumed flow performs, exactly as a registry key is. WHAT DECIDES IT IS `lastIndex`,
+           which §22.2.7.2 RegExpBuiltinExec ( R, S ) reads and writes for a global pattern — so two RegExps
+           sharing one source and one flag set are NOT one question, and a name composed of source and flags
+           alone would be 1:N again with the same lost arms. Read that before building it, not after; the
+           property is non-configurable by §22.2.8.1 "lastIndex", so a page cannot turn it into an accessor
+           and reading it runs no trap.
+           RETIREMENT: this note goes with the residual it belongs to.
            `{}` IS NOT THAT SPELLING AND NAMING IT AS ONE SENDS A READER TO GREP FOR THE WRONG THING: `{}` is
            what a CONCOLIC handed no shape renders as, and it was also this site's own spelling for an object
            operand until derived_operand_shape was routed here — so a census row `~{}[…]` quoted from an older
@@ -558,9 +638,19 @@ static char *literal_ident(JSContext *ctx, JSValueConst v)
            which is what makes that base the control for this one. */
         char *nm = intrinsic_name(ctx, v);
         const char *nf[1];
+        if (nm) {
+            nf[0] = nm;
+            r = concolic_ident_compose("i", nf, 1);
+            free(nm);
+            return r;
+        }
+        /* THE TAG IS THE REGISTRY'S OWN NAME AND NOT `i`, for the reason `i` is not `k`: these are two
+           registries and a shared tag would let %Symbol.iterator% and a page's `Symbol.for("Symbol.iterator")`
+           compose one constraint key. */
+        nm = registry_key(ctx, v);
         if (!nm) return NULL;
         nf[0] = nm;
-        r = concolic_ident_compose("i", nf, 1);
+        r = concolic_ident_compose("Symbol.for", nf, 1);
         free(nm);
         return r;
     }
@@ -642,7 +732,21 @@ static char *derived_operand_shape(JSContext *ctx, JSValueConst v)
        which is a name a reader of the fork census can act on — the reason this is text and not a hash. */
     if (!tok) {
         char *nm = intrinsic_name(ctx, v);
+        char *q;
         if (nm) { r = shapef("%s", nm); free(nm); return r; }
+        /* AND A REGISTERED SYMBOL RENDERS AS THE CALL THE PAGE WROTE, out of the SAME key literal_ident
+           composed its identity from — this pair's invariant restated for the third kind of operand, and the
+           reason both arms are in one diff. The key is QUOTED by the speller a String operand's display
+           already uses, so the shape separates every pair of keys the identity separates; and the rendering
+           is `Symbol.for("k")` rather than the bare key, which is what keeps it clear of a String operand's
+           `"k"` — two operands the identity separates by tag. */
+        q = registry_key(ctx, v);
+        if (q) {
+            char *quoted = shape_quote(q);
+            r = shapef("Symbol.for(%s)", quoted);
+            free(quoted); free(q);
+            return r;
+        }
         return shapef("?");
     }
     switch (kind) {
