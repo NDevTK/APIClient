@@ -43360,15 +43360,19 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    from 1 — so for such a flow the test answers PRIVATE for every closure page code has ever
                    minted and the isolation is unreachable by construction, not by circumstance.
                    RETIREMENT: this comment goes when the gate asks its question of the activation. */
+                /* THE MESSAGE CARRIES THE STATE AND NOT THE ARGUMENT, AND THAT IS A LENGTH DECISION THE
+                   COMPILER MADE RATHER THAN A PREFERENCE. `quickjs-check.h` gives a reason 512 bytes; the
+                   first version of this abort expanded to at least 644, and `-Wformat-truncation` — which
+                   `build.mjs` keeps ON, deliberately, with a comment recording a DFAIL that wrote 526 into
+                   320 — said so. A crash that names less than it knows is the one failure this mechanism
+                   cannot have, so what a cut would have eaten is the part that is ALREADY ABOVE: the three
+                   readings and the SHARED/PRIVATE verdict stay here because only this line can produce them,
+                   and the account of what each one MEANS stays in the comment, where it costs no bytes and
+                   cannot be truncated. Do not re-expand this string; the argument did not go missing. */
                 DCHECKF(as->is_active,
                         "a flow resumed a suspended async continuation that was already consumed. hook=%d "
-                        "closureGen=%u forkGen=%u — this flow reads the continuation closure %s. SHARED says "
-                        "this flow would itself have cloned, so read coroSwapAsyncCalls/coroSwapAsyncMade for a "
-                        "resume the host declined the swap for. PRIVATE says this flow's own shared-test denies "
-                        "that any sibling holds this closure while one has just consumed what it names, which "
-                        "refutes the test: js_async_resume_isolate asks JS_IsFlowShared of the CLOSURE and owes "
-                        "the question of the ACTIVATION. hook=0 says the swap is not installed at all and the "
-                        "work is in cow_install_time_travel_hooks, not here",
+                        "closureGen=%u forkGen=%u closure=%s — read the paragraph above this DCHECKF for what "
+                        "each reading indicts, and coroSwapAsyncCalls/coroSwapAsyncMade beside it",
                         g_time_travel.async_fork != NULL,
                         (unsigned)JS_ObjFlowGen(rfunc), (unsigned)g_flow_fork_gen,
                         JS_IsFlowShared(rfunc) ? "SHARED" : "PRIVATE");
