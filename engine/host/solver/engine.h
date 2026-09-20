@@ -22,6 +22,11 @@
 #include "solver/step_unit.h"          /* the arms of flow_step — EngineStepUnitRuns is one count per arm */
 #include "quickjs.h"
 
+/* A FLOW BY TAG ONLY — solver/flow.h owns the definition and this header does not need it: the one entry below
+   that names a flow takes it through and hands it straight back. Declared rather than included so the engine's
+   own public surface does not drag the scheduler's private record into every host that reads it. */
+struct Flow;
+
 /* Run the page's scripts as one code flow: each script `bodies[i]` is its OWN program (JS_FlowNew — faithful
    per-<script> scope, NEVER concatenated), run in document order, sharing globals + the flow's COW delta. */
 
@@ -1020,6 +1025,23 @@ void engine_world_gone(JSContext *ctx, const char *world);
    contributes is its SEGMENT in this instance — see engine.c, where the conjunction of the two is stated and
    the part of it that cannot yet be built crashes. There is no inbound queue because the frontier is one. */
 void engine_route(JSContext *ctx, const char *record, const char *sender_origin);
+
+/* THE SAME ARRIVAL, ONE SESSION LATER — a routed record the COLD TIER is putting back on the queue of the flow
+   it belonged to, which is the only other way an entry gets onto a delivery queue.
+   IT IS ONE ENTRY AND NOT TWO CALLS, AND THAT IS THE WHOLE POINT OF IT EXISTING. The ledger beside these
+   queues (engine_routed_census's `zero_delivery`) is keyed on the record TEXT and is raised at the ARRIVAL, so
+   a rebuild that pushed without registering would hand this session a work item whose arrival it has no record
+   of — and the delivery then fires `routed_rec_admitted`'s abort, which names that exact cause first. Making
+   the cold tier call one function that does both is what makes the pair impossible to separate; an assert at
+   the delivery can only ever DETECT the separation, one whole session after the line that caused it.
+   REGISTERED BEFORE IT IS ATTACHED, for engine_route's own reason: a record whose attach aborts is still on
+   the ledger as one no timeline admitted, and the alternative counts it nowhere.
+   WHY A REBUILT RECORD IS AN ARRIVAL AND NOT A SECOND COUNT OF AN OLD ONE. The ledger is PROCESS-LIFETIME and
+   a park crosses a process, so the session that registered the original is gone with its table; what this
+   session holds is a work item it must still deliver, and `routed`/`admitted` are the two facts about it that
+   make `zero_delivery` mean the same thing on both sides of the tier. A residue resumed and never delivered
+   is then a LOSS this census can state, which is exactly what it could not do before. */
+void engine_routed_rebuilt(JSContext *ctx, struct Flow *f, const char *record, const char *sender_origin);
 
 /* THE INBOUND HALF THAT OWES AN ANSWER — a cross-agent OPERATION (core/frame/remote_op.h) another instance's
    flow is parked on, routed here by the trusted zone because this instance holds the document it names.

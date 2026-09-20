@@ -611,19 +611,18 @@ typedef struct {
        not yet made. A positional field of the flow before it exactly as 'r' is, and zero is a real answer
        for the same reason: a delivery is the one work item on this frontier that no replay re-derives, so a
        park carrying none is a statement about the document rather than about the tier.
-       NAMED RESIDUAL — THE WRITE AND THE REBUILD ARE BUILT AND THE ROUND TRIP IS NOT, AND THE UNBUILT HALF IS
-       NOT IN THIS FILE. WHAT IS NOT COVERED: a residue carrying an 'm' that the resumed session then STEPS.
-       cold_resume's 'm' arm puts the record back on the flow's queue correctly, and the flow then delivers it
-       like any other — reaching solver/engine.c's `routed_rec_admitted`, whose ledger is PROCESS-LIFETIME and
-       whose arrival was registered in the session that PARKED. The resumed process has no arrival for the
-       record it is holding, which is the first of the three causes that abort names in its own message: `the
-       delivery queue was rebuilt from the COLD TIER without replaying the arrival`. WHAT THE NEXT DIFF BUILDS:
-       the arrival side of that ledger across the tier — a record put back by this arm is a record this
-       instance has been handed, so the rebuild registers it the way engine_route does, which is the one line
-       that makes `zero_delivery` mean the same thing in a resumed session as in a fresh one. HOW ITS ABSENCE
-       WOULD SHOW: a session that resumes a residue whose `delivers` is non-zero aborts at that ledger instead
-       of delivering, so the pair a round-trip reader compares is unreadable at the resume end rather than
-       merely unequal — the park census states a count and the resume census is never printed at all. */
+       THE ROUND TRIP IS WHOLE, AND THE RESIDUAL THAT STOOD HERE IS RETIRED BY THE THING IT NAMED BEING BUILT.
+       It said the write and the rebuild existed and the round trip did not: cold_resume's 'm' arm put the
+       record back correctly and the flow that stepped it reached solver/engine.c's `routed_rec_admitted`,
+       whose ledger is PROCESS-LIFETIME and whose arrival belonged to the session that PARKED — the first of
+       the three causes that abort names in its own message. The rebuild now goes through
+       `engine_routed_rebuilt`, which registers the arrival and pushes in one call, so the pair cannot come
+       apart at a rebuild and `zero_delivery` means the same thing on both sides of the tier: a residue
+       resumed and never delivered is a loss this census can now state, which is what it could not do before.
+       WHAT A PARK STILL MAY NOT MEET IS THE OTHER INSTANT OF THIS KIND — a delivery already turned into its
+       §9.3.3 task, which is off `deliver_q` and named by no record here. That refusal is cold_park_flow's and
+       it is a row of ColdPreview below, so a host chooses a moment that does not contain one rather than
+       discovering it at the abort. */
     long delivers;
 } ColdParked;
 void cold_parked(ColdParked *out);
@@ -690,6 +689,23 @@ typedef struct {
        for both at once is asking for two messages, and a host asking for neither has said nothing about
        whether a peer's message is in the document it is storing. */
     long commits, delivers;
+    /* …AND THE ONE ROW THAT IS NOT A RECORD AT ALL: HOW MANY MEMBERS A PARK TAKEN NOW WOULD REFUSE.
+       Every other row here answers "what would be WRITTEN", and the preview's contract is what the HOST is
+       deciding on — so a description that is complete about the residue and silent about whether the park
+       ABORTS is complete about the wrong question. cold_park_flow refuses a flow holding a task a replay will
+       not re-cause (a routed delivery already turned into its §9.3.3 task, which is off `deliver_q` and so
+       named by no 'm'), and a host that evicted on a description missing this meets that abort with its RAM
+       still held and its residue unwritten.
+       IT IS DELIBERATELY NOT IN cold_park's TWO-SIDED CHECK, and that is not an omission. That check compares
+       what the preview PROMISED against what the park WROTE, record for record; this row is a count of
+       members that would stop the park writing anything at all, so it has no `after - before` to be equal to.
+       A park that is taken with this non-zero does not write a different residue — it aborts, by name, at the
+       flow that holds the task.
+       ZERO IS THE ORDINARY ANSWER AND IT IS TRANSIENT, not structural: the task runs on that flow's very next
+       step, so this rises at a delivery and falls again a pick later. A host that wants a moment rather than a
+       race asks for it to be zero, which is a statement about THIS instant and never a wait for the frontier
+       to stop receiving. */
+    long refuses;
 } ColdPreview;
 void cold_park_preview(ColdPreview *out);
 

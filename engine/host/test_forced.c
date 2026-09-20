@@ -15264,12 +15264,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        park carrying no commitment is a fixture whose peer never posted or whose frontier never received; a
        resume that rebuilt none out of a residue that carried one is cold_resume's 'r' arm, and those were the
        same absent number until these rows existed.
-       AND THERE IS NO 'm' PAIR BESIDE THEM, WHICH IS A CHOICE THIS FILE MAKES AND NOT AN ARM NOBODY REACHED.
-       An 'm' is the same message one instant earlier, so the moment could hold one by asking for it — and
-       solver/cold.h's residual on that field says what the RESUME then does: it rebuilds the queue correctly
-       and the flow that steps it reaches a ledger whose arrival belongs to the process that parked. The park
-       moment therefore requires `delivers == 0` and these rows say `commits`, so the `delivers 0→0` the
-       round-trip report prints is this sentence and not a gap in it. */
+       AND THERE IS NO 'm' PAIR BESIDE THEM, WHICH IS NOW A STATEMENT ABOUT WHAT A ROW CAN ASSERT AND NOT
+       ABOUT WHAT THE TIER CAN DO. The 'm' ROUND TRIP IS WHOLE — solver/cold.c rebuilds one through the entry
+       that registers its arrival, so the moment no longer excludes it and the residue carries whatever the
+       frontier had not yet received. What it may not do is ASSERT one: whether any member still holds an
+       undelivered record at the instant the park is taken is a property of the SCHEDULE, so a row demanding
+       `delivers > 0` would be a green that depends on the interleaving, which §Testing names as the shape a
+       loaded machine falsifies. The `delivers p→r` pair the round-trip report prints says what crossed
+       without claiming a number this fixture can guarantee. */
     int cold_park_commit    = g_sess == SESS_PARK && g_cp.commits > 0;
     int cold_resumed_commit = g_sess == SESS_RESUME && g_cr.commits > 0;
     /* AND THE ARM THAT CARRIES CODE THE PAGE NEVER RAN. `park-orphan` says the residue names a FUNCTION and not
@@ -16928,24 +16930,33 @@ static int fixture_cold_moment(void) {
            one, and no amount of asking at a cleverer instant produces that on its own. That is why the post
            is ROUTED at the first payment below and the moment is what waits: the two halves are a routing
            this host performs and a state it observes, and only the second can be a predicate.
-           `delivers == 0` IS A REQUIREMENT AND NOT A TIDINESS, AND IT IS THE HALF THAT COSTS A COLUMN. An 'm'
-           is the SAME message one instant earlier, so a park taken before the frontier has received it writes
-           the queue instead of the commitments — and solver/cold.h's own residual on that field says what a
-           resumed session then does with it: cold_resume rebuilds the queue correctly and the flow that steps
-           it reaches a ledger whose arrival belongs to the process that parked. So this conjunct chooses the
-           arm of this grammar whose ROUND TRIP is built, and the `delivers 0→0` pair the round-trip report
-           prints is that choice stated rather than an arm nobody reached.
-           IT CANNOT WAIT FOREVER ON THE PAIR, which is the failure the latch above exists for and the reason
-           these two are safe to add to it. A commitment row is never removed and every fork inherits its
-           parent's (solver/flow.c's flow_world_commit_fork), so `commits > 0` is monotone over the descendants
-           of whatever was live when the post was routed — and the post is routed at the FIRST payment, when
-           that is the boot flow and therefore an ancestor of the frontier. `delivers` is the transient: it
-           rises once, at the routing, and falls to zero as each member takes its one delivery (engine.c's
-           flow_step reaches a routed record before any of the flow's own programs), after which nothing
-           re-raises it because a fork of a member that has delivered inherits an empty queue. The steady state
-           is the state this asks for. */
+           THE FOURTH CONJUNCT WAS `delivers == 0` AND IT IS RETIRED BY MEASUREMENT, NOT BY TASTE — the
+           reasoning is kept because it is what a reader re-derives, and it is wrong in one specific place.
+           It read: `delivers` is the transient, it rises once at the routing and falls to zero as each member
+           takes its one delivery, after which nothing re-raises it because a fork of a member that has
+           DELIVERED inherits an empty queue — so the steady state is the state this asks for. Every clause of
+           that is true of a frontier that does not FORK BEFORE IT DELIVERS, and this one does. A fork inherits
+           its parent's queue as of the instant of the branch (solver/flow.c's flow_deliver_fork), so a record
+           routed when the boot flow is the only member is inherited UNDELIVERED by every arm that branches off
+           it before that flow steps — and `delivers` then tracks the frontier's GROWTH rather than draining
+           ahead of it. MEASURED at the revision that landed this: one record routed at the first payment,
+           `forks 10`, and `routed-delivery 13` — every member of a 13-member frontier received it, so
+           `delivers` reached 0 only once all 13 had delivered, by which time all 11 candidates had FINISHED
+           and `deepcands` was 0. The four conjuncts were never true together, the latch never fired, the
+           frontier drained, and the session wrote no residue at all.
+           WHAT REPLACES IT IS THE REFUSAL AND NOT THE QUEUE, which is the question this conjunct was really
+           reaching for. A residue carrying an 'm' is safe now — solver/cold.c rebuilds one through the entry
+           that registers its arrival — so what the moment still may not meet is a member the park would
+           REFUSE: one holding a routed delivery already turned into its §9.3.3 task, which is off `deliver_q`
+           and named by no record. That is per-INSTANT and transient (the task runs on that flow's very next
+           step) rather than per-FRONTIER and monotone, so it is reachable in a way `delivers == 0` was not.
+           `commits > 0` STAYS AND ITS ARGUMENT SURVIVED THE MEASUREMENT: a commitment row is never removed and
+           every fork inherits its parent's (flow_world_commit_fork), so it is monotone over the descendants of
+           whatever was live when the post was routed — and the same fork inheritance that refuted the clause
+           above is what makes this one hold, since every arm carries the row whether or not it has delivered
+           yet. */
         g_cold_moment = would.deepcands > 0 && would.orphans > 0 &&
-                        would.commits > 0 && would.delivers == 0;
+                        would.commits > 0 && would.refuses == 0;
     }
     return g_cold_moment;
 }

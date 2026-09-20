@@ -9,6 +9,7 @@
 #include "solver/solve.h"     /* …and the @S sink table a parked candidate's class is re-bound through */
 #include "solver/pending.h"   /* the session's context, which a flow's JS-valued queues are read through */
 #include "solver/dyn_body.h"  /* …and the program text, which is SHARED and so is counted once, not per flow */
+#include "solver/engine.h"    /* the one entry a rebuilt routed delivery goes back through — see the 'm' arm */
 #include "check.h"
 
 #include <stdio.h>
@@ -865,6 +866,11 @@ void cold_park_preview(ColdPreview *out)
            SELECTIONS, not between two readings of one queue. */
         out->commits  += flow_world_commits(f);
         out->delivers += flow_deliver_pending(f);
+        /* …AND WHETHER THIS MEMBER WOULD STOP THE PARK RATHER THAN BE WRITTEN BY IT — read through the same
+           predicate cold_park_flow refuses on, so the description and the refusal cannot disagree about which
+           flows they are about. Counted in MEMBERS and not in tasks: the refusal is per flow, so a member
+           holding two such tasks is one reason the park cannot be taken and not two. */
+        if (flow_job_external(f) > 0) out->refuses++;
     }
     /* AND THE ROW THAT IS NOT A MEMBER OF THE FRONTIER. A foreign segment belongs to a PEER's flow, so no walk
        of this registry can find it and the host would otherwise be shown a residue smaller than the one it is
@@ -1774,7 +1780,14 @@ void cold_resume(JSContext *ctx, const char *recipes)
                    "zone stamped is the second half of this record and no reader may invent one");
             record = park_unhex(q, comma);
             origin = park_unhex(comma + 1, end);
-            flow_deliver_push(ctx, last_flow, record, origin);
+            /* THROUGH THE ENTRY THAT REGISTERS THE ARRIVAL, never `flow_deliver_push` directly. The ledger
+               solver/engine.h keeps beside these queues is PROCESS-LIFETIME and a park crosses a process, so
+               a rebuild that only PUSHED would hand this session a work item whose arrival it has no record
+               of — and the flow that then steps it aborts at `routed_rec_admitted`, whose own message names
+               "the delivery queue was rebuilt from the COLD TIER without replaying the arrival" as the first
+               of its three causes. One entry does both, so the two cannot come apart here; an assert at the
+               delivery detects the separation a whole session after the line that caused it. */
+            engine_routed_rebuilt(ctx, last_flow, record, origin);
             free(record);
             free(origin);
             g_resumed.delivers++;

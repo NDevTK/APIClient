@@ -2718,6 +2718,20 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
     }
 }
 
+/* THE COLD TIER'S HALF OF THAT — see engine.h for why the registration and the push are ONE entry and not two
+   calls a rebuild could make separately. The ORDER is engine_route's above, for engine_route's reason. */
+void engine_routed_rebuilt(JSContext *ctx, struct Flow *f, const char *record, const char *sender_origin)
+{
+    DCHECK(f != NULL, "a parked routed delivery was rebuilt onto no flow — an 'm' record belongs to the flow "
+                      "written immediately before it, so one with no flow names nothing to deliver to");
+    DCHECK(record != NULL && *record && sender_origin != NULL && *sender_origin,
+           "a parked routed delivery was rebuilt missing its record or the sender ORIGIN the trusted zone "
+           "stamped — both cross the tier as TEXT, so an absent one is a residue this reader may not complete "
+           "by inventing the field every `event.origin` check in every bundle is written against");
+    routed_rec_arrived(record);
+    flow_deliver_push(ctx, (Flow *)f, record, sender_origin);
+}
+
 /* WHICH REALM OF THIS AGENT ANSWERS FOR A DOCUMENT NAMED BY A PEER — the one lookup both halves of the
  * cross-instance seam need, and the reason neither of them is restricted to this instance's ROOT document any
  * more. An instance is an ORIGIN-KEYED AGENT CLUSTER (SECURITY.md), so several documents are this one's and a
