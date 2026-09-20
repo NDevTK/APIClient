@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html><head><title>themepin triunknown</title>
+<style>
+html[data-theme=dark] { background-color: #101011; }
+#sw { width: 400px; height: 200px; background-color: #00ff00; }
+</style></head>
+<body><div id="sw">themepin triunknown</div>
+<script>
+/* THE SUBJECT OF (1) THREE-VALUED MATCHING — see the ordered subproblems at `host_attr_value_read` in
+   core/dom/selector_match.c. It is `themepin_unpinned` reduced to ONE population and made drivable without
+   a paint: no equality appears anywhere, so EVERY flow that stores the attribute reaches the cascade having
+   determined nothing, and there is no pinned world whose silence could be read as a pin failing.
+   IT ASKS THE CASCADE ITSELF rather than waiting for a rendering opportunity. `themepin_pinned` and its
+   siblings reach Selectors 4 §17.3 through a paint, so a drive without one answers nothing about this seam;
+   `getComputedStyle` is CSSOM §6.1's own entry to the same cascade and needs no raster, which makes this pair
+   readable from a terminal event alone. That matters because the discriminator here IS the terminal event.
+   WHAT IT PREDICTS, AND THE TWO LITERALS THAT SETTLE IT. Before (1) the abort is at the VALUE SEAM, fires
+   once per attribute test per rule per element, and its text contains `BOTH arms of the test are about to be
+   answered false`. After (1) the seam ANSWERS — Selectors 4 §6's test has no two-valued answer, and saying so
+   is a positive statement — Kleene's rules carry that to the selector's own answer, and the abort is at
+   `selector_match_node` with `Match a Selector Against an Element\" answered UNKNOWN` and the selector's own
+   text in it. Each literal is a compile-time constant present in exactly one of the two binaries, so the
+   move is observable without any run producing an absence.
+   WHY THE MOVE IS THE RESULT AND NOT A RELABELLING: see `themepin_trior`, which is this document with the
+   two rules written as ONE selector list. That one STOPS aborting, because a definite match makes the list's
+   answer true whatever another branch could not decide, and it is the arm that shows the propagation
+   deciding something rather than renaming a crash. Neither document is worth reading without the other.
+   WHAT IT IS NOT: a model of a document anybody writes. A real theme shim pins — that is what
+   `themepin_pinned` is for and why (0) exists. This arm exists to isolate the flow that pins NOTHING, which
+   is the population (1) is about and the one every other arm in this family has to reason around. */
+var stored = localStorage.getItem('themepin_tri');
+if (stored) {
+  var parsed = JSON.parse(stored);
+  if (parsed && parsed.theme) {
+    document.documentElement.setAttribute('data-theme', parsed.theme);
+  }
+}
+getComputedStyle(document.documentElement).backgroundColor;
+/* PAST THE CASCADE. A CONSTANT path and no computed segment: CLAUDE.md
+   §A-WITNESS-MAY-NOT-BE-COMPOSED-FROM-A-VALUE-THE-SUBJECT-CAN-MAKE-UNKNOWN — a witness whose payload this
+   engine computed can itself be unknown, and then the request never goes out and reads exactly like the path
+   not being taken, which is the one failure mode that gets WORSE the better the engine does its job. This
+   document is expected NEVER to reach it at either revision; it is here so that its ABSENCE is a fact about
+   the abort and not about the fixture having nothing to say. */
+fetch("/themepin-triunknown-PASTCASCADE.txt");
+</script>
+</body></html>

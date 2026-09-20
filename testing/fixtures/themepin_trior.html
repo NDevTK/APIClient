@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html><head><title>themepin trior</title>
+<style>
+html, html[data-theme=dark] { background-color: #101011; }
+#sw { width: 400px; height: 200px; background-color: #00ff00; }
+</style></head>
+<body><div id="sw">themepin trior</div>
+<script>
+/* THE ARMED CONTROL FOR (1), and it is `themepin_triunknown` with ONE character changed: the two rules are
+   written as ONE SELECTOR LIST. Everything else is held — the same store from the same unknown with no
+   equality anywhere, the same `getComputedStyle`, the same constant witness — so the two documents differ in
+   exactly one property of the SELECTOR and in nothing about the value, the flow or the seam.
+   WHAT IT ARMS. Selectors 4 §17.3 matches a list through whichever of its selectors did, and CSS 2.1 §6.4's
+   cascade weighs that one; `html` matches this element under every value `data-theme` could hold. So the
+   list's answer is a DEFINITE TRUE and Kleene's OR says a definite true wins over anything another branch
+   could not decide. The value seam is still ASKED along the way — the second branch reads the attribute — and
+   that is the whole point: the question is not whether the seam stays quiet, it is whether an undetermined
+   ANSWER stops being an undetermined MATCH.
+   SO IT DISCRIMINATES A DECISION FROM A RELABELLING. Before (1) the abort is at the value seam and fires the
+   moment the attribute is read, so this document aborts exactly as its sibling does and the two are
+   indistinguishable. After (1) this one COMPLETES and its sibling still aborts. A run in which both abort
+   says the propagation was not reached; a run in which both complete says the seam stopped being asked,
+   which would be a different defect and would show as `themepin_unpinned`'s seam count falling to zero.
+   CLAUDE.md §A-CONTROL-ARMS-ONLY-ON-A-SITE-THE-INSTRUMENT-CAN-JUDGE: this control fires the OLD abort today,
+   which is what makes its silence tomorrow a result rather than an unarmed probe.
+   HOW ITS ABSENCE WOULD SHOW: this document aborting at `selector_match_node`. That would say a definite
+   match is not being read before the undetermined bit — Kleene's OR inverted — and would send the next
+   reader to the `!h.matched` gate on that abort rather than to the propagation. */
+var stored = localStorage.getItem('themepin_tri');
+if (stored) {
+  var parsed = JSON.parse(stored);
+  if (parsed && parsed.theme) {
+    document.documentElement.setAttribute('data-theme', parsed.theme);
+  }
+}
+getComputedStyle(document.documentElement).backgroundColor;
+/* PAST THE CASCADE, and for this document it is the POSITIVE half of the pair. A CONSTANT path with no
+   computed segment, for the reason its sibling states. This request is expected to be ABSENT before (1) and
+   PRESENT after it, which is the one reachability witness in this pair that is a presence rather than a
+   text: it says the flow got past Selectors 4 §17.3 with an undetermined attribute in hand. */
+fetch("/themepin-trior-DECIDED.txt");
+</script>
+</body></html>

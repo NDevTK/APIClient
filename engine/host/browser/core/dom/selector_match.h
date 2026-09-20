@@ -53,7 +53,15 @@ void selector_list_destroy(JSContext *ctx, void *p);
 
 /* Selectors 4 §17.3 — does `node` match `list`? `out_spec` receives the HIGHEST specificity that matched (a
    list matches through whichever of its selectors did, and CSS 2.1 §6.4's cascade weighs that one), or is
-   NULL for a caller that only asks the question. A non-element never matches. */
+   NULL for a caller that only asks the question. A non-element never matches.
+
+   THE ANSWER IS TWO-VALUED AND THE MATCHER'S IS NOT, WHICH IS WHAT THIS SIGNATURE CANNOT SAY. A test decided
+   from an attribute whose value the host declines to state has no two-valued answer, and the matcher now
+   carries that outward as Kleene's third value; a `bool` has nowhere to put it. So a selector whose own
+   answer is UNDETERMINED ABORTS IN DEV at the site, naming the selector and what to build, and answers
+   `false` in release — the defined wrong answer every build gave before the seam existed.
+   WHAT THE NEXT DIFF BUILDS is an out-parameter for that third answer, which is (2) in the ordered list at
+   `host_attr_value_read` in the .c, and is why the abort is a placeholder rather than a verdict. */
 bool selector_match_node(lxb_dom_node_t *node, const lxb_css_selector_list_t *list,
                          lxb_css_selector_specificity_t *out_spec);
 

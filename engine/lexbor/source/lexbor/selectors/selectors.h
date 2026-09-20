@@ -71,6 +71,30 @@ typedef lxb_selectors_entry_t *
                             lxb_selectors_entry_t *entry);
 
 /*
+ * WHAT THE HOST HAS TO SAY ABOUT AN ATTRIBUTE'S VALUE, and there are THREE answers because there are three
+ * states an embedder can be in. This used to be a bool, and the two answers it could carry -- "the value is
+ * THESE bytes" and "I have nothing to add" -- are unchanged and keep their old meanings; what a bool could
+ * not say is that the host KNOWS the tree's bytes do not state the value and cannot supply the ones that do.
+ * A host with that to say had to pick one of the other two, and both are wrong in the same direction: every
+ * operator below is then decided against a placeholder that no operand can equal, so BOTH arms of the test
+ * answer false and nothing anywhere says a question was asked.
+ */
+typedef enum {
+    /* "I have nothing to add" -- compare the bytes the tree holds. The old `false`, unchanged, and what
+       every embedder that installs no table gets. */
+    LXB_SELECTORS_VALUE_TREE         = 0,
+
+    /* "the value is THESE bytes" -- `*out` is filled and is what the comparison reads. The old `true`. */
+    LXB_SELECTORS_VALUE_HOST         = 1,
+
+    /* "I cannot state this value" -- there is no byte string this comparison may be decided against, so the
+       test has no two-valued answer and the match's answer is UNKNOWN. See lxb_selectors_nested_t::unknown
+       for what the matcher then does with it. */
+    LXB_SELECTORS_VALUE_UNDETERMINED = 2
+}
+lxb_selectors_value_t;
+
+/*
  * THE HOST LANGUAGE'S SEAM. A pseudo-class whose answer is NOT a fact about the tree cannot be decided here:
  * Selectors Level 5 §7 "Exposing custom state: the :state() pseudo-class" says outright that "The exact
  * matching behavior of :state() pseudo-class is defined by the host language", and HTML §4.16.3
@@ -103,20 +127,21 @@ typedef struct {
      * ask, because `.x` and `#x` are attribute value tests that happen to have their own syntax -- §6.6 says
      * so outright for the first ("it is equivalent to the ~= notation applied to the local class attribute").
      *
-     * IT ANSWERS, AND THE ANSWER IS BYTES. This used to be VOID, on the reasoning that "there is nothing for
-     * the matcher to do with a refusal" -- true of a host that can only REFUSE, and that is not the only thing
-     * a host has to say. A host whose attribute value is a stand-in may have SINCE ESTABLISHED what it stands
-     * for, and then the honest value of the attribute for this match is those bytes and not what the tree
-     * holds; every operator below is then decided by the matcher's own comparison, on a real string, exactly
-     * as it would have been had the bytes been there all along. So the seam carries both answers: `true` with
-     * `*out` filled means "the value is THESE bytes", and `false` means "I have nothing to add" -- which is
-     * the refusal the old spelling could make, unchanged.
+     * IT ANSWERS, AND THE ANSWER IS BYTES OR THE STATEMENT THAT THERE ARE NONE. This used to be VOID, on the
+     * reasoning that "there is nothing for the matcher to do with a refusal" -- true of a host that can only
+     * REFUSE, and that is not the only thing a host has to say. A host whose attribute value is a stand-in may
+     * have SINCE ESTABLISHED what it stands for, and then the honest value of the attribute for this match is
+     * those bytes and not what the tree holds; every operator below is then decided by the matcher's own
+     * comparison, on a real string, exactly as it would have been had the bytes been there all along. And a
+     * host that has established NOTHING has a third thing to say, which is lxb_selectors_value_t's whole
+     * subject: see it for what each of the three answers means.
      *
-     * `*out` IS BORROWED FOR THE DURATION OF THE MATCH and the matcher neither frees nor writes it. `attr` is
-     * the attribute the comparison is about and `node` its element.
+     * `*out` IS BORROWED FOR THE DURATION OF THE MATCH and the matcher neither frees nor writes it, and it is
+     * read ONLY for LXB_SELECTORS_VALUE_HOST. `attr` is the attribute the comparison is about and `node` its
+     * element.
      */
-    bool (*attr_value_read)(const lxb_dom_node_t *node, const lxb_dom_attr_t *attr,
-                            lexbor_str_t *out, void *ctx);
+    lxb_selectors_value_t (*attr_value_read)(const lxb_dom_node_t *node, const lxb_dom_attr_t *attr,
+                                             lexbor_str_t *out, void *ctx);
 }
 lxb_selectors_host_cb_t;
 
@@ -146,6 +171,38 @@ struct lxb_selectors_nested {
     size_t                   index;
 
     bool                     forward;
+
+    /*
+     * AN UNDETERMINED VALUE WAS READ WHILE THIS SCOPE WAS BEING EVALUATED -- Kleene's third value, carried as
+     * a sticky flag rather than as a third return type, because THE STATE MACHINE ALREADY COMPUTES AND AND OR
+     * AS CONTROL FLOW and a third value every caller collapsed the same way would be a type nobody branches
+     * on. A compound is an AND and stops at a definite false; a selector list, a `:is()` and a combinator's
+     * candidate walk are ORs and stop at a definite true. Both already keep going exactly as three-valued
+     * evaluation requires. What an undetermined read adds is this bit.
+     *
+     * AN UNDETERMINED READ BEHAVES AS NO-MATCH IN CONTROL FLOW AND SETS THIS. The flag is then read on ONE
+     * path -- where the machine concludes NOT MATCHED -- and it is what makes that conclusion UNKNOWN instead
+     * of FALSE. A definite TRUE never consults it, which is Kleene's OR: a match found along a path of
+     * definite answers is a match whatever some other candidate could not answer.
+     *
+     * SO THE ANSWER IS NEVER WRONG AND IS SOMETIMES COARSE. It can never report TRUE where the truth is not
+     * true: a true comes only from a path of definite answers reaching the callback. It can never report
+     * FALSE where an undetermined value was touched: that is exactly what this bit prevents. It CAN report
+     * UNKNOWN where a definite answer was available -- see the residual at lxb_selectors_host_attr_value --
+     * and reporting unknown where the truth is decided keeps an arm that could have been dropped, which is
+     * the safe direction and the only one a solver may take.
+     *
+     * `:not()` IS THE ONE PLACE A CARELESS RULE INVERTS IT, and it is one line: Kleene's NOT maps unknown to
+     * unknown, so a `:not()` whose inner scope concluded NOT MATCHED **with this bit set** is UNKNOWN and must
+     * not become true. lxb_selectors_state_after_not is where that is spelled. A `:not()` that took the bit
+     * for a false would answer TRUE for a test it never decided -- the matcher PICKING an arm rather than
+     * declining to answer, which is the whole thing this bit exists to make impossible.
+     *
+     * ONE BIT PER SCOPE, and nested scopes do not share it: an undetermined read inside a `:not()` belongs to
+     * the `:not()`'s own answer and reaches the outer scope only through that answer. lxb_selectors_nested_make
+     * clears it for every entry into a scope, because the nested record is REUSED across matches.
+     */
+    bool                     unknown;
 };
 
 struct lxb_selectors {
@@ -162,6 +219,26 @@ struct lxb_selectors {
 
     lxb_selectors_opt_t      options;
     lxb_status_t             status;
+
+    /*
+     * THE ANSWER THE CALLER CAME FOR THAT THE CALLBACK CANNOT CARRY. lxb_selectors_find and
+     * lxb_selectors_match_node report a match by CALLING BACK, so "matched" has a channel and "did not match"
+     * is its absence -- and a third answer has neither. This is that channel: true after the call means at
+     * least one node's answer in it was UNDETERMINED rather than false, which for lxb_selectors_match_node's
+     * one node is exactly that node's answer.
+     *
+     * IT IS SET AT ENTRY, NOT BY lxb_selectors_clean, because clean runs BEFORE the call returns and a field
+     * the caller is about to read may not be cleared under it. Each of find/match_node clears it itself.
+     *
+     * AN EMBEDDER THAT DOES NOT READ IT GETS THE FALSE ARM OF EVERY UNDETERMINED TEST, silently. That is the
+     * old behaviour and is why the seam's own host answers `false` rather than aborting: a matcher cannot make
+     * its embedder ask. NAMED RESIDUAL -- WHAT IS NOT COVERED: an arena whose owner never reads this field
+     * decides an undetermined test against the tree's placeholder bytes and says nothing. WHAT THE NEXT DIFF
+     * BUILDS: the embedder-side read at every arena this engine creates, which is a fact about the embedder
+     * and not about this file. HOW ITS ABSENCE WOULD SHOW: a selector answered false for an element whose
+     * attribute the host had declined to state, in a walk whose owner never looked here.
+     */
+    bool                     unknown;
 };
 
 

@@ -63,6 +63,21 @@ testing/fixtures/*
 # fires the seam 1 with its negative control at 0. The three pinned arms are BYTE-IDENTICAL to each other —
 # same two worlds, same seam count, same terminal — which is what retires the read-count and the ordering as
 # explanations and leaves the pin read itself as the subject.
+# AND THE FAMILY GAINED A PAIR FOR (1) THREE-VALUED MATCHING, ALREADY COVERED BY THE PATTERN ABOVE AND
+# NAMED HERE BECAUSE THE PATTERN IS NOT THE REASONING. `themepin_triunknown` is the SUBJECT: no equality
+# appears in it at all, so every flow that stores the attribute reaches the cascade having determined
+# nothing, and it isolates the one population the five arms above have to reason around. `themepin_trior` is
+# its ARMED CONTROL and is that document with the two rules written as ONE SELECTOR LIST — a branch that
+# matches under every value the attribute could hold, so Selectors 4 §17.3's answer is a definite TRUE while
+# the value seam is still asked. The two differ in exactly one property of the selector and in nothing about
+# the value, the flow or the seam, which is what lets them tell a DECISION from a relabelled crash: before
+# (1) both abort and are indistinguishable, after it the control completes and the subject's abort MOVES.
+# BOTH ASK THE CASCADE THROUGH `getComputedStyle` RATHER THAN THROUGH A PAINT, which is why they are
+# quotable from a terminal event alone: the five arms above reach Selectors 4 §17.3 by rendering, so a drive
+# without a raster answers nothing about them, and CSSOM §6.1 is the same cascade with no raster in it.
+# A control that has never made its check speak has calibrated nothing (CLAUDE.md
+# §A-CONTROL-ARMS-ONLY-ON-A-SITE-THE-INSTRUMENT-CAN-JUDGE), and `themepin_trior` fires the OLD seam abort at
+# the revisions before (1) — which is what makes its silence afterwards a result rather than an unarmed probe.
 !testing/fixtures/themepin_*.html
 # THE VALUES-BACKING READBACK PAIR, re-included by name because the two are ONE EXPERIMENT and the
 # silent one is worthless without the loud one. `7c4c6b3f` moved every declaration block's READ onto a

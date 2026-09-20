@@ -107,16 +107,51 @@ lxb_selectors_match_attribute(lxb_selectors_t *selectors,
  * and is what comes back whenever the host declines, which is every embedder that installs no table and every
  * attribute the host has nothing to say about. `buf` is scratch the CALLER owns for the length of its own
  * comparison; the bytes the host writes into it are the host's and are neither freed nor written here.
+ *
+ * AND `NULL` IS THE THIRD ANSWER -- LXB_SELECTORS_VALUE_UNDETERMINED, which is the host saying there is no
+ * byte string this comparison may be decided against. NULL is unambiguous HERE and nowhere else in this
+ * file: every one of the three callers has already refused an attribute whose value is NULL before it gets
+ * this far (`attr_class->value == NULL`, `attr_id->value == NULL`, and the `&lxb_blank_str` substitution),
+ * so a NULL coming back can only be this. A caller that forgets the test dereferences it, which is the
+ * direction to fail in -- the alternative is an out-parameter whose unchecked arm answers against a
+ * placeholder and says nothing.
+ *
+ * THE BIT IS SET HERE AND NOT AT THE CALLERS so there is ONE statement of the rule. `selectors->current` is
+ * the scope being evaluated -- a `:not()`'s own scope inside a `:not()`, the top-level one outside -- which
+ * is what keeps an undetermined read inside a nested list from leaking past that list's own answer.
+ *
+ * NAMED RESIDUAL -- THE AND DIRECTION IS COARSE. What is not covered: an undetermined read behaves as
+ * no-match in control flow, so a COMPOUND abandons at the undetermined member and never reaches a later
+ * member that would have decided it FALSE -- `.absent[att=x]` is evaluated right-to-left, asks here first,
+ * and is reported UNKNOWN where `.absent` makes it false under every value the attribute could hold. That
+ * is sound (it keeps an arm that could have been dropped) and it is not tight. What the next diff builds:
+ * lxb_selectors_match answering a three-valued lxb_selectors_tri_t rather than a bool, so a compound can
+ * carry an undetermined member forward and still short-circuit on a definite false -- which needs the
+ * conclusion to distinguish "this attempt was provisional" from "this scope saw an unknown", and so needs a
+ * per-attempt flag that the backtracking in lxb_selectors_state_not_found can clear. HOW ITS ABSENCE WOULD
+ * SHOW: the agent's matcher reporting an undetermined answer for a selector one of whose simple selectors
+ * the element definitely fails.
  */
 static const lexbor_str_t *
 lxb_selectors_host_attr_value(lxb_selectors_t *selectors, const lxb_dom_node_t *node,
                               const lxb_dom_attr_t *attr, lexbor_str_t *buf,
                               const lexbor_str_t *value)
 {
-    if (selectors->host != NULL && selectors->host->attr_value_read != NULL
-        && selectors->host->attr_value_read(node, attr, buf, selectors->host_ctx))
-    {
-        return buf;
+    if (selectors->host != NULL && selectors->host->attr_value_read != NULL) {
+        switch (selectors->host->attr_value_read(node, attr, buf,
+                                                 selectors->host_ctx))
+        {
+            case LXB_SELECTORS_VALUE_HOST:
+                return buf;
+
+            case LXB_SELECTORS_VALUE_UNDETERMINED:
+                selectors->current->unknown = true;
+                return NULL;
+
+            case LXB_SELECTORS_VALUE_TREE:
+            default:
+                break;
+        }
     }
 
     return value;
@@ -598,9 +633,13 @@ lxb_selectors_find(lxb_selectors_t *selectors, lxb_dom_node_t *root,
     nested.cb = cb;
     nested.ctx = ctx;
     nested.forward = false;
+    nested.unknown = false;
 
     selectors->current = &nested;
     selectors->status = LXB_STATUS_OK;
+    /* CLEARED AT ENTRY AND NOT BY lxb_selectors_clean, which runs BEFORE this call returns -- a field the
+       caller is about to read may not be cleared under it. */
+    selectors->unknown = false;
 
     return lxb_selectors_tree(selectors, root);
 }
@@ -630,9 +669,12 @@ lxb_selectors_match_node(lxb_selectors_t *selectors, lxb_dom_node_t *node,
     nested.cb = cb;
     nested.ctx = ctx;
     nested.forward = false;
+    nested.unknown = false;
 
     selectors->current = &nested;
     selectors->status = LXB_STATUS_OK;
+    /* CLEARED AT ENTRY AND NOT BY lxb_selectors_clean, which runs below, BEFORE this call returns. */
+    selectors->unknown = false;
 
     status = lxb_selectors_run(selectors, node);
 
@@ -724,6 +766,11 @@ lxb_selectors_run(lxb_selectors_t *selectors, lxb_dom_node_t *node)
     current->root = node;
     selectors->state = lxb_selectors_state_find;
 
+    /* PER NODE. lxb_selectors_find drives this once for every element in the tree over ONE top-level scope
+       record, so a bit left standing from the previous element would report this one's answer undetermined
+       for a value the match never read. */
+    current->unknown = false;
+
     do {
         entry = selectors->state(selectors, entry);
     }
@@ -731,6 +778,14 @@ lxb_selectors_run(lxb_selectors_t *selectors, lxb_dom_node_t *node)
 
     current->first = current->top;
     current->entry = current->top;
+
+    /* THE ANSWER THE CALLBACK COULD NOT CARRY. A match is reported by CALLING BACK, so "did not match" is the
+       absence of a call and a third answer has no channel at all; this is it. Sticky across the nodes of one
+       find() by construction -- the caller asked one question about a tree and gets one answer about it,
+       which for match_node's single node is that node's own. */
+    if (current->unknown) {
+        selectors->unknown = true;
+    }
 
     return selectors->status;
 }
@@ -1185,24 +1240,67 @@ lxb_selectors_make_following_forward(lxb_selectors_t *selectors,
     return next;
 }
 
+/*
+ * LEAVING A NESTED SCOPE, CARRYING ITS ANSWER. A `:is()`, `:not()`, `:has()` or `:nth-child(... of ...)`
+ * reaches its return state by ONE of two routes and they mean opposite things: the callback fires when the
+ * inner list MATCHED, and these states run when it EXHAUSTED WITHOUT MATCHING. So this is the only place an
+ * inner scope's `unknown` can be read, and it must be read BEFORE the scope pointer moves.
+ *
+ * IT IS SPELLED ONCE because the three return states would otherwise each hold a copy of the same rule, and a
+ * copy is where the `:not()` arm below drifts back to answering true.
+ */
+lxb_inline bool
+lxb_selectors_leave_nested(lxb_selectors_t *selectors)
+{
+    bool unknown = selectors->current->unknown;
+
+    selectors->current = selectors->current->parent;
+
+    if (unknown) {
+        selectors->current->unknown = true;
+    }
+
+    return unknown;
+}
+
 static lxb_selectors_entry_t *
 lxb_selectors_state_after_find(lxb_selectors_t *selectors,
                                lxb_selectors_entry_t *entry)
 {
-    selectors->current = selectors->current->parent;
+    /* The inner list did not match. An undetermined read inside it makes that conclusion UNKNOWN rather than
+       false, and UNKNOWN takes the same control flow as false here -- `:is(U)` is not a match, and the bit
+       the line below hands the parent is what stops the parent calling it one. */
+    (void) lxb_selectors_leave_nested(selectors);
 
     lxb_selectors_switch_to_not_found(selectors, selectors->current);
 
     return selectors->current->entry;
 }
 
+/*
+ * `:not()` WHOSE INNER LIST DID NOT MATCH -- and the one line in this file where a careless three-valued rule
+ * turns a declined question into an answer. Selectors 4 §5.2 "The Negation Pseudo-class" is the complement of
+ * its argument, so the inner list failing to match is `:not()` MATCHING, which is what the untouched arm
+ * below does. KLEENE'S NOT MAPS UNKNOWN TO UNKNOWN: an inner list that did not match *because it could not
+ * decide* has not established its complement either, and routing that to `found_check` would report a MATCH
+ * for a test nothing answered -- the matcher picking an arm instead of declining, for a value the embedder
+ * said outright it cannot state. So the undetermined arm takes `not_found` exactly as `:is()` does, with the
+ * bit carrying the reason, and `:not(U)` and `U` both come out UNKNOWN as they must.
+ *
+ * THE MATCHING ROUTE IS lxb_selectors_cb_not AND IS CORRECTLY SILENT ABOUT THE BIT: an inner list that
+ * matched matched DEFINITELY (a match comes only from a path of definite answers), so its complement is a
+ * definite false and nothing is undetermined about it.
+ */
 static lxb_selectors_entry_t *
 lxb_selectors_state_after_not(lxb_selectors_t *selectors,
                               lxb_selectors_entry_t *entry)
 {
-    selectors->current = selectors->current->parent;
-
-    lxb_selectors_switch_to_found_check(selectors, selectors->current);
+    if (lxb_selectors_leave_nested(selectors)) {
+        lxb_selectors_switch_to_not_found(selectors, selectors->current);
+    }
+    else {
+        lxb_selectors_switch_to_found_check(selectors, selectors->current);
+    }
 
     return selectors->current->entry;
 }
@@ -1263,7 +1361,10 @@ lxb_selectors_state_after_nth_child(lxb_selectors_t *selectors,
     current = selectors->current;
 
     if (current->index == 0) {
-        selectors->current = selectors->current->parent;
+        /* Nothing in the `of` list matched. An undetermined read while counting makes the COUNT undetermined,
+           so the An+B answer is too -- coarser than it could be (a value that cannot decide one sibling can
+           still leave the tally decided) and in the safe direction. */
+        (void) lxb_selectors_leave_nested(selectors);
         lxb_selectors_switch_to_not_found(selectors, selectors->current);
 
         return selectors->current->entry;
@@ -1273,7 +1374,7 @@ lxb_selectors_state_after_nth_child(lxb_selectors_t *selectors,
     node = lxb_selectors_state_nth_child_node(pseudo, current->root);
 
     if (node == NULL) {
-        selectors->current = selectors->current->parent;
+        (void) lxb_selectors_leave_nested(selectors);
 
         return lxb_selectors_state_nth_child_done(selectors, pseudo,
                                                   current->index);
@@ -1300,6 +1401,17 @@ lxb_selectors_state_nth_child_found(lxb_selectors_t *selectors,
     node = lxb_selectors_state_nth_child_node(pseudo, current->root);
 
     if (node == NULL) {
+        /* THE THIRD EXIT FROM THE `of` SCOPE, and the one lxb_selectors_leave_nested cannot serve because the
+           scope was ALREADY popped -- by lxb_selectors_done, on the path where a sibling MATCHED. That pop is
+           right to drop the bit for `:is()` and `:not()`, where a definite inner match is a definite answer
+           whatever another branch could not decide; it is WRONG here, because `:nth-child(An+B of S)` does not
+           ask whether a sibling matched, it asks WHICH sibling this is. A sibling whose membership in S is
+           undetermined leaves the INDEX undetermined even when this one's membership is certain, so the tally
+           the An+B test is about to be applied to is undetermined and the answer is too. */
+        if (current->unknown) {
+            selectors->current->unknown = true;
+        }
+
         return lxb_selectors_state_nth_child_done(selectors, pseudo,
                                                   current->index);
     }
@@ -1319,6 +1431,7 @@ lxb_selectors_match(lxb_selectors_t *selectors, lxb_selectors_entry_t *entry,
 {
     lxb_dom_element_t *element;
     lexbor_str_t host_value;
+    const lexbor_str_t *host_trg;
 
     switch (entry->selector->type) {
         case LXB_CSS_SELECTOR_TYPE_ANY:
@@ -1345,10 +1458,15 @@ lxb_selectors_match(lxb_selectors_t *selectors, lxb_selectors_entry_t *entry,
                So the value it reads is asked about exactly as `[class~=x]`'s would be -- and answered the
                same way, which is what makes `el.className = <host unknown>` decidable once the host knows
                what it wrote. */
-            return lxb_selectors_match_class(
-                       lxb_selectors_host_attr_value(selectors, node, element->attr_class,
-                                                     &host_value, element->attr_class->value),
-                       &entry->selector->name, true);
+            host_trg = lxb_selectors_host_attr_value(selectors, node,
+                                                     element->attr_class, &host_value,
+                                                     element->attr_class->value);
+            if (host_trg == NULL) {
+                return false;   /* undetermined: recorded on the scope, no-match in control flow */
+            }
+
+            return lxb_selectors_match_class(host_trg, &entry->selector->name,
+                                             true);
 
         case LXB_CSS_SELECTOR_TYPE_ATTRIBUTE:
             return lxb_selectors_match_attribute(selectors, entry->selector,
@@ -1411,6 +1529,10 @@ lxb_selectors_match_id(lxb_selectors_t *selectors,
        named id" -- so the value it reads is asked about like any other attribute's, and answered like one. */
     trg = lxb_selectors_host_attr_value(selectors, node, element->attr_id,
                                         &host_value, element->attr_id->value);
+    if (trg == NULL) {
+        return false;   /* undetermined: recorded on the scope, no-match in control flow */
+    }
+
     src = &selector->name;
 
     return trg->length == src->length
@@ -1530,6 +1652,9 @@ lxb_selectors_match_attribute(lxb_selectors_t *selectors,
         || attr->match == LXB_CSS_SELECTOR_MATCH_DASH)
     {
         trg = lxb_selectors_host_attr_value(selectors, node, dom_attr, &host_value, trg);
+        if (trg == NULL) {
+            return false;   /* undetermined: recorded on the scope, no-match in control flow */
+        }
     }
 
     ins = attr->modifier == LXB_CSS_SELECTOR_MODIFIER_I;
@@ -1941,6 +2066,10 @@ lxb_selectors_nested_make(lxb_selectors_t *selectors, lxb_dom_node_t *node,
     selectors->current = entry->nested;
     entry->nested->entry = entry->nested->top;
     entry->nested->first = entry->nested->top;
+    /* PER ENTRY INTO THE SCOPE, not per allocation: the record above is created once for an entry and reused
+       for every node the entry is matched against, so a bit left standing from an earlier element would make
+       a later `:not()` undetermined for a value it never read. */
+    entry->nested->unknown = false;
 
     selectors->current->root = node;
     selectors->current->ctx = selectors;

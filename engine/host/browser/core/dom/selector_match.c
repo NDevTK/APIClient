@@ -28,23 +28,33 @@ static bool host_defined(const lxb_dom_node_t *node, void *ctx)
  * THE HOST'S ANSWER FOR AN ATTRIBUTE WHOSE VALUE IS NOT BYTES — Selectors 4 §6 "Attribute selectors" read
  * against §Solver-half's unknown.
  *
- * WHAT THE MATCHER IS ABOUT TO DO. DOM §4.9's write stores a concolic value's SHAPE in the tree, because a
- * concolic has no bytes and `core/dom/element.c`'s write says so at its own site ("A concolic value has no
+ * WHAT THE MATCHER WOULD OTHERWISE DO. DOM §4.9's write stores a concolic value's SHAPE in the tree, because
+ * a concolic has no bytes and `core/dom/element.c`'s write says so at its own site ("A concolic value has no
  * bytes to store ... The SHAPE is the honest byte form for the tree") and files the value itself in the
  * per-flow taint shadow. A shape is a DISPLAY FORM and not the value: nothing the page could write makes it
  * equal to `dark`, so every §6.1 `=` test against it answers false, and so does every test against every
- * other operand. Both arms of a two-armed question are therefore decided, and §Solver-half permits pruning
- * only a CONTRADICTED branch — "a contradicted branch is pruned (sound-only — uncertainty keeps the arm)".
- * Neither arm is contradicted here. The page renders with neither rule and NOTHING SAYS SO.
+ * other operand. Both arms of a two-armed question would therefore be decided, and §Solver-half permits
+ * pruning only a CONTRADICTED branch — "a contradicted branch is pruned (sound-only — uncertainty keeps the
+ * arm)". Neither arm is contradicted here.
  *
- * WHY THIS IS A CRASH AND NOT A REFUSAL. §Offensive-programming's category (2): a capability that should
- * exist and does not. It is NOT the page-held abort switch §WHOSE-BYTES-STATE-THE-VALUE forbids — the value
- * asserted on is one THIS ENGINE MINTED to stand for something it does not know, not bytes a stranger
- * stated, and no string a page can write reaches this. What it asserts is this engine's own capability,
- * which is what a `DFAIL` is for.
+ * SO THIS FUNCTION DECLINES TO STATE A VALUE, and that is now an answer the matcher can carry rather than a
+ * crash. THE CRASH MOVED AND DID NOT GO: it is at `selector_match_node` below, where the WHOLE selector's
+ * answer is known, and its old reasoning is retired rather than deleted because a reader will re-derive it.
+ * It read: "WHY THIS IS A CRASH AND NOT A REFUSAL — §Offensive-programming's category (2): a capability that
+ * should exist and does not." That was exactly right about the CAPABILITY and wrong about the SITE, and the
+ * difference is what (1) bought. A crash HERE fires once per attribute test per rule per element and knows
+ * nothing about the selector it is inside, so it fired for `#known, [att=x]` on an element `#known` matches
+ * — a question whose answer was never in doubt — and it fired three times for a selector that poses one
+ * question. A crash at the CONCLUSION fires only where the selector's own answer is undetermined, which is
+ * the population (2)-(5) are for. Nothing about the category changed; the engine simply now knows which
+ * asks are real.
+ *
+ * IT WAS NEVER THE PAGE-HELD ABORT SWITCH §WHOSE-BYTES-STATE-THE-VALUE FORBIDS, and it is further from one
+ * now: the value declined on is one THIS ENGINE MINTED to stand for something it does not know, not bytes a
+ * stranger stated, and no string a page can write reaches this. The refusal itself asserts nothing at all.
  *
  * WHAT THE NEXT DIFFS BUILD, IN ORDER, and why none of them is this one:
- *   (0) CONCRETIZE-ON-PIN AT THE MATCH — LANDED, AND IT IS WHAT THIS FUNCTION NOW DOES FIRST. A flow whose
+ *   (0) CONCRETIZE-ON-PIN AT THE MATCH — LANDED, AND IT IS WHAT THIS FUNCTION STILL DOES FIRST. A flow whose
  *       own `===` already determined the value HAS the answer, so the match need only ASK: §Solver-half's
  *       "once `x==='admin'` pins the value, a later READ of that source returns the pinned bytes, so a later
  *       branch on it is decided by RUNNING the real predicate on a real string and does not fork at all".
@@ -53,33 +63,40 @@ static bool host_defined(const lxb_dom_node_t *node, void *ctx)
  *       reaches most (`el.className = <unknown>`). THE ONE THING THAT MADE THIS EASY TO MISS IS WORTH KEEPING
  *       AND IS ONE SENTENCE: the pin is written by the PAGE and is therefore in neither this file nor the
  *       sheet, so a reader of either sees a value nothing can decide and reaches for a fork.
- *       NAMED RESIDUAL — A VALUE THE PAGE DERIVED BEFORE STORING IT IS NOT ANSWERED. What is not covered:
- *       `el.setAttribute('t', 'x-' + cfg.theme)` files a DERIVATION in the shadow, and a derivation carries
- *       its first unknown operand's `src` (concolic_add_hook takes `ca ? concolic_src_c(a) : …` and says
- *       why), so the flow's pin on `cfg.theme` is a determination of the OPERAND and not of the stored
- *       value — `concolic_pin_bytes` answers NULL for it by construction and the abort below stands. What
- *       the next diff builds: (1) BELOW, and nothing of its own. THE OBVIOUS REPAIR IS THE ONE NOT TO MAKE,
- *       which is why this clause names a diff already in the list rather than a new one: re-deriving the
- *       stored value at the READ would need the record to have kept its operands, and a value plus the
- *       expression that made it is the recorded transform-expression §Re-execution forbids BY NAME — the
- *       record deliberately keeps a shape, an identity and an example and no operands. The sound way to get
- *       a derivation's real bytes is the one this engine already has: RE-EXECUTE the write under the
- *       constraint, which is what a resumed flow and a candidate re-fire both do, and what the pin cannot do
- *       for a store that already happened. So the derived case is not a narrower version of this read; it is
- *       an UNDETERMINED value like any other, and three-valued matching is its answer. How its absence would
- *       show: this abort firing on an element whose attribute was written from a concatenation, in a flow
- *       whose fork census already names a pin on one of that concatenation's operands.
- *   (1) THREE-VALUED MATCHING, for the flows (0) cannot answer — the ones that reached the cascade having
- *       committed to NEITHER arm, where there is no pin to read and a real question has to be asked.
- *       `lxb_selectors_match_*` must be able to answer UNKNOWN, and `:not()`, `:is()`
- *       and the combinators must propagate it. The RULE is Kleene's and this engine already implements it,
- *       in core/css/media_query.c's `mq_not`/`mq_and`/`mq_or` over an `MQ_UNKNOWN` — so what is missing is
- *       the propagation and not the arithmetic. ITS CAUSE THERE IS NOT THE CAUSE HERE and the analogy stops
- *       at the table: Media Queries Level 4 §3.1 "Evaluating Media Queries" makes a query UNKNOWN when the
- *       UA does not UNDERSTAND it (`<general-enclosed>`), where a selector here is perfectly understood and
- *       it is the ATTRIBUTE'S VALUE that is unknown. Nothing downstream can know a question was asked until
- *       this lands, which is why it is first.
- *   (2) A CASCADE THAT REPORTS ITS UNANSWERED PREDICATE, rather than an answer it does not have.
+ *       ITS RESIDUAL IS RETIRED BY (1) AND ITS ARGUMENT IS NOT, which is why the argument stays: a value the
+ *       page DERIVED before storing it (`el.setAttribute('t', 'x-' + cfg.theme)`) files a DERIVATION in the
+ *       shadow, and a derivation carries its first unknown operand's `src` (concolic_add_hook takes
+ *       `ca ? concolic_src_c(a) : …` and says why), so a flow's pin on `cfg.theme` is a determination of the
+ *       OPERAND and not of the stored value and `concolic_pin_bytes` answers NULL for it by construction.
+ *       THE OBVIOUS REPAIR IS STILL THE ONE NOT TO MAKE: re-deriving the stored value at the READ would need
+ *       the record to have kept its operands, and a value plus the expression that made it is the recorded
+ *       transform-expression §Re-execution forbids BY NAME — the record deliberately keeps a shape, an
+ *       identity and an example and no operands. The sound way to get a derivation's real bytes is the one
+ *       this engine already has: RE-EXECUTE the write under the constraint, which is what a resumed flow and
+ *       a candidate re-fire both do, and what the pin cannot do for a store that already happened. So the
+ *       derived case is not a narrower version of the pin read; it is an UNDETERMINED value like any other,
+ *       and three-valued matching is now its answer.
+ *   (1) THREE-VALUED MATCHING — LANDED, AND IT IS WHY THIS FUNCTION RETURNS RATHER THAN ABORTS.
+ *       `lxb_selectors_host_cb_t.attr_value_read` has a third answer, `:not()`, `:is()`, `:has()`,
+ *       `:nth-child(… of …)` and the combinators propagate it, and `lxb_selectors_t::unknown` carries the
+ *       conclusion out. The RULE is Kleene's and the arithmetic was never the work: the state machine already
+ *       computes AND as a compound's short-circuit and OR as a list's and a combinator walk's, so what (1)
+ *       added is a sticky per-scope bit and one inverted arm. ITS CAUSE IS NOT THE CAUSE IN
+ *       core/css/media_query.c, whose `mq_not`/`mq_and`/`mq_or` hold the same table for a different reason —
+ *       Media Queries Level 4 §3.1 "Evaluating Media Queries" makes a query UNKNOWN when the UA does not
+ *       UNDERSTAND it (`<general-enclosed>`), where a selector here is perfectly understood and it is the
+ *       ATTRIBUTE'S VALUE that is unknown. AND THE TWO TABLES ARE NOT SHARED, WHICH IS A FACT ABOUT THE BUILD
+ *       AND NOT A CHOICE: `engine/build.mjs` compiles lexbor into its own archive with `-I` LEXBOR_INC ALONE,
+ *       so no host header is reachable from `selectors.c` and a shared spelling would invert the embedding.
+ *       What keeps them from drifting is that lexbor grew no table at all — it has one inverted arm, at
+ *       `lxb_selectors_state_after_not`, and its own comment there is what a reader checks.
+ *       WHAT (1) DOES NOT COVER is recorded where it is caused, at `lxb_selectors_host_attr_value`: an
+ *       undetermined read behaves as no-match in CONTROL FLOW, so a compound abandons at the undetermined
+ *       member rather than reaching a later member that would decide it false. That answers UNKNOWN where
+ *       FALSE was available, which keeps an arm that could have been dropped and is the safe direction.
+ *   (2) A CASCADE THAT REPORTS ITS UNANSWERED PREDICATE, rather than an answer it does not have. THIS IS
+ *       NEXT, AND `selector_match_node`'s abort below is where it lands: the answer exists now and the
+ *       signature has nowhere to put it, so the abort is standing in for the out-parameter.
  *   (3) A CONSUMER THAT CAN ASK. A fork needs a RESUME POINT, and there is none inside a match: the arena
  *       note below says lxb_selectors_match_node "is a single C call that returns before the machine driving
  *       it can yield", and solver/engine.c's `engine_prepare_fork` aborts by name for a C body that forks
@@ -98,17 +115,19 @@ static bool host_defined(const lxb_dom_node_t *node, void *ctx)
  *       answered TRUE by a fork of (3) pins the value, after which `[att=light]` is DECIDED by the flow's own
  *       constraint rather than forked again. Without it the worlds multiply with the number of operands the
  *       sheet tests, where the page can only be in one.
- * HOW ITS ABSENCE WOULD SHOW once (1)-(5) exist: a document whose only style difference between two flows is
+ * HOW ITS ABSENCE WOULD SHOW once (2)-(5) exist: a document whose only style difference between two flows is
  * an attribute this engine never observed would report one computed value where a browser has two.
  *
  * WHAT IT DOES NOT COVER, AND THE NEXT DIFF FOR IT: §6.1's `~=` with WHITESPACE in its operand ("If "val"
  * contains whitespace, it will never represent anything") is decided false by the operand alone, exactly as
- * the empty-operand arms the matcher already declines to ask about are — so this refuses a match that is
- * false under every value the attribute could hold. The next diff tests the operand for whitespace beside
- * the length test in `lxb_selectors_match_attribute`. It would show as this abort naming an attribute whose
- * only test in the sheet is a `~=` whose operand has a space in it. */
-static bool host_attr_value_read(const lxb_dom_node_t *node, const lxb_dom_attr_t *attr,
-                                 lexbor_str_t *out, void *ctx)
+ * the empty-operand arms the matcher already declines to ask about are — so this is asked about a match that
+ * is false under every value the attribute could hold, and now answers UNDETERMINED for it rather than
+ * false. The next diff tests the operand for whitespace beside the length test in
+ * `lxb_selectors_match_attribute`. It would show as the abort below naming a selector whose only test
+ * against the undetermined attribute is a `~=` whose operand has a space in it. */
+static lxb_selectors_value_t host_attr_value_read(const lxb_dom_node_t *node,
+                                                  const lxb_dom_attr_t *attr,
+                                                  lexbor_str_t *out, void *ctx)
 {
     lxb_dom_element_t *el;
     JSValue taint;
@@ -118,15 +137,15 @@ static bool host_attr_value_read(const lxb_dom_node_t *node, const lxb_dom_attr_
     /* THE O(1) PRECONDITION FIRST. This runs per attribute test per rule per element, and resolving §4.9's
        key out of the attribute allocates; a document that never put an unknown in an attribute — which is
        most of them — pays one load for its whole cascade. */
-    if (attr_shadow_count() == 0) return false;
+    if (attr_shadow_count() == 0) return LXB_SELECTORS_VALUE_TREE;
     DCHECK(node != NULL && attr != NULL && out != NULL,
            "Selectors 4 §6's value seam was asked about no element, no attribute or with nowhere to put its "
            "answer — the matcher holds all three at the comparison, so a missing one is a caller that "
            "composed the ask somewhere else");
-    if (node->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    if (node->type != LXB_DOM_NODE_TYPE_ELEMENT) return LXB_SELECTORS_VALUE_TREE;
     el = lxb_dom_interface_element((lxb_dom_node_t *)node);
     taint = dom_cow_attr_taint_node(el, attr);   /* BORROWED */
-    if (!concolic_is(taint)) return false;
+    if (!concolic_is(taint)) return LXB_SELECTORS_VALUE_TREE;
 
     /* WHAT THIS FLOW HAS ALREADY PROVED, ASKED BEFORE ANYTHING ELSE — §Solver-half's CONCRETIZE-ON-PIN, and
        the reason it belongs at a READ rather than at a fork: the determination is made by the PAGE'S OWN
@@ -139,7 +158,7 @@ static bool host_attr_value_read(const lxb_dom_node_t *node, const lxb_dom_attr_
        operand's — so a key spelled here would hand `'x-' + cfg.theme` back `cfg.theme`'s bytes as if they
        were the concatenation's. The record knows which of the two it is holding and this file cannot, so the
        question goes to the record. NULL is the positive statement that this flow has determined nothing about
-       this value, which is exactly the population the abort below is about. */
+       this value, which is exactly the population that answers UNDETERMINED below. */
     pinned = concolic_pin_bytes(taint);
     if (pinned != NULL) {
         /* THE BYTES ARE THE ATTRIBUTE'S VALUE AND NOT A RENDERING OF IT. DOM §4.9 "Interface Element"'s
@@ -153,49 +172,26 @@ static bool host_attr_value_read(const lxb_dom_node_t *node, const lxb_dom_attr_
            between this line and the comparison that reads it. */
         out->data = (lxb_char_t *)pinned;
         out->length = strlen(pinned);
-        return true;
+        return LXB_SELECTORS_VALUE_HOST;
     }
 
-#if APICLIENT_DEV
-    /* AND WHERE THE FLOW HAS PROVED NOTHING, THE CRASH STANDS — §Offensive-programming's category (2), a
-       capability that should exist and does not. This population is the one the ordered list above is for:
-       a flow that reached the cascade having committed to NEITHER arm has no determination to read, and
-       answering it either way would decide a branch nothing contradicted.
-       IT IS NOT THE PAGE-HELD ABORT SWITCH §WHOSE-BYTES-STATE-THE-VALUE FORBIDS — the value asserted on is
-       one THIS ENGINE MINTED to stand for something it does not know, not bytes a stranger stated, and no
-       string a page can write reaches it. */
-    {
-        const lxb_char_t *tag, *name;
-        size_t tag_n = 0, name_n = 0;
-
-        tag = lxb_dom_element_local_name(el, &tag_n);
-        name = lxb_dom_attr_qualified_name((lxb_dom_attr_t *)attr, &name_n);
-        DFAILF("<%.*s %.*s> — Selectors 4 §6 \"Attribute selectors\" is being decided from an attribute whose "
-               "value this engine does not know (`%s`) and whose value this flow has not pinned, so BOTH arms "
-               "of the test are about to be answered false against a DISPLAY SHAPE that no operand can equal. "
-               "§6's own rule is two-valued — \"an attribute selector must be considered to match an element "
-               "if that element has an attribute that matches the attribute represented by the attribute "
-               "selector\" — so the matcher has no third answer. THE FLOW'S OWN DETERMINATION WAS ALREADY "
-               "ASKED FOR AND THERE IS NONE: either this flow committed to neither arm of the page's own "
-               "gate, which is what three-valued matching is for, or the stored value is a DERIVATION whose "
-               "operand is what got pinned. See host_attr_value_read in this file for the ordered diffs.",
-               (int)tag_n, tag ? (const char *)tag : "?",
-               (int)name_n, name ? (const char *)name : "?",
-               concolic_shape_c(taint) ? concolic_shape_c(taint) : "{}");
-    }
-#endif
-    /* THE RELEASE ANSWER, STATED RATHER THAN LEFT TO THE MACRO, AND ITS OLD REASON IS RETIRED BY THIS DIFF.
-       It used to read "the WORK is compiled out with the crash because its only consumer is the crash" — true
-       while the seam's only product was a `DFAIL`, and FALSE the moment the pin read landed above it: that
-       read is a CORRECTNESS answer and not a diagnostic, so a release build that skipped it would render a
-       different page from the dev build that measured it, which §Offensive-programming's release exemption
-       never licensed. The lookup therefore runs in BOTH builds and the `attr_shadow_count` load above is what
-       keeps it free for every document that stores no unknown.
-       WHAT RELEASE DOES *HERE* is what every build did before this seam existed: decline, and let the shape
-       bytes be compared. That is a DEFINED wrong answer with no sibling to compose badly with — the cascade
-       receives a value like any other — which is the one thing §THE-ARM-BENEATH-A-`DFAIL` asks of a release
-       arm. */
-    return false;
+    /* AND WHERE THE FLOW HAS PROVED NOTHING, THE ANSWER IS THAT THERE IS NO VALUE — Selectors 4 §6's test
+       has no two-valued answer here, and saying so is a POSITIVE STATEMENT rather than a refusal. A flow that
+       reached the cascade having committed to NEITHER arm has no determination to read, and answering it
+       either way would decide a branch nothing contradicted; the matcher now carries that outward through
+       `lxb_selectors_t::unknown` and `selector_match_node` is where it is read.
+       IT ASSERTS NOTHING ON THE VALUE, which §WHOSE-BYTES-STATE-THE-VALUE requires of every seam whose
+       operand a page can reach — and the old crash here did not either, the value being one THIS ENGINE
+       MINTED rather than bytes a stranger stated. What changed is not the entitlement but the SITE: the
+       question this function is asked ("what are this attribute's bytes") has an honest answer and the
+       question worth aborting on ("does this selector match") is one function away.
+       THIS RUNS IN BOTH BUILDS, and the old reason for compiling the work out is retired: it read "the WORK
+       is compiled out with the crash because its only consumer is the crash", which was true while the seam's
+       only product was a `DFAIL` and became false the moment the pin read landed above it. Both answers this
+       function gives are now CORRECTNESS answers — a release build that skipped either would render a
+       different page from the dev build that measured it — and the `attr_shadow_count` load above is what
+       keeps the whole seam free for every document that stores no unknown. */
+    return LXB_SELECTORS_VALUE_UNDETERMINED;
 }
 
 static const lxb_selectors_host_cb_t HOST_CB = { host_defined, host_attr_value_read };
@@ -283,6 +279,26 @@ static lxb_status_t sel_hit_cb(lxb_dom_node_t *node, lxb_css_selector_specificit
     return LXB_STATUS_OK;
 }
 
+#if APICLIENT_DEV
+/* THE SELECTOR THE ABORT IS ABOUT, in the author's own spelling. A compiled list is a graph and a reader
+   standing at a crash needs the text they wrote; lexbor already serializes one, so this is the callback its
+   signature asks for and nothing more. Truncation is the correct behaviour for a diagnostic — a selector
+   longer than this names itself in its first hundred bytes — and the buffer is a caller-owned automatic. */
+typedef struct { char buf[256]; size_t n; } SelText;
+
+static lxb_status_t sel_text_cb(const lxb_char_t *data, size_t len, void *vctx)
+{
+    SelText *t = vctx;
+    size_t room = sizeof(t->buf) - 1 - t->n;
+
+    if (len > room) len = room;
+    memcpy(t->buf + t->n, data, len);
+    t->n += len;
+    t->buf[t->n] = '\0';
+    return LXB_STATUS_OK;
+}
+#endif
+
 bool selector_match_node(lxb_dom_node_t *node, const lxb_css_selector_list_t *list,
                          lxb_css_selector_specificity_t *out_spec)
 {
@@ -305,6 +321,60 @@ bool selector_match_node(lxb_dom_node_t *node, const lxb_css_selector_list_t *li
        a subtree — `el.querySelectorAll('div p')` finds a <p> under `el` whose <div> ancestor is OUTSIDE it. */
     lxb_selectors_match_node(g_arena, node, list, sel_hit_cb, &h);
     g_in_match = false;
+
+#if APICLIENT_DEV
+    /* THE QUESTION THIS SELECTOR ASKED AND NOBODY CAN ANSWER — §Offensive-programming's category (2), a
+       capability that should exist and does not, and the crash that (1) MOVED here from the value seam.
+       `g_arena->unknown` is Kleene's third value carried out of the match: some test in this selector was
+       decided from an attribute whose value the host declined to state, and the conclusion "did not match"
+       is therefore UNKNOWN rather than false.
+       IT IS GATED ON `!h.matched`, WHICH IS KLEENE'S OR AND IS WHY THIS IS NOT THE OLD CRASH WITH A NEW
+       ADDRESS. A selector list matches through whichever of its selectors did, so a definite match makes the
+       list's answer TRUE whatever some other branch could not decide — `#known, [att=x]` on an element
+       `#known` matches is answered, and the seam being asked along the way is not a question the engine
+       failed. The old crash could not tell those apart because it fired before the list had one.
+       WHAT THE NEXT DIFF BUILDS is (2) in this file's ordered list, and this abort is standing in for its
+       signature: the answer exists now and `bool` has nowhere to put it, so the cascade cannot yet REPORT an
+       unanswered predicate and the process stops instead. Its shape is an out-parameter here and a third
+       state at `cssom_cascaded_value`, exactly as `out_spec` is an out-parameter for the thing the bool
+       cannot carry.
+       THE VALUE IS NOT ASSERTED ON and no page string reaches this condition: `g_arena->unknown` is a bit
+       THIS ENGINE set about its own capability, which is what a `DFAIL` is for.
+       NAMED RESIDUAL — `out_spec` IS A LOWER BOUND WHEN A BRANCH WAS UNDETERMINED. What is not covered: a
+       list reports the HIGHEST specificity that MATCHED, so a branch this match could not decide contributes
+       none, and `div, #a[att=x]` on a div with that id weighs the rule at 0,0,1 where the undecided branch
+       would have weighed it 1,1,0 — the rule APPLIES either way and CSS 2.1 §6.4 orders it wrongly against a
+       competitor in between. What the next diff builds: (2)'s out-parameter carries the undetermined
+       branches' specificities beside the answer, since a cascade that must fork on the predicate must fork on
+       its weight too. How its absence would show: two rules whose winner changes with an attribute this
+       engine never observed, reported with the loser's declaration and no question asked. */
+    if (!h.matched && g_arena->unknown) {
+        SelText t;
+        const lxb_char_t *tag;
+        size_t tag_n = 0;
+
+        t.n = 0; t.buf[0] = '\0';
+        lxb_css_selector_serialize_list_chain((lxb_css_selector_list_t *)list,
+                                              sel_text_cb, &t);
+        tag = lxb_dom_element_local_name(lxb_dom_interface_element(node), &tag_n);
+        DFAILF("<%.*s> vs `%s` — Selectors 4 §17.3 \"Match a Selector Against an Element\" answered UNKNOWN: "
+               "a test in this selector was decided from an attribute whose value this engine does not know "
+               "and this flow has not pinned, and Kleene's rules carried that through the compound, the "
+               "combinators and any `:not()`/`:is()` to the selector's own answer. THE MATCHER DECLINED "
+               "RATHER THAN PICKING, which is correct and is as far as it can go: §Solver-half's \"a "
+               "contradicted branch is pruned (sound-only — uncertainty keeps the arm)\" means the arm must "
+               "be KEPT, and keeping it needs a consumer that can ask. NOTHING HERE CAN: `bool` has nowhere "
+               "to put a third answer, so the cascade would receive `false` for a predicate nobody decided "
+               "and both worlds would paint the same page. Build (2) — see host_attr_value_read in this file "
+               "for the ordered diffs.",
+               (int)tag_n, tag ? (const char *)tag : "?",
+               t.buf[0] ? t.buf : "?");
+    }
+#endif
+
     if (out_spec) *out_spec = h.spec;
+    /* THE RELEASE ANSWER IS `h.matched`, which for an undetermined selector is FALSE — the same defined
+       wrong answer every build gave before this seam existed, with no sibling to compose badly with, which
+       is the one thing §THE-ARM-BENEATH-A-`DFAIL` asks of a release arm. */
     return h.matched;
 }
