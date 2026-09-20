@@ -4603,7 +4603,14 @@ static int concolic_exotic_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint
                §A-DFAIL-OUTLIVES-THE-ABSENCE names, where the spec half stays right and the claim about the
                tree goes wrong — so what the crash names now is the ROUTING and the naming, which are the two
                things that are actually absent.
-               TWO STATES REACH IT AND THEY TAKE DIFFERENT WORK. (i) A consumer that reaches this internal
+               TWO STATES REACH IT AND THEY TAKE DIFFERENT WORK, AND THE CRASH SAYS WHICH, because the
+               discriminator is IN HAND here and a remedy naming an action with no object is what CLAUDE.md's
+               §AN-ASSERT-THAT-NAMES-A-REMEDY calls a crash nobody can act on. `c->ident` decides it outright,
+               and for the same reason own_keys_pred does: that function composes the question's key from this
+               exact field and answers JS_UNINITIALIZED when concolic_ident_compose refuses an unspellable
+               member, so a NULL here is the seam HAVING DECLINED and a non-NULL here is the seam HAVING NEVER
+               BEEN ASKED. The two sites read the field the same way on purpose — the asker and the reader may
+               not disagree about which records carry the question. (i) A consumer that reaches this internal
                method WITHOUT the step machine — an engine-side key walk, or any call spelling that does not
                go through the seam that asks the hook — has no arm because nothing asked for one; that one is
                ROUTED, not built. (ii) A record this engine cannot SPELL composes no identity, so
@@ -4611,14 +4618,36 @@ static int concolic_exotic_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint
                with no key, and the arm is absent by construction; that one is literal_ident's named residual
                (a page-created object is named by its creation site plus the creating flow's count of prior
                creations there), and until it exists the ask must not be reachable for such a record. */
-            DFAIL("an unknown with NO EXAMPLE was asked to enumerate itself and this flow holds no ARM for its "
-                  "enumeration — the empty List would state that the record holds nothing, which is a fact "
-                  "this run never observed. The fork itself is NOT missing: the own-keys step machine asks "
-                  "JSConcolicHooks.own_keys_pred and forks it before issuing the request, so reaching this "
-                  "line means either a consumer that went round that seam (route it — do not build a second "
-                  "fork) or a record with no identity to key the question by, for which the hook declines to "
-                  "mint a predicate at all and the ask must not be reachable until such a record can be "
-                  "named");
+            if (!c->ident) {
+                /* (ii) THE RECORD CANNOT BE SPELLED, so own_keys_pred minted no predicate and the seam had
+                   nothing to fork. The absence is by construction and no routing reaches it. */
+                DFAILF("an unknown with NO EXAMPLE was asked to enumerate itself and THIS ENGINE CANNOT SPELL "
+                       "THE RECORD (its identity is absent), so concolic_own_keys_pred minted no predicate and "
+                       "the own-keys seam correctly declined to fork a question with no key. The empty List "
+                       "would state that the record holds nothing, which is a fact this run never observed. "
+                       "THIS IS NOT A ROUTING GAP and a second fork would not reach it: what is missing is the "
+                       "NAME, which is literal_ident's named residual — a page-created object is named by its "
+                       "creation site (quickjs already composes one at JS_OrphanHash) PLUS the creating flow's "
+                       "own count of prior creations at that site, since one `{}` in a loop is one site and a "
+                       "thousand objects. Build BOTH halves: the site alone names three iterations of one loop "
+                       "as one object and LOSES arms. This record reads shape=%s root=%s",
+                       c->shape ? c->shape : "(none)", c->root ? c->root : "(none)");
+            } else {
+                /* (i) THE RECORD IS NAMED, so own_keys_pred WOULD have minted one — the question was never
+                   asked, which is a fact about the CONSUMER and not about the record. */
+                DFAILF("an unknown with NO EXAMPLE was asked to enumerate itself and this flow holds no ARM "
+                       "for its enumeration, THOUGH THE RECORD IS NAMED (%s) — so concolic_own_keys_pred "
+                       "would have minted the predicate, and whatever reached this internal method did so "
+                       "without asking it. The fork is NOT missing and a second one must not be built: "
+                       "step_ownkeys_run asks JSConcolicHooks.own_keys_pred, forks the boolean through the "
+                       "step driver, runs the unknown-member chain on the true arm and only then issues "
+                       "request 11. ROUTE THE CONSUMER ONTO IT. step_request_check names the two routes to "
+                       "GP_OWNKEYS that do not pass through that wrapper and are therefore invisible to its "
+                       "own assert — PerformPromiseAllKeyed step 1, which asks under its own step code, and "
+                       "§10.5.11's invariant walk, which reads the TARGET's keys from the driver's own "
+                       "continuation — so read the frame list for those two before looking anywhere else",
+                       c->ident);
+            }
         }
         return 0;
     }
