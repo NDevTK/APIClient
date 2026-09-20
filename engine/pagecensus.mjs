@@ -30,8 +30,20 @@
  * the 740 mirrored resources carry a query"). A path mapping here would be a second copy of that rule, and
  * the copy anyone writes first is the one that drops the query. So this driver knows nothing about the mirror:
  * it takes a URL, fetches the document from it, and answers every park by fetching that park's own URL from
- * the same origin. Point it at serve-faithful and it replays the mirror; point it at any other local origin
- * and it drives that. One serving rule, one statement of it, two consumers.
+ * the same origin.
+ * THE MIRROR AND ITS SERVER ARE DELETED AND THE PARAGRAPH ABOVE IS KEPT RATHER THAN DROPPED, BECAUSE ITS
+ * ARGUMENT SURVIVES ITS SUBJECT AND A READER WHO RE-DERIVES IT WILL RE-ADD THE PATH MAPPING. e36d41d2
+ * ("corpus: THIS REPOSITORY CARRIES NO COPY OF ANYBODY ELSE'S SITE") removed testing/corpus/serve-faithful.mjs
+ * and the committed capture; `git cat-file -e origin/main:testing/corpus/serve-faithful.mjs` answers "does not
+ * exist", and testing/corpus/run.sh refuses `AT=frozen` in as many words. So the sentence "that rule is stated
+ * in exactly one place" is now about a file no revision of this tree contains, and what is left of it is the
+ * rule that never needed the mirror: this driver knows nothing about any on-disk layout, takes a URL, and
+ * answers every park from the origin the document came from. Point it at ANY local origin and it drives that.
+ * AND THE `Usage` LINE BELOW STILL NAMES THE DELETED SERVER, WHICH IS KEPT AND MARKED RATHER THAN SILENTLY
+ * REWRITTEN: a lane sent to reproduce a census by typing it gets a file-not-found for a component it did not
+ * touch, reads that as its own mistake, and the cheapest thing that stops the next one is the line saying so
+ * where the command is. What to type instead is any static server over the directory holding the document —
+ * `python3 -m http.server <port>` in testing/fixtures drives every tracked fixture there.
  *
  * WHY THE CENSUS IS A SERIES AND WHICH HALF OF IT IS QUOTED WHERE. solver/result.c states the kinds and they
  * are not alike. `_wfq` is a reading of an INSTANT: on a frontier that has drained it is `{members: 0}`, which
@@ -85,7 +97,8 @@
  * driver abort at its first park while the other keeps running.
  *
  * Usage:  node engine/pagecensus.mjs <document-url> [transcript.jsonl]
- *   e.g.  node testing/corpus/serve-faithful.mjs gitlab 8977 &
+ *   e.g.  node testing/corpus/serve-faithful.mjs gitlab 8977 &       <-- DELETED at e36d41d2; see above
+ *         (cd testing/fixtures && python3 -m http.server 8973) &        <-- a tracked subject that exists
  *         `timeout 400 sh -c "ulimit -S -t 300; node engine/pagecensus.mjs http://127.0.0.1:8977/ /tmp/gl.jsonl"`
  */
 import { appendFileSync, existsSync } from "node:fs";

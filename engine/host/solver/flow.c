@@ -79,6 +79,14 @@ static int64_t g_picks_total = 0;
    above cannot: it measures the ORDER and not what the order fails to reach. Artifact 58d56516, a 4.5 MB real
    bundle replayed from its own mirror at its original host and paths, 224 samples over 167 s:
      node testing/corpus/serve-faithful.mjs <id> <port> & node engine/pagecensus.mjs http://127.0.0.1:<port>/
+   THAT COMMAND NO LONGER RUNS AND THESE FIGURES CANNOT BE RE-TAKEN, KEPT AT THE HEAD OF THEM RATHER THAN LEFT
+   FOR A READER TO FIND BY TYPING IT. `testing/corpus/serve-faithful.mjs` and the committed capture it replayed
+   were DELETED at e36d41d2 ("corpus: THIS REPOSITORY CARRIES NO COPY OF ANYBODY ELSE'S SITE") — established by
+   CONTENT and not by ancestry, `git cat-file -e origin/main:testing/corpus/serve-faithful.mjs` answering "does
+   not exist", which is the check this repository being SHALLOW leaves available — and testing/corpus/run.sh
+   says so in its own words by refusing `AT=frozen` outright. So every number below is a reading about a
+   subject this tree does not carry: sound where it is about the ENGINE, and unrepeatable, so a later
+   disagreement with it is not a regression, cannot be bisected, and is not evidence about anything.
    `wTop - wMin` is 0.036 — the fixture's figure to the digit — with `valMin == valMax == valTop == 4`, so the
    reward is not a common offset here either, it is one value every member holds. 71452 members and 71451
    forks come from FIFTY branch sites at `brDepthMax` 6 over THIRTY-NINE source reads, one bucket holding
@@ -100,11 +108,42 @@ static int64_t g_picks_total = 0;
    WHAT THE ROW LICENSES IN ITS OWN UNIT IS LESS THAN EITHER READING, AND SAYING SO IS THE POINT: not every
    fork records a slot at all (decide_fork_same_path asks no predicate, and dec_fork_handoff "claims no replay
    slot"), so 10507 arms against 71451 forks is not a fraction of anything this document publishes. The row
-   says how many recorded questions were re-asked and matched. It does not say where the thread went, and no
-   row on that line does — `scanNextWeights`/`steps` against `members` and `scanRivalRuns` against `forks` are
-   the two that were built for exactly that question and neither was quoted here.
-   RETIRES: a run of this mirror quoting those two scan rows, after which this paragraph is about a derivation
-   nobody needs to be warned off.
+   says how many recorded questions were re-asked and matched. It does not say where the thread went.
+   THE TWO ROWS THAT DO SAY IT ARE NOW QUOTED, AND THE ANSWER IS WHAT ASKING THE ORDER COSTS RATHER THAN
+   ANYTHING THE ORDER DECIDED. Not on that mirror, which is gone; the retirement clause that stood here named
+   an instrument no revision contains, so it could never have been satisfied as written. Re-taken instead on a
+   document this repository TRACKS — testing/fixtures/wjp_absent.html, four `src` rows and no inline — at
+   artifact 9213fbab, 64 commits behind its tip, TWO runs of 161 s and 163 s under one 180 s CPU budget on a
+   quiet box, served by any static server over that directory:
+     node engine/pagecensus.mjs http://127.0.0.1:<port>/wjp_absent.html <transcript.jsonl>
+   `scanNextWeights / steps` reads 17604 and 17801 against `members` 31828 and 32232 — a ratio of 0.553 and
+   0.552 — and the same ratio read 0.5531 at a sample a THIRD of the way through the first run, on a frontier
+   that tripled between the two readings. A quotient that holds to three figures while its denominator triples
+   is a FULL O(members) walk per step, which no single sample could have said. `scanRivalRuns / forks` reads
+   1.985 and 1.992: the hook rescans about twice per fork, where flow.h's own cadence note predicts about once,
+   so something raises the frontier generation a second time per fork and `flow_rank_changes` is the row that
+   would name it.
+   SUMMED, THE TWO RUNS EVALUATED 2.17 AND 2.22 BILLION MEMBER WEIGHTS TO PERFORM `unitsDone` 380 AND 522 —
+   about five and a half million weight evaluations per unit of work — split next 30.1%/30.0%, rival
+   49.0%/49.3%, other 20.7%/20.5%, census 0.2% on both. Those are COUNTS and not clocks, for the reason
+   FLOW_SCANS gives, so a loaded box cannot have inflated any of them; `unitsDone` is the one column of this
+   paragraph that moved with the interleaving and it is not what the paragraph is about.
+   AND IT IS NOT THE ORDER, SETTLED BY THE TWO ROWS THIS FILE ALREADY NAMES FOR THAT QUESTION RATHER THAN BY
+   THE FRACTION IT WARNS AGAINST. `starvedPicksIdle` is 0 and 1 against `picksLifetime` 34971 and 35603 — ONE
+   pick in seventy thousand ever passed over a member — and `neverPickedGap` is 0 at both, so the best
+   never-picked member stands AT the top. `valMin == valMax == valTop` reproduces here at 1, a second document
+   and a second artifact, so the reward orders nothing on this one either; and it costs nothing that it does
+   not, because there is no member it would have had to be ranked ahead of. The frontier is wide because
+   forking is the point (§THERE IS NO GRIND: this is what BFS looks like, not a depth preference to restore),
+   and the thread is spent ASKING rather than running.
+   THE COST IS QUADRATIC IN THE FRONTIER AND THAT LICENSES NO BOUND WHATEVER (§NO BOUNDS). Every ask is
+   O(members) and the asks are one per STEP and about two per FORK, so a page that forks pays members-squared
+   to be ordered — and the diff that follows from it changes what an ask COSTS and never what it ANSWERS,
+   which is the only kind of diff this measurement licenses. Capping a fork site, bounding the cross product or
+   shedding an arm would move every number above and answer a different question.
+   RETIRES: a reading of these rows on which the four entries' weights do NOT grow with `steps * members`,
+   which is what a sub-linear ask would look like and is the one observation that would make this paragraph
+   describe a cost the engine no longer pays.
    WHAT IS NEW IS THE CURSOR HISTOGRAM, AND IT IS A FACT ABOUT THE DOCUMENT RATHER THAN THE QUEUE.
    `deepest` 7, `programCursors` {0..6: 0, 7: 71296, 8: 156}: ONE program is holding the entire frontier —
    71296 members have finished program 6 and are standing at program 7's door, while 156 have finished 7 and
