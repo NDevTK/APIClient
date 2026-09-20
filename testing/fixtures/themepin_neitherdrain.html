@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html><head><title>themepin neitherdrain</title>
+<style>
+html { background-color: #00ff00; }
+html[data-theme=dark]  { background-color: #101011; }
+html[data-theme=light] { background-color: #f9fafb; }
+#sw { width: 400px; height: 200px; background-color: #00ff00; }
+html[data-theme=dark]  #sw { background-color: #101011; }
+html[data-theme=light] #sw { background-color: #f9fafb; }
+</style></head>
+<body><div id="sw">themepin neitherdrain</div>
+<script>
+/* THE DISCRIMINATOR THAT NAMES WHICH WORLD ABORTS, and it is `themepin_pinned` plus ONE `else`. Everything
+   its sibling is tested on is held: the store runs OUTSIDE the equalities, BEFORE them, in the order a real
+   theme shim writes and which its sibling's own comment calls "the order that makes the pin a fact the
+   cascade must go back and read". The single delta is that the world where the value is NEITHER token drops
+   the attribute instead of carrying an undetermined one into the cascade.
+   SO THE TWO FIXTURES DIFFER IN EXACTLY ONE POPULATION — the neither-arm flow — AND IN NOTHING ELSE. If this
+   one paints two differing rasters and completes while its sibling aborts, the aborting world is the
+   neither-arm world, which is a fact about WHICH FLOW reached the seam and NOT about a pin failing to reach a
+   read. That reading cannot be had from `themepin_pinned` alone, and its absence is what makes a single
+   abort there look like a broken pin: the abort ends the process, so the two worlds that DID pin never get
+   to paint and their silence is read as their having painted green.
+   HOW ITS ABSENCE WOULD SHOW: this document aborting at the cascade, or painting three greens. Either would
+   say the neither-arm world is not the one that ends the run and would send the next reader back to the pin.
+   WHAT IT IS NOT: a model of a document anybody writes. No page drops an attribute in an else-branch. This
+   arm exists to isolate one flow, exactly as `themepin_prepinned` exists to isolate one ordering. */
+var stored = localStorage.getItem('themepin_session');
+if (stored) {
+  var parsed = JSON.parse(stored);
+  if (parsed && parsed.theme) {
+    document.documentElement.setAttribute('data-theme', parsed.theme);
+    if (parsed.theme === 'dark') { window.__themepin = 1; }
+    else if (parsed.theme === 'light') { window.__themepin = 2; }
+    else { document.documentElement.removeAttribute('data-theme'); }
+  }
+}
+</script>
+</body></html>

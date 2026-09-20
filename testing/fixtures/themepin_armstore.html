@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html><head><title>themepin armstore</title>
+<style>
+html { background-color: #00ff00; }
+html[data-theme=dark]  { background-color: #101011; }
+html[data-theme=light] { background-color: #f9fafb; }
+#sw { width: 400px; height: 200px; background-color: #00ff00; }
+html[data-theme=dark]  #sw { background-color: #101011; }
+html[data-theme=light] #sw { background-color: #f9fafb; }
+</style></head>
+<body><div id="sw">themepin armstore</div>
+<script>
+/* THE ARM THAT PAINTS TWO WORLDS, and the one this partition was missing. Its four unknown-bearing siblings
+   all store the attribute OUTSIDE the equalities, so every one of them also runs the store in the world where
+   the value is NEITHER token — a flow that has determined nothing, for which the cascade's refusal is CORRECT
+   and which is therefore the world that ends the process. This arm stores INSIDE each equality's holding arm,
+   so the only worlds that carry an unknown attribute are the two that pinned it.
+   WHAT IT ESTABLISHES, and it is the positive statement its siblings cannot make: concretize-on-pin reaches
+   the cascade END TO END. The pin is written by the page's own `===`, it survives `setAttribute`, it survives
+   the context switch between the script's task and the rendering opportunity, and the attribute-selector seam
+   reads it — so `[data-theme=dark]` is decided TRUE in one world and `[data-theme=light]` TRUE in the other,
+   and the two rasters DIFFER in content rather than merely in count.
+   HOW ITS ABSENCE WOULD SHOW: this document painting every world green, or aborting at the cascade at all.
+   Either says the pin is not reaching the read, which is the reading its siblings' single abort invites and
+   does not support. WHAT IT DOES NOT ESTABLISH, and must not be read as: anything about a value the flow
+   never determined. That population is `themepin_unpinned`'s and its answer is three-valued matching. */
+var stored = localStorage.getItem('themepin_session');
+if (stored) {
+  var parsed = JSON.parse(stored);
+  if (parsed && parsed.theme) {
+    var t = parsed.theme;
+    if (t === 'dark') { document.documentElement.setAttribute('data-theme', t); }
+    else if (t === 'light') { document.documentElement.setAttribute('data-theme', t); }
+  }
+}
+</script>
+</body></html>

@@ -17,7 +17,22 @@ html[data-theme=light] #sw { background-color: #f9fafb; }
    Each equality PINS the value on the arm that takes it, so the frontier holds a dark-pinned world
    and a light-pinned world; a cascade that reads the pin decides `[data-theme=dark]` TRUE in the
    first and FALSE in the second, and the two worlds paint #101011 against #f9fafb across the whole
-   viewport. TWO RASTERS THAT DIFFER IS THE RESULT; one raster is the pin not being read. */
+   viewport. TWO RASTERS THAT DIFFER IS THE RESULT.
+   THIS USED TO END `one raster is the pin not being read`, AND THAT INFERENCE IS RETIRED RATHER THAN DELETED
+   BECAUSE IT IS THE ONE A READER RE-DERIVES FROM THIS DOCUMENT ALONE. It does not follow, and the step it
+   skips is WHICH WORLD reached the seam. Forced multi-path runs a third flow here — the one where the value
+   is NEITHER token — and that flow stores the attribute too, because the store is outside the equalities;
+   it has determined nothing, so the cascade's refusal is CORRECT for it. The refusal ends the PROCESS, so
+   the two worlds that did pin never reach their rendering opportunity and their absence is read as their
+   having painted green. `themepin_neitherdrain` is this document plus one `else` that drops the attribute in
+   that third world, and `themepin_armstore` stores only inside the holding arms; both complete and both
+   paint #101011 against #f9fafb, so the pin IS written, IS carried across the store and the context switch,
+   and IS read at the seam.
+   WHAT REMAINS TRUE OF THIS ARM, and why it stays: it is the ORDER a real theme shim writes, and it is the
+   one that shows an unanswerable world costing every answerable world its output. That cost is not a pin
+   defect and not a crash to soften — it is the case three-valued matching is for, arriving as a process
+   exit. RETIREMENT: this paragraph goes when the seam can answer a flow that determined nothing, because
+   this document then paints its three worlds and there is no inference left to get wrong. */
 var stored = localStorage.getItem('themepin_session');
 if (stored) {
   var parsed = JSON.parse(stored);
