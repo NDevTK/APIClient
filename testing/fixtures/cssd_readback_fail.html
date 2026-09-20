@@ -1,0 +1,9 @@
+<!DOCTYPE html><html><head><title>readback fail</title></head>
+<body><div id="d" style="color:red;margin:4px 0"></div>
+<script>
+/* THE POSITIVE CONTROL, and it is the whole reason its sibling's silence means anything. Identical
+   document, and it asserts a value that is DELIBERATELY WRONG, so it MUST throw. If this one is
+   silent too, the throw channel is not reaching the log and neither fixture has measured anything. */
+var d = document.getElementById('d');
+if (d.style.color !== 'ZZNOTACOLOR') throw new Error('CSSDREADBACK color=' + d.style.color);
+</script></body></html>

@@ -1,0 +1,12 @@
+<!DOCTYPE html><html><head><title>readback ok</title></head>
+<body><div id="d" style="color:red;margin:4px 0"></div>
+<script>
+/* THE SUBJECT. An ORDINARY declaration block -- no unknown anywhere -- read back through the
+   members the values-backing store now answers. It THROWS on a mismatch, so a page error is the
+   witness and silence is a real result ONLY because its sibling cssd_readback_fail.html proves
+   the throw channel speaks. */
+var d = document.getElementById('d');
+if (d.style.color !== 'red') throw new Error('CSSDREADBACK color=' + d.style.color);
+if (d.style.length !== 5) throw new Error('CSSDREADBACK len=' + d.style.length);
+if (d.style.cssText.indexOf('color: red') < 0) throw new Error('CSSDREADBACK cssText=' + d.style.cssText);
+</script></body></html>

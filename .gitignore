@@ -64,6 +64,19 @@ testing/fixtures/*
 # same two worlds, same seam count, same terminal — which is what retires the read-count and the ordering as
 # explanations and leaves the pin read itself as the subject.
 !testing/fixtures/themepin_*.html
+# THE VALUES-BACKING READBACK PAIR, re-included by name because the two are ONE EXPERIMENT and the
+# silent one is worthless without the loud one. `7c4c6b3f` moved every declaration block's READ onto a
+# values store with the serialization kept as a projection, and named its own biggest unmeasured risk:
+# an ORDINARY block -- no unknown anywhere -- must still answer `color`, `length` and `cssText` exactly
+# as before. Both fixtures are that block. `cssd_readback_ok` asserts the CORRECT values and throws on a
+# mismatch, so its SILENCE is the result; `cssd_readback_fail` is identical except that it asserts a
+# value that is deliberately wrong, so it MUST throw. CLAUDE.md
+# §A-CONTROL-ARMS-ONLY-ON-A-SITE-THE-INSTRUMENT-CAN-JUDGE: a probe that has never made its check speak
+# has calibrated nothing, and an absent crash is not a correct value.
+# MEASURED at 7c4c6b3f through the shipped ABI: the control fires and its message carries `color=red`,
+# which is POSITIVE evidence of the value rather than an absence, and the subject is silent -- so the
+# store answers `red`, `5` and a `cssText` containing `color: red`.
+!testing/fixtures/cssd_readback_*.html
 # THE `webpackJsonp` PRESENT/ABSENT PAIR AND THE FOUR BODIES IT LOADS. THREE TRACKED FILES QUOTE NUMBERS
 # MEASURED ON THIS DOCUMENT AND NAME IT BY PATH, and the bytes were in no revision: engine/host/solver/flow.c's
 # argument for why `rankChanges` is not the arrival count (34315 against 34309 at the last of twelve samples,
