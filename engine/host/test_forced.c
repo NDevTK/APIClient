@@ -4725,6 +4725,18 @@ static void css_pending_selftest(void)
            "as a margin by the four-side grammar", out ? out : "(nothing)");
     free(v);
 
+    /* THE SECOND DISJUNCT OF THE SAME `Otherwise` ARM — "or contain arbitrary substitution functions of their
+       own that have not yet been substituted". This longhand was DECLARED with a var() of its own, so it is
+       not a pending-substitution value at all and the standard gives it the same empty string. Without this
+       the entry would answer `var(--x) 1px 1px 1px`, which no grammar in this engine produced. */
+    mixed[0] = "var(--x)";
+    mixed[1] = mixed[2] = mixed[3] = "1px";
+    out = css_shorthand_serialize_value("margin", mixed);
+    CHECKF(out == NULL,
+           "css-values-5 \"Substitution in Shorthand Properties\": a shorthand one of whose longhands carries "
+           "an UNSUBSTITUTED arbitrary substitution function must serialize to the empty string and answered "
+           "`%s`", out ? out : "(nothing)");
+
     /* AND A LIST WITH NONE OF THEM IS NOT THIS RULE'S BUSINESS AT ALL, which is the assertion that keeps the
        arm from swallowing every other shorthand serialization in the engine. */
     four[0] = four[1] = four[2] = four[3] = "0px";

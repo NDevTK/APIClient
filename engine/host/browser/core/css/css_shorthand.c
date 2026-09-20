@@ -1901,10 +1901,11 @@ char *css_shorthand_serialize_value(const char *shorthand, const char *const *va
        THE FIRST ARM IS WHAT MAKES A SHORTHAND ROUND-TRIP: `margin: var(--g) 0` read back through `cssText`
        or `getPropertyValue("margin")` answers the bytes the page wrote, which is the one observation an
        author has of a value the same sentence calls unobservable.
-       css-values-5's OWN arbitrary-substitution clause of the `Otherwise` arm is NOT answered here, and is
-       named where it belongs — a longhand carrying an unsubstituted function of its own reaches this list
-       only through a declaration of that longhand, and core/css/css_style_declaration.c's block serializer is
-       what would have to notice. */
+       BOTH DISJUNCTS OF THE `Otherwise` ARM ARE ANSWERED, which is why this is one call: a longhand DECLARED
+       with an arbitrary substitution function of its own — `margin-top: var(--x)` beside three literal
+       margins — is not a pending-substitution value and the standard gives it the same empty string. Without
+       it this entry would answer `var(--x) 1px 1px 1px`, which no grammar here produced and no browser
+       serializes. */
     {
         char *pending = NULL;
 

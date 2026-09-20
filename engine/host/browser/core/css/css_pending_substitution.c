@@ -8,6 +8,7 @@
 
 #include "check.h"
 #include "core/css/css_pending_substitution.h"
+#include "core/css/css_var.h"
 
 /* U+0001 START OF HEADING. Its whole job is to be a byte no shorthand NAME contains — the names come from
    core/css/css_shorthand.c's own table — so the split below is exact whatever the page's value holds. */
@@ -90,7 +91,17 @@ bool css_pending_serialize(const char *const *values, unsigned n, char **out)
     for (i = 0; i < n; i++) {
         bool pending = css_pending_is(values[i]);
 
-        any = any || pending;
+        /* THE `Otherwise` ARM HAS TWO DISJUNCTS AND THIS IS THE SECOND: "or contain arbitrary substitution
+           functions of their own that have not yet been substituted". A longhand reaches this list carrying
+           one only by having been DECLARED as a longhand — `margin-top: var(--x)` beside three literal
+           margins — which is a different population from the pending values above and takes the same answer.
+           Leaving it out would make that shorthand serialize to `var(--x) 1px 1px 1px`, a string that is
+           neither the standard's answer nor a value any grammar here produced: `css_shorthand_component`
+           never returns an unsubstituted function, so the only way one arrives is the declaration itself.
+           THE SCAN IS core/css/css_var.h's OWN, the same one that decided this declaration was admitted at
+           parse time and the same one the substitution step performs, so no two of the three can come to
+           disagree about what a function token is. */
+        any = any || pending || css_var_references(values[i]);
         /* "from the same original shorthand value" is a BYTE COMPARISON and not a re-decode, because every
            longhand of one declaration is filled in from ONE `css_pending_make` call carrying one shorthand
            name and one original value. So two of a shorthand's longhands can only differ here by having been

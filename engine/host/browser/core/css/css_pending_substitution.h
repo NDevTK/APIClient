@@ -103,10 +103,14 @@ bool css_pending_split(const char *value, char **shorthand, const char **origina
 /* "If all of the component longhand properties for a given shorthand are pending-substitution values from the
    same original shorthand value, the shorthand property must serialize to that original (arbitrary
    substitution function-containing) value. Otherwise, if any of the component longhand properties for a given
-   shorthand are pending-substitution values … the shorthand property must serialize to the empty string."
+   shorthand are pending-substitution values, or contain arbitrary substitution functions of their own that
+   have not yet been substituted, the shorthand property must serialize to the empty string."
    THE TWO ARMS ARE ONE ANSWER, so they are one call: `*out` receives the original (OWNED) for the first arm
    and NULL for the second, and the return value says whether the standard's rule decided at all. FALSE means
-   no member of `values` is a pending-substitution value and the caller's own grammar answers. */
+   the rule says nothing about this list and the caller's own grammar answers.
+   THE SECOND DISJUNCT IS WHY THIS TAKES A LIST OF VALUES RATHER THAN A LIST OF PENDING-SUBSTITUTION VALUES:
+   a longhand DECLARED with an arbitrary substitution function of its own is not one of this file's values at
+   all, and the standard gives it the same answer. */
 bool css_pending_serialize(const char *const *values, unsigned n, char **out);
 
 #endif
