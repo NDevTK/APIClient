@@ -4436,14 +4436,33 @@ static CssPx uv_px_ask(lxb_dom_element_t *el, const char *name)
    node set is not a ceiling). engine/check_recursion.mjs's LLVM IR is the exact edge set for direct calls and
    needs a compile; the cut ranking is not in it. Every figure in this banner is quoted with that
    caveat or not quoted.
-   WHAT THE NEXT DIFF BUILDS: a THIRD kind at `bf_layout`, CSS 2.1 §9.4.1 "Block formatting contexts"' walk,
-   which the same ranking makes the best third cut by a clear margin — twenty-one to SIX, against seven for
-   `bf_box` and nine for the next three. It is also already a probe in engine/layout_cost.mjs, so its call
-   count is a number this tree can already produce. THE ARM CHECK IS OWED FIRST AND IS NOT THE SAME ONE:
-   a BFC walk descending into a NESTED formatting context is a re-entry with a DIFFERENT element and is
-   legitimate, so the question is whether one element's walk can be open twice — read what `bf_box` hands back
-   to the walk and whether any pass re-enters the walk for the box it is already laying out. A reader who
-   finds that it can has found that this kind must not be declared, and that answer belongs at the site.
+   NOT `bf_layout`, WHICH THIS RESIDUAL NAMED AS THE NEXT KIND AND WHICH THE ARM CHECK REFUSES. The ranking
+   does make CSS 2.1 §9.4.1 "Block formatting contexts"' walk the best third cut — twenty-one to SIX, against
+   seven for `bf_box` and nine for the next three, with nothing tied at six or seven — and the cut number is
+   not what decides a kind. THE QUESTION DOES NOT FIT THE TYPE, and that is a refusal rather than an
+   inconvenience: `bf_layout`'s tuple is (element, WANT, pass), where `want` is a SECOND ELEMENT — the box the
+   walk is looking for, which is how `block_flow_child_top` asks one container for one child's position — and
+   `LayoutQuestion` holds ONE element. `pass` would fit `code` one-based; `want` has nowhere to go.
+   AND DROPPING IT IS NOT MERELY LOSSY, IT ABORTS A CORRECT DOCUMENT. Two walks of ONE container looking for
+   TWO DIFFERENT children are different questions that would render and compare as one, and they are reachable
+   one inside the other: `bf_layout` asks `used_value_px` of its OWN subject for `margin-top` and
+   `margin-bottom`, and from that ask `uv_px_ask` -> `uv_abs_margins` -> `uv_abs_solve` ->
+   `flow_static_position` -> `flow_border_box_origin` -> `fp_border_box_origin_compute` reaches
+   `block_flow_child_top` and a second walk. The same ask reaches `block_flow_auto_height` (a `want` of NULL)
+   and both baseline entries (a different `pass`), so all three of this kind's discriminators vary INSIDE an
+   open walk. A kind that cannot spell a discriminator its own callers vary is the one shape
+   core/layout/layout_question.h names as turning a working engine into an abort.
+   WHAT THE NEXT DIFF BUILDS, THEREFORE: `bf_box`, whose question IS (element, pass) and fits the type exactly
+   — `name` NULL, `code` the pass ONE-BASED, which is load-bearing for the same reason `UV_BOX_INLINE` was,
+   since `BF_BASELINE_NONE` is 0 and is the pass every ordinary render runs. It costs ONE function against
+   `bf_layout` (a residual of seven rather than six) and it is the cut whose question this type can say.
+   ITS OWN ARM CHECK IS NOT DONE AND IS NOT THE ONE ABOVE — do not read this paragraph as having cleared it.
+   The shape to settle is whether `bf_box(el, pass)` can be open twice for ONE element: the candidate found
+   while refusing `bf_layout` is `bf_box` -> `bf_box_compute` -> the same `uv_abs_solve` chain ->
+   `block_flow_child_top(cb, el)` -> `bf_layout(cb, el, …)` -> that walk reaching `el` among `cb`'s children
+   -> `bf_box(el, pass)`, whose memo cannot answer because `flow_placement_box_record` runs AFTER the compute
+   that is still open. That is either the defect this kind exists to name or a route the engine prevents, and
+   reading which is the next diff's first act rather than its second.
    HOW ITS ABSENCE WOULD SHOW: a terminal SIGSEGV on a real document with no `@WHY` line anywhere in the run
    and a backtrace that is one short frame cycle repeated to the guard page, whose repeated frames include
    neither this function nor `uv_sized`. ---------------------------------------------------------------- */
