@@ -360,6 +360,60 @@ static int border_side_index(const char *longhand, const char *part)
     return -1;
 }
 
+/* ---- css-position-3 §3.2 "Box Insets Shorthands: the inset-block , inset-inline , and inset properties" ----
+ *
+ * THE THREE ROWS ARE ONE GRAMMAR, which is why their longhand lists sit HERE beside it rather than beside
+ * `LH_MARGIN` with the rest of the table's: §3.2 declares all three on two `Name:` lines of one section over
+ * ONE component production, and the arm below and the table both read these two arrays, so there is no second
+ * copy of either list to drift from the first. `inset`'s own list needs no array at all — it IS `SIDES`,
+ * because §3.2 assigns "to the corresponding physical longhand properties — top , right , bottom , and left"
+ * in exactly the order every four-side rule in CSS states them.
+ *
+ * WHY THE SHORTHANDS ARE THIS COMPONENT'S AND THE LONGHANDS ARE NOT. Lexbor's property registry carries all
+ * EIGHT §3.1 longhands — `top`, `right`, `bottom`, `left` and the four `inset-*-start`/`-end` — and NONE of
+ * §3.2's three shorthands, so a longhand declaration has been through lexbor's own grammar (which is why
+ * `css_shorthand_validates_longhand` must go on answering FALSE for all eight: a second grammar standing
+ * beside the registry's parser is the `border-*-color` mistake one property along) while `inset: 0` reaches
+ * the cascade as a `__CUSTOM` holding the raw token stream with nothing having validated or lower-cased it.
+ * The one `inset` lexbor does know is `LXB_CSS_VALUE_INSET`, the `<line-style>` KEYWORD of
+ * css-backgrounds-3 §3.2 "Line Patterns: the border-style properties", which is a VALUE and not a property
+ * and types nothing here.
+ *
+ * AND THE LOGICAL PAIR IS WHY ALL THREE ROWS LAND TOGETHER RATHER THAN `inset` ALONE. css-logical-1 §4
+ * "Flow-Relative Box Model Properties" makes `left` and `inset-inline-start` share ONE computed value
+ * "determined by cascading the declarations of both properties together as one", and `cssom_cascaded_value`
+ * implements that by resolving the partner and collecting BOTH members' declarations. So an `inset-inline: 10px`
+ * two lines above a `left` read is a declaration of `left`'s own cascade, and a `css_shorthand_complete_for`
+ * that recorded the four physical insets on the strength of the `inset` row alone would be claiming a
+ * completeness that is false in exactly the direction the predicate exists to catch — the answer would be a
+ * real number with nothing to say the declaration was never looked at. */
+static const char *const LH_INSET_BLOCK[]  = { "inset-block-start",  "inset-block-end"  };
+static const char *const LH_INSET_INLINE[] = { "inset-inline-start", "inset-inline-end" };
+
+/* css-position-3 §3.1 "Box Insets: the top , right , bottom , left , inset-block-start , inset-inline-start ,
+   inset-block-end , and inset-inline-end properties"' `Value:` line is `auto | <length-percentage>`, and that
+   ONE line is what `<'top'>` names in all three of §3.2's multipliers — so the component test is one entry the
+   three rows route to rather than a copy per row. §3.1's own value prose admits the sign on both arms
+   ("Negative values are allowed", said of `<length>` and again of `<percentage>`), which is why nothing here
+   range-checks: `sh_length_component` answers the PRODUCTION and a negative inset is a valid declaration. */
+static bool inset_component(const char *w, size_t n)
+{
+    return css_word_is(w, n, "auto") || sh_length_component(w, n, true);
+}
+
+/* THE COMPONENT AS THE LONGHAND'S SPECIFIED VALUE, and the keyword is CANONICALIZED where the length is
+   copied. That split is `overflow`'s and not `margin`'s, and the difference is the registry rather than a
+   preference: `margin`'s expansion may copy `auto` verbatim because lexbor TYPES `margin` and has already
+   serialized the declaration back in canonical lower case, so the raw spelling reaches it only down the
+   narrow `__UNDEF` math-function path. Lexbor types no `inset` at all, so EVERY `inset` declaration arrives
+   as the author's own bytes — `inset: AUTO` is an ordinary stylesheet and would otherwise put `AUTO` into
+   `left`'s cascaded value for every consumer downstream to be case-insensitive about one at a time. */
+static char *inset_take(const char *w, size_t n)
+{
+    if (css_word_is(w, n, "auto")) return css_sh_strdup("auto");
+    return css_sh_dupn(w, n);
+}
+
 /* css-backgrounds-3 §3.4's OTHER HALF, which its own prose states outright: "The border shorthand also resets
    border-image to its initial value." That is not a footnote here — CSSOM §6.6 re-forms a shorthand only when
    EVERY longhand it sets is present in the block, so a `border` that did not set these five would be a
@@ -1028,6 +1082,46 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
         comp = SIDE_OF[n][side];
         return css_sh_dupn(w[comp], wl[comp]);
     }
+    /* ---- css-position-3 §3.2's `inset`, `inset-block` and `inset-inline` -----------------------------------
+       ONE ARM FOR THREE ROWS, because §3.2 gives them one component production and they differ only in the
+       MULTIPLIER and in which list the index is into. `inset` is `<'top'>{1,4}` and takes CSS 2.1 §8.3's
+       rotation, which §3.2 states as the whole of its rule — "assigning values to the longhands representing
+       each side exactly as the margin property does for its longhands" — so it reads SIDE_OF like `margin`
+       and `border-width` rather than carrying a rotation of its own. `inset-block` and `inset-inline` are
+       `<'top'>{1,2}` and §3.2 states THEIR rule outright too: "The first component value sets the start side,
+       the second sets the end ; if omitted, the second value defaults to the first." */
+    {
+        const char *const *lh = NULL;
+        int m = 0, k, comp;
+
+        if (strcmp(shorthand, "inset") == 0)             { lh = SIDES;           m = 4; }
+        else if (strcmp(shorthand, "inset-block") == 0)  { lh = LH_INSET_BLOCK;  m = 2; }
+        else if (strcmp(shorthand, "inset-inline") == 0) { lh = LH_INSET_INLINE; m = 2; }
+        if (lh != NULL) {
+            side = -1;
+            for (k = 0; k < m; k++)
+                if (strcmp(lh[k], longhand) == 0) { side = k; break; }
+            if (side < 0) return NULL;   /* this shorthand does not name that longhand */
+            /* csscascade-5 §3 "Shorthand Properties": "if a shorthand is specified as one of the CSS-wide
+               keywords, it sets all of its sub-properties to that keyword" — the ENTIRE value, ahead of
+               §3.2's own grammar, in which `inherit` is no component at all. CSS Cascade §7's DEFAULTING step
+               is what resolves it. */
+            if (css_wide_keyword(value)) return css_sh_strdup(value);
+            /* A COMPONENT COUNT PAST THE MULTIPLIER IS AN INVALID DECLARATION AND NOT A TRUNCATION, which is
+               `css_words`' own -1 and the same refusal `margin` makes: nothing typed this value, so the count
+               is the page's and CSS Syntax 3 §5.5.6 "Consume a declaration" drops what the grammar refuses. */
+            n = css_words(value, w, wl, m);
+            if (n < 1) return NULL;
+            /* EVERY COMPONENT IS VALIDATED BEFORE ANY OF THEM SETS ANYTHING, because an invalid shorthand is
+               a declaration the cascade drops WHOLE rather than one that sets the sides before the bad
+               component. This is the only grammar these bytes meet — see `inset_take` — so a `2` admitted
+               here would be copied into `left` and abort core/css/css_length.c's parse on a page's own typo. */
+            for (k = 0; k < n; k++)
+                if (!inset_component(w[k], wl[k])) return NULL;
+            comp = (m == 4) ? SIDE_OF[n][side] : ((side == 1 && n > 1) ? 1 : 0);
+            return inset_take(w[comp], wl[comp]);
+        }
+    }
     /* ---- css-flexbox-1 §5.3 "Flex Direction and Wrap: the flex-flow shorthand"'s `flex-flow` -------------- */
     /* csscascade-5 §3 "Shorthand Properties": "if a shorthand is specified as one of the CSS-wide keywords, it
        sets all of its sub-properties to that keyword" — the ENTIRE value, so it precedes the shorthand's own
@@ -1420,6 +1514,17 @@ static const CssShorthandRow SHORTHANDS[] = {
        everything else is optional — so the round trip exercises all nineteen longhands (the seven set, and the
        twelve reset to their initial values) without depending on how any one component canonicalizes. */
     { "font", CSS_FONT_SHORTHAND_LONGHANDS, CSS_FONT_SHORTHAND_N, CSS_SH_FONT, "12px sans-serif", NULL, NULL },
+    /* css-position-3 §3.2's THREE ROWS, in the ascending name order the table is asserted to be in. The
+       fixtures name every arm of §3.1's `auto | <length-percentage>` that one value can reach: `inset`'s four
+       components are all DIFFERENT, which is the one arrangement in which the rotation writes all four and
+       the serialization drops none, and they are an `auto`, a unitless zero (css-values-4 §6 "Distance Units:
+       the <length> type" makes the unit optional only there), a `<percentage>` and a dimension — the four
+       spellings `inset_component` decides between. The `{1,2}` pair's two components DIFFER for the reason
+       `place-items`' do: an equal pair serializes back to a single word, so it would leave the end side's own
+       index and the omission rule untested in both directions at once. */
+    { "inset",        SIDES,           4, CSS_SH_FOUR_SIDE, "auto 0 10% 2px", NULL, NULL },
+    { "inset-block",  LH_INSET_BLOCK,  2, CSS_SH_TWO_AXIS,  "auto 4px",       NULL, NULL },
+    { "inset-inline", LH_INSET_INLINE, 2, CSS_SH_TWO_AXIS,  "3% auto",        NULL, NULL },
     { "margin",        LH_MARGIN,         4, CSS_SH_FOUR_SIDE, "1px 2px 3px 4px", NULL, NULL },
     { "overflow",      LH_OVERFLOW,       2, CSS_SH_TWO_AXIS,  "hidden auto", NULL, NULL },
     { "padding",       LH_PADDING,        4, CSS_SH_FOUR_SIDE, "1px 2px", NULL, NULL },
@@ -2249,7 +2354,81 @@ bool css_shorthand_complete_for(const char *longhand)
        IT IS IN lexbor's PROPERTY REGISTRY (`LXB_CSS_PROPERTY_Z_INDEX`, initial `LXB_CSS_Z_INDEX_AUTO`), so a
        `z-index: 3` declaration has been typed and validated all along and this row is what lets the value be
        READ as a computed one: core/css/css_computed_value.c asserts this predicate before it derives
-       anything. */
+       anything.
+
+       `top`, `right`, `bottom` and `left` — css-position-3 §3.2 "Box Insets Shorthands: the inset-block ,
+       inset-inline , and inset properties"' THREE shorthands are the only ones in CSS that can decide any of
+       the four, and ALL THREE ARE NOW IN THE TABLE ABOVE. That is one more than a reader counts from §3.2's
+       physical sentence alone, and the extra two are the whole reason this row could not be written before.
+       §3.2's `inset` is the direct one: its `Value:` line is `<'top'>{1,4}` and it assigns "to the
+       corresponding physical longhand properties — top , right , bottom , and left — which for historical
+       reasons do not have an inset- prefix". `inset-block` and `inset-inline` set the FLOW-RELATIVE longhands,
+       and for every other four-side family in this list that would end the question — the dismissal three
+       paragraphs up, that a logical group's shorthands "set the logical longhands, which are different
+       properties", is the one `margin` and `padding` are recorded under. IT DOES NOT HOLD HERE, and the
+       sentence that overturns it is css-logical-1 §4 "Flow-Relative Box Model Properties"': paired properties
+       "share a computed value", which "is determined by cascading the declarations of both properties together
+       as one". core/css/css_style_declaration.c's `cssom_cascaded_value` implements exactly that — it resolves
+       `left`'s partner for this element's writing mode and collects BOTH members' declarations into one
+       cascade — so in `horizontal-tb`/`ltr` an `inset-inline: 10px` IS a declaration of `left`'s own cascade,
+       and a row recorded on the strength of the `inset` row alone would have claimed a completeness that is
+       false in precisely the direction this predicate exists to catch.
+       THE SAME THREE SHORTHANDS ARE DECLARED A SECOND TIME, by css-logical-1 §4.3 "Flow-Relative Offsets: the
+       inset-block-start , inset-block-end , inset-inline-start , inset-inline-end properties and inset-block ,
+       inset-inline , and inset shorthands", with the identical `Value:` lines and the identical rules — its
+       `inset` sentence is "this shorthand property sets the top, right, bottom, and left properties" and its
+       `{1,2}` rule is "if only one value is given, it applies to both the start and end edges". Two standards
+       stating one property definition is not two containers and adds no row here; it is recorded so that a
+       reader who finds §4.3 does not read it as one. WHERE THE TWO DISAGREE IS THE `Initial:` LINE — §3.2
+       gives `inset` `auto` and §4.3 gives it "see individual properties" — and nothing here reads it, because
+       a shorthand's own `Initial:` line is the `whole_initial` field and only CSS_SH_ALL_OF consults it. A
+       diff that gives one of these three rows a `whole_initial` is choosing between two standards and owes
+       that choice a sentence.
+       ALL EIGHT §3.1 LONGHANDS ARE IN lexbor's PROPERTY REGISTRY (`LXB_CSS_PROPERTY_TOP`, `_LEFT`, `_BOTTOM`,
+       `_RIGHT` and the four `_INSET_*`, each with an initial of `LXB_CSS_VALUE_AUTO`, which is §3.1's own
+       `Initial: auto`), so their declarations were typed and validated all along and it was the three
+       SHORTHANDS that set nothing: lexbor's registry carries none of them, so an `inset: 0` reached the
+       cascade as a `__CUSTOM` nothing took apart. The four physical ones ARE modelled by
+       core/css/css_computed_value.c, so this predicate was the LAST of the two asserts standing between a
+       consumer and the value — CSS 2.1 §10.3.7 "Absolutely positioned, non-replaced elements"' constraint
+       equation reads `css_computed_length(el, "left")` for every absolutely positioned box, which is most
+       boxes of most application pages, and it aborted there.
+       THE FOUR FLOW-RELATIVE ONES ARE RECORDED TOO and their set is the pair above and nothing else: §3.2's
+       `inset` is stated over the physical four by name, so it is no container for them. What they have not got
+       is a `Computed value:` line in core/css/css_computed_value.c, so a reader asking for one crashes at
+       `css_cv_modelled`'s FIRST assert naming the property — the same genuinely-open question the two
+       `justify-*` rows above are in, and a different question from this one.
+
+       NAMED RESIDUAL — THE FLOW-RELATIVE SHORTHANDS OF THE OTHER LOGICAL PROPERTY GROUPS THAT HAVE ANY,
+       WHICH THIS LIST STILL RECORDS WITHOUT. They are named rather than counted: `margin`, `padding`,
+       `border-width`, `border-style` and `border-color`. The groups core/css/css_logical.c carries that are
+       NOT among them are `size`, `min-size`, `max-size` and `overflow`, and their rows here are SOUND — each
+       group's flow-relative members are longhands of their own — css-logical-1 §4.1 "Logical Height and
+       Logical Width: the block-size / inline-size , min-block-size / min-inline-size , and max-block-size /
+       max-inline-size properties"' `inline-size`, and css-overflow-3 §3.1 "Managing Overflow: the overflow-x ,
+       overflow-y , and overflow properties"' `overflow-inline` — and no module states a shorthand over any of
+       them, which is
+       the same sentence those rows are already recorded under.
+       WHAT IS NOT COVERED: the css-logical-1 §4 argument above is general, and the rows it was derived for
+       are only the inset group's. `margin-top`, `padding-top` and the twelve `border-*-*` longhands are
+       recorded here under the dismissal that a logical group's shorthands set different properties — which
+       the paired cascade makes false for them exactly as it does for `left`, since `margin-top`'s partner is
+       `margin-block-start` and the `margin-block` of css-logical-1 §4.2 "Flow-Relative Margins: the
+       margin-block-start , margin-block-end , margin-inline-start , margin-inline-end properties and
+       margin-block and margin-inline shorthands" sets it. No flow-relative shorthand of
+       those five groups has a row in the table above.
+       WHAT THE NEXT DIFF BUILDS: §4.2's `margin-block`/`margin-inline` first, and it is a LARGER
+       subproblem than this one was rather than another three rows — the inset group needed shorthand rows
+       ALONE because lexbor's registry types all eight of its longhands, and lexbor carries NO
+       `margin-block-start` (nor any other flow-relative box-model longhand), so each row there needs
+       `css_shorthand_validates_longhand` to own that longhand's own grammar as well, and an initial value
+       apiece in core/css/css_style_declaration.c's CSSD_INITIAL_UNREGISTERED. Verify that registry claim
+       before building to it rather than taking it from here.
+       HOW ITS ABSENCE WOULD SHOW: a rule that sets a box's edge flow-relatively and a rule that sets it
+       physically lay the same box out differently — a `margin-block: 2em` reads as the initial `0` at
+       core/layout, with a real number to show for it, while the byte-identical `margin-top: 2em` is honoured.
+       RETIREMENT: this record goes when no name in the list below belongs to a css-logical-1 §4 property group
+       whose flow-relative shorthands have no row in the table above. */
     static const char *const RECORDED[] = {
         "overflow-x", "overflow-y", "display", "float", "clear", "position", "box-sizing", "color",
         "white-space",
@@ -2270,6 +2449,8 @@ bool css_shorthand_complete_for(const char *longhand)
         "border-top-color", "border-right-color", "border-bottom-color", "border-left-color",
         "caption-side", "table-layout", "border-collapse", "border-spacing",
         "align-items", "align-self", "justify-items", "justify-self",
+        "top", "right", "bottom", "left",
+        "inset-block-start", "inset-block-end", "inset-inline-start", "inset-inline-end",
         "z-index",
     };
     unsigned i;
