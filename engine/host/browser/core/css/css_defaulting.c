@@ -133,7 +133,28 @@ bool css_property_inherited(const char *name)
     DCHECK(name != NULL, "CSS Cascade §7.2's `Inherited:` line was asked for with no property name");
     /* css-variables §2: a CUSTOM PROPERTY is "an ordinary property, so it can be declared on any element, is
        resolved with the normal inheritance and cascade rules" — the whole family inherits, and it is named by
-       its two-dash prefix rather than enumerated, since the set is the author's and not a spec's. */
+       its two-dash prefix rather than enumerated, since the set is the author's and not a spec's.
+       NAMED RESIDUAL — §2's HALF IS BUILT AND §3's IS NOT, AND THE PAIR IS WHY A REAL PAGE LOOKS UNSTYLED
+       RATHER THAN UNPARSED. This line is CORRECT and NARROWER: a custom property is stored, cascaded,
+       inherited and readable through it, and nothing anywhere ever SUBSTITUTES one into another property.
+       WHAT IS NOT COVERED: css-variables-1 §3 "Using Cascading Variables: the var() notation" — "The value of
+       a custom property can be substituted into the value of another property with the var() function" — is
+       performed for no shape of `var()`, the bare reference and the fallback form alike. The fallback form is
+       the one that shows the gap is in SUBSTITUTION and not in this line's storage or inheritance, because it
+       needs no custom property to be set at all.
+       WHAT THE NEXT DIFF BUILDS: §3's substitution, over the CASCADED value and before the switch below, with
+       css-variables-1 §2.2 "Guaranteed-Invalid Values" as the failure arm — "If it ever appears in a property
+       value, then at computed value time that property becomes invalid at computed-value time". That arm is
+       the half most easily got wrong and it is NOT a fall back to the parent: css-values-5, which defines the
+       term in its "Appendix A: Arbitrary Substitution Functions", states in its own Note that "the property
+       falls back (essentially) to unset behavior, rather than falling back to an earlier value in the cascade
+       the way declarations invalid at parse time do" — so a failed substitution arrives at this function as
+       §7.3.3's `unset` and is resolved by the arm already written for it, rather than by a new one.
+       HOW ITS ABSENCE WOULD SHOW, as an observation and never as an instance: a declaration whose value
+       contains `var()` computes as the property's initial or inherited value, so a document that writes its
+       colours as custom-property references renders its text in the initial colour over an unpainted canvas —
+       every glyph present, every fill and every authored colour missing.
+       RETIREMENT: this record goes when §3's substitution runs, and loses a clause as each shape lands. */
     if (name[0] == '-' && name[1] == '-') return true;
     for (i = 0; i < sizeof(CSS_INHERITED) / sizeof(CSS_INHERITED[0]); i++)
         if (strcmp(CSS_INHERITED[i], name) == 0) return true;
