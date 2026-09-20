@@ -2477,8 +2477,10 @@ char *result_json(JSContext *ctx) {
                                 A WALK — which is why the row is `originDerived` and not `originWalks`.
                                 §10.1's second case derives a box's border-box origin from its CONTAINING
                                 BLOCK's, so an unanswered ask climbs the ancestor chain; `originDerived` is
-                                how many boxes this run computed a point for, and on a tree of N boxes that is
-                                O(N) while the climb it replaces was the sum of every ask's own DEPTH. So
+                                how many points this run derived — IN OR OUT of a render, because a page
+                                reading CSSOM VIEW §6's members between two paints derives one per ask and
+                                stores nothing — and over a rendered tree of N boxes that is O(N) while the
+                                climb it replaces was the sum of every ask's own DEPTH. So
                                 `childTopWalks` is the row to read against a container's CHILD COUNT and
                                 `originDerived` the row to read against a document's DEPTH — real pages are
                                 deep, and the two multipliers are separate facts that no single row states.

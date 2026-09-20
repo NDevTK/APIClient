@@ -244,6 +244,25 @@ void flow_placement_origin_record(const lxb_dom_element_t *el, FlowPoint origin,
 
     DCHECK(el != NULL, "CSS 2 §8.1 \"Box dimensions\"' border-box origin record was handed a point with "
                        "no box to attach it to");
+    /* THE COUNT IS TAKEN BEFORE THE STORE'S GUARD, AND THE ORDER OF THESE TWO LINES IS THE WHOLE OF A DEFECT
+       THIS FILE SHIPPED. It stood below the early return, so ONE `if (!g_open)` was answering two questions —
+       "is there anywhere to put this point" and "did this agent derive a point" — and §A-PREDICATE-THAT-
+       ANSWERS-TWO-QUESTIONS' rule held exactly: the stricter question won, the looser one was refused with
+       nothing to say it had been asked, and the cost landed on the census. The ask above it is counted
+       whether or not a pass is open, so every derivation made OUTSIDE a pass went into the numerator and
+       into neither denominator. It is not a rounding error: a fixture that reads geometry through CSSOM
+       VIEW's own members rather than through a paint makes nearly EVERY ask an outside one, and the identity
+       broke 283 against 7 and 4 on the first build that ran one.
+       THE GUARD IS RIGHT FOR THE STORE AND HAS NOTHING TO SAY ABOUT THE COUNT. With no pass there is no
+       table, so a point has nowhere to go; the DERIVATION still happened, and `origin_derived` is a count of
+       derivations performed by this agent rather than of entries in any table.
+       WHY THIS PAIR COUNTS INSIDE ITS RECORD AND §9.4.1's PAIR COUNTS IN AN ENTRY OF ITS OWN, since the
+       asymmetry is the first thing a reader will want to remove: `flow_placement_record` is called once per
+       box the WALK passes, so it fires many times for one ask and a count there would not be a count of
+       asks-that-missed at all — which is why `flow_placement_walked` exists. This entry is called exactly
+       once per derivation, so the count belongs with it, and putting it here is what makes a caller unable to
+       record without counting. Making the two symmetric would re-introduce a call a caller can forget. */
+    g_origin_derived++;
     if (!g_open) return;
     if (g_used * 2 >= g_cap) fp_grow();
     i = fp_probe(g_tab, g_cap, el);
@@ -270,7 +289,6 @@ void flow_placement_origin_record(const lxb_dom_element_t *el, FlowPoint origin,
     g_tab[i].origin = origin;
     g_tab[i].origin_cb = derived_from;
     g_tab[i].has_origin = true;
-    g_origin_derived++;
 }
 
 bool flow_placement_origin_ask(const lxb_dom_element_t *el, FlowPoint *out, const lxb_dom_element_t **cb_out)

@@ -165,9 +165,17 @@ void flow_placement_origin_record(const lxb_dom_element_t *el, FlowPoint origin,
    `origin_asks`, `origin_served` and `origin_derived` are the border-box origin's pair and close the same
    way. The
    shortfall is named `derived` rather than `walks` because a missed origin ask runs ONE equation over an
-   already-answered ancestor, never a walk: `origin_derived` is therefore the count of boxes whose point this
-   pass computed, which on a tree of N boxes is O(N) and which USED TO BE the sum of every ask's ancestor
-   chain — the row that must stop growing with the square of a document's DEPTH. */
+   already-answered ancestor, never a walk: `origin_derived` is the count of points this AGENT derived, which
+   over a rendered tree of N boxes is O(N) and which USED TO BE the sum of every ask's ancestor chain — the
+   row that must stop growing with the square of a document's DEPTH.
+   IT IS THIS AGENT'S AND NOT THIS PASS'S, AND THE DIFFERENCE IS NOT PEDANTRY. A derivation made with no pass
+   open — CSSOM VIEW §6's members answer one for every `getBoundingClientRect` a page makes between two
+   renders — stores nothing and is still a derivation, and counting only the stored ones put the ask in the
+   numerator and in neither denominator. That is what broke this identity the first time a fixture read
+   geometry through the members rather than through a paint; core/layout/flow_placement.c holds the reason
+   at the line whose ORDER decides it. So a run with no render at all has `origin_asks == origin_derived`
+   and `origin_served` of zero, which is the correct reading and not an instrument that failed to see a
+   pass. */
 typedef struct {
     long long asks;
     long long served;
