@@ -77,7 +77,14 @@ typedef enum { LAYOUT_QUESTIONS(LAYOUT_QUESTION_ENUM) LAYOUT_Q__COUNT } LayoutQu
    nobody can derive. A kind whose parameter is a STRING (a property name) leaves `code` at 0; a kind whose
    parameter is a small NUMBER (an axis, a box type) leaves `name` at NULL; a kind that needs both uses both;
    a kind with no parameter at all uses neither. `name` is compared by `strcmp` and is BORROWED from the asking
-   frame — a node lives exactly as long as the frame it is on, so the pointer cannot outlive its subject. */
+   frame — a node lives exactly as long as the frame it is on, so the pointer cannot outlive its subject.
+   `code` IS ENCODED SO THAT ZERO MEANS ABSENT, WHICH IS AN OBLIGATION ON EACH KIND AND NOT A SUGGESTION.
+   EQUALITY reads the field raw, so a kind that used 0 as a real value would still be COMPARED correctly and
+   would RENDER as a question with no numeric parameter at all — the two arms are one field answering two
+   questions, and the one that silently loses is the reader's. A kind whose parameter can legitimately be zero
+   (an axis, a boolean) therefore encodes it ONE-BASED at the site that composes the question, and says so
+   where it declares its kind. The tell that a kind got this wrong: two of its questions that differ render
+   identically in a chain while the cycle test correctly tells them apart. */
 typedef struct {
     LayoutQuestionKind kind;
     lxb_dom_element_t *element;

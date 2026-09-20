@@ -4360,7 +4360,11 @@ static CssPx uv_px_ask(lxb_dom_element_t *el, const char *name)
    and `uv_abs_solve` among them. So the chain records the ASKS and not the LAYOUTS: between two consecutive
    nodes of it five C frames come and go with nothing anywhere naming them, and C-stack exhaustion by DEPTH
    rather than by repetition is not a repeated pair and does not fire here.
-   WHAT THE NEXT DIFF BUILDS: a second KIND at `uv_sized`, whose question is (element, box type, axis) — the
+   WHAT THE NEXT DIFF BUILDS: a second KIND at `uv_sized`, whose question is (element, box type, axis), the
+   axis being a `bool` and therefore the first parameter that has to be encoded ONE-BASED for the reason
+   layout_question.h states of `code` — a `vertical` of false is a real answer and a `code` of 0 is the
+   absence of one, and a kind that conflates them renders two different questions as one chain node while the
+   cycle test correctly keeps them apart. It is the
    best second cut there is, taking that residual from SIXTY mutually recursive functions to TWENTY-ONE, and
    the smallest surface on which a second kind's contract can be exercised at all. The static cut and the
    frame census agree on it independently: `uv_sized` is one of the five unrecorded frames per level in the
