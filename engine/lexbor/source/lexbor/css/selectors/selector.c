@@ -589,6 +589,106 @@ lxb_css_selector_serialize_undef(lxb_css_selector_t *selector,
     return LXB_STATUS_ERROR_UNEXPECTED_DATA;
 }
 
+/* CSSOM §2.1 "Common Serializing Idioms"' SERIALIZE AN IDENTIFIER. It was not performed anywhere in this
+   file, and it is what makes a selector ROUND-TRIP: CSS Syntax 3 §4.3.7 "Consume an escaped code point" runs
+   in the TOKENIZER, so the ident this selector holds is the UNESCAPED text — `.\!p-0` arrives as the class
+   name `!p-0` and `.bottom-100\%` as `bottom-100%` — and writing those bytes back produces `.!p-0`, which
+   is not a selector at all. A re-parse of such a serialization fails its prelude and lexbor reports the
+   rule as LXB_CSS_RULE_BAD_STYLE, so the rule silently changes KIND while keeping its position.
+   EVERY IDENTIFIER-BEARING COMPONENT OF CSSOM §5.2 "Serializing Selectors"' SERIALIZE A SIMPLE SELECTOR GOES
+   THROUGH HERE, in that algorithm's own words: "Append a "." (U+002E), followed by the serialization of
+   the class name as an identifier to s", "Append a "#" (U+0023), followed by the serialization of the ID
+   as an identifier to s", "If this is a type selector append the serialization of the element name as an
+   identifier to s",
+   "Append the serialization of the attribute name as an identifier to s", and the namespace prefix "as an
+   identifier".
+   THE RULES BELOW ARE THE STANDARD'S OWN AND IN ITS ORDER, and CSSOM §2.1's two escape idioms are
+   DIFFERENT THINGS. Both open with U+005C; where they differ is what follows, and the standard's words for
+   the first are "followed by the character" while the second writes the code point — "followed by the
+   Unicode code point as the smallest possible number of hexadecimal digits in the range 0-9 a-f (U+0030 to
+   U+0039 and U+0061 to U+0066) to represent the code point in base 16, followed by a single SPACE
+   (U+0020)". (Neither sentence is quoted whole: each opens by naming the U+005C inside its own quotation
+   marks, so a verbatim run would close here at that mark and reach the audit as a fragment.)
+   THE WALK STEPS BY UTF-8 SEQUENCE AND NOT BY BYTE, because "the first character" and "the second
+   character" are the standard's words: a name whose first character is multi-byte would otherwise have its
+   second BYTE judged by a rule written about its second CHARACTER. A code point at or above U+0080 is
+   copied raw by the standard's own next-to-last rule, so the sequence never has to be decoded. */
+static lxb_status_t
+lxb_css_selector_serialize_ident(const lxb_char_t *data, size_t length,
+                                 lexbor_serialize_cb_f cb, void *ctx)
+{
+    static const lxb_char_t hex[] = "0123456789abcdef";
+
+    lxb_char_t buf[4];
+    lxb_status_t status;
+    size_t i, n, k, nth;
+    lxb_char_t cp;
+
+    i = 0;
+    nth = 0;
+
+    while (i < length) {
+        cp = data[i];
+
+        if (cp >= 0x80) {
+            n = (cp >= 0xF0) ? 4 : (cp >= 0xE0) ? 3 : (cp >= 0xC0) ? 2 : 1;
+
+            if (i + n > length) {
+                n = 1;
+            }
+
+            lxb_css_selector_serialize_write(data + i, n);
+
+            i += n;
+            nth += 1;
+            continue;
+        }
+
+        if (cp == 0x00) {
+            /* "If the character is NULL (U+0000), then the REPLACEMENT CHARACTER (U+FFFD)." */
+            lxb_css_selector_serialize_write("\xEF\xBF\xBD", 3);
+        }
+        else if (cp <= 0x1F || cp == 0x7F
+                 || (nth == 0 && cp >= '0' && cp <= '9')
+                 || (nth == 1 && cp >= '0' && cp <= '9' && data[0] == '-'))
+        {
+            k = 0;
+            buf[k++] = '\\';
+
+            if (cp >= 0x10) {
+                buf[k++] = hex[(cp >> 4) & 0x0F];
+            }
+
+            buf[k++] = hex[cp & 0x0F];
+            buf[k++] = ' ';
+
+            lxb_css_selector_serialize_write(buf, k);
+        }
+        /* The lone "-" of the fifth rule ("is the first character and is a "-" (U+002D), and there is no
+           second character"), and the standard's final `Otherwise` — one branch because the rule between
+           them, which keeps "-" itself, is exactly what the second disjunct negates. */
+        else if ((nth == 0 && cp == '-' && length == 1)
+                 || !(cp == '-' || cp == '_'
+                      || (cp >= '0' && cp <= '9')
+                      || (cp >= 'A' && cp <= 'Z')
+                      || (cp >= 'a' && cp <= 'z')))
+        {
+            buf[0] = '\\';
+            buf[1] = cp;
+
+            lxb_css_selector_serialize_write(buf, 2);
+        }
+        else {
+            lxb_css_selector_serialize_write(data + i, 1);
+        }
+
+        i += 1;
+        nth += 1;
+    }
+
+    return LXB_STATUS_OK;
+}
+
 static lxb_status_t
 lxb_css_selector_serialize_any(lxb_css_selector_t *selector,
                                lexbor_serialize_cb_f cb, void *ctx)
@@ -596,13 +696,46 @@ lxb_css_selector_serialize_any(lxb_css_selector_t *selector,
     lxb_status_t status;
 
     if (selector->ns.data != NULL) {
-        lxb_css_selector_serialize_write(selector->ns.data,
-                                         selector->ns.length);
+        /* A "*" PREFIX IS THIS PARSER'S OWN LITERAL AND NOT AN IDENTIFIER, and CSSOM §5.2 asks for an
+           identifier only for a prefix that NAMES a namespace: the two namespace states build a
+           one-byte "*" by hand for `*|E` and for the universal selector, so escaping it would write `\*|E`
+           and change which elements the selector matches.
+           NAMED RESIDUAL — A PREFIX A PAGE WROTE AS `\*` IS INDISTINGUISHABLE FROM IT. WHAT IS NOT COVERED:
+           an escaped `\*` ident reaches `ns` as the same one byte this parser writes for the any-namespace
+           prefix, so it is emitted unescaped. WHAT THE NEXT DIFF BUILDS: a bit on lxb_css_selector_t set by
+           the two states that synthesize the literal, so the test is on how the prefix was PRODUCED rather
+           than on what it spells. HOW ITS ABSENCE WOULD SHOW, as an observation: a rule whose prefix was
+           written `\*|E` serializes as `*|E`, so it reads back through CSSOM naming any namespace and
+           matches elements the page's own selector excluded. */
+        if (selector->ns.length == 1 && selector->ns.data[0] == '*') {
+            lxb_css_selector_serialize_write(selector->ns.data,
+                                             selector->ns.length);
+        }
+        else {
+            status = lxb_css_selector_serialize_ident(selector->ns.data,
+                                                      selector->ns.length,
+                                                      cb, ctx);
+            if (status != LXB_STATUS_OK) {
+                return status;
+            }
+        }
+
         lxb_css_selector_serialize_write("|", 1);
     }
 
     if (selector->name.data != NULL) {
-        return cb(selector->name.data, selector->name.length, ctx);
+        /* CSSOM §5.2: "If this is a universal selector append "*" (U+002A) to s" — the standard reaches for
+           the literal rather than for an identifier, and so does this parser: a LXB_CSS_SELECTOR_TYPE_ANY
+           carries a hand-built one-byte "*" as its name. An element name, and the attribute name this entry
+           also
+           serves, are identifiers. */
+        if (selector->type == LXB_CSS_SELECTOR_TYPE_ANY) {
+            return cb(selector->name.data, selector->name.length, ctx);
+        }
+
+        return lxb_css_selector_serialize_ident(selector->name.data,
+                                                selector->name.length,
+                                                cb, ctx);
     }
 
     return LXB_STATUS_OK;
@@ -617,7 +750,9 @@ lxb_css_selector_serialize_id(lxb_css_selector_t *selector,
     lxb_css_selector_serialize_write("#", 1);
 
     if (selector->name.data != NULL) {
-        return cb(selector->name.data, selector->name.length, ctx);
+        return lxb_css_selector_serialize_ident(selector->name.data,
+                                                selector->name.length,
+                                                cb, ctx);
     }
 
     return LXB_STATUS_OK;
@@ -632,30 +767,73 @@ lxb_css_selector_serialize_class(lxb_css_selector_t *selector,
     lxb_css_selector_serialize_write(".", 1);
 
     if (selector->name.data != NULL) {
-        return cb(selector->name.data, selector->name.length, ctx);
+        return lxb_css_selector_serialize_ident(selector->name.data,
+                                                selector->name.length,
+                                                cb, ctx);
     }
 
     return LXB_STATUS_OK;
 }
 
+/* CSSOM §2.1 "Common Serializing Idioms"' SERIALIZE A STRING, which CSSOM §5.2 "Serializing Selectors"'
+   serialize a simple selector asks for by name: "followed by the serialization of the attribute value as a
+   string". THE REVERSE SOLIDUS WAS NOT ESCAPED, and that is the same round-trip break the identifier
+   serializer above fixes, at the sibling site: the tokenizer consumes the escape, so `[x="a\\b"]` arrives
+   holding `a\b` and writing those bytes back
+   produces `[x="a\b"]`, whose re-parse consumes `\b` as an escape and yields `ab`. A NEWLINE WAS NOT ESCAPED
+   EITHER, and CSS Syntax 3 §4.3.5 "Consume a string token" ends the string on one: "newline: This is a parse
+   error. Reconsume the current input code point, create a <bad-string-token>, and return it." The rest of C0
+   is escaped because CSSOM asks for it and not to keep a parse alive.
+   THE RULES ARE CSSOM §2.1's OWN: "If the character is NULL (U+0000), then the REPLACEMENT CHARACTER
+   (U+FFFD). If the character is in the range [\1-\1f] (U+0001 to U+001F) or is U+007F, the character
+   escaped as code point. If the character is '"' (U+0022) or "\" (U+005C), the escaped character.
+   Otherwise, the character itself." The quotation mark used to go out as `\000022`, which re-parses to the
+   same string and is what no browser writes; the standard's own escaped-character form is `\"`.
+   NO UTF-8 STEPPING IS NEEDED HERE, unlike the identifier serializer: none of these rules asks which
+   CHARACTER position this is, and every byte at or above 0x80 falls to the last rule and is copied. */
 static lxb_status_t
 lxb_css_selector_serialize_escape_write(lxb_char_t *p, lxb_char_t *end,
                                         lexbor_serialize_cb_f cb, void *ctx)
 {
+    static const lxb_char_t hex[] = "0123456789abcdef";
+
+    lxb_char_t buf[4];
     lxb_char_t *begin;
     lxb_status_t status;
+    size_t k;
 
     begin = p;
 
     lxb_css_selector_serialize_write("\"", 1);
 
     while (p < end) {
-        if (*p == '"') {
+        if (*p == 0x00 || *p <= 0x1F || *p == 0x7F || *p == '"' || *p == '\\') {
             if (begin < p) {
                 lxb_css_selector_serialize_write(begin, p - begin);
             }
 
-            lxb_css_selector_serialize_write("\\000022", 7);
+            if (*p == 0x00) {
+                lxb_css_selector_serialize_write("\xEF\xBF\xBD", 3);
+            }
+            else if (*p == '"' || *p == '\\') {
+                buf[0] = '\\';
+                buf[1] = *p;
+
+                lxb_css_selector_serialize_write(buf, 2);
+            }
+            else {
+                k = 0;
+                buf[k++] = '\\';
+
+                if (*p >= 0x10) {
+                    buf[k++] = hex[(*p >> 4) & 0x0F];
+                }
+
+                buf[k++] = hex[*p & 0x0F];
+                buf[k++] = ' ';
+
+                lxb_css_selector_serialize_write(buf, k);
+            }
 
             begin = p + 1;
         }
