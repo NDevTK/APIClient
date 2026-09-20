@@ -1482,6 +1482,10 @@ void cold_resume(JSContext *ctx, const char *recipes)
     const char *p = recipes;
     const int before = flow_count();
     int gen_seen = 0;
+    /* HOW MANY RECORDS THIS PASS CONSUMED — the read side's half of park_doc_agrees, counted at the loop head
+       so it cannot disagree with the records the way a per-arm sum can. It is the merge's own total exactly as
+       `flows` is, and it is what the identity at the bottom is asserted against. */
+    long recs = 0;
     /* THE FLOW AN 'm' RECORD BELONGS TO — the one this pass last rebuilt, which is the binding the writer
        states by writing a flow's deliveries immediately after it. NULL until the first 'f' or 'c', so an 'm'
        that arrives before one is refused rather than attached to whatever came next. */
@@ -1515,6 +1519,7 @@ void cold_resume(JSContext *ctx, const char *recipes)
 
         if (!end) end = p + strlen(p);
         q = p + 1;
+        recs++;
         if (kind == 'g') {
             /* THE NAMESPACE THIS RESIDUE RESUMES INTO, INSTALLED BEFORE ANYTHING IS NAMED UNDER IT. The record
                carries the WRITER's generation and world_session_resume mints one above it — the successor is
@@ -1732,6 +1737,11 @@ void cold_resume(JSContext *ctx, const char *recipes)
             flow_world_commit_push(ctx, last_flow, vec, comma[1] == '1',
                                    (FlowCommitArm)(comma[3] - '0'));
             free(vec);
+            /* COUNTED AFTER THE PUSH AND NOT BEFORE IT, which is the same placement every other kind here
+               uses and matters for one reason: the push owns the vocabulary check, so a record naming a
+               FlowCommitArm that does not exist aborts there — and a census raised first would have already
+               claimed a commitment this rebuild never installed. */
+            g_resumed.commits++;
         } else if (kind == 'm') {
             /* A MESSAGE A PEER SENT AND THIS DOCUMENT HAD NOT YET RECEIVED, put back on the queue of the flow
                it belonged to, in the order it was written — which is the order the page must observe (HTML
@@ -1756,6 +1766,7 @@ void cold_resume(JSContext *ctx, const char *recipes)
             flow_deliver_push(ctx, last_flow, record, origin);
             free(record);
             free(origin);
+            g_resumed.delivers++;
         } else if (kind == 'o') {
             /* THE FUNCTION A DRIVEN ORPHAN WAS DRIVING, put back on the flow it belonged to — which is the flow
                written immediately before it, the same binding an unmade delivery uses and for the same reason.
@@ -2004,6 +2015,39 @@ void cold_resume(JSContext *ctx, const char *recipes)
            "the rebuild read more orphan locators than it rebuilt flows — an 'o' record names the flow before "
            "it, so more of them than there are flows means at least one was bound to a flow that already had "
            "one and a drive the residue was saved for is gone");
+    /* AND THE TOTAL AND ITS PARTS ARE ONE NUMBER READ TWO WAYS, WHICH IS park_doc_agrees ASKED AT THE OTHER
+       END. cold.h says the two ends "are asked the same question in the same shape … because they are one
+       round trip", and until now only the WRITER asserted it: the read side had the flow-producing sum above,
+       which accounts for 'f' and 'c' and is structurally silent about every POSITIONAL and every non-member
+       kind — so 'w', 'o', 'r' and 'm' could each be parsed without counting themselves and no arithmetic
+       anywhere would notice. That is §a-count-that-cannot-be-true with the parts counted and the sum asserted
+       nowhere, and it is the whole reason a census of a rebuild could be STATED rather than read.
+       NINE SUMMANDS HERE AGAINST THE WRITER'S EIGHT, and the extra one is `cands_withdrawn` — not a ninth
+       record kind but the second OUTCOME of the 'c' arm, which exists only on this side because only this
+       side can refuse a payload. One 'g', and it is a CONSTANT here rather than a counter because the two
+       asserts above have already made it one — `gen_seen` is refused twice over, once for a second record and
+       once for none at all — and cold.h keeps the generation out of both censuses for exactly that reason.
+       Both of those asserts and this one are dev-only, so the constant cannot outlive what establishes it.
+       IT IS THE ARMED HALF OF THE TWO COUNTERS ADDED BESIDE IT. A residue carrying no 'r' and no 'm' cannot
+       exercise their increments, so on such a document this identity is what stands between a 0 that is an
+       absent RECORD and a 0 that is an absent COUNTER — and it is not vacuous there, because the other seven
+       summands are what it is holding up.
+       A DCHECK AND NOT A CHECK, for park_doc_agrees' reason exactly: this is the engine's arithmetic about its
+       own READING, the flows are rebuilt correctly whatever these counters say, so a disagreement MISREPORTS
+       the rebuild and does not corrupt it — and aborting a resume over a reporting discrepancy would lose a
+       whole suspended frontier to it. FORMATTED, because the nine numbers are what localize it: the kind
+       whose counter is short is the one whose row does not account for the gap. */
+    DCHECKF(recs == 1 + g_resumed.segs + g_resumed.flows + g_resumed.cands + g_resumed.cands_withdrawn +
+                    g_resumed.worlds + g_resumed.orphans + g_resumed.commits + g_resumed.delivers,
+            "the rebuild read %ld record(s) and its census accounts for %ld — g 1, s %ld, f %ld, c %ld "
+            "(+%ld withdrawn), w %ld, o %ld, r %ld, m %ld. A record kind was parsed without counting itself, "
+            "so every host asking which arms of this grammar ran is told a kind that ran did not, and a "
+            "census nobody can check is a census anybody can state",
+            recs,
+            1 + g_resumed.segs + g_resumed.flows + g_resumed.cands + g_resumed.cands_withdrawn +
+                g_resumed.worlds + g_resumed.orphans + g_resumed.commits + g_resumed.delivers,
+            g_resumed.segs, g_resumed.flows, g_resumed.cands, g_resumed.cands_withdrawn,
+            g_resumed.worlds, g_resumed.orphans, g_resumed.commits, g_resumed.delivers);
     /* RESIDUAL: THE TOTAL SURVIVES AN ABORT AND THE DECOMPOSITION DOES NOT, WHICH INVERTS WHICH OF THE TWO
        THE PARAGRAPH ABOVE IS AN ARGUMENT FOR. That paragraph's reason for printing here rather than into the
        result document is exactly right - "a session that goes on to crash still has to have said that it

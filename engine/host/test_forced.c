@@ -27850,9 +27850,9 @@ int main(int argc, char **argv) {
            and an 'm' are the two arms of this grammar that NO counter anywhere held, so a residue that
            carried none and a writer that has never been reached were the same absent number — and the
            `records` on this line minus the kinds beside it was the only way anybody could recover them.
-           They are park-side only: cold_resume rebuilds both and ColdResumed has no counter for either yet,
-           so @COLDRESUME states nothing about them and build.mjs reports these two as counts rather than as
-           a round trip. */
+           THEY ARE NO LONGER PARK-SIDE ONLY, and the sentence that used to end this comment said they were:
+           ColdResumed counts both now, so @COLDRESUME carries the other end and build.mjs pairs them like
+           every other kind instead of reporting them as records WRITTEN with nothing to compare against. */
         printf("@COLDPARK {\"records\":%ld,\"segs\":%ld,\"flows\":%ld,\"cands\":%ld,\"orphans\":%ld,"
                "\"worlds\":%ld,\"commits\":%ld,\"delivers\":%ld,\"bytes\":%zu,\"store\":\"%s\"}\n",
                cold_park_records(), g_cp.segs, g_cp.flows, g_cp.cands, g_cp.orphans, g_cp.worlds,
@@ -27872,9 +27872,15 @@ int main(int argc, char **argv) {
            the other, so a residue that carried peers' segments and a resume that re-materialized none of them
            were the same two numbers — absent — and nothing in the run could tell that apart from a residue
            that carried none. ColdResumed counted it and no host had ever read it. */
+        /* AND `commits`/`delivers` BESIDE THEM, which closes the last two kinds of this grammar on the same
+           argument for the third time: a residue that carried no 'r' and no 'm' and a REBUILD that dropped
+           every one it was handed were the same absent number here, and the park line above has been stating
+           how many it WROTE with nothing on this line to compare them against. Both ends now say it, so
+           build.mjs pairs all seven kinds instead of five and two. */
         printf("@COLDRESUME {\"segs\":%ld,\"flows\":%ld,\"cands\":%ld,\"orphans\":%ld,\"worlds\":%ld,"
-               "\"orphansMet\":%ld,\"orphansUnmet\":%ld}\n",
-               g_cr.segs, g_cr.flows, g_cr.cands, g_cr.orphans, g_cr.worlds, met, unmet);
+               "\"commits\":%ld,\"delivers\":%ld,\"orphansMet\":%ld,\"orphansUnmet\":%ld}\n",
+               g_cr.segs, g_cr.flows, g_cr.cands, g_cr.orphans, g_cr.worlds,
+               g_cr.commits, g_cr.delivers, met, unmet);
     }
 
     /* ONE result document — both surfaces and the scheduler's interleave count, serialized DIRECTLY from the

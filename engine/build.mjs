@@ -2742,12 +2742,14 @@ function programCursorReading(b) {
    summing a gauge: the check passes for the wrong reason or fails for no reason, and here it was the second.
    The shelf identity is asserted at `coldRoundTrip`, where the value is READ and where a reader who hits it
    is already holding both paths. */
-/* `commits` AND `delivers` ARE IN THIS CONTRACT AND NOT IN THE PAIRING BELOW, which is the whole of what this
-   reader can honestly say about them. They are the 'r' and 'm' records — POSITIONAL fields of the flow they
-   follow, exactly as an orphan locator is — and solver/cold.h now counts both at the write while ColdResumed
-   still has no counterpart, so there is a park-side number and no rebuild to compare it against. Listing them
-   here makes an absent name THROW (this file's own field contract) instead of being compared as undefined,
-   which is the same refusal `store` gets one line down. */
+/* `commits` AND `delivers` ARE IN THIS CONTRACT AND IN THE PAIRING BELOW, which is a correction to what this
+   comment said while only one end counted them. They are the 'r' and 'm' records — POSITIONAL fields of the
+   flow they follow, exactly as an orphan locator is — and the sentence here used to be that solver/cold.h
+   counts both at the WRITE while ColdResumed has no counterpart, so there was a park-side number and no
+   rebuild to compare it against. ColdResumed counts both now and @COLDRESUME carries them, so the honest
+   thing this reader can say about them is the same thing it says about every other kind. Listing them here
+   makes an absent name THROW (this file's own field contract) instead of being compared as undefined, which
+   is the same refusal `store` gets one line down. */
 const COLDPARK_FIELDS = ["records", "segs", "flows", "cands", "orphans", "worlds", "commits", "delivers",
                          "bytes"];
 /* THE @S ARRIVAL CENSUS, SPELLED AS THE RESULT DOCUMENT SPELLS IT. test_forced.c prints the same four numbers
@@ -2755,7 +2757,8 @@ const COLDPARK_FIELDS = ["records", "segs", "flows", "cands", "orphans", "worlds
    producers, and it prints them under the document's own names — one namespace, so a reader who learns these
    off `@RESULT` can read them off the line and a rename breaks in one place rather than drifting in two. */
 const SCENSUS_FIELDS = ["_sourceReads", "_sinkReached", "_sinkTainted", "_sinkSuppressed"];
-const COLDRESUME_FIELDS = ["segs", "flows", "cands", "orphans", "worlds", "orphansMet", "orphansUnmet"];
+const COLDRESUME_FIELDS = ["segs", "flows", "cands", "orphans", "worlds", "commits", "delivers",
+                           "orphansMet", "orphansUnmet"];
 /* THE ORPHAN-DRIVE CENSUS, SPELLED AS THE RESULT DOCUMENT SPELLS IT, for SCENSUS_FIELDS' reason exactly — the
    same two producers reach a reader twice (this line, and `result_json`'s `_orphansDriven`/`_orphansAsked`
    which bridge.js asserts and the popup renders), so a reader who learns the names off `@RESULT` reads them
@@ -2861,28 +2864,23 @@ function coldRoundTrip(v1, v2, store) {
   /* A KIND WRITTEN AND NOT REBUILT IS THE FINDING, and each is named at its own read rather than looped over a
      list of strings: the whole value of splitting the residue by kind is that the arm which stopped working is
      the arm to look at, and a kind reached through a computed key is a kind no reader of this file can see. */
+  /* `commits` AND `delivers` ARE IN THIS LIST AND USED NOT TO BE, WHICH RETIRES A SPECIAL CASE RATHER THAN
+     ADDING TWO ROWS. There was a separate `unpaired` sentence here reporting them as park-side counts, and its
+     reason was sound while it stood: ColdResumed had no counterpart, so pairing them would have read
+     `undefined` off the resume census and printed it as a rebuild — a defaulted field in the READER, which is
+     the one thing this file's census contract exists to refuse. solver/cold.c counts both arms now and
+     @COLDRESUME carries them, so the pairing is available and the special case is not a weaker version of it,
+     it is a DIFFERENT CLAIM: `commits 0` park-side said a residue carried none, and `0→0` says that AND that
+     the rebuild agreed. The two sentences the old branch carried survive generically — its zero case is what
+     `never` prints, and a park-side count with no rebuild behind it is exactly what `lost` now catches. */
   const kinds = [["segs", park.segs, res.segs], ["flows", park.flows, res.flows],
                  ["cands", park.cands, res.cands], ["orphans", park.orphans, res.orphans],
-                 ["worlds", park.worlds, res.worlds]];
+                 ["worlds", park.worlds, res.worlds], ["commits", park.commits, res.commits],
+                 ["delivers", park.delivers, res.delivers]];
   const lost = kinds.filter(([, p, r]) => p > 0 && r < p).map(([k]) => k);
   const never = kinds.filter(([, p]) => p === 0).map(([k]) => k);
-  /* THE TWO KINDS THIS COMPARISON MAY NOT PAIR, REPORTED AS PARK-SIDE COUNTS. Pairing them anyway would read
-     `undefined` off the resume census and print it as a rebuild — a defaulted field in the READER rather than
-     in the tree, which is the one thing this file's census contract exists to refuse. They are reported at all
-     because their ZERO is the finding: 'r' and 'm' are the arms of the recipe grammar that no gate in this
-     tree has ever run, and until solver/cold.c counted them a residue that carried none and a writer that was
-     never reached were the same absent number — recoverable only by subtracting every other kind from
-     `records`, which is the derivation a reader had to be trusted to do and could therefore state instead. */
-  const unpaired = park.commits === 0 && park.delivers === 0
-    ? `commits 0, delivers 0 — NEITHER ARM EXERCISED: this residue carried no sending-timeline commitment and ` +
-      `no unmade routed delivery, so the 'r' and 'm' writers and cold_resume's rebuilds of them did not run. ` +
-      `A zero the residue wrote, and park-side only — ColdResumed has no counter for either yet, so nothing ` +
-      `here says whether the rebuild would have worked`
-    : `commits ${park.commits}, delivers ${park.delivers} — park-side only: ColdResumed has no counter for ` +
-      `either, so these are records WRITTEN and nothing in session TWO's census says how many came back`;
   return `${park.records} record(s) / ${park.bytes} B parked into ` +
          kinds.map(([k, p, r]) => `${k} ${p}→${r}`).join(", ") +
-         `; ${unpaired}` +
          (lost.length ? `; REBUILT SHORT on ${lost.join(", ")} — a kind session ONE wrote and session TWO did ` +
                         `not fully re-materialize is the arm to look at`
                       : `; every kind session ONE wrote came back`) +

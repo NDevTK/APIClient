@@ -713,6 +713,22 @@ typedef struct {
        legitimately exceed this count, because a waiting drive forks arms while it replays and every arm of it
        is the same drive of the same body. */
     long orphans;
+    /* 'r' AND 'm': THE OTHER TWO POSITIONAL KINDS, REBUILT — a sending timeline's commitment and an unmade
+       routed delivery, each naming the flow written before it rather than producing one, exactly as 'o' does.
+       So neither is a summand of `flows`+`cands`; and neither is BOUNDED by them the way `orphans` is, because
+       a flow drives ONE function (cold_resume asserts it) and may carry any number of commitments and any
+       number of undelivered messages.
+       THEY EXIST SO THE ROUND TRIP CAN BE PAIRED RATHER THAN DESCRIBED. ColdParked has counted both at the
+       write since the park document's total was asserted against its parts; this end had nothing, so a kind
+       the residue WROTE and this rebuild dropped was invisible on precisely the two arms whose rebuild has
+       never run — and build.mjs said so in its own text, reporting them as park-side counts because pairing
+       them would have read `undefined` off this census. Now park N → resume 0 is the arm to open and park
+       0 → resume 0 is a residue that carried none, which are the two states that used to be one number.
+       ZERO IS A REAL ANSWER HERE FOR THE SAME REASON IT IS ON THE PARK SIDE, and cold_resume's record-total
+       identity is what keeps it one: a kind parsed without counting itself moves the total and nothing else,
+       so a 0 that is a MISSING COUNTER cannot reach a reader as a 0 that is an ABSENT RECORD. */
+    long commits;
+    long delivers;
 } ColdResumed;
 void cold_resumed(ColdResumed *out);
 
