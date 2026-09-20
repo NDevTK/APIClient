@@ -1179,24 +1179,52 @@ JSValue flow_deliver_fork(JSContext *ctx, const Flow *parent);
  * member or it does not compile, and a reader that meets one it has no arm for CRASHES rather than filing it
  * under whichever it tested first. That is the same closure `taken` has and for the same reason.
  *
- * NAMED RESIDUAL — A MECHANISM THAT MINTS ITS ARM AFTER THE ROW IS PUSHED HAS NO MEMBER HERE, AND THE
- * VOCABULARY IS NOT YET WIDE ENOUGH FOR ONE. Both members below are decided AT the push, which is true of
- * every producer that exists. It is NOT true of a cross-instance ANSWER: solver/engine.c's flow_answer_fork
- * mints the arm for an answer commitment when the peer's NEXT answer arrives — not at the push, and not
- * necessarily ever — so such a row can state neither member honestly, and a third meaning "an arm is OWED by
- * another mechanism, later" is what it needs. WHAT THE NEXT DIFF BUILDS: that member, landed WITH the producer
- * that writes it and WITH the arm deliver_admits grows for it, because a member no producer writes is a value
- * a reader can only guess the meaning of. HOW ITS ABSENCE WOULD SHOW: a producer of a commitment whose arm is
- * minted elsewhere has, at its push, no member that is true of it — so it is discovered by writing one, not by
- * any run of the engine today. */
+ * NAMED RESIDUAL — AN OWED ARM IS RECORDED AND NOTHING ANYWHERE ASKS WHETHER IT WAS EVER MINTED.
+ *   WHAT IS NOT COVERED: `FLOW_COMMIT_ARM_ANSWER_OWED` states an OBLIGATION that solver/engine.c's
+ *   flow_answer_fork discharges when the peer's NEXT answer arrives, and a peer that answers ONCE never
+ *   arrives — so the row is indistinguishable, for the whole life of the flow, from one whose arm was minted
+ *   the next step. The refusal such a row makes is therefore either a message the arm holds or a message no
+ *   timeline of this document receives, and the row cannot say which.
+ *   WHAT THE NEXT DIFF BUILDS: the release criterion solver/engine.c's engine_host_take residual already
+ *   names — the peer's own statement that every timeline holding a token has answered — at which point an
+ *   owed arm either exists or is known never to be coming, and this member splits into the two that already
+ *   exist rather than needing a fourth.
+ *   HOW ITS ABSENCE WOULD SHOW: a receiving timeline refusing a routed delivery on an answer commitment, with
+ *   the exhaustion assert over `_routedZeroDelivery` firing at the end of the session because no other
+ *   timeline admitted that record — an obligation that was recorded and never discharged, observed at the one
+ *   line that can see a record no timeline took. */
 typedef enum {
     /* NO FLOW IS ON THE OTHER SIDE. The refusal a row like this makes is a message no timeline of this
        document receives, which is why deliver_admits aborts on one rather than answering. */
     FLOW_COMMIT_ARM_NONE = 0,
     /* THE DELIVERY-TIME FORK (solver/engine.c's deliver_fork_arm) minted it, and it inherited this flow's
        delivery queue at that instant — so it was handed every record this flow consumes from there on. */
-    FLOW_COMMIT_ARM_DELIVERY_FORK = 1
+    FLOW_COMMIT_ARM_DELIVERY_FORK = 1,
+    /* AN ARM IS OWED BY ANOTHER MECHANISM, LATER — the member both of those cannot state, and the reason it
+       is an OBLIGATION rather than an outcome. The two above are decided AT the push; a cross-instance ANSWER
+       is not. solver/engine.c's flow_answer_fork mints the arm for an answer commitment when the peer's NEXT
+       answer arrives, which is after the row is pushed and is not guaranteed at all — a peer holding ONE
+       timeline has nothing further to answer from. So the producer states what it knows, which is that an arm
+       is owed, and never which of its neighbours turned out to be true.
+       A READER MAY NOT FILE IT UNDER EITHER NEIGHBOUR, and the two mistakes are opposite. Read as
+       DELIVERY_FORK it asserts an arm that may not exist, which is the claim the whole vocabulary was built
+       to stop a row making. Read as NONE it ABORTS — on a peer that answered exactly once, which is a peer
+       behaving correctly. The refusal it produces is counted on its own census row (solver/step_unit.h), and
+       if that refusal really was a lost message the exhaustion assert over `_routedZeroDelivery` is what
+       says so: it is the only line that can see a record no timeline of this document admitted. */
+    FLOW_COMMIT_ARM_ANSWER_OWED = 2
 } FlowCommitArm;
+
+/* IS THIS A MEMBER? — beside the enum and not at the one assert that asks, because a closed enumeration
+   spelled as a list of member names is the drift CLAUDE.md names: a member added here and not there is
+   admitted by a check whose whole job is to refuse it. One edit adds a member and nothing else names the set.
+   IT IS NOT A SECOND COPY OF THE VOCABULARY, it is the vocabulary's only statement of its own membership —
+   the values themselves are the wire digits solver/cold.c's park grammar writes, and their ORDER carries no
+   meaning at all, which is why nothing may test a member with a comparison. */
+static inline int flow_commit_arm_is_member(FlowCommitArm a) {
+    return a == FLOW_COMMIT_ARM_NONE || a == FLOW_COMMIT_ARM_DELIVERY_FORK ||
+           a == FLOW_COMMIT_ARM_ANSWER_OWED;
+}
 
 int     flow_world_commits(const Flow *f);
 JSValue flow_world_commit_at(const Flow *f, int i);

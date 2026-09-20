@@ -99,6 +99,29 @@
     /* an archived census is not comparable with a new one until this row is */ \
     /* added back into it.                                                   */ \
     X(ROUTED_PARENT_TOOK, "routed-delivery-the-parent-took")                      \
+    /* AND THE THIRD REFUSAL, WHICH IS THE ONE THAT CANNOT SAY WHERE THE     */ \
+    /* RECORD WENT. The two above both name a flow that holds it — the       */ \
+    /* sibling a delivery-time fork minted, or the parent that took the      */ \
+    /* subtree. This one is refused on a commitment whose arm is OWED by     */ \
+    /* another mechanism, LATER (flow.h's FLOW_COMMIT_ARM_ANSWER_OWED): a    */ \
+    /* cross-instance answer records the timeline it took at the TAKE, and   */ \
+    /* the arm for the timeline it did not take is minted only if the peer   */ \
+    /* answers again. So this row is the population in which a message can   */ \
+    /* be lost and the row above it is not, which is the same split as the   */ \
+    /* one above and made by the same read of the same commitment.           */ \
+    /* IT IS NOT A SHADE OF `not-this-timeline`, AND FILING IT THERE WOULD   */ \
+    /* HIDE EXACTLY THE THING THAT ROW'S OWN COMMENT SAYS IT CANNOT SEE:     */ \
+    /* "a RECEIVED row a second producer makes whose arm is never forked,    */ \
+    /* for which every live timeline consumes and refuses the record and     */ \
+    /* `_routedZeroDelivery` is the only thing that says so afterwards".     */ \
+    /* That second producer now exists and names itself here, so the gauge   */ \
+    /* is no longer the only witness — this row says at the REFUSAL which    */ \
+    /* refusals could have been it.                                          */ \
+    /* IT NARROWS NEITHER ROW ABOVE: the population is new (no commitment    */ \
+    /* carried this arm before), so an archived census is comparable with a  */ \
+    /* new one wherever this row reads zero, which is every session in which */ \
+    /* nothing crosses an instance boundary.                                 */ \
+    X(ROUTED_ARM_OWED,    "routed-delivery-an-arm-is-owed")                       \
     X(CROSS_AGENT_OP,     "cross-agent-operation")                                \
     X(MICROTASK,          "microtask-checkpoint")                                 \
     X(DELIVER_REPLY,      "deliver-one-reply")                                    \

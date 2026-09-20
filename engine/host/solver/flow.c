@@ -2950,7 +2950,11 @@ void flow_world_commit_push(JSContext *ctx, Flow *f, const char *vector, int tak
     DCHECK(taken == 0 || taken == 1,
            "a delivery-world commitment carried something other than RECEIVED or FORECLOSED — the two are the "
            "whole vocabulary, and a third value would be read as one of them by whichever test asked first");
-    DCHECK(arm == FLOW_COMMIT_ARM_NONE || arm == FLOW_COMMIT_ARM_DELIVERY_FORK,
+    /* THROUGH flow.h's OWN MEMBERSHIP TEST AND NOT A LIST OF NAMES SPELLED HERE. This condition used to name
+       the members, which is a second copy of a set whose first copy is the enum — and the copy that drifts is
+       always this one, because a member is added where the vocabulary is written and the check that exists to
+       refuse an unknown value is the last place anybody looks. */
+    DCHECK(flow_commit_arm_is_member(arm),
            "a delivery-world commitment named a minting mechanism this engine has no member for — the "
            "vocabulary is flow.h's FlowCommitArm and a producer states one of its members or states nothing "
            "true, so an unknown value here is either a producer that was never given a member or a park "

@@ -1310,6 +1310,11 @@ int engine_host_answered(uint32_t req, JSValueConst *out) {
  *     holds a token's answers until the peer's own turn drains does not show it, and that batching is a
  *     property of a driver that owns both pumps rather than a guarantee this seam may be built on: RELAY ON
  *     ARRIVAL is what the protocol permits, so it is what the register must survive. */
+/* THE ROW A TAKEN CROSS-INSTANCE ANSWER OWES — declared here and defined with the OTHER commitment writer,
+   because the two are one block: what a receiving timeline has heard from is one question with one set of
+   rules, and a producer written beside its own call site is the second reader of a shape that then drifts. */
+static void answer_commit_taken(JSContext *ctx, Flow *f, const char *world);
+
 JSValue engine_host_take(JSContext *ctx, uint32_t req, int *pcompletion) {
     Flow *f = flow_running();
     JSValue v;
@@ -1351,6 +1356,35 @@ JSValue engine_host_take(JSContext *ctx, uint32_t req, int *pcompletion) {
                        "the fork and the take have come apart");
             }
 #endif
+            /* …AND WHICH SENDING TIMELINE THIS FLOW IS NOW IN, recorded HERE because this is the line at
+               which it becomes true. A peer's answer is computed by ONE of that document's flows and is a
+               fact about that flow alone, so a receiver that consumes one is in that world from here on and
+               may not also hear from a timeline contradicting it — the same claim a routed delivery makes,
+               written by the same field, and answer_commit_taken says why the ARM differs.
+               BEFORE THE ENTRY DIES AND AFTER THE FORK: the assert above has just established that every
+               recorded extra was drained into an arm, so the arms exist and hold their OWN answers, and none
+               of them inherited this row — a clone taken before this line carries a record that does not name
+               a world it never received. That ordering is what makes the push a plain append with nothing to
+               correct afterwards, and it is flow_step's, not this function's, which is why it is read off the
+               assert rather than assumed.
+               A ZONE-COMPUTED ANSWER NAMES NO TIMELINE AND COMMITS THIS FLOW TO NOTHING. §7.4 step 14's load
+               and XHR §3.5.6's fetch are values the trusted zone produced, so there is no flow of anybody's
+               behind them and no world to be in; engine_host_answer asserts that the absence of a name and
+               the answer's SOURCE agree, so reading the field here is reading that same one fact. */
+            {
+                JSValue wv = pending_get(e, PEND_ANSWER_WORLD);
+
+                if (JS_IsString(wv)) {
+                    const char *w = JS_ToCString(ctx, wv);
+
+                    CHECK(w != NULL, "engine: OOM reading which peer TIMELINE answered a cross-instance "
+                                     "request — a commitment that cannot be written is a receiving timeline "
+                                     "that will go on to accept a message from a peer arm it never took");
+                    answer_commit_taken(ctx, f, w);
+                    JS_FreeCString(ctx, w);
+                }
+                JS_FreeValue(ctx, wv);
+            }
             v = pending_get(e, PEND_VALUE);   /* the caller's reference; the register's goes with the entry */
             JS_FreeValue(ctx, e);
             pending_remove(&f->pending, i);
@@ -2235,7 +2269,14 @@ static StepUnit deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
                    same `!deliver_commit_implied` — one answer, because deliver_fork_arm puts its row on the
                    SIBLING and leaves this flow's list untouched between the two calls. So among the rows that
                    are HERE, the arm exists iff the vector names an ancestor, which is what this line reads and
-                   is a biconditional rather than a necessary condition. (The sentence that stood here named
+                   is a biconditional rather than a necessary condition.
+                   AND THAT BICONDITIONAL IS A PROPERTY OF ONE PRODUCER AND NOT OF THE LIST, which is exactly
+                   why this line reads the ROW rather than re-deriving it. answer_commit_taken pushes RECEIVED
+                   rows too, on a mechanism that mints its arm LATER or never, and no gate of the delivery
+                   path is asked at that push — so a reader that re-derived "an arm exists" from the vector
+                   would answer for a producer whose runs it has never seen. The paragraph above is kept
+                   because the argument is what a later reader re-derives, and it is scoped here rather than
+                   corrected: it is true of the rows the delivery path wrote and of no others. (The sentence that stood here named
                    `world_vec_fork_point` as the row's gate too. The conclusion was right and the gate was not,
                    and the gate is the half a later reader builds on — see below for what it cost.)
                    AND IT IS THE ROW'S OWN STATEMENT AND NOT A READING OF ITS VECTOR, WHICH IS WHAT MAKES IT
@@ -2252,9 +2293,12 @@ static StepUnit deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
                    which says in its own words that the arm it would have forked is silently missing — so the
                    old line PASSED while the record was consumed and refused by every timeline there is. The
                    second is the one that SHIPS, and `_routedZeroDelivery` read on a DRAINED receiver is the
-                   row it moves. Neither is reachable through a row: a producer states a FlowCommitArm member
-                   or it does not compile, and an answer commitment has no member that is true of it, which is
-                   flow.h's named residual and the reason the push that would write one is not landed here.
+                   row it moves. NEITHER IS REACHABLE THROUGH A ROW, AND THE MEMBER THAT MAKES THAT TRUE IS
+                   NOW WRITTEN RATHER THAN OWED: a producer states a FlowCommitArm member or it does not
+                   compile, and an answer commitment states FLOW_COMMIT_ARM_ANSWER_OWED — an OBLIGATION, which
+                   is the one thing its producer knows at the push. The arm below reads it and neither aborts
+                   nor claims an arm; the sentence that stood here said this member did not exist and that the
+                   push which would write one was therefore not landed, and both halves went with it.
                    AND THE ARM STILL HOLDS THIS RECORD — the other half of "an arm exists", scoped to the same
                    population as the sentence above it and by a mechanism that is delivery-specific for the
                    same reason: it is what makes the assert about a delivery rather than about a flow. The arm inherited this flow's
@@ -2312,21 +2356,36 @@ static StepUnit deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
                    this one.
                    RETIREMENT: this record goes when `flow_add*(…, WORLD_NONE)` has one caller, at which point
                    naming the generator of a root pair is a grep rather than a paragraph. */
-                DCHECK(arm != FLOW_COMMIT_ARM_NONE,
-                       "a routed delivery CONTRADICTS a world this timeline already received, and the row for "
-                       "that world states that NO mechanism minted a flow on the other side of its branch — "
-                       "so the arm that should receive this record does not exist and no timeline of this "
-                       "document will receive it. The row is the producer's own statement about its own run "
-                       "(flow.h's FlowCommitArm), so this is the mechanism's answer and not a reading of the "
-                       "vector: a vector edited to look forked does not move it. Today the only producer that "
-                       "writes NONE is the delivery-time fork declining a ROOT sending world, which means the "
-                       "two sending worlds are ROOTS of one (document, generation) and roots name each other "
-                       "nowhere. A root is minted by every flow_add(..., WORLD_NONE) — the sending agent's "
-                       "boot flow, a JOINED document's boot flow, an @S candidate session, and each member a "
-                       "cold resume rebuilds — so read WHICH of those minted the pair in front of you; the "
-                       "block above says why 'rebuild the parked flow as a child of its parked world' is not "
-                       "the repair");
-                verdict = STEP_UNIT_ROUTED_NOT_MINE;
+                /* AN ARM THAT IS OWED RATHER THAN MINTED IS ITS OWN ANSWER, AND IT IS NEITHER OF THE
+                   NEIGHBOURS THIS LINE WOULD OTHERWISE FILE IT UNDER. A cross-instance answer records the
+                   timeline it TOOK (answer_commit_taken); the arm for the timeline it did not take is
+                   flow_answer_fork's and is built only if that other timeline answers. Aborting would fire on
+                   a peer that answered exactly ONCE — a peer behaving correctly, whose single timeline has
+                   nothing further to say — and treating it as DELIVERY_FORK would assert an arm no mechanism
+                   has built, which is the claim reading the row instead of the vector exists to stop.
+                   SO IT REFUSES AND SAYS WHICH REFUSAL IT WAS, and the loss, if there is one, is caught where
+                   every other lost delivery is: the exhaustion assert over `_routedZeroDelivery` is the only
+                   line that can see a record no timeline of this document admitted, and it names this case.
+                   Counting it apart from `routed-delivery-not-this-timeline` is the same split that row's own
+                   neighbour is made by — that one names a flow that holds the record and this one cannot. */
+                if (arm == FLOW_COMMIT_ARM_ANSWER_OWED) verdict = STEP_UNIT_ROUTED_ARM_OWED;
+                else {
+                    DCHECK(arm != FLOW_COMMIT_ARM_NONE,
+                           "a routed delivery CONTRADICTS a world this timeline already received, and the row for "
+                           "that world states that NO mechanism minted a flow on the other side of its branch — "
+                           "so the arm that should receive this record does not exist and no timeline of this "
+                           "document will receive it. The row is the producer's own statement about its own run "
+                           "(flow.h's FlowCommitArm), so this is the mechanism's answer and not a reading of the "
+                           "vector: a vector edited to look forked does not move it. Today the only producer that "
+                           "writes NONE is the delivery-time fork declining a ROOT sending world, which means the "
+                           "two sending worlds are ROOTS of one (document, generation) and roots name each other "
+                           "nowhere. A root is minted by every flow_add(..., WORLD_NONE) — the sending agent's "
+                           "boot flow, a JOINED document's boot flow, an @S candidate session, and each member a "
+                           "cold resume rebuilds — so read WHICH of those minted the pair in front of you; the "
+                           "block above says why 'rebuild the parked flow as a child of its parked world' is not "
+                           "the repair");
+                    verdict = STEP_UNIT_ROUTED_NOT_MINE;
+                }
             }
         } else if (rel == WORLD_REL_SAME || rel == WORLD_REL_DESCENDANT) {
             /* AT OR UNDER A SUBTREE THIS ARM FORECLOSED: the parent that took it delivers it. Its own row,
@@ -2402,11 +2461,28 @@ static StepUnit deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
  *   engine_route attaches every record to every live flow. On the fixture measured above, simulated: flows 80
  *   -> 18945 and refusals 33485 -> ~4M for the same 449 records. That is the ceiling this makes visible, and
  *   naming it here is what stops the next reader reading it as this predicate being wrong. */
-static int deliver_commit_implied(JSContext *ctx, const Flow *f, const char *vec)
+/* …AND IT HANDS BACK THE COVERING ROW'S ARM, WHICH IS A SECOND QUESTION THE BOOLEAN WAS ANSWERING BY
+ * ACCIDENT. `implied` decides whether to PUSH a row; the caller that mints the arm was using the same bit to
+ * decide that an arm EXISTS, and spelled the answer as a constant — its own mechanism — on the argument that
+ * the covering row was necessarily pushed by that same mechanism. That argument was EXACT while the delivery
+ * path was the only producer of a RECEIVED row and is not a property of this predicate at all: a second
+ * producer's row can cover a delivery, and the constant would then claim an arm that producer never minted.
+ * This is the one-bit-two-questions shape CLAUDE.md names, and the repair is its: the BIT stays one fact and
+ * each caller asks the question it actually has.
+ * THE SHORT-CIRCUIT GOES WITH IT, because the arm is a property of the WHOLE covering set and not of whichever
+ * row happens to sit first. Several RECEIVED rows may cover one vector — they are pairwise comparable, so they
+ * are a chain, and any of them may have been pushed by any producer — so the answer is the WEAKEST arm among
+ * them: a caller told DELIVERY_FORK by one row and ANSWER_OWED by another has an arm only if both hold, and
+ * only the second can fail to. Reading the first match instead would make the answer depend on push ORDER,
+ * which is the ordinal-over-a-mutable-set defect one list down.
+ * `covering` MAY BE NULL for a caller that wants the bit alone (the row-suppression half), and it is written
+ * only when the answer is 1 — there is no covering arm when nothing covers. */
+static int deliver_commit_implied(JSContext *ctx, const Flow *f, const char *vec, FlowCommitArm *covering)
 {
     int n = flow_world_commits(f), i, implied = 0;
+    FlowCommitArm arm = FLOW_COMMIT_ARM_DELIVERY_FORK;
 
-    for (i = 0; !implied && i < n; i++) {
+    for (i = 0; i < n; i++) {
         JSValue e = flow_world_commit_at(f, i);
         JSValue cv = JS_GetPropertyUint32(ctx, e, 0);
         JSValue tv = JS_GetPropertyUint32(ctx, e, 1);
@@ -2420,12 +2496,36 @@ static int deliver_commit_implied(JSContext *ctx, const Flow *f, const char *vec
                "row read as RECEIVED here would suppress the arm for a world this timeline has never heard "
                "from, which is the message that then reaches no timeline at all");
         rel = world_vec_relate(vec, c);
-        if (JS_VALUE_GET_INT(tv) && (rel == WORLD_REL_SAME || rel == WORLD_REL_ANCESTOR)) implied = 1;
+        if (JS_VALUE_GET_INT(tv) && (rel == WORLD_REL_SAME || rel == WORLD_REL_ANCESTOR)) {
+            JSValue av = JS_GetPropertyUint32(ctx, e, 2);
+            FlowCommitArm row_arm;
+
+            DCHECK(JS_VALUE_GET_TAG(av) == JS_TAG_INT,
+                   "a delivery-world commitment that COVERS an arriving world carried no small-integer "
+                   "minting mechanism — the covering row is what says whether an arm for this world already "
+                   "exists, so a missing field would be read as FLOW_COMMIT_ARM_NONE and report that no "
+                   "timeline can take the record this row is about to suppress the arm for");
+            row_arm = (FlowCommitArm)JS_VALUE_GET_INT(av);
+            JS_FreeValue(ctx, av);
+            /* A COVERING ROW WITH NO ARM AT ALL IS UNREACHABLE, AND SAYING SO IS CHEAPER THAN HANDLING IT. A
+               NONE row is one the delivery-time fork declined to mint for, which it does exactly for a ROOT
+               sending world — and a root has no ancestors, so no vector can be ABOVE it and nothing it holds
+               can cover anything. If this fires, a producer has written NONE onto a row that is not a root's
+               and the whole covering argument is about a branch that was never there. */
+            DCHECK(row_arm != FLOW_COMMIT_ARM_NONE,
+                   "a RECEIVED commitment that COVERS an arriving sending world states that NO flow is on the "
+                   "other side of its branch — a row with no arm is the delivery-time fork declining a ROOT "
+                   "world, and a root is an ancestor of nothing, so it cannot cover a world below it. The "
+                   "producer that wrote this row named a mechanism that does not match the world it named");
+            if (row_arm == FLOW_COMMIT_ARM_ANSWER_OWED) arm = FLOW_COMMIT_ARM_ANSWER_OWED;
+            implied = 1;
+        }
         JS_FreeCString(ctx, c);
         JS_FreeValue(ctx, cv);
         JS_FreeValue(ctx, tv);
         JS_FreeValue(ctx, e);
     }
+    if (implied && covering) *covering = arm;
     return implied;
 }
 
@@ -2778,6 +2878,7 @@ static StepUnit g_step_unit;
 static FlowCommitArm deliver_fork_arm(JSContext *ctx, Flow *f, const char *vec)
 {
     char *fork_point = world_vec_fork_point(vec);
+    FlowCommitArm covering;
     Flow *sib;
 
     /* A ROOT WORLD: no branch, so no other side to be on — and that is the answer, not an absence of one. */
@@ -2799,10 +2900,18 @@ static FlowCommitArm deliver_fork_arm(JSContext *ctx, Flow *f, const char *vec)
        ANCESTOR — see deliver_commit_implied for why that question had no sound answer to give and for the
        measurement of what it cost. */
     /* AND AN IMPLIED COMMITMENT IS COVERED BY THE ARM OF THE DEEPER ONE, whose foreclosure is a SUBTREE
-       containing this world — so the other side exists and was minted by this same mechanism, at that
-       deeper delivery. No row is pushed for this world either (deliver_commit_taken asks the same
-       predicate), so the answer below is the one the CALLER would write if there were a row to write it on. */
-    if (deliver_commit_implied(ctx, f, vec)) return FLOW_COMMIT_ARM_DELIVERY_FORK;
+       containing this world — so the other side exists, and WHICH MECHANISM MINTED IT IS THE COVERING ROW'S
+       OWN STATEMENT rather than this line's. No row is pushed for this world either (deliver_commit_taken
+       asks the same predicate), so the answer below is the one the CALLER would write if there were a row to
+       write it on — which is exactly why it may not be a constant: the row that would have been written here
+       inherits the covering row's claim, and this mechanism is not the only producer of one.
+       THIS LINE READ `FLOW_COMMIT_ARM_DELIVERY_FORK` AND THAT WAS EXACT UNTIL A SECOND PRODUCER EXISTED. Its
+       argument was "the other side … was minted by this same mechanism, at that deeper delivery", which is a
+       claim about WHO PUSHED THE COVERING ROW and was true only while this file was the sole pusher. A
+       cross-instance answer now pushes RECEIVED rows too (answer_commit_taken), and its arm is OWED rather
+       than minted — so the constant would have asserted an arm no mechanism has built, on the one field
+       deliver_admits reads to decide whether a refusal can lose a message. */
+    if (deliver_commit_implied(ctx, f, vec, &covering)) return covering;
     DCHECK(f->frame == NULL,
            "a delivery-time fork was taken by a flow INSIDE a program — a delivery is made between programs "
            "(flow_step reaches it only with no frame), so a parent holding one means this ran somewhere else "
@@ -2844,7 +2953,47 @@ static void deliver_commit_taken(JSContext *ctx, Flow *f, const char *vec, FlowC
     /* `arm` IS NOT COMPUTED HERE AND MUST NOT BE. It is what the fork above OBSERVED about its own run, passed
        down rather than re-derived, so the row states a fact one line of this file established instead of a
        property of the vector that two lines happen to agree about today. */
-    if (!deliver_commit_implied(ctx, f, vec)) flow_world_commit_push(ctx, f, vec, 1, arm);
+    if (!deliver_commit_implied(ctx, f, vec, NULL)) flow_world_commit_push(ctx, f, vec, 1, arm);
+}
+
+/* AND THE SAME HALF FOR A CROSS-INSTANCE ANSWER — the SECOND producer of a RECEIVED row, and the reason
+ * flow.h's vocabulary has a member that names an obligation instead of an outcome.
+ *
+ * WHY AN ANSWER IS A COMMITMENT OF EXACTLY THIS KIND. A peer's document state IS its flows, so an answer to a
+ * cross-document read is computed BY ONE TIMELINE of that peer and is true of that timeline alone. A receiving
+ * flow that has taken it is in that sending world from here on, exactly as it is when it takes a routed
+ * message — and a later `postMessage` from a CONTRADICTING timeline of the same peer would hand the page a
+ * state neither peer timeline was ever in, which is the fabrication the record exists to refuse. The two
+ * producers write the same row for the same reason; what they cannot share is the ARM.
+ *
+ * WHY THE ARM IS OWED AND NOT MINTED. deliver_fork_arm mints the other side AT the delivery, because a sending
+ * world with a fork point above it has a sibling whether or not that sibling ever sends. An answer has no such
+ * guarantee: the arm for the timeline this flow did NOT take is flow_answer_fork's, and it is built only when
+ * that other timeline's answer actually arrives. A peer holding one timeline never produces one, and that is
+ * the peer behaving correctly rather than an arm going missing — so the row states the obligation, which is
+ * the only thing its producer knows at the moment it writes.
+ *
+ * WHY AT THE TAKE AND NOT AT THE ANSWER, WHICH IS WHAT MAKES THE ARMS COME OUT RIGHT WITH NO CORRECTION
+ * ANYWHERE. engine_host_answer writes the value onto the register; the flow has not RECEIVED anything until it
+ * consumes it, and flow_step drains every recorded extra into an arm BEFORE it resumes the frame that
+ * consumes (engine_host_take asserts exactly that, on the entry it is destroying). So at the instant
+ * flow_answer_fork clones the parent, the parent has not taken and has no row for its own answer — the arm
+ * inherits a record that does not name a world the arm never received, and each side then pushes its own row
+ * at its own take. A push at the ANSWER would put the issuer's world on the arm's inherited list, where it is
+ * false of the arm and CONTRADICTS the world the arm did take, and the correction would have to find and
+ * replace a row by searching for it.
+ *
+ * THE SUPPRESSION IS THE DELIVERY PATH'S, ASKED HERE FOR THE SAME REASON AND WITH THE SAME ANSWER: a world
+ * some existing RECEIVED commitment already descends from refuses nothing that commitment does not already
+ * refuse. Two spellings of one question is the shape that drifts, so there is one. */
+static void answer_commit_taken(JSContext *ctx, Flow *f, const char *world)
+{
+    DCHECK(world != NULL && *world,
+           "a cross-instance answer was recorded as a commitment with no answering TIMELINE — a peer answers "
+           "by running a program on one of its flows, and an answer that names none cannot say which of that "
+           "document's timelines this one is now in");
+    if (!deliver_commit_implied(ctx, f, world, NULL))
+        flow_world_commit_push(ctx, f, world, 1, FLOW_COMMIT_ARM_ANSWER_OWED);
 }
 
 /* THE DELIVERY ITSELF, made by the receiving flow's own step — so it runs with that flow switched in, under its
@@ -5786,9 +5935,11 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
  *       - THE REFUSAL IS SOUND ONLY WHERE THE ARM IS ALREADY MINTED. deliver_admits refuses a contradicting
  *         record and ASSERTS the arm that takes it exists. Its proof USED to be `strchr(c, ',')`, a proxy for
  *         deliver_fork_arm having run, which an answer row satisfied in neither direction; it is the row's own
- *         FlowCommitArm now, and an answer row still satisfies it in neither direction — there is no member
- *         that is TRUE of one, which is flow.h's named residual and is what (c) has to land first. The change
- *         is that the gap is a value a producer cannot write rather than a reading that answers wrongly. The
+ *         FlowCommitArm now, and an answer row states FLOW_COMMIT_ARM_ANSWER_OWED — the member flow.h's
+ *         residual asked for, landed with (c). The refusal is therefore no longer asserted against on such a
+ *         row: it is COUNTED, on `routed-delivery-an-arm-is-owed`, and the only line that can say the record
+ *         really was lost is the exhaustion gauge. The change is that the gap is a value a producer cannot
+ *         write rather than a reading that answers wrongly. The
  *         costly case is unchanged: a peer timeline that answers AFTER the issuer took its first answer has
  *         had its entry dropped by engine_host_take, so no arm is forked, and every live timeline consumes
  *         and refuses that peer's messages. `_routedZeroDelivery` on a DRAINED receiver is the row.
@@ -5826,12 +5977,12 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
  *         for deliver_fork_arm having run. It reads the ROW now (flow.h's FlowCommitArm, written by the
  *         producer out of what the fork actually did), and the row shape crossed into solver/cold.c with it:
  *         park_rec_commit writes the mechanism beside the `,0`/`,1` flag and the resume refuses a two-field
- *         'r' BY NAME, so a park no longer loses the distinction. What is STILL missing for (c) is a member
- *         of that vocabulary meaning "an arm is OWED by another mechanism, later" — an answer commitment can
- *         state neither member that exists, because both are decided AT the push while flow_answer_fork mints
- *         its arm when the peer's NEXT answer arrives. That member lands WITH the push and WITH the arm this
- *         assert grows for it, never before: a member no producer writes is a value whose meaning a reader
- *         can only guess at.
+ *         'r' BY NAME, so a park no longer loses the distinction. THE MEMBER (c) WAS WAITING ON IS LANDED —
+ *         FLOW_COMMIT_ARM_ANSWER_OWED, meaning "an arm is OWED by another mechanism, later", written by
+ *         answer_commit_taken and read by the arm this assert grew for it, all in the diff that landed the
+ *         push. The rule it was landed under is the one that kept it out until then and is worth keeping:
+ *         a member no producer writes is a value whose meaning a reader can only guess at, so the member, its
+ *         producer and its consumer are one diff or none of them.
  *       LANDING ORDER, EACH MEMBER WITH THE CALL THAT CONSUMES IT TODAY:
  *         (a) LANDED — flow_world_commit_push aborts on two RECEIVED rows that CONTRADICT, and its message
  *             names this pin as the repair.
@@ -5841,9 +5992,40 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
  *             today, and that is stated rather than hidden: the single producer of a RECEIVED row decides both
  *             questions, so the proxy was EXACT for it. What changed is that the next producer cannot inherit
  *             the proxy by accident, and that a vector edited to look forked no longer moves the assert.
- *         (c) THE PUSH — flow_answer_fork replaces the arm's RECEIVED row with the world it was forked over,
- *             and engine_host_answer pushes the issuer's. Consumer today: deliver_admits. It needs the THIRD
- *             FlowCommitArm member first, in the same diff: see flow.h's residual.
+ *         (c) LANDED — and BOTH HALVES OF THE CLAUSE THAT DESCRIBED IT WERE WRONG, which is recorded rather
+ *             than quietly replaced because a remedy clause is read ONCE, by somebody who has already decided
+ *             to do the work. It read: "flow_answer_fork replaces the arm's RECEIVED row with the world it
+ *             was forked over, and engine_host_answer pushes the issuer's."
+ *             THE MECHANISM WAS WRONG, AND THE ORDERING THAT REFUTES IT IS ASSERTED THREE FUNCTIONS AWAY.
+ *             engine_host_answer writes the value onto the REGISTER; a flow has received nothing until it
+ *             CONSUMES one, and flow_step drains every recorded extra into an arm BEFORE it resumes the frame
+ *             that consumes — which engine_host_take asserts, on the entry it is destroying ("flow_step forks
+ *             one arm per extra before it resumes this frame"). So at the instant flow_answer_fork clones the
+ *             parent, the parent has not taken and holds no row for its own answer: pushing at the TAKE
+ *             (answer_commit_taken) gives the issuer and every arm its own row with NOTHING TO CORRECT, and
+ *             the replace the clause asked for is not a smaller version of that, it is a search-and-overwrite
+ *             for a row that would never have been there. It is also unbuildable as written — entries are
+ *             shared across a fork and the row to replace is identified only by a vector two requests can
+ *             share, which is an ordinal over a set that is not fixed.
+ *             THE SCOPE WAS WRONG IN THE OTHER DIRECTION, AND THE PART IT OMITTED IS THE PART THAT WOULD HAVE
+ *             SHIPPED A FALSE ROW. deliver_fork_arm's implied-commitment path returned the CONSTANT
+ *             FLOW_COMMIT_ARM_DELIVERY_FORK, under an argument — "the other side exists and was minted by
+ *             this same mechanism" — that is a claim about WHO PUSHED THE COVERING ROW and was exact only
+ *             while this file was the sole producer of a RECEIVED row. A second producer's row can cover a
+ *             delivery, and the constant would then have written an arm nobody minted onto the one field
+ *             deliver_admits reads to decide whether a refusal can lose a message. The clause named a third
+ *             enum member and two pushes and did not name the line that would have been made to lie by them;
+ *             a residual sits in ONE file and its author reasons from where they are standing.
+ *             WHAT LANDED: flow.h's FLOW_COMMIT_ARM_ANSWER_OWED with its membership test beside the enum,
+ *             answer_commit_taken as its producer, deliver_commit_implied handing back the COVERING row's arm
+ *             instead of a constant, deliver_admits' own arm for it, and step_unit.h's
+ *             `routed-delivery-an-arm-is-owed` so the refusal that CAN lose a message is counted apart from
+ *             the two that cannot. Consumer today: deliver_admits, as the clause said — that half was right.
+ *             THE COLD TIER NEEDED NOTHING, which is worth writing down because the natural assumption is
+ *             that a new member is a grammar change: park_rec_commit writes the mechanism as one DIGIT and
+ *             asserts only that it is one, and the resume deliberately does not check the vocabulary, so a
+ *             member past the two that existed round-trips by construction. A member past NINE is the
+ *             grammar change, and that assert says so.
  *         (d) THE WRITER-SIDE READ — window_proxy.c and remote_object.c read the carrier for the document
  *             they are addressing. Consumer: (ii)'s field. This is the member the enumeration above omits.
  *         (e) (ii) and (iii), which are ONE landing: a field with no consult is a grammar change that buys
@@ -12976,7 +13158,15 @@ static int engine_sched_slice(void) {
        that at the refusal itself, where the reader is standing at the decision. This is the FORECLOSED half's
        only witness and the backstop for both: an arm that was minted and then never picked, a record attached
        to a flow that left the frontier through a path flow_finish does not cover, or a refusal whose covering
-       timeline exists and refuses it for a second reason of its own. */
+       timeline exists and refuses it for a second reason of its own.
+       AND IT IS THE ONLY WITNESS FOR A THIRD REFUSAL, WHICH IS WHY THAT ONE DOES NOT ABORT WHERE IT IS MADE.
+       A commitment whose arm is OWED (flow.h's FLOW_COMMIT_ARM_ANSWER_OWED) cannot be asserted against at the
+       refusal: the arm is minted only if the answering peer answers from a SECOND timeline, so an abort there
+       would fire on a peer that answered once, which is a peer behaving correctly. The obligation is recorded
+       at the push and the only moment at which it can be known to have gone undischarged is here, with the
+       frontier exhausted and the gauge unable to fall again. That is the same reason this line exists at all
+       — a loss is a property of the whole session and never of one decision — and it is what makes an
+       obligation a sound thing to record rather than a deferral in a field. */
     {
         long d = 0, r = 0, zero = 0;
 
@@ -12986,11 +13176,17 @@ static int engine_sched_slice(void) {
                "ever admitted — every attachment has been consumed (the walk above asserts no live flow holds "
                "one and flow_finish asserts it of every flow that ended), so each of these was refused by "
                "every timeline it was offered to and the peer's message is simply gone, which the page cannot "
-               "tell from a message that was never sent. Each refusal happened at deliver_admits: either a "
-               "RECEIVED world CONTRADICTS it and the arm that should take it was never minted, or a "
-               "FORECLOSED world covers it and the parent that took that world refused it for a reason of its "
-               "own. Find which by re-running the routed world vectors through deliver_admits — the answer is "
-               "a property of the vectors alone, not of the schedule");
+               "tell from a message that was never sent. Each refusal happened at deliver_admits, on one of "
+               "three rows, and the census says which: a RECEIVED world CONTRADICTS it and the arm that "
+               "should take it was never minted; a FORECLOSED world covers it and the parent that took that "
+               "world refused it for a reason of its own; or a cross-instance ANSWER world contradicts it and "
+               "the arm for that peer's other timeline is OWED by flow_answer_fork and was never minted, "
+               "because the peer never answered again. The third is the one this line is the ONLY witness "
+               "for — `routed-delivery-an-arm-is-owed` says at the refusal that the record COULD be lost and "
+               "this says that it WAS. Find which by reading the step-unit histogram first and then "
+               "re-running the routed world vectors through deliver_admits; for the first two the answer is a "
+               "property of the vectors alone, and for the third it is a property of how many timelines the "
+               "peer answered from");
         (void)zero;
     }
     /* A SESSION THAT CLOSES OVER LIVE MEMBERS WRITES THEM DOWN FIRST, and until this line it did not — which
