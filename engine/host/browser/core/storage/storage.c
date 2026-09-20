@@ -168,6 +168,105 @@ static JSAtom st_key_atom(JSContext *ctx, JSValueConst key)
     return JS_ValueToAtom(ctx, key);
 }
 
+/* WHETHER THIS Storage IS THE ONE §12.1 SAYS OUTLIVES THE SESSION. The slot holds the two spellings
+   Storage §4.1 "Storage endpoints" names, and storage_new is its only writer, so a third string here is that
+   constructor and this test disagreeing. */
+static bool st_type_is_local(JSContext *ctx, JSValueConst slots)
+{
+    JSValue t = JS_GetPropertyStr(ctx, slots, "type");
+    const char *s;
+    bool local;
+
+    DCHECK(JS_IsString(t), "a Storage object's type is not a string — storage_new writes Storage §4.1's two "
+                           "spellings at the mint and nothing else ever writes this slot");
+    s = JS_ToCString(ctx, t);
+    CHECK(s != NULL, "storage: OOM reading a Storage object's type");
+    local = !strcmp(s, "local");
+    /* Storage §4.1 "Storage endpoints": "A storage type is \"local\" or \"session\"." A third spelling would
+       read as session here and answer a concrete null for an area that outlives the run, so the closed set is
+       asserted and not assumed. */
+    DCHECK(local || !strcmp(s, "session"),
+           "a Storage object's type is neither of Storage §4.1's two — storage_new writes them and a third "
+           "string means something else now writes this slot");
+    JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, t);
+    return local;
+}
+
+/* WHAT A KEY THIS MAP DOES NOT HOLD READS AS — §12.2.1's getItem step 1, "If this's map[key] does not exist,
+ * then return null", answered as the SOURCE it is rather than as a fact about the program.
+ *
+ * THE `null` IS CORRECTLY COMPUTED AND IT IS ABOUT THIS ENGINE. Storage §4.6 "Storage bottles" mints every
+ * bottle with "a map, which is initially an empty map", storage_shed.c builds the shed at the PRE-BOOT
+ * baseline and loads nothing from anywhere, so a key no flow wrote really is absent HERE. The question a
+ * forced-execution run asks is not about here. §12.1 "Introduction" says what a local storage area IS —
+ * "The second storage mechanism is designed for storage that spans multiple windows, and lasts beyond the
+ * current session" — and §12.3.1 "User tracking" names that same property as the threat it creates, "a
+ * unique identifier stored in its local storage area to track a user across multiple sessions". An area is
+ * BY DEFINITION carrying state written before this run. This engine has no before, so step 1 was reporting
+ * the absence of a prior session to the page as though it were a fact about the program.
+ *
+ * SO IT IS THE SOURCE AND THE CONCRETE ANSWER RIDES IT AS THE EXAMPLE, which is document.referrer's shape
+ * one component over: "A document this engine builds is given no referrer, so the concrete answer is the
+ * empty string the section names for exactly that case — and the value is still the SOURCE". document.cookie
+ * is that same fact minted per read out of a jar this run cannot have populated either. A local storage area
+ * and a cookie jar are ONE category — client-side, page-written, prior-session state — and §Attacker-sources
+ * already names two members of it ("cookies, referrer, `name`, IndexedDB, form values"). This was the member
+ * answering concretely.
+ *
+ * IT IS NOT §Headless's "there is no device", and that section draws the line itself: the device here is
+ * COMPLETE. The shed, shelf, bucket, bottle, quota, broadcast and round trip are all modelled, and a byte
+ * written through setItem is a byte getItem reads back — which is why a key THIS RUN WROTE never reaches this
+ * function at all and stays concrete. What is missing is not hardware, it is a PRIOR SESSION, and a prior
+ * session is not a device.
+ *
+ * AND `null` IS NOT DELETED, IT IS DEMOTED FROM A FACT TO AN ARM. It rides as the EXAMPLE — a real value and
+ * not the JS_UNDEFINED that means "no example" — so §solver's branch rule marks the FIRST-TIME visitor's
+ * world PRIMARY and forks the returning visitor's as the sibling, and nothing that runs today stops running.
+ * concolic.h states the identical thing for the analogous unknown one component over: "The empty List is a
+ * wrong answer only when it is stated as a FACT; as an arm this flow decided and recorded, it is the honest
+ * half of a fork."
+ *
+ * THE MINT IS concolic_source_wrap AND NOT concolic_new, which is what keeps this member SPEC-CORRECT where
+ * it has to be: a host that installed no source overlay gets `computed` back unchanged, so a conformance run
+ * reads the plain `null` step 1 names.
+ *
+ * SESSION IS NOT LOCAL AND THE REASON ABOVE DOES NOT REACH IT. §12.1 gives the two opposite lifetimes in its
+ * own words: the local area "lasts beyond the current session", while the session area is for a user
+ * "carrying out a single transaction". An empty session area is the area a FRESH navigation really has, so
+ * `null` there is a fact about the world and not about this engine's missing past. WHAT THAT REASON DOES NOT
+ * COVER, said here so the sibling is not read as decided: a SECOND document of one traversable, where the
+ * key was written by an earlier load of the same session. That is a separate question with its own evidence
+ * and it is not answered here.
+ *
+ * ASKED IN ONE PLACE so the spellings of one question cannot drift apart — see the residual at js_st_get_item
+ * for the door that does not route here yet. OWNED. */
+static JSValue st_absent_value(JSContext *ctx, JSValueConst slots, JSAtom key)
+{
+    const char *k;
+    char *shape, *src;
+    JSValue r;
+    int n;
+
+    if (!st_type_is_local(ctx, slots)) return JS_NULL;
+    k = JS_AtomToCString(ctx, key);
+    CHECK(k != NULL, "storage: OOM spelling an absent key's provenance");
+    n = snprintf(NULL, 0, "localStorage[\"%s\"]", k);
+    CHECK(n > 0, "storage: an absent key's provenance could not be measured");
+    src = js_malloc(ctx, (size_t)n + 1);
+    shape = js_malloc(ctx, (size_t)n + 3);
+    CHECK(src != NULL && shape != NULL, "storage: OOM spelling an absent key's provenance");
+    /* THE KEY IS SPELLED IN FULL AND NEVER INTO A FIXED BUFFER. Two long keys sharing a prefix would truncate
+       to ONE shape, and a shape is an identity — the two unknowns would then decide each other's branches. */
+    snprintf(src, (size_t)n + 1, "localStorage[\"%s\"]", k);
+    snprintf(shape, (size_t)n + 3, "{%s}", src);
+    JS_FreeCString(ctx, k);
+    r = concolic_source_wrap(ctx, shape, src, JS_NULL);
+    js_free(ctx, shape);
+    js_free(ctx, src);
+    return r;
+}
+
 /* HOW MANY BYTES ONE STORED STRING COSTS is the MODEL's measure and not this interface's — Storage §4.1's
    per-bottle quota and §6's storage usage are the same number counted for two purposes, so
    core/storage/storage_shed.h owns it and step 4 below reads it. It used to be a static here, and the second
@@ -336,7 +435,33 @@ static JSValue js_st_key(JSContext *ctx, JSValueConst this_val, int argc, JSValu
 }
 
 /* "The getItem(key) method steps are: 1. If this's map[key] does not exist, then return null. 2. Return
-    this's map[key]." */
+    this's map[key]."
+ *
+ * NAMED RESIDUAL — THE SECOND DOOR, which asks this member's question and does not route to its answer.
+ * WHAT IS NOT COVERED: a read of an absent key spelled as a PROPERTY ACCESS rather than as this call.
+ * §3.9.7's step 1 asks whether the name is a supported property name, st_named_visible answers that off the
+ * map, and a key the map does not hold fails it — so the read falls through the prototype chain and
+ * `localStorage.theme` answers a concrete `undefined` where `localStorage.getItem("theme")` now forks.
+ * WHAT THE NEXT DIFF BUILDS: this class's `get_property` exotic hook, which quickjs.h declares beside the
+ * four this file already installs, answering AFTER the ordinary lookup has missed and calling
+ * st_absent_value. It may NOT be built by making the name visible to §3.9.7 instead: that is the EXTENT
+ * rather than the value, and a key nothing wrote would then enter `Object.keys(localStorage)`, `in` and
+ * `length`. Answering the read while leaving the extent alone is the split solver/absent.c already makes on
+ * the global object, whose absent_unresolved_note records a `typeof` and an `in` and decides neither.
+ * HOW ITS ABSENCE WOULD SHOW: a document that reads storage through property access reaches its gates with a
+ * concrete value, so a run over it carries no fork-census row naming a `{localStorage[...]}` source while the
+ * same document spelled with getItem carries one.
+ * WHY IT IS SECOND AND NOT FIRST is MEASURED and not assumed — over ten corpus documents and excalidraw's own
+ * 2.2 MB bundle, fetched live, the getItem door carried 21 reads and the property and bracket doors carried
+ * ZERO. That number is a floor over one sample and it is re-derived rather than trusted:
+ *     grep -c 'localStorage\.getItem(' <file> ; grep -c 'localStorage\[' <file>
+ *     grep -oE 'localStorage\.[A-Za-z_$][A-Za-z0-9_$]*' <file> | sort | uniq -c
+ *
+ * setItem's step 3 EXISTENCE TEST IS DELIBERATELY NOT THIS QUESTION and is left concrete. It reads the
+ * engine's OWN map to decide step 3.3's reorder and step 7's oldValue, at the moment this run is writing the
+ * key — a fact about storage this engine holds, not a claim to the page about an area it cannot see. Routing
+ * it here would make step 3.2's "If oldValue is value, then return" compare against an unknown and fork every
+ * first write in the document. */
 static JSValue js_st_get_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     JSValue slots = st_brand(ctx, this_val), map, v;
@@ -347,11 +472,13 @@ static JSValue js_st_get_item(JSContext *ctx, JSValueConst this_val, int argc, J
     DCHECK(argc >= 1, "Storage.getItem() ran with no key — its one argument is required");
     a = st_key_atom(ctx, argv[0]);
     map = st_map(ctx, slots);
-    JS_FreeValue(ctx, slots);
-    if (a == JS_ATOM_NULL) { JS_FreeValue(ctx, map); return JS_EXCEPTION; }
-    if (JS_GetOwnSlot(ctx, &v, map, a) <= 0) v = JS_NULL;               /* step 1 */
+    if (a == JS_ATOM_NULL) { JS_FreeValue(ctx, map); JS_FreeValue(ctx, slots); return JS_EXCEPTION; }
+    /* STEP 1. A key THIS RUN WROTE takes the slot above and is untouched, which is the round trip §Headless
+       requires of a mock; only the key no flow wrote reaches the source. */
+    if (JS_GetOwnSlot(ctx, &v, map, a) <= 0) v = st_absent_value(ctx, slots, a);
     JS_FreeAtom(ctx, a);
     JS_FreeValue(ctx, map);
+    JS_FreeValue(ctx, slots);
     return v;                                                            /* step 2 */
 }
 
