@@ -283,9 +283,10 @@ typedef struct {
        says which of the two questions it is answering. */
     int replay_pm;
     /* …AND HOW MANY ARMS THE PATH THAT FRACTION IS OF ACTUALLY HAS, WHICH IS WHAT SPLITS THE ZERO ABOVE.
-       The re-injection point is frozen ONCE per search — add_pending, under the `opened` latch, at the one
-       moment a flow stands at this sink — and every candidate is seeded at cursor 0 over that same frozen
-       segment, so the segment's LENGTH is a property of the SEARCH: fixed from the freeze, known before any
+       The re-injection point is frozen ONCE per search — cand_learn_path, at whichever of its TWO doors a
+       flow first stands at this sink (a detection, or this search's own context probe coming back) — and
+       every candidate is seeded at cursor 0 over that same frozen segment, so the segment's LENGTH is a
+       property of the SEARCH: fixed from the freeze, known before any
        candidate is seeded or scheduled, and already named by the accessor that reports it (decide.h: "the
        length of the CHAIN ... fixed from the instant a blob is built and is the DENOMINATOR of any question
        about progress").
@@ -1194,6 +1195,11 @@ static int search_solved(const Cand *e) {
    IT PUSHES NOTHING, which is what keeps it out of solve_resume_candidate's way: that door declines to call
    add_pending precisely because opening a search SEEDS it, and a resumed search's probes are already running
    as flows. This takes the path and only the path. */
+/* DECLARED HERE AND DEFINED BELOW, because the closure question is asked ABOVE its definition — by
+   add_pending's tail — and a second spelling of `e->reinject != NULL` at that site would be a third answer to
+   a question this file has an accessor for. */
+static int search_seeds(const Cand *e);
+
 static void cand_learn_path(Cand *e) {
     DCHECK(e != NULL, "a re-injection point was taken for no search");
     if (e->reinject) return;       /* the one capture has happened, at whichever door reached it first */
@@ -1257,6 +1263,40 @@ static void add_pending(const char *src, const char *root, int sink) {
        ASKED OF THE ENTRY, it is right in both orders: whichever door made the slot, the first DETECTION opens
        the search, and the second and hundredth return here as they always did. */
     if (e->opened) return;
+    /* …AND A SEARCH THAT HAS ALREADY FIRED IS NOT OPENED EITHER — a SECOND fact about the search, not a
+       second spelling of the first. `opened` answers "has detection been here", and the cold tier makes a
+       search able to FINISH before this session's first detection ever arrives: solve_resume_candidate
+       registers a parked candidate at engine init, that candidate reaches the sink and FIRES, and record_sink
+       closes the search — all of it before an exploration flow of this session has re-reached the same eval.
+       SOLVED-AND-UNOPENED is the one combination the latch above cannot express, and it is the cold tier's
+       normal state rather than a corner of it.
+       EVERY OTHER CONSUMER OF A SOLVED SEARCH IN THIS FILE ALREADY DECLINES, AND THIS WAS THE ONE THAT DID
+       NOT: cand_learn_path returns rather than taking a path ("a solved search seeds no further candidates"),
+       queue_derived and solve_seed_candidates return on search_seeds, and record_sink discards a duplicate
+       PoC for the pair at its own top. Opening a closed search bought NOTHING and cost three things — a
+       flow_credit_emit for an observation carrying no value of information, since the finding is already
+       emitted and standing here again learns nothing new; a context probe pushed onto a list the seeder will
+       never walk; and an `opened` latch on a search nobody will act on — and then asserted below a
+       re-injection point record_sink's release has taken back BY DESIGN. What this restores is agreement
+       between the two arrival orders: detection-first already returned at the latch above without paying or
+       pushing, and the cold order now does the same.
+       MEASURED at 938fd7c9, `--cold-resume` over four cuts of ONE park document, total separation and the
+       same binary throughout. The full residue and a cut to the parked ESCAPES alone abort at the tail assert
+       below holding `reinject` NULL and `reinject_len` 0 — the search fired before any path was ever
+       captured. A cut to the parked CONTEXT PROBES alone aborts there holding `reinject` NULL and
+       `reinject_len` 1 — a path WAS taken, at the witness door, and record_sink gave it back at the fire of
+       the escape the derivation built from that probe's own witness. A cut to NO candidates at all never
+       reaches the assert and runs on to @RESULT. Two routes into one state: in both aborting cases g_sinks
+       held this entry's own (class, source) carrying the PoC `';X9()//`, which is search_solved's comparison
+       satisfied.
+       IT IS NOT A SEEN-SET AND TRUNCATES NOTHING, for search_seeds' reason exactly: what closes a search is
+       EMITTED OUTPUT — a fire-verified PoC for this exact (source, sink) — which §NO BOUNDS names as the one
+       thing allowed to prove a flow is done. The detecting flow goes on running, its arm is not pruned, and
+       the arrival is still counted upstream in detect_sink, which raises `reached`/`tainted` before this
+       function is called at all.
+       RETIREMENT: this record goes when these two returns are ONE question asked of one derived fact — has
+       this detection anything to open — so that a third state cannot be admitted by forgetting a predicate. */
+    if (search_solved(e)) return;
     /* …AND THE ONLY OTHER DOOR THAT CAN HAVE MADE THE SLOT SAYS SO IN ITS OWN NUMBERS. A detection opening a
        search on an entry it did not create means some other producer made that entry, and there is exactly one
        — solve_resume_candidate.
@@ -1342,11 +1382,17 @@ static void add_pending(const char *src, const char *root, int sink) {
             }
         }
     }
-    DCHECK(e->npl > 0 && e->reinject != NULL,
+    /* ASKED THROUGH `search_seeds`, WHICH IS THIS FILE'S ONE SPELLING OF IT. queue_derived and
+       solve_seed_candidates both route to it and this site spelled `e->reinject != NULL` for itself, which is
+       a third answer to a question that has an accessor — the shape that drifts the day "does this search
+       still seed" grows a second term. */
+    DCHECK(e->npl > 0 && search_seeds(e),
            "a search was opened with no candidate to run or with no path to run it on — the class states one of "
            "the two breakout sources (solve_init asserts the exclusive or) and this call is the one moment a "
            "flow stands at the sink, so either missing means the search would re-search the document's whole "
-           "gate tree for an arm the detection already took");
+           "gate tree for an arm the detection already took. A search record_sink has CLOSED is not a "
+           "counterexample and never reaches this line: it is refused at the solved return above, which is "
+           "what lets the release that clears this path go on being the closure");
 }
 
 static void record_sink(int cls, const char *source, const char *poc) {
@@ -1506,8 +1552,16 @@ static void detect_sink(JSValueConst arg, int cls) {
  * THAT IS A STATEMENT ABOUT THE RESUME AND NOT ABOUT THE ENTRY, and the difference is the whole of what
  * add_pending's `opened` latch fixed. A resumed entry acquires a path the moment an EXPLORATION flow of this
  * session detects the same sink — which is a detection like any other and opens the search like any other —
- * and from then on it seeds, derives and reports exactly as one opened by detection first. What it never has
- * is a path taken by the resume itself, because a verifying flow does not detect. Read as a claim about the
+ * and from then on it seeds, derives and reports exactly as one opened by detection first.
+ * WHAT MAKES "LIKE ANY OTHER" TRUE IS THAT A SOLVED SEARCH IS NOT OPENED AT ALL, and that clause was missing:
+ * the cold tier can FINISH a search before this session's first detection, because a parked candidate is
+ * registered at engine init and fires before any exploration flow re-reaches the sink. Read without it, this
+ * sentence promised a path to a detection that could not take one — cand_learn_path declines a solved search
+ * by design and record_sink has already taken the path back — and add_pending's tail assert caught exactly
+ * that, on every residue of a resumed park document that carried a candidate able to fire. add_pending now
+ * refuses to open one, so the promise is kept by the detections that can still be given a path.
+ * What it never has is a path taken by the resume itself, because a verifying flow does not detect. Read as a
+ * claim about the
  * ENTRY, this sentence said a resumed search is inert for the life of the session, which is precisely the
  * wrong verdict `opened` exists to stop.
  * IT IS NOT A SEEN-SET AND TRUNCATES NOTHING. What closes a search is EMITTED OUTPUT — a fire-verified PoC for
