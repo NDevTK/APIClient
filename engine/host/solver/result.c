@@ -2455,10 +2455,6 @@ char *result_json(JSContext *ctx) {
                                 boundary and not `_switches`'s; solver/absent.c states that at the composer,
                                 which is where the accessor that decides it is in view. */
                              "\"_absent\":%s,"
-                             /* AND WHAT ALL OF THE ABOVE WERE DENOMINATED IN — the one nested object here that
-                                is neither a total nor a reading of an instant, but a property of the HOST that
-                                decides whether two of these documents may be compared at all. result.h and
-                                solver/quantum.h state the argument; nothing in this file composes it. */
                              /* …AND WHAT THE RENDER SPENT ON GEOMETRY, which is neither a solver row nor a
                                 reading of an instant: five LIFETIME counters of this agent, every one
                                 differenceable, published together because two of them are a SHARE OF the
@@ -2478,6 +2474,10 @@ char *result_json(JSContext *ctx) {
                                 childTopWalks` is what one walk now pays for. */
                              "\"_layout\":{\"childTopAsks\":%lld,\"childTopServed\":%lld,"
                              "\"childTopWalks\":%lld,\"placements\":%lld,\"passes\":%lld},"
+                             /* AND WHAT ALL OF THE ABOVE WERE DENOMINATED IN — the one nested object here that
+                                is neither a total nor a reading of an instant, but a property of the HOST that
+                                decides whether two of these documents may be compared at all. result.h and
+                                solver/quantum.h state the argument; nothing in this file composes it. */
                              "\"_quantum\":%s,\"_park\":%s}",
                      eps, sinks, errs, errsRetracted, errsExplored,
                      engine_switch_count(), flow_created_count(), solve_candidate_count(),
