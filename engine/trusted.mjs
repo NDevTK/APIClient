@@ -1560,8 +1560,35 @@ async function main() {
     const q = i.quantum === null ? 'and announced no quantum either, so it never opened a cooperative slice'
                                  : 'though it DID announce a quantum, so it opened a slice and ran';
     if (i.census.n === 0)
+      /* NAMED RESIDUAL — WHAT IS NOT COVERED: this branch does not separate a host that reached no census
+         call from a BINARY BUILT BEFORE `engine_census_emit` existed, and those take opposite work. This zone
+         is INTERPRETED FROM THE TREE, so its half of that entry is live the instant it is written, while the
+         engine's half is live only after somebody BUILDS — which is why the two readings can both be true of
+         one checkout and why no git question can tell them apart: the claim rots against an ARTIFACT, and a
+         build leaves no commit.
+         WHAT THE NEXT DIFF BUILDS: the child states its own emitter in a field of the `@QUANTUM` line it
+         already writes once per instance, and this branch reads it — one line on a record that exists, rather
+         than a second announcement.
+         HOW ITS ABSENCE WOULD SHOW: a run against a page that is visibly working — its bills going out, its
+         `@RESULT` arriving — reporting NO census beside a quantum that says a slice was opened.
+         THE ACT THAT RETIRES IT AND WHO MAY PERFORM IT, because an observation with no actor reads as merely
+         pending: `node engine/build.mjs native` and an INSTALL of the result, which only the agent that owns
+         builds may do. Until then the check is by CONTENT in the artifact and never by its timestamp:
+         `grep -c engine_census_emit <binary>`, with an INVENTED name beside it so a zero means absent — AND
+         with a symbol that is certainly there (`engine_sched_step`) so a zero means absent rather than
+         unasked. THE POSITIVE HALF IS NOT BELT-AND-BRACES AND THE ORDER MATTERS: `grep -c` over a path that
+         does not exist writes to stderr and answers 0 for EVERY pattern, including the control, which is
+         indistinguishable from a binary that simply lacks the symbol — and a frozen snapshot is deleted the
+         moment its lane is done, so a stale path is the ordinary case rather than the unlucky one. Measured
+         while this residual was being written: a probe of all three names against a reclaimed snapshot
+         answered 0, 0, 0 and was one sentence from being read as "the emitter is absent"; re-aimed at a
+         surviving artifact it answered 2, 0, 0 and said what it was supposed to say. */
       console.error(`[trusted] [${i.tag}] wrote NO scheduler census (ended ${i.ended}) ${q}. That is a ` +
-                    'statement about what was asked, never a page that was explored and found empty.');
+                    'statement about what was asked, never a page that was explored and found empty — and ' +
+                    'it is TWO states this zone cannot yet separate: a host that reached no census call, ' +
+                    'and a binary built before solver/engine.c grew `engine_census_emit`. Ask the ARTIFACT ' +
+                    'by content (`grep -c engine_census_emit <binary>`, with an invented name beside it as ' +
+                    'the control) rather than this line, which cannot see it.');
     else if (i.census.n === 1)
       console.error(`[trusted] [${i.tag}] wrote exactly ONE scheduler census (ended ${i.ended}), with ` +
                     `${i.census.lastLive} live frontier member(s) in it — the run never advanced another ` +
