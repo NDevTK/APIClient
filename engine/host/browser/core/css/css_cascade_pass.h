@@ -60,6 +60,11 @@
  *     those writes asserts that no pass is open, at the write, which is the only place the two can be made
  *     exclusive by construction. If one fires, the write is real and the PASS is in the wrong place; the fix
  *     is where the pass opens and closes and never a re-check on the read side.
+ *   - AND THE ONE THAT IS NEITHER THE TREE NOR A STYLE INPUT, which is here because a reader counting the
+ *     three above would otherwise have to find it: selector matching has exactly ONE host-language answer,
+ *     and it is `:defined` over DOM §4.9 "Interface Element"'s custom element state. An UPGRADE moves that
+ *     state without touching the tree, so a selector that matched one way before it matches the other way
+ *     after, and the tree version is blind to it. It is closed at ITS write like the rest.
  *
  * WHAT THIS RECORD DOES NOT DO, STATED BECAUSE THE PRECEDENT DOES IT AND A READER WILL LOOK FOR IT: it does
  * NOT re-derive its answer at every hit. core/layout/flow_placement.h's border-box origin can afford that —

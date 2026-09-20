@@ -73,6 +73,7 @@
 #include "core/dom/node.h"
 #include "core/dom/names.h"
 #include "core/dom/attr_list.h"   /* §4.9's (namespace, local name) lookup — the old value of THIS attribute */
+#include "core/css/css_cascade_pass.h"   /* the render record a `:defined` change may not land inside */
 #include "core/dom/element.h"
 #include "core/dom/document.h"
 #include "core/dom/shadow_root.h"
@@ -808,6 +809,22 @@ static void ce_set_state(JSContext *ctx, JSValueConst wrap, int state)
     DCHECK(JS_IsObject(wrap), "a custom element state was written onto something that is not an element wrapper");
     DCHECK(state >= CE_STATE_UNCUSTOMIZED && state <= CE_STATE_CUSTOM,
            "a custom element state DOM §4.9 does not name was written onto an element");
+    /* A CASCADE INPUT MOVING INSIDE A RENDER, AND THE ONLY ONE THAT IS NEITHER THE TREE, AN ATTRIBUTE NOR
+       A STYLE SHEET — see core/css/css_cascade_pass.h. Selector matching has exactly ONE host-language
+       answer (core/dom/selector_match.c installs one callback and no other), and it is `:defined`,
+       which css-scoping-1 leaves to the host language and HTML §4.16.3 "Pseudo-classes" defines over
+       DOM §4.9 "Interface Element"'s custom element state — this slot. An UPGRADE moves it without
+       touching the tree, so `dom_cow_version` does not advance for it, and a selector that matched one
+       way before it matches the other way after. */
+    DCHECK(!css_cascade_pass_is_open(),
+           "a custom element state was written while css-cascade-5 §4.2 \"Cascaded Values\"' record "
+           "was open for a render. That state is what `:defined` matches on — the one host-language "
+           "answer this engine's selector matcher has — so an upgrade here re-decides which author "
+           "rules apply to this element, and every cascaded value the render already served for it was "
+           "sorted over the other answer. The tree version does not move for an upgrade, so nothing "
+           "else in this engine can see it happen. The span is core/paint/document_paint.c's CSS 2.1 "
+           "§E.2 \"Painting order\" walk and nothing in it may write: find what did, and either take "
+           "it out of the walk or move the pass inside it");
     JS_DefinePropertyValue(ctx, (JSValue)wrap, g_atom_state, JS_NewInt32(ctx, state), CE_SLOT_FLAGS);
 }
 
