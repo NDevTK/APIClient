@@ -27,6 +27,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "solver/solve.h"      /* the @S URL class's ONE detector — §4.6.5 step 4 is an arrival at it */
 #include "solver/concolic.h"   /* href is a slot a SOURCE can be stashed in — the members keep its provenance */
 #include "core/html/hyperlink.h"
 #include "core/html/html_base_element.h"   /* §4.2.3's get an element's target — see §4.6.5 step 3 below */
@@ -37,7 +38,7 @@
 #include "core/dom/node.h"
 #include "core/events/event_target.h"
 #include "core/frame/navigable.h"
-#include "core/frame/window_proxy.h"   /* the brand on what §7.3.1.7's rules answer with — see §4.6.5 step 9 */
+#include "core/frame/window_proxy.h"   /* the brand on what §7.3.1.7's rules answer with — see §4.6.5 step 11 */
 #include "core/frame/window_features.h"
 #include "quickjs-step.h"
 
@@ -408,6 +409,11 @@ static bool link_has_activation(JSContext *ctx, JSValueConst el)
 static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev, uint8_t *phase, uint32_t *req)
 {
     JSValue hrefv = element_attr_get_value(ctx, el, "href");
+    /* §4.6.5 step 4's OPERAND, ASKED ONCE AND READ THREE TIMES BELOW. An href a flow computed out of unknown
+       external input has no bytes for step 4's encoding-parse to produce a URL record from, and therefore no
+       urlString for step 11 to navigate to — see the arrival below for why that ends the algorithm rather
+       than picking a destination. */
+    const bool href_is_unknown = concolic_is(hrefv) != 0;
     const char *href, *tv;
     size_t tlen = 0;
     char *target;
@@ -418,20 +424,46 @@ static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev,
     WindowType window_type;
 
     (void)ev;
-    /* FOLLOWING A TAINTED LINK IS A SINK, AND IT IS NOT BUILT. `a.href = location.hash.slice(1)` then a click
-       navigates to a destination the attacker names — a `javascript:` URL is the @S vector — and navigable_open
-       takes BYTES, so the destination would arrive at §7.4 as a plain string with its provenance gone and the
-       finding would be silently absent rather than parked. Asserted HERE and not left to the generic assert in
-       element_attr_get, because the mechanism to build is this site's and not that accessor's: navigable_open
-       over a concolic destination, forking the feasible arm and carrying the source into the navigation. */
-    DCHECK(!concolic_is(hrefv),
-           "a hyperlink whose href holds unknown external input was followed — §4.6.5's navigation takes the "
-           "destination as bytes, so the attacker-controlled URL reaches §7.4 untainted and the sink is never "
-           "recognised. Build navigable_open over a concolic destination");
-    DCHECK(JS_IsString(hrefv), "a hyperlink with no href was picked as an activation target — "
-                               "link_has_activation is what decides that, and it reads the same attribute");
-    /* Borrowed from `hrefv`, which outlives the navigation below — one read of the attribute, not two. */
-    href = JS_ToCString(ctx, hrefv);
+    /* §4.6.5 STEP 4's ARRIVAL AT THE @S URL CLASS, THROUGH THE ONE DETECTOR AND NEVER AN `if` HERE.
+       `a.href = location.hash.slice(1)` then a click navigates to a destination the attacker names, and
+       navigating is what executes the `javascript:` scheme (solver/solve.h), so this element's activation is
+       the same sink as §7.2.4's three whole-URL algorithms, as §7.2.2.1's `url` argument and as §4.10.22.3's
+       action. Those three announce through solve_url_sink and this door did not — which is not one door
+       missing a feature: it is the dispatch over WHAT A SET OF BYTES IS asked at three entries out of four,
+       and the entry that skipped it did not report an absent capability, it ABORTED THE ENGINE on input every
+       other entry records. A page that computes an href and clicks it is ordinary, so the population was real.
+       UNCONDITIONAL ON TAINT, like the other three and for their reason: solver/solve.c's URL detector is both
+       the exploration-time recorder and the verification-time fire oracle, so a candidate run's href is a
+       plain String by construction and announcing only the tainted arm leaves the search parked with nothing
+       ever witnessed — exactly the half-a-search solve.h names.
+       UNCONDITIONAL ON THE VALUE TOO, which is where this algorithm and §7.2.2.1's part company a second time.
+       Step 4 encoding-parses the attribute whatever it holds, so `<a href="">` IS a destination — it resolves
+       against the document's own address and a click reloads — while §7.2.2.1 step 3 leaves urlRecord null for
+       the empty string. The `url_is_null` condition core/frame/navigable.c reads before its own announcement
+       is that algorithm's step and not this one's, and copying it here would suppress the sink for the one
+       href value a page writes without meaning to.
+       AND THE `DFAIL` THIS REPLACES NAMED THE WRONG REMEDY, WHICH IS RECORDED HERE RATHER THAN DELETED WITH
+       IT. It said to "build navigable_open over a concolic destination, forking the feasible arm and carrying
+       the source into the navigation", and that half was a claim about this DESIGN written by someone who
+       knew exactly what was missing and was guessing at what fills it. Three siblings had since settled the
+       same question the other way, in writing. §7.4.2.2 "Beginning navigation" reads the destination at SIX
+       predicates — the `javascript` scheme, whether the scheme is a fetch scheme, equality with the active
+       document's url, the fragment together with equality-excluding-fragments, the about:blank/about:srcdoc
+       match, and the origin — so an arm per feasible destination is not a fork of a NAVIGATION, it is a fork
+       of a URL PARSE, and the arm that wins it still has no bytes to fetch. What the siblings do instead is
+       end the algorithm at the announcement, and core/frame/location.c states the reason in full: navigating
+       the exploring flow on a guess tears down the Document that flow is exploring for an address the run
+       never computed, while the real §7.4.2.2 runs in the CANDIDATE flow over the attacker's real bytes,
+       which is §Re-execution discharging the constraint rather than modelling it. */
+    solve_url_sink(ctx, hrefv);
+    DCHECK(href_is_unknown || JS_IsString(hrefv),
+           "a hyperlink with no href was picked as an activation target — link_has_activation is what decides "
+           "that, and it reads the same attribute");
+    /* Borrowed from `hrefv`, which outlives the navigation below — one read of the attribute, not two. NULL
+       for an unknown destination, which is the same word core/frame/navigable.c hands navigable_open from
+       §7.2.2.1's own unknown arm: §7.3.1.7's rules do not read the url at all, so steps 6-8 below still run in
+       full and choose the right navigable, and only the tail that needs an ADDRESS is narrowed. */
+    href = href_is_unknown ? NULL : JS_ToCString(ctx, hrefv);
     /* §4.6.5 step 11's "referrerPolicy set to subject's hyperlink referrer policy", of which the `noreferrer`
        link type is the half this build answers — §4.6.8's determination, asked through the ONE entry that runs
        it. §4.6.5's NOOPENER is asked below instead of here, because its second clause reads the resolved
@@ -472,9 +504,15 @@ static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev,
        caller costs. It is asked AFTER the target because step 2 compares that target against `_blank`. */
     feat.noopener = hyperlink_element_noopener(ctx, el, target, tlen);
     r = navigable_open(ctx, href, target, &feat, node_of(el), &window_type);
-    /* §4.6.5 STEP 9: "Navigate targetNavigable to urlString using subject's node document, with referrerPolicy
+    /* §4.6.5 STEP 11: "Navigate targetNavigable to urlString using subject's node document, with referrerPolicy
        set to subject's hyperlink referrer policy, userInvolvement set to userInvolvement, and sourceElement set
-       to subject." IT IS THIS CALLER'S STEP AND IT IS UNCONDITIONAL — there is no urlRecord-is-null test here,
+       to subject." THE NUMBER WAS 9 HERE AND 11 EIGHT LINES ABOVE, IN ONE FUNCTION. Step 9 is "let urlString be
+       the result of applying the URL serializer to urlRecord" and step 10 is the hyperlinkSuffix append; the
+       navigate is step 11 of an eleven-step list, which engine/specindex/steps/html.json records for §4.6.5's
+       third `<ol>` and which this file's own §4.6.5-step-11 sites already said. The other four `step 9` sites
+       are listed in the report that landed this; they are a cluster written from one retired edition and are
+       repaired per site rather than swept, because a disagreement says a defect exists and not which side has
+       it. IT IS THIS CALLER'S STEP AND IT IS UNCONDITIONAL — there is no urlRecord-is-null test here,
        because §4.6.5 step 4 RETURNS when the parse fails rather than carrying a null forward, and no windowType
        branch, because step 6 takes only the FIRST return value of the rules. That is precisely where this
        algorithm and §7.2.2.1's part company: an empty `href` resolves against the document's own address and
@@ -484,13 +522,29 @@ static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev,
        §4.6.5: a navigable the rules CREATED has already been navigated to `href` by §7.4 step 14 inside the
        create (navigable.h states that contract), so navigating again would load one address into two documents
        of one navigable. When step 8's create stops taking a url — which is what §7.3.1.7 actually says — this
-       test goes and the step becomes unconditional, as it reads. */
-    if (window_type == WINDOW_TYPE_EXISTING_OR_NONE && window_proxy_is(r)) {
+       test goes and the step becomes unconditional, as it reads.
+       AND THE SECOND CONDITION IS NOT STEP 11's — it is the difference between a step whose CONDITION is false
+       and a step whose condition is TRUE and which this engine cannot perform, and writing them as one `if` is
+       what would hide that. An unknown destination reaches step 11 like any other; what it cannot be given is
+       an address.
+       RESIDUAL — THE CODE IS RIGHT AND NARROWER. NOT COVERED: with an unknown destination the exploring flow
+       loads no document, so the chosen navigable goes on showing what it was showing, and a `_blank` arm is
+       handed no url and stays at §7.3.2.1's initial about:blank. THE NEXT DIFF BUILDS a navigation whose
+       DESTINATION is concolic — the whole-URL half of the same capability core/frame/location.c's
+       component-setter assert names by URL §4.4's url_parse_override and core/frame/navigable.c's §7.2.2.1
+       step 16.1 residual names for `window.open` — so §7.4 step 14's load job forks over the domain instead of
+       being skipped; the two are ONE landing, because a destination that is concolic at one door and bytes at
+       the other is two answers to the question navigable_open exists to ask once. HOW ITS ABSENCE WOULD SHOW:
+       a route a bundle reaches ONLY by clicking a link whose href it computed from unknown input contributes
+       no @H endpoint and no sink of its own to exploration, so the run's learned surface is missing everything
+       behind that route while the @S URL entry for the href stands parked — read it as the endpoint set and
+       the parked entry disagreeing about the same address. */
+    if (window_type == WINDOW_TYPE_EXISTING_OR_NONE && window_proxy_is(r) && href != NULL) {
         JSValue nav = navigable_navigate(ctx, r, href);
         JS_FreeValue(ctx, r);
         r = nav;
     }
-    JS_FreeCString(ctx, href);
+    if (href) JS_FreeCString(ctx, href);
     JS_FreeValue(ctx, hrefv);
     free(target);
     (void)phase; (void)req;

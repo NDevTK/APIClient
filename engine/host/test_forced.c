@@ -2065,6 +2065,32 @@ static const char *HTML =
        constraint this search is solved under is the same one. */
     "var lhAttr = document.createElement('div'); document.body.appendChild(lhAttr);"
     "lhAttr.innerHTML = \"<img alt='\" + location.hash.slice(1) + \"'>\";"
+    /* AND THE SAME SOURCE INTO THE URL CONTEXT, WHICH IS THE THIRD OF THE THREE AND THE ONE NO STATEMENT
+       REACHED. The two writes above are one source into two sink CONTEXTS; this is one source into the third,
+       and it is the context whose whole class has exactly one vector — solver/solve.h: "navigating executes
+       the `javascript:` scheme and nothing else does". The fragment percent-encode set (URL §1.3
+       "Percent-encoded bytes") holds space, `"`, `<`, `>` and the backtick and holds NONE of the bytes in
+       `javascript:X9()`, so unlike the data-state write above this one is solvable through a raw fragment: it
+       is the positive half of the same pair, in a third context, and `<a href=<computed>>` clicked is the
+       ordinary shape of it on a real page rather than a contrived one.
+       IT IS THE FOURTH DOOR ONTO THE ONE URL SINK AND IT WAS THE ONLY ONE THAT ABORTED. §7.2.4's three
+       whole-URL algorithms, §7.2.2.1's `url` argument and §4.10.22.3's action all announce through
+       solve_url_sink; §4.6.5 "Following hyperlinks" did not, and asserted instead — so no gate in this tree
+       could reach that abort, because no fixture statement clicked a link whose href a flow had computed.
+       THE CLICK IS `click()` AND NOT A DISPATCHED `Event`, and that is load-bearing rather than stylistic:
+       DOM §2.9 step 6.4 makes an event an ACTIVATION event only when it is a MouseEvent object AND its type
+       is `click`, so `dispatchEvent(new Event('click'))` runs no activation behaviour and this statement
+       would assert nothing at all. HTML §6.5's `click()` fires a synthetic POINTER event, which carries the
+       brand step 6.4 asks for — the same reason the `idv.click()` statement above reaches its handler.
+       THE WITNESS FETCH CARRIES CONSTANTS ONLY. Its path holds no piece of the href and no piece of anything
+       this engine computed, because a payload composed from a concolic can itself be concolic — the request
+       is then never made and its silence reads as the statement not having run, which is the one way a
+       witness fails silently in an engine whose purpose is making values unknown. */
+    "var lhLink = document.createElement('a');"
+    "lhLink.href = location.hash.slice(1);"
+    "document.body.appendChild(lhLink);"
+    "lhLink.click();"
+    "fetch('/api/aclick');"
     /* THE OUTCOME FORK AT A C BUILTIN. `JSON.parse` of unknown text has two feasible completions — §25.5.2
        JSON.parse ( text [ , reviver ] ) step 2's normal completion and the SyntaxError of §25.5.2.1 ParseJSON
        ( text ) step 1 — and a builtin that picks one has DELETED the arm the `catch` and everything behind it
@@ -15029,6 +15055,17 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int st_loc   = s_stage(ss, "eval",      LOCATION_HASH_SRC);
     int st_lpark = s_stage(ss, "innerHTML", LOCATION_HASH_SRC);
     int st_attr  = s_stage(ss, "innerHTML", ATTR_SRC);
+    /* THE ANCHOR DOOR ONTO THE @S URL CLASS — the SAME derived source as `st_attr` above into a DIFFERENT sink
+       context, which is what `s_stage`'s two keys partition. `aclick_ran` is the REACHABILITY WITNESS and is
+       read FIRST: its fetch carries constants only and stands AFTER the click, so it is non-zero iff
+       §4.6.5's activation returned at all — which before the announcement it did not, because the abort at
+       that door ended the process. READ THE PAIR AND NOT EITHER ALONE: `ran=1, seen=0` is not the
+       announcement failing to happen, it is a statement about WHICH SOURCE IDENTITY SURVIVES THE ATTRIBUTE
+       ROUND TRIP — the value goes into the href content attribute and comes back out of it before the
+       announcement sees it — and the finding is then that spelling and not this door. `ran=0` makes `seen`
+       unreadable in either direction, because nothing downstream of the click ran. */
+    int aclick_ran = strstr(ss, "\"url\":\"/api/aclick\"") != NULL;
+    int st_aclick  = s_stage(ss, "location", ATTR_SRC);
     /* AND THE TWO PRODUCER FACTS THAT SPLIT `-ran=1, -atsink=0` INTO THE THINGS IT HAS BEEN SAYING AT ONCE —
        FOR EVERY DERIVED SEARCH, WHICH IS THE HALF THAT WAS MISSING. s_witnessed/s_derived state why the pair is
        the right two facts; what belongs here is why it is read six times and not once. Five of this fixture's
@@ -16348,6 +16385,11 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            producing something executable out of the data state would show up first and which a `poc`-shaped
            row cannot see until it has already fired. */
         { "s-park-noescape", st_lpark < S_ESCAPED, "location.hash", SESS_EXPLORE },
+        /* THE ANCHOR DOOR, LOWEST RUNG FIRST — and the lowest rung here is not an @S stage at all, it is
+           whether the statement's own tail ran. Keyed on `lhLink.click()`, which only that statement puts in
+           the document, so these two select on it and on nothing else. */
+        { "aclick-ran", aclick_ran, "lhLink.click()", SESS_EXPLORE },
+        { "aclick-seen", st_aclick >= S_SEEN, "lhLink.click()", SESS_EXPLORE },
         /* THE THREE OPERAND-SHAPE STATEMENTS. Each key is the piece of PROGRAM TEXT that only its own statement
            puts in the document — the rejected head's error message, the rest parameter's own read, the accessor
            read, the constructor's name — so a row selects on the statement it is about and on nothing else. */
