@@ -2726,6 +2726,15 @@ void  flow_set_host_owed(Flow *f);
    stalled frontier is the healthy reading. */
 int   flow_host_owed_count(void);
 
+/* IS THIS ONE MEMBER OUT OF THE RUNNABLE ORDER — flow_pick's own filter, asked of a single flow. The pick
+   skips a marked member and nothing else skips anything (no seed and no exclusion on the runnable entries),
+   so this predicate answering FALSE for a live member is exactly the statement "the scan weighed it", and
+   that is what a caller comparing its own incumbent against the scan's maximum needs in order to know
+   whether the two readings are about the same population. It is published for that one consumer rather than
+   because it is generally useful: the alternative is the caller inferring the mark from the step code that
+   laid it down, which is a second writer's worth of knowledge about a mark that has exactly one writer. */
+int   flow_host_owed(const Flow *f);
+
 /* THE HOST ANSWERED THIS FLOW, so it is askable again. ONE CLEAR PER EVENT, ON THE FLOW THE EVENT REACHED —
  * a reply provided into its register, an answer delivered to its request, a record or an operation the host
  * attached to it. Those are the only things that can change a host-owed flow's answer, and each of them names

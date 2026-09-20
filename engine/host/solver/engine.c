@@ -12742,9 +12742,58 @@ static int engine_sched_slice(void) {
 
             if (quantum_expired()) yielding = 1;
             else if (cur && flow_weight(cur) < g_yield_floor) yielding = 1;
-            else {
+            /* AND THE THIRD ARM IS ASKED ONLY WHERE IT CAN DISAGREE WITH THE SECOND — A COST AND NEVER A
+               DECISION, BECAUSE THE ANSWER IS IDENTICAL AT EVERY INPUT. The two arms read two POPULATIONS:
+               arm 2 is the INCUMBENT'S weight, arm 3 the maximum over the pick's RUNNABLE candidates.
+               flow_pick's only filter on a runnable entry is flow_host_owed — this call passes no seed and
+               no exclusion, so nothing else skips anything — hence an incumbent that is a live unmarked
+               member IS one of the candidates arm 3 maximises over, and `top >= flow_weight(cur)`. Reaching
+               arm 3 at all says arm 2 did not fire, i.e. `flow_weight(cur) >= g_yield_floor`. The two compose
+               to `top >= g_yield_floor`, so `top < g_yield_floor` is unreachable there and the scan cannot
+               move `yielding` off 0 — which is where the skip leaves it. Where the incumbent is NOT a
+               candidate that implication is gone and the scan is the only thing that can answer: `cur` is
+               NULL because the arm above FINISHED it, or `cur` is MARKED because the arm above MARKED it,
+               and in both cases arm 2 asked about a flow the pick no longer weighs.
+               THE FILTER IS READ AND NOT RE-DERIVED. flow_host_owed is flow_pick's own predicate, published
+               for this one consumer; inferring the mark from the step code that laid it down would be a
+               second writer's worth of knowledge about a mark with exactly one writer, which is the shape
+               the paragraph above this block already names for "does this turn return".
+               WHAT IS CONTINGENT IS MEMBERSHIP, AND IT IS THE HALF ASSERTED. Once the incumbent is in the
+               scanned set the arithmetic is an identity, so all that is left to be wrong is `cur` naming a
+               flow the registry no longer holds — O(1) through its registry handle, side-effect-free.
+               THE HANDLE IS READ HERE THOUGH flow_is_member REFUSES TO, and the difference is whose pointer
+               it is. That predicate answers for a pointer that MAY BE DANGLING, so it can only compare
+               addresses; `cur` is the member this iteration just stepped and ARM 2 ONE LINE ABOVE ALREADY
+               DEREFERENCED IT through flow_weight, so the read adds no exposure this decision did not
+               already have. `flow_running()` is not the witness to reach for instead: flow_remove does not
+               clear it, so it goes on naming a departed flow and would answer TRUE for exactly the state
+               this assert exists to catch.
+               ASSERTING THE CONCLUSION IS NOT AVAILABLE AT ANY PRICE: flow_pick raises `g_scan_runs` on
+               every call, so a dev-only re-scan would corrupt the very counters this decision is measured
+               with and make the dev build's census a different program from the one that ships.
+               NO ASSERTION COVERAGE GOES WITH THE CALL. engine_top_weight's own DCHECK fires only on a -inf
+               — a pick that came back empty — and in the skipped case the incumbent is a candidate, so the
+               pick returns at least it and that assert's first disjunct holds for every input reaching here.
+               IT IS A PRECONDITION AND NOT A FALLBACK BY §C-stack'S TEST: delete engine_top_weight and the
+               question still has to be asked, because "is the incumbent in the population the other arm
+               read" is what decides whether arm 2's answer already covers arm 3's. Nothing is selected
+               against and no second implementation waits behind a shape it fails to answer for.
+               RETIREMENT: this argument goes when the two arms become ONE reading over ONE population — an
+               arm 2 that asks the pick's maximum rather than the incumbent's own weight — because there is
+               then no second population for the implication to be about. */
+            else if (cur == NULL || flow_host_owed(cur)) {
                 double top = engine_top_weight();
                 if (top > -1.0 / 0.0 && top < g_yield_floor) yielding = 1;
+            }
+            else {
+                DCHECK(flow_at(cur->reg_i) == cur,
+                       "the yield decision skipped its own third arm on an incumbent the registry does not "
+                       "hold — the skip is sound because a live unmarked member is weighed by the runnable "
+                       "pick, so `top` is at least this flow's weight and the arm could not have fired; a "
+                       "flow that has LEFT the frontier is weighed by nobody, the bound is gone, and this "
+                       "engine will hold the thread past the host's floor with nothing saying so. Either "
+                       "`cur` outlived a flow_remove that should have cleared it, or its registry handle "
+                       "and the registry have come apart");
             }
             /* AND THE OTHER CLOSING EDGE OF A TURN, DISCHARGED WITHOUT BUYING A RETURN — @PERWORLD. A yield
                hands the host this exact member, standing, with its COW and DOM deltas applied and a step of

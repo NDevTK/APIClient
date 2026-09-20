@@ -4100,7 +4100,13 @@ static inline int64_t flow_silence_us_to_sink(const Flow *f) {
  * generation on it, and every stamp ages out the instant the generation moves. */
 static unsigned g_owed_gen = 1;   /* NEVER 0: a fresh (calloc'd) flow must read as RUNNABLE, not as marked */
 
-static int flow_host_owed(const Flow *f) { return f->owed_gen == g_owed_gen; }
+/* PUBLISHED RATHER THAN STATIC, BECAUSE IT IS flow_pick'S OWN FILTER AND A SECOND CALLER NOW HAS TO ASK
+   THE SAME QUESTION. The scan below is the ONE place a member is kept out of the runnable order, so
+   "is this flow a candidate of that order" has exactly one correct spelling; engine.c's yield decision
+   needs the answer for the incumbent, and re-deriving it there from the step code that marked it would
+   be two right answers to one question — the shape that drifts the day a second site learns to mark.
+   ROUTED TO THE CANONICAL SPELLING rather than answered twice. */
+int flow_host_owed(const Flow *f) { return f->owed_gen == g_owed_gen; }
 
 int flow_host_owed_count(void) {
     int n = 0;
