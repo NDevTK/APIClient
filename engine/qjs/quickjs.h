@@ -2757,6 +2757,19 @@ JS_EXTERN uint32_t JS_OrphanGen(JSRuntime *rt);
    called from inside the object-list walk above. `fn` must be an object with a bytecode body; a C function, a
    bound function and a Proxy have no body to name and are never orphans. */
 JS_EXTERN uint64_t JS_OrphanHash(JSContext *ctx, JSValueConst fn);
+/* WHERE THE PAGE'S OWN CODE IS STANDING, as a CALL SITE rather than as a body — the locator above folded over
+   the nearest bytecode frame's body PLUS the byte offset of the opcode that frame is standing at, so two calls
+   in one minified function are two names where JS_OrphanHash gives them one. Answers about the nearest frame
+   with a bytecode body, walking outward past call roots, because a C function this engine runs on the page's
+   behalf is doing it FOR the page code beneath it — a DOM mutator, a coercion, a codec.
+   IT RETURNS WHETHER A PAGE FRAME IS STANDING AND WRITES WHICH SITE, and those are two questions on purpose.
+   "No page frame at all" is the whole of HOST TIME and of the initial parse — a large population and a
+   meaningful one — so a reserved hash for it would seat that population on a value a real site can also fold
+   to, and nothing downstream could separate them. A caller that ignores the return cannot read `*out`.
+   ALLOCATION-FREE and O(1) in the body, like the locator it is built on: the position is the frame's own byte
+   offset, never a pc2line resolution, which makes it reproducible within a BUILD and not across two of them.
+   See the definition's named residual for what that costs and what replaces it. */
+JS_EXTERN int JS_RunningSiteHash(JSContext *ctx, uint64_t *out);
 /* THE NAME OF AN INTRINSIC OF THIS REALM — the OTHER name source a value can have, for the creator kind
    JS_OrphanHash's composition cannot reach. A locator built from a script, a position and a body's text names
    nothing for `Array.prototype`: no page created it. An intrinsic is a SINGLETON of its realm, so the SLOT it

@@ -1296,6 +1296,16 @@ typedef struct JSFunctionBytecode {
     int pc2line_len;
     uint8_t *pc2line_buf;
     char *source;
+    /* THIS BODY'S LOCATOR, FOLDED ONCE — (script, line, column, body text) as orphan_hash_body composes it.
+       It is a MEMO and not a second name: the fold is O(source_len) and a top-level program's source is the
+       WHOLE SCRIPT, so a caller asking per DOM write would hash megabytes per write. Asked lazily because the
+       overwhelming majority of bodies are never named at all.
+       0 MEANS "NOT YET FOLDED" AND IS NOT A SENTINEL OVER A POPULATION. Every other reserved value in this
+       engine has to be proved disjoint from the real one; this one does not, because the only cost of a body
+       whose fold genuinely IS zero is that it is folded again next time and answers the same number. There is
+       no state to decode and nothing downstream can tell the two apart, which is the property a sentinel is
+       usually missing. */
+    uint64_t locator;
 #if APICLIENT_DEV
     /* THE OPERAND DEPTH AT EVERY OPCODE OF THIS BODY — kept instead of thrown away, because it is the only
        thing that can say WHICH opcode left the operand stack at the wrong height.
@@ -111197,25 +111207,18 @@ static uint64_t orphan_hash_u32(uint64_t h, uint32_t v)
     return orphan_hash_bytes(h, b, sizeof b);
 }
 
-uint64_t JS_OrphanHash(JSContext *ctx, JSValueConst fn)
+/* THE BODY HALF OF A LOCATOR, FACTORED SO THERE IS EXACTLY ONE COMPOSITION OF IT. Two callers need (script,
+   line, column, body text): the orphan's cross-session name below, and JS_RunningSiteHash's CALL-SITE name,
+   which is this fold plus one coordinate. A second copy would be the second spelling of one identity, and it
+   would fail in the direction that costs most here — a site name and a body name folded two different ways
+   over the same body would file one body under two numbers, with nothing anywhere to compare them. */
+static uint64_t orphan_hash_body(JSRuntime *rt, JSFunctionBytecode *b)
 {
-    JSRuntime *rt = ctx->rt;
-    JSObject *p;
-    JSFunctionBytecode *b;
     JSAtom filename;
     uint64_t h = 0xcbf29ce484222325ULL;
 
-    DCHECK(JS_VALUE_GET_TAG(fn) == JS_TAG_OBJECT,
-           "the cross-session name of an orphan was asked of something that is not an object — only a function "
-           "with a body can be an orphan, and a locator computed from anything else names nothing");
-    p = JS_VALUE_GET_OBJ(fn);
-    DCHECK(js_class_has_bytecode(p->class_id) && p->u.func.function_bytecode &&
-           p->u.func.function_bytecode->byte_code_buf,
-           "the cross-session name of an orphan was asked of a function with no bytecode body — a C function, a "
-           "bound function and a Proxy are never handed over by JS_OrphanTakeOne, so a caller that reached here "
-           "with one is naming something the resume can never take back");
-    b = p->u.func.function_bytecode;
-
+    if (b->locator != 0)
+        return b->locator;
     /* WHICH SCRIPT, by the interned filename's own characters rather than through a formatting buffer: a URL is
        longer than any fixed buffer worth putting on this stack, and a truncated one would make two chunks that
        differ only in their content hash suffix name the same body. Wide and narrow are folded identically to
@@ -111248,7 +111251,79 @@ uint64_t JS_OrphanHash(JSContext *ctx, JSValueConst fn)
        above, which is why this is a fold and not an assertion. */
     h = orphan_hash_u32(h, (uint32_t)b->source_len);
     if (b->source) h = orphan_hash_bytes(h, b->source, (size_t)b->source_len);
+    b->locator = h;
     return h;
+}
+
+uint64_t JS_OrphanHash(JSContext *ctx, JSValueConst fn)
+{
+    JSObject *p;
+
+    DCHECK(JS_VALUE_GET_TAG(fn) == JS_TAG_OBJECT,
+           "the cross-session name of an orphan was asked of something that is not an object — only a function "
+           "with a body can be an orphan, and a locator computed from anything else names nothing");
+    p = JS_VALUE_GET_OBJ(fn);
+    DCHECK(js_class_has_bytecode(p->class_id) && p->u.func.function_bytecode &&
+           p->u.func.function_bytecode->byte_code_buf,
+           "the cross-session name of an orphan was asked of a function with no bytecode body — a C function, a "
+           "bound function and a Proxy are never handed over by JS_OrphanTakeOne, so a caller that reached here "
+           "with one is naming something the resume can never take back");
+    return orphan_hash_body(ctx->rt, p->u.func.function_bytecode);
+}
+
+/* ── WHERE THE PAGE'S OWN CODE IS STANDING ───────────────────────────────────────────────────────────────────
+ *
+ * THE LOCATOR OF A CALL SITE RATHER THAN OF A BODY, which is a different question from JS_OrphanHash's and not
+ * a finer one: a body is 1:1 with its position and an uncalled one is named by that alone, while a body makes
+ * as many DISTINCT CALLS as it has call opcodes and every one of them is a different site. A host asking "which
+ * of the page's own lines did this" gets one answer per body without the extra coordinate, so an `appendChild`
+ * and a `setAttribute` twenty lines apart in one minified function would be one name.
+ *
+ * WHICH FRAME ANSWERS. The nearest frame with a BYTECODE BODY, walking outward, skipping call roots — the same
+ * walk js_running_code_is_inline_script makes, for the same reason it makes it: a C function this engine runs
+ * on the page's behalf is doing it FOR the page code beneath it, and that is the frame that answers. A DOM
+ * mutator IS such a C function, so the innermost frame is never the one to name. It reads
+ * rt->current_stack_frame and that is sound for THIS question where it is not for "who is my caller" —
+ * §C-stack trampolines every call onto the HEAP stack and `restart:` gives each frame a position before its
+ * first opcode, so the chain is the engine's own record of what is running rather than the C activation stack;
+ * what it cannot promise is that the element one hop out is the SYNTACTIC caller, which is why eval_direct_closure
+ * takes a parameter instead. This walk does not ask that.
+ *
+ * WHY THE ANSWER IS A RETURN CODE AND NOT A SENTINEL VALUE. "No page frame is running" is not a rare edge — it
+ * is the whole of HOST TIME and of the initial parse, which is a large population and a meaningful one, so a
+ * reserved hash for it would put that population on a value real sites can also fold to and no consumer could
+ * separate them. The two questions are answered separately: the return says WHETHER a page frame is standing,
+ * `*out` says WHICH SITE, and a caller that ignores the first cannot silently read the second.
+ *
+ * WHAT THE POSITION IS FOLDED AS, AND THE NARROWING THAT FOLLOWS. The BYTE OFFSET of the opcode the frame is
+ * standing at, not the line and column find_line_num would resolve. That is O(1) where a pc2line walk is
+ * O(body), and this is asked once per DOM write on a page that makes thousands of them.
+ * NAMED RESIDUAL. WHAT IS NOT COVERED: the offset is a fact about the BYTECODE this build emitted, so two
+ * builds of one engine over one bundle may number the same source line differently — a site name therefore
+ * reproduces WITHIN a build and is not the cross-BUILD name JS_OrphanHash deliberately is (see its byte-order
+ * note). Every consumer today is session-scoped and nothing carries one across the cold tier, so the code is
+ * correct for what it does and narrower than a durable locator. WHAT THE NEXT DIFF BUILDS: find_line_num's
+ * line and column folded in place of the offset, at whichever caller first writes a site name into a residue
+ * a later session reads back. HOW ITS ABSENCE WOULD SHOW: a resumed session whose body-level names match a
+ * residue's and whose site-level names share none of them, on a bundle that did not change. */
+int JS_RunningSiteHash(JSContext *ctx, uint64_t *out)
+{
+    JSRuntime *rt = ctx->rt;
+    JSStackFrame *sf;
+
+    DCHECK(out != NULL, "a call-site name was asked for with nowhere to put it — the answer is the whole of "
+                        "what this walk produces, so a caller with no out-parameter is asking nothing");
+    for (sf = rt->current_stack_frame; sf != NULL; sf = sf->prev_frame) {
+        JSFunctionBytecode *b;
+        if (sf->is_call_root)
+            continue;
+        b = JS_GetFunctionBytecode(sf->cur_func);
+        if (b == NULL)
+            continue;
+        *out = orphan_hash_u32(orphan_hash_body(rt, b), js_frame_pc_pos(sf, b));
+        return 1;
+    }
+    return 0;
 }
 
 /* ── AN INTRINSIC'S NAME ──────────────────────────────────────────────────────────────────────────────────────

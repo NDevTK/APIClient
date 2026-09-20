@@ -1272,25 +1272,51 @@ static void cow_state_hist_json(char *buf, size_t cap, int want_made, const char
    the async hook CAN be reached: the two producers have different callers entirely — one is the scheduler's
    fork assembly, the other the interpreter's await-resume — so they share a mechanism and not a reachability.
 
+   AND THE FIFTH HALF IS WHICH OF THE PAGE'S OWN LINES CHANGED THE DOCUMENT, which every row above it is
+   blind to in the way a DELTA is always blind to its author: `domSegs`/`domSegEntries` say a flow's DOM delta
+   holds N entries and say nothing about how many DISTINCT places in the bundle wrote them, so a surface built
+   by one `innerHTML` assignment and one built by four hundred scattered `appendChild`s are one number here.
+   `domWrites`/`domWritesSited`/`domWritesUnsited`/`domSites` are that question, and they are FOUR rows rather
+   than a ratio for the reason the pairs above are pairs: a bare `domSites` of zero means two things — no page
+   code changed the document at all (the tree is the parse's, and `domWritesUnsited` carries the traffic), or
+   nothing changed it (both write rows are zero) — and only the partition separates them.
+   THEIR KINDS AND THEIR IDENTITIES ARE THE ACCESSOR'S, stated at solver/dom_cow.h's `dom_cow_site_stats` and
+   asserted in dom_cow.c where both halves of each are in one hand: all four are LIFETIME COUNTS, so any may be
+   differenced; `domWrites == domWritesSited + domWritesUnsited` and `domSites <= domWritesSited`.
+   `domSites` IS ALSO A HIGH-WATER MARK — a name is inserted once and never retired — so a plateau in it across
+   two samples of one run is what a complete alphabet looks like and not a ceiling, and only its terminal value
+   beside `domWritesSited` says anything.
+   IT IS NOT A COUNT OF SURFACES AND MUST NOT BE READ AS ONE. The identity a rendered surface would be keyed by
+   is the SET of sites that built it, held PER FLOW; this counts names over the WHOLE SESSION, which is the
+   alphabet that identity would be drawn over and not the identity.
+   IT DOES NOT PARTITION `cowHostRecAsksBySite` ABOVE IT AND SHARES NO QUANTITY WITH IT, which is worth saying
+   because the two carry the same word: that row names the ENGINE'S OWN C call sites that asked a capture unit,
+   by `__FILE__`/`__LINE__`, and this one names the PAGE'S JavaScript, by quickjs's JS_RunningSiteHash. They
+   answer about different programs and neither is a floor or a bound on the other.
+
    NO BYTE COUNT — see solver/compose.h's `composef`. */
 char *result_swap_json(void) {
     long sc = 0, st = 0, sm = 0, hs = 0, he = 0, ds = 0, de = 0;
     long gc = 0, gm = 0, ac = 0, am = 0;
+    long dw = 0, dsi = 0, du = 0, dn = 0;
     char asks[COW_STATE_KINDS_JSON_MAX], made[COW_STATE_KINDS_JSON_MAX];
 
     cow_swap_stats(&sc, &st, &sm);
     cow_coro_swap_stats(&gc, &gm, &ac, &am);
     cow_chain_stats(&hs, &he);
     dom_cow_chain_stats(&ds, &de);
+    dom_cow_site_stats(&dw, &dsi, &du, &dn);
     cow_state_hist_json(asks, sizeof asks, 0, "cowStateAsks");
     cow_state_hist_json(made, sizeof made, 1, "cowStateMade");
     return composef(
                  "{\"installs\":%ld,\"entries\":%ld,\"worst\":%ld,\"mean\":%.1f,"
                  "\"heapSegs\":%ld,\"heapSegEntries\":%ld,\"domSegs\":%ld,\"domSegEntries\":%ld,"
+                 "\"domWrites\":%ld,\"domWritesSited\":%ld,\"domWritesUnsited\":%ld,\"domSites\":%ld,"
                  "\"coroSwapGenCalls\":%ld,\"coroSwapGenMade\":%ld,"
                  "\"coroSwapAsyncCalls\":%ld,\"coroSwapAsyncMade\":%ld,"
                  "\"cowStateAsks\":%s,\"cowStateMade\":%s}",
                  sc, st, sm, sc ? (double)st / (double)sc : 0.0, hs, he, ds, de,
+                 dw, dsi, du, dn,
                  gc, gm, ac, am, asks, made);
 }
 

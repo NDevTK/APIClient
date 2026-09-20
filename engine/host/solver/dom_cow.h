@@ -418,6 +418,22 @@ void dom_base_release(void *base);
    The heap half reports the same pair (cow.h); they are read together because a delta nobody released looks the
    same from either side and only the one that CLIMBS names which half owns it. */
 void dom_cow_chain_stats(long *segs, long *entries);
+/* WHICH OF THE PAGE'S OWN LINES CHANGED THE DOCUMENT — the DOM call-site census, four LIFETIME counts over
+   this session, all raised at the one line every delta producer goes through and lowered by nothing, so any of
+   them may be differenced across two samples.
+     `writes`  — delta entries pushed.
+     `sited`   — of those, ones a BYTECODE frame of the page's own code was standing at.
+     `unsited` — of those, ones with no page frame anywhere on the chain: this engine's own C acting inside a
+                 slice. A zero here is a positive statement and not an absence.
+     `sites`   — DISTINCT call-site names among the sited ones, by quickjs's JS_RunningSiteHash.
+   THE IDENTITIES ARE ASSERTED IN dom_cow.c WHERE BOTH HALVES ARE IN ONE HAND and are not re-derived by any
+   consumer: `writes == sited + unsited` (the partition) and `sites <= sited`.
+   WHAT THIS IS FOR, so that a reader does not take it for a feature: the candidate identity for a rendered
+   SURFACE is the SET of sites that built it, and these rows are the alphabet that identity would be drawn over
+   measured against the traffic it would have to key. A set is NOT what this census holds — it counts names over
+   the whole session, not per flow — which is the next diff and is why `sites` may not be read as a count of
+   surfaces. */
+void dom_cow_site_stats(long *writes, long *sited, long *unsited, long *sites);
 /* …in the unit the cold tier pages in, and the same for ONE flow's parked head at capacity `cap`. Asked of
    this file for the reason cow.h's twin is: `sizeof(DomUndo)` is private and a caller that guessed it would
    report a number that drifts the next time an entry kind is added. */

@@ -439,6 +439,125 @@ static void dom_claim_forget(const lxb_dom_node_t *n) { (void)n; }
 static bool dom_claim_holds(const lxb_dom_node_t *n) { (void)n; return false; }
 #endif
 
+/* ── WHICH OF THE PAGE'S OWN LINES CHANGED THE DOCUMENT ──────────────────────────────────────────────────────
+ *
+ * A MEASUREMENT AND NOT A FEATURE. A forced multi-path solver gives one document as many APPEARANCES as it has
+ * flows, and a person reading a report wants to know which SURFACES a bundle can render — so something has to
+ * say when two of those appearances are the same surface and when they are two. The candidate identity is the
+ * SET OF DOM-MUTATING CALL SITES that built a state, for the reason solver/flow.h's orphan locator gives about
+ * a function: it is composed of what the BUNDLE determines and the session does not, so the same surface built
+ * with different DATA is one name and two surfaces that merely look alike at one viewport stay two. That is a
+ * HYPOTHESIS, and this census is what has to be read before anything is built on it — the alphabet it would be
+ * drawn over, measured on real documents, against the traffic it would have to key.
+ *
+ * WHERE IT IS RECORDED, AND WHY IT IS AT THE PUSH RATHER THAN AT THE CHOKEPOINT DOOR. CLAUDE.md
+ * §AN-INVARIANT-OVER-A-GATED-OPERATION says to count the ASK where a gate may legitimately decline, so that a
+ * component which never asked is not confused with one the gate correctly refused. This file has exactly two
+ * gates in front of the push and NEITHER of them can hide a site:
+ *   - `g_dom_capture` is the SLICE (solver/engine.c sets it at slice entry and clears it at slice exit), so
+ *     every write it declines is HOST TIME — the baseline tree the parse builds, a write between two slices —
+ *     and on host time no bytecode frame is standing at all. The declined population is exactly the population
+ *     with no site to lose, so counting it here would add a row of zeroes to the unsited count and change
+ *     nothing a reader could act on.
+ *   - a PARSE'S OWN PRIVATE TREE is declined by dom_cow_parse_declare's root test, and that decline is what
+ *     makes this census answer the question it is FOR: `el.innerHTML = "<div>…"` parses into a private tree and
+ *     then MOVES it in, so the document sees ONE write at ONE site instead of one per parsed node. Counting the
+ *     ask would report a surface built by one assignment as dozens of sites, which is the identity being wrong
+ *     in the direction that makes two renderings of one panel look like two panels.
+ * So the question this census asks is "which of the page's lines CHANGED THE DOCUMENT", and the push is where
+ * that fact exists. What a reader still cannot get from these rows is how much of the tree the parse built
+ * without any script — that is `domSegs`/`domSegEntries` beside them and `g_dom_version`, neither of which is
+ * this row's to restate.
+ *
+ * THE KINDS: all four are LIFETIME COUNTS over the session, raised here and lowered by nothing, so any of them
+ * may be differenced across two samples. `domSites` is monotone for a second reason on top of that — a name is
+ * inserted once and never retired — which makes it a HIGH-WATER MARK as well as a count, so a plateau in it is
+ * not evidence of a ceiling (CLAUDE.md §AND-THE-COUNTER-KIND-NONE-OF-THAT-REACHES) and only its terminal value
+ * beside `domWritesSited` says anything.
+ * THE IDENTITIES, both asserted below where both halves are in one hand rather than checked at the composer:
+ *   domWrites == domWritesSited + domWritesUnsited      (the partition — every push takes exactly one arm)
+ *   domSites  <= domWritesSited                         (a name cannot be seen distinctly more often than it
+ *                                                        was seen at all)
+ * A reader who subtracts the first two rows gets the third; a reader for whom they do not sum is looking at a
+ * census that contradicts itself, which is what makes the partition worth emitting rather than a ratio.
+ *
+ * NO CAP ON THE TABLE. §NO BOUNDS: a distinct-site index that stopped growing would silently truncate the one
+ * quantity this census exists to report, and the truncation would read as a small alphabet — the answer that
+ * makes the hypothesis look GOOD. It grows through the allocator that asks for a flow back before it fails,
+ * which is what the undo log beneath it does and for the same reason.
+ * ZERO IS THE EMPTY SLOT AND THE ONE NAME THAT COULD COLLIDE WITH IT IS HELD BESIDE THE TABLE, so no population
+ * sits on a reserved value: a locator that genuinely folds to zero is a 2^-64 event and it is recorded as a
+ * flag rather than left to read as an empty slot forever. */
+static long g_dom_site_writes = 0, g_dom_site_sited = 0, g_dom_site_unsited = 0, g_dom_site_n = 0;
+static uint64_t *g_dom_site_tab = NULL;
+static size_t g_dom_site_cap = 0;
+static int g_dom_site_zero_seen = 0;   /* the one name the empty slot cannot hold */
+
+static void dom_site_grow(void)
+{
+    size_t cap = g_dom_site_cap ? g_dom_site_cap * 2 : 256;
+    uint64_t *tab = reclaim_calloc(cap, sizeof *tab);
+    size_t i;
+
+    CHECK(tab != NULL, "dom-cow-oom: the DOM call-site index could not be grown — the alphabet of sites this "
+                       "document renders from is the one quantity this census reports, and a table that "
+                       "stopped growing would report a SMALLER alphabet, which is indistinguishable from a "
+                       "bundle that renders from few sites");
+    for (i = 0; i < g_dom_site_cap; i++) {
+        uint64_t k = g_dom_site_tab[i];
+        size_t j;
+        if (k == 0) continue;
+        for (j = (size_t)k & (cap - 1); tab[j] != 0; j = (j + 1) & (cap - 1)) ;
+        tab[j] = k;
+    }
+    free(g_dom_site_tab);
+    g_dom_site_tab = tab; g_dom_site_cap = cap;
+}
+
+/* ONE WRITE'S WORTH OF CENSUS. Called at the END of the push for the reason dom_claim_note is: the table grow
+   above asks the allocator, which can SELL A FLOW and so runs this file's own frees, and by here the entry is
+   stored and nothing the producer still holds is dereferenced again. */
+static void dom_site_note(void)
+{
+    uint64_t h = 0;
+    size_t i;
+    int sited;
+
+    DCHECK(g_cow_ctx != NULL,
+           "a DOM delta entry was written with no context — a capture happens only inside a slice, and a slice "
+           "cannot be open before engine.c has named the runtime through dom_cow_set_ctx, so a NULL here is a "
+           "flow running against a runtime this file was never told about");
+    g_dom_site_writes++;
+    sited = JS_RunningSiteHash(g_cow_ctx, &h);
+    if (sited) g_dom_site_sited++;
+    else       g_dom_site_unsited++;
+    /* THE PARTITION, ASSERTED WHERE BOTH HALVES ARE IN ONE HAND rather than re-derived at the composer: every
+       push takes exactly one arm, so a total that stops summing is a third arm somebody added without a row. */
+    DCHECK(g_dom_site_writes == g_dom_site_sited + g_dom_site_unsited,
+           "the DOM call-site census lost a write between its total and its two arms — every push takes exactly "
+           "one of them, so a total that does not sum is an arm with no row");
+    if (!sited)
+        return;
+    if (h == 0) {
+        /* The one name the empty slot cannot hold — see the header above. */
+        if (g_dom_site_zero_seen)
+            return;
+        g_dom_site_zero_seen = 1;
+        g_dom_site_n++;
+    } else {
+        if ((g_dom_site_n + 1) * 2 > (long)g_dom_site_cap)
+            dom_site_grow();
+        for (i = (size_t)h & (g_dom_site_cap - 1); g_dom_site_tab[i] != 0; i = (i + 1) & (g_dom_site_cap - 1))
+            if (g_dom_site_tab[i] == h)
+                return;
+        g_dom_site_tab[i] = h;
+        g_dom_site_n++;
+    }
+    DCHECK(g_dom_site_n <= g_dom_site_sited,
+           "the DOM call-site census counted more DISTINCT sites than sited writes — a name is inserted at most "
+           "once per write that carried it, so this is the index answering `absent` for a name it already holds");
+}
+
 static void dom_undo_push(DomUndo u) {
     /* THE ONE LINE EVERY PRODUCER GOES THROUGH, which is why the scope is asserted here and not at each of the
        ten of them: an eleventh entry kind written tomorrow does not get to choose whether it declares the read
@@ -469,9 +588,20 @@ static void dom_undo_push(DomUndo u) {
     g_dom_undo[g_dom_undo_n++] = u;
     /* AFTER THE STORE AND AFTER EVERY ALLOCATION THAT COULD SELL A FLOW. A sale spends claims through
        dom_release_created, so an index write interleaved with the grow above would be a write into a table a
-       nested spend is editing; by here the reclaim_realloc has returned and nothing else on this path asks. */
+       nested spend is editing; by here the reclaim_realloc has returned.
+       THIS USED TO END `and nothing else on this path asks`, WHICH THE LINE BELOW MADE FALSE — rewritten
+       rather than deleted, because a reader who re-derives the ordering rule from the sale's own behaviour
+       will re-derive that clause and then have no way to place the census. The rule that holds is the one the
+       retired clause was an instance of: an allocation that can sell must not stand BETWEEN the claim index's
+       read and its write, and the census below stands entirely AFTER that write, so the index is consistent
+       before anything can re-enter this file. What the census keeps is a static array of names, which a sale
+       cannot reach at all. */
     if (u.kind == 4)
         dom_claim_note(u.node);
+    /* AND WHICH OF THE PAGE'S OWN LINES DID IT — see dom_site_note above for why this is the ASK for that
+       question and not merely the outcome of one. LAST ON THIS PATH, because its table grow asks the
+       allocator that can sell a flow and nothing after it reads anything a sale can move. */
+    dom_site_note();
 }
 /* Record (element, namespace, local name)'s BASELINE — value and taint together, because a restore that put one
    back without the other would hand a sink either clean bytes that are attacker input or a stale provenance on
@@ -2324,6 +2454,14 @@ long dom_cow_chain_bytes(void) {
     return g_dom_seg_live * (long)sizeof(DomSeg) + g_dom_seg_entries_live * (long)sizeof(DomUndo);
 }
 long dom_cow_head_bytes(int cap) { return (long)cap * (long)sizeof(DomUndo); }
+/* THE DOM CALL-SITE CENSUS — see dom_site_note for what each number is, which arm of the push raises it, and
+   the two identities that hold between them. All four are LIFETIME COUNTS over this session. */
+void dom_cow_site_stats(long *writes, long *sited, long *unsited, long *sites) {
+    if (writes)  *writes  = g_dom_site_writes;
+    if (sited)   *sited   = g_dom_site_sited;
+    if (unsited) *unsited = g_dom_site_unsited;
+    if (sites)   *sites   = g_dom_site_n;
+}
 
 static void dom_seg_unref(DomSeg *s) {
     while (s && --s->refcount <= 0) {
