@@ -9,9 +9,14 @@ extension.crx
 testing/harness-dumps
 testing/finding-snapshots
 # THE SERVED FIXTURES. Ignored WHOLE, with no reasoning beside it, in a block of scratch and output — and
-# this file's own paragraph 20 lines down argues the opposite for the same kind of artifact: CLAUDE.md §Testing
-# "requires a before/after to be on FROZEN BYTES, 'a mirror, a fixture, a recorded payload replayed — where the
-# only thing that changed is the engine'", and "Bytes that are not committed cannot be frozen HERE". A gate runs
+# this file's own paragraph 20 lines down argues the opposite for the same kind of artifact. THE JUSTIFICATION
+# THAT USED TO STAND HERE WAS A QUOTATION OF CLAUDE.md §Testing requiring a before/after on FROZEN BYTES,
+# "a mirror, a fixture, a recorded payload replayed" — and the project owner has RETIRED the mirror half of
+# that sentence: this repository carries no copy of anybody else's site, because a page's scripts and styles
+# are computed and fetched at runtime. THE ARGUMENT FOR TRACKING OUR OWN FIXTURES IS UNTOUCHED BY THAT AND
+# NEVER DEPENDED ON IT: a fixture this project WROTE is an INSTRUMENT, not a capture of a third party, and
+# "Bytes that are not committed cannot be frozen HERE" is a fact about the clone rather than about whose
+# bytes they are. A gate runs
 # from a `git clone --shared` snapshot, and a clone brings nothing git does not track, so an ignored fixture is
 # one no frozen run can serve and one a fresh container does not have. Most of what is in this directory really
 # is scratch — a lane's throwaway page, a generated body — so the directory stays ignored and a fixture that is

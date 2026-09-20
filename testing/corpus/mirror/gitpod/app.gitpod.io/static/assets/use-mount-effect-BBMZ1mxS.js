@@ -1,1 +1,0 @@
-import{i as e}from"./rolldown-runtime-aKtaBQYM.js";import{n as t}from"./@mux-Ce8MRpmL.js";var n=e(t(),1);function r(e){(0,n.useEffect)(e,[])}export{r as t};

@@ -1,1 +1,0 @@
-{"kind":"Preferences","apiVersion":"preferences.grafana.app/v1","metadata":{"resourceVersion":"1761748047000","creationTimestamp":"2025-10-29T14:27:27Z","annotations":{"preferences.grafana.app/source":"namespace"}},"spec":{"homeDashboardUID":"to6j8mh","timezone":"utc","weekStart":"browser","theme":"dark","language":"en-US"}}

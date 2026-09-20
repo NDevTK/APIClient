@@ -177,7 +177,21 @@ const argOf = (flag, dflt) => {
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : dflt;
 };
 const HOST = resolve(argOf("--host", join(HERE, "host")));
-const CORPUS = resolve(argOf("--corpus", join(HERE, "..", "testing", "corpus", "mirror")));
+/* THE CORPUS IS A REQUIRED ARGUMENT AND HAS NO DEFAULT, BECAUSE THE ONE IT USED TO NAME WAS A COPY OF
+   OTHER PEOPLE'S SITES COMMITTED TO THIS REPOSITORY, AND THAT COPY IS GONE. A ranking over an ABSENT
+   directory is the defect this tool exists to report, performed on itself: `readdirSync` on a missing
+   path throws, but a path that EXISTS and is empty answers zero files, and a rank over zero files is a
+   clean bill drawn from nothing. So the flag is asked for rather than defaulted, and the message names
+   what produces one now: a real-network drive's own saved responses, with the manifest beside them
+   that `corpus_programs.mjs` reads for each file's served Content-Type. A page's scripts and styles are
+   FETCHED AT RUNTIME; they are not an artifact this tree carries. */
+const CORPUS_ARG = argOf("--corpus", null);
+if (!CORPUS_ARG)
+  throw new Error("[absentrank] --corpus <dir> is REQUIRED. It names a directory of responses a real-network "
+                  + "drive saved, with its manifest beside it. There is no default: the committed copy of "
+                  + "other people's sites that used to be one is deleted, and ranking against an empty "
+                  + "directory would report a clean bill drawn from no files at all.");
+const CORPUS = resolve(CORPUS_ARG);
 const TOP = Number(argOf("--top", "20"));
 const say = (s) => console.log(`[absentrank] ${s}`);
 const die = (s) => { throw new Error(`[absentrank] CALIBRATION FAILED — ${s}`); };

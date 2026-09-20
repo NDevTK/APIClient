@@ -74,7 +74,16 @@ case "$SITES" in /*) ;; *) SITES=$CORP/$SITES;; esac
 # WHERE THE BYTES COME FROM. `frozen` serves the mirror; `live` drives the row's own URL. Anything else is a
 # typo and is fatal rather than silently taken as one of them -- a census that measured the other corpus
 # under this one's label is a row no counter in the output could contradict.
-AT=${AT:-frozen}
+# THERE IS ONE PLACE THE BYTES COME FROM AND IT IS THE NETWORK. `AT=frozen` served a committed copy of
+# other people's sites through serve-faithful.mjs; that copy and that server are deleted, so the only
+# transport left is the row's own URL. A page's scripts and styles are FETCHED AT RUNTIME. `AT` is still
+# read so a stale caller is TOLD rather than silently given a different measurement than it asked for.
+AT=${AT:-live}
+if [ "$AT" != "live" ]; then
+  echo "run.sh: AT=$AT is gone. The frozen transport served a committed mirror of real sites, which this" >&2
+  echo "        repository no longer carries. Drive the row's own URL with AT=live." >&2
+  exit 2
+fi
 case "$AT" in frozen|live) ;; *) echo "AT must be frozen or live, not \`$AT\`"; exit 2;; esac
 PORT=${HARNESS_PORT:-9451}
 FIXPORT=${FIXPORT:-8951}

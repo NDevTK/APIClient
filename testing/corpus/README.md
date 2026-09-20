@@ -1,24 +1,35 @@
 # Real-site corpus
 
-The gate for "does this work on real webapps". Six instruments.
+The gate for "does this work on real webapps". The bytes come from THE NETWORK, at the moment of the run.
 
-THE MIRROR TREE IS CHECKED IN AND THIS FILE USED TO SAY IT WAS NOT. Measured at `origin/main`:
-`git ls-tree -r origin/main -- testing/corpus/mirror | wc -l` is 463 blobs, 72.1 MiB, 397 of them `.js`.
-That is not a detail of housekeeping — it is what lets a number taken over these bytes BELONG TO A REVISION,
-which is the whole of why `reach.mjs` derives its denominator from the mirror rather than from a run. What is
-NOT tracked is the census `.jsonl` rows (`git ls-tree -r origin/main -- testing/corpus | grep -c census` is 0),
-so any figure read out of THOSE is a fact about one run and one artifact and never about a commit. Re-derive
-both with the commands above rather than taking these counts; they are printed to show which side of the line
-each input falls on, not as a total to quote.
+THIS REPOSITORY CARRIES NO COPY OF ANYBODY ELSE'S SITE, AND THIS FILE USED TO DESCRIBE ONE AT LENGTH. A
+checked-in mirror tree, its `provenance.json` manifest, the fetcher that built it, the server that replayed
+it, and the two instruments whose only input was it are all deleted. What is left is a list of ADDRESSES and
+a driver that visits them.
+
+WHAT THE MIRROR BOUGHT, SAID PLAINLY, BECAUSE THE NEXT READER WILL RE-DERIVE THE ARGUMENT FOR IT. A live site
+changes under you, so two runs against one URL differ by the site AND by the engine, and a committed copy made
+a number BELONG TO A REVISION. That reasoning is sound and it is not what this project is for: a page's
+scripts and styles are computed and fetched at runtime, and an engine measured against a frozen copy is
+measured against a program no visitor is served. The repeatability the mirror bought is bought instead by
+what CLAUDE.md §Testing already prescribes for a moving subject — a run COUNT and a SPREAD rather than a
+single number, and comparison on the things that do not move with reach: a crash's IDENTITY, a conservation
+identity read within one sample, a count that cannot be true.
+
+WHAT WENT WITH IT, so nobody hunts for a file that was deliberately removed: `mirror.mjs` (fetch + freeze),
+`serve-faithful.mjs` (replay one frozen site), `backfill.mjs` (repair a frozen capture's declined resources),
+`reach.mjs` and `composed_diff.mjs` (both took the mirror directory and its manifest as their subject and
+have none without it). `corpus_programs.mjs` SURVIVES unchanged in contract: it takes a corpus DIRECTORY and
+reads the manifest beside it, which a real-network drive that saves what it fetched can supply.
 
     node list.mjs                       # (a module) the one reader of a site list
-    SITES=apps.tsv node mirror.mjs      # fetch + freeze that list, write provenance.json
-    node serve-faithful.mjs <id> <port> # serve one frozen site
     node site.mjs <id> <url> [pass]     # drive it in Chrome, emit one ROW of JSON
-    LANE=/tmp/mylane ./run.sh a1                          # one pass, frozen bytes, sites.tsv
-    LANE=/tmp/mylane SITES=apps.tsv AT=live ./run.sh r1   # one pass, live, the app pages
+    LANE=/tmp/mylane ./run.sh a1                          # one pass over sites.tsv, live
+    LANE=/tmp/mylane SITES=apps.tsv ./run.sh r1           # one pass over the app pages, live
     SITES=apps.tsv node report.mjs census-r1.jsonl …      # the table + the ranked abort queue
-    node reach.mjs census-r1.jsonl …                      # reach: where each learned address came from
+
+The census `.jsonl` rows are not tracked (`git ls-tree -r origin/main -- testing/corpus | grep -c census`
+is 0), so any figure read out of one is a fact about one run and one artifact and never about a commit.
 
 ## Two lists, and a census is a measurement OF one
 

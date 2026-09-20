@@ -1,1 +1,0 @@
-function e(e,t){let n=`/details/${e.environment.id}`;return t?.view?`${n}?view=${t.view}`:n}export{e as t};

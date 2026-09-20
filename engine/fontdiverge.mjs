@@ -323,7 +323,16 @@ function visibleText(htmlPath) {
 const SAMPLE_CHARS = 6000;   /* one sample size for every row, so no row is a different measurement */
 
 function main() {
-    const mirror = process.argv[2] || join('testing', 'corpus', 'mirror');
+    /* THE CORPUS DIRECTORY IS REQUIRED AND HAS NO DEFAULT. The default used to name a committed copy of
+       other people's sites, which is deleted: a page's fonts, like its scripts and styles, are FETCHED AT
+       RUNTIME and are not an artifact this tree carries. An absent path throws on the walk, but a path that
+       EXISTS and holds no face answers an EMPTY LIST, and the line below used to print one sentence and
+       RETURN — a comparison that was never made, rendered identically to a comparison that found no
+       divergence. */
+    const mirror = process.argv[2];
+    if (!mirror)
+        throw new Error('fontdiverge: a corpus directory is REQUIRED as argv[2]. It names faces a '
+                      + 'real-network drive fetched and saved. There is no default.');
     const { face: shipped, tags: shippedTags, published } = shippedFace(DEFAULT_FONT_C);
 
     console.log(`SHIPPED FACE  ${DEFAULT_FONT_C}`);
@@ -332,7 +341,13 @@ function main() {
                 Object.entries(published).map(([k, v]) => `${k}=${v}`).join(' '));
 
     const faces = walk(mirror).filter((p) => p.endsWith('.woff2')).sort();
-    if (faces.length === 0) { console.log(`\nno .woff2 under ${mirror} — nothing to compare against`); return; }
+    /* AN EMPTY CORPUS IS A FAILED MEASUREMENT AND SAYS SO. It used to print and return, which is the
+       absent-versus-zero conflation this project refuses everywhere else: nothing to compare against and
+       nothing found to diverge are different facts and only one of them is a result. */
+    if (faces.length === 0)
+        throw new Error(`fontdiverge: no .woff2 under ${mirror}. That is a corpus that was never fetched, `
+                      + `not a comparison that found no divergence — the two are different facts and this `
+                      + `tool may only report the second.`);
 
     console.log(`\nWHAT THE CORPUS'S OWN FACES CARRY  (${mirror})`);
     const census = Object.create(null);
