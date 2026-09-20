@@ -2276,8 +2276,14 @@ static StepUnit deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
                    exactly so the ended session's names cannot be minted under again, and world_vec_relate
                    answers INDEPENDENT for two sessions of one document ON PURPOSE: "a resumed session's flows
                    are re-derivations of the parked ones rather than the other arm of any branch". What a park
-                   actually loses is the fork shape BETWEEN THE REBUILT MEMBERS, and that residual is stated at
-                   solver/cold.c's park_flow_add with the record it needs.
+                   loses is NOT a shape BETWEEN THE REBUILT MEMBERS, and the sentence that stood here said it
+                   was: two members of ONE frontier are never ancestor-and-descendant in any session, because a
+                   fork re-mints BOTH arms as children of the point it retires, so a live member's world is
+                   `held` and never `forked` while every ancestor is `forked` — which is (iii) below, "every
+                   live flow's world is a LEAF", said twenty-six lines from a sentence claiming the parked
+                   session had a tree. What a resume loses is one member's OWN ancestry, so its vector is a
+                   bare head and reaches THIS line rather than any relation. solver/cold.c's park_flow_add
+                   holds the refutation and the three asserts that refuse the record that clause asked for.
                    AND SATISFYING THIS CONDITION IS NOT THE SAME AS MAKING ITS CLAIM TRUE: `strchr(c, ',')` is
                    a proxy for deliver_fork_arm having run — this file's own landing order says so at (b) — so
                    a design that hangs an ancestor off a root merely to put a comma in the vector would make
@@ -5781,16 +5787,26 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
  *         which is NOT "the world its recipe was parked under", and this clause said that it was. cold.c's
  *         park_flow_add calls flow_add with WORLD_NONE, so every member a resume rebuilds is a fresh ROOT of
  *         the NEW generation. Re-minting under the PARKED world is refused by world_mint_child's
- *         `parent.session == g_session` assert and would undo the generation a park exists to bump; what has
- *         to come back is the ancestry AMONG the rebuilt members, minted fresh. Nor is this a pair: measured
- *         on this tree's own fixture, one park writes `flows 2` and `cands 11` and the resume answers
- *         `@RESUMED 13`, which is 78 contradicting pairs where the parked session had a tree. The sentence
+ *         `parent.session == g_session` assert and would undo the generation a park exists to bump; and what
+ *         that clause said HAS to come back — "the ancestry AMONG the rebuilt members, minted fresh" — is a
+ *         relation no two members have ever had, which is recorded rather than deleted because a reader who
+ *         re-derives it will re-propose the record. Two members of one frontier are never
+ *         ancestor-and-descendant: a flow's world is written at exactly two sites (flow_new's mint and the
+ *         fork's re-mint) and the fork makes BOTH arms children of the point it RETIRES, so a member's world
+ *         is `held` and never `forked` while every ancestor is `forked` — which is (iii) below, "every live
+ *         flow's world is a LEAF". The measured `flows 2` / `cands 11` / `@RESUMED 13` is 78 CONTRADICTs on
+ *         BOTH sides of the park, not 78 where there had been a tree: solve.c mints each of those eleven @S
+ *         candidate sessions a ROOT. What a resume actually loses is one member's OWN ancestry — a chain
+ *         FILTERED to fork points that have crossed the seam, and a resume has sent nothing — so the record
+ *         proposed for it is INERT past that filter and breaks world_flow_gone's `held` assert if it names a
+ *         live member; solver/cold.c's park_flow_add holds the three refusals. The sentence
  *         that stood here — that this "makes every commitment a resumed flow carries name a forest its own
  *         world is not in" — identifies nothing: a commitment names a SENDER's world, which is another
  *         instance's forest for every flow, parked or not. An addressee written before the residue carries
  *         that shape is one a park turns into a name relating to nothing.
- *         RETIREMENT: this record goes when the park grammar binds a rebuilt member to its nearest rebuilt
- *         ancestor, at which point the ordering is enforced by that record rather than argued here.
+ *         RETIREMENT: this record goes with (b) — when deliver_admits' arm-existence assert reads a row's
+ *         minting mechanism instead of the vector's shape, a resumed member's bare vector is owed to nobody
+ *         and the park grammar is not what enforces this ordering.
  *     (ii) THE FIELD MAY NOT GO BESIDE THE DOCUMENT. `engine/route.mjs` is trusted-zone JavaScript, which
  *       §A-CROSS-BOUNDARY-DIFF makes LIVE ON WRITE, and it reads this grammar positionally — `split('\t')[1]`
  *       for the holder and `split('\t')[2]` for the asking world — while relaying the record VERBATIM. An

@@ -1273,44 +1273,62 @@ static Flow *park_flow_add(JSContext *ctx, double val, int before, long flows)
        exactly this: world_vec_relate answers INDEPENDENT for two sessions of one document ON PURPOSE, because
        "a resumed session's flows are re-derivations of the parked ones rather than the other arm of any
        branch".
-       WHAT IS NOT COVERED: the ancestry AMONG THE MEMBERS THIS RESUME REBUILDS. Every one of them reaches
-       flow_add with WORLD_NONE, so every PAIR of them is two roots of one (document, generation) and
-       world_vec_relate answers CONTRADICT — including a pair that was parent and child when the session
-       parked. It is not a pair: measured on this tree's own fixture, one park writes `flows 2` and `cands 11`
-       and the resume answers `@RESUMED 13`, which is 78 contradicting pairs where there had been a tree.
-       AND IT IS NOT RE-DERIVABLE FROM WHAT THE DOCUMENT ALREADY CARRIES, which is the first thing a reader
-       should check and the reason this needs a RECORD rather than a cleverer reader. The residue's only tree
-       is the SEGMENT base chain ('s' names its base's ordinal), and that is a DECISION prefix rather than a
-       fork edge: in the measured document above, `s2,0` bases a candidate's segment on flow 0's segment while
-       solve.c mints that same candidate a world ROOT with WORLD_NONE. The two trees disagree inside one park
-       document, so neither can be read off the other.
-       WHAT THE NEXT DIFF BUILDS: ONE EDGE PER MEMBER, never a chain. The record names the nearest OTHER member
-       of THIS document whose world was an ancestor of this one's, by the flow-record ordinal both ends already
-       count in one forward pass, with `parent ordinal < mine` asserted at both ends — true by construction,
-       since the registry only appends, so a parent is always parked first. The reader passes that member's NEW
-       world to flow_add in place of WORLD_NONE and the chain re-derives itself, exactly as 's' re-derives a
-       segment chain from a base ordinal and as the 'w' arm re-materializes a peer's segment "in one forward
-       pass … with nothing to patch up". Recording the whole ancestry instead is the bound §NO BOUNDS forbids
-       and which solver/world.h already records as a CRASH rather than a cost: an unfiltered chain "would grow
-       with the number of BRANCHES rather than with the fork depth — past this record's buffer on any page
-       whose boot flow forks freely". A member whose parked ancestor did not itself survive the park attaches
-       to the NEAREST one that did — world_segment's own "NEAREST, NOT ANY" rule — and where none did it is a
-       root and writes no record, because a fork point neither of whose arms survived answers a relation
-       between two timelines that no longer exist.
-       IT SPANS THREE COPIES OF THE GRAMMAR AND THEY LAND TOGETHER — this writer, cold_resume's reader, and the
-       kind DFAIL enumerating ('g','w','s','f','c','o','r','m') — because the two ends are two PROCESSES and a
-       kind one of them does not know is a half-landed diff. It also needs an accessor for a minted world's
-       parent, which does not exist: `git grep -n world_parent origin/main -- engine` answers nothing at
-       19420b97.
-       AND PASSING A PARENT HERE MOVES A SECOND THING. flow_add_unseeded's `world_is_none(parent)` decides BOTH
-       where the flow enters the world tree AND whether it arrives at the frontier's virtual time; its own
-       comment says so. A rebuilt member wants the first and not the second, and that is harmless ONLY because
-       flow_restore_reward writes the parked coordinate over it on the next line — a dependency between two
-       lines that nothing asserts. Assert it, or split the bit, in the same landing.
-       HOW ITS ABSENCE WOULD SHOW, as an observation rather than as whichever member forked last: at a peer
-       receiving from two members of one resumed document, world_vec_relate answers CONTRADICT for a pair that
-       answered ANCESTOR before the park, so deliver_admits refuses the second sender's record and the
-       receiver's `_routedZeroDelivery` row rises on a document whose pre-park run delivered both. */
+       WHAT IS NOT COVERED — AND THE CLAUSE THAT STOOD HERE NAMED A RELATION NO TWO MEMBERS HAVE EVER HAD.
+       Recorded rather than quietly replaced, because a remedy clause is read ONCE by somebody who has already
+       decided to do the work, so a wrong one is not caught but EXECUTED — and this one was, into a brief. It
+       said: "the ancestry AMONG THE MEMBERS THIS RESUME REBUILDS … every PAIR of them is two roots of one
+       (document, generation) and world_vec_relate answers CONTRADICT — including a pair that was parent and
+       child when the session parked … 78 contradicting pairs where there had been a tree."
+       NO PAIR OF MEMBERS WAS EVER PARENT AND CHILD, IN ANY SESSION, AND ONE GREP SETTLES IT.
+       `git grep -nE '(->|\.)world[[:space:]]*=[^=]' -- engine/host` answers exactly two writers of a flow's
+       world — flow_new's mint and the fork's re-mint of the arm that keeps running — and the fork makes BOTH
+       arms children of the point it RETIRES, which flow_add_unseeded states outright: "`parent` IS THE FORK
+       POINT AND NOT THE OTHER ARM'S WORLD … the two arms are siblings rather than ancestor-and-descendant". A
+       live member's world is `held` and never `forked`; every ancestor is `forked` by construction, and
+       world_ancestry asserts both. So world_vec_relate's ANCESTOR arm cannot hold between two members: they
+       answer CONTRADICT in a LIVE session exactly as in a resumed one, and the measured 78 pairs are 78
+       CONTRADICTs on BOTH sides of the park. solver/engine.c states this under (iii) of its own landing order
+       — "every live flow's world is a LEAF" — twenty-six lines below the sentence claiming the parked session
+       had a tree, so one comment block holds both halves. The cheap witness needs no run: eleven of those
+       thirteen members are @S candidate sessions, and solve.c mints each with WORLD_NONE under the comment "a
+       candidate session runs from the baseline". The parked session was a forest of roots.
+       WHAT A PARK ACTUALLY LOSES IS ONE MEMBER'S OWN VECTOR, never a relation between two. An ancestry is
+       FILTERED to fork points that have themselves crossed the seam (world_ancestry's `sent` test), so a
+       lineage that posted before it branched carries a comma and a resumed member cannot — world_session_resume
+       has just asserted the minted table is EMPTY and nothing a resume mints has been sent. That reaches ONE
+       consumer and it is a DCHECK rather than a value: deliver_admits aborts when a contradicting delivery
+       meets a committed sender whose vector names no fork point.
+       THE RECORD THIS CLAUSE SPECIFIED IS REFUSED THREE TIMES OVER. It asked for ONE EDGE PER MEMBER naming
+       the nearest other member whose world was an ancestor of this one's, the reader passing that member's NEW
+       world to flow_add below. (1) `mint` would retire the named member's world under a member that is STILL
+       LIVE (`p->forked = true; p->held = false`), so that member aborts at its own release on world_flow_gone's
+       "the world of a departing flow is not HELD — a live flow never holds a retired name", and again at its
+       next cross-instance post. (2) Minting both as siblings of a fresh point is well-formed and INERT: the
+       `sent` filter drops an edge nothing has sent, so every vector stays a bare head and no observable moves.
+       (3) Forcing the comma anyway is refused by the consumer BY NAME — deliver_admits says "a design that
+       hangs an ancestor off a root merely to put a comma in the vector would make this line PASS while the arm
+       it asserts still does not exist", trading a loud abort for a silent wrong answer.
+       WHAT THE NEXT DIFF BUILDS IS THE DELIVERY SEAM'S, and that abort already carries the condition: it
+       "RETIRES when a RECEIVED row states which mechanism minted its sibling arm, at which point this asks
+       that question instead of asking the vector's shape". This tier's half is a field on the 'r' record naming
+       that mechanism, landing WITH the consult or buying nothing. Reaching the abort needs no park at all —
+       two @S candidate sessions are the same comma-less pair of roots — which is why a reader sent from it to
+       this file finds nothing here to fix.
+       AND PASSING A PARENT WAS SAID TO MOVE A SECOND THING, ON A MECHANISM THAT DOES NOT EXIST. The retired
+       clause read: flow_add_unseeded's `world_is_none(parent)` decides both the world edge and the arrival, a
+       rebuilt member wants the first and not the second, and this is "harmless ONLY because flow_restore_reward
+       writes the parked coordinate over it on the next line". flow_arrive_at_virtual_time WRITES NOTHING — it
+       is four DCHECKs, and its own comment says "THE PLACEMENT IS THE ABSENCE OF A STAMP, so there is nothing
+       to write". There is no coordinate to overwrite and no adjacency to rest on: the arrival ASSERTS this flow
+       is pristine, which a rebuilt one is, and flow_restore_reward then places it. The predicate does answer
+       two questions and today they agree at every call site, the non-baseline arm being covered by
+       flow_fork_inherit's rank-neutrality equality — both arms have an invariant standing under them, so a
+       split would be a second right answer to one question.
+       HOW ITS ABSENCE WOULD SHOW, as an observation and not as whichever member forked last: a peer receiving
+       from two members of one resumed document, already holding a RECEIVED commitment to the first, aborts at
+       deliver_admits' arm-existence DCHECK when the second arrives.
+       RETIREMENT: this record goes when that assert reads a row's minting mechanism instead of `strchr(c,
+       ',')`, at which point a resumed member's bare vector is owed to nobody. */
     Flow *fl = flow_add(ctx, JS_UNDEFINED, WORLD_NONE);
     /* IT WENT ON THE END, WHICH IS THE HALF OF THE MERGE A LIVE FRONTIER CARES ABOUT. A rebuilt flow must be
        an addition and never a substitution: the registry appends, so this one belongs at `before` plus however
