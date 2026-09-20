@@ -26840,28 +26840,32 @@ static int abi_main(int argc, char **argv)
        forking frontier an ask that never finishes — every fork would owe an image, and §NO BOUNDS forbids
        capping the answer once it is owed", and solver/engine.h states the same decision as the contract.
        Building it would have overturned a decision by quoting a clause written without reading it.
-       AND THE WORLD FORKED AFTER THE ASK — which is what that clause named as NOT COVERED — IS COVERED BY THE
-       RE-ASK IN THE LOOP BELOW, so the residual is retired rather than restated. Its observation held exactly
-       as written: a document whose gate forks once published `_forkAt` naming one branch site, held TWO flows,
-       and wrote TWO images of which one was the `baseline` — so the arm born at the fork was photographed by
-       nothing, because `engine_request_paint` marks the members alive when it is called and a fork inherits
-       nothing.
-       ITS REMEDY CLAUSE WAS HALF RIGHT AND THE HALF IT GOT WRONG IS THE PART A READER WOULD HAVE ACTED ON,
-       which is why that is recorded here rather than deleted with it. It said the answer was a cadence THIS
-       FILE had to choose — "a decision about how many extra returns a picture is worth" — and that a re-ask
-       per round could not be it, because "a round triggered by a discharge would re-mark every member and buy
-       another, which does not terminate". The first half is the kind of guess §the-remedy-clause-is-a-
-       HYPOTHESIS warns about: it reads as a policy question and it was a MISSING GUARD, one line, in the
-       party that owns the fact. A mark is spent at a member's END or FREE at any yield it is standing for, so
-       re-marking a member that is already marked writes a bit it already has and a per-round ask costs
-       exactly one extra return per member that ever ends. What genuinely did not terminate — and what that
-       clause had correctly felt without being able to name — is the ONE member whose finish is DEFERRED
-       across the return: re-marking it is the state solver/engine.c's deferred-finish path aborts on by name.
-       `engine_request_paint` now skips exactly that member, and the argument is at its site.
-       SO THE CADENCE IS EVERY ROUND, WHICH IS NOT A CHOICE THIS FILE MAKES BUT THE ABSENCE OF ONE: a driver
-       that asks on every round cannot be holding a stale view of a frontier that forks, and there is no
-       constant here to tune, no counter to age and nothing for two hosts to disagree about. */
-    if (paint_dir != NULL) qjs_request_paint();
+       AND THE WORLD FORKED AFTER THE ASK — which is what that clause named as NOT COVERED — IS THE ONE THING
+       IT WAS RIGHT ABOUT, and its observation held exactly as written: a document whose gate forks once
+       published `_forkAt` naming one branch site, held TWO flows, and wrote TWO images of which one was the
+       `baseline`, so the arm born at the fork was photographed by nothing.
+       ITS REMEDY CLAUSE WAS WRONG IN A WAY THIS FILE THEN REPEATED, AND BOTH ARE RECORDED HERE BECAUSE A
+       READER RE-DERIVES THE SECOND FROM THE FIRST. The clause said the answer was a cadence THIS FILE had to
+       choose — "a decision about how many extra returns a picture is worth" — and that a re-ask per round
+       could not be it, because "a round triggered by a discharge would re-mark every member and buy another,
+       which does not terminate". THE FIRST HALF IS THE REAL ERROR AND IT WAS NOT CAUGHT: the framing of a
+       CADENCE was accepted, the non-termination objection was correctly refuted (a mark is one bit, spent at
+       a member's END or FREE at a yield it is standing for, so re-marking costs nothing and the one member
+       that must be skipped is the one whose finish is DEFERRED, which `engine_request_paint` now skips), a
+       per-round re-ask was built on that refutation, and IT DID NOT WORK. MEASURED on the same six-element
+       gate document, on a binary carrying the renewal: still TWO images, `flows 2, forks 1, switches 13`, and
+       exactly ONE `abi_paint` inside the loop — thirteen internal switches, one round boundary. The arm is
+       forked, run and ended INSIDE one `qjs_step`, and a host is only ever at a round boundary, so no cadence
+       this file could have chosen reaches it. A correct refutation of a wrong objection is not a correct
+       design, and the thing neither clause questioned is that the answer was this file's to choose at all.
+       SO THE ASK IS THE STANDING ONE AND THERE IS NO CADENCE HERE AT ALL — `qjs_request_paint_every_world`,
+       once, before the first step. It is the frontier walk (which is the only thing that can reach the boot
+       flow, born before any ask) plus a mark laid down at the MINT (which is the only thing that can reach a
+       world born after one). The population is every world the run explores rather than every world some
+       boundary happened to hold, and solver/engine.h holds the contract. The renewal this file used to take
+       on every round is DELETED rather than kept beside it: it marked a strict subset, and a driver holding
+       both would be choosing between two answers to one question every round. */
+    if (paint_dir != NULL) qjs_request_paint_every_world();
 
     for (;;) {
         int step = qjs_step();
@@ -26874,8 +26878,9 @@ static int abi_main(int argc, char **argv)
            scheduler was holding SWITCHED IN, with its COW and DOM deltas applied (solver/engine.c holds it in
            a static across this return and asserts it is still a member when it picks it back up), so this is
            the one moment that timeline's pixels exist. `qjs_paint` renders whatever world is standing; what
-           `qjs_request_paint` bought above is that the standing world is one somebody asked for rather than
-           one the schedule happened to leave.
+           `qjs_request_paint_every_world` bought above is that the standing world is one somebody asked for
+           rather than one the schedule happened to leave — and that a member which never stands at a boundary
+           of its own accord is handed one at its end.
            IT RENDERS ON EVERY ROUND AND NOT ONLY ON THE ASKED ONES, WHICH IS A DECISION. This driver cannot
            tell an asked round from an ordinary quantum yield — the ABI answers one code for both, and a second
            code would be a fact about the scheduler's reason leaking into a host that has no use for it — so it
@@ -26894,22 +26899,6 @@ static int abi_main(int argc, char **argv)
            capability hours earlier — and the findings are recoverable by re-running without the flag, which is
            what makes the trade payable at all. */
         if (paint_dir != NULL) abi_paint(paint_dir, doc_id, url);
-        /* AND THE ASK IS RENEWED, AFTER THE PICTURE AND NEVER BEFORE IT — @PERWORLD. The ask above this loop
-           names the members alive at the seed, which on a document that forks is the boot flow and nothing
-           else; every arm born at a gate afterwards is outside it, and the images such a run writes are its
-           baseline and whichever single world the quantum left standing. Renewing here is what makes the
-           directory a picture of a SOLVER rather than of one timeline.
-           THE ORDER IS LOAD-BEARING AND IS THE WHOLE OF WHY THIS LINE IS HERE RATHER THAN ONE LINE UP. The
-           round that discharges a member's LAST mark returns with that member's finish deferred, and the
-           picture of it is the `abi_paint` immediately above; asking before that render would mark a world
-           this host has not yet photographed and engine_request_paint's skip would then be reasoning about a
-           deferral the render had not yet been paid for. Ask after, and the member skipped is one whose image
-           is already on disk.
-           IT COSTS ONE EXTRA RETURN PER MEMBER THAT EVER ENDS AND NOT ONE PER ROUND, which is the arithmetic
-           the residual above got wrong and is settled at engine_request_paint: a mark is ONE BIT, spent at a
-           member's end or free at a yield it is standing for, so re-writing it on a member that already has
-           it is not a second obligation. */
-        if (paint_dir != NULL) qjs_request_paint();
         /* THE BILL GOES OUT ON EVERY ROUND AND IS READ BACK ON NONE OF THEM — see abi_announce for why the
            announcement and the payment are separate halves and why the channel is half-duplex between them. */
         abi_announce();

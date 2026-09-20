@@ -2538,6 +2538,28 @@ QJS_EXPORT void qjs_request_paint(void)
     engine_request_paint();
 }
 
+/* …AND THE SAME ASK STANDING, SO IT COVERS THE WORLDS THIS RUN HAS NOT MINTED YET — @PERWORLD. Everything the
+   entry above says about this one is true unchanged: it renders nothing, answers nothing, chooses no flow and
+   switches nothing in. The difference is the POPULATION, and solver/engine.h states it.
+   WHY A HOST WOULD REACH FOR THIS ONE: the entry above is a photograph of a FRONTIER, and the question a
+   screenshot of forced execution actually asks is about a RUN — one picture per timeline the document
+   explored, including the timelines that do not exist yet when the host is able to speak. A host can only ask
+   between two steps, so every arm this engine forks, runs and finishes INSIDE one step is invisible to any
+   number of re-asks; that is not a cadence a host could choose more finely, it is the one population an
+   asking host cannot address at all. MEASURED, on a document that forks once: two flows, thirteen internal
+   switches, and ONE return to the host.
+   AND IT IS THE HOST'S TIME IT SPENDS. One extra return per timeline that ever ends, and the host renders on
+   each; a host that does not want a picture of every world calls the entry above, and one that wants none
+   calls neither. Nothing in a run that asks for no picture reaches any of this. */
+QJS_EXPORT void qjs_request_paint_every_world(void)
+{
+    DCHECK(g_begun, "an image of every world this run mints was asked of an engine whose frontier was never "
+                    "seeded — the mode would stand and the walk that covers the members already standing has "
+                    "none to walk, so the boot flow itself, which is the only member holding a document, would "
+                    "be the one world such a run never photographed");
+    engine_request_paint_every_world();
+}
+
 /* …AND THE ANSWERS, DRAINED. One record per timeline that ran the program, `<world><TAB><json>`, newline
    separated, "" when there are none. The pointer is this file's to own for the same reason qjs_result's is:
    the previous answer is released before a new one is asked for.

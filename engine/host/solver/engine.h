@@ -308,11 +308,16 @@ const char *engine_take_dumps(void);
  * lives here rather than in a host entry that chooses a flow and switches it in — flow_switch_in writes the
  * record of what a member was ranked on when it took the thread (the record preempt_hook's assertion reads), so
  * a switch performed for a picture would forge a ranking for a pick the WFQ never made.
- *   THE MEMBERS ALIVE AT THE ASK, AND NO FORK AFTER IT. A newborn arm owes nothing (flow.h's `paint_owed` says
- * why: an ask that newborns inherited would never finish on a forking frontier, and §NO BOUNDS forbids capping
- * an answer once it is owed). A host that wants the arms a run has since grown asks again — and THAT SENTENCE
- * USED TO BE AN INVITATION TO AN ABORT, which is why it now carries the clause below rather than standing
- * alone. A re-ask taken while the thread is with the host re-marks the member whose finish this session
+ *   THE MEMBERS ALIVE AT THE ASK, AND NO FORK AFTER IT. A newborn arm owes nothing from THIS entry, and a host
+ * that wants the arms a run has since grown has two ways to get them of which only one is this one's. It may
+ * ASK AGAIN, which re-walks the frontier and is what the clause below makes safe; or, where what it wants is
+ * one picture per timeline for the whole run rather than a photograph of the frontier as it stands, it calls
+ * `engine_request_paint_every_world` and never asks twice. The two are not a choice of cadence — a re-ask,
+ * however often it is taken, CANNOT reach a member forked, run and ended between two host returns, because a
+ * host exists only at a round boundary. flow.h's `paint_owed` carries that measurement and the refusal it
+ * overturned.
+ *   AND THAT SENTENCE USED TO BE AN INVITATION TO AN ABORT, which is why it now carries the clause below
+ * rather than standing alone. A re-ask taken while the thread is with the host re-marks the member whose finish this session
  * DEFERRED for a picture, and the deferred-finish path asserts against exactly that. So `engine_request_paint`
  * skips that one member, the assert stays, and asking again is a thing a host can do on EVERY round: a mark is
  * one bit, spent at a member's end or free at any yield it is standing for, so the price of the renewal is one
@@ -328,6 +333,21 @@ const char *engine_take_dumps(void);
  * on a reply the zone refused is not offered the thread, so it is not offered the picture either; that is the
  * frontier's own answer about that member and not a loss this entry may paper over. */
 void engine_request_paint(void);
+/* ONE PICTURE PER WORLD, FOR EVERY WORLD THIS RUN MINTS FROM HERE ON — the entry above photographs a FRONTIER
+ * and this one photographs a RUN, and they are different questions rather than two strengths of one.
+ *   IT IS THE ENTRY ABOVE PLUS THE MINT, and it has to be both. The walk names the members standing now — on a
+ * document that has not stepped, that is the boot flow, which no mint-side mark can ever reach because it was
+ * born before the ask. The mint names every member born afterwards — which is every forked arm, and is the
+ * population §Boot's `if (__FLAGS.admin)` sibling lives in and the one this whole mechanism exists for.
+ *   IT IS ONE-WAY, and flow.h's `flow_paint_every_world` says why: a mode that could be turned off would let a
+ * run write a world-named image for some arms and not others, with nothing in the artifact to say which, so a
+ * directory that reads as a document's complete set of worlds would be a sample of them.
+ *   THE COST IS ONE EXTRA RETURN PER MEMBER THAT EVER ENDS and one §E.2 painting-order walk per return, paid on
+ * the thread the engine ages its members in. That is @PERWORLD's stated price rather than an overrun of it: the
+ * quantity that grows without limit is the number of worlds PHOTOGRAPHED, which §NO BOUNDS requires to grow,
+ * and the per-member price is O(1) and paid once. A member that never ends never pays it, which is the same
+ * fact as a member that never runs again and is the frontier's own answer about it. */
+void engine_request_paint_every_world(void);
 /* Park the running flow on a <script src> WITH NO POSITION TO HOLD: the host fetches it, and the reply becomes
    this flow's next program rather than a promise's value. Two kinds of element are that — one a page INJECTED,
    and a member of HTML §4.12.1.1's `set of scripts that will execute as soon as possible`, which is a SET (§13.2.7

@@ -563,10 +563,31 @@ typedef struct Flow {
        ON THE OPPOSITE FACT. A generation makes "clear every mark" one increment, and its cost is that a
        member born AFTER the stamp moved reads as marked for free. That is exactly right for host-owed, where
        a fresh flow must read RUNNABLE and the stamp only ever ages OUT of a mark; it is exactly wrong here,
-       where the population is "the members alive when the host asked". A newborn arm reading marked would
-       make an ask over a forking frontier an ask that never finishes — every fork would owe an image, and
-       §NO BOUNDS forbids capping the answer once it is owed. `reclaim_calloc` zeroes a new Flow, so a fork
-       inherits NO ask and the ask names exactly the set `engine_request_paint` walked.
+       where the mark must be laid down DELIBERATELY — by the frontier walk or by the mint — and a stamp
+       cannot tell those two apart from a member the ask never reached.
+       A NEWBORN IS MARKED WHEN THE EVERY-WORLD MODE IS ON, AND NEVER BY INHERITANCE. `reclaim_calloc` zeroes
+       a new Flow, so a fork still inherits nothing from its parent; what mints a mark is the MODE read at
+       `flow_new`, which is a fact about what the host asked for and not about who forked.
+       THIS FIELD USED TO REFUSE THAT OUTRIGHT, and the refusal is rewritten rather than deleted because its
+       reasoning is what a reader re-derives. It read: "A newborn arm reading marked would make an ask over a
+       forking frontier an ask that never finishes — every fork would owe an image, and §NO BOUNDS forbids
+       capping the answer once it is owed." The §NO BOUNDS half is right and is not what the mode does; the
+       "never finishes" half reads a PER-MEMBER bit as a COLLECTIVE obligation. Nothing here waits for an ask
+       to close — a mark is spent at its own member's end or free at any yield that member is standing for —
+       so what grows with the frontier is the number of WORLDS PHOTOGRAPHED, which is the quantity @PERWORLD
+       exists to make grow and the one §NO BOUNDS forbids capping. The per-member price is one extra return,
+       once, and it is paid only by a member that ever ends.
+       AND THE TREE HAD ALREADY ACCEPTED THE UNBOUNDED SET BEFORE THE MODE EXISTED, which is what makes this a
+       LATENCY fix rather than a policy change: a host asking on EVERY ROUND re-walks the frontier each round
+       and marks every arm forked since, so the marked set already grew without limit. The one population a
+       per-round ask cannot reach is a member BORN AND ENDED INSIDE ONE ROUND — the host exists only at round
+       boundaries, so no cadence it can choose is finer than one.
+       MEASURED, on a six-element document whose inline script branches on `window.__FLAGS.admin`: `_forkAt`
+       named one branch site, `@RESULT` read `flows 2, forks 1, switches 13`, and the run wrote TWO images —
+       the `baseline` and ONE world — off exactly ONE host return. The arm was born, ran and ended between two
+       rounds, and a re-ask per round photographed it never.
+       RETIREMENT: this record goes when a document that mints N worlds cannot write fewer than N world-named
+       images under the mode, asserted rather than argued.
        IT DECIDES NOTHING ABOUT THE ORDER. The scheduler does not promote a member that owes an image; it
        hands the thread back at the moment its own pick has already put that member in front, which is why
        this can never forge a ranking record the WFQ did not make (engine.c's flow_switch_in writes exactly
@@ -2697,6 +2718,15 @@ void  flow_clear_host_owed_all(void);
 void  flow_set_paint_owed(Flow *f);
 void  flow_clear_paint_owed(Flow *f);
 int   flow_paint_owed(const Flow *f);
+/* EVERY WORLD MINTED FROM NOW ON OWES THE HOST ONE IMAGE — a standing MODE and not a second ask, which is the
+   distinction the two entries exist to keep: `flow_set_paint_owed` marks ONE member a caller is holding, and
+   this decides what a member is BORN with. It is one-way on purpose. A host turns it on because it wants one
+   picture per timeline for the whole run, and a mode that could be turned off would let a run write a
+   world-named image for some arms and not others with nothing in the artifact to say which — the plausible
+   datum §A-FIELD-A-CONSUMER-DEFAULTS names, arriving as a directory of pictures that reads as a complete set
+   of a document's worlds and is a sample of them. The members ALIVE when a host asks are not this entry's
+   business: `engine_request_paint_every_world` walks those, and this covers the ones not yet born. */
+void  flow_paint_every_world(void);
 
 /* A counter bumped on every frontier membership change (add/remove). The value-yield recomputes its rival
    only when this changes (or the running flow switches), never per-opcode. */

@@ -2422,6 +2422,12 @@ void flow_registry_free(JSContext *ctx) {
    that takes twenty minutes instead of three is a number with no decomposition — "the frontier grew" and "each
    flow got slower" look identical from outside, and they need opposite fixes. */
 static long g_flows_created;
+
+/* IS EVERY WORLD MINTED FROM HERE ON OWED AN IMAGE? flow.h's `flow_paint_every_world` holds the argument and
+   why it is one-way. Read at the ONE constructor below, so a mode turned on mid-run covers exactly the
+   members born after it and the frontier walk covers exactly the ones already standing — between them, every
+   world of a run that asked. Zero-initialised, which is the answer for a host that never asked. */
+static int g_paint_every_world;
 long flow_created_count(void) { return g_flows_created; }
 
 /* THE ONE CONSTRUCTOR. Every flow is born here with a world already decided, so no flow can exist without one
@@ -2440,6 +2446,16 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     }
     Flow *f = reclaim_calloc(1, sizeof(Flow));
     CHECK(f, "flow_add: OOM allocating a flow — a dropped flow corrupts the frontier");
+    /* AND IT IS BORN OWING THE HOST AN IMAGE IF THE HOST ASKED FOR EVERY WORLD — @PERWORLD. HERE, at the one
+       constructor, because that is the only line every timeline passes through: a mark laid down by walking
+       the frontier names the members standing at that instant, and an arm that is forked, runs and ends
+       BETWEEN two host returns is never standing at one. The host exists only at round boundaries, so this is
+       not a cadence it could have chosen more finely — it is the population it cannot address at all.
+       IT IS THE MINT AND NOT THE FORK. `flow_add_unseeded` is one caller of two kinds (a from-baseline root
+       and a branch's arm) and marking there would have covered the arms and missed whatever else this engine
+       learns to mint; the question "was this world ever photographed" is asked of a WORLD, and this is where
+       a world is decided (the line above mints one, and no flow can exist without one). */
+    if (g_paint_every_world) flow_set_paint_owed(f);
     f->fn = JS_DupValue(ctx, fn);
     /* THE PENDING REGISTER IS EMPTY, AND EMPTY IS NOT AN ARRAY. Most flows never park on anything, so
        allocating one per flow would put a JSObject on the heap for every member of a frontier that reached
@@ -4137,6 +4153,10 @@ void flow_clear_paint_owed(Flow *f) {
            "the one it tested, so this is a discharge reached by a route that never took the ask, and every "
            "later pick of this member hands the thread back for a picture no host asked for");
     f->paint_owed = 0;
+}
+
+void flow_paint_every_world(void) {
+    g_paint_every_world = 1;
 }
 
 int flow_paint_owed(const Flow *f) {

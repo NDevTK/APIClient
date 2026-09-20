@@ -7577,7 +7577,7 @@ void engine_request_dump(const char *program) {
    return per round per member. The residual in test_forced.c that predicted the opposite ("a round triggered
    by a discharge would re-mark every member and buy another, which does not terminate") was reasoning about
    an ask with no such skip, and it was right about that ask. */
-void engine_request_paint(void) {
+static void paint_mark_standing_members(void) {
     int n, i;
 
     DCHECK(g_sess_live, "an image of every world was asked of an instance with no live session — there is no "
@@ -7593,6 +7593,34 @@ void engine_request_paint(void) {
         if (g_sess_finish_owed && f == g_sess_cur) continue;
         flow_set_paint_owed(f);
     }
+}
+
+void engine_request_paint(void) {
+    paint_mark_standing_members();
+}
+
+/* ONE PICTURE PER WORLD, FOR EVERY WORLD THIS RUN GOES ON TO MINT — @PERWORLD, and engine.h holds the contract.
+   TWO POPULATIONS AND THEREFORE TWO LINES, which is the whole of this entry: the members STANDING right now,
+   which only a walk of the frontier can name, and the members NOT YET BORN, which only the mint can. Either
+   line alone leaves a hole a reader would read as an answer — the walk alone misses every arm forked
+   afterwards, and the mode alone misses the boot flow, which on a document that has not stepped yet is the
+   entire frontier and the only member with a document in it.
+   IT SUPERSEDES A PER-ROUND RE-ASK RATHER THAN STANDING BESIDE ONE, and test_forced.c's renewal went in the
+   diff that added this. A host renewing `engine_request_paint` every round marks a superset of the standing
+   members each time and still cannot reach a member that is FORKED, RUN AND ENDED between two of its own
+   returns — the host is only ever at a round boundary, so this is not a cadence it could have chosen more
+   finely. MEASURED, on a six-element document whose inline script branches on `window.__FLAGS.admin` and
+   whose `_forkAt` names that one branch site: `flows 2, forks 1, switches 13`, TWO images written (the
+   `baseline` and ONE world), off exactly ONE host return. Thirteen internal switches, one boundary.
+   IT IS NOT A BOUND AND IT IS NOT A CAP. What grows with the frontier is the count of worlds PHOTOGRAPHED,
+   which §NO BOUNDS requires to grow; each member pays one extra return, once, at its own end, and a member
+   that never ends never pays it. Nothing anywhere waits for "the ask" to complete, which is the reading
+   flow.h's retired refusal made and the reason it read as non-terminating.
+   THE PRICE IS REAL AND IS THE HOST'S TO REFUSE BY NOT ASKING: one CSS 2.1 §E.2 "Painting order" walk per
+   member that ever ends, on the thread the engine ages its members in. */
+void engine_request_paint_every_world(void) {
+    flow_paint_every_world();
+    paint_mark_standing_members();
 }
 
 /* THE OPERATION BECOMES THIS FLOW'S NEXT PROGRAM. Not a call: a peer answers by RUNNING a program, and every one

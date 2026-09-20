@@ -162,4 +162,12 @@ QJS_EXPORT const char *qjs_dumps(void);
    engine_request_paint and what is true of the entry is at its body in main.c. */
 QJS_EXPORT void qjs_request_paint(void);
 
+/* …AND EVERY WORLD THIS RUN GOES ON TO MINT, WHICH THE ASK ABOVE CANNOT COVER AT ANY CADENCE — @PERWORLD. The
+   ask above names the timelines alive when it is called; a host reaches this engine only BETWEEN two steps, so
+   a timeline that is forked, run and finished inside one step is standing at no boundary and is photographed by
+   no number of re-asks. This one is that ask plus a standing mode read where a timeline is MINTED, so the two
+   together name every world of the run. It is one-way, it renders nothing, and it costs one extra return per
+   timeline that ever ends. The contract is at solver/engine.h's engine_request_paint_every_world. */
+QJS_EXPORT void qjs_request_paint_every_world(void);
+
 #endif
