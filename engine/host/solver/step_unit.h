@@ -74,6 +74,31 @@
     X(LINK_CONNECTED,     "link-connected-time")                                  \
     X(ROUTED_DELIVERY,    "routed-delivery")                                      \
     X(ROUTED_NOT_MINE,    "routed-delivery-not-this-timeline")                    \
+    /* AND THE OTHER REFUSAL, WHICH IS A DIFFERENT FACT AND NOT A SHADE OF   */ \
+    /* THE ROW ABOVE. deliver_admits refuses a record for exactly two        */ \
+    /* reasons and its own banner says they "refuse different things": the   */ \
+    /* row above is a world this timeline RECEIVED a contradicting arm of,   */ \
+    /* so the SIBLING that timeline minted takes it; this one is a subtree   */ \
+    /* this timeline FORECLOSED, so the PARENT that took it delivers it.     */ \
+    /* The two are not the same claim about where the record went, and the   */ \
+    /* difference is whether a loss is possible at all: an arm minted at a   */ \
+    /* fork is above this flow and holds the record by construction, while   */ \
+    /* the sibling the row above defers to is minted by deliver_fork_arm     */ \
+    /* only for the rows deliver_commit_taken pushed — engine.c names, at    */ \
+    /* that assert, a RECEIVED row a second producer makes whose arm is      */ \
+    /* never forked, for which every live timeline consumes and refuses the  */ \
+    /* record and `_routedZeroDelivery` is the only thing that says so       */ \
+    /* afterwards. Summed, "the sibling has it" and "the parent has it" are  */ \
+    /* ONE number, and only the first can contain a message nobody got.      */ \
+    /* THE SPLIT IS THE SAME PREDICATE AT THE SAME TWO LINES, so the rows    */ \
+    /* partition by construction rather than by two writers agreeing — the   */ \
+    /* start and resume splits below are the same move for the same reason.  */ \
+    /* IT NARROWS `routed-delivery-not-this-timeline`, WHICH IS THE PRICE    */ \
+    /* AND IS STATED RATHER THAN DISCOVERED: a figure taken before this row  */ \
+    /* existed counts foreclosed refusals and one taken after does not, so   */ \
+    /* an archived census is not comparable with a new one until this row is */ \
+    /* added back into it.                                                   */ \
+    X(ROUTED_PARENT_TOOK, "routed-delivery-the-parent-took")                      \
     X(CROSS_AGENT_OP,     "cross-agent-operation")                                \
     X(MICROTASK,          "microtask-checkpoint")                                 \
     X(DELIVER_REPLY,      "deliver-one-reply")                                    \

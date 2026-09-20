@@ -1291,7 +1291,7 @@ for (const [doc, n] of routedTo) {
     fail(`${n} record(s) were routed to \`${doc}\` and its timelines admitted ${d} of them — every receiver ` +
          'was drained before this count, so the remaining attachments were consumed as refusals and at least ' +
          `${n - d} record(s) were admitted by NO timeline of that document. That is a peer's message the page ` +
-         'never receives and cannot know it did not (this document refused as not-this-timeline: ' +
+         'never receives and cannot know it did not (refusals this document\'s timelines made: ' +
          `${refused} across all receivers; routed in total: ${posts.length}, delivered in total: ` +
          `${delivered}). The direction matters: this fires only on a shortfall, so it names a loss when it ` +
          'speaks and proves nothing when it is silent — the equality below is the statement about every ' +
@@ -1335,7 +1335,7 @@ if (endsTotal < delivered)
        `${ends._routedTasksThrew}) — the missing ${delivered - endsTotal} were queued on a receiving ` +
        'timeline and never run, which is a peer\'s message dropped by the scheduler rather than by any of the ' +
        'spec\'s own ways of delivering nothing, and is the one of the four the page cannot tell from a ' +
-       `message that was never sent (records routed: ${posts.length}, refused as not-this-timeline: ${refused})`);
+       `message that was never sent (records routed: ${posts.length}, declined by the receiving timeline: ${refused})`);
 /* AND AT LEAST ONE OF THEM REACHED A PAGE. This is deliberately NOT `fired >= posts.length`, and the reason is
    a real ordering rather than caution: `b`'s own listener calls `window.close()`, §7.2.2.1 step 6.2 queues the
    definitely-close, and a LATER record delivered into a timeline that has already run it is removed by §7.5.10
@@ -1523,7 +1523,7 @@ if (zeroDeliveryAbsent.length || zeroDeliveryRead.length === 0)
    that IS a statement about every record that arrived, and beside the count of instances that equality could
    not be asked of, because a check that was not made is not a check that passed. */
 console.log(`[route] OK — two instances, ${posts.length} record(s) routed into ${delivered} delivery(ies) ` +
-            `across the receiver's timelines (${refused} refused as not-this-timeline) with one listener run ` +
+            `across the receiver's timelines (${refused} declined by the receiving timeline) with one listener run ` +
             'each; no receiving document admitted fewer records than it was handed, which on its own does NOT ' +
             'establish that every record was admitted (a record admitted by several timelines pays for one ' +
             `admitted by none) — and, which that sum cannot say, every record that ARRIVED at each of the ` +

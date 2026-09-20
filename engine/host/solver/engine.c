@@ -2168,12 +2168,28 @@ static char *record_worlds_dup(const char *record) {
  *     drops nothing.
  * INDEPENDENT IS NOT A REFUSAL and that is the half a boolean could not state: two peers posting to one page
  * are in two forests that were never one (world.h), and a receiver split over that pair would be two timelines
- * each missing one sender's messages. */
-static int deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
+ * each missing one sender's messages.
+ *
+ * AND THE SAME SENTENCE IS TRUE OF THIS FUNCTION'S OWN ANSWER, which is why it returns the census ROW rather
+ * than a yes/no. The two kinds above refuse different things and defer to different flows — the RECEIVED arm
+ * to a SIBLING deliver_fork_arm minted, the FORECLOSED arm to the PARENT that took the subtree — and only the
+ * first of those can be absent, so a caller that knows only THAT a record was refused cannot say whether a
+ * message reached any timeline at all. Returning the row is one fact with one writer: solver/step_unit.h is
+ * the only place an arm is named, the answer this line computes IS which arm flow_deliver leaves through, and
+ * a second refusal kind added here cannot be filed under the first without saying so at the `return`.
+ * `STEP_UNIT_ROUTED_DELIVERY` is the admitting answer, and it is a real row rather than a sentinel: it is the
+ * arm the delivery below actually takes, so no value this can return is out of the histogram's range. */
+static StepUnit deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
 {
-    int n = flow_world_commits(f), i, admits = 1;
+    int n = flow_world_commits(f), i;
+    StepUnit verdict = STEP_UNIT_ROUTED_DELIVERY;
 
-    for (i = 0; admits && i < n; i++) {
+    /* THE FIRST REFUSING COMMITMENT DECIDES, WHICH IS THE LOOP'S OWN BEHAVIOUR AND NOT A NEW CHOICE — it
+       stopped at the first `admits = 0` before this returned a row. What IS new is that the row inherits
+       that order: a flow holding both a contradicting RECEIVED world and a foreclosed subtree over one
+       record reports whichever commitment was pushed first, so the two rows partition the REFUSALS and not
+       the REASONS a refusal had. They are the same population only because one refusal ends the walk. */
+    for (i = 0; verdict == STEP_UNIT_ROUTED_DELIVERY && i < n; i++) {
         JSValue e = flow_world_commit_at(f, i);
         JSValue cv = JS_GetPropertyUint32(ctx, e, 0);
         JSValue tv = JS_GetPropertyUint32(ctx, e, 1);
@@ -2248,17 +2264,20 @@ static int deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
                        "(its boot flow beside a cold-resumed one — park_flow_add mints WORLD_NONE) and roots "
                        "name each other nowhere. Rebuild a parked flow as a CHILD of the world its recipe was "
                        "written under, so that pair has a branch between them to fork at");
-                admits = 0;
+                verdict = STEP_UNIT_ROUTED_NOT_MINE;
             }
         } else if (rel == WORLD_REL_SAME || rel == WORLD_REL_DESCENDANT) {
-            admits = 0;   /* at or under a subtree this arm foreclosed: the parent that took it delivers it */
+            /* AT OR UNDER A SUBTREE THIS ARM FORECLOSED: the parent that took it delivers it. Its own row,
+               because that parent is ABOVE this flow and holds the record by construction — a refusal here
+               can never be a lost message, and the arm above can. */
+            verdict = STEP_UNIT_ROUTED_PARENT_TOOK;
         }
         JS_FreeCString(ctx, c);
         JS_FreeValue(ctx, cv);
         JS_FreeValue(ctx, tv);
         JS_FreeValue(ctx, e);
     }
-    return admits;
+    return verdict;
 }
 
 /* IS A COMMITMENT TO RECEIVING `vec` ALREADY IMPLIED BY THIS TIMELINE'S RECORD? — one predicate with two
@@ -2886,6 +2905,9 @@ static void flow_deliver(JSContext *ctx, Flow *f)
     const WorldId *anc;
     uint32_t doc_id;
     int n_anc;
+    /* WHICH ARM THIS DELIVERY LEAVES THROUGH, held because the line that DECIDES it is not the line that
+       records it — see the refusal below. */
+    StepUnit verdict;
     CowDelta *seg;
     JSContext *rctx;
 
@@ -2907,7 +2929,8 @@ static void flow_deliver(JSContext *ctx, Flow *f)
     JS_FreeCString(ctx, record);
     JS_FreeValue(ctx, rv);
     JS_FreeValue(ctx, entry);
-    if (!deliver_admits(ctx, f, vec)) {
+    verdict = deliver_admits(ctx, f, vec);
+    if (verdict != STEP_UNIT_ROUTED_DELIVERY) {
         /* NOT THIS TIMELINE'S MESSAGE, AND THAT IS NOT A DROPPED WORK ITEM. It is a message belonging to the
            other side of a sender branch this timeline has taken a side at, and the flow on that side holds its
            own copy of the same entry (engine_route attaches to EVERY live flow, and a fork hands the arm its
@@ -2919,9 +2942,17 @@ static void flow_deliver(JSContext *ctx, Flow *f)
         JS_FreeValue(ctx, entry);
         /* …AND IT IS COUNTED, because "this timeline declined it" and "this timeline was never offered it" are
            the two readings of a delivery count that is lower than a host expected, and they take opposite
-           actions (engine.h). */
+           actions (engine.h). ONE counter for BOTH refusal kinds, deliberately: `_routedRefused` is the number
+           engine.h pairs with `_routedDelivered` and route.mjs's pigeonhole differences against the records a
+           zone handed a document, so splitting it would move a figure whose readers are outside this engine.
+           WHICH refusal it was is the STEP UNIT below, which partitions the same population inside the census
+           that is already keyed per arm — so the sum is unchanged and the split costs no reader anything. */
         g_routed_refused++;
-        g_step_unit = STEP_UNIT_ROUTED_NOT_MINE;
+        /* …AND IT LEAVES THROUGH THE ARM deliver_admits NAMED, never through one this line chose. The two
+           refusals defer to different flows and only one of them can have no flow to defer TO (step_unit.h),
+           and the line that decided which is the line that read the commitment — one read, spending its
+           answer twice, which is the split the start and resume rows in that file are made by. */
+        g_step_unit = verdict;
         return;
     }
     /* THE ARM THAT DOES NOT RECEIVE IT, MINTED BEFORE IT IS RECEIVED — and this timeline's commitment to
