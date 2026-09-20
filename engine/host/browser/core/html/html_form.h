@@ -88,6 +88,45 @@ JSValue html_form_reset_owner_with_attr(JSContext *ctx, JSValueConst wrap, const
    §4.10.13's `progress` and §4.10.14's `meter` are built. */
 JSValue html_form_labels_of(JSContext *ctx, JSValueConst wrap);
 
+/* ---- HTML §4.10.2 "Categories"' LISTED and LABELABLE elements, as the INTERFACES that declare the two
+ * members those categories give a control: §4.10.18.3's `form` and §4.10.4's `labels` -----------------------
+ *
+ * The table and both getters are in html_form.c, beside the form owner and the label relation they answer
+ * from. What crosses this header is the ROW LIST and one install taking every prototype by name, because the
+ * PROTOTYPES belong to core/html/html_element.c — the same split every other §4.10 install here makes: that
+ * file owns the element-interface table, this one owns the algorithms.
+ *
+ * `cat` IS A BIT SET AND NOT TWO TABLES because §4.10.2 states two OVERLAPPING subsets of one element list,
+ * and two tables are two places for `output` to be in one of them and not the other. */
+#define HTML_FORM_CAT_LISTED     0x1u
+#define HTML_FORM_CAT_LABELABLE  0x2u
+/* THE ROW ORDER IS THIS ENUM AND NOTHING ELSE: the table is written with ARRAY DESIGNATORS keyed by these, so
+   a row cannot drift out of the position its getter's magic names and no assertion is needed to say so. */
+enum { FC_BUTTON = 0, FC_FIELDSET, FC_INPUT, FC_OBJECT, FC_OUTPUT, FC_SELECT, FC_TEXTAREA, FC_COUNT };
+typedef struct { const char *iface; const char *tag; unsigned cat; } HtmlFormControlIface;
+extern const HtmlFormControlIface HTML_FORM_CONTROL_IFACES[FC_COUNT];
+
+/* INSTALL §4.10.18.3's `form` and §4.10.4's `labels` on the prototypes that DECLARE them. Each prototype is a
+   NAMED parameter and each member is installed at its own unconditional call, which is not a matter of style:
+   the Web IDL gap audit resolves which object a member landed on by following the install's TARGET, and it can
+   follow a named parameter the caller bound from a literal interface name. Written instead as a loop over the
+   row list above — `for (i…) install(ctx, html_iface_proto(ctx, ROWS[i].iface), i)` — every one of these twelve
+   members is reported UNPROVEN, the audit saying of each that
+   `proto is 71 tagged prototypes and this install is under a condition that does not name which`.
+   That is an ABSTENTION and not a check: it retires a true ABSENT row and puts nothing in its place.
+   MEASURED, both shapes, at this revision.
+   The ROW LIST still crosses this header because §4.10.2's categories and the brand check are this file's, and
+   because core/html/html_element.c CHECKS each row's `tag` against HTML §3.2.2 "Elements in the DOM" once per
+   agent, in its declare path beside the same join asserted for the reflection sets — that assertion is the only
+   thing holding this table and that one together. The `cat` bits and this parameter list are TWO HALVES of one
+   statement of the categories, held together in both directions by two different instruments: a getter reached
+   through a row without its bit ABORTS at the getter, and a row whose bit is set with no install is exactly
+   what the IDL gap audit reports as ABSENT. */
+void html_form_install_control_members(JSContext *ctx, JSValueConst button_proto, JSValueConst fieldset_proto,
+                                       JSValueConst input_proto, JSValueConst object_proto,
+                                       JSValueConst output_proto, JSValueConst select_proto,
+                                       JSValueConst textarea_proto);
+
 /* HTML §4.10.19's "a form control is disabled": the element carries a `disabled` content attribute, or it is a
    descendant of a `fieldset` whose `disabled` attribute is set and it is not inside that fieldset's first
    legend child. §4.13.5 step 10.2's condition. */

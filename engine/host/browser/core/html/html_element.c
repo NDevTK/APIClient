@@ -908,6 +908,34 @@ void html_element_init(JSContext *ctx)
                "join — HTMLElement's own reflections are R_HTML, declared once below, and HTMLUnknownElement "
                "adds none");
     }
+    /* §4.10.2's CONTROL ROWS AGAINST THE SAME TABLE, in BOTH directions and for the same reason the join
+       above is asserted: core/html/html_form.c pairs an INTERFACE (which the IDL declares `form` and `labels`
+       on) with a TAG (which that file's brand check asks of the receiver, for the reason stated there), and
+       the second of those is a copy of what HTML §3.2.2 "Elements in the DOM" already states. A row naming
+       a tag that wears a DIFFERENT interface installs the member on a prototype no such element can have, so
+       the member exists and no page reaches it. A SECOND tag wearing the same interface is the mirror: an
+       element whose OWN prototype carries the member, refused by a brand check that asks for the one tag the
+       row names. Neither is visible to the member audit, which reads names and never receivers. Checked HERE
+       rather than at the per-realm install because both tables are compile-time constants, so the question is
+       the AGENT's and asking it per realm would be the same answer bought again. */
+    for (i = 0; i < FC_COUNT; i++) {
+        int hits = 0;
+
+        for (j = 0; j < HTML_IFACE_N; j++)
+            if (strcmp(HTML_IFACE[j].iface, HTML_FORM_CONTROL_IFACES[i].iface) == 0) {
+                hits++;
+                DCHECKF(strcmp(HTML_IFACE[j].tag, HTML_FORM_CONTROL_IFACES[i].tag) == 0,
+                        "§4.10.2's control row for %s names tag <%s>, and HTML §3.2.2's generated table "
+                        "gives that interface to <%s> — the brand check would refuse the very element whose "
+                        "prototype carries the member",
+                        HTML_FORM_CONTROL_IFACES[i].iface, HTML_FORM_CONTROL_IFACES[i].tag,
+                        HTML_IFACE[j].tag);
+            }
+        DCHECKF(hits == 1,
+                "HTML §3.2.2's generated table gives %s to %d tag(s) and §4.10.2's control row names one, "
+                "so an element carrying that member on its own prototype would not pass its brand check",
+                HTML_FORM_CONTROL_IFACES[i].iface, hits);
+    }
     for (i = 0; i < HTML_IFACE_N; i++) {
         g_iface_refl[i] = NULL;
         g_iface_nrefl[i] = 0;
@@ -1243,6 +1271,26 @@ void html_element_install_protos(JSContext *ctx)
         html_option_install_members(ctx, op);
         JS_FreeValue(ctx, f); JS_FreeValue(ctx, in); JS_FreeValue(ctx, ta); JS_FreeValue(ctx, op);
         JS_FreeValue(ctx, bt);
+    }
+
+    /* §4.10.2's LISTED and LABELABLE categories give a control two members — §4.10.18.3's `form` and §4.10.4's
+       `labels` — declared on SEVEN interfaces between them. The prototypes are resolved HERE, each from a
+       LITERAL interface name, because that is what lets the Web IDL gap audit follow a member to the object it
+       landed on; core/html/html_form.c owns the categories and the algorithms, and its declaration says what a
+       loop over its own row list costs instead. Each row's TAG is checked against HTML §3.2.2 "Elements in the
+       DOM" once per agent, in the declare path above. */
+    {
+        JSValue bt2 = html_iface_proto(ctx, "HTMLButtonElement");
+        JSValue fs2 = html_iface_proto(ctx, "HTMLFieldSetElement");
+        JSValue in2 = html_iface_proto(ctx, "HTMLInputElement");
+        JSValue ob2 = html_iface_proto(ctx, "HTMLObjectElement");
+        JSValue ou2 = html_iface_proto(ctx, "HTMLOutputElement");
+        JSValue se2 = html_iface_proto(ctx, "HTMLSelectElement");
+        JSValue ta2 = html_iface_proto(ctx, "HTMLTextAreaElement");
+
+        html_form_install_control_members(ctx, bt2, fs2, in2, ob2, ou2, se2, ta2);
+        JS_FreeValue(ctx, bt2); JS_FreeValue(ctx, fs2); JS_FreeValue(ctx, in2); JS_FreeValue(ctx, ob2);
+        JS_FreeValue(ctx, ou2); JS_FreeValue(ctx, se2); JS_FreeValue(ctx, ta2);
     }
 
     /* §4.11.4's `returnValue` goes on HTMLDialogElement and nowhere else, handed the prototype for the same

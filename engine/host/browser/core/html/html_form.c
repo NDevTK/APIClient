@@ -2142,6 +2142,158 @@ JSValue html_form_labels_of(JSContext *ctx, JSValueConst wrap)
     return collections_static(ctx, arr);
 }
 
+/* ---- HTML §4.10.2 "Categories"' TWO CATEGORIES, AND THE TWO MEMBERS THEY DECLARE --------------------------
+ *
+ * A CONTROL'S TWO RELATIONSHIPS: to the form it will be submitted with, and to the labels that name it. Both
+ * algorithms are already above — the form owner and `html_form_labels_of` — and NEITHER had an IDL reader on a
+ * single form control, so `input.form` was `undefined` on every page this engine has ever run. That is not a
+ * conformance footnote for a tool whose reason to exist is DRIVING A FORM: a bundle reaches its form through
+ * the control the user touched, and a real one measured in this tree (testing/fixtures/assets/index-CmqSbLij.js,
+ * React's radio-group restore) compares `i.form === e.form` across every radio in the document — which with
+ * both sides `undefined` is TRUE for radios of unrelated groups, a wrong answer rather than a missing one.
+ *
+ * ONE TABLE BECAUSE §4.10.2 IS ONE ELEMENT LIST WITH CATEGORIES OVER IT. The section defines LISTED elements
+ * ("Denotes elements that are listed in the form.elements and fieldset.elements APIs") and, separately, "Some
+ * elements, not all of them form-associated, are categorized as labelable elements" — two overlapping subsets
+ * of one set, which is why the membership is a BIT per row and not two tables that can disagree about `output`.
+ *
+ * WHY THE TAG TRAVELS WITH THE INTERFACE. The IDL declares each member on an INTERFACE; Web IDL §3.7.6
+ * "Attributes"' brand check is asked of a RECEIVER, and what this engine can ask a receiver is its local
+ * name, because every node wrapper shares one class id and there is no per-interface brand to ask. The pair
+ * is a second copy of what HTML §3.2.2 "Elements in the DOM" already relates, so it is ASSERTED against that
+ * table rather than trusted — once per agent, in core/html/html_element.c's declare path beside the same join
+ * made for the reflection sets, and in BOTH directions, because a row whose tag wears a different interface
+ * installs on a prototype the element cannot have, and a SECOND tag wearing the same interface is an element
+ * whose own prototype carries a member this brand check would refuse it.
+ *
+ * NOT IN THIS TABLE, AND EACH FOR A REASON THE SECTION STATES:
+ *   `meter` and `progress` are labelable and install their own `labels` from their own components, beside the
+ *   rest of their members and their own receiver test. One ALGORITHM with three call sites, not three answers.
+ *   `img` is a form-associated element and has no `form` IDL attribute at all — §4.10.18.3's sentence is about
+ *   LISTED elements, and `img` is form-associated without being listed.
+ *   Form-associated CUSTOM elements are listed and labelable and are excluded by name by both sentences below;
+ *   their two members are on ElementInternals, which core/html/element_internals.c installs. */
+const HtmlFormControlIface HTML_FORM_CONTROL_IFACES[FC_COUNT] = {
+    [FC_BUTTON]   = { "HTMLButtonElement",   "button",   HTML_FORM_CAT_LISTED | HTML_FORM_CAT_LABELABLE },
+    [FC_FIELDSET] = { "HTMLFieldSetElement", "fieldset", HTML_FORM_CAT_LISTED },
+    [FC_INPUT]    = { "HTMLInputElement",    "input",    HTML_FORM_CAT_LISTED | HTML_FORM_CAT_LABELABLE },
+    [FC_OBJECT]   = { "HTMLObjectElement",   "object",   HTML_FORM_CAT_LISTED },
+    [FC_OUTPUT]   = { "HTMLOutputElement",   "output",   HTML_FORM_CAT_LISTED | HTML_FORM_CAT_LABELABLE },
+    [FC_SELECT]   = { "HTMLSelectElement",   "select",   HTML_FORM_CAT_LISTED | HTML_FORM_CAT_LABELABLE },
+    [FC_TEXTAREA] = { "HTMLTextAreaElement", "textarea", HTML_FORM_CAT_LISTED | HTML_FORM_CAT_LABELABLE },
+};
+
+/* Web IDL §3.7.6 "Attributes"' BRAND CHECK — the attribute getter's own steps, "If jsValue does not implement
+   target, then:" … "Otherwise, throw a TypeError". A TypeError and never a DCHECK: the receiver is whatever the
+   page handed `HTMLInputElement.prototype.form.call(x)`, so asserting on it would put an engine abort behind a
+   value a page states. THE NAMESPACE IS PART OF THE QUESTION — an `input` in another namespace is a different
+   element with a different interface, the same test core/html/html_meter.c makes for `<meter>`. */
+static bool form_control_receiver(JSContext *ctx, JSValueConst this_val, int i, const char *member)
+{
+    lxb_dom_node_t *n = node_of(this_val);
+
+    DCHECK(i >= 0 && i < FC_COUNT,
+           "a §4.10.2 control member was installed with a magic that names no interface row");
+    if (n && n->type == LXB_DOM_NODE_TYPE_ELEMENT && n->ns == LXB_NS_HTML &&
+        tag_is(n, HTML_FORM_CONTROL_IFACES[i].tag))
+        return true;
+    JS_ThrowTypeError(ctx, "%s.%s was reached on something that is not a <%s> element",
+                      HTML_FORM_CONTROL_IFACES[i].iface, member, HTML_FORM_CONTROL_IFACES[i].tag);
+    return false;
+}
+
+/* HTML §4.10.18.3 "Association of controls and forms": "Listed form-associated elements except for
+   form-associated custom elements have a form IDL attribute, which, on getting, must return the element's form
+   owner, or null if there isn't one." ONE sentence for all seven, which is why there is one getter: the member
+   is declared seven times and its steps are stated once.
+   NAMED RESIDUAL — `form` is ALSO declared on HTMLLabelElement, HTMLLegendElement and HTMLOptionElement, and
+   those three are NOT covered here because none of them is a listed form-associated element and none of them
+   HAS a form owner: each delegates to a different element's. WHAT THE NEXT DIFF BUILDS, per section:
+     HTML §4.10.10 "The option element" — "The form getter steps are: Let select be this's nearest ancestor
+     select. If select is null, then return null. Return select's form owner." NOTE THE WALK: that is the
+     NEAREST ANCESTOR select, which is NOT html_form_select_of_option's question — that one answers which
+     select's LIST OF OPTIONS holds the option, and §4.10.7's walk stops descending at a nested `optgroup`,
+     `datalist`, `hr` and `option`, so the two disagree for exactly the options that sit under one of those.
+     Reaching for the exported helper because it is there is how this member gets built wrong.
+     HTML §4.10.16 "The legend element" — "If the legend has a fieldset element as its parent, then the form
+     IDL attribute must return the same value as the form IDL attribute on that fieldset element. Otherwise, it
+     must return null." The PARENT, not an ancestor.
+     HTML §4.10.4 "The label element" — "If the label element has no labeled control, then return null. If the
+     label element's labeled control is not a form-associated element, then return null." then return that
+     control's form owner. It needs the FORWARD direction of the labeled-control relation, which this file
+     holds only as the predicate form_label_controls answers for a CANDIDATE. Those are one FACT — which
+     element a label controls — and two QUESTIONS asked of it, so the diff that needs the forward direction
+     writes THAT and re-expresses the predicate as an equality against it; a second walk is where the two
+     directions start disagreeing about `<label><span><my-control>`.
+   HOW ITS ABSENCE SHOWS: reading `form` on a `label`, `legend` or `option` answers `undefined`, which is not a
+   value the declaration `readonly attribute HTMLFormElement? form` admits at all — so `'form' in el` is false
+   on those three and true on the seven below, observable from any page without knowing what the document
+   contains. */
+static JSValue js_form_control_form(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    if (!form_control_receiver(ctx, this_val, magic, "form")) return JS_EXCEPTION;
+    DCHECK((HTML_FORM_CONTROL_IFACES[magic].cat & HTML_FORM_CAT_LISTED) != 0,
+           "§4.10.18.3's `form` answered on an interface §4.10.2 does not list — the sentence is about LISTED "
+           "form-associated elements and a row without that bit has no form owner to return");
+    return html_form_owner_of(ctx, this_val);
+}
+
+/* HTML §4.10.4 "The label element" states this member for every labelable element, in one sentence and with
+   one exception: "The labels IDL attribute of labelable elements that are not form-associated custom elements,
+   and the labels IDL attribute of input elements, on getting, must return that NodeList object, and that same
+   value must always be returned, unless this element is an input element whose type attribute is in the Hidden
+   state, in which case it must instead return null."
+   THE HIDDEN CASE IS WHY HTMLInputElement's IDL SAYS `NodeList?` AND THE OTHER FOUR SAY `NodeList`, and it is
+   asked HERE rather than inside html_form_labels_of because that algorithm has a caller for whom the rule does
+   not hold: §4.13.7's ElementInternals reaches it for a form-associated custom element, which is never an
+   `input`. html_form_input_state answers INPUT_STATE_NONE for anything that is not an `input`, so the four
+   non-input rows cannot take this arm.
+   THE LIVE AND [SameObject] HALVES OF THAT SENTENCE ARE NOT BUILT: html_form_labels_of composes a STATIC
+   NodeList and a fresh one per call, which is the gap collections_static is named for and which meter and
+   progress already carry — one narrowing, stated at the collection, not re-argued per member. */
+static JSValue js_form_control_labels(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    if (!form_control_receiver(ctx, this_val, magic, "labels")) return JS_EXCEPTION;
+    DCHECK((HTML_FORM_CONTROL_IFACES[magic].cat & HTML_FORM_CAT_LABELABLE) != 0,
+           "§4.10.4's `labels` answered on an interface §4.10.2 does not call labelable");
+    if (html_form_input_state(node_of(this_val)) == INPUT_STATE_HIDDEN) return JS_NULL;
+    return html_form_labels_of(ctx, this_val);
+}
+
+/* §4.10.18.3's `form` and §4.10.4's `labels`, each at its own unconditional install on a NAMED prototype —
+   see this function's declaration for why a loop over the row list is the wrong shape here and what the audit
+   reports when it is used. The `cat` bits above and this list are two statements of §4.10.2's categories and
+   each getter ASSERTS its own bit, so a member installed through a row that does not carry it aborts at the
+   first read rather than answering out of an algorithm §4.10.2 never pointed at it. */
+void html_form_install_control_members(JSContext *ctx, JSValueConst button_proto, JSValueConst fieldset_proto,
+                                       JSValueConst input_proto, JSValueConst object_proto,
+                                       JSValueConst output_proto, JSValueConst select_proto,
+                                       JSValueConst textarea_proto)
+{
+    DCHECK(g_atom_owner != JS_ATOM_NULL,
+           "§4.10.2's control members were installed before html_form_declare minted the form-owner slot key");
+    DCHECK(JS_IsObject(button_proto) && JS_IsObject(fieldset_proto) && JS_IsObject(input_proto) &&
+           JS_IsObject(object_proto) && JS_IsObject(output_proto) && JS_IsObject(select_proto) &&
+           JS_IsObject(textarea_proto),
+           "a §4.10.2 control member was installed with no prototype for one of the seven listed interfaces");
+    /* THE SEVEN LISTED form-associated elements. */
+    idl_install_accessor(ctx, button_proto,   "form", js_form_control_form, FC_BUTTON,   -1);
+    idl_install_accessor(ctx, fieldset_proto, "form", js_form_control_form, FC_FIELDSET, -1);
+    idl_install_accessor(ctx, input_proto,    "form", js_form_control_form, FC_INPUT,    -1);
+    idl_install_accessor(ctx, object_proto,   "form", js_form_control_form, FC_OBJECT,   -1);
+    idl_install_accessor(ctx, output_proto,   "form", js_form_control_form, FC_OUTPUT,   -1);
+    idl_install_accessor(ctx, select_proto,   "form", js_form_control_form, FC_SELECT,   -1);
+    idl_install_accessor(ctx, textarea_proto, "form", js_form_control_form, FC_TEXTAREA, -1);
+    /* THE FIVE OF THOSE SEVEN THAT ARE ALSO LABELABLE — `fieldset` and `object` are not labelable elements and
+       declare no `labels`; `meter` and `progress` are labelable and are not listed, so their `labels` is
+       installed from their own components beside the rest of their members. */
+    idl_install_accessor(ctx, button_proto,   "labels", js_form_control_labels, FC_BUTTON,   -1);
+    idl_install_accessor(ctx, input_proto,    "labels", js_form_control_labels, FC_INPUT,    -1);
+    idl_install_accessor(ctx, output_proto,   "labels", js_form_control_labels, FC_OUTPUT,   -1);
+    idl_install_accessor(ctx, select_proto,   "labels", js_form_control_labels, FC_SELECT,   -1);
+    idl_install_accessor(ctx, textarea_proto, "labels", js_form_control_labels, FC_TEXTAREA, -1);
+}
+
 bool html_form_control_is_disabled(JSContext *ctx, JSValueConst wrap)
 {
     lxb_dom_node_t *n = node_of(wrap), *a;
