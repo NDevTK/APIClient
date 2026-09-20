@@ -4379,14 +4379,22 @@ static CssPx uv_px_ask(lxb_dom_element_t *el, const char *name)
    which is 6N + 16 frames of which N + 3 are recorded at THIS entry, so this entry's share is a CONSTANT
    sixth at every depth rather than something that improves on a real page. `uv_sized` is a second of the six
    and is recorded too now, which is arithmetic over the SAME table and not a second measurement — the census
-   has not been re-run, and a reader who wants it re-run needs gdb and a native build. TAKE IT INSIDE A
-   NAMED SNAPSHOT, because the NATIVE binary carries no revision stamp and the snapshot's DIRECTORY does:
-   engine/frozen_snapshot.sh names it `snap-<lane>-<sha8>`, so a census run there belongs to a revision
-   even though nothing in the binary says which. The stamp a reader goes looking for is the ABI link's —
-   engine/build.mjs stamps the wasm artifact and gates that stamp on the compiled cone being clean, under
-   `if (ABI_LINK.code === 0)` — and the native link is not in it, which is WHY the binary is bare rather
-   than an oversight. A figure taken off an unstamped binary outside a snapshot belongs to no revision at
-   all, and this banner would rather carry no second column than one of those.
+   has not been re-run, and a reader who wants it re-run needs gdb and a native build. IT IS QUOTABLE AGAINST
+   A REVISION, AND NOT BY AN ARTIFACT STAMP — engine/gate_revision.mjs prints `the compiled cone (…) is CLEAN
+   at that revision — this number is quotable against it`, engine/build.mjs passes it a cone that CONTAINS
+   `engine/host`, and it is printed at top level before the first compiler runs, so the NATIVE target is
+   covered like every other. Run it in a freeze anyway (`engine/frozen_snapshot.sh`, which that gate's own
+   dirty arm names) — not to obtain a revision but to make the cone clean BY CONSTRUCTION in a checkout
+   several lanes are editing — and read the `[rev]` line rather than assuming it.
+   THE PARAGRAPH THAT STOOD HERE SAID THE OPPOSITE AND IS WRITTEN OUT BECAUSE ITS METHOD IS THE REUSABLE
+   PART. It said the native binary is uncertified, reasoning from `stampArtifact` sitting under
+   `if (ABI_LINK.code === 0)`. That observation is TRUE and the conclusion does not follow: an artifact STAMP
+   is about BYTES IN THE OUTPUT and the cone gate is about THE SOURCES THAT WERE LINKED, and for a census it
+   is the second that decides. The error was reading a mechanism off a `why` string — a DIAGNOSTIC for the
+   stamp — instead of off the line that certifies. THE TELL WAS FREE AND ARITHMETIC: two tree-wide greps for
+   two halves of one sentence returned two file lists, engine/gate_revision.mjs was the ONLY file in BOTH,
+   and the other one got opened. When two searches for one sentence intersect in one file, that file is the
+   answer.
    THE FIRST COLUMN IS THE LARGER FINDING AND IT IS THE REASON
    THIS COMPONENT EXISTS: laying out a document costs SIX C FRAMES PER LEVEL OF NESTING and nothing bounds the
    nesting, so the C stack is a function of the document — which is not a thing a browser does, and is the
