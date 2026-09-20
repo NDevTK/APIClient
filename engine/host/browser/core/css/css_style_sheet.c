@@ -132,6 +132,20 @@ static CssStyleSheetData *sheet_of(JSValueConst v)
 static void sheet_set_at(JSContext *ctx, CssStyleSheetData *s, JSValue *slot, JSValue v,
                          const char *file, int line)
 {
+    /* A CASCADE INPUT MOVING INSIDE A RENDER — see core/css/css_cascade_pass.h. A sheet's own slots are
+       what CSSOM §6.2's collection hands the author cascade: its rule list, its media object, the node
+       it hangs off. The ADDRESS this function already carries is what makes one check here name the
+       WRITE rather than this line — the same reason cow.h gives for threading it at all. */
+    DCHECKF(!css_cascade_pass_is_open(),
+            "%s:%d wrote a CSS style sheet record slot while css-cascade-5 §4.2 \"Cascaded Values\"' "
+            "record was open for a render. A sheet's rule list and its media object ARE the author "
+            "origin css-cascade-5 §6.2 \"Cascading Origins\" names, read for the element's own root, and "
+            "`dom_cow_version` does not advance for either — so every cascaded value this render already "
+            "served was sorted over the sheet this write is replacing, and nothing else in this engine "
+            "can see it happen. The span is core/paint/document_paint.c's CSS 2.1 §E.2 \"Painting "
+            "order\" walk and nothing in it may write: find what did, and either take it out of the walk "
+            "or move the pass inside it",
+            file, line);
     cow_record_set_at(ctx, s, &SHEET_REC, slot, v, file, line);
 }
 #define sheet_set(ctx_, s_, slot_, v_) sheet_set_at((ctx_), (s_), (slot_), (v_), __FILE__, __LINE__)
