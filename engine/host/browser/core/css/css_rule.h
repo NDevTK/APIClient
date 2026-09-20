@@ -36,10 +36,32 @@
  * `@import` fetch, which is this member's own subject — so the conclusion above is untouched and only its premise
  * moved. The tell that the two were ever one sentence: they are one FETCH and two ALGORITHMS, and the `<link>` one
  * reaches no CSSImportRule at all.
- * THE CAPABILITY TO BUILD IS THE IMPORT'S OWN SHEET FETCH: CSSOM §6.3's "obtain a CSS
- * style sheet" over the import's URL, resolved against the importing sheet's base URL, creating a child sheet whose
- * parent CSS style sheet is the importer and whose owner CSS rule is the import rule — which is also what fills the
- * `ownerRule` css_style_sheet.c already reads off its record for exactly this day.
+ * THE CAPABILITY TO BUILD IS THE IMPORT'S OWN SHEET FETCH, AND THIS CLAUSE NAMED IT AFTER AN ALGORITHM NO STANDARD
+ * DEFINES. It is recorded rather than silently corrected because a next-diff clause is read once, by somebody who
+ * has already decided to do the work, so a wrong one is not caught, it is EXECUTED. It read: CSSOM §6.3's "obtain a
+ * CSS style sheet". That phrase occurs ZERO times in CSSOM — in the editor's draft this tree's corpus is keyed to
+ * and in the `cssom-1` snapshot — and §6.3 is "Style Sheet Association", which is LinkStyle, `xml-stylesheet`
+ * processing instructions and HTTP `Link:` headers. core/css/css_style_declaration.c spells that same number with
+ * that same title, so the tree disagreed with itself about one section and no channel could see it: the number
+ * resolves, and a clause names a MECHANISM where a quotation check needs a QUOTATION.
+ * THE ALGORITHM IS CSSOM §6.3.1 "Fetching CSS style sheets", and it takes more than a URL — "To fetch a CSS style
+ * sheet with parsed URL parsed URL, referrer referrer, document document, optionally a set of parameters
+ * parameters". It fetches with `processResponseEndOfBody`, returns on a network error, and returns again when the
+ * response is not in a supported styling language, so the type test is that section's rather than a second copy of
+ * the `text/css` compare core/html/html_link.c makes for HTML §4.6.8.23.
+ * THE SHEET IS CSSOM §6.2's create a CSS style sheet, as the `<link>` arm's already is, with the parent CSS style
+ * sheet the importer and the owner CSS rule this import rule — which is what fills the `ownerRule`
+ * css_style_sheet.c already reads off its record. TWO CELLS COME FROM THE IMPORTER RATHER THAN THE RESPONSE and the
+ * old clause was silent about both: CSS Cascade 5 §2.2 "Processing Stylesheet Imports" states "The cascade origin
+ * of an imported style sheet is the cascade origin of the style sheet that imported it" and "The environment
+ * encoding of an imported style sheet is the encoding of the style sheet that imported it" — the second is the
+ * operand core/html/html_link.c's fallback-encoding step computes for a `<link>`, reached here from the IMPORTER
+ * and never from the document.
+ * MEASURED, so the gap is not taken on this comment's word: a document whose author style arrives through a fetched
+ * sheet holding an `@import` requests the IMPORTING sheet and never requests the imported one at all, and its
+ * `getComputedStyle` answers the UA default in every world the run explored.
+ * RETIREMENT: this record goes when `@import`'s fetch is built, since a reader can then no longer re-derive the
+ * wrong clause from an absent capability.
  *
  * A RULE IS MADE OF TEXT, AND THAT IS THE CONSTRAINT THE WHOLE COMPONENT IS BUILT ON. Lexbor parses a stylesheet into
  * an ARENA and names every rule, selector and value by a pointer into it, and a pointer has no cross-tier identity: a
