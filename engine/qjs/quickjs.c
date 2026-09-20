@@ -100563,7 +100563,7 @@ static double js_fmax(double a, double b)
 }
 
 /* §21.3.2.25 Math.max ( ...args ) / §21.3.2.26 Math.min ( ...args ) RUN OVER THE OPERANDS' OWN EXAMPLES. Both
-   are "For each element arg of args: Let n be ? ToNumber(arg)" followed by a comparison walk, so the real
+   are "For each element arg of args, do Let n be ? ToNumber(arg)" followed by a comparison walk, so the real
    function is re-entered with each unknown replaced by the concrete this engine has for it — the same shape
    22.1.2.1's example builder uses, and for the same reason: the value the page would have computed is worth
    more than a placeholder. An argument with NO example makes the whole result exampleless rather than letting
@@ -100712,11 +100712,98 @@ static double js_math_round(double a)
     return u.d;
 }
 
+/* §21.3.2.11 Math.clz32 ( x ), §21.3.2.19 Math.hypot ( ...args ) and §21.3.2.20 Math.imul ( x, y ) RUN OVER
+   THE OPERANDS' OWN EXAMPLES. §21.3.2.25 Math.max ( ...args ) / §21.3.2.26 Math.min ( ...args ) already answer
+   this way one function down, and theirs is NOT this builder only because it is the `generic_magic` twin and
+   carries a magic this family has none of.
+   RE-ENTERING THE REAL BODY IS THE POINT rather than reimplementing each algorithm here: the derived value's
+   concrete is then whatever this engine's own `Math.imul` computes, so an example cannot drift from the
+   function it claims to be an example of. All three are a coercion followed by pure arithmetic with no user
+   code in them, so the re-entry runs nothing a page can observe twice.
+   THE VECTOR IS PADDED TO WHAT THE BODY READS AND NOT TO argc. js_primargs_step hands the body the call's
+   REAL argc over a buffer padded to the declaration's arity, and a fixed-arity body reads that padding:
+   `Math.imul(x)` is argc 1 and still reads argv[1]. An example vector sized argc would be read off its end.
+   AN ARGUMENT WITH NO EXAMPLE MAKES THE WHOLE RESULT EXAMPLELESS rather than letting a picked number decide a
+   later `if` — a value known only to satisfy a gate is INVENTED, which is the one thing @H may never emit. */
+static JSValue js_math_generic_example(JSContext *ctx, JSCFunction *body, JSValueConst this_val,
+                                       int argc, int nread, JSValueConst *argv)
+{
+    int n = argc > nread ? argc : nread;
+    JSValue *ex = js_malloc(ctx, sizeof(JSValue) * (size_t)(n > 0 ? n : 1));
+    JSValue r;
+    int i, built = 0;
+
+    /* ALWAYS FATAL rather than a dropped example: a derivation that silently loses its concrete is a value the
+       @H surface then reports as shape-only, which is indistinguishable from an operand that never had one. */
+    CHECK(ex != NULL, "out of memory building a derived unknown's example operands");
+    for (i = 0; i < n; i++) {
+        JSValue e = js_concolic_operand(ctx, argv[i]);
+        if (JS_IsUninitialized(e))
+            e = js_dup(argv[i]);
+        else if (JS_IsUndefined(e)) {          /* the unknown carries no concrete operand */
+            r = JS_UNDEFINED;
+            goto done;
+        }
+        DCHECK(!JS_IsObject(e) && !JS_IsSymbol(e),
+               "an unknown's example is not an operable primitive — an example rides the value the interpreter "
+               "actually produced, so a producer attached something this engine never computed");
+        ex[built++] = e;
+    }
+    r = body(ctx, this_val, argc, (JSValueConst *)ex);
+done:
+    for (i = 0; i < built; i++)
+        JS_FreeValue(ctx, ex[i]);
+    js_free(ctx, ex);
+    return r;
+}
+
+/* The answer the three owe AT THEIR OWN SITE, which is what the conversion boundary's abort asks for by name.
+   `nread` is how many leading arguments the SPEC's steps coerce — two for §21.3.2.20 "Math.imul ( x, y )",
+   whose steps name x and y; one for §21.3.2.11 "Math.clz32 ( x )", whose step 1 names x; and every one of
+   them for §21.3.2.19 "Math.hypot ( ...args )", which coerces each element of args — so an unknown in a slot the
+   algorithm never reads leaves the result KNOWN: `Math.imul(1, 2, {unknown})` is 2 and not an unknown, because
+   step 1 and step 2 name x and y and no step reads a third argument.
+   Returns JS_UNINITIALIZED when no argument the steps coerce is unknown, which is the caller's signal that its
+   ordinary body is the right answer. */
+static JSValue js_math_generic_unknown(JSContext *ctx, JSCFunction *body, const char *op,
+                                       JSValueConst this_val, int argc, int nread, JSValueConst *argv)
+{
+    int i, coerced = argc < nread ? argc : nread;
+
+    for (i = 0; i < coerced; i++) {
+        JSValue c;
+        if (!js_value_is_concolic(argv[i]))
+            continue;
+        c = js_concolic_derive(ctx, argv[i], op,
+                               js_math_generic_example(ctx, body, this_val, argc, nread, argv));
+        DCHECK(!JS_IsUninitialized(c),
+               "the concolic derivation declined an operand this function had already recognised as unknown "
+               "external input — the value semantics were installed without the builtin-derivation hook");
+        return c;
+    }
+    return JS_UNINITIALIZED;
+}
+
 static JSValue js_math_hypot(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
 {
     double r, a;
+    JSValue c;
     int i;
+
+    /* §21.3.2.19 Math.hypot ( ...args ) OVER UNKNOWN EXTERNAL INPUT. Its steps are "For each element arg of
+       args, do Let n be ? ToNumber(arg)" and then a walk over the coerced List, so the JS_ToFloat64 below IS
+       that §7.1.4 ToNumber ( arg ). The coerce-then-compute declaration's own coercion is §7.1.1 ToPrimitive
+       ( input [ , preferredType ] ), which over a concolic is the IDENTITY — the value is primitive in the page
+       and wears an Object only as the solver's carrier — so an unknown argument arrives here UNCOERCED and that
+       conversion boundary, which owes C a real double and can only abort, took the whole document's findings
+       with it.
+       ONE unknown argument makes the WHOLE result unknown. A known +∞𝔽 would settle the result on its own, so
+       answering unknown there is broader than the algorithm strictly needs; it costs a FORK the search would
+       otherwise not take, which is the direction to err in, and never a value the page did not compute. */
+    c = js_math_generic_unknown(ctx, js_math_hypot, "Math.hypot", this_val, argc, argc, argv);
+    if (!JS_IsUninitialized(c))
+        return c;
 
     r = 0;
     if (argc > 0) {
@@ -100751,6 +100838,20 @@ static JSValue js_math_imul(JSContext *ctx, JSValueConst this_val,
 {
     uint32_t a, b, c;
     int32_t d;
+    JSValue u;
+
+    /* §21.3.2.20 Math.imul ( x, y ) OVER UNKNOWN EXTERNAL INPUT. Steps 1 and 2 are "Let a be ℝ(? ToUint32(x))"
+       and "Let b be ℝ(? ToUint32(y))", and §7.1.9 ToUint32 ( arg )'s own step 1 is §7.1.4 ToNumber ( arg ) — so
+       the two JS_ToUint32 calls below ARE that coercion. The declaration's coercion is §7.1.1 ToPrimitive
+       ( input [ , preferredType ] ), which over a concolic is the IDENTITY, so an unknown arrives here
+       uncoerced and asked the conversion boundary for a real integer, which owes C one and can only abort.
+       Every hashing helper a bundler ships is `Math.imul` over bytes it was handed, which is how large this is.
+       EXACTLY TWO ARGUMENTS ARE COERCED, which is why the scan is bounded rather than over argc: no step reads
+       a third, so `Math.imul(1, 2, {unknown})` is 2 and answering unknown there would be a value the page does
+       not compute. */
+    u = js_math_generic_unknown(ctx, js_math_imul, "Math.imul", this_val, argc, 2, argv);
+    if (!JS_IsUninitialized(u))
+        return u;
 
     if (JS_ToUint32(ctx, &a, argv[0]))
         return JS_EXCEPTION;
@@ -100765,6 +100866,17 @@ static JSValue js_math_clz32(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
 {
     uint32_t a, r;
+    JSValue u;
+
+    /* §21.3.2.11 Math.clz32 ( x ) OVER UNKNOWN EXTERNAL INPUT. Step 1 is "Let n be ? ToUint32(x)", whose own
+       step 1 is §7.1.4 ToNumber ( arg ), so the JS_ToUint32 below IS that coercion and an unknown reaching it
+       aborted the instance for the reason its two siblings did: §7.1.1 ToPrimitive over a concolic is the
+       IDENTITY, so the declaration hands one straight through uncoerced.
+       ONE argument is coerced and no step reads a second, so the scan is bounded at one: the count of leading
+       zero bits of a value nobody has is unknown, and nothing else about the call can make it known. */
+    u = js_math_generic_unknown(ctx, js_math_clz32, "Math.clz32", this_val, argc, 1, argv);
+    if (!JS_IsUninitialized(u))
+        return u;
 
     if (JS_ToUint32(ctx, &a, argv[0]))
         return JS_EXCEPTION;
