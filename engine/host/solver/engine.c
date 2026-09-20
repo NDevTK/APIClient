@@ -2250,20 +2250,49 @@ static StepUnit deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
                    as the head/ancestry separator and world_parse splits on nothing else, so within the one
                    grammar those two readers share, a comma is exactly "this vector names an ancestor" — the
                    question fork_point answers by parsing.
-                   A vector that names none is a ROOT world — a flow its instance created from the baseline —
-                   and the sending document has two of those the moment the cold tier rebuilds one beside the
-                   boot flow: park_flow_add passes WORLD_NONE, so a resumed timeline is a fresh root rather
-                   than a child of the world its recipe was parked under. Those two roots contradict and name
-                   each other nowhere, so there is no branch at which this receiver could have taken the other
-                   side. Give a rebuilt flow the world its recipe was written under, so every timeline of one
-                   document meets every other at a fork point. */
+                   A vector that names none is a ROOT world — a flow its instance created from the baseline.
+                   THE PAIR THIS BLOCK NAMED WAS IMPOSSIBLE AND THE REMEDY IT PRESCRIBED IS REFUSED BY AN
+                   ASSERT THAT ALREADY EXISTS. Both are recorded rather than quietly replaced, because a remedy
+                   clause is read ONCE, by somebody who has already decided to do the work, so a wrong one is
+                   not caught — it is executed. It read: "the sending document has two of those the moment the
+                   cold tier rebuilds one beside the boot flow: park_flow_add passes WORLD_NONE … Give a
+                   rebuilt flow the world its recipe was written under, so every timeline of one document meets
+                   every other at a fork point."
+                   THE BOOT FLOW AND A COLD-RESUMED RESIDUE ARE ALTERNATIVES, NOT NEIGHBOURS. This file's own
+                   session opener runs `if (recipes && *recipes) cold_resume(…); else flow_add(…, WORLD_NONE)`
+                   under a DCHECK that the frontier is EMPTY, because "adding a fresh boot flow beside them
+                   would explore the un-forked path a second time". The pair named above cannot occur.
+                   AND THE COLD TIER IS ONE GENERATOR OF FOUR, so a fix there does not retire this abort. Every
+                   `flow_add*(…, WORLD_NONE)` mints a root in THIS (document, generation) and `mint` stamps the
+                   AGENT's `g_doc` on all of them: this file's boot flow, a JOINED document's boot flow (whose
+                   root is in the SAME forest, not a second one), solve.c's @S candidate session, and each
+                   member a cold resume rebuilds. Two candidates, or a candidate beside the boot flow, are this
+                   pair with no park anywhere in it — so READ WHICH generator minted the pair in front of you
+                   before repairing any one of them; a reader sent from here to solver/cold.c finds nothing
+                   wrong there.
+                   "AS A CHILD OF THE WORLD ITS RECIPE WAS PARKED UNDER" IS REFUSED BY NAME. world_mint_child
+                   asserts `parent.session == g_session` — "a world minted in a PREVIOUS session of this
+                   document was forked here" — because a park BUMPS the generation (world_session_resume)
+                   exactly so the ended session's names cannot be minted under again, and world_vec_relate
+                   answers INDEPENDENT for two sessions of one document ON PURPOSE: "a resumed session's flows
+                   are re-derivations of the parked ones rather than the other arm of any branch". What a park
+                   actually loses is the fork shape BETWEEN THE REBUILT MEMBERS, and that residual is stated at
+                   solver/cold.c's park_flow_add with the record it needs.
+                   AND SATISFYING THIS CONDITION IS NOT THE SAME AS MAKING ITS CLAIM TRUE: `strchr(c, ',')` is
+                   a proxy for deliver_fork_arm having run — this file's own landing order says so at (b) — so
+                   a design that hangs an ancestor off a root merely to put a comma in the vector would make
+                   this line PASS while the arm it asserts still does not exist.
+                   RETIREMENT: this record goes when `flow_add*(…, WORLD_NONE)` has one caller, at which point
+                   naming the generator of a root pair is a grep rather than a paragraph. */
                 DCHECK(strchr(c, ',') != NULL,
                        "a routed delivery CONTRADICTS a world this timeline already received whose vector "
                        "names no fork point, so the arm that should receive it was never minted and no "
-                       "timeline of this document will: the two sending worlds are ROOTS of one document "
-                       "(its boot flow beside a cold-resumed one — park_flow_add mints WORLD_NONE) and roots "
-                       "name each other nowhere. Rebuild a parked flow as a CHILD of the world its recipe was "
-                       "written under, so that pair has a branch between them to fork at");
+                       "timeline of this document will: the two sending worlds are ROOTS of one (document, "
+                       "generation) and roots name each other nowhere. A root is minted by every "
+                       "flow_add(..., WORLD_NONE) — the sending agent's boot flow, a JOINED document's boot "
+                       "flow, an @S candidate session, and each member a cold resume rebuilds — so read WHICH "
+                       "of those minted the pair in front of you; the block above says why 'rebuild the parked "
+                       "flow as a child of its parked world' is not the repair");
                 verdict = STEP_UNIT_ROUTED_NOT_MINE;
             }
         } else if (rel == WORLD_REL_SAME || rel == WORLD_REL_DESCENDANT) {
@@ -5748,11 +5777,20 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
  *             they are addressing. Consumer: (ii)'s field. This is the member the enumeration above omits.
  *         (e) (ii) and (iii), which are ONE landing: a field with no consult is a grammar change that buys
  *             nothing, and a consult with no field reads a slot that is not there.
- *       AND (c) CANNOT OUTLIVE A PARK UNTIL A RESUMED FLOW KEEPS ITS OWN WORLD. cold.c's park_flow_add calls
- *         flow_add with WORLD_NONE, so a rebuilt timeline is a fresh ROOT rather than a child of the world
- *         its recipe was parked under — which deliver_admits' own block already states from the other end,
- *         and which makes every commitment a resumed flow carries name a forest its own world is not in. An
- *         addressee written before that is one a park turns into a name relating to nothing.
+ *       AND (c) CANNOT OUTLIVE A PARK UNTIL A RESUMED MEMBER KEEPS ITS PLACE IN THE RESIDUE'S OWN FOREST —
+ *         which is NOT "the world its recipe was parked under", and this clause said that it was. cold.c's
+ *         park_flow_add calls flow_add with WORLD_NONE, so every member a resume rebuilds is a fresh ROOT of
+ *         the NEW generation. Re-minting under the PARKED world is refused by world_mint_child's
+ *         `parent.session == g_session` assert and would undo the generation a park exists to bump; what has
+ *         to come back is the ancestry AMONG the rebuilt members, minted fresh. Nor is this a pair: measured
+ *         on this tree's own fixture, one park writes `flows 2` and `cands 11` and the resume answers
+ *         `@RESUMED 13`, which is 78 contradicting pairs where the parked session had a tree. The sentence
+ *         that stood here — that this "makes every commitment a resumed flow carries name a forest its own
+ *         world is not in" — identifies nothing: a commitment names a SENDER's world, which is another
+ *         instance's forest for every flow, parked or not. An addressee written before the residue carries
+ *         that shape is one a park turns into a name relating to nothing.
+ *         RETIREMENT: this record goes when the park grammar binds a rebuilt member to its nearest rebuilt
+ *         ancestor, at which point the ordering is enforced by that record rather than argued here.
  *     (ii) THE FIELD MAY NOT GO BESIDE THE DOCUMENT. `engine/route.mjs` is trusted-zone JavaScript, which
  *       §A-CROSS-BOUNDARY-DIFF makes LIVE ON WRITE, and it reads this grammar positionally — `split('\t')[1]`
  *       for the holder and `split('\t')[2]` for the asking world — while relaying the record VERBATIM. An

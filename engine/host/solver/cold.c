@@ -1263,6 +1263,54 @@ static double park_reward(const char *p, char **ep)
    drops the assert and nothing says so. */
 static Flow *park_flow_add(JSContext *ctx, double val, int before, long flows)
 {
+    /* WORLD_NONE IS A NAMED RESIDUAL AND NOT A PLACEHOLDER: a fresh root is the CORRECT answer to the only
+       question this argument is asked about the ENDED session, and a NARROW one about this residue.
+       WHAT IS RIGHT ABOUT IT. The parked world's NAME may not come back. A WorldId is (document, generation,
+       serial): the document is stable across a park by requirement, the generation is bumped by
+       world_session_resume precisely so the ended session's names cannot be minted under again, and the serial
+       indexes a PER-SESSION table — world_mint_child asserts both `parent.session == g_session` and
+       `parent.serial <= g_minted_n`, so re-minting under a parked world aborts by name. solver/world.h wants
+       exactly this: world_vec_relate answers INDEPENDENT for two sessions of one document ON PURPOSE, because
+       "a resumed session's flows are re-derivations of the parked ones rather than the other arm of any
+       branch".
+       WHAT IS NOT COVERED: the ancestry AMONG THE MEMBERS THIS RESUME REBUILDS. Every one of them reaches
+       flow_add with WORLD_NONE, so every PAIR of them is two roots of one (document, generation) and
+       world_vec_relate answers CONTRADICT — including a pair that was parent and child when the session
+       parked. It is not a pair: measured on this tree's own fixture, one park writes `flows 2` and `cands 11`
+       and the resume answers `@RESUMED 13`, which is 78 contradicting pairs where there had been a tree.
+       AND IT IS NOT RE-DERIVABLE FROM WHAT THE DOCUMENT ALREADY CARRIES, which is the first thing a reader
+       should check and the reason this needs a RECORD rather than a cleverer reader. The residue's only tree
+       is the SEGMENT base chain ('s' names its base's ordinal), and that is a DECISION prefix rather than a
+       fork edge: in the measured document above, `s2,0` bases a candidate's segment on flow 0's segment while
+       solve.c mints that same candidate a world ROOT with WORLD_NONE. The two trees disagree inside one park
+       document, so neither can be read off the other.
+       WHAT THE NEXT DIFF BUILDS: ONE EDGE PER MEMBER, never a chain. The record names the nearest OTHER member
+       of THIS document whose world was an ancestor of this one's, by the flow-record ordinal both ends already
+       count in one forward pass, with `parent ordinal < mine` asserted at both ends — true by construction,
+       since the registry only appends, so a parent is always parked first. The reader passes that member's NEW
+       world to flow_add in place of WORLD_NONE and the chain re-derives itself, exactly as 's' re-derives a
+       segment chain from a base ordinal and as the 'w' arm re-materializes a peer's segment "in one forward
+       pass … with nothing to patch up". Recording the whole ancestry instead is the bound §NO BOUNDS forbids
+       and which solver/world.h already records as a CRASH rather than a cost: an unfiltered chain "would grow
+       with the number of BRANCHES rather than with the fork depth — past this record's buffer on any page
+       whose boot flow forks freely". A member whose parked ancestor did not itself survive the park attaches
+       to the NEAREST one that did — world_segment's own "NEAREST, NOT ANY" rule — and where none did it is a
+       root and writes no record, because a fork point neither of whose arms survived answers a relation
+       between two timelines that no longer exist.
+       IT SPANS THREE COPIES OF THE GRAMMAR AND THEY LAND TOGETHER — this writer, cold_resume's reader, and the
+       kind DFAIL enumerating ('g','w','s','f','c','o','r','m') — because the two ends are two PROCESSES and a
+       kind one of them does not know is a half-landed diff. It also needs an accessor for a minted world's
+       parent, which does not exist: `git grep -n world_parent origin/main -- engine` answers nothing at
+       19420b97.
+       AND PASSING A PARENT HERE MOVES A SECOND THING. flow_add_unseeded's `world_is_none(parent)` decides BOTH
+       where the flow enters the world tree AND whether it arrives at the frontier's virtual time; its own
+       comment says so. A rebuilt member wants the first and not the second, and that is harmless ONLY because
+       flow_restore_reward writes the parked coordinate over it on the next line — a dependency between two
+       lines that nothing asserts. Assert it, or split the bit, in the same landing.
+       HOW ITS ABSENCE WOULD SHOW, as an observation rather than as whichever member forked last: at a peer
+       receiving from two members of one resumed document, world_vec_relate answers CONTRADICT for a pair that
+       answered ANCESTOR before the park, so deliver_admits refuses the second sender's record and the
+       receiver's `_routedZeroDelivery` row rises on a document whose pre-park run delivered both. */
     Flow *fl = flow_add(ctx, JS_UNDEFINED, WORLD_NONE);
     /* IT WENT ON THE END, WHICH IS THE HALF OF THE MERGE A LIVE FRONTIER CARES ABOUT. A rebuilt flow must be
        an addition and never a substitution: the registry appends, so this one belongs at `before` plus however
