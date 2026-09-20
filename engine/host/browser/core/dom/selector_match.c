@@ -1,4 +1,5 @@
-/* SELECTORS §3/§5 — the agent's selector matcher. See selector_match.h for why the two lexbor objects below
+/* Selectors 4 §17.3 "Match a Selector Against an Element" and Selectors 4 §17.1 "Parse A Selector" — the
+ * agent's selector matcher. See selector_match.h for why the two lexbor objects below
  * live here and not in the machines that use them. */
 #include <stdlib.h>
 #include <string.h>
@@ -24,7 +25,7 @@ static bool host_defined(const lxb_dom_node_t *node, void *ctx)
 }
 
 /*
- * THE HOST'S ANSWER FOR AN ATTRIBUTE WHOSE VALUE IS NOT BYTES — SELECTORS §6 "Attribute selectors" read
+ * THE HOST'S ANSWER FOR AN ATTRIBUTE WHOSE VALUE IS NOT BYTES — Selectors 4 §6 "Attribute selectors" read
  * against §Solver-half's unknown.
  *
  * WHAT THE MATCHER IS ABOUT TO DO. DOM §4.9's write stores a concolic value's SHAPE in the tree, because a
@@ -119,7 +120,7 @@ static bool host_attr_value_read(const lxb_dom_node_t *node, const lxb_dom_attr_
        most of them — pays one load for its whole cascade. */
     if (attr_shadow_count() == 0) return false;
     DCHECK(node != NULL && attr != NULL && out != NULL,
-           "SELECTORS §6's value seam was asked about no element, no attribute or with nowhere to put its "
+           "Selectors 4 §6's value seam was asked about no element, no attribute or with nowhere to put its "
            "answer — the matcher holds all three at the comparison, so a missing one is a caller that "
            "composed the ask somewhere else");
     if (node->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
@@ -169,7 +170,7 @@ static bool host_attr_value_read(const lxb_dom_node_t *node, const lxb_dom_attr_
 
         tag = lxb_dom_element_local_name(el, &tag_n);
         name = lxb_dom_attr_qualified_name((lxb_dom_attr_t *)attr, &name_n);
-        DFAILF("<%.*s %.*s> — SELECTORS §6 \"Attribute selectors\" is being decided from an attribute whose "
+        DFAILF("<%.*s %.*s> — Selectors 4 §6 \"Attribute selectors\" is being decided from an attribute whose "
                "value this engine does not know (`%s`) and whose value this flow has not pinned, so BOTH arms "
                "of the test are about to be answered false against a DISPLAY SHAPE that no operand can equal. "
                "§6's own rule is two-valued — \"an attribute selector must be considered to match an element "
@@ -248,7 +249,7 @@ SelectorList *selector_list_compile(const char *sel)
        lxb_css_parser_destroy frees the tokenizer and the parser's own scratch and does NOT touch that memory,
        which is what selector_list_destroy then owns. On failure the same function has already destroyed it. */
     lxb_css_parser_destroy(parser, true);
-    if (!list) return NULL;   /* SELECTORS §5's `failure` */
+    if (!list) return NULL;   /* Selectors 4 §17.1's `failure` */
     sl = malloc(sizeof(*sl));
     CHECK(sl != NULL, "a compiled selector list could not be recorded");
     sl->refs = 1;
@@ -274,7 +275,8 @@ static lxb_status_t sel_hit_cb(lxb_dom_node_t *node, lxb_css_selector_specificit
 {
     SelHit *h = vctx;
     (void)node;
-    /* A selector LIST matches through whichever of its selectors matched, and §6.4's cascade uses the highest —
+    /* A selector LIST matches through whichever of its selectors matched, and CSS 2.1 §6.4's cascade uses the
+       highest —
        `#id, div { … }` on a div with that id contributes the id's weight, not the tag's. */
     if (!h->matched || spec > h->spec) h->spec = spec;
     h->matched = true;

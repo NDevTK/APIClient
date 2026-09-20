@@ -2310,7 +2310,7 @@ static const struct { const char *tag; const char *prop; const char *value; } UA
    rule that outranks it, so a page's own `[hidden] { display: block }` did nothing.
      [hidden]:not([hidden=until-found i]):not(embed) { display: none }
      embed[hidden] { display: inline; height: 0; width: 0 } */
-/* An attribute selector's `i` FLAG, over a raw attribute value: Selectors §6.3's ASCII case-insensitive match.
+/* An attribute selector's `i` FLAG, over a raw attribute value: Selectors 4 §6.3's ASCII case-insensitive match.
    `want` is lowercase ASCII and NUL-terminated; `v`/`vlen` are the attribute's own bytes and are neither. It is
    a function because four of the rules above and below carry the flag and each hand-rolled copy is one more
    place `type=HIDDEN` can be read as a different value than `type=hidden`. */
@@ -5137,12 +5137,13 @@ static JSValue js_get_computed_style(JSContext *ctx, JSValueConst this_val, int 
         JS_FreeValue(ctx, example);
         if (!pseudo) return JS_EXCEPTION;
     }
-    /* STEP 3, ENTERED. Its two halves are both absent from this engine and neither may be faked: 3.1's parse
-       and 3.3's pseudo-element. Claiming 3.2's `failure` for a pseudo that PARSES would report an empty block
-       as this UA's answer for `::before`, which is the invented-value defect one layer up from the throw this
-       replaces. RELEASE FALLS THROUGH to the element's own style, which is what every other unbuilt arm in
-       this component does (core/css/css_computed_value.c's inset arm is the same shape) — a dev build cannot
-       reach it, and release adds no capability. */
+    /* CSSOM §7.2's getComputedStyle, STEP 3, ENTERED. Its two halves are both absent from this engine and
+       neither may be faked: step 3.1's parse and step 3.3's pseudo-element. Claiming step 3.2's `failure`
+       for a pseudo that PARSES would report an empty block as this UA's answer for `::before`, which is the
+       invented-value defect one layer up from the throw this replaces. RELEASE FALLS THROUGH to the
+       element's own style, which is what every other unbuilt arm in this component does
+       (core/css/css_computed_value.c's inset arm is the same shape) — a dev build cannot reach it, and
+       release adds no capability. */
     if (pseudo && *pseudo == ':')
         DFAIL("CSSOM §7.2 Extensions to the Window Interface's getComputedStyle entered step 3 — its "
               "`pseudoElt` is provided, is not the empty string, and starts with a colon — and BOTH of that "

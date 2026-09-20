@@ -1172,6 +1172,45 @@ const SPECS = [
     anchors: ["css-anchor-position-1", "css-anchor-positioning-1"] },
   { key: "csscoloradjust1", label: "CSS Color Adjustment Module Level 1", kind: "bikeshed",
     base: "https://drafts.csswg.org/css-color-adjust-1/", edition: "maintained", anchors: ["css-color-adjust-1"] },
+  /* SELECTORS, AS TWO ROWS, AND THE TWO-ROW SHAPE IS NOT CAUTION — IT IS WHAT THE TWO HEADING LISTS SAY.
+     `css-images-3`/`4` and `css-grid-1`/`2` are in this table because a later level RENUMBERS an earlier one,
+     and a reader meeting those rows learns to hunt for the INSERTED CHAPTER that shifts its siblings.
+     Selectors has none, and hunting for one is how this gets decided wrongly: Level 5 is a DELTA DOCUMENT, so
+     the two lists AGREE ON THE FIRST CHAPTER AND ON NOTHING ELSE. Walked from the top against both fetched
+     drafts, the first divergence is the SECOND chapter and every top-level number after it names a different
+     subject in each — Level 4's sixth chapter is "Attribute selectors" where Level 5's sixth is
+     "Time-dimensional Pseudo-classes", Level 4's seventh is "Linguistic Pseudo-classes" where Level 5's
+     seventh is "Exposing custom state: the :state() pseudo-class". Level 5's own changes chapter carries the
+     subsection "Changes Since Level 4". There is no shift to mark because NOTHING IS SHIFTED; the documents
+     are disjoint below the first chapter, which is the STRONGEST form of the css-images argument rather than
+     a weaker one. A reader who looks for the inserted chapter and cannot find one must not conclude that the
+     levels agree — here that absence means the opposite.
+     SO THE BARE WORD STAYS ON THE FOREIGN LIST AND MUST, which is the `css conditional` decision reached by
+     the same route. An unlevelled `SELECTORS` plus a number names a section BOTH documents have and they do
+     not mean the same thing by it, so no rule can decide it and a row that tried would be answering a
+     question the citation does not ask. Every unlevelled site this tree held when these rows landed was
+     repaired to name its level in the same diff, and the foreign entry keeps the refusal standing for the
+     next one written.
+     WHAT THE TWO ROWS ANSWER IS THE LEVELLED SPELLING THIS TREE ALREADY WRITES, and both reach classifyAnchor
+     through `joinLevel` rather than through the trailing-name path: a `Selectors 4` citation ends on a DIGIT,
+     which the tail regex refuses, so its only token is the joined `selectors-4` — emitted today because the
+     bare word is on the foreign list, and LEVELLED-classified as a foreign standard. An anchor is what turns
+     that refusal into an answer.
+     AND THE SPELLED-OUT `Selectors Level 5` IS A THIRD SPELLING THAT MOVES FOR A DIFFERENT REASON, WHICH IS
+     WHY IT IS WRITTEN DOWN: `joinLevel` already produced `selectors-5` for it, and classifyAnchor's FIRST
+     pass reached the bare `selectors` off the trimmed tail before the LEVELLED pass could ever see that join
+     — so that site resolved to the FOREIGN word while its sibling one line down, written without the word
+     `Level`, resolved to the levelled one. Two spellings of one document answering two ways, with nothing in
+     any census able to say so, because both answers were refusals. An anchor ends it: `ANCHOR_TO_KEY` is
+     asked first, in the same first pass, and the join is offered before the tail. MEASURED with an armed
+     probe before these rows were written and again after — a file carrying all three spellings plus an
+     indexed control, reporting `selectors-4=2 selectors=2 selectors-5=1` unindexed on one side and
+     `selectors4=2(0) selectors5=2(0)` audited on the other, with a deliberately wrong number in it so the
+     run had to SPEAK before its silence about the rest meant anything. */
+  { key: "selectors4", label: "Selectors Level 4", kind: "bikeshed",
+    base: "https://drafts.csswg.org/selectors-4/", edition: "maintained", anchors: ["selectors-4"] },
+  { key: "selectors5", label: "Selectors Level 5", kind: "bikeshed",
+    base: "https://drafts.csswg.org/selectors-5/", edition: "maintained", anchors: ["selectors-5"] },
   /* THE TWO EDITIONS OF CSS 2, AND THEY ARE THE FIRST STANDARD HERE WHOSE DOCUMENT IS SPLIT ACROSS CHAPTERS AND
      WHOSE PIPELINE PREDATES EVERY GENERATOR ABOVE — see regenW3cChapters for how a multi-document standard is
      indexed and why the chapter list is READ rather than listed.

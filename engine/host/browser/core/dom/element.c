@@ -3055,7 +3055,7 @@ void element_init(JSContext *ctx)
 
     g_attrs_key = JS_NewAtom(ctx, "__attributesSlot");
     CHECK(g_attrs_key != JS_ATOM_NULL, "the attributes slot key could not be interned");
-    /* SELECTORS §3's matching arena, before anything that can run a query. It is the AGENT's and not a
+    /* Selectors 4 §17.3's matching arena, before anything that can run a query. It is the AGENT's and not a
        machine's, which is what lets a selector walk park and fork with nothing lexbor-shaped in its state. */
     selector_match_init();
     collections_init(ctx);      /* NodeList and HTMLCollection, which childNodes and children are */

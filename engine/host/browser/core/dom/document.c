@@ -610,7 +610,7 @@ enum { IDL_STEP_STAGE_BASE(QS_STAGES) QS_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const QS_STEPS[] = { QS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
-    SelectorList *compiled;   /* SELECTORS §5's parsed selector, SHARED by reference with every forked arm */
+    SelectorList *compiled;   /* Selectors 4 §17.1's parsed selector, SHARED by reference with every forked arm */
     lxb_dom_node_t *root, *cursor;
     JSValue arr;      /* QS_ALL's collected matches (owned) */
     uint32_t n;
@@ -647,7 +647,7 @@ static int js_document_qs(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         }
         sel = concolic_name_cstr(ctx, argv[0]);   /* the declaration passes UNKNOWN input through as itself, so an unknown name denotes its SHAPE */
         if (!sel) return JS_STEP_ABRUPT;
-        /* SELECTORS §5, AND IT IS OVER BEFORE THE FIRST REST POINT. The parser that compiles this lives and
+        /* Selectors 4 §17.1, AND IT IS OVER BEFORE THE FIRST REST POINT. The parser that compiles this lives and
            dies inside selector_list_compile; what comes back is the read-only list the walk below reads. */
         s->compiled = selector_list_compile(sel);
         JS_FreeCString(ctx, sel);

@@ -1,6 +1,7 @@
-/* SELECTORS §3 — "match a selector against an element", and the compiled selector list it is matched from.
+/* Selectors 4 §17.3 "Match a Selector Against an Element", and the compiled selector list it is matched from.
  *
- * ONE PLACE LEXBOR'S SELECTOR ENGINE IS ASKED, so the four §1.3/§4.9 members and §6.4's cascade cannot disagree
+ * ONE PLACE LEXBOR'S SELECTOR ENGINE IS ASKED, so DOM's four §1.3/§4.9 members and CSS 2.1 §6.4 "The cascade"
+ * cannot disagree
  * about what a selector means. It exists as its own component for a second reason, which is the one that made
  * it: a selector walk is a STEP MACHINE, and a machine's state is what it holds across a rest point. Neither
  * lexbor object here is that.
@@ -43,16 +44,16 @@ void selector_match_free(void);
    give a different answer, it calls through a NULL. Borrowed, static, valid for the process. */
 const lxb_selectors_host_cb_t *selector_match_host_cb(void);
 
-/* SELECTORS §5 "parse a selector". NULL is the spec's `failure`, which every caller turns into a SyntaxError.
-   The returned record is owned by the caller at one reference. */
+/* Selectors 4 §17.1 "Parse A Selector". NULL is the spec's `failure`, which every caller turns into a
+   SyntaxError. The returned record is owned by the caller at one reference. */
 SelectorList *selector_list_compile(const char *sel);
 /* JSStepVisit::shared's destroy — the signature is that hook's, which is why it takes a JSContext it has no
    use for and a void *. */
 void selector_list_destroy(JSContext *ctx, void *p);
 
-/* SELECTORS §3 — does `node` match `list`? `out_spec` receives the HIGHEST specificity that matched (a list
-   matches through whichever of its selectors did, and §6.4's cascade weighs that one), or is NULL for a caller
-   that only asks the question. A non-element never matches. */
+/* Selectors 4 §17.3 — does `node` match `list`? `out_spec` receives the HIGHEST specificity that matched (a
+   list matches through whichever of its selectors did, and CSS 2.1 §6.4's cascade weighs that one), or is
+   NULL for a caller that only asks the question. A non-element never matches. */
 bool selector_match_node(lxb_dom_node_t *node, const lxb_css_selector_list_t *list,
                          lxb_css_selector_specificity_t *out_spec);
 

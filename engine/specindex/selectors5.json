@@ -1,0 +1,193 @@
+{
+ "spec": "Selectors Level 5",
+ "key": "selectors5",
+ "base": "https://drafts.csswg.org/selectors-5/",
+ "specUpdated": "18 August 2026",
+ "fetched": "2026-09-20",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Attribute Selectors",
+   "page": "",
+   "id": "attribute-selectors"
+  },
+  "3": {
+   "title": "Location Pseudo-classes",
+   "page": "",
+   "id": "location"
+  },
+  "4": {
+   "title": "User Action Pseudo-classes",
+   "page": "",
+   "id": "useraction-pseudos"
+  },
+  "5": {
+   "title": "The Input Pseudo-classes",
+   "page": "",
+   "id": "input-pseudos"
+  },
+  "6": {
+   "title": "Time-dimensional Pseudo-classes",
+   "page": "",
+   "id": "time-pseudos"
+  },
+  "7": {
+   "title": "Exposing custom state: the :state() pseudo-class",
+   "page": "",
+   "id": "custom-state"
+  },
+  "8": {
+   "title": "Heading Structures: the heading pseudo-classes :heading , and :heading()",
+   "page": "",
+   "id": "headings"
+  },
+  "9": {
+   "title": "Grid-Structural Selectors",
+   "page": "",
+   "id": "grid-structural-selectors"
+  },
+  "10": {
+   "title": "Combinators",
+   "page": "",
+   "id": "combinators"
+  },
+  "11": {
+   "title": "Grammar",
+   "page": "",
+   "id": "grammar"
+  },
+  "12": {
+   "title": "Changes",
+   "page": "",
+   "id": "changes"
+  },
+  "13": {
+   "title": "Acknowledgements",
+   "page": "",
+   "id": "acknowledgements"
+  },
+  "1.1": {
+   "title": "Module Interactions",
+   "page": "",
+   "id": "placement"
+  },
+  "2.1": {
+   "title": "Class Prefix Selectors",
+   "page": "",
+   "id": "class-prefix"
+  },
+  "3.1": {
+   "title": "The Local Link Pseudo-class :local-link",
+   "page": "",
+   "id": "local-pseudo"
+  },
+  "4.1": {
+   "title": "The Interest Pseudo-classes: :interest-source and :interest-target",
+   "page": "",
+   "id": "interest-pseudos"
+  },
+  "5.1": {
+   "title": "Input Value-checking",
+   "page": "",
+   "id": "ui-validity"
+  },
+  "5.1.1": {
+   "title": "The Empty-Value Pseudo-class: :blank",
+   "page": "",
+   "id": "blank"
+  },
+  "6.1": {
+   "title": "The Current-element Pseudo-class: :current",
+   "page": "",
+   "id": "the-current-pseudo"
+  },
+  "6.2": {
+   "title": "The Past-element Pseudo-class: :past",
+   "page": "",
+   "id": "the-past-pseudo"
+  },
+  "6.3": {
+   "title": "The Future-element Pseudo-class: :future",
+   "page": "",
+   "id": "the-future-pseudo"
+  },
+  "9.1": {
+   "title": "Column combinator ( || )",
+   "page": "",
+   "id": "the-column-combinator"
+  },
+  "9.2": {
+   "title": ":nth-col() pseudo-class",
+   "page": "",
+   "id": "the-nth-col-pseudo"
+  },
+  "9.3": {
+   "title": ":nth-last-col() pseudo-class",
+   "page": "",
+   "id": "the-nth-last-col-pseudo"
+  },
+  "10.1": {
+   "title": "Reference combinators /ref/",
+   "page": "",
+   "id": "idref-combinators"
+  },
+  "12.1": {
+   "title": "Changes Since the First Public Working Draft of 17 February 2026",
+   "page": "",
+   "id": "changes-20260415"
+  },
+  "12.2": {
+   "title": "Changes Since Level 4",
+   "page": "",
+   "id": "changes-level-4"
+  }
+ },
+ "dfns": {
+  "class prefix selector": [
+   "2.1"
+  ],
+  "column combinator": [
+   "9.1"
+  ],
+  "interest source": [
+   "4.1"
+  ],
+  "interest target": [
+   "4.1"
+  ],
+  "local link": [
+   "3.1"
+  ],
+  "nth col( an b )": [
+   "9.2"
+  ],
+  "nth col()": [
+   "9.2"
+  ],
+  "nth last col( an b )": [
+   "9.3"
+  ],
+  "nth last col()": [
+   "9.3"
+  ],
+  "reference combinator": [
+   "10.1"
+  ],
+  "state( ident )": [
+   "7"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "interest source": {
+   "13": 2
+  },
+  "interest target": {
+   "13": 2
+  }
+ }
+}

@@ -1,0 +1,1003 @@
+{
+ "spec": "Selectors Level 4",
+ "key": "selectors4",
+ "base": "https://drafts.csswg.org/selectors-4/",
+ "specUpdated": "18 September 2026",
+ "fetched": "2026-09-20",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "context"
+  },
+  "2": {
+   "title": "Selectors Overview",
+   "page": "",
+   "id": "overview"
+  },
+  "3": {
+   "title": "Selector Syntax and Structure",
+   "page": "",
+   "id": "syntax"
+  },
+  "4": {
+   "title": "Logical Combinations",
+   "page": "",
+   "id": "logical-combination"
+  },
+  "5": {
+   "title": "Elemental selectors",
+   "page": "",
+   "id": "elemental-selectors"
+  },
+  "6": {
+   "title": "Attribute selectors",
+   "page": "",
+   "id": "attribute-selectors"
+  },
+  "7": {
+   "title": "Linguistic Pseudo-classes",
+   "page": "",
+   "id": "linguistic-pseudos"
+  },
+  "8": {
+   "title": "Location Pseudo-classes",
+   "page": "",
+   "id": "location"
+  },
+  "9": {
+   "title": "User Action Pseudo-classes",
+   "page": "",
+   "id": "useraction-pseudos"
+  },
+  "10": {
+   "title": "Resource State Pseudo-classes",
+   "page": "",
+   "id": "resource-pseudos"
+  },
+  "11": {
+   "title": "Element Display State Pseudo-classes",
+   "page": "",
+   "id": "display-state-pseudos"
+  },
+  "12": {
+   "title": "The Input Pseudo-classes",
+   "page": "",
+   "id": "input-pseudos"
+  },
+  "13": {
+   "title": "Tree-Structural pseudo-classes",
+   "page": "",
+   "id": "structural-pseudos"
+  },
+  "14": {
+   "title": "Combinators",
+   "page": "",
+   "id": "combinators"
+  },
+  "15": {
+   "title": "Calculating a selector’s specificity",
+   "page": "",
+   "id": "specificity-rules"
+  },
+  "16": {
+   "title": "Grammar",
+   "page": "",
+   "id": "grammar"
+  },
+  "17": {
+   "title": "API Hooks",
+   "page": "",
+   "id": "api-hooks"
+  },
+  "18": {
+   "title": "Changes",
+   "page": "",
+   "id": "changes"
+  },
+  "19": {
+   "title": "Acknowledgements",
+   "page": "",
+   "id": "acknowledgements"
+  },
+  "1.1": {
+   "title": "Module Interactions",
+   "page": "",
+   "id": "placement"
+  },
+  "3.1": {
+   "title": "Structure and Terminology",
+   "page": "",
+   "id": "structure"
+  },
+  "3.2": {
+   "title": "Data Model",
+   "page": "",
+   "id": "data-model"
+  },
+  "3.2.1": {
+   "title": "Featureless Elements",
+   "page": "",
+   "id": "featureless-elements"
+  },
+  "3.3": {
+   "title": "Scoped Selectors",
+   "page": "",
+   "id": "scoping"
+  },
+  "3.4": {
+   "title": "Relative Selectors",
+   "page": "",
+   "id": "relative"
+  },
+  "3.5": {
+   "title": "Pseudo-classes",
+   "page": "",
+   "id": "pseudo-classes"
+  },
+  "3.6": {
+   "title": "Pseudo-elements",
+   "page": "",
+   "id": "pseudo-elements"
+  },
+  "3.6.1": {
+   "title": "Syntax",
+   "page": "",
+   "id": "pseudo-element-syntax"
+  },
+  "3.6.2": {
+   "title": "Binding to the Document Tree",
+   "page": "",
+   "id": "pseudo-element-attachment"
+  },
+  "3.6.3": {
+   "title": "Pseudo-classing Pseudo-elements",
+   "page": "",
+   "id": "pseudo-element-states"
+  },
+  "3.6.4": {
+   "title": "Sub-pseudo-elements",
+   "page": "",
+   "id": "sub-pseudo-elements"
+  },
+  "3.6.5": {
+   "title": "Internal Structure",
+   "page": "",
+   "id": "pseudo-element-structure"
+  },
+  "3.7": {
+   "title": "Characters and case sensitivity",
+   "page": "",
+   "id": "case-sensitive"
+  },
+  "3.8": {
+   "title": "Declaring Namespace Prefixes",
+   "page": "",
+   "id": "namespaces"
+  },
+  "3.9": {
+   "title": "Invalid Selectors and Error Handling",
+   "page": "",
+   "id": "invalid"
+  },
+  "3.10": {
+   "title": "Legacy Aliases",
+   "page": "",
+   "id": "legacy-aliasing"
+  },
+  "4.1": {
+   "title": "Selector Lists",
+   "page": "",
+   "id": "grouping"
+  },
+  "4.2": {
+   "title": "The Matches-Any Pseudo-class: :is()",
+   "page": "",
+   "id": "matches"
+  },
+  "4.3": {
+   "title": "The Negation (Matches-None) Pseudo-class: :not()",
+   "page": "",
+   "id": "negation"
+  },
+  "4.4": {
+   "title": "The Specificity-adjustment Pseudo-class: :where()",
+   "page": "",
+   "id": "zero-matches"
+  },
+  "4.5": {
+   "title": "The Relational Pseudo-class: :has()",
+   "page": "",
+   "id": "relational"
+  },
+  "5.1": {
+   "title": "Type (tag name) selector",
+   "page": "",
+   "id": "type-selectors"
+  },
+  "5.2": {
+   "title": "Universal selector",
+   "page": "",
+   "id": "the-universal-selector"
+  },
+  "5.3": {
+   "title": "Namespaces in Elemental Selectors",
+   "page": "",
+   "id": "type-nmsp"
+  },
+  "5.4": {
+   "title": "The Defined Pseudo-class: :defined",
+   "page": "",
+   "id": "the-defined-pseudo"
+  },
+  "6.1": {
+   "title": "Attribute presence and value selectors",
+   "page": "",
+   "id": "attribute-representation"
+  },
+  "6.2": {
+   "title": "Substring matching attribute selectors",
+   "page": "",
+   "id": "attribute-substrings"
+  },
+  "6.3": {
+   "title": "Case-sensitivity",
+   "page": "",
+   "id": "attribute-case"
+  },
+  "6.4": {
+   "title": "Attribute selectors and namespaces",
+   "page": "",
+   "id": "attrnmsp"
+  },
+  "6.5": {
+   "title": "Default attribute values in DTDs",
+   "page": "",
+   "id": "def-values"
+  },
+  "6.6": {
+   "title": "Class selectors",
+   "page": "",
+   "id": "class-html"
+  },
+  "6.7": {
+   "title": "ID selectors",
+   "page": "",
+   "id": "id-selectors"
+  },
+  "7.1": {
+   "title": "The Directionality Pseudo-class: :dir()",
+   "page": "",
+   "id": "the-dir-pseudo"
+  },
+  "7.2": {
+   "title": "The Language Pseudo-class: :lang()",
+   "page": "",
+   "id": "the-lang-pseudo"
+  },
+  "8.1": {
+   "title": "The Hyperlink Pseudo-class: :any-link",
+   "page": "",
+   "id": "the-any-link-pseudo"
+  },
+  "8.2": {
+   "title": "The Link History Pseudo-classes: :link and :visited",
+   "page": "",
+   "id": "link"
+  },
+  "8.3": {
+   "title": "The Target Pseudo-class: :target",
+   "page": "",
+   "id": "the-target-pseudo"
+  },
+  "8.4": {
+   "title": "The Reference Element Pseudo-class: :scope",
+   "page": "",
+   "id": "the-scope-pseudo"
+  },
+  "9.1": {
+   "title": "The Pointer Hover Pseudo-class: :hover",
+   "page": "",
+   "id": "the-hover-pseudo"
+  },
+  "9.2": {
+   "title": "The Activation Pseudo-class: :active",
+   "page": "",
+   "id": "the-active-pseudo"
+  },
+  "9.3": {
+   "title": "The Input Focus Pseudo-class: :focus",
+   "page": "",
+   "id": "the-focus-pseudo"
+  },
+  "9.4": {
+   "title": "The Focus-Indicated Pseudo-class: :focus-visible",
+   "page": "",
+   "id": "the-focus-visible-pseudo"
+  },
+  "9.5": {
+   "title": "The Focus Container Pseudo-class: :focus-within",
+   "page": "",
+   "id": "the-focus-within-pseudo"
+  },
+  "10.1": {
+   "title": "Media Playback State: the :playing , :paused , and :seeking pseudo-classes",
+   "page": "",
+   "id": "video-state"
+  },
+  "10.2": {
+   "title": "Media Loading State: the :buffering and :stalled pseudo-classes",
+   "page": "",
+   "id": "media-loading-state"
+  },
+  "10.3": {
+   "title": "Sound State: the :muted and :volume-locked pseudo-classes",
+   "page": "",
+   "id": "sound-state"
+  },
+  "11.1": {
+   "title": "Collapse State: the :open pseudo-class",
+   "page": "",
+   "id": "open-state"
+  },
+  "11.2": {
+   "title": "Popover State: the :popover-open pseudo-class",
+   "page": "",
+   "id": "popover-open-state"
+  },
+  "11.3": {
+   "title": "Modal (Exclusive Interaction) State: the :modal pseudo-class",
+   "page": "",
+   "id": "modal-state"
+  },
+  "11.4": {
+   "title": "Fullscreen Presentation State: the :fullscreen pseudo-class",
+   "page": "",
+   "id": "fullscreen-state"
+  },
+  "11.5": {
+   "title": "Picture-in-Picture Presentation State: the :picture-in-picture pseudo-class",
+   "page": "",
+   "id": "pip-state"
+  },
+  "12.1": {
+   "title": "Input Control States",
+   "page": "",
+   "id": "input-states"
+  },
+  "12.1.1": {
+   "title": "The :enabled and :disabled Pseudo-classes",
+   "page": "",
+   "id": "enableddisabled"
+  },
+  "12.1.2": {
+   "title": "The Mutability Pseudo-classes: :read-only and :read-write",
+   "page": "",
+   "id": "rw-pseudos"
+  },
+  "12.1.3": {
+   "title": "The Placeholder-shown Pseudo-class: :placeholder-shown",
+   "page": "",
+   "id": "placeholder"
+  },
+  "12.1.4": {
+   "title": "The Automatic Input Pseudo-class: :autofill",
+   "page": "",
+   "id": "autofill"
+  },
+  "12.1.5": {
+   "title": "The Default-option Pseudo-class: :default",
+   "page": "",
+   "id": "the-default-pseudo"
+  },
+  "12.2": {
+   "title": "Input Value States",
+   "page": "",
+   "id": "input-value-states"
+  },
+  "12.2.1": {
+   "title": "The Selected-option Pseudo-classes: :checked , :unchecked , and :indeterminate",
+   "page": "",
+   "id": "checked"
+  },
+  "12.3": {
+   "title": "Input Value-checking",
+   "page": "",
+   "id": "ui-validity"
+  },
+  "12.3.1": {
+   "title": "The Validity Pseudo-classes: :valid and :invalid",
+   "page": "",
+   "id": "validity-pseudos"
+  },
+  "12.3.2": {
+   "title": "The Range Pseudo-classes: :in-range and :out-of-range",
+   "page": "",
+   "id": "range-pseudos"
+  },
+  "12.3.3": {
+   "title": "The Optionality Pseudo-classes: :required and :optional",
+   "page": "",
+   "id": "opt-pseudos"
+  },
+  "12.3.4": {
+   "title": "The User-interaction Pseudo-classes: :user-valid and :user-invalid",
+   "page": "",
+   "id": "user-pseudos"
+  },
+  "13.1": {
+   "title": ":root pseudo-class",
+   "page": "",
+   "id": "the-root-pseudo"
+  },
+  "13.2": {
+   "title": ":empty pseudo-class",
+   "page": "",
+   "id": "the-empty-pseudo"
+  },
+  "13.3": {
+   "title": "Child-indexed Pseudo-classes",
+   "page": "",
+   "id": "child-index"
+  },
+  "13.3.1": {
+   "title": ":nth-child() pseudo-class",
+   "page": "",
+   "id": "the-nth-child-pseudo"
+  },
+  "13.3.2": {
+   "title": ":nth-last-child() pseudo-class",
+   "page": "",
+   "id": "the-nth-last-child-pseudo"
+  },
+  "13.3.3": {
+   "title": ":first-child pseudo-class",
+   "page": "",
+   "id": "the-first-child-pseudo"
+  },
+  "13.3.4": {
+   "title": ":last-child pseudo-class",
+   "page": "",
+   "id": "the-last-child-pseudo"
+  },
+  "13.3.5": {
+   "title": ":only-child pseudo-class",
+   "page": "",
+   "id": "the-only-child-pseudo"
+  },
+  "13.4": {
+   "title": "Typed Child-indexed Pseudo-classes",
+   "page": "",
+   "id": "typed-child-index"
+  },
+  "13.4.1": {
+   "title": ":nth-of-type() pseudo-class",
+   "page": "",
+   "id": "the-nth-of-type-pseudo"
+  },
+  "13.4.2": {
+   "title": ":nth-last-of-type() pseudo-class",
+   "page": "",
+   "id": "the-nth-last-of-type-pseudo"
+  },
+  "13.4.3": {
+   "title": ":first-of-type pseudo-class",
+   "page": "",
+   "id": "the-first-of-type-pseudo"
+  },
+  "13.4.4": {
+   "title": ":last-of-type pseudo-class",
+   "page": "",
+   "id": "the-last-of-type-pseudo"
+  },
+  "13.4.5": {
+   "title": ":only-of-type pseudo-class",
+   "page": "",
+   "id": "the-only-of-type-pseudo"
+  },
+  "14.1": {
+   "title": "Descendant combinator ( )",
+   "page": "",
+   "id": "descendant-combinators"
+  },
+  "14.2": {
+   "title": "Child combinator ( > )",
+   "page": "",
+   "id": "child-combinators"
+  },
+  "14.3": {
+   "title": "Next-sibling combinator ( + )",
+   "page": "",
+   "id": "adjacent-sibling-combinators"
+  },
+  "14.4": {
+   "title": "Subsequent-sibling combinator ( ~ )",
+   "page": "",
+   "id": "general-sibling-combinators"
+  },
+  "16.1": {
+   "title": "<forgiving-selector-list>",
+   "page": "",
+   "id": "forgiving-selector"
+  },
+  "17.1": {
+   "title": "Parse A Selector",
+   "page": "",
+   "id": "parse-selector"
+  },
+  "17.2": {
+   "title": "Parse A Relative Selector",
+   "page": "",
+   "id": "parse-relative-selector"
+  },
+  "17.3": {
+   "title": "Match a Selector Against an Element",
+   "page": "",
+   "id": "match-against-element"
+  },
+  "17.4": {
+   "title": "Match a Selector Against a Pseudo-element",
+   "page": "",
+   "id": "match-against-pseudo-element"
+  },
+  "17.5": {
+   "title": "Match a Selector Against a Tree",
+   "page": "",
+   "id": "match-against-tree"
+  },
+  "18.1": {
+   "title": "Changes since the 22 January 2026 Working Draft",
+   "page": "",
+   "id": "changes-2026-01"
+  },
+  "18.2": {
+   "title": "Changes since the 11 November 2022 Working Draft",
+   "page": "",
+   "id": "changes-2022-11"
+  },
+  "18.3": {
+   "title": "Changes since the 7 May 2022 Working Draft",
+   "page": "",
+   "id": "changes-2022-05"
+  },
+  "18.4": {
+   "title": "Changes since the 21 November 2018 Working Draft",
+   "page": "",
+   "id": "changes-2018-11"
+  },
+  "18.5": {
+   "title": "Changes since the 2 February 2018 Working Draft",
+   "page": "",
+   "id": "changes-2018-02"
+  },
+  "18.6": {
+   "title": "Changes since the 2 May 2013 Working Draft",
+   "page": "",
+   "id": "changes-2013"
+  },
+  "18.7": {
+   "title": "Changes since the 23 August 2012 Working Draft",
+   "page": "",
+   "id": "changes-2012"
+  },
+  "18.8": {
+   "title": "Changes since the 29 September 2011 Working Draft",
+   "page": "",
+   "id": "changes-2011"
+  },
+  "18.9": {
+   "title": "Changes Since Level 3",
+   "page": "",
+   "id": "changes-level-3"
+  },
+  "18.9.1": {
+   "title": "Conditional Logic",
+   "page": "",
+   "id": "changes-conditional"
+  },
+  "18.9.2": {
+   "title": "Interaction, Input and Forms",
+   "page": "",
+   "id": "changes-forms"
+  },
+  "18.9.3": {
+   "title": "Hyperlinking Support",
+   "page": "",
+   "id": "changes-hyperlinking"
+  },
+  "18.9.4": {
+   "title": "Clearer Expression of Authorial Intent",
+   "page": "",
+   "id": "changes-authorial"
+  },
+  "18.9.5": {
+   "title": "Media State",
+   "page": "",
+   "id": "changes-media"
+  },
+  "18.9.6": {
+   "title": "Internationalization Improvements",
+   "page": "",
+   "id": "changes-i18n"
+  }
+ },
+ "dfns": {
+  "any link": [
+   "8.1"
+  ],
+  "attribute selector": [
+   "6",
+   "16"
+  ],
+  "child combinator": [
+   "14.2"
+  ],
+  "class selector": [
+   "6.6",
+   "16"
+  ],
+  "complex real selector": [
+   "16"
+  ],
+  "complex real selector list": [
+   "16"
+  ],
+  "complex selector": [
+   "3.1",
+   "16"
+  ],
+  "complex selector list": [
+   "16"
+  ],
+  "complex selector unit": [
+   "16"
+  ],
+  "compound selector": [
+   "3.1",
+   "16"
+  ],
+  "compound selector list": [
+   "16"
+  ],
+  "descendant combinator": [
+   "14.1"
+  ],
+  "document language": [
+   "3.2"
+  ],
+  "first child": [
+   "13.3.3"
+  ],
+  "first of type": [
+   "13.4.3"
+  ],
+  "focus visible": [
+   "9.4"
+  ],
+  "focus within": [
+   "9.5"
+  ],
+  "forgiving selector list": [
+   "16.1"
+  ],
+  "functional pseudo class": [
+   "3.5"
+  ],
+  "functional pseudo element": [
+   "3.6.1"
+  ],
+  "has allowed pseudo element": [
+   "4.5"
+  ],
+  "id selector": [
+   "6.7",
+   "16"
+  ],
+  "in range": [
+   "12.3.2"
+  ],
+  "input value pseudo classes": [
+   "12.2.1"
+  ],
+  "invalid selector": [
+   "3.9"
+  ],
+  "invalid selectors": [
+   "3.9"
+  ],
+  "last child": [
+   "13.3.4"
+  ],
+  "last of type": [
+   "13.4.4"
+  ],
+  "legacy pseudo element selector": [
+   "16"
+  ],
+  "list of complex selectors": [
+   "3.1"
+  ],
+  "list of compound selectors": [
+   "3.1"
+  ],
+  "list of selectors": [
+   "3.1"
+  ],
+  "list of simple compound complex selectors": [
+   "3.1"
+  ],
+  "list of simple selectors": [
+   "3.1"
+  ],
+  "match a selector against a pseudo element": [
+   "17.4"
+  ],
+  "match a selector against a tree": [
+   "17.5"
+  ],
+  "match a selector against an element": [
+   "17.3"
+  ],
+  "next sibling combinator": [
+   "14.3"
+  ],
+  "nth child( an b [of s ] )": [
+   "13.3.1"
+  ],
+  "nth child()": [
+   "13.3.1"
+  ],
+  "nth last child( an b [of s ] )": [
+   "13.3.2"
+  ],
+  "nth last child()": [
+   "13.3.2"
+  ],
+  "nth last of type( an b )": [
+   "13.4.2"
+  ],
+  "nth last of type()": [
+   "13.4.2"
+  ],
+  "nth of type( an b )": [
+   "13.4.1"
+  ],
+  "nth of type()": [
+   "13.4.1"
+  ],
+  "only child": [
+   "13.3.5"
+  ],
+  "only of type": [
+   "13.4.5"
+  ],
+  "originating element": [
+   "3.6.2"
+  ],
+  "originating pseudo element": [
+   "3.6.4"
+  ],
+  "out of range": [
+   "12.3.2"
+  ],
+  "parse a relative selector": [
+   "17.2"
+  ],
+  "parse a selector": [
+   "17.1"
+  ],
+  "parse as a forgiving selector list": [
+   "16.1"
+  ],
+  "picture in picture": [
+   "11.5"
+  ],
+  "placeholder shown": [
+   "12.1.3"
+  ],
+  "popover open": [
+   "11.2"
+  ],
+  "pseudo class": [
+   "3.5"
+  ],
+  "pseudo class selector": [
+   "16"
+  ],
+  "pseudo classes": [
+   "3.5"
+  ],
+  "pseudo compound selector": [
+   "16"
+  ],
+  "pseudo element": [
+   "3.6"
+  ],
+  "pseudo element selector": [
+   "16"
+  ],
+  "pseudo elements": [
+   "3.6"
+  ],
+  "read only": [
+   "12.1.2"
+  ],
+  "read write": [
+   "12.1.2"
+  ],
+  "relative real selector": [
+   "16"
+  ],
+  "relative real selector list": [
+   "16"
+  ],
+  "relative selector": [
+   "3.4",
+   "16"
+  ],
+  "relative selector anchor elements": [
+   "3.4"
+  ],
+  "relative selector list": [
+   "16"
+  ],
+  "relative selectors": [
+   "3.4"
+  ],
+  "scoped selector": [
+   "3.3"
+  ],
+  "scoping root": [
+   "3.3"
+  ],
+  "selector list": [
+   "3.1",
+   "16"
+  ],
+  "simple selector": [
+   "3.1",
+   "16"
+  ],
+  "simple selector list": [
+   "16"
+  ],
+  "structural pseudo classes": [
+   "13"
+  ],
+  "sub pseudo element": [
+   "3.6.4"
+  ],
+  "sub pseudo elements": [
+   "3.6.4"
+  ],
+  "subject of a selector": [
+   "3.1"
+  ],
+  "subject of the selector": [
+   "3.1"
+  ],
+  "subsequent sibling combinator": [
+   "14.4"
+  ],
+  "type selector": [
+   "5.1",
+   "16"
+  ],
+  "ultimate originating element": [
+   "3.6.4"
+  ],
+  "universal selector": [
+   "5.2"
+  ],
+  "unknown webkit pseudo elements": [
+   "17.5"
+  ],
+  "user invalid": [
+   "12.3.4"
+  ],
+  "user valid": [
+   "12.3.4"
+  ],
+  "volume locked": [
+   "10.3"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "attribute selector": {
+   "19": 2
+  },
+  "class selector": {
+   "19": 2
+  },
+  "complex selector": {
+   "15": 2,
+   "19": 2,
+   "17.4": 2
+  },
+  "compound selector": {
+   "2": 3,
+   "19": 2,
+   "3.2.1": 3,
+   "3.5": 2,
+   "18.4": 2
+  },
+  "descendant combinator": {
+   "3.1": 2
+  },
+  "id selector": {
+   "19": 2
+  },
+  "invalid selectors": {
+   "19": 3,
+   "17.1": 2,
+   "17.2": 2
+  },
+  "list of simple compound complex selectors": {
+   "19": 3
+  },
+  "nth child( an b [of s ] )": {
+   "18.4": 2
+  },
+  "nth last child( an b [of s ] )": {
+   "18.4": 2
+  },
+  "originating element": {
+   "3.1": 4
+  },
+  "pseudo classes": {
+   "4": 2,
+   "3.1": 2,
+   "3.6": 2
+  },
+  "pseudo element": {
+   "16": 2,
+   "3.1": 2,
+   "3.6.1": 3,
+   "3.6.2": 2,
+   "3.6.4": 2,
+   "3.6.5": 2,
+   "17.5": 2
+  },
+  "relative selector anchor elements": {
+   "19": 2
+  },
+  "relative selector list": {
+   "4.5": 2
+  },
+  "relative selectors": {
+   "19": 2
+  },
+  "scoped selector": {
+   "19": 2
+  },
+  "scoping root": {
+   "8.4": 3,
+   "17.5": 2
+  },
+  "selector list": {
+   "15": 3,
+   "19": 3,
+   "4.1": 2
+  },
+  "simple selector": {
+   "19": 2,
+   "3.2.1": 4,
+   "3.5": 2
+  },
+  "subject of a selector": {
+   "19": 3,
+   "8.4": 2
+  },
+  "type selector": {
+   "19": 2,
+   "3.1": 2,
+   "5.2": 3,
+   "5.3": 3
+  },
+  "universal selector": {
+   "3.1": 3,
+   "5.3": 2
+  }
+ }
+}

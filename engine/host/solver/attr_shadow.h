@@ -31,7 +31,7 @@ int attr_shadow_find(const void *owner, int kind, const char *ns, const char *na
    linear scan keyed on (owner, kind, ns, name), so a reader that has to resolve an attribute's identity
    before it can ask pays for that resolution whether or not anything is tainted; this answers "is there any
    taint in this agent" without naming one, which is what a HOT reader needs in front of the question. The
-   CSS cascade is that reader: SELECTORS §6 "Attribute selectors"' tests, and §6.6 "Class selectors"' and
+   CSS cascade is that reader: Selectors 4 §6 "Attribute selectors"' tests, and §6.6 "Class selectors"' and
    §6.7 "ID selectors"', run per rule per element, and a document that never put an unknown in an attribute
    must pay one load for its whole walk.
    ZERO IS A POSITIVE STATEMENT and the only one this answers — "no element in this agent carries a taint on
