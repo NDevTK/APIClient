@@ -2484,10 +2484,18 @@ char *result_json(JSContext *ctx) {
                                 `childTopWalks` is the row to read against a container's CHILD COUNT and
                                 `originDerived` the row to read against a document's DEPTH — real pages are
                                 deep, and the two multipliers are separate facts that no single row states.
-                                `originAsks == originServed + originDerived` closes and is asserted. */
+                                `originAsks == originServed + originDerived` closes and is asserted.
+                                AND THE THIRD PAIR IS CSS 2.1 §10.6.3's — what a box CONTRIBUTES to its
+                                parent's stack, which for a box sized by its content means walking that
+                                box's own children. `boxDerived` is how many contributions this run
+                                computed; growing with the square of a document's DEPTH is a render
+                                computing one box's contribution once per ancestor that asks. It is taken
+                                over the ONE baseline pass the record serves, because §10.8.1's baseline is
+                                the only fact of a contribution that depends on which pass asked. */
                              "\"_layout\":{\"childTopAsks\":%lld,\"childTopServed\":%lld,"
                              "\"childTopWalks\":%lld,\"placements\":%lld,\"passes\":%lld,"
-                             "\"originAsks\":%lld,\"originServed\":%lld,\"originDerived\":%lld},"
+                             "\"originAsks\":%lld,\"originServed\":%lld,\"originDerived\":%lld,"
+                             "\"boxAsks\":%lld,\"boxServed\":%lld,\"boxDerived\":%lld},"
                              /* AND WHAT ALL OF THE ABOVE WERE DENOMINATED IN — the one nested object here that
                                 is neither a total nor a reading of an instant, but a property of the HOST that
                                 decides whether two of these documents may be compared at all. result.h and
@@ -2502,7 +2510,8 @@ char *result_json(JSContext *ctx) {
                      srcReads, sinkReached, sinkTainted, sinkSuppressed,
                      orphansDriven, orphansAsked, wfq, cold, heap, swap, forkAt, absent,
                      place.asks, place.served, place.walks, place.placements, place.passes,
-                     place.origin_asks, place.origin_served, place.origin_derived, quantum,
+                     place.origin_asks, place.origin_served, place.origin_derived,
+                     place.box_asks, place.box_served, place.box_derived, quantum,
                      cold_park_json());
     }
     free(eps);

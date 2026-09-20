@@ -1,6 +1,23 @@
-/* CSS 2.1 §9.4.1 "Block formatting contexts"' STACK POSITIONS, HELD FOR ONE WHOLE-TREE GEOMETRY PASS — the
- * component that exists because §9.4.1's walk answers a question about EVERY in-flow child and its caller
- * takes ONE of the answers.
+/* WHAT A WHOLE-TREE GEOMETRY PASS KNOWS ABOUT A BOX — three facts under one span, each of them an answer a
+ * walk already computed and a caller already threw away.
+ *
+ * THE NAME STAYS `flow_placement` AND THAT IS A DECISION RATHER THAN AN OMISSION. This opened on CSS 2.1
+ * §9.4.1 "Block formatting contexts"' stack positions when that was the only fact here, and a banner that
+ * still opened there would be describing a third of its own subject — which is the defect a reader meets
+ * first and the one nothing mechanical reports. What the three have in common is PLACEMENT in the sense the
+ * directory uses it: where a box sits (§9.4.1's stack position), where its border box is (CSS 2 §8.1's
+ * origin, placed through §10.1's cases), and what it contributes to the stack it sits on (§10.6.3's content
+ * height with §8.3.1's two adjoining runs). Renaming the file would move three components' includes for a
+ * word, and the word is not wrong.
+ *
+ * THE ONE SPAN IS THE COMPONENT AND THE THREE RECORDS ARE ITS TENANTS. Every one of them is a pure function
+ * of the same two inputs — the tree and the cascade — so all three go stale on exactly the same events, and
+ * that is what makes ONE span correct for all three rather than one span stretched over three questions. One
+ * open, one close, one tree-version check, one table: three tables would be three probes and three growth
+ * policies over one key space, and each record's own check reads more than one of the facts.
+ *
+ * THE FIRST OF THE THREE, AND THE ONE THE COMPONENT WAS BUILT FOR: §9.4.1's walk answers a question about
+ * EVERY in-flow child and its caller takes ONE of the answers.
  *
  * THE DEFECT IT CLOSES IS NOT A SLOW FUNCTION, IT IS AN ANSWER THROWN AWAY. §9.4.1 says "boxes are laid out
  * one after the other, vertically, beginning at the top of a containing block", so the running offset a walk
@@ -154,6 +171,56 @@ bool flow_placement_origin_peek(const lxb_dom_element_t *el, FlowPoint *out, con
 void flow_placement_origin_record(const lxb_dom_element_t *el, FlowPoint origin,
                                   const lxb_dom_element_t *derived_from);
 
+/* ---- WHAT A BOX CONTRIBUTES TO ITS PARENT'S STACK — CSS 2 §8.1 "Box dimensions"' CONTENT HEIGHT AS
+ * §10.6.3 COMPUTES IT, WITH §8.3.1's TWO ADJOINING RUNS ---------------------------------------------------
+ * THE THIRD FACT, AND IT IS THE SAME DEFECT ONE LEVEL DOWN FROM THE FIRST. §9.4.1's walk asks each child what
+ * it contributes, and answering that for a box whose `height` behaves as auto means walking ITS children, so
+ * one walk of a container computes the contribution of every box in its subtree and reports one. A container
+ * asked about N times re-descends N times.
+ * IT IS THE RECURSION SHAPE AND NOT THE WALK SHAPE, which is why a memo of the return value is the collapse
+ * here as it is for the border-box origin: the cost is the descent INTO DESCENDANTS, and a remembered answer
+ * terminates it at the first recorded one. MEASURED at the revision this record was built against, on a
+ * document N boxes deep: the two entries that ask were already LINEAR — `block_flow_child_top` at 2N+2 and
+ * `block_flow_auto_height` at 4N+8 — while the work beneath them was QUADRATIC, `bf_box` at 2(N+1)^2. A
+ * linear number of asks over quadratic work is the signature that separates a MULTIPLIER from an inherent
+ * cost, and it is the reason this is a record rather than a thing to accept.
+ *
+ * SIX FACTS AND NOT THREE, WHICH IS A CORRECTION TO THE FIRST ANALYSIS OF THIS RECORD AND IS WRITTEN DOWN
+ * BECAUSE THE MISSING PAIR IS THE LOAD-BEARING ONE. It was first stated as `border_h`, `content_h` and
+ * `collapse_through`. The walk ALSO reads a child's two §8.3.1 ADJOINING RUNS on every iteration, and a
+ * record that replayed those as zero would silently drop every margin collapse in the document — a wrong
+ * stack with every number in it real. They are here as four lengths rather than as that component's own run
+ * type, because a run IS its two extrema and exporting the type to share this table would widen a
+ * deliberately private one for a storage reason.
+ *
+ * WHAT IS DELIBERATELY NOT HELD: CSS 2.1 §10.8.1's BASELINE and whether the box holds a line box. Those are
+ * the only two of the eight that depend on WHICH baseline pass asked, so they are the only two this record
+ * cannot answer — and it therefore serves no pass but the one that asks for neither. NOT COVERED: a
+ * first-baseline or last-baseline walk re-descends exactly as it did. WHAT THE NEXT DIFF BUILDS: the same
+ * record keyed on (box, pass) for those two fields, which is a bigger key and not a bigger idea. HOW ITS
+ * ABSENCE WOULD SHOW: a document whose cost falls with this record and does not fall further when the boxes
+ * on its stack are ones a caller asks a baseline of.
+ *
+ * `border_from_content` IS HOW `border_h` WAS DERIVED and is the one thing its check needs — the same role
+ * `derived_from` plays above, for the same reason: the write path knows which arm it took and re-deriving
+ * that at the check would mean re-asking the cascade a question it already asked. */
+typedef struct {
+    CssPx content_h;        /* §10.6.3's distance from the box's own top content edge */
+    CssPx border_h;         /* CSS 2 §8.1's border-box height — meaningless when the box collapses through */
+    /* §8.3.1's two ADJOINING RUNS, each as its two extrema: the largest positive margin in the run and the
+       largest ABSOLUTE value among its negative ones, which is the whole of what that section's reduction
+       carries and is what makes a run merge associatively. */
+    CssPx top_pos, top_neg;
+    CssPx bottom_pos, bottom_neg;
+    bool  collapse_through;
+    bool  is_table_wrapper;
+    bool  border_from_content;
+} FlowPlacementBox;
+
+bool flow_placement_box_ask(const lxb_dom_element_t *el, FlowPlacementBox *out);
+bool flow_placement_box_peek(const lxb_dom_element_t *el, FlowPlacementBox *out);
+void flow_placement_box_record(const lxb_dom_element_t *el, const FlowPlacementBox *box);
+
 /* THE CENSUS, in solver/result.c's vocabulary. Every field is a LIFETIME counter of this agent — it states
    what has happened, never what stands now — so every one may be differenced across two samples.
    `asks` is the number of times §9.4.1's stack position of a box was asked for; `served` is how many of those
@@ -185,6 +252,9 @@ typedef struct {
     long long origin_asks;
     long long origin_served;
     long long origin_derived;
+    long long box_asks;
+    long long box_served;
+    long long box_derived;
 } FlowPlacementCensus;
 void flow_placement_census(FlowPlacementCensus *out);
 

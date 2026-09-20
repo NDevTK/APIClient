@@ -32,8 +32,10 @@ typedef struct {
        the out-of-flow arms and the §17.5 table arms each derive their point some other way, so a non-NULL
        here says "this point is that equation" and a NULL says "this component has no second route to it". */
     const lxb_dom_element_t *origin_cb;
+    FlowPlacementBox         box;
     bool                     has_top;
     bool                     has_origin;
+    bool                     has_box;
 } FpEntry;
 
 static FpEntry  *g_tab;
@@ -50,6 +52,9 @@ static long long g_passes;
 static long long g_origin_asks;
 static long long g_origin_served;
 static long long g_origin_derived;
+static long long g_box_asks;
+static long long g_box_served;
+static long long g_box_derived;
 
 /* THE ONE INITIAL CAPACITY, AND IT IS NOT A BOUND ON ANYTHING. §NO BOUNDS forbids deciding that work will not
    happen; this decides only how many placements fit before the table is rebuilt at twice the size, which is a
@@ -291,6 +296,67 @@ void flow_placement_origin_record(const lxb_dom_element_t *el, FlowPoint origin,
     g_tab[i].has_origin = true;
 }
 
+bool flow_placement_box_peek(const lxb_dom_element_t *el, FlowPlacementBox *out)
+{
+    size_t i;
+
+    DCHECK(el != NULL, "CSS 2.1 §10.6.3's contribution record was asked about no box");
+    DCHECK(out != NULL, "CSS 2.1 §10.6.3's contribution record was asked with nowhere to put the answer");
+    if (!g_open || g_cap == 0) return false;
+    DCHECKF(dom_cow_version() == g_ver,
+            "CSS 2.1 §10.6.3's contribution record was read at tree version %llu inside a pass opened at "
+            "%llu — see this record's close",
+            (unsigned long long)dom_cow_version(), (unsigned long long)g_ver);
+    i = fp_probe(g_tab, g_cap, el);
+    if (g_tab[i].el == NULL || !g_tab[i].has_box) return false;
+    *out = g_tab[i].box;
+    return true;
+}
+
+bool flow_placement_box_ask(const lxb_dom_element_t *el, FlowPlacementBox *out)
+{
+    g_box_asks++;
+    if (!flow_placement_box_peek(el, out)) return false;
+    g_box_served++;
+    return true;
+}
+
+void flow_placement_box_record(const lxb_dom_element_t *el, const FlowPlacementBox *box)
+{
+    size_t i;
+
+    DCHECK(el != NULL, "CSS 2.1 §10.6.3's contribution record was handed a contribution with no box");
+    DCHECK(box != NULL, "CSS 2.1 §10.6.3's contribution record was handed no contribution");
+    /* THE COUNT BEFORE THE GUARD, which is the discipline the border-box origin record above was landed
+       WITHOUT and aborted a build for: one `if (!g_open)` answering both "is there anywhere to store this"
+       and "did this agent derive one" refuses the second silently, and every derivation made outside a
+       render then sits in the numerator and in neither denominator. The guard is about the TABLE; the
+       derivation happened either way. */
+    g_box_derived++;
+    if (!g_open) return;
+    if (g_used * 2 >= g_cap) fp_grow();
+    i = fp_probe(g_tab, g_cap, el);
+    if (g_tab[i].el == NULL) {
+        g_tab[i].el = el;
+        g_used++;
+    } else {
+        /* ONE BOX'S CONTRIBUTION COMPUTED TWICE IN ONE PASS, which core/layout/block_flow.c's ask makes
+           unreachable and which is therefore asserted rather than allowed. §10.6.3's distance and §8.3.1's
+           two runs are functions of the document, so a second computation that DISAGREES is the document
+           having moved on an axis this pass's tree version cannot see. The BORDER-box height is compared
+           because it is the one the walk stacks; a run that differed while it agreed would be a second
+           finding and core/layout/block_flow.c's own check is what reaches that. */
+        DCHECKF(!g_tab[i].has_box || fp_same_example(g_tab[i].box.border_h, box->border_h),
+                "CSS 2.1 §10.6.3's contribution was computed twice in one pass for one box and the two "
+                "border-box heights disagree: %g then %g. core/layout/block_flow.c asks this record before "
+                "it walks, so a second computation means a read missed a key a write had landed — and two "
+                "different answers mean the cascade moved inside a span nothing else can see move",
+                g_tab[i].box.border_h.px, box->border_h.px);
+    }
+    g_tab[i].box = *box;
+    g_tab[i].has_box = true;
+}
+
 bool flow_placement_origin_ask(const lxb_dom_element_t *el, FlowPoint *out, const lxb_dom_element_t **cb_out)
 {
     g_origin_asks++;
@@ -360,5 +426,14 @@ void flow_placement_census(FlowPlacementCensus *out)
     out->passes = g_passes;
     out->origin_asks = g_origin_asks;
     out->origin_served = g_origin_served;
+    DCHECKF(g_box_asks == g_box_served + g_box_derived,
+            "CSS 2.1 §10.6.3's contribution census does not close: %lld asks against %lld served and %lld "
+            "derived. The ask and the record are one call apart in core/layout/block_flow.c's `bf_box` and "
+            "both are taken under the ONE baseline pass this record serves, so a gap is either a return "
+            "between them or a record call made under a pass whose ask was never counted",
+            g_box_asks, g_box_served, g_box_derived);
     out->origin_derived = g_origin_derived;
+    out->box_asks = g_box_asks;
+    out->box_served = g_box_served;
+    out->box_derived = g_box_derived;
 }

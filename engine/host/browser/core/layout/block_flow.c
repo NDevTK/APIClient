@@ -1572,7 +1572,14 @@ static bool bf_height_needs_content(lxb_dom_element_t *el)
    (§10.8.1 asks for that baseline, not for a clamped one). So when the baseline is asked for, the walk RUNS
    whatever `height` says — `block_flow_anonymous_boxes` runs it for the same reason and states it in the same
    words — and only the SIZE is still taken from used_value.h. */
-static BfBox bf_box(lxb_dom_element_t *el, BfBaseline pass)
+/* `*from_content` IS REPORTED BY THE ARM THAT TOOK IT AND IS NEVER RE-DERIVED, which is the difference
+   between a discriminator that is exact and one that is nearly right. Re-asking the cascade which arm this
+   box WOULD take answers for the ternary at the end and NOT for the four arms that return before it: a table
+   wrapper and a non-container both take `used_value_border_edge_px` while `used_value_height_behaves_as_auto`
+   may be true of them, so a re-derived bit says from-content for a box whose height came from a declared
+   edge — and the check would then compare a conversion of a `content_h` that arm never set. It is false on
+   every path but one, set where that one is taken. */
+static BfBox bf_box_compute(lxb_dom_element_t *el, BfBaseline pass, bool *from_content)
 {
     CssPx sink = css_px(0.0);
     bool sunk = false;
@@ -1585,6 +1592,10 @@ static BfBox bf_box(lxb_dom_element_t *el, BfBaseline pass)
     char nbuf[160];
     BfBox b;
 
+    DCHECK(from_content != NULL, "a box's contribution was computed with nowhere to report which arm derived "
+                                 "its border-box height, which is the one thing its recorded form is checked "
+                                 "against");
+    *from_content = false;
     free(d);
     b.content_h = css_px(0.0);
     b.top = bf_run_of(used_value_px(el, "margin-top"));
@@ -1759,9 +1770,121 @@ static BfBox bf_box(lxb_dom_element_t *el, BfBaseline pass)
     /* A box whose height BEHAVES AS AUTO (css-sizing-3 §3.2.1) is the one whose border-box height is this
        walk's own content height; a resolved percentage is a declared length like any other and goes back
        through used_value.h, which is where §10.4/§10.7's clamp runs for it. */
-    b.border_h = used_value_height_behaves_as_auto(el)
-                     ? used_value_border_edge_from_content_px(el, b.content_h, true)
-                     : used_value_border_edge_px(el, true);
+    if (used_value_height_behaves_as_auto(el)) {
+        *from_content = true;
+        b.border_h = used_value_border_edge_from_content_px(el, b.content_h, true);
+    } else {
+        b.border_h = used_value_border_edge_px(el, true);
+    }
+    return b;
+}
+
+/* THE SIX FACTS OF A CONTRIBUTION THAT DO NOT DEPEND ON WHICH BASELINE PASS ASKED, packed and unpacked here
+   because they are this file's vocabulary and core/layout/flow_placement.h holds them as lengths. §10.8.1's
+   `baseline` and `has_line_box` are the two that DO depend on the pass and are therefore the two the record
+   never carries — which is why only `BF_BASELINE_NONE` is served, and why an unpack rebuilds them at the
+   values a NONE walk produces rather than leaving whatever a caller's struct held. */
+/* TWO LENGTHS' EXAMPLES, COMPARED FOR AN ASSERTION AND FOR NOTHING ELSE — the same private comparison
+   core/layout/flow_placement.c and core/layout/flow_position.c each hold, and for the same reason: a public
+   equality over a `CssPx` is a predicate a caller can branch on, and §Solver-half forbids a C branch on a
+   concolic's EXAMPLE because it deletes the arm the other world takes. Inside a `DCHECK` there is no arm to
+   delete. NaN equals itself here, because two runs of one derivation that both produced NaN agree. */
+static bool bf_same_example(CssPx a, CssPx b)
+{
+    return a.px == b.px || (a.px != a.px && b.px != b.px);
+}
+
+static void bf_box_pack(const BfBox *b, FlowPlacementBox *out, bool border_from_content)
+{
+    out->content_h = b->content_h;
+    out->border_h = b->border_h;
+    out->top_pos = b->top.pos;
+    out->top_neg = b->top.neg;
+    out->bottom_pos = b->bottom.pos;
+    out->bottom_neg = b->bottom.neg;
+    out->collapse_through = b->collapse_through;
+    out->is_table_wrapper = b->is_table_wrapper;
+    out->border_from_content = border_from_content;
+}
+
+static BfBox bf_box_unpack(const FlowPlacementBox *r)
+{
+    BfBox b;
+
+    b.content_h = r->content_h;
+    b.border_h = r->border_h;
+    b.top.pos = r->top_pos;
+    b.top.neg = r->top_neg;
+    b.bottom.pos = r->bottom_pos;
+    b.bottom.neg = r->bottom_neg;
+    b.collapse_through = r->collapse_through;
+    b.is_table_wrapper = r->is_table_wrapper;
+    /* §10.8.1's PAIR AT THE VALUES A `BF_BASELINE_NONE` WALK ANSWERS WITH, which is not a default standing in
+       for something unknown: `bf_layout` writes exactly these two under that pass and its baseline block is
+       gated on the pass being something else, so this reproduces the computed answer rather than replacing
+       it. A record that served any other pass would be answering a question it does not hold. */
+    b.baseline = css_px(0.0);
+    b.has_line_box = false;
+    return b;
+}
+
+/* THE RECORDED CONTRIBUTION, RE-DERIVED FROM ITS OWN ARM'S EQUATION — two answers off two lines that can
+   disagree, arming on the first box of every painted document.
+   IT RE-READS THE CASCADE, WHICH IS WHAT MAKES IT MORE THAN A MEMO CHECK. The pass's tree version moves for
+   an insert, a removal and the COW swap and not for an attribute or a stylesheet, so a computed value that
+   moved inside the span is invisible to it; `used_value_border_edge_px` and
+   `used_value_border_edge_from_content_px` go back to the cascade, so a recorded height that no longer
+   satisfies its own derivation fires here whatever route the change arrived by.
+   THREE ARMS ARE SKIPPED AND EACH IS NAMED, because a check that costs a walk is not a check this can afford
+   to run per hit: a TABLE WRAPPER's declared edge reaches CSS 2.1 §17.5.3 "Table height algorithms" and
+   re-running that per answer would put the multiplier back; a box whose height BEHAVES AS AUTO but whose
+   `border_h` did not come from the content took one of the non-container arms, where the same call can reach
+   a flex or grid measurement; and a box that COLLAPSED THROUGH has no border box at all, so its recorded
+   height is `bf_layout`'s own zero and THAT is what is checked. */
+static bool bf_box_agrees(lxb_dom_element_t *el, const FlowPlacementBox *r)
+{
+    if (r->collapse_through) return bf_same_example(r->border_h, css_px(0.0));
+    if (r->is_table_wrapper) return true;
+    if (r->border_from_content)
+        return bf_same_example(r->border_h, used_value_border_edge_from_content_px(el, r->content_h, true));
+    /* The bit above is REPORTED by the arm that ran, so what is left took `used_value_border_edge_px` — and
+       a box whose height behaves as auto reached that call through a non-container arm, where the same call
+       can reach a flex or grid measurement. Skipped for the cost, not for doubt about the arm. */
+    if (used_value_height_behaves_as_auto(el)) return true;
+    return bf_same_example(r->border_h, used_value_border_edge_px(el, true));
+}
+
+/* §9.4.1's CONTRIBUTION OF ONE BOX, ASKED OF THE PASS FIRST. See core/layout/flow_placement.h for why a
+   remembered return value is the collapse for this question and not for `block_flow_child_top`'s, and for
+   the measurement that says the cost beneath these asks is a multiplier rather than inherent. */
+static BfBox bf_box(lxb_dom_element_t *el, BfBaseline pass)
+{
+    FlowPlacementBox rec;
+    BfBox b;
+
+    DCHECK(el != NULL, "a box's contribution to §9.4.1's stack was asked for with no element");
+    if (pass == BF_BASELINE_NONE && flow_placement_box_ask(el, &rec)) {
+        DCHECKF(bf_box_agrees(el, &rec),
+                "CSS 2.1 §10.6.3's recorded contribution for this box no longer satisfies the derivation "
+                "that produced it — recorded border-box height %g, content height %g. The arm is re-asked "
+                "of the ELEMENT and the height re-read from the CASCADE, so this is one of two things and "
+                "they take opposite work: the record answered for a box it does not hold, which is "
+                "core/layout/flow_placement.c's probe, OR a computed value moved INSIDE the pass, which is "
+                "the axis its tree version cannot see and which solver/dom_cow.c's attribute chokepoint "
+                "exists to make impossible. If that chokepoint did not fire, the change arrived by a route "
+                "it does not own and the route is the finding",
+                rec.border_h.px, rec.content_h.px);
+        return bf_box_unpack(&rec);
+    }
+    {
+        bool from_content = false;
+
+        b = bf_box_compute(el, pass, &from_content);
+        if (pass == BF_BASELINE_NONE) {
+            bf_box_pack(&b, &rec, from_content);
+            flow_placement_box_record(el, &rec);
+        }
+    }
     return b;
 }
 

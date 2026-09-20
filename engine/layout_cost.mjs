@@ -64,11 +64,17 @@ if (!bin) {
 const MAX = Number(maxArg || 6);
 
 /* The functions counted, and each is one question. `bf_layout` is CSS 2.1 §9.4.1 "Block formatting
-   contexts"' walk; `block_flow_child_top` and `flow_border_box_origin` are the two asks a render makes of
-   geometry; `element_view_bounding_box_px` is CSSOM VIEW §6's rectangle a paint mark needs; `bp_visit` is
-   CSS 2.1 §E.2 "Painting order"'s offer, which is the DENOMINATOR the others are a cost per. */
-const PROBES = ['bf_layout', 'block_flow_child_top', 'flow_border_box_origin',
-                'element_view_bounding_box_px', 'bp_visit', 'used_value_border_edge_px'];
+   contexts"' walk and `bf_box` is one box's contribution to it; `block_flow_child_top`,
+   `block_flow_auto_height` and `flow_border_box_origin` are the asks a render makes of geometry;
+   `element_view_bounding_box_px` is CSSOM VIEW §6's rectangle a paint mark needs; `bp_visit` is CSS 2.1
+   §E.2 "Painting order"'s offer, which is the DENOMINATOR the others are a cost per.
+   THE ASKS AND THE WORK BENEATH THEM ARE BOTH HERE ON PURPOSE, because their ORDERS DIFFERING is the one
+   reading that separates a multiplier from an inherent cost: a linear number of asks over quadratic work
+   means a walk is re-deriving what another walk already established, and asks that are themselves
+   superlinear mean the multiplier is in the caller instead. Neither number says it alone. */
+const PROBES = ['bf_layout', 'bf_box', 'block_flow_child_top', 'block_flow_auto_height',
+                'flow_border_box_origin', 'element_view_bounding_box_px', 'bp_visit',
+                'used_value_border_edge_px'];
 
 const flat = (n) => '<!DOCTYPE html><html><head><title>t</title></head><body>' +
   Array.from({ length: n }, (_, i) => `<div>r${i}</div>`).join('') + '</body></html>';
