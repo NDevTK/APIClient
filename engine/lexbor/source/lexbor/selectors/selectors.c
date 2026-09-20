@@ -84,15 +84,32 @@ lxb_selectors_match_element(const lxb_css_selector_t *selector,
                             lxb_dom_node_t *node, lxb_selectors_entry_t *entry);
 
 static bool
-lxb_selectors_match_id(const lxb_css_selector_t *selector, lxb_dom_node_t *node);
+lxb_selectors_match_id(lxb_selectors_t *selectors,
+                       const lxb_css_selector_t *selector, lxb_dom_node_t *node);
 
 static bool
 lxb_selectors_match_class(const lexbor_str_t *target, const lexbor_str_t *src,
                           bool quirks);
 
 static bool
-lxb_selectors_match_attribute(const lxb_css_selector_t *selector,
+lxb_selectors_match_attribute(lxb_selectors_t *selectors,
+                              const lxb_css_selector_t *selector,
                               lxb_dom_node_t *node, lxb_selectors_entry_t *entry);
+
+/*
+ * THE HOST'S ONE CHANCE TO REFUSE A VALUE IT CANNOT STATE -- see lxb_selectors_host_cb_t.attr_value_read. It
+ * is spelled once, here, because three arms below read an attribute's value and a per-arm copy of the NULL
+ * test is three places for the seam to go missing from; an embedder that installed no table at all is a
+ * matcher that asks nothing, which is the same deliberate NULL the table's own declaration describes.
+ */
+static void
+lxb_selectors_host_attr_value(lxb_selectors_t *selectors, const lxb_dom_node_t *node,
+                              const lxb_dom_attr_t *attr)
+{
+    if (selectors->host != NULL && selectors->host->attr_value_read != NULL) {
+        selectors->host->attr_value_read(node, attr, selectors->host_ctx);
+    }
+}
 
 static bool
 lxb_selectors_pseudo_class(lxb_selectors_t *selectors,
@@ -1299,7 +1316,7 @@ lxb_selectors_match(lxb_selectors_t *selectors, lxb_selectors_entry_t *entry,
             return lxb_selectors_match_element(entry->selector, node, entry);
 
         case LXB_CSS_SELECTOR_TYPE_ID:
-            return lxb_selectors_match_id(entry->selector, node);
+            return lxb_selectors_match_id(selectors, entry->selector, node);
 
         case LXB_CSS_SELECTOR_TYPE_CLASS:
             element = lxb_dom_interface_element(node);
@@ -1310,11 +1327,18 @@ lxb_selectors_match(lxb_selectors_t *selectors, lxb_selectors_entry_t *entry,
                 return false;
             }
 
+            /* §6.6 "Class selectors" IS an attribute value test and says so: "in [HTML], [SVG11], and
+               [MATHML] membership in a class is given by the class attribute: in these languages it is
+               equivalent to the ~= notation applied to the local class attribute (i.e. [class~=identifier])".
+               So the value it reads is asked about exactly as `[class~=x]`'s would be. */
+            lxb_selectors_host_attr_value(selectors, node, element->attr_class);
+
             return lxb_selectors_match_class(element->attr_class->value,
                                              &entry->selector->name, true);
 
         case LXB_CSS_SELECTOR_TYPE_ATTRIBUTE:
-            return lxb_selectors_match_attribute(entry->selector, node, entry);
+            return lxb_selectors_match_attribute(selectors, entry->selector,
+                                                 node, entry);
 
         case LXB_CSS_SELECTOR_TYPE_PSEUDO_CLASS:
             return lxb_selectors_pseudo_class(selectors, entry->selector, node);
@@ -1355,7 +1379,8 @@ lxb_selectors_match_element(const lxb_css_selector_t *selector,
 }
 
 static bool
-lxb_selectors_match_id(const lxb_css_selector_t *selector, lxb_dom_node_t *node)
+lxb_selectors_match_id(lxb_selectors_t *selectors,
+                       const lxb_css_selector_t *selector, lxb_dom_node_t *node)
 {
     const lexbor_str_t *trg, *src;
     lxb_dom_element_t *element;
@@ -1365,6 +1390,11 @@ lxb_selectors_match_id(const lxb_css_selector_t *selector, lxb_dom_node_t *node)
     if (element->attr_id == NULL || element->attr_id->value == NULL) {
         return false;
     }
+
+    /* §6.7 "ID selectors" IS an attribute value test: "An ID selector represents an element instance that
+       has an identifier that matches the identifier in the ID selector", and "In HTML all ID attributes are
+       named id" -- so the value it reads is asked about like any other attribute's. */
+    lxb_selectors_host_attr_value(selectors, node, element->attr_id);
 
     trg = element->attr_id->value;
     src = &selector->name;
@@ -1428,7 +1458,8 @@ lxb_selectors_match_class(const lexbor_str_t *target, const lexbor_str_t *src,
 }
 
 static bool
-lxb_selectors_match_attribute(const lxb_css_selector_t *selector,
+lxb_selectors_match_attribute(lxb_selectors_t *selectors,
+                              const lxb_css_selector_t *selector,
                               lxb_dom_node_t *node, lxb_selectors_entry_t *entry)
 {
     bool res, ins;
@@ -1464,12 +1495,26 @@ lxb_selectors_match_attribute(const lxb_css_selector_t *selector,
     trg = dom_attr->value;
     src = &attr->value;
 
+    /* §6.1's `[att]` -- "Represents an element with the att attribute, whatever the value of the attribute."
+       The value is never read, so the host is never asked: the answer is a fact about the tree. */
     if (src->data == NULL) {
         return true;
     }
 
     if (trg == NULL) {
         trg = &lxb_blank_str;
+    }
+
+    /* DECIDED BY THE OPERAND ALONE, so no value is read and the host is not asked -- asking there would
+       refuse a match that is false under every value the attribute could hold. §6.1's `~=`: "Also if "val"
+       is the empty string, it will never represent anything." §6.2's three, in its own separate wording:
+       "If "val" is the empty string then the selector does not represent anything." `=` and `|=` with an
+       empty operand DO read it: both match an attribute whose value is the empty string. */
+    if (src->length != 0
+        || attr->match == LXB_CSS_SELECTOR_MATCH_EQUAL
+        || attr->match == LXB_CSS_SELECTOR_MATCH_DASH)
+    {
+        lxb_selectors_host_attr_value(selectors, node, dom_attr);
     }
 
     ins = attr->modifier == LXB_CSS_SELECTOR_MODIFIER_I;

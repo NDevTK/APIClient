@@ -855,6 +855,25 @@ JSValue dom_cow_attr_taint(lxb_dom_element_t *el, const char *name) {
     attr_ident_free(&id);
     return t;
 }
+/* THE SAME READ FROM THE ATTRIBUTE THIS ENGINE IS ALREADY HOLDING, which is a third ENTRY and not a third
+   answer: the by-name read resolves a qualified name into §4.9's key by LOOKING THE ATTRIBUTE UP, and a
+   caller that already has the attribute would be paying for a search whose result it is standing on — and
+   would be spelling the qualified name back out of the node to do it, which is the one step that can differ
+   from what the write stored. `attr_ident_of_node` is the write side's own identity, so this and the fused
+   write cannot disagree about which attribute they mean.
+   BORROWED, like both of its siblings, and JS_UNDEFINED where the attribute carries no taint. */
+JSValue dom_cow_attr_taint_node(lxb_dom_element_t *el, const lxb_dom_attr_t *a) {
+    AttrIdent id;
+    JSValue t;
+
+    DCHECK(el != NULL && a != NULL,
+           "an attribute's taint was asked for with no element or no attribute — the key is (element, §4.9 "
+           "name) and half of it cannot be supplied later");
+    attr_ident_of_node(a, &id);
+    t = dom_cow_attr_taint_ns(el, id.ns, id.local);
+    attr_ident_free(&id);
+    return t;
+}
 
 /* THE TREE VERSION — Blink's Document::dom_tree_version, and it is here rather than on the document for the
    reason every other piece of this file is: the tree a flow sees is the baseline PLUS its delta, so "did the

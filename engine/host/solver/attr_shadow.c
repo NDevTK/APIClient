@@ -47,6 +47,7 @@ void attr_shadow_set(JSContext *ctx, const void *owner, int kind, const char *ns
     g_attr_shadow[g_attr_shadow_n].opaque = JS_DupValue(ctx, opaque); g_attr_shadow_n++;
 }
 JSValue attr_shadow_opaque(int i) { return g_attr_shadow[i].opaque; }   /* borrowed */
+int attr_shadow_count(void) { return g_attr_shadow_n; }
 void attr_shadow_forget(JSRuntime *rt, const void *owner) {
     /* NO RUNTIME IS ALLOWED EXACTLY WHEN THERE IS NOTHING TO RELEASE, and this is the two-sided half of
        node_agent_runtime's contract. A node can die after the agent's runtime is gone — main.c's teardown

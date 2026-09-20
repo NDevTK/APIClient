@@ -122,6 +122,10 @@ JSValue dom_cow_attr_taint(lxb_dom_element_t *el, const char *name);
 /* The same read at §4.9's OWN key, which is what the namespace-keyed family (`getAttributeNS`, `Attr.value`)
    asks with — the by-name read above is that question plus the qualified-name resolution in front of it. */
 JSValue dom_cow_attr_taint_ns(lxb_dom_element_t *el, const char *ns, const char *local);
+/* The same read for a caller ALREADY HOLDING the attribute — the CSS cascade's, which reaches an attribute by
+   walking the element's own list and has no qualified name to spell. See the definition for why re-spelling
+   one would be a fourth chance for the read and the write to disagree about §4.9's key. */
+JSValue dom_cow_attr_taint_node(lxb_dom_element_t *el, const lxb_dom_attr_t *a);
 /* node-insert chokepoint — the tree-structure twin of dom_cow_set_attribute: capture the insertion THEN attach
    the child, so a subtree a flow appends reverts per-flow (detached on context-switch, re-attached on resume). */
 void dom_cow_append_child(lxb_dom_node_t *parent, lxb_dom_node_t *child);

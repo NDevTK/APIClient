@@ -84,6 +84,30 @@ typedef lxb_selectors_entry_t *
 typedef struct {
     /* DOM §4.9: "An element whose custom element state is "uncustomized" or "custom" is said to be defined." */
     bool (*defined)(const lxb_dom_node_t *node, void *ctx);
+
+    /*
+     * THE HOST IS ABOUT TO HAVE A MATCH DECIDED FROM THIS ATTRIBUTE'S VALUE BYTES, and this is its one chance
+     * to say that those bytes do not STATE the value. Selectors §6 "Attribute selectors" is two-valued -- "an
+     * attribute selector must be considered to match an element if that element has an attribute that matches
+     * the attribute represented by the attribute selector" -- so a matcher has no third answer to give, and a
+     * host whose attribute value is a stand-in for something it does not know would otherwise have BOTH arms
+     * decided against it in silence. It is the same seam `defined` is, asked for a VALUE instead of for a
+     * state: the byte comparison below cannot tell a real value from a placeholder, and the embedder can.
+     *
+     * It is CALLED ONLY WHERE THE ANSWER DEPENDS ON THE VALUE. §6.1 "Attribute presence and value selectors"
+     * gives `[att]` as "Represents an element with the att attribute, whatever the value of the attribute" --
+     * no value is read -- and its `~=` is decided by the operand alone where that operand is empty ("Also if
+     * "val" is the empty string, it will never represent anything"), as are §6.2 "Substring matching
+     * attribute selectors"' three ("If "val" is the empty string then the selector does not represent
+     * anything"). None of those asks. §6.6 "Class selectors" and §6.7 "ID selectors" DO read a value and do
+     * ask, because `.x` and `#x` are attribute value tests that happen to have their own syntax -- §6.6 says
+     * so outright for the first ("it is equivalent to the ~= notation applied to the local class attribute").
+     *
+     * VOID, because there is nothing for the matcher to do with a refusal: a host that cannot state the value
+     * has no arm for this matcher to take, so it either stops the run or it accepts the byte comparison that
+     * follows. `attr` is the attribute the comparison is about and `node` its element.
+     */
+    void (*attr_value_read)(const lxb_dom_node_t *node, const lxb_dom_attr_t *attr, void *ctx);
 }
 lxb_selectors_host_cb_t;
 

@@ -6,6 +6,9 @@
 #include "check.h"
 #include "core/dom/selector_match.h"
 #include "core/html/custom_elements.h"
+#include "solver/attr_shadow.h"
+#include "solver/concolic.h"
+#include "solver/dom_cow.h"
 
 /* THE HOST LANGUAGE'S ANSWERS, for the pseudo-classes whose truth is not a shape of the tree. Selectors Level
    5 §7 "Exposing custom state: the :state() pseudo-class" states the rule in general — "The exact matching
@@ -20,7 +23,106 @@ static bool host_defined(const lxb_dom_node_t *node, void *ctx)
     return custom_elements_is_defined(node);
 }
 
-static const lxb_selectors_host_cb_t HOST_CB = { host_defined };
+/*
+ * THE HOST'S ANSWER FOR AN ATTRIBUTE WHOSE VALUE IS NOT BYTES — SELECTORS §6 "Attribute selectors" read
+ * against §Solver-half's unknown.
+ *
+ * WHAT THE MATCHER IS ABOUT TO DO. DOM §4.9's write stores a concolic value's SHAPE in the tree, because a
+ * concolic has no bytes and `core/dom/element.c`'s write says so at its own site ("A concolic value has no
+ * bytes to store ... The SHAPE is the honest byte form for the tree") and files the value itself in the
+ * per-flow taint shadow. A shape is a DISPLAY FORM and not the value: nothing the page could write makes it
+ * equal to `dark`, so every §6.1 `=` test against it answers false, and so does every test against every
+ * other operand. Both arms of a two-armed question are therefore decided, and §Solver-half permits pruning
+ * only a CONTRADICTED branch — "a contradicted branch is pruned (sound-only — uncertainty keeps the arm)".
+ * Neither arm is contradicted here. The page renders with neither rule and NOTHING SAYS SO.
+ *
+ * WHY THIS IS A CRASH AND NOT A REFUSAL. §Offensive-programming's category (2): a capability that should
+ * exist and does not. It is NOT the page-held abort switch §WHOSE-BYTES-STATE-THE-VALUE forbids — the value
+ * asserted on is one THIS ENGINE MINTED to stand for something it does not know, not bytes a stranger
+ * stated, and no string a page can write reaches this. What it asserts is this engine's own capability,
+ * which is what a `DFAIL` is for.
+ *
+ * WHAT THE NEXT DIFFS BUILD, IN ORDER, and why none of them is this one:
+ *   (1) THREE-VALUED MATCHING. `lxb_selectors_match_*` must be able to answer UNKNOWN, and `:not()`, `:is()`
+ *       and the combinators must propagate it. The RULE is Kleene's and this engine already implements it,
+ *       in core/css/media_query.c's `mq_not`/`mq_and`/`mq_or` over an `MQ_UNKNOWN` — so what is missing is
+ *       the propagation and not the arithmetic. ITS CAUSE THERE IS NOT THE CAUSE HERE and the analogy stops
+ *       at the table: Media Queries Level 4 §3.1 "Evaluating Media Queries" makes a query UNKNOWN when the
+ *       UA does not UNDERSTAND it (`<general-enclosed>`), where a selector here is perfectly understood and
+ *       it is the ATTRIBUTE'S VALUE that is unknown. Nothing downstream can know a question was asked until
+ *       this lands, which is why it is first.
+ *   (2) A CASCADE THAT REPORTS ITS UNANSWERED PREDICATE, rather than an answer it does not have.
+ *   (3) A CONSUMER THAT CAN ASK. A fork needs a RESUME POINT, and there is none inside a match: the arena
+ *       note below says lxb_selectors_match_node "is a single C call that returns before the machine driving
+ *       it can yield", and solver/engine.c's `engine_prepare_fork` aborts by name for a C body that forks
+ *       from inside its own activation, naming the remedy — JS_CFUNC_STEP_DEF, with the ask in the machine's
+ *       own `step_fork_run`. So the ask belongs at whichever step machine reached the cascade, which re-runs
+ *       it once per answered predicate exactly as quickjs.c's `step_ownkeys_chain` re-runs its enumeration.
+ *       WHICH MACHINES THOSE ARE IS THE PART TO DERIVE RATHER THAN ASSUME: `cssom_cascaded_value`'s callers
+ *       are what reach it, and the ones a page drives (`getComputedStyle`, the §7 view members) are plain C
+ *       bodies today, so each is a declaration to build and not a call to add.
+ *   (4) ONE KEY PER PREDICATE, NOT PER RULE. `html[data-theme=dark]` and `html:not([data-theme=dark])` are
+ *       ONE question asked twice, and a key composed from the rule rather than from (the value's identity,
+ *       the operator, the operand) forks a world for each — §Solver-half's "keyed by the PREDICATE's own
+ *       identity — operator and both operands".
+ *   (5) THE PIN. §concretize-on-pin: `[att=dark]` answered TRUE pins the value, after which `[att=light]` is
+ *       DECIDED by the flow's own constraint rather than forked. Without it the worlds multiply with the
+ *       number of operands the sheet tests, where the page can only be in one.
+ * HOW ITS ABSENCE WOULD SHOW once (1)-(5) exist: a document whose only style difference between two flows is
+ * an attribute this engine never observed would report one computed value where a browser has two.
+ *
+ * WHAT IT DOES NOT COVER, AND THE NEXT DIFF FOR IT: §6.1's `~=` with WHITESPACE in its operand ("If "val"
+ * contains whitespace, it will never represent anything") is decided false by the operand alone, exactly as
+ * the empty-operand arms the matcher already declines to ask about are — so this refuses a match that is
+ * false under every value the attribute could hold. The next diff tests the operand for whitespace beside
+ * the length test in `lxb_selectors_match_attribute`. It would show as this abort naming an attribute whose
+ * only test in the sheet is a `~=` whose operand has a space in it. */
+static void host_attr_value_read(const lxb_dom_node_t *node, const lxb_dom_attr_t *attr, void *ctx)
+{
+#if !APICLIENT_DEV
+    /* THE RELEASE ARM, STATED RATHER THAN LEFT TO THE MACRO. §Offensive-programming's release exemption makes
+       the abort below dev-only, and what remains for release is the answer the matcher already gives: the
+       shape bytes are compared and the test answers false. That is a DEFINED wrong answer with no sibling to
+       compose badly with — the cascade receives a value like any other — and it is byte-for-byte the
+       behaviour every build had before this seam existed. The WORK is compiled out with the crash because
+       its only consumer is the crash: resolving §4.9's key out of the attribute allocates, and doing it per
+       attribute test per rule per element for a check that cannot fire is a cost paid for nothing. */
+    (void)node; (void)attr; (void)ctx;
+#else
+    lxb_dom_element_t *el;
+    JSValue taint;
+    const lxb_char_t *tag, *name;
+    size_t tag_n = 0, name_n = 0;
+
+    (void)ctx;
+    /* THE O(1) PRECONDITION FIRST. This runs per attribute test per rule per element, and resolving §4.9's
+       key out of the attribute allocates; a document that never put an unknown in an attribute — which is
+       most of them — pays one load for its whole cascade. */
+    if (attr_shadow_count() == 0) return;
+    DCHECK(node != NULL && attr != NULL,
+           "SELECTORS §6's value seam was asked about no element or no attribute — the matcher holds both at "
+           "the comparison, so half a key here is a caller that composed the ask somewhere else");
+    if (node->type != LXB_DOM_NODE_TYPE_ELEMENT) return;
+    el = lxb_dom_interface_element((lxb_dom_node_t *)node);
+    taint = dom_cow_attr_taint_node(el, attr);   /* BORROWED */
+    if (!concolic_is(taint)) return;
+    tag = lxb_dom_element_local_name(el, &tag_n);
+    name = lxb_dom_attr_qualified_name((lxb_dom_attr_t *)attr, &name_n);
+    DFAILF("<%.*s %.*s> — SELECTORS §6 \"Attribute selectors\" is being decided from an attribute whose "
+           "value this engine does not know (`%s`), so BOTH arms of the test are about to be answered "
+           "false against a DISPLAY SHAPE that no operand can equal. §6's own rule is two-valued — \"an "
+           "attribute selector must be considered to match an element if that element has an attribute that "
+           "matches the attribute represented by the attribute selector\" — so the matcher has no third "
+           "answer and this engine has no fork here: a fork needs a RESUME POINT and a match is one C call "
+           "that returns before its driver can yield. See host_attr_value_read in this file for the five "
+           "ordered diffs, of which the first is three-valued matching.",
+           (int)tag_n, tag ? (const char *)tag : "?",
+           (int)name_n, name ? (const char *)name : "?",
+           concolic_shape_c(taint) ? concolic_shape_c(taint) : "{}");
+#endif
+}
+
+static const lxb_selectors_host_cb_t HOST_CB = { host_defined, host_attr_value_read };
 
 const lxb_selectors_host_cb_t *selector_match_host_cb(void) { return &HOST_CB; }
 
