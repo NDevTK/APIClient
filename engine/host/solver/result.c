@@ -1205,6 +1205,62 @@ static void cow_state_hist_json(char *buf, size_t cap, int want_made, const char
     buf[hi] = 0;
 }
 
+/* WHICH COMPONENT ASKED — the per-site breakdown of ONE of the histogram rows above, and the reason it is a
+   separate object rather than a wider row is that it is a different KIND of partition: `cowStateAsks` splits
+   the asks by solver/cow.h's capture-unit list, which is seven rows and fixed at compile time, and this splits
+   ONE of those rows by the ~30 component accessors that reach it, which is a population only a run can know.
+   IT IS A HEAP COMPOSITION FOR EXACTLY THAT REASON. The two kind histograms go into stack buffers whose width
+   COW_STATE_KINDS_JSON_MAX derives from the list they render; there is no list here to derive one from, so
+   the size is COUNTED FROM THE ROWS THEMSELVES the way solver/decide.c's fork census counts its own — a row
+   costs its key, the two quotes, the colon, the comma, up to eleven digits of `int` line and a `long`'s
+   widest twenty, which is the key plus 36.
+   THE KEYS ARE NOT ESCAPED AND THAT IS A STATEMENT ABOUT WHOSE BYTES THEY ARE, not an omission. decide.c
+   escapes its rows because they are the PAGE's; these are `__FILE__` at a call site in this repository,
+   rewritten repo-relative by the build's own `-ffile-prefix-map`, so the only way a quote or a backslash
+   reaches this loop is a source path containing one — which the DCHECK below says out loud rather than
+   letting it write a document that will not parse.
+   NO ROW IS OMITTED AND NO ROW IS SYNTHESISED: a call site that has never been reached under a running flow
+   is not on the list at all, because this is a census of ASKS and a 0 here would be a claim about that site's
+   reachability which an ask count is not entitled to make. `{}` is the positive statement that no component
+   record was reached, and engine/build.mjs's reader takes it as one against the `cowStateAsks.hostRec` it is
+   handed in the same census.
+   NULL ON ALLOCATION FAILURE, which result_swap_json passes on as "this census is absent" exactly as composef
+   already does — see solver/compose.h. */
+static char *cow_site_hist_json(void) {
+    const CowHostRecSite *head = cow_host_rec_sites(), *s;
+    size_t n = 3;            /* "{}" and the NUL */
+    size_t len = 0;
+    char *out;
+
+    for (s = head; s; s = s->next) n += strlen(s->file) + 36;
+    out = malloc(n);
+    if (!out) return NULL;
+    out[len++] = '{';
+    for (s = head; s; s = s->next) {
+        int w;
+        DCHECKF(strcspn(s->file, "\"\\") == strlen(s->file),
+                "a component-record capture site is named by a source path carrying a quote or a backslash — "
+                "`%s` at line %d. These keys are written with no escaping pass because they are this "
+                "repository's own paths and not a page's bytes; one that needs escaping does not make a wrong "
+                "row, it makes a census that will not parse and a page that reports nothing at all",
+                s->file, s->line);
+        if (len > 1) out[len++] = ',';
+        w = snprintf(out + len, n - len, "\"%s:%d\":%ld", s->file, s->line, s->asks);
+        DCHECKF(w > 0 && (size_t)w < n - len,
+                "the per-site component-record census overran the size counted from its own rows at %s:%d — "
+                "the count above walks the same list this loop walks, so a row that does not fit is a key "
+                "that grew between the two passes or a count wider than the twenty digits priced for it",
+                s->file, s->line);
+        len += (size_t)w;
+    }
+    out[len++] = '}';
+    out[len] = 0;
+    DCHECK(len < n, "the per-site component-record census overran its buffer at the closing brace — a "
+                    "truncation here does not lose a row, it loses the brace, so the document that embeds it "
+                    "will not parse and every finding for this page is discarded");
+    return out;
+}
+
 /* WHAT A CONTEXT SWITCH COSTS, AND WHAT THE TWO CHAINS ARE STILL HOLDING — see result.h for why this composes
    here rather than in a host's printf. It DECIDES NOTHING: it reads cow.c's and dom_cow.c's own stats and
    renders them.
@@ -1242,6 +1298,26 @@ static void cow_state_hist_json(char *buf, size_t cap, int want_made, const char
    is the mechanism working, so `asks` running far ahead of `made` is a healthy unit and not a refusal rate.
    The identity that does hold is `made <= asks` per kind, and it is asserted in cow.c where an entry is made
    rather than checked here, because that is the one place both numbers are in hand.
+
+   AND WITHIN ONE OF THOSE KINDS, WHICH COMPONENT ASKED — `cowHostRecAsksBySite`, the third half taken one
+   level further down on the one row where the aggregate ran out of answers. A census window measured
+   125,800,636 asks of `hostRec`, 99.6% of every stepped microsecond in it and byte-identical across two
+   independent runs, and `cowStateAsks` cannot be made to say which of the ~30 component `*_of(v)` accessors
+   supplied them: it is one counter behind all of them, so "which unwrap is the plurality" is not a finer
+   reading of that number but a partition it has no room for.
+   ITS KIND IS THE SAME AS THE ROW IT SPLITS: a per-SITE LIFETIME COUNT of asks (cow.c raises it immediately
+   after the prologue that raises `g_state_asks[HOST_REC]` and before this unit's own gate), so it may be
+   differenced across two samples, and it must not be divided by `cowStateMade` for the reason the pair above
+   must not — a walk asks once per key and records ONCE.
+   THE IDENTITY IS THAT THE ROWS SUM TO `cowStateAsks.hostRec`, which is the one thing a reader cannot check
+   from the rows alone and the reason this is worth publishing as an object rather than as a largest-row
+   number. It is asserted TWICE over two different subjects: cow.c's `cow_host_rec_sites` checks the COUNTERS
+   where both halves are in one hand, and engine/build.mjs's @SWAP reader sums the RENDERED rows against the
+   `cowStateAsks.hostRec` of the same census — so a row lost between the counters and this composer is visible
+   only in the second, which is also the only one of the two that survives a release build.
+   A SITE THAT HAS NEVER BEEN REACHED IS ABSENT RATHER THAN 0, because this is a census of asks and a zero row
+   would be a claim about a call site's reachability that an ask count is not entitled to make; `{}` is the
+   positive statement that no component record was reached under a running flow at all.
 
    AND THE FOURTH HALF IS AN ENTRY KIND THE THIRD CANNOT SPEAK FOR: the per-flow COROUTINE-ACTIVATION SWAP.
    `cowStateAsks`/`cowStateMade` partition the `is_state` entry kind and nothing else, so the `is_gendata`
@@ -1300,6 +1376,7 @@ char *result_swap_json(void) {
     long gc = 0, gm = 0, ac = 0, am = 0;
     long dw = 0, dsi = 0, du = 0, dn = 0;
     char asks[COW_STATE_KINDS_JSON_MAX], made[COW_STATE_KINDS_JSON_MAX];
+    char *sites, *out;
 
     cow_swap_stats(&sc, &st, &sm);
     cow_coro_swap_stats(&gc, &gm, &ac, &am);
@@ -1308,16 +1385,20 @@ char *result_swap_json(void) {
     dom_cow_site_stats(&dw, &dsi, &du, &dn);
     cow_state_hist_json(asks, sizeof asks, 0, "cowStateAsks");
     cow_state_hist_json(made, sizeof made, 1, "cowStateMade");
-    return composef(
+    sites = cow_site_hist_json();
+    if (!sites) return NULL;   /* this census is absent — composef's own arm for the same failure */
+    out = composef(
                  "{\"installs\":%ld,\"entries\":%ld,\"worst\":%ld,\"mean\":%.1f,"
                  "\"heapSegs\":%ld,\"heapSegEntries\":%ld,\"domSegs\":%ld,\"domSegEntries\":%ld,"
                  "\"domWrites\":%ld,\"domWritesSited\":%ld,\"domWritesUnsited\":%ld,\"domSites\":%ld,"
                  "\"coroSwapGenCalls\":%ld,\"coroSwapGenMade\":%ld,"
                  "\"coroSwapAsyncCalls\":%ld,\"coroSwapAsyncMade\":%ld,"
-                 "\"cowStateAsks\":%s,\"cowStateMade\":%s}",
+                 "\"cowStateAsks\":%s,\"cowStateMade\":%s,\"cowHostRecAsksBySite\":%s}",
                  sc, st, sm, sc ? (double)st / (double)sc : 0.0, hs, he, ds, de,
                  dw, dsi, du, dn,
-                 gc, gm, ac, am, asks, made);
+                 gc, gm, ac, am, asks, made, sites);
+    free(sites);
+    return out;
 }
 
 /* WHAT THE FRONTIER IS MADE OF AND WHAT ITS PARKED SNAPSHOTS WEIGH — solver/cold.h's ColdCensus, this

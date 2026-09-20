@@ -3000,7 +3000,8 @@ const heapFields = () => (g_heapFields ??= censusRowSet(
   "from the composer rather than from a list beside it"));
 let g_swapFields = null;
 const swapFields = () => (g_swapFields ??= censusRowSet(
-  "solver/result.c", "char *result_swap_json(void)", "\n}\n", ["cowStateAsks", "cowStateMade"],
+  "solver/result.c", "char *result_swap_json(void)", "\n}\n",
+  ["cowStateAsks", "cowStateMade", "cowHostRecAsksBySite"],
   "the @SWAP reader states which rows it requires of the delta-swap census, and it takes that set from the " +
   "composer rather than from a list beside it"));
 function lastTwo(out, marker, fields, composer) {
@@ -3081,6 +3082,68 @@ function cowStateReading(b) {
            : `; every kind was asked at least once`) +
          ` (counts, never a ratio: a walk asks per key and records once, so asks running ahead of made is the ` +
          `dedup working)`;
+}
+/* WHICH COMPONENT ASKED — `cowHostRecAsksBySite`, the per-call-site partition of ONE row of the pair above,
+   and the reading the aggregate could not be made to give however carefully it was read. A census window
+   measured 125,800,636 `hostRec` asks, 99.6% of every stepped microsecond in it, and `cowStateAsks` is ONE
+   counter behind ~30 component `*_of(v)` unwrap accessors: "which unwrap supplies two million asks a turn" is
+   not a finer reading of that number, it is a partition it has no room for.
+   IT IS A PARTITION AND THAT IS WHAT THIS READER CHECKS, which is the whole reason the rows are published as
+   an object rather than as a largest-row number somebody already divided. The engine states the same identity
+   over its COUNTERS (solver/cow.c's `cow_host_rec_sites` DCHECKs the sum against `g_state_asks[HOST_REC]`
+   every time a consumer asks for the rows); this states it over the DOCUMENT, which is a different subject —
+   a row lost between those counters and solver/result.c's composer is visible here and in no assert — and it
+   is the half that survives a release build, where that DCHECK is compiled out and this reader still runs on
+   the bytes.
+   AN EMPTY OBJECT IS A CLAIM AND IS CHECKED AS ONE. `{}` is the positive statement that no component record
+   was reached under a running flow, so it is correct exactly when `cowStateAsks.hostRec` is 0 — which the
+   same sum check decides, with no separate arm to get wrong. A SITE IS ABSENT RATHER THAN 0 for the reason
+   the composer gives: this is a census of ASKS, and a zero row would be a claim about a call site's
+   reachability that an ask count is not entitled to make.
+   THE ROWS ARE NOT DIVIDED BY `cowStateMade`, for the pair's own reason — a walk asks once per key and
+   records ONCE — but they ARE divided by their own sum, which is a different and legitimate question: a
+   share of the asks is what names the site to go and look at, and the denominator is the one number this
+   reader has just proved the rows add up to. */
+function cowHostRecSiteReading(b) {
+  const u = b.cowHostRecAsksBySite;
+  if (u === null || typeof u !== "object" || Array.isArray(u))
+    throw new Error("[build] the @SWAP census carries no `cowHostRecAsksBySite` object — solver/result.c's " +
+                    "`cow_site_hist_json` composes it from solver/cow.c's site list on every census, so its " +
+                    "absence is that composer having changed rather than a run in which no component record " +
+                    "was reached. An absent partition and an empty one are different facts and this reader " +
+                    "will not average them.");
+  for (const [k, v] of Object.entries(u))
+    if (typeof v !== "number")
+      throw new Error(`[build] the @SWAP census's \`cowHostRecAsksBySite.${JSON.stringify(k)}\` is not a ` +
+                      `number — every row is one call site's LIFETIME ask count, and a non-numeric row ` +
+                      `cannot be summed against the kind total it is a partition of.`);
+  if (typeof b.cowStateAsks.hostRec !== "number")
+    throw new Error("[build] the @SWAP census names no `cowStateAsks.hostRec` for " +
+                    "`cowHostRecAsksBySite` to be a partition OF — that row is solver/cow.h's " +
+                    "`COW_STATE_KINDS` entry `X(HOST_REC, \"hostRec\")` and the per-site rows are its " +
+                    "breakdown, so without it these rows have no denominator and every share taken off them " +
+                    "would be against a total this reader made up.");
+  const rows = Object.entries(u);
+  const total = rows.reduce((t, r) => t + r[1], 0);
+  if (total !== b.cowStateAsks.hostRec)
+    throw new Error(`[build] the @SWAP census's \`cowHostRecAsksBySite\` sums to ${total} over ` +
+                    `${rows.length} site(s) against \`cowStateAsks.hostRec\` ${b.cowStateAsks.hostRec} — ` +
+                    `solver/cow.c raises a site's count in the same breath as the kind's, immediately after ` +
+                    `the prologue that raises it and before that unit's own gate, so the rows are a ` +
+                    `PARTITION of that number and no attribution composed from them is about the run that ` +
+                    `happened. The engine DCHECKs the same identity over its counters where both halves are ` +
+                    `in one hand; a difference visible HERE and not there is a row lost between those ` +
+                    `counters and solver/result.c's composer.`);
+  if (rows.length === 0)
+    return `; component-record asks by site — NO component record was reached under a running flow in this ` +
+           `run, which is a statement about what the run DID and not about the capture`;
+  const top = rows.sort((x, y) => y[1] - x[1]);
+  const share = (n) => `${n[0]} ${n[1]} (${Math.round(100 * n[1] / total)}%)`;
+  return `; component-record asks by site — ${total} over ${rows.length} site(s), ` +
+         `${top.slice(0, 3).map(share).join(", ")}` +
+         (top.length > 3 ? `, and ${top.length - 3} more` : ``) +
+         ` (a per-site LIFETIME count and a partition of cowStateAsks.hostRec, so it may be differenced ` +
+         `across two samples; never divided by cowStateMade)`;
 }
 /* WHETHER THE PER-FLOW COROUTINE-ACTIVATION SWAP HAPPENED AT ALL — the `is_gendata` entry kind, which the
    pair above is structurally blind to: it partitions `is_state` entries and nothing else, so however cow.h's
@@ -3277,7 +3340,7 @@ function censusReading(out) {
                `${w.b.worst} at the worst; chains holding ${w.b.heapSegs} heap segment(s) ` +
                `(${w.b.heapSegEntries} entries) + ${w.b.domSegs} DOM (${w.b.domSegEntries})` +
                (w.b.heapSegs > w.a.heapSegs ? ` and still growing` : ``) +
-               cowStateReading(w.b) + coroSwapReading(w.b));
+               cowStateReading(w.b) + cowHostRecSiteReading(w.b) + coroSwapReading(w.b));
   if (c) {
     parts.push(retiredReading(c.b));
     /* WHAT THE PARKED FRONTIER WEIGHS AND WHICH HALF OF IT — the pager's own trade, and the reason

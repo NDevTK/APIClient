@@ -1229,11 +1229,92 @@ void cow_capture_iter_state(JSContext *ctx, JSValueConst obj) {
 static JSContext *g_cow_ctx;
 void cow_set_ctx(JSContext *ctx) { g_cow_ctx = ctx; }
 
+/* WHICH COMPONENT ASKED — the head of the list of expansions that have been reached. See cow.h for why the
+   identity is the expansion's own storage rather than its `(file, line)`, and why there is no table. */
+static CowHostRecSite *g_host_rec_sites;
+
+/* A SITE'S FIRST ASK FILES IT, and this runs at most once per call site in the life of the instance — which is
+   what makes the duplicate check below affordable at O(sites) and the hot path a single pointer test.
+   THE DUPLICATE CHECK IS OVER THE LABEL AND NOT OVER THE STORAGE, and that is the whole of what it can find:
+   two distinct statics CANNOT be the same site, so a collision here means two expansions are wearing one
+   address — which is what a `static inline` in a HEADER would produce the day somebody writes one, since the
+   macro would then expand once per including translation unit under one `__FILE__` and one `__LINE__`. The
+   rows would look like a census with a duplicated key and the sum would still close, so nothing downstream
+   could tell. Today every call site is in a `.c`; this is what says so out loud the day one is not. */
+static bool cow_host_rec_site_unfiled(const char *file, int line) {
+    const CowHostRecSite *o;
+    for (o = g_host_rec_sites; o; o = o->next)
+        if (o->line == line && strcmp(o->file, file) == 0) return false;
+    return true;
+}
+
+static void cow_host_rec_site_register(CowHostRecSite *s, const char *file, int line) {
+    DCHECK(file != NULL, "a component-record capture reached this file with no `__FILE__` — the address is "
+                         "captured at the macro's expansion, so a call with none is a caller that reached "
+                         "cow_capture_host_record_at directly and named a site nothing can print");
+    DCHECKF(cow_host_rec_site_unfiled(file, line),
+            "two component-record capture sites are filing under ONE address — %s:%d is already on the "
+            "per-site census and a second expansion has reached it. The identity of a site is its own static, "
+            "so this is one expansion reached from two translation units, which is what a `static inline` in "
+            "a HEADER does; the census would then carry a duplicated key and its sum would still close, so "
+            "nothing further down could tell", file, line);
+    s->file = file;
+    s->line = line;
+    s->next = g_host_rec_sites;
+    g_host_rec_sites = s;
+}
+
+/* WHAT THE ROWS ADD UP TO — asked from the DCHECK below and nowhere else, so it reads and decides nothing,
+   which is what a DCHECK condition must be. A FUNCTION for cow_state_undeduped's reason exactly: DCHECKF's
+   release expansion is `sizeof` over its CONDITION, and a loop cannot be written inside one. */
+static long cow_host_rec_site_sum(void) {
+    const CowHostRecSite *s;
+    long sum = 0;
+    for (s = g_host_rec_sites; s; s = s->next) sum += s->asks;
+    return sum;
+}
+
+/* THE ROWS, AND THE PARTITION'S IDENTITY ARMED ON EVERY READ OF THEM — see cow.h. It is checked HERE, at the
+   one door a consumer comes through, rather than left to whoever renders them: the rows are a partition of
+   `g_state_asks[COW_STATE_HOST_REC]` — the same number `cowStateAsks.hostRec` publishes — so a consumer that
+   takes a share off these rows is taking it against that denominator whether or not it says so, and the two
+   sides CAN disagree, which is the test CLAUDE.md puts on an assert: add a second capture path reaching
+   cow_state_ask for this kind without passing a site, or an early return between the ask and the site's
+   increment, and this fires on the next census rather than on a table somebody reads later and believes.
+   IT IS NOT THE ONLY STATEMENT OF THIS IDENTITY AND THE OTHER ONE IS THE HALF THAT SURVIVES A RELEASE BUILD:
+   engine/build.mjs's @SWAP reader sums the RENDERED rows against the `cowStateAsks.hostRec` it is handed in
+   the same census, which is a different subject — this one checks the COUNTERS and that one checks the
+   DOCUMENT, so a row lost between here and the composer is visible there and nowhere else. */
+const CowHostRecSite *cow_host_rec_sites(void) {
+    DCHECKF(cow_host_rec_site_sum() == g_state_asks[COW_STATE_HOST_REC],
+            "the per-site component-record census sums to %ld over its rows against %ld asks of that kind — "
+            "a site's count is raised in the same breath as the kind's, immediately after the prologue that "
+            "raises it and before this unit's own gate, so a difference is an ask that reached "
+            "cow_state_ask(COW_STATE_HOST_REC) by a path carrying no site, or an early return added between "
+            "the two. Every reading composed from these rows would then be a share of a denominator the rows "
+            "do not add up to",
+            cow_host_rec_site_sum(), g_state_asks[COW_STATE_HOST_REC]);
+    return g_host_rec_sites;
+}
+
 void cow_capture_host_record_at(JSValueConst owner, void *p, const CowRecord *rec,
-                                const char *file, int line) {
+                                const char *file, int line, CowHostRecSite *site) {
     JSContext *ctx = g_cow_ctx;
     CowDelta *d = cow_state_ask(COW_STATE_HOST_REC);
     if (!d) return;
+    /* THE SITE'S ASK, IN THE SAME BREATH AS THE KIND'S AND BEFORE THIS UNIT'S OWN GATE — which is what makes
+       the rows a partition of `cowStateAsks.hostRec` rather than a second census with its own denominator.
+       Counting at the MACRO instead would have counted the reaches this file's prologue correctly drops (hooks
+       off, no current delta), so the rows would run ahead of the kind and cow_host_rec_sites would fire.
+       THE COST IS ONE POINTER TEST AND ONE ADD on eight bytes that are in L1 by construction: it is the same
+       static every time this site runs, so it adds no reference to a cold line — which is the only thing that
+       could matter across the hundred-odd million asks this row exists to attribute. The branch is taken once
+       per call site in the life of the instance. */
+    DCHECK(site != NULL, "a component record was captured with no census site — the site is the macro's own "
+                         "static and arrives with the address, so a NULL one is a caller that reached this "
+                         "function directly and whose asks would be counted in the kind and in no row");
+    if (!site->file) cow_host_rec_site_register(site, file, line);
+    site->asks++;
     DCHECKF(ctx != NULL,
             "a component record was captured before cow_set_ctx named the session's context, at %s:%d",
             file, line);

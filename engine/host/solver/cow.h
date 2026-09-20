@@ -234,10 +234,74 @@ void      cow_capture_host_state_at(JSContext *ctx, JSValueConst owner, void *p,
  * accessors take only the object, so the context is the session's, stashed by cow_set_ctx exactly as the DOM
  * delta's already is. */
 typedef struct { size_t size; const uint16_t *val_off; int n_val; } CowRecord;
+
+/* WHICH COMPONENT ASKED — the per-site half of this unit's ask count, and the one question `cowStateAsks`
+ * cannot be made to answer however many kinds cow.h's list grows.
+ *
+ * THE AGGREGATE NAMED A COST AND COULD NOT NAME AN OWNER. A census window measured 125,800,636 asks of THIS
+ * kind — 99.6% of every stepped microsecond in the window, byte-identical across two independent runs — and
+ * the only thing the number could say was "a component record was reached". `cowStateAsks.hostRec` is one
+ * counter behind ~30 accessors, so the reading that actually directs work ("which unwrap supplies two million
+ * asks a turn") was not a smaller version of it: it was a partition the counter has no room for. This is that
+ * partition, and it costs nothing to take because the address ALREADY ARRIVES — the macro below has been
+ * threading `__FILE__`/`__LINE__` to the checks since THE SITE TRAVELS WITH THE OPERATION was written.
+ *
+ * THE KEY IS THE EXPANSION AND NOT THE ADDRESS, WHICH IS THE ONE DECISION HERE THAT COULD HAVE BEEN WRONG
+ * QUIETLY. A table keyed on `(file pointer, line)` is the obvious shape and it rests on a property the
+ * language does not give: C11 §6.4.5 "String literals" — "It is unspecified whether these arrays are distinct
+ * provided their elements have the appropriate values." So whether two expansions of `__FILE__` in one
+ * translation unit are ONE object is a fact about the toolchain's literal pooling rather than about the
+ * program, and this project links two toolchains. Keying on the STRING instead puts a `strcmp` on the hottest
+ * path in the engine. Neither is needed: a macro expansion can carry its OWN STORAGE, so each call site gets
+ * one of these structs, the identity is that object's address, and a merge or a split is not expressible —
+ * two expansions are two objects and one expansion is one object, at every optimisation level and on either
+ * host. What `(file, line)` is still good for is the LABEL, resolved once at the site's first ask.
+ * IT IS ALSO WHY THE RECORD IS NOT THE KEY, which is the other shape a reader will reach for and which is
+ * wrong in BOTH directions at once: `RANGE_BOUNDS_REC` is passed from THREE sites (core/dom/abstract_range.c,
+ * and twice from core/dom/range.c) so keying on it merges three accessors into one row, while
+ * core/timing/performance_entry.c passes `e->cls->rec` — a record chosen per derived class at run time — so
+ * one site would split across as many rows as §3 has derived interfaces.
+ *
+ * NO TABLE, NO CAPACITY AND NO ALLOCATION: the sites are threaded onto a list through the statics THE LINKER
+ * HAS ALREADY ALLOCATED, so there is no array to size, nothing to grow inside a capture (where an allocation
+ * can raise a cold-tier sale back into this file — see cow_state_entry_set's first DCHECK), and no bound for
+ * a thirty-fifth call site to fall off the end of. `file` is NULL until the site's first ask and is what says
+ * "not yet on the list"; static storage zeroes it, so there is no initialiser for a call site to forget.
+ *
+ * `asks` IS A LIFETIME COUNT, raised at the same event and in the same breath as `g_state_asks[HOST_REC]` —
+ * after the prologue's gate and before this unit's own — so it may be differenced across two samples and the
+ * rows are a PARTITION of that kind's ask count. That identity is `cow_host_rec_sites`' own, asserted where
+ * both halves are in one hand, and re-derived from outside the process by engine/build.mjs's @SWAP reader
+ * because the DCHECK that states it is compiled out of the release build that reader still runs on. */
+typedef struct CowHostRecSite CowHostRecSite;
+struct CowHostRecSite {
+    long             asks;   /* LIFETIME COUNT of this expansion's asks — never a gauge, never a rate */
+    const char      *file;   /* the expansion's own `__FILE__`; NULL until its first ask files it below */
+    int              line;
+    CowHostRecSite  *next;
+};
 void      cow_capture_host_record_at(JSValueConst owner, void *p, const CowRecord *rec,
-                                     const char *file, int line);
-#define cow_capture_host_record(owner_, p_, rec_) \
-    cow_capture_host_record_at((owner_), (p_), (rec_), __FILE__, __LINE__)
+                                     const char *file, int line, CowHostRecSite *site);
+/* THE STATIC IS THE SITE, so the `do`/`while(0)` is not punctuation — it is the scope the storage lives in.
+   Every one of this macro's call sites is in statement position (an `if (x) …;`, a bare statement, or a
+   braced arm), which is what makes that legal here and is worth re-checking before anyone writes the first
+   one that is not. */
+#define cow_capture_host_record(owner_, p_, rec_) do {                                  \
+    static CowHostRecSite cow_hr_site_;                                                 \
+    cow_capture_host_record_at((owner_), (p_), (rec_), __FILE__, __LINE__,              \
+                               &cow_hr_site_);                                          \
+} while (0)
+
+/* THE SITES THIS RUN HAS ACTUALLY REACHED, newest first; NULL when no component record was ever asked for
+   under a running flow. A site that has never been reached is not on the list at all, which is the honest
+   shape: this is a census of asks and a row of 0 would be a claim about a call site's reachability that the
+   ask count is not entitled to make. */
+/* THE IDENTITY IS ARMED BY THIS CALL AND IS THE SINGLE MOST VALUABLE LINE IN THE PARTITION, which is why
+   there is no separate total accessor to forget to call: the rows sum to `g_state_asks[COW_STATE_HOST_REC]`
+   — the same number `cowStateAsks.hostRec` publishes — and that is asserted at this door, where both halves
+   are in one hand, rather than left to whoever renders them. A consumer needs no total of its own; the
+   denominator it should be taking shares against is already a row of the same census. */
+const CowHostRecSite *cow_host_rec_sites(void);
 
 /* AND THE WRITE, WHICH THE LAYOUT HAD NO OPERATION FOR — PUBLISH BEFORE RELEASE.
  *
