@@ -966,13 +966,19 @@ static int g_root_n;
    EMITTED, in the key rather than in a comment no consumer reads — a reader is standing at the census line,
    not here. What this record adds that the name cannot is the direction of the error, which is the half that
    decides where a misled reader goes.
-   WHAT RETIRES IT: a LIVE companion row. The question the misreading was reaching for — how many of the
-   document's own rows still await bytes RIGHT NOW — is real and is not answered anywhere; when a row answers
-   it, the ambiguity is gone and this paragraph goes with it. That row is NOT a walk of `g_root_scripts`,
-   which learns nothing after the seed (its `.body` is written at one line and never again), and it is not
-   document-wide either: a program row's kind lives on EACH FLOW's own table and a delivery rewrites the
-   flow's, so the honest answer is per-flow and the shape of the row is a question about the delivery's
-   fan-out rather than about this pair. */
+   THE LIVE COMPANION THIS RECORD ASKED FOR IS BUILT AND IS `engine_rows_awaiting_bytes` — the census emits
+   it as `rowsAwaitingBytes`, so the misreading now has a row that answers it and the pair reads as the
+   CONSTANT beside the GAUGE it always was. The clause that stood here said the question was "not answered
+   anywhere", which is the shape CLAUDE.md rates worst in this direction: an absence asserted in the present
+   tense is read by exactly one person, the one about to build it, and it goes on arguing for a second row
+   after the first has landed. It is kept in its own words for the half that is still load-bearing and that a
+   reader WILL otherwise re-derive wrongly — the row is NOT a walk of `g_root_scripts`, which learns nothing
+   after the seed (its `.body` is written at one line and never again), and it is not document-wide either: a
+   program row's kind lives on EACH FLOW's own table and a delivery rewrites the flow's, so the honest answer
+   is per-flow and the shape of the row is a question about the delivery's fan-out rather than about this
+   pair. What must not follow from this pair is an INEQUALITY: the gauge counts rows across every member and
+   a fork copies them, so it stands ABOVE `…AwaitedAtSeed` on any forking frontier and below it as soon as
+   one member is sold — neither direction is a broken count, which is why there is no assert between them. */
 static int g_root_n_held, g_root_n_awaited;
 static Flow *g_sess_cur;
 static int g_sess_live;
@@ -7252,6 +7258,49 @@ static void engine_seed_root_flow(Flow *f) {
 static DynKind flow_dyn_kind(const Flow *f) {
     if (f->script_i >= f->dyn_n) return DYN_PAGE_SCRIPT;
     return (DynKind)f->dyn_cand[f->script_i];
+}
+
+/* HOW MANY PROGRAM ROWS OF THE LIVE FRONTIER ARE STANDING ON AN ADDRESS RIGHT NOW — the LIVE companion
+   `rootProgramsAwaitedAtSeed`'s own record names as the thing that retires its ambiguity, and this is it.
+   THE PAIR IS A CONSTANT BESIDE A GAUGE AND THAT IS THE WHOLE OF WHAT IT BUYS. `…AwaitedAtSeed` is written at
+   one line and never again — what the document OWED the reply door when its rows were laid down — so it
+   cannot say whether those bytes ever came. This row can, and the two readings take OPPOSITE WORK: `17`
+   beside `0` is a bundle that arrived whole, so a run that never reached its later programs is the ORDER
+   failing; `17` beside `17` is a bundle whose bytes never arrived at all, which is the fetch path. Nothing
+   on the census line separated those, and the question was being settled by counting `<script src>`
+   elements off the page by hand.
+   IT IS PER-FLOW AND THE FAN-OUT IS THE ANSWER RATHER THAN A DISTORTION. A row's kind lives on EACH member's
+   own table (solver/flow.h's `dyn_cand`) and a fork COPIES it, so one document row awaited by N members
+   counts N times — each of those members independently stops at that position until its own delivery pays
+   it, which is exactly the quantity a reader asking what the frontier is waiting for wants. A walk of
+   `g_root_scripts` cannot answer it at all (that table's `.body` is written at the seed and never again) and
+   a document-wide count would be a third thing that is neither.
+   A SECOND WALK OF THE FRONTIER, like `flow_host_owed_count()` beside it on the census line, and for its
+   reason: this is a GAUGE, and the struct `engine_frontier_census` fills is documented at its emitter as
+   LIFETIME COUNTS. Putting it there would have made the kind contract — which groups rows MECHANICALLY by
+   which accessor filled them — wrong about a row for the first time.
+   NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: this walks the members the REGISTRY holds, so
+   a member the level-1 pager sold to the cold tier takes its awaited rows out of the number with it; the row
+   is a reading of the RESIDENT frontier rather than of everything the session still owes. WHAT THE NEXT DIFF
+   BUILDS: the same count taken as a member is WRITTEN OUT and carried on the park's own record, beside
+   `sold`, so a reader can tell a frontier that has been paid from one whose debt left with its members —
+   taken at the write because a park stores a recipe and replays the document from its first script
+   (solver/cold.h), so the residue holds no row to recompute it from. HOW ITS ABSENCE WOULD SHOW: on a run
+   whose `sold` is nonzero this row FALLS with no delivery having been made, so a reader watching it drain
+   sees the bundle arriving when what happened is that the members waiting for it were paged out. */
+long engine_rows_awaiting_bytes(void)
+{
+    long n = 0;
+    Flow *f;
+
+    for (int i = 0; (f = flow_at(i)) != NULL; i++) {
+        /* THE EIGHT PARALLEL ARRAYS ARE ALLOCATED TOGETHER (solver/flow.h), so a member with no rows has no
+           array at all and this is the read that says so rather than indexing one. */
+        if (!f->dyn_cand) continue;
+        for (int r = 0; r < f->dyn_n; r++)
+            if ((DynKind)f->dyn_cand[r] == DYN_SCRIPT_SRC) n++;
+    }
+    return n;
 }
 
 /* AND WHICH DOCUMENT IT BELONGS TO, re-derived from the same cursor and for the same reason. Past the end of

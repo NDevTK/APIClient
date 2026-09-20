@@ -1250,7 +1250,9 @@ char *result_swap_json(void) {
      `stepUnits`, `outOfProgramsAtTheLadderUnits` and `programCursors` — the second of which partitions
      `outOfProgramsAtTheLadder` rather than the frontier, so it is the one histogram here whose sum is a row
      on this line and not `live`. `owed` is `flow_host_owed_count()`, a second walk of the same frontier
-     and a gauge for the same reason. `perFlowKiB` and `sharedKiB` are SUMS OF GAUGES taken in that one walk.
+     and a gauge for the same reason, and `rowsAwaitingBytes` is `engine_rows_awaiting_bytes()`, a third walk
+     and a gauge for the same reason again — which is why it is a free function rather than a field of the
+     record below, since this grouping is by ACCESSOR and a gauge inside that record would make it wrong. `perFlowKiB` and `sharedKiB` are SUMS OF GAUGES taken in that one walk.
      From `engine_frontier_census` — LIFETIME COUNTS over this session, the only rows here a reader may
      difference: `finished`/`finishedFlows`/`finishedCands`, `sold`/`soldFlows`/`soldCands`, `forks`,
      `orphanClaimsMet`/`orphanClaimsUnmet`, every `host*` row, and `pagedReqs`/`pagedAsks`/`pagedUnarmed`/
@@ -1623,6 +1625,7 @@ char *result_cold_json(void) {
        one: a composer that read `left` and `left_arms` in two calls could publish a pair no instant of this
        session ever held. */
     long rp_hits, rp_left, rp_left_arms;
+    long awaiting_rows;   /* the awaited-rows gauge, read ONCE below and used by the assert and the row */
 
     cold_census(&c);
     engine_step_unit_runs(&r);
@@ -1696,6 +1699,32 @@ char *result_cold_json(void) {
     }
     cold_resumed(&resumed);
     engine_frontier_census(&e);
+    /* THE ONE READING OF THE AWAITED-ROWS GAUGE, TAKEN ONCE AND USED TWICE — the assert below and the row
+       emitted far down this composef are THE SAME NUMBER by construction. CLAUDE.md §Testing: an identity
+       holds WITHIN one sample and nowhere else, and this session has already paid for the other reading once,
+       when two rows taken at two ends of a run were differenced into a contradiction that held of no
+       quantity. A second call at the emit would be a second instant. */
+    awaiting_rows = engine_rows_awaiting_bytes();
+    /* AND IT IS A SUBSET OF THE REGISTERS IT IS COUNTED AGAINST, which is the only relation these two rows
+       have and therefore the only one worth asserting. Every row standing as an external script has exactly
+       one entry naming it by `dyn_id` on the SAME member's register — solver/engine.c pushes the two together
+       at the one site that creates such a row, flow_deliver_one_reply removes the entry and flips the row's
+       kind inside one C activation, a fork duplicates both (the arm's register is asserted the same length as
+       its parent's), and HTML §7.5.10 "Destroying documents"' removal walk takes the entry and the row
+       together. So an EXCESS is not a
+       large debt: it is a row whose park was retired without it, which is the state solver/engine.c's
+       cursor-side walk can only see for the ONE row a member happens to be standing at, and this sees it for
+       every row of every member. `pend_count` is the whole register and therefore a generous bound — the
+       chain is the same shape as `pend_ready <= pend_count` above and is asserted here for its reason, that
+       both are summed over ONE frontier in ONE pass and a disagreement is two sums over different
+       populations. */
+    DCHECK(awaiting_rows <= c.pend_count,
+           "more program rows of the frontier are standing on an address than there are pending register "
+           "entries to owe them bytes — a row awaiting a program and the park that names it are created and "
+           "retired together at every site that does either, so this is a row whose park was taken without "
+           "it: that member will stop at this position for the rest of the session on a reply nothing will "
+           "ever be asked for, and `rowsAwaitingBytes` is about to be published as a debt the reply door does "
+           "not hold");
     decide_replay_stats(&rp_hits, &rp_left, &rp_left_arms);
     /* THE CURSOR HISTOGRAM AGAINST THE MAXIMUM IT IS READ BESIDE — the one identity that says the two rows are
        about the same run, asserted here because this is the only place both are in one hand. It is not a
@@ -1835,6 +1864,25 @@ char *result_cold_json(void) {
                     reached by counting `<script src>` elements off the page by hand. A partition, asserted at
                     engine_frontier_census. */
                  "\"rootProgramsHeldAtSeed\":%d,\"rootProgramsAwaitedAtSeed\":%d,"
+                 /* …AND THE LIVE HALF OF THAT PAIR, WHICH IS A GAUGE AND WHICH THE TWO ROWS ABOVE ARE NOT.
+                    `…AwaitedAtSeed` is a CONSTANT — what the document OWED the reply door when its rows were
+                    laid down, written at one line and never again — so on its own it cannot say whether those
+                    bytes ever came, and the misreading it invites (`…Awaited 17` read as "seventeen are STILL
+                    owed") has already sent a reader to a component with nothing wrong in it. This row is the
+                    question that misreading was reaching for: how many program rows of the LIVE frontier are
+                    standing on an address right now.
+                    THE TWO READINGS TAKE OPPOSITE WORK, which is the whole of why the pair is worth a row.
+                    `17` beside `0` is a bundle that arrived WHOLE, so a run that never reached its later
+                    programs is the ORDER failing and the reader wants `programCursors`; `17` beside `17` is a
+                    bundle whose bytes never came, which is the fetch path and the reply door. Nothing on this
+                    line separated them.
+                    IT IS SUMMED PER MEMBER AND NO INEQUALITY AGAINST `…AwaitedAtSeed` HOLDS IN EITHER
+                    DIRECTION, so there is no assert between them: a fork copies its parent's rows, so one
+                    document row awaited by N members counts N times and drives this ABOVE the seed's arm,
+                    while a member the pager sells takes its awaited rows out of the number and drives it
+                    below. The relation this row does have is to `pend` and is asserted where both are in one
+                    hand, at the head of this composer. */
+                 "\"rowsAwaitingBytes\":%ld,"
                  /* THE COUNTS BESIDE THOSE TWO MAXIMA, AND THE @S SEARCH'S OWN NUMERATOR AND DENOMINATOR. See
                     solver/engine.h for the whole reading; the part a reader of THIS line needs is that
                     `progStartsCand` alone means nothing. A `0` there is `no breakout was ever queued` and it
@@ -1931,6 +1979,7 @@ char *result_cold_json(void) {
                  e.deepest, e.completed, e.deepest_left,
                  e.root_programs,
                  e.root_programs_held_at_seed, e.root_programs_awaited_at_seed,
+                 awaiting_rows,
                  e.prog_starts, e.prog_starts_cand, e.prog_starts_other, e.prog_queued_cand,
                  e.sold, e.sold_flows, e.sold_cands, e.forks,
                  ran, resumed.segs, resumed.flows, resumed.cands, resumed.worlds,

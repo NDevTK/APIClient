@@ -1641,6 +1641,23 @@ typedef struct {
 } EngineFrontierCensus;
 void engine_frontier_census(EngineFrontierCensus *out);
 
+/* HOW MANY PROGRAM ROWS OF THE LIVE FRONTIER ARE STANDING ON AN ADDRESS WHOSE BYTES HAVE NOT ARRIVED — the
+ * GAUGE that `rootProgramsAwaitedAtSeed` is the CONSTANT half of, and the reason it is a free function rather
+ * than a field of the record above. That record is documented at its emitter (solver/result.c) as LIFETIME
+ * COUNTS, and the grouping there is MECHANICAL — a row inherits its kind from the accessor that filled it —
+ * so a gauge inside it would make that contract wrong about a row for the first time. `flow_host_owed_count`
+ * is the existing member of this shape and this stands beside it on the census line for its reason.
+ * WHAT THE PAIR SEPARATES, which is the whole of why it exists: `…AwaitedAtSeed` says what the document OWED
+ * the reply door when its rows were laid down and cannot say whether those bytes ever came, so `17` beside a
+ * `rowsAwaitingBytes` of 0 is a bundle that arrived WHOLE — a run that never reached its later programs is
+ * then the ORDER failing — and `17` beside `17` is a bundle whose bytes never arrived, which is the fetch
+ * path. Those take opposite work and no row on that line separated them.
+ * IT IS SUMMED PER MEMBER AND THE FAN-OUT IS THE ANSWER. A fork copies its parent's rows, so one document row
+ * awaited by N members counts N times: each of them stops at that position until its own delivery pays it. No
+ * inequality against `…AwaitedAtSeed` holds in either direction — forking drives it above, a sale drives it
+ * below — which is why there is no assert between the two. */
+long engine_rows_awaiting_bytes(void);
+
 /* THE ALLOCATOR UNDER THE JS HEAP, which is the one number quickjs's own accounting structurally cannot give.
  * `JS_ComputeMemoryUsage` walks the RUNTIME; Lexbor's document arenas, the per-flow COW deltas and every other
  * `malloc` in this host are invisible to it, so a run whose RSS is sixteen times its JS heap has nothing in
