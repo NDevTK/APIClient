@@ -26962,6 +26962,26 @@ static int abi_main(int argc, char **argv)
            last step produced is exactly the one a drain placed before the terminator would lose. */
         abi_notices();
         if (step == ENGINE_STEP_DONE) break;
+        /* WHAT THE FRONTIER LOOKS LIKE RIGHT NOW — @SWAP/@COLD/@HEAP/@WFQ/@FORKAT, from solver/engine.c's one
+           emitter, which decides for itself whether this round is a sample. This driver's output IS a stream
+           of lines, which is the whole of why it prints them: the same five censuses ride the `@RESULT`
+           document below, and that document is composed when the frontier DRAINS or STALLS — which a real
+           page's frontier does neither of inside any budget anyone has given one. So every run of this host
+           against a real site has ended on a signal with its entire census unwritten, and a run exploring
+           thousands of worlds has been indistinguishable from a run wedged on one member. MEASURED before
+           this line existed: one `document` record over this channel drove a page to a DRAIN — 9808 context
+           switches, 774 flows, 4644 jobs, a 14-row fork table — and wrote `@QUANTUM`, its bills and
+           `@RESULT`, with not one census line in between; the same host on a page that does not drain wrote
+           `@QUANTUM` and nothing else.
+           BEFORE THE PAINT AND BEFORE THE BILL, WHICH IS AN ORDERING AND NOT A PLACEMENT. `abi_paint` walks
+           CSS 2.1 §E.2 "Painting order" over a real page's boxes and the comment below it says in as many
+           words that it is the road most likely to abort at a capability this engine has not built — so a
+           census taken after it would be the one a paint abort costs, and this round's numbers are exactly
+           what a reader of that abort needs. The bill follows for the same reason in reverse: what the
+           frontier IS explains what it is asking for.
+           ITS COST IS PUBLISHED ON THE LINE ITSELF and is not this driver's to state twice — see
+           engine_census_emit, and read @WFQ's `scanCensusWeights` against `scanNextWeights` on any sample. */
+        engine_census_emit();
         /* AND THE IMAGE THIS ROUND WAS HANDED THE THREAD FOR — @PERWORLD. A yield leaves the member the
            scheduler was holding SWITCHED IN, with its COW and DOM deltas applied (solver/engine.c holds it in
            a static across this return and asserts it is still a member when it picks it back up), so this is

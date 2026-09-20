@@ -231,6 +231,19 @@ function fieldLines(entries) {
    `-` IS ABSENCE, WHICH IS A DIFFERENT FACT FROM EMPTINESS, and main.c holds the two apart at both entries
    this feeds: a NETWORK ERROR has no body at all, a 204 has one that is zero bytes long, an answer that is a
    number has none while an answer that is a document has bytes. */
+/* THE FIVE MARKERS solver/engine.c's `engine_census_emit` writes, in the order it writes them — @SWAP then
+   @COLD then @HEAP then @WFQ then @FORKAT, one printf each so that each is a RECORD a reader can match on.
+   THE LIST IS HELD HERE AND NOT DERIVED, AND THE REASON IS THAT ITS FAILURE IS LOUD AND IN THE RIGHT
+   DIRECTION. A sixth census added to that function and not to this line reaches `onLine`'s final `throw` —
+   "the host wrote a record under the verb … which this zone does not carry" — which is exactly what this
+   file's `@QUANTUM` arm records as the CORRECT behaviour and the repair as the reader rather than a case
+   that swallows the line. A list that went silently stale would be the other direction, and there is nothing
+   here to derive from in any case: the emitter is C and this is Node.
+   THE ORDER IS COPIED FROM THE EMITTER AND NOTHING HERE DEPENDS ON IT — every arm below is keyed on the
+   MARKER — but engine/build.mjs's @FORKAT reader pairs that census with the @COLD of the same block BY
+   INDEX, so the order is a contract of the stream and is written down where a reader of this file can see
+   which stream it is reading. */
+const CENSUS_MARKERS = ['@SWAP', '@COLD', '@HEAP', '@WFQ', '@FORKAT'];
 const b64 = (x) => Buffer.from(x === undefined ? '' : x).toString('base64');
 const ABSENT = '-';
 
@@ -560,6 +573,13 @@ async function main() {
       tag: `${docId}/s${++serial}`,
       say: (rec) => child.stdin.write(rec + '\n'),
       ready: [], answered: new Map(), stalled: false, live: true, result: null, quantum: null,
+      /* WHAT THE FRONTIER LOOKED LIKE WHILE THIS INSTANCE WAS STILL RUNNING — see `onLine`'s census arm. The
+         COUNT is the load-bearing member and not the numbers: a killed run's result document does not exist,
+         so the only thing that separates a run that explored thousands of worlds from one wedged on a single
+         member is the SERIES this instance wrote before it died. `firstLive`/`lastLive` are @COLD's `live`,
+         which solver/cold.h declares as "live members of the frontier" — a GAUGE, so it states what was true
+         at one instant and the two are never differenced into a rate. */
+      census: { n: 0, byMarker: new Map(), firstLive: null, lastLive: null },
       /* THE KEYS THE NEXT WRITE TO THIS CHILD PAYS OFF — see `track` for why a fetch key is released by the
          WRITE and not by the work. It is a list beside `ready` rather than a field on each record because only
          `workFetch` composes a record that answers a REQUEST key, and it composes all four of them through one
@@ -1255,6 +1275,57 @@ async function main() {
       e.quantum = q;
       return;
     }
+    /* THE PERIODIC SCHEDULER CENSUS — @SWAP, @COLD, @HEAP, @WFQ, @FORKAT, written by solver/engine.c's
+       `engine_census_emit` once per sampled round and ECHOED HERE THE MOMENT IT ARRIVES.
+       WHY IT IS ECHOED RATHER THAN ACCUMULATED, WHICH IS THE WHOLE POINT OF THE ARM. `@RESULT` is composed
+       when the frontier DRAINS or STALLS, and a real page's frontier does neither inside any budget anyone
+       has given one — every real-site run of this zone has ended on a signal with no result document at all.
+       A reader who waits for the report at the bottom of this file gets NOTHING from exactly the runs that
+       needed explaining, so a line held for a summary is a line a `SIGKILL` deletes. It goes out at arrival,
+       on STDERR, which is where every other sentence this zone says goes and which keeps `console.log`'s
+       stdout the pure result document `peergate.mjs` reads it as.
+       VERBATIM AND NOT A DIGEST, deliberately. These five lines carry upwards of two hundred rows between
+       them and each row has a KIND — @COLD's `live` is a gauge, its `forks` and `steps` are lifetime counters
+       — so a field list chosen here would be a second contract over the engine's census, maintained by hand
+       in the reader, which is the drift CLAUDE.md's §AN-AUDITOR-DERIVES-THE-RULE names. The bytes are the
+       engine's own; what this zone adds is the INSTANCE and the SAMPLE ORDINAL, which the engine cannot know
+       and which are what make a multi-instance drive readable and a truncated tail countable.
+       THE PAYLOAD IS ASSERTED TO PARSE AND NEVER SWALLOWED, on the same ground the `@QUANTUM` arm above
+       states: these composers speak one JSON grammar, so a payload this zone cannot read is the two grammars
+       having parted and is a failure rather than a line to drop. */
+    for (const marker of CENSUS_MARKERS) {
+      if (!line.startsWith(marker + ' ')) continue;
+      const payload = line.slice(marker.length + 1);
+      let c;
+      try { c = JSON.parse(payload); }
+      catch (err) {
+        throw new Error(`instance [${e.tag}] wrote a \`${marker}\` census whose payload will not parse: ` +
+                        `${line.slice(0, 200)} — solver/result.c and solver/decide.c compose all five with ` +
+                        'the same grammar `@QUANTUM` uses, so an unreadable one is the two grammars having ' +
+                        `parted (${err.message})`);
+      }
+      if (marker === '@COLD') {
+        /* ONE ROW IS READ AND IT IS ASSERTED RATHER THAN DEFAULTED. solver/result.c emits every row of this
+           census including the zeroes, precisely so that an ABSENT row and a ZERO row stay different facts,
+           and a `??` here would turn a producer that stopped writing `live` into a plausible datum — which
+           is the defect that made `@RESUMED` read 0 for every session there has ever been. */
+        if (typeof c.live !== 'number')
+          throw new Error(`instance [${e.tag}]'s \`@COLD\` census carries no numeric \`live\` — it is the ` +
+                          'frontier\'s own member count and the one row this zone reads off the line, so a ' +
+                          'census without it is a producer this reader is no longer paired with: ' +
+                          line.slice(0, 200));
+        e.census.n += 1;
+        if (e.census.firstLive === null) e.census.firstLive = c.live;
+        e.census.lastLive = c.live;
+      }
+      /* THE ORDINAL IS PER MARKER AND NOT PER BLOCK, so a line's number is a fact about its OWN stream. A
+         block ordinal would be a POSITION inside a set this reader does not control, and the one thing it
+         would be used for — noticing a truncated tail — is exactly what five independent counts already say
+         better: a killed run ends mid-block, and five counts that no longer agree is where it stopped. */
+      e.census.byMarker.set(marker, (e.census.byMarker.get(marker) || 0) + 1);
+      console.error(`[trusted] [${e.tag}] ${marker}#${e.census.byMarker.get(marker)} ${line}`);
+      return;
+    }
     const f = line.split('\t');
     if (f[0] === 'fetch') {
       if (f.length !== 8)
@@ -1462,6 +1533,46 @@ async function main() {
                        : 'A DESCHEDULED THREAD IS CHARGED, so machine load decided how far this run got and ' +
                          'no total below is a fact about a revision — quote it with the load average or not ' +
                          'at all.'));
+  }
+  /* WHAT EACH INSTANCE WAS DOING WHILE IT RAN, WHICH IS THE ONLY THING A KILLED RUN LEAVES BEHIND.
+     `@RESULT` is composed when the frontier DRAINS or STALLS and a real page's frontier does neither inside
+     any budget anyone has given one, so for the runs this zone most needs to explain the report below this
+     block does not exist. This one always does, because it is a statement about the STREAM.
+     THE SAMPLE COUNT IS THE DISCRIMINATOR AND IT SEPARATES THREE STATES, which is the whole of why
+     solver/engine.c takes its first sample unconditionally rather than waiting for the first work gate:
+       · NONE — the instance never reached a round with a live session, or the binary predates the emitter.
+         It is not a claim that nothing happened; it is a claim that nothing was asked.
+       · ONE — the frontier has not moved `ENGINE_PROGRESS_EVERY` units of work nor minted a candidate since
+         the run began. That is a WEDGED run, said POSITIVELY and with the numbers it wedged at, and it is
+         the state that used to be indistinguishable from a busy one.
+       · MANY — the engine was exploring, and the echoed series above says how: @COLD's `live` and `forks`,
+         @SWAP's `installs` and @WFQ's `picksLifetime` moving is a frontier being worked; the same numbers
+         frozen across samples is one member holding the thread while the rest of the run goes on around it.
+     `@QUANTUM` IS THE WITNESS THAT THE PATH RAN, and it is why NONE is readable at all. quantum.c announces
+     at the FIRST SLICE, so an instance that announced a quantum and produced no census is one that opened a
+     slice and never reached a census call — a fact about this run — while an instance that announced neither
+     never opened a slice, which is a fact about the binary or the seed. An absent measurement and a zero
+     measurement are different facts and this is where this zone says which it is holding.
+     THE TWO `live` READINGS ARE A GAUGE AT TWO INSTANTS AND ARE NEVER DIFFERENCED INTO A RATE — solver/cold.h
+     declares the row as "live members of the frontier", so what they support is "it was N, then it was M",
+     which is a comparison of two instants and not a quantity per unit of anything. */
+  for (const i of instances) {
+    const q = i.quantum === null ? 'and announced no quantum either, so it never opened a cooperative slice'
+                                 : 'though it DID announce a quantum, so it opened a slice and ran';
+    if (i.census.n === 0)
+      console.error(`[trusted] [${i.tag}] wrote NO scheduler census (ended ${i.ended}) ${q}. That is a ` +
+                    'statement about what was asked, never a page that was explored and found empty.');
+    else if (i.census.n === 1)
+      console.error(`[trusted] [${i.tag}] wrote exactly ONE scheduler census (ended ${i.ended}), with ` +
+                    `${i.census.lastLive} live frontier member(s) in it — the run never advanced another ` +
+                    'ENGINE_PROGRESS_EVERY units of work nor minted a candidate after its first round, ' +
+                    'which is a WEDGED engine rather than a quiet one. The sample above is where it stopped.');
+    else
+      console.error(`[trusted] [${i.tag}] wrote ${i.census.n} scheduler censuses (ended ${i.ended}); the ` +
+                    `frontier held ${i.census.firstLive} live member(s) at the first and ` +
+                    `${i.census.lastLive} at the last. Those are two readings of a GAUGE and not a rate; ` +
+                    'the echoed @COLD/@SWAP/@WFQ series above is what says whether forks, switches and ' +
+                    'picks were moving between them.');
   }
   if (root.result === null) {
     console.error(`[trusted] the host produced no @RESULT (ended ${root.ended}) — an ABSENT result and a result ` +

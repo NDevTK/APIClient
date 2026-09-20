@@ -582,6 +582,33 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
                         lxb_dom_element_t **els, int n, int forking, const char *recipes);
 int  engine_sched_step(void);
 
+/* THE PERIODIC CENSUS, FOR A HOST WHOSE OUTPUT IS A STREAM OF LINES — @SWAP, @COLD, @HEAP, @WFQ, @FORKAT,
+ * in that order, from the same five composers that put these bytes on the result document.
+ *
+ * CALLED BETWEEN TWO STEPS, ON THE HOST'S OWN TIME, ONCE PER ROUND. It decides for itself whether a sample is
+ * DUE — `ENGINE_PROGRESS_EVERY` units of `engine_work_done()` or a new @S candidate, whichever comes first —
+ * so a host's rule is "call it when you come back from a step" with nothing to get right, which is the same
+ * shape `engine_sched_end` gives the session close one entry up. A host that called it per opcode would be
+ * choosing a cadence the engine already owns.
+ *
+ * WHY A HOST NEEDS IT AT ALL, WHICH IS THE WHOLE OF THE ENTRY. The result document is built when the frontier
+ * DRAINS or STALLS, and a real page's frontier does neither inside any budget anyone has run — so a host that
+ * waits for it reports NOTHING about a run that is killed, and a run exploring thousands of worlds and a run
+ * wedged on one member are the same silence. These five lines are what tell them apart while the run is still
+ * going: @COLD's `live`/`forks`/`finished`/`steps`, @SWAP's `installs` and @WFQ's `picksLifetime`/`members`
+ * rising is a frontier being explored, and the same numbers frozen across two samples is one member holding
+ * the thread.
+ *
+ * WHO CALLS IT: `run_scheduler` here, and `test_forced.c`'s `--abi` arm. NOT the wasm ABI hosts — they read
+ * the RESULT DOCUMENT, which carries these same bytes, and a line for them would be a second spelling of a
+ * number they already hold. NOT inside `engine_sched_step`, which would put the emission on every host of
+ * this ABI whether its stdout is a record stream or a console.
+ *
+ * ITS COST IS ON THE LINE IT PRINTS. A sample is O(frontier members) and solver/flow.h's `FLOW_SCAN_CENSUS`
+ * note says it weighs every member TWICE; @WFQ's `scanCensusWeights` against `scanNextWeights` is what
+ * fraction of all frontier-weighing went to the REPORT rather than to the run, on the very run being read. */
+void engine_census_emit(void);
+
 /* THE SESSION ENDS WHEN THE HOST STOPS STEPPING, AND EVERY HOST SAYS SO THE SAME WAY. `begin`/`step`/`end`,
  * with `end` called unconditionally at the point the host leaves its loop — never `if (r != ENGINE_STEP_DONE)`,
  * which is a condition each host has to copy correctly and which one of them will not.

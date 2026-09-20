@@ -13034,9 +13034,140 @@ void engine_set_provider(int (*provide)(JSContext *ctx)) { g_provider = provide;
 static int (*g_park_hook)(void);
 void engine_set_park_hook(int (*want_park)(void)) { g_park_hook = want_park; }
 
+/* THE CENSUS, FOR EVERY HOST WHOSE OUTPUT IS A STREAM OF LINES — one cadence, one order, one emitter.
+ *
+ * WHY THIS IS A FUNCTION AND NOT A BLOCK IN A LOOP, AND IT IS A CORRECTION RATHER THAN A TIDY-UP. The five
+ * lines below stood inside `run_scheduler`, which the smoke fixture reaches through `engine_run` and NOTHING
+ * else does — the ABI's hosts drive `engine_sched_step` through `qjs_step` and never enter that loop. So the
+ * five censuses were COMPOSED on every sample of every run and PRINTED only by the fixture, which is
+ * §Testing's "measure what the shipped path writes, not what a harness prints" with the writer on the wrong
+ * side of it for the SECOND time in one file: the block's own banner records the first, where these rows were
+ * computed for the product and printed for the smoke, and moving the numbers into this block fixed the
+ * COMPOSITION and left the EMISSION exactly where it was.
+ *
+ * WHAT THAT COST, MEASURED ON THE SHIPPED PATH RATHER THAN ARGUED. `test_forced.c --abi`, driven with one
+ * `document` record over its own channel, ran a page to a DRAIN — 9808 context switches, 774 flows, 4644 jobs
+ * and a 14-row fork table — and wrote `@QUANTUM` once, its bills, and `@RESULT`. Not one census line. The
+ * same host on a page whose frontier does NOT drain inside a budget writes `@QUANTUM` and nothing else at all,
+ * so a run exploring thousands of worlds and a run wedged on one member are the SAME SILENCE from outside.
+ * That is the only thing this entry changes: both are still the same run; only one of them is now legible.
+ *
+ * WHO CALLS IT AND WHO DELIBERATELY DOES NOT. The block's own banner already states the rule — "a host that
+ * publishes a DOCUMENT reads the census out of it, and a host whose output IS lines must print it when it is
+ * TAKEN or it is not in the output at all" — and it names exactly two hosts in this tree: `run_scheduler`
+ * (the smoke) and `test_forced.c`'s `--abi` arm (the native ABI, whose trusted zone reads its stdout as a
+ * record stream). The wasm ABI hosts — `route.mjs`, `solvergate.mjs`, `pagecensus.mjs`, the extension's
+ * bridge — read the RESULT DOCUMENT, which carries these same bytes from these same composers, so a line for
+ * them would be a second spelling of a number they already hold.
+ *
+ * WHERE IT RUNS AND HOW OFTEN, STATED HERE BECAUSE AN OBSERVER RUNS AT THE FREQUENCY OF WHAT IT OBSERVES.
+ * On the HOST's own time, between two steps, never inside a slice — so it creates no JS value and the flow
+ * stamp and the capture route are down, which is what makes `result_heap_json`'s runtime walk legal here. The
+ * cadence is `ENGINE_PROGRESS_EVERY` units of `engine_work_done()` (forks + flows + jobs + switches) or a NEW
+ * CANDIDATE, whichever comes first, and a sample is O(frontier members): solver/flow.h's own note says it
+ * weighs every member twice, and prices ITSELF on the line it prints — read `scanCensusWeights` against
+ * `scanNextWeights` on the @WFQ line of the very run you are reading for the share of all frontier-weighing
+ * that went to the REPORT rather than to the run. An instrument that cannot be priced from its own output is
+ * the one §Testing says is not a measurement; this one can be, on every sample, by its reader.
+ *
+ * THE FIRST SAMPLE IS UNCONDITIONAL AND THAT IS LOAD-BEARING, not an artifact of `last_cands` starting at -1.
+ * It is what separates THREE states a reader otherwise cannot tell apart from a killed run's output: NO census
+ * line at all is a host that never reached its first round (or a binary without this entry); EXACTLY ONE is a
+ * frontier that has not moved `ENGINE_PROGRESS_EVERY` units nor minted a candidate since — a wedged run, said
+ * POSITIVELY, with the numbers it wedged at; MANY is a run exploring, and the series says how. An absent line
+ * and a zero line are different facts (solver/result.c says so about every row of @COLD), and this is that
+ * rule applied to the sample itself.
+ *
+ * THE CADENCE IS STATIC AND NOT A CALLER'S LOCAL, which is the one behaviour change here beyond the caller
+ * set. `engine_work_done` is a LIFETIME counter that this file refuses to reset at a session boundary, so a
+ * cadence restarting per call would be a reporting interval keyed on a clock that does not restart with it.
+ * `long` rather than the `int` the local carried, for the same reason: the counter is a long and a run that
+ * outlives an `int` would wrap its own reporting interval. */
+void engine_census_emit(void)
+{
+    static long next = ENGINE_PROGRESS_EVERY;
+    static int  last_cands = -1;
+
+    /* THE PRECONDITION THAT MAKES EVERY LINE BELOW LEGAL, NAMED AT THE CALLER'S MISTAKE. Each of the five
+       composers walks state the SESSION owns — the frontier, the pager's tables, the runtime behind
+       `g_sess_ctx` — so a host that asks for a census outside a live session is asking about nothing, and
+       `result_heap_json`'s own null check would report it as a missing runtime one component further on. */
+    DCHECK(g_sess_live && g_sess_ctx != NULL,
+           "a census was asked for with no live session — every row of these five lines is a walk of the "
+           "frontier, the pager and the runtime this session holds, so a host asking here is reporting on "
+           "state that has been torn down or was never seeded");
+
+    /* Either enough work has happened to be worth a line, or the SEARCH grew — a new candidate is the event
+       that changes what the rest of the run will cost, so it is worth saying when it happens. */
+    if (engine_work_done() < next && solve_candidate_count() == last_cands)
+        return;
+    while (engine_work_done() >= next) next += ENGINE_PROGRESS_EVERY;
+    last_cands = solve_candidate_count();
+
+    /* THE FOUR CENSUSES, EACH PRINTED FROM THE ONE COMPOSER THAT ALSO PUTS IT ON THE RESULT DOCUMENT
+       — solver/result.c's `result_swap_json`/`result_cold_json`/`result_heap_json`/`result_wfq_json`
+       and solver/decide.c's `decide_fork_json`. Not four renderings of four structs: one composer per
+       census, two emission sites, and the bytes are the SAME BYTES, so the two can never disagree.
+
+       WHY THEY MOVED HERE, AND IT IS THE SAME SENTENCE FOR ALL OF THEM. Every row below was a static of
+       this file with exactly one consumer — a printf inside `run_scheduler`, which `engine_run` reaches
+       and nothing else does — so the pager's own accounting, the runtime's heap decomposition, the cost
+       of a context switch and the frontier's provenance were computed on every census of every
+       production run and printed on NONE of them: §Testing's "measure what the shipped path writes, not
+       what a harness prints" with the writer on the wrong side of it. Sixty-nine numbers, not one of
+       them ever read off a real page.
+
+       AND THAT REPAIR FIXED THE COMPOSITION AND LEFT THE EMISSION, WHICH IS WHY THE SENTENCE ABOVE IS
+       REWRITTEN RATHER THAN DELETED — a reader who re-derives it will re-introduce the printf inside one
+       host's loop. The clause it used to carry ("this loop runs for exactly one host … the extension's
+       ABI drives `engine_sched_step` directly and never enters this function") was TRUE of the block and
+       is what made these five lines a fixture-only stream: the numbers reached the product's result
+       DOCUMENT and the lines reached only the smoke, so a run that never drains — which is every real
+       page inside any budget anyone has given one — printed nothing at all. This is a FUNCTION for
+       exactly that reason, and the banner above it names both of its callers and the two hosts that
+       deliberately do not call it.
+
+       A HOST WHOSE OUTPUT IS A STREAM OF LINES STILL PRINTS ITS OWN LINE, and that is not a second
+       reporting mechanism: it is the rule result.h states for a page error and test_forced.c states
+       for the @S array — a host that publishes a DOCUMENT reads the census out of it, and a host whose
+       output IS lines must print it when it is TAKEN or it is not in the output at all.
+
+       THE @PROGRESS LINE IS GONE AND ITS ROWS ARE NOT. `switches`, `flows` and `candidates` were the
+       result document's `_switches`/`_flows`/`_candidates` under a second spelling; `objects` and
+       `heapKiB` were the @HEAP line's own rows; `live` and `sold` are the frontier's and are in the
+       cold census, where `finished` beside them is what tells a frontier that RETIRED its flows from
+       one that PAGED them; `forks` and the fork table are `_forkAt` and its total. What is deleted
+       outright is the three that were a SAMPLE of one flow rather than a census of anything — the
+       running flow's script cursor, and the sink and payload of whichever candidate happened to be
+       switched in. `deepest` and `completed` answer the cursor's question as facts about the DOCUMENT,
+       and the @S array already carries every candidate's sink and payload; a sample of one flow at one
+       instant is not a measurement the next reader can compare against anything. */
+    {
+        char *swap = result_swap_json(), *cold = result_cold_json();
+        char *heap = result_heap_json(g_sess_ctx), *wfq = result_wfq_json(), *forks = decide_fork_json();
+
+        CHECK(swap && cold && heap && wfq && forks,
+              "a census could not be composed — these five lines are the whole of what this host says "
+              "about the frontier it is draining, and a run that continues without one reports its "
+              "cost, its heap and its order as an absence that reads exactly like a zero");
+        /* ONE PRINT PER MARKER, because a marker is what a reader MATCHES on: build.mjs greps
+           `^@COLD (\{.*\})$` and `^@WFQ (\{.*\})$` to drive its stuck-run discriminators, and a
+           single format string carrying five of them puts four marker names in the middle of an
+           emission where nothing looking for an emission's marker can see them. The bytes on the
+           stream are identical; what differs is whether the stream is READABLE as five records. */
+        printf("@SWAP %s\n", swap);
+        printf("@COLD %s\n", cold);
+        printf("@HEAP %s\n", heap);
+        printf("@WFQ %s\n", wfq);
+        printf("@FORKAT %s\n", forks);
+        free(swap); free(cold); free(heap); free(wfq); free(forks);
+    }
+    fflush(stdout);
+}
+
 static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types,
                           lxb_dom_element_t **els, int n, int forking, const char *recipes) {
-    int next = ENGINE_PROGRESS_EVERY, last_cands = -1, r;
+    int r;
     /* THE RESIDUE THIS HOST WAS HANDED, or NULL. This line used to say the cold tier's resume "belongs to the
        host that has an IndexedDB", and that was a claim about STORAGE standing in for a claim about the
        SCHEDULER: seeding from a residue is engine_sched_begin's own alternative to seeding a boot flow, and a
@@ -13146,61 +13277,7 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
             if (r == ENGINE_STEP_STALLED && filled == 0)
                 break;
         }
-        /* Either enough work has happened to be worth a line, or the SEARCH grew — a new candidate is the event
-           that changes what the rest of the run will cost, so it is worth saying when it happens. */
-        if (engine_work_done() >= next || solve_candidate_count() != last_cands) {
-            while (engine_work_done() >= next) next += ENGINE_PROGRESS_EVERY;
-            last_cands = solve_candidate_count();
-            /* THE FOUR CENSUSES, EACH PRINTED FROM THE ONE COMPOSER THAT ALSO PUTS IT ON THE RESULT DOCUMENT
-               — solver/result.c's `result_swap_json`/`result_cold_json`/`result_heap_json`/`result_wfq_json`
-               and solver/decide.c's `decide_fork_json`. Not four renderings of four structs: one composer per
-               census, two emission sites, and the bytes are the SAME BYTES, so the two can never disagree.
-
-               WHY THEY MOVED, AND IT IS THE SAME SENTENCE FOR ALL OF THEM. This loop runs for exactly one
-               host: `engine_run` is called by the smoke fixture and by nothing else, while the extension's ABI
-               drives `engine_sched_step` directly and never enters this function. So the pager's own
-               accounting, the runtime's heap decomposition, the cost of a context switch and the frontier's
-               provenance were computed on every census of every production run and printed on NONE of them —
-               §Testing's "measure what the shipped path writes, not what a harness prints" with the writer on
-               the wrong side of it. Sixty-nine numbers, not one of them ever read off a real page.
-
-               A HOST WHOSE OUTPUT IS A STREAM OF LINES STILL PRINTS ITS OWN LINE, and that is not a second
-               reporting mechanism: it is the rule result.h states for a page error and test_forced.c states
-               for the @S array — a host that publishes a DOCUMENT reads the census out of it, and a host whose
-               output IS lines must print it when it is TAKEN or it is not in the output at all.
-
-               THE @PROGRESS LINE IS GONE AND ITS ROWS ARE NOT. `switches`, `flows` and `candidates` were the
-               result document's `_switches`/`_flows`/`_candidates` under a second spelling; `objects` and
-               `heapKiB` were the @HEAP line's own rows; `live` and `sold` are the frontier's and are in the
-               cold census, where `finished` beside them is what tells a frontier that RETIRED its flows from
-               one that PAGED them; `forks` and the fork table are `_forkAt` and its total. What is deleted
-               outright is the three that were a SAMPLE of one flow rather than a census of anything — the
-               running flow's script cursor, and the sink and payload of whichever candidate happened to be
-               switched in. `deepest` and `completed` answer the cursor's question as facts about the DOCUMENT,
-               and the @S array already carries every candidate's sink and payload; a sample of one flow at one
-               instant is not a measurement the next reader can compare against anything. */
-            {
-                char *swap = result_swap_json(), *cold = result_cold_json();
-                char *heap = result_heap_json(ctx), *wfq = result_wfq_json(), *forks = decide_fork_json();
-
-                CHECK(swap && cold && heap && wfq && forks,
-                      "a census could not be composed — these five lines are the whole of what this host says "
-                      "about the frontier it is draining, and a run that continues without one reports its "
-                      "cost, its heap and its order as an absence that reads exactly like a zero");
-                /* ONE PRINT PER MARKER, because a marker is what a reader MATCHES on: build.mjs greps
-                   `^@COLD (\{.*\})$` and `^@WFQ (\{.*\})$` to drive its stuck-run discriminators, and a
-                   single format string carrying five of them puts four marker names in the middle of an
-                   emission where nothing looking for an emission's marker can see them. The bytes on the
-                   stream are identical; what differs is whether the stream is READABLE as five records. */
-                printf("@SWAP %s\n", swap);
-                printf("@COLD %s\n", cold);
-                printf("@HEAP %s\n", heap);
-                printf("@WFQ %s\n", wfq);
-                printf("@FORKAT %s\n", forks);
-                free(swap); free(cold); free(heap); free(wfq); free(forks);
-            }
-            fflush(stdout);
-        }
+        engine_census_emit();
     }
     /* THE SESSION IS CLOSED ON EVERY EXIT, not only on the one that drained. `engine_sched_step` closes it when
        it answers DONE; the OTHER way out of this loop — a stall nobody can supply — left the session LIVE, with
