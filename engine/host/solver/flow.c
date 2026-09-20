@@ -82,8 +82,29 @@ static int64_t g_picks_total = 0;
    `wTop - wMin` is 0.036 — the fixture's figure to the digit — with `valMin == valMax == valTop == 4`, so the
    reward is not a common offset here either, it is one value every member holds. 71452 members and 71451
    forks come from FIFTY branch sites at `brDepthMax` 6 over THIRTY-NINE source reads, one bucket holding
-   38836: a cross product of a handful of unknowns, not seventy thousand decisions. 10507 of 10569 steps are
-   REPLAY HITS, so nearly all of the thread goes into re-running prefixes.
+   38836: a cross product of a handful of unknowns, not seventy thousand decisions.
+   AND THE SENTENCE THAT STOOD HERE — "10507 of 10569 steps are REPLAY HITS, so nearly all of the thread goes
+   into re-running prefixes" — IS A UNIT ERROR, REWRITTEN RATHER THAN DELETED BECAUSE ITS CONCLUSION IS WHAT
+   THIS BLOCK GETS QUOTED FOR AND A READER WHO RE-DERIVES IT WILL RE-DIVIDE THE SAME TWO ROWS. `replayHits` is
+   counted in ARMS — decision-vector slots consumed at dec_replay — and decide.c says so at the declaration and
+   calls reading it otherwise "the `svcMax` defect exactly"; `steps` is ENTRIES INTO flow_step, raised at that
+   function's own first lines. One step passes through as many branches as its program has, so arms per step
+   has no ceiling of 1 and "10507 of 10569" is not a subset relation at all — the two magnitudes happened to
+   agree, which is the shape that never gets checked.
+   AND THE CONCLUSION IS CONTRADICTED BY THE FORK ITSELF, which no arithmetic would have caught:
+   engine_sibling_assemble COPIES the parent's frame, its `script_i`, its `last_compiled` and its delta (an
+   O(1) shared base segment), so an IN-SESSION sibling does not re-run its prefix — that function's own DCHECK
+   forbids the state in which it would, in the words "its first step would compile that program's row again
+   and replay every side effect the parent has already performed". Replay is what a COLD-TIER REBUILD does,
+   and this run reports `resumed` 0.
+   WHAT THE ROW LICENSES IN ITS OWN UNIT IS LESS THAN EITHER READING, AND SAYING SO IS THE POINT: not every
+   fork records a slot at all (decide_fork_same_path asks no predicate, and dec_fork_handoff "claims no replay
+   slot"), so 10507 arms against 71451 forks is not a fraction of anything this document publishes. The row
+   says how many recorded questions were re-asked and matched. It does not say where the thread went, and no
+   row on that line does — `scanNextWeights`/`steps` against `members` and `scanRivalRuns` against `forks` are
+   the two that were built for exactly that question and neither was quoted here.
+   RETIRES: a run of this mirror quoting those two scan rows, after which this paragraph is about a derivation
+   nobody needs to be warned off.
    WHAT IS NEW IS THE CURSOR HISTOGRAM, AND IT IS A FACT ABOUT THE DOCUMENT RATHER THAN THE QUEUE.
    `deepest` 7, `programCursors` {0..6: 0, 7: 71296, 8: 156}: ONE program is holding the entire frontier —
    71296 members have finished program 6 and are standing at program 7's door, while 156 have finished 7 and
@@ -4693,6 +4714,16 @@ void flow_wfq_census(WfqCensus *out) {
        does not know until flow_best runs below, so the width is COLLECTED here and only ATTRIBUTED to the
        front there. It costs no weighing — the walk has already computed this member's weight. */
     long never_at_w = 0;
+    /* …AND THE DEEPEST ROW OF THE DOCUMENT'S PROGRAM TABLE ANY MEMBER IS STANDING AT, WITH THE BEST WEIGHT
+       OFFERED THERE AND HOW MANY STAND WITH IT — held here for the three maxima above's reason exactly:
+       `cur_deep_w_gap` is a DIFFERENCE against a top this scan does not know until flow_best runs below, so
+       the population is COLLECTED here and only ATTRIBUTED to the front there. The `have_` flag is what keeps
+       "no member standing" from being spelled the same way as "a member standing at row 0", which matters
+       here more than at the gaps above: row 0 is where every member of a fresh frontier is. */
+    int cur_deep = 0;
+    long cur_deep_live = 0;
+    double cur_deep_w = 0.0;
+    int have_cur_deep = 0;
 
     /* THE WEIGHINGS flow_best WILL PERFORM BELOW, READ BEFORE IT RUNS — the other half of what a sample costs,
        and it is captured here rather than derived afterwards because FLOW_SCAN_OTHER is SHARED (the host's
@@ -4775,6 +4806,10 @@ void flow_wfq_census(WfqCensus *out) {
        beside it: a frontier with no ready holder states no gap and states no counts, and a reader who found
        one of the three set and the others not would be holding a gap about members this scan never found. */
     out->deliv_w_gap_vis = out->w_top_vis = 0;
+    /* …AND THE SAME SENTENCE FOR THE DOCUMENT-PROGRESS GAP AND ITS POPULATION, zeroed together for the reason
+       the delivery triple is: they are written in ONE branch below, so a reader who found the cursor set and
+       the gap not would be holding a distance to members this scan never found. */
+    out->cur_deep = 0; out->cur_deep_live = 0; out->cur_deep_w_gap = 0.0;
     for (i = 0; i < g_flows_n; i++) {
         const Flow *f = g_flows[i];
         int64_t s = flow_service_notch(f);
@@ -4786,6 +4821,21 @@ void flow_wfq_census(WfqCensus *out) {
            skips nothing, so its count is the frontier's size per sample by construction, which is what makes
            the identity below an assertion rather than a restatement. */
         g_scan_weights[FLOW_SCAN_CENSUS]++;
+        /* …AND WHERE THIS MEMBER STANDS IN THE DOCUMENT'S OWN PROGRAM TABLE, KEPT FOR THE DEEPEST ROW ANYBODY
+           IS AT — see flow.h. Rewritten WHOLESALE when a deeper member is met and accumulated when an equal
+           one is, because the population is "the members at the maximum" and the maximum is not known until
+           the walk ends; a running maximum that only ever climbed would leave the count summing every row it
+           passed through. It costs no weighing: `w` one line up is this member's, taken for `w_min` anyway.
+           `Flow.script_i` AND NOT A DERIVED DEPTH, deliberately: that is the same field cold.c's
+           `program_cursors` histogram buckets on, so the two rows are in ONE unit and a reader may check this
+           maximum against that histogram's top non-empty index. A second spelling of "how far has this member
+           got" would be two quantities one reader would subtract. */
+        if (!have_cur_deep || f->script_i > cur_deep) {
+            have_cur_deep = 1; cur_deep = f->script_i; cur_deep_live = 1; cur_deep_w = w;
+        } else if (f->script_i == cur_deep) {
+            cur_deep_live++;
+            if (w > cur_deep_w) cur_deep_w = w;
+        }
         /* HOW MANY DECISIONS THIS FLOW STANDS ON, read from wherever its decision state currently lives: a
            parked flow's blob, and decide.c's live globals for the one the scheduler is switched into — the
            same split cold.c's census makes, because there is only one place each can be. Asked of EVERY
@@ -5372,6 +5422,16 @@ void flow_wfq_census(WfqCensus *out) {
         if (never_w == out->w_top) out->never_picked_at_top = never_at_w;
     }
 
+    /* …AND HOW FAR THE FRONT STANDS AHEAD OF THE MEMBERS THAT HAVE RUN FURTHEST THROUGH THE DOCUMENT — taken
+       here for the identical reason the three gaps above are, and written as ONE branch so the cursor, its
+       population and the distance are either all three about members this scan found or all three zero. See
+       flow.h for what the reading separates and for why no term of the order may ever read it. */
+    if (have_cur_deep && top) {
+        out->cur_deep = cur_deep;
+        out->cur_deep_live = cur_deep_live;
+        out->cur_deep_w_gap = out->w_top - cur_deep_w;
+    }
+
     /* WHAT A SAMPLE COST, ASSERTED AS THE IDENTITY IT IS: this function weighs the frontier EXACTLY TWICE, once
        in its own walk and once inside flow_best, so the weighings flow_best just performed must equal the
        members this walk enumerated. It is worth an assert rather than a comment because both sides can move for
@@ -5469,6 +5529,32 @@ void flow_wfq_census(WfqCensus *out) {
        members this scan never found — and asserting it is what makes the sentence checkable: they are written
        together or not at all, so any of them speaking with `deliv_ready` at zero is that branch having
        acquired a second writer. */
+    /* AND THE DOCUMENT-PROGRESS GAP IS NON-NEGATIVE BY THE SAME CONSTRUCTION, ASSERTED FOR THE SAME REASON
+       `never_picked_gap`'s is: `w_top` is flow_best's maximum over EVERY member with no filter, and the member
+       this gap is from is one of them, so the front cannot stand behind it. A negative reading is flow_best
+       and this walk disagreeing about the frontier or about the comparator — the one thing that would make
+       every sentence read off this row a reading of the disagreement rather than of the run. */
+    DCHECK(out->cur_deep_w_gap >= 0.0,
+           "a WFQ census read a NEGATIVE gap to the deepest member of the document's program table — `w_top` "
+           "is the maximum over every member and the member this gap is from is one of them, so the front of "
+           "the order cannot be behind it; this is flow_best and the census walk reading two frontiers");
+    /* …AND THE POPULATION CANNOT EXCEED THE FRONTIER IT IS DRAWN FROM. Both sides come out of ONE walk over
+       `g_flows_n` — `members` is that bound and `cur_deep_live` is a count of trips through it — so this is an
+       assertion about the loop having one population and not an arithmetic tautology: a `continue` added above
+       the collection, or a second walk folded into this one, breaks it. */
+    DCHECK(out->cur_deep_live <= out->members,
+           "a WFQ census counted more members standing at the deepest program row than the frontier holds — "
+           "both numbers come out of one walk of the registry, so a count above the population is that walk "
+           "having been given a second source of members");
+    /* …AND THE THREE ARE WRITTEN TOGETHER OR NOT AT ALL, which is the delivery triple's own check one row
+       over. A cursor or a gap speaking with NO member standing at it is that branch having come apart, and it
+       is the one shape that would make a reader price an order against a population this scan never found.
+       THE CONVERSE IS NOT ASSERTED AND MUST NOT BE: a frontier standing wholly at row 0 reports `cur_deep` 0
+       with `cur_deep_live` at the whole frontier, which is a fresh document and the ordinary state. */
+    DCHECK(out->cur_deep_live > 0 || (out->cur_deep == 0 && out->cur_deep_w_gap == 0.0),
+           "a WFQ census stated a deepest program row or a distance to it with NO member standing there — the "
+           "cursor, its population and the gap are written in one branch, so any of them speaking alone is "
+           "that branch having come apart and the row is a distance to nobody");
     DCHECK(out->deliv_ready > 0 ||
            (out->deliv_w_gap == 0.0 && out->deliv_w_gap_vis == 0 && out->w_top_vis == 0),
            "the WFQ census states a reply backlog's distance from the front of the order, or the visit counts "

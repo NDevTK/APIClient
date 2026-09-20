@@ -2372,6 +2372,54 @@ typedef struct {
      * narrowing of the one quantity the pair exists to state. */
     int64_t deliv_w_gap_vis;  /* GAUGE: `visits` of the best READY holder — the member `deliv_w_gap` is from */
     int64_t w_top_vis;        /* GAUGE: `visits` of the member at `w_top` — the member `deliv_w_gap` is to */
+
+    /* HOW FAR THROUGH THE DOCUMENT'S OWN PROGRAM TABLE THE FRONTIER'S DEEPEST MEMBER HAS GOT, AND WHAT THE
+     * ORDER OFFERS IT — the one sentence neither this census nor the cursor histogram can say alone, and the
+     * one that separates the two opposite diagnoses a piled-up frontier has.
+     *
+     * WHAT IS MISSING WITHOUT IT. `programCursors` (solver/cold.h) says WHERE the members stand and every row
+     * of this struct says WHAT THE ORDER IS OFFERING, and nothing joins them: a frontier reading `{7: 71296,
+     * 8: 156}` is either an order that ranks the 156 who got through program 7 AT THE FRONT — in which case
+     * the members are being offered the thread in the right sequence and the tail is not being reached for
+     * want of dispatches — or an order that ranks 71296 members still at row 7 AHEAD of them, in which case
+     * the sequence itself is wrong. THOSE TAKE OPPOSITE WORK: the first is repaired by finding where a TURN
+     * GOES and the second by a TERM, and flow.c's block at `g_arrivals` records the same run being dispatched
+     * as the second when the rows it quoted could only have shown the first.
+     *
+     * IT IS THE `deliv_w_gap` SHAPE AND NOT A NEW ONE — a difference against `w_top`, with the population it
+     * is a maximum over published beside it, written in ONE branch so a reader who finds a gap is holding the
+     * count it is about. `cur_deep_w_gap` is 0.0 exactly when a member standing at the deepest row is itself
+     * at the front of the order, which is the order having nothing to answer for; a positive gap is the
+     * distance the front stands ahead of every member that has run furthest, in the same points
+     * `never_picked_gap` and `nonreward_max` are in, so a reader can price it against one emission's worth
+     * without a second rule.
+     *
+     * IT COSTS NO WEIGHING. The walk has already computed each member's weight for `w_min`/`w_top`, so these
+     * three are collected off a number that was going to be taken anyway — which is the bar flow.h's
+     * FLOW_SCANS sets for anything this census does, and `scanCensusWeights` is unchanged by them.
+     *
+     * THE KINDS. `cur_deep` and `cur_deep_live` are GAUGES over the members standing NOW: both may FALL
+     * between two samples (a member at the deepest row departs, or one advances past it and takes the whole
+     * population with it), so neither may be differenced and neither is a high-water mark — `deepest` and
+     * `deepest_left` (solver/engine.h) are the monotone pair and these are deliberately not them. The gap is a
+     * reading at an instant like every other weight row here.
+     *
+     * READ AGAINST `programCursors` ON THE SAME SAMPLE AND THE PAIR CHECKS ITSELF. `cur_deep` is the top
+     * non-empty index of that histogram and `cur_deep_live` is that bucket's count, computed by a DIFFERENT
+     * WALK in a different file over the same `Flow.script_i`; when the two censuses carry one `workDone` they
+     * must agree, and a disagreement is two walks reading two frontiers. That is a reading and not an assert,
+     * because the two are composed by two functions and nothing in this engine guarantees they were taken at
+     * one instant — which is precisely why the top bucket is REPEATED here rather than left to be joined
+     * across two objects, the same correction `workDone` on this line already made for `_unitsDone`.
+     *
+     * A REPORT AND NEVER A BOUND (§NO BOUNDS). No term of flow_weight reads any of the three, no pick branches
+     * on them, nothing is shed or capped by them; a cursor entering the order would be a term monotone in a
+     * quantity a fork carries FORWARD, which ranks the youngest arm highest — the LIFO CLAUDE.md names, not a
+     * drain order — and this row exists to say whether such a term is even called for before anybody writes
+     * one. */
+    int  cur_deep;        /* GAUGE: the deepest `Flow.script_i` any live member stands at; 0 on an empty walk */
+    long cur_deep_live;   /* GAUGE: how many live members stand there — the gap's own population */
+    double cur_deep_w_gap; /* `w_top` minus the best weight offered by a member standing at `cur_deep` */
 } WfqCensus;
 void flow_wfq_census(WfqCensus *out);
 

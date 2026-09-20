@@ -947,6 +947,29 @@ char *result_wfq_json(void) {
                         met them there would be one row away from subtracting quantities taken over
                         different populations. */
                      "\"delivWGapVis\":%lld,\"wTopVis\":%lld,"
+                     /* …AND THE SAME DIFFERENCE TAKEN AGAINST THE MEMBERS THAT HAVE RUN FURTHEST THROUGH THE
+                        DOCUMENT'S OWN PROGRAM TABLE — the row that joins this line to `programCursors` on the
+                        @COLD one, which no row on either could do alone. solver/flow.h carries the derivation;
+                        what a reader does with it is one comparison: `curDeepWGap` at 0.000 says a member
+                        standing at the deepest row IS the front of the order, so the sequence the thread is
+                        being offered in is right and a tail that is not being reached is not being reached for
+                        want of DISPATCHES; a positive gap is the order ranking members that have got LESS far
+                        ahead of every member that has got further, which is the ordering, and the distance is
+                        in the same points as `neverPickedGap` and `nonrewardMax` so it can be priced against
+                        one emission's worth without a second rule. Those two take OPPOSITE work and nothing in
+                        this document told them apart.
+                        READ THE THREE TOGETHER OR NONE OF THEM. `curDeepLive` is the gap's population and is
+                        what separates "156 members got through and stand at the front" from "one did"; without
+                        it the distance is a statement about an unnamed member. GAUGES, both counts: a member
+                        at the deepest row departing, or one advancing past it, moves them DOWN, so neither may
+                        be differenced and neither is `deepest`/`deepestLeft`, which are the monotone pair.
+                        AND THE PAIR CHECKS ITSELF ACROSS THE TWO CENSUSES when they carry one `workDone`:
+                        `curDeep` is `programCursors`' top non-empty index and `curDeepLive` is that bucket's
+                        count, computed by a DIFFERENT walk in a different file over the same `Flow.script_i`.
+                        The top bucket is repeated here rather than left to be joined across two objects for
+                        the reason `workDone` itself was added to this line — two censuses share no identity
+                        unless a row holds one. */
+                     "\"curDeep\":%d,\"curDeepLive\":%ld,\"curDeepWGap\":%.3f,"
                      /* AND WHAT ASKING THIS ORDER COST, which every row above is silent about because every
                         row above is about what the order DECIDED. solver/flow.h's FLOW_SCANS states why the
                         three entries are counted apart and why the quantity is a count rather than a clock;
@@ -1098,6 +1121,7 @@ char *result_wfq_json(void) {
                      w.mem_unframed,
                      w.deliv_ready, w.deliv_framed, w.deliv_owed, w.deliv_w_gap,
                      (long long)w.deliv_w_gap_vis, (long long)w.w_top_vis,
+                     w.cur_deep, w.cur_deep_live, w.cur_deep_w_gap,
                      flow_scan_runs(FLOW_SCAN_NEXT),  flow_scan_weights(FLOW_SCAN_NEXT),
                      flow_scan_runs(FLOW_SCAN_RIVAL), flow_scan_weights(FLOW_SCAN_RIVAL),
                      flow_scan_runs(FLOW_SCAN_OTHER), flow_scan_weights(FLOW_SCAN_OTHER),
