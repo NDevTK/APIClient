@@ -5710,6 +5710,49 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
  *       a landing order, which is the ordinary trap when the deep member has no consumer yet: the carrier's
  *       only reader today was built for the delivery mechanism's arm, and the reader it is FOR is
  *       engine_perform's attach loop, which (iii) builds.
+ *       AND THAT ORDER IS ITSELF THE TRAP IT NAMES, WHICH IS THE THIRD CORRECTION ON THIS CLAUSE AND IS
+ *         RECORDED RATHER THAN APPLIED FOR THE REASON THE TWO ABOVE IT ARE. It diagnoses a dependency order
+ *         read as a landing order and then states one: with no PUSH there is no source for the addressee, so
+ *         (ii) lands a field no writer can fill and (iii) lands a refusal that cannot fire. THE ENUMERATION
+ *         IS SHORT A MEMBER, and that is why the order looks sound — the carrier's reader is named as
+ *         engine_perform's attach loop, which is ONE HOP TOO FAR. engine_perform runs in the PEER instance
+ *         and never sees this flow's list at all; the chain is carrier -> THE RECORD WRITER -> the wire ->
+ *         engine_perform, and the record writers are window_proxy.c's cross-document read and
+ *         remote_object.c's five traps, two components away from this file. A residual sits in ONE file and
+ *         its author reasons from where they are standing, which is the scope mis-aim CLAUDE.md names.
+ *       WHAT MAKES THE SOURCE ABSENT IS THE ENTRY'S DEATH, and this file already writes the fact down twice
+ *         and keeps no reader for it. engine_host_answer records the answering timeline on the register
+ *         (PEND_ANSWER_WORLD) under a comment saying in as many words that a flow which does not know whose
+ *         answer it took cannot address its next operation to that timeline; flow_answer_fork writes the same
+ *         field onto the arm. The ONE reader either write has is pending_answer_world_seen, the duplicate
+ *         check — and engine_host_take removes the entry as it hands the value back, so the name dies at the
+ *         take and neither the issuer nor the arm carries it into the operation it is FOR. The addressing
+ *         half of that field is a write whose reader does not exist, which is the defect CLAUDE.md names and
+ *         is the whole of why the pin cannot be first.
+ *       AND THE PUSH IS BLOCKED ON ONE ASSERT IN THIS FILE, NAMED SO THE NEXT LANE STARTS THERE.
+ *         deliver_admits' refusal arm asserts the arm that takes a refused record exists, and proves it with
+ *         `strchr(c, ',')` — a proxy for deliver_fork_arm having run. That block says itself that an answer
+ *         row satisfies neither direction of it. So the push is (b) below and not (c), and the member before
+ *         it is that assert learning to ask which mechanism minted a row's sibling arm. THE ROW SHAPE IS
+ *         WHERE THAT LANDS AND IT IS NOT THIS COMPONENT'S ALONE: the [vector, taken] pair is written and read
+ *         by the cold tier as well (park_rec_commit, and the resume's `,0`/`,1` flag), so a third element
+ *         crosses into solver/cold.c and the two must land together or a park loses the distinction.
+ *       LANDING ORDER, EACH MEMBER WITH THE CALL THAT CONSUMES IT TODAY:
+ *         (a) LANDED — flow_world_commit_push aborts on two RECEIVED rows that CONTRADICT, and its message
+ *             names this pin as the repair.
+ *         (b) deliver_admits' arm-existence assert asks a row which mechanism minted its sibling, not the
+ *             vector's shape. Consumer today: that assert. Spans solver/cold.c; ONE landing with it.
+ *         (c) THE PUSH — flow_answer_fork replaces the arm's RECEIVED row with the world it was forked over,
+ *             and engine_host_answer pushes the issuer's. Consumer today: deliver_admits, once (b) is in.
+ *         (d) THE WRITER-SIDE READ — window_proxy.c and remote_object.c read the carrier for the document
+ *             they are addressing. Consumer: (ii)'s field. This is the member the enumeration above omits.
+ *         (e) (ii) and (iii), which are ONE landing: a field with no consult is a grammar change that buys
+ *             nothing, and a consult with no field reads a slot that is not there.
+ *       AND (c) CANNOT OUTLIVE A PARK UNTIL A RESUMED FLOW KEEPS ITS OWN WORLD. cold.c's park_flow_add calls
+ *         flow_add with WORLD_NONE, so a rebuilt timeline is a fresh ROOT rather than a child of the world
+ *         its recipe was parked under — which deliver_admits' own block already states from the other end,
+ *         and which makes every commitment a resumed flow carries name a forest its own world is not in. An
+ *         addressee written before that is one a park turns into a name relating to nothing.
  *     (ii) THE FIELD MAY NOT GO BESIDE THE DOCUMENT. `engine/route.mjs` is trusted-zone JavaScript, which
  *       §A-CROSS-BOUNDARY-DIFF makes LIVE ON WRITE, and it reads this grammar positionally — `split('\t')[1]`
  *       for the holder and `split('\t')[2]` for the asking world — while relaying the record VERBATIM. An
@@ -5718,6 +5761,15 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
  *       is a pass-through; wpt_runner.c's parent walks to the second tab for the document and forwards the
  *       rest), so the pin does NOT span the JS/C seam and lands as C only. The tail is variadic
  *       (`object.apply … <arg>*`), so index 3 is the only fixed slot every verb has.
+ *       THE CONCLUSION HOLDS AND THE READER LIST IS SHORT BY FOUR, which matters because a lane sent to
+ *         build this checks the files the clause names. THREE trusted-zone files read this grammar
+ *         positionally, not one: route.mjs takes the holder and the asking world, and trusted.mjs's
+ *         askOperation and extension/bridge.js each take the holder only — both of the latter relay the
+ *         record whole, so an index-3 field is invisible to them. On the C side test_forced.c's fixture
+ *         answers a `windowproxy.get` by scanning BACK from the record's end for the last field, which
+ *         survives an insertion at 3 exactly while the member stays last, and html_iframe.c writes a sixth
+ *         record this grammar has no verb for — dead behind its own DFAIL in dev and live in release, so it
+ *         shifts with the others or the release wire carries two grammars.
  *     (iii) ADDRESSING IS NOT IDENTITY, AND THE PRESCRIBED CRASH FIRES ON THE PEER BEING CORRECT. A fork
  *       RETIRES the world it branched at and mints a child for both arms (world_mint_child), so every live
  *       flow's world is a LEAF: the world an answer named stops naming any flow the first time that peer
@@ -5750,8 +5802,12 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
  *     two counts ceasing to be equal — the addressed one becoming a strict subset whose dropped members
  *     are exactly the worlds the addressee CONTRADICTS, which is ONE only where the peer has not branched
  *     since it answered.
- *   RETIREMENT: this whole block goes when engine_perform's attach loop consults an addressee, at which
- *     point the refusal is in the code and the reasoning above is re-derivable from it. */
+ *   RETIREMENT: this whole block goes when engine_perform's attach loop REFUSES a flow on an addressee a
+ *     writer filled from the carrier, at which point the refusal is in the code and the reasoning above is
+ *     re-derivable from it. The clause said `consults an addressee` and that is satisfiable by a loop
+ *     reading a slot nothing ever writes — a retirement condition whose two sides cannot disagree, which
+ *     would have retired this block for a mechanism that does nothing and taken the reasoning with it. A
+ *     retirement condition is a check like any other: ask what state of the program makes it FAIL. */
 static int flow_answer_fork(JSContext *ctx, Flow *f) {
     int n = pending_count(f->pending), i;
 
