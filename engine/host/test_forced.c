@@ -76,6 +76,8 @@
 #include "core/css/css_computed_value.h"   /* css-display-3 §2.8's root rule, asserted where a page could otherwise abort the engine */
 #include "core/css/css_property_syntax.h"
 #include "core/css/css_var.h"   /* css-variables-1 §3's var() substitution, the syntax half */
+#include "core/css/css_pending_substitution.h"   /* css-values-5 "Substitution in Shorthand Properties" */
+#include "core/css/css_shorthand.h"   /* …and the grammar its resolution step re-expands through */
 #include "core/css/css_math.h"   /* css-values-4 §10's grammar, §10.9's type algebra and §10.10.1's reduction */
 #include "core/css/css_numeric_value.h"   /* CSS Typed OM 1 §4.3.2's create-a-type, and §5.4.1's ratio */
 #include "core/css/css_syntax_match.h"
@@ -4636,6 +4638,101 @@ static void css_var_selftest(void)
     tf_var_is("var(width)", NULL);
     tf_var_is("var(--)", NULL);
     tf_var_is("var()", NULL);
+}
+
+/* css-values-5 "Appendix A: Arbitrary Substitution Functions" / "Substitution in Shorthand Properties" — AN
+   APPENDIX, so the titles are the citation and no § is written beside them. THE PENDING-SUBSTITUTION VALUE,
+   exercised with no DOM, no realm and no cascade, which is the whole of what core/css/
+   css_pending_substitution.h claims to be exercisable with.
+   IT ENDS AT `css_shorthand_serialize_value` DELIBERATELY. The encode/decode round trip is the cheap half and
+   would pass with the value wired to nothing; what actually has to hold is that a pending value REACHES the
+   places a real value reaches and is answered by the standard's rule there rather than by the property's own
+   grammar — so the last two assertions go through the REAL serializer, which is the site this landing edited
+   and the one where a regression would otherwise show up only as an author seeing a control character. */
+static void css_pending_selftest(void)
+{
+    const char *four[4], *mixed[4];
+    char *v, *sh, *out;
+    const char *orig;
+    char lone[16];
+
+    /* THE MARK IS READ OFF THE COMPONENT AND NEVER SPELLED HERE. core/css/css_pending_substitution.c keeps it
+       private, and a fixture that wrote its own copy would go on passing while testing a different encoding —
+       the second copy of a generated fact that this tree's auditors exist to prevent, arriving in the one
+       place nobody audits. Every value this function makes is therefore MADE by the component. */
+    v = css_pending_make("margin", "");
+    lone[0] = v[0];
+    lone[1] = 'x';
+    lone[2] = '\0';
+    free(v);
+
+    /* NOT ONE. Each of these is an ordinary value that must never be decoded, and the last is the shape that
+       makes the encoding's own split exact: a LEADING mark with no separator after it is not one either. */
+    CHECK(!css_pending_is(NULL), "a pending-substitution value is never absent");
+    CHECK(!css_pending_is("40px 0"), "an ordinary value must not read as a pending-substitution value");
+    CHECK(!css_pending_is(lone), "a mark with no separator after it is not the encoding");
+
+    /* THE ROUND TRIP, and the case the encoding is designed for: the ORIGINAL VALUE may hold the mark itself
+       and still split correctly, because the SHORTHAND NAME cannot, so the second mark is the separator. */
+    v = css_pending_make("margin", "var(--gap) 0");
+    CHECK(css_pending_is(v), "a value this file just made must read as a pending-substitution value");
+    CHECK(css_pending_split(v, &sh, &orig), "a value this file just made must decode");
+    CHECK(strcmp(sh, "margin") == 0 && strcmp(orig, "var(--gap) 0") == 0,
+          "css-values-5 \"Substitution in Shorthand Properties\": the pending-substitution value must carry "
+          "BOTH halves back — the shorthand whose grammar re-expands it, and the value AS WRITTEN that the "
+          "substitution step runs over. A truncated half here is a longhand resolved from somebody else's "
+          "declaration or from half of its own");
+    free(sh);
+    free(v);
+    {
+        char carries[8];
+
+        carries[0] = lone[0];       /* the component's own mark, INSIDE the original value */
+        carries[1] = ' ';
+        carries[2] = '0';
+        carries[3] = '\0';
+        v = css_pending_make("margin", carries);
+        CHECK(css_pending_split(v, &sh, &orig) && strcmp(orig, carries) == 0,
+              "css-values-5 \"Substitution in Shorthand Properties\": the split must take the SECOND mark and "
+              "not the last, so an original value carrying the encoding's own mark survives whole");
+        free(sh);
+        free(v);
+    }
+
+    /* "If all of the component longhand properties for a given shorthand are pending-substitution values from
+       the same original shorthand value, the shorthand property must serialize to that original (arbitrary
+       substitution function-containing) value." THROUGH THE REAL SERIALIZER, which is where CSSOM reads it. */
+    v = css_pending_make("margin", "var(--gap) 0");
+    four[0] = four[1] = four[2] = four[3] = v;
+    out = css_shorthand_serialize_value("margin", four);
+    CHECKF(out != NULL && strcmp(out, "var(--gap) 0") == 0,
+           "css-values-5 \"Substitution in Shorthand Properties\": a shorthand whose four longhands are all "
+           "pending from one declaration must serialize back to the value the page wrote, and answered `%s`. "
+           "That string is the ONE observation an author has of a value the same sentence calls "
+           "unobservable-to-authors, so a wrong answer here is either the page's own bytes lost or this "
+           "engine's encoding leaking out of CSSOM as a control character", out ? out : "(nothing)");
+    free(out);
+
+    /* "Otherwise, if any of the component longhand properties for a given shorthand are pending-substitution
+       values … the shorthand property must serialize to the empty string" — which for this entry's callers is
+       a NULL, and which is the state `margin: var(--g) 0; margin-top: 5px` leaves a block in. */
+    mixed[0] = "5px";
+    mixed[1] = mixed[2] = mixed[3] = v;
+    out = css_shorthand_serialize_value("margin", mixed);
+    CHECKF(out == NULL,
+           "css-values-5 \"Substitution in Shorthand Properties\": a shorthand with SOME pending longhands "
+           "must serialize to the empty string and answered `%s` — which would be this engine's encoding read "
+           "as a margin by the four-side grammar", out ? out : "(nothing)");
+    free(v);
+
+    /* AND A LIST WITH NONE OF THEM IS NOT THIS RULE'S BUSINESS AT ALL, which is the assertion that keeps the
+       arm from swallowing every other shorthand serialization in the engine. */
+    four[0] = four[1] = four[2] = four[3] = "0px";
+    out = css_shorthand_serialize_value("margin", four);
+    CHECKF(out != NULL && strcmp(out, "0px") == 0,
+           "a shorthand with NO pending longhand must be answered by its own grammar and answered `%s`",
+           out ? out : "(nothing)");
+    free(out);
 }
 
 static void trusted_types_selftest(void)
@@ -27090,6 +27187,7 @@ int main(int argc, char **argv) {
        registry initialised twice. So this is a return, not a branch. */
     if (arg_has(argc, argv, "--abi")) return abi_main(argc, argv);
     css_var_selftest();        /* css-variables-1 §3's substitution — no runtime, no tree, no realm */
+    css_pending_selftest();    /* css-values-5's pending-substitution value — the same, one level up */
     trusted_types_selftest();
     policy_container_selftest();
     /* BEFORE the CSP element matching, because that check's hash arm is this primitive: a failure here would

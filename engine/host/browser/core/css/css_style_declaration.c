@@ -103,6 +103,7 @@
 #include "core/css/css_font_family.h"
 #include "core/css/css_keyframes.h"
 #include "core/css/css_logical.h"
+#include "core/css/css_pending_substitution.h"
 #include "core/css/css_math.h"
 #include "core/css/css_page.h"
 #include "core/css/css_property_numeric.h"
@@ -651,21 +652,20 @@ static bool cssd_undef_is_declaration(const char *name, const char *value)
        from disagreeing about what a function token is: a `var(` inside a string is not one, and neither is
        the `(` of an ident that merely ends in `var`. Two spellings of that question would let a declaration
        be admitted here and then substituted into by a step that cannot see the function.
-       NAMED RESIDUAL — A SHORTHAND IS DELIBERATELY NOT ADMITTED, AND THE STANDARD SPLITS IT THE SAME WAY.
-       WHAT IS NOT COVERED: css-values-5 gives the shorthand case its own mechanism — "If a shorthand property
-       contains an arbitrary substitution function in its value, the longhand properties it's associated with
-       must instead be filled in with a special, unobservable-to-authors pending-substitution value that
-       indicates the shorthand contains an arbitrary substitution function, and thus the longhand's value
-       can't be determined until after substituted" — and this engine has no such value, so admitting a
-       shorthand here would hand core/css/css_shorthand.h a component it cannot split and the expansion would
-       fail with the declaration already in the block. WHAT THE NEXT DIFF BUILDS: the pending-substitution
-       value, cascaded as normal and resolved at computed-value time by substituting the ORIGINAL shorthand
-       value and expanding what comes back; its serialization is stated too ("Pending-substitution values must
-       be serialized as the empty string, if an API allows them to be observed"). HOW ITS ABSENCE WOULD SHOW,
-       as an observation: a shorthand whose value references a custom property sets none of its longhands,
-       while the same declaration written as longhands sets all of them — so a document styled through
-       shorthands paints less than its longhand twin and neither aborts. */
-    if (css_var_references(value)) return !css_shorthand_is_shorthand(name);
+       A SHORTHAND IS ADMITTED TOO, AND WHAT SPLITS IT IS NOT THIS TEST. A residual stood here saying a
+       shorthand must be refused because this engine had no pending-substitution value to fill its longhands
+       with; core/css/css_pending_substitution.h is that value, so the refusal is retired and the standard's
+       own split moves one function along to `cssd_decls_collect_property`, which fills each longhand with a
+       pending-substitution value instead of asking core/css/css_shorthand.h for a component it cannot yet
+       compute. The question THIS function answers is only whether a refused declaration is a declaration at
+       all, and css-values-5's sentence above makes a shorthand's value as valid at parse time as a
+       longhand's: both are "assumed to be valid" until substitution has run. Refusing one here would answer
+       a different question — which longhand gets which component — in the one place that has no way to.
+       (The retired residual's next-diff clause named exactly what this diff built, which is the mechanism
+       working. Its QUOTATION carried straight apostrophes where css-values-5 writes curly ones; the clause
+       was right and the transcription was a typo, and core/css/css_pending_substitution.h now holds the
+       sentence checked against the fetched draft.) */
+    if (css_var_references(value)) return true;
     if (!cssd_has_math_function(value)) return false;
     shape = css_property_numeric(name, &prods);
     /* The grammar names no numeric production anywhere, so a math function is not a value of this property and
@@ -777,6 +777,25 @@ static void cssd_decls_collect_declaration(CssDecls *d, const char *name, const 
     }
     CHECK(n <= CSS_SHORTHAND_MAX_LONGHANDS,
           "cssom: a shorthand's longhand list outgrew the array its expansion is collected through");
+    /* css-values-5 "Appendix A: Arbitrary Substitution Functions" / "Substitution in Shorthand Properties" —
+       AN APPENDIX, so the titles are the citation and no § is written beside them. "If a shorthand property
+       contains an arbitrary substitution function in its value, the longhand properties it’s associated with
+       must instead be filled in with a special, unobservable-to-authors pending-substitution value that
+       indicates the shorthand contains an arbitrary substitution function, and thus the longhand’s value
+       can’t be determined until after substituted." (The spec's own curly marks are kept.)
+       SO THE EXPANSION BELOW IS NOT MERELY SKIPPED, IT IS UNANSWERABLE HERE, which is the Note's own reason:
+       "When the shorthand contains a var(), however, this can’t be done, as the var() could be substituted
+       with anything." `margin: var(--g)` may resolve to one component or to four, and CSS 2.1 §8.3's
+       rotation cannot say which longhand each lands in until it has bytes to rotate. The pending value
+       carries the name and the ORIGINAL value to core/css/css_computed_value.c, which substitutes and then
+       runs exactly the expansion below.
+       IT IS THE SAME SCAN core/css/css_var.h PERFORMS — the one `cssd_undef_is_declaration` admitted this
+       declaration on — so the two cannot come to disagree about what a function token is and leave a
+       shorthand admitted at the gate and expanded here with a `var(` still in it. */
+    if (value != NULL && css_var_references(value)) {
+        for (i = 0; i < n; i++) cssd_decls_collect(d, lh[i], css_pending_make(name, value), important);
+        return;
+    }
     /* A shorthand with NO VALUE matches no shorthand's grammar — every one of them names at least one
        component — so it sets nothing, exactly as an out-of-grammar value does. */
     for (i = 0; i < n; i++) {
@@ -985,7 +1004,20 @@ static char *cssd_value_in_block(const char *text, size_t len, const char *name,
        declarations of one property survives is decided where they are COLLECTED, by the cascade's own two
        criteria (importance, then order), and this is the one answer that came out. */
     if (at >= 0 && d.v[at].value) {
-        out = cssd_strdup(d.v[at].value);
+        /* css-values-5 "Appendix A: Arbitrary Substitution Functions" / "Substitution in Shorthand
+           Properties" — AN APPENDIX, so the titles are the citation: "Pending-substitution values must be
+           serialized as the empty string, if an API allows them to be observed." THIS ENTRY IS EVERY SUCH
+           API for a LONGHAND — §6.6.1's getPropertyValue reaches it, and so does `cssom_declared_value` —
+           so the empty string is answered here rather than at each of them.
+           IT IS THE EMPTY STRING AND NOT NULL, because NULL already means the block declares the property
+           NOWHERE and a shorthand containing an arbitrary substitution function does declare its longhands —
+           css-values-5 "Substitution in Shorthand Properties" again (the audit reports this quotation
+           against cssom §6.6.1, the nearest indexed anchor above it — see
+           core/css/css_pending_substitution.h, and do not repair it here): "the longhand properties it’s
+           associated with must instead be filled in". Collapsing the two would
+           make `margin: var(--g)` read back as a block that never mentioned `margin-top`, which is the state
+           this engine was in before the pending-substitution value existed. */
+        out = cssd_strdup(css_pending_is(d.v[at].value) ? "" : d.v[at].value);
         if (pimportant) *pimportant = d.v[at].important;
     }
     cssd_decls_free(&d);
@@ -1469,7 +1501,15 @@ static char *cssd_serialize_decls(const CssDecls *d)
         for (s = 0; s < nsh && !emitted; s++)
             emitted = cssd_try_shorthand(d, done, sh[s], &out, &first);
         if (emitted) continue;
-        cssd_append_declaration(&out, &first, d->v[i].name, d->v[i].value, d->v[i].important);
+        /* css-values-5 "Substitution in Shorthand Properties": "Pending-substitution values must be
+           serialized as the empty string, if an API allows them to be observed." REACHED ONLY WHERE THE
+           SHORTHAND ITSELF COULD NOT BE WRITTEN — `css_shorthand_serialize_value` answers the shorthand's
+           own original value when every one of its longhands is pending from it, so this line is the
+           standard's `Otherwise` arm: a block holding `margin: var(--g) 0; margin-top: 5px` has three
+           pending longhands and one real one, no shorthand can absorb them, and each pending one goes out
+           under its own name with an empty value. */
+        cssd_append_declaration(&out, &first, d->v[i].name,
+                                css_pending_is(d->v[i].value) ? "" : d->v[i].value, d->v[i].important);
         done[i] = true;
     }
     /* EVERY DECLARATION IS IN THE STRING EXACTLY ONCE — either under its own name or inside the one shorthand
@@ -3226,6 +3266,20 @@ static void cssd_decls_set_property(CssDecls *d, const char *name, const char *v
     }
     CHECK(n <= CSS_SHORTHAND_MAX_LONGHANDS,
           "cssom: a shorthand's longhand list outgrew the array §6.6.1's setProperty expands through");
+    /* css-values-5 "Substitution in Shorthand Properties"' pending-substitution value, on the WRITE path for
+       the same reason the read path has it: §6.6.1's step 8.1 wants "the appropriate value(s) from component
+       value list", and a component value list still holding an arbitrary substitution function has no
+       appropriate values yet. `el.style.margin = "var(--g) 0"` and `<div style="margin: var(--g) 0">` are one
+       declaration written two ways, so a branch at one of them alone would make the same bytes set four
+       longhands through one door and none through the other. */
+    if (css_var_references(parsed)) {
+        for (i = 0; i < n; i++) {
+            cssd_decls_set(d, lh[i], css_pending_make(name, parsed), important);
+            cssd_set_names_add(set, lh[i]);
+        }
+        free(parsed);
+        return;
+    }
     for (i = 0; i < n; i++) {
         values[i] = css_shorthand_component(name, parsed, lh[i]);
         if (!values[i]) break;

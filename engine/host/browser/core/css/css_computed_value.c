@@ -12,6 +12,7 @@
 #include "core/css/css_computed_value.h"
 #include "core/css/css_defaulting.h"
 #include "core/css/css_length.h"
+#include "core/css/css_pending_substitution.h"
 #include "core/css/css_property_applies.h"
 #include "core/css/css_shorthand.h"
 #include "core/css/css_style_declaration.h"
@@ -194,26 +195,80 @@ static CssVarResolution css_cv_var_resolve(void *ud, const char *name, size_t na
  * half of that keyword is reached only because the property inherits — never because substitution failed.
  * Returning the text unchanged instead would hand a property grammar a `var(...)` it cannot parse, which is
  * the same wrong answer wearing a value's clothes. */
-static char *css_cv_cascaded(lxb_dom_element_t *el, const char *name)
+/* §3's substitution over one span of text FOR ONE ELEMENT, which is the step both arms of the entry below
+   run and therefore lives here rather than being spelled twice. OWNED, or NULL for a value that is invalid at
+   computed-value time. It does NOT free its input: the pending arm's text is borrowed from inside the
+   cascaded value it came out of. */
+static char *css_cv_substitute_for(lxb_dom_element_t *el, const char *text)
 {
-    char *cascaded = cssom_cascaded_value(el, name);
     CssVarChain chain;
     char *sub;
-
-    DCHECK(name != NULL, "css-variables-1 §3's substitution step was asked for no property");
-    if (name[0] == '-' && name[1] == '-') return cascaded;
-    if (cascaded == NULL || !css_var_references(cascaded)) return cascaded;
 
     chain.el = el;
     chain.names = NULL;
     chain.n = 0;
     chain.cap = 0;
-    sub = css_var_substitute(cascaded, css_cv_var_resolve, &chain);
+    sub = css_var_substitute(text, css_cv_var_resolve, &chain);
     DCHECK(chain.n == 0,
            "css-variables-1 §3's substitution returned with names still on its chain — every push is paired "
            "with a pop at the same frame, so a survivor is a resolver arm that returned without unwinding and "
            "the next declaration on this element would be told it is in a cycle");
     free(chain.names);
+    return sub;
+}
+
+static char *css_cv_cascaded(lxb_dom_element_t *el, const char *name)
+{
+    char *cascaded = cssom_cascaded_value(el, name);
+    char *shorthand = NULL;
+    const char *original = NULL;
+    char *sub, *out;
+
+    DCHECK(name != NULL, "css-variables-1 §3's substitution step was asked for no property");
+    if (name[0] == '-' && name[1] == '-') return cascaded;
+    if (cascaded == NULL) return NULL;
+
+    /* css-values-5 "Appendix A: Arbitrary Substitution Functions" / "Substitution in Shorthand Properties" —
+       AN APPENDIX, so the titles are the citation and no § is written beside them. THE SECOND HALF OF THE
+       PENDING-SUBSTITUTION VALUE, whose first half core/css/css_style_declaration.c wrote at parse time:
+       "This value must then be cascaded as normal, and at computed-value time, after substitution, the
+       shorthand must be parsed and the longhands must be given their appropriate values at that point."
+       (The spec's own curly marks are kept in the quotations here and in css_pending_substitution.h.)
+       THE ORDER IS THE STANDARD'S AND IT IS THE WHOLE OF THIS ARM: substitute into the SHORTHAND'S OWN
+       original value first, then split what comes back. Splitting first is what parse time could not do, and
+       is why the value exists at all.
+       THE `unset` ARM IS THE SAME ONE §Invalid Substitution GIVES EVERY OTHER PROPERTY. Its "To replace
+       substitution functions in a property prop" has two failure steps — "If result contains the
+       guaranteed-invalid value, prop is invalid at computed-value time; return" and "Parse result according
+       to prop’s grammar. If this returns failure, prop is invalid at computed-value time; return" — and this
+       arm has one for each: a NULL from `css_var_substitute` is the first, and a NULL from
+       `css_shorthand_component` is the second, that call BEING the shorthand's grammar. Both answer CSS
+       Cascade 5 §7.3.3's `unset`, exactly as a longhand's failed substitution does below.
+       AND A SUBSTITUTED CSS-WIDE KEYWORD NEEDS NO ARM HERE, which is worth saying because it looks like one.
+       css-values-5 "Invalid Substitution": "If a property value, after property replacement, contains only a
+       single CSS-wide keyword (and possibly whitespace/comments), its value is determined as if that keyword
+       were its specified value all along" — and `css_shorthand_component` already answers that for every
+       shorthand it expands, csscascade-5 §3 "Shorthand Properties" making it a step of the GRAMMAR rather
+       than of this file: "If a shorthand is specified as one of the CSS-wide keywords" it "sets all of its
+       sub-properties to that keyword, including any that are reset-only sub-properties". Those two halves
+       are quoted APART because the standard's bibliography reference to css-values-3 sits between them, and
+       the trailing clause is kept because a truncation at `that keyword` is the reading that loses the
+       reset-only sub-properties — both MEASURED against the fetched draft, where the sentence occurs once.
+       So `margin: var(--missing, inherit)` reaches core/css/css_defaulting.h with `inherit`, which is where
+       it is resolved. THE AUDIT REPORTS THE css-values-5 QUOTATION ABOVE AGAINST csscascade5 §7.3.3 — the
+       nearest INDEXED anchor, css-values-5 having no corpus row — and that finding is manufactured rather
+       than real: see core/css/css_pending_substitution.h, and do not repair it here. */
+    if (css_pending_split(cascaded, &shorthand, &original)) {
+        sub = css_cv_substitute_for(el, original);
+        out = sub != NULL ? css_shorthand_component(shorthand, sub, name) : NULL;
+        free(sub);
+        free(shorthand);
+        free(cascaded);
+        return out != NULL ? out : css_cv_strdup("unset");
+    }
+
+    if (!css_var_references(cascaded)) return cascaded;
+    sub = css_cv_substitute_for(el, cascaded);
     free(cascaded);
     return sub != NULL ? sub : css_cv_strdup("unset");
 }

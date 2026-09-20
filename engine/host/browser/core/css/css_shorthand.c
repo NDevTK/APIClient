@@ -11,6 +11,7 @@
 #include "core/css/css_computed_value.h"
 #include "core/css/css_font_shorthand.h"
 #include "core/css/css_length.h"
+#include "core/css/css_pending_substitution.h"
 #include "core/css/css_shorthand.h"
 
 static char *css_sh_strdup(const char *s)
@@ -1885,6 +1886,30 @@ char *css_shorthand_serialize_value(const char *shorthand, const char *const *va
                "whether ALL of a shorthand's longhands are present BEFORE it builds the list, so a hole here "
                "is that test having been skipped — and a hole read as a value is the shorthand claiming a "
                "declaration the block never made");
+    /* css-values-5 "Appendix A: Arbitrary Substitution Functions" / "Substitution in Shorthand Properties" —
+       AN APPENDIX, so the titles are the citation and no § is written beside them. AHEAD OF EVERY OTHER RULE
+       HERE, because a pending-substitution value is not a value of this property's grammar at all and every
+       arm below would read its bytes as one: "If all of the component longhand properties for a given
+       shorthand are pending-substitution values from the same original shorthand value, the shorthand
+       property must serialize to that original (arbitrary substitution function-containing) value.
+       Otherwise, if any of the component longhand properties for a given shorthand are pending-substitution
+       values, or contain arbitrary substitution functions of their own that have not yet been substituted,
+       the shorthand property must serialize to the empty string." A NULL IS THAT EMPTY STRING for both this
+       entry's callers — CSSOM §6.6.1's getPropertyValue answers nothing for the property, and §6.6's block
+       serializer writes the longhands out separately instead — which is why the second arm needs no value of
+       its own.
+       THE FIRST ARM IS WHAT MAKES A SHORTHAND ROUND-TRIP: `margin: var(--g) 0` read back through `cssText`
+       or `getPropertyValue("margin")` answers the bytes the page wrote, which is the one observation an
+       author has of a value the same sentence calls unobservable.
+       css-values-5's OWN arbitrary-substitution clause of the `Otherwise` arm is NOT answered here, and is
+       named where it belongs — a longhand carrying an unsubstituted function of its own reaches this list
+       only through a declaration of that longhand, and core/css/css_style_declaration.c's block serializer is
+       what would have to notice. */
+    {
+        char *pending = NULL;
+
+        if (css_pending_serialize(values, row->n, &pending)) return pending;
+    }
     w = css_sh_wide_value(values, row->n, &wide);
     if (w != 0) return w > 0 ? wide : NULL;
     switch (row->kind) {
