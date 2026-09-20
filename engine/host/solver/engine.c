@@ -2497,27 +2497,41 @@ static int deliver_commit_implied(JSContext *ctx, const Flow *f, const char *vec
                "from, which is the message that then reaches no timeline at all");
         rel = world_vec_relate(vec, c);
         if (JS_VALUE_GET_INT(tv) && (rel == WORLD_REL_SAME || rel == WORLD_REL_ANCESTOR)) {
-            JSValue av = JS_GetPropertyUint32(ctx, e, 2);
-            FlowCommitArm row_arm;
+            /* THE COVERING ARM IS READ ONLY FOR A CALLER THAT ASKED FOR ONE, AND THAT SCOPE IS LOAD-BEARING
+               RATHER THAN A SAVING — it is what makes the assert below true. A ROOT sending world's row
+               carries NO arm (deliver_fork_arm declines to mint where there is no branch), and such a row
+               COVERS ITSELF: a second message from one root is WORLD_REL_SAME against it, so a reader that
+               demanded an arm on every covering row would abort on an ordinary repeated delivery. The one
+               caller that wants the arm — deliver_fork_arm — has already RETURNED for a root before it asks,
+               so a root's row is never a covering row in its question, which is the whole of why the value
+               can be asserted there and not here.
+               THE SENTENCE THAT STOOD HERE SAID A ROOT "CANNOT COVER A WORLD BELOW IT", which is true of the
+               ANCESTOR arm and says nothing about SAME — an enumeration of the ways a row can cover that was
+               short by the one that needs no ancestry at all. It is recorded rather than deleted because the
+               argument reads as complete and a reader who re-derives it will re-propose the unconditional
+               assert, whose cost is an abort on the commonest delivery shape there is. */
+            if (covering) {
+                JSValue av = JS_GetPropertyUint32(ctx, e, 2);
+                FlowCommitArm row_arm;
 
-            DCHECK(JS_VALUE_GET_TAG(av) == JS_TAG_INT,
-                   "a delivery-world commitment that COVERS an arriving world carried no small-integer "
-                   "minting mechanism — the covering row is what says whether an arm for this world already "
-                   "exists, so a missing field would be read as FLOW_COMMIT_ARM_NONE and report that no "
-                   "timeline can take the record this row is about to suppress the arm for");
-            row_arm = (FlowCommitArm)JS_VALUE_GET_INT(av);
-            JS_FreeValue(ctx, av);
-            /* A COVERING ROW WITH NO ARM AT ALL IS UNREACHABLE, AND SAYING SO IS CHEAPER THAN HANDLING IT. A
-               NONE row is one the delivery-time fork declined to mint for, which it does exactly for a ROOT
-               sending world — and a root has no ancestors, so no vector can be ABOVE it and nothing it holds
-               can cover anything. If this fires, a producer has written NONE onto a row that is not a root's
-               and the whole covering argument is about a branch that was never there. */
-            DCHECK(row_arm != FLOW_COMMIT_ARM_NONE,
-                   "a RECEIVED commitment that COVERS an arriving sending world states that NO flow is on the "
-                   "other side of its branch — a row with no arm is the delivery-time fork declining a ROOT "
-                   "world, and a root is an ancestor of nothing, so it cannot cover a world below it. The "
-                   "producer that wrote this row named a mechanism that does not match the world it named");
-            if (row_arm == FLOW_COMMIT_ARM_ANSWER_OWED) arm = FLOW_COMMIT_ARM_ANSWER_OWED;
+                DCHECK(JS_VALUE_GET_TAG(av) == JS_TAG_INT,
+                       "a delivery-world commitment that COVERS an arriving world carried no small-integer "
+                       "minting mechanism — the covering row is what says whether an arm for this world "
+                       "already exists, so a missing field would be read as FLOW_COMMIT_ARM_NONE and report "
+                       "that no timeline can take the record this row is about to suppress the arm for");
+                row_arm = (FlowCommitArm)JS_VALUE_GET_INT(av);
+                JS_FreeValue(ctx, av);
+                DCHECK(row_arm != FLOW_COMMIT_ARM_NONE,
+                       "a RECEIVED commitment COVERS an arriving sending world for a caller that is about to "
+                       "suppress the arm it would otherwise mint, and that row states that NO flow is on the "
+                       "other side of its own branch. A row with no arm is the delivery-time fork declining a "
+                       "ROOT world, and the only caller that reads this answer has already returned for a "
+                       "root before asking — so the arriving world names a fork point while the row covering "
+                       "it names none, and suppressing here would leave the sibling subtree with no timeline "
+                       "at all. Read which producer wrote the covering row: a NONE it did not take from "
+                       "world_vec_fork_point is a mechanism naming a branch that was never there");
+                if (row_arm == FLOW_COMMIT_ARM_ANSWER_OWED) arm = FLOW_COMMIT_ARM_ANSWER_OWED;
+            }
             implied = 1;
         }
         JS_FreeCString(ctx, c);
