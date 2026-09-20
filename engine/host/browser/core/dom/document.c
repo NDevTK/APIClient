@@ -1411,6 +1411,52 @@ JSValue document_create_element_internal(JSContext *ctx, const char *local, size
    REPORTING of documents whose tests had all already run.
    Lexbor carries the namespace on the element, so this is its create with the namespace resolved, not a
    createElement in disguise: `el.namespaceURI` is what the page asked for. */
+/* BYTES FOR A DOMString A FACTORY IS ABOUT TO PUT IN THE TREE, WHEN THE VALUE MAY BE UNKNOWN EXTERNAL INPUT.
+   §4.5's node factories take a DOMString and Lexbor stores BYTES, so every one of them reaches a byte consumer
+   — and quickjs's `js_force_tostring` asserts, correctly and by design, that a concolic can never become the
+   `const char *` C is owed. Its own banner says where the repair belongs: "the fix is never here". It belongs
+   at the edge that asked, which is this one.
+   THE ANSWER IS THE SHAPE, AND IT IS NOT A NEW ONE — core/dom/node.c's `js_cd_set_data` already gives it for
+   §4.10's `CharacterData.data` in the same words: "Unknown external input has no bytes: its SHAPE is what the
+   node carries". A page that parks a source in the tree as text and reads it back gets the source it came
+   from, and the two edges that build such a node and the one that rewrites it now answer alike. Routing to the
+   established spelling rather than writing a second correct one is the whole point: two right answers to one
+   question is the shape that drifts.
+   IT INVENTS NOTHING, which is the line §RUN-DON'T-MATCH draws. A shape is a DISPLAY of a value the run has,
+   not a value the run guessed: the taint is preserved by solver/attr_shadow.c on the slot, and what Lexbor
+   holds is a legible stand-in for bytes that do not exist. The alternative on offer was a fabricated string,
+   which is the @H ban one layer down.
+   `*owned` SAYS WHO FREES IT, because the two arms differ and a caller cannot tell them apart from the pointer:
+   a shape is borrowed from the concolic and a converted string is a reference this function took.
+   NAMED RESIDUAL — TWO SIBLING FACTORIES ASK THIS QUESTION AND ARE NOT ROUTED HERE, DELIBERATELY.
+   NOT COVERED: §4.5's `createProcessingInstruction(target, data)` and `createCDATASection(data)` still take
+   their bytes straight from a byte consumer, so an unknown reaching either dies at the same assertion this
+   entry exists to answer. They are not merely unconverted — each runs a STEP OVER THE BYTES that the other two
+   factories do not: §4.5 step 2 refuses a CDATA section whose data contains `]]>`, and a processing
+   instruction's target is matched against `xml`. Routing a SHAPE through a check with content semantics is a
+   second decision and not this one: the shape is a display of a value, so those steps would be deciding about
+   a string the page never wrote. WHAT THE NEXT DIFF BUILDS: those two steps asked of the VALUE rather than of
+   the bytes — a check that refuses only what it can see and admits an unknown as unknown — after which both
+   factories route here. HOW ITS ABSENCE WOULD SHOW: a run that builds an XML document from forced input aborts
+   at the byte consumer naming `document.c`'s processing-instruction or CDATA line, where the two factories
+   above now continue. */
+static const char *doc_domstring_bytes(JSContext *ctx, JSValueConst v, size_t *len, int *owned)
+{
+    const char *s;
+
+    *owned = 0;
+    if (concolic_is(v)) {
+        s = concolic_shape_c(v);
+        DCHECK(s != NULL, "a concolic value answered no display shape to a node factory — concolic_shape_c is "
+                          "declared to answer for every concolic, so a NULL here is a value that passed "
+                          "concolic_is and cannot say what it is");
+        *len = s ? strlen(s) : 0;
+        return s ? s : "";
+    }
+    *owned = 1;
+    return JS_ToCStringLen(ctx, len, v);
+}
+
 /* 4.5.1 createTextNode / createComment. The two non-element nodes a page builds by hand, and without them a
    page could not put TEXT into the tree at all: testharness.js's make_dom_single does
    `output_document.createTextNode(template[i])` for every string in a template. Detached, like createElement —
@@ -1420,15 +1466,16 @@ static JSValue js_doc_create_text(JSContext *ctx, JSValueConst this_val, int arg
     (void)magic;
     const char *s;
     size_t len = 0;
+    int owned = 0;
     lxb_dom_text_t *t;
     Document *d = doc_receiver(ctx, this_val);
 
     if (!d) return JS_EXCEPTION;
-    s = argc >= 1 ? JS_ToCStringLen(ctx, &len, argv[0]) : JS_ToCStringLen(ctx, &len, JS_UNDEFINED);
+    s = doc_domstring_bytes(ctx, argc >= 1 ? argv[0] : JS_UNDEFINED, &len, &owned);
     if (!s) return JS_EXCEPTION;
     t = lxb_dom_document_create_text_node(lxb_dom_interface_document(d->dom), (const lxb_char_t *)s, len);
     dom_cow_note_created(t ? lxb_dom_interface_node(t) : NULL);   /* this flow made it */
-    JS_FreeCString(ctx, s);
+    if (owned) JS_FreeCString(ctx, s);
     DCHECK(t != NULL, "createTextNode produced no node — a page building its DOM would silently build nothing");
     return node_wrap(ctx, lxb_dom_interface_node(t));
 }
@@ -1555,15 +1602,16 @@ static JSValue js_doc_create_comment(JSContext *ctx, JSValueConst this_val, int 
     (void)magic;
     const char *s;
     size_t len = 0;
+    int owned = 0;
     lxb_dom_comment_t *c;
     Document *d = doc_receiver(ctx, this_val);
 
     if (!d) return JS_EXCEPTION;
-    s = argc >= 1 ? JS_ToCStringLen(ctx, &len, argv[0]) : JS_ToCStringLen(ctx, &len, JS_UNDEFINED);
+    s = doc_domstring_bytes(ctx, argc >= 1 ? argv[0] : JS_UNDEFINED, &len, &owned);
     if (!s) return JS_EXCEPTION;
     c = lxb_dom_document_create_comment(lxb_dom_interface_document(d->dom), (const lxb_char_t *)s, len);
     dom_cow_note_created(c ? lxb_dom_interface_node(c) : NULL);   /* this flow made it */
-    JS_FreeCString(ctx, s);
+    if (owned) JS_FreeCString(ctx, s);
     DCHECK(c != NULL, "createComment produced no node — a page building its DOM would silently build nothing");
     return node_wrap(ctx, lxb_dom_interface_node(c));
 }
