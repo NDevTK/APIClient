@@ -131,7 +131,7 @@ bool media_query_length_px(JSContext *ctx, double n, const char *unit, size_t un
    (`a restartable fork was asked for while page code was on the stack`, solver/engine.c, whose own text
    already lists `a listener inside a rendering step`). Its FIRST precondition passes, which is what makes the
    wrong site look right: a C activation leaves the flow's frame handle NULL.
-   THE SITE THAT DOES HOLD IT is §8.1.7.3's IN-PARALLEL half — core/rendering/rendering.c's
+   THE SITE THAT DOES HOLD IT is HTML §8.1.7.3's IN-PARALLEL half — core/rendering/rendering.c's
    `rendering_run_opportunity`, which the scheduler calls as a rung of the flow's own step with nothing of the
    flow on any stack. It is not a hopeful candidate: it ALREADY asks this seam, through
    core/timing/event_loop.h's `event_loop_before`, and has done since before this residual was written. The
