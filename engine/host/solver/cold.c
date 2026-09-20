@@ -856,6 +856,15 @@ void cold_park_preview(ColdPreview *out)
            a KIND, so it is not counted by the switch above and a host reading only the two kinds would be
            shown a residue one record per drive smaller than the one it is about to be handed. */
         if (f->orphan) out->orphans++;
+        /* …AND THE TWO ROWS OF THE FLOW RECORD THAT ARE ABOUT A PEER, for the orphan locator's reason exactly:
+           neither is a KIND, so neither is counted by the switch, and a host shown only the kinds is shown a
+           residue smaller than the one it is handed by one record per commitment and one per unmade delivery.
+           READ THROUGH THE SAME TWO ACCESSORS cold_park_flow WRITES FROM, never off `deliver_world_q` and
+           `deliver_q` here — a second walk of a flow's own Arrays is the second speller this file's preview
+           exists not to be, and cold_park's two-sided check can only catch a disagreement between the two
+           SELECTIONS, not between two readings of one queue. */
+        out->commits  += flow_world_commits(f);
+        out->delivers += flow_deliver_pending(f);
     }
     /* AND THE ROW THAT IS NOT A MEMBER OF THE FRONTIER. A foreign segment belongs to a PEER's flow, so no walk
        of this registry can find it and the host would otherwise be shown a residue smaller than the one it is
@@ -1173,6 +1182,8 @@ void cold_park(void)
            after.cands - before.cands == would.cands &&
            after.worlds - before.worlds == would.worlds &&
            after.orphans - before.orphans == would.orphans &&
+           after.commits - before.commits == would.commits &&
+           after.delivers - before.delivers == would.delivers &&
            deep_written == would.deep,
            "the park wrote a different residue from the one its own preview described — the host evicted this "
            "engine on the strength of that description, so whatever it is storing is not what it was told it "

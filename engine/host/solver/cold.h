@@ -599,13 +599,31 @@ typedef struct {
        commitment record (solver/flow.h). A positional field of the record before it exactly as 'o' is, never
        an alternative to being a flow or a candidate, so not a summand of flows+cands.
        ZERO IS A REAL ANSWER AND IT IS WHAT THIS ROW IS FOR. No counter anywhere held an 'r', so a residue
-       that carried none and a writer that has never been reached read alike — and both halves of this kind,
-       this park's write and cold_resume's rebuild, are a pair no gate in this tree has exercised. */
+       that carried none and a writer that has never been reached read alike.
+       THE CLAUSE THAT STOOD HERE SAID THIS PARK'S WRITE AND cold_resume's REBUILD WERE `a pair no gate in this
+       tree has exercised`, AND IT IS RETIRED BY THE MOMENT RATHER THAN BY EITHER HALF CHANGING. Both halves
+       were written and neither had a producer, because a commitment is a fact about a RECEIVER and the only
+       host that parked was standing in for a SENDER. What closed it is a park moment chosen by what the
+       residue would CONTAIN (ColdPreview's `commits` below), so the row is written because a timeline really
+       received a peer's message and rebuilt because the residue really carried one. */
     long commits;
     /* 'm': the ROUTED DELIVERIES this residue carries — messages a peer sent that the parked timeline had
        not yet made. A positional field of the flow before it exactly as 'r' is, and zero is a real answer
        for the same reason: a delivery is the one work item on this frontier that no replay re-derives, so a
-       park carrying none is a statement about the document rather than about the tier. */
+       park carrying none is a statement about the document rather than about the tier.
+       NAMED RESIDUAL — THE WRITE AND THE REBUILD ARE BUILT AND THE ROUND TRIP IS NOT, AND THE UNBUILT HALF IS
+       NOT IN THIS FILE. WHAT IS NOT COVERED: a residue carrying an 'm' that the resumed session then STEPS.
+       cold_resume's 'm' arm puts the record back on the flow's queue correctly, and the flow then delivers it
+       like any other — reaching solver/engine.c's `routed_rec_admitted`, whose ledger is PROCESS-LIFETIME and
+       whose arrival was registered in the session that PARKED. The resumed process has no arrival for the
+       record it is holding, which is the first of the three causes that abort names in its own message: `the
+       delivery queue was rebuilt from the COLD TIER without replaying the arrival`. WHAT THE NEXT DIFF BUILDS:
+       the arrival side of that ledger across the tier — a record put back by this arm is a record this
+       instance has been handed, so the rebuild registers it the way engine_route does, which is the one line
+       that makes `zero_delivery` mean the same thing in a resumed session as in a fresh one. HOW ITS ABSENCE
+       WOULD SHOW: a session that resumes a residue whose `delivers` is non-zero aborts at that ledger instead
+       of delivering, so the pair a round-trip reader compares is unreadable at the resume end rather than
+       merely unequal — the park census states a count and the resume census is never printed at all. */
     long delivers;
 } ColdParked;
 void cold_parked(ColdParked *out);
@@ -657,6 +675,21 @@ typedef struct {
        preview's whole contract: the host decides to evict on the strength of this description, so a row the
        description leaves out is a record the residue turns out to hold. */
     long orphans;
+    /* AND THE TWO POSITIONAL ROWS OF THE FLOW RECORDS — the 'r' commitments and the 'm' unmade deliveries a
+       park taken now would write, by the same sentence the orphan locator above is here for. A host evicts on
+       the strength of this description, and these were the two rows it left out.
+       THEY ARE ALSO WHAT LETS A HOST CHOOSE A MOMENT BY WHAT THE RESIDUE WOULD CONTAIN RATHER THAN BY WHEN IT
+       ASKED, which is the only form of that question that is not a race. A park is honoured at the top of the
+       very next slice, so the state this answers IS the state the park walks — a host that requires `commits`
+       here gets a residue carrying an 'r', by construction rather than by having waited long enough, and one
+       that requires `delivers == 0` gets a residue with no queued peer message in it. Both are statements
+       about the DOCUMENT the host is about to store and neither truncates anything: what is being chosen is
+       WHEN the residue leaves memory, which is §NO BOUNDS' own line between paging and a cap.
+       A `delivers` ROW IS NOT A WEAKER `commits` ROW AND THE TWO ARE NOT INTERCHANGEABLE AS A MOMENT. They are
+       the SAME record kind at two instants of one message's life — queued, then received — so a host asking
+       for both at once is asking for two messages, and a host asking for neither has said nothing about
+       whether a peer's message is in the document it is storing. */
+    long commits, delivers;
 } ColdPreview;
 void cold_park_preview(ColdPreview *out);
 

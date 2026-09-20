@@ -35,6 +35,7 @@
 #include "core/frame/window_proxy.h"
 #include "core/frame/remote_location.h"
 #include "core/frame/window_message.h"   /* §9.3.3's two attacker sources, spelled once by their owner */
+#include "core/structured_clone.h"       /* §2.7's serialize — a peer's post crosses as the bytes IT produces */
 #include "core/frame/remote_object.h"
 #include "core/html/html_iframe.h"
 #include "core/html/html_parse.h"   /* the ONE place a Document is parsed — that header owns the token bytes */
@@ -360,9 +361,14 @@ static JSValue js_last_child_mark(JSContext *ctx, JSValueConst this_val, int arg
 static int hostreq_answer_all(JSContext *ctx);   /* the SYNCHRONOUS half — see the machine below */
 
 /* THE PEER THIS FIXTURE STANDS IN FOR — declared here and defined beside the park moment it belongs to, which
-   is the one thing that decides when the question is asked. */
+   is the one thing that decides when the question is asked.
+   TWO THINGS A PEER DOES AND THEY ARE ASKED AT OPPOSITE ENDS OF THE RUN, which is why they are two functions
+   and not one. A cross-agent OPERATION is a question this instance must still be HOLDING when the park is
+   taken, so it is asked at the moment; a POSTED MESSAGE has to have been RECEIVED by then, so it is routed as
+   early as this host can route one and the moment waits for the residue to show that it was. */
 static int  fixture_cold_moment(void);
 static void fixture_ask_remote_op(JSContext *ctx);
+static void fixture_route_peer_post(JSContext *ctx);
 
 /* ─── THE TWO ADDRESSES THIS HOST SERVES AS SOMETHING OTHER THAN JSON, AND WHY THEY ARE A PAIR ───────────
  *
@@ -513,6 +519,13 @@ static int fixture_provide(JSContext *ctx) {
         urls = nl + 1;
     }
     url_record_free(&base);
+    /* THE PEER'S POST GOES IN AT THE FIRST PAYMENT AND THE MOMENT WAITS FOR IT, WHICH IS THE ORDER AND NOT A
+       PREFERENCE. A commitment is written when a timeline RECEIVES, so the record has to be in the document
+       before the moment can ever be true — and routing it here, where the frontier is still the boot flow,
+       is what makes every member of the eventual frontier a descendant of a receiver rather than a sibling of
+       one. It is idempotent and SESS_PARK-only at its own definition, so this line is the payment's cadence
+       and not a second gate. */
+    fixture_route_peer_post(ctx);
     if (fixture_cold_moment()) fixture_ask_remote_op(ctx);
     return filled + hostreq_answer_all(ctx);
 }
@@ -15240,6 +15253,25 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        until these columns existed. */
     int cold_park_world    = g_sess == SESS_PARK && g_cp.worlds > 0;
     int cold_resumed_world = g_sess == SESS_RESUME && g_cr.worlds > 0;
+    /* AND THE 'r' ARM AT BOTH ENDS — the LAST kind of this grammar that had a counter at each end and no
+       producer anywhere, which is a different absence from the one the 'w' rows closed and reads identically.
+       A commitment is a fact about a RECEIVER (solver/flow.h), and the only host that had ever taken a park
+       stood in for a SENDER — so both halves were written, both were counted, and the pair `commits 0→0` was
+       a residue of nothing rather than a tier that works. What produces one is a peer's posted message routed
+       in (fixture_route_peer_post) and a timeline of this document taking it; what makes the park MEET one is
+       that the moment now asks the residue rather than the clock.
+       TWO ROWS AND NOT ONE, for the reason the 'w' pair gives: the ends fail differently and independently. A
+       park carrying no commitment is a fixture whose peer never posted or whose frontier never received; a
+       resume that rebuilt none out of a residue that carried one is cold_resume's 'r' arm, and those were the
+       same absent number until these rows existed.
+       AND THERE IS NO 'm' PAIR BESIDE THEM, WHICH IS A CHOICE THIS FILE MAKES AND NOT AN ARM NOBODY REACHED.
+       An 'm' is the same message one instant earlier, so the moment could hold one by asking for it — and
+       solver/cold.h's residual on that field says what the RESUME then does: it rebuilds the queue correctly
+       and the flow that steps it reaches a ledger whose arrival belongs to the process that parked. The park
+       moment therefore requires `delivers == 0` and these rows say `commits`, so the `delivers 0→0` the
+       round-trip report prints is this sentence and not a gap in it. */
+    int cold_park_commit    = g_sess == SESS_PARK && g_cp.commits > 0;
+    int cold_resumed_commit = g_sess == SESS_RESUME && g_cr.commits > 0;
     /* AND THE ARM THAT CARRIES CODE THE PAGE NEVER RAN. `park-orphan` says the residue names a FUNCTION and not
        only paths; `resumed-orphan` says the rebuild turned that name back into a drive waiting for its body;
        `resumed-orphan-met` says a take in this session actually handed one over, which is the only one of the
@@ -16445,6 +16477,12 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            than one is the statement these rows are about. */
         { "park-world", cold_park_world, "cfg.admin", SESS_PARK },
         { "resumed-world", cold_resumed_world, "cfg.admin", SESS_RESUME },
+        /* THE 'r' ARM AT BOTH ENDS, KEYED ON THE FORK for the 'w' pair's reason exactly: a commitment is
+           carried by the TIMELINES of this document — engine_route attaches a peer's record to every one of
+           them — so the line that makes this document have more than one is the statement these rows are
+           about. */
+        { "park-commit", cold_park_commit, "cfg.admin", SESS_PARK },
+        { "resumed-commit", cold_resumed_commit, "cfg.admin", SESS_RESUME },
         /* THE LADDER, LOWEST RUNG FIRST — read them in this order and the lowest 0 is the answer. */
         { "park-remoteop-asked", cold_park_remoteop_asked, "cfg.admin", SESS_PARK },
         { "park-remoteop-many", cold_park_remoteop_many, "cfg.admin", SESS_PARK },
@@ -16874,7 +16912,7 @@ static int fixture_have_answers(void) {
  * rungs `park-remoteop-asked`, `park-remoteop-many` and `park-remoteop-once`, split apart because a single
  * folded row could not say which of those three a 0 was about. The last of them is the one a per-flow hand-back
  * would fail. The `dyn_token` half is named where its row is. */
-static int g_cold_moment, g_op_asked;
+static int g_cold_moment, g_op_asked, g_post_routed;
 
 static int fixture_cold_moment(void) {
     ColdPreview would;
@@ -16883,9 +16921,123 @@ static int fixture_cold_moment(void) {
        provider runs in all three, and which session this is is already stated once. */
     if (!g_cold_moment && g_sess == SESS_PARK) {
         cold_park_preview(&would);
-        g_cold_moment = would.deepcands > 0 && would.orphans > 0;
+        /* AND THE FOURTH AND FIFTH CONJUNCTS ARE THE ONE MOMENT AN 'r' RECORD IS WRITABLE, asked of what the
+           residue WOULD CONTAIN rather than of how long this host has waited. A commitment is a fact about a
+           RECEIVER — the row a timeline writes when it takes a peer's message (solver/engine.c's
+           deliver_commit_taken) — so the residue carries one exactly when some member has already received
+           one, and no amount of asking at a cleverer instant produces that on its own. That is why the post
+           is ROUTED at the first payment below and the moment is what waits: the two halves are a routing
+           this host performs and a state it observes, and only the second can be a predicate.
+           `delivers == 0` IS A REQUIREMENT AND NOT A TIDINESS, AND IT IS THE HALF THAT COSTS A COLUMN. An 'm'
+           is the SAME message one instant earlier, so a park taken before the frontier has received it writes
+           the queue instead of the commitments — and solver/cold.h's own residual on that field says what a
+           resumed session then does with it: cold_resume rebuilds the queue correctly and the flow that steps
+           it reaches a ledger whose arrival belongs to the process that parked. So this conjunct chooses the
+           arm of this grammar whose ROUND TRIP is built, and the `delivers 0→0` pair the round-trip report
+           prints is that choice stated rather than an arm nobody reached.
+           IT CANNOT WAIT FOREVER ON THE PAIR, which is the failure the latch above exists for and the reason
+           these two are safe to add to it. A commitment row is never removed and every fork inherits its
+           parent's (solver/flow.c's flow_world_commit_fork), so `commits > 0` is monotone over the descendants
+           of whatever was live when the post was routed — and the post is routed at the FIRST payment, when
+           that is the boot flow and therefore an ancestor of the frontier. `delivers` is the transient: it
+           rises once, at the routing, and falls to zero as each member takes its one delivery (engine.c's
+           flow_step reaches a routed record before any of the flow's own programs), after which nothing
+           re-raises it because a fork of a member that has delivered inherits an empty queue. The steady state
+           is the state this asks for. */
+        g_cold_moment = would.deepcands > 0 && would.orphans > 0 &&
+                        would.commits > 0 && would.delivers == 0;
     }
     return g_cold_moment;
+}
+
+/* A PEER'S POSTED MESSAGE, ROUTED IN AS THE TRUSTED ZONE ROUTES ONE — the other half of what this fixture
+ * stands in for, and the only producer of an 'r' record there is on a host with one instance.
+ *
+ * WHY IT IS ROUTED AND NOT POSTED. The page's own `postMessage` to a remote proxy emits the same record, and
+ * looping that back is the one thing this cannot do: solver/engine.c's engine_route refuses a record whose
+ * SENDING world names a document this instance holds, by name and correctly — a message to one's own document
+ * is delivered locally and never leaves. A commitment is a fact about a RECEIVER, so what has to be stood in
+ * for is the SENDER, exactly as the operation above stands in for an ASKER.
+ *
+ * THE VECTOR IS READ BACK OUT OF THE SEGMENT TABLE AND NOT COMPOSED, for the reason fixture_ask_remote_op
+ * gives at its own materialization: world_serialize refuses a world this instance did not mint, so a fixture
+ * standing in for a peer cannot call it, and writing the text here would be the second spelling of a grammar
+ * solver/world.c owns. The peer is a DIFFERENT document from the operation's, so the two stand-ins cannot
+ * interact — a commitment to one says nothing about a record from the other — and each is one 'w' record.
+ *
+ * THE PAYLOAD IS THE ENGINE'S OWN CODEC AND NOT A HAND-BUILT BLOB. §2.7's serialize produces what the sending
+ * half would have produced (core/frame/window_message.c's window_message_send_remote calls the same pair),
+ * and the base64 is quickjs's — §JS-engine-encoding-builtin: the engine runs the REAL codec, and a fixture
+ * that hand-rolled either would be testing its own arithmetic. What IS composed here is the record's five
+ * fields, which is the same thing fixture_ask_remote_op composes and for the same reason: the transport's
+ * grammar is what a trusted zone writes, and this function is the trusted zone.
+ *
+ * THE ORIGIN IS CROSS-ORIGIN ON PURPOSE. §9.3.2.2's integrity basis makes a message from a document that is
+ * not same origin with this agent indistinguishable from an attacker's, so window_message_deliver_remote
+ * wraps the stamped serialization concolic rather than concretising it — which is the arm §Attacker-sources
+ * is about, and the arm a same-origin stand-in would never reach. */
+static void fixture_route_peer_post(JSContext *ctx) {
+    WorldId peer = { world_doc_intern("mpeer"), 1, 0 };
+    const char *const *carried;
+    const char *vector = NULL;
+    StructuredData sd = { NULL, 0 };
+    JSValue payload;
+    char *b64, *rec;
+    size_t b64_cap, n, rec_cap;
+    int nseg, i, ser;
+
+    if (g_post_routed || g_sess != SESS_PARK) return;
+    g_post_routed = 1;
+
+    world_segment(ctx, peer, NULL, 0);
+    nseg = world_segments_park(&carried);
+    for (i = 0; i < nseg; i++) {
+        WorldId back;
+        const WorldId *anc;
+
+        world_parse(carried[i], &back, &anc);
+        if (world_eq(back, peer)) { vector = carried[i]; break; }
+    }
+    CHECK(vector != NULL,
+          "the peer world this fixture just materialized for a posted message is not in the segment table it "
+          "was materialized into — the record below would name a timeline this instance does not hold, and "
+          "the commitment every receiving flow writes would be to a world no resume can relate anything to");
+    /* §2.7's SERIALIZE, AND THE VALUE IS A STRING BECAUSE THE DELIVERY IS WHAT IS UNDER TEST AND NOT THE
+       CLONE. A structured graph would exercise core/structured_clone.c, which has its own rows; what this
+       needs is bytes the DESERIALIZE in §9.3.3 step 8's task accepts, so that the task reaches an end rather
+       than aborting inside a payload this fixture built wrong. */
+    payload = JS_NewString(ctx, "tf-peer-post");
+    CHECK(!JS_IsException(payload), "test_forced: OOM building a peer's posted message");
+    /* PERFORMED ON ITS OWN LINE AND THE ANSWER TESTED BELOW IT, never inside the condition: a check's
+       condition is read as side-effect-free everywhere in this tree (check.h), and a serialize inside one
+       would be a value produced by a line a release build is entitled to reason about differently. */
+    ser = structured_serialize(ctx, payload, &sd);
+    JS_FreeValue(ctx, payload);
+    CHECK(ser == 0,
+          "§2.7 refused to serialize a plain string — the peer's post has no payload to carry, so no timeline "
+          "of this document would receive one and the commitment this park is about would never be written");
+
+    b64_cap = JS_Base64EncodedSize(sd.len) + 1;
+    b64 = malloc(b64_cap);
+    CHECK(b64 != NULL, "test_forced: OOM encoding a peer's posted message");
+    n = JS_Base64Encode(b64, b64_cap, sd.buf, sd.len);
+    CHECK(n > 0 || sd.len == 0, "the base64 buffer was sized wrong for this message");
+    b64[n] = 0;
+
+    rec_cap = strlen(world_doc_name(world_local_doc())) + strlen(vector) + n + 64;
+    rec = malloc(rec_cap);
+    CHECK(rec != NULL, "test_forced: OOM building a peer's post record");
+    /* `windowproxy.post\t<target doc>\t<sender world>\t<targetOrigin>\t<base64>` — core/frame/window_message.c
+       writes this and solver/engine.c reads the first three fields off it. "*" is §9.3.3's any-origin, which
+       is what a post that names no target origin means. */
+    snprintf(rec, rec_cap, "windowproxy.post\t%s\t%s\t*\t%s",
+             world_doc_name(world_local_doc()), vector, b64);
+    /* THE ORIGIN TRAVELS BESIDE THE RECORD AND NEVER INSIDE IT (SECURITY.md): only the trusted zone may stamp
+       one, and this function is standing in for that zone. */
+    engine_route(ctx, rec, "https://peer.example");
+    free(rec);
+    free(b64);
+    structured_data_free(ctx, &sd);
 }
 
 /* THE QUESTION, ASKED ONCE, THROUGH THE PRODUCTION DOOR. `windowproxy.get … length` is HTML §7.2.1.3.1
