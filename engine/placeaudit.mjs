@@ -74,7 +74,6 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..");
 const DEFAULT_ROOT = path.join(REPO, "engine", "host", "browser");
 const EXPOSURE_HEADER = path.join(REPO, "engine", "host", "browser", "idl_exposure.h");
-const PLATFORM_C = path.join(REPO, "engine", "host", "browser", "core", "platform.c");
 
 /* The one door, by name, because it is the only fact in this file that cannot be derived from something else —
    every other door is found by asking which functions in its own file route to it. */
@@ -354,9 +353,23 @@ function deriveDoors(corpus) {
 
 /* ---- the two columns, derived --------------------------------------------------------------------------- */
 
+/* THE TABLE IS FOUND IN THE CORPUS THIS RUN WAS HANDED, never at a path fixed to this file's own repository.
+   It WAS the fixed path, and that is the same defect this instrument exists to report one level up: the
+   audited tree is an ARGUMENT (idlgen takes `--host`, this file takes `<paths>`, and both do so because a
+   check that has never been shown REJECTING anything is not a check, so a control has to be able to run the
+   tool over a tree holding the construct being probed) — and the columns were being read out of whichever
+   platform.c sat beside THIS FILE. Against a control tree it threw; against a tree that merely happened to
+   have one at the same absolute path it would have answered the wrong columns and said nothing. Found by a
+   positive control for the [Global] band in engine/idlgen.mjs, which is the control catching the instrument
+   rather than the tree, and which is the only way this direction is ever caught. */
 function platformColumns(corpus) {
-  const unit = corpus.find((u) => u.file === PLATFORM_C);
-  if (!unit) throw new Error(`${path.relative(REPO, PLATFORM_C)} is not in the audited paths — the columns are stated there`);
+  const want = path.join("core", "platform.c");
+  const hits = corpus.filter((u) => u.file.endsWith(path.sep + want));
+  if (hits.length !== 1)
+    throw new Error(`${hits.length} file(s) named ${want} in the audited paths — the columns are stated in ` +
+                    `exactly one, so ${hits.length === 0 ? "this run has no column list to read" : "which of " +
+                    hits.map((u) => u.rel).join(", ") + " states them is not a question these paths answer"}`);
+  const unit = hits[0];
   const m = new RegExp(`${PLATFORM_TABLE}\\s*\\[\\s*\\]\\s*=\\s*\\{`).exec(unit.code);
   if (!m) throw new Error(`no \`${PLATFORM_TABLE}[] = {\` in ${unit.rel} — the column list has moved`);
   const open = unit.code.indexOf("{", m.index + m[0].length - 1);
@@ -416,6 +429,70 @@ function reachable(edges, roots) {
     for (const c of edges.get(n) || []) if (!seen.has(c)) q.push(c);
   }
   return seen;
+}
+
+/* WHICH COLUMN REACHES A FUNCTION — THE ONE SPELLING, for this file and for engine/idlgen.mjs.
+ *
+ * This derivation was private to this file and a SECOND consumer needed it: idlgen's largest blind spot is
+ * "members installed on the realm's global object, whose [Global] interface a source reader cannot decide",
+ * and the reason a reader cannot is that the global is ONE `JS_GetGlobalObject` node for the whole program —
+ * so a Window global and a worker global are one expression and the install site names neither. What DOES
+ * separate them is already computed here: a function the per-DOCUMENT column reaches runs only in realms that
+ * reach core/platform.c's platform_document_install, which asserts its realm's Web IDL §3.3.8 [Global] global
+ * names are `Window`; a function the per-REALM column reaches runs in every realm core/realm.h builds.
+ *
+ * IT IS EXPORTED RATHER THAN COPIED for the reason CLAUDE.md §AN-AUDITOR-DERIVES-THE-RULE gives and this tree
+ * has paid for seven times: two spellings of one question is the shape that drifts, and the copy that drifts
+ * is the one nobody runs against reality. `run` below calls this function, so there is no second derivation
+ * to disagree with — a root set this file stops reading is a root set idlgen stops reading in the same edit.
+ *
+ * `globalMints` IS THE OTHER HALF AND IS NOT A COLUMN FACT. A column tells you WHICH realms a function runs
+ * in only once you know which [Global] interface each column's realms have, and the engine states that where
+ * it BUILDS the prototype: Web IDL §3.7.3's interface prototype object, minted through idl_interface_tag,
+ * whose identifier is a string literal at the call. The caller supplies the set of [Global] names, because
+ * that is the CORPUS's fact and not this file's — reading it off a list here would be the hand-kept table
+ * this whole instrument exists to not be. */
+export function installColumns(roots, globalNames) {
+  const corpus = loadCorpus(roots);
+  const cols = platformColumns(corpus);
+  const realmRoots = realmIntrinsics(corpus);
+  const { defs, edges } = callGraph(corpus);
+  const inRealm = reachable(edges, realmRoots);
+  const inDoc = reachable(edges, cols.install);
+  const inAgent = reachable(edges, cols.declare);
+  /* Every §3.7.3 mint naming one of the caller's [Global] interfaces, with the function it stands in — so a
+     caller can ask which column builds which realm's global. Empty when the caller supplies no names, which
+     is what `run` below does: it has no use for them and must not pay for the walk. */
+  const globalMints = [];
+  if (globalNames && globalNames.size) {
+    for (const u of corpus) {
+      for (const f of u.fns) {
+        for (const c of callsIn(u.code, f.bodyStart, f.bodyEnd)) {
+          if (!/^idl_interface_tag(_at)?$/.test(c.name)) continue;
+          const args = argsOfCall(u.code, c.paren);
+          if (!args) continue;
+          for (const a of args) {
+            const m = /^"((?:[^"\\]|\\.)*)"$/.exec(a.trim());
+            if (m && globalNames.has(m[1])) globalMints.push({ iface: m[1], fn: f.name, rel: u.rel });
+          }
+        }
+      }
+    }
+  }
+  /* THE ENCLOSING FUNCTION OF A (file, line), which is how a consumer holding a record from another reader
+     joins to this one. Keyed on the ABSOLUTE path and not on `rel`: `rel` is relative to THIS file's own
+     repository root, and a consumer may be pointed at a tree outside it (idlgen takes `--host`), so the two
+     sides would be spelling the same file two ways — which answers `null` and reads exactly like a line in no
+     function body. The absolute path is the one spelling both readers already hold. */
+  const byFile = new Map(corpus.map((u) => [u.file, u]));
+  const fnAt = (file, line) => {
+    const u = byFile.get(file);
+    if (!u) return null;
+    for (const f of u.fns)
+      if (line >= lineOf(u.lines, f.bodyStart) && line <= lineOf(u.lines, f.bodyEnd)) return f.name;
+    return null;
+  };
+  return { corpus, cols, realmRoots, defs, edges, inRealm, inDoc, inAgent, globalMints, fnAt };
 }
 
 /* ---- resolving the identifier a site names -------------------------------------------------------------- */
@@ -656,15 +733,10 @@ function run(argv) {
   const roots = paths.length ? paths.map((p) => path.resolve(p)) : [DEFAULT_ROOT];
   const all = flags.has("--all");
 
-  const corpus = loadCorpus(roots);
+  /* THE SAME DERIVATION engine/idlgen.mjs asks for — see installColumns above. It was written out here and
+     is called instead, so the two consumers cannot come to hold two answers. */
+  const { corpus, cols, realmRoots, defs, edges, inRealm, inDoc, inAgent } = installColumns(roots, null);
   const { doors, doorFile } = deriveDoors(corpus);
-  const cols = platformColumns(corpus);
-  const realmRoots = realmIntrinsics(corpus);
-  const { defs, edges } = callGraph(corpus);
-
-  const inRealm = reachable(edges, realmRoots);
-  const inDoc = reachable(edges, cols.install);
-  const inAgent = reachable(edges, cols.declare);
 
   const { table: exposure, globals } = parseExposure(fs.readFileSync(EXPOSURE_HEADER, "utf8"));
   const WINDOW = globals.get("IDL_GLOBAL_WINDOW");
@@ -1050,8 +1122,16 @@ function selftest() {
   return L.join("\n");
 }
 
+/* RUN ONLY WHEN THIS FILE IS THE PROGRAM. It exported four parsers and a column derivation and ran a full
+   audit over 834 translation units AT IMPORT, which is CLAUDE.md's §a-.mjs-that-does-work-at-import standing
+   in the module whose machinery a second instrument needs: every one of those exports was unreachable, because
+   reaching it printed seventy lines and, down a pipe, killed the importer with SIGPIPE before its own output
+   — measured, on the first probe that tried. A producer whose only consumers cannot consume it is the
+   write-with-no-reader defect wearing an `export` keyword. */
 const argv = process.argv.slice(2);
-if (argv.includes("--selftest")) {
+if (process.argv[1] && path.resolve(process.argv[1]) !== fileURLToPath(import.meta.url)) {
+  /* imported, not run */
+} else if (argv.includes("--selftest")) {
   const out = selftest();
   process.stdout.write(out);
   /* THE AUDIT EXITS 0 WHATEVER IT FINDS — it is not a gate, and a red exit code for a finding is an instruction
@@ -1060,5 +1140,6 @@ if (argv.includes("--selftest")) {
      tree. That is the one condition worth a non-zero status, and it cannot become a tree gate because nothing
      runs --selftest as one. */
   process.exit(/A CONTROL DISAGREED/.test(out) ? 1 : 0);
+} else {
+  process.stdout.write(run(argv));
 }
-process.stdout.write(run(argv));

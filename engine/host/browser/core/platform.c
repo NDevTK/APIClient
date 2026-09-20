@@ -1953,6 +1953,37 @@ void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_doc
            "against (§4.4 stood here and is Grouping content)");
     DCHECK(doc->origin != NULL && *doc->origin,
            "a document was installed with no PRINCIPAL — every same-origin check compares it");
+    /* AND THIS COLUMN'S REALM IS A WINDOW REALM — Web IDL §3.3.8 [Global], asked of the realm's OWN stated
+       global names rather than of which host called this.
+       IT WAS TRUE ONLY BY CONVENTION AND IS WRITTEN DOWN AT FIVE SITES AS IF IT WERE A GUARANTEE. Every one
+       of them reasons from it — "a realm that reaches no platform_document_install got neither name: a worker
+       realm always" — and §3.8's own placement loop at the end of this function says in its comment that it
+       "runs at the end of platform_document_install, which a worker realm never reaches". Nothing checked it.
+       What made it true was that all three hosts that call this build the realm with "Window": a fact about
+       the CALLERS, which this function cannot see, so the invariant's subject was absent from every site that
+       relied on it. CLAUDE.md §Fix-the-ROOT: where something is true only by convention, the diff to prefer
+       is the assert that makes it true by construction.
+       WHAT THE COLUMN PLACES IS WHY IT MATTERS. §3.7.6/§3.7.7's [Global] arm puts a member on the realm's
+       GLOBAL OBJECT, and this column installs 161 of them DIRECTLY onto `global` without asking §3.7.3's
+       conditional (idl_global_member_target, which two components do ask) — so in a realm whose [Global]
+       interface did not declare them, every one would be a §3.8 violation whose only symptom is a descriptor
+       read. The assert is what says those 161 are Window's, and it is what lets an instrument reading these
+       sources say so too: engine/idlgen.mjs could not decide WHOSE global such an install lands on, because
+       the global is one `JS_GetGlobalObject` node for the whole program.
+       THE BAND AND NOT A REALM KIND. `realm_global_is_worker` would be the hand-picked list of realm kinds an
+       engine happens to build that core/indexeddb/indexed_db.c retired by name — a WORKLET realm is not a
+       worker and would pass it. idl_global_names_are_window reads browser/idl_exposure.h's generated
+       IDL_GLOBALS bit, which is the corpus's own §3.3.8 answer and moves with it. */
+    DCHECK(idl_global_names_are_window(realm_global_names(ctx)),
+           "core/platform.c's per-DOCUMENT column ran in a realm whose Web IDL §3.3.8 [Global] global names "
+           "are not `Window`. This column installs a Document's surface, and most of it goes STRAIGHT onto "
+           "the realm's global object without asking §3.7.3's conditional (core/idl_args.h's "
+           "idl_global_member_target) — which is correct for a Window realm, where §3.8's \"Define the regular "
+           "operations of interface on instance\" arm places them, and is a §3.8 violation in any other, where "
+           "the same members belong on a non-[Global] ancestor's §3.7.3 interface prototype object. A realm "
+           "that is not a Window realm has no Document to install: build it with realm_install_intrinsics and "
+           "its own component's per-realm install, and route any member this column shares with it through "
+           "idl_global_member_target so the target is decided by the band rather than by which host called");
     /* THE TWO FACTS ARE TWO ARGUMENTS, which is the whole of the fix for them: a host with one of them passed
        whichever it had, and the address is the one that decides where `fetch("api/users")` goes.
        AND THEY ARE NOW COMPARED, BY §7.3.2.1 "Creating browsing contexts"'s OWN STEP 5, WHICH IS NOT

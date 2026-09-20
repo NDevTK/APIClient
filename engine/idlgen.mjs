@@ -52,6 +52,9 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { loadEnvironment, installedMembers } from "./idl_installed.mjs";
+/* WHICH COLUMN REACHES AN INSTALL — engine/placeaudit.mjs owns that derivation and this file asks it
+   rather than spelling a second one. See the block over `globalColumn` below for what it answers here. */
+import { installColumns } from "./placeaudit.mjs";
 import { loadIdl, windowGlobals, unplacedInterfaces, iterationMembers, EXPOSED_STAR, rhsNames, extOf } from "./idl_members.mjs";
 import { readDictDecls } from "./idl_dictdecl.mjs";
 
@@ -983,6 +986,97 @@ if (!BUILT_GLOBALS.size)
   throw new Error("[idl-audit] no [Global] interface is in this audit's census, so Web IDL §3.3.7's exposure " +
                   "question has no realm to be asked about — the engine builds no global, or the census lost " +
                   "the interface that is one");
+
+/* ---- WEB IDL §3.7.6/§3.7.7's [Global] ARM: WHOSE GLOBAL ------------------------------------------------
+ * An install whose every candidate is a [Global] interface landed on A REALM'S GLOBAL OBJECT, and this file
+ * reported all of them as one blind spot: "only the running realm says which global it is". That sentence was
+ * TRUE ABOUT THE READER IT WAS WRITTEN FOR and is a claim about THIS TREE, which is the half CLAUDE.md rates
+ * as the one that rots — engine/placeaudit.mjs now derives, with no blind spot of its own, which COLUMN
+ * reaches any function in this program, and a column IS a statement about which realms its code runs in.
+ *
+ * WHY THE READER CANNOT SEE IT AND THE COLUMN CAN. Every install target here resolves, through the argument
+ * edge, to one `JS_GetGlobalObject(ctx)` — ONE node for the whole program — so a Window global and a worker
+ * global are the same expression and the site names neither. The column is a different question entirely: not
+ * WHICH OBJECT this expression is, but WHICH REALMS THIS FUNCTION RUNS IN, and that is a property of the call
+ * graph from core/platform.c's PLATFORM[] and core/realm.h's intrinsic registrations.
+ *
+ * TWO RULES COMPOSE, AND BOTH ARE NEEDED. Neither alone decides the population:
+ *   (1) §3.8 Platform objects implementing interfaces' [Global] arm — "Define the regular operations of
+ *       interface on instance" — takes the instance's OWN interface, so a member an interface merely INHERITS
+ *       is never put on a global by it. `declaredBy` is that test, and the ENGINE asks the identical question
+ *       at run time: core/idl_args.c's idl_global_member_target returns the global exactly when
+ *       idl_realm_global_declares says this realm's [Global] interface declares the member, and the interface
+ *       prototype object of a non-[Global] ancestor otherwise. So for the members only ONE candidate declares,
+ *       the engine has already routed the question to THIS FILE'S OWN generated band.
+ *   (2) THE COLUMN, for the members BOTH candidates declare — `name`, `postMessage`, `close`,
+ *       `requestAnimationFrame`, `cancelAnimationFrame`. Rule (1) is silent about those: both globals may
+ *       carry them, so crediting both is the false COMPLETE and crediting neither is the floor this closes.
+ *       The column answers it because core/frame/window.c's install is in the per-DOCUMENT column and
+ *       core/platform.c's platform_document_install now ASSERTS its realm's §3.3.8 global names are `Window`
+ *       — which is what makes this a derivation from the engine's own statement rather than a convention.
+ *
+ * THE THIRD ROW IS NOT A MEMBER AT ALL and is why this is a partition and not a filter: a name written onto a
+ * realm's global that NO [Global] interface declares is not a §3.7.6/§3.7.7 placement, so it belongs in no
+ * member census. core/frame/remote_op.c writes `__apiclientOp` and its siblings onto the global for a
+ * cross-agent operation's program to read. Counting those as undecided members reports engine plumbing as
+ * platform surface.
+ *
+ * WHAT IS NOT DECIDED STAYS A BLIND SPOT, with the reason it could not be. That is the zero this file wants
+ * armed: a global install in a function NO column reaches is a construct to teach the derivation, not a
+ * member to credit or drop. */
+const globalNameSet = new Set(globalNamesOf.keys());
+const COLUMNS = installColumns([BROWSER], globalNameSet);
+/* WHICH [Global] INTERFACE EACH COLUMN'S REALMS HAVE, derived from where the engine MINTS the §3.7.3 interface
+   prototype object for one — never from a list here. A realm whose Window prototype is built in the
+   per-DOCUMENT column is a Window realm; the per-REALM column is core/realm.h's list, which EVERY realm runs,
+   so its code sees every [Global] interface this engine builds. */
+const DOC_GLOBALS = new Set(COLUMNS.globalMints.filter((m) => COLUMNS.inDoc.has(m.fn)).map((m) => m.iface));
+const ALL_GLOBALS = new Set(COLUMNS.globalMints.map((m) => m.iface));
+/* A member name NO [Global] interface in the corpus declares cannot be a §3.7.6/§3.7.7 [Global] placement. */
+const anyGlobalDeclares = (name) => [...globalNamesOf.keys()].some((n) => declaredBy(n).has(name));
+const globalNotMember = [], globalUndecided = [];
+let globalDecided = 0;
+{
+  const decided = new Set();
+  for (const r of unattributed) {
+    if (!isGlobalInstall(r)) continue;
+    const fn = COLUMNS.fnAt(r.file, r.line);
+    if (!anyGlobalDeclares(r.name)) { globalNotMember.push(r); decided.add(r); continue; }
+    const realms = !fn ? null
+                 : COLUMNS.inRealm.has(fn) ? ALL_GLOBALS
+                 : COLUMNS.inDoc.has(fn) ? DOC_GLOBALS
+                 : null;
+    if (!realms) {
+      globalUndecided.push({ ...r, why: fn ? `\`${fn}\` is reached from no install column, so which realms ` +
+                                             `this install runs in is not stated by core/platform.c's ` +
+                                             `PLATFORM[] or core/realm.h's intrinsic list`
+                                           : `no function body in ${r.file} encloses line ${r.line}` });
+      decided.add(r);
+      continue;
+    }
+    /* §3.8's [Global] arm, asked of each realm this install runs in — the same question
+       idl_global_member_target asks of the generated band at run time. */
+    const lands = r.candidates.filter((n) => realms.has(n) && declaredBy(n).has(r.name));
+    if (!lands.length) {
+      globalUndecided.push({ ...r, why: `no [Global] interface among ${[...realms].join("/")} DECLARES it, so ` +
+                                        `§3.7.3's other arm puts it on a non-[Global] ancestor's interface ` +
+                                        `prototype object and this file cannot yet name which` });
+      decided.add(r);
+      continue;
+    }
+    for (const iface of lands) {
+      addTo(r.stubbed ? stubbedBy : installedBy, iface, r.name);
+      addTo(landsIn, r.file, iface);
+      if (r.lenientSetter) addTo(lenientBy, iface, r.name);
+    }
+    globalDecided++;
+    decided.add(r);
+  }
+  /* SPLICED OUT rather than marked, so every consumer below — `maybeHere`'s UNPROVEN join, the CROSS-CHECK
+     stranger test, the blind-spot census — reads one list and cannot disagree about which records are still
+     open. A record this block decided is no longer unattributed in any sense any of them means. */
+  for (let i = unattributed.length - 1; i >= 0; i--) if (decided.has(unattributed[i])) unattributed.splice(i, 1);
+}
 /* §3.3.7's "exposure set intersection of a construct C and interface-or-null H". */
 const exposureIntersect = (c, h) => {
   if (h === null) return c;
@@ -1767,18 +1861,52 @@ if (nonIface.length)
     }
     return byFile.size;
   };
-  blind("members installed on the realm's global object, whose [Global] interface a source reader cannot " +
-        "decide — §3.7.6/§3.7.7's [Global] arm puts them there and only the running realm says which " +
-        "global it is", onGlobal.length);
-  if (onGlobal.length) {
-    const cands = [...new Set(onGlobal.flatMap((r) => r.candidates))].sort();
-    console.log(`[idl-audit] ${onGlobal.length} member(s) installed on the realm's global object, which is ` +
-                `${cands.join(" or ")} — every one of the candidates is a §3.3.8 [Global] interface, so each ` +
-                `of these IS a member and the open question is only WHOSE. Neither credited to all its ` +
-                `candidates (the false COMPLETE: a member the document column installs would read as a ` +
-                `worker's) nor dropped:`);
-    byFileList(onGlobal);
+  /* THE §3.7.6/§3.7.7 [Global] BAND, PARTITIONED — see the `installColumns` block above for the derivation.
+     THREE ROWS AND NOT ONE COUNT, because the three take different work: a name no [Global] interface declares
+     is not a member and there is nothing to build; an install whose realms are known is DECIDED and has left
+     this band entirely, crediting the interfaces whose globals carry it; and one whose realms are not known is
+     the only thing still owed, and it is owed HERE rather than in the engine.
+     THE DECIDED ONES ARE PRINTED AS A FINDING-FREE ROW ON PURPOSE. A channel that appears only on the bad day
+     is a channel nobody learns to look for, so the band says how many it resolved as well as how many it could
+     not — and a reader comparing two runs can then tell a derivation that stopped reading from a tree that
+     stopped installing, which one falling number cannot. */
+  console.log(`[idl-audit] ── Web IDL §3.7.6/§3.7.7 [Global] ── ${globalDecided} member placement(s) onto a ` +
+              `realm's global object were attributed by the column that reaches the install, ` +
+              `${globalNotMember.length} name(s) written onto a global are no interface's member, and ` +
+              `${globalUndecided.length} could not be decided. The realms each column runs in are DERIVED: ` +
+              `the per-DOCUMENT column builds { ${[...DOC_GLOBALS].join(", ")} }'s §3.7.3 interface prototype ` +
+              `object and core/platform.c asserts its realm's §3.3.8 global names are that, and the per-REALM ` +
+              `column is core/realm.h's list, which every realm runs, so it sees ` +
+              `{ ${[...ALL_GLOBALS].join(", ")} }`);
+  if (globalNotMember.length) {
+    console.log(`[idl-audit] ${globalNotMember.length} name(s) written onto a realm's global object that NO ` +
+                `§3.3.8 [Global] interface declares — so §3.7.6/§3.7.7 place none of them and they are in no ` +
+                `member count above. They are engine state on a platform object, which is a fact about this ` +
+                `program and not a gap in it:`);
+    byFileList(globalNotMember);
   }
+  blind("members installed on the realm's global object whose realms no install column states — " +
+        "§3.7.6/§3.7.7's [Global] arm puts them there and the column that reaches the install is what says " +
+        "which realms that is", globalUndecided.length);
+  if (globalUndecided.length) {
+    console.log(`[idl-audit] ${globalUndecided.length} member placement(s) onto a realm's global object could ` +
+                `not be attributed. Each IS a member — a [Global] interface declares the name — and the open ` +
+                `question is only WHOSE. Neither credited to all its candidates (the false COMPLETE: a member ` +
+                `the document column installs would read as a worker's) nor dropped:`);
+    byFileList(globalUndecided);
+  }
+  /* NOT A BLIND ROW, BECAUSE A BLIND ROW HERE COULD NOT BE NON-ZERO. Every [Global] install the block above
+     saw took one of its four arms and every arm marks the record decided, so a row printing `onGlobal.length`
+     would read 0 on every run for every tree — a NON-check wearing a category's name, which is worse than no
+     row at all because its zero reads as a finding-free channel. It is an invariant about THIS FILE instead,
+     and it CRASHES: a global install still standing in `unattributed` means the splice and the decision
+     disagree about which records are open, and every consumer below reads `unattributed` as the open set. */
+  if (onGlobal.length)
+    throw new Error(`[idl-audit] ${onGlobal.length} install(s) on a realm's global object reached the census ` +
+                    `still unattributed — the §3.7.6/§3.7.7 [Global] block above decides every one of them and ` +
+                    `splices it out, so this is that block and this census disagreeing about the open set, ` +
+                    `not a construct in the tree: ` +
+                    onGlobal.map((r) => `${r.name}@${r.file}:${r.line}`).join(", "));
   blind("installed members whose target interface could not be decided", elsewhere.length);
   if (elsewhere.length) {
     console.log(`[idl-audit] ${elsewhere.length} installed member(s) could not be attributed to an interface ` +
