@@ -1493,12 +1493,37 @@ function wfqReading(out) {
                     `guard with no rows under it passes every census ever printed rather than reporting that ` +
                     `it has nothing to check.`);
   scanRows.push("rankChanges");
+  /* AND THE HOOK'S OWN DENOMINATOR, NAMED HERE FOR `rankChanges`' REASON EXACTLY: it is a lifetime count the
+     rival readings are taken against, it is NOT a `scan<Entry>Runs` row, and so no shape over FLOW_SCANS can
+     reach it. Its PRESENCE is already required by the loop above — solver/result.c publishes it, so
+     `wfqFields()` returns it and a census without it throws there — and what naming it here adds is the other
+     two: the lifetime guard below, and membership of the interval filter, so a census that carries the rival
+     count without the count it is a share OF cannot be picked as an endpoint of an interval whose miss rate
+     this reader is about to print. That is the pairing the `scanCensus*` rows spent a session on the wrong
+     side of. */
+  scanRows.push("preemptAsksLifetime");
   for (const k of scanRows)
     if (w[k] < 0)
       throw new Error(`[build] the @WFQ census reports ${k} ${w[k]} — the order-scan counters are lifetime ` +
                       `counts that only climb (solver/flow.c increments them at the scan and nothing resets ` +
                       `them), so a negative is a counter that wrapped or a row that was never written, and ` +
                       `the cost reading below would be about no run at all.`);
+  /* AND THE CONTAINMENT THAT MAKES THE MISS RATE A FRACTION OF ANYTHING — checked HERE and not only in the
+     engine, for the reason this file already gives one pair up: solver/result.c asserts it with a DCHECK and a
+     DCHECK is compiled out of a release build, where this reader still runs. The engine raises
+     `preemptAsksLifetime` at the top of its preempt policy and calls flow_rival_of, whose only caller that is,
+     from the rescan branch below it — so the rescans are a subset of the consultations by the order of two
+     statements, and a value above 1 is a hook rescanning more often than it was asked, which is not a state
+     the engine has. It is the `starvedPicks / picksLifetime` defect one row over: a share above 1 is how a
+     quotient tells you its denominator counts a different event, and that one was caught by exactly this
+     arithmetic after a session of being read as a finding. */
+  if (w.scanRivalRuns > w.preemptAsksLifetime)
+    throw new Error(`[build] the @WFQ census reports ${w.scanRivalRuns} preempt-hook rescan(s) against ` +
+                    `${w.preemptAsksLifetime} consultation(s) of the preempt policy — the rescan branch is ` +
+                    `INSIDE that policy and runs after it raises its own count, and solver/flow.c's ` +
+                    `flow_rival_of has no other caller, so one of the two has acquired a writer that is not ` +
+                    `that hook. The cache miss rate below would be a share above 1, which is what a quotient ` +
+                    `says when its denominator counts a different event than its numerator.`);
   /* AND WHO CARRIES THE OPTIMISM TERM AT ITS MAXIMUM. `visMin`/`visMax` give the term's RANGE and cannot say
      how much of the frontier sits at the top of it; `visZero` is that population, and where it is the WHOLE
      frontier the bonus is one flat maximum and orders nothing — which is the same arithmetic as `rangeUcb: 0`
@@ -1580,6 +1605,11 @@ function wfqReading(out) {
         const a = scanSeries[scanSeries.length - 2], b = scanSeries[scanSeries.length - 1];
         const dRuns = b.scanNextRuns - a.scanNextRuns;
         const dGen = b.rankChanges - a.rankChanges;
+        /* AND HOW OFTEN THE HOOK WAS ASKED ACROSS THE SAME INTERVAL — a DELTA for this reader's own stated
+           reason, which the lifetime totals cannot serve: the counts are not comparable between runs, and a
+           lifetime miss rate averages an early frontier the hook walked cheaply against a late one it did
+           not. Two counters that move together, divided, is what the 2x spread cannot reach. */
+        const dAsk = b.preemptAsksLifetime - a.preemptAsksLifetime;
         return dRuns > 0
           ? { dRuns, walked: (b.scanNextWeights - a.scanNextWeights) / dRuns,
               rival: (b.scanRivalRuns - a.scanRivalRuns) / dRuns, members: b.members,
@@ -1588,7 +1618,11 @@ function wfqReading(out) {
                  OR an incumbent switch, so above 1 is switching and at or below 1 is the cache doing
                  its job. Null when the order did not change across the interval — there is nothing to
                  be a rate of, and a rate over zero events is the empty denominator §Testing names. */
-              gen: dGen, perGen: dGen > 0 ? (b.scanRivalRuns - a.scanRivalRuns) / dGen : null }
+              gen: dGen, perGen: dGen > 0 ? (b.scanRivalRuns - a.scanRivalRuns) / dGen : null,
+              /* THE CACHE'S MISS RATE. Null when the hook was not consulted across the interval — there is
+                 nothing to be a rate of, and a rate over zero events is the empty denominator the gen reading
+                 beside it refuses for the same reason. */
+              asks: dAsk, miss: dAsk > 0 ? (b.scanRivalRuns - a.scanRivalRuns) / dAsk : null }
           : null;
       })()
     : null;
@@ -1655,13 +1689,38 @@ function wfqReading(out) {
               `linear pick that is the frontier's size again on every one of them`
             : ` — at or below one per step, which REFUTES the per-branch multiplier for this interval ` +
               `and does NOT refute it for the run: read it beside the rank-change count, because an ` +
-              `interval in which nothing forked cannot show a per-fork cost`)) +
+              `interval in which nothing forked cannot show a per-fork cost`) +
+          /* AND THE ONE QUESTION THE TWO READINGS ABOVE ARE BOTH SILENT ABOUT, WHICH IS WHAT THE HOOK'S OWN
+             CACHE IS DOING. Per STEP and per RANK CHANGE are both rates of the rescan against something
+             OUTSIDE the hook; this is the rescan against the hook's own consultations, so it is the only one
+             of the three that can say whether the cache absorbs anything. The two ends take opposite work and
+             print the same rival count, which is why this row was added: near 1 nearly every suspend point
+             buys a walk of the whole frontier and the cost is the CACHE's, near 0 the cache is absorbing and
+             a rival count that is half of all frontier weighing is a statement about how often the generation
+             MOVES — which is the page branching and is not fixed at this hook at all.
+             THE PERCENTAGE IS THE READING AND THE BRANCH IS ONLY A LABEL ON IT, stated that way because a
+             half is not a threshold anybody derived: what it separates is whether MOST consultations pay,
+             which is a sentence about this interval and not a complexity. */
+          (ivl.miss === null
+            ? `; the preempt hook was not consulted at all across this interval, so its cache has no hit ` +
+              `rate to read here — which is a fact about an interval in which no flow reached a suspend ` +
+              `point, not about the cache`
+            : `; and of the ${ivl.asks} consultation(s) of the preempt policy in that interval ` +
+              `${(100 * ivl.miss).toFixed(1)}% bought a frontier rescan` +
+              (ivl.miss > 0.5
+                ? ` — MOST of them, so the hook's cache is absorbing little and its cost per suspend point ` +
+                  `is the frontier's size: that is fixed at the CACHE (or at whatever moves the generation ` +
+                  `once per consultation), and NOT at the pick`
+                : ` — a minority, so the cache IS absorbing and the rescan count is a statement about how ` +
+                  `often the generation moves rather than about the hook being asked; the repair for a large ` +
+                  `rival total is then upstream of this hook`))) +
       /* THE LIFETIME TOTALS ARE PRINTED AND LABELLED, never used to decide. They are what a reader needs to
          see the interval in proportion, and they are exactly what the 2x spread makes unquotable between two
          runs — so the sentence that carries them says so, rather than leaving a bare count for somebody to
          compare against another revision's. */
       ` (within this run only, not comparable across runs: ${w.scanNextWeights} weight(s) over ` +
-      `${w.scanNextRuns} dispatch scan(s), ${w.scanRivalWeights} over ${w.scanRivalRuns} hook rescan(s), ` +
+      `${w.scanNextRuns} dispatch scan(s), ${w.scanRivalWeights} over ${w.scanRivalRuns} hook rescan(s) of ` +
+      `${w.preemptAsksLifetime} consultation(s) of the preempt policy, ` +
       /* NOT `host/pager`, WHICH IS WHAT THIS SAID AND WHICH engine/host/main.c REFUSES AT ITS OWN SITE: the
          OTHER entry is shared by flow_best, the pager's eviction tail, the top-weight read AND the flow_best
          inside flow_wfq_census — so a census pays into it, and naming one of its contributors invites a

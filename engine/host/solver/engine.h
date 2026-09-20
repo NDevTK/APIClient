@@ -464,6 +464,17 @@ void engine_set_park_hook(int (*want_park)(void));
    already existed went silent exactly when there was most to say (see the definition). */
 long engine_work_done(void);
 
+/* HOW MANY TIMES THE SCHEDULER'S PREEMPT POLICY WAS ASKED — suspend points REACHED, which is not the same
+   quantity as preempts WANTED (quickjs's JS_FlowPreemptStats) and not the same as rescans PERFORMED
+   (solver/flow.h's `scanRivalRuns`). A LIFETIME count, never reset, so it is one of the few rows a reader may
+   difference across two censuses; a caller that wants a rate takes that delta and never the total.
+   IT IS THE DENOMINATOR `scanRivalRuns` DID NOT HAVE, and the containment that makes the quotient a fraction
+   of anything is structural: flow_rival_of has ONE caller, the rescan branch of that policy, which runs after
+   this count is raised. So the quotient is the hook's cache MISS rate, and it is asserted at the census where
+   both halves are in one hand (solver/result.c) rather than left to whoever divides them.
+   IT DECIDES NOTHING, for the scan counters' reason exactly — no policy reads it. */
+uint64_t engine_preempt_asks(void);
+
 /* THE SESSION — the same dispatch loop, stepped by its HOST instead of drained. The extension's host has other
    work between quanta (its message port, other documents' engines, streaming findings), and CLAUDE.md's
    cooperative-quantum yield says the scheduler RETURNS for exactly that and then resumes the byte-identical

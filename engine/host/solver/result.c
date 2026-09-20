@@ -720,6 +720,21 @@ char *result_wfq_json(void) {
            "the branch engine.c credits flow_credit_pick in, so this cannot exceed unless one of the two has "
            "acquired a second writer; `starvedPicks / picksLifetime` is about to be published as a share "
            "above 1, which is the reading that says the two rows are counting different events again");
+    /* AND THE IDENTITY THAT GIVES `scanRivalRuns` A DENOMINATOR AT ALL, checked here for the two above's
+       reason: this is the one moment both halves are in one hand, and the quotient is about to be published.
+       solver/engine.c raises `preemptAsksLifetime` at the TOP of its preempt policy and calls flow_rival_of —
+       whose only caller that is — from the rescan branch BELOW it, so the rescans are a subset of the
+       consultations by the order of two statements. A break here is a second caller of flow_rival_of, and the
+       cache MISS rate this row exists to make readable is then a fraction of some other population: above 1 it
+       reads as a hook rescanning more often than it is asked, which is not a state the engine has.
+       IT IS NOT THE SAME CHECK AS THE TWO ABOVE AND MUST NOT BE COLLAPSED WITH THEM. Those bound one pick's
+       counters against another's; this one spans two FILES, so it is the only one here that can see a writer
+       added on the other side of a header. */
+    DCHECK((long long)flow_scan_runs(FLOW_SCAN_RIVAL) <= (long long)engine_preempt_asks(),
+           "the scheduler reports MORE preempt-hook rescans than consultations of the preempt policy — the "
+           "rescan branch is inside that policy and runs after it raises its own count, and flow_rival_of has "
+           "no other caller, so one of the two has acquired a writer that is not that hook; "
+           "`scanRivalRuns / preemptAsksLifetime` is about to be published as a cache miss rate above 1");
     /* AN EMPTY FRONTIER SAYS SO AND SAYS NOTHING ELSE — result.h states why the term rows are absent rather
        than zero. This is the shape `qjs_result` composes, because a session answers DONE by draining or by
        parking and both leave no members standing. */
@@ -1001,6 +1016,24 @@ char *result_wfq_json(void) {
                         this host's quantum is wall-denominated, so a duration here would be a fact about the
                         machine and these are facts about what the engine did. */
                      "\"scanCensusRuns\":%ld,\"scanCensusWeights\":%ld,"
+                     /* …AND HOW OFTEN THE HOOK WAS ASKED, which every scan row above is silent about because
+                        every scan row above counts a walk PERFORMED. The rival entry is the preempt policy's
+                        rescan and is close to half of all the frontier weighing this engine does, and until
+                        this row there was no way to tell a cache that absorbs nothing from a generation that
+                        moves as fast as the hook is consulted — the first says the hook costs the frontier's
+                        size at every suspend point and the repair is at the CACHE, the second says the rescans
+                        are the page branching and the repair is nowhere near it. Both print the same rival
+                        count.
+                        READ IT AS THE MISS RATE AND NEVER AS A TOTAL: the rival runs over this is the share of
+                        CONSULTATIONS that bought a walk, which is not the row below (rescans per rank change,
+                        i.e. whether one generation is being rescanned twice) and not `scanNextRuns` (what a
+                        STEP pays). Three questions, three denominators, and the engine asserts the containment
+                        that makes this one a fraction — see the DCHECK above.
+                        A LIFETIME COUNTER AND MAY BE DIFFERENCED, which most of this line is not: solver/
+                        engine.c never resets it, so two censuses carrying one `workDone` give a RATE over the
+                        interval between them, and that is the only reading a wall-denominated quantum leaves
+                        quotable at all. */
+                     "\"preemptAsksLifetime\":%llu,"
                      /* AND THE DENOMINATOR THE HOOK'S RESCAN COUNT HAS. `scanRivalRuns / scanNextRuns` is
                         a COST — scan work per step — and it was being read as the hook's cadence, which it
                         is not: the rescan fires on a rank change or an incumbent switch, so a step that
@@ -1127,6 +1160,7 @@ char *result_wfq_json(void) {
                      flow_scan_runs(FLOW_SCAN_RIVAL), flow_scan_weights(FLOW_SCAN_RIVAL),
                      flow_scan_runs(FLOW_SCAN_OTHER), flow_scan_weights(FLOW_SCAN_OTHER),
                      flow_scan_runs(FLOW_SCAN_CENSUS), flow_scan_weights(FLOW_SCAN_CENSUS),
+                     (unsigned long long)engine_preempt_asks(),
                      flow_starved_picks(), flow_starved_picks_idle(),
                      (long long)w.arrivals, (long long)w.departures,
                      engine_work_done(), flow_rank_changes());

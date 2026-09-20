@@ -8165,7 +8165,25 @@ static double g_ranked_dist = 0.0;
    the one quickjs's counters do not give. g_flow_preempt_requested is incremented only where the hook returns
    TRUE, so it counts preempts WANTED, not points offered: a step showing requested=1 may have reached one
    suspend point or a million with the WFQ declining every one of them. Reading it as the latter is a mistake I
-   made and wrote into a commit message; this counter is what tells the two apart. */
+   made and wrote into a commit message; this counter is what tells the two apart.
+   IT IS A LIFETIME COUNT AND IS RAISED IN EVERY BUILD, and those are one decision rather than two. Nothing
+   resets it; the seam assertion below snapshots it per step and reads the DELTA, which is the only reading a
+   lifetime counter permits and the reason its per-step use does not make it a per-step quantity. It is
+   PUBLISHED as the @WFQ census's `preemptAsksLifetime` (solver/result.c) and that census is composed in every
+   build, so a raise left under `#if APICLIENT_DEV` would print 0 in release beside a `scanRivalRuns` that
+   solver/flow.c raises unconditionally and says so at its own line: an ABSENT count rendering as a ZERO one,
+   at the one row whose whole job is to be somebody else's denominator.
+   THE CONTAINMENT IS WHAT MAKES THE QUOTIENT READABLE, and it is structural rather than a hope: flow_rival_of
+   has exactly ONE caller, the rescan branch of this hook, and that branch runs AFTER this counter is raised —
+   so `scanRivalRuns <= preemptAsksLifetime` holds at every instant and the quotient is this hook's cache MISS
+   rate. That is neither of the two questions already published. `scanRivalRuns / scanNextRuns` is what a STEP
+   pays; `scanRivalRuns / rankChanges` is whether the cache is invalidated more than once per generation; this
+   is what fraction of CONSULTATIONS buy a frontier walk. Near 1 the cache absorbs nothing and the hook's cost
+   is the frontier's size per suspend point; near 0 it absorbs, and a rival scan count that is half of all
+   frontier weighing is then a statement about how often the generation MOVES. Those take different diffs and
+   no row separated them.
+   RETIREMENT: this argument goes when the census asserts the containment over rows it derives rather than
+   over two counters named here, so the quotient's denominator cannot be a different event again. */
 static uint64_t g_preempt_asked = 0;
 /* THE GAP BETWEEN SUSPEND POINTS is the quantity the contract is about, and it is not the same as how long a
    step ran. A step that offers the scheduler a point every few milliseconds and still runs for ten seconds is
@@ -8175,6 +8193,13 @@ static uint64_t g_preempt_asked = 0;
    points quickly and then one long gap. Measured per step: reset when the step starts, updated at each
    consultation, and closed off with the tail after the last one. */
 static int64_t g_last_ask = 0, g_max_gap = 0;
+
+/* …AND THE ONE OF THE THREE A CENSUS READS. Exported for solver/result.c's reason and no other: the row is
+   published beside `scanRivalRuns`, and a census that carried a count of its own would be a second definition
+   of "how often was the policy asked" — the defect solver/flow.h's scan rows exist to stop one question over.
+   The two clocks above stay private because nothing outside the seam message may read a WALL quantity from
+   this file. */
+uint64_t engine_preempt_asks(void) { return g_preempt_asked; }
 
 /* The solver's policy does not care WHICH kind of point it was offered — its two decisions are the WFQ ranking
    and the consumed slice, and both ask whether this flow should still hold the thread. */
@@ -8201,18 +8226,31 @@ static int preempt_hook(int kind) {
            "the scheduler's preempt policy was consulted with NO SLICE OPEN — whoever is running this code is "
            "not the scheduler, so there is no flow whose rank or budget this answer could be about; some entry "
            "reached the interpreter on the HOST's own time between two steps");
-    /* THE GAP CENSUS IS THE SEAM MESSAGE'S, SO IT IS COMPILED OUT WITH IT. Every one of these three statics is
-       read only inside this file's `#if APICLIENT_DEV` seam assertion, and the clock they are built from is the
-       WALL clock — which is neither the slice's measure nor a verdict, by design. A release build was therefore
-       taking a clock reading at EVERY suspend-point consultation to feed numbers nothing would ever print, and
-       on the host that matters most that reading is not a vDSO call at all: emscripten answers clock_gettime by
-       calling into JS. This is the mirror of the defect the aging charge had — that one was a real policy left
-       inside a DEV guard, this one a DEV diagnostic left outside it — and both are the same question asked once
-       per hook: is this number something the ENGINE decides on, or something a developer reads? */
+    /* THIS CONSULTATION, COUNTED — the census's `preemptAsksLifetime`, raised before the rescan below so the
+       containment its quotient rests on is an order of statements rather than an argument. */
+    g_preempt_asked++;
+    /* THE GAP CENSUS IS THE SEAM MESSAGE'S, SO IT IS COMPILED OUT WITH IT — AND THE COUNT ABOVE IS NOT, WHICH
+       IS THE ONE THING THIS PARAGRAPH GOT WRONG BY GROUPING THREE STATICS UNDER ONE GUARD. It read "Every one
+       of these three statics is read only inside this file's `#if APICLIENT_DEV` seam assertion", which was
+       TRUE WHEN WRITTEN and is retired by that count becoming a published census row: solver/result.c reads it
+       in every build. The paragraph's REASON was right and was never about the increment — it is the CLOCK.
+       `engine_now_ms()` at EVERY suspend-point consultation fed numbers nothing would ever print, and on the
+       host that matters most that reading is not a vDSO call at all: emscripten answers clock_gettime by
+       calling into JS. So the clock and the two statics built from it stay inside the guard and the count
+       comes out. It is kept rather than deleted because a reader who re-derives "these are diagnostics, so
+       they belong under the guard" will move the count back, and the row's denominator goes silent in exactly
+       the build nobody runs a gate in.
+       WHAT IT COSTS IN RELEASE IS ONE INCREMENT, which is what solver/flow.c already spends per scan for this
+       same reason and states in the same words ("the increment below is a WRITE in every build") — and this
+       hook already performs two flow_weight calls, plus an O(members) walk on a cache miss, so the add is not
+       the term anybody is paying here. This is the mirror of the defect the aging charge had — that one was a
+       real policy left inside a DEV guard, this one a DEV diagnostic left outside it — and both are the same
+       question asked once per hook: is this number something the ENGINE decides on, or something a developer
+       reads? The answer for the two clocks is still "a developer reads it"; the answer for the count changed
+       when a census started publishing it. */
 #if APICLIENT_DEV
     {
         int64_t now = engine_now_ms();
-        g_preempt_asked++;
         if (now - g_last_ask > g_max_gap) g_max_gap = now - g_last_ask;
         g_last_ask = now;
     }
