@@ -337,6 +337,72 @@ function _isScriptLike(d) {
   return d === "audioworklet" || d === "paintworklet" || d === "script" ||
     d === "serviceworker" || d === "sharedworker" || d === "worker";
 }
+// AND IS THIS REQUEST A SUBRESOURCE OF THE DOCUMENT — A SECOND QUESTION ASKED OF THE
+// SAME FACT, which is CLAUDE.md's own cure for a predicate answering two questions and
+// not a second spelling of the one above: the destination STRING is the fact, and each
+// of these is a QUESTION asked of it, so the two cannot come to disagree about a chunk
+// the way two answers to one question could. `_isScriptLike` answers CORB's — may this
+// reply be ingested as CODE — and stays exactly the spec's list. This one answers the
+// EGRESS question, which CLAUDE.md §THE-PER-ORIGIN-OPT-IN-GOVERNS-EGRESS states as
+// whose ACT the request is rather than what its reply becomes.
+//
+// THE TWO AGREED WHILE A `<script src>` WAS THE ONLY SUBRESOURCE IN THE PERMITTED
+// GROUP, AND A `<link rel=stylesheet>` IS WHAT MADE THEM COME APART. Read by the CORB
+// predicate alone a stylesheet lands in the group that spends somebody else's server,
+// and the page then renders with UA defaults only — which is not a narrower answer but
+// a DIFFERENT DOCUMENT. The bit kept whatever the stricter question needed and the
+// looser one was refused with nothing anywhere to say it had been asked.
+//
+// IT IS FETCH §2.2.5 "Requests"' OWN subresource request MINUS THE EMPTY STRING, AND
+// THE MINUS IS THE DECISION RATHER THAN A TIDY-UP. §2.2.5 states the term verbatim: "A
+// subresource request is a request whose destination is audio, audioworklet, font,
+// image, json, manifest, paintworklet, script, style, text, track, video, xslt, or the
+// empty string" — and the empty string is what a `fetch()` and an XHR carry, since
+// §2.2.5 gives every request a destination and "unless stated otherwise it is the empty
+// string". So the standard's term AS WRITTEN admits every data request at every origin,
+// which is the whole per-origin opt-in deleted by one predicate: the same dangerous
+// spelling the arm list below already names as `{signal:"destination",value:"value"}`,
+// reached this time through a term the standard hands you rather than through a typo.
+// The departure is therefore stated HERE rather than inherited silently. A NON-EMPTY
+// subresource destination is one some element, stylesheet rule or DOM constructor in
+// the document NAMED; the empty one is page code asking for bytes directly, which is
+// the data fetch the default refuses.
+//
+// AND IT IS THE STANDARD'S POSITIVE LIST AND NEVER THE COMPLEMENT OF ITS OTHER ONE,
+// because §2.2.5's two terms DO NOT PARTITION its own enumeration: `webidentity` is in
+// neither, so a complement would have admitted a destination the standard declines to
+// call a subresource — silently, and on the widening side.
+//
+// NAMED RESIDUAL — WHAT IS NOT COVERED IS A PROPERTY AND NOT A LIST: a subresource the
+// document's own markup or its own running code names, whose §2.2.5 destination is the
+// EMPTY STRING. At this chokepoint such a request is not separable from the data fetch
+// the default refuses, because the destination is the only fact crossing the seam that
+// says what a request is FOR, and §2.2.5 gives that value to a `fetch()` and to a
+// page-declared subresource alike. The code above is CORRECT for what it decides and
+// NARROWER than the owner's sentence, which reaches every subresource; it is not a gap
+// to crash on, because the arm it feeds is a permission and the narrow answer is the
+// refusing one.
+// WHAT THE NEXT DIFF BUILDS is the PARK KIND on the pending line beside the
+// destination — the engine already separates a browser algorithm's subresource fetch
+// from a `fetch()`/XHR by kind, and that fact does not cross. GREPPED at
+// engine/host/solver/engine.c's `engine_pending_fetches`, which joins METHOD,
+// DESTINATION, INITIATOR, PROVENANCE, PINNED, CREDENTIALS and URL, and reads PEND_KIND
+// at exactly one line in that function, inside a DCHECK. A kind-derived token there
+// would say WHOSE ALGORITHM IS OWED THE REPLY, which is the egress question asked of a
+// fact the engine already holds, and the empty destination would stop having to stand
+// for two things. That phrasing is this file's own and carries no quotation marks on
+// purpose: a run shown as a SPELLING under a spec anchor is judged as a quotation of
+// that spec, which is how this very sentence was reported as a fabricated §2.2.5
+// quotation on the run before this one.
+// HOW ITS ABSENCE WOULD SHOW, as an OBSERVATION and never as an instance: a run whose
+// log carries a `blocked-signal:destination=value` refusal for an address the analysed
+// document's own markup declares — the refusal and the markup disagreeing about whose
+// act the request is, which is the one disagreement this predicate exists to end.
+function _isDocumentSubresource(d) {
+  return d === "audio" || d === "audioworklet" || d === "font" || d === "image" ||
+    d === "json" || d === "manifest" || d === "paintworklet" || d === "script" ||
+    d === "style" || d === "text" || d === "track" || d === "video" || d === "xslt";
+}
 // FETCH §2.2.5 "Requests"' DESTINATION TYPE, ENUMERATED — "A destination type is one
 // of: the empty string, `audio`, `audioworklet`, `document`, `embed`, `font`, `frame`,
 // `iframe`, `image`, `json`, `manifest`, `object`, `paintworklet`, `report`, `script`,
@@ -858,14 +924,33 @@ function _urlAuthorityMarker(u) {
    anything — "this transport only ever sends GET" is the sentence that makes the method rows of every other
    security discussion legible — and it is where the row already is on the day it starts gating. */
 var _SIGNALS = [
-  /* FETCH §2.2.5 "Requests"' DESTINATION, COLLAPSED TO THE ONE DISTINCTION THE POLICY TURNS ON, and the
-     predicate is `_isScriptLike` itself rather than a second spelling of it: two answers to "is this code"
-     would be two rules free to disagree about a chunk, and CORB decides on that same line one function up.
-     A PROGRAM LOAD IS A BROWSER LOADING A PAGE — the bytes are the app's own, served identically to every
-     visitor, revealing nothing about this person — and a VALUE request is this tool spending somebody
-     else's server. That line is where the default below is drawn. */
-  { name: "destination", gates: true, certainty: "stated", values: ["program", "value"],
-    of: function (f) { return _isScriptLike(f.destination) ? "program" : "value"; } },
+  /* FETCH §2.2.5 "Requests"' DESTINATION, READ AS THE TWO DISTINCTIONS THE POLICY TURNS ON — each by its
+     own predicate over the ONE string, which is why `_isDocumentSubresource` sits beside `_isScriptLike`
+     rather than widening it.
+     THE ARGUMENT FOR ONE PREDICATE IS REWRITTEN HERE RATHER THAN DELETED, BECAUSE A READER WILL RE-DERIVE
+     IT. It read: the predicate is `_isScriptLike` itself rather than a second spelling of it, since two
+     answers to "is this code" would be two rules free to disagree about a chunk, and CORB decides on that
+     same line one function up. Every clause of that is still TRUE. What was wrong is the premise underneath
+     it — that the egress question WAS "is this code" — and the paragraph's own next sentence gave it away:
+     A PROGRAM LOAD IS A BROWSER LOADING A PAGE is a question about WHOSE ACT the request is, and a
+     stylesheet answers that one the way a chunk does while answering CORB's the other way. So there is
+     still exactly one answer to "is this code", and it is still `_isScriptLike`; what this row gained is a
+     SECOND QUESTION, not a second answer.
+     THE CASCADE IS ORDERED AND THE ORDER IS LOAD-BEARING. §2.2.5's sets OVERLAP and do not partition its
+     enumeration: `script`, `audioworklet` and `paintworklet` are script-like AND subresource requests,
+     while `serviceworker`, `sharedworker` and `worker` are script-like and NON-subresource requests.
+     Asking the CORB set first keeps all six reading `program`, which is what they are and what the first
+     arm below already permits; asking the other way round would have left those last three in a value no
+     arm names, refusing three code loads at every origin.
+     A PROGRAM LOAD AND A SUBRESOURCE LOAD ARE BOTH THE PAGE LOADING ITSELF — the bytes are the app's own,
+     served identically to every visitor, revealing nothing about this person — and a VALUE request is this
+     tool spending somebody else's server. That line is where the defaults below are drawn, and it is
+     CLAUDE.md §THE-PER-ORIGIN-OPT-IN-GOVERNS-EGRESS's rather than this file's. */
+  { name: "destination", gates: true, certainty: "stated", values: ["program", "subresource", "value"],
+    of: function (f) {
+      if (_isScriptLike(f.destination)) return "program";
+      return _isDocumentSubresource(f.destination) ? "subresource" : "value";
+    } },
   /* CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's three names. `stated` and not `certain`: the engine
      composes the word at the park out of the park's own kind and the parking flow's `path_forced`, and the
      `CHECK` in `_provenanceOf` catches a word outside the three and nothing else. */
@@ -1086,6 +1171,35 @@ var _DEFAULT_ARMS = [
   { when: [{ signal: "destination", value: "program" }],
     why: "a script, a module import or a lazy chunk is the page loading itself — the app's own code, served " +
          "byte-identically to every visitor, revealing nothing about this person" },
+  /* AND THE SAME SENTENCE ABOUT THE REST OF WHAT A DOCUMENT LOADS IN ORDER TO BE ITSELF — WHICH IS A
+     DECISION THE PROJECT OWNER MADE AND NOT ONE THIS FILE INFERRED, so it is cited rather than argued.
+     CLAUDE.md §THE-PER-ORIGIN-OPT-IN-GOVERNS-EGRESS carries it: the discriminator is WHOSE ACT THE REQUEST
+     IS and not what the reply becomes, so a subresource the page's own markup names or its own running code
+     computes is the page loading itself and is fetched exactly as a browser fetches it — same-origin,
+     credentialed, before any widening. Read by the destination's CORB question alone a `<link
+     rel=stylesheet>` is refused and the document renders with UA defaults only, which is not a narrower
+     answer but a different document.
+     IT IS DESTINATION-KEYED ALONE, SYMMETRICALLY WITH THE ARM ABOVE AND FOR THAT ARM'S OWN REASON. A forced
+     segment in the address does not carry a request across this line: a stylesheet or a font whose path
+     segment a forced equality pinned is still the app's own asset, served byte-identically to every
+     visitor, and it is precisely the gated surface this product exists to reach. The pinned-or-contradicted
+     bit refines the VALUE side and buys nothing here, which is why the `witness` row below cannot narrow
+     this arm any more than it can narrow the one above.
+     AND A CONJUNCTION WITH `provenance=observed` WOULD BE INERT RATHER THAN CAREFUL, which is the reading
+     this arm most invites and is measured in the paragraph after the next one: no subresource park in this
+     engine can be graded `observed`, so such an arm would sit here reading as a permission and match
+     nothing for ever.
+     WHAT IT RE-GRADES IS ENUMERATED RATHER THAN LEFT TO BE FOUND, because a permission whose reach the
+     person cannot state is not a control. Every destination §2.2.5 calls a subresource request except the
+     empty string now fires at every origin, which is ten words of that list; and of those this engine can
+     STATE six today, through `<link rel=stylesheet>`, through `<img>`, and through the four an `as=` on a
+     `<link rel=preload>` or a `modulepreload` translates to. The one that needs saying out loud is `<img>`,
+     because the paragraph below refused it at length: that refusal is retired by the OWNER'S DECISION and
+     not by anybody disagreeing with its reasoning, and it is rewritten rather than deleted there. */
+  { when: [{ signal: "destination", value: "subresource" }],
+    why: "a stylesheet, an image, a font or any other subresource the document's own markup or its own " +
+         "running code names is the page loading itself — the same request the person's own browser would " +
+         "have made, for bytes served byte-identically to every visitor" },
   /* AND THIS ARM IS A CONJUNCTION, WHICH IS WHERE THE SOUNDNESS OF ITS OWN `why` IS NOW STATED RATHER THAN
      ASSERTED ABOUT THE LIST. It used to name `provenance=observed` alone, and that was sound only while
      every document had itself been reached observably — a property of the OTHER arms, which this function
@@ -1104,26 +1218,41 @@ var _DEFAULT_ARMS = [
   { when: [{ signal: "provenance", value: "observed" }, { signal: "doc-reach", value: "observed" }],
     why: "the page made exactly this request, in a document this browser actually navigated to — so " +
          "relaying it is this browser being a browser" }
-  /* AND NO THIRD ARM FOR A DOCUMENT'S OWN `<img>`, WHICH IS A DECISION AND NOT AN OMISSION — THE ARM THAT
-     WOULD CARRY ONE IS THE ONE DIRECTLY ABOVE, AND WHAT HOLDS IT IS A FACT THE ENGINE STATES RATHER THAN A
-     PERMISSION THIS FILE WITHHOLDS. The question arrives here and is answered here, so the next reader does
-     not re-derive it: a markup `<img src>` satisfies the PURPOSE clause on every word — the person's own
-     browser makes that request, the bytes are served identically to every visitor, nothing about this person
-     is revealed — and it is refused, which reads as a line this file drew. It is not. The arm above already
-     names exactly that request; it does not fire because the request arrives graded `derived`.
-     THE TWO WIDENINGS THAT LOOK LIKE THE FIX ARE EACH WRONG, AND FOR DIFFERENT REASONS, WHICH IS WHY BOTH
-     ARE NAMED. (1) A DESTINATION-KEYED ARM IS UNSOUND AT EVERY ENGINE STATE, because the destination signal
-     cannot separate the page loading itself from a code-composed data request: `<img src=…>` in markup,
-     `new Image().src = …` and `document.createElement("img").src = …` all arrive with the same value of
-     every signal this file reads, and the second and third are exactly what a per-origin opt-in exists to
-     gate — an image address is a first-class exfiltration channel, `new Image().src = "/api/users/" + id`.
-     Spelled `{signal:"destination", value:"image"}` it does not even survive `_signalRegistryCheck`, because
-     this signal's value space is ["program","value"] — and THAT REFUSAL POINTS AT THE DANGEROUS SPELLING:
-     `{signal:"destination", value:"value"}` passes every assert in this file and permits every data request
-     at every origin, which is the whole opt-in deleted by one arm. (2) A CONJUNCTION ARM
-     `{destination:"image"} ∧ {provenance:"observed"}` is SOUND AND INERT: no request this engine composes
-     for an image can be graded `observed`, so it would sit in the list reading as a permission and match
-     nothing for ever — `safeFetchWidenable`'s own recorded failure shape, one field over.
+  /* THE ARM ABOVE USED NOT TO EXIST, AND THE PARAGRAPH THAT SAID SO IS REWRITTEN HERE RATHER THAN DELETED
+     — BECAUSE ITS REASONING IS SOUND, ONLY ITS PREMISE WAS OVERRULED, AND A READER WHO RE-DERIVES THE
+     REASONING WILL RE-DERIVE THE REFUSAL WITH IT. It read: there is no third arm for a document's own
+     `<img>`, and that is a decision rather than an omission; the arm that would carry one is the `observed`
+     arm below, and what holds it is a fact the ENGINE states rather than a permission this file withholds.
+     A markup `<img src>` satisfies the purpose clause on every word — the person's own browser makes that
+     request, the bytes are served identically to every visitor, nothing about this person is revealed —
+     and it was refused, which read as a line this file drew. It was not: the `observed` arm already named
+     exactly that request and did not fire, because the request arrives graded `derived`.
+     IT THEN NAMED TWO WIDENINGS AS THE APPARENT FIX AND REFUSED BOTH, AND EXACTLY ONE OF THE TWO REFUSALS
+     SURVIVES. (1) IT SAID A DESTINATION-KEYED ARM IS UNSOUND AT EVERY ENGINE STATE, because the destination
+     signal cannot separate the page loading itself from a code-composed data request: `<img src=…>` in
+     markup, `new Image().src = …` and `document.createElement("img").src = …` all arrive with the same
+     value of every signal this file reads, and an image address is a first-class exfiltration channel,
+     `new Image().src = "/api/users/" + id`. THAT OBSERVATION IS EXACTLY RIGHT AND ITS PREMISE IS GONE. The
+     premise was that a CODE-COMPOSED subresource must be gated, and
+     CLAUDE.md §THE-PER-ORIGIN-OPT-IN-GOVERNS-EGRESS records the project owner overruling it in as many
+     words — a subresource the page's own markup names, OR ITS OWN RUNNING CODE COMPUTES, is the page
+     loading itself.
+     So the three spellings arriving alike is no longer a defect in the signal; it is the answer, and the
+     signal now says it. What the refusal was PROTECTING is protected by a different row anyway: a request
+     on an arm nothing observed is graded `forced`, and this file's own `program` arm has permitted exactly
+     that shape for a `<script src>` since it was written — so refusing `image` while permitting `script`
+     closed one spelling of a channel it left open in another, which is furniture rather than a gate.
+     WHAT THAT PARAGRAPH ALSO NAMED IS STILL LIVE AND IS THE REASON THE ARM ABOVE READS `subresource` AND
+     NOT A DESTINATION WORD: spelled `{signal:"destination", value:"image"}` an arm does not survive
+     `_signalRegistryCheck`, because this signal's value space is the three words it declares — and THAT
+     REFUSAL POINTS AT THE DANGEROUS SPELLING, since `{signal:"destination", value:"value"}` passes every
+     assert in this file and permits every data request at every origin, which is the whole opt-in deleted
+     by one arm. An arm may name only a value the registry declares, which is what keeps the widening this
+     file makes exactly as wide as the predicate it is derived from.
+     (2) IT SAID A CONJUNCTION ARM `{destination:"image"} ∧ {provenance:"observed"}` IS SOUND AND INERT, and
+     THAT IS STILL TRUE AND IS WHY THE ARM ABOVE IS KEYED ON THE DESTINATION ALONE: no request this engine
+     composes for a subresource can be graded `observed`, so such an arm would read as a permission and
+     match nothing for ever — `safeFetchWidenable`'s own recorded failure shape, one field over.
      THE ENGINE-SIDE CLAIM IS A CLAIM ABOUT ANOTHER FILE AND TRAVELS WITH ITS DERIVATION RATHER THAN AS A
      SENTENCE, because that is the half a reader must check before acting on any of this:
        git grep -n "parser_inserted" engine/host/solver/pending.c engine/host/solver/engine.c
@@ -1134,26 +1263,37 @@ var _DEFAULT_ARMS = [
      about §4.12.1.1; it is NARROWER than the definition `observed` states for itself, which is CLAUDE.md
      §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS with the one bit answering "is §4.12.1.1's parser document
      non-null" (read by `script_block_schedule` for scheduling, and script-only by the standard) and "does a
-     real load of this document make exactly this request" (read here). They agreed while `<script src>` was
-     the only markup subresource that parked, and `<link>` and `<img>` parking made them come apart.
-     WHAT THAT ALSO RETIRES, REWRITTEN RATHER THAN DELETED BECAUSE A READER WILL RE-DERIVE IT: this arm's
-     `why` used to end "refusing it would leave the engine unable to answer the document's own fetch", and
-     the comment above the list named an OBSERVED request as "the page's own parked `fetch()` or XHR". The
-     arm cannot reach either. The `fetch()`/XHR park passes the same literal 0 — its own comment reads "a
-     `fetch()` or an XHR — page code composed it" — so `observed` is unreachable for that kind BY THE DCHECK
-     above, not by accident, and the sentence was describing the population the engine most deliberately
-     excludes. Measured on one document with a `<script src>`, a `<link rel=preload>` of each kind, an
-     `<img src>`, a `fetch()` and two JS-composed images, reading the run's own `fetchCallSites`: the ONLY
-     row graded `observed` was the markup `<script src>`.
-     AND THE CONSEQUENCE FOR THIS LIST IS THAT THIS ARM IS SUBSUMED BY THE ONE ABOVE IT TODAY, which is said
-     here so that nobody deletes it as dead: `observed` implies one of the two `<script>` kinds, both of
-     which stamp `PENDING_DESTINATION_SCRIPT`, which `_isScriptLike` answers true for, which is the first
-     arm. It permits nothing the first arm does not — and it is the arm that becomes load-bearing the instant
-     the engine can state a true grade for a markup subresource, which is the next diff and is not this
-     file's. Deleting it would have to be undone by that diff.
-     RETIREMENT: this record goes when a request for a subresource the parser put in the document's own
-     markup reaches this file graded `observed`, at which point the arm above fires it, the second paragraph
-     is about a widening nobody needs and the fourth is about a sentence no longer in the file. */
+     real load of this document make exactly this request" (read here).
+     AND THAT FILE'S OLD RETIREMENT CLAUSE NAMED A NEXT DIFF THAT IS NOW REFUTED, WHICH IS RECORDED AT THE
+     PLACE THE CLAUSE WAS WRITTEN BECAUSE IT WOULD OTHERWISE GO ON INSTRUCTING EVERY LATER READER. It said
+     this record goes when a request for a subresource the parser put in the document's own MARKUP reaches
+     this file graded `observed`. Building that means a new engine-side fact carried to
+     `pending_prov_compose` — `parser_inserted` itself cannot be widened, because the DCHECKF above aborts
+     for any kind but the two `<script>` ones and §4.12.1.1 is right that it is script-only. The reason it
+     is REFUTED rather than merely expensive is that a markup bit cannot express the OTHER HALF of the
+     owner's sentence: a `<link>` or an `<img>` that page code CREATED is not parser-inserted at any
+     definition, and "computed and fetched at runtime" is the half that names it. A grade keyed on markup
+     would have permitted a document's own declared stylesheet and refused the one its router loads, which
+     is the population this product is most for. The destination row is what can state both, and stating it
+     there is what CLAUDE.md's own retirement clause for that paragraph names.
+     WHAT THE ARGUMENT ABOVE ALSO RETIRED STAYS RETIRED AND IS KEPT HERE FOR THE SAME REASON. The `observed`
+     arm's `why` used to end "refusing it would leave the engine unable to answer the document's own fetch",
+     and the comment above this list named an OBSERVED request as "the page's own parked `fetch()` or XHR".
+     The arm cannot reach either. The `fetch()`/XHR park passes the same literal 0 — its own comment reads
+     "a `fetch()` or an XHR — page code composed it" — so `observed` is unreachable for that kind BY THE
+     DCHECK above, not by accident. Measured on one document with a `<script src>`, a `<link rel=preload>`
+     of each kind, an `<img src>`, a `fetch()` and two JS-composed images, reading the run's own
+     `fetchCallSites`: the ONLY row graded `observed` was the markup `<script src>`.
+     AND THE CONSEQUENCE FOR THIS LIST IS THAT THE `observed` ARM IS SUBSUMED BY THE FIRST ONE TODAY, which
+     is said here so that nobody deletes it as dead: `observed` implies one of the two `<script>` kinds,
+     both of which stamp `PENDING_DESTINATION_SCRIPT`, which `_isScriptLike` answers true for, which is the
+     `program` arm. It permits nothing the first arm does not — and it is the arm that becomes load-bearing
+     the instant the engine can state a true grade for a NAVIGATION, which the destination row cannot carry
+     because `document` is not a subresource destination in §2.2.5 or in any reading of the owner's
+     sentence. Deleting it would refuse every document this tool opens.
+     RETIREMENT: this record goes when no reader can re-derive the destination-keyed refusal above from the
+     signals this file declares — which is to say when the `subresource` value and the arm it feeds are no
+     longer separable from the `program` one, and the paragraph has nothing left to be wrong about. */
 ];
 var _EXPLORED = Object.create(null);
 /* HAS A HOST SPOKEN YET. Two questions, two fields — never one value answering both, because the
