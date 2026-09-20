@@ -91,11 +91,39 @@ const PROBES = ['bf_layout', 'bf_box', 'block_flow_child_top', 'block_flow_auto_
                 'used_value_border_edge_px',
                 'cssom_cascaded_value', 'css_computed_value', 'css_cv_specified',
                 'css_logical_partner_of', 'cssd_ua_value', 'css_presentational_hint',
-                'lxb_css_stylesheet_parse'];
+                'lxb_css_stylesheet_parse', 'cascade_emit', 'style_sheet_list_add'];
 
 const flat = (n) => '<!DOCTYPE html><html><head><title>t</title></head><body>' +
   Array.from({ length: n }, (_, i) => `<div>r${i}</div>`).join('') + '</body></html>';
 const deep = (n) => '<!DOCTYPE html><html><head><title>t</title></head><body>' +
+  '<div>'.repeat(n) + 'x' + '</div>'.repeat(n) + '</body></html>';
+
+/* THE THIRD SHAPE, AND IT IS A DIFFERENT AXIS FROM THE OTHER TWO ON PURPOSE. `flat` and `deep` differ in the
+   document's SHAPE and declare no author style at all, which is what lets a column that grows differently
+   between them be a fact about the shape. `styled` is `deep` with ONE author sheet, and it differs on the
+   axis those two hold fixed: whether css-cascade-5 §6.2 "Cascading Origins"' AUTHOR ORIGIN has anything in
+   it. Without it the sheet-path rows read zero, and a zero there is the instrument saying it is looking at
+   the other half of the cost rather than saying this half is free — which is a silence a reader is entitled
+   to mistake for a clean bill.
+   IT IS `deep` AND NOT A FOURTH GENERATOR so the pair is controlled: every row here is comparable with the
+   same row of `deep` at the same N, and the only difference between them is the sheet. What that comparison
+   answers is how much of the author-origin path a resolution runs, which no shape axis can reach.
+   READ `cascade_emit` AGAINST `cssom_cascaded_value`: the first is the walk that SERIALIZES a sheet's rule
+   objects for the cascade to read, and if the two are EQUAL then the whole sheet is flattened once per
+   (element, property) resolution rather than once per render. `lxb_css_stylesheet_parse` is the re-parse of
+   that text and is gated on the flatten having produced any, so the two are NOT one number and a zero in the
+   second with a nonzero first is a real state: rules built, sheet in the list, nothing emitted.
+   A PROBE IS ON THIS LIST ONLY IF IT READS THE SAME NUMBER TWICE, which is a rule about the READER below and
+   not about the symbol. `css_rule_list_new` was on it and is not: over one fixture on one binary it answered
+   15997 under one probe set and 0 under another, and a call count cannot legitimately differ between two
+   readings of one run — so one of them is this file's `info breakpoints` parse, which pairs an `in <fn> at`
+   line with the `already hit N time` line after it and has nothing to say about a breakpoint gdb resolved to
+   SEVERAL locations. Every other row reproduced to the digit across both sets, so the parse is sound for a
+   single-location symbol and is the thing to fix before that probe comes back. Dropping it is not a
+   judgement about the cost it would have measured; it is that a row nobody can reproduce is worse than an
+   absent one, because the absent one does not get quoted. */
+const styled = (n) => '<!DOCTYPE html><html><head><title>t</title>' +
+  '<style>div{color:red}p{margin-top:2px}.q{padding-left:1px}</style></head><body>' +
   '<div>'.repeat(n) + 'x' + '</div>'.repeat(n) + '</body></html>';
 
 /* The record's eleven facts are engine/one_document.mjs's `topLevelFacts`, copied for the reason that file
@@ -155,7 +183,9 @@ const order = (v) => {
 
 try {
   const ns = Array.from({ length: MAX }, (_, i) => i + 1);
-  for (const [name, gen] of [['flat (N siblings, constant depth)', flat], ['deep (N nested, one child each)', deep]]) {
+  for (const [name, gen] of [['flat (N siblings, constant depth)', flat],
+                             ['deep (N nested, one child each)', deep],
+                             ['styled (deep, plus ONE author style sheet)', styled]]) {
     const rows = ns.map((n) => counts(gen(n)));
     console.log(`\n${name} — CALL COUNTS, N = ${ns.join(' ')}`);
     for (const p of PROBES) {
