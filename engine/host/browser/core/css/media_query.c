@@ -127,10 +127,17 @@ void media_query_free(MediaQuerySet *set)
  * this engine genuinely does not have — there is no such feature in Level 4, which is why the table has no
  * holes and an unknown NAME is the page's, not ours.
  *
- * A DISCRETE FEATURE DECLARES ITS LEGAL VALUES, and that is load-bearing rather than tidy: §3 makes a KNOWN
- * feature with an unacceptable value a SYNTAX ERROR — `(orientation: sideways)` is `not all` — while an
- * UNKNOWN feature is `<general-enclosed>` and merely unknown. Those two produce different answers under `or`,
- * so the table is what tells them apart. */
+ * A DISCRETE FEATURE DECLARES ITS LEGAL VALUES, and that is load-bearing rather than tidy: MQ4 §3.2 makes a
+ * KNOWN feature with an unacceptable value send its whole `<media-query>` to `not all`, while an UNKNOWN
+ * feature is `<general-enclosed>` and merely unknown. Those two produce different answers under `or`, so
+ * the table is what tells them apart.
+ * THIS PARAGRAPH USED TO CLAIM THE SECOND HALF OF THAT AS THIS FILE’S BEHAVIOUR — "`(orientation: sideways)`
+ * is `not all`" — AND IT IS NOT. A value this table rejects fails `parse_feature_body`, which reports one
+ * `false` for every refusal, so `parse_in_parens` cannot tell it from an unknown NAME and hands it to
+ * `<general-enclosed>`: the answer is unknown AT THE LEAF, not `not all`. The table still tells the two
+ * apart — that much was always true, and is what `value_ok` is for — but nothing downstream carries the
+ * distinction yet. It is recorded with its three clauses at `parse_in_parens`, and is the reason a wrong
+ * value in this table is not cosmetic. */
 typedef enum { MFK_LENGTH, MFK_RATIO, MFK_RESOLUTION, MFK_INTEGER, MFK_DISCRETE } MfKind;
 typedef struct {
     const char *name;
@@ -530,6 +537,19 @@ static bool parse_feature_body(MqLex *L, MqFeature *f)
         snprintf(f->name, sizeof f->name, "%s", n);
         d = mf_lookup(f->name);
         if (!d) return false;                              /* not a feature: the caller retries as enclosed */
+        /* A PREFIX IS A RANGE FEATURE’S SPELLING AND ONLY A RANGE FEATURE’S.
+           MQ4 §2.4.1 "Media Feature Types: “range” and “discrete”" — "The only significant difference
+           between the two types is that “range” media features can be evaluated in a range context and
+           accept “min-” and “max-” prefixes on their name."
+           MQ4 §3.2 "Error Handling" settles this exact input — "The orientation feature does not accept
+           prefixes, so this is considered an unknown media feature, and turned into not all".
+           IT IS REFUSED AT THE NAME RATHER THAN LEFT TO THE EVALUATOR, because the `<mf-plain>` arm below
+           moves a prefixed value into `lo`/`hi` and CLEARS `eq`: `(min-orientation: portrait)` therefore
+           PARSED, reached eval_feature’s discrete arm carrying no `eq`, and fired that arm’s DCHECK. A
+           media query prelude is PAGE BYTES, so that abort was a switch any stylesheet could hold — an
+           assert may stand only over what this codebase computed, never over what a parse found in
+           somebody else’s document. */
+        if (f->prefix && d->kind == MFK_DISCRETE) return false;
         mq_scan(L);
         if (L->kind == TK_RPAREN) {                        /* `<mf-boolean>` */
             /* §4: the min-/max- prefixed forms take a value, so they have no boolean context. */
@@ -621,7 +641,26 @@ static bool parse_enclosed(MqLex *L, MqFeature *f)
     return true;
 }
 
-/* `<media-in-parens> = ( <media-condition> ) | <media-feature> | <general-enclosed>` */
+/* `<media-in-parens> = ( <media-condition> ) | <media-feature> | <general-enclosed>`
+
+   RESIDUAL — A FEATURE BRANCH REFUSED OVER ITS VALUE LANDS ON `<general-enclosed>`, WHERE MQ4 §3.2 SENDS
+   THE WHOLE `<media-query>` TO `not all`.
+   NOT COVERED: any input the `<media-feature>` branch refuses for a reason OTHER than an unknown NAME — a
+   value outside a known discrete feature’s own set, a range comparison on one, a min-/max- prefix on one.
+   The GRAMMAR is satisfied: MQ4 §3 says "the `<general-enclosed>` branch must only be chosen if the input
+   does not match either of the preceding branches", and it does not. MQ4 §3.2 "Error Handling" is a SECOND
+   rule over that same input and is the one unbuilt — "An unknown `<mf-name>` or `<mf-value>`, or a feature
+   value which does not match the value syntax for that media feature, results in the value “unknown”", and
+   "A `<media-query>` whose value is “unknown” must be replaced with not all". Unknown AT THE LEAF is
+   strictly narrower: the two agree for a bare query, and Kleene parts them as soon as the leaf sits under
+   an `or` whose other branch is true.
+   WHAT THE NEXT DIFF BUILDS: `parse_feature_body` reporting WHICH of the two it hit instead of one `false`
+   for both — it knows at each `return` — so the refusal can reach the QUERY and set the `invalid` flag
+   `query_matches` and `out_query` already read as `not all`. That flag exists; only the route to it here
+   does not.
+   HOW ITS ABSENCE WOULD SHOW: a `<media-condition>` one of whose `or` branches is true applying its rules
+   to a document a browser leaves unstyled, for a prelude naming a value its feature’s own table omits.
+   RETIREMENT: this record goes when a refused feature branch carries WHY it was refused. */
 static bool parse_in_parens(MqLex *L, MqCond **out)
 {
     MqLex save = *L;
@@ -1257,7 +1296,8 @@ static int eval_feature(const MqFeature *f, const MqEnv *e)
         if (f->boolean) return d->bool_ctx ? MQ_TRUE : MQ_FALSE;
         DCHECK(f->eq.kind == MV_IDENT,
                "a discrete media feature reached evaluation with something other than an identifier — the "
-               "parser rejects a range comparison and a non-ident value on one, so nothing else can arrive");
+               "parser rejects a non-ident value, a range comparison AND a min-/max- prefix on one, so "
+               "nothing else can arrive");
         if (!strcmp(d->name, "color-gamut"))
             return gamut_rank(ua) >= gamut_rank(f->eq.ident) ? MQ_TRUE : MQ_FALSE;
         return !strcmp(ua, f->eq.ident) ? MQ_TRUE : MQ_FALSE;
