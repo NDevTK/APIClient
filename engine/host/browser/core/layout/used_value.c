@@ -3349,6 +3349,17 @@ static CssPx uv_abs_margin(CssLength len, CssPx width_basis)
     return css_length_resolve_pct(len, width_basis);
 }
 
+/* CSS 2.1 §10.6.4 "Absolutely positioned, non-replaced elements"' and §10.3.7's TWO MARGINS AS THE RULES
+   LEAVE THEM — an `auto` margin is the 0 every one of the six rules writes ("set 'auto' values for
+   'margin-top' and 'margin-bottom' to 0"), and a declared one is §8.3's resolution against the containing
+   block's width. It is a function rather than two lines because `uv_abs_margins` answers with it too, and one
+   rule written twice is the shape that drifts. */
+static void uv_abs_margin_pair(CssLength mb, CssLength ma, CssPx width_basis, CssPx *before, CssPx *after)
+{
+    *before = uv_len_is_auto(mb) ? css_px(0.0) : uv_abs_margin(mb, width_basis);
+    *after = uv_len_is_auto(ma) ? css_px(0.0) : uv_abs_margin(ma, width_basis);
+}
+
 /* css-sizing-3 §3.3 IN BOTH DIRECTIONS, as the pair of conversions between the equation's CONTENT term and
    the value `uv_pass_size` hands back. They are two functions over one surround so the sum added is the sum
    subtracted — `uv_surround_total`'s own reason. */
@@ -3431,8 +3442,7 @@ static UvAbs uv_abs_solve(lxb_dom_element_t *el, CssLength size_len, bool vertic
     free_space = css_px_sub(cb, uv_surround_total(s));
     r.before = a_before ? css_px(0.0) : uv_abs_len(lb, cb);
     r.after = a_after ? css_px(0.0) : uv_abs_len(la, cb);
-    r.m_before = a_mb ? css_px(0.0) : uv_abs_margin(mb, width_basis);
-    r.m_after = a_ma ? css_px(0.0) : uv_abs_margin(ma, width_basis);
+    uv_abs_margin_pair(mb, ma, width_basis, &r.m_before, &r.m_after);
     content = a_size ? css_px(0.0)
                      : uv_abs_content_of(el,
                                          uv_is_border_box(el)
@@ -4136,6 +4146,66 @@ static UvSized uv_sized(lxb_dom_element_t *el, UvBox box, bool vertical)
     return r;
 }
 
+/* CSS 2.1 §10.6.4 "Absolutely positioned, non-replaced elements"' and §10.3.7's TWO MARGINS, SPLIT OFF FROM
+   THE SOLVE IN EVERY CASE THE SOLVE DOES NOT SOLVE THEM — which is what keeps the used-value graph ACYCLIC.
+   Reading them out of `uv_abs_solve` unconditionally is a CYCLE on a real page: rules 1 and 3 take "the
+   height is based on the content per 10.6.7", §10.6.7's walk is core/layout/block_flow.c's, and that walk
+   asks the box for its own `margin-top` — which came back here and ran the same solve again. Nothing bounds
+   it, because nothing in it makes progress. Measured on webamp.org: 1209 C frames of one six-frame cycle on
+   a `top: 40%` / `bottom: auto` / `height: auto` box and a SIGSEGV on the stack guard page, with the
+   `margin-top` the recursion had gone looking for already sitting in the calling frame's `r.m_before`.
+
+   WHY THE SPLIT IS SOUND RATHER THAN A NARROWING, IN THE SECTION'S OWN WORDS. §10.6.4 solves FOR a margin
+   in exactly ONE of its three entries — "If none of the three are 'auto': If both 'margin-top' and
+   'margin-bottom' are 'auto', solve the equation under the extra constraint that the two margins get equal
+   values" — while every one of the six rules of the third entry says instead "set 'auto' values for
+   'margin-top' and 'margin-bottom' to 0", which is what `uv_abs_margin_pair` already answers with. §10.3.7
+   is that section one axis over with the same shape. So `top` or `bottom` being `auto` is SUFFICIENT to know
+   the equation will not be solved for a margin — and it is decidable from two computed values, with no SIZE
+   in it, which is the whole point: the size is the term whose resolution re-enters.
+
+   AND THAT PREDICATE IS EXACTLY THE ONE THAT REACHES A CONTENT-BASED SIZE. The three sites that ask for one
+   are the first entry (all three `auto`) and rules 1 and 3 ("'top' and 'height' are 'auto'", "'height' and
+   'bottom' are 'auto'"), so every one of them has `top` or `bottom` `auto` and is answered by the arm below
+   that asks the solve for nothing. What is left for the other arm is both offsets declared, which admits the
+   second entry and rule 5 ("'height' is 'auto', 'top' and 'bottom' are not 'auto', then ... solve for
+   'height'") — and neither of those consults the content. The cycle is closed BY CONSTRUCTION and not by a
+   recursion limit, which §NO BOUNDS forbids and which would have truncated a legitimately deep box tree.
+
+   THE PAIR IS UNCHANGED ON EVERY PATH: `r.m_before` and `r.m_after` are written once at the top of
+   `uv_abs_solve` and reassigned ONLY inside its second entry, so wherever this arm answers directly the solve
+   would have answered with the identical values. Both roads go through `uv_abs_margin_pair`.
+
+   NAMED RESIDUAL. This closes the ONE cycle the used-value graph is known to have; it asserts nothing about
+   the others, so a second one still ends as a stack-guard SIGSEGV rather than as a §Offensive-programming
+   abort that names its own operand. The next diff is a dev-only CYCLE DETECTOR over `uv_abs_solve` — an
+   intrusive stack of the (element, axis) pairs currently being solved, pushed and popped by a wrapper so no
+   `return` can miss it, and a DFAIL when a pair is re-entered. It is a cycle test and NOT a depth cap: an
+   arbitrarily deep box tree still passes, and only self-reference fails. Its absence shows as a terminal
+   SIGSEGV whose backtrace is a short frame cycle repeated to the stack guard page, with no @WHY line. */
+static void uv_abs_margins(lxb_dom_element_t *el, bool vertical, CssPx *before, CssPx *after)
+{
+    CssLength lb = css_computed_length(el, vertical ? "top" : "left");
+    CssLength la = css_computed_length(el, vertical ? "bottom" : "right");
+    CssLength mb = css_computed_length(el, vertical ? "margin-top" : "margin-left");
+    CssLength ma = css_computed_length(el, vertical ? "margin-bottom" : "margin-right");
+
+    DCHECK(uv_box_kind(el) == UV_BOX_ABS,
+           "CSS 2.1 §10.3.7 and §10.6.4 are stated over an ABSOLUTELY POSITIONED box and this one is not — "
+           "`uv_box_kind` is the classification every §10 rule in this file is dispatched on, so a box "
+           "arriving here with another kind has had its section decided twice");
+    if (uv_len_is_auto(lb) || uv_len_is_auto(la)) {
+        uv_abs_margin_pair(mb, ma, used_value_containing_block_width(el), before, after);
+        return;
+    }
+    {
+        UvAbs abs = uv_abs_solve(el, uv_sized(el, UV_BOX_ABS, vertical).len, vertical);
+
+        *before = abs.m_before;
+        *after = abs.m_after;
+    }
+}
+
 CssPx used_value_px(lxb_dom_element_t *el, const char *name)
 {
     static const char *const MARGINS[] = { "margin-top", "margin-right", "margin-bottom", "margin-left" };
@@ -4202,19 +4272,23 @@ CssPx used_value_px(lxb_dom_element_t *el, const char *name)
            margins are routed HERE and not through the dispatch below. Two reasons, and the second is the one
            that decides the placement: (1) the margin, the size and the two offsets are solved together by one
            rule chain, so reading any of them through a second road is that chain run twice and free to take a
-           different branch; (2) `uv_margin`'s axis IS `opposite == NULL`, so a VERTICAL call carries no
-           property name at all — which is exactly right for §10.6.3, whose sentence gives both `auto` margins
+           different branch — AND `uv_abs_margins` IS NOT THAT SECOND ROAD, it is the one road with the cases
+           the chain does not solve a margin in split off ahead of the size, which is what stops a margin
+           query re-entering the content-based height it is not an input to; (2) `uv_margin`'s axis IS
+           `opposite == NULL`, so a VERTICAL call carries no property name at all — which is exactly
+           right for §10.6.3, whose sentence gives both `auto` margins
            0 without distinguishing them, and cannot express §10.6.4, whose equation solves for one of them.
-           THE SIZE HANDED OVER IS THE PASS'S, on both axes, for the reason the horizontal arm below gives:
-           §10.4 and §10.7 re-run "the rules above" with a limit substituted, and the margins §10.3.7 and
-           §10.6.4 solve are the ones that final pass produced. That is what centres a `margin: auto` box
-           against its `max-width` rather than against its declared `width`. */
+           THE SIZE HANDED OVER, where one still is, IS THE PASS'S, on both axes, for the reason the
+           horizontal arm below gives: §10.4 and §10.7 re-run "the rules above" with a limit substituted, and
+           the margins §10.3.7 and §10.6.4 SOLVE are the ones that final pass produced. That is what
+           centres a `margin: auto` box against its `max-width` rather than against its declared `width`. */
         if (box == UV_BOX_ABS) {
-            UvAbs abs = uv_abs_solve(el, uv_sized(el, box, vertical).len, vertical);
+            CssPx m_before, m_after;
 
+            uv_abs_margins(el, vertical, &m_before, &m_after);
             /* `side` indexes §8.1's four sides in the order top, right, bottom, left, so the LEADING side of
                either axis is `top` or `left` and the trailing one is its opposite. */
-            out = (side == 0 || side == 3) ? abs.m_before : abs.m_after;
+            out = (side == 0 || side == 3) ? m_before : m_after;
         } else if (!vertical && uv_margin_reads_width(box)) {
             CssLength width = uv_sized(el, box, false).len;
 
