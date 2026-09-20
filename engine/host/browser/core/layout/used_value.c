@@ -4456,13 +4456,34 @@ static CssPx uv_px_ask(lxb_dom_element_t *el, const char *name)
    — `name` NULL, `code` the pass ONE-BASED, which is load-bearing for the same reason `UV_BOX_INLINE` was,
    since `BF_BASELINE_NONE` is 0 and is the pass every ordinary render runs. It costs ONE function against
    `bf_layout` (a residual of seven rather than six) and it is the cut whose question this type can say.
-   ITS OWN ARM CHECK IS NOT DONE AND IS NOT THE ONE ABOVE — do not read this paragraph as having cleared it.
-   The shape to settle is whether `bf_box(el, pass)` can be open twice for ONE element: the candidate found
-   while refusing `bf_layout` is `bf_box` -> `bf_box_compute` -> the same `uv_abs_solve` chain ->
-   `block_flow_child_top(cb, el)` -> `bf_layout(cb, el, …)` -> that walk reaching `el` among `cb`'s children
-   -> `bf_box(el, pass)`, whose memo cannot answer because `flow_placement_box_record` runs AFTER the compute
-   that is still open. That is either the defect this kind exists to name or a route the engine prevents, and
-   reading which is the next diff's first act rather than its second.
+   ITS ARM CHECK IS READ AND THE TWO ROUTES THAT WOULD HAVE KILLED IT ARE EACH ACCOUNTED FOR — one by
+   construction, one by a spec-mandated guard — AND THAT IS NOT THE SAME AS CLEARED. What follows is what a
+   reading can settle, so the next reader starts past it rather than re-finding it.
+   THE ROUTE THIS RESIDUAL NAMED IS REFUTED, AND STRUCTURALLY. It went `bf_box` -> `bf_box_compute` -> the
+   `uv_abs_solve` chain -> `block_flow_child_top(cb, el)` -> `bf_layout(cb, el, …)` -> that walk reaching `el`
+   -> `bf_box(el, pass)`. It cannot start: `bf_box`'s ONLY caller is `bf_layout`, that walk admits only
+   `BLOCK_FLOW_CHILD_BLOCK`, and core/layout/block_flow.c's `bf_element_child` classifies a computed
+   `position` of `absolute` or `fixed` as NO_BOX — quoting §9.3.1 and §10.6.3 at that line for why. So a
+   `bf_box` subject is an IN-FLOW BLOCK-LEVEL box always, `uv_box_kind` of one is never `UV_BOX_ABS`, and the
+   abs-margin arm the whole chain hangs from is unreachable from that entry's own `margin-top` ask.
+   WHAT WAS LEFT IS THE ASCENDING ONE — a PERCENTAGE height resolving against a containing block whose own
+   height is the walk already open — AND §10.7 BREAKS IT IN ITS OWN WORDS. `uv_cb_height`'s last gate refuses
+   a basis when the containing block's height behaves as auto, which is that section's SECOND conjunct read as
+   a predicate. The gate is a real break rather than a deferral, which is the part worth checking and was:
+   the predicate reaches the cascade and an ancestor walk and NOTHING in this cluster — no used-value entry,
+   no `bf_` entry — so it cannot itself become the recursion it exists to stop.
+   AND THE `bf_box_agrees` ASYMMETRY CUTS NEITHER WAY, which is the opposite of what it looks like. A memo HIT
+   runs that predicate under a `DCHECKF`, so the DEV build re-enters the used-value cluster exactly where the
+   release build returns from the record — and a chain node is dev-only, so it would be open across a path
+   release never runs. That reads as a reason to move the node to `bf_box_compute`, and it is not: the three
+   non-leaf entries `bf_box_agrees` can reach are ALL in `bf_box_compute`'s own set, so the memo-MISS path —
+   which BOTH builds take — reaches everything the hit path does. The asymmetry is in WHEN the chain is
+   exercised and never in WHAT it can reach, so the node belongs at `bf_box`, where a memo hit costs a check
+   that could already have fired one call later.
+   WHY IT IS STILL NOT DECLARED, which is a decision and not an omission: the `uv_sized` kind's own prediction
+   is UNSCORED — no build has yet said whether it fires — and a third kind resting on the same premise as an
+   unverified second one is two subproblems taken out of order. The reading above is what the next diff starts
+   from; the build is what licenses it.
    HOW ITS ABSENCE WOULD SHOW: a terminal SIGSEGV on a real document with no `@WHY` line anywhere in the run
    and a backtrace that is one short frame cycle repeated to the guard page, whose repeated frames include
    neither this function nor `uv_sized`. ---------------------------------------------------------------- */
