@@ -1,5 +1,11 @@
-/* MEDIA QUERIES LEVEL 4 — the grammar of §3, the features of §4. See media_query.h for why the evaluation is a
-   plain bool, why the logic is three-valued, and why nothing here throws. */
+/* MEDIA QUERIES LEVEL 4 — the grammar of §3 "Syntax", the features of §4 "Viewport/Page Dimensions Media
+   Features" through §7 "Interaction Media Features". See media_query.h for why the evaluation is a plain bool,
+   why the logic is three-valued, and why nothing here throws.
+   A CITATION HERE NAMES ITS LEVEL OR IT NAMES TWO DIFFERENT SECTIONS. Level 5 DEFINES features Level 4 has no
+   counterpart for — its §9 "Scripting Media Features" and §12 "User Preference Media Features" — and it also
+   RENUMBERS two rows this table holds: `overflow-block` and `overflow-inline` are Level 4's §5.5 and §5.6 and
+   Level 5's §4.5 and §4.6. An unlevelled number is not a shorter citation, it is a citation of whichever of
+   the two documents the reader happens to open. */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -130,12 +136,12 @@ typedef struct {
     MfKind      kind;
     const char *ua;        /* MFK_DISCRETE: the value this user agent reports */
     const char *legal;     /* MFK_DISCRETE: every value the IDL/grammar allows, space separated */
-    uint8_t     bool_ctx;  /* MFK_DISCRETE: §2.4.3's boolean-context answer (false only for `none`/`0` kinds) */
+    uint8_t     bool_ctx;  /* MFK_DISCRETE: §2.4.2's boolean-context answer (false only for `none`/`0` kinds) */
 } MfDef;
 
 static const MfDef MQ_FEATURES[] = {
-    /* §4.1-4.4 — the viewport's own dimensions, and §12's deprecated device-* twins, which report the OUTPUT
-       DEVICE rather than the viewport and are kept because pages still ship them. */
+    /* §4.1-4.4 — the viewport's own dimensions — and APPENDIX A "Deprecated Media Features"'s device-* twins,
+       which report the OUTPUT DEVICE rather than the viewport and are kept because pages still ship them. */
     { "width",                MFK_LENGTH },
     { "height",               MFK_LENGTH },
     { "aspect-ratio",         MFK_RATIO },
@@ -143,7 +149,9 @@ static const MfDef MQ_FEATURES[] = {
     { "device-height",        MFK_LENGTH },
     { "device-aspect-ratio",  MFK_RATIO },
     { "orientation",          MFK_DISCRETE, NULL, "portrait landscape", 1 },   /* computed — see mf_discrete_ua */
-    /* §4.5-4.7 — the display. */
+    /* §5 "Display Quality Media Features" and §6 "Color Media Features" — the display. Two of these rows are
+       LEVEL 5's alone: `dynamic-range` is its §6.5 and `video-dynamic-range` its §8.2 "Video Prefixed
+       Features", and Level 4 defines neither. */
     { "resolution",           MFK_RESOLUTION },
     { "scan",                 MFK_DISCRETE, "progressive", "interlace progressive", 1 },
     { "grid",                 MFK_INTEGER },
@@ -156,8 +164,8 @@ static const MfDef MQ_FEATURES[] = {
     { "color-gamut",          MFK_DISCRETE, "srgb", "srgb p3 rec2020", 1 },
     { "dynamic-range",        MFK_DISCRETE, "standard", "standard high", 1 },
     { "video-dynamic-range",  MFK_DISCRETE, "standard", "standard high", 1 },
-    /* §4.8-4.9 — the input mechanisms. A headless agent is not a touch device and has no pointer that hovers
-       less precisely than a mouse, which is what `fine` and `hover` say. */
+    /* §7 "Interaction Media Features" — the input mechanisms. A headless agent is not a touch device and has
+       no pointer that hovers less precisely than a mouse, which is what `fine` and `hover` say. */
     { "pointer",              MFK_DISCRETE, "fine", "none coarse fine", 1 },
     { "any-pointer",          MFK_DISCRETE, "fine", "none coarse fine", 1 },
     { "hover",                MFK_DISCRETE, "hover", "none hover", 1 },
@@ -171,8 +179,9 @@ static const MfDef MQ_FEATURES[] = {
     { "prefers-contrast",              MFK_DISCRETE, "no-preference", "no-preference more less custom", 0 },
     { "forced-colors",                 MFK_DISCRETE, "none", "none active", 0 },
     { "inverted-colors",               MFK_DISCRETE, "none", "none inverted", 0 },
-    /* §11 — scripting. This engine RUNS the page's scripts, in the document's own realm, which is the whole of
-       what `enabled` asserts. */
+    /* LEVEL 5 §9.1 "Scripting Support: the scripting feature" — Level 4 defines no such feature at all. This
+       engine RUNS the page's scripts, in the document's own realm, which is the whole of what `enabled`
+       asserts. */
     { "scripting",                     MFK_DISCRETE, "enabled", "none initial-only enabled", 1 },
     /* Viewport segments (Level 5) — a device with one continuous screen has one of each. */
     { "horizontal-viewport-segments",  MFK_INTEGER },
@@ -1251,7 +1260,7 @@ static int eval_feature(const MqFeature *f, const MqEnv *e)
         MqValue zero = { MV_NUMBER, 0, 1, "", "" };
 
         if (!feature_numbers(d, e, &zero, &actual, &wanted)) return MQ_FALSE;
-        return actual != 0 ? MQ_TRUE : MQ_FALSE;   /* §2.4.3: true unless the value is zero */
+        return actual != 0 ? MQ_TRUE : MQ_FALSE;   /* §2.4.2: true unless the value is zero */
     }
     if (f->eq.kind != MV_ABSENT) {
         if (!feature_numbers(d, e, &f->eq, &actual, &wanted)) return MQ_FALSE;

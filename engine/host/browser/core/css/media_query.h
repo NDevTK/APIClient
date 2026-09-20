@@ -1,4 +1,7 @@
-/* MEDIA QUERIES — MEDIA QUERIES LEVEL 4, the grammar in §3 and the media features in §4.
+/* MEDIA QUERIES — MEDIA QUERIES LEVEL 4, the grammar in §3 and the media features in §4 THROUGH §7, not §4
+ * alone: §4 is the viewport's own dimensions and the display, colour and interaction features are §5, §6 and
+ * §7. Several rows of the table are LEVEL 5's outright and two of them MOVED between the levels, so
+ * media_query.c names the level per row rather than here.
  *
  * A media query is a PREDICATE OVER THE ENVIRONMENT, and this file is the whole of it: the parser that turns
  * the page's string into that predicate, the serializer CSSOM VIEW §4.2's `MediaQueryList.media` answers with,
@@ -103,7 +106,25 @@ bool media_query_length_px(JSContext *ctx, double n, const char *unit, size_t un
    THIS document's answer to THIS query list. See the header note for why one fact is spelled once.
    `media_query_matches_now` is the ENGINE's own non-forking read of that same value: C cannot fork, so it takes
    the arm this flow already committed to (solver/decide.h) and falls back to the modelled example where the
-   flow has committed to neither. The cascade and update-the-rendering both read through it. */
+   flow has committed to neither. The cascade and update-the-rendering both read through it.
+
+   RESIDUAL — THE PIN THAT READ CONSUMES HAS NO PRODUCER BUT THE PAGE.
+   NOT COVERED: a media condition no CSSOM member ever hands to page code. This predicate is minted at exactly
+   one call, `media_query_matches_value`, and reaches a branch seam only through the two members that return
+   one — `MediaQueryList.matches` and `CSSMediaRule.matches` — so a condition reached ONLY from a sheet (an
+   `@media` prelude, a `media` content attribute) is read here and asked nowhere. `decide_value_arm` then
+   answers -1 for it in every flow of the document, and every one of them resolves it to the same modelled
+   example: the arm CLAUDE.md §Solver-half keeps for a domain admitting both outcomes, unkept for want of an
+   asker rather than because anything contradicted it.
+   THE NEXT DIFF BUILDS THE ASKER, NOT A SECOND READER. Forking at a READ is already refused with its reason
+   (core/css/css_style_sheet.h: a forking read there would fork at every computed-value ask); that refusal is
+   about the SITE, it is correct, and it stays. What is missing is one ask per document per condition from a
+   point that can carry a sibling — `solver_decide_restartable` (solver/decide.h), whose contract is engine
+   code re-reached by re-running the flow's scheduler step. This read is then already its consumer.
+   ITS ABSENCE SHOWS wherever every flow of one document emits the same cascade text for a sheet whose only
+   environment dependence is an `@media` block over a feature the table in media_query.c gives more than one
+   legal value.
+   RETIRED BY: that ask existing. */
 JSValue media_query_matches_value(JSContext *ctx, const MediaQuerySet *set);
 bool    media_query_matches_now(JSContext *ctx, const MediaQuerySet *set);
 
