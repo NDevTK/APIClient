@@ -24107,7 +24107,18 @@ static void close_var_refs(JSRuntime *rt, JSStackFrame *sf)
    IT IS SEMANTICS-NEUTRAL BECAUSE A CAPTURED BINDING IS CELL-ADDRESSED, AND THAT IS NOW TRUE OF BOTH KINDS,
    which is why this loop is uniform. A captured local is addressed through its cell and nowhere else:
    resolve_scope_var resolves every access to OP_get_loc_ref / OP_put_loc_ref, so no path can observe the slot
-   the cell used to alias. A captured ARGUMENT used to be addressed BOTH ways — OP_get_arg / OP_put_arg read
+   the cell used to alias.
+   THAT SENTENCE WAS FALSE OF ONE ARM FOR AS LONG AS IT STOOD, AND IT IS THE ARM A MINIFIED BUNDLE TAKES MOST,
+   which is recorded here because this detach is the operation the claim exists to justify and a reader who
+   re-derives it will read it here first. An unqualified-identifier lvalue materialises a REFERENCE, and
+   resolve_scope_var collapses that reference back into a direct get/put — and the collapse spelled the opcode
+   question itself, as `is_lexical ? OP_get_loc_check : OP_get_loc`, never asking about capture. So `v = expr`
+   compiled to a RAW SLOT WRITE while every read of `v` compiled to the cell: one binding with two storages the
+   instant this loop ran, the write in the dead one, which is the exact symptom the measurement above names.
+   IT IS TRUE BY CONSTRUCTION NOW RATHER THAN BY INSPECTION: both spellings take local_get_opcode, and
+   optimize_scope_make_ref — the one point every in-place collapse passes through — DCHECKs that a captured
+   local never arrives there as a raw loc op.
+   A captured ARGUMENT used to be addressed BOTH ways — OP_get_arg / OP_put_arg read
    and wrote arg_buf directly and only the open cell's aliasing of that same slot made a capturing closure and
    a mapped `arguments` observe those writes, so detaching one left the frame with two storages and sharing one
    left the SIBLING with two, and this loop DFAILed on it. OP_get_arg / OP_put_arg / OP_set_arg now take the
@@ -46585,6 +46596,12 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 sp++;
             }
             BREAK;
+        /* THE CAPTURE IS PART OF THE WRITE, at these two exactly as at every other cell write in this file.
+           A cell is shared state a fork isolates by DELTA rather than by copy, so a write that does not record
+           the cell's pre-write value is a write no context switch can put back — the flow's own assignment is
+           restored as nothing, and a sibling's is not restored at all. These two were the only cell writes
+           without it; their non-lexical twins (OP_put_var_ref) and their frame-side twins (OP_put_loc_ref,
+           OP_put_loc_ref_init) all capture, so the omission was a spelling and never a decision. */
         CASE(OP_put_var_ref_check):
             {
                 int idx;
@@ -46594,6 +46611,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     JS_ThrowReferenceErrorUninitialized2(ctx, b, idx, true);
                     goto exception;
                 }
+                cow_capture_vr(ctx, var_refs[idx]);
                 set_value(ctx, var_refs[idx]->pvalue, sp[-1]);
                 sp--;
             }
@@ -46607,6 +46625,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     JS_ThrowReferenceErrorUninitialized2(ctx, b, idx, true);
                     goto exception;
                 }
+                cow_capture_vr(ctx, var_refs[idx]);
                 set_value(ctx, var_refs[idx]->pvalue, sp[-1]);
                 sp--;
             }
@@ -71152,12 +71171,69 @@ static bool can_opt_put_ref_value(const uint8_t *bc_buf, int pos)
              opcode == OP_rot3l));
 }
 
+/* EVERY GET/PUT PAIR A REFERENCE COLLAPSE CAN BE HANDED, ADJACENT — optimize_scope_make_ref derives the PUT as
+   the GET plus one and `local_scope_var` derives an argument's the same way, so the ordering is not a comment
+   about the table, it is an operand of the code below. */
+_Static_assert(OP_put_loc           == OP_get_loc + 1 &&
+               OP_put_loc_check     == OP_get_loc_check + 1 &&
+               OP_put_loc_ref       == OP_get_loc_ref + 1 &&
+               OP_put_arg           == OP_get_arg + 1 &&
+               OP_put_var_ref       == OP_get_var_ref + 1 &&
+               OP_put_var_ref_check == OP_get_var_ref_check + 1,
+               "a get/put opcode pair the reference collapse derives by +1 is no longer adjacent");
+
+/* WHICH OPCODE ADDRESSES A LOCAL. ONE ANSWER, because this question was spelled in TWO places and the second
+   spelling did not ask about capture at all. A CAPTURED local's storage is its frame-owned cell and NOT
+   var_buf: the two are the same word only while the cell is OPEN, and a fork DETACHES it before sharing it
+   (close_var_refs_for_fork), after which a raw slot access reads and writes a word no reader of that binding
+   can reach. resolve_scope_var's ordinary arm had this right; its REFERENCE-COLLAPSE arm asked
+   `is_lexical ? OP_get_loc_check : OP_get_loc`, which is a correct answer to a DIFFERENT question, so a
+   plain `v = expr` on a captured `v` compiled to a raw OP_put_loc while every READ of `v` compiled to the
+   cell — one binding, two storages, the write landing in the dead one, and a minified bundle calling a
+   function it had just assigned dying with `<name> is not a function (it is undefined)`.
+   THE MEASUREMENT THAT NAMES THE COLLAPSE AS THE SITE, four documents under engine/tests/solver differing in
+   the WRITE PATH alone: a write issued DIRECTLY from the minting frame (captured_var_fork,
+   captured_var_two_closures) is an unqualified-identifier lvalue, so it takes this collapse and lost the
+   write; a write issued from a DEEPER frame (captured_var_live_deep_write, captured_var_detached_control)
+   resolves the name as a CLOSURE variable, where the collapse picks OP_get_var_ref and the cell is the only
+   storage there is, and did not.
+   AN ARGUMENT IS DELIBERATELY NOT HERE and that is not an omission: OP_get_arg / OP_put_arg ask is_captured at
+   RUNTIME, and this collapse emits the LONG form, which is the form that has an operand to ask about — see
+   put_short_code, which refuses the fused forms for a captured parameter for exactly that reason.
+   RETIREMENT: this paragraph goes when no caller of optimize_scope_make_ref can name a local's opcode without
+   calling this function, which the DCHECK in that function is what enforces meanwhile. */
+static int local_get_opcode(const JSFunctionDef *s, int var_idx)
+{
+    if (s->vars[var_idx].is_captured)
+        return OP_get_loc_ref;      /* the cell, TDZ-checked; the sole storage of a captured local */
+    if (s->vars[var_idx].is_lexical)
+        return OP_get_loc_check;
+    return OP_get_loc;
+}
+
 static int optimize_scope_make_ref(JSContext *ctx, JSFunctionDef *s,
                                    DynBuf *bc, uint8_t *bc_buf,
                                    LabelSlot *ls, int pos_next,
                                    int get_op, int var_idx)
 {
     int label_pos, end_pos, pos;
+
+    /* THE ONE POINT EVERY IN-PLACE REFERENCE COLLAPSE PASSES THROUGH, which is why the rule is stated here and
+       not at the two callers: a caller that spells a local's opcode itself instead of asking local_get_opcode
+       says so by name rather than by compiling a captured binding into a storage nothing reads. The operands
+       are what name the site — one abort line serves both callers, and `get_op` tells them apart. */
+    DCHECK((get_op != OP_get_loc && get_op != OP_get_loc_check) ||
+           (var_idx >= 0 && var_idx < s->var_count),
+           "a collapsed LOCAL reference names a slot this function does not declare — the operand and the vars "
+           "table are one declaration read twice and cannot disagree about how many there are");
+    DCHECKF((get_op != OP_get_loc && get_op != OP_get_loc_check) ||
+            !s->vars[var_idx].is_captured,
+            "a reference to a CAPTURED local was collapsed into a RAW FRAME-SLOT get/put — get_op %d, var_idx "
+            "%d. A captured local is addressed through its frame-owned cell (OP_get_loc_ref / OP_put_loc_ref) "
+            "and nowhere else, because a fork detaches that cell and the slot it used to alias then reaches no "
+            "reader of the binding: the write lands in a dead word and every read answers the pre-write value. "
+            "Take the opcode from local_get_opcode",
+            get_op, var_idx);
 
     /* XXX: should optimize `loc(a) += expr` as `expr add_loc(a)`
        but only if expr does not modify `a`.
@@ -71433,9 +71509,12 @@ static int resolve_scope_var(JSContext *ctx, JSFunctionDef *s,
             }
             if (!(var_idx & ARGUMENT_VAR_OFFSET) &&
                 s->vars[var_idx].var_kind == JS_VAR_FUNCTION_NAME) {
-                /* Create a dummy object reference for the func_var */
+                /* Create a dummy object reference for the func_var. THE READ IS local_get_opcode's LIKE EVERY
+                   OTHER READ OF A LOCAL: a named function expression whose own name an inner function closes
+                   over is a CAPTURED local, and a raw slot read of one answers whatever the slot held before
+                   the fork detached its cell. */
                 dbuf_putc(bc, OP_object);
-                dbuf_putc(bc, OP_get_loc);
+                dbuf_putc(bc, local_get_opcode(s, var_idx));
                 dbuf_put_u16(bc, var_idx);
                 dbuf_putc(bc, OP_define_field);
                 dbuf_put_u32(bc, JS_DupAtom(ctx, var_name));
@@ -71450,10 +71529,7 @@ static int resolve_scope_var(JSContext *ctx, JSFunctionDef *s,
                     get_op = OP_get_arg;
                     var_idx -= ARGUMENT_VAR_OFFSET;
                 } else {
-                    if (s->vars[var_idx].is_lexical)
-                        get_op = OP_get_loc_check;
-                    else
-                        get_op = OP_get_loc;
+                    get_op = local_get_opcode(s, var_idx);
                 }
                 pos_next = optimize_scope_make_ref(ctx, s, bc, bc_buf, ls, pos_next, get_op, var_idx);
             } else {
@@ -71491,36 +71567,30 @@ static int resolve_scope_var(JSContext *ctx, JSFunctionDef *s,
             if (var_idx & ARGUMENT_VAR_OFFSET) {
                 dbuf_putc(bc, OP_get_arg + is_put);
                 dbuf_put_u16(bc, var_idx - ARGUMENT_VAR_OFFSET);
+            } else if (!is_put) {
+                /* THE READ SIDE IS local_get_opcode's AND NOBODY ELSE'S — it is the same three-way question the
+                   reference collapse asks, and it was answered twice, differently. */
+                dbuf_putc(bc, local_get_opcode(s, var_idx));
+                dbuf_put_u16(bc, var_idx);
             } else if (s->vars[var_idx].is_captured) {
                 /* V8-Context model: a captured local is addressed through its frame-owned heap cell, NEVER
                    var_buf — the owning frame and its closures share one COW-swappable cell (compile-time
                    resolution, so no runtime redirect and no fused loc ops touch it). */
-                if (is_put)
-                    dbuf_putc(bc, op == OP_scope_put_var_init ? OP_put_loc_ref_init : OP_put_loc_ref);
-                else
-                    dbuf_putc(bc, OP_get_loc_ref);
+                dbuf_putc(bc, op == OP_scope_put_var_init ? OP_put_loc_ref_init : OP_put_loc_ref);
                 dbuf_put_u16(bc, var_idx);
             } else {
-                if (is_put) {
-                    if (s->vars[var_idx].is_lexical) {
-                        if (op == OP_scope_put_var_init) {
-                            /* 'this' can only be initialized once */
-                            if (var_name == JS_ATOM_this)
-                                dbuf_putc(bc, OP_put_loc_check_init);
-                            else
-                                dbuf_putc(bc, OP_put_loc);
-                        } else {
-                            dbuf_putc(bc, OP_put_loc_check);
-                        }
+                if (s->vars[var_idx].is_lexical) {
+                    if (op == OP_scope_put_var_init) {
+                        /* 'this' can only be initialized once */
+                        if (var_name == JS_ATOM_this)
+                            dbuf_putc(bc, OP_put_loc_check_init);
+                        else
+                            dbuf_putc(bc, OP_put_loc);
                     } else {
-                        dbuf_putc(bc, OP_put_loc);
+                        dbuf_putc(bc, OP_put_loc_check);
                     }
                 } else {
-                    if (s->vars[var_idx].is_lexical) {
-                        dbuf_putc(bc, OP_get_loc_check);
-                    } else {
-                        dbuf_putc(bc, OP_get_loc);
-                    }
+                    dbuf_putc(bc, OP_put_loc);
                 }
                 dbuf_put_u16(bc, var_idx);
             }
