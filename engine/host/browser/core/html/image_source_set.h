@@ -15,12 +15,23 @@
  * aborted a dev build at the step that asks. That is most image-bearing markup on the modern web, and a build
  * that aborts there analyses none of those pages at all.
  *
- * WHAT `link` GETS AND WHY IT IS NOT HERE YET. §4.8.4.3.9 is written over "a given img or link element", with
- * `imagesrcset`/`imagesizes`/`href` standing in for `srcset`/`sizes`/`src`; §4.8.4.3.9's own note is that for a
- * link element "elements contains only el, so this step will be reached immediately and the rest of the
- * algorithm will not run". This component's entry takes an `img`, and asserts it: the link half belongs to
- * `<link rel=preload as=image>`'s preload machinery, which is a different caller with a different consumer of
- * the answer, and the day it is written it passes the same three strings into the same create-a-source-set.
+ * WHAT `link` GETS, AND WHY IT IS THE SAME ENTRY RATHER THAN A SECOND ONE. §4.8.4.3.9 is written over "a given
+ * img or link element", with `imagesrcset`/`imagesizes`/`href` standing in for `srcset`/`sizes`/`src`, and
+ * §4.8.4.3.9's own note is that for a link element "elements contains only el, so this step will be reached
+ * immediately and the rest of the algorithm will not run" — so a link takes step 5.1 and never the `picture`
+ * walk. Step 4 is the other half of the difference: "Let img be el if el is an img element, otherwise NULL",
+ * which is the operand §4.8.4.3.11 step 3.3's auto-sizes branch reads and is why that branch is unreachable
+ * for a link rather than merely unused.
+ * THE TWO STANDARDS COMPOSE THE SAME TWO SUB-ALGORITHMS AND THEY ARE NOT THE SAME ALGORITHM. §4.8.4.3.7's
+ * first algorithm is declared "To select an image source given an IMG ELEMENT el" — a link is not admitted to
+ * it and never runs its step 2. What a link runs is §4.6.8.20 Link type "preload"'s own pair: its fetch and
+ * process the linked resource steps open "Update the source set for el" (§4.8.4.3.9), and its "to preload"
+ * step 2 is "If options's destination is `image` and options's source set is not null, then set options's href
+ * to the result of SELECTING AN IMAGE SOURCE FROM options's source set" — §4.8.4.3.7's SECOND algorithm, the
+ * one over a bare source set. Update-then-choose is therefore what both kinds do, out of two different
+ * sentences, and `image_source_set_select` is that composition. A second entry spelling it again for links
+ * would be two right answers to one question, which is the shape that drifts; what the two callers genuinely
+ * do not share is what they make of an EMPTY answer, and that is the caller's step in both standards.
  *
  * ---------------------------------------------------------------------------------------------------------
  * THE SOURCE SIZE IS A LENGTH, AND EVERY UNIT IN IT IS ANSWERED BY A COMPONENT THAT ALREADY OWNS IT.
@@ -133,13 +144,19 @@ typedef struct {
     JSValue      undecided_url;
 } ImageSourceSet;
 
-/* §4.8.4.3.7 "Selecting an image source" for `el`, WHOLE: step 1's update the source set (§4.8.4.3.9, with the
-   `<picture>` walk), the two parsers it runs (§4.8.4.3.10, §4.8.4.3.11), §4.8.4.3.12's normalization and
-   step 3's select-an-image-source-from-a-source-set.
-   `el` MUST be an `img` element — asserted, see the header for what the `link` half would add.
+/* UPDATE THE SOURCE SET FOR `el` AND CHOOSE FROM IT: §4.8.4.3.9 (with the `<picture>` walk for an `img`), the
+   two parsers it runs (§4.8.4.3.10, §4.8.4.3.11), §4.8.4.3.12's normalization, and §4.8.4.3.7's
+   select-an-image-source-from-a-source-set.
+   For an `img` that composition IS §4.8.4.3.7 "Selecting an image source", whole. For a `link` it is
+   §4.6.8.20 Link type "preload"'s fetch-and-process step 1 plus its "to preload" step 2 — see the header for
+   why one entry serves both and where the two callers part company.
+   `el` MUST be an `img` or a `link` element — asserted.
    `ctx` is the element's NODE DOCUMENT's realm, never the realm that performed the write, because every
    viewport-relative length and every media query in here is answered per document (core/css/media_query.h).
-   `out` is filled entirely; the caller releases it. */
+   `out` is filled entirely; the caller releases it.
+   `out->selected` is an index into `out->items`, or -1 for "no source was chosen" — which is §4.8.4.3.7 step
+   2's null URL for an `img`, and for a `link` is the only outcome §4.2.4.3's create a link request permits
+   ("Assert: options's href is not the empty string"). `out->undecided` answers -1 too and carries the shape. */
 void image_source_set_select(JSContext *ctx, lxb_dom_element_t *el, ImageSourceSet *out);
 void image_source_set_release(JSContext *ctx, ImageSourceSet *s);
 

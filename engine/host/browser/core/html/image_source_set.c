@@ -1005,7 +1005,16 @@ static void iss_create_source_set(JSContext *ctx, ImageSourceSet *out,
         if (out->items[i].has_density && out->items[i].density == 1.0) has_1x = true;
         if (out->items[i].has_width) has_width = true;
     }
-    if (default_n && !has_1x && !has_width) {
+    /* "IS NOT THE EMPTY STRING" IS A TEST ON THE VALUE, AND A TAINTED ATTRIBUTE'S BYTES ARE AN EXAMPLE OF THE
+       VALUE RATHER THAN THE VALUE — so a zero-length example decides this test for an attribute composed out of
+       unknown input, and deciding it is what must not happen. A taint therefore enters the arm on its own: the
+       line below then reports the set undecided, which is the POSITIVE statement that the default source's
+       emptiness is not determinable. Reading `default_n` alone would have answered "the empty string" for
+       `el.href = "" + unknown` and produced an empty source set — a no-address answer indistinguishable from a
+       markup that names none, with the shape the page composed dropped on the floor.
+       THE PUSH STILL SEES A NON-EMPTY STRING, because the taint arm returns above it and the only way to reach
+       it with a taint-free default source is `default_n` being what carried the disjunct. */
+    if ((default_n || !JS_IsUndefined(default_taint)) && !has_1x && !has_width) {
         if (!JS_IsUndefined(default_taint)) { iss_undecided(ctx, out, default_taint); return; }
         iss_push(out, iss_copy(default_source, default_n), false, 0.0, false, 0.0);
     }
@@ -1076,38 +1085,68 @@ static bool iss_type_supported(const char *type, size_t len)
 }
 
 /* §4.8.4.3.9 step 5, for `child` == `el` — "Set el's source set to the result of creating a source set given
-   default source, srcset, sizes, and img", with the four strings §4.8.4.3.9 reads off an `img`. */
-static void iss_set_from_img(JSContext *ctx, lxb_dom_element_t *el, ImageSourceSet *out)
+   default source, srcset, sizes, and img", with the three strings §4.8.4.3.9 reads off `el`.
+ *
+ * ONE ALGORITHM, TWO SETS OF ATTRIBUTE NAMES, AND THE SPEC WRITES EACH ARM TWICE FOR THAT REASON ALONE. Every
+ * one of §4.8.4.3.9 step 5.1's three assignments is a pair — "If el is an img element that has a srcset
+ * attribute, then set srcset to that attribute's value. Otherwise, if el is a link element that has an
+ * `imagesrcset` attribute, then set srcset to that attribute's value", and the same shape for
+ * `sizes`/`imagesizes` and for `src`/`href`. So the NAMES are what the element kind decides and nothing below
+ * this line is: the three strings, their three taints and the create-a-source-set call are identical. Naming
+ * them as three locals is what keeps that visible — a second function per element kind would be two right
+ * answers to one question, which is the shape that drifts.
+ *
+ * `img` IS THE ALGORITHM'S OWN FOURTH OPERAND AND IT IS NOT `el`. §4.8.4.3.9 step 4 is "Let img be el if el is
+ * an img element, otherwise NULL", so a `link` hands create-a-source-set a null `img` and §4.8.4.3.11 step
+ * 3.3's auto-sizes branch — the one and only reader of it — is then unreachable for a link, which is correct:
+ * `allows auto-sizes` is defined in §4.8.3 "The img element" over an img's `loading` and `sizes` attributes
+ * and a link element has neither. */
+static void iss_set_from_el(JSContext *ctx, lxb_dom_element_t *el, bool is_img,
+                            lxb_dom_element_t *img, ImageSourceSet *out)
 {
+    const char *srcset_attr = is_img ? "srcset" : "imagesrcset";
+    const char *sizes_attr = is_img ? "sizes" : "imagesizes";
+    const char *default_attr = is_img ? "src" : "href";
     const char *srcset, *sizes, *src;
     size_t srcset_n = 0, sizes_n = 0, src_n = 0;
 
-    /* "Let default source be the empty string. Let srcset be the empty string. Let sizes be the empty string.
-       If el is an img element that has a srcset attribute, then set srcset to that attribute's value. If el is
-       an img element that has a sizes attribute, then set sizes to that attribute's value. If el is an img
-       element that has a src attribute, then set default source to that attribute's value." */
-    srcset = iss_attr(el, "srcset", &srcset_n);
-    sizes = iss_attr(el, "sizes", &sizes_n);
-    src = iss_attr(el, "src", &src_n);
+    /* "Let default source be the empty string. Let srcset be the empty string. Let sizes be the empty string."
+       — an absent attribute answers NULL from `iss_attr` with a zero length, which is that empty string. */
+    srcset = iss_attr(el, srcset_attr, &srcset_n);
+    sizes = iss_attr(el, sizes_attr, &sizes_n);
+    src = iss_attr(el, default_attr, &src_n);
     iss_create_source_set(ctx, out,
-                          src, src_n, dom_cow_attr_taint(el, "src"),
-                          srcset, srcset_n, dom_cow_attr_taint(el, "srcset"),
-                          sizes, sizes_n, dom_cow_attr_taint(el, "sizes"),
-                          el);
+                          src, src_n, dom_cow_attr_taint(el, default_attr),
+                          srcset, srcset_n, dom_cow_attr_taint(el, srcset_attr),
+                          sizes, sizes_n, dom_cow_attr_taint(el, sizes_attr),
+                          img);
 }
 
-/* §4.8.4.3.9 "Updating the source set" for an `img` element. */
+/* §4.8.4.3.9 "Updating the source set", which is written over "a given img or link element el". */
 static void iss_update_source_set(JSContext *ctx, lxb_dom_element_t *el, ImageSourceSet *out)
 {
+    /* Step 4: "Let img be el if el is an img element, otherwise null." Hoisted above the walk because steps 3,
+       5.1 and 5.7 all read it and only step 3 could be mistaken for a question about the PARENT alone. */
+    bool is_img = iss_is_tag(el, LXB_TAG_IMG);
+    lxb_dom_element_t *img = is_img ? el : NULL;
     lxb_dom_node_t *parent = lxb_dom_interface_node(el)->parent;
     lxb_dom_element_t *child;
 
-    /* Steps 1-3: "Set el's source set to an empty source set. Let elements be « el ». If el is an img element
+    /* Steps 1-3: "Set el's source set to an empty source set. Let elements be « el ». If EL IS AN IMG ELEMENT
        whose PARENT NODE IS A PICTURE ELEMENT, then replace the contents of elements with el's parent node's
-       CHILD ELEMENTS, retaining relative order." */
-    if (!parent || parent->type != LXB_DOM_NODE_TYPE_ELEMENT ||
+       CHILD ELEMENTS, retaining relative order."
+       THE `img` TEST IS PART OF STEP 3 AND NOT DECORATION ON IT, and the element it defends against arrives
+       from ORDINARY MARKUP rather than from scripting. `<picture><link rel=preload as=image imagesrcset=…>`
+       parses to a `link` whose parent node IS a `picture`: §13.2.6.4.7 "The \"in body\" insertion mode" sends
+       a `link` start tag to §13.2.6.4.4 "The \"in head\" insertion mode", whose arm is "Insert an HTML element
+       for the token. Immediately pop the current node off the stack of open elements" — and inserting is into
+       the CURRENT node, which is the open `picture`. A parent-only test would then walk that picture's
+       `source` children on behalf of an element §4.8.4.3.9's own note says never walks — "If el is a link
+       element, then elements contains only el, so this step will be reached immediately and the rest of the
+       algorithm will not run." */
+    if (!is_img || !parent || parent->type != LXB_DOM_NODE_TYPE_ELEMENT ||
         !lxb_html_tree_node_is(parent, LXB_TAG_PICTURE)) {
-        iss_set_from_img(ctx, el, out);
+        iss_set_from_el(ctx, el, is_img, img, out);
         return;
     }
 
@@ -1122,7 +1161,7 @@ static void iss_update_source_set(JSContext *ctx, lxb_dom_element_t *el, ImageSo
         JSValue taint;
 
         /* Step 5.1: "If child is el: … Set el's source set … Return." */
-        if (child == el) { iss_set_from_img(ctx, el, out); return; }
+        if (child == el) { iss_set_from_el(ctx, el, is_img, img, out); return; }
         /* Step 5.2: "If child is not a source element, then continue." */
         if (!iss_is_tag(child, LXB_TAG_SOURCE)) continue;
         /* Step 5.3: "If child does not have a srcset attribute, continue to the next child." */
@@ -1167,7 +1206,7 @@ static void iss_update_source_set(JSContext *ctx, lxb_dom_element_t *el, ImageSo
            value." */
         taint = dom_cow_attr_taint(child, "sizes");
         sizes = iss_attr(child, "sizes", &sizes_n);
-        cand.source_size = iss_parse_sizes(ctx, sizes, sizes_n, el);
+        cand.source_size = iss_parse_sizes(ctx, sizes, sizes_n, img);
 
         /* Step 5.8: "If child has a TYPE attribute, and its value is an unknown or unsupported MIME type,
            continue to the next child." */
@@ -1265,16 +1304,25 @@ void image_source_set_select(JSContext *ctx, lxb_dom_element_t *el, ImageSourceS
     memset(out, 0, sizeof *out);
     out->selected = -1;
     out->undecided_url = JS_UNDEFINED;
-    DCHECK(iss_is_tag(el, LXB_TAG_IMG),
-           "§4.8.4.3.7 was asked to select an image source for an element that is not an `img`. §4.8.4.3.9 is "
-           "written over 'a given img or link element' and the link half reads `imagesrcset`/`imagesizes`/"
-           "`href` instead — a different set of attribute names with a different consumer, which is a caller "
-           "this component does not have yet rather than one it can serve by accident");
+    DCHECK(iss_is_tag(el, LXB_TAG_IMG) || iss_is_tag(el, LXB_TAG_LINK),
+           "this component was asked to select an image source for an element that is neither an `img` nor a "
+           "`link`. Those two are the whole of what §4.8.4.3.9 'Updating the source set' is written over — 'a "
+           "given img or link element el' — and nothing else has a SECOND algorithm that reads the set it "
+           "produces: an `img` reaches this through §4.8.4.3.7's 'select an image source given an img element "
+           "el' and a `link` through §4.6.8.20 Link type \"preload\"'s own two steps");
 
-    /* Step 1: "Update the source set for el." */
+    /* Step 1: "Update the source set for el." — and for a `link` this is §4.6.8.20's fetch-and-process step 1,
+       "Update the source set for el", which is the SAME algorithm reached from the other standard. */
     iss_update_source_set(ctx, el, out);
     /* Step 2: "If el's source set is EMPTY, return NULL as the URL and undefined as the pixel density." — and
-       an UNDECIDED set answers the same way, because a choice made out of a value nobody can read is not one. */
+       an UNDECIDED set answers the same way, because a choice made out of a value nobody can read is not one.
+       FOR A `link` THE EMPTY CASE IS THE CALLER'S AND NOT THIS STEP'S: §4.6.8.20's "to preload" step 2 has no
+       empty arm at all, it says only "set options's href to the result of selecting an image source from
+       options's source set", and §4.8.4.3.7's second algorithm has nothing to choose from an empty set. What
+       decides it is the step after — §4.2.4.3's create a link request opens "Assert: options's href is not the
+       empty string" — so the ONE outcome that assert permits is the one this returns, a selection of -1 that
+       §4.6.8.20's caller reads as no address. Both element kinds get the same answer out of two different
+       sentences, which is why the arm is shared and the reason is stated twice. */
     if (out->undecided || out->n == 0) {
         DCHECK(out->selected == -1,
                "a source set that is empty or undecided named a selected image source — both answers are "

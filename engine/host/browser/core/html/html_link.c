@@ -37,6 +37,8 @@
 #include "core/html/nonce_attribute.h" /* §4.2.4.3 takes the request's nonce from [[CryptographicNonce]] */
 #include "core/html/cors_settings_attribute.h" /* …and its CREDENTIALS MODE from `crossorigin`, by
                                                   TWO algorithms this file's two types split on */
+#include "core/html/image_source_set.h" /* §4.6.8.20's step 1 and its "to preload" step 2: what source an
+                                           `as=image` link's `imagesrcset` selects, and out of what */
 #include "core/html/html_link.h"
 
 static int      g_ready;
@@ -914,11 +916,17 @@ static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueCon
  * caller for the split to serve, because §4.6.8.20's other entry ("The process a link header step for this type
  * of link … is to preload options") is `Link:` header processing and this engine has no header-link path.
  *
- * STEP 1, "Update the source set for el", IS NOT RUN AND ITS ABSENCE IS ASSERTED rather than assumed: the
- * source set is only non-null for a link carrying `imagesrcset`, which is §4.8.4.3's grammar reached through
- * core/html/image_source_set.h, and the only step that reads it is the `as=image` branch of preload. So the
- * DCHECK below is where that arrives, at the element that would need it, rather than as a silent wrong answer
- * for a responsive preload.
+ * STEP 1, "Update the source set for el", IS RUN AT THE ONE STEP THAT READS THE SET rather than at the top.
+ * The standard's order is step 1 here, then §4.2.4.4 "Processing `Link` headers"' create link options
+ * from el, which copies §4.2.4.4's "source set: el's source set", and then "to preload" step 2 —
+ * §4.6.8.20's "If options's destination is `image` and options's source set is not null, then set
+ * options's href to the result of selecting an image source from options's source set".
+ * This engine stores no per-element source set: §4.8.4.3.13 "Reacting to environment changes", the only other
+ * reader a link's set has in the standard, is a "may at any time" algorithm this engine does not run, so the
+ * set's whole lifetime is from its construction to that one read. Performing both at step 2's site therefore
+ * differs observably for exactly one population — an element that returns before step 2, at the `as`
+ * translation, at the type match or at the media check — and for every one of those a browser issues no
+ * request either. What it buys is that an `as=script` link does not parse an `imagesrcset` nothing will read.
  */
 static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
 {
@@ -945,13 +953,6 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
        "options's destination" reads it. */
     destination = translate_potential_destination(preload_destination);
 
-    DCHECK(strcmp(preload_destination, "image") != 0 ||
-           !lxb_dom_element_has_attribute(el, (const lxb_char_t *)"imagesrcset", 11),
-           "§4.6.8.20's preload reached an `as=image` link carrying `imagesrcset` — its step 1 updates the "
-           "source set and its step 2 selects an image source out of it, which is §4.8.4.3's grammar in "
-           "core/html/image_source_set.h. Run that selection here and set the href from its result, beside the "
-           "identical selection core/html/html_image.c already performs");
-
     /* "To preload given a link processing options options: 1. If options's type doesn't match options's
        destination, then return."
        THE MATCH TAKES THE KEYWORD, because §4.6.8.20 declares its parameter as one ("a string type matches a
@@ -968,35 +969,119 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
        precisely because this check can decline. */
     if (!link_media_matches(ctx, el)) return;
 
-    /* AN `href` COMPOSED OUT OF UNKNOWN EXTERNAL INPUT IS STILL A REQUEST THE PAGE MAKES, and it reaches the
-       @H surface as the SHAPE it is rather than disappearing — the same answer core/html/html_script.c gives an
-       unknown `<script src>` and core/html/html_image.c gives an undecided image source. It matters more here
-       than at either of those: a chunk address is exactly the thing a bundler composes (`"/c/" + hash + ".js"`),
-       and Lexbor would have ToString'd the taint away, so reading the raw attribute below is a read of a
-       concrete string that is not the address. Nothing is fetched, because there is no address to fetch, and
-       nothing is fired, because §4.6.8.20's two events are a RESPONSE's — an element left waiting for a load
-       that cannot come is what a browser does with a URL it could not resolve either. The link is NOT marked
-       obtained: it did not obtain a resource, so a later `type` or `media` change is still one of §4.6.8.20's
-       appropriate times, and the surface dedupes the address if it is recorded twice. */
-    {
-        /* BORROWED, never freed — solver/dom_cow.h states the contract at the declaration and
-           core/html/html_script.c reads it the same way at the same kind of site. */
-        JSValueConst t = dom_cow_attr_taint(el, "href");
-        if (!JS_IsUndefined(t)) { endpoint_record(ctx, "GET", t, NULL, 0, NULL, engine_prov_of_running_path()); return; }
+    /* §4.6.8.20's STEP 1 AND "to preload"'s STEP 2, AS ONE OPERATION — see the banner for why they are one
+       here. "If options's destination is `image` and options's source set is not null, then set options's href
+       to the result of SELECTING AN IMAGE SOURCE FROM options's source set."
+       THE DESTINATION TESTED IS THE PRELOAD KEYWORD AND NOT THE TRANSLATED ONE, for the reason the type match
+       above states: the two differ at `fetch` and agree at `image`, so either spelling answers this one the
+       same — and the keyword is the value §4.6.8.20 writes, which is the one to read.
+       "OPTIONS'S SOURCE SET IS NOT NULL" IS NOT A TEST THIS SITE MAKES, because it cannot be false here.
+       §4.2.4.4's create link options from element fills the member with "el's source set", and step 1 has just
+       set that to a source set (§4.8.4.3.9 step 1 is "Set el's source set to an EMPTY source set" — empty, and
+       not null). So every `as=image` link reaches the selection, including one carrying only an `href`: for
+       that element §4.8.4.3.9 hands the href to default source, §4.8.4.3.8 step 4 appends it (there is no 1x
+       and no width descriptor to stop it) and §4.8.4.3.12 gives it a 1x, so the selection round-trips to the
+       href it started from. That is the standard's own shape and is why this branch is not gated on the
+       element carrying an `imagesrcset`. */
+    if (strcmp(preload_destination, "image") == 0) {
+        ImageSourceSet ss;
+        int i;
+
+        image_source_set_select(ctx, el, &ss);
+
+        /* EVERY IMAGE SOURCE IN THE SET IS AN ADDRESS THE BUNDLE SHIPPED, and only one of them is preloaded —
+           the others are what a browser at another device pixel ratio or another viewport asks for from the
+           same markup, which is what this surface is for. Recorded here for the identical reason
+           core/html/html_image.c records an `img`'s candidates, and the surface dedupes on method+url so the
+           selected one being stated again below is not a second endpoint.
+           THE ADDRESSES ARE RECORDED UNRESOLVED-THEN-RESOLVED exactly as the selected one is, so a relative
+           candidate does not reach the surface as a path nobody can request. */
+        for (i = 0; i < ss.n; i++) {
+            char *cand;
+            JSValue uv;
+
+            DCHECK(ss.items[i].url != NULL && ss.items[i].url[0] != '\0',
+                   "§4.8.4.3's source set handed §4.6.8.20's preload an image source with no URL — §4.8.4.3.10 "
+                   "asserts a non-empty url for every candidate it appends and §4.8.4.3.8 appends a default "
+                   "source only when it is not the empty string, so an empty one here is one of those two "
+                   "disagreeing with its own assert");
+            cand = link_url_absolute(ctx, ss.items[i].url, strlen(ss.items[i].url));
+            if (!cand) continue;    /* HTML §2.4.2's failure: an address that is not one names no endpoint */
+            uv = JS_NewString(ctx, cand);
+            CHECK(!JS_IsException(uv), "§4.6.8.20: OOM naming an image candidate for the endpoint surface");
+            endpoint_record(ctx, "GET", uv, NULL, 0, NULL, engine_prov_of_running_path());
+            JS_FreeValue(ctx, uv);
+            free(cand);
+        }
+
+        /* AN ATTRIBUTE THE SELECTION DEPENDS ON WAS COMPOSED OUT OF UNKNOWN EXTERNAL INPUT, so which source
+           this link preloads is not a question any host can be asked — and it is still a request the page
+           makes, so the SHAPE reaches the @H surface rather than disappearing. THIS ARM SUBSUMES THE `href`
+           TAINT for an `as=image` link and is not merely the same answer: §4.8.4.3.9 hands `href` to default
+           source and §4.8.4.3.8 step 4 decides whether it is used AT ALL, so a tainted `href` beside an
+           `imagesrcset` that already supplies a 1x candidate decides nothing and the real candidate is still
+           preloaded — which an href-taint test standing in front of this would have thrown away. Nothing is
+           fetched and nothing is fired, for the reason the non-image arm below states, and the link is NOT
+           marked obtained. */
+        if (ss.undecided) {
+            if (!JS_IsUndefined(ss.undecided_url))
+                endpoint_record(ctx, "GET", ss.undecided_url, NULL, 0, NULL, engine_prov_of_running_path());
+            image_source_set_release(ctx, &ss);
+            return;
+        }
+
+        /* NO SOURCE WAS CHOSEN. §4.6.8.20's "to preload" states no arm for it and §4.8.4.3.7's
+           select-an-image-source-from-a-source-set has nothing to choose from an empty set; what settles it is
+           the step after, §4.2.4.3's create a link request, which opens "Assert: options's href is not the
+           empty string". So the only outcome that assert permits is this return.
+           THE ELEMENT IS an `as=image` preload with no `href` and an `imagesrcset` that is absent, empty, or
+           parses to zero image sources — the last of which §4.2.4's own sentence does not cover, since the
+           attribute is PRESENT, and for which a browser has no address either. */
+        if (ss.selected < 0) { image_source_set_release(ctx, &ss); return; }
+
+        /* "…set options's href to the result of selecting an image source from options's source set", and then
+           §4.2.4.3's "Let url be the result of encoding-parsing a URL given options's href, relative to
+           options's BASE URL". The selected source points INTO the set, so it is resolved before the release
+           and nothing below reads it. */
+        abs = link_url_absolute(ctx, ss.items[ss.selected].url, strlen(ss.items[ss.selected].url));
+        image_source_set_release(ctx, &ss);
+        if (!abs) return;
+    } else {
+        /* AN `href` COMPOSED OUT OF UNKNOWN EXTERNAL INPUT IS STILL A REQUEST THE PAGE MAKES, and it reaches
+           the @H surface as the SHAPE it is rather than disappearing — the same answer core/html/html_script.c
+           gives an unknown `<script src>` and core/html/html_image.c gives an undecided image source. It
+           matters more here than at either of those: a chunk address is exactly the thing a bundler composes
+           (`"/c/" + hash + ".js"`), and Lexbor would have ToString'd the taint away, so reading the raw
+           attribute below is a read of a concrete string that is not the address. Nothing is fetched, because
+           there is no address to fetch, and nothing is fired, because §4.6.8.20's two events are a RESPONSE's —
+           an element left waiting for a load that cannot come is what a browser does with a URL it could not
+           resolve either. The link is NOT marked obtained: it did not obtain a resource, so a later `type` or
+           `media` change is still one of §4.6.8.20's appropriate times, and the surface dedupes the address if
+           it is recorded twice. */
+        {
+            /* BORROWED, never freed — solver/dom_cow.h states the contract at the declaration and
+               core/html/html_script.c reads it the same way at the same kind of site. */
+            JSValueConst t = dom_cow_attr_taint(el, "href");
+            if (!JS_IsUndefined(t)) { endpoint_record(ctx, "GET", t, NULL, 0, NULL, engine_prov_of_running_path()); return; }
+        }
+
+        /* §4.2.4.3's create a link request opens "Assert: options's href is not the empty string" — an assert
+           and not a branch, so the element that would violate it must not reach it. It is §4.2.4.4's create
+           link options from element that says which one that is, in the DISJUNCTIVE form this site used to
+           quote for the algorithm above: "Assert: options's href is not the empty string, OR options's source
+           set is not null. A link element with neither an href or an imagesrcset does not represent a link."
+           On THIS arm the destination is not `image`, so nothing ever set a source set and the href carries
+           the whole of it — which §4.2.4 "The link element" states outright for the markup: "If both the href
+           and imagesrcset attributes are absent, then the element does not define a link." */
+        href = link_attr(el, "href", &href_n);
+        if (!href || href_n == 0) return;
+
+        /* "Let url be the result of encoding-parsing a URL given options's href … If url is failure, then
+           return null." and "3. Let request be the result of creating a link request given options. If request
+           is null, then return." */
+        abs = link_url_absolute(ctx, href, href_n);
+        if (!abs) return;
     }
-
-    /* "Assert: options's href is not the empty string, or options's source set is not null." With no source
-       set (above), the href carries the whole of it — and a `<link rel=preload as=script>` with no `href` at
-       all is the element §4.2.4 "The link element" states outright: "if both the href and imagesrcset
-       attributes are absent, then the element does not define a link". */
-    href = link_attr(el, "href", &href_n);
-    if (!href || href_n == 0) return;
-
-    /* "Let url be the result of encoding-parsing a URL given options's href … If url is failure, then return
-       null." and "3. Let request be the result of creating a link request given options. If request is null,
-       then return." */
-    abs = link_url_absolute(ctx, href, href_n);
-    if (!abs) return;
 
     /* THE ELEMENT IS OBTAINED THE MOMENT THE REQUEST EXISTS, which is what makes the conditional appropriate
        times answerable — see `link_obtained`. It is set before the policy check below for the same reason the
