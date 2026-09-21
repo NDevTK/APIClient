@@ -591,6 +591,26 @@ function safeFetchReachJoin(outer, own) {
    beside it. Writing `unpinned` there would be a FALSE claim (a flow that pinned a witness has `path_forced`
    set by the nesting, so exactly those acts can be `forced` and carry our bytes) and writing `pinned` would be
    a wrong sentence in the other direction. So the honest third answer is that the act does not carry the fact.
+   AND THE PARK TEST IN THE SENTENCE ABOVE IS THE INTUITIVE READING AND IS NOT THE ONE THE CALLERS OBEY,
+   WHICH IS WRITTEN DOWN HERE BECAUSE IT HAS NOW COST A READING. Read literally, `an act that does not come
+   off that line says unstated` condemns THREE of this file's own callers: `trusted.mjs`'s seed, the peer
+   gate's probe and the automatic discovery sweep all compose their request in the TRUSTED ZONE, park
+   nothing, and state `unpinned`. They are RIGHT and this paragraph's headline was imprecise, and its own
+   parenthesis one line up already gives the real discriminator without ever stating it as the rule:
+   CAN THIS ACT'S PROVENANCE BE `forced`. The witness mark is strictly nested inside `path_forced`, so an act
+   whose provenance is a LITERAL `observed` or `derived` cannot be carrying a witness this engine chose, and
+   `unpinned` is then a true positive statement rather than a claim about a line the act never rode; an act
+   whose provenance is a VARIABLE, or the literal `forced`, may be exactly such an act, and its zone cannot
+   say. `bridge.js`'s navigation relay states that rule in its own words at its own site — `unstated`
+   BECAUSE THIS PROVENANCE IS A VARIABLE — which is the consumer being right where the declaration was
+   loose. MEASURED over every hand-stated mark in this tree, ten sites and no exception: the four that state
+   `unpinned` all state a literal non-forced provenance beside it, and every one that states `unstated`
+   states a provenance that is a variable or is `forced` outright.
+   THE READING IT COSTS IS THE EXPENSIVE ONE AND IS WHY THIS IS A CORRECTION RATHER THAN A TIDY-UP: a reader
+   who takes the park test concludes the discovery sweep's `unpinned` is a FALSE claim to be repaired, and
+   repairing it would move a true statement to the word for an act that does not carry the fact — after
+   which the sweep and the analysed page's own `fetch()`, which are identical on every gating signal today,
+   would appear to be separable by the `witness` row and an egress arm could be built on the difference.
    IT IS NOT A DEFAULT AND MUST NOT BECOME ONE: an ABSENT `opts.pinned` still aborts. `unstated` has to be
    TYPED by a caller that means it, which is what makes it greppable, countable, and retirable.
    NAMED RESIDUAL — TWO SEAMS STATE IT. What is not covered: the XHR relay and the navigation load reach the
@@ -1315,9 +1335,11 @@ var _DEFAULT_ARMS = [
      same value on every one. The arm cannot admit the first and refuse the second.
      AND THE SAME ROW SORTS A THIRD POPULATION BACKWARDS, WHICH IS WHAT SHOWS THE AXIS TO BE WRONG RATHER
      THAN MERELY SHORT. The analysed page's own XHR reaches this file through bridge.js's `xhr.send` relay,
-     which states `destination: ""` and `pinned: "unstated"` — CORRECTLY, and for the reason `_pinnedOf`
-     already gives one screen up: an `xhr.send` record is not a PARK, so it carries no witness mark at all
-     and writing `unpinned` there would be a claim nobody made. So the arm as spelled would PERMIT this
+     which states `destination: ""` and `pinned: "unstated"` — CORRECTLY, and for the discriminator
+     `_pinnedOf` states one screen up: that relay's provenance is the VARIABLE `q.provenance`, which can be
+     `forced`, so the address may hold a witness this engine chose and the zone cannot say which. (The park
+     test is the tempting reason and is not the one the callers obey; see that banner, which three
+     trusted-zone composers refute.) So the arm as spelled would PERMIT this
      tool's own automatic probe and REFUSE the analysed page's own XHR, which is the SAME POPULATION as the
      `fetch()` it was written to admit. Three populations, two of them sorted the wrong way: that is not a
      conjunct that is missing, it is a row that is not about this question.
@@ -1326,6 +1348,12 @@ var _DEFAULT_ARMS = [
      discovery sweep firing while the XHR relay is refused. An arm here reading the witness row would move
      that same split into the DEFAULT, so what it decides stops being a person's audit of a widened origin
      and becomes whether this engine answers the analysed page's own XHR at all.
+     AND THAT RESIDUAL LANDING WOULD NOT RESCUE THE ARM, WHICH IS SAID SO THAT NOBODY WAITS FOR IT. Once
+     `engine_pinned_of_running_path()` is written into the XHR record, that relay carries a real mark and an
+     unpinned XHR joins the `fetch()` on the admitted side — and the automatic sweep is admitted with them,
+     unchanged, because it is `derived` and `unpinned` and correctly so. The two populations the owner's two
+     clauses name are separated by the fact named under WHAT THE NEXT DIFF BUILDS above and by nothing
+     else.
      THE ONE ROW THAT DOES DIFFER IS `header-authority` AND IT MAY NOT BE USED, WHICH IS SAID SO THAT NOBODY
      REACHES FOR IT. The sweep passes `headers || {}`, and `{}` is truthy, so it reads `unknown` where the
      pending relay reads `none` — a property of ONE call site's argument-passing and of whose list it is,
