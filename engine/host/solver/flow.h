@@ -2801,8 +2801,13 @@ void  flow_clear_host_owed(Flow *f);
 void  flow_clear_host_owed_all(void);
 
 /* THE IMAGE THIS MEMBER OWES THE HOST — @PERWORLD, and the whole of what it means is on `paint_owed` above.
- * The set is written by engine_request_paint over the members alive at the ask; each mark is discharged by the
- * scheduler HANDING THE THREAD BACK with that member switched in, which is the one moment its pixels exist.
+ * The set is written on TWO ROADS, which are this entry's own call sites and are what
+ * `engine_request_paint_every_world` is made of: `paint_mark_standing_members` marks the members ALIVE at the
+ * ask, which only a walk of the frontier can name, and `flow_new` marks the members NOT YET BORN, which only
+ * the mint can. EITHER ROAD ALONE LEAVES A POPULATION UNMARKED — the walk misses every arm forked afterwards,
+ * and the mint misses the boot flow, which on a document that has not stepped is the entire frontier and the
+ * only member with a document in it. Each mark is discharged by the scheduler HANDING THE THREAD BACK with
+ * that member switched in, which is the one moment its pixels exist.
  *
  * IT IS NOT A HOST-OWED MARK AND MUST NOT BE FOLDED INTO ONE, which is the near-miss this pair invites. A
  * host-owed mark says the member CANNOT PROGRESS and takes it OUT of the pick; this says the member has

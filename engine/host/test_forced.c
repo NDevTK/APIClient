@@ -27479,8 +27479,9 @@ static int abi_main(int argc, char **argv)
        which does not terminate". THE FIRST HALF IS THE REAL ERROR AND IT WAS NOT CAUGHT: the framing of a
        CADENCE was accepted, the non-termination objection was correctly refuted (a mark is one bit, spent at
        a member's END or FREE at a yield it is standing for, so re-marking costs nothing and the one member
-       that must be skipped is the one whose finish is DEFERRED, which `engine_request_paint` now skips), a
-       per-round re-ask was built on that refutation, and IT DID NOT WORK. MEASURED on the same six-element
+       that must be skipped is the one whose finish is DEFERRED, which the ask's own frontier walk,
+       `paint_mark_standing_members`, now skips), a per-round re-ask was built on that refutation, and IT
+       DID NOT WORK. MEASURED on the same six-element
        gate document, on a binary carrying the renewal: still TWO images, `flows 2, forks 1, switches 13`, and
        exactly ONE `abi_paint` inside the loop — thirteen internal switches, one round boundary. The arm is
        forked, run and ended INSIDE one `qjs_step`, and a host is only ever at a round boundary, so no cadence

@@ -4221,8 +4221,13 @@ void flow_clear_host_owed_all(void) {
  * generation here would tell the preempt hook and the value-yield assertion that the ranking moved when
  * nothing about it did, which is a claim about the frontier that is not true. */
 void flow_set_paint_owed(Flow *f) {
-    DCHECK(f != NULL, "an image was asked of no flow at all — engine_request_paint walks the frontier's own "
-                      "members, so a NULL here is that walk having read past its end");
+    /* THE MARK IS LAID DOWN ON TWO ROADS AND A NULL MEANS A DIFFERENT THING ON EACH, so this message names
+       both rather than the one its author was standing on. The roads are this entry's own call sites and
+       are found by grepping them; naming a COUNT here would be a number that goes wrong the day a third
+       caller lands, while naming what each road IS stays true. */
+    DCHECK(f != NULL, "an image was asked of no flow at all — either paint_mark_standing_members, which "
+                      "walks the frontier's own members, has read past its end, or flow_new has reached "
+                      "the mint with no flow to mark, which its own allocation CHECK makes impossible");
     f->paint_owed = 1;
 }
 

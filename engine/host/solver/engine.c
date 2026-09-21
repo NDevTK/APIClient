@@ -12294,9 +12294,10 @@ static int engine_sched_slice(void) {
            the PRE-SCRIPT text in both, on a run reporting `pageErrors: []` and one finished flow. Two files,
            one fact — CLAUDE.md's plausible datum arriving as an artifact, since the second file reads as a
            timeline's appearance and is a copy of the timeline nobody asked about.
-           IT DEFEATED THE ASK AT PRECISELY THE POPULATION THE ASK IS MADE OVER. `engine_request_paint`'s own
-           DCHECK requires a live frontier, so the earliest a host may ask is before its first `qjs_step` —
-           when the one member is the boot flow and has run nothing. flow.h's `paint_owed` says the mark
+           IT DEFEATED THE ASK AT PRECISELY THE POPULATION THE ASK IS MADE OVER. The frontier walk the ask
+           is made of, `paint_mark_standing_members`, DCHECKs a live session and a non-empty frontier, so
+           the earliest a host may ask is before its first `qjs_step` — when the one member is the boot
+           flow and has run nothing. flow.h's `paint_owed` says the mark
            exists because "§Boot's `if (__FLAGS.admin)` sibling holds a DOM and a heap its primary never had";
            a discharge before the member's first instruction photographs neither.
            A MEMBER'S TURN HAS TWO SUCH MOMENTS AND THE CLOSING ONE IS THE WORLD. The opening and the closing
@@ -12882,8 +12883,9 @@ static int engine_sched_slice(void) {
                    of `g_sess_finish_owed` and is not a second teardown path: the SAME two calls run, at this
                    function's own entry, before anything else this session does. Yielding after them would
                    render a document whose delta had just been reverted — the baseline again, one turn later.
-                   NOTHING IS DEFERRED FOR A MEMBER THAT OWES NO PICTURE, so a run made without
-                   `engine_request_paint` reaches none of this and finishes on the line it always did. */
+                   NOTHING IS DEFERRED FOR A MEMBER THAT OWES NO PICTURE, so a run made without the ask —
+                   `engine_request_paint_every_world` — reaches none of this and finishes on the line it
+                   always did. */
                 if (flow_paint_owed(cur)) {
                     flow_clear_paint_owed(cur);
                     g_sess_finish_owed = 1;

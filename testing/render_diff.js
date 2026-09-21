@@ -11,10 +11,22 @@
 //
 // WHY A GEOMETRY DUMP AND NOT A PICTURE. The goal is to spot differences, and a difference you cannot NAME is
 // not one anybody can fix: a pixel count localises to a rectangle, and a rectangle localises to nothing. This
-// artifact's divergences name an ELEMENT and a FIELD. The raster is not "the same thing later" either — it has
-// no engine side at all, because engine/host/browser/core/paint/ holds a stacking order and no rasteriser, so
-// a raster oracle would be one-sided at every ordering. When one exists, its OWN localiser is this artifact:
-// mapping a differing pixel back to an element is exactly the join below.
+// artifact's divergences name an ELEMENT and a FIELD. A raster oracle is not "the same thing later" either, and
+// the reason is the localisation above — NOT an absent engine side. THIS CLAUSE USED TO READ that the raster
+// "has no engine side at all, because engine/host/browser/core/paint/ holds a stacking order and no
+// rasteriser, so a raster oracle would be one-sided at every ordering", and it is rewritten rather than
+// deleted because a reader who re-derives it will re-introduce it. It was an UNDER-CLAIM, which is the silent
+// direction: it argued AGAINST building the oracle, and nobody discovers that by acting on it, because acting
+// on it is not looking. ITS STACKING-ORDER HALF IS TRUE AND ITS RASTERISER HALF IS NOT, which is why it read
+// as checked: that directory holds stacking_order.c AND display_list_raster.h, whose first line opens
+// "THE INK BECOMING PIXELS"; core/graphics/ holds rasterizer.c, raster_path.c and
+// raster_surface.c; and the engine already ships the pixels outward, engine/host/qjs_abi.h calling
+// `qjs_paint` / `qjs_paint_bytes` "the ONLY pair of entries in this ABI that carries BYTES outward", with
+// `qjs_paint_width` / `qjs_paint_height` for the shape. This checkout is a SHALLOW clone, so whether the
+// clause was wrong when written or went stale as the raster landed is NOT ESTABLISHABLE from here, and it is
+// not guessed at. When the oracle is built, its OWN localiser is this artifact: mapping a differing pixel
+// back to an element is exactly the join below. RETIREMENT: this paragraph goes when a raster comparison
+// exists and cites this join, because nothing will then be arguing that the engine side is missing.
 //
 // THE TWO SIDES RUN THE SAME PROGRAM. `COLLECTOR` is one function, shipped as source, evaluated in the page.
 // Chrome runs it through this file; the engine will run it as page script. There is no second implementation
