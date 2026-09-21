@@ -2380,6 +2380,35 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
             concolic_strpred_file(sp.subject, sp.method, sp.args, sp.nargs, arm);
         }
     }
+    /* NAMED RESIDUAL — A BARE TRUTHINESS GATE NARROWS, IS RECORDED, AND IS FILED UNDER A KEY THE @H SURFACE
+       CANNOT LOOK UP. It is the fourth arm of the one defect each recorder above was written to close: the
+       equality's failing arm, the loose equality's holding arm and the ordering's two arms each had nowhere
+       to go until one of them was built for it, and `if (cfg.admin)` still has nowhere to go.
+       WHAT IS NOT COVERED: a condition that IS the unknown rather than a predicate over one. `concolic_cmp`
+       answers OPCMP_NONE for it, `concolic_rel` REL_NONE and `concolic_strpred` 0, so not one of the four
+       recorders above fires — while ECMAScript §7.1.2 "ToBoolean ( arg )" over that operand is precisely the
+       narrowing they exist to carry, and the arm this flow took is the fact, exactly as it is for a call
+       predicate. THE OBSERVATION IS NOT LOST, WHICH IS WHAT MAKES THIS A RESIDUAL AND NOT A GAP: `decide_arm`
+       files it through `concolic_constrain_branch`, and that is what keeps N tests of one flag from costing
+       2^N flows. What it is filed UNDER is `decide_key`'s `branch` composition over the value's IDENTITY,
+       while `concolic_excluded`, `concolic_bound_read`, `concolic_strpred_read` and `concolic_looseeq_read`
+       are keyed `excl`, `bound`, `strpred` and `looseeq` over the HOLE. Those namespaces cannot collide —
+       `excl_key` states that as its own reason for composing rather than using the raw shape — so the fact
+       sits in the one constraint map under a key `kv_add`'s four reads have no spelling of.
+       WHAT THE NEXT DIFF BUILDS: a fifth recorder beside the four, keyed by
+       `concolic_hole_key(concolic_shape_c(cond))` as `concolic_cmp_subject` keys the others, filed on BOTH
+       arms because ToBoolean determines no value on either and a fact on each; read at `kv_add` under the
+       same `hole` the other four are gated on; merged across sightings by intersection in
+       extension/lib/learn.js as `intersectLooselyEquals` is, with its emitted name added to
+       `AST_PARAM_KEYS` in the same diff, that list's own crash being what refuses half of one. It states the
+       ARM and never a member of the set the false arm admits — naming one would be the WITNESS §@H refuses,
+       which is the same refusal `concolic_looseeq` makes for §7.2.13's holding arm and for the same reason.
+       HOW ITS ABSENCE WOULD SHOW: a param whose `valueClass` is "unknown" carries all four domain keys
+       absent, and every consumer reads that quadruple absence as the positive statement that no gate of any
+       kind held on every observed path — on a path where the flow both FORKED at the gate and was later
+       REFINED by it. Observe it at the @H record, by reading `valueClass` against the four keys beside it;
+       that the gate was reached at all is witnessed on the same surface by the forked arm's own endpoint.
+       RETIREMENT: this record goes when a branch over a bare unknown files under a hole key. */
     /* AND BACK INTO THE VALUE'S TERMS. Everything above recorded a fact about the PREDICATE; the interpreter
        asked about the CONDITION, and for a negation those are complements. The forked bit is unaffected —
        whether a sibling was prepared is a fact about the branch and not about which way it reads. */

@@ -554,30 +554,37 @@ static char *path_scan(KvBuf *out, const char *shape, const char *ex) {
         const char *ae = strchr(a, '/');
         const char *be = NULL;
         size_t an = ae ? (size_t)(ae - a) : strlen(a);
-        size_t bn = 0, i, nlen = 0;
+        size_t bn = 0, nlen = 0;
         char *seg, *name;
 
         if (aligned) { be = strchr(b, '/'); bn = be ? (size_t)(be - b) : strlen(b); }
         seg = malloc(an + 1); CHECK(seg, "endpoint: OOM copying a path segment");
         memcpy(seg, a, an); seg[an] = 0;
-        name = malloc(an + 1); CHECK(name, "endpoint: OOM naming a path segment");
-        for (i = 0; i < an; i++) if (seg[i] != '{' && seg[i] != '}') name[nlen++] = seg[i];
-        name[nlen] = 0;
-        if (!strchr(seg, '{') || !nlen) {
+        /* THE NAME *IS* THE HOLE KEY on this path, SO IT IS SPELLED BY THE ONE SPELLER AND NOT BESIDE IT.
+           This loop used to strip the braces itself and the comment below said the result was
+           concolic_hole_key's own rule — which is two right answers to one question, and the whole emission
+           rests on the string this produces being byte-identical to the one solver/decide.c filed the domain
+           under. Two independent loops agreeing TODAY is not that guarantee; routing to the speller is,
+           because there is then nothing left to drift. It also answers BOTH of the conditions this branch
+           used to ask separately: concolic_hole_key returns NULL for a brace-free segment and for the
+           unnameable `{}` whose strip is empty, which is exactly the pair the test below selected on. */
+        name = concolic_hole_key(seg);
+        if (!name) {
             json_buf_raw(&p, seg);   /* a literal segment, or a `{}` this surface cannot name */
         } else {
-            /* THE GRAMMAR THE CONSUMER SUBSTITUTES BY, ASSERTED AT THE MINT. Both bytes are stripped above and
-               a segment cannot hold a `/`, so this holds by construction — which is exactly why it is worth
-               asserting: the next producer of a name has to keep it true. */
+            nlen = strlen(name);
+            /* THE GRAMMAR THE CONSUMER SUBSTITUTES BY, ASSERTED AT THE MINT. The braces are stripped by the
+               speller above and a segment cannot hold a `/` because this walk split on one, so this holds by
+               construction — which is exactly why it is worth asserting: the next producer of a name has to
+               keep it true. */
             DCHECK(!strpbrk(name, "{}/"),
                    "a path param's NAME still holds a brace or a slash — the popup substitutes a hole by "
                    "matching /\\{([^}/]+)\\}/ against this path, so a name outside that grammar names a hole "
                    "no substitution can find");
             json_buf_raw(&p, "{"); json_buf_raw(&p, name); json_buf_raw(&p, "}");
-            /* THE NAME *IS* THE HOLE KEY on this path — both are the segment with every brace stripped, which
-               is concolic_hole_key's own rule, so a path param looks its domain up by the same string the
-               popup substitutes it by. The VALUE here is the concrete example aligned out of the URL and
-               carries no braces to read a hole out of. */
+            /* …so a path param looks its domain up by the same string the popup substitutes it by AND by the
+               same string decide.c filed it under. The VALUE here is the concrete example aligned out of the
+               URL and carries no braces to read a hole out of. */
             kv_add(out, name, nlen, aligned ? b : "", aligned ? bn : 0, EP_PATH, name);
         }
         free(seg); free(name);

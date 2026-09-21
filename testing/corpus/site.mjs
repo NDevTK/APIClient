@@ -178,7 +178,25 @@ const PROBE = `(() => ({
      is checkable by grepping this file for each name and a number is checkable by nothing. It was the number
      that made the omission invisible, and this file restates the record in two more comments below.
      RETIREMENT: this record goes when these columns are derived from the field set lib/learn.js declares
-     rather than listed here, so a kind added there cannot go missing from this walk. */
+     rather than listed here, so a kind added there cannot go missing from this walk.
+     AND A ZERO IN ALL FOUR IS NOT ABOUT THIS MACHINERY WHEN THE DOCUMENT NEVER GATES A HOLE-CARRYING PARAM,
+     WHICH IS THE SAME DEFECT THE PARAGRAPHS ABOVE FIX TWICE, RECURRING A THIRD TIME AT THE LEVEL BELOW THEM.
+     Those paragraphs narrow the DENOMINATOR until it counts only rows a domain could be looked up for, and
+     \`astHoleParams\` reaches that. What none of them asks is whether any value the document GATES is also a
+     value that reaches a request as a hole-carrying param — and a domain is filed under a hole by
+     solver/decide.c and read back under that same hole by solver/endpoint.c's \`kv_add\`, so where those two
+     populations are DISJOINT the four columns cannot rise however well the engine narrows. That makes a zero
+     here an unarmed control rather than a finding, which is CLAUDE.md's rule that a control which has never
+     produced a finding is not a control.
+     MEASURED on the control corpus's own data-channel document, one drive of one artifact: the gated members
+     are read by bare truthiness (\`if (c.admin)\`) and each of their requests is a CONSTANT address, which
+     mints no param at all; the only members reaching an address as a hole are the two the bundle never gates.
+     So \`astHoleParams\` stood at 2 with all four columns at 0, and both readings of that pair — the engine
+     narrowing nothing, and the document asking nothing — are consistent with it. The @S half of this control
+     has the same rule stated at its own site: a corpus-wide zero is a finding only once the control's own
+     value in that column is non-zero, and no document here has ever made that true for these four.
+     RETIREMENT: this record goes when a control document gates a value that also reaches a request as a
+     hole-carrying param, so a zero in these columns is a statement about the engine again. */
   domains: (() => {
     let params = 0, astParams = 0, astPathParams = 0, astHoleParams = 0, astUnstatedParams = 0,
         withExcl = 0, withBnd = 0, withPred = 0, withLeq = 0, reached = false;
