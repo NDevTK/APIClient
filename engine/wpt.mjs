@@ -1070,7 +1070,48 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       NOTHING IS PREDICTED HERE ABOUT WHAT ANY AREA SCORES. A fixture that starts arriving
                       changes what a family is measuring, so a count taken across this entry is a fraction
                       of a different population from one taken before it. */
-                   "css/reference", "css/CSS2/reference", "fonts"];
+                   "css/reference", "css/CSS2/reference", "fonts",
+                   /* HTML'S FORM-OWNER SURFACE, WHOSE ORACLE THIS TREE HAS BEEN IMPLEMENTING AGAINST AND
+                      COULD NOT RUN. `html/semantics/forms` was on no disk, so members landed for it were
+                      measured by nothing: the `form` getters on HTMLOptionElement and HTMLLegendElement --
+                      the second of which core/html/html_element.c installs BY NAME -- have their oracles at
+                      `the-option-element/option-form.html` (whose own rel=help is
+                      html.spec.whatwg.org/multipage/#dom-option-form) and
+                      `the-legend-element/legend-form.html`, and the form-owner ASSOCIATION those getters
+                      answer from is `form-control-infrastructure/association.window.js`. Three directories,
+                      chosen because those are the files that settle members ALREADY INSTALLED -- not
+                      because the area is due.
+                      THE OWN LEVEL COMES WITH THEM, WHICH IS WHY THE WPT_OWN_LEVEL ROW BELOW IS PART OF THIS
+                      ENTRY RATHER THAN A SEPARATE THOUGHT. Cone mode materializes every directory ON THE
+                      PATH, so naming these three puts `html/semantics/forms`'s own level on disk -- 7 blobs,
+                      9490 bytes -- and FIVE of those are testharness tests. Left unclaimed they are exactly
+                      the stray the census at the foot of this file FAILS the gate for.
+                      EVERY FIXTURE WAS RESOLVED BEFORE THE ENTRY WENT IN, which is this file's own procedure
+                      and not a formality. Across all 33 files every `<script src>` is one of
+                      /resources/testharness.js, testharnessreport.js, testdriver.js, testdriver-vendor.js --
+                      all four already on disk under the `resources` row -- plus ONE relative src,
+                      `option-label-value.js`, which ships inside `the-option-element` itself. No META
+                      script, no `.sub` template, no fetched `.idl`: nothing here needs a row not already
+                      listed.
+                      WHAT THE COLLECTOR TAKES IS MEASURED, through the corpus's own classifier rather than
+                      this file's port of it:
+                        python3 engine/wpt_classify.py engine/.work/wpt
+                      answers 8444 testharness files / 9828 runs WITHOUT these rows and 8468 / 9852 WITH
+                      them, and the diff of the two listings is EXACTLY the 24 files these three directories
+                      and that own level contribute -- nothing else moved either way. The count closes
+                      against the checkout: 33 blobs = 24 collected + 5 META.yml/WEB_FEATURES.yml + 4 that
+                      `testKind` drops, each for a different reason it already states --
+                      `option-disabled-manual.html` at the NAME, `dynamic-content-change-rendering.html` and
+                      its `-ref.html` for holding no testharness element, and `option-label-value.js` for
+                      being a `.js` with no global in its meta.
+                      THE OTHER EIGHTEEN DIRECTORIES OF `forms` ARE DELIBERATELY NOT LISTED, on the same
+                      ground the `compat` row above states: each would put test files on disk that a decision
+                      has to be taken about first. They are 847 blobs and 1464338 bytes, the largest being
+                      `the-select-element` at 335 and `the-input-element` at 185, and the derivation for
+                      whoever takes them is the two commands that row already names.
+                      NOTHING IS PREDICTED HERE ABOUT WHAT ANY OF THE 24 SCORES. */
+                   "html/semantics/forms/the-option-element", "html/semantics/forms/the-legend-element",
+                   "html/semantics/forms/form-control-infrastructure"];
 
 /* AND THE DIRECTORIES WHOSE OWN LEVEL CONE MODE HAS ALREADY PUT ON DISK. A cone-mode checkout materializes every
    file of every directory ON THE PATH to a listed one, so naming one helper's `resources` lands its standard's
@@ -1130,7 +1171,17 @@ const WPT_OWN_LEVEL = [
      `assert_equals(OffscreenCanvasRenderingContext2D.prototype.commit, undefined)` — which is the opposite
      question from everything under `element/`, and in this engine that name is absent outright, so the file
      reaches its assertion through a ReferenceError rather than through a member. */
-  "html/canvas"];
+  "html/canvas",
+  /* The five test files at `html/semantics/forms`'s own level, on disk because the three
+     `html/semantics/forms/*` rows are listed in WPT_PATHS and cone mode materializes every directory ON THE
+     PATH: `beforeinput.tentative.html`, `historical-search-event.html`, `historical.html`,
+     `input-change-event-properties.html` and `setCustomValidity-normalize-newlines.html`. Its two remaining
+     own-level entries are META.yml and WEB_FEATURES.yml, which `nameIsNonTest` refuses.
+     A ROW OF ITS OWN RATHER THAN FOLDING INTO `html/semantics`, because an own level is the files DIRECTLY
+     in a directory and those are two different sets: that entry claims `interfaces.html` and
+     `rellist-feature-detection.html`, and this one claims five different files one directory down. Cone mode
+     put both on disk and only a path claims either. */
+  "html/semantics/forms"];
 
 if (!existsSync(join(WPT, "resources", "testharness.js"))) {
   /* NO --depth 1. The corpus is PINNED, and a depth-1 clone has only the tip — `git checkout bf4714d` in it
