@@ -2049,12 +2049,12 @@ bool used_value_height_behaves_as_auto(lxb_dom_element_t *el)
        "a subcategory of absolute positioning". So such a box's height never behaves as auto for want of a
        definite containing block. WHETHER THIS ENGINE CAN RESOLVE IT IS A DIFFERENT QUESTION AND IS
        ANSWERED ELSEWHERE: §10.1's third and fourth cases own that rectangle and `uv_cb` returns both, so
-       `uv_cb_height` supplies the basis on §10.7's absolutely-positioned arm. THIS ARM IS NOT THEREFORE
-       REDUNDANT AND IS NOT FOLDED INTO THAT ONE, because the two answer different questions: this one says
-       the percentage is DEFINITE, which §10.5's note settles for every absolutely positioned box without a
-       layout, and that one says what the NUMBER is, which costs the containing block's own height walk.
-       core/layout/block_flow.c asks THIS one of boxes it is only classifying and must not pay for the
-       other. */
+       `used_value_containing_block_height` supplies the basis on §10.7's absolutely-positioned arm. THIS ARM
+       IS NOT THEREFORE REDUNDANT AND IS NOT FOLDED INTO THAT ONE, because the two answer different questions:
+       this one says the percentage is DEFINITE, which §10.5's note settles for every absolutely positioned
+       box without a layout, and that one says what the NUMBER is, which costs the containing block's own
+       height walk. core/layout/block_flow.c asks THIS one of boxes it is only classifying and must not pay
+       for the other. */
     if (uv_computed_is(el, "position", "absolute") || uv_computed_is(el, "position", "fixed")) return false;
     /* §10.5: "A percentage height on the ROOT ELEMENT is relative to the initial containing block" — whose
        dimensions are the viewport's, so the root's percentage always resolves and never behaves as auto.
@@ -2083,12 +2083,16 @@ bool used_value_height_behaves_as_auto(lxb_dom_element_t *el)
     return used_value_height_behaves_as_auto(cb.element);
 }
 
-/* CSS 2.1 §10.7's OTHER BASIS, and the reason it is a `bool` and not a `CssPx`: "If the height of the
-   containing block is NOT SPECIFIED EXPLICITLY (i.e., it depends on content height), and this element is not
-   absolutely positioned, the percentage value is treated as '0' (for 'min-height') or 'none' (for
-   'max-height')." So the question §10.7 asks first is whether the basis EXISTS, and false here is that
-   sentence's antecedent rather than a failure to compute one — the caller turns it into the spec's two
-   answers, which differ per property and are therefore not this function's to pick.
+/* §10.1's RECTANGLE ON THE BLOCK AXIS — the HEIGHT half of the pair whose width
+ * `used_value_containing_block_width` answers, over the one `uv_cb` walk that decides WHICH box both of
+ * them measure, so the two cannot disagree about the rectangle they are extents of.
+ * CSS 2.1 §10.7 "Minimum and maximum heights: 'min-height' and 'max-height'" IS THE OTHER BASIS, and is
+ * the reason it is a `bool` and not a `CssPx`: "If the height of the containing block is NOT SPECIFIED
+ * EXPLICITLY (i.e., it depends on content height), and this element is not absolutely positioned, the
+ * percentage value is treated as '0' (for 'min-height') or 'none' (for 'max-height')." So the question
+ * §10.7 asks first is whether the basis EXISTS, and false here is that sentence's antecedent rather than
+ * a failure to compute one — the caller turns it into the spec's two answers, which differ per property
+ * and are therefore not this function's to pick.
  * IT IS ALSO WHAT KEEPS THE CLAMP FROM WALKING THE TREE TWICE PER LEVEL. "Depends on content height" is
  * §10.6.3's walk, so resolving a percentage against an `auto`-height containing block would run that walk for
  * every descendant that declares a percentage limit — and §10.7 does not ask for it: the definiteness test is
@@ -2100,7 +2104,7 @@ bool used_value_height_behaves_as_auto(lxb_dom_element_t *el)
  * instead of as a `position` read: the tag is what this function has in hand, a read of the subject's
  * `position` beside it would be a second statement of the same fact, and the two would then be free to
  * disagree about which boxes §10.7's second conjunct excuses. */
-static bool uv_cb_height(lxb_dom_element_t *el, CssPx *out)
+bool used_value_containing_block_height(lxb_dom_element_t *el, CssPx *out)
 {
     UvCb cb = uv_cb(el);
 
@@ -2243,13 +2247,13 @@ static bool uv_limit(lxb_dom_element_t *el, UvBox box, bool vertical, bool is_ma
                    "§10.4's OTHER undefined case is a different sentence and is unreachable for the reason "
                    "uv_padding states: \"if the containing block's width depends on this element's width, then "
                    "the resulting layout is undefined in CSS 2.1\"");
-        } else if (!uv_cb_height(el, &basis)) {
+        } else if (!used_value_containing_block_height(el, &basis)) {
             /* §10.7's OWN ANSWER for an indefinite basis, which is a rule and not a fallback: "the percentage
                value is treated as '0' (for 'min-height') or 'none' (for 'max-height')". The two properties
                get DIFFERENT answers, which is why the escape is turned into a value here rather than in
-               `uv_cb_height`. Both answers are the property's own initial value, so `height: auto` on a
-               containing block makes a percentage limit on its children vanish — which is why
-               `min-height: 100%` inside an auto-height parent does nothing in every user agent.
+               `used_value_containing_block_height`. Both answers are the property's own initial value, so
+               `height: auto` on a containing block makes a percentage limit on its children vanish — which is
+               why `min-height: 100%` inside an auto-height parent does nothing in every user agent.
                IT TAKES THE MATH FUNCTION WHOLE, and css-values-4 §10.11 "Computed Value" says so in the
                sentence that exists for exactly this: "if there are SPECIAL RULES for computing percentages in a
                value (e.g. the height property), THEY APPLY whenever a math function contains percentages." So
@@ -3494,7 +3498,7 @@ static UvAbs uv_abs_solve(lxb_dom_element_t *el, CssLength size_len, bool vertic
            absolutely positioned box answers `true` — and a state that cannot arise is still a state the
            release build has to leave somewhere defined. */
         CssPx h = css_px(0.0);
-        bool definite = uv_cb_height(el, &h);
+        bool definite = used_value_containing_block_height(el, &h);
 
         cb = h;
         DCHECK(definite,
@@ -3738,9 +3742,14 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
        box §10.5 would have to resolve against. It is not — §17.4 calls it the table's principal block box — and
        even for an anonymous one CSS 2 §9.2.1.1 Anonymous block boxes orders the resolution past it. A reader
        who re-derives "the wrapper is anonymous" from §17.4's own silence about an element naming it would
-       re-introduce the whole reading, so the refutation stays beside the rule. What is genuinely missing is the
-       HEIGHT twin of `used_value_containing_block_width`: this file's own `uv_cb_height` computes it over the
-       same `uv_cb` walk and only the width half of that pair is exported. */
+       re-introduce the whole reading, so the refutation stays beside the rule.
+       THIS LINE USED TO SAY THE HEIGHT TWIN OF `used_value_containing_block_width` WAS MISSING, and it is
+       rewritten rather than deleted because the reading that produced it is the one a reader re-derives:
+       §10.1's walk answers ONE rectangle and a caller that can only ask for its width will reach for a
+       number from the other axis. `used_value_containing_block_height` is that twin and takes the same
+       walk. WHAT DOES NOT CARRY OVER FROM THE WIDTH IS ITS RETURN TYPE, which is the whole of why the pair
+       is not symmetric: §10.1's chain always HAS a width and frequently has no height, so the height entry
+       answers §10.7's antecedent first and writes `*out` only when there is a basis to write. */
     if (vertical && box == UV_BOX_TABLE) {
         TableBoxKind kind = uv_table_box_kind(el);
 
@@ -3753,7 +3762,7 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
         basis = used_value_containing_block_width(el);
         resolves = true;
     } else if (pct) {
-        resolves = uv_cb_height(el, &basis);
+        resolves = used_value_containing_block_height(el, &basis);
     }
     /* CSS 2.1 §10.2: a percentage `width` "is calculated with respect to the width of the generated box's
        containing block", which §10.1 answers — and past that resolution it is a declared length like any
@@ -4535,11 +4544,12 @@ static CssPx uv_px_ask(lxb_dom_element_t *el, const char *name)
    `bf_box` subject is an IN-FLOW BLOCK-LEVEL box always, `uv_box_kind` of one is never `UV_BOX_ABS`, and the
    abs-margin arm the whole chain hangs from is unreachable from that entry's own `margin-top` ask.
    WHAT WAS LEFT IS THE ASCENDING ONE — a PERCENTAGE height resolving against a containing block whose own
-   height is the walk already open — AND §10.7 BREAKS IT IN ITS OWN WORDS. `uv_cb_height`'s last gate refuses
-   a basis when the containing block's height behaves as auto, which is that section's SECOND conjunct read as
-   a predicate. The gate is a real break rather than a deferral, which is the part worth checking and was:
-   the predicate reaches the cascade and an ancestor walk and NOTHING in this cluster — no used-value entry,
-   no `bf_` entry — so it cannot itself become the recursion it exists to stop.
+   height is the walk already open — AND §10.7 BREAKS IT IN ITS OWN WORDS. The last gate of
+   `used_value_containing_block_height` refuses a basis when the containing block's height behaves as auto,
+   which is that section's SECOND conjunct read as a predicate. The gate is a real break rather than a
+   deferral, which is the part worth checking and was: the predicate reaches the cascade and an ancestor walk
+   and NOTHING in this cluster — no used-value entry, no `bf_` entry — so it cannot itself become the
+   recursion it exists to stop.
    AND THE `bf_box_agrees` ASYMMETRY CUTS NEITHER WAY, which is the opposite of what it looks like. A memo HIT
    runs that predicate under a `DCHECKF`, so the DEV build re-enters the used-value cluster exactly where the
    release build returns from the record — and a chain node is dev-only, so it would be open across a path

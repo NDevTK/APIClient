@@ -1890,10 +1890,10 @@ static BfBox bf_box(lxb_dom_element_t *el, BfBaseline pass)
                          "PERCENTAGE height resolving against a containing block whose own height is the "
                          "walk already open — is broken by CSS 2.1 §10.7 \"Minimum and maximum heights: "
                          "'min-height' and 'max-height'\"' SECOND CONJUNCT read as a predicate, at "
-                         "`uv_cb_height`'s last gate, which refuses a basis when the containing block's "
-                         "height behaves as auto. If the chain shows THAT one, read whether that gate still "
-                         "refuses rather than adding a second guard beside it. FIX IT AT THE RULE THAT "
-                         "RE-ENTERS AND BY CONSTRUCTION, never by a limit.");
+                         "the last gate of `used_value_containing_block_height`, which refuses a basis "
+                         "when the containing block's height behaves as auto. If the chain shows THAT one, "
+                         "read whether that gate still refuses rather than adding a second guard beside "
+                         "it. FIX IT AT THE RULE THAT RE-ENTERS AND BY CONSTRUCTION, never by a limit.");
     if (pass == BF_BASELINE_NONE && flow_placement_box_ask(el, &rec)) {
         DCHECKF(bf_box_agrees(el, &rec),
                 "CSS 2.1 §10.6.3's recorded contribution for this box no longer satisfies the derivation "

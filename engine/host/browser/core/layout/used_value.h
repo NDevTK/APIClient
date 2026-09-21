@@ -519,6 +519,24 @@ const char *const *used_value_positioning_cb_properties(size_t *n);
    the first entry cannot name, so a caller holding that entry's answer could derive neither. */
 CssPx used_value_containing_block_width(lxb_dom_element_t *el);
 
+/* THE SAME RECTANGLE'S HEIGHT, AND IT IS A `bool` WHERE THE WIDTH IS A `CssPx` BECAUSE §10.1's CHAIN ALWAYS
+   HAS A WIDTH AND FREQUENTLY HAS NO HEIGHT. CSS 2.1 §10.5 "Content height: the 'height' property" states the
+   basis and its absence in one sentence — "The percentage is calculated with respect to the height of the
+   generated box's containing block. If the height of the containing block is not specified explicitly (i.e.,
+   it depends on content height), and this element is not absolutely positioned, the value computes to
+   'auto'" — and §10.7 "Minimum and maximum heights: 'min-height' and 'max-height'" repeats the antecedent
+   with a DIFFERENT consequence: "the percentage value is treated as '0' (for 'min-height') or 'none' (for
+   'max-height')". So the two sections disagree about what to DO with an absent basis and agree about how to
+   ASK for one, which is why this entry answers only the asking half and `*out` is written only on `true`.
+   FALSE IS A POSITIVE STATEMENT AND NOT A MISSING NUMBER, so a caller reads it as one rather than defaulting
+   past it. "The containing block's height is indefinite" is a fact each of those sections has its own rule
+   for, and a zero substituted here would be a resolved percentage neither of them wrote — the same reason
+   `used_value_height_behaves_as_auto` below is a separate question and not this one's return value.
+   THE TWO EXTENTS TAKE THE ONE WALK, so they cannot disagree about WHICH box they measure: §10.1 decides the
+   rectangle once and both entries read that answer. What they do not share is the ANSWER'S SHAPE, which is
+   the whole of what this declaration adds. */
+bool used_value_containing_block_height(lxb_dom_element_t *el, CssPx *out);
+
 /* css-sizing-3 §3.2.1 "“Behaving as auto”" — DOES `el`'s `height` BEHAVE AS AUTO, which is the question CSS
    2.1 asks in several places as "a computed value of `auto`" and which is NOT answerable from a computed value.
    TRUE for a computed `auto`, and for a PERCENTAGE (bare or inside a math function) whose containing block's
@@ -547,7 +565,7 @@ bool used_value_height_behaves_as_auto(lxb_dom_element_t *el);
    CSS 2 §9.4.1's horizontal placement ("each box's left outer edge touches the left edge of the containing
    block (for right-to-left formatting, right edges touch)") both name THE CONTAINING BLOCK's value and not the
    box's own, so both ask this and neither reads the property directly.
-   IT IS A THIRD ENTRY FOR THE SAME REASON THE WIDTH IS A SECOND ONE: §10.1's FIRST case has no box, and the
+   IT IS A SEPARATE ENTRY FOR THE SAME REASON THE TWO EXTENTS ARE: §10.1's FIRST case has no box, and the
    section answers it in its own sentence — "the 'direction' property of the initial containing block is the
    same as for the root element" — so a caller holding the NULL could not derive it and would have to carry a
    second copy of that exception. */
