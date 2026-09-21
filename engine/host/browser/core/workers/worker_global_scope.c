@@ -361,13 +361,29 @@ static void wgs_assert_placed(JSContext *ctx, const char *member, WgsPlacement w
 }
 #define WGS_ASSERT_PLACED(c, m, w, g, d, p) wgs_assert_placed((c), (m), (w), (g), (d), (p))
 
-/* §10.2.1.1's SIX EVENT HANDLER IDL ATTRIBUTES, AUDITED BY DERIVING THE SET FROM THE ROWS THAT CARRY THE BIT
- * rather than by naming them here. The install below passes a MIXIN — one bit — because that is what an
- * install is allowed to know; naming the six in this function would put a second copy of core/events/'s own
- * table in this file, which is the thing every note in that enum argues against and which the `onmessage`
- * pair below does anyway. Walking the rows asks the list that OWNS the set which members the bit named, so a
- * seventh row given the bit is audited the day it lands rather than the day somebody remembers to add a line
- * here for it.
+/* EVERY SET THIS FILE INSTALLS BY A BIT, AUDITED BY DERIVING THAT SET FROM THE ROWS THAT CARRY THE BIT
+ * rather than by naming its members here. An install below passes a MIXIN — one bit — because that is what an
+ * install is allowed to know; naming the members in this function would put a second copy of core/events/'s
+ * own table in this file, which is the thing every note in that enum argues against. Walking the rows asks
+ * the list that OWNS the set which members the bit named, so a row newly given the bit is audited the day it
+ * lands rather than the day somebody remembers to add a line here for it.
+ *
+ * IT TAKES THE BIT AND THE PLACEMENT AS ARGUMENTS BECAUSE THIS FILE INSTALLS BY TWO BITS ONTO TWO DIFFERENT
+ * OBJECTS, and the second pair used to be audited by two calls naming `onmessage` and `onmessageerror` — which
+ * this banner itself named as the very second copy it argues against, and then left standing. The clause is
+ * retired by being obeyed rather than deleted, because a reader who re-derives the split will reach for two
+ * hand-written calls again: HTML §10.2.1.1's own six ride EH_WORKER_GLOBAL_SCOPE onto `wgs_p` by Web IDL
+ * §3.7.3's not-[Global] arm, and HTML §9.4.3 "The MessageEventTarget mixin"'s ride EH_PORT onto the global by
+ * §3.8's, so the two differ in BIT and in TARGET and in nothing else.
+ * WHAT THE HAND-WRITTEN PAIR RISKED IS NOT A TYPO — IT IS A ROW GAINING THE BIT. A by-name audit checks a
+ * SUBSET of what its install placed, and the subset is silent: core/events/event_target.h gives `onclose` a
+ * BIT OF ITS OWN precisely so that it does not ride this one, so EH_PORT's membership is a boundary somebody
+ * DREW rather than a size, and a third row given the bit would be installed on this global and audited by
+ * nothing — which is the one placement question this file says can be asked nowhere else. Derive the set
+ * rather than trusting a size stated here:
+ *   `git grep -n EH_PORT -- '*core/events/event_target.c'`
+ * RETIREMENT: this record goes when no WGS_ASSERT_PLACED call in this file names an event handler attribute,
+ * because the second copy is then unspellable rather than merely absent.
  *
  * HOW MANY MEMBERS THAT BIT NAMES IS NOT ASKED HERE, and the REASON THAT STOOD HERE WAS FALSE WHEN IT WAS
  * WRITTEN — the third site of one wrong claim, and the two that were repaired did not reach it. It said this
@@ -384,7 +400,8 @@ static void wgs_assert_placed(JSContext *ctx, const char *member, WgsPlacement w
  * it would answer for the fixture's two and for no production agent at all, which is the opposite of what a
  * row-table invariant is for. What is left here is the PLACEMENT question, which needs the three objects this
  * function is holding and can be asked nowhere else. */
-static void wgs_assert_handlers_placed(JSContext *ctx, JSValueConst g, JSValueConst dwgs_p, JSValueConst wgs_p)
+static void wgs_assert_handlers_placed(JSContext *ctx, int mask, WgsPlacement where,
+                                       JSValueConst g, JSValueConst dwgs_p, JSValueConst wgs_p)
 {
     int n = event_target_handler_attribute_count(), i;
 
@@ -395,15 +412,15 @@ static void wgs_assert_handlers_placed(JSContext *ctx, JSValueConst g, JSValueCo
        compiled at all. An assert whose failing state an earlier assert has already stopped is a check with
        no program behind it, however well its message reads. */
     for (i = 0; i < n; i++) {
-        if (!(event_target_handler_attribute_mask(i) & EH_WORKER_GLOBAL_SCOPE))
+        if (!(event_target_handler_attribute_mask(i) & mask))
             continue;
-        wgs_assert_placed(ctx, event_target_handler_attribute_at(i), WGS_ON_WGS_PROTO, g, dwgs_p, wgs_p);
+        wgs_assert_placed(ctx, event_target_handler_attribute_at(i), where, g, dwgs_p, wgs_p);
     }
 }
-#define WGS_ASSERT_HANDLERS_PLACED(c, g, d, p) wgs_assert_handlers_placed((c), (g), (d), (p))
+#define WGS_ASSERT_HANDLERS_PLACED(c, m, w, g, d, p) wgs_assert_handlers_placed((c), (m), (w), (g), (d), (p))
 #else
 #define WGS_ASSERT_PLACED(c, m, w, g, d, p) ((void)0)
-#define WGS_ASSERT_HANDLERS_PLACED(c, g, d, p) ((void)0)
+#define WGS_ASSERT_HANDLERS_PLACED(c, m, w, g, d, p) ((void)0)
 #endif
 
 /* ---- THE REALM ---------------------------------------------------------------------------------------- */
@@ -507,7 +524,7 @@ static void worker_global_scope_install_realm(JSContext *ctx)
     /* …AND §10.2.1.1's SIX, over whichever rows the bit turned out to name rather than over a list restated
        here. It runs at the same place and for the same reason `self`'s does: the target of an install is an
        ARGUMENT, a wrong one is silent, and this function is where all three objects are in hand. */
-    WGS_ASSERT_HANDLERS_PLACED(ctx, g, dwgs_p, wgs_p);
+    WGS_ASSERT_HANDLERS_PLACED(ctx, EH_WORKER_GLOBAL_SCOPE, WGS_ON_WGS_PROTO, g, dwgs_p, wgs_p);
 
     /* ---- §10.2.1.2's MEMBERS: THE OTHER ARM OF THE SAME SPLIT, ON THE INSTANCE -----------------------------
        WEB IDL §2.3 "Interface mixins" MAKES A MIXIN'S MEMBERS THIS INTERFACE'S OWN: "An includes statement is
@@ -550,8 +567,11 @@ static void worker_global_scope_install_realm(JSContext *ctx)
        §3.7.6's opening steps against the Window brand. Two doors, one of them already carrying the receiver's
        interface as data. */
     event_target_install_handlers(ctx, g, EH_PORT);
-    WGS_ASSERT_PLACED(ctx, "onmessage", WGS_ON_GLOBAL, g, dwgs_p, wgs_p);
-    WGS_ASSERT_PLACED(ctx, "onmessageerror", WGS_ON_GLOBAL, g, dwgs_p, wgs_p);
+    /* …AND §9.4.3's SET, ON THE OTHER OBJECT, over whichever rows THAT bit turned out to name. Two calls
+       naming the two members stood here and were the second copy the audit's own banner argues against; what
+       they could not see is a row newly given EH_PORT, which would be installed on this global and audited by
+       nothing. Same walk, same three objects, different bit and different arm. */
+    WGS_ASSERT_HANDLERS_PLACED(ctx, EH_PORT, WGS_ON_GLOBAL, g, dwgs_p, wgs_p);
 
     /* §3.8's define the global property references, step 3.1 — for both interfaces, because both are exposed
        in this realm and §3.8's population is every interface that is, not every interface that has a member
@@ -775,9 +795,11 @@ void worker_global_scope_free(JSRuntime *rt)
  *     `error` and core/html/unhandled_rejection.c fires `unhandledrejection` and `rejectionhandled`, each at
  *     JS_GetGlobalObject of the running realm rather than at a Window.
  *
- * (5) §10.2.1.2's `name`, `postMessage` and `close` — the three members the interface DECLARES, as against the
- *     two its MessageEventTarget include brings, which are installed above. NOT COVERED: none of the three.
- *     Three separate things block them and they are not the same size:
+ * (5) §10.2.1.2's `name`, `postMessage` and `close` — the three members the interface DECLARES IN ITS OWN IDL
+ *     BLOCK, as against the two its MessageEventTarget include brings, which are installed above. NOT
+ *     COVERED: none of the three. Three separate things block them and they are not the same size — and (e)
+ *     is a FOURTH member of the same §3.8 arm that no reading of §10.2.1.2 can find, because another standard
+ *     declares it in a partial:
  *       (a) THE SHARED ONE, WHOSE SCOPE THIS ENTRY GOT WRONG AND WHICH IS WHY `onmessage` LANDED WITHOUT IT.
  *           Web IDL §3.7.6's create an attribute getter step 1.1.2.3 throws "if jsValue does not implement
  *           target", and core/idl_args.c's idl_attribute_this resolves the receiver through
@@ -867,6 +889,38 @@ void worker_global_scope_free(JSRuntime *rt)
  *           "Processing model"'s run a worker creates. NEXT DIFF: §10.2.4's run a worker, then this member.
  *           ABSENCE SHOWS AS: `typeof
  *           self.close` is `"undefined"`.
+ *       (e) `onrtctransform` IS THE ONLY MEMBER OF THIS INTERFACE'S OWN SURFACE THAT NO PARAGRAPH IN THIS FILE
+ *           NAMED, and the reason is worth more than the member: it is declared by a PARTIAL in ANOTHER
+ *           STANDARD, so every count in this list was taken by reading §10.2.1.2 and every one of them missed
+ *           it. engine/idlgen.mjs, which flattens the partials, is what surfaced it.
+ *           NOT COVERED: `attribute EventHandler onrtctransform`, declared by WEBRTC ENCODED TRANSFORM §6.4
+ *           "Events" in its `partial interface DedicatedWorkerGlobalScope`. Its OBJECT is already settled and
+ *           is this global by §3.8's arm, exactly as (a)-(d)'s are: browser/idl_exposure.h's generated band
+ *           carries the name as IDL_GLOBAL_DEDICATEDWORKER.
+ *           IT IS NOT AN idl_members_excluded DECLARATION EITHER, WHICH IS THE REFLEX AND WOULD FABRICATE A
+ *           CONDITION. That entry's contract is a member whose existence the SPEC makes conditional in prose,
+ *           with its `why` being the spec sentence; §6.4 states an IDL block and no condition over this member
+ *           at all, so declaring it excluded would assert of a standard something no sentence of it says.
+ *           WHAT BLOCKS IT IS A PRODUCER, AND THE PRODUCER SITS BEHIND (4)'s OWN LAST SUBPROBLEM. The one step
+ *           in that standard that fires the event is WEBRTC ENCODED TRANSFORM §5.2 "Constructor"'s
+ *           "Fire an event named rtctransform using RTCTransformEvent with transformer set to transformer on transformer's relevant global object",
+ *           and the constructor it is a step of is §5 "RTCRtpScriptTransform interface"'s `[Exposed=Window]`
+ *           one, whose argument is a `Worker` — which is (4)'s ordered remainder (vi), the member that list
+ *           orders LAST. So this member is strictly downstream of (vi), hence of (i)-(v), and it is the only
+ *           one on this arm whose ordering is decided outside HTML.
+ *           NEXT DIFF: NOT THIS MEMBER, which is the whole content of the entry rather than a deferral inside
+ *           it. Installing the handler ahead of its producer is what §NO STUBS and CLAUDE.md's
+ *           partially-built-interface rule forbid together: a worker bundle that guards on
+ *           `"onrtctransform" in self` would read TRUE here and register a handler for an event no algorithm
+ *           in this build can fire, abandoning the branch that works for one that cannot — and §5's
+ *           `RTCRtpScriptTransform` and §6's `RTCRtpScriptTransformer` are both outside idlgen's audited set
+ *           entirely, so there is nothing for the true branch to reach. The diff that makes that branch
+ *           survivable is those two interfaces, after (vi); this member is the LAST of it and not the first.
+ *           HOW ITS ABSENCE SHOWS: in a worker realm `"onrtctransform" in self` is false where a browser
+ *           answers true, and the name stands in engine/idlgen.mjs's ABSENT list for this interface — which is
+ *           the only instrument in this tree that reads the partial at all, and is where it was found.
+ *           RETIREMENT: this record goes when `RTCRtpScriptTransform` carries a Web IDL §3.7.3 tag in this
+ *           tree, because the member is an ordinary gap with a producer from that moment and owes no entry.
  *
  (7) THE MIXINS BOTH INTERFACES INCLUDE, WHICH IS THE LARGEST OF THESE AND THE ONE THIS LIST DID NOT NAME
  *     UNTIL engine/idlgen.mjs WAS RUN. NOT COVERED: `WorkerGlobalScope includes WindowOrWorkerGlobalScope`
