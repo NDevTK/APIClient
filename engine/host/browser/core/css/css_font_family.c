@@ -331,11 +331,22 @@ static void ff_skip_ws(const char **p, const char *end)
     while (ff_is_ws(css_cp_at(*p, end, &n))) *p += n;
 }
 
-/* ONE ITEM of §2.1's `[ <family-name> | <generic-family> ]#`, from `*p` up to the next top-level comma or the
-   end of the value. FALSE is an item outside the grammar, and CSS Syntax drops the WHOLE declaration for one:
-   a family list is `#` and not a best-effort collection, so §2.1.1's own `font-family: Ahem!, sans-serif`
-   sets nothing rather than keeping the `sans-serif` a lenient reader would salvage. */
-static bool ff_parse_item(const char **p, const char *end, FfList *out)
+/* ONE ITEM of §2.1's `[ <font-family-name> | <generic-font-family> ]#`, from `*p` up to the next top-level
+   comma or the end of the value. FALSE is an item outside the grammar, and CSS Syntax drops the WHOLE
+   declaration for one: a family list is `#` and not a best-effort collection, so §2.1.1's own
+   `font-family: Ahem!, sans-serif` sets nothing rather than keeping the `sans-serif` a lenient reader would
+   salvage.
+
+   `generic_arm` IS WHICH VALUE DEFINITION THIS ITEM IS BEING READ UNDER, and it is a parameter rather than two
+   copies of this walk because the two definitions differ in exactly one alternative. css-fonts-4 §2.1's
+   PROPERTY offers `<generic-font-family>` beside `<font-family-name>`; css-fonts-4 §4.2 "Font family: the
+   font-family descriptor"'s `Value:` line is `<font-family-name>` alone, so the descriptor passes FALSE and a
+   bare `serif` falls through to §2.1.1's exclusion below — which refuses it, because that section's closing
+   paragraph is about the TYPE rather than about a value definition: "UAs must not consider these keywords as
+   matching the <font-family-name> type." The arm and the exclusion therefore answer the same word in opposite
+   directions, which is why suppressing the arm is the whole of the descriptor's difference and not merely a
+   narrowing of it. */
+static bool ff_parse_item(const char **p, const char *end, FfList *out, bool generic_arm)
 {
     const char *generic;
     FfBuf joined = { 0 };
@@ -386,10 +397,11 @@ static bool ff_parse_item(const char **p, const char *end, FfList *out)
            "first code point was already tested against — so an empty join means the emptiness test and the "
            "loop bound have come apart and an empty family name would be stored as a real one");
 
-    /* §2.1's `[ <family-name> | <generic-family> ]`: the GENERIC arm is tried FIRST, and only for a single
-       identifier, because that is the only shape a `<generic-family>` has. Asking the exclusion below first
-       would make `font-family: serif` an invalid declaration. */
-    if (nparts == 1 && (generic = ff_generic_of(joined.s, joined.n)) != NULL) {
+    /* §2.1's `[ <font-family-name> | <generic-font-family> ]`: the GENERIC arm is tried FIRST, and only for a
+       single identifier, because that is the only shape a `<generic-font-family>` has. Asking the exclusion
+       below first would make `font-family: serif` an invalid declaration — and under §4.2, where there is no
+       such arm to try, that is the correct answer rather than a bug. */
+    if (generic_arm && nparts == 1 && (generic = ff_generic_of(joined.s, joined.n)) != NULL) {
         free(joined.s);
         ff_list_add(out, generic, NULL);
         return true;
@@ -548,6 +560,38 @@ static char *ff_strip_comments(const char *value)
     return out.s;
 }
 
+/* ONE ITEM of the list, serialized — the body §2.1's `#` loop and §4.2's single name BOTH emit, so the two
+   entries cannot come to disagree about how a `<font-family-name>` is spelled on the way back out. The comma
+   join belongs to the `#` and stays at its caller, because §4.2 has no `#` to join. */
+static void ff_serialize_item(FfBuf *out, const FfItem *it)
+{
+    DCHECK((it->generic == NULL) != (it->name == NULL),
+           "a css-fonts-4 §2.1 list item is both a `<generic-font-family>` and a `<font-family-name>`, or "
+           "neither. §2.1's value is `[ <font-family-name> | <generic-font-family> ]#` — exactly one "
+           "alternative per item — and the two serialize by different rules, so an item answering both would "
+           "be emitted under whichever branch happened to be tested first");
+    if (it->generic) {
+        /* The CANONICAL keyword out of §2.1.2's table and never the author's spelling, because a keyword
+           is ASCII case-insensitive and serializes one way. */
+        ff_buf_add(out, it->generic, strlen(it->generic));
+        return;
+    }
+    if (ff_name_is_ident_sequence(it->name)) {
+        /* CSSOM §2.1's SERIALIZE A WHITESPACE-SEPARATED LIST, which the name already IS: §2.1.1 joined its
+           identifiers "by single spaces" and every part has just been tested as a bare ident. */
+        ff_buf_add(out, it->name, strlen(it->name));
+        return;
+    }
+    {
+        char *s = css_serialize_string(it->name, strlen(it->name));
+
+        CHECK(s != NULL, "cssom: CSSOM §2.1 \"Common Serializing Idioms\"' serialize a string answered "
+                         "nothing for a `<font-family-name>`");
+        ff_buf_add(out, s, strlen(s));
+        free(s);
+    }
+}
+
 char *css_font_family_value(const char *value)
 {
     FfList list = { 0 };
@@ -595,7 +639,7 @@ char *css_font_family_value(const char *value)
     for (;;) {
         uint32_t cp;
 
-        if (!ff_parse_item(&p, end, &list)) { ff_list_free(&list); free(text); return NULL; }
+        if (!ff_parse_item(&p, end, &list, true)) { ff_list_free(&list); free(text); return NULL; }
         ff_skip_ws(&p, end);
         cp = css_cp_at(p, end, NULL);
         if (cp == CSS_CP_EOF) break;
@@ -613,30 +657,8 @@ char *css_font_family_value(const char *value)
     /* CSSOM §2.1 "Common Serializing Idioms"' SERIALIZE A COMMA-SEPARATED LIST: "concatenate all items of the
        list in list order while separating them by ", ", i.e., COMMA (U+002C) followed by a single SPACE". */
     for (i = 0; i < list.n; i++) {
-        const FfItem *it = &list.v[i];
-
-        DCHECK((it->generic == NULL) != (it->name == NULL),
-               "a css-fonts-4 §2.1 list item is both a `<generic-family>` and a `<family-name>`, or neither. "
-               "§2.1's value is `[ <family-name> | <generic-family> ]#` — exactly one alternative per item — "
-               "and the two serialize by different rules, so an item answering both would be emitted under "
-               "whichever branch happened to be tested first");
         if (i) ff_buf_add(&out, ", ", 2);
-        if (it->generic) {
-            /* The CANONICAL keyword out of §2.1.2's table and never the author's spelling, because a keyword
-               is ASCII case-insensitive and serializes one way. */
-            ff_buf_add(&out, it->generic, strlen(it->generic));
-        } else if (ff_name_is_ident_sequence(it->name)) {
-            /* CSSOM §2.1's SERIALIZE A WHITESPACE-SEPARATED LIST, which the name already IS: §2.1.1 joined its
-               identifiers "by single spaces" and every part has just been tested as a bare ident. */
-            ff_buf_add(&out, it->name, strlen(it->name));
-        } else {
-            char *s = css_serialize_string(it->name, strlen(it->name));
-
-            CHECK(s != NULL, "cssom: CSSOM §2.1 \"Common Serializing Idioms\"' serialize a string answered "
-                             "nothing for a `<family-name>`");
-            ff_buf_add(&out, s, strlen(s));
-            free(s);
-        }
+        ff_serialize_item(&out, &list.v[i]);
     }
     ff_list_free(&list);
     free(text);
@@ -644,5 +666,49 @@ char *css_font_family_value(const char *value)
            "css-fonts-4 §2.1's serializer produced NO TEXT from a non-empty list. Every arm above appends at "
            "least one code point, so an empty answer would be stored as an empty declaration — which CSSOM "
            "reads back as UNDECLARED and which the round-trip cannot re-parse");
+    return out.s;
+}
+
+/* See css_font_family.h: css-fonts-4 §4.2's `Value: <font-family-name>`, which is the entry above with the
+   `#` and the `<generic-font-family>` alternative both gone. */
+char *css_font_family_descriptor_value(const char *value)
+{
+    FfList list = { 0 };
+    FfBuf out = { 0 };
+    const char *p, *end;
+    char *text;
+
+    if (!value) return NULL;
+    /* CSS Syntax §4.3.1 "Consume a token"'s first step, owed here for the reason ff_strip_comments gives and
+       owed to the WHOLE value for the same reason — the walk below reads code points and a comment is not
+       whitespace to it. There is no CSS Cascade 5 §7.3 arm ahead of it here: §7.3's keywords are a value for
+       every PROPERTY and a descriptor is not one, so `inherit` reaches §2.1.1's exclusion like any other
+       identifier and is refused there. */
+    text = ff_strip_comments(value);
+    p = text;
+    end = text + strlen(text);
+    if (!ff_parse_item(&p, end, &list, false)) { ff_list_free(&list); free(text); return NULL; }
+    ff_skip_ws(&p, end);
+    /* §4.2 HAS NO `#`, so anything at all after the one name is outside the grammar — and the item walk stops
+       at a top-level comma without consuming it, so `a, b` arrives here with the comma still in hand rather
+       than as a second item nobody asked for. CSS Syntax drops the declaration whole. */
+    if (css_cp_at(p, end, NULL) != CSS_CP_EOF) { ff_list_free(&list); free(text); return NULL; }
+    DCHECK(list.n == 1,
+           "css-fonts-4 §4.2's ONE `<font-family-name>` produced a list that is not one item long. The item "
+           "parse above adds exactly one entry when it answers TRUE and the value is then required to END, so "
+           "any other count means the item walk and this entry disagree about what an item is — and a "
+           "descriptor serialized from several would read back as a family list a browser drops");
+    DCHECK(list.v[0].generic == NULL,
+           "css-fonts-4 §4.2's descriptor parse produced a `<generic-font-family>` item. §4.2's `Value:` line "
+           "is `<font-family-name>` and carries no generic alternative, so the arm was suppressed at the "
+           "parse — an item answering one means the suppression did not reach it, and `@font-face "
+           "{ font-family: serif }` would declare a family this descriptor cannot name");
+    ff_serialize_item(&out, &list.v[0]);
+    ff_list_free(&list);
+    free(text);
+    DCHECK(out.s != NULL,
+           "css-fonts-4 §4.2's serializer produced NO TEXT from an item the parse accepted. Every arm of "
+           "ff_serialize_item appends at least one code point, so an empty answer would be stored as an empty "
+           "declaration — which CSSOM reads back as UNDECLARED and which the round-trip cannot re-parse");
     return out.s;
 }

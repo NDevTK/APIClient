@@ -735,6 +735,23 @@ static bool cssd_block_admits(CssomBlockContext context, const char *name, bool 
         return custom || css_page_property_applies(CSS_PAGE_CONTEXT_MARGIN, name);
     case CSSOM_BLOCK_KEYFRAME:
         return css_keyframes_declaration_applies(name, important);
+    case CSSOM_BLOCK_FONT_FACE:
+        /* NAMED RESIDUAL — THE MEMBERSHIP HALF OF `@font-face` IS NOT BUILT AND THIS ARM ADMITS WHAT
+           UNRESTRICTED ADMITS.
+           WHAT IS NOT COVERED: css-fonts-4 §4.1 "The @font-face rule" says "Like properties in a declaration
+           block, declarations of any descriptors that are not supported by the user agent must be ignored",
+           and `color` is not a descriptor of that rule at all — so `@font-face { color: red }` declares
+           nothing in a browser and is kept here.
+           WHAT THE NEXT DIFF BUILDS: this arm asked of the DESCRIPTOR SET this file already states once, the
+           `FONT_FACE_DESCRIPTORS[]` table CSS Fonts 5 §9.1's CSSFontFaceDescriptors is built from, so the
+           membership question has one answer rather than a second list beside it.
+           HOW ITS ABSENCE WOULD SHOW: an `@font-face` rule's `style.length` counts a declaration whose name
+           is a PROPERTY and not a descriptor, and that declaration serializes back out of the rule's
+           `cssText`.
+           IT IS SEPARATE FROM THE GRAMMAR HALF ON PURPOSE: the grammar question below is about which value
+           definition a name that IS a descriptor takes, and answering both from one arm is the predicate
+           CLAUDE.md warns is decided by the stricter of its two questions. */
+        return true;
     default:
         DCHECK(context == CSSOM_BLOCK_UNRESTRICTED,
                "a declaration block was collected in a context css_style_declaration.h does not declare — the "
@@ -742,6 +759,15 @@ static bool cssd_block_admits(CssomBlockContext context, const char *name, bool 
                "with no rule behind it");
         return true;
     }
+}
+
+/* IS THIS BLOCK A DESCRIPTOR BODY — the OTHER question the context answers, kept apart from the membership
+   one above for the reason css_style_declaration.h gives. A name that reaches the walk inside an at-rule body
+   that declares DESCRIPTORS takes the descriptor's value definition, which for `font-family` is css-fonts-4
+   §4.2's `<font-family-name>` rather than §2.1's `[ <font-family-name> | <generic-font-family> ]#`. */
+static bool cssd_block_is_descriptor_body(CssomBlockContext context)
+{
+    return context == CSSOM_BLOCK_FONT_FACE;
 }
 
 /* THE LONGHAND DECLARATIONS ONE DECLARATION PRODUCES, collected into the block. A declaration sets a longhand
@@ -863,7 +889,7 @@ static void cssd_decls_collect_declaration(CssDecls *d, const char *name, const 
  * that, because the re-judge is asked ABOUT the raw span and there is none to ask about.
  * ON FALSE NEITHER OUT-PARAMETER IS WRITTEN, so a caller cannot free what it never received. */
 static bool cssd_decl_take(const lxb_css_rule_declaration_t *d, const char *text, size_t len,
-                           char **pname, char **pvalue)
+                           CssomBlockContext context, char **pname, char **pvalue)
 {
     char *name, *value;
 
@@ -898,26 +924,28 @@ static bool cssd_decl_take(const lxb_css_rule_declaration_t *d, const char *text
        A VALUE OUTSIDE css-fonts-4 §2.1's GRAMMAR IS CSS Syntax's INVALID DECLARATION and is dropped whole,
        which is the same answer this function gives a `__UNDEF` it cannot re-judge.
 
-       NAMED RESIDUAL — THE DESCRIPTOR GRAMMAR IS NOT THE ONE ASKED, AND THIS SEAM SERVES BOTH.
-         WHAT IS NOT COVERED: css-fonts-4 §4.2 "Font family: the font-family descriptor" gives an `@font-face`
-         descriptor the value `<family-name>` — ONE name, with no `#` and no `<generic-family>` alternative —
-         where the PROPERTY of css-fonts-4 §2.1 is `[ <family-name> | <generic-family> ]#`. A descriptor body
-         reaches this arm under the same property name as a style rule's declaration and is answered under the
-         wider of the two grammars.
-         WHAT THE NEXT DIFF BUILDS: a DESCRIPTOR member of `CssomBlockContext`, which already carries the other
-         three block restrictions of CSSOM §6.6 "CSS Declaration Blocks" and which an `@font-face` body is
-         currently collected under the default of, threaded to this arm so the descriptor grammar of
-         css-fonts-4 §4.2 is asked where the block is a descriptor body.
-         HOW ITS ABSENCE WOULD SHOW: an `@font-face` rule whose `font-family` names several families, or names
-         a generic, serializes every one of them back out of that rule's `cssText` where a browser drops the
-         descriptor whole.
-       THAT IS NOT A WIDENING THIS BRANCH MAKES. Lexbor's registry carries no descriptor grammar either — an
-       `@font-face` body's `font-family` reached the SAME property state of css-fonts-4 §2.1 — so which
-       descriptor values are ACCEPTED is unchanged by routing here and only their SERIALIZATION moves. */
+       THE DESCRIPTOR GRAMMAR IS A SECOND VALUE DEFINITION OVER THE SAME NAME, AND THIS SEAM SERVES BOTH.
+       css-fonts-4 §4.2 "Font family: the font-family descriptor" gives an `@font-face` descriptor the value
+       `<font-family-name>` — ONE name, with no `#` and no `<generic-font-family>` alternative — where the
+       PROPERTY of css-fonts-4 §2.1 is `[ <font-family-name> | <generic-font-family> ]#`. A descriptor body
+       reaches this arm under the same property name as a style rule's declaration, so WHICH BODY THIS IS has
+       to be an argument: it is the one thing the text cannot say.
+       THE RESIDUAL THIS REPLACES NAMED THE TWO PRODUCTIONS `<family-name>` AND `<generic-family>`, WHICH ARE
+       NOT css-fonts-4's SPELLINGS, and the correction is recorded rather than quietly applied because the
+       clause's SUBSTANCE was exactly right and only its transcription was stale — the routine half of
+       CLAUDE.md's mis-transcription rule. Its `WHAT THE NEXT DIFF BUILDS` clause named a DESCRIPTOR member of
+       `CssomBlockContext` threaded to this arm, which is what landed; its `HOW ITS ABSENCE WOULD SHOW` clause
+       — an `@font-face` whose `font-family` names several families or a generic serializing back out of that
+       rule's `cssText` — is the observation that retires it.
+       WHAT DOES NOT MOVE IS THE PROPERTY'S OWN ANSWER. Lexbor's registry carries no descriptor grammar at all,
+       so an `@font-face` body's `font-family` reached the SAME property state of css-fonts-4 §2.1 before this
+       and a style rule's still does. */
     if (strcmp(name, "font-family") == 0) {
         char *raw = cssd_decl_source_value(d, text, len);
 
-        value = raw ? css_font_family_value(raw) : NULL;
+        value = raw ? (cssd_block_is_descriptor_body(context) ? css_font_family_descriptor_value(raw)
+                                                              : css_font_family_value(raw))
+                    : NULL;
         free(raw);
         if (!value) { free(name); return false; }
         *pname = name;
@@ -959,7 +987,7 @@ static void cssd_decls_from_list(const lxb_css_rule_declaration_list_t *list, co
         char *name, *value;
 
         if (r->type != LXB_CSS_RULE_DECLARATION) continue;
-        if (!cssd_decl_take(d, text, len, &name, &value)) continue;
+        if (!cssd_decl_take(d, text, len, out->context, &name, &value)) continue;
         cssd_decls_collect_declaration(out, name, value, d->important);
         free(name);
         free(value);
@@ -3436,7 +3464,13 @@ char *cssom_parse_a_css_value(const char *name, const char *value)
         /* §6.7.1's Note — "\"!important\" declarations are not part of the property value space and will
            therefore cause parse a CSS value to return null" — asked of the DECLARATION rather than of the
            text, because that is where lexbor records the flag and it records it for a `__UNDEF` too. */
-        if (!d->important && cssd_decl_take(d, text.s, text.n, &dname, &dvalue)) {
+        /* CSSOM §6.7.1 "Parsing CSS Values"' operand is a PROPERTY — this entry's own header says its one
+           other caller is CSS Conditional Rules 3 §7.5's `CSS.supports(property, value)` — so the context is
+           the unrestricted one and the descriptor grammar is not reachable from here. A descriptor body's
+           write does not lose it: `css_rule_set_block_text` re-serializes the whole block through the rule's
+           own context afterwards, which is the second of the two moments a restricted block's text is
+           DECIDED. */
+        if (!d->important && cssd_decl_take(d, text.s, text.n, CSSOM_BLOCK_UNRESTRICTED, &dname, &dvalue)) {
             DCHECK(dname != NULL,
                    "cssd_decl_take answered TRUE with no property name — a declaration this engine holds is "
                    "one whose name §6.6.1's set a CSS declaration compares case-sensitively, so a nameless "

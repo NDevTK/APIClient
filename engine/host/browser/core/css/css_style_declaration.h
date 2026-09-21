@@ -75,8 +75,33 @@ void cssom_install_style_attribute(JSContext *ctx, JSValueConst proto);
  * §3: "The <declaration-list> inside of <keyframe-block> accepts any CSS property except those defined in this
  * specification, but does accept the animation-timing-function property", plus "properties qualified with
  * !important are invalid and ignored" (core/css/css_keyframes.h owns both halves). UNRESTRICTED is every other
- * block this engine has — an inline style, a computed style, a style rule's and an `@font-face`'s — and it is
- * ZERO so that a caller with no rule to name states it by naming nothing.
+ * block this engine has — an inline style, a computed style and a style rule's — and it is ZERO so that a
+ * caller with no rule to name states it by naming nothing.
+ *
+ * `@font-face` IS A FOURTH, AND IT IS HERE BECAUSE ITS BODY DECLARES DESCRIPTORS RATHER THAN PROPERTIES — SO
+ * WHAT IT ADDS IS A GRAMMAR AND NOT (YET) A MEMBERSHIP. A descriptor and a property can share a NAME and not
+ * share a VALUE DEFINITION: css-fonts-4 §2.1 "Font family: the font-family property" is
+ * `[ <font-family-name> | <generic-font-family> ]#` and css-fonts-4 §4.2 "Font family: the font-family
+ * descriptor" is `<font-family-name>`, one name with no list and no generic arm. Both reach this file's
+ * declaration walk under the name `font-family`, so without a context saying which body this is, an
+ * `@font-face` rule's descriptor is answered under the PROPERTY's wider grammar and a value a browser drops
+ * serializes back out of that rule's `cssText`.
+ *
+ * ONE BIT, TWO QUESTIONS, AND THEY ARE ASKED THROUGH TWO PREDICATES. `which declarations may this block HOLD`
+ * and `which grammar does a name take here` are not the same question, and a single predicate answering both
+ * is the shape CLAUDE.md names as decided by the stricter one with the looser one's cost landing silently.
+ * (The two runs above are BACKTICKED and not quoted, and the reason is a measurement rather than a style: the
+ * citation auditor anchors a quotation on the NEAREST PRECEDING citation, so two rhetorical questions in
+ * double quotes after a css-fonts-4 §4.2 citation were judged — correctly — as a quotation of that section
+ * and reported as diverging at word one. A run that is a SPELLING BEING SHOWN goes outside the quotation
+ * channel by construction, which is what a backtick does here.)
+ * The membership half of `@font-face` is a NAMED RESIDUAL at `cssd_block_admits` and today admits everything
+ * UNRESTRICTED admits; the grammar half is live.
+ *
+ * NAMING IT IS ALSO WHAT MAKES THE WRITE SIDE FOLLOW, which is the property that makes a context worth having
+ * at all: `css_rule_set_block_text` re-serializes through whatever `rule_block_context` answers, so a
+ * `setProperty`, a `style.cssText =` and a descriptor attribute all reach the same grammar the PARSE used
+ * without any of them asking for it.
  *
  * IT IS A RULE TYPE AND NOT A PROPERTY FILTER, which is Blink's `StyleRule::RuleType` reaching
  * `CSSParserImpl::ConsumeDeclaration` and is the shape that keeps the three restrictions from becoming three
@@ -86,6 +111,7 @@ typedef enum {
     CSSOM_BLOCK_PAGE,        /* CSS Paged Media §4.3's page context — inside `@page` itself */
     CSSOM_BLOCK_MARGIN,      /* one of §5's margin at-rules */
     CSSOM_BLOCK_KEYFRAME,    /* CSS Animations §3's `<keyframe-block>` */
+    CSSOM_BLOCK_FONT_FACE,   /* css-fonts-4 §4.1's `@font-face` body — a DESCRIPTOR list */
 } CssomBlockContext;
 
 /* CSSOM §6.6's SERIALIZE A CSS DECLARATION BLOCK over the text a backing keeps — the declarations that parsing

@@ -898,6 +898,7 @@ static JSValue font_face_rule_new(JSContext *ctx, JSValueConst parent_style_shee
 {
     JSValue obj;
     CssRuleData *r;
+    char *decls;
 
     DCHECK(block_text != NULL,
            "a CSSFontFaceRule was built with no descriptor text — `@font-face {}` declares NOTHING, which is "
@@ -905,7 +906,15 @@ static JSValue font_face_rule_new(JSContext *ctx, JSValueConst parent_style_shee
     obj = rule_new(ctx, PROTO_FONT_FACE, RULE_TYPE_FONT_FACE, parent_style_sheet, parent_rule);
     if (JS_IsException(obj)) return obj;
     r = JS_GetOpaque(obj, g_rule_class);
-    rule_set(ctx, r, &r->block_text, JS_NewString(ctx, block_text));
+    /* THE FIRST OF THE TWO MOMENTS A RESTRICTED BLOCK'S TEXT IS DECIDED, and the same call `@page`, a margin
+       at-rule and a keyframe block make about themselves. What it buys here is css-fonts-4 §4.2's descriptor
+       grammar: `@font-face { font-family: a, b }` declares nothing, because §4.2's `Value:` line is one
+       `<font-family-name>` with no `#`. Storing the raw text instead would leave the parse answering the
+       PROPERTY's grammar while `css_rule_set_block_text` answered the descriptor's, which is a block whose
+       `cssText` disagrees with itself depending on whether a page has written to it. */
+    decls = cssom_serialize_declarations(block_text, strlen(block_text), CSSOM_BLOCK_FONT_FACE);
+    rule_set(ctx, r, &r->block_text, JS_NewString(ctx, decls ? decls : ""));
+    free(decls);
     return obj;
 }
 
@@ -919,10 +928,14 @@ static CssomBlockContext rule_block_context(uint16_t type)
     if (type == RULE_TYPE_PAGE) return CSSOM_BLOCK_PAGE;
     if (type == RULE_TYPE_MARGIN) return CSSOM_BLOCK_MARGIN;
     if (type == RULE_TYPE_KEYFRAME) return CSSOM_BLOCK_KEYFRAME;
-    DCHECK(type == RULE_TYPE_STYLE || type == RULE_TYPE_FONT_FACE,
+    /* css-fonts-4 §4.1 "The @font-face rule"'s body declares DESCRIPTORS, which is a fact about the GRAMMAR a
+       name takes there rather than (yet) about which names it may hold — core/css/css_style_declaration.h
+       states the split and carries the membership half as a named residual. Naming it here is what makes the
+       PARSE and the WRITE agree: `css_rule_set_block_text` below re-serializes through this same answer. */
+    if (type == RULE_TYPE_FONT_FACE) return CSSOM_BLOCK_FONT_FACE;
+    DCHECK(type == RULE_TYPE_STYLE,
            "a rule type that has no declaration block was asked which restriction its block carries — CSSOM §6.4.3's "
-           "CSSStyleRule and CSS Fonts 5 §9.1's CSSFontFaceRule are the two whose blocks are unrestricted, and "
-           "every other rule with a block is named above");
+           "CSSStyleRule is the one whose block is unrestricted, and every other rule with a block is named above");
     return CSSOM_BLOCK_UNRESTRICTED;
 }
 
@@ -3120,7 +3133,12 @@ static bool decl_body_rule_serialize(JSContext *ctx, CssRuleData *r, const char 
            "a rule whose body is a declaration list has a declaration text that is not a string, and nothing is "
            "pending. `@font-face {}` and `@top-left {}` declare nothing, which is the EMPTY STRING");
     if (!block) return false;
-    decls = cssom_serialize_declarations(block, bl, CSSOM_BLOCK_UNRESTRICTED);
+    /* THE RULE'S OWN CONTEXT AND NOT A NAMED ONE. The stored text has already been filtered at both moments
+       it was written, so a hardcoded UNRESTRICTED answered the same bytes today — and it answered them by an
+       ARGUMENT rather than by construction, which is the state that goes wrong the first time the two
+       disagree. Asking `rule_block_context` makes this arm's answer the rule's own for `@font-face` and for a
+       margin at-rule alike, which are the two rules that reach it. */
+    decls = cssom_serialize_declarations(block, bl, rule_block_context(r->type));
     free(block);
     rbuf_add(out, "@");
     rbuf_add(out, at_name);
