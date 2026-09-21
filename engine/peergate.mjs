@@ -318,6 +318,12 @@ async function main() {
   const probe = await ZONE.safeFetch(`${peerOrigin}/pna-probe`,
                                      { pageUrl: seedUrl, destination: 'document',
                                        provenance: 'derived', pinned: 'unpinned',
+                                       /* THIS GATE COMPOSED THE ADDRESS, so the act is THIS TOOL'S and not
+                                          any analysed page's — see safe-fetch.js's `_actorOf`. The peer
+                                          addresses are this harness's own literals and each `/beacon/` one
+                                          is built from a value this run computed, so no page's code is
+                                          anywhere in the composition. */
+                                       actor: 'tool',
                                        docReach: 'observed', credentialed: false });
   if (!probe || typeof probe.status !== 'number')
     record('pna', 'missing', 'safeFetch returned no reply record at all');

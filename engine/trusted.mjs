@@ -409,8 +409,16 @@ async function main() {
      RESTATEMENT. No document issued this request — a person typed the address on this process's command
      line — so the context it is made from is the person's own act, which is the strongest grade there is and
      is what every document this run reaches is composed against. */
+  /* AND THE ACT IS THIS TOOL'S AND NOT ANY PAGE'S, WHICH IS A DELIBERATE ANSWER AND NOT A DEFAULT. A person
+     named this address on a command line, which is the strongest authorization there is — and it is a fact on
+     a DIFFERENT axis, carried where that axis asks it. This row asks who COMPOSED the request, and no analysed
+     document exists yet when a seed is fetched, so `page` would be false. It changes no outcome: the
+     observed/observed arm already admits this load, and the `actor` arm requires `page`. See
+     safe-fetch.js's `_actorOf`, which records that a value chosen for correctness rather than for effect is
+     exactly the kind nothing tests. */
   const seed = await ZONE.safeFetch(target, { pageUrl: target, destination: 'document',
                                               provenance: 'observed', pinned: 'unpinned',
+                                              actor: 'tool',
                                               docReach: 'observed', credentialed: false });
   const seeded = replyRecord(seed, 'the seed document');
   if (!seeded)
@@ -723,8 +731,12 @@ async function main() {
        what this host's navigate actually performs and is stated rather than omitted, because a hypothetical
        answered from fewer facts than the real request states is a permission question about a different
        request. */
+    /* `page` — THE NAVIGATION WAS INITIATED BY THE ANALYSED DOCUMENT'S OWN CODE, which is the question this
+       row asks; the grade beside it says what that code's PATH is evidence of, and the two are independent.
+       Stated on the hypothetical as well as on the load below, because a permission question answered from
+       fewer facts than the real request states is a question about a different request. */
     const refusal = ZONE.safeFetchFiringRefusal({ url: abs, destination: 'document', provenance,
-                                                  pinned: 'unstated', docReach: fromReach,
+                                                  pinned: 'unstated', docReach: fromReach, actor: 'page',
                                                   credentialed: false, headers: null });
     if (refusal)
       return { declined: `${what} ${abs} — a DOCUMENT LOAD this origin's egress policy refuses on ` +
@@ -749,6 +761,7 @@ async function main() {
        question about a document that does not exist yet. */
     const rec = replyRecord(await ZONE.safeFetch(abs, { pageUrl: fromDocUrl, destination: 'document',
                                                         provenance, pinned: 'unstated', docReach: fromReach,
+                                                        actor: 'page',
                                                         credentialed: false }),
                             `${what} ${abs}`);
     /* HTML §7.4.5 determines the loaded Document's ORIGIN over the RESPONSE'S URL — "set responseOrigin to the
@@ -851,7 +864,12 @@ async function main() {
        instance existed. A page this zone chose to open goes on making its own `fetch()`es and the engine
        grades them `observed`, correctly — so without this the chokepoint would be judging the second act
        with the first act's word. */
+    /* `page` — THIS FRAME EXISTS ONLY TO ANSWER A RECORD THE ENGINE PRODUCED, so the request in front of it
+       was composed by the analysed document's own code by construction. It is STATED rather than left to be
+       inferred from that sentence: safe-fetch.js asserts the word, so a frame that is wrong about its own
+       population is wrong LOUDLY there rather than exempted by a claim about who its callers are. */
     const raw = await ZONE.safeFetch(abs, { pageUrl: e.docUrl, destination, provenance, pinned, credentials,
+                                            actor: 'page',
                                             docReach: e.docReach, credentialed: false });
     /* A REFUSAL THIS ZONE'S OWN POLICY MADE IS A DECLINE AND NOT A NETWORK ERROR, and the difference is what
        the flow does next. A `provide` of `null` is Fetch §5.6's network error: the page's request RESUMES down
@@ -876,6 +894,7 @@ async function main() {
          question about THAT request and not about a simpler one. `credentialed: false` is what `fetched`
          passes and `headers: null` is what a park carries here. */
       const refusal = ZONE.safeFetchFiringRefusal({ url: abs, destination, provenance, pinned,
+                                                    actor: 'page',
                                                     docReach: e.docReach, credentialed: false, headers: null });
       if (!refusal) {
         settle(declineRequest(method, url,

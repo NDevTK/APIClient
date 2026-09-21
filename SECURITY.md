@@ -214,10 +214,19 @@ has to remember:
   have been DERIVED from a credentialed read, so it names that person's account whatever headers it carries.
   GET does not mean safe either: RFC 9110 §9.2.1 "Safe Methods" defines safety by what the CLIENT requests
   and expects and says an implementation MAY cause side effects anyway.
-  So the policy surfaces **SIGNALS** and a person decides which combinations their origin allows: the
-  request's `destination` (program or value), its `provenance`, whether the person's `cookies` pay, whether a
+  So the policy surfaces **SIGNALS** and a person decides which combinations their origin allows: whose act
+  the request is (`actor` — the ANALYSED PAGE's own code, or THIS TOOL), the
+  request's `destination` (program, subresource or value), its `provenance`, how the DOCUMENT it was made
+  from was itself reached (`doc-reach`), whether the person's `cookies` pay, whether a
   header list of unstated ownership rides along (`header-authority`), the engine's `witness` mark,
-  address-borne authority (`url-authority`), and `lineage`. Each row carries how much this tool can KNOW
+  address-borne authority (`url-authority`), and `lineage`. **`actor` IS THE ONE GATING ROW THE UNTRUSTED
+  ZONE CANNOT REACH**, which is why it is the one graded `certain` rather than `stated`: `destination`,
+  `provenance`, `witness` and the credentials mode are words the ENGINE composes and this zone relays, and
+  the engine is attacker-controlled; `actor` is a literal in trusted-zone source at every asker, so no
+  bundle and no compromised renderer can move it. It is also the only fact that separates the analysed
+  page's own `fetch()` from a probe this tool composed — those two arrive IDENTICAL on destination,
+  provenance, doc-reach, witness and cookies, because what differs about them is not a property of the
+  request. Each row carries how much this tool can KNOW
   about it — `certain`, `stated`, `partial`, `undetermined`, `intent` — because grading facts of different
   reliability as one list is what a score does, and a collapsed number hides which signal drove a decision at
   the one boundary where a person acts on it. A signal the chokepoint cannot determine renders as a stated
@@ -229,11 +238,23 @@ has to remember:
   reach; it is what this transport IS, and the difference is checkable: delete the whole table and the `GET`
   literal is still there, because it selects against nothing.
   **PROGRAM LOADS FIRE AT EVERY SETTING AND ARE NOT WHAT THIS CONTROL OPENS** (`<script src>`, a module
-  import, a lazy chunk — Fetch §2.2.5's script-like destinations), and so does a request the page itself made
-  **in a document this browser actually navigated to** (`provenance` `observed` AND `doc-reach` `observed`):
-  both are the page loading itself, which the person's own browser would have done.
-  Those two are the DEFAULT ARMS, they are DATA (`safeFetchDefaultArms`), and the surface renders them — a
-  person looking at a control that permits nothing is owed the reason their app still works.
+  import, a lazy chunk — Fetch §2.2.5's script-like destinations), and so does every other SUBRESOURCE the
+  document's own markup or its own running code names (a stylesheet, an image, a font), and so does a request
+  the page itself made **in a document this browser actually navigated to** (`provenance` `observed` AND
+  `doc-reach` `observed`): each is the page loading itself, which the person's own browser would have done.
+  **AND SO DOES THE ANALYSED PAGE'S OWN DATA FETCH WHERE ITS ADDRESS RESTS ON NOTHING THIS ENGINE PINNED**
+  (`destination` `value` AND `witness` `unpinned` AND `actor` `page`) — the project owner's decision, whose
+  two clauses are carried one per conjunct: the witness conjunct is what refuses an address a fork pinned,
+  and the actor conjunct is what refuses every derived probe. Neither is decoration, and removing either
+  admits a population the other clause names. What fires under it is UNCREDENTIALED, because the relay that
+  reaches it states `credentialed: false` — so an app whose boot data differs by session is answered with
+  the logged-out payload, which is a decision in another file and is named here rather than left to be
+  discovered.
+  Those FOUR are the DEFAULT ARMS, they are DATA (`safeFetchDefaultArms`), and the surface renders them — a
+  person looking at a control that permits nothing is owed the reason their app still works. The count is
+  stated because this paragraph has already been wrong about it: it read "those two" while the tree held
+  three, so a reader checking whether their app's stylesheet fires was told to look at an arm that was not
+  the one answering.
   **THE SECOND ARM IS A CONJUNCTION AND THE SECOND CONJUNCT IS WHAT STOPS ONE ROW PERMITTING TWO
   POPULATIONS.** It used to name `provenance` `observed` alone, which was sound only while every document had
   itself been reached observably — a property of the OTHER ARMS rather than of the request, so the chokepoint

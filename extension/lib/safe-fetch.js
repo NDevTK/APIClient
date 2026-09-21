@@ -640,6 +640,53 @@ function _pinnedOf(opts) {
         "not carry one");
   return opts.pinned;
 }
+/* ── WHOSE ACT THIS REQUEST IS: THE ANALYSED PAGE'S, OR THIS TOOL'S ──────────────────────────────────────
+   EVERY OTHER ROW IN THE REGISTRY DESCRIBES THE REQUEST AND THIS ONE DESCRIBES THE CALLER, WHICH IS WHY NO
+   COMPOSITION OF THE OTHERS CAN STAND IN FOR IT. Measured, and it is what this fact exists for: the analysed
+   page's own `fetch()` and this tool's AUTOMATIC discovery sweep carry the SAME `destination`, the SAME
+   `provenance` (both `derived`), the SAME `doc-reach` (both `observed`), the SAME `witness` (both `unpinned`)
+   and the SAME `cookies`. They are identical on every signal that describes the request, because the thing
+   that differs about them is not a property of the request at all — one was composed by the page's code and
+   the other by `lib/discovery-probe.js`. CLAUDE.md §THE-PER-ORIGIN-OPT-IN-GOVERNS-EGRESS's discriminator is
+   WHOSE ACT THE REQUEST IS, and until this row existed nothing here could ask it.
+   IT IS A STACK PARAMETER AND NEVER AN INFERENCE, WHICH IS CLAUDE.md §AND-AN-EXEMPTION-SCOPED-BY-WHO-ACTED
+   VERBATIM: a fact about who acted is a VALUE stated by the site that knows, carried down every frame and
+   asserted where it is relied on, never re-derived and never inferred from a sentence about who the callers
+   are. That rule is written from an incident in this project where a privilege was scoped by exactly such a
+   sentence and was false of three callers for as long as it stood. So the word is TYPED at each asker and
+   `CHECK`ed here, and an ABSENT one ABORTS rather than taking an arm — forgetting may not be a way to be
+   exempted, and there is no third word for "this act does not carry the fact" because every asker knows.
+   THE VALUES ARE THIS SIGNAL'S OWN AND ARE DELIBERATELY NOT `lib/schema.js`'s `PAGE_CONTEXT_*`. That pair
+   answers HUMAN-or-TOOL and gates the operator relay; this one answers ANALYSED-PAGE-or-THIS-TOOL. A page's
+   own `fetch()` is NEITHER of those words — no human initiated it and this tool did not compose it — so
+   reusing them would be one vocabulary serving two questions, which is the defect
+   §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS names and which this row exists because of. The two axes are also
+   independent in both directions: the operator's Fetch-Discovery button is `user-initiated` AND this tool's
+   act, and the automatic sweep is `tool-initiated` AND this tool's act.
+   IT IS THE ONE GATING SIGNAL THE UNTRUSTED ZONE CANNOT REACH, which is why its grade is `certain` where
+   `provenance`, `doc-reach` and `witness` are only `stated`. Those three are words the ENGINE composes and
+   this zone relays, and the engine is attacker-controlled (SECURITY.md §The QuickJS/WASM sandbox); this one
+   is a literal in trusted-zone source at every site, so no bundle and no compromised renderer can move it.
+   A REQUEST THIS TOOL COMPOSED AT A PERSON'S DIRECTION IS STILL `tool`, AND THAT IS A DECISION RATHER THAN
+   AN OVERSIGHT. `trusted.mjs`'s seed is an address a person typed on a command line and `bridge.js`'s
+   frontier-residue re-fetch is this tool re-opening a document it parked — neither is composed by any
+   analysed page's code, so `page` would be a false statement about both. What their human authorization is
+   worth is a REAL fact and it is carried on the axis that asks it, not folded into this one; and neither
+   site's outcome moves today, so the value is chosen for CORRECTNESS rather than for effect, which is
+   exactly the kind that gets defaulted because nothing tests it. */
+var _ACTOR_WORDS = ["page", "tool"];
+function _actorOf(opts) {
+  CHECK(_ACTOR_WORDS.indexOf(opts.actor) >= 0,
+        "safeFetch was called with an ACTOR that is neither word this file declares: " +
+        JSON.stringify(opts.actor) + " — it says whether the ANALYSED PAGE'S own code composed this request " +
+        "or THIS TOOL did, which is the fact that separates a page's own `fetch()` from a probe this tool " +
+        "built, and no other signal here can: those two arrive identical on destination, provenance, " +
+        "doc-reach, witness and cookies. Every caller knows which it is by construction — a relay answering " +
+        "the engine's own record states `page`, and a composer that built the address itself states `tool` " +
+        "— so there is no third word and an absent one is a site that never answered the question rather " +
+        "than an act that cannot");
+  return opts.actor;
+}
 /* ── AND WHAT THIS FUNCTION DOES *NOT* READ, WHICH IS THE HALF NO ASSERT WAS MAKING ──────────────────────
    The two rules above refuse a VALUE this file cannot serve. This one refuses a FIELD it will not read, and
    the failure it closes is the opposite shape: not a bad answer to a question this file asks, but a caller's
@@ -671,7 +718,7 @@ function _pinnedOf(opts) {
    an option added to the body and forgotten in this list aborts on its AUTHOR's own first call, at the line
    they just wrote — while the failure it closes is silent and belongs to somebody else, later. */
 var _SAFEFETCH_OPTIONS = ["pageUrl", "pageOrigin", "destination", "provenance", "pinned", "docReach",
-                          "credentialed", "credentials", "headers", "signal", "onChunk"];
+                          "actor", "credentialed", "credentials", "headers", "signal", "onChunk"];
 /* FETCH §2.2.5 "Requests"' CREDENTIALS MODE — "which is `omit`, `same-origin`, or `include`" — and these are
    the same three words `core/fetch/fetch.h`'s `fetch_credentials_token` puts on the pending line, which is
    the only place they are spelled on the engine side. Written here rather than derived because this zone is
@@ -971,6 +1018,18 @@ var _SIGNALS = [
       if (_isScriptLike(f.destination)) return "program";
       return _isDocumentSubresource(f.destination) ? "subresource" : "value";
     } },
+  /* WHOSE ACT THIS REQUEST IS — see `_actorOf`, which carries why no other row can answer it and why the
+     word is TYPED at each asker rather than inferred from who the callers are.
+     IT SITS SECOND, AND THE POSITION IS THE REFUSAL'S SENTENCE RATHER THAN A RANKING OF HARM. The walk names
+     the FIRST gating signal an origin does not permit, so after "this origin does not permit data requests"
+     the sentence a person most needs is "and this one is a request THIS TOOL composed rather than one your
+     page made" — which is coarser than any grade about the request's PATH and is what every row below it
+     refines. `provenance` and `doc-reach` follow it for the reason they already give each other.
+     `certain` AND NOT `stated`, WHICH IS THE ONE PLACE THIS REGISTRY CAN SAY THAT ABOUT A ROW THE POLICY
+     TURNS ON: the three grades nearest it are words the ENGINE composes and this zone relays, and the engine
+     is attacker-controlled; this one is a literal in trusted-zone source at every asker. */
+  { name: "actor", gates: true, certainty: "certain", values: _ACTOR_WORDS,
+    of: function (f) { return f.actor; } },
   /* CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's three names. `stated` and not `certain`: the engine
      composes the word at the park out of the park's own kind and the parking flow's `path_forced`, and the
      `CHECK` in `_provenanceOf` catches a word outside the three and nothing else. */
@@ -1237,7 +1296,7 @@ var _DEFAULT_ARMS = [
      the only requests that behave differently are the ones the old arm was permitting without being asked. */
   { when: [{ signal: "provenance", value: "observed" }, { signal: "doc-reach", value: "observed" }],
     why: "the page made exactly this request, in a document this browser actually navigated to — so " +
-         "relaying it is this browser being a browser" }
+         "relaying it is this browser being a browser" },
   /* THE ARM ABOVE USED NOT TO EXIST, AND THE PARAGRAPH THAT SAID SO IS REWRITTEN HERE RATHER THAN DELETED
      — BECAUSE ITS REASONING IS SOUND, ONLY ITS PREMISE WAS OVERRULED, AND A READER WHO RE-DERIVES THE
      REASONING WILL RE-DERIVE THE REFUSAL WITH IT. It read: there is no third arm for a document's own
@@ -1314,118 +1373,80 @@ var _DEFAULT_ARMS = [
      RETIREMENT: this record goes when no reader can re-derive the destination-keyed refusal above from the
      signals this file declares — which is to say when the `subresource` value and the arm it feeds are no
      longer separable from the `program` one, and the paragraph has nothing left to be wrong about. */
-  /* AND A FOURTH ARM IS DECIDED AND IS NOT SPELLED HERE, WHICH IS A FINDING ABOUT THE SIGNALS AND NOT A
-     DISAGREEMENT WITH THE DECISION — WRITTEN AT THE SITE BECAUSE THIS LIST IS WHERE THE NEXT READER WILL BE
-     STANDING WHEN THEY ARE TOLD TO ADD IT. The project owner decided, in two sentences: permit unpinned
-     value fetches, `a data fetch whose address carries no value this path pinned fires at every origin`;
-     and, in the SAME sentence, `anything whose address a fork pinned, and every derived probe, is still
-     refused`. The obvious spelling of the first half is
-     `{destination: value} AND {witness: unpinned}`, and it CONTRADICTS the second half, because nothing this
-     file reads separates the two populations the two clauses name.
-     THE TWO ARE BYTE-IDENTICAL ON EVERY GATING SIGNAL, AND THAT IS READ RATHER THAN FEARED. A page's own
-     `fetch()` parks through engine/host/solver/engine.c's `engine_pending_fetch_url`, which pushes with a
-     literal `parser_inserted` of 0 under the comment `a fetch() or an XHR — page code composed it`; and
-     engine/host/solver/pending.c's `pending_prov_compose` ends in two lines, which are
-     `if (path_forced) return PROV_FORCED;` and then
-     `return parser_inserted ? PROV_OBSERVED : PROV_DERIVED;`. So an unforced page `fetch()` arrives
-     DERIVED, and by
-     the nesting solver/flow.h holds, UNPINNED. The AUTOMATIC discovery sweep states, by hand at
-     lib/discovery-probe.js's `_chokepointGetFn`, `provenance: "derived"`, `pinned: "unpinned"`,
-     `docReach: "observed"` and `destination: ""`. Destination, provenance, doc-reach, witness, cookies: the
-     same value on every one. The arm cannot admit the first and refuse the second.
-     AND THE SAME ROW SORTS A THIRD POPULATION BACKWARDS, WHICH IS WHAT SHOWS THE AXIS TO BE WRONG RATHER
-     THAN MERELY SHORT. The analysed page's own XHR reaches this file through bridge.js's `xhr.send` relay,
-     which states `destination: ""` and `pinned: "unstated"` — CORRECTLY, and for the discriminator
-     `_pinnedOf` states one screen up: that relay's provenance is the VARIABLE `q.provenance`, which can be
-     `forced`, so the address may hold a witness this engine chose and the zone cannot say which. (The park
-     test is the tempting reason and is not the one the callers obey; see that banner, which three
-     trusted-zone composers refute.) So the arm as spelled would PERMIT this
-     tool's own automatic probe and REFUSE the analysed page's own XHR, which is the SAME POPULATION as the
-     `fetch()` it was written to admit. Three populations, two of them sorted the wrong way: that is not a
-     conjunct that is missing, it is a row that is not about this question.
-     AND IT ESCALATES `_pinnedOf`'s OWN RESIDUAL RATHER THAN MERELY CITING IT. That paragraph records the
-     `unstated`/`unpinned` split as a difference in OUTCOME at an origin a person has already WIDENED — the
-     discovery sweep firing while the XHR relay is refused. An arm here reading the witness row would move
-     that same split into the DEFAULT, so what it decides stops being a person's audit of a widened origin
-     and becomes whether this engine answers the analysed page's own XHR at all.
-     AND THAT RESIDUAL LANDING WOULD NOT RESCUE THE ARM, WHICH IS SAID SO THAT NOBODY WAITS FOR IT. Once
-     `engine_pinned_of_running_path()` is written into the XHR record, that relay carries a real mark and an
-     unpinned XHR joins the `fetch()` on the admitted side — and the automatic sweep is admitted with them,
-     unchanged, because it is `derived` and `unpinned` and correctly so. The two populations the owner's two
-     clauses name are separated by the fact named under WHAT THE NEXT DIFF BUILDS above and by nothing
-     else.
-     THE ONE ROW THAT DOES DIFFER IS `header-authority` AND IT MAY NOT BE USED, WHICH IS SAID SO THAT NOBODY
-     REACHES FOR IT. The sweep passes `headers || {}`, and `{}` is truthy, so it reads `unknown` where the
-     pending relay reads `none` — a property of ONE call site's argument-passing and of whose list it is,
-     never of whether a request is a probe. Keying a permission on it would key it on an idiom, and it would
-     be wrong in outcome too: the XHR relay is a genuine page request and states a list, so the conjunct
-     would refuse every XHR the analysed page makes, which is half of what §Learning-from-replies calls the
-     POINT.
-     THE ROOT IS A PREDICATE ANSWERING TWO QUESTIONS AND THIS FILE ALREADY NAMES IT ONE ARM UP. `observed` is
-     unreachable for a `fetch()` park BY the DCHECKF in `pending_prov_compose`, which is RIGHT about
-     HTML §4.12.1.1 "Processing model" — a parser document belongs to `script` elements and to nothing else —
-     and narrower than what the egress question needs. The egress question is not `did a parser insert this`;
-     it is WHOSE ALGORITHM IS OWED THE REPLY, which is the same sentence `_isDocumentSubresource`'s residual
-     already names as its next diff, arriving here instead of at the CORB class.
-     NAMED RESIDUAL. WHAT IS NOT COVERED: a data request the analysed document's own code made, on a path
-     that pinned nothing, is refused at every origin until a person widens it — so an app whose boot data
-     comes back through its own `fetch()` never initialises, while every script and chunk beside it lands.
-     WHAT THE NEXT DIFF BUILDS: the fact that separates them, stated by the CALLER the way `provenance`,
-     `pinned` and `docReach` already are and asserted here the way they already are — WHOSE ACT THIS REQUEST
-     IS: the ANALYSED PAGE'S, or THIS TOOL'S. The page's `fetch()` and the page's XHR are ONE population
-     under the owner's rule and the sweep is not, and no signal this file reads separates them because every
-     signal here describes the REQUEST while this fact is about the CALLER.
-     AND THIS CLAUSE FIRST READ `whether a flow in the analysed document is PARKED on this reply`, WHICH IS
-     WRONG AND IS REWRITTEN RATHER THAN DELETED BECAUSE IT IS THE FRAMING A READER RE-DERIVES FROM THE
-     PARAGRAPH ABOVE IT. An `xhr.send` record IS NOT A PARK — bridge.js says exactly that at its own site —
-     so a signal keyed on parking would have ADMITTED the page's `fetch()` and REFUSED the page's XHR, which
-     is precisely the backwards sort the paragraph directly above this one exists to name. It was written an
-     hour after that paragraph, by its author, and reproduced the defect it had just recorded. That is the
-     failure CLAUDE.md rates worst about this clause in particular: a next-diff clause is read ONCE, by
-     somebody who has already decided to do the work, so a wrong one is not caught, it is EXECUTED. The
-     METHOD is the finding and the sentence is only its symptom — the park is where the ENGINE composes a
-     witness, it was never the question of whose act a request is, and reaching for it was reasoning from
-     the mechanism that happened to be in hand rather than from the population being separated.
-     ITS SHAPE IS `schema.js`'s AND IS NOT A NEW MECHANISM — a STACK PARAMETER stated by the site that
-     knows, which is what CLAUDE.md §AND-AN-EXEMPTION-SCOPED-BY-WHO-ACTED requires of any fact about WHO
-     ACTED: a VALUE carried down every frame and asserted where it is relied on, never re-derived and never
-     inferred from a sentence about who the callers are, with an unstated one taking the refusing arm so
-     that forgetting is not a way to be exempted. Its VALUES must be its own and may NOT be
-     `PAGE_CONTEXT_*`'s, which answer HUMAN-or-TOOL: a page's own `fetch()` is neither of those words, so
-     reusing them would be one vocabulary serving two questions.
-     IT IS GENUINELY A DIFFERENT FACT FROM THE TWO ROWS NEAREST IT, AND THAT IS CHECKABLE RATHER THAN
-     ASSERTED: the sweep and the page's `fetch()` carry the SAME `provenance` and the SAME `doc-reach` and
-     differ on this, so it is neither of them renamed; and a page `fetch()` is the page's act whether its
-     path is `derived` or `forced`, so the two vary independently in both directions.
-     IT COMPOSES AND NEVER OVERRIDES. The arm is `{destination: value}` AND `{witness: unpinned}` AND
-     `{actor: the analysed page}` — the witness conjunct refuses an address a fork pinned and this one
-     refuses the probe, so neither half of the owner's sentence is left to be carried by the other.
-     `provenance` is untouched and still says what the REPLY is worth.
-     WHAT IT COSTS, WHICH IS WHAT DECIDES WHETHER ONE LANE CAN DO IT: NO THREADING. Every frame that reaches
-     this file serves exactly ONE population by construction — the pending relay and the XHR relay exist
-     only to answer a record the engine produced, and `_chokepointGetFn`, the peer gate and this surface's
-     own probe compose their request themselves — so each states a LITERAL and no frame in between carries
-     anything. That is what makes it unlike the operator relay CLAUDE.md records, where ONE door served both
-     populations and the grade had to travel. IT IS A CLAIM ABOUT THE COST AND NEVER A JUSTIFICATION FOR THE
-     VALUE, which is the distinction that rule is about: each site still STATES the fact and this file still
-     asserts it, so a site that is wrong about its own population is wrong LOUDLY at the chokepoint rather
-     than exempted by a sentence about who the callers are. The diff is the registry row, the option, its
-     `CHECK`, and one literal at every asker, which is derived rather than counted here:
-     `git grep -n "safeFetch(\|safeFetchFiringRefusal(" -- '*.js' '*.mjs'` — the hypothetical askers
-     included, since each must state what its real request would.
-     AND THE SIGNAL MAY NOT LAND WITHOUT THE ARM, which is a landing-order fact rather than a preference: a
-     new GATING row is one no stored grant names, and `safeFetchEgressStated` reads a row a grant does not
-     name as NOT PERMITTED — so a signal landed alone silently NARROWS every permission anybody has already
-     made. One landing, or a person's standing sentence is revoked by a diff that was only meant to add a
-     fact.
-     GREPPED rather than assumed, and it is why the fact must be STATED rather than read off the line:
-     `engine_pending_fetches` joins METHOD, DESTINATION, INITIATOR, PROVENANCE, PINNED, CREDENTIALS and URL,
-     and reads `PEND_KIND` at one line of that function, inside a DCHECK — so the park kind does not cross,
-     and that line's INITIATOR is a parser-or-script token about an ELEMENT rather than about whose act the
-     request is. HOW ITS ABSENCE WOULD SHOW, as an OBSERVATION and never as an
-     instance: a run whose log carries a `blocked-signal:destination=value` refusal for an address the
-     analysed document's own script fetched, with that document's scripts and chunks all answering 200 on
-     the lines around it — the app loading its code and never its state. */
+  /* THE ARM BELOW DID NOT EXIST AND A RESIDUAL HERE SAID WHY, AND THAT RESIDUAL IS RETIRED BY THE DIFF
+     THAT BUILT IT. What is kept is the part that stays true once the arm exists, which is a METHOD finding
+     rather than a description of the tree.
+     WHAT IT ESTABLISHED IS NOW `_actorOf`'s BANNER AND IS NOT REPEATED HERE: the analysed page's own
+     `fetch()` and this tool's automatic discovery sweep are identical on every signal that describes the
+     REQUEST, so the fact separating them had to be about the CALLER, and until the `actor` row existed the
+     owner's two clauses could not both be spelled by any arm.
+     WHAT IS KEPT IS THE CLAUSE THAT WAS WRONG, BECAUSE THE METHOD IS THE FINDING AND A READER WILL
+     RE-DERIVE IT. That residual's own WHAT-THE-NEXT-DIFF-BUILDS first read `whether a flow in the analysed
+     document is PARKED on this reply`, and an `xhr.send` record IS NOT A PARK — bridge.js says exactly that
+     at its own site — so a signal keyed on parking would have ADMITTED the page's `fetch()` and REFUSED the
+     page's XHR, which is the same backwards sort the clause existed to end. It was written an hour after
+     the paragraph recording that sort, by its author, in the paragraph directly beneath it. CLAUDE.md rates
+     this the worst failure a next-diff clause has, because a clause is read ONCE, by somebody who has
+     already decided to do the work: a wrong one is not caught, it is EXECUTED. The park is where the ENGINE
+     composes a witness; it was never the question of whose act a request is, and reaching for it was
+     reasoning from the mechanism that happened to be in hand rather than from the population to be split.
+     AND THE ROW THAT LOOKS LIKE A CHEAPER ANSWER MAY NOT BE USED, WHICH IS SAID HERE SO THAT NOBODY REACHES
+     FOR IT ON THE DAY THE `actor` OPTION READS AS PLUMBING. `header-authority` does differ between the
+     sweep and the page's `fetch()` — the sweep passes `headers || {}` and `{}` is truthy — and that is a
+     property of ONE call site's argument-passing rather than of whether a request is a probe. It is wrong
+     in outcome too: the XHR relay is a genuine page request that states a list, so the conjunct would
+     refuse every XHR the analysed page makes.
+     RETIREMENT: this record goes when no reader can re-derive a parking-keyed discriminator from the
+     paragraphs around it — which is to say when whose-act is asked somewhere a park is not, and the two
+     stop being confusable at a glance. */
+  /* AND THE ANALYSED PAGE'S OWN DATA REQUESTS, WHICH IS A DECISION THE PROJECT OWNER MADE AND NOT ONE THIS
+     FILE INFERRED, so it is cited rather than argued: permit unpinned value fetches — a data fetch whose
+     address carries no value this path pinned fires at every origin — and anything whose address a fork
+     pinned, and every derived probe, is still refused. Recorded under CLAUDE.md
+     §AND-THAT-ABSOLUTE-IS-RETIRED-BY-THE-PROJECT-OWNER, whose model is signals a person decides per origin.
+     THE ARM IS THE OWNER'S TWO CLAUSES AND EACH CONJUNCT CARRIES EXACTLY ONE OF THEM, which is what stops
+     either being left to the other: `witness: unpinned` is what refuses an address a fork pinned, and
+     `actor: page` is what refuses the probe. Neither is decoration and removing either one admits a
+     population the other clause names.
+     IT IS KEYED ON `pinned` AND NOT ON `forced`, WHICH IS THE OWNER'S LITERAL WORD AND IS NOT THE SAME SET.
+     A page `fetch()` on a FORCED-but-unpinned path fires here: the flow stood past an arm nothing observed,
+     but no source's value was DETERMINED, so the address holds no witness this engine chose — which is
+     precisely what "carries no value this path pinned" says. Keying it on `forced` instead would refuse the
+     boot of any SPA whose boot flow forks at all, which is the population the decision is about.
+     AND `provenance` IS UNTOUCHED BY IT. §A-REQUEST-CARRIES-THE-PROVENANCE is explicit that what a
+     permission changes is which ACT may be spent and never what a reply is WORTH: a forced reply is still
+     carried as forced, still never merged into the observed pool, and every consumer downstream still sees
+     that word. An arm makes something FIRE; it re-grades nothing.
+     WHAT IT RE-GRADES IS ENUMERATED RATHER THAN LEFT TO BE FOUND, because a permission whose reach the
+     person cannot state is not a control — the same obligation the subresource arm above discharges. Of the
+     destinations §2.2.5 leaves in this row's `value` bucket, the only ones any caller can reach with a
+     witness mark of `unpinned` AND an actor of `page` are the EMPTY STRING's: the analysed page's own
+     `fetch()`, relayed off the engine's pending line. A navigation is `document` and states `unstated`; the
+     seed and the residue re-fetch state `tool`; the sweep and the peer gate state `tool`. So what this arm
+     admits today is exactly the analysed document's own `fetch()` on a path that pinned nothing, and
+     nothing else.
+     NAMED RESIDUAL, AND IT IS `_pinnedOf`'s MADE LOAD-BEARING RATHER THAN A NEW ONE. WHAT IS NOT COVERED:
+     the analysed page's own XHR, which is the SAME population as the `fetch()` above by the owner's rule and
+     does not fire, because `bridge.js`'s `xhr.send` relay states `witness: unstated` — correctly, since that
+     record's provenance is a variable that can be `forced` and the zone cannot say whether the address holds
+     this engine's bytes. WHAT THE NEXT DIFF BUILDS: `engine_pinned_of_running_path()` written into the XHR
+     request op, which is the diff `_pinnedOf`'s own residual already names and which was a question about a
+     person's audit of a widened origin until this arm landed; it is now the difference between answering a
+     page's `fetch()` and answering the same page's XHR. HOW ITS ABSENCE WOULD SHOW, as an OBSERVATION and
+     never as an instance: a run whose log carries a `blocked-signal:witness=unstated` refusal for an address
+     the analysed document reached through `XMLHttpRequest`, on a document whose `fetch()`es to the same host
+     are answered on the lines around it.
+     AND WHAT FIRES HERE IS UNCREDENTIALED, WHICH IS STATED SO THAT NOBODY READS THIS ARM AS THE WHOLE OF THE
+     OWNER'S SENTENCE. Their words were "same-origin and credentialed like a browser", and the relay that
+     reaches this arm passes `credentialed: false` — so the reply is the LOGGED-OUT one, and an app whose
+     boot data differs by session boots on the wrong payload. That is a decision in another file and is NOT
+     this arm's to make; it is named here because a person reading what they permitted is entitled to know
+     that the row they ticked does not spend their session. */
+  { when: [{ signal: "destination", value: "value" },
+           { signal: "witness", value: "unpinned" },
+           { signal: "actor", value: "page" }],
+    why: "the analysed page's own code made this request and composed its address out of nothing this " +
+         "engine pinned — so what fires is the app asking for its own state, not a probe this tool built" }
 ];
 var _EXPLORED = Object.create(null);
 /* HAS A HOST SPOKEN YET. Two questions, two fields — never one value answering both, because the
@@ -1726,10 +1747,12 @@ function _firingRefusal(facts) {
         "passed none would be answered by whichever arm this function happens to reach first");
   CHECK(typeof facts.destination === "string" && _PROVENANCE_TYPES.indexOf(facts.provenance) >= 0 &&
         _PROVENANCE_TYPES.indexOf(facts.docReach) >= 0 &&
-        _PINNED_MARKS.indexOf(facts.pinned) >= 0 && typeof facts.credentialed === "boolean" &&
+        _PINNED_MARKS.indexOf(facts.pinned) >= 0 && _ACTOR_WORDS.indexOf(facts.actor) >= 0 &&
+        typeof facts.credentialed === "boolean" &&
         facts.url !== null && typeof facts.url === "object" && typeof facts.url.origin === "string",
         "the firing question was asked without the facts that decide it — Fetch §2.2.5's DESTINATION says " +
-        "whether this reply becomes a PROGRAM or a VALUE, the provenance says whose act it is, the reach " +
+        "whether this reply becomes a PROGRAM or a VALUE, the actor says whether the ANALYSED PAGE composed " +
+        "this request or THIS TOOL did, the provenance says what its path is evidence of, the reach " +
         "grade says whose act the DOCUMENT it was made from was, the witness " +
         "mark says whether the address may rest on a value this engine chose, the credential flag says " +
         "whether the person's session pays, and the parsed URL is what the address-borne authority is read " +
@@ -1831,6 +1854,7 @@ function safeFetchFiringRefusal(facts) {
         "make and a caller that parsed one for itself would be the second copy of that rule");
   return _firingRefusal({ url: new URL(String(facts.url)), destination: facts.destination,
                           provenance: facts.provenance, pinned: facts.pinned, docReach: facts.docReach,
+                          actor: facts.actor,
                           credentialed: !!facts.credentialed, headers: facts.headers });
 }
 /* THE VECTOR FOR A HYPOTHETICAL REQUEST, FOR A SURFACE THAT MUST SHOW A PERSON WHAT THEY ARE DECIDING
@@ -1841,8 +1865,17 @@ function safeFetchSignalVector(facts) {
   CHECK(facts !== null && typeof facts === "object" && typeof facts.url === "string",
         "the signal vector was asked for without an absolute URL — `url-authority` is read off the parsed " +
         "address, so a caller with none would be shown a row about nothing");
+  /* AND `docReach` TRAVELS, WHICH IT DID NOT — A FIELD DROPPED ON A FORWARDING FUNCTION, WHICH IS THE
+     DEFECT THIS WHOLE SURFACE HAS NOW HAD TWICE IN TWO FILES. `_signalVector` reads `f.docReach` for the
+     `doc-reach` row, this forward did not carry it, and the only caller states one — so that row computed
+     `undefined`, which is outside the value space it declares, and `_signalVector`'s own DCHECK fired on it
+     in every dev build that opened this panel. The surface's fault was the loud half; the quiet half is
+     that in release the person's control rendered a row about nothing while reading as a row about their
+     request. It is the same shape as the `permit` field that the popup relay dropped, one function over:
+     a name WRITTEN by a caller and READ nowhere on the path between. */
   return _signalVector({ url: new URL(String(facts.url)), destination: facts.destination,
-                         provenance: facts.provenance, pinned: facts.pinned,
+                         provenance: facts.provenance, pinned: facts.pinned, docReach: facts.docReach,
+                         actor: facts.actor,
                          credentialed: !!facts.credentialed, headers: facts.headers });
 }
 function _corbDeniesScript(mime, nosniff, sniff, sameOrigin) {
@@ -2316,6 +2349,13 @@ async function safeFetch(url, opts) {
      the request is judged twice, before the wire and again after a redirect, and a fact re-read at each gate
      is a fact the two gates can disagree about. */
   var docReach = _docReachOf(opts);
+  /* AND WHOSE ACT THIS REQUEST IS, AT THE SAME DOOR AND FOR THE SAME REASONS — see `_actorOf`. It is read
+     HERE rather than at the gate for the reason every fact above it is: the request is judged twice, before
+     the wire and again after a redirect, and a fact re-read at each gate is a fact the two gates can
+     disagree about. Reading it here is also what makes the `CHECK` fire on EVERY path through this
+     function rather than only on the ones that reach the firing question — an assert whose coverage is an
+     accident of which arm a request took is one that will be missing exactly where a caller forgot. */
+  var actor = _actorOf(opts);
   /* AND WHETHER THE PERSON'S SESSION PAYS FOR IT, DERIVED ONCE AT THE SAME DOOR — see `_credentialedOf`,
      which is also where the one option this file reads from the UNTRUSTED zone is refused a place on a
      cookie-bearing request. It was derived below, beside the deny list; one derivation is what stops the
@@ -2441,7 +2481,7 @@ async function safeFetch(url, opts) {
      the flow fires the day `safeFetchWiden` is told about this origin, which a flow that has already run its
      failure path cannot do. */
   var _ptok = _firingRefusal({ url: parsed, destination: destination, provenance: provenance,
-                               pinned: pinnedMark, docReach: docReach,
+                               pinned: pinnedMark, docReach: docReach, actor: actor,
                                credentialed: credentialed, headers: opts.headers });
   if (_ptok)
     return _refused("decline", "blocked-signal:" + _ptok, [parsed.href], {});
@@ -2648,7 +2688,7 @@ async function safeFetch(url, opts) {
      onto a presigned or token-bearing address is exactly the case `url-authority` exists to see, and reading
      the requested address here would answer that row about a URL the bytes did not come from. */
   var _rptok = _firingRefusal({ url: _finalUrl, destination: destination, provenance: provenance,
-                                pinned: pinnedMark, docReach: docReach,
+                                pinned: pinnedMark, docReach: docReach, actor: actor,
                                 credentialed: credentialed, headers: opts.headers });
   if (_rptok)
     return _refused("decline", "blocked-signal-redirect:" + _rptok,

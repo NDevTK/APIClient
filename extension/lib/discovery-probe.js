@@ -194,6 +194,12 @@ function _chokepointGetFn(tab, who) {
          `path_forced`, so a request this zone states as DERIVED cannot carry one. safe-fetch.js asserts the
          pair rather than trusting it, which is what makes stating it here a claim and not a formality. */
       pinned: "unpinned",
+      /* AND THE ACT IS THIS TOOL'S — the fact that separates this sweep from the analysed page's own
+         `fetch()`, which is identical to it on every other signal the chokepoint reads. `buildDiscoveryUrls`
+         composed this address out of a published well-known path; no line of the page's code asked for it,
+         which is the same sentence `provenance: "derived"` above makes about the PATH and this one makes
+         about the CALLER. See safe-fetch.js's `_actorOf`. */
+      actor: "tool",
       destination: "",
       headers: headers || {},
     });

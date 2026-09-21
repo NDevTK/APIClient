@@ -1619,9 +1619,16 @@ async function frontierRederive(e) {
        document this entry IS, and the grade it was parked under is the whole of what this zone knows about
        how that document was reached. Reading a different word here would re-fetch a residue under a
        permission nobody granted it, which is the failure `frontierProvenance` exists to make impossible. */
+    /* `tool` — THIS TOOL RE-OPENING A DOCUMENT IT PARKED, and a deliberate answer rather than a default.
+       No analysed page's code asked for this load: the frontier did, rounds or sessions after the document
+       that produced the residue stopped running. The grade beside it is what that residue was parked under
+       and is a different question. It changes no outcome — the witness mark below is `unstated`, so the
+       value arm cannot fire here at any setting — which is exactly why safe-fetch.js's `_actorOf` records
+       that this class of value gets defaulted because nothing tests it. */
     try { r = await self.safeFetch(e.sourceUrl, { pageUrl: e.sourceUrl, pageOrigin: e.origin,
                                                   destination: "document", provenance: frontierProvenance(e),
                                                   docReach: frontierProvenance(e),
+                                                  actor: "tool",
                                                   pinned: "unstated",
                                                   credentials: "include",
                                                   credentialed: navigationCarriesSession(e.sourceUrl, e.origin) }); }
@@ -2283,9 +2290,12 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
     /* AND THE ISSUING DOCUMENT'S REACH GRADE, WHICH IS `fromReach` AND NOT THE JOIN: the chokepoint asks
        about the document this request was made FROM, and for a navigation that is the one that initiated it.
        The join names the document these bytes will BECOME, which does not exist yet. */
+    /* `page` — THE ANALYSED DOCUMENT'S OWN CODE INITIATED THIS NAVIGATION, which is the question this row
+       asks. The provenance beside it says what that code's PATH is evidence of and the two are independent:
+       a page navigates itself on a forced arm as readily as on an observed one. */
     const r = await self.safeFetch(abs, { pageUrl: principalUrl, pageOrigin: principalOrigin,
                                           destination: "document", provenance: provenance,
-                                          docReach: fromReach,
+                                          docReach: fromReach, actor: "page",
                                           /* `unstated` BECAUSE THIS PROVENANCE IS A VARIABLE. A navigation's
                                              word comes from `engine_provenance_of_running_path` by way of a
                                              notice, and a notice is not a park, so no witness mark was ever
@@ -3183,7 +3193,16 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          and not another, a person watching which requests fire sees a frontier that drains for documents
          inside one instance and refuses the identical request made from a top-level document reached the
          same way. */
+      /* AND WHOSE ACT IT IS — `page`, BY THE ONLY CONSTRUCTION THIS FRAME HAS: it exists to answer a park
+         the engine put on its own pending line, and the engine parks on what the analysed document's code
+         does. It is STATED rather than inferred from that sentence, which is the whole of CLAUDE.md
+         §AND-AN-EXEMPTION-SCOPED-BY-WHO-ACTED: a fact about who acted is a value the site that knows types
+         out, and safe-fetch.js asserts it, so this frame being wrong about its own population is loud there
+         rather than a privilege nothing can see. THIS IS THE ROW THE OWNER'S VALUE ARM TURNS ON — with
+         `witness` off the line reading `unpinned`, a data `fetch()` the page made fires here at every
+         origin, and the sweep that is identical to it on every other signal does not. */
       const opts = { pageUrl: msg.sourceUrl, destination, provenance, pinned, credentials,
+                     actor: "page",
                      docReach: msg.provenance, credentialed: false };
       const r = await self.safeFetch(abs, opts);
       /* THE CHOKEPOINT'S RECORD IS FIXED — safe-fetch.js returns {ok,status,statusText,headers,body,urlList}
@@ -3440,9 +3459,16 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       /* AND THE DOCUMENT'S OWN REACH GRADE BESIDE IT, for the reason `fetched` states in full one function
          up: an XHR is a request the page made, so the engine grades it `observed` whatever this zone did to
          reach the page — and the chokepoint's default arm asks both. */
+      /* AND `page` FOR THE ACTOR, WHICH IS TRUE AND IS NOT ENOUGH TO MAKE THIS FIRE. Every request an
+         XMLHttpRequest makes is made by RUNNING THE PAGE'S CODE — the same population as the `fetch()` relay
+         one function up, and the owner's rule does not distinguish them. What keeps this refused is the
+         WITNESS mark above, which is honestly `unstated` because this record's provenance is a variable that
+         can be `forced`; so the arm that admits the page's `fetch()` cannot admit its XHR until
+         `engine_pinned_of_running_path()` puts a real mark on this record. safe-fetch.js carries that as the
+         residual on the arm itself, and this is the site it is about. */
       const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, destination: "",
                                             provenance: q.provenance, pinned: "unstated",
-                                            docReach: msg.provenance,
+                                            docReach: msg.provenance, actor: "page",
                                             credentials: q.credentials, headers: q.headers });
       DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && typeof r.status === "number" &&
              r.headers && typeof r.headers === "object",
@@ -4644,9 +4670,12 @@ async function hostNotice(eng, line) {
        hypothetical answered from fewer facts than the request makes is a permission question about a
        different request. It is `eng.msg.provenance` and NOT the join: this ask is about a request issued BY
        the declaring document, and the join names the document the load would produce. */
+    /* AND `page` FOR THE ACTOR — a route this document's OWN CODE declared, which is the act this ask is
+       about. Stated on the hypothetical because it is stated on the load: a permission question answered
+       from fewer facts than the real request makes is a question about a different request. */
     const _seedRefusal = self.safeFetchFiringRefusal({
       url: f[1], destination: "document", provenance: f[2], pinned: "unstated",
-      docReach: eng.msg.provenance,
+      docReach: eng.msg.provenance, actor: "page",
       credentialed: navigationCarriesSession(f[1], eng.origin), headers: null });
     if (_seedRefusal) {
       console.warn("[bridge] a route declaration for `" + f[1] + "` is refused by this origin's egress " +
@@ -6877,8 +6906,13 @@ self.astDispatch = async function astDispatch(msg) {
          most about, so the row this surface shows as `this request` is the one a person is deciding. It is
          NOT a claim that any document at this origin was reached that way; it is the hardest case, which is
          what a control surface owes somebody about to tick a box. */
+      /* AND `tool` FOR THE ACTOR, FOR THE SAME REASON EVERY OTHER WORD ON THIS PROBE IS THE HARDEST CASE:
+         a request the ANALYSED PAGE made now fires by default wherever its address rests on nothing this
+         engine pinned, so the act a person is actually deciding about at this origin is the one THIS TOOL
+         composed. Showing them the row that is already answered would be a control about a question they do
+         not have. It is not a claim that anything at this origin was composed that way. */
       const _probe = { url: msg.subject + "/", destination: "", provenance: PROVENANCE_FORCED,
-                       pinned: "unstated", docReach: PROVENANCE_FORCED,
+                       pinned: "unstated", docReach: PROVENANCE_FORCED, actor: "tool",
                        credentialed: false, headers: null };
       return { success: true, result: {
         origins: self.safeFetchWidenedOrigins(),
