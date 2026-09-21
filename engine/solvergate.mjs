@@ -142,6 +142,27 @@ function scriptLikeDestinations() {
 }
 const SCRIPT_LIKE = scriptLikeDestinations();
 
+/* THE PENDING LINE'S FIELDS, IN ORDER AND BY NAME — ONE LIST THAT DECIDES BOTH THE ARITY CHECK AND EVERY
+   BINDING. A destructuring with holes binds by COUNTING COMMAS, which is an ORDINAL over a set that GROWS:
+   widen the line and every binding after the new field silently re-points, nothing throws, and the token
+   checks below still pass because they read the fields AHEAD of the insertion. The only thing that moves is
+   the value the reply is keyed on. That is what happened here — the join gained a field ahead of the address,
+   the arity check in `service` was raised to match and the extra hole was never added, so this gate read the
+   CREDENTIALS token as the URL and handed `qjs_provide` a (method, url) pair the frontier had never parked
+   on. Every schedule that reached the provide path aborted, identically, at the engine's own pairing DCHECK:
+   that abort is the ONLY thing that could have said so, since nothing on this side of the boundary knows what
+   a URL looks like. The two sibling drivers took the extra hole in the same commit that widened the line and
+   this one did not, which is the shape rather than the incident: three hand-counted spellings of one grammar,
+   and the one that drifts is the one nobody re-counts.
+   IT IS THE REPAIR THIS FILE ALREADY MADE ONE FUNCTION AWAY, where the renderer entry's operands stopped
+   being two hand-ordered arrays and became a record keyed by the interface's own parameter names — same
+   defect, same silence, same cure. `engine_pending_split` is the C authority this mirrors.
+   WHAT IT MAKES IMPOSSIBLE: the arity check and the bindings are now ONE list, so a field added to the join
+   and not here trips the check LOUDLY, and a field added here and not to the join trips it too. Neither can
+   quietly re-point the address. */
+const PENDING_LINE_FIELDS = ["method", "destination", "initiator", "provenance",
+                             "pinned", "credentials", "url"];
+
 /* THE SCHEDULES, AND EACH ONE IS A TRIPLE RATHER THAN A NAME. Every knob is one the production host already
    has and uses, so none of them is a test hook grown into the engine for this gate's benefit. A schedule
    declares ALL THREE of its policies — when the ENGINE hands the thread back, when the HOST answers what it is
@@ -639,10 +660,11 @@ async function child(docPath, schedName) {
                  : pending;
     for (const line of answer) {
       const t = line.split("\t");
-      if (t.length !== 7 || t.some((x, i) => i !== 1 && x === ""))
+      if (t.length !== PENDING_LINE_FIELDS.length || t.some((x, i) => i !== 1 && x === ""))
         gateFail("a pending line is not " +
-                 "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` — " +
-                 "qjs_pending joins the seven and the reply is delivered against the (method, url) pair, so " +
+                 `\`${PENDING_LINE_FIELDS.map((k) => k.toUpperCase()).join("<TAB>")}\` — ` +
+                 `qjs_pending joins the ${PENDING_LINE_FIELDS.length} and the reply is delivered against ` +
+                 "the (method, url) pair, so " +
                  "a short line makes a token the address. The empty DESTINATION is Fetch §2.2.5's own default " +
                  "and is the one field that may be empty");
       /* THE DESTINATION IS NAMED NOW, AND THE ARGUMENT IT REPLACES IS REWRITTEN RATHER THAN DELETED because a
@@ -658,7 +680,9 @@ async function child(docPath, schedName) {
          Fetch §2.2.5's CREDENTIALS MODE joined the line after the provenance and says WHOSE SESSION PAYS; its
          vocabulary is asserted at the door that DECIDES from it (safe-fetch.js's `_credentialedOf`), which is
          one check for every host rather than a copy here. */
-      const [method, destination, initiator, provenance, , u] = t;
+      /* BY NAME AND NEVER BY POSITION — see PENDING_LINE_FIELDS for what a hole cost here. */
+      const { method, destination, initiator, provenance, url: u } =
+        Object.fromEntries(PENDING_LINE_FIELDS.map((k, i) => [k, t[i]]));
       /* A DOCUMENT WHOSE REPLY IS COMPILED IS REFUSED BY NAME, which is this gate's own idiom for a corpus
          document it cannot serve. It is not a solver finding and must not be reported as one: the refusal
          names the gate, so a reader is sent to the reply policy rather than to the compiler. */
