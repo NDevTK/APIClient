@@ -349,7 +349,10 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     docEntry = {
       status: "found",
       isVirtual: true,
-      grouping: makeGroupingRecord(grouping.rule, grouping.matched, csUrl ? csUrl.href : callSite.url,
+      /* `_addr.href` AND NOT `csUrl.href` — see the read below and lib/callsite-url.js: the `url` object is
+         parsed from a MASKED template, so `url.href` spells a hole's name percent-encoded and the record's
+         own `href` is the address. */
+      grouping: makeGroupingRecord(grouping.rule, grouping.matched, _addr.href || callSite.url,
                                    "lib/learn.js minting a virtual entry for an AST call site, service " +
                                    JSON.stringify(interfaceName)),
       doc: {
@@ -379,6 +382,22 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
   if (!csUrl) return { entry: docEntry, method: null };   // dynamic URL: the service exists, no method to register against
 
   // Method name + collision handling — mirrors learnFromRequest.
+  /* NAMED RESIDUAL — THE METHOD NAME IS STILL DERIVED FROM THE PARSED URL, WHICH IS THE ONE READER OF IT
+     THIS DIFF DID NOT ROUTE.
+       WHAT IS NOT COVERED: calculateMethodMetadata takes a URL OBJECT and reads `urlObj.pathname` and
+         `urlObj.searchParams`, and lib/callsite-url.js now parses a MASKED template — so a hole whose name
+         holds a code point of URL §1.3's path percent-encode set reaches the segment walk in
+         lib/grouping.js percent-encoded (`{script%23id}` where the record's param is named `script#id`).
+         It is no longer TRUNCATED, which is what it was before that mask existed, so the segment COUNT and
+         the endpoint's identity are right and only the spelling of a hole-bearing method name is not.
+       WHAT THE NEXT DIFF BUILDS: the split this function needs anyway — it is asked one question by a real
+         observed request (learnFromRequest, the probe, the rename handler, all of which hand it a genuine
+         URL whose `#` really is a fragment) and a different one by a call-site TEMPLATE, and one signature
+         answering both is why the template arm reads a component that cannot represent it. Give it the PATH
+         as a string beside the object, so the template caller passes `_addr.path` and every other caller
+         passes what it passes today.
+       HOW ITS ABSENCE WOULD SHOW: a learned method key carrying `%` in a `{…}` segment, in the popup's
+         method list, for a service whose endpoint row beside it spells the same hole with the byte. */
   const { methodName: baseMethodName } = calculateMethodMetadata(csUrl, interfaceName);
   const qualifiedName = callSite.method.toLowerCase() + "_" + baseMethodName;
   // Verb-matched probed lookup (see learnFromRequest for the same rule):
@@ -407,7 +426,17 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
   if (!doc.resources.learned.methods[methodName] && !probedMethod) {
     doc.resources.learned.methods[methodName] = {
       id: methodId,
-      path: _decHoles(csUrl.pathname.substring(1)),
+      /* THE PATH lib/callsite-url.js RESOLVED, NOT THE ONE ITS `URL` OBJECT HOLDS. `_decHoles(csUrl.pathname
+         .substring(1))` read the parsed pathname and restored a hole's BRACES, which is all `_decHoles`
+         reverses; the NAME between them is a display shape carrying the page's own bytes, and 172 of the 259
+         code points it may legally hold do not survive `new URL` — `#` and `?` truncated it AND everything
+         after it (`api/{script#id}/z` became `api/{script`), `\` split it across two segments, and SPACE,
+         `"`, `<`, `>`, backtick and every non-ASCII code point came back percent-encoded. The last of those
+         is the silent one: the method's `path` then spells a hole the endpoint's own param is not named by,
+         and lib/popup-form.js's applyPathParams looks its capture up in pathParams and finds nothing, so the
+         reviewer's value never reaches the request and `{a%20b}` goes to the server as a literal. `_addr
+         .path` is that name unmasked; the leading `/` is dropped here as it always was. */
+      path: _addr.path.substring(1),
       httpMethod: callSite.method,
       parameters: {},
       request: null,

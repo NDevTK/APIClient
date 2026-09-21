@@ -284,9 +284,18 @@ function mergeASTResultsIntoVDD(tab, results) {
            name this record does not carry, so the next such projection crashes at the producer instead of
            reading `undefined` for the life of the feature. */
       var _rec = makeEndpointRecord({
-            // new URL().href percent-encodes shape holes ({} -> %7B%7D); decode so the endpoint URL keeps
-            // the canonical `{}` param placeholder the dedup/UI recognize (path is already decoded).
-            url: _addr.originKnown ? _decHoles(_addr.url.href) : callSite.url,
+            /* THE ADDRESS THE PARSER RESOLVED, NOT THE ONE ITS `URL` OBJECT CAN SPELL. This read was
+               `_decHoles(_addr.url.href)` under a comment saying `new URL().href` percent-encodes a hole's
+               braces so the decode restores them — true, and true of the BRACES only. A hole's NAME is a
+               display shape carrying the page's own bytes, and lib/callsite-url.js measured that 172 of the
+               259 code points a name may legally hold do not survive `new URL`: `#` and `?` truncate it, `\`
+               splits it across two segments, and SPACE, `"`, `<`, `>`, backtick and every non-ASCII code
+               point come back percent-encoded. That file masks the name for the parse and unmasks it after,
+               so its `url` object is now parsed from a MASKED template and `url.href` is the one field of it
+               that is no longer the address — `href` on the record beside it is, and it is minted there
+               rather than recomposed here for the reason the banner below gives about a fifth spelling.
+               `_decHoles` goes with it: the decode belongs to the parser that did the encode. */
+            url: _addr.originKnown ? _addr.href : callSite.url,
             method: callSite.method,
             host: _addr.host,
             path: _addr.path,
