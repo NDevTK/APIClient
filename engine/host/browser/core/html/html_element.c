@@ -1265,9 +1265,13 @@ void html_element_install_protos(JSContext *ctx)
         JSValue ta = html_iface_proto(ctx, "HTMLTextAreaElement"), op = html_iface_proto(ctx, "HTMLOptionElement");
         JSValue bt = html_iface_proto(ctx, "HTMLButtonElement");
         html_form_install(ctx, f, in, ta, op, bt);
-        /* §4.10.10's `selected`, on the same prototype and handed it for the same reason — this file owns the
-           table, core/html/html_option.c owns the SELECTEDNESS the member reads and writes. It is not part of
-           html_form_install because it is not a fact about a form: an `option` in a `datalist` has one too. */
+        /* §4.10.10's OWN members — `selected` and `form` — on the same prototype and handed it for the same
+           reason: this file owns the table, core/html/html_option.c owns §4.10.10's algorithms. Neither is part
+           of html_form_install, and for one reason that covers both: §4.10.2 gives an `option` no category, so
+           neither member comes from the row list html_form_install's getters assert a `cat` bit out of.
+           `selected` is not a fact about a form at all — an `option` in a `datalist` has one too — and `form`
+           is a DELEGATION to whatever §4.10.10's own ancestor walk finds, which is a different question from
+           the form owner §4.10.18.3 states for the seven listed elements below. */
         html_option_install_members(ctx, op);
         JS_FreeValue(ctx, f); JS_FreeValue(ctx, in); JS_FreeValue(ctx, ta); JS_FreeValue(ctx, op);
         JS_FreeValue(ctx, bt);

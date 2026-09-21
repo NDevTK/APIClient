@@ -1,5 +1,6 @@
-/* THE `option` ELEMENT'S OWN STATE — HTML §4.10.10 "The option element": its SELECTEDNESS, its DIRTINESS, the
- * `selected` IDL attribute those two decide, and Web IDL §3.7.2 "Legacy factory functions"'s `Option`.
+/* HTML §4.10.10 "The option element" — its SELECTEDNESS, its DIRTINESS, the `selected` IDL attribute those two
+ * decide, the `form` IDL attribute §4.10.10's own ancestor walk decides, and Web IDL §3.7.2 "Legacy factory
+ * functions"'s `Option`.
  *
  * ONE PROBLEM: WHAT AN OPTION IS SELECTED. §4.10.10 states it as two booleans that are not the `selected`
  * CONTENT ATTRIBUTE and are not each other:
@@ -89,11 +90,18 @@ void html_option_ask_for_a_reset(JSContext *ctx, lxb_dom_element_t *opt);
    HTMLOptionElement is a row of and the list of global names this build carries. */
 void html_option_declare(JSContext *ctx);
 
-/* §4.10.10's `attribute boolean selected` on THIS REALM's HTMLOptionElement.prototype. Handed the prototype for
-   the reason html_form_install is: core/html/html_element.c owns the table, this file owns the state the member
-   reads. §4.10.10's `defaultSelected` is NOT here — it is a plain `[CEReactions, Reflect="selected"]` mirror of
-   the content attribute and lives in that file's reflection table, which is exactly the distinction this
-   component exists to keep: one member is the attribute and the other is the state. */
+/* §4.10.10's `attribute boolean selected` and `readonly attribute HTMLFormElement? form` on THIS REALM's
+   HTMLOptionElement.prototype. Handed the prototype for the reason html_form_install is: core/html/html_element.c
+   owns the table, this file owns §4.10.10's algorithms. §4.10.10's `defaultSelected` is NOT here — it is a plain
+   `[CEReactions, Reflect="selected"]` mirror of the content attribute and lives in that file's reflection table,
+   which is exactly the distinction this component exists to keep: one member is the attribute and the other is
+   the state.
+   `form` IS HERE AND NOT IN core/html/html_form.c because the algorithm it runs is §4.10.10's, not §4.10.18.3's.
+   HTML §4.10.10 "The option element" states the walk — "To get the nearest ancestor select given an Element
+   element" — and an `option` has no form owner of its own for that other file's getter to return. The standard's
+   name is repeated in front of its own sentence rather than left to the nearest number above it, which here
+   would be §4.10.18.3 and would anchor the quotation to a section that does not contain it. What crosses the
+   boundary is one call in the other direction — html_form_owner_of, asked of the SELECT the walk found. */
 void html_option_install_members(JSContext *ctx, JSValueConst option_proto);
 
 /* Web IDL §3.7.2's legacy factory function object for `Option`, on THIS REALM's global. `proto` is this realm's

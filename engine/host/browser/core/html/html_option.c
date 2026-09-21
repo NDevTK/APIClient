@@ -141,23 +141,104 @@ void html_option_ask_for_a_reset(JSContext *ctx, lxb_dom_element_t *opt)
     if (select) html_form_selectedness_setting_algorithm(ctx, select);
 }
 
-/* ---- §4.10.10's `selected` IDL attribute ------------------------------------------------------------------ */
-
-static lxb_dom_element_t *option_receiver(JSContext *ctx, JSValueConst this_val)
+/* Web IDL §3.7.6 "Attributes"' BRAND CHECK — the attribute getter's own steps, "If jsValue does not implement
+   target, then:" … "Otherwise, throw a TypeError". A TypeError and NEVER a DCHECK: the receiver is whatever
+   the page handed `HTMLOptionElement.prototype.form.call(x)`, so an assert there is an engine abort a page can
+   reach. THE MEMBER NAME IS AN ARGUMENT because this check now serves more than one of them, and a message
+   that named `selected` at a `form` read would send its reader to the wrong algorithm. */
+static lxb_dom_element_t *option_receiver(JSContext *ctx, JSValueConst this_val, const char *member)
 {
     lxb_dom_node_t *n = node_of(this_val);
 
     if (opt_tag_is(n, "option")) return lxb_dom_interface_element(n);
-    JS_ThrowTypeError(ctx, "HTMLOptionElement.selected was reached on something that is not an option");
+    JS_ThrowTypeError(ctx, "HTMLOptionElement.%s was reached on something that is not an option", member);
     return NULL;
 }
+
+/* ---- §4.10.10's `form` IDL attribute ---------------------------------------------------------------------- */
+
+/* HTML §4.10.10 "The option element"'s OWN ANCESTOR WALK: "To get the nearest ancestor select given an Element
+   element, run these steps. They return a select or null."
+     1. "Let ancestorOptgroup be null."
+     2. "For each ancestor of element's ancestors, in reverse tree order:"
+        1. "If ancestor is a datalist, hr, or option element, then return null."
+        2. "If ancestor is an optgroup element:"
+           1. "If ancestorOptgroup is not null, then return null."
+           2. "Set ancestorOptgroup to ancestor."
+        3. "If ancestor is a select, then return ancestor."
+     3. "Return null."
+   REVERSE TREE ORDER OVER ANCESTORS IS NEAREST-FIRST, which is the whole of what the bail-outs mean: they are
+   about what stands BETWEEN the element and its select, so a root-first walk would answer the select for
+   `<select><datalist><option>` and make every step under it dead.
+
+   WHY THIS IS NOT html_form_select_of_option, AND THE REASON IS NOT THE ONE THE RESIDUAL THAT ORDERED IT GAVE.
+   That residual said the two `disagree for exactly the options that sit under one of those` bail-out
+   ancestors — ITS OWN WORDS, backticked here because they are this tree's prose and not a standard's. THEY DO
+   NOT DISAGREE: §4.10.7's list of options skips the DESCENDANTS of a `select`, `hr`, `option`, `datalist` or
+   nested `optgroup`, and a node is skipped over only when it is an ancestor of the option — so `reached by the
+   descent from S` and `no bail-out ancestor strictly between the option and S` are the same condition, the
+   select arm being vacuous because S is the first select ancestor. Both answer NULL for every one of the named
+   shapes, and the equality holds for every tree.
+   THE REAL REASONS ARE THREE, AND EACH OUTLIVES THAT COINCIDENCE:
+     - It is a coincidence. The two skip lists are stated in two sections over two different concepts — one is
+       MEMBERSHIP of a select's list of options, the other is a walk "given an Element" with three call sites in
+       the standard — and nothing makes them move together. A shared predicate would be §A-PREDICATE-THAT-
+       ANSWERS-TWO-QUESTIONS exactly: agreeing only by a fact stated in another function.
+     - The two IMPLEMENTATIONS here already disagree. This walk asks the NAMESPACE (opt_tag_is), and
+       html_form.c's list-of-options descent does not (its tag_is is local-name only), so a foreign-namespace
+       element whose local name is `datalist` between a select and an option empties that select's list of
+       options while leaving this walk's answer the select — and this walk is the one the standard agrees with.
+     - It costs a subtree. select_of_option builds the whole list of options as a JS array, minting a wrapper
+       per option, to answer what the standard answers with a parent loop and no allocation. */
+static lxb_dom_node_t *option_nearest_ancestor_select(const lxb_dom_node_t *element)
+{
+    lxb_dom_node_t *ancestor;
+    const lxb_dom_node_t *ancestor_optgroup = NULL;                                /* step 1 */
+
+    if (!element) return NULL;
+    for (ancestor = element->parent; ancestor; ancestor = ancestor->parent) {      /* step 2 */
+        if (opt_tag_is(ancestor, "datalist") || opt_tag_is(ancestor, "hr") ||
+            opt_tag_is(ancestor, "option"))
+            return NULL;                                                           /* step 2.1 */
+        if (opt_tag_is(ancestor, "optgroup")) {                                    /* step 2.2 */
+            if (ancestor_optgroup != NULL) return NULL;                            /* step 2.2.1 */
+            ancestor_optgroup = ancestor;                                          /* step 2.2.2 */
+        }
+        if (opt_tag_is(ancestor, "select")) return ancestor;                       /* step 2.3 */
+    }
+    return NULL;                                                                   /* step 3 */
+}
+
+/* HTML §4.10.10: "The form getter steps are:" — "Let select be this's nearest ancestor select. If select is
+   null, then return null. Return select's form owner."
+   STEP 3 IS THE SELECT'S FORM OWNER AND NOT THE OPTION'S. An `option` is not a form-associated element and has
+   no form owner of its own, which is why this member delegates rather than reading a slot: §4.10.18.3's
+   sentence is about LISTED form-associated elements, and answering an option out of html_form_owner_of's
+   RESET-THE-FORM-OWNER steps would run §4.10.18.3 step 4's `form` content attribute lookup on an element whose
+   `form` attribute the standard never gives meaning to. */
+static JSValue js_option_form(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_node_t *select;
+    JSValue select_wrap, owner;
+
+    (void)magic;
+    if (!option_receiver(ctx, this_val, "form")) return JS_EXCEPTION;
+    select = option_nearest_ancestor_select(node_of(this_val));                    /* step 1 */
+    if (select == NULL) return JS_NULL;                                            /* step 2 */
+    select_wrap = node_wrap(ctx, select);
+    owner = html_form_owner_of(ctx, select_wrap);                                  /* step 3 */
+    JS_FreeValue(ctx, select_wrap);
+    return owner;
+}
+
+/* ---- §4.10.10's `selected` IDL attribute ------------------------------------------------------------------ */
 
 /* "The selected IDL attribute, on getting, must return true if the element's selectedness is true, and false
    otherwise." The reset runs first — see html_option.h for why that is this engine's spelling of §4.10.7's own
    invocation points rather than a narrowing of them. */
 static JSValue js_option_get_selected(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    lxb_dom_element_t *el = option_receiver(ctx, this_val);
+    lxb_dom_element_t *el = option_receiver(ctx, this_val, "selected");
 
     (void)magic;
     if (!el) return JS_EXCEPTION;
@@ -171,7 +252,7 @@ static JSValue js_option_get_selected(JSContext *ctx, JSValueConst this_val, int
    would be run against the state the assignment replaced. */
 static JSValue js_option_set_selected(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    lxb_dom_element_t *el = option_receiver(ctx, this_val);
+    lxb_dom_element_t *el = option_receiver(ctx, this_val, "selected");
 
     (void)magic;
     if (!el) return JS_EXCEPTION;
@@ -333,6 +414,9 @@ void html_option_install_members(JSContext *ctx, JSValueConst option_proto)
     DCHECK(JS_IsObject(option_proto),
            "§4.10.10's members were installed with no HTMLOptionElement.prototype");
     idl_install_accessor(ctx, option_proto, "selected", js_option_get_selected, 0, g_id_set_selected);
+    /* `form` takes NO setter id — `readonly attribute HTMLFormElement? form`, and its declaration is the whole
+       of what makes an assignment to it silent in sloppy mode and a TypeError in strict. */
+    idl_install_accessor(ctx, option_proto, "form", js_option_form, 0, -1);
 }
 
 void html_option_install_global(JSContext *ctx, JSValueConst global, JSValueConst proto)

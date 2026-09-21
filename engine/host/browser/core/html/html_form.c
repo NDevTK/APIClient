@@ -2246,29 +2246,25 @@ static bool form_control_receiver(JSContext *ctx, JSValueConst this_val, int i, 
    form-associated custom elements have a form IDL attribute, which, on getting, must return the element's form
    owner, or null if there isn't one." ONE sentence for all seven, which is why there is one getter: the member
    is declared seven times and its steps are stated once.
-   NAMED RESIDUAL — `form` is ALSO declared on HTMLLegendElement and HTMLOptionElement, and those two are NOT
-   covered here because neither is a listed form-associated element and neither HAS a form owner: each
-   delegates to a different element's, by a different algorithm. WHAT THE NEXT DIFF BUILDS, per section:
-     HTML §4.10.10 "The option element" — "The form getter steps are: Let select be this's nearest ancestor
-     select. If select is null, then return null. Return select's form owner." NOTE THE WALK: that is the
-     NEAREST ANCESTOR select, which is NOT html_form_select_of_option's question — that one answers which
-     select's LIST OF OPTIONS holds the option, and §4.10.7's walk stops descending at a nested `optgroup`,
-     `datalist`, `hr` and `option`, so the two disagree for exactly the options that sit under one of those.
-     Reaching for the exported helper because it is there is how this member gets built wrong. §4.10.10 states
-     its own walk ("To get the nearest ancestor select given an Element element"), which bails to null on a
-     `datalist`, `hr` or `option` ancestor and on a SECOND `optgroup`, so it is that walk and not a loop to the
-     first `select` found.
-     HTML §4.10.16 "The legend element" — "If the legend has a fieldset element as its parent, then the form
-     IDL attribute must return the same value as the form IDL attribute on that fieldset element. Otherwise, it
-     must return null." The PARENT, not an ancestor — and it delegates to the FIELDSET'S member, which is
-     js_form_control_form below, so a legend under a fieldset with no form owner answers null for a different
-     reason than a legend under a `div` does.
-     §4.10.4's label is DONE and its clause is gone with it: the forward direction of the labeled-control
-     relation is form_label_control above, and both of that section's members read it.
-   HOW ITS ABSENCE SHOWS: reading `form` on a `legend` or an `option` answers `undefined`, which is not a value
-   the declaration `readonly attribute HTMLFormElement? form` admits at all — so `'form' in el` is false on
-   those two and true on the seven below and on a `label`, observable from any page without knowing what the
-   document contains. */
+   NAMED RESIDUAL — `form` is ALSO declared on HTMLLegendElement, and it is NOT covered here because a `legend`
+   is not a listed form-associated element and has no form owner: it DELEGATES.
+   WHAT IS NOT COVERED: HTML §4.10.16 "The legend element" — "If the legend has a fieldset element as its
+   parent, then the form IDL attribute must return the same value as the form IDL attribute on that fieldset
+   element. Otherwise, it must return null." The PARENT, not an ancestor.
+   WHAT THE NEXT DIFF BUILDS: that member, here, delegating to THIS getter with FC_FIELDSET — "the same value
+   as the form IDL attribute on that fieldset element" is this function and not html_form_owner_of, which is
+   the difference between running §4.10.18.3's sentence and running the steps that quote it.
+   HOW ITS ABSENCE SHOWS: `'form' in el` on a `legend` answers false where it answers true on the seven below,
+   on a `label` and on an `option` — observable from any page without knowing what the document contains, since
+   `readonly attribute HTMLFormElement? form` admits no `undefined`.
+   §4.10.4's label and §4.10.10's option are DONE and their clauses are gone with them: the label's forward
+   labeled-control relation is form_label_control above, and the option's walk and getter are in
+   core/html/html_option.c, which owns §4.10.10. THAT CLAUSE'S STATED REASON FOR NOT SHARING
+   html_form_select_of_option WAS WRONG and is recorded at the walk it sent its reader to build: it said the
+   two `disagree for exactly the options that sit under one of those` bail-out ancestors, and they agree for
+   every tree — §4.10.7's descent skips the DESCENDANTS of exactly those elements, so `reached by the descent`
+   and `no bail-out ancestor between` are one condition. The remedy was right and the reason was not, which is
+   why the reason is written down where the next reader of that walk will meet it. */
 static JSValue js_form_control_form(JSContext *ctx, JSValueConst this_val, int magic)
 {
     if (!form_control_receiver(ctx, this_val, magic, "form")) return JS_EXCEPTION;
