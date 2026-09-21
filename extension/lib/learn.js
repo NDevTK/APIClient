@@ -281,9 +281,17 @@ function astHeaderRecord(headers) {
 /* WHAT `learnFromAstCallSite` HANDS BACK, AS TWO POSITIVE STATEMENTS RATHER THAN A NULLABLE ONE.
    `entry` is the service (discovery doc) the call site was filed under, and `method` is the method record
    the call site's values were merged into — the object holding this endpoint's parameters, each with its
-   `location` and its `_astValidValues`. `method: null` is a STATEMENT: the URL was dynamic, so a service
-   exists but no method could be registered against it; `entry: null` says the site is not a learnable
-   endpoint at all (an unreached @T candidate, or inline content).
+   `location` and its `_astValidValues`. `entry: null` says the site is not a learnable endpoint at all (an
+   unreached @T candidate, or inline content), and it comes with `method: null` because there is nothing to
+   register a method against.
+   THE TWO ARE NOW ALL-OR-NOTHING, AND THE HALF-ANSWER THAT USED TO EXIST IS THE DEFECT THIS FUNCTION WAS
+   REPAIRED FOR. `method: null` beside a live `entry` was a STATEMENT — "the URL was dynamic, so a service
+   exists but no method could be registered against it" — and what it cost is recorded at the arm that used
+   to produce it: every parameter the forced execution computed for that address went with the method, on a
+   population lib/merge.js calls most of a real corpus. An address whose origin is a shape names its method
+   off the path exactly as any other does, so the state has no producer left and lib/merge.js asserts that
+   it has none rather than this sentence promising it. A reader who finds a null method beside an entry has
+   found that repair undone, not a case this contract allows for.
 
    It returns the method because the caller PERSISTS its path-param examples onto the flat endpoint record,
    and the caller must not have to find the method again: re-deriving it from (verb, path, origin) would be
@@ -379,7 +387,31 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
   const doc = docEntry.doc;
   if (!doc.resources.learned) doc.resources.learned = { methods: strangerKeyedMap() };
 
-  if (!csUrl) return { entry: docEntry, method: null };   // dynamic URL: the service exists, no method to register against
+  /* AN UNDETERMINED ORIGIN REGISTERS A METHOD LIKE ANY OTHER ADDRESS, AND THE EARLY RETURN THAT STOOD HERE IS
+     WHY THE PARAMETER HALF OF THIS RECORD WAS EMPTY ON A REAL CORPUS.
+     It read `if (!csUrl) return { entry: docEntry, method: null };` — the service exists, no method to
+     register against — and everything this function learns about a call site's PARAMETERS happens below it:
+     the `for (const p of callSite.params)` walk is the ONLY reader of that array in either realm, so a call
+     site whose origin is a shape had its braced path segments, its query pairs, its `validValues`, and all
+     four narrowed domains dropped between the engine and the moat, with nothing anywhere to say they went.
+     lib/merge.js's DCHECK one hop up asserts `params` is PRESENT on every record and then, on this arm,
+     nothing ever read it — §A-FIELD-A-CONSUMER-DEFAULTS' write-with-no-reader, conditional on a population
+     rather than on a name, which is why no grep for a missing field could find it.
+     THE ENDPOINT HALF WAS ALREADY REPAIRED AND THE PARAMETER HALF WAS NOT, WHICH IS THE ASYMMETRY THAT MADE
+     IT INVISIBLE. lib/merge.js registers the flat endpoint for exactly this arm — its own account of that
+     repair says what stood there dropped "EVERY call site whose address begins with a shape … which on a
+     real corpus is most of them" — so the address APPEARED on the surface, correctly, carrying `source:
+     "ast_shape_origin"`, while the parameters of that same address appeared nowhere. A reviewer reading a
+     populated endpoint list beside an empty parameter list reads it as the forced execution having learned
+     no values, which is a finding about the SOLVER, and it was a finding about this line.
+     WHY IT IS A SHAPE RATHER THAN A FAILURE. lib/callsite-url.js answers `originKnown:false` only where a
+     hole stands in the SCHEME/HOST/PORT region (URL §4.7 Origin is that tuple), which is the ordinary
+     spelling of a bundle that computes its own base — `fetch(cfg.apiBase + "/v1/users/" + id)`. §@H makes a
+     domain-annotated shape a first-class output, so the origin being a shape is a POSITIVE statement about
+     the page and never a reason to drop what the run computed about the rest of the address.
+     WHAT IS STILL ANSWERED BY `csUrl` AND WHAT IS NOT is decided per read below rather than by one gate:
+     the method NAME comes from the path either way, the ORIGIN is stated as absent, and the concrete-record
+     reconcile is skipped because it matches BY HOSTNAME and there is no hostname to match on. */
 
   // Method name + collision handling — mirrors learnFromRequest.
   /* NAMED RESIDUAL — THE METHOD NAME IS STILL DERIVED FROM THE PARSED URL, WHICH IS THE ONE READER OF IT
@@ -390,15 +422,25 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
          lib/grouping.js percent-encoded (`{script%23id}` where the record's param is named `script#id`).
          It is no longer TRUNCATED, which is what it was before that mask existed, so the segment COUNT and
          the endpoint's identity are right and only the spelling of a hole-bearing method name is not.
-       WHAT THE NEXT DIFF BUILDS: the split this function needs anyway — it is asked one question by a real
-         observed request (learnFromRequest, the probe, the rename handler, all of which hand it a genuine
-         URL whose `#` really is a fragment) and a different one by a call-site TEMPLATE, and one signature
-         answering both is why the template arm reads a component that cannot represent it. Give it the PATH
-         as a string beside the object, so the template caller passes `_addr.path` and every other caller
-         passes what it passes today.
+       WHAT THE NEXT DIFF BUILDS: THE PARAMETER NOW EXISTS AND THE ROUTING IS WHAT IS LEFT, which is a
+         SMALLER clause than the one that stood here and is the part this diff did not do. That clause asked
+         for "the PATH as a string beside the object, so the template caller passes `_addr.path`", and
+         `calculateMethodMetadata`'s fourth argument is exactly that — added for the shape-origin arm below,
+         which has no URL object to read at all. It is IGNORED where a URL object is present, so this literal
+         arm still reads `urlObj.pathname` and still spells a hole name percent-encoded.
+         THE REASON IT IS NOT ROUTED HERE IS NOT TIDINESS: a method name is this record's KEY, so re-spelling
+         one renames an endpoint, and every record already stored under the old name is then unreachable from
+         the popup's method list. That is a behaviour change owed its own diff — one that says what happens to
+         the stored records — and folding it into a change about a DIFFERENT population (addresses with no
+         origin, which have no stored records to rename) would have hidden it inside a diff nobody would
+         think to look in. So the next diff passes `_addr.path` on this line too and states the rename.
        HOW ITS ABSENCE WOULD SHOW: a learned method key carrying `%` in a `{…}` segment, in the popup's
          method list, for a service whose endpoint row beside it spells the same hole with the byte. */
-  const { methodName: baseMethodName } = calculateMethodMetadata(csUrl, interfaceName);
+  /* `_addr.path` IS READ ONLY WHERE THERE IS NO URL OBJECT — see that parameter's own contract in
+     lib/grouping.js. On this arm it is the address's path as lib/callsite-url.js resolved it, which for a
+     shape origin is the literal remainder beside the shape and carries no query (endpoint.c cuts a call
+     site's address at the first `?`, so neither arm's template has one). */
+  const { methodName: baseMethodName } = calculateMethodMetadata(csUrl, interfaceName, undefined, _addr.path);
   const qualifiedName = callSite.method.toLowerCase() + "_" + baseMethodName;
   // Verb-matched probed lookup (see learnFromRequest for the same rule):
   // a probed POST entry must not absorb GET traffic.
@@ -440,7 +482,16 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
       httpMethod: callSite.method,
       parameters: {},
       request: null,
-      origin: csUrl.origin,
+      /* `null` IS THE POSITIVE STATEMENT THAT THE CODE DETERMINED NO ORIGIN, AND IT IS NOT A HOLE A READER
+         FILLS. Both readers of this field — the templated reconcile below and `_matchTemplatedMethodAcross-
+         Host` — already test `_cm.origin && URL.canParse(_cm.origin)` before using it, so a stated absence
+         takes the same arm as an origin they cannot parse and neither invents a host. Writing the SHAPE here
+         instead would be the alternative and is wrong in the direction this file keeps fixing: `origin` names
+         a URL §4.7 tuple, a shape is not one, and a later reader that did not happen to guard would compose
+         a request against an address the page never computed. The shape is already on this method's own
+         service (`rootUrl`/`baseUrl` above) and on the flat endpoint record's `host`, which are the two
+         fields that are ABOUT it. */
+      origin: csUrl ? csUrl.origin : null,
     };
   }
   const m = probedMethod || doc.resources.learned.methods[methodName];
@@ -448,7 +499,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
          "learnFromAstCallSite reached its param merge with no method — the block above either found the " +
          "verb-matched probed entry or created the learned one, so an absent method here means that " +
          "get-or-create stopped covering a case and every value this call site computed has nowhere to land");
-  if (!m.origin) m.origin = csUrl.origin;
+  if (!m.origin && csUrl) m.origin = csUrl.origin;
   /* THE BUNDLE-ORIGIN FACT IS STAMPED BY THE FUNCTION THAT LEARNED IT, NOT BY THE CREATE THAT HAPPENED FIRST.
      `_astInferred` was written inside the object literal above, so it existed only when the AST path was the
      first producer to name this method. It is READ as "the engine found this call site in the shipped
@@ -843,7 +894,16 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
   // method's origin host == this host, and the dup must be concrete at >=1
   // hole (else it IS this template, not a distinct concrete record) — so
   // distinct endpoints are never merged.
-  if (typeof m.path === "string" && m.path.indexOf("{") >= 0) {
+  /* `csUrl &&` IS A PRECONDITION OF THIS RECONCILE AND NOT A GUARD BOLTED ONTO IT. The match below is keyed
+     on HOSTNAME — its own comment states "matched method's origin host == this host" — and an address whose
+     origin is a shape has no hostname for a concrete live record to equal. So there is nothing this walk
+     could correctly fold for such a method: a live request is a CONCRETE address, and the template it would
+     be folded into names an origin the run never determined, so matching them on path alone would claim that
+     a request some host served is an observation of an address that might be a different host entirely.
+     Skipping is the answer the walk already gives for every record whose origin does not parse (`_cm.origin
+     && URL.canParse(_cm.origin)` below), reached one level earlier because here it is THIS side that has
+     none. */
+  if (csUrl && typeof m.path === "string" && m.path.indexOf("{") >= 0) {
     const _tSegs = m.path.split("/").filter(Boolean);
     const _hostname = csUrl.hostname;
     for (const [, _de] of tab.discoveryDocs) {

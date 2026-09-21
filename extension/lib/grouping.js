@@ -47,7 +47,31 @@ function extractInterfaceName(urlObj) {
 //  name-matching. The engine marks genuinely-dynamic segments as {shape} holes from real data-flow; a concrete
 //  segment stays concrete. RUN, DON'T MATCH.)
 
-function calculateMethodMetadata(urlObj, interfaceName, hint) {
+/* `pathNoUrl` IS THE PATH TO READ WHEN THERE IS NO URL OBJECT, AND IT IS THE ONLY WAY TO ASK THIS QUESTION
+   ABOUT AN ADDRESS WHOSE ORIGIN THE CODE NEVER DETERMINED. lib/callsite-url.js answers `originKnown:false`
+   with `url:null` for a call site whose SCHEME/HOST/PORT region holds a hole (`{cfg.apiBase}/v1/users/{id}`),
+   which is a positive statement about the page and not a malformed address — and every read below is of a URL
+   component, so without this the one caller that holds such an address cannot ask at all. That is what the
+   early return in lib/learn.js used to do instead, and it took the whole parameter surface of those call
+   sites with it.
+   IT IS IGNORED WHERE `urlObj` IS PRESENT, WHICH IS DELIBERATE AND IS NOT THIS PARAMETER BEING HALF-ROUTED.
+   The literal arm reads `urlObj.pathname`, which lib/callsite-url.js parses from a MASKED template, so a hole
+   NAME comes back percent-encoded there — a real defect, with its own named residual at that caller, whose
+   repair CHANGES EXISTING METHOD NAMES. A method name is a record's KEY, so re-spelling one is a behaviour
+   change owed its own diff and its own reasoning about the records already stored under the old name; folding
+   it in here would hide it inside a change about a different population. So this arm is byte-identical to
+   what it answered before for every caller that has a URL.
+   A HOSTNAME IS NOT ASKED FOR BESIDE IT, and the reason is that there is nothing for one to do: `startIdx`
+   below strips an interface PREFIX from the path, and it fires only where `interfaceName` holds a `/`, which
+   `classifyInterface` never writes — it answers the bare hostname, and the prefix clustering that once wrote
+   more is deleted. On the no-URL arm `interfaceName` is the origin SHAPE and the path is the remainder beside
+   it, so no part of the path is interface prefix and `startIdx` is 0, which is what the guarded read yields. */
+function calculateMethodMetadata(urlObj, interfaceName, hint, pathNoUrl) {
+  DCHECK(!!urlObj || typeof pathNoUrl === "string",
+         "calculateMethodMetadata was given neither a URL object nor a path string — every answer below is " +
+         "read off one or the other, so a caller holding an address whose origin is a shape must hand over " +
+         "lib/callsite-url.js's resolved `path` or this returns a method name derived from nothing");
+  const pathname = urlObj ? urlObj.pathname : pathNoUrl;
   // Explicit hint (e.g. GraphQL operationName) takes precedence over URL.
   // A GraphQL endpoint at /svc/shreddit/graphql serves dozens of distinct
   // operations (GetUser, CreatePost, …). Without the hint every op would
@@ -60,8 +84,14 @@ function calculateMethodMetadata(urlObj, interfaceName, hint) {
     };
   }
   // batchexecute: use first rpcid from URL param (individual calls registered by learnFromRequest)
-  if (urlObj.pathname.includes("batchexecute")) {
-    const rpcids = urlObj.searchParams.get("rpcids") || "batch";
+  if (pathname.includes("batchexecute")) {
+    /* THE QUERY IS ASKED OF THE URL OBJECT OR OF NOBODY, and on the no-URL arm there is nobody BY
+       CONSTRUCTION rather than by omission: lib/callsite-url.js's header records that endpoint.c builds a
+       call site's address cut at the first `?` — "the query is not in this string, it is in `params[]` under
+       location query" — so a template carries no query on EITHER arm and this read has always answered empty
+       for a call site. `"batch"` is therefore the same answer the URL arm already gives for one, and it is
+       reached here without asking a null object for a component it does not have. */
+    const rpcids = (urlObj ? urlObj.searchParams.get("rpcids") : null) || "batch";
     const primaryRpcId = rpcids.split(",")[0].trim();
     return {
       methodName: primaryRpcId,
@@ -69,16 +99,16 @@ function calculateMethodMetadata(urlObj, interfaceName, hint) {
     };
   }
 
-  const segments = urlObj.pathname.split("/").filter(Boolean).map(_decHoles);
+  const segments = pathname.split("/").filter(Boolean).map(_decHoles);
   const interfaceParts = interfaceName.split("/");
 
   // Method segments are everything after the interface prefix
   // If interface is "example.com/api/v1" and path is "/api/v1/users/get"
   // startIdx should skip "api" and "v1".
 
-  const hostname = urlObj.hostname;
+  const hostname = urlObj ? urlObj.hostname : null;
   let startIdx = 0;
-  if (interfaceName.startsWith(hostname)) {
+  if (hostname !== null && interfaceName.startsWith(hostname)) {
     startIdx = interfaceParts.length - 1;
   }
 
@@ -117,7 +147,7 @@ function calculateMethodMetadata(urlObj, interfaceName, hint) {
   let methodName = methodSegments.join("_") || "root";
 
   // If it's a gRPC-style path, use the actual method name
-  if (urlObj.pathname.includes("$rpc")) {
+  if (pathname.includes("$rpc")) {
     methodName = segments[segments.length - 1];
   }
 

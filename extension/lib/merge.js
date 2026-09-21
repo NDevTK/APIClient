@@ -20,7 +20,16 @@ function _astPathParamPool(method, poolField) {
          "pools — the offerable/forced split is spelled as those two field names (lib/endpoint-record.js's " +
          "`provenanceOffersExample` states why it is a name and not a grade), so a third one reads a field " +
          "the method record does not have and every hole would project as empty");
-  if (!method || !method.parameters) return null;   // dynamic URL: no method, no path template
+  /* THE COMMENT HERE READ "dynamic URL: no method, no path template" AND THAT CASE NO LONGER EXISTS: an
+     address whose origin is a shape now registers a method like any other, and the caller asserts that a
+     registered call site never answers with a null one. The GUARD stays, and is not merely defensive — it is
+     the one this walk owes whatever the caller proves, because `learnFromAstCallSite` may hand back a PROBED
+     discovery-document method rather than a learned one, and this file does not mint those and cannot state
+     their shape. (The probe's own mint writes `parameters: {}`; a discovery document fetched from a server is
+     a third party's bytes, which §whose-bytes-state-the-value says this zone reads and never assumes about.)
+     So the `!method` half is now unreachable by the caller's own assertion and the `!method.parameters` half
+     is about a record nobody here authored. */
+  if (!method || !method.parameters) return null;
   var out = [];
   for (var pn in method.parameters) {
     var pd = method.parameters[pn];
@@ -177,6 +186,25 @@ function mergeASTResultsIntoVDD(tab, results) {
              "learnFromAstCallSite did not answer with its {entry, method} pair — both halves are read " +
              "below and a missing one silently files this endpoint under the wrong service or drops the " +
              "path-param examples it just learned");
+      /* AND THAT THE PAIR IS ALL-OR-NOTHING, WHICH IS THE STATE THE SHAPE-ORIGIN REPAIR MADE IMPOSSIBLE AND
+         IS ASSERTED HERE SO IT CANNOT COME BACK QUIETLY. That function used to hand back a live `entry` with
+         a NULL METHOD for an address whose origin is a shape, and every parameter the forced execution had
+         computed for that address — its braced path segments, its query pairs, all four narrowed domains —
+         was dropped with the method, because the walk that reads `callSite.params` is the only reader of
+         that array in either realm and it sits past the return. The endpoint below was registered anyway, so
+         the address appeared on the surface with an empty parameter half and the run read as a solver that
+         had learned no values.
+         IT IS A DCHECK AND NOT A GUARD: a half-answer here is this zone's own two halves having parted, not
+         input, and §Offensive-programming's category (1). A `?:` past it is what the old arm effectively
+         was, and it cost the product's headline claim on most of a real corpus with nothing to say so —
+         `_astPathParamPool` below answers `null` for a null method and a null method was, until now, an
+         ordinary thing to be handed. */
+      DCHECK((_learned.entry === null) === (_learned.method === null),
+             "learnFromAstCallSite answered with half a pair (entry " + (_learned.entry ? "present" : "null") +
+             ", method " + (_learned.method ? "present" : "null") + ") — a site it refuses answers null for " +
+             "BOTH, and a site it accepts registers a method whatever its address's origin turned out to be, " +
+             "so a live entry with no method is the shape-origin arm's early return having come back and " +
+             "every parameter this call site computed is about to be dropped between the engine and the moat");
       // Refine interfaceName for endpoint registration if the call site
       // got promoted to a prefix bucket via observed-prefix clustering.
       if (_learned.entry && _learned.entry.doc && _learned.entry.doc.name) {

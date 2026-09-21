@@ -254,20 +254,31 @@ const PROBE = `(() => ({
     return reached ? { params, astParams, astPathParams, astHoleParams, astUnstatedParams,
                        withExcl, withBnd, withPred, withLeq } : null;
   })(),
-  /* THE ADDRESSES \`domains\` ABOVE COULD NOT HAVE COUNTED A PARAMETER FOR, WHICH IS THE ONE READING OF ITS
-     ZERO THAT IS NOT ABOUT PARAMETERS AT ALL. Every denominator up there narrows the set of rows a domain
-     could be looked up for, and each of those narrowings is over rows that REACHED an \`m.parameters\` object.
-     An address whose ORIGIN the code did not determine reaches none: lib/callsite-url.js's
-     \`astCallSiteAddress\` answers \`originKnown:false\` with the shape as \`host\` and the literal remainder as
-     \`path\`, and lib/learn.js's \`learnFromAstCallSite\` returns its entry with a NULL METHOD on that arm before
-     it names one — so the engine's \`params\` for that address, its braced path segments and its query pairs
-     alike, are dropped before \`_astInferred\` is written and no denominator above can see them. lib/merge.js
-     registers the ENDPOINT for that same arm, and its own account of the repair that did so calls that
-     population most of a real corpus — so one address is counted by the endpoint half of the record and by
-     neither half of the parameter one.
-     WITHOUT THIS COLUMN \`astParams:0\` IS TWO SENTENCES THAT TAKE OPPOSITE WORK: the forced execution learned
-     no parameter, and it learned parameters for addresses this walk is never shown. The first is a finding
-     about the solver and the second is a finding about that early return, and they rendered identically.
+  /* THE ADDRESSES WHOSE ORIGIN THE CODE NEVER DETERMINED — ONCE THE READING OF \`domains\`' ZERO THAT WAS NOT
+     ABOUT PARAMETERS AT ALL, NOW THE CONFIRMATION THAT THEY ARE COUNTED.
+     WHAT THIS COLUMN WAS FOR, KEPT IN ITS OWN TERMS BECAUSE THE ARGUMENT IS WHAT A READER RE-DERIVES: every
+     denominator above narrows the set of rows a domain could be looked up for, and each of those narrowings
+     is over rows that REACHED an \`m.parameters\` object. An address whose ORIGIN the code did not determine
+     reached none — lib/callsite-url.js's \`astCallSiteAddress\` answers \`originKnown:false\` with the shape as
+     \`host\` and the literal remainder as \`path\`, and \`learnFromAstCallSite\` RETURNED THERE, with a null
+     method, before it named one, so the engine's \`params\` for that address, its braced path segments and its
+     query pairs alike were dropped before \`_astInferred\` was written and no denominator above could see them.
+     lib/merge.js registered the ENDPOINT for that same arm, and its own account of the repair that did so
+     calls that population most of a real corpus — so one address was counted by the endpoint half of the
+     record and by neither half of the parameter one, and \`astParams:0\` was TWO SENTENCES THAT TAKE OPPOSITE
+     WORK: the forced execution learned no parameter, and it learned parameters for addresses this walk is
+     never shown. The first is a finding about the solver and the second was a finding about that early
+     return, and they rendered identically.
+     THAT EARLY RETURN IS GONE AND THE POPULATION IS INSIDE \`domains\`' DENOMINATORS, which is the condition
+     this record's own RETIREMENT named. It is REWRITTEN RATHER THAN DELETED, and the retirement's stated
+     reason is the half that turned out to be wrong: it said a count out here "says nothing a parameter-level
+     one does not", and a parameter-level count cannot separate A PAGE WITH NO SHAPE-ORIGIN CALL SITES from a
+     page whose shape-origin call sites learned nothing — both read as a smaller \`astParams\`. These counts
+     answer that, and they are what makes the fix's own claim falsifiable, so the column stays and its reason
+     changes.
+     RETIREMENT: this record goes when the split is asserted rather than counted — when a shape-origin call
+     site reaching \`m.parameters\` is something a DCHECK in lib/learn.js forbids the absence of, so no walk
+     out here has to look for it.
      IT IS A SEPARATE KEY AND NOT A FIELD OF \`domains\`, WHICH IS THE WHOLE OF WHY IT CAN ANSWER. That object
      is null when no method carried a \`parameters\` object at all, and a page every one of whose call sites
      took that arm is exactly such a page — so a column that explains the null may not live inside the object
@@ -283,13 +294,17 @@ const PROBE = `(() => ({
      A record whose \`host\` is not a string is one lib/endpoint-record.js's own assert forbids, and folding it
      into "not a shape" would let a broken producer read as a clean split; a nonzero here says the split
      beside it is UNREADABLE rather than zero.
-     \`shapeSvcMethods\` IS THE CROSS-CHECK THAT THIS COLUMN STILL MEANS WHAT IT SAYS. While that early return
-     stands it is 0, because the arm that would mint a learned method for a shape-origin service returns
-     before minting one. A nonzero says some producer now reaches those docs and the paragraph above has
-     stopped describing them — a finding about lib/learn.js that neither count alone could report.
-     RETIREMENT: this record goes when \`learnFromAstCallSite\` registers a method for an address whose path it
-     resolved and whose origin it did not, because that population is then inside \`domains\`' own denominators
-     and a count of it out here says nothing a parameter-level one does not. */
+     \`shapeSvcMethods\` IS THE REACHABILITY WITNESS FOR THE REPAIR, AND ITS POLARITY IS NOW INVERTED. While the
+     early return stood it was 0 BY CONSTRUCTION — the arm that would mint a learned method for a shape-origin
+     service returned before minting one — so it was written as the tripwire that would say the paragraph
+     above had stopped describing the tree. It is the other way round now: on a page carrying a shape-origin
+     call site it must be NONZERO, and a 0 beside a nonzero \`shapeSvcs\` is that repair not having run.
+     THE PAIR IS WHAT MAKES EITHER READABLE, which is why neither is summed into the other. \`shapeSvcs\` counts
+     the buckets a shape-origin address minted and needs nothing from \`learnFromAstCallSite\` past the doc
+     entry it always created; \`shapeSvcMethods\` counts what that function now registers INSIDE them. So
+     \`shapeSvcs > 0 && shapeSvcMethods === 0\` is the defect that was here, stated as a live check rather than
+     as a paragraph, and \`shapeSvcs === 0\` says this page never had the population and neither number is
+     about the repair at all — the unarmed-control reading the domain columns above already spell out. */
   origins: (() => {
     let eps = 0, shapeOrigin = 0, hostUnstated = 0, shapeSvcs = 0, shapeSvcMethods = 0;
     for (const ep of globalStore.endpoints.values()) {
