@@ -679,6 +679,31 @@ say(`   ${rankA.length} of ${ABSENT_GLOBAL.size} absent global name(s) are named
 for (const n of rankA.slice(0, TOP))
   say(`   ${klass(n).padStart(11)}  ${String(uses(n)).padStart(4)}  qjs=${String(qjsHits(n)).padStart(3)}  ` +
       `shadow=${String(shadowed(n)).padStart(3)}  ${n.padEnd(24)} ${shape(n) || "(every occurrence shadowed)"}`);
+/* AN INSTRUMENT THAT TRUNCATES SAYS SO, AND THIS ONE DID NOT — WHICH AMPUTATED A WHOLE CLASS RATHER THAN A
+   TAIL. `--top` caps the rows PRINTED and the sort above is by CLASS FIRST, so the cut is not a random tail:
+   it takes the lowest-ranked classes ENTIRELY. Measured on the run that found this, at the default 20: 65
+   names ranked, 11 THROWS and 9 mixed printed, and `detect-only` printed ZERO TIMES with no line anywhere
+   saying a row had been dropped. A reader then reads a name's ABSENCE from this list as the corpus not
+   naming it, which is the one reading the data cannot support — `EventSource` has 8 non-shadow hits here
+   (globalThis.X=5, typeof X=3) and appeared nowhere, and a decision about whether to build it was about to
+   be made on that silence.
+   THE CLASS IT DROPS IS THE ONE THIS PROJECT MOST NEEDS TO SEE. CLAUDE.md §NO-STUBS: a feature-detected
+   absence "degrades to SILENCE, which is the one signal nothing here surfaces", and what is lost is not the
+   guarded line but every endpoint and every sink BEHIND the guard. So the rows a `--top` cut removes first
+   are exactly the rows whose whole defect is that they are already invisible.
+   THE COUNTS ARE PRINTED EVEN WHEN THE ROWS ARE NOT, so raising `--top` is a choice a reader can make
+   knowingly instead of one they do not know is available. */
+{
+  const omitted = rankA.slice(TOP);
+  if (omitted.length) {
+    const by = new Map();
+    for (const n of omitted) by.set(klass(n), (by.get(klass(n)) || 0) + 1);
+    say(`   ... ${omitted.length} further ranked row(s) NOT PRINTED at --top=${TOP}: ` +
+        [...by].map(([k, v]) => `${k}=${v}`).join(" ") +
+        ` — raise --top to read them. This is a cut by CLASS, not a tail: the sort above is class-first, so a ` +
+        `class can be omitted WHOLE and its absence from the list above is not evidence the corpus is silent about it.`);
+  }
+}
 
 console.log("");
 say(`── B. INTERFACES THAT EXIST AND CARRY ABSENT MEMBERS, RANKED BY CORPUS USE OF THE INTERFACE NAME ──`);
@@ -688,6 +713,11 @@ say(`   Ordered by the unambiguous channels only. A bundle reaches an element th
 const rankB = [...absentBy.keys()].sort((a, b) => uses(b) - uses(a) || a.localeCompare(b));
 for (const n of rankB.slice(0, TOP))
   say(`   ${String(uses(n)).padStart(4)}  ${n.padEnd(26)} ABSENT ${String(absentBy.get(n).length).padStart(3)}  ${shape(n) || "(named nowhere in the corpus)"}`);
+/* SAME CUT, SAME OBLIGATION. This list is ordered by corpus use rather than by class, so a `--top` cut here
+   really is a tail — but a tail whose size is unstated is still a floor being read as a total, which is the
+   defect the paragraph in list A is about. */
+if (rankB.length > TOP)
+  say(`   ... ${rankB.length - TOP} further interface(s) NOT PRINTED at --top=${TOP} — raise --top to read them.`);
 
 const overlap = rankB.filter((n) => ABSENT_GLOBAL.has(n));
 console.log("");
