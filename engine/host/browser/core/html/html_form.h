@@ -134,6 +134,13 @@ void html_form_install_control_members(JSContext *ctx, JSValueConst button_proto
    no label component and the relation's other direction (`labels`) is already this file's. */
 void html_form_install_label_members(JSContext *ctx, JSValueConst label_proto);
 
+/* HTML §4.10.16 "The legend element"'s `form` — the same split for the same reason: a `legend` carries no
+   §4.10.2 row either, and its one member DELEGATES rather than answering, "the same value as the form IDL
+   attribute on that fieldset element" when the legend's PARENT is a `fieldset` and null otherwise. It is in
+   this file and not a legend component because the value it returns is this file's member — §4.10.18.3's
+   getter, asked of the parent — so the delegation is a call and not a second algorithm. */
+void html_form_install_legend_members(JSContext *ctx, JSValueConst legend_proto);
+
 /* HTML §4.10.19's "a form control is disabled": the element carries a `disabled` content attribute, or it is a
    descendant of a `fieldset` whose `disabled` attribute is set and it is not inside that fieldset's first
    legend child. §4.13.5 step 10.2's condition. */

@@ -1305,6 +1305,15 @@ void html_element_install_protos(JSContext *ctx)
         JS_FreeValue(ctx, lb2);
     }
 
+    /* §4.10.16's `form` on HTMLLegendElement, for the same reason and NOT folded into the block above: the two
+       sections state two different algorithms over two different elements, and one call taking both prototypes
+       would be one name for them. */
+    {
+        JSValue lg2 = html_iface_proto(ctx, "HTMLLegendElement");
+        html_form_install_legend_members(ctx, lg2);
+        JS_FreeValue(ctx, lg2);
+    }
+
     /* §4.11.4's `returnValue` goes on HTMLDialogElement and nowhere else, handed the prototype for the same
        reason §4.10's members are: this file owns the table, that one owns the algorithm that writes it. */
     {

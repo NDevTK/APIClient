@@ -2227,44 +2227,51 @@ const HtmlFormControlIface HTML_FORM_CONTROL_IFACES[FC_COUNT] = {
    target, then:" … "Otherwise, throw a TypeError". A TypeError and never a DCHECK: the receiver is whatever the
    page handed `HTMLInputElement.prototype.form.call(x)`, so asserting on it would put an engine abort behind a
    value a page states. THE NAMESPACE IS PART OF THE QUESTION — an `input` in another namespace is a different
-   element with a different interface, the same test core/html/html_meter.c makes for `<meter>`. */
+   element with a different interface, the same test core/html/html_meter.c makes for `<meter>`.
+   ONE CHECK FOR EVERY MEMBER THIS FILE INSTALLS ON A NAMED INTERFACE, and the three bindings below are names
+   for its two constants rather than three answers to one question. It is written out because this file now
+   asks it for §4.10.2's seven controls, §4.10.4's `label` and §4.10.16's `legend`, and a hand-written third
+   copy is where the NAMESPACE test goes missing — which is silent, since a foreign-namespace element with the
+   right local name passes everything else and gets an HTML interface's member answered for it. */
+static bool form_node_is(lxb_dom_node_t *n, const char *tag)
+{
+    return n && n->type == LXB_DOM_NODE_TYPE_ELEMENT && n->ns == LXB_NS_HTML && tag_is(n, tag);
+}
+
+static bool form_receiver_is(JSContext *ctx, JSValueConst this_val, const char *iface, const char *tag,
+                             const char *member)
+{
+    if (form_node_is(node_of(this_val), tag)) return true;
+    JS_ThrowTypeError(ctx, "%s.%s was reached on something that is not a <%s> element", iface, member, tag);
+    return false;
+}
+
+/* The §4.10.2 row list's binding — the only one that carries a magic, and therefore the only one with a magic
+   to assert. */
 static bool form_control_receiver(JSContext *ctx, JSValueConst this_val, int i, const char *member)
 {
-    lxb_dom_node_t *n = node_of(this_val);
-
     DCHECK(i >= 0 && i < FC_COUNT,
            "a §4.10.2 control member was installed with a magic that names no interface row");
-    if (n && n->type == LXB_DOM_NODE_TYPE_ELEMENT && n->ns == LXB_NS_HTML &&
-        tag_is(n, HTML_FORM_CONTROL_IFACES[i].tag))
-        return true;
-    JS_ThrowTypeError(ctx, "%s.%s was reached on something that is not a <%s> element",
-                      HTML_FORM_CONTROL_IFACES[i].iface, member, HTML_FORM_CONTROL_IFACES[i].tag);
-    return false;
+    return form_receiver_is(ctx, this_val, HTML_FORM_CONTROL_IFACES[i].iface,
+                            HTML_FORM_CONTROL_IFACES[i].tag, member);
 }
 
 /* HTML §4.10.18.3 "Association of controls and forms": "Listed form-associated elements except for
    form-associated custom elements have a form IDL attribute, which, on getting, must return the element's form
    owner, or null if there isn't one." ONE sentence for all seven, which is why there is one getter: the member
    is declared seven times and its steps are stated once.
-   NAMED RESIDUAL — `form` is ALSO declared on HTMLLegendElement, and it is NOT covered here because a `legend`
-   is not a listed form-associated element and has no form owner: it DELEGATES.
-   WHAT IS NOT COVERED: HTML §4.10.16 "The legend element" — "If the legend has a fieldset element as its
-   parent, then the form IDL attribute must return the same value as the form IDL attribute on that fieldset
-   element. Otherwise, it must return null." The PARENT, not an ancestor.
-   WHAT THE NEXT DIFF BUILDS: that member, here, delegating to THIS getter with FC_FIELDSET — "the same value
-   as the form IDL attribute on that fieldset element" is this function and not html_form_owner_of, which is
-   the difference between running §4.10.18.3's sentence and running the steps that quote it.
-   HOW ITS ABSENCE SHOWS: `'form' in el` on a `legend` answers false where it answers true on the seven below,
-   on a `label` and on an `option` — observable from any page without knowing what the document contains, since
-   `readonly attribute HTMLFormElement? form` admits no `undefined`.
-   §4.10.4's label and §4.10.10's option are DONE and their clauses are gone with them: the label's forward
-   labeled-control relation is form_label_control above, and the option's walk and getter are in
-   core/html/html_option.c, which owns §4.10.10. THAT CLAUSE'S STATED REASON FOR NOT SHARING
-   html_form_select_of_option WAS WRONG and is recorded at the walk it sent its reader to build: it said the
-   two `disagree for exactly the options that sit under one of those` bail-out ancestors, and they agree for
-   every tree — §4.10.7's descent skips the DESCENDANTS of exactly those elements, so `reached by the descent`
-   and `no bail-out ancestor between` are one condition. The remedy was right and the reason was not, which is
-   why the reason is written down where the next reader of that walk will meet it. */
+   THE RESIDUAL THAT STOOD HERE IS DISCHARGED AND THE COUNT IT WAS ABOUT IS CLOSED: `form` is declared on
+   ELEVEN interfaces, this sentence covers seven, ElementInternals carries its own, and the remaining three —
+   §4.10.4's `label`, §4.10.10's `option` and §4.10.16's `legend` — each DELEGATE by a different algorithm and
+   are each built at the section that states them: form_label_control below, core/html/html_option.c's ancestor
+   walk, and js_legend_form below. None of the three is a listed form-associated element and none has a form
+   owner, which is why none of them could ever have been an eighth row of the table above.
+   ITS OPTION CLAUSE'S STATED REASON WAS WRONG, and it is recorded rather than deleted because the next reader
+   will re-derive it the same way: it said §4.10.10's walk is not html_form_select_of_option because the two
+   `disagree for exactly the options that sit under one of those` bail-out ancestors, and they agree for EVERY
+   tree — §4.10.7's descent skips the DESCENDANTS of exactly those elements, so `reached by the descent` and
+   `no bail-out ancestor between` are one condition. The remedy was right and the reason was not; the reasons
+   that do hold are at the walk, where whoever doubts it will be standing. */
 static JSValue js_form_control_form(JSContext *ctx, JSValueConst this_val, int magic)
 {
     if (!form_control_receiver(ctx, this_val, magic, "form")) return JS_EXCEPTION;
@@ -2344,20 +2351,11 @@ void html_form_install_control_members(JSContext *ctx, JSValueConst button_proto
  * with two steps after it, which is why they share form_label_control and why building one without the other
  * would have written the second member's entire body and then not installed it. */
 
-/* Web IDL §3.7.6 "Attributes"' brand check — "If jsValue does not implement target, then:" … "Otherwise,
-   throw a TypeError". A TypeError and NEVER a DCHECK, for the reason form_control_receiver states: the
-   receiver is whatever the page handed `HTMLLabelElement.prototype.form.call(x)`, so an assert there is an
-   engine abort a page can reach. The namespace is part of the question — a `label` in another namespace is a
-   different element with a different interface. */
+/* Web IDL §3.7.6 "Attributes"' brand check for HTMLLabelElement — form_receiver_is states the steps and the
+   reason a TypeError is not a DCHECK; this names the interface and the tag it asks them about. */
 static bool form_label_receiver(JSContext *ctx, JSValueConst this_val, const char *member)
 {
-    lxb_dom_node_t *n = node_of(this_val);
-
-    if (n && n->type == LXB_DOM_NODE_TYPE_ELEMENT && n->ns == LXB_NS_HTML && tag_is(n, "label"))
-        return true;
-    JS_ThrowTypeError(ctx, "HTMLLabelElement.%s was reached on something that is not a <label> element",
-                      member);
-    return false;
+    return form_receiver_is(ctx, this_val, "HTMLLabelElement", "label", member);
 }
 
 /* HTML §4.10.4: "The control IDL attribute must return the label element's labeled control, if any, or null
@@ -2407,6 +2405,62 @@ void html_form_install_label_members(JSContext *ctx, JSValueConst label_proto)
     DCHECK(JS_IsObject(label_proto), "§4.10.4's label members were installed with no HTMLLabelElement prototype");
     idl_install_accessor(ctx, label_proto, "control", js_label_control, 0, -1);
     idl_install_accessor(ctx, label_proto, "form", js_label_form, 0, -1);
+}
+
+/* ---- HTML §4.10.16 "The legend element"'s `form` --------------------------------------------------------
+ *
+ * §4.10.16: "The form IDL attribute's behavior depends on whether the legend element is in a fieldset element
+ * or not. If the legend has a fieldset element as its parent, then the form IDL attribute must return the same
+ * value as the form IDL attribute on that fieldset element. Otherwise, it must return null."
+ *
+ * THE PARENT, NOT AN ANCESTOR, and the difference is observable: `<fieldset><div><legend>` answers null while
+ * `<fieldset><legend>` answers the fieldset's form. A walk to the nearest ancestor `fieldset` would be the
+ * §4.10.4 mistake one section over — a wrong value rather than a missing one — and this member has no
+ * fallback arm to reach for either, because a `legend` is not a form-associated element, has no form owner and
+ * has no `form` content attribute for §4.10.18.3 step 4 to look up.
+ *
+ * "THE SAME VALUE AS THE form IDL ATTRIBUTE ON THAT fieldset ELEMENT" IS THAT MEMBER AND NOT ITS ALGORITHM, so
+ * this calls js_form_control_form rather than html_form_owner_of. The two answer alike today and are not the
+ * same claim: §4.10.18.3's getter is the member, and a step added to it — which is where a fieldset-specific
+ * rule would land — is a step this section's own words say a legend takes with it. One implementation, two
+ * callers, and nothing to drift.
+ *
+ * THE PARENT TEST IS THE CALLEE'S BRAND CHECK ASKED EARLY, which is what makes that call unable to throw: both
+ * are form_node_is against the `fieldset` tag, so the null arm this section states is taken for exactly the
+ * receivers Web IDL §3.7.6 "Attributes" would have refused, and a `legend` whose parent is a FOREIGN-namespace
+ * element with the local name `fieldset` answers null rather than raising a TypeError a page never asked for. */
+static bool form_legend_receiver(JSContext *ctx, JSValueConst this_val, const char *member)
+{
+    return form_receiver_is(ctx, this_val, "HTMLLegendElement", "legend", member);
+}
+
+static JSValue js_legend_form(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_node_t *parent;
+    JSValue parent_wrap, owner;
+
+    (void)magic;
+    if (!form_legend_receiver(ctx, this_val, "form")) return JS_EXCEPTION;
+    parent = node_of(this_val)->parent;
+    if (!form_node_is(parent, "fieldset")) return JS_NULL;          /* "Otherwise, it must return null." */
+    parent_wrap = node_wrap(ctx, parent);
+    owner = js_form_control_form(ctx, parent_wrap, FC_FIELDSET);
+    JS_FreeValue(ctx, parent_wrap);
+    DCHECK(!JS_IsException(owner),
+           "§4.10.16's `form` was refused by Web IDL §3.7.6 \"Attributes\"' brand check, on a receiver this file "
+           "had just tested with the same predicate that check uses — form_node_is against the `fieldset` tag — "
+           "so the two have been allowed to disagree about what an HTMLFieldSetElement is");
+    return owner;
+}
+
+/* Its own install for the reason §4.10.4's is: a `legend` carries no §4.10.2 category row, so this member comes
+   from no `cat` bit and cannot ride the control list's loop. */
+void html_form_install_legend_members(JSContext *ctx, JSValueConst legend_proto)
+{
+    DCHECK(g_atom_owner != JS_ATOM_NULL,
+           "§4.10.16's `form` was installed before html_form_declare minted the form-owner slot key");
+    DCHECK(JS_IsObject(legend_proto), "§4.10.16's `form` was installed with no HTMLLegendElement prototype");
+    idl_install_accessor(ctx, legend_proto, "form", js_legend_form, 0, -1);
 }
 
 bool html_form_control_is_disabled(JSContext *ctx, JSValueConst wrap)
