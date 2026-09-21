@@ -56,6 +56,27 @@
  * FIXED by close_var_refs_for_fork, which detaches a frame's own open cells before either clone path
  * shares them: a detached cell IS its storage, so both arrays naming it agree and ONE delta entry covers
  * the whole binding — which is the configuration /q/ below had already measured clean.
+ * THAT `FIXED` SENTENCE IS RETIRED BY MEASUREMENT AND REWRITTEN RATHER THAN DELETED, because it is the
+ * reading a reader re-derives from the detach: it predicts this document is CLEAN, and this document is not.
+ * It also predicted the detached-cell control would be clean, which is true — so it is right about the
+ * control and wrong about the case the control was built to explain, which is the shape that kept it alive.
+ * MEASURED BY A COORDINATOR, artifact stamped 17fc107d `dirty: []`, schedule `direct`, three runs of each
+ * document in one session with this one re-run beside them as a paired positive control. Four documents, and
+ * the only variable that predicts the answer is the WRITE PATH:
+ *   LIVE minting frame, write DIRECT, one closure over `v`   (this document)              closure-undefined
+ *   LIVE minting frame, write DIRECT, two closures over `v`  (captured_var_two_closures)  closure-undefined
+ *   LIVE minting frame, write via a DEEPER frame             (captured_var_live_deep_write) closure-function
+ *   RETURNED minting frame, write via a closure call         (captured_var_detached_control) closure-function
+ * So it is NOT the cell's storage, NOT detachment, and NOT how many closures capture it. The two-closure
+ * document exists only to kill that last confound and it killed it: two closures with a DIRECT write still
+ * lose. What survives is narrow and is a statement about an OPCODE rather than about a delta — a write
+ * issued DIRECTLY from the frame that minted the cell loses across a fork, and the SAME cell of the SAME
+ * live frame written from one frame deeper does not.
+ * WHAT THAT DOES NOT ESTABLISH, stated because the matrix invites over-reading: it names the discriminator
+ * and not the mechanism. It does not say which opcode, does not say whether the loss is at the write or at
+ * the read, and every row is one artifact and one schedule. The control's own banner records that an
+ * AGREEMENT between two of these is unambiguous and a DIFFERENCE has candidate causes — the reason there
+ * are four documents and not two is that each difference cost another one to disambiguate.
  *
  * WHAT IT ASKS OF THE GATE. Every arm assigns before it reads, so `typeof` is `"function"` in every world this
  * program has; there is no schedule under which `undefined` is an answer. It is therefore also a

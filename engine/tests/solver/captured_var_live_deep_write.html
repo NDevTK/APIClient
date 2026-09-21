@@ -1,0 +1,49 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>captured var across a fork — LIVE frame, write from a DEEPER frame</title>
+<script>
+/* ONE PROBLEM: this document SEPARATES the two candidate causes that captured_var_detached_control.html left
+ * standing, and it exists only because that control answered with a DIFFERENCE rather than an agreement.
+ *
+ * WHAT WAS MEASURED, AND AT WHAT STRENGTH. Artifact stamped 17fc107d with `dirty: []`, schedule `direct`,
+ * measured by a coordinator in one session with the subject re-run beside it as a paired positive control:
+ *   - captured_var_fork.html (LIVE minting frame, write DIRECT from it):  closure-undefined, both arms.
+ *   - captured_var_detached_control.html (frame RETURNED, write through a closure call): closure-function,
+ *     both arms, 3 runs of 3.
+ * The control's own banner names the ambiguity in advance: it holds the unknown, the depth and the `arm` shape
+ * fixed, and it CANNOT hold fixed the frame the write issues from, because a returned frame cannot issue one.
+ * So the difference above has TWO candidate causes and the control cannot choose between them:
+ *   (a) the CELL'S STORAGE — open at the fork (a slot in the minting frame) versus on the heap from birth;
+ *   (b) the WRITE PATH — issued from the minting frame itself versus arriving through a closure call.
+ *
+ * WHAT THIS DOCUMENT CHANGES, AND IT IS EXACTLY ONE THING. It is captured_var_fork.html with the assignment
+ * routed through `set()` — a DEEPER frame — and nothing else. The minting frame is LIVE, the cell is a
+ * captured local of it, the unknown is the same, the depth is the same, `arm` is the same captured local of
+ * the forking frame written from a deeper frame. So (a) is held at the subject's value and only (b) moves.
+ *
+ * HOW TO READ IT, and the two answers take opposite work:
+ *   - closure-undefined HERE => the write path is NOT the cause. (a) is, the discriminator is the cell being
+ *     OPEN AT THE FORK, and the control's cleanliness is explained by its storage rather than by its call.
+ *   - closure-function HERE => the write path IS sufficient to avoid the loss, the control's result is
+ *     CONFOUNDED by it, and the detached-at-birth reading of that document must be withdrawn rather than
+ *     merely qualified.
+ * Either answer is a result. What must not happen is reading the control alone as evidence about storage,
+ * which is what this file exists to stop.
+ *
+ * REACHABILITY WITNESS, because an absent defect is not a correct value. `plain-` is the uncaptured half of
+ * the same assignment expression, so it is `function` only if that statement executed; two learned addresses
+ * differing in `arm1`/`arm2` witness that the fork happened and each arm ran its own branch. It does NOT
+ * witness that the `arm` cell is isolated — the value is copied into the uncaptured `b` in the same expression
+ * that produced it. A run emitting ONE address, or `plain-undefined`, measured nothing whatever `closure-` says.
+ *
+ * RETIREMENT: this document goes with its control, when the subject passes and the mechanism that fixes it is
+ * asserted at its origin — the separation these two buy is then made by a crash rather than by three fixtures. */
+(function () {
+  var v = undefined, w = undefined, arm = 0;
+  function rd() { return v; }
+  function set(fn) { v = fn; return fn; }
+  function d(n) { if (n > 0) return d(n - 1); if (__FLAGS.b) { arm = 1; } else { arm = 2; } return arm; }
+  var b = d(3), assigned = (w = set(function () { return 1; })), pad = 0;
+  fetch("/d/closure-" + (typeof rd()) + "/plain-" + (typeof w) + "/arm" + b);
+})();
+</script>

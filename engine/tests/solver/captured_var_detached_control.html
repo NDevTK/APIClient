@@ -1,0 +1,74 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>captured var across a fork — DETACHED-CELL CONTROL</title>
+<script>
+/* ONE PROBLEM: this document is the CONTROL for captured_var_fork.html and asks ONE question — does the loss
+ * track the cell being OPEN (its storage a slot in the frame that minted it) or does it happen to a cell that
+ * is DETACHED before the fork ever runs?
+ *
+ * WHY IT IS A SEPARATE FILE. Its subject's banner records that this control was measured at 3 runs, 0 of 3 —
+ * and records, in the same paragraph, that it is NOT in that document because putting it there SUPPRESSES the
+ * defect (5 runs, 0 of 5): a second IIFE is a second unknown and a bigger frontier, and it moves the
+ * interleaving. That sensitivity is a fact about the defect and not a flaw in the control, so the control gets
+ * its own document, where there is no subject for it to suppress.
+ *
+ * WHY IT IS WORTH RE-TAKING RATHER THAN CITED. The 0 of 3 was measured against an artifact built at
+ * superproject f49e7bf6 with the submodule state unrecorded, when the defect was INTERMITTENT (7 of 9 on the
+ * subject) — so 0 of 3 on a flaky defect is weak evidence, and it is evidence about a program nobody can
+ * rebuild. The subject is now DETERMINISTIC and BROADER: ten arms of ten wrong, both arms, byte-identical
+ * across five schedules. A control taken when the subject was flaky does not transfer to a subject that is not.
+ *
+ * WHAT MAKES IT DECISIVE NOW, AND IT IS NOT WHAT IT WAS BUILT FOR. Its subject's banner states a FIX — "FIXED
+ * by close_var_refs_for_fork, which detaches a frame's own open cells before either clone path shares them: a
+ * detached cell IS its storage, so both arrays naming it agree and ONE delta entry covers the whole binding".
+ * That sentence predicts this document is clean, and it predicts the SUBJECT is clean too, which it is not.
+ * MEASURED BY A COORDINATOR against the artifact stamped 17fc107d with `dirty: []`, `direct`, 3 runs of 3: the
+ * DCHECKF at get_captured_cell — `vr->is_detached || vr->stack_frame == sf` — DOES NOT FIRE, while the subject
+ * still emits closure-undefined on both arms. The check was proven ARMED rather than assumed silent: a
+ * distinctive run of its message occurs in the shipped qjs.wasm (1), a positive control occurs (2), an invented
+ * string occurs (0). A LANE THEN CORRECTED THE REASONING AND THE CORRECTION IS THE PART TO KEEP: that assert is
+ * a DISJUNCTION, so it is silent for an open cell read through its OWN minting frame, which is the parent arm's
+ * read. What establishes detachment is the SIBLING specifically — its reads go through the CLONED frame, where
+ * an open shared cell would have vr->stack_frame naming the original and would fire. Both arms emit, so the
+ * sibling ran and read the cell and did not fire. The conclusion holds; the evidence for it is the clone's read
+ * and not the assert in general, and the parent arm remains uncovered by it.
+ *
+ * SO THE TWO OUTCOMES HERE TAKE OPPOSITE WORK, which is what makes this worth a document rather than an
+ * argument:
+ *   - closure-undefined HERE TOO => detachment is NOT the discriminator, the subject's stated fix does not
+ *     describe what fixes anything, and the loss is downstream of the cell's storage entirely.
+ *   - closure-function HERE while the subject stays broken => the loss tracks the cell having been OPEN AT THE
+ *     FORK, and the question becomes what differs between detached-at-fork and detached-at-birth.
+ *
+ * WHAT IT HOLDS FIXED, and what it cannot. Same unknown (`__FLAGS.b`), same depth (`d(3)` recursing three
+ * frames deep), same `arm` shape — a captured local of the forking frame written from a DEEPER frame, so the
+ * branch that forks is on the tramp chain with that frame beneath it — and the same conservation identity in
+ * the address: one CAPTURED read beside one PLAIN slot written by the same expression.
+ * WHAT NECESSARILY DIFFERS, stated because a control whose differences are unlisted is a control for nothing:
+ * `v`'s minting frame has RETURNED, so the write to it cannot come from that frame and arrives through a
+ * closure call instead. That is inherent to detached-at-birth and cannot be engineered away; it means a
+ * DIFFERENCE between this document and its subject has two candidate causes (the cell's storage, or the frame
+ * the write issues from) and only an AGREEMENT is unambiguous.
+ *
+ * REACHABILITY WITNESS, because an absent defect is not a correct value. `plain-` is the uncaptured half of the
+ * same assignment expression: it is `function` only if that statement executed. `arm1`/`arm2` differing across
+ * the two learned addresses witnesses that the fork happened and each arm ran its own branch — it does NOT
+ * witness that the `arm` cell is isolated, since the value is copied into the uncaptured `b` in the same
+ * expression that produced it, and it must not be read as a second working captured binding.
+ * A run emitting ONE address, or `plain-undefined`, measured nothing here whatever `closure-` says.
+ *
+ * RETIREMENT: this document goes when the subject passes and the mechanism that fixes it is asserted at its
+ * origin, because the question it exists to separate is then answered by a crash rather than by two fixtures. */
+var box = (function () {
+  var v = undefined;
+  function rd() { return v; }
+  function set(fn) { v = fn; return fn; }
+  return { rd: rd, set: set };
+})();
+(function () {
+  var w = undefined, arm = 0;
+  function d(n) { if (n > 0) return d(n - 1); if (__FLAGS.b) { arm = 1; } else { arm = 2; } return arm; }
+  var b = d(3), assigned = (w = box.set(function () { return 1; })), pad = 0;
+  fetch("/c/closure-" + (typeof box.rd()) + "/plain-" + (typeof w) + "/arm" + b);
+})();
+</script>

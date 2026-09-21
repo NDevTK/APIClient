@@ -1,0 +1,37 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>captured var across a fork — two closures, write DIRECT</title>
+<script>
+/* ONE PROBLEM: this closes the last confound between captured_var_fork.html and
+ * captured_var_live_deep_write.html. Those two differ in the WRITE PATH, which is what they were built to
+ * separate — and they ALSO differ in HOW MANY closures capture `v`: one (`rd`) in the subject, two (`rd` and
+ * `set`) in the deep-write document. That second difference was not held fixed and is not nothing: a compiler
+ * that routes a captured access differently could plausibly key on the capture rather than on the caller.
+ *
+ * WHAT THIS CHANGES, AND IT IS EXACTLY ONE THING. It is captured_var_fork.html with a second closure over `v`
+ * added and NEVER CALLED, so `v` is captured twice exactly as in the deep-write document, while the write
+ * stays DIRECT from the minting frame. Unknown, depth, `arm` shape and the plain witness are all unchanged.
+ *
+ * HOW TO READ IT:
+ *   - closure-undefined HERE => the closure COUNT is irrelevant, and the deep-write document's clean answer is
+ *     attributable to the write path alone. The localisation stands: the loss tracks a write issued DIRECTLY
+ *     from the minting frame.
+ *   - closure-function HERE => the count is sufficient on its own, the write-path reading is confounded in
+ *     turn, and BOTH the control and the deep-write conclusions must be withdrawn rather than qualified.
+ *
+ * REACHABILITY WITNESS: `plain-` is the uncaptured half of the same assignment expression, so it is `function`
+ * only if that statement executed; two addresses differing in `arm1`/`arm2` witness that the fork happened and
+ * each arm ran its own branch. It does NOT witness that the `arm` cell is isolated — the value is copied into
+ * the uncaptured `b` in the same expression that produced it. A run emitting ONE address, or `plain-undefined`,
+ * measured nothing whatever `closure-` says.
+ *
+ * RETIREMENT: goes with its siblings, when the subject passes and the mechanism is asserted at its origin. */
+(function () {
+  var v = undefined, w = undefined, arm = 0;
+  function rd() { return v; }
+  function set(fn) { v = fn; return fn; }
+  function d(n) { if (n > 0) return d(n - 1); if (__FLAGS.b) { arm = 1; } else { arm = 2; } return arm; }
+  var b = d(3), assigned = (w = v = function () { return 1; }), pad = 0;
+  fetch("/e/closure-" + (typeof rd()) + "/plain-" + (typeof w) + "/arm" + b + "/unused" + (typeof set));
+})();
+</script>
