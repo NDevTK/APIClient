@@ -490,15 +490,51 @@ const char *absent_standard_name(const char *name, AbsentVocab *vocab)
  * two callers, which is the half a reader is tempted to doubt.) Both hand this file the same base and
  * the same atom: the property-read miss that degrades to
  * `undefined`, and the unresolvable Reference that goes on to throw. The `typeof` entry beside them is a
- * THIRD outcome and is separated by its own member, which the other two are not. The outcome differs entirely
- * AFTER this hook returns, so a row of twelve reads cannot be read as twelve silent degradations.
+ * THIRD outcome and is separated by its own member AND by its own bucket on the row, which the other two are
+ * not: they are the two callers of ONE entry and land together in `read`. The outcome differs entirely AFTER
+ * this hook returns, so a row whose `read` bucket stands at twelve cannot be read as twelve silent
+ * degradations — and the bucket is the unit of that ambiguity now rather than the row, since the `typeof` and
+ * `in` buckets beside it are each one outcome and carry none of it.
  * WHAT THE NEXT DIFF BUILDS: the ask carrying which of its two callers asked, so the row splits into the arm
  * that degraded and the arm that threw — again an engine/qjs change.
  * HOW ITS ABSENCE SHOWS: a page that only ever writes `new EventSource(…)` is FULLY diagnosed by its own
  * ReferenceError in `pageErrors` and still appears here, so a reader cross-references the two surfaces by
  * hand; a name in this census with no matching `pageErrors` entry is the silent case and a name in both is
  * ambiguous. */
-typedef struct { const char *name; long reads; AbsentVocab vocab; } OwedRow;
+/* WHICH OF THIS FILE'S THREE ENTRIES RAISED A READ. IT IS A HOST FACT AND NOT THE ENGINE'S
+   `JSConcolicAbsentOp`, and taking the engine's enum for it is the wrong diff a reader reaches for FIRST —
+   recorded here because it is one member short of the population and the shortfall lands in the direction
+   that inverts the finding. quickjs.h defines JSConcolicAbsentOp as "WHICH OPERATOR ASKED A GLOBAL NAME AND
+   ANSWERED WITHOUT PERFORMING A [[Get]]" and says of BOTH its members that "neither operator's algorithm
+   contains a read", so the [[Get]] absent_read_hook answers has no member of it and cannot be given one
+   without contradicting the sentence that defines the enum. A field of that type on a row would therefore be
+   STATED at one of global_miss_note's two callers and DEFAULTED at the other, and the defaulted one is the
+   larger: every property read on the global would land in whichever member the default named. That is
+   CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS at the one axis this census exists to publish — a `typeof` or an
+   `in` guard degrades to the false arm a browser without the feature also takes, and a read nothing guarded
+   ends the flow at a ReferenceError, so filing the second under the first reports the cheapest band for the
+   most expensive one.
+   SO THE ENGINE'S TWO MAP INTO THIS THREE AND NEVER THE OTHER WAY ROUND: the engine states which no-[[Get]]
+   operator asked because it is the only party that knows, and this file states which of ITS entries was
+   standing there because the engine does not know this file has three. `ABSENT_ENTRY_N` is the COUNT and is
+   never an entry — it is the poison an unset local carries into owed_note's own assert, exactly as
+   `ABSENT_VOCAB_N` is, so an arm that classifies nothing aborts at the record with the name in hand rather
+   than filing one spelling under another's.
+   RETIREMENT: this argument goes when JSConcolicAbsentOp can name a [[Get]], which would mean the engine's
+   `.absent` and `.absent_unresolved` hooks had become one — at which point the two enums are one enum and
+   nothing here is re-derivable. */
+typedef enum { ABSENT_ENTRY_READ, ABSENT_ENTRY_TYPEOF, ABSENT_ENTRY_IN, ABSENT_ENTRY_N } AbsentEntry;
+
+/* AND THE SPLIT IS AN ARRAY OF COUNTS RATHER THAN ONE MEMBER NAMING AN ENTRY, which is the second half of the
+   same argument and is independent of it. A row is keyed by NAME and accumulates for the life of the run, so
+   what it describes is N EVENTS and a scalar is one latch over all of them: `typeof X !== "undefined" && new
+   X(...)` is the commonest shape a bundle has and it raises two entries on ONE row, which a latch answers
+   with whichever ran last. Counts are also what make the split CHECKABLE rather than merely published — the
+   buckets SUM to `reads`, and a total that cannot move without one of its parts moving is the only kind a
+   reader may do arithmetic on (CLAUDE.md §A-GAUGE-AND-A-LIFETIME-COUNTER). A latch closes over nothing.
+   RETIREMENT: this argument goes when a row can hold at most one read, which is what a seen-set would buy and
+   is banned by §NO BOUNDS, so it does not go. */
+typedef struct { const char *name; long reads; long by_entry[ABSENT_ENTRY_N]; AbsentVocab vocab; } OwedRow;
 static OwedRow *g_owed;
 static int g_owed_n, g_owed_cap;
 /* THE THREE ARMS OF THE GLOBAL MISS, EACH RAISED AT THE SITE THAT DECIDES IT — never one counter incremented
@@ -540,9 +576,9 @@ static long g_owed_by_vocab[ABSENT_VOCAB_N];
    where a read has ALREADY missed the whole prototype chain of the global AND matched a binary search, so the
    distinct names are what one document asked for and not what a standard defines. A hash here would be a
    second index over a table whose whole content is normally under a hundred rows. */
-static void owed_note(const char *name, AbsentVocab vocab)
+static void owed_note(const char *name, AbsentVocab vocab, AbsentEntry entry)
 {
-    int i;
+    int i, e;
 
     DCHECK(name != NULL, "a read was recorded as owed with no name — the caller's name is the vocabulary's own "
                          "entry and absent_standard_name returns NULL rather than an empty one, so this is a "
@@ -558,11 +594,23 @@ static void owed_note(const char *name, AbsentVocab vocab)
                                    "absent_standard_name writes it on every hit, so an out-of-range value is a "
                                    "caller passing an uninitialised local, and the line below indexes the "
                                    "per-standard split with it", (int)vocab, (int)ABSENT_VOCAB_N);
+    /* AND THE SAME MACRO FOR THE SAME REASON ONE ARGUMENT OVER — the row's bucket is indexed with this in
+       every build, so a dev-only guard here would be compiled out of exactly the build where the write still
+       happens. The value that reaches an out-of-range state is the POISON global_miss_note's two callers
+       carry when nothing classified them, so this fires with the NAME in hand: `ABSENT_ENTRY_N` arriving
+       means a caller reached the record without saying which of this file's entries it was, and the arm that
+       does that is a switch over JSConcolicAbsentOp that gained a member. */
+    CHECKF(entry < ABSENT_ENTRY_N, "a read was recorded as owed by an entry this file does not have (%d of "
+                                   "%d) — the enum is the only thing that mints one and every caller states "
+                                   "it, so an out-of-range value is the poison an unclassified arm carries "
+                                   "and the line below indexes the row's per-entry split with it",
+           (int)entry, (int)ABSENT_ENTRY_N);
     g_owed_reads++;
     g_owed_by_vocab[vocab]++;
     for (i = 0; i < g_owed_n; i++)
         if (g_owed[i].name == name) {
             g_owed[i].reads++;
+            g_owed[i].by_entry[entry]++;
             return;
         }
     if (g_owed_n == g_owed_cap) {
@@ -579,6 +627,13 @@ static void owed_note(const char *name, AbsentVocab vocab)
     }
     g_owed[g_owed_n].name = name;
     g_owed[g_owed_n].reads = 1;
+    /* ZEROED BY HAND AND NOT BY THE ALLOCATOR, because the allocator above is `realloc` and realloc does not
+       zero what it grows into. A new row's buckets would otherwise hold whatever the heap last put there, the
+       composer's per-row identity would fire on the first census, and on the arm where DCHECKs are compiled
+       out the census would publish a split of a population it never counted. */
+    for (e = 0; e < ABSENT_ENTRY_N; e++)
+        g_owed[g_owed_n].by_entry[e] = 0;
+    g_owed[g_owed_n].by_entry[entry] = 1;
     g_owed[g_owed_n].vocab = vocab;
     g_owed_n++;
 }
@@ -599,8 +654,13 @@ static void owed_note(const char *name, AbsentVocab vocab)
    One rule, three reasons; a reader who takes the reason for the rule will put an assert on a page's bytes.
    Returns 1 when the read is LEFT ALONE — a standard owes the name, or it is an integer key on the global —
    and 0 when no vocabulary claimed it, which is the arm the read hook mints an unknown on and the two
-   operator entries simply record. `key` is the atom already spelled by ns_key_str. */
-static int global_miss_note(const char *key, JSAtom name)
+   operator entries simply record. `key` is the atom already spelled by ns_key_str.
+   `entry` IS WHICH OF THE THREE ASKED AND IS THE CALLER'S TO STATE, for the reason the engine's own operator
+   enum is the engine's to state: this function cannot infer it, because the classification it performs is a
+   question about the NAME and the name is identical at all three entries. It is carried rather than derived
+   and it reaches the ROW, which is what separates "this document guarded the name" from "this document read
+   it" per NAME instead of only in the two whole-run cuts above. */
+static int global_miss_note(const char *key, JSAtom name, AbsentEntry entry)
 {
     /* THE POISON IS THE VALUE owed_note'S OWN ASSERT NAMES, so a vocabulary that is read without having been
        written aborts at the record with the name in hand rather than filing one standard's work under the
@@ -609,6 +669,19 @@ static int global_miss_note(const char *key, JSAtom name)
     AbsentVocab vocab = ABSENT_VOCAB_N;
     const char *owed;
 
+    /* THE CLASSIFICATION IS ASSERTED AT ITS ORIGIN AND NOT ONLY WHERE IT IS INDEXED WITH, which is two
+       obligations rather than one copy of a third: owed_note guards an ARRAY WRITE and so is a CHECK in every
+       build, and this guards that A CALLER CLASSIFIED ITS READ AT ALL, which is a statement about this
+       codebase's own logic and so is a DCHECK. They do not cover the same population either — owed_note is
+       reached only on the arm where a standard owns the name, so the poison an unclassified arm carries would
+       pass through every app-state and every integer read in silence and fire only if the document happened
+       to read an OWED name with the unclassified operator. Here it fires on the first read of any kind. */
+    DCHECKF(entry < ABSENT_ENTRY_N,
+            "a read of the global object reached the classification with no entry stated (%d of %d) — every "
+            "caller of this function names which of the three it is, and the only value that is none of them "
+            "is the poison absent_unresolved_note opens with, so this is a switch over JSConcolicAbsentOp "
+            "that gained a member and classified it nowhere",
+            (int)entry, (int)ABSENT_ENTRY_N);
     g_global_reads++;
     /* A name a STANDARD owns on the global object is a component this engine owes; leave the read alone
        so its throw names it. Asked ONLY of the global, because those names live there: `gon.Node` is a
@@ -623,7 +696,7 @@ static int global_miss_note(const char *key, JSAtom name)
            left exactly as alone as it was — and what the census gains is the one population that says
            something about a run: the names THIS DOCUMENT asked a standard for that this realm did not
            answer. See the census banner above owed_note for the population and the denominator. */
-        owed_note(owed, vocab);
+        owed_note(owed, vocab, entry);
         return 1;
     }
     /* AND AN INDEX IS NOT A FIELD OF A RECORD AT ALL, WHICH IS A QUESTION ABOUT THE KEY SPACE AND NOT
@@ -701,8 +774,11 @@ static size_t absent_emitf(char *out, size_t cap, size_t len, const char *fmt, .
    the provenance is what is checked below.
    MEMBERS OPEN ON `_` AND ROWS CANNOT, which is decide.c's namespace rule and is asserted here for its
    reason: a consumer sums the ROWS to get the reads and reads the MEMBERS as the population they are drawn
-   from, so a member that could be mistaken for a row would put the denominator inside its own numerator. No
-   name either standard puts on the global object opens on an underscore, and that is a claim about two
+   from, so a member that could be mistaken for a row would put the denominator inside its own numerator. A
+   ROW IS A HISTOGRAM AND A MEMBER IS A NUMBER, and summing a row now means summing its BUCKETS — which is
+   the same statement one level down and is why the buckets are a partition rather than a list: they sum to
+   that row's reads, so a reader who sums every bucket of every row still has the numerator.
+   No name either standard puts on the global object opens on an underscore, and that is a claim about two
    generated tables, so it is a DCHECK over this codebase's own bytes and not over a document's.
    IT IS NEVER `{}`. Every member is emitted on every census, zeroes included, so this object has rows only
    when a document actually asked for something this realm could not answer and has MEMBERS always — which is
@@ -741,12 +817,25 @@ char *absent_json(void)
         "_of those owed reads, names ECMA-402 §8 The Intl Object puts there"
     };
     char *out = NULL;
+    /* THE BUCKET NAMES, SHORT WHERE THE MEMBERS ABOVE ARE PROSE — a member is rendered by popup.js as a row
+       of its own and is read as a sentence, and a bucket is rendered inside one (`EventSource read 1, typeof
+       1, in 1`), so the vocabulary the members establish is what these three lean on rather than restating.
+       THE SIZE IS DERIVED AND THE COUNT IS ASSERTED AT COMPILE TIME, which is the one thing the per-standard
+       array beside it cannot do: `KEY_VOCAB[ABSENT_VOCAB_N]` is a SIZED array with a short initialiser, so a
+       vocabulary added without a key compiles and writes `(null)` into the census. An unsized array plus this
+       assertion makes that state unreachable rather than merely asserted — CLAUDE.md §Fix-the-ROOT — and it
+       costs one line, so the sized form below is the one to change next rather than the pattern to copy. */
+    static const char *const KEY_ENTRY[] = { "read", "typeof", "in" };
     size_t cap = 0, len = 0;
-    long sum = 0, rowsby[ABSENT_VOCAB_N];
-    int pass, i, v;
+    long sum = 0, rowsby[ABSENT_VOCAB_N], rowsbyentry[ABSENT_ENTRY_N];
+    int pass, i, v, e;
 
+    _Static_assert(sizeof KEY_ENTRY / sizeof *KEY_ENTRY == ABSENT_ENTRY_N,
+                   "absent.c's census has an entry with no bucket name, or a name with no entry");
     for (v = 0; v < ABSENT_VOCAB_N; v++)
         rowsby[v] = 0;
+    for (e = 0; e < ABSENT_ENTRY_N; e++)
+        rowsbyentry[e] = 0;
     /* THE ROWS SUMMED TWICE OVER, ONCE WHOLE AND ONCE PER STANDARD — which is what makes the per-standard
        split CHECKABLE rather than merely published, and what gives `OwedRow.vocab` a reader. That field is
        written at every row and it would otherwise be read by nothing at all: a name WRITTEN somewhere and
@@ -759,7 +848,27 @@ char *absent_json(void)
        owed_note and the other per ROW here, so they part company if the grow path drops a row or a bucket is
        raised twice. */
     for (i = 0; i < g_owed_n; i++) {
+        long rsum = 0;
+
         sum += g_owed[i].reads;
+        for (e = 0; e < ABSENT_ENTRY_N; e++) {
+            rsum += g_owed[i].by_entry[e];
+            rowsbyentry[e] += g_owed[i].by_entry[e];
+        }
+        /* THE ROW'S OWN IDENTITY, WHICH IS WHAT MAKES THE SPLIT A PARTITION RATHER THAN THREE ANNOTATIONS —
+           and the two sides CAN disagree, which is the whole test an assert has to pass here. `reads` is
+           raised by owed_note and so is the bucket, but the row is grown by `realloc`, which does not zero:
+           a new row whose buckets were left as the heap found them parts company with its own total on the
+           very first census. It also fires for a bucket raised twice for one read, which is how a second
+           recording site gets added wrongly, and for a struct the two translation units lay out differently.
+           A reader takes this row's split as a fraction OF `reads`, so a row that leaks hands back a
+           fraction of a denominator that is not the number of reads. */
+        DCHECKF(rsum == g_owed[i].reads,
+                "the owed-name census holds a row (\"%s\") whose per-entry split does not sum to its own "
+                "reads (%ld by the buckets, %ld by the row) — owed_note raises exactly one bucket per read "
+                "and zeroes every bucket of a row it creates, so a mismatch is a row the grow path left "
+                "uninitialised or a bucket raised beside a read rather than as part of one",
+                g_owed[i].name, rsum, g_owed[i].reads);
         /* A `CHECK` FOR THE REASON THE RAISE HAS ONE — the line under it indexes `rowsby` with this value in
            every build, and a guard that is compiled out of the build where the write still happens is not a
            guard. It is NOT an `if` past a broken invariant either: there is no arm here that could be right,
@@ -809,6 +918,30 @@ char *absent_json(void)
             "exactly ONE, and it is the placement, because the [[HasProperty]] miss underneath it is the same "
             "request every unresolved identifier issues",
             g_in_reads, g_global_reads);
+    /* AND THE SAME TWO CUTS AGAIN, THIS TIME AGAINST THE PER-NAME SPLIT THAT IS A CUT OF THEM — which is what
+       gives `OwedRow.by_entry` a reader beside the row it is emitted on, exactly as the sum above the
+       identities gives `OwedRow.vocab` one. The two sides are raised at DIFFERENT events: the cut once per
+       operator entry BEFORE the classification, this sum once per OWED read inside it, so they part company
+       when a row's operator bucket is raised without the entry that owns it having been reached — which is
+       precisely the shape a second recording site for one of these operators would have.
+       IT IS `<=` AND THE SLACK IS A POPULATION RATHER THAN A TOLERANCE, which is why it is stated here: the
+       residue is operator reads on names NO standard owns, and `typeof __NEXT_DATA__` is the commonest line
+       in a server-rendered bundle. A reader who takes the gap for a defect has read a cut of the global
+       reads as a cut of the owed ones; an EQUALITY here would be that misreading frozen into an assert and
+       would fire on the first app-state feature detect any document performs. */
+    DCHECKF(rowsbyentry[ABSENT_ENTRY_TYPEOF] <= g_unresolved_reads,
+            "the owed-name census's per-name typeof buckets (%ld) outnumber the typeof reads the engine told "
+            "this file about (%ld) — the cut is raised once per typeof entry before the classification and "
+            "the buckets once per OWED typeof read inside it, so the buckets can only be FEWER (the residue "
+            "is typeof reads on names no standard owns). More of them is a row's bucket raised by something "
+            "that never came through absent_unresolved_note",
+            rowsbyentry[ABSENT_ENTRY_TYPEOF], g_unresolved_reads);
+    DCHECKF(rowsbyentry[ABSENT_ENTRY_IN] <= g_in_reads,
+            "the owed-name census's per-name `in` buckets (%ld) outnumber the `in` reads the engine told this "
+            "file about (%ld) — stated as its own assert rather than as a sum with the typeof pair for that "
+            "pair's own reason: a summed statement closes over one bucket running ahead while the other runs "
+            "behind, and which operator a document actually writes is the fact this split exists to state",
+            rowsbyentry[ABSENT_ENTRY_IN], g_in_reads);
     for (v = 0; v < ABSENT_VOCAB_N; v++)
         DCHECKF(rowsby[v] == g_owed_by_vocab[v],
                 "the per-standard split of the owed reads disagrees with the rows it is a split OF (standard "
@@ -854,13 +987,27 @@ char *absent_json(void)
                         k, (unsigned char)*c);
             DCHECKF(*k != '_',
                     "the owed-name census is writing a row named \"%s\", which opens on the `_` its MEMBERS "
-                    "are told apart by — a consumer sums the rows to get the reads and reads the members as "
-                    "the population they are drawn from, so a row in the member namespace puts a denominator "
-                    "inside its own numerator. No name Web IDL exposes on Window and no name ECMAScript §19 "
-                    "puts on the global object opens on an underscore, so this is a generated table having "
-                    "gained a name neither standard spells", k);
+                    "are told apart by — a consumer sums the rows' buckets to get the reads and reads the "
+                    "members as the population they are drawn from, so a row in the member namespace puts a "
+                    "denominator inside its own numerator. No name Web IDL exposes on Window and no name "
+                    "ECMAScript §19 puts on the global object opens on an underscore, so this is a generated "
+                    "table having gained a name neither standard spells", k);
 #endif
-            len = absent_emitf(out, cap, len, ",\"%s\":%ld", k, g_owed[i].reads);
+            /* THE ROW IS A HISTOGRAM AND NOT A COUNT, AND EVERY BUCKET IS EMITTED INCLUDING THE ZEROES —
+               which is the members' own rule one level down and is load-bearing twice over. It is what makes
+               `typeof 3, in 0, read 0` the positive statement that this document guarded the name and never
+               read it, rather than a table a reader has to know the shape of; and extension/bridge.js refuses
+               an EMPTY histogram on this census by name, so a row that listed only its non-zero buckets would
+               abort the trusted zone for every document whose reads all took one entry.
+               THE TOTAL IS NOT A FOURTH BUCKET. `reads` is the SUM of these three and printing it beside them
+               is CLAUDE.md §EVIDENCE-INFLATION in a JSON object: a reader summing the table would get twice
+               the reads, with every bucket still looking like a measurement. The sum IS the total, which is
+               what the row identity above asserts and what leaves nothing here to double-count. */
+            len = absent_emitf(out, cap, len, ",\"%s\":{", k);
+            for (e = 0; e < ABSENT_ENTRY_N; e++)
+                len = absent_emitf(out, cap, len, "%s\"%s\":%ld", e ? "," : "", KEY_ENTRY[e],
+                                   g_owed[i].by_entry[e]);
+            len = absent_emitf(out, cap, len, "}");
         }
         len = absent_emitf(out, cap, len, "}");
         if (pass == 0) {
@@ -1190,14 +1337,22 @@ void absent_unresolved_note(JSContext *ctx, JSAtom name, JSConcolicAbsentOp op)
        JSConcolicAbsentOp is a COMPILE diagnostic here rather than a read that silently raises no cut and
        leaves the census reporting a smaller absence than the document asked for. That is the direction this
        whole file is about: a number that falls because the instrument stopped looking. */
+    /* AND THE SAME SWITCH MAPS THE ENGINE'S OPERATOR ONTO THIS FILE'S ENTRY, which is the whole of the
+       translation between the two enums and is why there is exactly one of it. `entry` opens on the POISON
+       rather than on a member, so the no-`default` property above gains a RUNTIME backstop to go with its
+       compile diagnostic: a member added to JSConcolicAbsentOp breaks this build, and a build that somehow
+       proceeds anyway aborts at owed_note's own assert with the name in hand instead of filing the new
+       operator's reads under READ and reporting an unguarded read for a guarded one. */
+    AbsentEntry entry = ABSENT_ENTRY_N;
+
     switch (op) {
-    case JS_CONCOLIC_ABSENT_TYPEOF: g_unresolved_reads++; break;
-    case JS_CONCOLIC_ABSENT_IN:     g_in_reads++; break;
+    case JS_CONCOLIC_ABSENT_TYPEOF: g_unresolved_reads++; entry = ABSENT_ENTRY_TYPEOF; break;
+    case JS_CONCOLIC_ABSENT_IN:     g_in_reads++;         entry = ABSENT_ENTRY_IN;     break;
     }
     /* THE ANSWER IS DISCARDED AND THAT IS THE WHOLE DIFFERENCE FROM THE READ HOOK: the arms decide what the
        READ hook returns, and this entry has already been answered by the operator. Every arm's counter and
        every row is raised inside, so there is nothing here left to do with the verdict. */
-    (void)global_miss_note(s, name);
+    (void)global_miss_note(s, name, entry);
     JS_FreeCString(ctx, s);
 }
 
@@ -1221,7 +1376,7 @@ JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name)
            not on the channel", which completes §10.1.8.1 OrdinaryGet ( O, P, Receiver ) step 2.b's
            `undefined`. Falling through is the third arm: no vocabulary claimed the name, so it is
            server-injected app state and the mint below is what this entry has that the other does not. */
-        if (global_miss_note(s, name))
+        if (global_miss_note(s, name, ABSENT_ENTRY_READ))
             goto done;
     } else {
         base = ns_path_of(obj);

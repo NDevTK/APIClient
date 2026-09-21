@@ -2635,10 +2635,16 @@ static const char *HTML =
        §13.5.3.1 Runtime Semantics: Evaluation step 2.a answers at the opcode, BEFORE step 2.b's GetValue, so
        it reaches no read hook at all and is recorded by JSConcolicHooks.absent_unresolved instead. They are
        one question about one name and must raise ONE row.
-       WHAT TO OBSERVE, since this asserts nothing: in the run's `_absent`, the row `"EventSource"` reads 2 —
-       one per spelling — and `_of those, answered by the typeof operator with no [[Get]] performed` reads at
-       least 1. Both are emitted on every census including zero, so a 0 there is the positive statement that no
-       `typeof` reached an unresolved name rather than an absent member.
+       WHAT TO OBSERVE, since this asserts nothing: in the run's `_absent`, the row `"EventSource"` is a
+       HISTOGRAM rather than a count and these two statements put 1 in `read` and 1 in `typeof` — one per
+       spelling, with the buckets summing to the reads — while `_of those, answered by the typeof operator
+       with no [[Get]] performed` reads at least 1. Every bucket and every member is emitted on every census
+       including zero, so a 0 in either is the positive statement that no `typeof` reached an unresolved name
+       rather than an absent member.
+       THE BUCKET IS WHAT THE COUNT COULD NOT SAY, which is why this observation is worth more than the `2` it
+       replaces: a row reading 2 is produced by these two spellings AND by two `typeof`s, and those are
+       opposite findings — a name only ever guarded costs the false arm a browser without the feature also
+       takes, and a name READ costs the flow at its ReferenceError. The row now states which.
        NEITHER STATEMENT THROWS AND NEITHER FORKS: the read misses on a name a vocabulary owns, so the census
        records it and the suppression leaves it alone — §10.1.8.1 OrdinaryGet ( O, P, Receiver ) step 2.b's
        `undefined` — and the `typeof` was already `"undefined"`. NO PROBE ROW is added for them on purpose:
@@ -2656,12 +2662,20 @@ static const char *HTML =
        arm the line before it reaches: the engine records it at the `in` operator's own placement, where the
        operator, its base and its answer are in one hand. It answers `false` and nothing throws, exactly as the
        other two answer `"undefined"` and `undefined`.
-       WHAT TO OBSERVE, since this asserts nothing: in the run's `_absent`, the row `"EventSource"` reads 3
-       rather than 2 — one per spelling — and `_of those, answered by the in operator with no [[Get]]
-       performed` reads at least 1 beside the `typeof` member's at least 1. Both operator members are emitted
-       on every census including zero, so a 0 in either is the positive statement that no read of that shape
-       reached an unresolved name rather than an absent member; and the two are SEPARATE members precisely so
-       that this document can show them moving independently, which one summed member could not.
+       WHAT TO OBSERVE, since this asserts nothing: in the run's `_absent`, the row `"EventSource"` reads
+       `read 1, typeof 1, in 1` rather than `read 1, typeof 1` — one per spelling, three buckets summing to
+       the three reads — and `_of those, answered by the in operator with no [[Get]] performed` reads at least
+       1 beside the `typeof` member's at least 1. Every operator member and every bucket is emitted on every
+       census including zero, so a 0 in any of them is the positive statement that no read of that shape
+       reached an unresolved name rather than an absent member; and they are SEPARATE members and SEPARATE
+       buckets precisely so that this document can show them moving independently, which one summed member
+       could not.
+       THIS DOCUMENT IS THE WHOLE-RUN WITNESS FOR THE PER-NAME SPLIT and is the only one in the corpus: the
+       two members above say that SOME typeof and SOME `in` reached an unanswered name, and only a row whose
+       three buckets each stand at 1 says they reached the SAME name — which is the question a reader of this
+       census actually has, since a name guarded by one spelling and read by another is a name whose absence
+       costs something. A build in which the split regressed reads `read 3, typeof 0, in 0` here, with every
+       member above unchanged.
        IT IS THE REACHABILITY WITNESS AND NOT A PROBE ROW, for the reason the paragraph above gives: a census
        member is neither an endpoint nor a param, and a bare `strstr` needle over a census key is one
        engine/probegate.mjs cannot resolve to any document token this file emits. The observation is the
