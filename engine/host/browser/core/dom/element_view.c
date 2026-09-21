@@ -29,6 +29,7 @@
 #include "core/layout/replaced_element.h"
 #include "core/layout/scroll_container.h"
 #include "core/layout/scrolling_area.h"
+#include "core/layout/table_box.h"
 #include "core/layout/used_value.h"
 #include "solver/concolic.h"
 
@@ -380,11 +381,12 @@ static double ev_scroll_position_px(const EvTarget *t, bool vertical)
 }
 
 /* THE ATTRIBUTE, over the derivation above — and the two are separate for the reason viewport.h gives for its
-   own pair. §2 Terminology is explicit that "when a method or an attribute is said to call another method or
-   attribute, the user agent must invoke its INTERNAL API for that attribute", and §6's scroll members do
-   exactly that at three steps: step 1's "or the element's current scroll position on the x axis otherwise",
-   and `scrollBy`'s steps 3 and 4 ("add the value of scrollLeft to the left dictionary member"). Those callers
-   need the NUMBER, so the derivation answers a double and the member wraps it — rather than the callers
+   own pair. CSSOM VIEW §2 "Terminology" is explicit that "when a method or an attribute is said to call
+   another method or attribute, the user agent must invoke its INTERNAL API for that attribute", and §6's
+   scroll members do exactly that at three steps: step 1's "or the element's current scroll position on the x
+   axis otherwise", and `scrollBy`'s steps 3 and 4 ("add the value of scrollLeft to the left dictionary
+   member"). Those callers need the NUMBER, so the derivation answers a double and the member wraps it —
+   rather than the callers
    reading a JSValue back out of the member, which is the shape that lets a page's override decide what an
    engine algorithm measures. */
 static JSValue ev_scroll_position(JSContext *ctx, const EvTarget *t, bool vertical)
@@ -688,9 +690,10 @@ static JSValue js_ev_scroll(JSContext *ctx, JSValueConst this_val, int argc, JSV
        is what this half of the engine traces to and a member that quietly "fixed" it would be a fidelity gap
        invented here rather than one inherited: a page whose `documentElement.scrollTo(x, y)` moved
        horizontally in this engine and nowhere else is a divergence with nothing to point at.
-       §2 Terminology is why this is `viewport_scroll` and not the page-visible `window.scroll`: "when a method
-       or an attribute is said to call another method or attribute, the user agent must invoke its INTERNAL API
-       for that attribute", so a page overriding `window.scroll` cannot change what this does. */
+       CSSOM VIEW §2 "Terminology" is why this is `viewport_scroll` and not the page-visible `window.scroll`:
+       "when a method or an attribute is said to call another method or attribute, the user
+       agent must invoke its INTERNAL API for that attribute", so a page overriding `window.scroll` cannot
+       change what this does. */
     if (t.is_root) {
         /* ONLY `y` IS CONSUMED ON THIS ARM, so only `y` is resolved: step 8 DISCARDS x (see the paragraph
            above, which quotes it), and resolving a request no step reads would crash on an unknown `left` that
@@ -1217,45 +1220,77 @@ ElementViewFragments element_view_fragment_kind(lxb_dom_element_t *el)
     return ELEMENT_VIEW_FRAGMENTS_ONE;
 }
 
-/* §6's step 3's SECOND CONSTRAINT — the one fragment shape this engine cannot enumerate. THE INLINE ARM IS
-   GONE FROM HERE BECAUSE IT IS BUILT, and this comment says so because the crash that stood here instructed
-   the reader to build it: core/layout/flow_position.h's `flow_inline_fragment_rects` answers every border area
-   of a non-replaced inline box, out of `line_box_inline_fragments`' per-line fragments, out of
-   `text_run_measure_line_offset`'s per-item position and css-text-4 §7.3 "Default Text Alignment: the
-   text-align-all property"'s alignment. `ev_client_rects` below emits one rect per line box the box spans. */
-static void ev_require_enumerable_fragments(const EvTarget *t)
+/* §6's step 3's SECOND CONSTRAINT, PERFORMED — "if the element on which the method was invoked has a computed
+   value for the display property of table or inline-table include both the table box and the caption box, if any,
+   but not the anonymous container box". THE INLINE ARM IS GONE FROM HERE BECAUSE IT IS BUILT and the TABLE ARM IS
+   GONE BECAUSE THIS IS IT: the crash that stood here ended "Emit that LIST here, the way the line-box arm above
+   emits one rectangle per fragment", and the list is what this answers.
+   IT IS A LIST OF ELEMENTS AND NOT OF RECTANGLES, because every box on it is one an element generates and the
+   border area of each is the SAME derivation `ev_border_area_px` performs for any other box — one derivation over
+   N boxes rather than a second assembly free to disagree with the first about what a border area is.
+   THE ANONYMOUS CONTAINER THE CONSTRAINT EXCLUDES IS CSS 2.1 §17.4 "Tables in the visual formatting model"'s
+   TABLE WRAPPER BOX — "the table generates a principal block box called the table wrapper box that contains the
+   table box itself and any caption boxes (in document order)" — and excluding it costs nothing here rather than
+   being a step performed: NO ELEMENT IN THE TREE NAMES THAT BOX (core/layout/table_wrapper.h says so in its own
+   words), so a list keyed on elements cannot contain it.
+   THE TABLE ELEMENT STANDS FOR THE TABLE BOX AND NOT FOR THE WRAPPER, which is CSS 2.1 §17.4's own declaration
+   split and not a choice made here: "The computed values of properties 'position', 'float', 'margin-*', 'top',
+   'right', 'bottom', and 'left' on the table element are used on the table wrapper box and not the table box; all
+   other values of non-inheritable properties are used on the table box and not the table wrapper box." So the
+   BORDER and PADDING `ev_border_area_px` reads off the table element are the TABLE BOX's, and its two extents are
+   CSS 2.1 §17.5.2 "Table width algorithms: the 'table-layout' property"'s and CSS 2.1 §17.5.3 "Table height
+   algorithms"' through core/layout/used_value.h — so the rectangle that comes back is the box this constraint
+   names and not the one it excludes. core/layout/flow_position.c asserts the same split from the other side, over
+   the same property list.
+   A CAPTION NEEDS NO ENTRY OF ITS OWN EITHER, for CSS 2.1 §17.4's own reason: "The caption boxes are block-level
+   boxes that retain their own content, padding, margin, and border areas, and are rendered as normal block boxes
+   inside the table wrapper box", so the ordinary block-box derivation is the right one for it. What a caption
+   still lacks is its POSITION, which core/layout/flow_position.c refuses by name — CSS 2.1 §9.4.1 "Block
+   formatting contexts"' stack over the WRAPPER's own child box list — so a table that has one crashes THERE, at
+   the earlier subproblem, exactly as the inline arm crashes inside core/layout/used_value.h for a box CSS 2.1 §10
+   "Visual formatting model details" does not size.
+   NAMED RESIDUAL — THE ORDER. Step 3 wants its rectangles "in content order" and CSSOM VIEW defines no such term;
+   the only ordering the box structure carries is CSS 2.1 §17.4's own "(in document order)" over the WRAPPER's
+   children, and a `<caption>` element may stand before or after the table element's internal boxes. WHAT IS NOT
+   COVERED: this list is the table box followed by the caption boxes in document order, which is that order
+   exactly when no caption precedes the first internal box and is narrower than step 3 otherwise. WHAT THE NEXT
+   DIFF BUILDS: an entry beside core/layout/table_box.h's `table_box_captions` reporting the WRAPPER's CHILD BOXES
+   in document order — the same list core/layout/block_flow.c's CSS 2.1 §9.4.1 stack needs, so it is one build
+   with two consumers rather than a child scan written here, which would be a second copy of CSS 2.1 §17.2.1
+   "Anonymous table objects"' classification. HOW ITS ABSENCE WOULD SHOW: `getClientRects()` on a `table` whose
+   first child generates a caption box answers with that caption's rectangle SECOND where a browser answers with
+   it first — an ordering visible in the returned DOMRectList and in nothing else. It is not observable from this
+   engine today, because the same caption's position is refused by name one component over, so no list of more
+   than one member is produced at all.
+   Answers the count and stores a newly allocated array of that many ELEMENTS at `*out`, which the caller owns and
+   frees. The count is never zero — the table box is always on it. */
+static size_t ev_table_fragments(lxb_dom_element_t *el, lxb_dom_element_t ***out)
 {
-    ElementViewFragments kind = element_view_fragment_kind(lxb_dom_interface_element(t->node));
+    lxb_dom_element_t **caps = NULL, **frags;
+    size_t ncaps, i;
 
-    if (kind == ELEMENT_VIEW_FRAGMENTS_TABLE)
-        DFAIL("CSSOM VIEW §6's getClientRects() step 3's SECOND CONSTRAINT: an element whose computed `display` "
-              "is `table` or `inline-table` contributes 'both the TABLE BOX and the CAPTION BOX, if any, but "
-              "not the anonymous container box' — two fragments out of a box structure CSS 2.1 §17.2.1 "
-              "Anonymous table objects generates. THE STRUCTURE IS BUILT and this line used to say it was not: "
-              "core/layout/table_box.h answers §17.2.1's first two stages, and `table_box_captions` answers "
-              "exactly the CAPTION BOX half of the sentence above — the anonymous container this step excludes "
-              "is CSS 2.1 §17.4 Tables in the visual formatting model's table wrapper box, which nothing here "
-              "has to produce. ITS EXTENTS ARE NOT §10's EITHER AND BOTH AXES ARE NOW ANSWERED — this line "
-              "used to name the block axis as the one still missing, and then told its reader to BUILD it. "
-              "CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' property owns the table's WIDTH "
-              "and CSS 2.1 §17.5.3 Table height algorithms owns its HEIGHT, and BOTH are components "
-              "(core/layout/table_width.h, core/layout/table_height.h) that core/layout/used_value.c routes "
-              "a table box to on the declared arm and the `auto` arm alike — each section takes the "
-              "declaration as an INPUT to its own comparison rather than as the used value, so there is no "
-              "declared-height arm left for it to crash in. WHAT IS STILL MISSING IS THIS STEP'S OWN "
-              "ENUMERATION AND NOT AN EXTENT: one ELEMENT's entry has to answer SEVERAL rectangles — the "
-              "table box's, which is the single-fragment arm below, and one per element `table_box_captions` "
-              "reports, each of which CSS 2.1 §17.4 Tables in the visual formatting model makes an ordinary "
-              "block-level box — \"The caption boxes are block-level boxes that retain their own content, "
-              "padding, margin, and border areas, and are rendered as normal block boxes inside the table "
-              "wrapper box\". Emit that LIST here, the way "
-              "the line-box arm above emits one rectangle per fragment");
+    DCHECK(element_view_fragment_kind(el) == ELEMENT_VIEW_FRAGMENTS_TABLE,
+           "§6's getClientRects() step 3's second constraint was asked for the fragments of an element whose "
+           "computed `display` is neither `table` nor `inline-table` — the constraint is written over exactly "
+           "those two values, and no other box structure in this model has a caption box to include");
+    DCHECK(out != NULL,
+           "§6's getClientRects() step 3's second constraint was asked with nowhere to put its boxes — a count "
+           "alone names no box for the list to measure");
+    ncaps = table_box_captions(el, &caps);
+    frags = (lxb_dom_element_t **) malloc((ncaps + 1) * sizeof *frags);
+    CHECK(frags != NULL, "§6's getClientRects() step 3 could not allocate its fragment list");
+    frags[0] = el;                      /* the TABLE BOX, which the split above makes this element's box */
+    for (i = 0; i < ncaps; i++) frags[i + 1] = caps[i];
+    free(caps);
+    *out = frags;
+    return ncaps + 1;
 }
 
-/* §6's getClientRects() STEPS, AS THE INTERNAL ALGORITHM. §2 is explicit that a member "said to call another
-   method or attribute" invokes the algorithm and not the page-visible member, and getBoundingClientRect's step
-   1 is exactly such a call — so a page that overwrites `Element.prototype.getClientRects` cannot change what
-   `getBoundingClientRect()` measures, and neither can it change what §9's Range members measure.
+/* §6's getClientRects() STEPS, AS THE INTERNAL ALGORITHM. CSSOM VIEW §2 "Terminology" is explicit that a
+   member "said to call another method or attribute" invokes the algorithm and not the page-visible member, and
+   getBoundingClientRect's step 1 is exactly such a call — so a page that overwrites
+   `Element.prototype.getClientRects` cannot change what `getBoundingClientRect()` measures, and neither can it
+   change what §9's Range members measure.
    STEP 1 IS THE ONE THIS ENGINE ANSWERS FOR REAL, and it is a DERIVATION and not a stand-in: an element with
    no associated box generates no fragments in ANY user agent, so the empty list is the whole domain of the
    answer rather than one point picked out of it. element_view.h's one predicate is what decides it, so this
@@ -1264,6 +1299,8 @@ static void ev_require_enumerable_fragments(const EvTarget *t)
    `none` — which is most of what a lazy-loading bundle measures before it inserts anything. */
 static JSValue ev_client_rects(JSContext *ctx, const EvTarget *t)
 {
+    lxb_dom_element_t *el = lxb_dom_interface_element(t->node);
+    ElementViewFragments kind;
     JSValue rects;
 
     (void)ctx;   /* every object below is minted in the ELEMENT's relevant realm, never the caller's */
@@ -1278,21 +1315,20 @@ static JSValue ev_client_rects(JSContext *ctx, const EvTarget *t)
               "no margins and no borders; its bounds are its own segments). This engine lays out no SVG at all. "
               "BUILD SVG 2's bounding box beside the CSS one, in its own component, since none of §10's used "
               "values applies to it");
-    /* step 3, whose second constraint is decided first */
-    ev_require_enumerable_fragments(t);
     /* Step 3's THIRD constraint — "replace each anonymous block box with its child box(es) and repeat" — never
        fires for a list this engine produces, because an ELEMENT's own principal box is never anonymous: CSS 2
        §9.2.1.1 generates one only around block-level children of an inline-containing block container, and it
        belongs to no element. The list below is therefore already in the constraint's final form. */
     rects = JS_NewArray(t->rctx);
     CHECK(!JS_IsException(rects), "the client-rect list could not be allocated");
+    kind = element_view_fragment_kind(el);
     /* STEP 3'S COUNT — "one for each BOX FRAGMENT", "IN CONTENT ORDER". For an inline box that is one per line
        box it spans, which is the whole reason this member answers a list; `flow_inline_fragment_rects` reports
        them in the order the fill assigned the items, which IS content order because CSS 2 §9.4.2 distributes
        the run in document order and stacks the lines downward. */
-    if (element_view_fragment_kind(lxb_dom_interface_element(t->node)) == ELEMENT_VIEW_FRAGMENTS_LINE_BOXES) {
+    if (kind == ELEMENT_VIEW_FRAGMENTS_LINE_BOXES) {
         FlowRect *frags = NULL;
-        size_t n = flow_inline_fragment_rects(lxb_dom_interface_element(t->node), &frags), i;
+        size_t n = flow_inline_fragment_rects(el, &frags), i;
 
         for (i = 0; i < n; i++) {
             CssPx x = css_px_sub(frags[i].x, css_px(viewport_window_scroll(t->dctx, false)));
@@ -1307,6 +1343,43 @@ static JSValue ev_client_rects(JSContext *ctx, const EvTarget *t)
         free(frags);
         return dom_rect_list_new(t->rctx, rects);
     }
+    /* STEP 3'S SECOND CONSTRAINT, ASSEMBLED — one rectangle per box `ev_table_fragments` names, through the one
+       border-area derivation. The TABLE BOX's rectangle is this element's own, which is why the arm below and
+       the tail are the same call on different targets rather than two assemblies: CSS 2.1 §17.4's
+       declaration split (`ev_table_fragments`) makes the table element's border and padding the table box's,
+       so a table with no caption answers with exactly the rectangle the single-fragment tail would have
+       produced — the list grew a member, the measurement did not change. A CAPTION'S rectangle is an ordinary block box's and crashes
+       inside core/layout/flow_position.c for its POSITION, which is the earlier subproblem and the whole of
+       what a caption still waits on. */
+    if (kind == ELEMENT_VIEW_FRAGMENTS_TABLE) {
+        lxb_dom_element_t **frags = NULL;
+        size_t n = ev_table_fragments(el, &frags), i;
+
+        for (i = 0; i < n; i++) {
+            EvTarget ft;
+
+            ev_target_of_element(frags[i], &ft);
+            DCHECK(ft.rctx == t->rctx,
+                   "§6's getClientRects() step 3 reached a fragment box whose element's relevant realm is not "
+                   "the invoked element's — Web IDL mints a `[NewObject]` in the relevant realm of `this`, and "
+                   "CSS 2.1 §17.4's caption boxes are children of the table ELEMENT and therefore of its node "
+                   "document, so the two realms are one and a disagreement here is a caption taken from "
+                   "another tree");
+            DCHECK(ft.has_box,
+                   "§6's getClientRects() step 3 reached a fragment box whose element generates NO box — "
+                   "core/layout/table_box.h skips a child whose computed `display` is `none` before it is "
+                   "classified at all, so every caption it reports has a box and this is that component and "
+                   "core/dom/element_view.h's box predicate disagreeing");
+            JS_SetPropertyUint32(t->rctx, rects, (uint32_t)i, ev_border_area(&ft));
+        }
+        free(frags);
+        return dom_rect_list_new(t->rctx, rects);
+    }
+    DCHECK(kind == ELEMENT_VIEW_FRAGMENTS_ONE,
+           "§6's getClientRects() step 3 reached a fragment kind with no arm — the enumeration is this "
+           "codebase's own (core/dom/element_view.h) and every member of it names a different COUNT, so a new "
+           "one silently taking the single-fragment tail below would answer one rectangle for a box the "
+           "enumeration was widened precisely because it has more");
     JS_SetPropertyUint32(t->rctx, rects, 0, ev_border_area(t));
     return dom_rect_list_new(t->rctx, rects);
 }
@@ -1326,10 +1399,19 @@ JSValue element_view_client_rects(lxb_dom_element_t *el)
    this can be a second ENTRY without being a second ANSWER: step 1's list is empty exactly when the element has
    no associated box, so step 2's "a DOMRect object whose x, y, width and height members are zero" is reached by the
    one predicate element_view.h states and not by counting a list that was built to be counted; and a list of
-   one is what steps 3 and 4 both answer with, which is the derivation `ev_bounding_rect` writes out. What is
-   deliberately NOT reachable here is that function's multi-fragment crash — the two gates below fire first, for
-   the only two ways §6 says a list of more than one arises, so a caller of this entry meets the earlier
-   subproblem by its own name rather than the later one by a count. */
+   one is what steps 3 and 4 both answer with, which is the derivation `ev_bounding_rect` writes out.
+   THIS PARAGRAPH USED TO CLAIM THAT `ev_bounding_rect`'s MULTI-FRAGMENT CRASH IS NOT REACHABLE HERE, on the
+   ground that `the two gates below fire first, for the only two ways §6 says a list of more than one arises,`
+   `so a caller of this entry meets the earlier subproblem by its own name rather than the later one by a`
+   `count.` It is REWRITTEN RATHER THAN DELETED because its preference is right and a reader will re-derive it:
+   a crash that names the earliest unbuilt operand sends its reader to the component that owns it, and a crash
+   that names a COUNT sends them to arithmetic they cannot perform yet. What made it true was a gate refusing
+   every `table`, and §6's step 3 is now assembled for one — so the two ways a list of more than one arises no
+   longer agree about where this entry stops. AN INLINE BOX STILL REFUSES BY ITS OWN NAME, inside
+   `ev_border_area_px`, where the fragments are in hand. A `table` refuses BY A COUNT below, and the count is
+   the honest answer rather than a regression: the earlier subproblem for a captioned table is that caption's
+   own POSITION, which lives one component over and which this entry has no rectangle to ask for — so the
+   crash NAMES it instead of computing and discarding a rectangle to reach it. */
 void element_view_bounding_box_px(lxb_dom_element_t *el, CssPx out[4])
 {
     EvTarget t;
@@ -1346,7 +1428,39 @@ void element_view_bounding_box_px(lxb_dom_element_t *el, CssPx out[4])
               "SPECIFICATION', which is SVG 2's own object bounding box and not a special case of CSS 2 §8.1's "
               "border box. This engine lays out no SVG at all. BUILD SVG 2's bounding box beside the CSS one, "
               "in its own component");
-    ev_require_enumerable_fragments(&t);
+    /* §6's STEP 3'S SECOND CONSTRAINT, AS A COUNT — which is all this entry can ask of it, because it answers
+       ONE rectangle and `ev_table_fragments` names a box per member. A `table` with no caption is one member
+       and leaves through the ordinary derivation below; a `table` with captions is more, and the choice
+       between steps 3 and 4 is the same unbuilt union `ev_bounding_rect` and `ev_border_area_px`'s inline arm
+       each name. The array is released before the crash for the reason core/layout/flow_position.c states of
+       its own pair: `DFAIL` is compiled out in release, so a `free` after one is a `free` the release build
+       falls through to, and a `free` inside the arm would be a leak in dev and a double free here. */
+    if (element_view_fragment_kind(el) == ELEMENT_VIEW_FRAGMENTS_TABLE) {
+        lxb_dom_element_t **frags = NULL;
+        size_t n = ev_table_fragments(el, &frags);
+
+        free(frags);
+        if (n > 1)
+            DFAILF("CSSOM VIEW §6's get-the-bounding-box was asked in css_length.h's vocabulary for an element "
+                   "whose computed `display` is `table` or `inline-table` and whose step 3 list has %zu "
+                   "members — the TABLE BOX and %zu CAPTION BOX(ES), which CSS 2.1 §17.4 \"Tables in the visual "
+                   "formatting model\" renders \"as normal block boxes inside the table wrapper box\". So §6's "
+                   "steps 3 and 4 must CHOOSE between them, and this entry has one rectangle to answer with. "
+                   "IT IS THE SAME BUILD `ev_bounding_rect` above and `ev_border_area_px`'s inline arm each "
+                   "crash for: step 3 returns the first rectangle when every one has a zero width or height, "
+                   "step 4 otherwise returns the smallest rectangle enclosing those that do not — both "
+                   "COMPARISONS over rectangles whose numbers are concolics derived from the initial "
+                   "containing block, so neither may be a C branch on the example (that deletes the arm a "
+                   "responsive bundle explores) and both go through Geometry Interfaces §3's NaN-safe derived "
+                   "edges. BUILD it ONCE, over CssPx, and let every entry call it. "
+                   "AND THE EARLIER SUBPROBLEM IS NOT THIS ONE, which is why a caller of `getClientRects` on "
+                   "this same element meets a DIFFERENT crash: a caption box's own POSITION is "
+                   "CSS 2.1 §9.4.1 \"Block formatting contexts\"' stack "
+                   "over the table WRAPPER box's child box list, which core/layout/flow_position.c refuses by "
+                   "name for a `table-caption` and core/layout/block_flow.c names in full. Build that first — "
+                   "a union over a rectangle nothing can place is a union over a number that does not exist",
+                   n, n - 1);
+    }
     ev_border_area_px(&t, out);
 }
 
