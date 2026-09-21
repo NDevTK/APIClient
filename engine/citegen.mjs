@@ -2864,9 +2864,9 @@ for (const s of SPECS) for (const a of s.anchors) ANCHOR_TO_KEY.set(a, s.key);
 /* AN ANCHOR IS STORED AS IT IS WRITTEN AND ASKED IN LOWER CASE, SO A ROW CARRYING A CAPITAL IS UNREACHABLE —
  * AND THAT IS ENFORCED HERE FOR THE REASON THE EDITION DECLARATION IS ENFORCED AT ITS ROW: the failure it
  * guards against is a ROW EDIT and not a citation. Every reader of these two lists lowercases its token
- * before asking, at four call sites across three functions — classifyAnchor lowercases each tail it tests,
- * joinLevel lowercases the words it builds its base and its joined form out of, and nameStart is only ever
- * handed one of those words. So a capital does not make an anchor WEAK, it makes it unaskable: the row
+ * before asking — classifyAnchor lowercases each tail it tests, joinLevel lowercases the words it builds
+ * its base and its joined form out of, and nameStart is only ever handed one of those words. That list is
+ * the evidence and a count of it would not be. A capital makes an anchor UNASKABLE rather than weak: the row
  * would match at no site, classify nothing, and for ever, with nothing anywhere saying so, because a name
  * that fires at no site is indistinguishable from a standard this tree does not cite. That is the `mixed`
  * shape both lists already record by name, and it is the reason the registry header states the rule in
