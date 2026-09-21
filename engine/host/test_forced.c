@@ -15333,16 +15333,48 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int cold_park_remoteop, cold_park_remoteop_once, cold_park_remoteop_asked, cold_park_remoteop_many;
 
     engine_retract_census(&retract_flows, &retract_started, &retract_back);
-    /* Rung 1: the park MET a peer's question at all. A 0 here says nothing was ever attached — read
-       fixture_ask_remote_op and the moment that gates it, not engine_retract_span. */
+    /* THE LADDER'S FOUR SENTENCES, WRITTEN WHERE THE RUNGS ARE COMPUTED AND PRINTED WHERE A ROW IS 0. They
+       stood here as comments, which is the one place a reader of a LOG never looks: probes_report narrates a
+       0 row only when it carries a `why`, and this ladder carried none — so the lowest rung, whose 0 is a
+       NAMED RESIDUAL and not a defect, printed a bare `park-remoteop=0` that a reader then has to localise
+       out of a 28k-line file. MEASURED, and it cost a dispatched lane: that 0 was read as `the last zero`
+       and briefed with three candidate mechanisms, every one of them about the park RESIDUE KINDS, when this
+       row reads engine_retract_census and no park record at all. The printer's own comment already states
+       the rule this follows — a 0 has two readings, answered-wrongly and never-reached, and per row the
+       split is what a `why` and a ladder's lowest rung are for. The ladder was half of that pair.
+       EACH SENTENCE STATES WHAT ITS OWN RUNG OBSERVED AND NOTHING ABOUT ITS NEIGHBOURS, because a rung
+       cannot read them: probes_report prints the `why` of every 0 row, so a sentence asserting that another
+       rung is 1 would be printed on the run where it is not.
+       RETIREMENT: these go when a probe row's 0 cannot be printed without a diagnostic beside it. */
+    /* Rung 1: the park MET a peer's question at all. */
+    const char *remoteop_asked_why =
+        "nothing was attached to any member at all — no peer question reached this frontier, so the walk's "
+        "arrival-slot half never ran. Read fixture_ask_remote_op and the moment that gates it, never "
+        "engine_retract_span.";
     cold_park_remoteop_asked = g_sess == SESS_PARK && retract_flows > 0;
-    /* Rung 2: MANY timelines held the one question, which is the precondition that makes the rung above it a
-       statement about a RULE rather than about a single free(). A 0 here with rung 1 at 1 is a document that
-       did not fork, so it is this fixture that needs fixing and not the hand-back. */
+    /* Rung 2: MANY timelines held the one question — the precondition that makes rung 3 a statement about a
+       RULE rather than about a single free(). */
+    const char *remoteop_many_why =
+        "at most one member held a question, so the rung above decides a last-holder rule over a single "
+        "holder and states nothing about a RULE. That is this DOCUMENT not forking, so the fix is in this "
+        "fixture and not in the hand-back.";
     cold_park_remoteop_many = g_sess == SESS_PARK && retract_flows > 1;
     /* Rung 3: and exactly ONE notice left for it. */
+    const char *remoteop_once_why =
+        "the notice count is not 1. engine_perform attaches ONE question to EVERY live timeline, so above 1 "
+        "is a per-flow hand-back — the zone told to forget a token a surviving timeline is about to answer "
+        "under — and 0 is a question that left no notice at all.";
     cold_park_remoteop_once = g_sess == SESS_PARK && retract_back == 1;
     /* Rung 4: the named residual — a STARTED operation was met and its row stripped. */
+    const char *remoteop_why =
+        "no member carried a peer's rendezvous token on a PROGRAM ROW at this park. That is the `dyn_token` "
+        "strip, and for a single-instance host it is a NAMED RESIDUAL rather than a defect: flow_perform "
+        "appends the operation's program DYN_POS_APPEND and leaves the flow RUNNABLE, so a member mid-answer "
+        "is in neither the stall exit nor the exhausted one, and the only slice exits that could end one over "
+        "a started operation are the CPU quantum and the level-1 yield floor — a row resting on either would "
+        "be a flaky green. THIS ROW IS NOT ABOUT THE RESIDUE KINDS: it reads engine_retract_census, so what "
+        "park.recipes carries, and whether a resume rebuilt it, says nothing about it in either direction. "
+        "The rungs printed beside this one are where what the park DID exercise is stated.";
     cold_park_remoteop      = g_sess == SESS_PARK && retract_started > 0;
     /* AND THE REPLAY REACHED ITS SINK AGAIN — the strongest thing a resumed residue can be asked to say, and a
        correction of what this row used to ask. It read BOTH ARMS of the branch out of the @H surface, and that
@@ -16486,10 +16518,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "park-commit", cold_park_commit, "cfg.admin", SESS_PARK },
         { "resumed-commit", cold_resumed_commit, "cfg.admin", SESS_RESUME },
         /* THE LADDER, LOWEST RUNG FIRST — read them in this order and the lowest 0 is the answer. */
-        { "park-remoteop-asked", cold_park_remoteop_asked, "cfg.admin", SESS_PARK },
-        { "park-remoteop-many", cold_park_remoteop_many, "cfg.admin", SESS_PARK },
-        { "park-remoteop-once", cold_park_remoteop_once, "cfg.admin", SESS_PARK },
-        { "park-remoteop", cold_park_remoteop, "cfg.admin", SESS_PARK },
+        { "park-remoteop-asked", cold_park_remoteop_asked, "cfg.admin", SESS_PARK, remoteop_asked_why },
+        { "park-remoteop-many", cold_park_remoteop_many, "cfg.admin", SESS_PARK, remoteop_many_why },
+        { "park-remoteop-once", cold_park_remoteop_once, "cfg.admin", SESS_PARK, remoteop_once_why },
+        { "park-remoteop", cold_park_remoteop, "cfg.admin", SESS_PARK, remoteop_why },
     };
     /* WHICH ROWS THIS INVOCATION CARRIES — its SESSION, and whether its document contains the statement. */
     int n = 0;
