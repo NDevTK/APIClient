@@ -9,10 +9,21 @@
  * HTML §4.2.6 step 6 at all.
  *
  * THE LIST IS A JS ARRAY ON THE ROOT'S WRAPPER, for the reason the style element's association is a slot on
- * ITS wrapper: a property write is captured by the per-flow heap COW delta for free, so an arm that appends a
+ * ITS wrapper: a property write is captured by the per-flow heap COW delta, so an arm that appends a
  * `<style>` has a sheet in its collection that its sibling does not, and the whole thing parks to the IDB cold
  * tier and resumes because it is made of JS values. A malloc'd C list would revert its head and tail pointers
  * on a context switch and leave the nodes reachable from nothing.
+ *
+ * THE WORD THAT USED TO STAND IN THAT SENTENCE WAS "FOR FREE", AND IT IS WHAT MADE THE SPLIT BELOW INVISIBLE.
+ * A property write is captured only where the delta's hook decides to capture it, and that decision is made on
+ * the AGE OF THE OBJECT BEING WRITTEN rather than on who can reach it — an object younger than the writing
+ * flow's last fork is treated as private and its writes are not recorded at all. So "captured for free" is
+ * true of a write to a LONG-LIVED object and false of a write to one this flow just minted, and §6.2's add
+ * does BOTH, one statement apart: the membership into an Array the root's wrapper holds (old, captured) and
+ * the holder into a slot on the sheet (minted one call earlier, therefore never captured). ONE FACT IN TWO
+ * STORAGES WITH OPPOSITE PER-FLOW VISIBILITY, which is what the removal's two aborts now tell apart. The
+ * sentence is rewritten rather than deleted because the reasoning it gives for using JS values IS RIGHT and a
+ * reader who re-derives it will re-derive the "for free" with it.
  *
  * WHICH LIST A SHEET IS IN IS REMEMBERED, NOT RE-DERIVED. §6.2's remove is invoked from HTML §4.2.6 step 2,
  * which for a disconnection runs AFTER the element has already left the tree — so `node_root(owner)` then

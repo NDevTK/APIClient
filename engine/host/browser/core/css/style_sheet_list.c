@@ -102,17 +102,36 @@ static int64_t list_index_of(JSContext *ctx, JSValueConst list, JSValueConst v)
 
 /* ---- the list a root keeps ------------------------------------------------------------------------------- */
 
-/* The Array of `root_wrap`'s CSS style sheets, CREATING it when the root has none. Creating it here rather than
-   at the root's construction is what keeps a document that declares no styles from carrying one; the array is
-   made by whichever flow first needs it, and a flow that made it owns it (the delta skips a flow's own
-   creations, which is correct — no other flow can see this one's array). OWNED. */
-static JSValue root_sheets(JSContext *ctx, JSValueConst root_wrap)
+/* THE LIST A ROOT ALREADY HAS, or JS_UNDEFINED — the READ, with NO mint. It is its own function because the
+   two callers ask two different questions and only one of them may answer by creating: an ADD is entitled to
+   bring the list into existence, and a REMOVE asking the same function would answer its own question by
+   MINTING AN EMPTY ARRAY and then reporting the sheet missing from it. That is one predicate answering two
+   questions, and the cost landed on the reader of the removal's abort, which could not tell "this root has no
+   list at all" from "this sheet is not in the list it has". OWNED. */
+static JSValue root_sheets_existing(JSContext *ctx, JSValueConst root_wrap)
 {
     JSValue cur;
 
     DCHECK(g_atom_sheets != JS_ATOM_NULL, "§6.2's list was asked for before style_sheet_list_init ran");
-    if (JS_GetOwnSlot(ctx, &cur, root_wrap, g_atom_sheets) > 0 && JS_IsArray(cur)) return cur;
+    if (JS_GetOwnSlot(ctx, &cur, root_wrap, g_atom_sheets) <= 0) return JS_UNDEFINED;
+    if (JS_IsArray(cur)) return cur;
     JS_FreeValue(ctx, cur);
+    return JS_UNDEFINED;
+}
+
+/* The Array of `root_wrap`'s CSS style sheets, CREATING it when the root has none. Creating it here rather than
+   at the root's construction is what keeps a document that declares no styles from carrying one.
+   THIS COMMENT USED TO SAY "a flow that made it owns it (the delta skips a flow's own creations, which is
+   correct — NO OTHER FLOW CAN SEE THIS ONE'S ARRAY)", and that is false the line after the array is made: it
+   is PUBLISHED onto `root_wrap`, which every flow reaches, and onto every [SameObject] StyleSheetList the page
+   holds. The delta's skip is gated on the ARRAY's own age, not on who can reach it, so what the sentence
+   described is a write regime and not a privacy guarantee. It is rewritten rather than deleted because a
+   reader who re-derives it from the skip's name will write it again. OWNED. */
+static JSValue root_sheets(JSContext *ctx, JSValueConst root_wrap)
+{
+    JSValue cur = root_sheets_existing(ctx, root_wrap);
+
+    if (JS_IsArray(cur)) return cur;
     cur = JS_NewArray(ctx);
     CHECK(!JS_IsException(cur), "§6.2's list of document or shadow root CSS style sheets could not be allocated");
     JS_SetProperty(ctx, (JSValue)root_wrap, g_atom_sheets, JS_DupValue(ctx, cur));
@@ -261,12 +280,34 @@ void style_sheet_list_remove(JSContext *ctx, JSValueConst sheet)
            "§6.2's remove a CSS style sheet reached a sheet that no add ever put in a list — §6.1's create runs "
            "the add steps for every sheet it makes, so a sheet with no recorded holder is one built by a path "
            "that skipped them");
-    list = root_sheets(ctx, root_wrap);
-    at = list_index_of(ctx, list, sheet);
+    /* THE READ, NEVER THE MINT — see root_sheets_existing. A removal that could create the list would answer
+       its own question with an empty Array and charge the miss to the sheet. */
+    list = root_sheets_existing(ctx, root_wrap);
+    DCHECK(JS_IsArray(list),
+           "§6.2's remove a CSS style sheet reached a holder that has NO LIST AT ALL — the add that recorded "
+           "this holder hung the Array off this very wrapper one statement before it wrote the holder, so a "
+           "wrapper with no Array means the ADD'S SLOT WRITE IS NOT APPLIED IN THIS FLOW WHILE THE SHEET'S "
+           "HOLDER WRITE IS. That is the pair coming apart at the SLOT rather than at the membership, and it "
+           "is a question about the delta and not about this list: ask which of the two writes this flow's "
+           "delta holds before changing anything here");
+    at = JS_IsArray(list) ? list_index_of(ctx, list, sheet) : -1;
     DCHECK(at >= 0,
-           "§6.2's remove a CSS style sheet did not find the sheet in the list its own add recorded — the "
-           "holder slot and the list are written together and nothing else writes either");
-    list_remove_at(ctx, list, (uint32_t)at);
+           "§6.2's remove a CSS style sheet did not find the sheet in the list the holder it recorded holds. "
+           "THIS MESSAGE USED TO SAY \"the holder slot and the list are written together and nothing else "
+           "writes either\", and that is true of the SOURCE ORDER and false of the STORAGE: the membership "
+           "goes into an Array the ROOT'S WRAPPER holds and the holder into a slot on the SHEET, and the "
+           "per-flow delta decides the two separately, because its capture is gated on the AGE of the object "
+           "being written and those are two objects of very different ages — a sheet is minted one call before "
+           "its holder write and a root's wrapper long predates both. An unapply that reverts the membership "
+           "and not the holder leaves exactly this state. Establish WHICH of the two writes this flow's delta "
+           "holds; the repair is wherever that asymmetry is decided, not here");
+    /* THE CALLEE'S OWN PRECONDITION, ASKED BY ITS CALLER — not a fallback: delete either abort above and
+       list_remove_at still may not be handed an index the list does not have, because its release arm turns a
+       -1 into `k = i + 1` WRAPPING TO 0 and shifts every element down one, so a sheet that is not in the list
+       silently evicts the sheet that is at index 0. The holder is still nulled below either way: a sheet this
+       algorithm has run on is out of every list whatever the list turned out to hold. */
+    if (at >= 0)
+        list_remove_at(ctx, list, (uint32_t)at);
     /* The holder goes with the membership: a sheet out of every list must not name one, or a second removal
        would read a live index out of a list it is not in. */
     JS_SetProperty(ctx, (JSValue)sheet, g_atom_holder, JS_NULL);
@@ -282,11 +323,11 @@ JSValue style_sheet_list_of(JSContext *ctx, lxb_dom_node_t *root)
     if (!root || (root->type != LXB_DOM_NODE_TYPE_DOCUMENT && !shadow_root_is(root))) return JS_UNDEFINED;
     w = node_wrap(ctx, root);
     DCHECK(JS_IsObject(w), "§6.2's list could not reach the wrapper of the root that holds it");
-    if (JS_GetOwnSlot(ctx, &cur, w, g_atom_sheets) <= 0) cur = JS_UNDEFINED;
+    /* ONE read-only lookup, shared with the removal's — a second spelling of it here is a second answer to
+       "does this root have a list", and the two would be free to disagree about what counts as one. */
+    cur = root_sheets_existing(ctx, w);
     JS_FreeValue(ctx, w);
-    if (JS_IsArray(cur)) return cur;
-    JS_FreeValue(ctx, cur);
-    return JS_UNDEFINED;   /* no `<style>` has ever been placed in this tree — see the header on not minting */
+    return cur;   /* no `<style>` has ever been placed in this tree — see the header on not minting */
 }
 
 /* ---- §6.2.2's StyleSheetList ----------------------------------------------------------------------------- */
