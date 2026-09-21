@@ -367,9 +367,12 @@ function foldValuePools(valid, forced, inValid, inForced) {
      WHAT IS NOT COVERED: `bodySent`, `bodyShape` and `bodyExample` of every sighting that LOSES the
        `method + host + path` collision — at lib/merge.js's within-document endpoint seam and again at its
        moat seam, where this run's record replaces a stored one whatever either holds. The engine emits one
-       @H row per (method, path, provenance, param-set) and those four keys are the only place in the
-       extension that reads `bodyBase64` / `bodyShape` / `bodyExampleBase64` at all, so a body observed on
-       any row but the winning one reaches no surface in either realm.
+       @H row per (method, path, provenance, param-set), and `callSite.bodyBase64`, `callSite.bodyShape`,
+       `callSite.bodyExampleBase64` and `callSite.bodyMime` are read at ONE site in the whole extension —
+       lib/merge.js's endpoint literal — so a body observed on any row but the winning one reaches no
+       surface in either realm. (The headers next to them are NOT in that position: lib/learn.js is a second
+       reader of `callSite.headers` and folds it onto the METHOD before the gate, which is why they are
+       foldable here and the body is not.)
      WHAT THE NEXT DIFF BUILDS: the grade this record does not state. `provenance`, one of
        `CALLSITE_PROVENANCE` above, stated on every record from the `callSite.provenance` lib/merge.js
        already refuses to default at its fetch-call-site loop, plus its reader beside the body the Send panel

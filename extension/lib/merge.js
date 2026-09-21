@@ -253,9 +253,16 @@ function mergeASTResultsIntoVDD(tab, results) {
          bundle calls at two grades, or once with a query and once without, arrives here as several rows and
          the `if` had NO `else`: the first row's record was kept and every later row's `requiredHeaders`,
          `bodySent`, `bodyShape` and `bodyExample` were read off the call site, DCHECKed on arrival, and
-         dropped. The four body/header keys are read at no other site in either realm, so what was dropped
-         reached no surface at all — §What-the-tool-produces' "computed example KEYS and VALUES" and §@S(d)'s
-         reproduction envelope going missing with nothing to say so.
+         dropped.
+         HOW MUCH THAT COSTS IS NOT UNIFORM ACROSS THE FOUR, and this comment first said it was — that the
+         keys are read nowhere else, so everything dropped reached no surface. Re-derived over the whole
+         extension: `callSite.bodyBase64`, `callSite.bodyShape`, `callSite.bodyExampleBase64` and
+         `callSite.bodyMime` are read at these lines and NOWHERE ELSE in either realm, so a losing row's body
+         really does reach no surface — §What-the-tool-produces' "computed example KEYS and VALUES" and
+         §@S(d)'s reproduction envelope going missing with nothing to say so. `callSite.headers` has a SECOND
+         reader, lib/learn.js, which folds it onto the METHOD record before this gate runs, so a losing row's
+         headers were kept there and lost only from the FLAT record — which is still what `netdiff --unused`
+         counts, what crosses to the popup, and what lib/send.js reads when no method resolves.
          BUILDING IT UNCONDITIONALLY IS WHAT MAKES THE FOLD A FOLD OF TWO RECORDS rather than of a record and
          a raw call site: one law, one shape, at both of this file's endpoint seams. It also puts every
          sighting through `makeEndpointRecord`'s assertions instead of only the first.
