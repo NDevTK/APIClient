@@ -67,14 +67,55 @@ static lxb_dom_element_t *form_elem_of(JSValueConst v)
     return (n && n->type == LXB_DOM_NODE_TYPE_ELEMENT) ? lxb_dom_interface_element(n) : NULL;
 }
 
+/* IS THIS AN HTML <name> — and the NAMESPACE IS HALF OF THAT QUESTION, which is what this asks that it did
+   not. HTML §2.1.3 "XML compatibility" says so in the words that define the term every §4.10 algorithm is
+   written in: "The term element type is used to refer to the set of elements that have a given local name and
+   namespace", and of the worked example, that "they have the local name "button" and (implicitly as defined
+   above) the HTML namespace". The same section makes it the standing default rather than a per-element note:
+   "Except where otherwise stated, all elements defined or mentioned in this specification are in the HTML
+   namespace".
+   THE LOCAL NAME ALONE IS NOT A NARROWER ANSWER, IT IS A DIFFERENT ELEMENT TYPE. An `option` in the SVG
+   namespace joined §4.10.7's list of options, and a foreign `select` inside a form reached §4.10.22.4's entry
+   list — so an element no page meant as a control contributed a NAME AND A VALUE to a submitted request, which
+   is a wrong REQUEST rather than a cosmetic divergence, and this engine's whole output is requests.
+   NOTHING DOWNSTREAM COULD REFUSE IT: §4.10.7's selectedness algorithm guards its operand with a DCHECK that
+   asks through this same predicate, so the assert and its caller agreed by construction and the shortfall was
+   silent at every site at once.
+   ASKED HERE AND NOT AT THE ~30 CALL SITES, because a call site is exactly where the test goes missing — five
+   below had hand-written the conjunct and the rest had not, and the five are now the passthroughs this leaves.
+   THE ONE §4.10 ALGORITHM THAT NAMES A FOREIGN ELEMENT does not come through here; see the predicate directly
+   below, and do not fold it back in.
+   RETIREMENT: this record goes when this routes to lexbor's own `lxb_html_node_is` (local name + LXB_NS_HTML,
+   over a tag id), which cannot be rewritten into a namespace-blind test the way this body could. */
 static bool tag_is(lxb_dom_node_t *n, const char *name)
 {
     size_t len = 0;
     const lxb_char_t *t;
 
-    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT || n->ns != LXB_NS_HTML) return false;
     t = lxb_dom_element_local_name(lxb_dom_interface_element(n), &len);
     return t && len == strlen(name) && memcmp(t, name, len) == 0;
+}
+
+/* THE ONE ELEMENT TEST IN §4.10 THAT CROSSES A NAMESPACE, and it crosses exactly one. HTML §4.10.10 "The
+   option element"'s collect option text: "If descendant is a script or SVG script element, then continue
+   skipping all descendants of descendant." That names TWO element types, so tag_is cannot answer it — and
+   neither can a local-name-only test, which additionally skips a MathML element named `script` that the step
+   does not name.
+   IT IS WRITTEN OUT BECAUSE IT IS THE EXCEPTION THAT MAKES tag_is's NAMESPACE TEST SAFE. Fold this back into
+   tag_is and an SVG script stops being skipped, so its SOURCE TEXT becomes part of an option's value and is
+   submitted as a form entry — the same wrong-request failure, arrived at from the other side.
+   Measured against the standard rather than assumed: over the four pages §4.10 spans (forms, input,
+   form-elements, form-control-infrastructure) the strings "SVG" and "MathML" occur exactly ONCE, here. */
+static bool tag_is_script_or_svg_script(const lxb_dom_node_t *n)
+{
+    size_t len = 0;
+    const lxb_char_t *t;
+
+    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    if (n->ns != LXB_NS_HTML && n->ns != LXB_NS_SVG) return false;
+    t = lxb_dom_element_local_name(lxb_dom_interface_element((lxb_dom_node_t *)n), &len);
+    return t && len == 6 && memcmp(t, "script", 6) == 0;
 }
 
 static const char *attr_of(lxb_dom_element_t *el, const char *name, size_t *plen)
@@ -281,7 +322,7 @@ static JSValue js_button_type(JSContext *ctx, JSValueConst this_val, int magic)
     int state;
 
     (void)magic;
-    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT || n->ns != LXB_NS_HTML || !tag_is(n, "button"))
+    if (!tag_is(n, "button"))   /* tag_is IS the element-type test, namespace included */
         return JS_ThrowTypeError(ctx, "HTMLButtonElement.type was reached on something that is not a button");
     if (html_form_is_submit_button(ctx, this_val)) return JS_NewString(ctx, "submit");
     state = button_type_state(n);
@@ -299,7 +340,7 @@ static JSValue js_button_set_type(JSContext *ctx, JSValueConst this_val, JSValue
     lxb_dom_node_t *n = node_of(this_val);
 
     (void)magic;
-    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT || n->ns != LXB_NS_HTML || !tag_is(n, "button"))
+    if (!tag_is(n, "button"))   /* tag_is IS the element-type test, namespace included */
         return JS_ThrowTypeError(ctx, "HTMLButtonElement.type was reached on something that is not a button");
     element_attr_set_value(ctx, this_val, "type", val);
     return JS_UNDEFINED;
@@ -309,7 +350,7 @@ bool html_form_is_form_element(JSValueConst v)
 {
     lxb_dom_node_t *n = node_of(v);
 
-    return n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT && n->ns == LXB_NS_HTML && tag_is(n, "form");
+    return tag_is(n, "form");   /* tag_is IS the element-type test, namespace included */
 }
 
 /* ---- a growable byte buffer, for the two algorithms here that build one ------------------------------------ */
@@ -355,7 +396,7 @@ static JSValue option_collect_text(JSContext *ctx, lxb_dom_node_t *root)
     bool pending_space = false, any = false;
 
     for (;;) {
-        bool skip_subtree = n != root && n->type == LXB_DOM_NODE_TYPE_ELEMENT && tag_is(n, "script");
+        bool skip_subtree = n != root && tag_is_script_or_svg_script(n);
 
         if (!skip_subtree && n->first_child) { n = n->first_child; }
         else {
@@ -410,7 +451,7 @@ static JSValue js_option_label(JSContext *ctx, JSValueConst this_val, int magic)
     JSValue attribute;
 
     (void)magic;
-    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT || n->ns != LXB_NS_HTML || !tag_is(n, "option"))
+    if (!tag_is(n, "option"))   /* tag_is IS the element-type test, namespace included */
         return JS_ThrowTypeError(ctx, "HTMLOptionElement.label was reached on something that is not an option");
     /* Step 1 takes the attribute as a VALUE and not as bytes: an attacker string a flow stashed in `label`
        reaches this member with its provenance, and step 3 hands back that same value. */
@@ -429,7 +470,7 @@ static JSValue js_option_set_label(JSContext *ctx, JSValueConst this_val, JSValu
     lxb_dom_node_t *n = node_of(this_val);
 
     (void)magic;
-    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT || n->ns != LXB_NS_HTML || !tag_is(n, "option"))
+    if (!tag_is(n, "option"))   /* tag_is IS the element-type test, namespace included */
         return JS_ThrowTypeError(ctx, "HTMLOptionElement.label was reached on something that is not an option");
     element_attr_set_value(ctx, this_val, "label", val);
     return JS_UNDEFINED;
@@ -2100,9 +2141,12 @@ static bool form_is_labelable(JSContext *ctx, lxb_dom_node_t *n)
    caller never wants it) and admits ANY valid custom element name without asking the definition, because it
    answers with no wrapper. Both of its divergences are unreachable from a labeled control, which is precisely
    why sharing it would be a predicate that answers two questions and agrees only by a fact stated elsewhere.
-   NAMESPACE IS NOT ASKED HERE because form_is_labelable does not ask it either, and these two are read
-   together by one algorithm: one of the pair checking it and the other not is a disagreement about which
-   elements §4.10.2 names, which is worse than the answer they currently share. */
+   NAMESPACE USED TO BE LEFT UNASKED HERE, deliberately and for a stated reason: form_is_labelable did not ask
+   it either, and one of the pair asking while the other did not would have been a disagreement about which
+   elements §4.10.2 names. THAT REASONING WAS CORRECT AND IT WAS AN ARGUMENT FOR MOVING BOTH AT ONCE, never for
+   leaving either — which is what asking it inside tag_is does: both predicates reach the one test, so they
+   cannot drift apart and no later editor can move one without the other. The pair still shares a single
+   answer; it is now §2.1.3's. */
 static bool form_is_form_associated(JSContext *ctx, lxb_dom_node_t *n)
 {
     if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
@@ -2235,7 +2279,7 @@ const HtmlFormControlIface HTML_FORM_CONTROL_IFACES[FC_COUNT] = {
    right local name passes everything else and gets an HTML interface's member answered for it. */
 static bool form_node_is(lxb_dom_node_t *n, const char *tag)
 {
-    return n && n->type == LXB_DOM_NODE_TYPE_ELEMENT && n->ns == LXB_NS_HTML && tag_is(n, tag);
+    return tag_is(n, tag);   /* the type and NAMESPACE tests this used to restate now live in tag_is itself */
 }
 
 static bool form_receiver_is(JSContext *ctx, JSValueConst this_val, const char *iface, const char *tag,
