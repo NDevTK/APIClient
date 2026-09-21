@@ -320,6 +320,58 @@ rm -rf "$DIR/engine/.work/emsdk" "$DIR/engine/.work/wpt"
 [ -d "$SRC/engine/.work/wpt" ]   && ln -s "$SRC/engine/.work/wpt"   "$DIR/engine/.work/wpt"
 mkdir -p "$DIR/engine/.work/obj"
 
+# THE DEPENDENCY TREE IS PROVISIONED LIKE THE TOOLCHAIN, AND FOR THE SAME REASON emsdk IS.
+# `node_modules/` is .gitignore line 1, so the clone above brings NONE of it, and the build needs it: the Web
+# IDL gap audit is a STAGE of `engine/build.mjs`, which spawns `engine/idlgen.mjs`, which reaches
+# `engine/idl_members.mjs`'s `import { listAll } from "@webref/idl"` and its `webidl2` beside it. build.mjs's
+# own paragraph says that stage "is not skipped when @webref/idl is absent ... a gate that skips itself when
+# its input is missing is a gate that silently is not one". Six harness drivers import `puppeteer` the same way.
+#
+# SYMLINK, BECAUSE THE DECIDING QUESTION IS WHETHER THE BUILD WRITES TO IT AND NOTHING HERE DOES.
+# That is the general test one paragraph up — "if it does, it is not a toolchain, it is state" — and it is what
+# separates this from the object directory rather than from emsdk. Measured over the tracked tree: no writer
+# anywhere under node_modules; every `npm install` occurrence is inside a GENERATED-HEADER STRING LITERAL
+# telling a human to regenerate, and the one under testing/ is an error MESSAGE. No stage runs npm and no
+# package caches into it. A copy would be the wrong trade twice over: it is the largest thing a snapshot would
+# hold, it would inflate the observed per-snapshot headroom above and so reclaim PEERS' snapshots harder, and
+# it would freeze only whatever is installed NOW — the same bytes the link gives, privately duplicated.
+#
+# THE DIRECTORY, NEVER A LIST OF PACKAGES, which would be a second copy of package.json that drifts.
+#
+# AND THE GATE BELOW IS NOT DECORATION, BECAUSE THE UNPROVISIONED CASE DOES NOT FAIL — IT SILENTLY SUCCEEDS.
+# Node resolves a bare specifier by walking PARENT directories, and the last rung of that walk is `/node_modules`
+# at the filesystem root. Measured here: that path exists and is a symlink INTO THE SHARED WORKING TREE, so a
+# snapshot carrying no node_modules of its own still resolved `@webref/idl` — reading the moving tree under a
+# script whose entire product is a number belonging to one revision, with nothing in the snapshot, in this
+# output, or in any gate's log saying where the corpus came from. That is the working-tree defect arriving
+# through the RESOLVER instead of through a `cd`, and it is machine-dependent: the same freeze where no such
+# root symlink exists fails instead, so one script has two behaviours and nothing says which. A count at the
+# snapshot's OWN path is the only thing that tells them apart — asking "can node resolve it" cannot, because
+# that question passes via the root fallback exactly when this provisioning is broken.
+rm -rf "$DIR/node_modules"
+if [ -d "$SRC/node_modules" ]; then
+  ln -s "$SRC/node_modules" "$DIR/node_modules"
+  NM=$(ls -A "$DIR/node_modules" 2>/dev/null | wc -l)
+  if [ "$NM" -lt 1 ]; then
+    echo "REFUSING: $DIR/node_modules resolves to nothing — this script's own provisioning is broken, and what" >&2
+    echo "  a gate reads instead is whatever the resolver's last rung, /node_modules, happens to point at." >&2
+    exit 1
+  fi
+else
+  NM=0
+  echo "WARNING: $SRC/node_modules does not exist, so nothing was linked and the snapshot has none." >&2
+  echo "  The build's Web IDL gap audit stage and every puppeteer driver will fail in it; run npm install in" >&2
+  echo "  the source tree. Proceeding — those gates report their own failure rather than this guessing at one." >&2
+fi
+# RESIDUAL — THE LINK CARRIES WHATEVER IS INSTALLED, NOT THE EDITION THIS REVISION NAMES. package-lock.json is
+# tracked, so a SHA names an exact @webref/idl and webidl2, while the link resolves to whatever was last
+# installed in the source tree; the two can disagree, and a corpus edition decides what a member list or a
+# quotation means. The next diff reads the installed versions against `git show <SHA>:package-lock.json` and
+# states the disagreement beside `revision` below, rather than refusing — a refusal would block every freeze on
+# a tree nobody has npm installed, and a copy would not close it either, duplicating the same wrong edition.
+# Its absence shows as two snapshots at ONE SHA taken either side of an `npm install`, printing identical
+# `revision` lines and producing different IDL audit numbers.
+
 # GATE ON THE COUNT — a check whose result nothing branches on is a comment with a pipeline in it.
 QN=$(ls -A "$DIR/engine/qjs" 2>/dev/null | wc -l)
 if [ "$QN" -lt 50 ]; then
@@ -340,6 +392,10 @@ echo "revision   $SHA"
 # `<sha>:engine/qjs` names is a TREE, which is not a revision and must not be printed where one was — so what
 # is printed is the population, which is what the gate above actually checked.
 echo "engine/qjs $QN entries  (subtree of $SHA; no revision of its own)"
+# PRINTED BECAUSE AN INPUT NOBODY NAMES IS READ FROM WHEREVER THE RESOLVER FINDS IT. This is the one line that
+# distinguishes a gate that read this snapshot's dependency tree from one that walked out to the root fallback,
+# and it states the edition is the source tree's rather than the revision's — see the residual above.
+echo "node_modules $NM entries  (symlink to $SRC/node_modules; edition is whatever is installed there)"
 echo "load       $(cat /proc/loadavg)"
 if [ $# -eq 0 ]; then
   # PRINT THE INVOCATION THAT NEEDS NO `cd`, because the caller's own `cd` is the one path that degrades into
