@@ -696,6 +696,96 @@ static void dom_panel_note(uint64_t digest)
     dom_set_add(&g_dom_setseen_tab, &g_dom_setseen_cap, &g_dom_setseen_n, &g_dom_setseen_zero, digest);
 }
 
+/* THE SITE SET AT A RENDERING OPPORTUNITY — HTML §8.1.7.3 "Processing model"'s in-parallel half, censused so
+   that the moment can be JUDGED as a candidate identity for a rendered surface instead of assumed to be one.
+   `setseen` above is a CEILING because a flow passes through every PREFIX of its set and no moment inside the
+   flow says the set has settled; a rendering opportunity is a moment the STANDARD names, so it is the one
+   candidate for that moment which is not a bound anybody chose. These rows are what decide whether it works.
+   THE ASK IS COUNTED, NOT THE OUTCOME. §8.1.7.3's in-parallel list has FOUR ways to decline and THREE of them
+   are the machine working — no navigable might have one (its step 1), a timer expires before the frame, and
+   the host still owes this flow a reply so the clock may not be jumped past it. The fourth is this component's
+   own declaration latch, which is why `asks` is raised ABOVE it too: a caller that reached the function asked,
+   whatever the component had got round to declaring. A census of grants alone could tell none of those from a
+   run whose scheduler never reached that rung, and those take opposite work.
+   AND A ZERO `asks` IS ATTRIBUTABLE IN THIS ENGINE, which is what makes that split worth having: rendering_init
+   is a row on core/platform.c's UNCONDITIONAL agent-component table, so the hook is installed for every agent
+   and a zero here is the scheduler's rung never being REACHED — the zeroth conjunct solver/engine.c's ladder
+   names — rather than the component being absent.
+   ALL THREE COUNTS ARE LIFETIME COUNTS OF EVENTS over this session, raised here and lowered by nothing, so any
+   of them may be differenced across two samples. Deliberately not a gauge of the running flow's own set: that
+   number falls at every context switch and is the one row on this line a reader could difference into nonsense.
+   NOTHING A FORK HAS TO CARRY. The digest read here is derived from the chain and the head at every dom_apply
+   (dom_flow_rebuild), so a sibling reads its parent's set with nothing handed over; these three are session
+   totals that belong to no flow, so branching cannot move any of them. */
+static long g_dom_ro_asks = 0, g_dom_ro_grants = 0, g_dom_ro_sited = 0;
+/* DISTINCT DIGESTS STOOD AT A GRANTED OPPORTUNITY. Same table shape, same helper and same zero flag as the two
+   indexes above — a second spelling of one table is the shape that drifts — and the flag is LOAD-BEARING here
+   rather than theoretical: a flow that reaches this rung has run out of work, and a flow that has run out of
+   work without the page's own code writing the document stands at the EMPTY set, whose digest is exactly 0.
+   That is the commonest digest this row will ever see, so a reserved value with a population on it would be the
+   defect rather than a hazard. */
+static uint64_t *g_dom_ro_tab = NULL;
+static size_t g_dom_ro_cap = 0;
+static long g_dom_ro_n = 0;
+static int g_dom_ro_zero = 0;
+
+void dom_cow_rendering_asked(void) { g_dom_ro_asks++; }
+
+void dom_cow_rendering_granted(void)
+{
+    uint64_t digest;
+    int n;
+
+    /* THE SET IS THE STANDING FLOW'S OR THERE IS NO SURFACE TO NAME. This rung is a step of a dispatched flow
+       (solver/engine.c asks it inside flow_step, with the flow's chain installed), so the window dom_unapply
+       marks cannot be open here; the whole point of the row is that the digest belongs to the flow that reached
+       the opportunity, and a digest taken between two flows would name whoever ran last. */
+    DCHECK(g_dom_flow_valid,
+           "a rendering opportunity was granted between a switch-out and the next switch-in — the site set "
+           "this row is about was taken down with its head, so the digest recorded would belong to no flow. "
+           "§8.1.7.3's in-parallel half is asked as a rung of a flow's own step, so either that stopped being "
+           "true or a switch is no longer going through dom_apply");
+    /* BOTH READS BEFORE ANYTHING ALLOCATES, for dom_site_note's reason one level up: the table grow below asks
+       the allocator, an ask can SELL A FLOW, and a sale runs this file's own frees. They are plain integers
+       once copied, so nothing below re-reads state a sale could have moved. */
+    digest = g_dom_flow_digest;
+    n = g_dom_flow_n;
+    g_dom_ro_grants++;
+    if (n > 0) g_dom_ro_sited++;
+    dom_set_add(&g_dom_ro_tab, &g_dom_ro_cap, &g_dom_ro_n, &g_dom_ro_zero, digest);
+    /* THE GATE CAN ONLY DECLINE, so a grant with no ask under it is a caller that reached the enqueue without
+       going through the top of the algorithm — which is the one thing that would make `asks - grants` stop
+       being the declines. */
+    DCHECK(g_dom_ro_grants <= g_dom_ro_asks,
+           "§8.1.7.3's in-parallel half granted more rendering opportunities than it was asked for — a grant "
+           "is reached only through the ask that precedes every one of its four decline arms, so this is a "
+           "caller that queued a rendering task without going through rendering_run_opportunity's top");
+    DCHECK(g_dom_ro_sited <= g_dom_ro_grants,
+           "more rendering opportunities carried a non-empty site set than were granted at all — the two are "
+           "raised by the same line and one of them has stopped being fed by it");
+    /* THE ROW AGAINST ITS OWN POPULATION, and the `+ 1` is the EMPTY SET rather than slack: a grant whose flow
+       has written nothing from the page's own code stands at the empty set, which is ONE digest however many
+       grants carry it, and every other digest belongs to a grant whose set was non-empty. So this holds exactly
+       and it holds without assuming anything about the fold — a non-empty set whose members happen to XOR to
+       zero lands in the zero flag, which is already the one the `+ 1` pays for. A reader who finds this tight
+       is reading a run in which every rendering opportunity stood in a set no other one did, which is the
+       reading that REFUTES the collapse this row exists to measure. */
+    DCHECK(g_dom_ro_n <= g_dom_ro_sited + 1,
+           "the census counted more distinct site-set digests at rendering opportunities than there were "
+           "opportunities that could have produced a distinct one — every digest but the empty set's comes "
+           "from a grant whose flow had a non-empty set, so the table is answering `absent` for a name it "
+           "already holds or a grant is being recorded twice");
+}
+
+/* WHAT THE RENDERING-OPPORTUNITY CENSUS HOLDS — see the statics above for each number's kind and the three
+   identities dom_cow_rendering_granted asserts between them. */
+void dom_cow_rendering_stats(long *asks, long *grants, long *sited, long *digests) {
+    if (asks)    *asks    = g_dom_ro_asks;
+    if (grants)  *grants  = g_dom_ro_grants;
+    if (sited)   *sited   = g_dom_ro_sited;
+    if (digests) *digests = g_dom_ro_n;
+}
+
 /* ONE WRITE'S WORTH OF CENSUS. Called at the END of the push for the reason dom_claim_note is: the table grow
    above asks the allocator, which can SELL A FLOW and so runs this file's own frees, and by here the entry is
    stored and nothing the producer still holds is dereferenced again. */

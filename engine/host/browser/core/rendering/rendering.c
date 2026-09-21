@@ -35,6 +35,7 @@
 #include "core/timing/hr_time.h"
 #include "core/timing/timer.h"
 #include "solver/engine.h"
+#include "solver/dom_cow.h"   /* the site-set census this half is asked from — see dom_cow_rendering_asked */
 
 /* THE UA'S REFRESH RATE. See rendering.h: the spec hands this to the user agent, so answering it is modelling
    rather than approximating. */
@@ -1195,6 +1196,13 @@ int rendering_run_opportunity(JSContext *ctx)
     JSContext *topctx;
     JSValue driver;
 
+    /* THE ASK, AHEAD OF ALL FOUR DECLINE ARMS — solver/dom_cow.h states why the census is a pair. Every arm
+       below this line is the machine WORKING (nothing might have an opportunity, a timer is due first, the
+       clock may not be jumped past a reply in flight), so a census of what was GRANTED could not tell a run
+       whose scheduler never reached this rung from one whose gate always said no, and those take opposite
+       work. It goes above the `g_ready` latch too: a caller that reached this function asked, whatever this
+       component had got round to declaring. */
+    dom_cow_rendering_asked();
     if (!g_ready)
         return 0;
     if (!rendering_any_opportunity(ctx))
@@ -1276,6 +1284,12 @@ int rendering_run_opportunity(JSContext *ctx)
            "one, and a realm without it would queue a task nothing can run");
     JS_EnqueueCallTask(topctx, driver, 0, NULL);
     JS_FreeValue(topctx, driver);
+    /* AND THE GRANT, WITH THE STANDING FLOW'S SITE SET — the other half of solver/dom_cow.h's pair, and the
+       reason it is HERE rather than at the top: this is the moment §8.1.7.3's in-parallel list step 3 defines,
+       and the flow standing at it is the one whose document the frame is OF. Last in the function for
+       dom_site_note's reason — the census asks the allocator and an ask can SELL A FLOW, so it runs where
+       nothing this function still holds is dereferenced again. */
+    dom_cow_rendering_granted();
     return 1;
 }
 

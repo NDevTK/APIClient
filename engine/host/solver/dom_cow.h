@@ -453,6 +453,46 @@ void dom_cow_site_stats(long *writes, long *sited, long *unsited, long *sites);
    average site, which is the traffic an identity keyed on the set would have to key, and `repeats / sited` is
    how much of this engine's DOM work is a flow going round again. */
 void dom_cow_site_set_stats(long *folds, long *repeats, long *sets_seen);
+/* AND THE SET AT A MOMENT THE STANDARD NAMES, which is the one thing `setsSeen` above says it cannot give: a
+   count of SURFACES needs a moment at which a flow's set has SETTLED, and every moment inside the flow is a
+   bound somebody chose. HTML §8.1.7.3 "Processing model"'s in-parallel half is not — a rendering opportunity is
+   a moment the STANDARD defines, and core/rendering/rendering.c's `rendering_run_opportunity` is where this
+   engine reaches one. These two are raised from there; the rows exist to decide whether that moment WORKS as an
+   identity, and they are able to say it does not.
+     `dom_cow_rendering_asked`   — at the CALL, ahead of all four of the algorithm's decline arms.
+     `dom_cow_rendering_granted` — where a rendering task is queued (§8.1.7.3's in-parallel list step 3), which
+                                   is where the running flow's site-set digest is read and recorded.
+   THE ASK IS SEPARATE FROM THE GRANT BECAUSE THE GATE CAN LEGITIMATELY DECLINE — no navigable might have one,
+   a timer is due first, the host still owes this flow a reply — and a census of grants alone cannot tell a run
+   whose scheduler never reached that rung from one whose gate always said no. Those take opposite work.
+   NOTHING A FORK CARRIES: the digest is DERIVED from the chain and head at every dom_apply, and these are
+   session totals belonging to no flow, so a flow cannot change any of them by branching. */
+void dom_cow_rendering_asked(void);
+void dom_cow_rendering_granted(void);
+/* WHAT THAT CENSUS HOLDS. Three LIFETIME COUNTS OF EVENTS plus a distinct-name count, raised at the two lines
+   above and lowered by nothing, so any of them may be differenced across two samples. Deliberately not a gauge
+   of the running flow's own set, which falls at every switch.
+     `asks`    — times §8.1.7.3's in-parallel half was asked, ahead of every decline arm. A zero is the
+                 scheduler's rung never being REACHED and not the component being absent: rendering_init is a
+                 row on core/platform.c's unconditional agent-component table.
+     `grants`  — of those, ones that queued a rendering task. `asks - grants` is the declines, and it is NOT a
+                 row: it is a function of its two neighbours, so emitting it would report one fact twice.
+     `sited`   — of those grants, ones where the standing flow's site set was NON-EMPTY. A flow reaches this
+                 rung having run out of work, and one that ran out of work without the page's own code touching
+                 the document stands at the EMPTY set — so this row is what lets a small `digests` be
+                 attributed, and a `sited` far below `grants` says the opportunities are landing on flows that
+                 rendered nothing rather than that the collapse is working.
+     `digests` — DISTINCT site-set digests stood at a grant. A HIGH-WATER MARK on top of being a count.
+   THE IDENTITIES ARE ASSERTED IN dom_cow.c WHERE BOTH HALVES OF EACH ARE IN ONE HAND and are not re-derived by
+   any consumer: `grants <= asks` (the gate can only decline), `sited <= grants`, and `digests <= sited + 1`
+   — the `+ 1` being the empty set, which is ONE digest however many grants carry it.
+   WHAT A READER GETS, AND IT IS THE QUESTION THESE ROWS EXIST FOR: `digests / grants` is how much the moment
+   COLLAPSES. Near 1 and the moment buys nothing — a rendering opportunity would be a flow serial number rather
+   than a surface, which is the same refutation `setsSeen` names for itself, one level up. Far below 1 and a
+   flow's forty DOM writes between two opportunities are ONE surface, which is what the collapse claims. A zero
+   `grants` with a nonzero `asks` says the gate declined every time; a zero `asks` says the rung was never
+   reached, and either way the moment is unreachable and nothing can be keyed on it. */
+void dom_cow_rendering_stats(long *asks, long *grants, long *sited, long *digests);
 /* …in the unit the cold tier pages in, and the same for ONE flow's parked head at capacity `cap`. Asked of
    this file for the reason cow.h's twin is: `sizeof(DomUndo)` is private and a caller that guessed it would
    report a number that drifts the next time an entry kind is added. */

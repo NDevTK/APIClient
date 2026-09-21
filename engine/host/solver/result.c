@@ -1382,12 +1382,43 @@ static char *cow_site_hist_json(void) {
    by `__FILE__`/`__LINE__`, and this one names the PAGE'S JavaScript, by quickjs's JS_RunningSiteHash. They
    answer about different programs and neither is a floor or a bound on the other.
 
+   AND THE SIXTH HALF IS THE MOMENT, which is the one thing every row above it is structurally unable to give.
+   `domSiteSetsSeen` is a CEILING because a flow passes through every PREFIX of its own set, and a COUNT of
+   surfaces needs a moment at which that set has SETTLED — which §NO BOUNDS says cannot be decided from inside
+   the flow, because every candidate (a timer, a write count, "when the flow finishes") is a bound somebody
+   chose. HTML §8.1.7.3 "Processing model"'s RENDERING OPPORTUNITY is a moment the STANDARD names, so it is the
+   one candidate that is not. `renderingOpportunityAsks`/`renderingOpportunities`/
+   `renderingOpportunitiesSited`/`renderingDigests` are solver/dom_cow.h's `dom_cow_rendering_stats`, where
+   their kinds and their three identities are stated and dom_cow.c is where all three are asserted:
+   `renderingOpportunities <= renderingOpportunityAsks`, `renderingOpportunitiesSited <= renderingOpportunities`
+   and `renderingDigests <= renderingOpportunitiesSited + 1`.
+   THEY EXIST TO REFUTE THE MOMENT, NOT TO ASSUME IT, and they can do it three ways. A `renderingOpportunities`
+   at or near zero says the moment is UNREACHABLE and nothing can be keyed on it — and the ask row is what
+   attributes that, since a zero `renderingOpportunityAsks` is the scheduler's rung never being reached while a
+   nonzero one with no grants is the gate declining every time. A `renderingDigests` near `renderingOpportunities`
+   says the COLLAPSE BUYS NOTHING: every opportunity stood in a set no other one did, so the moment is a flow
+   serial number and not a surface, which is exactly the refutation `domSiteSetsSeen` names for itself one level
+   down. `renderingDigests` well below `renderingOpportunities` is the collapse working, and the ratio is how
+   much — a flow's forty DOM writes between two opportunities contributing ONE surface rather than forty.
+   `renderingOpportunitiesSited` IS WHAT SEPARATES A SMALL `renderingDigests` FROM A GOOD ONE. A flow reaches
+   that rung having run out of work, and one that ran out of work without the page's own code touching the
+   document stands at the EMPTY set — so a `renderingOpportunitiesSited` far below `renderingOpportunities` says
+   the opportunities are landing on flows that rendered nothing, which reads in `renderingDigests` exactly like
+   a collapse that worked and is the opposite finding.
+   THE DECLINES ARE NOT A ROW. `renderingOpportunityAsks - renderingOpportunities` is a function of its two
+   neighbours, and a derived row printed beside the rows it is made of is one fact counted twice.
+   IT SHARES NO QUANTITY WITH `domSiteSetsSeen` AND IS NOT BOUNDED BY IT, which is worth saying because the two
+   are digests of the same sets: that row records a set at every FOLD, and a flow standing at the EMPTY set has
+   never folded, so a digest counted here can be one it does not hold. The empty set is the likeliest digest at
+   this rung, not a corner.
+
    NO BYTE COUNT — see solver/compose.h's `composef`. */
 char *result_swap_json(void) {
     long sc = 0, st = 0, sm = 0, hs = 0, he = 0, ds = 0, de = 0;
     long gc = 0, gm = 0, ac = 0, am = 0;
     long dw = 0, dsi = 0, du = 0, dn = 0;
     long df = 0, dr = 0, dss = 0;
+    long roa = 0, rog = 0, ros = 0, rod = 0;
     char asks[COW_STATE_KINDS_JSON_MAX], made[COW_STATE_KINDS_JSON_MAX];
     char *sites, *out;
 
@@ -1397,6 +1428,7 @@ char *result_swap_json(void) {
     dom_cow_chain_stats(&ds, &de);
     dom_cow_site_stats(&dw, &dsi, &du, &dn);
     dom_cow_site_set_stats(&df, &dr, &dss);
+    dom_cow_rendering_stats(&roa, &rog, &ros, &rod);
     cow_state_hist_json(asks, sizeof asks, 0, "cowStateAsks");
     cow_state_hist_json(made, sizeof made, 1, "cowStateMade");
     sites = cow_site_hist_json();
@@ -1406,11 +1438,13 @@ char *result_swap_json(void) {
                  "\"heapSegs\":%ld,\"heapSegEntries\":%ld,\"domSegs\":%ld,\"domSegEntries\":%ld,"
                  "\"domWrites\":%ld,\"domWritesSited\":%ld,\"domWritesUnsited\":%ld,\"domSites\":%ld,"
                  "\"domSiteFolds\":%ld,\"domSiteRepeats\":%ld,\"domSiteSetsSeen\":%ld,"
+                 "\"renderingOpportunityAsks\":%ld,\"renderingOpportunities\":%ld,"
+                 "\"renderingOpportunitiesSited\":%ld,\"renderingDigests\":%ld,"
                  "\"coroSwapGenCalls\":%ld,\"coroSwapGenMade\":%ld,"
                  "\"coroSwapAsyncCalls\":%ld,\"coroSwapAsyncMade\":%ld,"
                  "\"cowStateAsks\":%s,\"cowStateMade\":%s,\"cowHostRecAsksBySite\":%s}",
                  sc, st, sm, sc ? (double)st / (double)sc : 0.0, hs, he, ds, de,
-                 dw, dsi, du, dn, df, dr, dss,
+                 dw, dsi, du, dn, df, dr, dss, roa, rog, ros, rod,
                  gc, gm, ac, am, asks, made, sites);
     free(sites);
     return out;
