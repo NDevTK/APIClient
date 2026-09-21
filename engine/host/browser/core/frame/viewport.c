@@ -134,6 +134,31 @@ CssPx viewport_icb_height(JSContext *ctx)
     return css_px_env(CSS_ENV_ICB_HEIGHT, ctx, viewport_height(ctx));
 }
 
+/* css-values-4 §6.1.2.1: the SMALL viewport size is "the viewport sized assuming any UA interfaces that are
+   dynamically expanded and retracted to be expanded", and the DYNAMIC one is "sized with dynamic consideration
+   of" them. THIS MODEL HAS NO SUCH INTERFACE, so both antecedents are satisfied by the one viewport and each
+   answers its number — which is §6.1.2.1's own "possibly identical" arm and not a rounding of it. What is NOT
+   shared is the FACT each carries, so a page comparing two families forks rather than being answered. */
+CssPx viewport_small_width(JSContext *ctx)
+{
+    return css_px_env(CSS_ENV_SMALL_VIEWPORT_WIDTH, ctx, viewport_width(ctx));
+}
+
+CssPx viewport_small_height(JSContext *ctx)
+{
+    return css_px_env(CSS_ENV_SMALL_VIEWPORT_HEIGHT, ctx, viewport_height(ctx));
+}
+
+CssPx viewport_dynamic_width(JSContext *ctx)
+{
+    return css_px_env(CSS_ENV_DYNAMIC_VIEWPORT_WIDTH, ctx, viewport_width(ctx));
+}
+
+CssPx viewport_dynamic_height(JSContext *ctx)
+{
+    return css_px_env(CSS_ENV_DYNAMIC_VIEWPORT_HEIGHT, ctx, viewport_height(ctx));
+}
+
 bool viewport_canvas_region(JSContext *ctx, CssPx out[4])
 {
     DCHECK(out != NULL, "CSS 2.1 §2.3.1 \"The canvas\"'s rendered region was asked for through no rectangle");
@@ -156,6 +181,15 @@ bool viewport_canvas_region(JSContext *ctx, CssPx out[4])
 static const struct { const char *member; bool presented; } VIEWPORT_FACT[CSS_ENV_FACT_COUNT] = {
     [CSS_ENV_ICB_WIDTH]          = { "initialContainingBlock.width",  true  },
     [CSS_ENV_ICB_HEIGHT]         = { "initialContainingBlock.height", true  },
+    /* css-values-4 §6.1.2.1 "The Large, Small, and Dynamic Viewport Sizes"' other two sizes. `presented` is
+       TRUE for the same reason it is true two rows up and false three rows down: these are RECTANGLES A
+       NAVIGABLE PRESENTS, so a document that is not fully active has none of them either — a viewport sized
+       assuming a UA interface expanded is still a viewport, and there is not one here. The LARGE size has no
+       row because §6.1.2.1 gives it to the default family as well, so it IS the pair above. */
+    [CSS_ENV_SMALL_VIEWPORT_WIDTH]    = { "smallViewportSize.width",   true  },
+    [CSS_ENV_SMALL_VIEWPORT_HEIGHT]   = { "smallViewportSize.height",  true  },
+    [CSS_ENV_DYNAMIC_VIEWPORT_WIDTH]  = { "dynamicViewportSize.width",  true },
+    [CSS_ENV_DYNAMIC_VIEWPORT_HEIGHT] = { "dynamicViewportSize.height", true },
     [CSS_ENV_DEVICE_PIXEL_RATIO] = { "devicePixelRatio",              false },
     /* THE NUMBER IS NOT THIS FILE'S — core/css/font_size_functions.h picks css-fonts-4 §2.5's `medium` and says
        why it passes this component's PICKED-rather-than-DERIVED test — and that is what this seam is FOR: its
@@ -169,8 +203,8 @@ static const struct { const char *member; bool presented; } VIEWPORT_FACT[CSS_EN
        ratio. It is its own row beside the one above rather than sharing it because the two are
        separately observable: a script reads `getComputedStyle(el).fontSize` for the size and measures a `1cap`
        box for the ascent, and one key for both would decide their RATIO on the example — the same mistake
-       core/css/css_length.c's `sv*`/`lv*`/`dv*` crash refuses for three viewport sizes that happen to agree
-       today. `presented` is false for the reason it is false one row up: the user agent's installed face
+       core/css/css_length.c resolves its `sv*`/`lv*`/`dv*` units by, giving §6.1.2.1's three viewport
+       sizes the rows above though all three answer one rectangle today. `presented` is false for the reason it is false one row up: the user agent's installed face
        exists whether or not this document is on a screen. */
     [CSS_ENV_FONT_ASCENT]        = { "fontAscent",                    false },
     /* CSS 2.1 §10.8.1's `D`, the other half of the pair the row above picks. Two rows for one face is the

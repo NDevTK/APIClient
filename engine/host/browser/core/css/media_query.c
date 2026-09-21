@@ -1103,8 +1103,10 @@ static bool mq_container_extent(const char *u, const MqEnv *e, double *extent)
    one has said nothing that could decide the other: the arm where the dynamic and large viewport sizes differ
    survives answering both from one rectangle. In the COMPUTED-VALUE chain it does not — a length crosses to the
    page there through `viewport_env_derived`'s JOINT over `CssEnvFact`s, where all four spellings would carry
-   the one ICB fact — and that is what that file's own crash is about and why it must be answered THERE, by
-   giving §6.1.2.1's three viewport sizes their own picked facts, rather than by copying these rows across.
+   the one ICB fact — so that file answers it THERE, and has: §6.1.2.1's SMALL and DYNAMIC sizes are picked
+   facts of their own in core/frame/viewport.c, and its LARGE size is the ICB pair because §6.1.2.1 defines
+   that one size for `lv*` and the default `v*` together. THE ROWS BELOW WERE STILL NOT COPIED ACROSS, which is
+   the point: two seams, two kinds of key, and this one stays keyed on the serialized query.
    THE TABLE IS SPLIT FROM THE `MqValue` WALK because it has a SECOND caller with no MqValue to hand it, and
    that caller's rule is HTML §4.8.4.3 "Processing model" in one sentence: a source size's units other than the
    viewport-relative ones "must be interpreted THE SAME AS IN MEDIA QUERIES". So `media_query_length_px` below

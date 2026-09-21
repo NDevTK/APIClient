@@ -141,6 +141,23 @@ double viewport_device_pixel_ratio(JSContext *ctx);
 CssPx viewport_icb_width(JSContext *ctx);
 CssPx viewport_icb_height(JSContext *ctx);
 
+/* css-values-4 §6.1.2.1 "The Large, Small, and Dynamic Viewport Sizes"' SMALL and DYNAMIC viewport sizes — the
+   rectangles `sv*` and `dv*` are one percent of. THE LARGE ONE IS NOT HERE, because §6.1.2.1 gives it to the
+   DEFAULT family too ("The large viewport-percentage units (lv*) and default viewport-percentage units (v*)
+   are defined with respect to the large viewport size"), so it is the ICB pair above and asking for it twice
+   is how the two answers get to disagree.
+   THESE REPORT THE SAME NUMBER AS THE ICB AND ARE STILL SEPARATE FACTS, by exactly the test this header
+   applies to `innerWidth` against the ICB one paragraph up: §6.1.2.1 distinguishes the three by what each
+   assumes about UA interfaces "that are dynamically expanded and retracted", this model has none, so its
+   "three (possibly identical) notions of the viewport size" are identical HERE — and `100dvh === 100lvh` is
+   a question a page can still ask, so each answer carries its own row in the seam below and the comparison
+   forks instead of being decided on the shared example. The day a retractable interface is modelled these
+   stop agreeing and nothing above them has to change. */
+CssPx viewport_small_width(JSContext *ctx);
+CssPx viewport_small_height(JSContext *ctx);
+CssPx viewport_dynamic_width(JSContext *ctx);
+CssPx viewport_dynamic_height(JSContext *ctx);
+
 /* CSS 2.1 §2.3.1 "The canvas"'s RENDERED REGION for this realm's document, written to `out` as an x, y, width
    and height in the CLIENT coordinates a display list's rectangles are stated in.
    IT IS NOT A THIRD GEOMETRY BESIDE THE TWO ABOVE, it is those two plus an ORIGIN. CSS 2.1 §2.3.1 says "The

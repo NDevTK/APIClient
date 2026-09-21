@@ -76,17 +76,21 @@
  *   renders no scroll bar, so the two rectangles are one — asserted at the resolution rather than assumed, so
  *   the day a scroll bar reduces the ICB the crash stands where `vw` would have to stop following it.
  *   `vi`/`vb` still crash: they are stated in the BOX'S INLINE AXIS, which is `writing-mode` and `direction`,
- *   both inherited. So does every `sv*`/`lv*`/`dv*` variant, and NOT because their number would differ here —
- *   §6.1.2.1's three viewport sizes are separate FACTS the moment a UA interface expands and retracts, and
- *   answering all four families out of one source key would decide `100dvh === 100lvh` on the example and
- *   delete the arm a mobile bundle wrote the comparison for.
+ *   both inherited — and so do `svi`, `lvb` and the rest, through the SAME crash, because the axis question is
+ *   §6.1.2.2's and is independent of which of §6.1.2.1's sizes the family names.
+ *   THE `sv*`/`lv*`/`dv*` FAMILIES THEMSELVES RESOLVE. §6.1.2.1 gives the LARGE size to `lv*` and to the
+ *   default `v*` together, so those two share the ICB's facts and `100vh === 100lvh` is the identity the
+ *   standard states rather than a fork; `sv*` and `dv*` answer the same rectangle today and carry FACTS OF
+ *   THEIR OWN, so `100dvh === 100lvh` forks instead of being decided on the shared example — which is the arm
+ *   a mobile bundle wrote the comparison for, and the reason the rows exist while the numbers agree.
  *
  * AND `calc()` IS A THIRD, ANSWERED BY core/css/css_math.h OVER THE SAME TABLE. css-values-4 §10 makes a math
  * function a value in its own right whose result depends on every unit above, and it arrives here as a string
  * that is neither a dimension nor a keyword. The GRAMMAR and the §10.9 type algebra are that component's; the
  * UNITS stay this one's, and `calc(100vw - 2em)` reaches exactly the arms above through the resolver callback
- * §10.10.1's canonical-unit step is asked through — so a `dvh` inside a math function crashes with the same
- * message, in the same place, as a `dvh` written on its own.
+ * §10.10.1's canonical-unit step is asked through — so a `dvh` inside a math function resolves through the
+ * same arm, carrying the same fact, as a `dvh` written on its own, and a `cqw` inside one crashes with the
+ * same message as a `cqw` written on its own.
  *
  * A LENGTH IN CSS PIXELS IS NOT ALWAYS A NUMBER, WHICH IS WHY `CssPx` BELONGS HERE AND NOT IN WHOEVER COMPUTES
  * ONE. CSS 2.1 §10.1 makes the ROOT ELEMENT's containing block the INITIAL CONTAINING BLOCK, "it has the
@@ -136,6 +140,31 @@
 typedef enum {
     CSS_ENV_ICB_WIDTH = 0, /* CSS 2.1 §10.1's initial containing block, whose dimensions are the viewport's */
     CSS_ENV_ICB_HEIGHT,
+    /* css-values-4 §6.1.2.1 "The Large, Small, and Dynamic Viewport Sizes"' SMALL and DYNAMIC viewport sizes.
+       THERE ARE FOUR SPELLINGS AND THREE SIZES, AND THE TWO ROWS ABOVE ARE THE THIRD — so `lv*` gets no row of
+       its own and that is the SECTION'S OWN ARM rather than a saving: §6.1.2.1 defines one size for two
+       families, "The large viewport-percentage units (lv*) and default viewport-percentage units (v*) are
+       defined with respect to the large viewport size", so `100vh === 100lvh` is an identity the standard
+       states and a row here would fork it — an arm the spec itself contradicts, which is not exploration.
+       THE OTHER TWO ARE THEIR OWN ROWS THOUGH ALL THREE ARE ONE RECTANGLE TODAY, which is this seam's
+       PICKED-rather-than-DERIVED test answering YES rather than an oversight. §6.1.2.1 calls them "three
+       (possibly identical) notions of the viewport size" and separates them by what each ASSUMES about UA
+       interfaces "that are dynamically expanded and retracted" — the large size assumes them "to be
+       retracted", the small size "to be expanded", and the dynamic size is "sized with dynamic consideration
+       of" them. This user agent models one viewport and no such interface, so the three antecedents are
+       satisfied by one rectangle and the three NUMBERS agree; the three QUESTIONS do not, and `100dvh ===
+       100lvh` is the comparison a mobile bundle writes its viewport workaround around. One key for all of
+       them would decide that on the shared example and delete the arm where they differ — which is the same
+       test core/frame/viewport.c's table applies to the font ascent beside the default font size, two facts
+       for one face because a page can read them apart. */
+    CSS_ENV_SMALL_VIEWPORT_WIDTH,
+    CSS_ENV_SMALL_VIEWPORT_HEIGHT,
+    /* §6.1.2.1's DYNAMIC size, whose own sentence is why it is a fact and not a refinement of either
+       neighbour: "The sizes of the dynamic viewport-percentage units are not stable even while the viewport
+       itself is unchanged." A page that compares it against the large size is asking whether a UA interface
+       is currently expanded, which is a question about the environment and never about this cascade. */
+    CSS_ENV_DYNAMIC_VIEWPORT_WIDTH,
+    CSS_ENV_DYNAMIC_VIEWPORT_HEIGHT,
     /* CSSOM VIEW §4's `devicePixelRatio`, which css-values §6's SNAP A LENGTH AS A LINE WIDTH divides a
        border width by. `devicePixelRatio > 1` is the retina gate a bundle puts a second image host behind, and
        it reaches a length as well as a member: a `border: 1px solid` is one device pixel at every ratio, so it

@@ -255,6 +255,7 @@ bool css_length_absolute_px(const char *unit, size_t unit_len, double n, double 
 static CssPx css_len_viewport(JSContext *realm, const char *unit, double k)
 {
     CssPx w, h;
+    const char *axis;
 
     if (realm == NULL || !viewport_exists(realm))
         DFAIL("a VIEWPORT-PERCENTAGE length was absolutized for an element whose document is NOT BEING "
@@ -268,8 +269,30 @@ static CssPx css_len_viewport(JSContext *realm, const char *unit, double k)
               "over the predicate that already decides it, core/dom/element_view.h's `element_view_has_box`, "
               "so the resolved value takes §9's computed-value escape before a length is ever absolutized "
               "(core/layout/used_value.c's uv_icb names the same one)");
-    w = viewport_icb_width(realm);
-    h = viewport_icb_height(realm);
+    /* §6.1.2.1's THREE SIZES, PICKED BY THE ONE LETTER A VARIANT PUTS IN FRONT — the spec's own naming rule,
+       which is why this strips a prefix rather than tabulating twenty-four spellings a second time. The
+       default family has no prefix and its `v` falls through to the same arm as `lv*`, which is §6.1.2.1
+       defining one size for both: "The large viewport-percentage units (lv*) and default viewport-percentage
+       units (v*) are defined with respect to the large viewport size". So `100vh` and `100lvh` carry the ONE
+       ICB fact and compare EQUAL without forking, which is the standard's identity rather than a collapse —
+       while `sv*` and `dv*` carry facts of their own and a comparison against either forks. */
+    switch (unit[0]) {
+    case 's': w = viewport_small_width(realm);   h = viewport_small_height(realm);   break;
+    case 'd': w = viewport_dynamic_width(realm); h = viewport_dynamic_height(realm); break;
+    default:
+        DCHECK(unit[0] == 'v' || unit[0] == 'l',
+               "a unit reached §6.1.2.1's viewport-size selection whose first letter names none of its four "
+               "families — css_len_is_viewport and css_len_is_viewport_variant are the two predicates that "
+               "admit a unit here and between them they admit only `v`, `s`, `l` and `d`, so a fifth letter "
+               "is a caller that tested neither");
+        w = viewport_icb_width(realm);
+        h = viewport_icb_height(realm);
+        break;
+    }
+    /* THE AXIS NAME IS THE DEFAULT SPELLING, which is what §6.1.2.2 defines every unit over: it writes each
+       definition once with a `*` standing for all four families, so the axis question and the size question
+       are independent and are asked here as two. */
+    axis = unit[0] == 'v' ? unit : unit + 1;
     /* §6.1.2.1's ONE DIVERGENCE, asserted rather than assumed: "if the value of overflow or scrollbar-gutter on
        the root element in either axis would cause scrollbars to appear … unconditionally … the computed values
        of the viewport-percentage lengths in that axis are reduced in accordance with the initial containing
@@ -287,17 +310,17 @@ static CssPx css_len_viewport(JSContext *realm, const char *unit, double k)
            "`overflow` in the axis: where it forces a scroll bar unconditionally the unit follows the reduced "
            "ICB, and otherwise it follows the unreduced viewport, which is then a SECOND environment fact "
            "beside CSS_ENV_ICB_WIDTH and needs its own row in core/frame/viewport.c's seam");
-    if (strcmp(unit, "vw") == 0)   return css_px_scale(w, k);
-    if (strcmp(unit, "vh") == 0)   return css_px_scale(h, k);
+    if (strcmp(axis, "vw") == 0)   return css_px_scale(w, k);
+    if (strcmp(axis, "vh") == 0)   return css_px_scale(h, k);
     /* §6.1.2.2: "vmin: equal to the smaller of vw and vh", "vmax: … the larger". BOTH axes are operands, so
        both facts reach the result and the answer is a JOINT function of them — which is exactly what a page
        branching on a `100vmin` box is branching on, a relation between the two viewport dimensions, and what a
        domain over either one alone could not say. Which axis is smaller is decided on the modelled viewport
        (media_query.h's layering) and the fact the loser carried survives the decision, because at another
        viewport it is the winner. */
-    if (strcmp(unit, "vmin") == 0) return css_px_min(css_px_scale(w, k), css_px_scale(h, k));
-    if (strcmp(unit, "vmax") == 0) return css_px_max(css_px_scale(w, k), css_px_scale(h, k));
-    DCHECK(strcmp(unit, "vi") == 0 || strcmp(unit, "vb") == 0,
+    if (strcmp(axis, "vmin") == 0) return css_px_min(css_px_scale(w, k), css_px_scale(h, k));
+    if (strcmp(axis, "vmax") == 0) return css_px_max(css_px_scale(w, k), css_px_scale(h, k));
+    DCHECK(strcmp(axis, "vi") == 0 || strcmp(axis, "vb") == 0,
            "a unit reached the viewport-percentage resolution that is not one of §6.1.2.2's six — this arm and "
            "CSS_VIEWPORT_RELATIVE are one list and have come apart");
     DFAIL("`vi` and `vb` are 1% of the viewport IN THE BOX'S INLINE AND BLOCK AXIS (css-values §6.1.2.2), so "
@@ -386,51 +409,34 @@ static CssPx css_len_unit_px(JSContext *realm, const CssFontMetrics *font, const
                "multiplication can use");
         return css_px_scale(base, num);
     }
-    if (css_len_is_viewport(unit))
+    /* §6.1.2's DEFAULT FAMILY AND §6.1.2.1's THREE VARIANTS REACH ONE ARM, because §6.1.2.2 defines every
+       one of the twenty-four spellings over a `*` that stands for all four families — the SIZE the unit is a
+       percentage of and the AXIS it is taken in are independent questions, and css_len_viewport asks them as
+       two. A variant is recognised by the prefix test rather than tabulated, which is §6.1.2.1's own naming
+       rule; what each family resolves against, and why `lv*` shares the default family's facts while `sv*`
+       and `dv*` carry their own, is stated once at that function and at core/css/css_length.h's fact list. */
+    if (css_len_is_viewport(unit) || css_len_is_viewport_variant(unit))
         return css_len_viewport(realm, unit, num / 100.0);
-    else if (css_len_is_viewport_variant(unit))
-        DFAIL("a length in one of css-values §6.1.2.1's SMALL, LARGE or DYNAMIC viewport-percentage units "
-              "(`svh`, `lvw`, `dvh`, …). The default `v*` family resolves — it is 1% of the INITIAL CONTAINING "
-              "BLOCK, which core/frame/viewport.h models — and these three do not, because each is a percentage "
-              "of a DIFFERENT viewport size: the large one assumes every dynamically retractable UA interface "
-              "retracted, the small one assumes them all expanded, and the dynamic one tracks them and is "
-              "explicitly NOT STABLE while the viewport itself is unchanged. This engine models ONE viewport "
-              "with no retractable interface, so the three coincide in the number — and answering all four "
-              "families out of the ONE source key that number carries is exactly what must not happen: "
-              "`100dvh === 100lvh` is the comparison a mobile bundle writes its viewport workaround around, and "
-              "deciding it on the shared example deletes the arm where they differ. BUILD the three viewport "
-              "sizes as their own PICKED facts in core/frame/viewport.c — a row each in its seam's table, by "
-              "the same test viewport.h applies to `innerWidth` and the ICB, which reports the same number "
-              "today and is still a separate fact for the same reason. AND THIS ARM IS REACHABLE FROM A "
-              "STYLESHEET ONLY SINCE THE TWO UNIT TABLES WERE MADE TO AGREE, WHICH IS WHY THE INSTRUCTION "
-              "ABOVE IS NOW THE NEXT DIFF RATHER THAN A LATER ONE: lexbor's `lxb_css_property_state_length` "
-              "returns false when `lxb_css_unit_absolute_relative_by_name` answers NULL, which DROPS the "
-              "declaration and leaves the initial `auto` behind, so while lexbor's tables carried none of "
-              "these units a declared `100dvh` was INDISTINGUISHABLE FROM AN INVENTED `100zzq`. Measured on "
-              "a frozen native binary with controls both ways: `100dvh`, `100cqh` and `100zzq` all reached "
-              "core/layout/block_flow.c's flex `column` arm, which is reached only when a height BEHAVES AS "
-              "AUTO, while `100vh` and `50em` did not reach it at all. Those tables are GENERATED and their "
-              "generator was never vendored, which is why extending them by hand was a silent-corruption "
-              "risk; engine/cssunitgen.mjs is that generator, restored and proven by regenerating the tables "
-              "as they stood BYTE-IDENTICALLY before a unit was added, and it refuses to finish while any "
-              "unit `css_length_is_length_unit` admits is one lexbor cannot resolve. Ask "
-              "`node engine/cssunitgen.mjs --check` for that derivation rather than trusting a number here. "
-              "WHAT IS NOT YET OBSERVED IS THIS CRASH FIRING, because that check is over SOURCE and a table "
-              "reaches a running engine only through a BUILD AND AN INSTALL, which is an act only the agent "
-              "that owns builds may perform. RETIREMENT: this paragraph goes when a `height: 100dvh` aborts "
-              "HERE rather than in block_flow.c");
     else if (css_len_is_container(unit))
         DFAIL("a length in one of CSS Conditional 5 §7 Container Relative Lengths' six units (`cqw`, `cqi`, "
               "`cqmax`, …). §7 states what one is worth in two parts, and this engine has neither: \"container "
               "query length units are evaluated using the same rules as container size queries on the relevant "
               "axis (or axes) described by the unit. The query container for each axis is the nearest ancestor "
               "container that accepts container size queries on that axis. If no eligible query container is "
-              "available, then use the small viewport size for that axis.\" So BUILD, in order: the "
-              "`container-type` cascade and the nearest-ancestor-container walk that decides WHICH element "
-              "answers for each axis, which is CSS Conditional 5 §3's own machinery and is a component of its "
-              "own; and §6.1.2.1's SMALL viewport size as its own picked fact in core/frame/viewport.c, which "
-              "is the same one the `sv*` arm above already names — one fact, two callers, and answering "
-              "either from the default `v*` source key would delete the arm where they differ");
+              "available, then use the small viewport size for that axis.\" THE SECOND HALF IS BUILT — "
+              "§6.1.2.1's SMALL viewport size is a picked fact of its own in core/frame/viewport.c "
+              "(`viewport_small_width`/`viewport_small_height`, carrying CSS_ENV_SMALL_VIEWPORT_*), which "
+              "the `sv*` arm above resolves through and which this arm must resolve its FALLBACK through "
+              "rather than through the default `v*` pair: one fact, two callers, and answering this one "
+              "from the ICB's source key would delete the arm where the two viewport sizes differ. SO "
+              "WHAT IS LEFT IS THE FIRST HALF AND ONLY IT: the `container-type` cascade and the "
+              "nearest-ancestor-container walk that decides WHICH element answers for each axis, which is "
+              "CSS Conditional 5 §3's own machinery and is a component of its own. Until an element can "
+              "BE a query container, §7's antecedent holds for every element there is and this arm is the "
+              "fallback outright rather than an approximation of it — which is the reading "
+              "core/css/media_query.c's `mq_container_extent` already states and answers for a media "
+              "query, and the reason this one crashes instead is that a computed value carries FACTS "
+              "where a media query carries its own serialization as the key");
     else
         DFAIL("a length-valued property's value is a DIMENSION in a unit CSS Values §6 does not define as a "
               "length at all — an angle, a time, a frequency or a resolution. A property whose grammar admits "
