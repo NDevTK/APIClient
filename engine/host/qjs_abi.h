@@ -97,6 +97,37 @@ QJS_EXPORT void qjs_set_yield_floor(double floor);
 QJS_EXPORT void qjs_request_park(void);
 QJS_EXPORT void qjs_emit_partial(void);
 
+/* NAMED RESIDUAL OVER THE WHOLE PAINT SURFACE BELOW — IT HAS NO CONSUMER IN THE TRUSTED ZONE, AND THE
+   ENGINE HALF IS NOT WHAT IS MISSING. Every paint entry declared below is in build.mjs's `QJS_ABI`, so each
+   is `--export=`'d on wasm-ld and reaches the shipped module as `Module._qjs_*`; a host could call one today
+   with no change to this file, to main.c or to the solver. What no party outside this process does is CALL
+   one.
+   WHAT IS NOT COVERED — A PROPERTY AND NOT A LIST: an ABI entry whose only caller is a fixture is exercised
+   at exactly the cadence the fixture is run and never at the one the product is, so the per-world reach
+   `qjs_request_paint_every_world` buys is spent only by a host that already renders. §Testing rates that the
+   same as a translation unit that is in the program and in nobody's build, and the paint surface is thirteen
+   entries in that state rather than one.
+   WHAT THE NEXT DIFF BUILDS: the YIELD arm of the step loop in the trusted zone — the branch on
+   ENGINE_STEP_YIELD, which is the moment the scheduler hands back a MARKED member standing with its COW and
+   DOM deltas applied — asks `qjs_paint`, reads the twelve entries beside it in the order `qjs_paint_bytes`
+   states, and hands the bytes and the world to the zone that may present them. test_forced.c's `abi_paint`
+   is that read already written, against this same ABI. It is a CROSS-BOUNDARY diff in CLAUDE.md's sense — the
+   zone's JavaScript is live on WRITE and this half is live only after a BUILD — so its two halves land
+   together or neither lands.
+   HOW ITS ABSENCE WOULD SHOW — STATED AS AN OBSERVATION AND NOT AS AN INSTANCE: a run of the shipped
+   extension over a document that forks emits its findings and no image of any world, and nothing in the
+   result says a picture was ever available — so a reader asking what one of this engine's forced arms LOOKS
+   like has neither an artifact nor a statement that there could have been one. It is observed as the absence
+   of any paint entry in the extension's own step loop, which is the one place a host that wanted a picture
+   would have to ask; the same loop already records what this shape cost once, at the NEED_FETCH branch that
+   made a whole reply path unreachable in the shipped extension while every gate stayed green.
+   THE ACT THAT RETIRES IT, AND WHO MAY PERFORM IT, BECAUSE A PASSIVE CONDITION READS AS MERELY PENDING: the
+   observation is about the SHIPPED extension, so what changes it is a trusted-zone diff landed TOGETHER with
+   a build and an install of the module — and a lane in this project may not build, so the act belongs to the
+   one role that may. A reader who runs the observation, gets the defer answer and correctly leaves this
+   standing is asked to SAY SO rather than to wait, since nothing anywhere accumulates those readings.
+   RETIREMENT: this record goes when `qjs_paint` has a caller outside `engine/host/`. */
+
 /* AN IMAGE OF THE DOCUMENT — the ONLY pair of entries in this ABI that carries BYTES outward, and two
    entries rather than one because linear memory has no length. `qjs_paint` PERFORMS the render and answers
    where the run starts; `qjs_paint_bytes` answers how long the run `qjs_paint` last produced is. A pointer

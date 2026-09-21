@@ -1563,7 +1563,15 @@ static const char *paint_forced_word(Flow *f)
    current when the call arrives, and a host that wants one arm's picture rather than another's is asking a
    question §State-isolation's COW delta answers and this entry does not.
 
-   THE REACH THAT USED TO BE A RESIDUAL HERE IS BUILT, AND IT IS `qjs_request_paint` BELOW — @PERWORLD. The
+   THE REACH THAT USED TO BE A RESIDUAL HERE IS BUILT, AND IT IS `qjs_request_paint_every_world` BELOW —
+   @PERWORLD. THIS SENTENCE NAMED `qjs_request_paint`, WHICH THIS TREE NO LONGER HOLDS, and the correction is
+   recorded rather than made silently because the name was wrong in the direction that costs a reading: that
+   entry photographed the members alive AT THE ASK, was deleted for having no caller, and its record is at its
+   own line below. The two asks are a FRONTIER and a RUN rather than two spellings of one — so a reader who
+   greps the dead name gets NOTHING, and a reader who settles for the entry they can see has taken a different
+   population by luck rather than by this sentence. RETIREMENT: this note goes when a backticked ABI name in
+   this file is checked against build.mjs's `QJS_ABI` the way that list is already checked against
+   `QJS_EXPORT`, so a prose reference cannot outlive the entry it names. The
    residual said, correctly, that a host reaches this engine only BETWEEN two steps, so the only worlds this
    entry could render were the ones the scheduler happened to leave switched in at a yield; that it could be
    asked for neither a NAMED world nor all of them; and that an `if (__FLAGS.admin)` sibling's appearance —
@@ -1615,9 +1623,19 @@ static const char *paint_forced_word(Flow *f)
    and a real page's frontier is members in the thousands. The derivation, for whoever prices it rather than
    believing this: `4 *
    qjs_paint_width() * qjs_paint_height()` against the frontier's member count on the same document — both are
-   already published, so it is a reading and not an experiment. So the scheduler renders into THIS register
-   and returns to the host, which drains it before the next flow renders; nothing is decided not to be
-   painted, which is what CLAUDE.md's no-bounds rule asks of a per-world render, and nothing is held.
+   already published, so it is a reading and not an experiment. AND THIS PARAGRAPH'S LAST SENTENCE USED TO
+   READ `So the scheduler renders into THIS register and returns to the host, which drains it before the next
+   flow renders`, WHICH IS THE MECHANISM THE HEADLINE ABOVE WITHDREW, LEFT STANDING BY THE EDIT THAT WITHDREW
+   IT — the headline says the solver renders nothing and holds nothing, and solver/engine.h's own contract
+   says it in its own words at `engine_request_paint_every_world`: that entry does not produce a picture and
+   does not call anybody who does. An argument is a headline plus its tail, and an insertion made at the
+   headline re-attaches the tail to whatever was inserted.
+   IT IS CORRECTED RATHER THAN DELETED BECAUSE IT IS THE READING A HOST AUTHOR RE-DERIVES, AND IT IS THE ONE
+   THAT COSTS A DIFF: a consumer told this register is already written asks `qjs_paint_bytes` WITHOUT asking
+   `qjs_paint` first, which is exactly the order `g_painted` exists to refuse — an abort in dev, and in
+   release a length of zero that reads identically to the length of an empty image. WHAT HOLDS IS THAT THE
+   SCHEDULER RETURNS THE THREAD WITH A MARKED MEMBER STANDING AND THE HOST RENDERS; nothing is decided not to
+   be painted, which is what CLAUDE.md's no-bounds rule asks of a per-world render, and nothing is held.
 
    HOW THE ASK'S ABSENCE WOULD SHOW, WHICH IS THE ONE CLAUSE OF THE RETIRED RESIDUAL THAT IS STILL AN
    INSTRUMENT RATHER THAN A HISTORY: every image a run produces names the SAME world, and that name is the
