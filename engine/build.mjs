@@ -2534,11 +2534,17 @@ function ladderUnitReading(b) {
          `${b.outOfProgramsAtTheLadder === 1 ? "" : "s"} whose next dispatch descends it, by the arm each ` +
          `LAST returned through): ` + at.map((r) => `${r[1]} ${r[0]}`).join(", ") +
          ` — largest ${at[0][1]} at \`${at[0][0]}\`. Read that arm's position in flow_step's chain against ` +
-         `\`engine_orphan_seed\`: an arm ABOVE the seed says these members ARE being dispatched and that ` +
-         `work the page arranged falls due ahead of the take on every round, which is the ladder's ` +
-         `precondition and not the pick; an arm BELOW it says the member went PAST the seed, so the seed RAN ` +
-         `and found nothing to take, which is a fact about the heap. Those two take opposite work and ` +
-         `\`outOfProgramsAtTheLadder\` beside \`asked\` cannot choose between them (solver/cold.h)`;
+         `\`engine_orphan_seed\`, and the lookup has THREE outcomes and not two: an arm ABOVE the seed says ` +
+         `these members ARE being dispatched and that work the page arranged falls due ahead of the take on ` +
+         `every round, which is the ladder's precondition and not the pick; an arm BELOW it says the member ` +
+         `went PAST the seed, so the seed RAN and found nothing to take, which is a fact about the heap; and ` +
+         `AN ARM YOU CANNOT FIND IN THAT CHAIN AT ALL is the third and is not a failed lookup — the ladder ` +
+         `sits under \`if (!f->frame)\` and the FRAMED branch is the other side of that \`if\`, so its ` +
+         `frame-CLEARING outcomes leave a member standing here having never entered the ladder. That says ` +
+         `the member's last dispatch ENDED ITS FRAME AND RETURNED, so the first dispatch that could ask is ` +
+         `one it has not had — the PICK, in its strongest form, and the reading a binary sends to the ` +
+         `wrong file. Those three take opposite work and \`outOfProgramsAtTheLadder\` beside \`asked\` ` +
+         `cannot choose between them (solver/cold.h)`;
 }
 
 /* WHAT A TURN OF THE DISPATCH LOOP COST — the row every reading above is structurally silent about, and the

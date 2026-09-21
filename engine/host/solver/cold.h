@@ -243,6 +243,32 @@ typedef struct {
        found nothing to take, which is a fact about the HEAP and not about the frontier at all. The two
        `await-` rows there are ONE arm of flow_step split by whether the host can still be asked, so they are
        at the same rung by construction and a reader of this row may take either as the same evidence.
+       AND THOSE TWO CLASSES ARE A BINARY OVER A CHAIN THAT HAS A THIRD POSITION, WHICH IS WHY THIS ROW COULD
+       NOT READ THE ONE MEASUREMENT THIS BLOCK ALREADY CARRIES. The arms above are named out of flow_step's
+       ladder, and every one of them is reached under `!f->frame`; the FRAMED branch is the other side of that
+       `if`, and its frame-CLEARING outcomes leave a member standing here too. `resume-ended-its-frame`,
+       `start-ended-its-frame`, `program-detached-its-base` and `start-detached-its-base` are those outcomes —
+       solver/step_unit.h names the property that groups them, "whether a step left its member framed is
+       exactly whether it made that whole ladder reachable" — and NOT ONE OF THEM IS IN EITHER LIST ABOVE. A
+       reader told to "read that arm's position in flow_step's chain against `engine_orphan_seed`" finds it
+       has no position in that chain at all, because the step that wrote it ran on the other branch.
+       WHAT MASS THERE MEANS IS THE PICK, AND IT IS THE STRONGEST FORM OF THAT READING RATHER THAN A THIRD
+       SHADE. An above-rung arm says the ladder was ENTERED and something took the member before the seed; a
+       below-rung arm says the seed RAN. A frame-clearing arm says the ladder was NEVER ENTERED FOR THIS
+       MEMBER: the dispatch that wrote it ended the member's frame and returned (engine.c's END_FRAME tail is
+       `f->frame = NULL; return 0;`, with no `continue`), so the first dispatch that could descend the ladder
+       is one the member HAS NOT HAD. The orphan question therefore costs a member TWO dispatches — one to end
+       the frame it was born holding, one to ask — and a frontier that mints arms faster than it serves them
+       gives almost nobody the second.
+       THAT IS THE CLASS THE MEASUREMENT FORTY LINES UP LANDED IN, which is how this gap was found: 1318 of
+       1699 members stepped EXACTLY ONCE through `resume-ended-its-frame` and standing here with `asked` 2,
+       against a control on the same document made to drain that asks 387 times. Read under the binary, that
+       mass has no true class — and the nearest reading a reader reaches for is the above-rung one, which
+       reports the ladder's PRECONDITION as the cause and sends the next lane to flow_step's arms when the
+       answer is that these members are never dispatched again. Those take opposite work, which is the whole
+       reason this row exists.
+       RETIREMENT: this record goes when every arm solver/step_unit.h declares is named by exactly one of the
+       three classes here, so a reader cannot meet a row with no class.
        AND THE SECOND OF THOSE HAS A CONSEQUENCE FOR THE ORPHAN CENSUS WORTH STATING AND NOT ASSERTING: `asked`
        is a LIFETIME count and this is a GAUGE, so a member reading a below-rung arm says only that SOME member
        passed the seed at SOME past instant. That is enough to make a nonzero below-rung mass beside `asked` 0
