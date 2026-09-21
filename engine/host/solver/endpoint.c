@@ -42,11 +42,27 @@ static const char *const ep_loc_name[] = { "query", "path", "body" };
    on the record only where EVERY observed path obeyed it, so a sighting that reached the request without
    testing it is a path that DISPROVES it and the claim goes. There is no hull here and no widening — the
    domain is unordered, so intersecting the sets IS the rule, exactly as it is for `excl`. */
+/* `has_hole` IS NOT A FIFTH DOMAIN AND ITS MERGE IS NEITHER OF THE TWO ABOVE. The four fields above are
+   CLAIMS ABOUT THE VALUE, so a path that reached the request without obeying one disproves it and they
+   intersect. This says whether this param's value NAMED A HOLE at the read — whether `kv_add` was able to ask
+   the flow anything at all — which is a fact about the OBSERVATION and not a constraint on the value, so a
+   sighting that had no hole disproves nothing. It therefore merges as a UNION, for `vals`' reason exactly:
+   another path minting this param from an unknown adds knowledge and takes none away.
+   THE DIRECTION IS ALSO THE ONLY SOUND ONE, WHICH IS WHY THIS IS NOT A PREFERENCE. Intersecting would answer
+   `concrete` for a param one observed path DID mint from a hole, and a consumer computing "parameters whose
+   domain could have been narrowed" would then drop a row that genuinely could — a coverage fraction reading
+   HIGHER than the truth, which is the flattering direction CLAUDE.md forbids. The union errs the other way:
+   it counts a row whose every later sighting was concrete, which widens the denominator and understates
+   coverage.
+   IT CANNOT BE RE-DERIVED DOWNSTREAM, which is the whole reason it is carried rather than left to a reader.
+   `kv_pairs` emits the aligned EXAMPLE where the shape held a hole, so a param minted from `{location.hash}`
+   renders `validValues:["abc"]` — the same bytes as a param the code computed — and the one spelling that
+   would have betrayed the hole is exactly the one the example replaced. */
 typedef struct { int has_lo, has_hi; double lo, hi; int lo_incl, hi_incl; char *lo_txt, *hi_txt; } ParamBound;
 typedef struct { char *name; EpLoc loc; char **vals; int nvals, vcap;
                  char **excl; int nexcl; ParamBound bnd;
                  ConcolicPred *pred; int npred;
-                 ConcolicLooseEq *leq; int nleq; } Param;
+                 ConcolicLooseEq *leq; int nleq; int has_hole; } Param;
 typedef struct { char *name; char *value; } EpHeader;   /* the transport half: what the request must carry */
 /* `is_asset` IS WHAT THE RESOURCE AT THIS ADDRESS TURNED OUT TO BE, and it can only be written after the
    record exists. §Attacker sources: "Static assets are NEVER endpoints (magic-byte + content-type, not URL
@@ -158,9 +174,11 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
    lives in the flow's constraint head, which the very next narrowing reallocs. */
 /* …and `leq` for the same reason a third time: concolic_looseeq_read hands back a BORROWED row out of that
    same head. */
+/* …and `has_hole` is COPIED FROM NOTHING, because it is the one fact here the flow is not asked for: it is
+   whether the caller HAD a hole key to ask with, which is known at the call and nowhere else afterwards. */
 typedef struct { char *name; char *val; EpLoc loc; char **excl; int nexcl; ParamBound bnd;
                  ConcolicPred *pred; int npred;
-                 ConcolicLooseEq *leq; int nleq; } KV;
+                 ConcolicLooseEq *leq; int nleq; int has_hole; } KV;
 typedef struct { KV *e; int n, cap; } KvBuf;
 
 /* ONE COPY AND ONE DISPOSER FOR A SET OF THEM. What a single ROW owns is concolic.c's to say
@@ -240,6 +258,17 @@ static void kv_add(KvBuf *b, const char *name, size_t nlen, const char *val, siz
     DCHECK(loc == EP_QUERY || loc == EP_PATH || loc == EP_BODY,
            "an endpoint param was minted with no LOCATION — a param the reviewer cannot place is a param "
            "that cannot be replayed, and a consumer defaulting it reads every one of them as a query param");
+    /* A PATH PARAM ALWAYS HAS A HOLE, ASSERTED HERE BECAUSE A READER DOWNSTREAM HAS BEEN RE-DERIVING IT.
+       `path_scan` mints a param only for a segment holding a brace and passes the brace-stripped segment AS
+       the hole key, so this holds by construction — which is exactly why it is worth asserting: it is what
+       makes a `location:"path"` row a denominator a consumer can trust without reading this file, and the
+       next producer of a path param has to keep it true. The query and body producers have no such invariant
+       (`concolic_hole_key` answers NULL for a brace-free value), which is what `has_hole` below is for. */
+    DCHECK(loc != EP_PATH || hole != NULL,
+           "a PATH param was minted with no hole key — path_scan mints one only for a braced segment and "
+           "passes that segment's brace-stripped name as the key, so a path param with no hole is a second "
+           "producer that learned to mint a path param and not to name the hole it stands for, and every "
+           "domain read below would be silently skipped for it");
     if (b->n >= b->cap) { b->cap = b->cap ? b->cap * 2 : 8; b->e = realloc(b->e, (size_t)b->cap * sizeof(KV)); CHECK(b->e, "endpoint: OOM params"); }
     b->e[b->n].name = malloc(nlen + 1); CHECK(b->e[b->n].name, "endpoint: OOM param name");
     memcpy(b->e[b->n].name, name, nlen); b->e[b->n].name[nlen] = 0;
@@ -247,6 +276,15 @@ static void kv_add(KvBuf *b, const char *name, size_t nlen, const char *val, siz
     if (vlen) memcpy(b->e[b->n].val, val, vlen);
     b->e[b->n].val[vlen] = 0;
     b->e[b->n].loc = loc;
+    /* …AND WHETHER THERE WAS ANYTHING TO ASK WITH, WRITTEN BEFORE THE FOUR READS THAT DEPEND ON IT. Each of
+       them is gated on `hole`, so a NULL one makes all four silently answer nothing — and the emission spells
+       that silence as the positive statement that no gate of that kind held on every observed path. That
+       reading is true of a param whose hole was never narrowed and FALSE of a param that had no hole, and the
+       two take opposite work: the first is a fact about this run's gating and wants more gates observed, the
+       second is a fact about the param and wants nothing, however good the solver gets. Recording it here is
+       what lets a consumer tell them apart; it is the same `hole` the reads below use, so the flag and the
+       silence it explains cannot disagree. */
+    b->e[b->n].has_hole = hole ? 1 : 0;
     /* THE DOMAIN IS READ HERE BECAUSE HERE IS WHERE THE FLOW STILL EXISTS. The path constraint is per-flow and
        the serializer runs at the end of the run with no flow under it, so a domain fetched there would be
        whichever flow happened to park last — or none. */
@@ -1165,6 +1203,12 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                 param_widen_bound(&g_eps[i].params[j].bnd, &kvb.e[j].bnd);
                 param_intersect_pred(&g_eps[i].params[j], kvb.e[j].pred, kvb.e[j].npred);
                 param_intersect_leq(&g_eps[i].params[j], kvb.e[j].leq, kvb.e[j].nleq);
+                /* THE ONE UNION AMONG THE FOUR INTERSECTIONS ABOVE, and the struct's own banner says why: the
+                   four are claims about the VALUE that a path reaching the request without obeying them
+                   disproves, and this is a fact about whether the OBSERVATION could ask anything at all,
+                   which a later concrete sighting cannot take back. `same_identity` reads names and
+                   locations only, so the two sightings being merged here are free to disagree about it. */
+                g_eps[i].params[j].has_hole |= kvb.e[j].has_hole;
             }
             /* A REQUIRED HEADER THIS ENDPOINT DID NOT HAVE IS EMITTED OUTPUT, and this path credited the WFQ
                with nothing for it. An endpoint's IDENTITY is method + path + param names AND locations
@@ -1206,6 +1250,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
         param_set_bound(&e->params[e->np].bnd, &kvb.e[j].bnd);
         param_set_pred(&e->params[e->np], kvb.e[j].pred, kvb.e[j].npred);
         param_set_leq(&e->params[e->np], kvb.e[j].leq, kvb.e[j].nleq);
+        e->params[e->np].has_hole = kvb.e[j].has_hole;
         e->np++;
     }
     body_store(e, body, body_named);
@@ -1331,6 +1376,30 @@ char *endpoint_json_array(void) {
                   "would index outside a three-entry table and emit whatever that address holds as the "
                   "param's location");
             json_buf_raw(&b, ","); json_buf_key(&b, "location"); json_buf_str(&b, ep_loc_name[e->params[j].loc]);
+            /* …AND WHETHER THIS PARAM'S VALUE EVER NAMED A HOLE, ALWAYS, for `provenance`'s reason one level
+               in. There is NO absence-is-the-statement here — it is the opposite of `excludes` and `bounds`
+               below — because the two words are EXHAUSTIVE over the ways a value reaches this surface, and a
+               fact that cannot have gone unobserved must not be spelled by a silence that means "unobserved"
+               everywhere else in this record.
+               IT IS WHAT MAKES THOSE SILENCES READABLE, which is the whole of why it is here. `excludes`
+               absent says "no equality gate over this hole took its false arm on every path that built this
+               request" — a sentence that presupposes a hole. Where there was none, all four domain reads were
+               skipped at the mint and the same absence means "this param is a literal and there was never
+               anything to look up". Those two take opposite work and rendered with identical bytes, so a
+               consumer counting parameters whose domain could have been narrowed was counting a population
+               it could not name.
+               TWO WORDS AND NOT A BOOLEAN, DELIBERATELY. This record is read by a zone that is deployed on
+               WRITE while this engine is live only after a build, so a consumer WILL meet params from a
+               build that predates this key — and `false` and absent are one value under every truthiness
+               test a reader reaches for, while neither word is. The absence is a third state and has to stay
+               one; lib/learn.js reads it as `unstated`, which is extension/lib/safe-fetch.js's own word for
+               an act that comes off no line at all.
+               THE WORDS ARE `concolic_hole_key`'s OWN, not coined here: its contract says it answers NULL
+               where a shape "names no hole at all (a concrete value has no domain to look up and must not
+               borrow one)", so `concrete` is the name of exactly the case that gates these reads out and
+               `unknown` is §Solver-half's word for the other. */
+            json_buf_raw(&b, ","); json_buf_key(&b, "valueClass");
+            json_buf_str(&b, e->params[j].has_hole ? "unknown" : "concrete");
             json_buf_raw(&b, ","); json_buf_key(&b, "validValues"); json_buf_raw(&b, "[");
             for (int k = 0; k < e->params[j].nvals; k++) { if (k) json_buf_raw(&b, ","); json_buf_str(&b, e->params[j].vals[k]); }
             json_buf_raw(&b, "]");

@@ -127,13 +127,37 @@ const PROBE = `(() => ({
      \`location\` is \"path\" has a non-NULL hole at the read, always, and the record carries \`location\` on
      every param. A zero over THIS denominator is the one reading that is about the domain machinery: a
      parameter the engine could look a domain up for, that carried none.
-     WHAT IT DOES NOT COVER IS THE QUERY AND BODY HALF, AND NOTHING IN THE RECORD CAN: the @H param carries
-     \`name\`, \`location\`, \`validValues\` and the four optional domains and no statement of whether its
-     value named a hole, so a query param reading 0 is two facts — concrete, nothing owed, or a hole whose
-     every gate was lost — rendered identically. Partitioning that half is an engine diff (state hole-ness at
-     the emission) and not a probe one. HOW ITS ABSENCE WOULD SHOW: a run reporting \`astParams\` in the single
-     digits with every domain column at 0, read as the narrowing machinery producing nothing, on a page whose
-     forced-execution params were all concrete query pairs. It is also the reachability witness for the whole
+     \`astPathParams\` DID NOT COVER THE QUERY HALF AND NOW \`astHoleParams\` DOES, WHICH IS THE ENGINE DIFF
+     THIS COLUMN'S RESIDUAL ASKED FOR AND NOT A SECOND DENOMINATOR BESIDE IT. The record used to carry \`name\`,
+     \`location\`, \`validValues\` and the four optional domains and no statement of whether the value named a
+     hole, so a query param reading 0 was two facts — concrete, nothing owed, or a hole whose every gate was
+     lost — rendered identically. solver/endpoint.c now writes \`valueClass\` on EVERY param, off the same
+     \`hole\` the four domain reads are gated on, so the two are separable: \`astHoleParams\` counts the rows a
+     domain could have been looked up for, whatever their location.
+     \`astPathParams\` STAYS AND IS NOT A SUPERSEDED FALLBACK, WHICH IS THE ONE THING A LATER READER WILL GET
+     WRONG ABOUT IT. It is sound BY CONSTRUCTION and needs nothing from the engine, so it is the denominator
+     that still answers for a record learned by a build predating \`valueClass\` — the case
+     \`astUnstatedParams\` exists to make visible. On an engine that states the key the two are a CROSS-CHECK
+     rather than a duplicate: a path param is always "unknown" and endpoint.c's \`kv_add\` asserts it, so
+     \`astHoleParams >= astPathParams\` holds, and the pair disagreeing is a finding about the engine that no
+     single column could report.
+     WHAT IS STILL NOT COVERED IS THE BODY HALF, AND THE ENGINE IS NO LONGER THE REASON. endpoint.c states a
+     body field's \`valueClass\` exactly as it states a query param's; what stops it reaching here is that
+     lib/learn.js routes a param whose \`location\` is "body" into \`_bodyParams\` and onto
+     \`doc.schemas[<Method>Request].properties\` rather than \`m.parameters\`, and this walk visits
+     \`m.parameters\` only. That file does NOT merge \`valueClass\` onto those properties, and says at the site
+     why not: the four domains leave them by one road — lib/discovery.js's \`_buildDiscoveryFieldShell\` lifts
+     each by name onto a FieldDef — and a name \`FIELD_DEF_ABSENT\` does not declare cannot travel it, so
+     writing it there today would be a field stored on every body row and read by nothing.
+     WHAT THE NEXT DIFF BUILDS: \`_astValueClass\` declared in extension/lib/field-def.js, lifted by
+     \`_buildDiscoveryFieldShell\` beside the four, merged in lib/learn.js's body block, and walked here as
+     its OWN columns rather than folded into these — one landing, because each part alone is a write nothing
+     reads, and its own columns because a body field and a URL parameter are two different things to send and
+     one denominator over two populations is the defect the paragraphs above fix twice.
+     HOW ITS ABSENCE WOULD SHOW: a page whose forced execution learns its parameters in POST bodies reports
+     every column here at 0 against a live engine and a populated surface, and that zero reads as the
+     narrowing machinery producing nothing rather than as this walk never having been shown the rows.
+     THIS COLUMN SET IS ALSO THE REACHABILITY WITNESS FOR THE WHOLE
      chain: solver/decide.c records a gate under a hole key, solver/endpoint.c reads it back at kv_add and
      emits \`excludes\`/\`bounds\`/\`predicates\`, and lib/learn.js merges those onto exactly the objects walked
      here — every hop present with a live caller, and nothing at any level asserting that one arrives.
@@ -156,7 +180,8 @@ const PROBE = `(() => ({
      RETIREMENT: this record goes when these columns are derived from the field set lib/learn.js declares
      rather than listed here, so a kind added there cannot go missing from this walk. */
   domains: (() => {
-    let params = 0, astParams = 0, astPathParams = 0, withExcl = 0, withBnd = 0, withPred = 0, withLeq = 0, reached = false;
+    let params = 0, astParams = 0, astPathParams = 0, astHoleParams = 0, astUnstatedParams = 0,
+        withExcl = 0, withBnd = 0, withPred = 0, withLeq = 0, reached = false;
     for (const svc of globalStore.discoveryDocs.values()) {
       const methods = svc && svc.doc && svc.doc.resources && svc.doc.resources.learned
                    && svc.doc.resources.learned.methods;
@@ -171,6 +196,21 @@ const PROBE = `(() => ({
              and its hole key IS that segment's brace-stripped name, so its domain read is never gated out by
              a NULL hole the way a concrete query pair's is. */
           if (p && p._astInferred && p.location === "path") astPathParams++;
+          /* THE DENOMINATOR THE ENGINE NOW STATES, WHICH COVERS THE QUERY HALF THE ONE ABOVE CANNOT — see the
+             banner. solver/endpoint.c writes \`valueClass\` on EVERY param from the same \`hole\` the four
+             domain reads are gated on, so this counts exactly the rows a domain could have been looked up
+             for. It is a SUPERSET of \`astPathParams\` and not a replacement: a path param is always
+             "unknown" and endpoint.c asserts it, so \`astHoleParams >= astPathParams\` holds on any engine
+             that states the key, and the two disagreeing is a finding about the engine. */
+          if (p && p._astInferred && p._astValueClass === "unknown") astHoleParams++;
+          /* AND THE THIRD STATE, PUBLISHED RATHER THAN LEFT TO BE RE-DERIVED, for the reason this banner
+             already publishes \`astParams\`' entailment. This zone is deployed on WRITE and the engine is
+             live only after a build, and the store outlives both — so a row learned by an engine that
+             predates \`valueClass\` states NOTHING, which is neither "unknown" nor "concrete". Without this
+             column such a run reads \`astHoleParams: 0\`, which is byte-identical to a page whose every
+             forced-execution param was a concrete query pair. A nonzero here says the sound denominator for
+             THIS run is \`astPathParams\` and not \`astHoleParams\`; a zero is what licenses the latter. */
+          if (p && p._astInferred && p._astValueClass === undefined) astUnstatedParams++;
           if (p && Array.isArray(p._excludedValues) && p._excludedValues.length) withExcl++;
           if (p && p._bounds && Object.keys(p._bounds).length) withBnd++;
           if (p && Array.isArray(p._predicates) && p._predicates.length) withPred++;
@@ -182,7 +222,8 @@ const PROBE = `(() => ({
         }
       }
     }
-    return reached ? { params, astParams, astPathParams, withExcl, withBnd, withPred, withLeq } : null;
+    return reached ? { params, astParams, astPathParams, astHoleParams, astUnstatedParams,
+                       withExcl, withBnd, withPred, withLeq } : null;
   })(),
 }))()`;
 

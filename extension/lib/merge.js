@@ -109,9 +109,16 @@ function mergeASTResultsIntoVDD(tab, results) {
          SO THE RULE, WHICH IS WHAT DOES NOT ROT. A record states its verb, its address and what it is
          evidence of unconditionally (`method`, `url`, `provenance`) plus its `params` array, always present
          and possibly empty; `headers` is written ONLY where the run observed one. A param states `name`,
-         `location` and `validValues` unconditionally, plus one key per KIND OF GATE that held on every
-         observed path to this request — an equality's false arm, an ordering's interval, a method call, a
-         loose equality — each OMITTED where that kind proved nothing.
+         `location`, `validValues` and `valueClass` unconditionally, plus one key per KIND OF GATE that held on
+         every observed path to this request — an equality's false arm, an ordering's interval, a method call,
+         a loose equality — each OMITTED where that kind proved nothing.
+         AND `valueClass` IS THE ONE UNCONDITIONAL KEY THAT IS ABOUT THOSE OMISSIONS RATHER THAN BESIDE THEM,
+         which is why adding it to the rule above is not the same edit as adding a fifth gate. endpoint.c reads
+         all four gates through the param's HOLE KEY, so a param whose value the code COMPUTED had all four
+         skipped at the mint and their absence stops meaning "that kind proved nothing"; this key says which
+         of the two sentences a reader is holding. Its OWN absence is a third state rather than a fifth
+         omission — this zone is deployed on write and the engine is live only after a build — and the merge
+         at the foot of this file leaves an unstated one alone rather than answering for it.
          THE AUTHORITY IS THE PRODUCER AND NOT THIS PARAGRAPH. solver/endpoint.h carries the record's own
          sketch beside the emission, and lib/learn.js's `AST_PARAM_KEYS` is the consumer half — a list that
          CRASHES on a param key no reader in that file asks for, which is the mechanism this comment used to
@@ -548,6 +555,24 @@ function _mergeParamInto(ep, np) {
      surviving `== 0` tells a reviewer to send a value that coerces to zero when a second document reached the
      request without any such gate. */
   if (Array.isArray(np._looselyEquals)) intersectLooselyEquals(ep, np._looselyEquals);
+  /* …AND THE FACT THAT SAYS WHICH OF TWO SENTENCES THOSE FOUR SILENCES ARE, WHICH IS NOT A FIFTH ONE OF THEM
+     AND MERGES BY THE OPPOSITE LAW. solver/endpoint.c reads all four domains through the param's HOLE KEY, so
+     a param whose value named no hole had all four skipped at the mint and their absence means "a literal
+     with nothing to look up" rather than "a hole every gate was lost on". `_astValueClass` is the engine's
+     statement of which, carried here for the reason the paragraph above records against itself: a domain fact
+     this merge does not carry is a second document's observation discarded, and the moat then renders the
+     first document's claim as one the run established.
+     IT UNIONS WHERE THEY INTERSECT, AND THAT IS solver/endpoint.h's rule rather than a choice made here. The
+     four are claims about the VALUE, so a document that reached the request without obeying one DISPROVES it;
+     this is a fact about whether the observation could ask anything at all, and a second document whose own
+     value was a literal cannot take back a hole the first one really had. So "unknown" is sticky and
+     "concrete" fills only an unstated slot.
+     PRESENCE, NOT TRUTHINESS, FOR THIS BLOCK'S OWN REASON — and here the third state is an ABSENT key rather
+     than an empty array, because this zone is deployed on WRITE while the engine is live only after a build
+     and the store outlives both. A record learned by an engine that predates the key states nothing, so it
+     must contribute nothing; writing "concrete" for it would be that silence read as an answer. */
+  if (np._astValueClass === "unknown") ep._astValueClass = "unknown";
+  else if (np._astValueClass === "concrete" && ep._astValueClass !== "unknown") ep._astValueClass = "concrete";
 }
 
 /* THE PER-METHOD STATS UNION — `lib/stats.js`'s `mergeParamStats`, WHICH HAD NO CALLER.

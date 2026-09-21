@@ -167,12 +167,41 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
 /* The @H surface as a malloc'd JSON ARRAY (caller frees) — findings are C data, so the emit is C, never a
    JS-object round-trip.
    `[ {"method":..,"url":..,"provenance":"observed"|"derived"|"forced",
-      "params":[{"name":..,"location":..,"validValues":[..],"excludes":[..],
+      "params":[{"name":..,"location":..,"valueClass":"unknown"|"concrete","validValues":[..],"excludes":[..],
       "bounds":{"minimum"|"exclusiveMinimum":N,"maximum"|"exclusiveMaximum":N},
       "predicates":[{"method":..,"arguments":[..],"holds":true|false}],
       "looselyEquals":[{"value":..,"type":..}]}]}, ... ]`.
    Every param states WHERE IT LANDED — "path", "query" or "body" — because that is what the reviewer replays
    it with, and because a consumer that has to default the field cannot tell an unknown from a query param.
+   AND EVERY PARAM STATES WHETHER ITS VALUE EVER NAMED A HOLE. `valueClass` is "unknown" where some observed
+   path minted this param from a value the code did NOT compute, and "concrete" where every one of them minted
+   it from a literal. It is ALWAYS PRESENT for `provenance`'s reason one level in: the two words are
+   exhaustive, so there is no absence to read as a statement, and this record already spells "unobserved" as a
+   silence four fields down.
+   IT IS WHAT MAKES THOSE FOUR SILENCES READABLE AT ALL, and that is the whole of why it is on the record.
+   Each of `excludes`, `bounds`, `predicates` and `looselyEquals` is OMITTED where no such claim survived every
+   observed path, and endpoint.c reads all four through the param's HOLE KEY — so where there was no hole, all
+   four were skipped at the mint and their absence means something else entirely. "No equality gate over this
+   hole took its false arm on every path" presupposes a hole; "this param is a literal and there was never
+   anything to look up" is the other reading, and the two take OPPOSITE work — the first wants more gates
+   observed and the second wants nothing, however good the solver gets. Without this key they render with
+   identical bytes, so a consumer counting parameters whose domain could have been narrowed is counting a
+   population it cannot name, and its zero is consistent with a page whose every forced-execution param was a
+   concrete query pair.
+   A CONSUMER CANNOT RE-DERIVE IT FROM `validValues`, which is why it is carried. endpoint.c's query scan
+   emits the ALIGNED EXAMPLE where the shape held a hole, so a param minted from `{location.hash}` renders a
+   computed-looking literal — the one spelling that would have betrayed the hole is exactly the one the
+   example replaced.
+   A `location:"path"` PARAM IS ALWAYS "unknown" and endpoint.c's `kv_add` asserts it: the path scan mints a
+   param only for a braced segment and passes that segment's brace-stripped name AS the hole key. That
+   invariant used to be re-derived by readers of this file — testing/corpus/site.mjs reasoned it out to build
+   a denominator it could trust — and it is now a fact the record states and the engine crashes on.
+   ITS MERGE IS A UNION AND NOT THE INTERSECTION THE FOUR DOMAINS TAKE. Those are claims about the VALUE, so a
+   path that reached the request without obeying one disproves it; this is a fact about whether the
+   OBSERVATION could ask anything, which a later concrete sighting cannot take back. The direction is also the
+   only sound one: intersecting would answer "concrete" for a param one observed path did mint from a hole,
+   dropping a row that genuinely could have carried a domain and making a coverage fraction read HIGHER than
+   the truth.
    AND EVERY RECORD STATES WHAT IT IS EVIDENCE OF. `provenance` is one of solver/engine.h's three words and it
    is ALWAYS PRESENT — there is no absence to read as a statement here, because the three words are exhaustive
    over the ways this engine can come to know an address and a silent grade is read as the strongest of them.

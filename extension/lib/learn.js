@@ -82,11 +82,19 @@
  * renders an UNCONSTRAINED parameter and a range-gated one with identical bytes, so its silence about the
  * gate is read as the positive statement 'anything goes'".
  *
- * THREE ARE UNCONDITIONAL AND FOUR ARE WRITTEN ONLY WHERE A GATE HELD, and that split is the contract rather
- * than a property of this list: `name`, `location` and `validValues` are on every param, while `excludes`,
- * `bounds`, `predicates` and `looselyEquals` are OMITTED where no constraint of that kind survived every
- * observed path — so each of those four absences is a POSITIVE statement and is read with an `in` test and
- * never with a `||`. This list is the set of names, not a claim about which of them arrived.
+ * FOUR ARE UNCONDITIONAL AND FOUR ARE WRITTEN ONLY WHERE A GATE HELD, and that split is the contract rather
+ * than a property of this list: `name`, `location`, `validValues` and `valueClass` are on every param, while
+ * `excludes`, `bounds`, `predicates` and `looselyEquals` are OMITTED where no constraint of that kind survived
+ * every observed path — so each of those four absences is a POSITIVE statement and is read with an `in` test
+ * and never with a `||`. This list is the set of names, not a claim about which of them arrived.
+ *
+ * AND `valueClass` IS WHAT SAYS WHICH SENTENCE EACH OF THOSE FOUR ABSENCES IS, which is why it joined the
+ * unconditional half rather than the optional one. endpoint.c reads all four domains through the param's HOLE
+ * KEY, so a param whose value the code COMPUTED had all four skipped at the mint: the same absence then means
+ * "a literal with nothing to look up" instead of "a gate no observed path kept", and those take opposite work.
+ * Its own absence is a THIRD state and not a fifth silence of the same kind — this zone is deployed on WRITE
+ * while the engine is live only after a build, and the store outlives both, so a param from an engine that
+ * predates the key states nothing and `_mergeValueClass` leaves the target alone rather than answering for it.
  *
  * IT IS A SET AND DELIBERATELY NOT A COUNT. A tally is a second copy of a fact that moves, and it rots in
  * silence: this project has already carried a header naming "the eight cost counters" and "all thirteen
@@ -100,9 +108,41 @@
  * repair — add the name, make the abort stop — converts a loud unread key into the silent dropped one this
  * whole mechanism exists to prevent. */
 const AST_PARAM_KEYS = Object.freeze([
-  "name", "location", "validValues",              // written on every param
+  "name", "location", "validValues", "valueClass", // written on every param
   "excludes", "bounds", "predicates", "looselyEquals",  // written only where that gate held on every path
 ]);
+
+/* WHETHER THIS PARAM'S VALUE EVER NAMED A HOLE — "unknown" or "concrete", and ABSENT is a third state this
+   function is the only place that spells. The four domain keys above are omitted where no claim survived
+   every observed path, and solver/endpoint.c reads all four through the param's HOLE KEY, so where there was
+   no hole all four were skipped at the mint. Their absence therefore means one of two things that take
+   OPPOSITE work — a hole nothing narrowed, which wants more gates observed, or a literal with nothing to look
+   up, which wants nothing however good the engine gets — and this is the key that tells them apart.
+   THE ABSENCE IS `unstated` AND IS NEVER FOLDED INTO EITHER ANSWER. This zone is deployed on WRITE and the
+   engine is live only after a build, so a WASM that predates the key is the ordinary case and not an error;
+   the store also persists across sessions, so a record learned by an older engine outlives that build. An
+   absent key can neither confirm nor deny, so it leaves the target ALONE — writing "concrete" there would be
+   the `|| false` this record's own key-set crash exists to prevent, one name over. extension/lib/safe-fetch.js
+   uses the same word for an act that comes off no pending line at all.
+   THE MERGE IS A UNION, which is solver/endpoint.h's rule carried rather than re-derived: "unknown" is sticky
+   because a later concrete sighting cannot take back a hole an earlier one really had. Intersecting would
+   answer "concrete" for a param some observed path did mint from a hole, dropping a row that genuinely could
+   have carried a domain — a coverage fraction reading HIGHER than the truth. */
+function _mergeValueClass(target, p) {
+  if (!("valueClass" in p)) return;
+  DCHECK(p.valueClass === "unknown" || p.valueClass === "concrete",
+         "an @H param carries `valueClass: " + JSON.stringify(p.valueClass) + "`, which is neither of the " +
+         "two words solver/endpoint.c writes — the key is emitted on EVERY param from one ternary over one " +
+         "flag, so a third spelling is the two halves of this record having parted, and a consumer that " +
+         "matched neither word would read it as the absent third state and silently un-learn the fact");
+  DCHECK(!(p.location === "path" && p.valueClass === "concrete"),
+         "an @H param states `location:\"path\"` beside `valueClass:\"concrete\"` — endpoint.c's path scan " +
+         "mints a param only for a braced segment and passes that segment as the hole key, and `kv_add` " +
+         "asserts it, so this pair is that invariant broken upstream and it would silently shrink the one " +
+         "denominator testing/corpus/site.mjs trusts without reading the engine");
+  if (target._astValueClass === "unknown") return;
+  target._astValueClass = p.valueClass;
+}
 
 /* Exclusions: intersect, because only a token EVERY observed path proved the value is not belongs to the
    endpoint. `observed` is the array this sighting proved (empty = this sighting proved nothing). A target
@@ -753,6 +793,8 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
        after it. `callSite.provenance` is what THIS row was reached at, asserted at lib/merge.js's boundary
        before it arrives. */
     _mergeAstValues(m.parameters[p.name], p.validValues, callSite.provenance);
+    /* BEFORE THE FOUR DOMAIN MERGES, because it is what says which of two sentences their silence is. */
+    _mergeValueClass(m.parameters[p.name], p);
     _mergeExcludes(m.parameters[p.name], p);
     _mergeBounds(m.parameters[p.name], p);
     _mergePredicates(m.parameters[p.name], p);
@@ -885,6 +927,22 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
       /* AT THIS SIGHTING'S GRADE, for the reason the query params carry it: a body field the page POSTs is
          learned on the same path the address was, so it is worth exactly what that path is worth. */
       _mergeAstValues(schema.properties[bp.name], bp.validValues, callSite.provenance);
+      /* `valueClass` IS DELIBERATELY NOT MERGED HERE, AND THE ASYMMETRY WITH THE FOUR BELOW IS THE POINT
+         RATHER THAN AN OMISSION. It is the key that says which of two sentences their silence is — endpoint.c
+         reads all four domains through the param's HOLE KEY, so a field whose value the code COMPUTED had all
+         four skipped at the mint — and by every argument the four comments below give, this half of the
+         record wants it. WHAT STOPS IT IS THAT IT WOULD HAVE NO READER. The four leave these properties by
+         ONE road: lib/discovery.js's `_buildDiscoveryFieldShell` lifts each of them by name onto a FieldDef,
+         and a name not in `FIELD_DEF_ABSENT` cannot travel it — `makeFieldDef` crashes on an undeclared key
+         precisely so a producer cannot emit into a reader that does not exist. Writing it here would be that
+         defect one name over: stored on every body field, read by nothing, and indistinguishable from a fact
+         the popup renders.
+         WHAT THE NEXT DIFF BUILDS: `_astValueClass` declared in extension/lib/field-def.js, lifted by
+         `_buildDiscoveryFieldShell` beside the four, this merge, and the schema-property walk
+         testing/corpus/site.mjs's `domains` column names as its own residual — one landing, because each of
+         those alone is a write nothing reads. HOW ITS ABSENCE WOULD SHOW: a body field the engine minted from
+         a literal and one it minted from a hole no gate narrowed render in the Send panel with the same
+         constraint badges, so a reviewer reads "this tool narrowed nothing here" off both. */
       /* A BODY FIELD'S DOMAIN IS THE SAME FACT AS A QUERY PARAM'S. endpoint.c reads the request body in the
          body's own format and mints a param per field, so a gate over a value the page then POSTs is observed
          exactly as one over a value it appends to the query is. Leaving it out here would make the report's
