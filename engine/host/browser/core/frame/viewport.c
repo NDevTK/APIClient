@@ -262,11 +262,17 @@ JSValue viewport_env_derived(CssPx len, JSValue computed)
         DCHECK(VIEWPORT_FACT[f].member != NULL,
                "a fact this seam declares has no member name in its row — the table is indexed BY the fact, so "
                "a hole in it is a fact whose row was never written and whose domain would be spelled empty");
-        DCHECK(!VIEWPORT_FACT[f].presented || viewport_exists(len.realm),
-               "a length derived from the INITIAL CONTAINING BLOCK reached the page out of a realm whose "
-               "document is not being presented. §10.1's ICB has the dimensions of the viewport, and "
-               "viewport.h makes a document that is not fully active have none — so this length was derived "
-               "from a rectangle that does not exist rather than from one whose size is a UA choice");
+        /* THE FACT NAMES ITSELF, because this line is ONE site for every `presented` row and a message that
+           spelled one of them would send the reader to the wrong rectangle for the others — the shared-helper
+           address defect, which this table grew the moment §6.1.2.1's viewport sizes joined the ICB here. */
+        DCHECKF(!VIEWPORT_FACT[f].presented || viewport_exists(len.realm),
+                "a length derived from `%s` reached the page out of a realm whose document is not being "
+                "presented. Every fact this table marks as presented is a RECTANGLE A NAVIGABLE PRESENTS — "
+                "CSS 2.1 §10.1's initial containing block has the dimensions of the viewport, and "
+                "css-values-4 §6.1.2.1's small and dynamic viewport sizes are that viewport sized under two "
+                "assumptions about UA interfaces — and viewport.h makes a document that is not fully active "
+                "have none of them. So this length was derived from a rectangle that does not exist rather "
+                "than from one whose size is a UA choice", VIEWPORT_FACT[f].member);
         viewport_src_key(len.realm, VIEWPORT_FACT[f].member, key[n], sizeof key[n]);
         /* EACH MEMBER'S SHAPE IS ITS OWN HOLE, exactly as it is at the scalar seam above — the joint's display
            form is these joined, so a member that named no hole would leave the composed shape naming one
