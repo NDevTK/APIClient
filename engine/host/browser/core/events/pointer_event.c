@@ -30,11 +30,33 @@
  * that was working and dies one line later, which is worse than the absence. The reach site is a drag
  * library's `supportPointer: … && "PointerEvent" in window`, and everything its true arm does is register
  * `pointerdown`/`pointermove`/`pointerup` listeners and read `pointerType` off the event it is handed.
- * `setPointerCapture` — Pointer Events 4 §4 "Extensions to the Element interface", which this component does
- * not build and which belongs to core/dom/element.c — occurs ZERO times in the whole frozen corpus, and the
- * one `navigator.maxTouchPoints` in it (§6 "Extensions to the Navigator interface") sits in a touch-detection
- * helper that is not behind this guard and answers falsey either way. So the members this interface owes are
- * the members that branch needs.
+ * `setPointerCapture` — Pointer Events 4 §4 "Extensions to the Element interface" — is a member of ELEMENT and
+ * not of this interface, so it is core/dom/element.c's to build and this file would owe it nothing whatever
+ * the corpus said. THAT OWNERSHIP IS THE REASON, AND IT REPLACES A COUNT THIS SENTENCE USED TO GIVE: it read
+ * that the member "occurs ZERO times in the whole frozen corpus", and that evidence is withdrawn — no corpus
+ * is tracked in this repository (`git ls-files | grep -ci sitecorpus` answers 0), so the claim cannot be
+ * re-derived at the revision that made it, and it is FALSE of a corpus fetched since. The conclusion did not
+ * move and its reason did, which is the point: a right conclusion resting on wrong evidence is inherited as
+ * the METHOD, and the method here was to price a component by a number nobody can re-run.
+ * WHAT THAT NUMBER WAS REALLY DECIDING IS WHETHER §4 IS WORTH BUILDING AT ALL, AND IT POINTED THE WRONG WAY.
+ * MEASURED over a corpus fetched with `NODE_USE_ENV_PROXY=1 SITES=apps.tsv node testing/corpus/fetch.mjs`,
+ * every grep carrying an invented spelling beside it as the control because a zero from a misspelled pattern
+ * reads exactly like an absence: `setPointerCapture` is reached across EIGHT distinct apps, and all but one
+ * of its occurrences is a BARE call — `target.setPointerCapture(e.pointerId)` as the first statement of a
+ * `pointerdown` handler. AN UNGUARDED ABSENCE DOES NOT DEGRADE TO SILENCE, which is the whole of why this
+ * matters: it throws on the line that opens every drag interaction, in the same drag libraries whose pointer
+ * branch this interface exists to unlock, so the guard is flipped true and the branch behind it dies one
+ * statement in. Re-derive that figure rather than quoting it — it is a fact about whichever bundles answered
+ * that hour, and what is durable is the SHAPE: the population that feature-detects `PointerEvent` and the
+ * population that calls pointer capture unguarded are the same drag libraries.
+ * ITS ABSENCE SHOWS as a run that takes the pointer branch, registers the listeners this file made possible,
+ * and then reports an uncaught `TypeError` at the first handler body it enters.
+ * RETIREMENT: this record goes when core/dom/element.c carries Pointer Events 4 §4's members.
+ * `navigator.maxTouchPoints` (Pointer Events 4 §6 "Extensions to the Navigator interface") is not behind this
+ * guard and answers falsey either way — and the retired sentence gave its count as ONE, which is withdrawn
+ * for the same reason and over the same missing corpus. Its BARE `§6` is repaired too: this file's own
+ * opening paragraph requires the standard's name in front of every number including a repeat, because a bare
+ * one is resolved by the file vote and judged against whichever indexed standard shares it.
  *
  * WHAT WRITES ITS OBSERVABLES. Pointer Events 4 §3.1's constructor and nothing else. `pointerId`, `width`,
  * `height`, `pressure`, `tangentialPressure`, `twist`, `pointerType`, `isPrimary` and `persistentDeviceId`
