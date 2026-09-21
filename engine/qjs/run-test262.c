@@ -2000,14 +2000,31 @@ int run_test_buf(ThreadLocalStorage *tls, const char *filename, char *harness,
         if (eval_file(ctx, harness, ip->array[i], JS_EVAL_TYPE_GLOBAL)) {
             fatal(1, "error including %s for %s", ip->array[i], filename);
         }
-        // hack to get useful stack traces from Test262Error exceptions
+        /* THE SAME DOOR THE INCLUDE DIRECTLY ABOVE USES. This called plain JS_Eval — the fallback eval_buf's
+           own comment calls banned — so JS_EvalInternal's DFAIL refused it by name and the corpus ABORTED on
+           its first non-skipped test. The reachability is what makes it expensive rather than untidy:
+           test262.conf sets `verbose=yes`, so verbose is already 1 and a SINGLE `-v` arrives here, and -v is
+           the only way to make a corpus crash name the test it crashed on. The blocker therefore sat in the
+           instrument a reader reaches for precisely when the gate has died on them, and it hid behind an
+           unrelated abort — measured: annexB and harness run clean, while `-v` aborts every directory at its
+           first test.
+           This program is a CONTINUATION of the sta.js include above, so it goes through eval_buf like every
+           other harness include rather than through a third spelling: that arms the fork hooks, runs the body
+           on the trampoline chain, and pairs fork_preempt_hooks_off with the arm. Its result is CHECKED rather
+           than dropped — the old line freed the value and swallowed any exception, so a hack that failed to
+           install left the stack traces it exists for silently absent, which is the same defect one field
+           over. */
         if (verbose > 1 && str_equal(ip->array[i], "sta.js")) {
             static const char hack[] =
                 ";(function(C){"
                 "globalThis.Test262Error = class Test262Error extends Error {};"
                 "globalThis.Test262Error.thrower = C.thrower;"
                 "})(Test262Error)";
-            JS_FreeValue(ctx, JS_Eval(ctx, hack, sizeof(hack)-1, "sta.js", JS_EVAL_TYPE_GLOBAL));
+            int hack_msec = 0;
+            if (eval_buf(ctx, hack, sizeof(hack) - 1, "sta.js", false, false, NULL,
+                         JS_EVAL_TYPE_GLOBAL, false, &hack_msec)) {
+                fatal(1, "error installing the sta.js stack-trace hack for %s", filename);
+            }
         }
     }
 
@@ -2252,7 +2269,13 @@ int run_test262_harness_test(ThreadLocalStorage *tls, const char *filename,
     } else {
       eval_flags = JS_EVAL_TYPE_GLOBAL;
     }
-    res_val = JS_Eval(ctx, buf, buf_len, filename, eval_flags);
+    /* THE SAME ENTRY eval_buf USES, for the same reason and after the same refusal: a program run through
+       plain JS_Eval gets an activation with no flow base, which JS_EvalInternal DFAILs on by name. This is the
+       `-N` (test262-harness+eshost) runner, which engine/test262.mjs never invokes, so it aborted only for
+       whoever passed the flag — the SIBLING of the sta.js site above, found by grepping this file for the
+       other spelling rather than by meeting it, because a defect repaired at one site recurs at the ones
+       nobody counted. fork_preempt_eval keeps the module arm's promise contract the pump below expects. */
+    res_val = fork_preempt_eval(ctx, buf, buf_len, filename, eval_flags);
     ret_code = 0;
     if (JS_IsException(res_val)) {
        js_std_dump_error(ctx);
@@ -2304,6 +2327,10 @@ int run_test262_harness_test(ThreadLocalStorage *tls, const char *filename,
          }
          JS_FreeValue(ctx, promise);
     }
+    /* PAIRED WITH THE ARM fork_preempt_eval PERFORMED, exactly as eval_buf pairs its own after its pump: the
+       runtime is torn down three lines below, and leaving the hooks armed across that teardown is a state no
+       tested path is ever in. */
+    fork_preempt_hooks_off();
     free(buf);
     js_agent_free(ctx);
     JS_FreeContext(ctx);
