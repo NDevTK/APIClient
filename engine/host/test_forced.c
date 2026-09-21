@@ -4363,6 +4363,83 @@ static const char *HTML =
     "})();"
     "</script>"
     TF_CANVAS_INK
+    /* §State-isolation's PER-FLOW COW DELTA, ASKED ABOUT AN EDGE THE DELTA CANNOT SEE — AND THIS ROW IS
+       EXPECTED TO FAIL. TODAY'S OUTCOME IS THE LEAK: a reader who meets `/api/nwiso/t-sees-f` or
+       `/api/nwiso/f-sees-t` in a run has met the thing this statement was written to catch, and NOT a
+       regression somebody introduced. It is written as a probe and not as a repair because the repair is a
+       later step of one ordering — landing it first would mean nobody ever sees the failure.
+
+       WHAT IT ASSERTS. `cow_capture_hook`'s whole gate is `JS_ObjFlowGen(obj) > d->fork_gen`, so the capture
+       decision is made on the AGE OF THE OBJECT BEING WRITTEN and never on who can reach it. That gate is
+       SOUND for an ordinary object, by an induction the weak-collection paragraph at the top of this document
+       states as "each arm mints its own": a sibling can reach a post-fork object X only through some O that
+       existed at the fork, O is old, so the write O->X IS captured and reverts — and X goes unreachable in
+       the same instant its own uncaptured slots survive.
+
+       THE DEFECT SHAPE, WHICH IS WHAT OUTLIVES THIS ROW. An edge from shared state to a JS object that is
+       held in a C IDENTITY TABLE rather than in a JS slot presents no property write for a hook to see, so
+       the induction's "O->X is captured" step has no capture in it and the conclusion does not follow.
+       `node_wrap`'s map is such a table: ONE wrapper per node, minted by whichever arm reaches the node
+       first and handed to every arm after, declared through `agent_state_ptr` as AGENT-lifetime state and
+       released only by `node_wrap_forget` when the NODE dies. Its own DCHECK names two objects for one node
+       as the error it exists to prevent; one object across two worlds is what that costs here.
+
+       WHY THE WRAPPER IS YOUNG, WHICH IS THE WHOLE OF THE ORDER CONSTRAINT. `node_wrap_peek` exists so the
+       PARSER never mints — its own banner says minting there would put a wrapper in the identity map for
+       every node in the page — so a baseline element's wrapper is minted MID-FLOW by whatever member body
+       asks first, and `getElementById` answers through `node_wrap`. `cow_delta_fork` sets BOTH deltas'
+       fork_gen to the live generation and only THEN bumps it, so a wrapper minted after the fork is strictly
+       younger than both arms' threshold and every expando written on it is skipped by both. `nwisoel` is
+       therefore reached ONLY from inside the two arms below: a `getElementById` hoisted above the `if` would
+       mint at the PRE-fork generation, the write would be CAPTURED and correctly reverted, and this row
+       would read clean while proving nothing. That it is a plain `<span>` under an id no other statement
+       names is a PRECONDITION and not a decoration — anything that reaches it earlier moves the mint above
+       the fork and buys exactly that false clean, so a statement added to this document that walks elements
+       document-wide is one that must be checked against this id. Insertion-time custom-element candidacy is
+       already safe by construction: it asks `node_wrap_peek`, and answers no for a hyphenless tag.
+
+       HOW ITS ABSENCE WOULD SHOW, as an observation rather than as an instance: an arm reads back an expando
+       it never wrote, on a platform object it did not create, in a world no statement ever assigned it in —
+       so a page keeping per-request state on a DOM element is handed another world's value, and every @H
+       example downstream of that read is a fact about a session this flow was never in.
+
+       THE PAYLOAD IS A CONSTANT ADDRESS AND NOT A COMPOSED ONE, which is a requirement rather than a style:
+       a witness built out of the leaked value could itself be UNKNOWN in precisely the runs where the engine
+       is doing its job, the request would never be issued, and that silence would read identically to the
+       path not being taken. Both arms therefore choose between two string LITERALS, and the answer is WHICH
+       address appears.
+
+       THE REACHABILITY WITNESS IS `/api/nwiso/reach`, emitted unconditionally and TOUCHING NO ELEMENT for
+       the order reason above. It is what separates four states a single clean reading would merge, and it is
+       read BEFORE any verdict here. ABSENT: this statement never ran and this row says nothing whatever.
+       Present with records from ONE family only (`t-` or `f-`, not both): only one arm reached this
+       statement, and the claim is UNSCORED rather than clean — a leak is visible only to the arm that runs
+       SECOND, because the first to arrive always reads undefined. Present with BOTH families: the claim is
+       SCORED, and a leak shows as exactly one `-clean` beside one `-sees-`. Present with NEITHER family:
+       `getElementById` answered null and the assignment threw, which is a fact about this fixture's markup
+       and not about isolation. IT IS ANSWERABLE IN A RUN WHOSE `jobs run` IS 0, unlike the two statements
+       above it — nothing here sits behind an await, and an endpoint record is emitted BEFORE the park, so a
+       fire-and-forget `fetch` emits whatever becomes of its reply.
+
+       RETIREMENT: when the capture learns this edge, the fix deletes this banner's TODAY'S-OUTCOME sentence
+       in the same commit, and the row becomes an ordinary isolation assertion reading two `-clean` records.
+
+       APPENDED IN FRONT OF `</body></html>` AND NOT INSERTED, for the reason the module, crypto and
+       operand-shape statements above state: this document is ONE LINE, so a `@WHY` frame's COLUMN is the
+       only coordinate a reader has into it, and an insertion silently re-points every column after it. */
+    "<span id=nwisoel></span>"
+    "<script>"
+    "fetch('/api/nwiso/reach');"
+    "if (state.nwiso) {"
+    " document.getElementById('nwisoel').nwArmT = 1;"
+    " fetch(document.getElementById('nwisoel').nwArmF === undefined"
+    "       ? '/api/nwiso/t-clean' : '/api/nwiso/t-sees-f');"
+    "} else {"
+    " document.getElementById('nwisoel').nwArmF = 1;"
+    " fetch(document.getElementById('nwisoel').nwArmT === undefined"
+    "       ? '/api/nwiso/f-clean' : '/api/nwiso/f-sees-t');"
+    "}"
+    "</script>"
     "</body></html>";
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
