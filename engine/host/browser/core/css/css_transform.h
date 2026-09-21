@@ -20,6 +20,19 @@
  * CONJUNCTION of two facts that are easy to hold apart wrongly — the property's `Applies to:` line and its
  * computed value — so it is derived once, here, out of the module that defines both.
  *
+ * THE FIRST OF THOSE THREE CONSUMERS HAS SINCE TAKEN A DIFFERENT DOOR, and the bullet above is kept as
+ * written because it states the QUESTION correctly and only the caller moved. CSSOM VIEW §6's getClientRects()
+ * does not ask `css_transform_applied_self_or_ancestor` any more: it needs a MATRIX to map a border area
+ * through, and NULL told it only that the matrix it did not have would have been the identity, so it still had
+ * to build one. core/css/css_transform_matrix.h answers css-transforms-1 §2 "The Transform Rendering Model"'s
+ * matrix over the SAME conjunction and the SAME chain, and core/dom/element_view.c takes that.
+ * THE WALK HAS NO CALLER LEFT AND ITS REMOVAL IS OWED, which is recorded here rather than performed because
+ * the diff is not one file's: core/paint/stacking_order.c's own reasoning about which elements reach its SVG
+ * abort is written against this walk's ARGUMENT ORDER ("asks the two the other way round and says why at its
+ * site"), so deleting the walk falsifies a sentence in a component this one does not own. The two halves land
+ * together or neither does. A reader arriving here to build INTERSECTION OBSERVER §3.2.9 or §3.2 wants the
+ * matrix and not this predicate; that is what makes the walk superseded rather than merely unused.
+ *
  * THE TWO FACTS, AND WHY NEITHER ALONE IS THE ANSWER. §2 Terminology defines a TRANSFORMED ELEMENT as "an
  * element with a computed value other than none for the transform property", and it defines a TRANSFORMABLE
  * ELEMENT as one whose layout is governed by the CSS box model, excepting non-replaced inline boxes,

@@ -13,7 +13,7 @@
 #include "quickjs.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
-#include "core/css/css_transform.h"
+#include "core/css/css_transform_matrix.h"
 #include "core/dom/document.h"
 #include "core/dom/element.h"
 #include "core/dom/element_scrolling.h"
@@ -1046,54 +1046,70 @@ static JSValue ev_client_px(JSContext *ctx, CssPx v)
     return viewport_env_derived(v, JS_NewFloat64(ctx, v.px));
 }
 
+/* §6's getClientRects() step 3's FIRST CONSTRAINT, PERFORMED — "Apply the transforms that apply to the element
+   and its ancestors." css-transforms-1 §2 "The Transform Rendering Model" is the algorithm that constraint
+   names without naming, and that section says so in its own words: "Transforms are also taken into account when
+   computing client rectangles exposed via the Element Interface Extensions, namely getClientRects() and
+   getBoundingClientRect(), which are specified in [CSSOM-VIEW]".
+   THE RECTANGLE ARRIVES AND LEAVES IN THE INITIAL CONTAINING BLOCK'S SPACE, which is the whole reason this is a
+   step of its own rather than four lines at each assembly arm. §2's current transformation matrix is composed
+   "starting from the viewport coordinate system", so it maps a DOCUMENT coordinate — and the conversion to a
+   CLIENT one is CSSOM VIEW §4's scroll subtraction, which must happen AFTER. The two used to be one expression
+   at each arm and the order was invisible: a translation commutes with the subtraction so either order answers
+   the same number, and a rotation does not, so the arm that is correct today would have gone silently wrong the
+   day the matrix gained a linear part.
+   A DOMRect IS AXIS-ALIGNED — Geometry Interfaces §3 gives it an `x`, a `y`, a `width` and a `height` and no
+   angle — so what §6 can report of a mapped border area is the SMALLEST RECTANGLE ENCLOSING ITS FOUR MAPPED
+   CORNERS, which is why a rotated box reports a rectangle wider than its own width in every user agent. The
+   four comparisons go through core/css/css_length.h's `css_px_min`/`css_px_max` rather than through `<` on the
+   examples, for that component's own stated reason: the loser at this viewport is the winner at another, so the
+   answer carries BOTH operands' environment facts and a C branch on the example would delete an arm. */
+static void ev_map_through_transforms(lxb_dom_element_t *el, CssPx *x, CssPx *y, CssPx *w, CssPx *h)
+{
+    CssTransformMatrix ctm = css_transform_matrix_current(el);
+    CssPx cx[4], cy[4], min_x, min_y, max_x, max_y;
+    unsigned i;
+
+    css_transform_matrix_map(ctm, *x, *y, &cx[0], &cy[0]);
+    css_transform_matrix_map(ctm, css_px_add(*x, *w), *y, &cx[1], &cy[1]);
+    css_transform_matrix_map(ctm, css_px_add(*x, *w), css_px_add(*y, *h), &cx[2], &cy[2]);
+    css_transform_matrix_map(ctm, *x, css_px_add(*y, *h), &cx[3], &cy[3]);
+    min_x = max_x = cx[0];
+    min_y = max_y = cy[0];
+    for (i = 1; i < 4; i++) {
+        min_x = css_px_min(min_x, cx[i]);
+        max_x = css_px_max(max_x, cx[i]);
+        min_y = css_px_min(min_y, cy[i]);
+        max_y = css_px_max(max_y, cy[i]);
+    }
+    *x = min_x;
+    *y = min_y;
+    *w = css_px_sub(max_x, min_x);
+    *h = css_px_sub(max_y, min_y);
+}
+
 /* §6's step 3 FOR ONE BOX FRAGMENT — "a DOMRect describing its border area". A border area is CSS 2 §8.1's
    border box, so it is that box's two EXTENTS (core/layout/used_value.h) at its POSITION
    (core/layout/flow_position.h), and the two are asked in that order because the extent is the position's own
    operand: §9.4.1 stacks a box below its preceding siblings' heights, so a component that cannot measure a box
-   cannot place the next one either, and the crash the extent raises is the earlier subproblem. */
+   cannot place the next one either, and the crash the extent raises is the earlier subproblem.
+   THE THREE STEPS ARE ASSEMBLE, MAP, CONVERT, and they are written apart because they are three different
+   spaces. The two assembly arms below both answer in the INITIAL CONTAINING BLOCK's space; the map is §6's own
+   first constraint over css-transforms-1 §2's current transformation matrix, in that same space; and the
+   subtraction at the end is CSSOM VIEW §4's, which is what makes a client rectangle move as a page scrolls.
+   THE SUBTRACTION USED TO BE DUPLICATED INTO BOTH ARMS and is now performed once, which is not a tidy-up: it is
+   what puts the map on the correct side of it. */
 static void ev_border_area_px(const EvTarget *t, CssPx out[4])
 {
     lxb_dom_element_t *el = lxb_dom_interface_element(t->node);
-    lxb_dom_element_t *transformed = css_transform_applied_self_or_ancestor(el);
     CssPx w, h, x, y;
-    FlowPoint o;
 
-    /* STEP 3'S FIRST CONSTRAINT, ASKED BEFORE THE RECTANGLE IS BUILT — "Apply the transforms that apply to the
-       element and its ancestors."
-       THE CONSTRAINT IS SATISFIED, NOT SKIPPED, WHEN NOTHING IS TRANSFORMED. css-transforms-1 §2 Terminology
-       makes a TRANSFORMED ELEMENT one "with a computed value other than none for the transform property", and
-       §3's `Applies to:` line restricts even that to TRANSFORMABLE elements; core/css/css_transform.h asks
-       both of this element and of every one of its ancestors, out of each element's own computed value. When
-       none of them answers, the transformation matrix this step would map the border area through is the
-       IDENTITY, and mapping a rectangle through the identity is the rectangle — so the four numbers below ARE
-       the constrained ones. That is a derivation over the whole chain and not the silence it replaced: this
-       member used to crash for EVERY element because the cascade had no `transform` value at all to read, so
-       an untransformed `div` and a rotated one were one unanswerable case.
-       WHAT IS LEFT IS THE MATRIX, and it is reached only by an element that really is transformed. */
-    if (transformed != NULL)
-        DFAIL("CSSOM VIEW §6 \"Extensions to the Element Interface\"'s getClientRects() step 3 states its first "
-              "constraint as \"Apply the transforms that apply to the element and its ancestors\", and one of "
-              "them IS transformed — core/css/css_transform.h found a transformable element at or above this "
-              "one whose computed `transform` is not `none`. Reporting the border area below would drop an "
-              "author's own declaration, which is a WRONG rectangle rather than an absent one. This is not the "
-              "scroll-bar term every other member here reads as zero: no scroll bar is a UA CHOICE this model "
-              "makes, and a transform is a declaration the page wrote. WHAT TO BUILD, IN ORDER, AND THE FIRST "
-              "OF THE THREE IS DONE: the COMPUTED value of a <transform-list> is answered now — "
-              "core/css/css_transform_function.h parses css-transforms-1 §7 \"The Transform Functions\"' "
-              "grammar and §3 \"The transform Property\"'s absolutization runs over what it finds. WHAT IS "
-              "LEFT is §12 \"Mathematical Description of Transform Functions\"' matrix for each function and "
-              "§3.2 \"Resolved value of transform\"'s reduction of a list to one 4x4 — build BOTH beside "
-              "core/css/css_transform.c rather than here, because INTERSECTION OBSERVER §3.2.9 \"Calculate a "
-              "target's Effective Transformation Matrix\" needs the same matrix and a second one would drift "
-              "— and then THIS step, which post-multiplies the matrices of the element and of every ancestor "
-              "and maps the border area's four corners through the product. The result is the AXIS-ALIGNED "
-              "bounding box of those corners, which is why a rotated box reports a rectangle wider than its "
-              "own width");
-    /* AN INLINE BOX'S BORDER AREA IS NOT AN EXTENT AT A POSITION and cannot be assembled the way the block
-       arm below assembles one: CSS 2 §10.3.1 "Inline, non-replaced elements" says the `width` property "does
-       not apply", and §10.6.1 says the same of `height` while making the box's own content area a function of
-       its font — so `used_value_border_edge_px` has no answer for either axis. Both numbers come out of the
-       FRAGMENT instead (core/layout/flow_position.h), which is the same list `getClientRects` enumerates. */
+    /* THE ASSEMBLY, in the initial containing block's space. AN INLINE BOX'S BORDER AREA IS NOT AN EXTENT AT A
+       POSITION and cannot be assembled the way the block arm below assembles one: CSS 2 §10.3.1 "Inline,
+       non-replaced elements" says the `width` property "does not apply", and §10.6.1 says the same of `height`
+       while making the box's own content area a function of its font — so `used_value_border_edge_px` has no
+       answer for either axis. Both numbers come out of the FRAGMENT instead (core/layout/flow_position.h),
+       which is the same list `getClientRects` enumerates. */
     if (element_view_fragment_kind(el) == ELEMENT_VIEW_FRAGMENTS_LINE_BOXES) {
         FlowRect *frags = NULL;
         size_t n = flow_inline_fragment_rects(el, &frags);
@@ -1114,18 +1130,30 @@ static void ev_border_area_px(const EvTarget *t, CssPx out[4])
                   "Interfaces §3's NaN-safe derived edges. BUILD it ONCE, over CssPx, and let both entries "
                   "call it — this entry and that one are two vocabularies for one algorithm and a second copy "
                   "of the choice would be two answers");
-        out[0] = css_px_sub(first.x, css_px(viewport_window_scroll(t->dctx, false)));
-        out[1] = css_px_sub(first.y, css_px(viewport_window_scroll(t->dctx, true)));
-        out[2] = first.width;
-        out[3] = first.height;
-        return;
+        x = first.x;
+        y = first.y;
+        w = first.width;
+        h = first.height;
+    } else {
+        FlowPoint o = flow_border_box_origin(el);
+
+        w = used_value_border_edge_px(el, false);
+        h = used_value_border_edge_px(el, true);
+        x = o.x;
+        y = o.y;
     }
-    w = used_value_border_edge_px(el, false);
-    h = used_value_border_edge_px(el, true);
-    o = flow_border_box_origin(el);
-    x = css_px_sub(o.x, css_px(viewport_window_scroll(t->dctx, false)));
-    y = css_px_sub(o.y, css_px(viewport_window_scroll(t->dctx, true)));
-    out[0] = x; out[1] = y; out[2] = w; out[3] = h;
+    /* STEP 3'S FIRST CONSTRAINT. It is satisfied and not skipped for an element nothing transforms:
+       css-transforms-1 §2 makes the current transformation matrix the identity for such a chain, and mapping a
+       rectangle through the identity is the rectangle. What is left of the constraint for a chain that IS
+       transformed is that component's own subproblem and it crashes there, by name, naming
+       css-transforms-1 §4 "The transform-origin Property" as the value it has no way to compute. */
+    ev_map_through_transforms(el, &x, &y, &w, &h);
+    /* THE CLIENT CONVERSION — CSSOM VIEW §4 "Extensions to the Window Interface"'s scroll position subtracted
+       from a document coordinate, which element_view.h states and which is performed once for both arms. */
+    out[0] = css_px_sub(x, css_px(viewport_window_scroll(t->dctx, false)));
+    out[1] = css_px_sub(y, css_px(viewport_window_scroll(t->dctx, true)));
+    out[2] = w;
+    out[3] = h;
 }
 
 /* THE SAME RECTANGLE, MINTED. The four numbers stop here in css_length.h's vocabulary and cross to the page

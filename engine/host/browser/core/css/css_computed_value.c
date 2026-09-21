@@ -1610,21 +1610,48 @@ CssBorderSpacing css_computed_border_spacing(lxb_dom_element_t *el)
    translation resolves against and it is a LAYOUT — and §3's line moves LENGTHS, so a percentage is left
    exactly where css-values-4 §10.11 "Computed Value" leaves every unresolved percentage: as specified. The box
    becomes a question for the consumer that maps a rectangle through the matrix, not for this value. */
-static char *computed_transform(lxb_dom_element_t *el, char *spec)
+static bool css_cv_transform_list(lxb_dom_element_t *el, char *spec, CssTransformList *out)
 {
     CssCvFontCtx slot;
-    CssFontMetrics font = css_cv_font_metrics(&slot, el, "transform");
+    CssFontMetrics font;
+    bool parsed;
+
+    /* §3's FIRST ARM, and the one place the two answers below are one test: `none` is both the `Initial:` value
+       and what a dropped declaration falls to, so a caller asking for the LIST and a caller asking for the TEXT
+       must agree that there is none. */
+    if (css_cv_is(spec, "none")) { free(spec); return false; }
+    font = css_cv_font_metrics(&slot, el, "transform");
+    parsed = css_transform_list_parse(css_cv_realm(el), &font, spec, out);
+    free(spec);
+    return parsed;
+}
+
+static char *computed_transform(lxb_dom_element_t *el, char *spec)
+{
     CssTransformList list;
     char *out;
 
-    if (!css_transform_list_parse(css_cv_realm(el), &font, spec, &list)) {
-        free(spec);
-        return css_cv_strdup("none");
-    }
-    free(spec);
+    if (!css_cv_transform_list(el, spec, &list)) return css_cv_strdup("none");
     out = css_transform_list_serialize(&list);
     css_transform_list_free(&list);
     return out;
+}
+
+bool css_computed_transform_list(lxb_dom_element_t *el, CssTransformList *out)
+{
+    char *spec;
+
+    DCHECK(out != NULL, "css-transforms-1 §3 \"The transform Property\"'s computed `<transform-list>` was "
+                        "asked for with nowhere to put it");
+    css_cv_modelled(el, "transform");
+    spec = css_cv_specified(el, "transform");
+    DCHECK(spec != NULL, "CSS Cascade §7.1 \"Initial Values\" produced no specified `transform` — "
+                         "css-transforms-1 §3 \"The transform Property\" gives it an `Initial:` value of "
+                         "`none` and core/css/css_style_declaration.c carries that row for lexbor's registry, "
+                         "which has no entry of its own, so the cascade's last layer always answers");
+    /* ONE DERIVATION, TWO ENTRIES — the same call `computed_transform` makes for the text shape, so a list and
+       its serialization can never disagree about which arm of §3's `Value:` line an element is on. */
+    return css_cv_transform_list(el, spec, out);
 }
 
 char *css_computed_value(lxb_dom_element_t *el, const char *name)
@@ -1687,11 +1714,14 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
        It is also the value of every element no `transform` declaration reached, which is what
        core/css/css_transform.h's `transformed element` test needs and what CSSOM VIEW §6's client rectangles
        wait on. A `<transform-list>` is the other arm and it is BOTH clauses at once: this file cannot find the
-       lengths without the `<transform-function>` grammar, so it cannot absolutize them. */
-    if (strcmp(name, "transform") == 0) {
-        if (css_cv_is(spec, "none")) return spec;
+       lengths without the `<transform-function>` grammar, so it cannot absolutize them.
+       THE `none` TEST USED TO STAND HERE, RETURNING THE SPECIFIED STRING UNCHANGED, and it moved DOWN into
+       `css_cv_transform_list` when that derivation gained a SECOND entry. The reason is the one this file
+       states everywhere else: a test asked at one of two entries is a place the two can disagree about which
+       arm of §3's `Value:` line an element is on, and the text shape and the list shape must never do that.
+       What is returned for `none` is byte-identical either way. */
+    if (strcmp(name, "transform") == 0)
         return computed_transform(el, spec);
-    }
     /* `float` (CSS2 §9.5.1), `position` (css-position §2) and `box-sizing` (css-sizing §5) all state "Computed
        value: as specified" (`box-sizing`'s line is "specified keyword"), and a keyword has no absolutization to
        do — so the specified value IS the answer here rather than a stand-in for one. css-backgrounds-3 §3.2

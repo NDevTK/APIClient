@@ -65,6 +65,7 @@
 #include "core/css/css_color.h"
 #include "core/css/css_defaulting.h"
 #include "core/css/css_length.h"
+#include "core/css/css_transform_function.h"
 #include "quickjs.h"
 
 /* THE COMPUTED VALUE of a KEYWORD-VALUED property on `el`, as text. OWNED: the caller frees. `name` must be one
@@ -72,6 +73,23 @@
    entries are split by the property's own `Computed value:` line (see the header above), and each crashes when
    asked the other's question rather than answering it in a shape that cannot carry the answer. */
 char *css_computed_value(lxb_dom_element_t *el, const char *name);
+
+/* css-transforms-1 §3 "The transform Property"'s COMPUTED VALUE AS THE PARSED LIST — the THIRD shape this
+   component answers, and it is an entry for the same reason `css_computed_line_height` and
+   `css_computed_border_spacing` are: text cannot carry it. §3's `Computed value:` line is "as specified, but
+   with lengths made absolute", and an absolutized length is a `CssPx` whose ENVIRONMENT SET (css_length.h) is
+   what `transform: translateX(10vw)` derives from — so handing a caller the SERIALIZATION and letting it
+   re-parse would drop the domain behind the number, which is the same fork `getComputedStyle(el).width < 768`
+   shares with `innerWidth < 768`. It is also the shape every consumer wants: §3.2 "Resolved value of
+   transform" post-multiplies the functions, §2 "The Transform Rendering Model" brackets that product with the
+   transform-origin, and INTERSECTION OBSERVER §3.2.9 "Calculate a target's Effective Transformation Matrix"
+   accumulates the result up a chain — none of the three wants a string.
+   FALSE IS §3's OTHER ARM AND A REAL ANSWER RATHER THAN A FAILURE: `none` is the `Initial:` value every
+   element no declaration reached computes, and it is also what CSS Syntax §2.2 "Error Handling" leaves behind
+   when a declaration does not match §7 "The Transform Functions"' grammar. The two are ONE answer here because
+   they are one computed value. TRUE with `*out` owned by the caller — release it with
+   `css_transform_list_free`. */
+bool css_computed_transform_list(lxb_dom_element_t *el, CssTransformList *out);
 
 /* THE COMPUTED VALUE of a LENGTH-VALUED property on `el` — CSS 2.1 §8.3, §8.4, §10.2 and §10.5's one line,
    "the percentage as specified or the absolute length", plus css-backgrounds-3 §3.3's snapped border widths.
