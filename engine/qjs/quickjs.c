@@ -91411,12 +91411,23 @@ static int js_iterator_zip_keyed_step(JSContext *ctx, void *st, JSValue cb_resul
         r = step_getprop_run(ctx, &s->hdr, step_arg(&s->hdr, 1), JS_ATOM_padding, cb_result, &s->padding,
                              out_cb, out_argc);
         if (r) return r < 0 ? -1 : r;
+        cb_result = JS_UNDEFINED;   /* MOVED into s->padding by the line above — see keys_req's DCHECK */
     have_padding:
         if (!JS_IsUndefined(s->padding) && !JS_IsObject(s->padding)) {
             JS_ThrowTypeErrorNotAnObject(ctx);
             return -1;
         }
     keys_req:
+        /* EVERY PATH TO THE OWN-KEYS REQUEST CONVERGES HERE, which is why the delivery is settled here.
+           A `*_run` helper CONSUMES its `in` on BOTH arms — it frees it at the ASK and MOVES it to *pout
+           at the answer — so the local that carried it is a STALE ALIAS the instant the call returns, and
+           step_ownkeys_run's own ASK arm frees what it is handed. Falling through with one live therefore
+           gives back a reference this machine no longer owns, and the holder that still names the value
+           is a page object: it surfaces as the GC's "mark edge with no counted reference behind it" at a
+           parent nothing here touched, a whole collection away from the machine that caused it. */
+        DCHECK(JS_IsUndefined(cb_result),
+               "Iterator.zipKeyed reached its own-keys request still holding a delivery a `*_run` helper "
+               "had already consumed — the stale alias frees a reference this machine gave away");
         /* `? iterables.[[OwnPropertyKeys]]()`. The snapshot is taken WITHOUT an enum-only filter and each key's
            enumerability re-checked below, because the reads run between the snapshot and the check and one of them
            can flip a later key's visibility — which is the whole reason the self-hosted version collected
