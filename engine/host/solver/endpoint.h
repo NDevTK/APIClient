@@ -15,7 +15,41 @@
  * through `new URL()` before matching it. WHATWG URL's path percent-encode set is the query set plus `?`, `^`,
  * backtick, `{` and `}` — so `.`, `[` and `]` survive that trip and offscreen-brain.js's `_decHoles` restores
  * the braces, while a member name holding a SPACE or a `#` would come back percent-encoded and its hole would
- * stop matching. Not yet handled anywhere; it is page data, so it is a residual rather than an assert. */
+ * stop matching. Not yet handled anywhere; it is page data, so it is a residual rather than an assert.
+ *
+ * NAMED RESIDUAL — NOT COVERED: an address the page hands to a SOCKET-SHAPED constructor. Every edge that
+ * reaches endpoint_record is HTTP-shaped — fetch, XHR, sendBeacon, form submit, img, link, script, and this
+ * solver's own three — so a URL passed to `new WebSocket(u)` (WebSockets §3 "The WebSocket interface") or to
+ * `new EventSource(u)` (HTML §9.2.2 "The EventSource interface") reaches this surface through NO path, and
+ * neither interface is installed for one to be reached through. Both halves are claims about THIS TREE and
+ * each is one command, so neither is stated as a count here:
+ *   git grep -n 'endpoint_record(ctx' -- engine/host | grep -v solver/endpoint
+ *   git grep -n '"WebSocket"\|"EventSource"' -- engine/host   # generated tables only == no installer
+ * THE DURABLE HALF IS A PROPERTY AND NOT THAT POPULATION: this surface is a function of the request EDGES the
+ * engine HAS, so an endpoint whose transport is unbuilt is not under-reported here — it is absent, and no
+ * figure this file emits is a fraction of it.
+ * IT IS NOT REFUTED BY extension/intercept.js, WHICH WRAPS window.WebSocket AND KEEPS THE URL. That is the
+ * PASSIVE channel, which §What-the-tool-produces rates a DIAGNOSTIC and forbids merging into the learned
+ * surface, and it emits from the `open` listener — evidence about what FIRED, never about what a bundle CAN
+ * do, which is the half this surface exists to state.
+ * AND THE LOSS IS NOT UNIFORM, WHICH IS THE PART A NAME-KEYED CENSUS CANNOT SEE. solver/absent.c records that
+ * the NAME was read and unanswered; whether the page even COMPUTED the address depends on where the guard
+ * sits relative to the URL expression, and absent.c's `owed` row reads the same either way —
+ *   guard WRAPPING the construction, `if (null != window.WebSocket) { …build url…; new WebSocket(url) }`:
+ *     the address is never computed at all, and is lost at its source rather than at this surface;
+ *   guard AT the constructor — a `typeof` ternary choosing a polyfill, or a try/catch around the `new`:
+ *     the address IS computed, then discarded, so it is one edge away from being recordable.
+ * A count of unanswered NAMES is therefore not a measure of lost ADDRESSES, in either direction.
+ * WHAT THE NEXT DIFF BUILDS: HTML §9.2.2 steps 8-15 together with HTML §9.2.3 "Processing model", which
+ * core/eventsource/event_source_parser.h already scopes and which gives that component its first caller —
+ * its step 15 fetch is an endpoint_record site by construction, so the address arrives here with the
+ * connection rather than needing an edge of its own. WebSockets §3 is the diff after it and wants a transport
+ * this engine does not have; its address is statable at the constructor long before its connection is.
+ * HOW ITS ABSENCE WOULD SHOW: a document whose API surface is carried over a socket emits a `@H` array that
+ * is empty or holds only its subresource loads, while absent.c's census names the interface as owed — two
+ * surfaces disagreeing about one document, with nothing joining them.
+ * RETIREMENT: this record goes when endpoint_record has a caller that is not an HTTP-shaped edge.
+ */
 #ifndef ENGINE_HOST_SOLVER_ENDPOINT_H
 #define ENGINE_HOST_SOLVER_ENDPOINT_H
 
