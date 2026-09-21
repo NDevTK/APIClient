@@ -564,6 +564,17 @@ function linesToAnalysis(lines, msg, outcome, eng) {
      the absent case handled ONCE, on its own arm, every read on the present arm is a read off a document
      `assertResultDocument` has already checked field for field, so a default beside it can only ever hide that
      assert being wrong. There are none left. */
+  /* THE COUNTERS ARM READS `eng._egress`, SO IT ASSERTS THE RECORD IS THERE RATHER THAN READING THROUGH A
+     NULL. Two callers reach that arm — the terminal `complete` record and `qjs_emit_partial`'s snapshot — and
+     both hold the instance whose rounds did the asking. The two that may pass `eng` as null are `crashRecord`
+     (built PER WAITING CALLER for an instance that never booted) and the `nothing-to-run` arm, and neither
+     takes this branch: the first is `crashed` and the second writes no row at all. So a null here is that
+     split having moved, and the symptom without this line is a TypeError naming a property instead of the
+     contract that changed. */
+  DCHECK(!(outcome !== "crashed" && result) || (eng && eng._egress),
+         "a run reached the counters arm with no egress census on its instance — `_egress` is declared in the " +
+         "`eng` literal beside `_cold`, so an instance without one was built somewhere else, and the row would " +
+         "report this zone's own refusals as absent for a run that had them");
   const m = (outcome !== "crashed" && result)
     /* THE SCHEDULER'S OWN COUNTERS, so fairness/deep-preemption is OBSERVABLE (a real signal that the single
        BFS context-switches rather than running FIFO) — and they are the fields solver/result.c ACTUALLY emits.
@@ -635,6 +646,24 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            part of the frontier's order. Two runs of one build over one page then differ with nothing about the
            tree differing, and the popup renders this beside the order so nobody reads that as a change. */
         quantum: result._quantum,
+        /* AND WHAT THIS ZONE'S OWN EGRESS POLICY DID, WHICH EVERY COUNTER ABOVE IS STRUCTURALLY SILENT ABOUT.
+           `endpoints` below is a REACH figure — distinct addresses the run learned — and it has already been
+           quoted as an API-surface figure off a real SPA whose whole list was the app's own module graph. The
+           reading that row could not be given is the one a person acts on: a page with no API surface is
+           either a page this engine never derived those requests for, or a page whose requests THIS TOOL
+           REFUSED, and those take opposite work — improve the driving, or widen the origin.
+           THE PAIR IS WHAT MAKES IT READABLE AND NEITHER HALF IS QUOTABLE ALONE. `egressAsked` is the
+           denominator: `egressDeclined: {}` under a nonzero one says the policy refused nothing, and under a
+           zero one says this loop never ran. It is a DIFFERENT DENOMINATOR from the engine's own
+           `cold.replyDeclined`, and the two must not be read as one number — a decline names a (method, url)
+           PAIR and `engine_decline` marks every parked RECORD keyed on it, so one refusal here can raise that
+           counter several times. They are a CROSS-CHECK rather than a duplicate: this row nonzero with
+           `replyDeclined` at 0 is a refusal that never reached the engine, which no single column reports.
+           IT IS THE RULE AND NOT THE SIGNAL NAME, deliberately. `blocked-signal:witness=pinned` names the ROW
+           OF A PERSON'S OWN CONTROL that holds the request and would make it fire if they widened it;
+           `blocked-destructive:logout` names a refusal nothing reopens. Collapsing those to one count is the
+           several-states-behind-one-answer shape at the one place a person has to act on it. */
+        egressAsked: eng._egress.asked, egressDeclined: eng._egress.declined,
         endpoints: result.fetchCallSites.length, sinks: result.securitySinks.length,
         park: result._park.length, resumed: resumed, url: (msg && msg.sourceUrl) || "" }
     /* A CRASHED RUN REPORTS NO COUNTERS, and the honest report of that is the ABSENCE, not seven zeroes.
@@ -664,6 +693,23 @@ function linesToAnalysis(lines, msg, outcome, eng) {
      that composition having changed under this seam — a third crash path, or a producer that stopped writing
      the line — and the symptom would be a row that says "crashed" and nothing else, which is the state this
      field exists to end. It is not defaulted for the same reason no other field on this record is. */
+  /* THE CONTAINMENT, ASSERTED WHERE BOTH HALVES ARE IN ONE HAND. CLAUDE.md §AND-THE-DENOMINATOR-CAN-BE-THE-
+     RIGHT-KIND is the rule and it is exact: a count offered as a share of another is raised at the SAME event
+     the denominator counts, and the containment is the one thing about a quotient a reader can check without
+     re-deriving the whole mechanism. Both are raised in engineServiceFetch's one loop — `asked` once per
+     iteration, a decline at most once in the same iteration — so a histogram summing past its denominator is
+     a second raiser of one of the two, which is precisely how `egressDeclined/egressAsked` would start
+     reading above 1 with nothing anywhere saying so. It is asserted rather than left to a reader because a
+     sum that cannot be true is the cheapest finding this pair has. */
+  if (outcome !== "crashed" && result) {
+    let _sum = 0;
+    for (const k of Object.keys(eng._egress.declined)) _sum += eng._egress.declined[k];
+    DCHECK(_sum <= eng._egress.asked,
+           "this zone's egress census counted " + _sum + " refusal(s) against " + eng._egress.asked + " " +
+           "request(s) asked of it — the two are raised in one loop, one `asked` per delivered pending line " +
+           "and at most one refusal inside that same iteration, so a sum above the denominator is a second " +
+           "site raising one of them and every share read off this pair is over a population that never ran");
+  }
   DCHECK(outcome !== "crashed" || (typeof crashErr === "string" && crashErr !== ""),
          "a crashed run reached the run log with no `engine-crash` line among its output — every crash path " +
          "writes one (engineCrash appends the ROOT @WHY to it, crashRecord constructs it), so a crash with " +
@@ -2668,7 +2714,16 @@ function engineReserve(cluster, docId, msg, cold, referenced) {
   const eng = { state: "booting", cluster, docId, topDocId: docId, joinedDocIds: [], msg,
                 groupId: msg && msg.groupId, _resumed: null, referenced,
                 origin: (msg && msg.origin) || "", _cold: cold, _resolvers: [], _remoteAsked: new Set(),
-                _epoch: self.frontierEpoch(), r: null, _readyP: null };
+                _epoch: self.frontierEpoch(), r: null, _readyP: null,
+                /* WHAT THIS ZONE'S EGRESS POLICY WAS ASKED FOR AND WHAT IT REFUSED, PER RULE — declared in the
+                   literal like every other field on this record, so a reader of a run that refused nothing
+                   cannot be handed a missing map to default. `asked` is raised at the CALL and `declined` at
+                   the refusal, both in engineServiceFetch's one loop, so the histogram's sum is bounded by
+                   `asked` and the containment is asserted where the two are in one hand. Both are LIFETIME
+                   counts over this instance's rounds, counting ASK EVENTS and not distinct addresses: an @S
+                   candidate re-fire re-issues an address the engine already parked on, and that is a second
+                   ask. */
+                _egress: { asked: 0, declined: Object.create(null) } };
   _pool.push(eng);
   _reserveStats.made++;
   const n = _bootingCount();
@@ -4062,6 +4117,14 @@ async function engineServiceFetch(eng) {   // one round: answer every parked REQ
      check that validated the word was validating a field with no reader. */
   for (const line of requests) {
     const { method, destination, provenance, pinned, credentials, url } = pendingRequest(line);
+    /* THE ASK, RAISED BEFORE THE GATE AND NEVER AFTER IT. CLAUDE.md §AN-INVARIANT-OVER-A-GATED-OPERATION is
+       exact about this: a census read off the OUTCOME of a gated operation cannot tell a request nobody made
+       from one the gate correctly refused, and the whole point of the pair below is that those two are the
+       readings a person has to choose between. Raised here, `declined: {}` beside `asked: 47` is the positive
+       statement THE POLICY REFUSED NOTHING — so a run with no API surface is a finding about the DRIVING —
+       while `asked: 0` is the statement that this loop never ran, which is silent about the policy rather
+       than clean about it. Those three states rendered as one number is what this row exists to end. */
+    eng._egress.asked++;
     const answer = await eng.fetched(method, url, destination, provenance, pinned, credentials);
     /* A DECLINE IS ITS OWN DELIVERY, AND DELIVERING NOTHING WAS ONLY HALF OF IT. The park was right — the
        engine's register keys on (method, url), `provide` clears the entry, and leaving it there is the flow
@@ -4098,6 +4161,26 @@ async function engineServiceFetch(eng) {   // one round: answer every parked REQ
       console.warn("[bridge] " + method + " " + url + " — " + answer.refusal.reason +
                    ". This zone DECLINED to make the request: the flow stays PARKED rather than being told " +
                    "the server was unreachable, and one arm is forked to explore the page's failure path");
+      /* AND IT IS COUNTED, KEYED ON THE WHOLE TOKEN, WHICH IS WHY NOTHING HERE PARSES ONE. `safe-fetch.js`
+         composed `blocked-signal:<name>=<value>` out of the signal it walked and the value it read, so the
+         token IS the structured fact and a histogram over it is per-signal BY CONSTRUCTION — a signal added
+         to `_SIGNALS` appears here with nothing on this path edited, which is the property `cold` already has
+         and the reason `_firingRefusal` is exported rather than restated. Splitting the token to "read the
+         signal out of it" is the one thing forbidden: the chokepoint's own record says a consumer that
+         MATCHED `statusText` would be writing a second copy of that policy in a format nothing checks, and
+         `engine_decline` declines to match on it for exactly that reason.
+         THE CARDINALITY IS BOUNDED AND THAT IS A PROPERTY OF THE DECLINE FAMILY RATHER THAN OF THIS LINE. The
+         five arms that grade `decline` compose their tokens out of closed sets — the eleven `_SIGNALS` names
+         against their stated values, `_DESTRUCTIVE`'s word list, Fetch §2.2.5's destination words — so no
+         address and no origin can reach this map. The `network` family is not counted here and is not a hole
+         this row fills: those are refusals A REAL BROWSER ALSO MAKES, so `blocked-corb:` and
+         `blocked-cors-credentialed:` are facts about the origin rather than about this tool's policy, and two
+         of them carry an origin in the token.
+         IT IS A PLAIN INSERT AND NOT A DEFAULTED READ. `d[tok] || 0` would be the shape §A-FIELD-A-CONSUMER-
+         DEFAULTS bans one name over; a first occurrence is stated rather than filled in. */
+      const _tok = answer.refusal.reason;
+      if (!(_tok in eng._egress.declined)) eng._egress.declined[_tok] = 0;
+      eng._egress.declined[_tok]++;
       await engineDecline(eng, method, url, answer.refusal.reason);
       continue;
     }

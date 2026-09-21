@@ -771,23 +771,74 @@ const row = {
      observed pair -- and an address a forced equality PINNED is precisely the gated API surface this
      product exists to reach. That population is declined by default, correctly and configurably, and is
      invisible in every column here.
-     NAMED RESIDUAL, AND IT IS NOW TWO. NOT COVERED: (a) this row cannot state its own composition, because
+     HALF (b) OF THIS RESIDUAL IS BUILT AND IS RETIRED HERE RATHER THAN DELETED, because the sentence that
+     made it necessary is the one a reader re-derives. It read: this row cannot state what the chokepoint
+     REFUSED, though the chokepoint already names every refusal in a vocabulary of its own; and its falsifier
+     was a reader concluding the driving is weak from a low endpoint count, on a run where the driving reached
+     every address and the policy declined them. `egressAsked`/`egressDeclined` below are that count, split by
+     the RULE that refused rather than by the signal alone -- which is what the clause asked for and is
+     slightly WIDER than it, because `blocked-destructive` is not a signal and takes different work from one.
+     AND ITS `STILL UNESTABLISHED` CLAUSE IS ANSWERED, WHICH IS THE OTHER THING THE NEXT READER WOULD REDO.
+     It asked whether a refusal of a PARSER-INSERTED subresource reaches the engine's decline counter at all,
+     and it does: solver/engine.h names `PENDING_INITIATOR_PARSER` as a park like any other, `engine_decline`
+     finds its record by (method, url) with no initiator condition, and solver/pending_index.c raises
+     `g_declined_total` on membership alone. So the engine-side zero quoted above IS evidence about the
+     parser's requests as well as the engine's, and the caution that stood here was conservative rather than
+     correct. Derive it rather than trust it: `grep -n 'g_declined_total++' engine/host/solver/pending_index.c`
+     and read the function it sits in.
+     NAMED RESIDUAL, AND IT IS BACK TO ONE. NOT COVERED: this row cannot state its own composition, because
      the fact that would split it (is this address an asset) is not in the record it reads -- the
-     classification lives on a decoded response in the offscreen store and never reaches the census; (b)
-     this row cannot state what the chokepoint REFUSED, though the chokepoint already names every refusal
-     in a vocabulary of its own. NEXT DIFF: (a) the record carrying the classifier's own answer, so
-     learned-addresses and classified-as-asset are two columns neither quotable as the other; (b) a refusal
-     count split by the SIGNAL that refused, so a row with no API surface says which reading it is.
-     HOW EITHER ABSENCE SHOWS: (a) an endpoint count read as an API surface by a reader who would have to
-     open the address list to find out otherwise; (b) a reader concluding the driving is weak from a low
-     endpoint count, on a run where the driving reached every address and the policy declined them.
-     STILL UNESTABLISHED, said because a retirement that overclaims is worse than what it replaces: whether
-     a refusal of a PARSER-INSERTED subresource reaches that decline counter at all. The zero above is
-     evidence about requests the engine ASKED for and must not be read as evidence about the parser's.
-     RETIREMENT: both halves go when this object publishes a classified-as-asset count and a refusal count,
-     because the two readings are then separated by the row rather than by this paragraph. */
+     classification lives on a decoded response in the offscreen store and never reaches the census. NEXT
+     DIFF: the record carrying the classifier's own answer, so learned-addresses and classified-as-asset are
+     two columns neither quotable as the other. HOW ITS ABSENCE SHOWS: an endpoint count read as an API
+     surface by a reader who would have to open the address list to find out otherwise.
+     RETIREMENT: it goes when this object publishes a classified-as-asset count, because the composition is
+     then stated by the row rather than by this paragraph. */
   siteEndpoints: [...new Set(mine.flatMap(d => d.sites))],
   distinctEndpoints: new Set(mine.flatMap(d => d.sites)).size,
+  /* WHICH READING THE TWO ROWS ABOVE ARE, WHICH THEY CANNOT SAY ALONE AND WHICH IS THE WHOLE POINT OF THEM.
+     A low endpoint count has two causes that take OPPOSITE WORK -- the driving never derived those requests,
+     or this tool's own egress policy REFUSED them -- and until these two rows nothing this file emitted
+     separated them. `egressAsked` is extension/bridge.js's count of pending requests it handed to the
+     chokepoint, raised at the CALL and never at the outcome; `egressDeclined` is the histogram of the ones
+     refused, keyed on the chokepoint's own whole reason token.
+     THE PAIR, NEVER EITHER HALF. `{}` under a nonzero `egressAsked` is the positive statement THE POLICY
+     REFUSED NOTHING, so a page with no API surface is a finding about the driving. `{}` under a zero one is
+     the statement that the delivery loop never ran, which is SILENT about the policy rather than clean about
+     it. And a nonzero histogram says which reading it is per RULE, because the rules do not take one action:
+     `blocked-signal:<name>=<value>` names the row of a person's own per-origin control that holds the request
+     and would make it fire if they widened it, and `blocked-destructive:<token>` names a refusal nothing
+     reopens. A single "N refused" total would be those states behind one number at the one place a person has
+     to act on it.
+     NOTHING HERE PARSES A TOKEN AND THAT IS LOAD-BEARING RATHER THAN TIDY. lib/safe-fetch.js composed the
+     signal name and value INTO the token, so the histogram is per-signal BY CONSTRUCTION and a signal added
+     to its `_SIGNALS` table appears here with nothing on this path edited. Splitting one to read the signal
+     out would be a second copy of that policy written in a format nothing checks -- which is the reason
+     solver/engine.c's `engine_decline` declines to match on it too, stated in its own words at that site.
+     IT IS NOT THE ENGINE'S `cold.replyDeclined` AND IS DELIBERATELY NOT PUBLISHED BESIDE IT. That counter is
+     a PART of a five-term partition (`replyAsked == replyAnswered + replyDeclined + replyDropped +
+     replyOutstanding`, which solver/result.c asserts and engine/build.mjs reads) and its own siblings' prose
+     says the five mean nothing read apart -- so one of them alone in this row would be a part with no total,
+     which is the defect this file spends most of its length refusing. It is also a DIFFERENT DENOMINATOR: a
+     refusal names a (method, url) PAIR and `engine_decline` marks every parked RECORD keyed on it, so one
+     refusal counted here can raise that counter several times. The cross-check is still available to a reader
+     holding both objects -- this row nonzero with `replyDeclined` at 0 is a refusal that never reached the
+     engine -- and it is not a subtraction anything here may make.
+     LIFETIME COUNTS OVER ASK EVENTS AND NOT OVER DISTINCT ADDRESSES: an @S candidate re-fire re-issues an
+     address the engine already parked on, and that is a second ask. Taken from `counted[last]` like every
+     other counter on this row, so `countersFrom` keeps naming the one entry they all came from.
+     ABSENT STAYS ABSENT: a row written before these fields existed omits them, and `0`/`{}` here would read
+     as a chokepoint that was asked nothing -- which is one of the two states this pair exists to separate. */
+  egressAsked: (() => {
+    if (!counted.length) return null;
+    const v = counted[counted.length - 1].egressAsked;
+    return typeof v === 'number' ? v : null;
+  })(),
+  egressDeclined: (() => {
+    if (!counted.length) return null;
+    const d = counted[counted.length - 1].egressDeclined;
+    return (d && typeof d === 'object' && !Array.isArray(d)) ? d : null;
+  })(),
   pageErrors: [...new Set(mine.flatMap(d => d.errs))].slice(0, 40),
   globalEndpoints: (cur.global || []).length,
   /* `null` = the probe reached no `parameters` object; an object = it did. NOT defaulted to an empty object:
