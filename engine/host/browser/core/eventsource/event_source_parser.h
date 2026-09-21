@@ -61,9 +61,16 @@
  *
  * SO THE FIRST DIFF THAT GIVES THIS FILE A CALLER IS HTML §9.2.2's STEPS 8-15 AND HTML §9.2.3 TOGETHER,
  * in that order: the potential-CORS request whose credentials mode core/html/cors_settings_attribute.h's
- * `cors_potential_request_credentials` states — its own comment names this constructor as one of its three
- * callers — then the fetch, then announce the connection, then the three sink entries below, then fail the
- * connection. HTML §9.2.3's reestablish the connection and HTML §9.2.4 "The `Last-Event-ID` header" are
+ * `cors_potential_request_credentials` states, then the fetch, then announce the connection, then the three
+ * sink entries below, then fail the connection.
+ * THAT ENTRY'S COMMENT NAMES THIS CONSTRUCTOR AND THAT IS A FACT ABOUT THE STANDARD, NOT ABOUT THE WIRING.
+ * This sentence used to cite it flat, as `one of its three callers`, and the flat form is what turned it
+ * into EVIDENCE: a caller list is read as a claim about THIS TREE, so quoting one back made a statement
+ * about which algorithms HTML §2.5.1 "Terminology"'s create a potential-CORS request is called by read as
+ * a statement that the C call site already exists. It does not — nothing installs this interface, so the
+ * constructor calls nothing — and a reader scoping the diff above would have priced the credentials half
+ * as plumbing already done. The entry now says which two of its three are this tree's.
+ * HTML §9.2.3's reestablish the connection and HTML §9.2.4 "The `Last-Event-ID` header" are
  * the diff after that, and they are what finally give `set_reconnection_time` and `set_last_event_id`
  * somewhere to land.
  *

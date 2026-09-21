@@ -2626,16 +2626,37 @@ static const char *HTML =
        owed-name census, which no document in this corpus had. Every `typeof` guard above names an interface
        this build INSTALLS, so all of them HIT and none of them reaches the arm that records an unanswered
        name; without a name this realm does not answer, the census reads clean here whatever it is capable of
-       and a run proves nothing about it. `EventSource` is the file's own worked example and this build has no
-       such interface.
-       THE TWO SPELLINGS ARE THE POINT AND ARE WHY THIS IS TWO STATEMENTS. `window.EventSource` is a [[Get]]
+       and a run proves nothing about it. `WebSocket` is a name browser/platform_names.h carries and no realm
+       installs, so a read of it misses on a name this engine's own vocabulary owns — which is what this census
+       is a census OF.
+       AND THE SUBJECT IS CHOSEN FOR DURABILITY, WHICH IS A PROPERTY OF THE WITNESS RATHER THAN OF THE NAME.
+       This block read `EventSource` until the lane scoped to BUILD that interface read it. solver/absent.c
+       still spells that name in its own prose and is untouched by this, because there it illustrates an
+       OPCODE — ECMAScript §13.5.3 "The typeof Operator"'s step 2.a settling before step 2.b — and that
+       argument holds for any unresolvable identifier, so it rests on nothing this tree installs. HERE IT
+       RESTED ON THE ABSENCE ITSELF, and a witness whose subject is an interface somebody is about to
+       install has an EXPIRY DATE NOBODY WROTE
+       DOWN: it does not fail loudly on the day, it goes QUIET — the three buckets read 0, every paragraph
+       below stays grammatical, and the census returns to reading clean whatever it is capable of, which is
+       the exact state this block exists to rule out.
+       `WebSocket` IS ABSENT BY THE SAME EVIDENCE AND FOR LONGER. The evidence is one grep answering generated
+       tables only, with core/platform.c's interface column holding no row for it; the longer is why it is
+       worth moving to — WebSockets §3 "The WebSocket interface" wants a transport this engine does not
+       have, while HTML §9.2.2 "The EventSource interface" wants a fetch it already has, so the two names
+       were equally absent today and are not equally absent next week.
+       SO THE EXPIRY IS STATED RATHER THAN LEFT TO BE DISCOVERED: this witness dies the day `WebSocket`
+       reaches a realm, and the diff that installs it owes this block a subject that is still absent. AND THE
+       CENSUS KEY MOVED WITH THE SUBJECT — an archived run's `_absent` holds a row named `"EventSource"`
+       where this one holds `"WebSocket"`, so a reader comparing across this commit is comparing two
+       different rows rather than one row whose numbers changed.
+       THE TWO SPELLINGS ARE THE POINT AND ARE WHY THIS IS TWO STATEMENTS. `window.WebSocket` is a [[Get]]
        that misses the whole prototype chain of the global (`window` IS the global object — window.c installs
        it as an unforgeable value attribute holding `global` itself), so it reaches JSConcolicHooks.absent;
-       `typeof EventSource` is an unresolvable Reference that ECMAScript §13.5.3 The typeof Operator's
+       `typeof WebSocket` is an unresolvable Reference that ECMAScript §13.5.3 The typeof Operator's
        §13.5.3.1 Runtime Semantics: Evaluation step 2.a answers at the opcode, BEFORE step 2.b's GetValue, so
        it reaches no read hook at all and is recorded by JSConcolicHooks.absent_unresolved instead. They are
        one question about one name and must raise ONE row.
-       WHAT TO OBSERVE, since this asserts nothing: in the run's `_absent`, the row `"EventSource"` is a
+       WHAT TO OBSERVE, since this asserts nothing: in the run's `_absent`, the row `"WebSocket"` is a
        HISTOGRAM rather than a count and these two statements put 1 in `read` and 1 in `typeof` — one per
        spelling, with the buckets summing to the reads — while `_of those, answered by the typeof operator
        with no [[Get]] performed` reads at least 1. Every bucket and every member is emitted on every census
@@ -2652,17 +2673,17 @@ static const char *HTML =
        neither, and a bare `strstr` needle over a census key is one engine/probegate.mjs cannot resolve to any
        document token this file emits — so asserting it here would move that gate's unresolved-needle count
        rather than measure this one. The observation is the `@RESULT` line. */
-    "var absTy = typeof EventSource;"
-    "var absRd = window.EventSource;"
+    "var absTy = typeof WebSocket;"
+    "var absRd = window.WebSocket;"
     /* AND THE THIRD SPELLING, WHICH IS A THIRD STATEMENT FOR THE SAME REASON THE OTHER TWO ARE TWO.
-       `"EventSource" in window` is ECMAScript §13.10.1 "Runtime Semantics: Evaluation"'s `RelationalExpression
+       `"WebSocket" in window` is ECMAScript §13.10.1 "Runtime Semantics: Evaluation"'s `RelationalExpression
        : RelationalExpression in ShiftExpression`, whose last step is "Return ? HasProperty(rightValue, ?
        ToPropertyKey(leftValue))" — §7.3.11 "HasProperty ( obj, propertyKey )", which performs no [[Get]]
        anywhere in it. So it reaches NEITHER the read hook the line above reaches nor the unresolvable-Reference
        arm the line before it reaches: the engine records it at the `in` operator's own placement, where the
        operator, its base and its answer are in one hand. It answers `false` and nothing throws, exactly as the
        other two answer `"undefined"` and `undefined`.
-       WHAT TO OBSERVE, since this asserts nothing: in the run's `_absent`, the row `"EventSource"` reads
+       WHAT TO OBSERVE, since this asserts nothing: in the run's `_absent`, the row `"WebSocket"` reads
        `read 1, typeof 1, in 1` rather than `read 1, typeof 1` — one per spelling, three buckets summing to
        the three reads — and `_of those, answered by the in operator with no [[Get]] performed` reads at least
        1 beside the `typeof` member's at least 1. Every operator member and every bucket is emitted on every
@@ -2680,7 +2701,7 @@ static const char *HTML =
        member is neither an endpoint nor a param, and a bare `strstr` needle over a census key is one
        engine/probegate.mjs cannot resolve to any document token this file emits. The observation is the
        `@RESULT` line. NO PROBE ROW IS ADDED. */
-    "var absIn = 'EventSource' in window;"
+    "var absIn = 'WebSocket' in window;"
 
     /* HTML §4.8.9 "The audio element"'s five top-level steps, counted with list depth tracked against the
        standard's own <ol> so a nested item cannot be promoted to a peer. STEP 3 IS UNCONDITIONAL and is the

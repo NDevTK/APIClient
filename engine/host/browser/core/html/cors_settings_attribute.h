@@ -57,8 +57,18 @@ int cors_settings_attribute_state(const lxb_dom_element_t *el);
    a conjunction with the request's integrity metadata. The flag still has none. SECURITY.md's division is
    unchanged and is why the mode does NOT cross the wire: the trusted zone still makes the SOP/CORS decision
    from the request's own origin and the reply's headers, and the mode's only reader is inside this engine.
-   Callers: HTML §4.8.4.3.5 "Updating the image data", HTML §4.2.4.3 "Fetching and processing a resource from
-   a link element"'s create a link request, and HTML §9.2.2 "The EventSource interface"' constructor. */
+   THE THREE CALLERS ARE THE STANDARD'S AND ONLY TWO OF THEM ARE THIS TREE'S, which a bare list cannot say
+   and which this one was read as saying. HTML §4.8.4.3.5 "Updating the image data" and HTML §4.2.4.3
+   "Fetching and processing a resource from a link element"'s create a link request each have a call site
+   here; HTML §9.2.2 "The EventSource interface"' constructor is a caller the STANDARD gives this algorithm
+   and that no realm in this tree reaches, because nothing installs that interface.
+   IT WAS ALREADY PROPAGATING AS A CLAIM ABOUT THE WIRING, which is why this is worth a sentence rather than
+   a word: core/eventsource/event_source_parser.h cites this list back as its own evidence that the
+   constructor is `one of its three callers`, so a statement about which algorithms HTML §2.5.1 "Terminology"
+   IS CALLED BY was being read one file over as a statement that the call exists. A caller list is a claim about THIS TREE unless it says
+   otherwise, and this one did not.
+   RETIREMENT: this paragraph goes when `git grep -n cors_potential_request_credentials -- engine/host`
+   answers a third component. */
 FetchCredentialsMode cors_potential_request_credentials(int cors_attribute_state);
 
 /* HTML §2.5.1 "Terminology"'s CREATE A POTENTIAL-CORS REQUEST, as the MODE it computes — "Let mode be
