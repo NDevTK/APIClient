@@ -4059,8 +4059,11 @@ const char *engine_pending_fetches(void) {
                            the destination for something other than the code question — the register has to be
                            keyed on the destination instead of folded over it, and that is the change to make
                            then rather than a tie-break invented now to look deterministic. */
-                        /* EVERY OFFSET AND EVERY VERDICT IS TAKEN BEFORE THE FIRST WRITE, and the three writes
-                           then run BACK TO FRONT — provenance, initiator, destination. A rewrite shifts
+                        /* EVERY OFFSET AND EVERY VERDICT IS TAKEN BEFORE THE FIRST WRITE, and the five writes
+                           then run BACK TO FRONT — credentials, witness, provenance, initiator, destination.
+                           (It said `the three writes … provenance, initiator, destination` while the block
+                           wrote five; the RULE was right and its enumeration was two fields stale, which is the
+                           one thing a reader of an ordering constraint must not be handed.) A rewrite shifts
                            everything after the field it touches, so a later field's offset survives an earlier
                            field's growth and not the other way round; writing the destination first would
                            leave the two after it measured against a line that had moved. */
@@ -4069,15 +4072,41 @@ const char *engine_pending_fetches(void) {
                         size_t p_at = (size_t)(t3 + 1 - join), p_len = (size_t)(t4 - (t3 + 1));
                         size_t n_at = (size_t)(t4 + 1 - join), n_len = (size_t)(t5 - (t4 + 1));
                         size_t c_at = (size_t)(t5 + 1 - join), c_len = (size_t)(t6 - (t5 + 1));
-                        /* …AND THE SET'S PINNED MARK FOLDS TOWARD `pinned`, WHICH IS THE OPPOSITE DIRECTION TO
-                           THE TWO TOKEN FIELDS ABOVE AND IS NOT AN INCONSISTENCY. Those fold toward what is
-                           MOST OBSERVED because the set is one REQUEST and a reply to it is evidence about the
-                           app if any member's path was clean. This folds toward what is LEAST CLEAN because the
-                           set is one ADDRESS: if any member composed those bytes out of a witness this engine
-                           chose, then for that member the address may be one no server ever had, and the fold
-                           has to keep the claim that is true of the set rather than the one true of its
-                           luckiest element. The costs are not symmetric either — under-claiming the provenance
-                           merely grades a reply, and under-claiming here SPENDS AN ACT. */
+                        /* …AND THE SET'S (PROVENANCE, WITNESS) PAIR FOLDS AS A PAIR, TAKING ONE MEMBER'S
+                           WHOLE, WHICH IS THE ONE FOLD THAT CANNOT STATE A PAIR NO MEMBER HELD. The two facts
+                           are NESTED — solver/flow.h declares `path_pinned` strictly inside `path_forced`, and
+                           `pending_pinned_compose` asserts that at every park — so the legal pairs are exactly
+                           (observed, unpinned), (derived, unpinned), (forced, unpinned) and (forced, pinned).
+                           Folding each field by an extremum of its own takes the MINIMUM of the first and the
+                           MAXIMUM of the second, and over a NESTED pair those two extrema need not belong to
+                           one member: a set holding a clean `derived` park and a `forced`+`pinned` one folded
+                           to (derived, pinned), which is a state no park can be in. The consumer rests on the
+                           nesting BY NAME — extension/lib/safe-fetch.js's `_firingRefusal` CHECKs it, and a
+                           CHECK is always fatal — so that pair did not mis-grade a request, it KILLED THE
+                           FETCH PATH for the whole session, taking reply learning with it. The candidate
+                           re-fire named at the top of this function is a generator of the pair rather than an
+                           exotic case: the re-firing flow is forced and pinned by construction and re-runs the
+                           exploring flow's own fetches, so the two park on one (method, url).
+                           THE PAIR'S ORDER IS LEXICOGRAPHIC WITH THE PROVENANCE FIRST, so the provenance still
+                           folds toward what is MOST OBSERVED and the argument above it is untouched. What
+                           changes is that the witness mark stops being a second extremum and is read off
+                           whichever member won — the cleanest member that composed THESE BYTES.
+                           THE RETIRED ARGUMENT, REWRITTEN RATHER THAN DELETED BECAUSE A READER WILL OTHERWISE
+                           RE-DERIVE IT: this folded toward `pinned` on the ground that the set is one ADDRESS,
+                           so if any member composed those bytes out of a witness this engine chose then the
+                           address may be one no server ever had — and that under-claiming here SPENDS AN ACT
+                           where under-claiming the provenance merely grades a reply. That asymmetry is real
+                           and the conclusion does not follow from it, because the witness mark is an
+                           OVER-APPROXIMATION recorded at the FLOW. solver/flow.h says so in its own words: it
+                           cannot be read off the address, because `pin_mint` returns a BARE primitive and
+                           `"/chunks/" + region + ".js"` with `region` pinned is byte-indistinguishable from a
+                           chunk address spelled entirely in the bundle's own source. A member that composed
+                           the SAME BYTES with its own mark CLEAR is therefore a direct refutation of that
+                           approximation for this address — every byte of its address came from outside this
+                           engine, which is engine.h's own text for `unpinned` — and that member alone
+                           justifies the act whether or not the pinned member exists. Under-claiming is the
+                           hazard when nothing refutes the approximation; here the set carries the refutation,
+                           over the same identity, in the same walk. */
                         /* EVERY READER BELOW TAKES THE COMPUTED OFFSET AND NEVER A `tN + 1` OF ITS OWN, and
                            that is a repair rather than a style: the offsets and the tab pointers were TWO
                            SPELLINGS of one position, so inserting a field ahead of the credentials mode moved
@@ -4085,8 +4114,24 @@ const char *engine_pending_fetches(void) {
                            had taken its place — with the LENGTH of the field it meant. `cred_of_token` is
                            fatal on a word §2.2.5 does not define, so every deduped line would have aborted.
                            One spelling cannot drift from itself. */
-                        int mo_pinned = pinned_v || pinned_is_yes(join + n_at, n_len);
-                        int mo_prov = prov_of_token(join + p_at, p_len);
+                        int cur_prov = prov_of_token(join + p_at, p_len);
+                        int cur_pinned = pinned_is_yes(join + n_at, n_len);
+                        int take_new = prov_v < cur_prov || (prov_v == cur_prov && !pinned_v);
+                        int mo_prov = take_new ? prov_v : cur_prov;
+                        int mo_pinned = take_new ? pinned_v : cur_pinned;
+                        /* AND THE CONSTRUCTION IS CHECKED WHERE THE PAIR IS MADE. The park asserts the nesting
+                           at one end (`pending_pinned_compose`) and the chokepoint at the other, and this fold
+                           — the one party able to compose a pair neither of them ever saw — held neither. It
+                           is not vacuous: it fails the day either field grows an extremum of its own again,
+                           which is the shape this block had and the regression it now exists to refuse. */
+                        DCHECKF(!mo_pinned || mo_prov == PROV_FORCED,
+                                "this join folded a (provenance, witness) pair no park can hold — provenance "
+                                "%d with the witness mark SET, where solver/flow.h declares `path_pinned` "
+                                "strictly inside `path_forced`. The fold takes ONE member's pair whole for "
+                                "exactly this reason, so a pair that disagrees is a field folded by an "
+                                "extremum of its own again, and extension/lib/safe-fetch.js's "
+                                "`_firingRefusal` CHECK kills the fetch path on the line this writes",
+                                mo_prov);
                         int mo_parser = ini_is_parser(join + i_at, i_len) || ini_is_parser(ini, il);
                         int widen_dst = destination_is_script_like(d, dl) &&
                                         !destination_is_script_like(join + d_at, d_len);
@@ -4095,7 +4140,6 @@ const char *engine_pending_fetches(void) {
                            residual this fold is. */
                         FetchCredentialsMode mo_cred = cred_narrower(cred_of_token(join + c_at, c_len),
                                                                     cred_of_token(c, cl));
-                        if (prov_v < mo_prov) mo_prov = prov_v;
                         join_set_field(&join, &n_out, &cap, c_at, c_len, fetch_credentials_token(mo_cred));
                         join_set_field(&join, &n_out, &cap, n_at, n_len,
                                        mo_pinned ? PENDING_PINNED_YES : PENDING_PINNED_NO);
