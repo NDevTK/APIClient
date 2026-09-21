@@ -98,12 +98,17 @@ bool flow_placement_pass_is_open(void);
    every in-flow child a walk passes, with no test of whether anybody will ask: the walk has the number in hand
    and deciding here who might want it is the throw-away this component exists to end.
    A NO-OP WHEN NO PASS IS OPEN, which is what keeps the walk's own code free of a mode.
-   `el`'s CONTAINING BLOCK MUST BE ITS PARENT ELEMENT, which is core/layout/block_flow.h's
-   `block_flow_child_top` precondition and is therefore this record's: that entry CRASHES for a box whose
-   containing block is an ancestor the containing-block walk steps over, and a position stored under such a
-   key would be a number returned where a refusal belongs on a build with the crash compiled out. §9.4.1's
-   walk really can place one — it descends into an in-flow inline box §9.2.1.1 breaks — so the caller tests
-   it at the write, where the walked container is in hand. */
+   `el` MUST BE A BOX ON THE WALKED CONTAINER'S CSS 2.2 §9.2.1.1 "Anonymous block boxes" BOX LIST, WHICH IS
+   NOT THE SAME THING AS A CHILD OF IT. This paragraph used to say that `el`'s containing block must be its
+   PARENT ELEMENT, on the ground that core/layout/block_flow.h's `block_flow_child_top` CRASHED for a box
+   whose containing block is an ancestor §10.1's walk steps over — so a position stored under such a key
+   would have been a number returned where a refusal belonged on a build with that crash compiled out. That
+   entry now ANSWERS for such a box, because §9.2.1.1 makes a block-level box inside a broken inline box "a
+   sibling of those anonymous boxes" and `block_flow_next_block_box` reaches it there; the narrower
+   precondition retired with the refusal it was protecting, and the caller asserts the wider one at the
+   write, where the walked container is in hand. THE KEY'S MEANING IS UNCHANGED and is what both
+   preconditions were really protecting: the position is a distance down the stack of the box's OWN
+   containing block, which §10.1's second case makes the container that recorded it. */
 void flow_placement_record(const lxb_dom_element_t *el, CssPx top);
 
 /* THE ASK, COUNTED WHETHER OR NOT A PASS IS OPEN — the recording point is the QUESTION and never the outcome,

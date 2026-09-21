@@ -664,6 +664,53 @@ bool block_flow_child_breaks_inline_box(lxb_dom_element_t *parent, lxb_dom_node_
     return bf_generates_inline_box(el) && bf_inline_box_breaks(el);
 }
 
+/* IS `el` A BOX ON `container`'s BOX LIST, RATHER THAN A CHILD OF IT — one question asked at three sites,
+   because a block container's BOX list and its ELEMENT child list stopped being the same list the day this
+   file's enumeration began descending into a broken inline box. CSS 2.2 §9.2.1.1 "Anonymous block boxes" is
+   the whole of the difference and states it in one sentence: "When an inline box contains an in-flow
+   block-level box, the inline box (and its inline ancestors within the same line box) is broken around the
+   block-level box (and any block-level siblings that are consecutive or separated only by collapsible
+   whitespace and/or out-of-flow elements), splitting the inline box into two boxes (even if either side is
+   empty), one on each side of the block-level box(es). The line boxes before the break and after the break
+   are enclosed in anonymous block boxes, and the block-level box becomes a sibling of those anonymous
+   boxes." A SIBLING OF BOXES ON `container`'s STACK IS A MEMBER OF `container`'s BOX LIST, however deep in
+   the ELEMENT tree it sits — which is why no test over a PARENT POINTER can answer this question.
+   EVERY INTERVENING ELEMENT MUST BREAK, AND THAT IS THE SECTION'S OWN PARENTHESIS RATHER THAN A STRICTER
+   READING: "and its inline ancestors within the same line box" breaks the WHOLE chain, and
+   `bf_inline_box_breaks` recurses through inline children, so a block-level box at any inline depth makes
+   every inline box above it break. An ancestor that does not break is therefore not an inline box this
+   section reaches through, and the box below it is on no list of `container`'s.
+   THE TWO SHAPES IT REFUSES ARE THE TWO §10.1's WALK STEPS OVER AND THIS SECTION DOES NOT PUT HERE. CSS 2.2
+   §9.2.2 "Inline-level elements and inline boxes"' ATOMIC inline-level box — a replaced `display: inline`
+   element — KEEPS its own block-level children, because it "participate[s] in their inline formatting
+   context as a single opaque box"; and a `display: contents` element is css-display-3 §2.5 "Box Generation:
+   the none and contents keywords"' splice, which `bf_element_child` refuses by name, so no enumeration in
+   this file reaches through one yet. */
+static bool bf_on_box_list_of(lxb_dom_element_t *el, lxb_dom_element_t *container)
+{
+    lxb_dom_node_t *root, *n;
+
+    DCHECK(el != NULL && container != NULL,
+           "CSS 2.2 §9.2.1.1's box-list membership was asked with no box or no container. The question is "
+           "about a PAIR — whether THIS box is on THAT container's list — so either half missing makes it a "
+           "question about nothing rather than a question with an unknown answer");
+    root = lxb_dom_interface_node(container);
+    for (n = lxb_dom_interface_node(el)->parent; n != NULL && n != root; n = n->parent) {
+        lxb_dom_node_t *p = n->parent;
+
+        /* An intervening node that is not an ELEMENT, or whose own parent is not one, is not a box §9.2's
+           generation can even be asked about — `block_flow_child_kind` states both requirements over the
+           pair it is handed, so the question stops here rather than being asked of a node it is not about. */
+        if (n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
+        if (p == NULL || p->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
+        if (block_flow_child_kind(lxb_dom_interface_element(p), n) != BLOCK_FLOW_CHILD_INLINE) return false;
+        if (!block_flow_child_breaks_inline_box(lxb_dom_interface_element(p), n)) return false;
+    }
+    /* THE LOOP ENDING IS NOT THE ANSWER — it ends both at `container` and at the top of the tree, and only
+       the first is membership. A walk that ran out of ancestors was asked about a box in another subtree. */
+    return n == root;
+}
+
 /* ---- the walk ---------------------------------------------------------------------------------------------- */
 
 /* ONE BOX'S CONTRIBUTION TO ITS PARENT'S FORMATTING CONTEXT, which is more than a height: §8.3.1's runs at the
@@ -1377,16 +1424,27 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
                a caller run this walk once per child of one container. core/layout/flow_placement.h states
                the arithmetic; here it is one call with no test in front of it, because deciding who might
                want a position is the throw-away rather than a saving.
-               THE ONE TEST IN FRONT OF IT IS `block_flow_child_top`'s OWN PRECONDITION AND NOT A FILTER ON
-               WHO MIGHT ASK. That entry crashes for a box whose containing block is not its PARENT, and this
-               walk can place such a box: `block_flow_next_block_box` descends into an in-flow inline box that
-               §9.2.1.1 breaks, so a block-level box inside one is on THIS container's stack while its parent
-               element is the inline. Recording it would put a position under a key that entry refuses to
-               answer for, which in a build with the crash compiled out is a number returned where a refusal
-               used to be. The walked container is in hand here and the parent is one pointer, so the test
-               belongs at the write. */
-            if (ce != NULL && lxb_dom_interface_node(ce)->parent == lxb_dom_interface_node(el))
-                flow_placement_record(ce, through_top);
+               A PARENT TEST STOOD IN FRONT OF IT AND IS RETIRED WITH THE PRECONDITION THAT WANTED IT. It
+               recorded a box only where its parent element was the walked container, because
+               `block_flow_child_top` used to CRASH for a box whose containing block is not its parent, and a
+               position stored under such a key would have been a number returned where a refusal belonged on
+               a build with that crash compiled out. That entry now ANSWERS for exactly the boxes this
+               enumeration places — CSS 2.2 §9.2.1.1 "Anonymous block boxes" makes a block-level box inside a
+               broken inline box "a sibling of those anonymous boxes", a member of THIS container's box list —
+               so the test went with the refusal it was protecting, and the boxes it used to drop are the ones
+               the record most needs, since they are the ones whose position no parent walk can re-derive.
+               WHAT REPLACES IT STATES THE KEY'S MEANING RATHER THAN NARROWING THE POPULATION: an entry is
+               keyed by a box on this container's box list, and §10.1's second case makes this container that
+               box's containing block, so the frame the position is measured in is the frame every reader
+               takes it in. */
+            DCHECK(ce == NULL || bf_on_box_list_of(ce, el),
+                   "CSS 2 §9.4.1's stack placed a box that is NOT on CSS 2.2 §9.2.1.1's box list for the "
+                   "container being walked, so the position about to be recorded is a distance down a stack "
+                   "this box is not on — and every reader of that entry would take it as a distance down the "
+                   "stack of its own containing block. The enumeration and this membership test read the "
+                   "SAME two sections over the SAME two elements, so they cannot disagree unless one of them "
+                   "has been changed without the other");
+            if (ce != NULL) flow_placement_record(ce, through_top);
             if (ce != NULL && ce == want) {
                 *want_top = through_top;
                 *found = true;
@@ -1416,9 +1474,12 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
            has no border and no padding (§9.2.1.1's initial values), so this top BORDER edge is also its top
            content edge and its top MARGIN edge. */
         /* …AND THE SAME REPORT FOR A BOX THAT DID NOT COLLAPSE THROUGH — the collapse-through arm above
-           states the reason and it is one reason, not two, and so does the parent test. */
-        if (ce != NULL && lxb_dom_interface_node(ce)->parent == lxb_dom_interface_node(el))
-            flow_placement_record(ce, pos);
+           states the reason and it is one reason, not two, and so does the membership assert. */
+        DCHECK(ce == NULL || bf_on_box_list_of(ce, el),
+               "CSS 2 §9.4.1's stack placed a box that is NOT on CSS 2.2 §9.2.1.1's box list for the "
+               "container being walked — the identical assert on the collapse-through arm above states why "
+               "the enumeration and this test cannot disagree");
+        if (ce != NULL) flow_placement_record(ce, pos);
         if (ce != NULL && ce == want) {
             *want_top = pos;
             *found = true;
@@ -1669,12 +1730,15 @@ static BfBox bf_box_compute(lxb_dom_element_t *el, BfBaseline pass, bool *from_c
                    "the table box is that SAME element wearing its other box, and the rows are not in the "
                    "wrapper at all — so `bf_element_child` over `el`'s children reaches neither the right set "
                    "nor the right boxes, and `bf_layout` has no list to stack. BUILD THAT LIST as the thing "
-                   "§9.4.1's stack iterates. It is the SAME box-tree step this file already crashes for twice "
-                   "over — CSS 2.2 §9.2.1.1 Anonymous block boxes' runs, which `block_flow_anonymous_boxes` "
-                   "delimits but `bf_layout` still walks as elements, and css-display-3 §2.5 Box Generation: "
-                   "the none and contents keywords' `contents` splice, which `bf_element_child` names by "
-                   "hand — so it is one construction with three rules and not three constructions. Once the "
-                   "walk iterates boxes, this arm is §8.3.1's ordinary collapsing stack over the captions and "
+                   "§9.4.1's stack iterates. It is the SAME box-tree step CSS 2.2 §9.2.1.1 Anonymous block "
+                   "boxes' runs already took, AND THAT ONE IS BUILT — `block_flow_next_block_box` enumerates "
+                   "that container's boxes in content order and `bf_layout` stacks what it yields, so the "
+                   "worked precedent for THIS list is one function away rather than a thing to design. What "
+                   "is still owed beside it is css-display-3 §2.5 Box Generation: the none and contents "
+                   "keywords' `contents` splice, which `bf_element_child` names by hand — so it is one "
+                   "construction with three rules and not three constructions, and one of the three has run "
+                   "since this crash was written. Once the walk iterates these boxes too, this arm is "
+                   "§8.3.1's ordinary collapsing stack over the captions and "
                    "the table box, with `caption-side` (§17.4.1 Caption position and alignment) deciding only "
                    "their ORDER, which a SUM does not ask, and §17.4's own initial-value sentence guaranteeing "
                    "the table box brings no margin to collapse with theirs. DO NOT SUM THE HEIGHTS HERE "
@@ -2191,22 +2255,51 @@ CssPx block_flow_child_top(lxb_dom_element_t *el)
            "§9.3.1 has already taken an absolutely positioned box out of flow. So this is the root element, "
            "which core/layout/flow_position.c answers from §10.1 directly rather than by walking a parent's "
            "children: the caller's own root test and this one have come apart");
-    DCHECKF(lxb_dom_interface_node(cb) == lxb_dom_interface_node(el)->parent,
+    /* CSS 2.2 §9.2.1.1 "Anonymous block boxes" PUTS A BOX ON A STACK ITS PARENT ELEMENT DOES NOT OWN, AND
+       THIS TEST USED TO REFUSE IT. The condition was `cb == el->parent` and the message told its reader to
+       BUILD THE BOX LIST §9.2.1.1 AND css-display-3 §2.5 DESCRIBE as the thing this walk iterates. §9.2.1.1's
+       half of that list EXISTS — `block_flow_next_block_box` enumerates a container's boxes in content order
+       and descends into an in-flow inline box the section breaks, and `bf_layout` stacks what it yields — so
+       the demand was met and the refusal outlived it, which is the one failure mode a crash naming another
+       mechanism has. WHAT THE TEST ASKS NOW IS THE SECTION'S OWN SENTENCE INSTEAD OF A PROXY FOR IT: is this
+       box on that container's BOX list, which for a box inside a broken inline box is exactly what "the
+       block-level box becomes a sibling of those anonymous boxes" makes it.
+       §2.5's HALF IS STILL UNBUILT AND IS STILL REFUSED HERE, by the same test and without a second arm: a
+       `display: contents` element generates no inline box, so `bf_on_box_list_of` cannot reach through one
+       and the crash below names the splice. Nothing was widened past what §9.2.1.1 states.
+       NAMED RESIDUAL — §9.2.1.1's RELATIVE-POSITIONING SENTENCE IS CARRIED BY NEITHER TERM OF THIS ORIGIN.
+       WHAT IS NOT COVERED: the section's own last sentence of that paragraph — "When such an inline box is
+       affected by relative positioning, any resulting translation also affects the block-level box contained
+       in the inline box." This entry answers a distance down `cb`'s stack and core/layout/flow_position.c
+       adds `cb`'s own border-box origin to it, so a translation applied to an inline box BETWEEN the two is
+       in neither term. That is not the ordinary absence of CSS 2.2 §9.4.3 "Relative positioning" wearing a
+       new name: an ordinary box inherits its ancestor's translation through that same origin recursion
+       because the ancestor is ON the recursion's chain, and this box's broken inline ancestor is precisely
+       the element §10.1's walk steps over, so it is on no chain any composition here climbs. WHAT THE NEXT
+       DIFF BUILDS: §9.4.3's offset where a box's own origin is composed, PLUS this section's extra term for
+       a box whose §9.2.1.1 ancestry crosses a relatively positioned inline box — the second does not fall
+       out of the first. HOW ITS ABSENCE WOULD SHOW: a document whose block-level box sits inside a
+       relatively positioned inline box reports the same border-box origin for that box with the inline's
+       `top` and `left` set as without them. */
+    DCHECKF(bf_on_box_list_of(el, cb),
            "%s, whose containing block is %s and whose parent is %s: "
-           "§10.1's containing block for this box is NOT its parent element, so §9.4.1's walk over that block's "
-           "own children can never reach it. WHAT REACHES HERE IS AN ANCESTOR THE CONTAINING-BLOCK WALK STEPS "
-           "OVER, and there are two of them, each naming a BOX-TREE construction step this walk does not "
-           "perform. A `display: contents` ancestor: css-display-3 §2.5 Box Generation: the none and contents "
-           "keywords splices its children into the grandparent's box list — \"the element must be treated as if "
-           "it had been replaced in the element tree by its contents\" — so those children are boxes in this "
-           "block's list that this walk over ELEMENT children never visits. An `inline` ancestor holding this "
-           "in-flow BLOCK-LEVEL box: CSS 2 §9.2.1.1 Anonymous block boxes breaks the inline around it, and "
-           "\"the block-level box becomes a sibling of those anonymous boxes\" — a sibling in this same block "
-           "container's box list, again reached by no walk over element children. BUILD THE BOX LIST §9.2.1.1 "
-           "AND §2.5 DESCRIBE as the thing this walk iterates; `bf_element_child`'s own `contents` crash names "
-           "the first half and this is where both halves are noticed. Deciding it HERE and not below is why "
-           "the message can name which of the two it is: the walk below would report only that it never "
-           "reached the box",
+           "§10.1's containing block for this box is not its parent element, which CSS 2.2 §9.2.1.1 "
+           "Anonymous block boxes makes ORDINARY rather than impossible — a block-level box inside an inline "
+           "box that section breaks \"becomes a sibling of those anonymous boxes\" on the block container's "
+           "own box list, and `block_flow_next_block_box` reaches it there. THIS BOX IS ON NO SUCH LIST. So "
+           "the chain between the two holds an element §10.1's walk steps over and §9.2.1.1 does not reach "
+           "through, and there are exactly two of them. A `display: contents` element: css-display-3 §2.5 "
+           "Box Generation: the none and contents keywords splices its children into the grandparent's box "
+           "list — \"the element must be treated as if it had been replaced in the element tree by its "
+           "contents\" — and `bf_element_child` refuses that value by name, so no enumeration in this file "
+           "reaches through one. BUILD THAT SPLICE as the thing the enumeration iterates, beside §9.2.1.1's "
+           "descent that already does it. OR CSS 2.2 §9.2.2 Inline-level elements and inline boxes' ATOMIC "
+           "inline-level box, which \"participate[s] in their inline formatting context as a single opaque "
+           "box\" and therefore KEEPS its block-level children: a box inside one is on no stack of this "
+           "container's at all, so an atomic box on this chain is core/layout/used_value.c's "
+           "containing-block walk having stepped over a box it must stop at, and the fix is THERE and not "
+           "here. Deciding it HERE and not below is why the message can name which of the two it is: the "
+           "walk below would report only that it never reached the box",
            box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf),
            box_subject_node(lxb_dom_interface_node(el)->parent, pbuf, sizeof pbuf));
     /* §9.4.1's WALK ANSWERS ABOUT EVERY CHILD AND THIS ENTRY IS ASKED ABOUT ONE, so the first ask about any
