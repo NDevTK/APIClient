@@ -310,7 +310,22 @@ static void *cow_delta_alloc(void *p, size_t n) {
    so two flows that reach the same segment agree about everything from there down and neither the fork nor the
    swap has to look at it. */
 typedef struct CowSeg { CowEntry *e; int n; struct CowSeg *base; int refcount; } CowSeg;
-struct CowDelta { CowEntry *e; int n, cap; uint32_t fork_gen; int *hash; int hash_cap; CowSeg *base; };
+/* head_applied: IS THIS DELTA'S HEAD ON THE LIVE HEAP RIGHT NOW. `g_cow_installed` states that for the frozen
+   CHAIN and nothing stated it for the HEAD, so two functions here asked `g_current` instead — and `g_current`
+   is a ROUTE ("where do captures go"), not an applied-state. The two are one fact only while the scheduler is
+   inside a flow's turn, and this file documents TWO windows in which they are not: engine_sched_step takes the
+   route off at a slice exit while §scheduler requires the yield to keep the running flow SWITCHED IN, and
+   cow_engine_write_begin nulls it for the length of a bookkeeping write. In both, a delta whose head is on the
+   heap answers "not applied", which is the §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS shape: the strict question
+   (the route) decided it and the loose one (applied-ness) was refused with nothing to say it was ever asked.
+   The consequences are not symmetric and neither is loud. A fork that answers NO about an applied delta
+   freezes a segment WITHOUT unapplying it — so the segment's `cur` is whatever its last unapply left, stale by
+   everything the flow has written since — and leaves `g_cow_installed` naming a chain the freeze moved out
+   from under it. A release that answers NO frees an applied head, which is the state cow.h calls catastrophic
+   in its own words. So the delta states it, both ends assert it, and the proxy is gone rather than kept
+   beside it. */
+struct CowDelta { CowEntry *e; int n, cap; uint32_t fork_gen; int *hash; int hash_cap; CowSeg *base;
+                  int head_applied; };
 
 /* THE CHAIN CURRENTLY APPLIED TO THE HEAP — a property of the heap, not of any flow, exactly as the DOM's is of
    the document. A switch moves it to the incoming flow's chain by walking to the two chains' lowest common
@@ -1566,15 +1581,28 @@ static void cow_unapply_entries(JSContext *ctx, CowEntry *ents, int n) {
    incoming flow's apply decides how much of it has to move, which for a sibling is none of it. */
 void cow_unapply(JSContext *ctx, CowDelta *d) {
     if (!d) return;
+    /* …AND UNAPPLIED ONCE. The second unapply's pass 1 reads a heap the first one has already put the BASELINE
+       back into, so it records the baseline as this flow's own state and the next apply replays that — the
+       flow resumes having lost every write this delta holds, which is the same loss as the apply above and
+       arrives by the opposite route. */
+    DCHECK(d->head_applied,
+           "a COW delta was unapplied while its head was NOT on the heap — the read-back pass records the "
+           "BASELINE as this flow's state, so the next apply replays the baseline and the flow resumes having "
+           "lost every write this delta holds");
     cow_swap_begin();
     cow_unapply_entries(ctx, d->e, d->n);
+    d->head_applied = 0;
     cow_swap_end();
     DCHECK(g_cow_installed == d->base,
            "the applied heap chain is not the running flow's — a delta was swapped without going through "
            "cow_apply, so the heap is showing a chain nobody is running");
 }
 
-static void cow_apply_entries(JSContext *ctx, CowEntry *ents, int n) {
+/* `who` NAMES THE CALLER BECAUSE THE ASSERT BELOW CANNOT. This is a shared helper with three call sites (a
+   flow's head, a segment of the installed chain, and the segment a fork has just frozen), so a DCHECK written
+   here stamps ONE file:line for all of them and its remedy — "find who applied a head that was never
+   unapplied" — would name an action with no object. The operand is what addresses it. */
+static void cow_apply_entries(JSContext *ctx, CowEntry *ents, int n, const char *who) {
     for (int i = 0; i < n; i++) {   /* forward: replay the writes over the chain below */
         CowEntry *e = &ents[i];
         if (e->is_gendata) { cow_gd_install(e, e->g1); continue; }   /* install this flow's own clone */
@@ -1588,7 +1616,32 @@ static void cow_apply_entries(JSContext *ctx, CowEntry *ents, int n) {
             else JS_MapAddRecord(ctx, e->obj, cow_map_key(e), cow_map_cur(e), JS_MAP_POS_TAIL);
             continue;
         }
-        if (e->cur_state == COW_CUR_UNRECORDED) continue;   /* never switched out: nothing of this flow's to replay */
+        /* NEVER SWITCHED OUT SINCE THE CAPTURE, WHICH IS A STATE NO APPLY MAY MEET. The skip itself is
+           right — an entry whose flow-side state was never read back has nothing to replay, and its write is
+           still standing in the heap — and it is the PREMISE that has to hold: that the write is still
+           standing. It is not, if anything moved the chain underneath in between, and then this `continue`
+           turns a lost write into a no-op that reads as correct, which is §A-FIELD-A-CONSUMER-DEFAULTS
+           performed by a swap. The state is unreachable, and that is now a statement rather than a reading:
+           an entry is only ever appended while the delta is `g_current`, which head_applied's asserts make
+           equivalent to "applied", so a head cannot gain an entry and be applied again without an unapply in
+           between; and a SEGMENT's entries were saved by the unapply that froze them or by the park that
+           switched their flow out. The `continue` stays for release, where a lost write is still better than
+           a write of a value nobody recorded.
+           AND ONE ENTRY KIND HAS BEEN ASSERTING THIS ALL ALONG, BY ACCIDENT OF WHAT WOULD CRASH. The HOST
+           arm of cow_state_restore already refuses a re-apply with nothing recorded, in these words: "reaching
+           here with nothing recorded means this flow was switched INTO without ever having been switched out
+           of — the swap is not a pair". It is asserted THERE because a byte copy from a NULL blob segfaults
+           and the ASYNC arm beside it tolerates one — so the invariant was held for the kind whose violation
+           is loud and left silent for the kinds whose violation is a value, which is every captured binding
+           and every shared slot. This is the same sentence, said once for the whole unit. */
+        DCHECKF(e->cur_state != COW_CUR_UNRECORDED,
+                "a COW apply met an entry whose flow-side state was never saved — entry %d of %d, applied by "
+                "%s. The write that entry recorded is being replayed as NOTHING, so a captured binding or slot "
+                "comes back at its pre-write BASELINE inside the very flow that wrote it. Either this unit was "
+                "applied without having been unapplied, or an entry was appended to a head that was not on the "
+                "heap — the two are told apart by which caller is named",
+                i, n, who);
+        if (e->cur_state == COW_CUR_UNRECORDED) continue;
         if (e->vref) {
             DCHECK(e->cur_state == COW_CUR_PRESENT,
                    "a closure cell was recorded ABSENT — a cell holds a value or does not exist at all, so "
@@ -1622,9 +1675,18 @@ static void cow_apply_entries(JSContext *ctx, CowEntry *ents, int n) {
 /* APPLY (parked -> flow): move the installed chain to this flow's, then its head on top. */
 void cow_apply(JSContext *ctx, CowDelta *d) {
     if (!d) return;
+    /* APPLIED ONCE. A second apply with no unapply between them replays entries whose `cur` is the state of
+       the LAST switch-out, over a heap the flow has written since — so every write since that switch-out is
+       overwritten by the value it had before it, in the flow that made it, with the delta and the heap both
+       self-consistent afterwards and nothing to say what happened. */
+    DCHECK(!d->head_applied,
+           "a COW delta was applied while its head was already on the heap — the replay puts back each entry's "
+           "value as of the last switch-out, so everything this flow has written since is silently reverted "
+           "inside the flow that wrote it");
     cow_swap_begin();
     cow_install_chain(ctx, d->base);
-    cow_apply_entries(ctx, d->e, d->n);
+    cow_apply_entries(ctx, d->e, d->n, "cow_apply: this flow's own head");
+    d->head_applied = 1;
     cow_swap_end();
 }
 
@@ -1641,11 +1703,23 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
     CowSeg *seg;
 
     /* IS `src` WHAT THE HEAP IS SHOWING? That one fact decides where the branch-point values are, and it is
-       asked here rather than by the caller — see cow.h. `g_current` is the delta being captured into, which is
-       the running flow's and no other; a delta reached from the world registry is a parked segment.
+       asked here rather than by the caller — see cow.h. IT IS ASKED OF THE DELTA AND NOT OF `g_current`, and
+       that is a correction rather than a spelling: `g_current` answers "where are captures being routed", and
+       the two windows named at the struct — a slice exit, and an engine-bookkeeping write — leave the route
+       NULL while the running flow's head is still on the heap. Answered from the route, a fork in either of
+       them takes the PARKED branch on an APPLIED delta: it freezes a segment without the unapply that is the
+       only thing which puts each entry's branch-point value into `cur`, so the segment carries whatever the
+       last switch-out left and every write since is lost to both arms, and it leaves `g_cow_installed` naming
+       a chain the freeze has moved out from under it. The delta's own bit cannot be wrong about its head.
        A delta being captured into whose chain is NOT installed is incoherent whichever path runs: the writes
        being captured are landing on a heap showing somebody else's timeline. */
-    const int applied = (src == g_current);
+    const int applied = src->head_applied;
+    /* THE ROUTE IMPLIES THE HEAP, IN THE ONE DIRECTION THAT IS SOUND. A delta being captured into is the
+       running flow's, and the running flow's head is on the heap — so `g_current` answering YES and the bit
+       answering NO is the pair that cannot happen. The converse is exactly the case above and is legitimate. */
+    DCHECK(src != g_current || applied,
+           "the delta captures are being routed into says its head is NOT on the heap — a write captured now "
+           "would record a baseline read off a timeline this delta is not showing");
     DCHECK(!applied || g_cow_installed == src->base,
            "the delta being captured into is not the one the heap is showing — a write captured now records a "
            "baseline value that belongs to another flow's timeline, and the fork would freeze that");
@@ -1704,7 +1778,8 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
     src->base = d->base = seg;
     if (applied) {
         g_cow_installed = seg;                 /* the frozen head is part of the applied chain now */
-        cow_apply_entries(ctx, seg->e, seg->n);/* re-apply -> the running flow continues byte-identically */
+        cow_apply_entries(ctx, seg->e, seg->n, /* re-apply -> the running flow continues byte-identically */
+                          "cow_delta_fork: the head this fork has just frozen");
     }
     /* A PARKED FORK LEAVES g_cow_installed WHERE IT WAS, and that is coherent rather than a loose end: it names
        a chain below an unapplied head, exactly the state cow_unapply leaves, and cow_install_chain walks from
@@ -1760,7 +1835,7 @@ static void cow_apply_seg_until(JSContext *ctx, CowSeg *s, CowSeg *stop) {
     while (cur != stop) { next = cur->base; cur->base = prev; prev = cur; cur = next; }
     cur = prev; prev = stop;
     while (cur != stop) {
-        cow_apply_entries(ctx, cur->e, cur->n);
+        cow_apply_entries(ctx, cur->e, cur->n, "cow_install_chain: a frozen segment of the incoming chain");
         next = cur->base; cur->base = prev; prev = cur; cur = next;
     }
 }
@@ -1817,15 +1892,22 @@ void cow_delta_release(JSContext *ctx, CowDelta *d) {
     CowSeg *surv, *s;
 
     if (!d) return;
-    /* THE SCHEDULER IS NOT SWITCHED INTO THIS DELTA, which is the release's whole contract — see cow.h. The head
-       is FREED below and never unapplied, so an applied one leaves this flow's writes standing in the shared
-       baseline with nothing left that could take them back out, and every other flow reads them as baseline from
-       then on. `g_current` is exactly "the delta the scheduler is switched into" — cow_set_current(NULL) is what
-       a switch-out does after cow_unapply — so the two facts are one fact and this is where it is asked. */
-    DCHECK(d != g_current,
-           "a COW delta was released while the scheduler was still switched into it — its head is APPLIED to the "
-           "live heap, so freeing the entries leaves this flow's writes standing in the shared baseline with "
-           "nothing that can unapply them; switch the flow out first");
+    /* THIS DELTA'S HEAD IS NOT ON THE HEAP, which is the release's whole contract — see cow.h. The head is
+       FREED below and never unapplied, so an applied one leaves this flow's writes standing in the shared
+       baseline with nothing left that could take them back out, and every other flow reads them as baseline
+       from then on.
+       IT USED TO ASK `d != g_current`, ON THE ARGUMENT THAT "the two facts are one fact". They are not, and
+       the argument is rewritten rather than deleted because a reader who re-derives it will re-introduce it:
+       cow_set_current(NULL) is indeed what a switch-out does after cow_unapply, and it is ALSO what a slice
+       exit and an engine-bookkeeping write do while the head stays on the heap. In those windows the proxy is
+       VACUOUS — it passes for exactly the state it exists to forbid — and the direction it fails in is the
+       one this comment calls catastrophic. The bit is the fact itself and strictly implies the proxy (a
+       current delta is an applied one, asserted at the fork), so the proxy is gone rather than kept beside
+       it. */
+    DCHECK(!d->head_applied,
+           "a COW delta was released with its head still on the heap — freeing the entries leaves this flow's "
+           "writes standing in the shared baseline with nothing that can unapply them, and every other flow "
+           "reads them as baseline from then on; switch the flow out first");
     /* THE DEEPEST SEGMENT THAT SURVIVES. A segment dies exactly when this delta held its last reference, and the
        dying set is a contiguous prefix from `d->base` down — freeing one drops its own reference on the one
        below it. Everything from `surv` down has another holder and must not be touched at all. */

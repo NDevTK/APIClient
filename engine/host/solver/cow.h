@@ -24,10 +24,18 @@ typedef struct CowDelta CowDelta;
 CowDelta *cow_delta_new(void);
 /* RELEASE ONE FLOW'S DELTA — the head it owns, and its reference on the frozen chain below it.
  *
- * IT IS THE DELTA THE SCHEDULER IS *NOT* SWITCHED INTO, and that is the whole contract rather than a caveat:
- * the head's entries are freed, never unapplied, so a head still applied to the live heap would leave this
- * flow's writes standing in the baseline with nothing left that could take them back out. The switch-out
- * (cow_unapply + cow_set_current(NULL)) is what makes that true and this asserts it.
+ * ITS HEAD IS NOT ON THE LIVE HEAP, and that is the whole contract rather than a caveat: the head's entries
+ * are freed, never unapplied, so a head still applied would leave this flow's writes standing in the baseline
+ * with nothing left that could take them back out.
+ *
+ * THIS SENTENCE READ "IT IS THE DELTA THE SCHEDULER IS *NOT* SWITCHED INTO … (cow_unapply +
+ * cow_set_current(NULL)) is what makes that true", AND THAT IS A PROXY FOR THE FACT RATHER THAN THE FACT. It
+ * is rewritten and not deleted because it is the reading a reader re-derives from the switch-out's own two
+ * lines: the switch-out really does clear the route right after the unapply, so within a flow's turn the two
+ * agree exactly. What it misses is that clearing the route is ALSO what a slice exit and an engine-bookkeeping
+ * write do, and neither of those takes the head off the heap — so in both windows the proxy passes for the one
+ * state it exists to forbid. The delta carries the fact now (CowDelta::head_applied) and cow_apply/cow_unapply
+ * are its two writers.
  *
  * WHAT IT UNAPPLIES IS EXACTLY WHAT IT IS ABOUT TO FREE, which is the half a whole-engine park never needed.
  * `g_cow_installed` is not a counted reference, so a segment can be the one the heap is SHOWING and still be
@@ -42,8 +50,9 @@ void      cow_delta_release(JSContext *ctx, CowDelta *d);
    then each diverges on its own head. The DOM twin is dom_cow_fork. Pairs with JS_FlowClone.
    This is what it does NOW; it said so while COPYING every entry and cloning every async blob, and the swap
    below then replayed that whole copied history on every context switch.
-   WHERE THE BRANCH-POINT VALUES COME FROM depends on whether `src` is the delta the heap is currently showing,
-   and this asks rather than making the caller say. For the RUNNING flow's delta they are in the LIVE HEAP and
+   WHERE THE BRANCH-POINT VALUES COME FROM depends on whether `src`'s HEAD is on the heap right now, and this
+   asks rather than making the caller say — asks the DELTA, which carries that fact, and not `g_current`, which
+   carries where captures are being ROUTED. Those two are one fact only inside a flow's turn. For the RUNNING flow's delta they are in the LIVE HEAP and
    the unapply is what fetches them; for a PARKED one they are already in the entries (cow_unapply put them
    there when the flow was switched out), so the freeze is pure bookkeeping that must touch neither the heap nor
    the installed chain — the heap belongs to whichever flow is running, and replaying a parked delta's entries
