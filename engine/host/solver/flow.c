@@ -4706,6 +4706,18 @@ static unsigned g_wfq_census_gen;
    all is that it never outlives the scan that set it. */
 static FlowAcct *g_wfq_census_crowd;
 
+/* AND THE BUCKET THE MINT MAXIMUM IS CURRENTLY OWNED BY, RETAINED FOR THE SAME REASON AND SUBJECT TO EVERY
+   SENTENCE ABOVE — a file static rather than a census field because `FlowAcct` is private to this translation
+   unit, sharing the generation mark's lifetime, set by branch_take and cleared by flow_wfq_census at both ends
+   of one scan, and cleared after it is read as well as before the walk because a pointer left standing between
+   censuses is a pointer into a node the next departure may free.
+   IT IS A SECOND POINTER AND NOT A SECOND WALK, AND IT IS NOT THE CROWD'S UNDER ANOTHER NAME. The crowd is
+   selected by the LIVE maximum and this by the MINT maximum, and `sub_born = live + sub_gone` makes those one
+   bucket only while nothing has been shed — so an arm that minted unboundedly and let each arm FINISH, which
+   is the shape flow.c's fork-tree banner is written against, owns this maximum and not that one. flow.h states
+   what the triple buys and why `br_born_max` alone cannot buy it. */
+static FlowAcct *g_wfq_census_minter;
+
 /* OPEN ONE BRANCH BUCKET INTO THE CENSUS, ONCE PER SCAN HOWEVER MANY DOORS REACH IT — the mark is the node's
    own, so this is idempotent within a scan and that is what makes the sums a PARTITION rather than a weighted
    count. A FUNCTION and not a macro because it is called from exactly one place per door with no invariant to
@@ -4790,7 +4802,20 @@ static void branch_take(WfqCensus *out, FlowAcct *br) {
            same population. Membership is not receipt, and a maximum that can be owned by a bucket holding
            nobody is not a statement about the frontier the other row is a share of. */
         if (out->br_born_min == 0 || br->sub_born < out->br_born_min) out->br_born_min = br->sub_born;
-        if (br->sub_born > out->br_born_max) out->br_born_max = br->sub_born;
+        if (br->sub_born > out->br_born_max) {
+            out->br_born_max = br->sub_born;
+            /* …AND THE BUCKET ITSELF, RETAINED RATHER THAN COPIED, for the reason the crowd's pointer is:
+               writing the three minter rows HERE would put the maximum and its companions in one statement,
+               and `br_minter_live + br_minter_gone == br_born_max` would be an assignment compared with
+               itself. The pointer is dereferenced once, after the walk, so the left side of that identity is
+               a second reading of the bucket's own pair and the right side is this running maximum.
+               THE MINT COUNT IS THE SELECTOR AND THE LIVE COUNT IS NOT, which is the whole difference from
+               the pointer moved a few lines up: this names the arm that has TAKEN the most arms and that one
+               names the arm that HOLDS the most, and they are one bucket only while nothing has been shed.
+               STRICT `>` FOR THE SAME REASON THE CROWD'S IS: two buckets at one mint count leave the maximum
+               and the pointer both at the first, so they cannot name two different buckets. */
+            g_wfq_census_minter = br;
+        }
     } else {
         /* THE EMPTY HALF, AND IT IS NOT A CORNER — branch_take's own note above says a bucket holding nobody
            is the ORDINARY state of any frontier whose boot flow has finished, because the family-root door
@@ -4879,12 +4904,15 @@ void flow_wfq_census(WfqCensus *out) {
     out->br_us_max = out->br_us_min = out->br_us_sum = 0;
     out->br_crowd_live = out->br_crowd_born = 0;
     out->br_crowd_us = 0;
+    out->br_minter_live = out->br_minter_gone = 0;
+    out->br_minter_us = 0;
     out->br_held_us = out->br_empty_us = 0;
     /* AND THE RETAINED BUCKET, CLEARED BEFORE THE WALK AS WELL AS AFTER IT IS READ. A pointer surviving from
        the previous census names a node this one may not reach and a later departure may already have freed,
        so the crowd rows would be a reading of a bucket that is not this frontier's — or of memory that is no
        longer a bucket at all. */
     g_wfq_census_crowd = NULL;
+    g_wfq_census_minter = NULL;
     out->br_depth_max = 0;
     out->br_fan_max = out->br_fan_sum = 0;
     out->br_fan_depth = 0;
@@ -5394,6 +5422,26 @@ void flow_wfq_census(WfqCensus *out) {
         out->br_crowd_us = cr->sub_us;
     }
     g_wfq_census_crowd = NULL;
+    /* AND THE BIGGEST-MINTING BUCKET'S OWN THREE, FROM THE OTHER NODE THE SAME WALK RETAINED — see flow.h for
+       why the crowd's selector cannot reach this arm and for the three states these separate. This is the
+       SECOND reading of that bucket's membership pair, and the identity below compares it against the running
+       maximum branch_take folded during the walk.
+       IT SHARES EVERY COST SENTENCE THE CROWD'S DEREFERENCE CARRIES: three loads and a subtraction off a
+       pointer already in hand, once per census, with no charge-time work and nothing per opcode.
+       `sub_gone` IS READ DIRECTLY AND NOT DERIVED, which is what makes the row a second writer's statement
+       rather than a rearrangement of the two beside it: the live count is `sub_born - sub_gone` and the shed
+       count is `sub_gone`, so their sum is this node's `sub_born` reached by a path the fold never took.
+       A NULL HERE IS `NO LIVE BUCKET WAS SEEN'. `sub_born` is at least 1 for every bucket and `br_born_max`
+       starts at 0, so the first live bucket the walk reaches sets both the maximum and this pointer — which
+       means a NULL is exactly the state the assert further down already says cannot arise with members
+       standing, and the rows then stay at the zero the reset wrote. */
+    if (g_wfq_census_minter) {
+        const FlowAcct *mn = g_wfq_census_minter;
+        out->br_minter_live = mn->sub_born - mn->sub_gone;
+        out->br_minter_gone = mn->sub_gone;
+        out->br_minter_us = mn->sub_us;
+    }
+    g_wfq_census_minter = NULL;
     top = flow_best();
     /* A NON-EMPTY FRONTIER HAS A FRONT, AND SAYING SO IS WHAT MAKES THE ROWS BELOW HONEST. flow_best is
        flow_pick with no seed, no exclusion and `runnable_only` OFF, so its loop skips nothing and takes the
@@ -5859,6 +5907,39 @@ void flow_wfq_census(WfqCensus *out) {
        coincidence reading (`is the crowd also the hungriest arm', `is it also the one that has taken most
        arms') would then be comparing two populations. Both are one-sided because a maximum is an upper bound
        and the crowd is one member of the set it is taken over. */
+    /* AND THE MINTER TRIPLE AGAINST THE ROW IT IS SELECTED BY — the same form as the crowd's identity above
+       and a statement about a different pointer, so neither catches the other's break. The two sides are
+       written by two writers at two instants: the left is one dereference of the node branch_take retained,
+       performed after the walk ended, and the right is a running maximum folded over every live bucket during
+       it. They agree only while the fold that moves the maximum is the same statement that moves the pointer.
+       IT IS WRITTEN AS A SUM AND NOT AS A SECOND `born` FIELD, which is what keeps it from being vacuous: the
+       two terms are the node's live count and its shed count, read as `sub_born - sub_gone` and `sub_gone`,
+       so their sum reaches `sub_born` by a path the fold never took. A fourth published row holding that
+       bucket's own `sub_born` would have made this a comparison of one load with another of the same field,
+       and `br_born_max` is already that number for the bucket this names.
+       AND IT IS THE ONE CHECK ON `br_minter_gone`, which nothing else in this struct can bound: the shed
+       count has no extremum beside it, so without this identity it would be a number with a paragraph
+       attached rather than a counter with a definition. */
+    DCHECK(out->br_minter_live + out->br_minter_gone == out->br_born_max,
+           "the branch bucket the census retained as the frontier's biggest MINTER does not hold the mint "
+           "maximum the same walk folded — its live count plus what it has shed IS its lifetime mint count, "
+           "so a disagreement means the pointer and the maximum are no longer moved by one statement, and the "
+           "shed count and receipt of the arm that has taken most arms are about to be published as some "
+           "other bucket's");
+    /* AND THAT BUCKET INSIDE THE POPULATIONS THE OTHER ROWS RANGED OVER, which is a different statement from
+       the one above and catches a different break, exactly as the crowd's pair does: the identity above says
+       the retained node owns the mint maximum, and these say it went through the SAME folds the live extremum
+       and the held-burn accumulator were taken from. A bucket reached by one door and not the others leaves a
+       minter whose own numbers sit outside the totals the rows beside them publish, and `br_minter_us /
+       br_held_us` — the reading the whole triple exists for — would then be a fraction of a denominator its
+       numerator is not drawn from. Both are one-sided because a maximum and a sum are upper bounds over sets
+       the minter belongs to. */
+    DCHECK(out->br_minter_live <= out->br_live_max && out->br_minter_us <= out->br_held_us,
+           "the biggest-minting live branch bucket holds more members than the live maximum, or more thread "
+           "time than the live buckets hold between them — an extremum and a sum are upper bounds over a set "
+           "this bucket belongs to, so this is the minter being reached through a door the live fold or the "
+           "held-burn accumulator is not under, and its share of the thread is about to be published against "
+           "a population it is not part of");
     DCHECK(out->br_crowd_born <= out->br_born_max && out->br_crowd_us <= out->br_us_max,
            "the fattest live branch bucket's own mint count or receipt is above the maximum the census took "
            "across the buckets it reached — an extremum is an upper bound over a set the crowd belongs to, so "

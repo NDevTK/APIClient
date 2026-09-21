@@ -858,6 +858,14 @@ char *result_wfq_json(void) {
                         identically in every other row on this line. `brCrowdUsLife == brUsLifeMax` says the
                         crowd IS the hungriest bucket and `brCrowdBornLife == brBornLifeMax` says it IS the
                         arm that has taken most arms; below either, the maxima belong to two arms.
+                        AND ONE OF THOSE TWO HAS AN EXIT AND THE OTHER DOES NOT. Below `brCrowdBornLife ==
+                        brBornLifeMax` the minter triple on the next line IS that other arm's three numbers,
+                        so the pairing says which arm to read rather than only that this one is the wrong one.
+                        Below `brCrowdUsLife == brUsLifeMax` there is no such row: the hungriest bucket stays
+                        a bare extremum with no membership and no shed count, deliberately, because on a real
+                        page it is routinely a DEPARTED family root holding nobody and a triple over it would
+                        describe a bucket no member stands in. solver/flow.h states what that leaves uncovered
+                        and what would make it worth building.
                         A `brCrowdUsLife` OF ZERO WITH `brCrowdLive` ABOVE ZERO IS THE STARVED READING AND NOT
                         AN UNOBSERVED BUCKET — the three are folded inside the same live guard as `brLiveMax`,
                         so all three at zero is `no live bucket seen', which the engine asserts cannot happen
@@ -906,6 +914,38 @@ char *result_wfq_json(void) {
                      "\"branches\":%ld,\"brLiveMax\":%ld,\"brLiveMin\":%ld,\"brLiveSum\":%ld,"
                      "\"brBornLifeMax\":%ld,\"brBornLifeMin\":%ld,"
                      "\"brCrowdLive\":%ld,\"brCrowdBornLife\":%ld,\"brCrowdUsLife\":%lld,"
+                     /* AND THE SAME THREE FOR THE ARM THAT HAS TAKEN THE MOST ARMS, WHICH IS A DIFFERENT ARM
+                        WHENEVER ONE HAS SHED WHAT IT MINTED. The crowd is selected by `brLiveMax` — a
+                        membership fact — and these by `brBornLifeMax`, and `sub_born = live + sub_gone` makes
+                        those one bucket only while nothing has departed. An arm that forks at every position
+                        of an unknown length and lets each arm FINISH mints unboundedly and stands narrow, so
+                        it owns the mint maximum, is NOT the crowd, and had no live count and no receipt on
+                        this line at all. That is the shape the whole aging mechanism was written against.
+                        IT IS ALSO THE ARM THE ORDER SEPARATES BY: flow_branch_bonus returns `1/sub_born`, so
+                        this bucket carries the SMALLEST branch bonus in the frontier. READ
+                        `brMinterUsLife / brHeldUsLife` AGAINST `brMinterLive / members` — at par the branch
+                        term is not demoting a branching arm at all, near zero it is demoting it and what
+                        keeps the frontier from draining is retention rather than ordering, above par it is an
+                        ordinary monopolist. Three diffs, and every other row on this line reads the same in
+                        all three.
+                        `brMinterGoneLife` IS PUBLISHED NOWHERE ELSE and is why these are three rows and not
+                        two: the live rows carry `sub_born - sub_gone` and the mint rows carry `sub_born`, so
+                        a bucket's shed count was recoverable only where the two maxima happened to name ONE
+                        bucket. It separates an arm holding N from an arm that minted ten N and shed nine,
+                        which read identically in `brLiveMax` and take opposite diffs.
+                        KINDS: the live count is a GAUGE; the shed count and the burn are per-bucket LIFETIME
+                        counters read as ratios at ONE instant and differenced by nobody, because the BUCKET
+                        SELECTED moves between samples — the extremum's rule, for the extremum's reason. The
+                        burn is in the quantum's own unit, so a raw total is quoted with `@QUANTUM` beside it.
+                        ONE MORE IDENTITY, CHECKABLE ON THIS DOCUMENT: `brMinterLive + brMinterGoneLife ==
+                        brBornLifeMax`. Two writers at two instants — one dereference of the node the walk
+                        retained, taken after it ended, against a running maximum folded during it — and it is
+                        the only bound on `brMinterGoneLife`, which has no extremum beside it. Asserted in
+                        flow_wfq_census where every term is in one hand.
+                        AND `brMinterUsLife == brCrowdUsLife` IS THE PUBLISHED STATEMENT THAT THE TWO
+                        SELECTORS NAME ONE ARM on this run, which is the caveat that has stood beside
+                        `brBornLifeMax` since it was written turned into a reading rather than a warning. */
+                     "\"brMinterLive\":%ld,\"brMinterGoneLife\":%ld,\"brMinterUsLife\":%lld,"
                      "\"brUsLifeMax\":%lld,\"brUsLifeMin\":%lld,"
                      "\"brUsLifeSum\":%lld,\"brHeldUsLife\":%lld,\"brEmptyUsLife\":%lld,"
                      "\"brRetiredUsLife\":%lld,\"chargedUsLife\":%lld,"
@@ -1141,6 +1181,7 @@ char *result_wfq_json(void) {
                      w.branches, w.br_live_max, w.br_live_min, w.br_live_sum,
                      w.br_born_max, w.br_born_min,
                      w.br_crowd_live, w.br_crowd_born, (long long)w.br_crowd_us,
+                     w.br_minter_live, w.br_minter_gone, (long long)w.br_minter_us,
                      (long long)w.br_us_max, (long long)w.br_us_min,
                      (long long)w.br_us_sum, (long long)w.br_held_us, (long long)w.br_empty_us,
                      (long long)w.br_retired_us, (long long)w.charged_us,
