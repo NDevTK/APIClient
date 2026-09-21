@@ -2089,26 +2089,55 @@ static bool form_is_labelable(JSContext *ctx, lxb_dom_node_t *n)
     }
 }
 
-/* Is `n` the labeled control of the label `lab`? */
-static bool form_label_controls(JSContext *ctx, lxb_dom_node_t *lab, lxb_dom_node_t *n)
+/* HTML §4.10.2 "Categories"' FORM-ASSOCIATED ELEMENTS, exactly as that section lists them:
+   "button, fieldset, input, object, output, select, textarea, img, form-associated custom elements".
+   NEITHER form_is_labelable NOR html_form_maybe_associated ANSWERS THIS, and the set is written out rather
+   than routed to one of them because that section states three different subsets over one element list and
+   says so in its own words: "Some elements, not all of them form-associated, are categorized as labelable
+   elements". `meter` and `progress` are exactly that difference — labelable, not form-associated —
+   which is the whole population §4.10.4's `form` step 2 exists to refuse. html_form_maybe_associated is the
+   other direction's approximation: it drops `img` (which is form-associated and not LISTED, so its tree-walk
+   caller never wants it) and admits ANY valid custom element name without asking the definition, because it
+   answers with no wrapper. Both of its divergences are unreachable from a labeled control, which is precisely
+   why sharing it would be a predicate that answers two questions and agrees only by a fact stated elsewhere.
+   NAMESPACE IS NOT ASKED HERE because form_is_labelable does not ask it either, and these two are read
+   together by one algorithm: one of the pair checking it and the other not is a disagreement about which
+   elements §4.10.2 names, which is worse than the answer they currently share. */
+static bool form_is_form_associated(JSContext *ctx, lxb_dom_node_t *n)
+{
+    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    if (tag_is(n, "button") || tag_is(n, "fieldset") || tag_is(n, "img") || tag_is(n, "input") ||
+        tag_is(n, "object") || tag_is(n, "output") || tag_is(n, "select") || tag_is(n, "textarea"))
+        return true;
+    {
+        JSValue w = node_wrap(ctx, n);
+        bool face = custom_elements_is_form_associated(ctx, w);
+
+        JS_FreeValue(ctx, w);
+        return face;
+    }
+}
+
+/* THE LABEL'S LABELED CONTROL, or NULL — HTML §4.10.4's forward direction, stated once: "If the attribute is
+   specified and there is an element in the tree whose ID is equal to the value of the for attribute, and the
+   first such element in tree order is a labelable element, then that element is the label element's labeled
+   control. If the for attribute is not specified, but the label element has a labelable element descendant,
+   then the first such descendant in tree order is the label element's labeled control."
+   NOTE WHAT A SPECIFIED-BUT-UNRESOLVED `for` DOES: nothing. The second sentence's condition is "not
+   specified", so a `for` naming no labelable element leaves the label with NO control and does not fall back
+   to the descendant walk — which is why the `for` arm below returns rather than breaking out of it. */
+static lxb_dom_node_t *form_label_control(JSContext *ctx, lxb_dom_node_t *lab)
 {
     size_t len = 0;
-    const char *f = attr_of(lxb_dom_interface_element(lab), "for", &len);
+    const char *f;
 
+    if (!lab || lab->type != LXB_DOM_NODE_TYPE_ELEMENT) return NULL;
+    f = attr_of(lxb_dom_interface_element(lab), "for", &len);
     if (f) {
-        size_t idlen = 0;
-        const char *id = attr_of(lxb_dom_interface_element(n), "id", &idlen);
-        /* §4.10.4: "If the attribute is specified and there is an element in the tree whose ID is equal to the
-           value of the for attribute, and the first such element in tree order is a labelable element, then
-           that element is the label element's labeled control." The FIRST element in the label's tree with that
-           ID is not necessarily this one, and it is only the control when it IS labelable. */
-        return id != NULL && idlen == len && memcmp(id, f, len) == 0 &&
-               form_first_by_id(node_root(lab), f, len) == n && form_is_labelable(ctx, n);
+        lxb_dom_node_t *e = form_first_by_id(node_root(lab), f, len);
+
+        return (e && form_is_labelable(ctx, e)) ? e : NULL;
     }
-    /* §4.10.4: "If the for attribute is not specified, but the label element has a labelable element
-       descendant, then the first such descendant in tree order is the label element's labeled control." So the
-       walk stops at the FIRST labelable descendant whether or not it is the element being asked about — which
-       is where `<label><span><my-control>` finds its control and `<label><x-foo>` finds none. */
     {
         lxb_dom_node_t *c = lab;
 
@@ -2116,14 +2145,25 @@ static bool form_label_controls(JSContext *ctx, lxb_dom_node_t *lab, lxb_dom_nod
             if (c->first_child) { c = c->first_child; }
             else {
                 while (c != lab && !c->next) c = c->parent;
-                if (c == lab) return false;
+                if (c == lab) return NULL;
                 c = c->next;
             }
             if (!c || c->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
-            if (c == n) return true;
-            if (form_is_labelable(ctx, c)) return false;
+            if (form_is_labelable(ctx, c)) return c;
         }
     }
+}
+
+/* Is `n` the labeled control of the label `lab`? ONE FACT — which element a label controls — AND TWO QUESTIONS
+   ASKED OF IT, so this is an equality against the forward direction and never a second walk. Written apart the
+   two stop agreeing, and they already did: this predicate used to answer its descendant arm by returning true
+   the moment the walk reached `n`, BEFORE asking whether `n` was labelable, so it called a non-labelable node
+   the labeled control of `<label><span id=s></span><input></label>`. No caller could reach that — `labels` is
+   declared only on labelable interfaces — so it was a wrong answer waiting for its first reader, and §4.10.4's
+   `control` below is that reader. */
+static bool form_label_controls(JSContext *ctx, lxb_dom_node_t *lab, lxb_dom_node_t *n)
+{
+    return n != NULL && form_label_control(ctx, lab) == n;
 }
 
 JSValue html_form_labels_of(JSContext *ctx, JSValueConst wrap)
@@ -2206,29 +2246,29 @@ static bool form_control_receiver(JSContext *ctx, JSValueConst this_val, int i, 
    form-associated custom elements have a form IDL attribute, which, on getting, must return the element's form
    owner, or null if there isn't one." ONE sentence for all seven, which is why there is one getter: the member
    is declared seven times and its steps are stated once.
-   NAMED RESIDUAL — `form` is ALSO declared on HTMLLabelElement, HTMLLegendElement and HTMLOptionElement, and
-   those three are NOT covered here because none of them is a listed form-associated element and none of them
-   HAS a form owner: each delegates to a different element's. WHAT THE NEXT DIFF BUILDS, per section:
+   NAMED RESIDUAL — `form` is ALSO declared on HTMLLegendElement and HTMLOptionElement, and those two are NOT
+   covered here because neither is a listed form-associated element and neither HAS a form owner: each
+   delegates to a different element's, by a different algorithm. WHAT THE NEXT DIFF BUILDS, per section:
      HTML §4.10.10 "The option element" — "The form getter steps are: Let select be this's nearest ancestor
      select. If select is null, then return null. Return select's form owner." NOTE THE WALK: that is the
      NEAREST ANCESTOR select, which is NOT html_form_select_of_option's question — that one answers which
      select's LIST OF OPTIONS holds the option, and §4.10.7's walk stops descending at a nested `optgroup`,
      `datalist`, `hr` and `option`, so the two disagree for exactly the options that sit under one of those.
-     Reaching for the exported helper because it is there is how this member gets built wrong.
+     Reaching for the exported helper because it is there is how this member gets built wrong. §4.10.10 states
+     its own walk ("To get the nearest ancestor select given an Element element"), which bails to null on a
+     `datalist`, `hr` or `option` ancestor and on a SECOND `optgroup`, so it is that walk and not a loop to the
+     first `select` found.
      HTML §4.10.16 "The legend element" — "If the legend has a fieldset element as its parent, then the form
      IDL attribute must return the same value as the form IDL attribute on that fieldset element. Otherwise, it
-     must return null." The PARENT, not an ancestor.
-     HTML §4.10.4 "The label element" — "If the label element has no labeled control, then return null. If the
-     label element's labeled control is not a form-associated element, then return null." then return that
-     control's form owner. It needs the FORWARD direction of the labeled-control relation, which this file
-     holds only as the predicate form_label_controls answers for a CANDIDATE. Those are one FACT — which
-     element a label controls — and two QUESTIONS asked of it, so the diff that needs the forward direction
-     writes THAT and re-expresses the predicate as an equality against it; a second walk is where the two
-     directions start disagreeing about `<label><span><my-control>`.
-   HOW ITS ABSENCE SHOWS: reading `form` on a `label`, `legend` or `option` answers `undefined`, which is not a
-   value the declaration `readonly attribute HTMLFormElement? form` admits at all — so `'form' in el` is false
-   on those three and true on the seven below, observable from any page without knowing what the document
-   contains. */
+     must return null." The PARENT, not an ancestor — and it delegates to the FIELDSET'S member, which is
+     js_form_control_form below, so a legend under a fieldset with no form owner answers null for a different
+     reason than a legend under a `div` does.
+     §4.10.4's label is DONE and its clause is gone with it: the forward direction of the labeled-control
+     relation is form_label_control above, and both of that section's members read it.
+   HOW ITS ABSENCE SHOWS: reading `form` on a `legend` or an `option` answers `undefined`, which is not a value
+   the declaration `readonly attribute HTMLFormElement? form` admits at all — so `'form' in el` is false on
+   those two and true on the seven below and on a `label`, observable from any page without knowing what the
+   document contains. */
 static JSValue js_form_control_form(JSContext *ctx, JSValueConst this_val, int magic)
 {
     if (!form_control_receiver(ctx, this_val, magic, "form")) return JS_EXCEPTION;
@@ -2292,6 +2332,85 @@ void html_form_install_control_members(JSContext *ctx, JSValueConst button_proto
     idl_install_accessor(ctx, output_proto,   "labels", js_form_control_labels, FC_OUTPUT,   -1);
     idl_install_accessor(ctx, select_proto,   "labels", js_form_control_labels, FC_SELECT,   -1);
     idl_install_accessor(ctx, textarea_proto, "labels", js_form_control_labels, FC_TEXTAREA, -1);
+}
+
+/* ---- HTML §4.10.4 "The label element"'s OWN TWO MEMBERS ----------------------------------------------------
+ *
+ * `form` is declared on eleven interfaces and §4.10.18.3's one sentence covers seven of them. A `label` is not
+ * one: it is not a form-associated element and has no form owner of its own, so its `form` DELEGATES — and the
+ * standard says outright that the two are not the same member, "The form IDL attribute on the label element is
+ * different from the form IDL attribute on listed form-associated elements, and the label element does not
+ * have a form content attribute." Answering it out of html_form_owner_of, or out of a walk to the nearest
+ * ancestor `form`, is a wrong value rather than a missing one.
+ *
+ * BOTH MEMBERS ARE ONE ALGORITHM. HTML §4.10.4: "The control IDL attribute must return the label element's
+ * labeled control, if any, or null if there isn't one" — the forward direction, bare. `form` is that same relation
+ * with two steps after it, which is why they share form_label_control and why building one without the other
+ * would have written the second member's entire body and then not installed it. */
+
+/* Web IDL §3.7.6 "Attributes"' brand check — "If jsValue does not implement target, then:" … "Otherwise,
+   throw a TypeError". A TypeError and NEVER a DCHECK, for the reason form_control_receiver states: the
+   receiver is whatever the page handed `HTMLLabelElement.prototype.form.call(x)`, so an assert there is an
+   engine abort a page can reach. The namespace is part of the question — a `label` in another namespace is a
+   different element with a different interface. */
+static bool form_label_receiver(JSContext *ctx, JSValueConst this_val, const char *member)
+{
+    lxb_dom_node_t *n = node_of(this_val);
+
+    if (n && n->type == LXB_DOM_NODE_TYPE_ELEMENT && n->ns == LXB_NS_HTML && tag_is(n, "label"))
+        return true;
+    JS_ThrowTypeError(ctx, "HTMLLabelElement.%s was reached on something that is not a <label> element",
+                      member);
+    return false;
+}
+
+/* HTML §4.10.4: "The control IDL attribute must return the label element's labeled control, if any, or null
+   if there isn't one." */
+static JSValue js_label_control(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_node_t *c;
+
+    (void)magic;
+    if (!form_label_receiver(ctx, this_val, "control")) return JS_EXCEPTION;
+    c = form_label_control(ctx, node_of(this_val));
+    return c ? node_wrap(ctx, c) : JS_NULL;
+}
+
+/* HTML §4.10.4: "The form IDL attribute must run the following steps: If the label element has no labeled
+   control, then return null. If the label element's labeled control is not a form-associated element, then
+   return null.
+   Return the label element's labeled control's form owner (which can still be null)."
+   STEP 2 IS NOT A RESTATEMENT OF STEP 1. A labeled control is a LABELABLE element and §4.10.2's labelable set
+   is not a subset of its form-associated set: `<label><meter></meter></label>` and the same with `progress`
+   have a labeled control that has no form owner to return, and those two are the entire difference. Dropping
+   the step would answer them out of html_form_owner_of, whose own contract is about elements §4.10.2 names. */
+static JSValue js_label_form(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_node_t *c;
+    JSValue cw, owner;
+
+    (void)magic;
+    if (!form_label_receiver(ctx, this_val, "form")) return JS_EXCEPTION;
+    c = form_label_control(ctx, node_of(this_val));
+    if (c == NULL) return JS_NULL;
+    if (!form_is_form_associated(ctx, c)) return JS_NULL;
+    cw = node_wrap(ctx, c);
+    owner = html_form_owner_of(ctx, cw);
+    JS_FreeValue(ctx, cw);
+    return owner;
+}
+
+/* Its own install and not a parameter on html_form_install_control_members, because a `label` is not a control
+   and neither of these members comes from §4.10.2's categories: the row list there carries a `cat` bit each of
+   those getters asserts, and a label has no bit to carry. Same split as §4.11.4's dialog — this file owns the
+   algorithm, core/html/html_element.c owns the prototype. */
+void html_form_install_label_members(JSContext *ctx, JSValueConst label_proto)
+{
+    DCHECK(g_atom_owner != JS_ATOM_NULL,
+           "§4.10.4's label members were installed before html_form_declare minted the form-owner slot key");
+    DCHECK(JS_IsObject(label_proto), "§4.10.4's label members were installed with no HTMLLabelElement prototype");
+    idl_install_accessor(ctx, label_proto, "control", js_label_control, 0, -1);
+    idl_install_accessor(ctx, label_proto, "form", js_label_form, 0, -1);
 }
 
 bool html_form_control_is_disabled(JSContext *ctx, JSValueConst wrap)

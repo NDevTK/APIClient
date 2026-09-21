@@ -127,6 +127,13 @@ void html_form_install_control_members(JSContext *ctx, JSValueConst button_proto
                                        JSValueConst output_proto, JSValueConst select_proto,
                                        JSValueConst textarea_proto);
 
+/* HTML §4.10.4 "The label element"'s `control` and `form` — the label's own two members, which §4.10.2's
+   categories do not reach: a `label` is neither listed nor labelable nor form-associated, so it carries no row
+   above and takes its own install. Both answer from ONE relation (the label's labeled control), which is why
+   they are one call and not two, and the algorithm is here rather than in a label component because there is
+   no label component and the relation's other direction (`labels`) is already this file's. */
+void html_form_install_label_members(JSContext *ctx, JSValueConst label_proto);
+
 /* HTML §4.10.19's "a form control is disabled": the element carries a `disabled` content attribute, or it is a
    descendant of a `fieldset` whose `disabled` attribute is set and it is not inside that fieldset's first
    legend child. §4.13.5 step 10.2's condition. */

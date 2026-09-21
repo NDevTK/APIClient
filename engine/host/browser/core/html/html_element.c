@@ -1293,6 +1293,14 @@ void html_element_install_protos(JSContext *ctx)
         JS_FreeValue(ctx, ou2); JS_FreeValue(ctx, se2); JS_FreeValue(ctx, ta2);
     }
 
+    /* §4.10.4's `control` and `form` go on HTMLLabelElement alone — a `label` carries no §4.10.2 category row,
+       so it takes its own install rather than an eighth prototype on the call above. */
+    {
+        JSValue lb2 = html_iface_proto(ctx, "HTMLLabelElement");
+        html_form_install_label_members(ctx, lb2);
+        JS_FreeValue(ctx, lb2);
+    }
+
     /* §4.11.4's `returnValue` goes on HTMLDialogElement and nowhere else, handed the prototype for the same
        reason §4.10's members are: this file owns the table, that one owns the algorithm that writes it. */
     {
