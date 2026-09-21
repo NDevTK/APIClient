@@ -126,7 +126,16 @@ QJS_EXPORT void qjs_emit_partial(void);
    a build and an install of the module — and a lane in this project may not build, so the act belongs to the
    one role that may. A reader who runs the observation, gets the defer answer and correctly leaves this
    standing is asked to SAY SO rather than to wait, since nothing anywhere accumulates those readings.
-   RETIREMENT: this record goes when `qjs_paint` has a caller outside `engine/host/`. */
+   RETIREMENT — THE CONDITION THAT STOOD HERE IS REWRITTEN RATHER THAN DELETED, BECAUSE IT FOLLOWS FROM THE
+   HEADLINE ABOVE AND A READER WILL RE-DERIVE IT. It read `this record goes when qjs_paint has a caller
+   outside engine/host/`, which is what `what no party outside this process does is CALL one` invites — and it
+   fires on a diff that leaves every other clause here answering DEFER. A Node driver that loads the glue and
+   `ccall`s these entries is outside `engine/host/`; testing/render_engine.mjs is that driver already written,
+   against `qjs_request_dump`; and such a driver is worth making and is not this record's subject, which the
+   observation clause above states is the SHIPPED extension. A retirement that fires on a diff worth making is
+   worse than one that never fires, because it will actually fire.
+   THE CONDITION IS THEREFORE THE OBSERVATION'S OWN: this record goes when the extension's own step loop asks
+   a paint entry on its ENGINE_STEP_YIELD arm. */
 
 /* AN IMAGE OF THE DOCUMENT — the ONLY pair of entries in this ABI that carries BYTES outward, and two
    entries rather than one because linear memory has no length. `qjs_paint` PERFORMS the render and answers
