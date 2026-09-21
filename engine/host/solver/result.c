@@ -1365,6 +1365,18 @@ static char *cow_site_hist_json(void) {
    IT IS NOT A COUNT OF SURFACES AND MUST NOT BE READ AS ONE. The identity a rendered surface would be keyed by
    is the SET of sites that built it, held PER FLOW; this counts names over the WHOLE SESSION, which is the
    alphabet that identity would be drawn over and not the identity.
+   AND THE PER-FLOW SET IS `domSiteFolds`/`domSiteRepeats`/`domSiteSetsSeen`, three more LIFETIME counts from
+   solver/dom_cow.h's `dom_cow_site_set_stats`, which is where their kinds and their three identities are
+   stated and dom_cow.c is where all three are asserted: `domWritesSited == domSiteFolds + domSiteRepeats`
+   (the partition), `domSiteSetsSeen <= domSiteFolds` and `domSites <= domSiteFolds`. The last of those is the
+   one line tying the two halves of this census together — a name new to the SESSION was new to whichever flow
+   ran it — so a reader who divides them gets how many flows executed the average site, which is the traffic an
+   identity keyed on the set would have to key and is the number these rows exist to produce.
+   `domSiteSetsSeen` IS A CEILING ON THE NUMBER OF SURFACES AND NOT A COUNT OF THEM. A flow passes through every
+   PREFIX of its own set on the way to it, so a flow that ends at three sites contributes three sets; a count of
+   surfaces needs a moment at which a flow's set has SETTLED, and §NO BOUNDS says no such moment can be decided
+   from the inside. It is emitted because it is the quantity that can be MEASURED, and it is named for what it
+   is so that nobody reads it as the one that cannot.
    IT DOES NOT PARTITION `cowHostRecAsksBySite` ABOVE IT AND SHARES NO QUANTITY WITH IT, which is worth saying
    because the two carry the same word: that row names the ENGINE'S OWN C call sites that asked a capture unit,
    by `__FILE__`/`__LINE__`, and this one names the PAGE'S JavaScript, by quickjs's JS_RunningSiteHash. They
@@ -1375,6 +1387,7 @@ char *result_swap_json(void) {
     long sc = 0, st = 0, sm = 0, hs = 0, he = 0, ds = 0, de = 0;
     long gc = 0, gm = 0, ac = 0, am = 0;
     long dw = 0, dsi = 0, du = 0, dn = 0;
+    long df = 0, dr = 0, dss = 0;
     char asks[COW_STATE_KINDS_JSON_MAX], made[COW_STATE_KINDS_JSON_MAX];
     char *sites, *out;
 
@@ -1383,6 +1396,7 @@ char *result_swap_json(void) {
     cow_chain_stats(&hs, &he);
     dom_cow_chain_stats(&ds, &de);
     dom_cow_site_stats(&dw, &dsi, &du, &dn);
+    dom_cow_site_set_stats(&df, &dr, &dss);
     cow_state_hist_json(asks, sizeof asks, 0, "cowStateAsks");
     cow_state_hist_json(made, sizeof made, 1, "cowStateMade");
     sites = cow_site_hist_json();
@@ -1391,11 +1405,12 @@ char *result_swap_json(void) {
                  "{\"installs\":%ld,\"entries\":%ld,\"worst\":%ld,\"mean\":%.1f,"
                  "\"heapSegs\":%ld,\"heapSegEntries\":%ld,\"domSegs\":%ld,\"domSegEntries\":%ld,"
                  "\"domWrites\":%ld,\"domWritesSited\":%ld,\"domWritesUnsited\":%ld,\"domSites\":%ld,"
+                 "\"domSiteFolds\":%ld,\"domSiteRepeats\":%ld,\"domSiteSetsSeen\":%ld,"
                  "\"coroSwapGenCalls\":%ld,\"coroSwapGenMade\":%ld,"
                  "\"coroSwapAsyncCalls\":%ld,\"coroSwapAsyncMade\":%ld,"
                  "\"cowStateAsks\":%s,\"cowStateMade\":%s,\"cowHostRecAsksBySite\":%s}",
                  sc, st, sm, sc ? (double)st / (double)sc : 0.0, hs, he, ds, de,
-                 dw, dsi, du, dn,
+                 dw, dsi, du, dn, df, dr, dss,
                  gc, gm, ac, am, asks, made, sites);
     free(sites);
     return out;

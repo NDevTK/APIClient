@@ -431,9 +431,28 @@ void dom_cow_chain_stats(long *segs, long *entries);
    WHAT THIS IS FOR, so that a reader does not take it for a feature: the candidate identity for a rendered
    SURFACE is the SET of sites that built it, and these rows are the alphabet that identity would be drawn over
    measured against the traffic it would have to key. A set is NOT what this census holds — it counts names over
-   the whole session, not per flow — which is the next diff and is why `sites` may not be read as a count of
-   surfaces. */
+   the whole session, not per flow — so `sites` may not be read as a count of surfaces. The per-flow set is the
+   census below, and it may not be read as one either. */
 void dom_cow_site_stats(long *writes, long *sited, long *unsited, long *sites);
+/* AND WHICH SITES ONE FLOW RAN, which the four above cannot say: they merge every flow's names into one pile,
+   so two flows that rendered two surfaces and one flow that rendered one are the same number there. Three more
+   LIFETIME counts over this session, raised at the same line and lowered by nothing.
+     `folds`    — sited writes whose site was NEW to the flow standing at it.
+     `repeats`  — of those same sited writes, ones that flow had already run. A zero here is a positive
+                  statement: no flow ever went round twice.
+     `setsSeen` — DISTINCT site SETS any flow has stood in, by an order-independent fold over its members.
+   THE IDENTITIES ARE ASSERTED IN dom_cow.c WHERE BOTH HALVES OF EACH ARE IN ONE HAND and are not re-derived by
+   any consumer: `sited == folds + repeats` (the partition — every sited write takes exactly one arm),
+   `setsSeen <= folds` (a set is recorded only where one grew) and `sites <= folds` (a name new to the SESSION
+   was new to whichever flow ran it, which is the one identity that ties this census to the one above it).
+   `setsSeen` IS A CEILING ON THE NUMBER OF SURFACES AND NOT A COUNT OF THEM, and the difference is the whole
+   reason it is not called one: a flow passes through every PREFIX of its own set on the way to it, so a flow
+   that ends at three sites contributes three sets. A count of surfaces needs a moment at which a flow's set has
+   SETTLED and §NO BOUNDS says no such moment can be decided from the inside, so there is none here.
+   WHAT A READER GETS THAT THE FOUR ROWS ABOVE CANNOT GIVE: `folds / sites` is how many flows executed the
+   average site, which is the traffic an identity keyed on the set would have to key, and `repeats / sited` is
+   how much of this engine's DOM work is a flow going round again. */
+void dom_cow_site_set_stats(long *folds, long *repeats, long *sets_seen);
 /* …in the unit the cold tier pages in, and the same for ONE flow's parked head at capacity `cap`. Asked of
    this file for the reason cow.h's twin is: `sizeof(DomUndo)` is private and a caller that guessed it would
    report a number that drifts the next time an entry kind is added. */

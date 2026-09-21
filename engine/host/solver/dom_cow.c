@@ -87,6 +87,19 @@ typedef struct DomUndo {
        only points a node back at one — and a type pun between them would compile and free a document the page
        is still using. */
     lxb_dom_document_t *doc_old, *doc_cur;
+    /* WHICH OF THE PAGE'S OWN LINES WROTE THIS ENTRY — quickjs's JS_RunningSiteHash, recorded here and not
+       merely counted, because a flow that is PARKED has to be able to say which sites it executed and the only
+       thing that travels with it is its delta. A switch-out detaches the head (dom_buf_take) and a fork freezes
+       it into a shared segment, so an entry is the one place a site name can sit and still be there when the
+       flow comes back; a scalar held beside the running flow would have to be carried by every take, every
+       load and every fork, and CLAUDE.md §EVERY-TERM-IS-CARRIED-BY-A-FORK says a value a fork does not carry is
+       a way for a flow to change its identity by branching.
+       TWO FIELDS AND NOT A RESERVED HASH, which is the whole of why `sited` exists. JS_RunningSiteHash answers
+       two questions on purpose — whether a page frame was standing, and which site — and the unsited population
+       (this engine's own C acting inside a slice) is LARGE. Seating it on some reserved value would put it on a
+       value a real site can also fold to, and this tree has already shipped a hash that mapped a whole
+       population onto one slot while every instrument read green. */
+    int sited; uint64_t site;
 } DomUndo;
 
 static DomUndo *g_dom_undo = NULL;
@@ -99,7 +112,14 @@ static JSContext *g_cow_ctx = NULL;   /* for the shadow's JSValue dup/free (set 
    (dom_cow_fork) freezes the head into a segment BOTH the running flow and a snapshot-forked sibling reference
    (refcount 2), so a continuation/sibling SHARES the parent's O(N) DOM delta in O(1) instead of copying it. NULL
    until the first fork -> the base-chain walks are no-ops and behaviour is byte-identical to the flat buffer. */
-typedef struct DomSeg { DomUndo *e; int n; struct DomSeg *base; int refcount; } DomSeg;
+/* `newsites`/`n_newsites`/`digest` are the site-set half — see the census at dom_site_note. `newsites` holds
+   the site names FIRST SEEN while this segment was the head, so a name appears in exactly one segment of any
+   one chain and the union down the chain is the frozen part of a flow's set with each member stored once.
+   `digest` is the accumulated fold over that whole union, cached so a switched-in flow reads its frozen
+   identity in O(1) instead of re-folding, and CHECKED against the walk that rebuilds it. An ARRAY and not a
+   table, which is why a zero name needs no flag here: there is no empty slot to collide with. */
+typedef struct DomSeg { DomUndo *e; int n; struct DomSeg *base; int refcount;
+                        uint64_t *newsites; int n_newsites; uint64_t digest; } DomSeg;
 static DomSeg *g_dom_base = NULL;
 
 /* THE CHAIN THAT IS CURRENTLY APPLIED TO THE DOCUMENT, and the whole reason a switch is not O(delta).
@@ -493,6 +513,69 @@ static uint64_t *g_dom_site_tab = NULL;
 static size_t g_dom_site_cap = 0;
 static int g_dom_site_zero_seen = 0;   /* the one name the empty slot cannot hold */
 
+/* ── AND WHICH SITES ONE FLOW RAN, WHICH IS A DIFFERENT QUESTION FROM WHICH SITES THE RUN RAN ────────────────
+ *
+ * The four rows above count names over the WHOLE SESSION. A session-wide count is the ALPHABET and cannot be
+ * an identity for anything: every flow's sites are merged into one pile, so two flows that rendered two
+ * different surfaces and one flow that rendered one are the same number. The identity a rendered surface would
+ * be keyed by is the SET of sites THAT FLOW executed, and these rows are that set measured — still not a
+ * feature, still a census, and deliberately NOT a count of surfaces (see the ceiling argument at dom_panel_note).
+ *
+ * WHERE THE SET LIVES, AND WHY IT IS DERIVED RATHER THAN CARRIED. A flow's full DOM delta is its mutable HEAD
+ * plus the immutable refcounted BASE CHAIN below it, and both already travel with the flow: dom_buf_take
+ * detaches the head at a switch-out, dom_cow_fork freezes it into a segment the sibling SHARES, dom_base_take
+ * parks the chain. So the set is a function of state the engine already moves, and this file keeps a LIVE TABLE
+ * of it only as a cache that dom_flow_rebuild reconstructs at every dom_apply. Nothing outside this file has to
+ * cooperate, which is the point: a fork carries the set BY CONSTRUCTION (the sibling holds the same segment by
+ * pointer) rather than because engine.c remembers to copy a field, and CLAUDE.md §EVERY-TERM-IS-CARRIED-BY-A-FORK
+ * is satisfied with nothing to forget. A cold-tier park carries nothing at all and needs to: that flow is
+ * re-derived from its recipe and the replay re-executes the sites, which rebuilds the set as a side effect of
+ * running.
+ *
+ * THE FOLD IS ORDER-INDEPENDENT AND IDEMPOTENT, AND THOSE ARE TWO SEPARATE OBLIGATIONS. Order-independence is
+ * what makes two flows that ran the same sites in different orders one name, and XOR gives it. Idempotence —
+ * running one site twice not changing the answer — XOR does NOT give: the second fold would CANCEL the first
+ * and the set would silently lose a member. It comes from the membership test below instead, so a name is
+ * folded exactly once per flow and the digest is a set hash rather than a parity of the traffic. An OR-fold
+ * would be idempotent without a test and is refused for the reason the header refuses a reserved hash: 64 bits
+ * saturate after 64 distinct names, after which every flow reads all-ones and every surface is one surface.
+ *
+ * AND THE RAW SITE HASH IS NOT WHAT IS FOLDED. JS_RunningSiteHash is FNV-1a over (body locator, opcode byte
+ * offset), so two sites in ONE body share every input but the last four bytes — the population most likely to
+ * appear together in one flow's set is exactly the population whose names are most correlated, and XOR is the
+ * one fold correlated values cancel in. dom_site_mix is splitmix64's finalizer, a BIJECTION with full
+ * avalanche, so a set hash over it collides at the birthday bound rather than structurally. */
+static uint64_t dom_site_mix(uint64_t h)
+{
+    uint64_t z = h + 0x9E3779B97F4A7C15ULL;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
+/* THE RUNNING FLOW'S SET — a cache of head-plus-chain and never a second source of truth for it. */
+static uint64_t *g_dom_flow_tab = NULL;   /* distinct site names, open-addressed; 0 is the empty slot */
+static size_t g_dom_flow_cap = 0;
+static long g_dom_flow_n = 0;             /* members, including the zero name if it is one */
+static int g_dom_flow_zero = 0;           /* the one name the empty slot cannot hold */
+static uint64_t g_dom_flow_digest = 0;    /* XOR of dom_site_mix over exactly those members */
+static uint64_t *g_dom_flow_new = NULL;   /* …of those, the ones first seen SINCE THE LAST FREEZE: what the next
+                                             fork hands the segment. An ARRAY, so no name is a sentinel in it. */
+static int g_dom_flow_new_n = 0, g_dom_flow_new_cap = 0;
+/* THE SET IS THE INSTALLED FLOW'S OR IT IS NOTHING. Cleared at dom_unapply and rebuilt at dom_apply, so the
+   window between a switch-out and the next switch-in is marked rather than argued about. A sited push cannot
+   happen in that window — no page frame is standing between two flows, so JS_RunningSiteHash answers 0 and the
+   fold is never reached — and this is the assert that says so at the origin instead of a paragraph. It starts
+   VALID because the pre-boot set is genuinely the empty one. */
+static int g_dom_flow_valid = 1;
+/* DISTINCT SITE SETS ANY FLOW HAS STOOD IN, session-wide. Same table shape and same zero flag as the site index
+   above, for the same reason. */
+static uint64_t *g_dom_setseen_tab = NULL;
+static size_t g_dom_setseen_cap = 0;
+static long g_dom_setseen_n = 0;
+static int g_dom_setseen_zero = 0;
+static long g_dom_site_folds = 0, g_dom_site_repeats = 0;
+
 static void dom_site_grow(void)
 {
     size_t cap = g_dom_site_cap ? g_dom_site_cap * 2 : 256;
@@ -503,15 +586,114 @@ static void dom_site_grow(void)
                        "document renders from is the one quantity this census reports, and a table that "
                        "stopped growing would report a SMALLER alphabet, which is indistinguishable from a "
                        "bundle that renders from few sites");
+    long occ = 0;
+
     for (i = 0; i < g_dom_site_cap; i++) {
         uint64_t k = g_dom_site_tab[i];
         size_t j;
         if (k == 0) continue;
+        occ++;
         for (j = (size_t)k & (cap - 1); tab[j] != 0; j = (j + 1) & (cap - 1)) ;
         tab[j] = k;
     }
+    /* THE SENTINEL EQUALS THE CONDITION IT STANDS FOR, asserted where both halves are in one hand and paid for
+       by a walk that was happening anyway. `0` means EMPTY SLOT here and the one real name that folds to it is
+       held in a flag beside the table, so the count and the occupancy can only agree while no population has
+       come to sit on the reserved value. They are compared at the one moment the whole table is already being
+       read, which is why this costs nothing and is not a sampling. */
+    DCHECK(occ + (g_dom_site_zero_seen ? 1 : 0) == g_dom_site_n,
+           "the DOM call-site index holds a different number of names than it has counted — either a name was "
+           "counted without being stored, or a population has landed on the reserved empty slot and the flag "
+           "beside the table is no longer the only thing sitting there");
     free(g_dom_site_tab);
     g_dom_site_tab = tab; g_dom_site_cap = cap;
+}
+
+/* ONE NAME INTO ONE OF THE TWO SET TABLES. Shared because they are the same structure asking the same question
+   of two populations — the running flow's site names, and the digests of the sets flows have stood in — and a
+   second spelling of one table is the shape that drifts. Returns whether the name was NEW. */
+static void dom_set_grow(uint64_t **tabp, size_t *capp, long n, int zero_seen)
+{
+    size_t cap = *capp ? *capp * 2 : 256;
+    uint64_t *tab = reclaim_calloc(cap, sizeof *tab);
+    size_t i;
+    long occ = 0;
+
+    CHECK(tab != NULL, "dom-cow-oom: a DOM site-set index could not be grown — the set of sites a flow ran is "
+                       "the candidate identity of the surface it rendered, and a table that stopped growing "
+                       "would report a SMALLER set, which reads as two surfaces being one");
+    for (i = 0; i < *capp; i++) {
+        uint64_t k = (*tabp)[i];
+        size_t j;
+        if (k == 0) continue;
+        occ++;
+        for (j = (size_t)k & (cap - 1); tab[j] != 0; j = (j + 1) & (cap - 1)) ;
+        tab[j] = k;
+    }
+    DCHECK(occ + (zero_seen ? 1 : 0) == n,
+           "a DOM site-set index holds a different number of names than it has counted — either a name was "
+           "counted without being stored, or a population has landed on the reserved empty slot");
+    free(*tabp);
+    *tabp = tab; *capp = cap;
+}
+
+static int dom_set_add(uint64_t **tabp, size_t *capp, long *np, int *zerop, uint64_t k)
+{
+    size_t i;
+
+    if (k == 0) {                      /* the one name the empty slot cannot hold */
+        if (*zerop) return 0;
+        *zerop = 1; (*np)++;
+        return 1;
+    }
+    if ((*np + 1) * 2 > (long)*capp) dom_set_grow(tabp, capp, *np, *zerop);
+    for (i = (size_t)k & (*capp - 1); (*tabp)[i] != 0; i = (i + 1) & (*capp - 1))
+        if ((*tabp)[i] == k) return 0;
+    (*tabp)[i] = k; (*np)++;
+    return 1;
+}
+
+/* ADD ONE SITE TO THE RUNNING FLOW'S SET, folding it into the digest exactly once. `fresh` says whether a new
+   name also belongs to the SINCE-THE-LAST-FREEZE list the next fork hands its segment — true while the head is
+   being read or written, false while the chain below it is being replayed, because those names are frozen
+   already. Returns whether the name was new to this flow. */
+static int dom_flow_add(uint64_t h, int fresh)
+{
+    if (!dom_set_add(&g_dom_flow_tab, &g_dom_flow_cap, &g_dom_flow_n, &g_dom_flow_zero, h))
+        return 0;
+    g_dom_flow_digest ^= dom_site_mix(h);
+    if (fresh) {
+        if (g_dom_flow_new_n >= g_dom_flow_new_cap) {
+            int nc = g_dom_flow_new_cap ? g_dom_flow_new_cap * 2 : 32;
+            uint64_t *n = reclaim_realloc(g_dom_flow_new, (size_t)nc * sizeof *n);
+            CHECK(n, "dom-cow-oom: the running flow's new-site list could not be grown — a fork would freeze a "
+                     "segment that under-reports which names it introduced, and every flow below it would read "
+                     "a set with members missing");
+            g_dom_flow_new = n; g_dom_flow_new_cap = nc;
+        }
+        g_dom_flow_new[g_dom_flow_new_n++] = h;
+    }
+    return 1;
+}
+
+/* THE FOLD OVER A SEGMENT'S OWN NEW NAMES — the derivation the cached `digest` is checked against. */
+static uint64_t dom_sites_fold(const uint64_t *a, int n)
+{
+    uint64_t d = 0;
+    int i;
+    for (i = 0; i < n; i++) d ^= dom_site_mix(a[i]);
+    return d;
+}
+
+/* ONE SET THE RUN HAS STOOD IN. Recorded at every FOLD, which is what makes the row a CEILING on the number of
+   surfaces rather than a count of them: a flow passes through every PREFIX of its own set on the way to it, so
+   a flow that ends at {A,B,C} contributes {A}, {A,B} and {A,B,C}. Naming this row for surfaces would be the
+   over-claim the four rows above already refuse to make — what a count of SURFACES needs is a moment at which a
+   flow's set has SETTLED, and §NO BOUNDS says no such moment can be decided from the inside, so there is none
+   here and the honest quantity is the one that can be measured. */
+static void dom_panel_note(uint64_t digest)
+{
+    dom_set_add(&g_dom_setseen_tab, &g_dom_setseen_cap, &g_dom_setseen_n, &g_dom_setseen_zero, digest);
 }
 
 /* ONE WRITE'S WORTH OF CENSUS. Called at the END of the push for the reason dom_claim_note is: the table grow
@@ -531,6 +713,17 @@ static void dom_site_note(void)
     sited = JS_RunningSiteHash(g_cow_ctx, &h);
     if (sited) g_dom_site_sited++;
     else       g_dom_site_unsited++;
+    /* ON THE ENTRY BEFORE ANYTHING ALLOCATES, because everything below this line can ask the allocator and an
+       ask can SELL A FLOW, which runs this file's own frees. The entry is stored by now (dom_undo_push appends
+       and then calls here), and its site is the one fact a PARKED flow has no other way to keep: the head is
+       detached at the next switch-out and replayed at the switch-in after it, and dom_flow_rebuild reads this
+       field to put the name back into the set. Both fields together, never one: `sited` is the answer to
+       whether a page frame was standing at all, and `site` is meaningless without it. */
+    DCHECK(g_dom_undo_n > 0,
+           "the DOM call-site census ran with no entry behind it — this is called at the END of the push, after "
+           "the entry is stored, so an empty head here means the ordering that lets it name that entry is gone");
+    g_dom_undo[g_dom_undo_n - 1].sited = sited;
+    g_dom_undo[g_dom_undo_n - 1].site  = sited ? h : 0;
     /* THE PARTITION, ASSERTED WHERE BOTH HALVES ARE IN ONE HAND rather than re-derived at the composer: every
        push takes exactly one arm, so a total that stops summing is a third arm somebody added without a row. */
     DCHECK(g_dom_site_writes == g_dom_site_sited + g_dom_site_unsited,
@@ -538,6 +731,32 @@ static void dom_site_note(void)
            "one of them, so a total that does not sum is an arm with no row");
     if (!sited)
         return;
+    /* THE SITED WRITE'S OWN PARTITION — was this name NEW to the flow standing here, or one it has already
+       executed. It is the same shape as the partition above and answers the question that one cannot: how much
+       of the traffic is a flow REACHING somewhere and how much is it going round again, which is exactly what
+       an identity keyed on the SET rather than on the count would have to key. */
+    DCHECK(g_dom_flow_valid,
+           "a sited DOM write landed between a switch-out and the next switch-in — the running flow's site set "
+           "was taken down with its head and the name about to be folded belongs to no flow's set. A page frame "
+           "cannot be standing there, so this is host time that has learned to look like page time, or a switch "
+           "that stopped going through dom_apply");
+    if (dom_flow_add(h, 1)) {
+        g_dom_site_folds++;
+        dom_panel_note(g_dom_flow_digest);
+    } else {
+        g_dom_site_repeats++;
+    }
+    DCHECK(g_dom_site_sited == g_dom_site_folds + g_dom_site_repeats,
+           "the DOM site-set census lost a sited write between its total and its two arms — a name is either "
+           "new to the flow standing here or one it has already run, and a total that does not sum is a third "
+           "arm somebody added without a row");
+    /* A SET IS RECORDED ONLY WHERE ONE GREW, so the distinct sets seen can never outrun the growths that
+       produced them — the ceiling on a row that is itself a ceiling, and the thing that would break first if
+       dom_panel_note were ever called from somewhere that is not a fold. */
+    DCHECK(g_dom_setseen_n <= g_dom_site_folds,
+           "the DOM census counted more distinct site SETS than folds that could have produced one — a set is "
+           "recorded only where a name was new to a flow, so a set with no fold under it came from a caller "
+           "this identity does not know about");
     if (h == 0) {
         /* The one name the empty slot cannot hold — see the header above. */
         if (g_dom_site_zero_seen)
@@ -556,6 +775,15 @@ static void dom_site_note(void)
     DCHECK(g_dom_site_n <= g_dom_site_sited,
            "the DOM call-site census counted more DISTINCT sites than sited writes — a name is inserted at most "
            "once per write that carried it, so this is the index answering `absent` for a name it already holds");
+    /* THE TWO INDEXES AGAINST EACH OTHER, which is the one identity neither of them can state alone: a name
+       that is new to the SESSION was, at that same write, new to whichever flow was standing — so the
+       session-wide alphabet can never be larger than the number of times some flow met a name for the first
+       time. A reader who divides them gets how many flows executed the average site, which is the traffic an
+       identity keyed on the set would have to key, and it is the number this census exists to produce. */
+    DCHECK(g_dom_site_n <= g_dom_site_folds,
+           "the DOM census counted more session-distinct sites than per-flow first-executions — a name new to "
+           "the session is new to the flow that ran it, so the two indexes have stopped being fed by the same "
+           "write and one of them is now answering about a population the other cannot see");
 }
 
 static void dom_undo_push(DomUndo u) {
@@ -2462,6 +2690,16 @@ void dom_cow_site_stats(long *writes, long *sited, long *unsited, long *sites) {
     if (unsited) *unsited = g_dom_site_unsited;
     if (sites)   *sites   = g_dom_site_n;
 }
+/* AND WHICH SITES ONE FLOW RAN — see dom_site_note for what each number is and which arm raises it. All three
+   are LIFETIME COUNTS over this session, like the four above and for the same reason, so any of them may be
+   differenced across two samples; `setsSeen` is a HIGH-WATER MARK on top of that. Deliberately NOT a gauge of
+   the running flow's own set: that number falls at every switch and would be the one row on this line a reader
+   could difference into nonsense. */
+void dom_cow_site_set_stats(long *folds, long *repeats, long *sets_seen) {
+    if (folds)     *folds     = g_dom_site_folds;
+    if (repeats)   *repeats   = g_dom_site_repeats;
+    if (sets_seen) *sets_seen = g_dom_setseen_n;
+}
 
 static void dom_seg_unref(DomSeg *s) {
     while (s && --s->refcount <= 0) {
@@ -2481,7 +2719,7 @@ static void dom_seg_unref(DomSeg *s) {
         for (int i = 0; i < s->n; i++) { DomUndo *u = &s->e[i];
             free(u->ns); free(u->prefix); free(u->name); free(u->old); free(u->cur);
             if (g_cow_ctx) { JS_FreeValue(g_cow_ctx, u->sh_old); JS_FreeValue(g_cow_ctx, u->sh_cur); } }
-        free(s->e); free(s);
+        free(s->e); free(s->newsites); free(s);
         s = base;
     }
 }
@@ -2499,14 +2737,66 @@ void dom_unapply(void) {
     /* ONLY THE HEAD. The base chain stays applied and `g_dom_installed` says so — the incoming flow's apply
        decides how much of it actually has to move, which for a sibling is none of it. */
     for (int i = g_dom_undo_n - 1; i >= 0; i--) dom_unapply_entry(&g_dom_undo[i]);
+    /* THE SITE SET GOES DOWN WITH THE HEAD IT WAS DERIVED FROM. It is a cache of head-plus-chain and the head
+       is about to be detached, so from here until the next dom_apply there is no running flow for it to be the
+       set OF. Marked rather than merely stale: dom_site_note asserts on this, so a sited write in the window
+       names itself instead of folding a page's name into whoever ran last. */
+    g_dom_flow_valid = 0;
     DCHECK(g_dom_installed == g_dom_base,
            "the applied chain is not the running flow's — a base was loaded or taken without going through "
            "dom_apply, so the document is showing a chain nobody is running");
 }
+/* REBUILD THE RUNNING FLOW'S SITE SET from the two things that already travel with the flow — the chain the
+   base load just installed and the head the buf load just attached. Called from dom_apply and nowhere else,
+   because dom_apply is the one line that means "this flow is the running one now".
+   IT IS A DERIVATION AND THE CACHE IS CHECKED AGAINST IT, which is the only reason the cache is allowed to
+   exist: each segment carries the accumulated digest of everything at and below it, and the walk here recomputes
+   that same number out of the per-segment name lists. A cached value that drifts from its own derivation is the
+   defect this file would otherwise have no way to see, since both halves render as a plausible 64-bit number.
+   COST. O(distinct names below) plus O(head entries), and the second of those is a pass dom_apply is already
+   making. It is NOT O(delta): a name is stored in the one segment of this chain that first saw it, so the walk
+   reads each member once however many entries carried it. The head is short by construction — a fork empties it. */
+static void dom_flow_rebuild(void)
+{
+    DomSeg *s;
+    uint64_t chain;
+    int i;
+
+    g_dom_flow_n = 0; g_dom_flow_zero = 0; g_dom_flow_digest = 0; g_dom_flow_new_n = 0;
+    if (g_dom_flow_cap) memset(g_dom_flow_tab, 0, g_dom_flow_cap * sizeof *g_dom_flow_tab);
+    for (s = g_dom_base; s; s = s->base)
+        for (i = 0; i < s->n_newsites; i++)
+            dom_flow_add(s->newsites[i], 0);   /* frozen already: not the next fork's to hand over */
+    chain = g_dom_flow_digest;
+    DCHECK(g_dom_base == NULL || chain == g_dom_base->digest,
+           "a frozen DOM chain's cached site digest is not what its own name lists fold to — the cache each "
+           "segment carries and the walk that rebuilds it have diverged, so a flow's identity depends on which "
+           "of the two a reader asked, and a switched-in sibling is standing in a set its parent never had");
+    for (i = 0; i < g_dom_undo_n; i++)
+        if (g_dom_undo[i].sited)
+            dom_flow_add(g_dom_undo[i].site, 1);   /* the head is what the next fork freezes */
+    /* THE DOCUMENT IS STILL SHOWING THE FLOW dom_apply JUST INSTALLED. This walk is the first thing in
+       dom_apply that ASKS THE ALLOCATOR — the set tables grow — and an ask can sell a flow, whose release walks
+       the frozen chain and can bring the document down to a surviving segment. It cannot reach this flow's
+       chain (the running flow holds a reference on every segment of it, so none of them can reach refcount
+       zero, and engine_reclaim_tail asserts the sale never takes the running flow), and that is an argument
+       rather than a check everywhere else it is made. Here it is the check: dom_unapply asserts the same
+       equality at the other end of the same pair. */
+    DCHECK(g_dom_installed == g_dom_base,
+           "the document stopped showing the running flow's chain while its site set was being rebuilt — the "
+           "only thing between the apply above and here that can move it is a sale taken from this walk's own "
+           "allocation, which means a segment this flow still names was released under it");
+    g_dom_flow_valid = 1;
+}
+
 /* APPLY (parked -> flow): base chain forward (deepest first), then the head on top. */
 void dom_apply(void) {
     dom_install_chain(g_dom_base);
     for (int i = 0; i < g_dom_undo_n; i++) dom_apply_entry(&g_dom_undo[i]);
+    /* LAST, AND AFTER THE REPLAY, for dom_undo_push's own reason one level up: this walk asks the allocator
+       (the set tables grow) and an ask can SELL A FLOW, which frees other flows' segments. By here the document
+       is showing this flow's writes and nothing below is read again. */
+    dom_flow_rebuild();
 }
 /* FORK the DOM delta: freeze the running flow's HEAD into a shared immutable base segment that BOTH the running
    flow and a snapshot-forked sibling reference (refcount 2) — the sibling SHARES the parent's O(N) DOM delta
@@ -2525,9 +2815,36 @@ void *dom_cow_fork(void) {
        written to meet a re-entry there. The seg's three fields are all readable now, so there is nothing the
        later position bought. */
     DomSeg *seg = reclaim_malloc(sizeof(DomSeg));
+    uint64_t *newsites = NULL;
+    int n_newsites = g_dom_flow_new_n;
+
     CHECK(seg, "dom-cow-oom: fork segment alloc failed — a shared DOM delta would be corrupted");
+    /* THE SITE NAMES THIS HEAD INTRODUCED, COPIED BEFORE THE UNAPPLY FOR THE REASON THE SEGMENT ITSELF IS
+       ALLOCATED BEFORE IT: this ask can sell a flow too, and between the unapply below and the re-apply at the
+       end the running flow's head is half-taken-down. Both asks are up here so that the round trip contains
+       none of them.
+       THIS IS THE WHOLE OF WHAT MAKES A FORK CARRY THE SET. The sibling holds `seg` by POINTER — refcount 2 —
+       so it inherits these names and every name below them without anything being copied per arm and without
+       engine.c knowing this census exists. A sibling cannot change its identity by branching because branching
+       is not an operation on the set at all. */
+    if (n_newsites) {
+        newsites = reclaim_malloc((size_t)n_newsites * sizeof *newsites);
+        CHECK(newsites, "dom-cow-oom: fork site-name copy failed — the frozen segment would under-report which "
+                        "names it introduced, and every flow that shares it would read a set with members "
+                        "missing, which is two surfaces reading as one");
+        memcpy(newsites, g_dom_flow_new, (size_t)n_newsites * sizeof *newsites);
+    }
     for (int i = g_dom_undo_n - 1; i >= 0; i--) dom_unapply_entry(&g_dom_undo[i]);
     seg->e = g_dom_undo; seg->n = g_dom_undo_n; seg->base = g_dom_base; seg->refcount = 2;   /* running flow + sibling */
+    seg->newsites = newsites; seg->n_newsites = n_newsites; seg->digest = g_dom_flow_digest;
+    /* THE CACHE AGAINST ITS OWN DERIVATION, at the one moment both are in one hand. dom_flow_rebuild makes the
+       same comparison from the other end — it folds the chain and checks the cache — and this is the write that
+       would have put a wrong number there. */
+    DCHECK(seg->digest == ((seg->base ? seg->base->digest : 0) ^ dom_sites_fold(newsites, n_newsites)),
+           "a DOM fork froze a segment whose cached site digest is not the chain below it folded with the names "
+           "this head introduced — the running flow's live digest and the set it is supposed to be the digest "
+           "OF have diverged, so every flow that shares this segment inherits an identity nobody can re-derive");
+    g_dom_flow_new_n = 0;   /* they belong to the frozen segment now; the fresh head introduces none yet */
     g_dom_seg_live++; g_dom_seg_entries_live += seg->n;
     g_dom_undo = NULL; g_dom_undo_n = 0; g_dom_undo_cap = 0;   /* fresh empty head for the running flow */
     g_dom_base = seg;
