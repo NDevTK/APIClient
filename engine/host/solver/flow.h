@@ -1231,6 +1231,22 @@ JSValue flow_world_commit_at(const Flow *f, int i);
 void    flow_world_commit_push(JSContext *ctx, Flow *f, const char *vector, int taken, FlowCommitArm arm);
 JSValue flow_world_commit_fork(JSContext *ctx, const Flow *parent);
 
+/* HOW MANY ROWS HAVE BEEN APPENDED TO ANY FLOW'S LEDGER SINCE THE FRONTIER CAME UP — a LIFETIME COUNT OF
+ * EVENTS and never a reading of the frontier, so it cannot fall and two of them may be differenced. It is the
+ * one question the per-flow accessor above structurally cannot answer: `flow_world_commits` is a GAUGE over a
+ * flow that is STILL A MEMBER, so a row written onto a flow that has since finished is invisible to every walk
+ * of the registry, and a walk that finds none cannot tell a document where no timeline ever received from one
+ * where the receivers have departed. Those take opposite work — the first wants the producer routed, the
+ * second is a commitment leaving the frontier — so they may not share a number (solver/cold.h says the same
+ * thing one level up about the ASK beside the OUTCOME).
+ * RAISED AT THE APPEND AND NOWHERE ELSE, which is what makes it the ledger's own count rather than a second
+ * opinion about it: a fork SHARES its parent's rows and writes none, so it raises nothing and the number stays
+ * a count of rows that were STATED rather than of rows that exist.
+ * IT DIES WITH THE FRONTIER, in flow_registry_free and beside the very call that resets the ask census it is
+ * read against — so the two lifetimes are one BY CONSTRUCTION and a reader comparing them is never comparing a
+ * previous document's rows against this one's asks. */
+long    flow_world_commit_rows_written(void);
+
 /* THIS FLOW'S JOB QUEUE, AND EVERYTHING THAT EVER HAPPENS TO IT — declared beside the field for the reason the
  * delivery queue's four are: the queue has MORE THAN ONE client (engine.c enqueues, picks and drops; cold.c
  * counts) and a second client reading the Array's shape is always the one missing the assert. A record is

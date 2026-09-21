@@ -728,8 +728,8 @@ void cold_park_preview(ColdPreview *out);
  * cold_park_preview, BEFORE the caller's conjunction runs, so `asks: 0` is the positive statement that no host
  * consulted this tier at all — a real and different answer, and the ordinary one in a session that never parks.
  *
- * EVERY ROW IS A LIFETIME COUNT OF ASKS AND ITS KEY SAYS SO. An ask is an EVENT, so none of these is a reading
- * of the frontier, none can fall, and a reader may difference them — which is the distinction result.c's own
+ * EVERY ROW BUT ONE IS A LIFETIME COUNT OF ASKS AND ITS KEY SAYS SO. An ask is an EVENT, so none of these is a
+ * reading of the frontier, none can fall, and a reader may difference them — which is the distinction result.c's own
  * banner records that `finished` beside `live` carries in neither key. They accumulate over the document and
  * die with it in cold_free, exactly as the outcome census does, because the frontier they describe is the
  * document's.
@@ -759,6 +759,29 @@ typedef struct {
        one hand, so the intersection row cannot drift into reading as `cands && deep`. */
     long asks_with_flows, asks_with_cands, asks_with_deep, asks_with_deepcands;
     long asks_with_worlds, asks_with_orphans, asks_with_commits, asks_with_delivers;
+    /* …AND THE TWO ROWS THAT SAY WHICH OF THREE STATES AN `asks_with_commits` OF 0 IS, because the banner
+       above promises this census can tell a row that NEVER ROSE from rows that never COINCIDED — and for
+       `commits` it could not. That row is raised only where a member of the frontier is HOLDING a commitment
+       at the instant of an ask, and the ledger it reads is written by a flow that may finish inside the same
+       slice: the tier is consulted BETWEEN slices, so a document whose receivers are born, commit and depart
+       within one of them reads exactly like a document where no timeline ever received. MEASURED at 79bf1ef5
+       on the one host in this tree that parks: `routed-delivery 13`, every delivery in the LAST slice, three
+       asks all before the first of them, `previewAsksWithCommits 0` — and that 0 was read as the producer
+       being unbuilt when the producer had run thirteen times.
+       `commit_rows_written` IS THE ONE ROW HERE THAT IS NOT A COUNT OF ASKS, and its key says so by not
+       joining the `previewAsks*` family: it is solver/flow.h's ledger count, a lifetime count of ROWS over
+       the same document these asks are counted over (the two are reset by one call, which is what makes them
+       comparable at all). `asks_after_commit` is an ask count like its neighbours and is the number of asks
+       taken at an instant when that ledger had ALREADY been written to.
+       THE THREE STATES, WHICH TAKE THREE DIFFERENT ACTIONS: `commit_rows_written == 0` is a document in which
+       no timeline ever received from a peer, and the work is the ROUTING; written with `asks_after_commit == 0`
+       is a producer that ran entirely after the last consultation, and the work is the MOMENT; and
+       `asks_after_commit > 0` with `asks_with_commits == 0` is the only one of the three that is a DEFECT —
+       asks were taken with rows already written and no member of the frontier held one, so a commitment left
+       the frontier, which no walk of the registry can otherwise see.
+       RETIREMENT: these two go when `asks_with_commits` is no longer read as a statement about whether a
+       commitment was ever written — which, by the row above, is when a host no longer chooses the moment. */
+    long commit_rows_written, asks_after_commit;
 } ColdPreviewCensus;
 void cold_preview_census(ColdPreviewCensus *out);
 

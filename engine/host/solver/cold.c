@@ -914,6 +914,13 @@ void cold_park_preview(ColdPreview *out)
     if (out->orphans   > 0) g_preview_census.asks_with_orphans++;
     if (out->commits   > 0) g_preview_census.asks_with_commits++;
     if (out->delivers  > 0) g_preview_census.asks_with_delivers++;
+    /* …AND WHAT THE LEDGER BEHIND `commits` HAD DONE BY THIS ASK, which is a different question from what the
+       FRONTIER is holding at it and is the only way that row's 0 can be read. The row above walks MEMBERS, so
+       a commitment written onto a flow that has since finished is not there to be counted; this is asked of
+       solver/flow.h's own count of rows STATED, which no departure can lower. See cold.h for the three states
+       the pair separates and for the measurement that made them worth separating. */
+    g_preview_census.commit_rows_written = flow_world_commit_rows_written();
+    if (g_preview_census.commit_rows_written > 0) g_preview_census.asks_after_commit++;
     /* THE CONSERVATION IDENTITY, ASSERTED WHERE ALL FOUR ARE IN ONE HAND AND AT EVERY ASK. The three arms are
        one `if` chain over one ask, so a break here is a fourth arm added without a row — which is exactly the
        edit that would publish a total no part of it accounts for, and a reader differencing the parts would
@@ -927,7 +934,7 @@ void cold_park_preview(ColdPreview *out)
             g_preview_census.asks_writable, g_preview_census.asks);
     /* AND THE CONTAINMENT, WHICH IS ONE FAILURE MODE AND SO ONE ASSERT: a per-row counter above `asks` is a
        raise that reached this census from somewhere other than an ask, after which every row here is a count
-       of something else. All nine numbers are printed because they share the message. */
+       of something else. Every number is printed because they share the message. */
     DCHECKF(g_preview_census.asks_with_flows     <= g_preview_census.asks &&
             g_preview_census.asks_with_cands     <= g_preview_census.asks &&
             g_preview_census.asks_with_deep      <= g_preview_census.asks &&
@@ -935,15 +942,18 @@ void cold_park_preview(ColdPreview *out)
             g_preview_census.asks_with_worlds    <= g_preview_census.asks &&
             g_preview_census.asks_with_orphans   <= g_preview_census.asks &&
             g_preview_census.asks_with_commits   <= g_preview_census.asks &&
-            g_preview_census.asks_with_delivers  <= g_preview_census.asks,
+            g_preview_census.asks_with_delivers  <= g_preview_census.asks &&
+            g_preview_census.asks_after_commit   <= g_preview_census.asks,
             "a park-preview row was counted more often than the preview was asked — asks %ld against flows "
-            "%ld, cands %ld, deep %ld, deepcands %ld, worlds %ld, orphans %ld, commits %ld, delivers %ld. "
+            "%ld, cands %ld, deep %ld, deepcands %ld, worlds %ld, orphans %ld, commits %ld, delivers %ld, "
+            "afterCommit %ld. "
             "Each is raised at most once per ask on the lines above, so an excess is a raise that reached this "
             "census outside cold_park_preview",
             g_preview_census.asks, g_preview_census.asks_with_flows, g_preview_census.asks_with_cands,
             g_preview_census.asks_with_deep, g_preview_census.asks_with_deepcands,
             g_preview_census.asks_with_worlds, g_preview_census.asks_with_orphans,
-            g_preview_census.asks_with_commits, g_preview_census.asks_with_delivers);
+            g_preview_census.asks_with_commits, g_preview_census.asks_with_delivers,
+            g_preview_census.asks_after_commit);
     /* AND THE SUBSET CHAIN, WHICH IS A DIFFERENT FACT AND SO A DIFFERENT ASSERT. `deepcands` is raised only
        inside the CAND arm and only under `deep`, so its ask count is bounded by BOTH neighbours — which is
        the statement ColdPreview's own comment makes about why it is a row rather than `cands && deep`. A
@@ -957,6 +967,28 @@ void cold_park_preview(ColdPreview *out)
             "host reading this row is reading `cands && deep`, which cold.h states it is not",
             g_preview_census.asks_with_cands, g_preview_census.asks_with_deep,
             g_preview_census.asks_with_deepcands);
+    /* AND THE LEDGER'S OWN CHAIN, WHICH IS THE ONE RELATION HERE THAT CAN BE BROKEN BY A FILE THAT IS NOT
+       THIS ONE. A member holding a commitment at an ask holds a row, and a row exists because some producer
+       APPENDED it (solver/flow.c's push) or because a fork SHARED one that was appended — so every row on
+       every live flow traces to an append, every append raises the count this reads, and an ask that saw a
+       commitment is necessarily an ask taken after the ledger had been written to. The two are raised on
+       adjacent lines of this one function over ONE walk, so a break is not a drift between two samples: it is
+       a row that reached a flow's `deliver_world_q` WITHOUT going through flow_world_commit_push, which is
+       the fourth producer that file's own abort text tells its reader to go and grep for.
+       NOT ASSERTED THE OTHER WAY. `asks_after_commit > 0` implies `commit_rows_written > 0` by the line that
+       raises it, which is a comparison of a thing with itself and would hold under every state of the
+       program — the shape §Offensive-programming names as a NON-check wearing a check's syntax. */
+    DCHECKF(g_preview_census.asks_with_commits <= g_preview_census.asks_after_commit,
+            "the park preview counted a frontier HOLDING a commitment at more asks (%ld) than it counted asks "
+            "taken after one had been WRITTEN (%ld), over %ld row(s) the ledger says exist. Every row on a "
+            "live flow is one flow_world_commit_push appended or one a fork shared from such a flow, so this "
+            "says a commitment row reached a flow's record by some other route — grep "
+            "`flow_world_commit_push(` for the producers this count knows about, and whatever wrote the row "
+            "is not among them. Never widen this to admit the pair: the count is what makes an "
+            "`asksWithCommits` of 0 readable at all, and a row it cannot see is a receiver the residue is "
+            "about to be written without",
+            g_preview_census.asks_with_commits, g_preview_census.asks_after_commit,
+            g_preview_census.commit_rows_written);
 }
 
 /* PARK ONE FLOW — the primitive, and the whole-frontier park below is the loop over it. See cold.h. */

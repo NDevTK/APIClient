@@ -23,6 +23,14 @@ static long g_rank_changes = 0;   /* …and the same event counted for the LIFE 
                                      See frontier_rank_changed for why the generation NUMBER is not. */
 static unsigned g_gen = 0;   /* bumped whenever the frontier's membership changes (add/remove) — lets the
                                 value-yield recompute the rival only on a change, never per-opcode */
+/* EVERY ROW EVER APPENDED TO ANY FLOW'S COMMITMENT LEDGER, for the life of THIS frontier — a LIFETIME
+   COUNTER, and it is here rather than on a Flow for the reason the dispatch count below is: a sum over the
+   members standing NOW is a GAUGE that FALLS when a receiver departs, and the whole question this answers is
+   what was written by flows that have since gone. Declared at the top of the file rather than beside the
+   ledger it counts because flow_registry_free — which resets it, beside the call that resets the ask census
+   it is read against — stands above that block. See flow.h for the three states it separates and
+   flow_world_commit_push for the one line that raises it. */
+static long g_world_commit_rows;
 /* EVERY DISPATCH THIS INSTANCE HAS EVER MADE — a LIFETIME COUNTER, and it is here rather than on a Flow
    because that is the only place it can be one. `Flow.picks` is a GAUGE the moment a member departs: the
    number leaves the frontier with it, so a sum over the members standing NOW is a statement about the live
@@ -2453,6 +2461,12 @@ void flow_registry_free(JSContext *ctx) {
        time any teardown runs, and putting the free in each host's teardown instead would be the hand-copied
        list that has already drifted once. */
     cold_free();
+    /* …AND THE LEDGER COUNT THE ASK CENSUS cold_free JUST RESET IS READ AGAINST, ON THE NEXT LINE AND NOT IN
+       SOME OTHER TEARDOWN. The two numbers are only comparable while they describe ONE document, and putting
+       the reset anywhere else would make that agreement a convention two files have to keep rather than a
+       fact one call states. The flows are already gone by here (the release loop at the top of this function),
+       so no member survives holding a row this line is about to stop counting. */
+    g_world_commit_rows = 0;
     /* AND THE PENDING REGISTER'S INTERNED FIELD NAMES, for the same reason and in the same place: the corpus
        hosts take a runtime down and bring another up per file, so an atom left here is a handle into a freed
        table that the next session's first push would write through. */
@@ -2906,6 +2920,8 @@ JSValue flow_deliver_fork(JSContext *ctx, const Flow *parent) {
     return out;
 }
 
+long flow_world_commit_rows_written(void) { return g_world_commit_rows; }
+
 /* ─── WHICH SENDING TIMELINES THIS ONE IS IN (flow.h's `deliver_world_q`) ───────────────────────────────
  * The same four operations as the queue above, over the same [a, b] pair shape, and separate from it for the
  * reason flow.h gives: the queue is work this timeline still owes, this is what it has already become. An
@@ -3037,6 +3053,12 @@ void flow_world_commit_push(JSContext *ctx, Flow *f, const char *vector, int tak
     }
     JS_SetPropertyUint32(ctx, f->deliver_world_q, (uint32_t)flow_world_commits(f), e);
     cow_engine_write_end();
+    /* AND THE LEDGER'S OWN COUNT, RAISED ON THE LINE THAT PERFORMS THE APPEND rather than anywhere a reader
+       might later infer one. This is the ONLY site that appends — the fork beside it shares its parent's
+       entries and states nothing — so a row that exists on a flow and was never counted here is a producer
+       that reached the Array without going through this entry, which is precisely what solver/cold.c's
+       preview asserts it cannot find. */
+    g_world_commit_rows++;
 }
 
 /* THE ARM'S OWN RECORD — a new Array naming the parent's entries, and then the fork adds the one entry that

@@ -1452,7 +1452,14 @@ char *result_swap_json(void) {
      that never asked. `previewAsksRefusing`/`previewAsksEmpty`/`previewAsksWritable` PARTITION
      `previewAsks`, asserted in cold.c at every ask; the eight `previewAsksWith*` rows are contained by it
      and are not a partition of anything, because a host's moment is a conjunction and several may stand at
-     once.
+     once. `previewAsksAfterCommit` is contained by it too and is NOT one of those eight: it counts asks
+     taken at an instant when the commitment ledger had already been written to, rather than asks at which
+     the frontier was holding a row, and the two differ by exactly the commitments that departed with their
+     flows. `previewCommitRowsWritten` is the ONE row of this group that is not a count of asks at all — it
+     is solver/flow.h's LIFETIME COUNT OF LEDGER ROWS over this same document, and its key says so by not
+     joining the `previewAsks*` family. Read the three together or not at all: cold.h names the three states
+     they separate, and a `previewAsksWithCommits` of 0 read without them was already taken once for a
+     producer that does not exist, when that producer had run thirteen times in the run being read.
      From `cold_resumed` — A LAST-EVENT RECORD AND NOT A COUNTER OF ANY KIND: `resumed`, `resumedSegs`,
      `resumedFlows`, `resumedCands`, `resumedWorlds` and `orphanClaims` describe the MOST RECENT rebuild
      (`cold_resume` memsets the record on entry), so they are neither monotone nor a reading of the frontier,
@@ -2157,6 +2164,7 @@ char *result_cold_json(void) {
                  "\"previewAsksWithDeep\":%ld,\"previewAsksWithDeepCands\":%ld,"
                  "\"previewAsksWithWorlds\":%ld,\"previewAsksWithOrphans\":%ld,"
                  "\"previewAsksWithCommits\":%ld,\"previewAsksWithDelivers\":%ld,"
+                 "\"previewAsksAfterCommit\":%ld,\"previewCommitRowsWritten\":%ld,"
                  "\"decEntries\":%ld,\"decKiB\":%ld,\"headEntries\":%ld,\"headKiB\":%ld,"
                  "\"domHeadEntries\":%ld,\"domHeadKiB\":%ld,\"jobs\":%ld,\"pend\":%ld,\"pendReady\":%ld,"
                  "\"stackEmpty\":%ld,\"canDeliver\":%ld,"
@@ -2225,6 +2233,7 @@ char *result_cold_json(void) {
                  pv.asks_with_deep, pv.asks_with_deepcands,
                  pv.asks_with_worlds, pv.asks_with_orphans,
                  pv.asks_with_commits, pv.asks_with_delivers,
+                 pv.asks_after_commit, pv.commit_rows_written,
                  c.dec_entries, c.dec_bytes / 1024, c.head_entries, c.head_bytes / 1024,
                  c.dom_head_entries, c.dom_head_bytes / 1024, c.job_count, c.pend_count, c.pend_ready,
                  c.stack_empty, c.can_deliver,
