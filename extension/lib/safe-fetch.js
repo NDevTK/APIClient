@@ -1371,15 +1371,58 @@ var _DEFAULT_ARMS = [
      that pinned nothing, is refused at every origin until a person widens it — so an app whose boot data
      comes back through its own `fetch()` never initialises, while every script and chunk beside it lands.
      WHAT THE NEXT DIFF BUILDS: the fact that separates them, stated by the CALLER the way `provenance`,
-     `pinned` and `docReach` already are and asserted here the way they already are — whether a flow in the
-     analysed document is PARKED on this reply. It is already true by construction at both ends and crosses
-     nowhere: the pending relay is by definition answering a park, and every trusted-zone composer
-     (`_chokepointGetFn`, the peer gate, this surface's own probe) by definition is not. GREPPED rather than
-     assumed: `engine_pending_fetches` joins METHOD, DESTINATION, INITIATOR, PROVENANCE, PINNED, CREDENTIALS
-     and URL, and reads `PEND_KIND` at one line of that function, inside a DCHECK — so the kind does not
-     cross today, and its INITIATOR is a parser-or-script token rather than this question. With that signal
-     declared, the owner's arm is spellable as `{destination: value} AND {witness: unpinned} AND {the new
-     row: parked}` and honours BOTH clauses. HOW ITS ABSENCE WOULD SHOW, as an OBSERVATION and never as an
+     `pinned` and `docReach` already are and asserted here the way they already are — WHOSE ACT THIS REQUEST
+     IS: the ANALYSED PAGE'S, or THIS TOOL'S. The page's `fetch()` and the page's XHR are ONE population
+     under the owner's rule and the sweep is not, and no signal this file reads separates them because every
+     signal here describes the REQUEST while this fact is about the CALLER.
+     AND THIS CLAUSE FIRST READ `whether a flow in the analysed document is PARKED on this reply`, WHICH IS
+     WRONG AND IS REWRITTEN RATHER THAN DELETED BECAUSE IT IS THE FRAMING A READER RE-DERIVES FROM THE
+     PARAGRAPH ABOVE IT. An `xhr.send` record IS NOT A PARK — bridge.js says exactly that at its own site —
+     so a signal keyed on parking would have ADMITTED the page's `fetch()` and REFUSED the page's XHR, which
+     is precisely the backwards sort the paragraph directly above this one exists to name. It was written an
+     hour after that paragraph, by its author, and reproduced the defect it had just recorded. That is the
+     failure CLAUDE.md rates worst about this clause in particular: a next-diff clause is read ONCE, by
+     somebody who has already decided to do the work, so a wrong one is not caught, it is EXECUTED. The
+     METHOD is the finding and the sentence is only its symptom — the park is where the ENGINE composes a
+     witness, it was never the question of whose act a request is, and reaching for it was reasoning from
+     the mechanism that happened to be in hand rather than from the population being separated.
+     ITS SHAPE IS `schema.js`'s AND IS NOT A NEW MECHANISM — a STACK PARAMETER stated by the site that
+     knows, which is what CLAUDE.md §AND-AN-EXEMPTION-SCOPED-BY-WHO-ACTED requires of any fact about WHO
+     ACTED: a VALUE carried down every frame and asserted where it is relied on, never re-derived and never
+     inferred from a sentence about who the callers are, with an unstated one taking the refusing arm so
+     that forgetting is not a way to be exempted. Its VALUES must be its own and may NOT be
+     `PAGE_CONTEXT_*`'s, which answer HUMAN-or-TOOL: a page's own `fetch()` is neither of those words, so
+     reusing them would be one vocabulary serving two questions.
+     IT IS GENUINELY A DIFFERENT FACT FROM THE TWO ROWS NEAREST IT, AND THAT IS CHECKABLE RATHER THAN
+     ASSERTED: the sweep and the page's `fetch()` carry the SAME `provenance` and the SAME `doc-reach` and
+     differ on this, so it is neither of them renamed; and a page `fetch()` is the page's act whether its
+     path is `derived` or `forced`, so the two vary independently in both directions.
+     IT COMPOSES AND NEVER OVERRIDES. The arm is `{destination: value}` AND `{witness: unpinned}` AND
+     `{actor: the analysed page}` — the witness conjunct refuses an address a fork pinned and this one
+     refuses the probe, so neither half of the owner's sentence is left to be carried by the other.
+     `provenance` is untouched and still says what the REPLY is worth.
+     WHAT IT COSTS, WHICH IS WHAT DECIDES WHETHER ONE LANE CAN DO IT: NO THREADING. Every frame that reaches
+     this file serves exactly ONE population by construction — the pending relay and the XHR relay exist
+     only to answer a record the engine produced, and `_chokepointGetFn`, the peer gate and this surface's
+     own probe compose their request themselves — so each states a LITERAL and no frame in between carries
+     anything. That is what makes it unlike the operator relay CLAUDE.md records, where ONE door served both
+     populations and the grade had to travel. IT IS A CLAIM ABOUT THE COST AND NEVER A JUSTIFICATION FOR THE
+     VALUE, which is the distinction that rule is about: each site still STATES the fact and this file still
+     asserts it, so a site that is wrong about its own population is wrong LOUDLY at the chokepoint rather
+     than exempted by a sentence about who the callers are. The diff is the registry row, the option, its
+     `CHECK`, and one literal at every asker, which is derived rather than counted here:
+     `git grep -n "safeFetch(\|safeFetchFiringRefusal(" -- '*.js' '*.mjs'` — the hypothetical askers
+     included, since each must state what its real request would.
+     AND THE SIGNAL MAY NOT LAND WITHOUT THE ARM, which is a landing-order fact rather than a preference: a
+     new GATING row is one no stored grant names, and `safeFetchEgressStated` reads a row a grant does not
+     name as NOT PERMITTED — so a signal landed alone silently NARROWS every permission anybody has already
+     made. One landing, or a person's standing sentence is revoked by a diff that was only meant to add a
+     fact.
+     GREPPED rather than assumed, and it is why the fact must be STATED rather than read off the line:
+     `engine_pending_fetches` joins METHOD, DESTINATION, INITIATOR, PROVENANCE, PINNED, CREDENTIALS and URL,
+     and reads `PEND_KIND` at one line of that function, inside a DCHECK — so the park kind does not cross,
+     and that line's INITIATOR is a parser-or-script token about an ELEMENT rather than about whose act the
+     request is. HOW ITS ABSENCE WOULD SHOW, as an OBSERVATION and never as an
      instance: a run whose log carries a `blocked-signal:destination=value` refusal for an address the
      analysed document's own script fetched, with that document's scripts and chunks all answering 200 on
      the lines around it — the app loading its code and never its state. */
