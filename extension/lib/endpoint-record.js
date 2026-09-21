@@ -216,9 +216,25 @@ function isCallSiteProvenance(p) { return CALLSITE_PROVENANCE.indexOf(p) >= 0; }
    one does.
    THE ENGINE DOES *NOT* FOLD, AND THAT IS NOT A DISAGREEMENT — engine/host/solver/endpoint.h explains it: the
    grade is part of the @H record's IDENTITY there, so a forced sighting's VALUES can never merge into a
-   derived record's. Two @H rows arrive here, and what folds is this record's one-line CLAIM ABOUT THE
-   ADDRESS. The VALUES behind it fold too, one level down and by this same rule — see
-   `provenanceOffersExample` below for where the two facts part company. */
+   derived record's. Two @H rows arrive here, and what folds is the one-line CLAIM ABOUT THE ADDRESS — which
+   this function performs on the METHOD record and not on the flat one: its single caller is lib/learn.js
+   writing `m._astProvenance`, and the flat record declares no grade at all, neither in `ENDPOINT_ABSENT` nor
+   in `_ENDPOINT_STATED`.
+   THE SENTENCE THAT STOOD HERE SAID "the VALUES behind it fold too, one level down and by this same rule",
+   AND IT IS REWRITTEN RATHER THAN DELETED BECAUSE ITS ARGUMENT IS SOUND AND A READER WILL RE-DERIVE IT. It
+   is true of the VALUES a param carries — `foldValuePools` performs that law at four merges and
+   `provenanceOffersExample` states where the two facts part company — and it was read as a claim about
+   everything a sighting states, which the flat record's other facts do not obey. The seam is `method + host
+   + path` and the engine's identity is (method, path, provenance, param-set), so several @H rows reach one
+   key; what each of the record's fields does when they do is a PER-FIELD question with three answers, not
+   one:
+     the HOLE POOLS fold, by `foldValuePools`, at lib/merge.js's two endpoint seams;
+     the REQUIRED HEADERS fold, by `foldHeaderRecords` above, which is endpoint.c's own literal-supersedes-
+       shape rule and the one lib/learn.js has always applied to the method;
+     the THREE BODY FIELDS do NOT fold, and that is the narrowing `foldHeaderRecords`' own residual states —
+       a body is ONE example rather than a set (endpoint.c's `body_store`: "FIRST BODY WINS ACROSS ALL THREE
+       FIELDS AND NOT PER FIELD"), and which sighting's example a record may carry is a question about the
+       GRADE, which this record cannot ask because it states none. */
 function mostObservedProvenance(a, b) {
   DCHECK(isCallSiteProvenance(a) && isCallSiteProvenance(b),
          "a call-site provenance fold was handed `" + a + "` and `" + b + "` — the engine emits one of " +
@@ -297,6 +313,104 @@ function foldValuePools(valid, forced, inValid, inForced) {
      renders the same bytes twice under two contradictory claims. */
   for (const x of inForced) if (v.indexOf(x) < 0 && f.indexOf(x) < 0) f.push(x);
   return { valid: v, forced: f };
+}
+
+/* THE PER-HEADER FOLD — the SET of headers the bundle was observed attaching to ONE address, met wherever
+   two sightings of that address reach one record, spelled ONCE.
+
+   WHY THIS RECORD OWES A FOLD AT ALL, WHICH IS A FACT ABOUT THE SEAM AND NOT ABOUT HEADERS. The engine
+   deliberately does NOT merge two sightings: `same_identity` (engine/host/solver/endpoint.c) is (method,
+   path, provenance, param-set), so one address the bundle calls at two grades, or with two different sets of
+   named params, is TWO @H rows — and engine/host/solver/endpoint.h says why in as many words, that "two rows
+   for one address, one graded `derived` and one `forced`, are two TRUE statements". The extension's key is
+   `method + host + path` and nothing else, so those rows arrive at ONE record. That collapse is this zone's
+   own choice and the right one — the moat's unit is an ADDRESS, which is what `netdiff --unused` counts and
+   what the popup lists — but a collapse without a fold is not a choice, it is a DROP: the first row to reach
+   the key wins and every later row's observation reaches nothing.
+
+   THE RULE IS NOT INVENTED HERE. Both halves of the seam already state it. endpoint.c merges headers into a
+   same-identity endpoint so that "a header seen with a concrete value supersedes the same header seen only as
+   a shape, which is the rule the param values already follow", and lib/learn.js has performed exactly that
+   union onto the METHOD record, across every sighting, since before this record carried headers at all —
+   `if (!prev || (prev.kind === "opaque" && incoming.kind === "literal"))`. So the flat record was the one
+   surface of three that dropped what the other two kept, and this is that rule routed rather than a fourth
+   copy of it (CLAUDE.md §A-FIX-OF-THE-FORM-"X-IS-NOT-HOW-TO-ASK-Q": where the codebase has a canonical
+   spelling, ROUTE to it, because two right answers to one question is the shape that drifts).
+
+   A UNION IS WHAT `requiredHeaders` ALREADY MEANS. Its declared absence is "NONE OBSERVED", never "this
+   endpoint needs no header" — so for a record whose unit is the address, "the bundle was observed attaching
+   these" over every sighting of it is the only reading that keeps `null` meaning what this file says it
+   means. Taking the first row's set instead states of a header some other row DID attach that nothing
+   observed it, which is §@H's WRONG report rather than a thin one.
+
+   IT FOLDS CASE-SENSITIVELY, AND THAT IS A RULE RATHER THAN AN OMISSION — `endpointKeyFromParts`' own
+   argument one section down, at the field next door. Two spellings of one header name are two entries here
+   because `astHeaderRecord` (lib/learn.js) keys on the bytes endpoint.c wrote and lib/learn.js's own
+   content-type read asks for BOTH spellings rather than normalising either. A `toLowerCase()` here would be a
+   THIRD rule disagreeing with both producers, and the entry it silently dropped would be one a reviewer needs.
+
+   `null` IN AND `null` OUT. Both sides spell "nothing was observed" as `null`, and the fold of two of them is
+   that same statement — never `{}`, which this record's own declaration says would mean the opposite ("this
+   endpoint requires no header"). A non-empty side makes a non-empty answer, because `astHeaderRecord` is the
+   one producer and it refuses an empty record at its own door.
+   IT RETURNS RATHER THAN MUTATES, for `foldValuePools`' reason exactly: the caller owns its record's spelling
+   of the absence, and a fold that wrote one would be answering for a producer.
+
+   THE ENTRY SHAPE IS ASSERTED HERE AND NOT AT THE DOOR, which is `endpointHolePairs`' precedent one function
+   down: a hole entry's `{name, values[]}` is checked at the ONE WALK that reads it rather than in
+   `checkEndpointRecord`, because that is where a malformed one would be acted on. The same holds and bites
+   harder — this fold BRANCHES on `kind`, so an entry without one takes the first-wins arm silently and a
+   literal never supersedes the opaque it was learned to replace, which is the promotion this function exists
+   to perform failing with nothing to say so.
+
+   NAMED RESIDUAL — the REQUEST BODY does not fold with the headers, and this is what that leaves.
+     WHAT IS NOT COVERED: `bodySent`, `bodyShape` and `bodyExample` of every sighting that LOSES the
+       `method + host + path` collision — at lib/merge.js's within-document endpoint seam and again at its
+       moat seam, where this run's record replaces a stored one whatever either holds. The engine emits one
+       @H row per (method, path, provenance, param-set) and those four keys are the only place in the
+       extension that reads `bodyBase64` / `bodyShape` / `bodyExampleBase64` at all, so a body observed on
+       any row but the winning one reaches no surface in either realm.
+     WHAT THE NEXT DIFF BUILDS: the grade this record does not state. `provenance`, one of
+       `CALLSITE_PROVENANCE` above, stated on every record from the `callSite.provenance` lib/merge.js
+       already refuses to default at its fetch-call-site loop, plus its reader beside the body the Send panel
+       labels — after which a body may fill an EMPTY slot from a sighting the record's own grade admits, and
+       that is engine/host/solver/endpoint.c's `body_store` rule ("FIRST BODY WINS ACROSS ALL THREE FIELDS
+       AND NOT PER FIELD") carried across the one seam the engine cannot reach. It is a NAME the record
+       learns, so lib/persistence.js's `_STORE_SHAPE` and lib/store-record.js's `endpoints.statedFrom` move
+       with it, which that file's own comment forbids splitting. Grep before building: the vocabulary and its
+       two predicates are here already; the field and the reader are what is missing.
+     HOW ITS ABSENCE WOULD SHOW: the Send panel rendering `body[off:end]` parameter rows beneath a record
+       whose three body fields are all `null` — the ADDRESSES without the CONTENT, which lib/popup-form.js
+       names as the half-answer state that panel exists to end. One sighting cannot produce it: endpoint.c
+       stores a spanned body's example bytes and asserts its ranges were named in the same breath, so the
+       rows and the bytes are one row's answer, and the two parting means a second row carried the bytes. */
+function foldHeaderRecords(prior, incoming, where) {
+  const _one = (r, side) => {
+    DCHECK(r === null || (!!r && typeof r === "object" && !Array.isArray(r) && Object.keys(r).length),
+           "the " + side + " side of a required-header fold is neither a non-empty header record nor the " +
+           "`null` that MEANS nothing was observed (" + where + ") — lib/learn.js's `astHeaderRecord` is the " +
+           "one producer and refuses an empty one at its own door, so `{}` here is a record that would go on " +
+           "to claim this endpoint requires no header");
+    if (r === null) return;
+    for (const k in r) {
+      const e = r[k];
+      DCHECK(!!e && typeof e === "object" && (e.kind === "literal" || e.kind === "opaque") &&
+             typeof e.value === "string",
+             "the " + side + " side of a required-header fold states `" + k + "` as something other than " +
+             "{kind:\"literal\"|\"opaque\", value:string} (" + where + ") — this fold BRANCHES on `kind` to " +
+             "let a concrete value supersede a shape, so an entry without one is read as neither and the " +
+             "promotion silently does not happen");
+    }
+  };
+  _one(prior, "held"); _one(incoming, "incoming");
+  if (prior === null && incoming === null) return null;
+  const out = {};
+  if (prior !== null) for (const k in prior) out[k] = prior[k];
+  if (incoming !== null) for (const k in incoming) {
+    const prev = out[k];
+    if (!prev || (prev.kind === "opaque" && incoming[k].kind === "literal")) out[k] = incoming[k];
+  }
+  return out;
 }
 
 /* WHAT THE ENGINE'S PATH TO A LEARNED METHOD WAS WORTH — one fact, asked in ONE place, because TWO zones ask

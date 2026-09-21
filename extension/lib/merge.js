@@ -207,8 +207,15 @@ function mergeASTResultsIntoVDD(tab, results) {
                                             "lib/merge.js building the structural dedup key");
       var _posRe = /\{arg\d+\}/;
       var _priorKey = tab._epNorm.get(_structKey);
+      /* WHAT THE UPGRADE BRANCH IS ABOUT TO DELETE, HELD SO ITS OBSERVATIONS CAN BE FOLDED FORWARD. The
+         positional record and the declared one are the SAME endpoint driven two ways — that is the premise
+         of this dedup — so the headers the positional drive observed are this endpoint's headers, and
+         `delete` alone states of them that nothing ever saw them. `null` MEANS this call site upgraded
+         nothing, which is the ordinary case and not an absence to interpret. */
+      var _upgradedFrom = null;
       if (_priorKey && _priorKey !== epKey && tab.endpoints.has(_priorKey)) {
         if (_posRe.test(_priorKey) && !_posRe.test(epKey)) {
+          _upgradedFrom = tab.endpoints.get(_priorKey);
           tab.endpoints.delete(_priorKey); tab._epNorm.set(_structKey, epKey);   // prior positional, new declared -> upgrade (add epKey below)
         } else {
           epKey = _priorKey;   // keep prior (declared/equal); has() below is true -> skip add, no dup
@@ -238,14 +245,31 @@ function mergeASTResultsIntoVDD(tab, results) {
       if (_learned.method && _learned.method._endpointKey === undefined) {
         _learned.method._endpointKey = epKey;
       }
-      if (!tab.endpoints.has(epKey)) {
-        /* THROUGH lib/endpoint-record.js, WHICH IS NOW THE ONLY DESCRIPTION OF THIS RECORD. This literal used
+      /* THE RECORD IS BUILT FOR EVERY SIGHTING AND THE MAP DECIDES WHAT HAPPENS TO IT — it used to be built
+         only inside the `has()` miss, and that is where the observations of every later sighting went.
+         WHAT THE MISSING ARM WAS. The engine emits one @H row per (method, path, provenance, param-set)
+         — engine/host/solver/endpoint.c's `same_identity`, and endpoint.h states that the split is
+         deliberate rather than an artifact — while this key is `method + host + path`. So one address the
+         bundle calls at two grades, or once with a query and once without, arrives here as several rows and
+         the `if` had NO `else`: the first row's record was kept and every later row's `requiredHeaders`,
+         `bodySent`, `bodyShape` and `bodyExample` were read off the call site, DCHECKed on arrival, and
+         dropped. The four body/header keys are read at no other site in either realm, so what was dropped
+         reached no surface at all — §What-the-tool-produces' "computed example KEYS and VALUES" and §@S(d)'s
+         reproduction envelope going missing with nothing to say so.
+         BUILDING IT UNCONDITIONALLY IS WHAT MAKES THE FOLD A FOLD OF TWO RECORDS rather than of a record and
+         a raw call site: one law, one shape, at both of this file's endpoint seams. It also puts every
+         sighting through `makeEndpointRecord`'s assertions instead of only the first.
+         THE HOLE POOLS GAIN FROM IT TOO, AND THAT IS NOT INCIDENTAL. `_astPathParamPool` reads the METHOD,
+         which lib/learn.js has already merged this sighting's values into above — so the held record, built
+         when those pools were shorter, folds the longer ones forward instead of staying at whatever the
+         first call site happened to know.
+         THROUGH lib/endpoint-record.js, WHICH IS NOW THE ONLY DESCRIPTION OF THIS RECORD. This literal used
            to BE the description, and it could only be consulted by reading it — which is why the field list
            had been hand-copied into seven comments and one DCHECK elsewhere, and why five names no producer
            writes had been projected onto it by readers with nothing to catch them. The constructor rejects a
            name this record does not carry, so the next such projection crashes at the producer instead of
            reading `undefined` for the life of the feature. */
-        tab.endpoints.set(epKey, makeEndpointRecord({
+      var _rec = makeEndpointRecord({
             // new URL().href percent-encodes shape holes ({} -> %7B%7D); decode so the endpoint URL keeps
             // the canonical `{}` param placeholder the dedup/UI recognize (path is already decoded).
             url: _addr.originKnown ? _decHoles(_addr.url.href) : callSite.url,
@@ -325,15 +349,39 @@ function mergeASTResultsIntoVDD(tab, results) {
                its own row as the real observation it is. */
             pathParams: _astPathParamPool(_learned.method, "_astValidValues"),
             pathParamsForced: _astPathParamPool(_learned.method, "_astForcedValues"),
-            /* (No request body on THIS record. The body surface lands in the doc model: endpoint.c reads the
-               request's own payload and lib/learn.js files its fields as `doc.schemas[…Request]` with
-               `m.request.$ref` pointing at them, which is what lib/send.js's `requestBody` and the OpenAPI
-               export already resolve. A flat copy here would be the eviction argument above applied to the
-               body, and it needs a reader in lib/send.js first — that file projects only the ten fields this
-               `endpoints.set` writes, deliberately.) */
+            /* THE PARAGRAPH THAT STOOD HERE SAID "No request body on THIS record" AND IS A SCAR, KEPT IN ITS
+               OWN TERMS BECAUSE ITS ARGUMENT IS WHAT A READER RE-DERIVES. It said the body surface lands in
+               the doc model — endpoint.c reads the request's own payload, lib/learn.js files its fields as
+               `doc.schemas[…Request]` with `m.request.$ref` pointing at them, and lib/send.js's `requestBody`
+               and the OpenAPI export resolve that — so a flat copy here would need a reader in lib/send.js
+               first, "that file projects only the ten fields this `endpoints.set` writes".
+               BOTH HALVES WENT FALSE AND NEITHER SENTENCE MOVED. The three body keys are written eight lines
+               up, lib/send.js projects all three by name onto the Send-panel schema, and lib/popup-form.js
+               renders them as three claims. The FIELDS half of the argument still holds and is why they are
+               not a second spelling of each other: a named field is a better answer than a blob and the body
+               keys are recorded exactly where the engine could name no field (`bodySent`/`bodyShape`) or
+               named several ADDRESSES into these bytes (`bodyExample`). The count is gone rather than
+               corrected, for the reason this file already states thirty lines up about another one: a
+               replacement number rots on the next field, while the ORIGIN of a name stays checkable by
+               opening the producer, which is `makeEndpointRecord` immediately below. */
             firstSeen: Date.now(),
-        }, "lib/merge.js registering an @H fetch call site"));
+      }, "lib/merge.js registering an @H fetch call site");
+      /* THE UPGRADED RECORD'S OBSERVATIONS, FOLDED FORWARD BEFORE THE MAP SEES EITHER. The structural dedup
+         above deleted it as a worse NAME for this same endpoint, which is a statement about the key and not
+         about what that drive observed — and a `delete` alone says nothing was ever seen. Folding into the
+         fresh record rather than into whatever the map holds keeps ONE order here: this call site's record
+         is complete before the map decides whether it is the first. */
+      if (_upgradedFrom !== null) _foldEndpointRecordInto(_rec, _upgradedFrom, epKey);
+      if (!tab.endpoints.has(epKey)) {
+        tab.endpoints.set(epKey, _rec);
         newEndpoints++;
+      } else {
+        /* THE ARM THAT DID NOT EXIST. A second @H row for one key is a second SIGHTING of one address, not a
+           duplicate to skip: `newEndpoints` is deliberately NOT raised — it counts addresses this document
+           added to the moat and this is not one — but what the row OBSERVED is folded, because the record's
+           unit is the address and its `requiredHeaders: null` MEANS "nothing was observed" of every sighting
+           rather than of the first. */
+        _foldEndpointRecordInto(tab.endpoints.get(epKey), _rec, epKey);
       }
       /* THE CATCH THAT STOOD HERE IS DELETED, AND IT IS WHY THIS DEFECT WAS INVISIBLE FOR A WHOLE CORPUS.
          Its stated job was that one malformed call site must not cost the other N-1 their registration, and
@@ -677,7 +725,20 @@ function _mergeResourcesInto(eres, nres, docKey) {
 }
 /* AN EMPTY PAIR, NAMED ONCE: what a record that has no such hole contributes to the fold below. */
 const _NO_HOLE_POOLS = Object.freeze({ valid: Object.freeze([]), forced: Object.freeze([]) });
-/* THE FLAT RECORDS' OWN HOLE MERGE — two sightings of ONE address, met at the moat, folded by the ONE law.
+/* THE FLAT RECORDS' OWN MERGE — two sightings of ONE address, met wherever they meet, folded by the ONE law
+   per field. IT IS CALLED AT BOTH SEAMS AND USED TO BE CALLED AT ONE, which is the whole of why it is no
+   longer named for holes. The engine's endpoint identity is (method, path, provenance, param-set) and
+   engine/host/solver/endpoint.h states that the split is deliberate — "two rows for one address, one graded
+   `derived` and one `forced`, are two TRUE statements". This zone's key is `method + host + path`, so those
+   rows meet HERE, inside one document as well as across two; the within-document seam had no `else` at all,
+   so every row after the first reached nothing whatever. Folding at the moat and dropping within the page is
+   one law with a hole in it.
+   WHICH FIELDS FOLD IS A PER-FIELD QUESTION WITH THREE ANSWERS, and lib/endpoint-record.js's
+   `mostObservedProvenance` carries the reasoning: the hole pools fold by `foldValuePools`, the required
+   headers fold by `foldHeaderRecords` (endpoint.c's own literal-supersedes-shape rule, which lib/learn.js has
+   always applied to the METHOD record built in the same loop), and the three body fields do NOT — see that
+   fold's named residual for what that leaves and what retires it.
+   THE HOLE HALF, WHICH IS WHAT THIS FUNCTION ORIGINALLY WAS:
    THIS IS THE THIRD MERGE OF THE SAME PAIR AND IT USED TO BE A PLAIN UNION OF ONE POOL. That was sound only
    while the record HELD one pool: the union ran over `pathParams`, the forced pool did not exist on this
    record, and a hole the run could only force reached the moat as a hole nothing had filled. Carrying the
@@ -693,7 +754,7 @@ const _NO_HOLE_POOLS = Object.freeze({ valid: Object.freeze([]), forced: Object.
    THE RESULT IS RE-CHECKED, because this function WRITES a record the constructor did not build: it is the
    one place the two lists are composed from two sources, so it is the one place their disjointness can be
    broken, and `checkEndpointRecord` asserts it where it can still name this merge. */
-function _foldEndpointHolesInto(into, from, key) {
+function _foldEndpointRecordInto(into, from, key) {
   /* BOTH RECORDS READ AS PER-NAME PAIRS THROUGH THE ONE WALK (lib/endpoint-record.js), so this merge is a
      fold of two RECORDS and not of four lists. */
   const _a = endpointHolePairs(from, "lib/merge.js moat-folding the stored record for " + JSON.stringify(key));
@@ -716,7 +777,15 @@ function _foldEndpointHolesInto(into, from, key) {
   };
   into.pathParams = _project("valid");
   into.pathParamsForced = _project("forced");
-  checkEndpointRecord(into, "lib/merge.js folding two documents' path-hole examples at the moat, key " +
+  /* THE HEADER HALF. `into` is the record that SURVIVES, so it is the prior side of the fold and a header
+     both sightings attached keeps its value unless the incoming one is a LITERAL over an opaque — the
+     promotion, which is the whole reason this is a fold and not a union. Neither side's absence is
+     interpreted here either: `null` in is what the record already states, and `foldHeaderRecords` refuses
+     `{}` from either side because that would be the opposite claim. */
+  into.requiredHeaders = foldHeaderRecords(into.requiredHeaders, from.requiredHeaders,
+                                           "lib/merge.js folding two sightings' required headers, key " +
+                                           JSON.stringify(key));
+  checkEndpointRecord(into, "lib/merge.js folding two sightings of one address, key " +
                             JSON.stringify(key));
 }
 
@@ -800,7 +869,7 @@ function mergeToGlobal(tab) {
      landed) never DROPS values a prior emit learned — the moat is monotonic. */
   for (const [k, v] of tab.endpoints) {
     var ge = globalStore.endpoints.get(k);
-    if (ge) _foldEndpointHolesInto(v, ge, k);
+    if (ge) _foldEndpointRecordInto(v, ge, k);
     globalStore.endpoints.set(k, v);
   }
   for (const [k, v] of tab.discoveryDocs) {

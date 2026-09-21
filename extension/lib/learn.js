@@ -842,14 +842,21 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     if (ctEntry && (!m.contentTypes || m.contentTypes.length === 0)) {
       m.contentTypes = [ctEntry.value];
     }
-    // Store the full set per-endpoint as transport metadata (NOT body params),
-    // so the Send panel can show "this endpoint needs header X". A literal
-    // supersedes an earlier opaque for the same header; real traffic refines.
-    if (!m.requiredHeaders) m.requiredHeaders = {};
-    for (const hk in _rh) {
-      const prev = m.requiredHeaders[hk];
-      if (!prev || (prev.kind === "opaque" && _rh[hk].kind === "literal")) m.requiredHeaders[hk] = _rh[hk];
-    }
+    /* THE FULL SET AS TRANSPORT METADATA (NOT body params), so the Send panel can show "this endpoint needs
+       header X" — folded THROUGH lib/endpoint-record.js's one spelling rather than by the loop that stood
+       here. The rule is unchanged and is not this file's to own: a literal supersedes an earlier opaque for
+       the same header, which is engine/host/solver/endpoint.c's own merge ("a header seen with a concrete
+       value supersedes the same header seen only as a shape") and real traffic refines it afterwards.
+       WHY IT MOVED. The same law is now owed at TWO records — here, and the FLAT endpoint record, where the
+       several @H rows the engine emits for one address (its identity is method+path+provenance+param-set)
+       all reach one `method + host + path` key and every row after the first used to reach nothing. A fold
+       written per merge is a fold free to disagree per merge, which is exactly why `foldValuePools` was
+       extracted one field over, and leaving this loop spelled out would have made this diff the drift.
+       `undefined` IS THIS RECORD'S SPELLING OF THE ABSENCE and `null` is the fold's, so the translation
+       happens HERE: the fold refuses to decide what a missing pool means, and each record keeps its own. */
+    m.requiredHeaders = foldHeaderRecords(m.requiredHeaders === undefined ? null : m.requiredHeaders, _rh,
+                                          "lib/learn.js folding an @H call site's headers onto the method " +
+                                          JSON.stringify(methodName));
   }
 
   /* THE REQUEST BODY'S FIELDS, AS THE METHOD'S REQUEST SCHEMA — what lib/send.js resolves through
