@@ -25,10 +25,25 @@
  *     same assignment shape. It is NOT in this document because putting it here SUPPRESSES the defect (5 runs,
  *     0 of 5): a second IIFE is a second unknown and a bigger frontier, and it moves the interleaving. That
  *     sensitivity is a fact about the defect, not a flaw in the control.
- * WHAT REPRODUCES AND WHAT DOES NOT. The COUNT of wrong arms per run varies and some runs are clean, so no
- * count here is a measurement of anything. What does not vary is the IDENTITY of the wrong answer: it is
- * always the PRE-ASSIGNMENT value, always on the FORCED sibling (arm2), and always beside `plain-function`.
- * Read this document for that identity; a clean run is not evidence the defect is gone.
+ * WHAT REPRODUCED, AND WHAT DOES NOW. THE PARAGRAPH THAT STOOD HERE IS REWRITTEN RATHER THAN DELETED, because
+ * a reader who meets a run that is clean on arm1 will otherwise re-derive its rule and read the defect as gone.
+ * IT READ: "The COUNT of wrong arms per run varies and some runs are clean, so no count here is a measurement
+ * of anything. What does not vary is the IDENTITY of the wrong answer: it is always the PRE-ASSIGNMENT value,
+ * always on the FORCED sibling (arm2), and always beside `plain-function`." Of its three claims the
+ * PRE-ASSIGNMENT-VALUE one held and the other two are now false.
+ * MEASURED BY A COORDINATOR, not by the lane that wrote this paragraph: tree revision a5e62f6f, against the
+ * artifact in extension/lib/qjs stamped 85cb7ea5 with `dirty: []` — which is the artifact
+ * `solvergate.mjs --run` loads, since renderer_abi.mjs's GLUE_PATH names it. Five schedules (`direct`,
+ * `preempt`, `eager`, `park`, `lastreply`), one run each, two learned addresses per run, BYTE-IDENTICAL across
+ * all five: `closure-undefined/frame-undefined/plain-function` on arm1 AND on arm2, ten arms of ten.
+ * So the defect is BROADER — the arm the old signature called correct is wrong too — and DETERMINISTIC, where
+ * the old one was 7 of 9 and moved with the interleaving. A clean run is still not evidence the defect is gone;
+ * and a run wrong on arm2 ALONE is now itself evidence of a CHANGE, because that is the OLD signature.
+ * WHAT THE ARM FIELD DOES AND DOES NOT WITNESS, since the shape above invites reading it wrongly: `b` is an
+ * UNCAPTURED local, so `arm1`/`arm2` differing across the two addresses witnesses that the FORK happened and
+ * that each arm ran its own branch. It does NOT witness that the `arm` CELL is isolated — the value was copied
+ * out into `b` in the same expression that produced it, before anything could switch — so it is not a second
+ * working captured binding standing beside the broken one, and must not be read as narrowing the defect to `v`.
  *
  * WHAT IT NAMES. What fails is not "a cell across a fork" but an OPEN cell, whose `pvalue` is a slot in the
  * frame that MINTED it — and which clone_susp_frame / clone_deep_flow share with the sibling (+1 ref) while
@@ -47,6 +62,20 @@
  * schedule-invariance failure in solvergate's own terms — the finding set stops being a function of the
  * document. It FAILED until close_var_refs_for_fork gave a forked sibling's captured local storage of its
  * own; it is a REGRESSION test now, and a `closure-undefined` here means that detach has stopped happening.
+ * AND THE ENFORCEMENT THAT SENTENCE NAMES IS THE ONE THE DEFECT SWITCHED OFF, WHICH IS HOW IT SURVIVED. The
+ * gate's ONLY oracle is that the finding SET is equal ACROSS SCHEDULES — its own banner: "It fails only when
+ * ONE BUILD DISAGREES WITH ITSELF" — and it deliberately stores no per-document expected output, because
+ * CLAUDE.md bans one twice over. An INTERMITTENT wrong answer makes two schedules disagree and the gate speaks;
+ * a TOTAL one makes every schedule agree, so the finding set IS a function of the document and the gate reports
+ * `ok`. The word "also" above is the tell: the invariance failure was always a CONSEQUENCE of this defect being
+ * flaky and never a check on its IDENTITY, so the defect getting WORSE is what blinded its own regression test.
+ * Nor can that be repaired inside this document. The conservation identity it is built around —
+ * `plain-function` beside `closure-undefined` is a CONTRADICTION — is stated here in prose and asserted by
+ * NOTHING, and no channel the gate compares can carry it: a uniform violation is schedule-invariant in
+ * `pageErrors` exactly as it is in the addresses, so a self-check that threw would be compared equal too.
+ * The identity is a fact about the ENGINE (a captured binding has ONE storage), so by this project's own rule
+ * it belongs as a DCHECK at its origin and not as a fixture self-check — see get_captured_cell, where the
+ * assert for exactly this state was deleted when the fork learned to detach, and has been put back.
  * A captured ARGUMENT used to be the arm this did NOT cover — addressed both through its cell and directly
  * through arg_buf, so detaching was not semantics-neutral there and that arm DFAILed. It is covered now: the
  * argument opcodes ask the same `is_captured` the compiler reads, and the fused index-in-opcode short forms

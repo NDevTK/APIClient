@@ -23624,10 +23624,36 @@ static JSVarRef *get_captured_cell(JSContext *ctx, JSStackFrame *sf, JSValue *pv
            "owner is whatever its memory held, which the cell would take a reference on and later free");
     vr = sf->var_refs[var_ref_idx];
     if (vr) {
-        /* AN OPEN CELL IN THIS ARRAY IS THIS FRAME'S OWN, and that is now a property of the fork rather than a
-           thing to check here: close_var_refs_for_fork closes a frame's open cells before either clone path
-           shares them, so a cloned array holds detached cells only. The assert that used to stand here — an
-           unbuilt-capability crash for a shared open cell — is deleted with the capability it named. */
+        /* AN OPEN CELL IN THIS ARRAY IS THIS FRAME'S OWN, and that is a property of the fork rather than of
+           this function: close_var_refs_for_fork closes a frame's open cells before either clone path shares
+           them, so a cloned array holds detached cells only.
+           THAT IS AN INVARIANT AND IT WAS BEING ASSERTED BY NOTHING. An unbuilt-capability CRASH for a shared
+           open cell used to stand here and was deleted with the capability it named — correctly, since the
+           case became buildable — but nothing replaced it, so the property the deletion RESTED ON stopped
+           being checked at the one point every cell-addressed access passes through. This is the check, in
+           the form the deletion left room for: not a crash naming a missing capability, a DCHECK naming a
+           broken one. It is the same predicate close_var_refs_for_fork and async_func_set_owner each already
+           use as a `continue` guard, and each of their paragraphs names promoting it as what the next diff
+           needs; the READ side is where it can be promoted first, because it needs no clone path to be
+           exercised — every access to every captured binding arrives here.
+           WHY THESE TWO CONJUNCTS AND NOT `is_detached` ALONE: an UNFORKED frame's own cells are legitimately
+           OPEN — that is how one is born, aliasing `&var_buf[idx]` — so is_detached is false for the whole
+           ordinary population and asserting it would fire on every closure in the engine. What cannot happen
+           is an OPEN cell this frame did NOT mint: get_captured_cell is the only mint and it always stores
+           into the minting frame's own array (`vr->stack_frame = sf` below), and the only other filler of the
+           array is a clone SHARING cells the fork has already detached. So open-and-foreign is reachable by
+           exactly one route, a clone that shared a cell whose storage is still a slot in the SOURCE flow's
+           buffer — which is the defect engine/tests/solver/captured_var_fork.html measures, and which that
+           document currently reports on BOTH arms under every schedule while every gate in this tree reads
+           green. The frame pointers are printed because the REMEDY is to find which clone path shared this
+           cell, and the abort is one shared line for a dozen opcodes: the operands are what name the site. */
+        DCHECKF(vr->is_detached || vr->stack_frame == sf,
+                "a frame reads a captured binding through an OPEN cell it did not mint — var_ref_idx %d, minted "
+                "into frame %p, read from frame %p. An open cell's storage is a slot in the MINTING frame's buffer "
+                "and a frame is flow-private, so the two answer this binding out of two storages while the delta "
+                "isolates the CELL. A clone shared it still open: close_var_refs_for_fork either did not reach the "
+                "minting frame or skipped this slot",
+                var_ref_idx, (void *)vr->stack_frame, (void *)sf);
         return vr;
     }
     vr = js_malloc(ctx, sizeof(JSVarRef));
