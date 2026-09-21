@@ -239,10 +239,11 @@ typedef struct {
        `document-lifecycle-stage`) says the members ARE dispatched and that work the page arranged falls due
        ahead of the take on every round — a statement about this ladder's precondition and not about the pick.
        Mass on an arm BELOW it (`queue-rendering-opportunity`, `fire-due-timer`, `await-owed-reply`,
-       `await-a-refused-request`, `close-request`) says the member went PAST the seed, so the seed RAN and
-       found nothing to take, which is a fact about the HEAP and not about the frontier at all. The two
-       `await-` rows there are ONE arm of flow_step split by whether the host can still be asked, so they are
-       at the same rung by construction and a reader of this row may take either as the same evidence.
+       `await-a-refused-request`, `model-a-potential-close-request`) says the member went PAST the seed, so
+       the seed RAN and found nothing to take, which is a fact about the HEAP and not about the frontier at
+       all. The two `await-` rows there are ONE arm of flow_step split by whether the host can still be
+       asked, so they are at the same rung by construction and a reader of this row may take either as the
+       same evidence.
        AND THOSE TWO CLASSES ARE A BINARY OVER A CHAIN THAT HAS A THIRD POSITION, WHICH IS WHY THIS ROW COULD
        NOT READ THE ONE MEASUREMENT THIS BLOCK ALREADY CARRIES. The arms above are named out of flow_step's
        ladder, and every one of them is reached under `!f->frame`; the FRAMED branch is the other side of that
@@ -267,8 +268,23 @@ typedef struct {
        reports the ladder's PRECONDITION as the cause and sends the next lane to flow_step's arms when the
        answer is that these members are never dispatched again. Those take opposite work, which is the whole
        reason this row exists.
+       AND A FOURTH POSITION IS THE RUNG ITSELF, WHOSE NEAREST CLASS STATES THE OPPOSITE OF WHAT IT MEANS.
+       `seed-one-orphan-flow`, `hand-a-parked-drive-its-function` and `resume-a-parked-orphan-drive` are the
+       three arms engine_orphan_unit returns, and every one of its cases is a SUCCESS outcome: the seed
+       answers 0 when the take finds nothing and the caller falls through, so the unit is written only past
+       a take, a route or an adopted drive. Mass there says the machinery RAN AND PRODUCED WORK, which is
+       the strongest positive reading this row has. A reader sent to read the arm's position against
+       `engine_orphan_seed` finds it is AT that rung rather than above or below it, and reaches for the
+       below-rung class — whose conclusion, that the seed found nothing to take, is exactly inverted.
+       MEASURED over THREE fresh-browser drives of one live production SPA through the shipped extension,
+       and the three do not agree, which is the point rather than a caveat. The two that FORKED held 47 of
+       50 and 65 of 68 members here on `seed-one-orphan-flow`, with `orphansAsked` and `orphansDriven`
+       EQUAL at 148 and 226. The third created FOUR flows, asked nothing, and held its four on
+       `deliver-one-reply` — the above-rung reading, on the same page, the same build and the same hour.
+       One page, one artifact, two classes, and only a reader with BOTH can tell the run that drove 226
+       uncalled functions from the run that never forked.
        RETIREMENT: this record goes when every arm solver/step_unit.h declares is named by exactly one of the
-       three classes here, so a reader cannot meet a row with no class.
+       classes here, so a reader cannot meet a row with no class.
        AND THE SECOND OF THOSE HAS A CONSEQUENCE FOR THE ORPHAN CENSUS WORTH STATING AND NOT ASSERTING: `asked`
        is a LIFETIME count and this is a GAUGE, so a member reading a below-rung arm says only that SOME member
        passed the seed at SOME past instant. That is enough to make a nonzero below-rung mass beside `asked` 0
