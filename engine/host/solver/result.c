@@ -2046,6 +2046,27 @@ char *result_cold_json(void) {
            "when it is answered, so a payment credited without a key is a reply settling a record the host was "
            "never shown, and `replyAnswered/replyAsked` is about to be published as a rate over two different "
            "populations. Both terms are written in solver/pending_index.c and nowhere else");
+    /* …AND THE GAP BETWEEN THEM IS A PARTITION AND NOT A NUMBER, which is the assertion the inequality above
+       could never make and the one a reader of the gap actually needs. Every record this door has ever KEYED
+       is, at the instant this census is composed, in exactly one of four states — a reply reached it, the
+       trusted zone REFUSED to make the request, the flow that asked DEPARTED owing it, or the host still owes
+       it — and solver/pending_index.c credits each at the one line that puts it there, with `pend_untrack`'s
+       three callers being the first three and `pend_unkey` the only line the fourth ever leaves on.
+       IT IS AN ASSERTION ABOUT ONE INSTANT, which is why it is written here and not composed from two
+       readings: three of the five terms are LIFETIME counts and `keyed_now` is a GAUGE, so the identity holds
+       at the moment all five are in one hand and at no other (CLAUDE.md §A-CONSERVATION-IDENTITY-HOLDS-WITHIN-
+       ONE-SAMPLE). A break is a record credited at a fifth site, or one that left the set without being
+       credited at all — and the second is exactly the shape that made the gap unreadable in the first place,
+       so it is the one this line exists to make loud. */
+    DCHECK(pending_index_asked_total() ==
+               pending_index_answered_total() + pending_index_declined_total() +
+               pending_index_dropped_total() + pending_index_keyed_now(),
+           "the reply door's four ends do not sum to what it was asked — every keyed record is answered, "
+           "declined, dropped with the flow that asked, or still outstanding, and those are the only four "
+           "ends solver/pending_index.c has. A difference means a record left the set without being credited "
+           "to any of them, and `replyAsked - replyAnswered` is about to be published as a gap whose reading "
+           "a reader cannot recover: a host that still owes replies and a surface this tool refused to ask "
+           "for are opposite findings and only one of them is about the reply door");
     /* AND THE DELIVERY DEBT IS A SUBSET OF THE REGISTER IT IS COUNTED OUT OF, which is the only relation these
        two rows have and therefore the only one worth asserting. Both are summed in ONE pass of cold_census over
        ONE frontier — `pend_count` is every entry of every live register and `pend_ready` is the entries of those
@@ -2214,7 +2235,18 @@ char *result_cold_json(void) {
                  "\"orphanClaims\":%ld,\"orphanClaimsMet\":%ld,\"orphanClaimsUnmet\":%ld,"
                  "\"hostAsked\":%ld,\"hostAnswered\":%ld,\"hostAnswersExtra\":%ld,"
                  "\"hostAnswersLate\":%ld,\"hostTerminated\":%ld,"
-                 "\"replyAsked\":%ld,\"replyAnswered\":%ld,\"pagedReqs\":%ld,"
+                 /* THE FOUR ENDS OF THE REPLY DOOR, PUBLISHED TOGETHER BECAUSE THE GAP BETWEEN THE FIRST
+                    TWO IS MEANINGLESS WITHOUT THE OTHER TWO. Measured on one real SPA: `replyAsked 9 /
+                    replyAnswered 7` in four of four fresh-browser drives, where the two were REFUSALS of the
+                    page's own boot `fetch()` and of its `.catch` arm's error report — the door owed nothing.
+                    A second page in the same browser read 31/31 with no refusal. One pair, opposite
+                    findings, and until these rows existed nothing in this census could tell them apart.
+                    `replyOutstanding` IS THE GAUGE AND THE OTHER THREE ARE LIFETIME COUNTS — see
+                    solver/pending_index.h. A reader who differences the gauge is reading a level as a rate;
+                    a reader who wants "is the host actually behind" wants that row and none of the others. */
+                 "\"replyAsked\":%ld,\"replyAnswered\":%ld,"
+                 "\"replyDeclined\":%ld,\"replyDropped\":%ld,\"replyOutstanding\":%ld,"
+                 "\"pagedReqs\":%ld,"
                  "\"pagedAsks\":%ld,\"pagedUnarmed\":%ld,\"pagedFloor\":%ld,"
                  /* AND WHY A PARK THAT NEVER HAPPENED DID NOT, WHICH THE THREE ROWS ABOVE CANNOT SAY.
                     Those are the ALLOCATOR's edge reaching this engine; this is the HOST asking the cold
@@ -2300,6 +2332,8 @@ char *result_cold_json(void) {
                  resumed.orphans, e.claims_met, e.claims_unmet,
                  e.host_asked, e.host_answered, e.host_answers_extra, e.host_answers_late, e.host_terminated,
                  pending_index_asked_total(), pending_index_answered_total(),
+                 pending_index_declined_total(), pending_index_dropped_total(),
+                 pending_index_keyed_now(),
                  e.paged_reqs,
                  e.paged_asks, e.paged_unarmed, e.paged_floor,
                  pv.asks,

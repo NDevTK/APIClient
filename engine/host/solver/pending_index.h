@@ -195,6 +195,20 @@ long pending_index_node_answered(const PendIndexNode *n);
  * catch the same defect arriving through some other route. */
 long pending_index_asked_total(void);
 long pending_index_answered_total(void);
+/* THE OTHER THREE ENDS OF ONE MEMBERSHIP, AND THE READING THE PAIR ABOVE COULD NOT MAKE. `asked - answered`
+   has FOUR readings and takes opposite work in each, which pending_index.c's banner records as a measured
+   defect rather than a hazard: the host still owes the reply (OUTSTANDING), the trusted zone refused to make
+   the request (DECLINED — nothing is stuck and the person's own per-origin control is what would change it),
+   or the flow that asked DEPARTED owing it (DROPPED — finished, or sold to the cold tier, which is a designed
+   state). Published, those four are a PARTITION of `asked` and result.c asserts the sum; unpublished, the gap
+   was one number standing for three findings and it was read as the wrong one.
+   THE KINDS DIFFER AND ARE STATED HERE RATHER THAN IN A NAME (CLAUDE.md §A-GAUGE-AND-A-LIFETIME-COUNTER):
+   `declined` and `dropped` are LIFETIME counts and may be differenced across samples; `keyed_now` is a GAUGE
+   over the records standing in the set at the instant it is read, it may FALL, and differencing it reads a
+   level as a rate. The identity they close is therefore an assertion about ONE INSTANT. */
+long pending_index_declined_total(void);
+long pending_index_dropped_total(void);
+long pending_index_keyed_now(void);
 
 /* ---- teardown -------------------------------------------------------------------------------------------- */
 

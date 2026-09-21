@@ -85,11 +85,48 @@ static PendIndexNode    *g_nodes_tail;  /* appended in creation order, so the jo
  * therefore contributes at most one to each, and answered implies keyed — so `answered <= asked` is a real
  * invariant and result.c asserts it, exactly as engine.c asserts the synchronous door's.
  * THERE IS A THIRD END AND IT PAYS NOTHING, WHICH IS WHY IT DOES NOT DISTURB THAT INVARIANT. A record may also
- * leave REFUSED (`pending_index_declined`), and a refusal is not a reply: it credits neither term, so it can
- * only ever take a record OUT of the population that could later be answered. The pair therefore still
- * describes one population and the inequality holds a fortiori — what a session full of refusals makes wide is
- * the GAP between the two, and that gap is what a refused surface should look like rather than a host failing
- * to pay. Nothing here can tell those two apart; the record's own `declined` reason is what can.
+ * leave REFUSED (`pending_index_declined`), and a refusal is not a reply: it credits neither of the two terms
+ * above, so it can only ever take a record OUT of the population that could later be answered. The pair
+ * therefore still describes one population and the inequality holds a fortiori — what a session full of
+ * refusals makes wide is the GAP between the two, and that gap is what a refused surface should look like
+ * rather than a host failing to pay.
+ * THIS PARAGRAPH USED TO END `Nothing here can tell those two apart; the record's own declined reason is what
+ * can`, AND THAT SENTENCE IS THE REASON THE THREE COUNTS BELOW EXIST — it is rewritten rather than deleted
+ * because a reader who re-derives the argument above will re-derive the missing entry with it. Every word of
+ * it was TRUE and it is CLAUDE.md §A-CONTRACT-THAT-NAMES-A-HAZARD-AND-OFFERS-NO-EXIT exactly: the one thing a
+ * caller could do with this file was take the gap, the sentence said the gap has two readings, and it named
+ * as the discriminator a per-record field NO CENSUS CAN REACH — so the forbidden reading was the only reading
+ * on offer, for the life of the interface. A warning a caller cannot act on is §Offensive-programming's
+ * category (2), an unbuilt capability wearing prose, and the missing ENTRY is the fix.
+ * MEASURED, WHICH IS WHY IT IS A DEFECT RECORD AND NOT A TIDY-UP: four fresh-browser drives of one real SPA at
+ * artifact f5650152 read `replyAsked 9 / replyAnswered 7` in every one, and the gap was TWO REFUSALS of that
+ * page's own boot `fetch()` and of the `.catch` arm's error report — nothing was outstanding and nothing was
+ * stuck. It was relayed onward as two replies the host had failed to pay, with an address named that had in
+ * fact come back 200, and a coordinator dispatched on it. A second page in the same browser read 31/31 with no
+ * refusal at all, which is the same pair saying the opposite thing for the same reason.
+ *
+ * SO THE GAP IS PARTITIONED AND THE PARTS SUM, which is what makes the new rows checkable rather than a second
+ * opinion (CLAUDE.md §a-bare-count-over-a-population-you-have-not-partitioned: raise three rows where you were
+ * raising one, and ASSERT that they sum to the total). Every record this index has ever KEYED is now, at any
+ * instant, in exactly one of four states, and each of the four is credited at the ONE line that puts it there:
+ *   ANSWERED     `pending_index_answered` — a reply reached the register.
+ *   DECLINED     `pending_index_declined` — the trusted zone refused to make the request.
+ *   DROPPED      `pending_index_unref`'s last naming — the flow that held it DEPARTED owing this reply
+ *                (finished, or SOLD to the cold tier, which `pending_free`'s own comment states is a designed
+ *                state and not a loss), so no reply can ever settle it.
+ *   OUTSTANDING  still keyed — `g_keyed_n`, the one GAUGE here, and the only one of the four that means the
+ *                host still owes something.
+ * THE PROOF THAT THOSE ARE THE ONLY FOUR IS BY INSPECTION AND IS ONE LINE LONG: `pend_untrack` has exactly
+ * three callers and they are the first three above, `pend_unkey` is the only line a record leaves a pair on,
+ * and `pending_index_reset` DCHECKs the set is EMPTY before it runs — so the gauge is 0 across a reset and the
+ * three lifetime totals may be left standing there exactly as the first two already are.
+ * THE KINDS ARE STATED BECAUSE THEY DIFFER (CLAUDE.md §A-GAUGE-AND-A-LIFETIME-COUNTER): `asked`, `answered`,
+ * `declined` and `dropped` are LIFETIME and may be differenced; `keyed` is a GAUGE, may FALL, and a reader who
+ * differences it is reading a level as a rate. The identity is therefore an assertion about ONE INSTANT and is
+ * asserted where all five are in one hand.
+ * WHAT THE FOUR DO NOT SAY is which KIND of request each record was — a fetch, an injected `<script src>`, a
+ * document script slot or a dynamic `import()`. That is a different partition of the same total and
+ * test_forced.c holds its own named residual for it; this one is by END and the two do not substitute.
  *
  * THE UNIT IS THE RECORD AND NOT THE ISSUED REQUEST, and the difference is the sharing this file is built on:
  * N arms share ONE record (pending.h's PEND_SHARE), the join dedups over the pair, so one issued request may
@@ -110,6 +147,13 @@ static PendIndexNode    *g_nodes_tail;  /* appended in creation order, so the jo
  * leaves these two alone. They are read by NOTHING but the census (§NO BOUNDS): no pick, no weight, no exit. */
 static long g_asked_total;
 static long g_answered_total;
+/* THE THIRD AND FOURTH ENDS, AND THE GAUGE THAT CLOSES THE IDENTITY — see the banner above for why the three
+   of them are one diff and for the inspection that says the four states are the only four. */
+static long g_declined_total;
+static long g_dropped_total;
+/* KEYED RIGHT NOW. A GAUGE: it rises at the one line that keys a record and falls at the one line that unkeys
+   one, so it is the count of requests the host may still be shown — never differenced, and 0 at a reset. */
+static long g_keyed_n;
 
 static uint32_t pend_hash_bytes(const char *s, uint32_t h)
 {
@@ -195,6 +239,15 @@ static void pend_unkey(PendIndexMember *m)
             n->mem[i] = n->mem[n->n_mem - 1];
             n->n_mem--;
             m->node = NULL;
+            /* THE GAUGE FALLS HERE AND NOWHERE ELSE, which is what makes it the count of records the host may
+               still be shown rather than a fourth thing that has to be kept in step by hand: this is the one
+               line a record's membership of a pair ever ends on, and every end above it — answered, declined,
+               the last naming given back — reaches it through pend_untrack. */
+            DCHECK(g_keyed_n > 0,
+                   "a record was unkeyed while the index holds no keyed record — the gauge rises at "
+                   "pending_index_key and falls only here, so this is a second unkey of one membership and "
+                   "the partition `asked == answered + declined + dropped + keyed` is about to go negative");
+            g_keyed_n--;
             return;
         }
     DFAIL("a record names a pair whose member list does not hold it — the two halves of one membership have "
@@ -261,7 +314,18 @@ void pending_index_unref(JSValueConst rec)
     DCHECK(m->namers > 0, "a register gave back a naming of a record it does not hold — the count is one per "
                           "register slot, so this is a second free of one slot or a drop of a record that "
                           "was never on this register");
-    if (--m->namers == 0) pend_untrack(m);
+    if (--m->namers == 0) {
+        /* THE FOURTH END: THE LAST FLOW NAMING THIS RECORD IS GONE AND NO REPLY CAN EVER SETTLE IT. A record
+           reaches this line when the register holding it was released — a flow that FINISHED, or one the pager
+           SOLD to the cold tier, which `pending_free`'s own comment names as the designed case ("the pager
+           credits that debt and the host still sends them"). It is neither a payment nor a refusal, and until
+           this row existed it was the third thing hiding inside `asked - answered`: a gap that means the host
+           still owes something and a gap that means the ASKER LEFT are opposite findings, and only one of them
+           is about the reply door at all. Guarded on `m->node` because an UNKEYED record never entered
+           `asked`. */
+        if (m->node) g_dropped_total++;
+        pend_untrack(m);
+    }
 }
 
 void pending_index_key(JSValueConst rec, const char *method, const char *url)
@@ -309,6 +373,10 @@ void pending_index_key(JSValueConst rec, const char *method, const char *url)
        neither half of its identity and the park writes them one at a time, so a push is not yet a request the
        host can be shown; this line is the moment it is one, and it is guarded by the once-only DCHECK above. */
     g_asked_total++;
+    /* …AND IT IS OUTSTANDING FROM THIS INSTANT, which is the gauge's other end. The two rise together because
+       they are the same event read as a rate and as a level, and the once-only DCHECK above is what stops the
+       level being raised twice for one record. */
+    g_keyed_n++;
 }
 
 void pending_index_answered(JSValueConst rec)
@@ -346,7 +414,14 @@ void pending_index_declined(JSValueConst rec)
        SO THE PAIR'S NODE MAY NOW BE EMPTY WITH `answered` AT ZERO, and that is a fourth reading it did not
        have — no member parked, none answered, because the zone refused them. It is not ambiguous with the
        others: `engine_provide` tells "answered twice" from "answered for nobody" by whether ANY record
-       matched, and a refused pair matches nothing, so it takes the arm the host's own pairing assert owns. */
+       matched, and a refused pair matches nothing, so it takes the arm the host's own pairing assert owns.
+       WHAT DOES MOVE IS THE THIRD END'S OWN COUNT, and the two statements are not in tension: crediting
+       `answered` here would put a payment nobody made into a rate, and crediting NOTHING left that rate's own
+       GAP unattributable, which is the defect the banner records. A refusal is its own end and gets its own
+       row, so `replyAnswered/replyAsked` stays exactly the rate it was and `asked - answered` stops being a
+       number with two readings. Guarded on `m->node` for `answered`'s reason exactly: an UNKEYED record was
+       never a request the host could be shown, so it entered neither `asked` nor this. */
+    if (m->node) g_declined_total++;
     pend_untrack(m);
 }
 
@@ -397,6 +472,13 @@ PendIndexNode *pending_index_find(const char *method, const char *url)
 
 long pending_index_asked_total(void)    { return g_asked_total; }
 long pending_index_answered_total(void) { return g_answered_total; }
+/* SEPARATE ENTRIES AND NOT OUT-PARAMETERS ON ONE CALL, for CLAUDE.md §A-CONTRACT-THAT-NAMES-A-HAZARD's own
+   reason: two answers of different KIND taken from one call are free to be read into a variable named for the
+   other, and three of these are LIFETIME counts while the last is a LEVEL. Separate entries make that mistake
+   a different CALL instead. */
+long pending_index_declined_total(void) { return g_declined_total; }
+long pending_index_dropped_total(void)  { return g_dropped_total; }
+long pending_index_keyed_now(void)      { return g_keyed_n; }
 
 void pending_index_reset(JSContext *ctx)
 {

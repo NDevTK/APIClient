@@ -285,7 +285,12 @@ typedef struct {
        so a rising count beside a rising KiB is what says the registers are where the frontier's memory is.
        THE DEBT IS A DIFFERENT NUMBER AND IT ALREADY HAS A FUNCTION — `pending_owed_replies` (solver/pending.h)
        — and the RATE that says whether the debt is being paid is `pending_index_asked_total` against
-       `pending_index_answered_total`, which is what the census publishes as `replyAsked`/`replyAnswered`. */
+       `pending_index_answered_total`, which is what the census publishes as `replyAsked`/`replyAnswered`.
+       AND THE GAP BETWEEN THAT PAIR IS NOT A DEBT EITHER, which is the same mistake one door over and was
+       made: a keyed record ends answered, REFUSED by the trusted zone, DROPPED with a flow that departed
+       owing it, or still outstanding, and only the last is anything the host owes. The census publishes all
+       four now (`replyDeclined`/`replyDropped`/`replyOutstanding`) and solver/result.c asserts they sum, so
+       the number to read as a debt is `replyOutstanding` and never the subtraction. */
     long pend_count;
     long pend_bytes;
     /* HOW MANY MEMBERS COULD TAKE A REPLY AT ALL, AND HOW MANY ACTUALLY HAVE ONE TO TAKE — the reply-delivery

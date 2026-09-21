@@ -342,6 +342,48 @@ function bundleShareReading(b) {
          `the document's own scripts — read the cursor histogram, not the driving`;
 }
 
+/* WHAT THE REPLY DOOR'S GAP MEANS, WHICH `answered/asked` ON ITS OWN CANNOT SAY AND WAS READ WRONGLY BECAUSE
+   OF IT. A record this door KEYED ends in exactly one of four states and solver/pending_index.c credits each
+   at the one line that puts it there, so the four are a PARTITION of `replyAsked` and the identity is checked
+   here as well as in the engine — a disagreement visible in one and not the other is a row lost between the
+   census and this document, which is what `coldPartition`'s message already says for every other caller.
+   THE GAP'S THREE READINGS TAKE OPPOSITE WORK AND THAT IS THE WHOLE REASON THIS READING EXISTS. A host that
+   still owes replies sends a reader to the scheduler and the delivery seam; a surface THIS TOOL REFUSED sends
+   them to the person's own per-origin egress control and means nothing is broken at all; and a record whose
+   flow DEPARTED owing it (finished, or sold to the cold tier) is a designed state `pending_free` documents.
+   Measured before these rows existed: four fresh-browser drives of one real SPA read `replyAsked 9 /
+   replyAnswered 7` every time, the two were REFUSALS of the page's own boot `fetch()` and of the `.catch`
+   arm's error report, and the gap was relayed onward as two replies the host had failed to pay — with an
+   address named that had in fact come back 200. A second page in the same browser read 31/31 with no refusal.
+   ONE INSTANT, NOT TWO: `replyOutstanding` is a GAUGE and the other four are LIFETIME counts
+   (solver/pending_index.h), so this is a reading of the census line in front of it and nothing here may be
+   differenced against another line. A READING AND NEVER A THRESHOLD (§NO BOUNDS): nothing branches on it and
+   no verdict is refused for it. */
+function replyDoorReading(b) {
+  coldPartition(b, "replyAsked",
+                ["replyAnswered", "replyDeclined", "replyDropped", "replyOutstanding"], "solver/result.c");
+  const asked = Number(b.replyAsked), ans = Number(b.replyAnswered);
+  const dec = Number(b.replyDeclined), drop = Number(b.replyDropped), out = Number(b.replyOutstanding);
+  let s = `; reply ${ans}/${asked} record(s) answered`;
+  if (asked === 0) return s + ` — the reply door was never asked, so every row about it below is silent ` +
+                              `about this run rather than clean about it`;
+  if (asked === ans) return s + ` — every record this door keyed was paid, so a reply-consuming row still ` +
+                                `at 0 is downstream of the delivery and never this door`;
+  /* THE PARTS ARE NAMED IN FULL AND NOT ONLY THE LARGEST, because two of the three are findings about other
+     subsystems and a reader who sees one number cannot know which they are holding. */
+  s += `, and the ${asked - ans} unanswered are ${dec} REFUSED by this tool's own egress policy` +
+       `, ${drop} dropped with a flow that departed owing them, ${out} still outstanding`;
+  if (out === 0)
+    s += ` — so the host owes this document NOTHING and the gap is not a delivery finding at all` +
+         (dec > 0 ? `; the refusals name the row of the person's own per-origin control that holds them, ` +
+                    `and the addresses are DERIVED IN FULL AND REPORTED, which §Attacker-sources says is not ` +
+                    `a gap in the report but IS the report` : ``);
+  else
+    s += ` — the ${out} outstanding is the only part of that gap the reply door owes, and it is the number ` +
+         `to read against the \`deliver-one-reply\` arm`;
+  return s;
+}
+
 function retiredReading(c) {
   coldPartition(c, "finished", ["finishedFlows", "finishedCands"], "engine_frontier_census");
   coldPartition(c, "sold", ["soldFlows", "soldCands"], "engine_frontier_census");
@@ -3471,7 +3513,9 @@ function censusReading(out) {
                   the quotient of the two is a percentage of nothing. It was taken as one: 998 arm runs against
                   24636 answered records was relayed as "about 4% consumed". The denominator in the arm's unit
                   is `pendReady` on the frontier-shape line above. */
-               `; reply ${c.b.replyAnswered}/${c.b.replyAsked} record(s) answered` +
+               /* THE FOUR ENDS REPLACE THE BARE PAIR HERE — see `replyDoorReading`, which holds the
+                  partition assert and the measurement that says why the gap needed one. */
+               replyDoorReading(c.b) +
                bundleShareReading(c.b) +
                `; programs: deepest ${c.b.deepest}, completed ${c.b.completed}` +
                `; forks ${c.b.forks}` +

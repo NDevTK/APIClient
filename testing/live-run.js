@@ -327,7 +327,13 @@ const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "u
  * change on every deploy, so re-derive the table with the grep above rather than trusting the index, and read
  * the rest as what a webpack bundle IS. */
 const CENSUS_LIFETIME = ["stepUnitRuns"];
-const CENSUS_GAUGE = ["stepUnits", "programCursors"];
+/* …AND THE REPLY DOOR'S ONE LEVEL, FILED WITH THE GAUGES AND NOT WITH ITS OWN THREE SIBLINGS, which is the
+   whole reason this driver splits the two lists: `replyOutstanding` is the count of records the host may still
+   be shown AT THE INSTANT the census was composed, so it may FALL and differencing it reads a level as a rate.
+   Its three siblings are lifetime counts and sit in COLD_COUNTERS below. They only mean anything read
+   together — the identity is `replyAsked == replyAnswered + replyDeclined + replyDropped + replyOutstanding`,
+   which solver/result.c asserts at the instant all five are in one hand and which holds on NO pair of lines. */
+const CENSUS_GAUGE = ["stepUnits", "programCursors", "replyOutstanding"];
 /* AND WHAT THE JOB BACKLOG IS WAITING ON — solver/flow.h's split, off `wfq` rather than `cold`. This
    driver already carries `jobsQueued`/`jobsRun`/`unitsDone` in COUNTERS and those cannot name a component:
    a queued job waits on the HOST (`jobsOwed`), on its member finishing its own program (`jobsFramed`, HTML
@@ -341,6 +347,18 @@ const CENSUS_GAUGE = ["stepUnits", "programCursors"];
    `wfqMembers` is the population all of them are taken over. */
 const WFQ_JOB_SPLIT = ["jobsReady", "jobsFramed", "jobsOwed", "jobWGap", "memUnframed", "visZero"];
 const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered",
+  /* AND THE OTHER THREE ENDS OF THE REPLY DOOR, WITHOUT WHICH `replyAsked - replyAnswered` IS A NUMBER WITH
+     THREE READINGS THAT TAKE OPPOSITE WORK. A record ends answered, REFUSED by this tool's own egress policy,
+     DROPPED with a flow that departed owing it, or still OUTSTANDING; only the last is the host being behind.
+     Measured on the very pages this driver is pointed at, before these rows existed: four fresh-browser drives
+     of play.grafana.org read `9/7` every time and the two were refusals of the page's own boot `fetch()` and
+     of its `.catch` arm's error report, while excalidraw.com read `31/31` in three — the same pair saying
+     opposite things, and the gap was relayed on as two replies the host had failed to pay.
+     `replyOutstanding` IS A GAUGE and the other two are LIFETIME counts (solver/pending_index.h), which is why
+     it is named here rather than filed with them in the header line below — a reader who differences it is
+     reading a level as a rate. An artifact older than these rows prints `-` for all three, which is this
+     driver's own absent-versus-zero rule and is the honest answer: the run did not state them. */
+  "replyDeclined", "replyDropped",
   /* AND THE REPLAY TRIPLE, WHICH IS THE COUNTER THE `forkAt` ROWS ABOVE HAVE TO BE READ AGAINST AND THE ONE
      THING THIS DRIVER DID NOT CARRY. solver/decide.c's `fork_site_name` states a NAMED RESIDUAL — a fork over
      an operand with no spellable identity "records no constraint, claims no replay slot, and re-forks every
