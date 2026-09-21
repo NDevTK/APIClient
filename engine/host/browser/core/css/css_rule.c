@@ -4280,52 +4280,73 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
         JS_FreeValue(ctx, kids);
         return ok;
     }
-    /* CSS Conditional 5 §5.4's `@container` IS THE ELEMENT-SENSITIVE CONDITIONAL, and that is what makes it a
-       different problem from the two arms above rather than a third copy of them. A media query and a feature query
-       are facts about the DOCUMENT, so each is asked once and its children are walked or not. CSS Conditional 5 §5.4's
-       condition is asked PER ELEMENT: "for each element, the query container to be queried is selected from among the
-       element's ancestor query containers", and two elements matching one selector inside one `@container` can
-       therefore get opposite answers. THERE IS NO ARM OF THIS WALK THAT IS RIGHT, WHICH IS WHY THIS CRASHES INSTEAD OF
-       PICKING ONE. This cascade flattens the rules that apply into TEXT that is re-parsed and matched by selector, so
-       emitting the children applies them to every element the selector matches — the query is then true for everybody
-       — and not emitting them applies them to nobody, which is the query being false for everybody. Both are a
-       plausible answer that reads exactly like a right one, and CSS Conditional 5 §5.4 says the third possibility is
-       the common case rather than an edge: "if no ancestor is an eligible query container, then the container query is
-       UNKNOWN for that element." AND SKIPPING IT IS WRONG EVEN FOR THE LAYERS. CSS Cascade 5 §6.4.3's sentence one arm
-       up has a second clause written for exactly this rule — layers inside a conditional group rule contribute "unless
-       the conditional group rule can evaluate differently for different elements in the document" — so a
-       `@container`'s layers contribute to the layer order UNCONDITIONALLY, which the `@media` arm's false branch does
-       not do and must not be reused for. WHAT TO BUILD, IN ORDER: CSS Conditional 5 §5.1 "Creating Query Containers:
-       the container-type property" resolved on ancestors (so the query container can be SELECTED, which is a cascade
-       result feeding a cascade input and is the part that has to be designed rather than added), then
-       CSS Conditional 5 §6.1 "Size Container Features" against that container's principal box — which needs
-       core/browser/layout — and CSS Conditional 5 §6.2 "Style Container Features", which needs only the computed value
-       of a custom property on the container and is therefore the arm that can land first. CSS Conditional 5 §5.4's
-       three-valued outcome is MQ4's and not a boolean: `<general-enclosed>` and an unselectable container are both
-       UNKNOWN, which does not match. */
+    /* CSS Conditional 5 §5.4 "Container Queries: the @container rule"'s `@container` IS THE ELEMENT-SENSITIVE
+       CONDITIONAL, and that is what makes it a different problem from the two arms above rather than a third copy
+       of them. A media query and a feature query are facts about the DOCUMENT, so each is asked once and its
+       children are walked or not. §5.4's condition is asked PER ELEMENT: "for each element, the query container to
+       be queried is selected from among the element's ancestor query containers", and two elements matching one
+       selector inside one `@container` can therefore get opposite answers. This cascade flattens the rules that
+       apply into TEXT that is re-parsed and matched by selector, so it has nowhere to put a condition that holds
+       for one matching element and not for its sibling.
+       THE LAYERS CONTRIBUTE UNCONDITIONALLY AND THAT IS NOT THE SAME QUESTION AS THE STYLE RULES.
+       CSS Cascade 5 §6.4.3 "Layer Ordering" writes its second arm for exactly this rule — "Layers that are defined
+       inside of a conditional group rule do not contribute to the layer order unless the condition is true or
+       unless the conditional group rule can evaluate differently for different elements in the document" — and its
+       Note says the consequence outright: "any layers defined inside an element-sensitive conditional group rule
+       need to be accommodated when establishing the global layer order, regardless of the rule's condition". So the
+       children are WALKED whatever the query says, and the `@media` arm's false branch is not the shape to copy.
+       AND EMITTING NO STYLE RULE IS THE RIGHT ANSWER IN THIS ENGINE RATHER THAN A GUESS BETWEEN TWO WRONG ONES.
+       §5.4 filters by TRUTH and not by falsity — "Style declarations within the @container rule are filtered by its
+       condition to only match when the container query is true for their element's query container" — and it states
+       what an element with no container gets: "If no ancestor is an eligible query container, then the container
+       query is unknown for that element." UNKNOWN IS NOT TRUE, so the declarations do not apply, and no `not` can
+       turn that around: selection failure makes the whole `<container-condition>` unknown rather than some feature
+       inside it, and §5.4's own combination rule ("true if any of its component <container-condition>s are true")
+       keeps a list of unknowns from ever being true. CSS Conditional 5 §5.1 "Creating Query Containers: the
+       container-type property" is the only thing that makes an element a query container, and this engine cascades
+       no such property, so that antecedent holds for EVERY element in every document it parses.
+       THE CRASH THIS REPLACED WAS RIGHT ABOUT THE SPEC AND WRONG ABOUT THE CONSEQUENCE, which is recorded here
+       because the next reader will otherwise re-derive it. It used to say that dropping the children
+       `makes it false for every element` while §5.4's own answer is UNKNOWN, `which is neither` — and unknown is
+       indeed neither, AS A VALUE. It is not a third CASCADE OUTCOME: §5.4's filter admits only TRUE, so unknown and
+       false are indistinguishable in what they apply, and the value distinction it turned on is real and does not
+       reach this walk. (Those two runs are this tree's own retired prose and are shown rather than claimed, which
+       is why they are backticked: a quoted run here would be read against the nearest citation above it — §5.1 —
+       and reported as a spec quotation that standard does not contain.)
+       THE SCRATCH EMITTER IS THE `@starting-style` ARM'S, and its banner holds the reasoning for why BOTH halves
+       are discarded rather than the style half suppressed — `cascade_emit_mark` writes one entry per rule written
+       into `out`, so stopping one without the other shifts every later rule into a neighbour's layer.
+       NAMED RESIDUAL — the code is CORRECT for the documents this engine can build and NARROWER than §5.4:
+         NOT COVERED: an element that IS a query container, whose descendants' container queries §5.4 then requires
+           to be EVALUATED against it rather than answered unknown. Every `@container` body is withheld here, so a
+           query that ought to be true is withheld with the rest.
+         THE NEXT DIFF BUILDS §5.1's `container-type` as a cascaded property and the ancestor walk that SELECTS a
+           query container for an element, which is a cascade result feeding a cascade input and is a component of
+           its own; then CSS Conditional 5 §6.2 "Style Container Features", which needs only the computed value of a
+           custom property on that container and is therefore the arm that can land without layout; then
+           CSS Conditional 5 §6.1 "Size Container Features", which needs core/browser/layout. Once a container can
+           be selected this arm can no longer withhold the body, because the text it emits is matched by selector
+           and cannot carry a per-element condition — so the diff that lands §5.1 is the diff that has to decide
+           where a per-element filter lives, and it must not reach this function for the answer.
+         ITS ABSENCE WOULD SHOW as a page whose `@container` bodies never style anything while its layer order is
+           the one a browser computes: read the text this walk emits for a sheet with an `@container` in it and the
+           declarations inside are absent, while the layers declared inside it hold their positions in
+           `css_layer_order`. A browser that had selected a container would have emitted those declarations for the
+           elements under it.
+         RETIREMENT: this note goes when `container-type` is a property this engine cascades. Grep
+           `"container-type"` across core/css: while that answers only prose, no element is a query container and
+           this arm is right. core/css/media_query.c's `mq_container_extent` rests on the SAME premise for
+           CSS Conditional 5 §7's `cq*` units and states the same grep, so the diff that retires one retires both
+           and neither may be drained alone. */
     if (r->type == RULE_TYPE_CONTAINER) {
-        DFAIL("CSS Conditional 5 §5.4 \"Container Queries: the @container rule\" reached the author cascade, "
-              "and this build cannot decide it: a container query is evaluated PER ELEMENT against a query "
-              "container selected from that element's ancestors (CSS Conditional 5 §5.4), while this walk flattens "
-              "the rules "
-              "that apply into one text matched by selector, so it has nowhere to put a condition that is true "
-              "for one matching element and unknown for its sibling. Do NOT resolve it to a boolean here — "
-              "emitting the children makes the query true for every element and dropping them makes it false "
-              "for every element, and CSS Conditional 5 §5.4's own answer for a document with no eligible container "
-              "is UNKNOWN, "
-              "which is neither. Build CSS Conditional 5 §5.1's `container-type` resolution so a query container can "
-              "be "
-              "selected, then CSS Conditional 5 §6.2's style container features (which need only a computed custom "
-              "property on "
-              "the container) and CSS Conditional 5 §6.1's size features (which need core/browser/layout); and note "
-              "that "
-              "CSS Cascade 5 §6.4.3's layer sentence puts THIS rule in its second arm — a `@container`'s "
-              "layers contribute to the layer order whatever its condition says, so the `@media` arm's skip "
-              "is not the shape to copy. The CSSOM object is complete and is NOT what is missing: core/css/css_rule.c "
-              "builds a  CSSContainerRule with CSS Conditional 5 §9.1's `conditions`, `containerName`, "
-              "`containerQuery` and "
-              "`conditionText`, so the rule, its children and its `cssText` are all readable by the page and "
-              "only its CASCADED EFFECT is unbuilt");
+        CascadeEmit scratch = { { NULL, 0, 0 }, NULL, 0, 0, e->order };
+        JSValue kids = rule_child_rules(ctx, rule);
+        bool ok = cascade_emit(ctx, kids, &scratch, cur, nest);
+
+        JS_FreeValue(ctx, kids);
+        free(scratch.out.s);
+        free(scratch.layer);
+        return ok;
     }
     /* AN `@namespace` IS EMITTED, and it is the one non-style rule that must be: it declares a prefix the
        SELECTORS below are written against, so a sheet whose `@namespace svg url(...)` were dropped would hand
