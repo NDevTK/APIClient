@@ -192,11 +192,22 @@ const PROBE = `(() => ({
      are read by bare truthiness (\`if (c.admin)\`) and each of their requests is a CONSTANT address, which
      mints no param at all; the only members reaching an address as a hole are the two the bundle never gates.
      So \`astHoleParams\` stood at 2 with all four columns at 0, and both readings of that pair — the engine
-     narrowing nothing, and the document asking nothing — are consistent with it. The @S half of this control
-     has the same rule stated at its own site: a corpus-wide zero is a finding only once the control's own
-     value in that column is non-zero, and no document here has ever made that true for these four.
-     RETIREMENT: this record goes when a control document gates a value that also reaches a request as a
-     hole-carrying param, so a zero in these columns is a statement about the engine again. */
+     narrowing nothing, and the document asking nothing — are consistent with it.
+     THE CONTROL IS ARMED NOW AND THESE COLUMNS ARE READABLE, which retires the clause that used to stand
+     here saying no document had ever made that true. control/gated-hole.html gates one member by each of the
+     four shapes \`decide_branch\` records and splices that SAME member into a path, so the gated set and the
+     hole-carrying set intersect; \`zone\` is spliced identically and gated by nothing, which is the negative
+     control that makes a nonzero reading mean something. MEASURED twice against one artifact, at loads 0.41
+     and 2.22, spread ZERO on every column: \`params\` 7, \`astHoleParams\` 7, \`astUnstatedParams\` 0, and
+     \`withExcl\` 1, \`withBnd\` 2, \`withPred\` 2, \`withLeq\` 1 — which is the per-rung design exactly, since
+     ordering and call predicates record on BOTH arms while a strict equality leaves a hole only on its false
+     arm and a loose one only on the arm that holds. Six of the seven holes carry a domain and the ungated
+     one carries none. SO A ZERO IN THESE COLUMNS IS A STATEMENT ABOUT THE ENGINE AGAIN — on any document
+     whose own \`astHoleParams\` is nonzero — and a zero HERE is a finding about the four recorders.
+     WHAT IT DOES NOT ARM IS THE BARE-TRUTHINESS GATE, which is a fifth shape and files under none of these
+     four keys: solver/decide.c carries a named residual saying so, and \`if (c.admin)\` is still the one
+     narrowing this surface cannot look up. That is why the data-channel reading above is kept rather than
+     deleted — it is the measured shape of exactly that gap. */
   domains: (() => {
     let params = 0, astParams = 0, astPathParams = 0, astHoleParams = 0, astUnstatedParams = 0,
         withExcl = 0, withBnd = 0, withPred = 0, withLeq = 0, reached = false;

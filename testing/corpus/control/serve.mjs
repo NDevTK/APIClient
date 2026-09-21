@@ -86,6 +86,7 @@
 //     node site.mjs control-csp  http://127.0.0.1:8906/ <pass>
 //     node site.mjs control-csp-open http://127.0.0.1:8907/ <pass>
 //     node site.mjs control-method http://127.0.0.1:8908/ <pass>
+//     node site.mjs control-gated http://127.0.0.1:8909/ <pass>
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -121,6 +122,13 @@ const DOCS = [
      "Methods" that works, and a non-GET aborting the run was a state nine green rows could not see. Its
      regression mode IS an abort, which is why it is its own document rather than a rung in index.html. */
   ['method-park.html', 'control-method'],
+  /* THE ONE ORIGIN WHOSE GATED SET AND HOLE-CARRYING SET INTERSECT, APPENDED FOR THE REASON STATED ABOVE.
+     Every other document here gates values that reach CONSTANT addresses, so site.mjs's four domain columns
+     were zero BY CONSTRUCTION and a reader could not tell that from an engine that narrowed nothing -- an
+     unarmed control, which CLAUDE.md says is not a control. Its regression mode is a SILENT zero rather
+     than an abort, which is why it is its own document: a rung added to injected-state.html would have
+     moved that channel's published baseline instead. */
+  ['gated-hole.html', 'control-gated'],
 ];
 
 /* THE ONE NON-SCRIPT SUBRESOURCE ANY ROW FETCHES, and it is answered by every origin for the same reason the

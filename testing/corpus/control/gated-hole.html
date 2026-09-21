@@ -1,0 +1,32 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>control — a gated value that also reaches a request as a hole</title>
+<!--
+  THE ONE DOCUMENT IN THIS CONTROL WHOSE GATED SET AND HOLE-CARRYING SET INTERSECT, which is the single
+  property site.mjs's four domain columns need in order to be readable at all. Its own banner states the
+  reason in full: a domain is filed under a HOLE by solver/decide.c and read back under that same hole by
+  solver/endpoint.c's `kv_add`, so a document that gates only values reaching CONSTANT addresses -- which is
+  every other channel here -- makes `withExcl`/`withBnd`/`withPred`/`withLeq` zero BY CONSTRUCTION and a
+  reader cannot tell that from an engine that narrowed nothing.
+
+  IT IS ITS OWN DOCUMENT RATHER THAN A RUNG IN injected-state.html, and that is not tidiness. That document's
+  measured reading (`astHoleParams` 2, all four domain columns 0) is a published baseline a lane may already
+  have quoted, and adding rungs to it would move the numbers a later reader compares against -- CLAUDE.md's
+  rule that a fixture's own design sets the denominator, so changing the design silently changes what every
+  proportion drawn from it means. A new origin leaves that channel byte-identical.
+
+  THE RECORD IS SERVER-INJECTED ABSENT STATE, which is what makes its members SYMBOLIC rather than concrete.
+  CLAUDE.md §Attacker-sources: a value a server injected is unknown input, so the read forks and the gate
+  narrows rather than deciding -- which is the whole precondition for there being a domain to file. A record
+  the page had COMPUTED would be concrete, every gate would be decided by running the real predicate, and
+  there would be no narrowing to record; that is a different measurement and not this one.
+
+  WHAT IT HOLDS AND WHY EACH MEMBER IS THERE is stated at gated-hole.js, one rung per recorder plus `zone` as
+  the document's own negative control. The values below are ordinary -- a region, a tier, a rank, a status,
+  an availability zone -- because a control whose data is exotic measures the exotic path.
+-->
+<h1>gated value, hole-carrying param</h1>
+<p>Four members gated by the four shapes <code>decide_branch</code> records, each spliced into a path so its
+   hole carries that recorder's key; <code>zone</code> spliced the same way and gated by nothing.</p>
+<script>window.__CTL_GATED__ = {"region":"us-east-1","tier":"gold","rank":7,"code":200,"zone":"a"};</script>
+<script src="/gated-hole.js"></script>
