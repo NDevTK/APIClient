@@ -47,9 +47,10 @@
  * WHAT IT DOES NOT COMPARE, and each name is here because it is a COST rather than a finding: `_switches`,
  * `_flows`, `_candidates`, `_jobsQueued`, `_jobsRun`, `_unitsDone`, `_worldSegmentsHeld`, `_worldSegmentsMade`,
  * `_worldSegmentsForked`, `_park`, the four numbers of the @S arrival census (`_sourceReads`, `_sinkReached`,
- * `_sinkTainted`, `_sinkSuppressed`), the routed-delivery pair and the four ends of the task it queues
- * (`_routedDelivered`, `_routedRefused`, `_routedTasksFired`, `_routedTasksTargetOrigin`,
- * `_routedTasksTargetGone`, `_routedTasksThrew`), the orphan census (`_orphansDriven`, `_orphansAsked`), the
+ * `_sinkTainted`, `_sinkSuppressed`), the routed-delivery TRIPLE and the four ends of the task it queues
+ * (`_routedDelivered`, `_routedRefused`, `_routedZeroDelivery`, `_routedTasksFired`,
+ * `_routedTasksTargetOrigin`, `_routedTasksTargetGone`, `_routedTasksThrew`), the orphan census
+ * (`_orphansDriven`, `_orphansAsked`), the placement census's fourteen lifetime counts (`_layout`), the
  * four subsystem censuses (`_cold`, `_heap`, `_swap`, `_forkAt` — dropped as READINGS OF AN INSTANT rather
  * than as costs; see the row itself, and note that `_wfq` is deliberately NOT dropped because the terminal
  * document's frontier is empty under every schedule), and a parked search's `tried` and `turns`. `_switches` exists precisely BECAUSE it differs between an
@@ -61,8 +62,8 @@
  * seven is the same DOCUMENT, and the census is about coverage rather than about what was found. What it
  * costs to drop them is stated plainly: this gate cannot then catch the census itself regressing, which is
  * correct for a cost surface and would not be for a finding.
- * THE SIX CROSS-INSTANCE COUNTERS ARE ARGUED IN ONE AT A TIME, because they are two different kinds of number
- * and no single sentence covers both. `_routedDelivered` and `_routedRefused` are counted once per (routed
+ * THE SEVEN CROSS-INSTANCE COUNTERS ARE ARGUED IN ONE AT A TIME, because they are THREE different kinds of
+ * number and no sentence covers them all. `_routedDelivered` and `_routedRefused` are counted once per (routed
  * record, TIMELINE it was offered to) — solver/engine.h: a routed record is attached to EVERY LIVE FLOW of the
  * receiving document, each of which either admits it or consumes it as belonging to the other side of a sender
  * branch. So their SUM is the number of flows standing when the host routed the record, which is a fact about
@@ -79,14 +80,37 @@
  * the target has THEN and a navigation may land between the post and the delivery; and `_routedTasksTargetGone`
  * is §7.5.10 "Destroying documents"'s destroy-a-document step 7 ("remove any tasks whose document is document
  * from any task queue (without running those tasks)") reaching a task before it runs. Both are outcomes of an
- * ORDER between two work items, which is the one thing a schedule is free to choose. None of the six is a
+ * ORDER between two work items, which is the one thing a schedule is free to choose.
+ * AND THE THIRD KIND IS ONE NUMBER, `_routedZeroDelivery`, WHOSE ARGUMENT IS NOT THE PAIR'S AND MUST NOT BE
+ * FOLDED INTO IT — which is the whole reason it is written here rather than added to the row above. The pair
+ * leaves because their SUM is a count of ATTACHMENTS; this one is per RECORD, and solver/engine.h says so in
+ * as many words: "Both counts above are per (record, TIMELINE) attachment" while "was this record admitted by
+ * any timeline at all" "is per RECORD, so no arithmetic over the pair recovers it". solver/result.c calls it
+ * out beside them rather than under their grouping paragraph for the second half of the same fact — "IT IS A
+ * GAUGE AND ITS TWO NEIGHBOURS ARE NOT". So the pair's reason is FALSE of it, and a right row resting on a
+ * wrong reason is the shape that survives review.
+ * WHAT MAKES IT SCHEDULE-CHOSEN IS THE INSTANT IT IS READ AT, AND `park` CHOOSES A DIFFERENT ONE. It RISES on
+ * arrival and FALLS when some timeline admits the record, so it is a BACKLOG until the receiver is drained to
+ * a stall and a LOSS only after that. The terminal document this gate compares is reached by draining OR
+ * PARKING, and the ledger is PROCESS-LIFETIME while a park crosses a process — solver/engine.h, on the rebuilt
+ * arrival: "the session that registered the original is gone with its table". So under `park` the resuming
+ * session sums only what cold_resume put back through `engine_routed_rebuilt`, and the population the gauge is
+ * taken over is chosen by WHERE THE PARK FELL. That is the schedule's choice and nothing else's, which is the
+ * one ground everything in this list leaves on.
+ * AND THE DRAINED INSTANT — the one at which it means a LOSS rather than a backlog — IS ALREADY ASSERTED
+ * WHERE IT LIVES, which is why comparing it here would buy nothing even if it converged: solver/engine.c reads
+ * it at frontier exhaustion, with every attachment consumed and the gauge unable to fall again, and ABORTS on
+ * a nonzero. A gate restating that from outside is the second, weaker copy of an assert that fires louder,
+ * which the paragraph opening this header refuses by name.
+ * None of the seven is a
  * finding: what a routed message CAUSES in this document arrives in fetchCallSites / securitySinks /
- * pageErrors by executing like anything else, and these six count the transport that carried it.
+ * pageErrors by executing like anything else, and these seven count the transport that carried it.
  * AND THEY ARE STRUCTURALLY ZERO IN THIS GATE, said out loud rather than left looking like coverage. A routed
  * record reaches an engine only through main.c's `qjs_route`; this driver never calls it, and window_message.c
  * and flow.c both gate the four ends on the record being ROUTED, so a local post reaches the same ends and is
  * not counted. A corpus document that would need a peer is refused above by name. So this row is a
- * classification made for the driver that DOES route — engine/route.mjs, which reads all six and asserts each
+ * classification made for the driver that DOES route — engine/route.mjs, which reads all seven and asserts
+ * each
  * rather than defaulting it — and not an exclusion this gate is exercising. Everything
  * else is compared BY DEFAULT — a field added to the result document is a field this gate holds invariant
  * until someone argues it into the list above, which is the direction that fails loud rather than quietly.
@@ -1130,6 +1154,16 @@ const DROP = new Map([
                    standing when the host routed — see the header. Zero in this gate by construction: nothing
                    here calls qjs_route. */
                 "_routedDelivered", "_routedRefused",
+                /* AND THE THIRD, WHICH IS ABOUT A RECORD RATHER THAN AN ATTACHMENT AND IS A GAUGE — so its
+                   argument is the header's THIRD-KIND paragraph and is NOT the two lines above it. Zero in
+                   this gate for its neighbours' reason: nothing here calls qjs_route. NOT in
+                   `INSTANT_CENSUSES`, on `_absent`'s ground — `snapshot` compares two composes at ONE
+                   boundary with no step between them, and engine_routed_census neither routes nor admits, so
+                   this must be byte-identical across that pair and holding it there is free.
+                   RETIREMENT: this row goes when the per-attachment ticket solver/engine.c names as its
+                   residual is built and the ledger stops being keyed on the record TEXT, because the number
+                   this name carries is then a different one and is classified from its own producer. */
+                "_routedZeroDelivery",
                 /* §9.3.3 step 8's four task ends, each counted per queued task PER ARM — engine.h's
                    conservation law is an inequality for exactly that reason. */
                 "_routedTasksFired", "_routedTasksTargetOrigin", "_routedTasksTargetGone",
@@ -1188,6 +1222,51 @@ const DROP = new Map([
                    and `securitySinks`. A schedule that read an absent name a different number of times and
                    still learned the same surface passes, and one that learned less fails on the surface. */
                 "_absent",
+                /* THE PLACEMENT CENSUS, FOURTEEN COUNTS IN ONE NESTED OBJECT, AND IT LEAVES WHOLE BECAUSE NOT
+                   ONE OF ITS ROWS IS A GEOMETRY. That is the question to ask of it — a document's LAYOUT
+                   ought to agree under every schedule even where the AMOUNT OF LAYOUT WORK does not, so a
+                   member that is a position would belong on the compared side and the object would have to be
+                   split rather than waived — and the answer is read off the producer, not off the name:
+                   core/layout/flow_placement.h declares the struct as fourteen `long long`s and says of them
+                   "Every field is a LIFETIME counter of this agent", "so every one may be differenced across
+                   two samples". The POSITIONS this component answers are the `CssPx *out` of its ask and peek
+                   entries and are emitted NOWHERE in this census, so there is no member to split out.
+                   WHAT EACH ROW COUNTS IS A QUESTION A RUNNING FLOW ASKED, which is the arrival census's
+                   ground exactly. The ask rows are raised whether or not a pass is open — "the recording
+                   point is the QUESTION and never the outcome" — and `passes` is one whole-tree paint walk,
+                   so the magnitude is how many flows and how many candidate re-runs reached geometry-reading
+                   code. Those are `_flows` and `_candidates`, names this list already accepts differ.
+                   AND THE REASON A READER REACHES FOR FIRST IS WRONG, said here because a right row on a
+                   wrong reason is the shape that survives review. The tempting argument is that the
+                   served/derived split is a RACE between flows — whichever paints first fills the record and
+                   the next one is SERVED — and the record cannot carry an answer across a flow switch at all:
+                   flow_placement.h holds it to `dom_cow_version()`, which "is read at open and asserted
+                   unchanged at close AND at every ask a pass" answers, and that number moves "on the COW
+                   SWAP". A pass is confined to one flow, so the split is decided inside one, and what the
+                   schedule chooses is HOW MANY flows open a pass rather than who wins a race.
+                   ITS FOUR IDENTITIES ARE ALREADY ASSERTED WHERE THEY LIVE — flow_placement_census DCHECKs
+                   asks == served + walks and the origin, box and width triples before it copies a byte — so a
+                   gate holding any ratio of these rows invariant would be the second, weaker copy of an
+                   assert that fires louder, which this file's header refuses by name.
+                   NOT ADDED TO `INSTANT_CENSUSES`, FOR `_absent`'s REASON AND WITH ITS PAYOFF. That list's
+                   other consumer is `snapshot`, which compares two composes at ONE boundary with no step
+                   between them; flow_placement_census is a pure read that asserts and copies and raises
+                   nothing, and it is result.c's ONLY call into that component, so this object must be
+                   byte-identical across that pair. Holding it there is free and it is the only thing in this
+                   tree that checks the composition path has not acquired a geometry ask — if it ever reddens
+                   THERE, result.c's render path has started asking layout questions, which is a finding
+                   rather than a gate fault.
+                   BY CONSTRUCTION AND NOT FROM A MEASUREMENT, stated as what was READ. flow_placement_pass_open
+                   has exactly one caller, core/paint/document_paint.c, and nothing this driver invokes reaches
+                   it, so `passes` and `placements` are 0 here under every schedule; and no document in
+                   engine/tests/solver names getBoundingClientRect, getClientRects, offsetTop, offsetLeft,
+                   offsetWidth, offsetHeight, clientTop or scrollTop. Nobody may read this row as evidence that
+                   a `_layout` mismatch was ever observed here — it is a classification made for the mechanism
+                   and for a driver that renders.
+                   RETIREMENT: this row goes when flow_placement.h's own retirement lands — layout producing a
+                   box tree that paint reads — because a position is then a field of the box, this census has
+                   no successor, and there is nothing left to classify. */
+                "_layout",
                 /* THE ONE COST IN THIS SET THAT IS NOT A COUNT, AND IT IS DROPPED ON THE SPEC'S OWN GATING
                    RATHER THAN ON A MAGNITUDE. Every other name above is a total or a reading of an instant
                    whose SIZE the schedule chooses, and that reason does not reach a LIST OF MESSAGES — a
