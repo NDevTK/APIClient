@@ -398,12 +398,22 @@ static const char *kv_pair_next(const char *p, const char **nm, size_t *nn, cons
     return p + plen;
 }
 
-/* DOES THE EXAMPLE'S QUERY LINE UP WITH THE SHAPE'S, PAIR BY PAIR? The question path_aligned asks of the path,
+/* DOES THE EXAMPLE'S QUERY LINE UP WITH THE SHAPE'S, PAIR BY PAIR? The question `path_align` asks of the path,
    asked of the other half of the address and for the same reason: the two strings are ONE concatenation
    rendered twice, so a hole's value may be read across only where everything around it still agrees. Same
-   pair count, same names, and every hole-free value byte-equal. A hole whose value held an `&` splits the
-   example into more pairs than the shape has and nothing aligns — the honest answer, since this layer cannot
-   know which pairs that value spanned. */
+   pair count, same names, and every hole-free value byte-equal.
+   NAMED RESIDUAL — THIS HALF STILL REQUIRES EQUAL PAIR COUNTS AND THE PATH HALF NO LONGER DOES.
+     WHAT IS NOT COVERED: a query hole whose computed value contains the pair separator. Such a value splits
+       the example into more pairs than the shape holds, this walk answers "not aligned" for the WHOLE query,
+       and every query param on that address is emitted with no example — the failure `path_align` was
+       widened to end, one half of the address over.
+     WHAT THE NEXT DIFF BUILDS: the uniqueness rule `path_align` states, over PAIRS rather than segments — a
+       hole covering one-or-more whole pairs, anchored on the pair NAMES either side, taken only where the
+       reading is unique. The name equality this walk already enforces makes those anchors stronger than the
+       path's, so the ambiguous population should be smaller here rather than larger.
+     HOW ITS ABSENCE WOULD SHOW: an endpoint whose path params all carry values beside query params on the
+       SAME record carrying none — the two halves are aligned by two walks over one concatenation, so a
+       record split that way is this clause and not a fact about the page. */
 static int query_aligned(const char *shape, const char *ex) {
     const char *a = shape, *b = ex;
     for (;;) {
@@ -509,26 +519,167 @@ static char *url_example(JSContext *ctx, JSValueConst url) {
     return r;
 }
 
-/* DOES THE EXAMPLE'S PATH LINE UP WITH THE SHAPE'S, SEGMENT BY SEGMENT? The alignment is what makes a hole's
-   value a MEASUREMENT rather than a guess, so it is checked and not assumed: the two must have the same
-   segment count and every hole-free segment must be byte-equal. A hole whose value contained a `/` breaks
-   both, and then nothing is aligned and no path param carries an example — which is the honest answer, since
-   this layer cannot know which segments that value spanned. */
-static int path_aligned(const char *shape, const char *ex) {
-    const char *a = shape, *b = ex;
+/* ONE `/`-SEPARATED SEGMENT OF AN ADDRESS, borrowed out of the string it was split from. */
+typedef struct { const char *p; size_t n; } Seg;
+
+/* THE SEGMENTS OF ONE ADDRESS HALF, malloc'd — ONE walk, so the aligner below and the scan that consumes its
+   answer index the same split and cannot disagree about where a segment ends. An address with no `/` is ONE
+   segment and an empty one is one EMPTY segment, which is the arithmetic the `strchr` walks already perform. */
+static Seg *seg_split(const char *s, int *n_out) {
+    int n = 1, i = 0;
+    const char *p = s, *e;
+    Seg *v;
+
+    for (e = s; *e; e++) if (*e == '/') n++;
+    v = malloc((size_t)n * sizeof *v);
+    CHECK(v, "endpoint: OOM splitting an address into segments");
     for (;;) {
-        const char *ae = strchr(a, '/'), *be = strchr(b, '/');
-        size_t an = ae ? (size_t)(ae - a) : strlen(a);
-        size_t bn = be ? (size_t)(be - b) : strlen(b);
-        if (!memchr(a, '{', an) && (an != bn || memcmp(a, b, an))) return 0;
-        if (!ae != !be) return 0;
-        if (!ae) return 1;
-        a = ae + 1; b = be + 1;
+        e = strchr(p, '/');
+        v[i].p = p;
+        v[i].n = e ? (size_t)(e - p) : strlen(p);
+        i++;
+        if (!e) break;
+        p = e + 1;
     }
+    DCHECK(i == n,
+           "an address split into a different number of segments than its own separator count — the count "
+           "and the walk are two readings of one string and the array is sized by the first, so a "
+           "disagreement means this walk wrote past its end or left a row nobody filled");
+    *n_out = n;
+    return v;
 }
 
-/* AN UNKNOWN PATH SEGMENT IS ONE PATH PARAMETER, AND IT IS ATOMIC. `/v1/users/{state}.id/posts` has one, and
-   its value is the whole segment the example holds there — `42`.
+/* THE END OF A RUN OF `nseg` WHOLE SEGMENTS STARTING AT `b` — the separator that terminates it, or NULL when
+   the run reaches the end of the string. It COUNTS separators rather than chasing `strchr` results so that no
+   build can dereference a NULL here: a span this is asked for was proved against this same string, so the
+   disagreement is a DCHECK to read rather than a pointer to fall over in release. */
+static const char *seg_run_end(const char *b, int nseg) {
+    const char *e;
+
+    DCHECK(nseg >= 1,
+           "a segment run was asked for no segments at all — every span `path_align` records is at least one, "
+           "a literal covering exactly one segment and a hole covering the value that stood there");
+    for (e = b; *e; e++) {
+        if (*e != '/') continue;
+        if (--nseg == 0) return e;
+    }
+    DCHECK(nseg == 1,
+           "a segment run ran off the end of the example it was measured against — `path_align` proved this "
+           "span against this same string, so a run wanting more segments than the string holds is that "
+           "proof and this walk reading two different addresses");
+    return NULL;
+}
+
+/* DOES THE EXAMPLE'S PATH LINE UP WITH THE SHAPE'S, AND IN EXACTLY ONE WAY? The alignment is what makes a
+   hole's value a MEASUREMENT rather than a guess, so it is checked and not assumed: every hole-free segment
+   of the shape must be byte-equal to the example segment standing under it, and every HOLE covers ONE OR MORE
+   whole example segments — one at least, because a hole is a value the code computed and a value that
+   computed to the empty string still occupies its own segment; more than one wherever that value itself
+   holds a `/`.
+   THE MULTI-SEGMENT HOLE IS THE PRODUCT'S OWN CASE RATHER THAN AN EDGE, which is why the equal-count matcher
+   that stood here is replaced instead of guarded. `fetch(cfg.apiBase + "/v1/users/" + id)` — a bundle that
+   computes its own base — displays as `{cfg.apiBase}/v1/users/{id}` and computes
+   `https://api.acme.com/v1/users/42`, so its FIRST hole stands over three example segments. Requiring equal
+   counts answers "not aligned" for the whole address, and `param_add_val` then skips the empty value of
+   EVERY param on it — so the spelling a large real app uses reported its parameters with no example under any
+   of them, while `https://{cfg.host}/v1/users/{id}`, which differs only in where the hole starts, reported
+   them in full. The same refusal covered every path hole whose value holds a `/` at all.
+   AMBIGUITY IS A REFUSAL AND NEVER A GUESS. `{a}/{b}` over `x/y/z` has two readings and nothing at this layer
+   can know which one the code computed; §@H makes an invented value a WRONG report rather than a thin one, so
+   the alignment is taken only where the reading is UNIQUE and the address is otherwise left example-free
+   exactly as it was. What is computed is therefore the COUNT of readings, saturated at two, because "more
+   than one" is the whole of what a second reading has to say.
+   IT IS A STRICT EXTENSION OF THE MATCHER IT REPLACES, AND THAT IS ARITHMETIC RATHER THAN A SPOT-CHECK: a
+   literal covers exactly one segment and a hole covers at least one, so where the two segment counts are
+   EQUAL every hole is FORCED to exactly one and the only candidate reading is the 1:1 walk the old matcher
+   took. Every address that aligned before aligns to the same spans, every address that failed on a literal
+   mismatch still fails, and the only answers that move are the ones that were refused for the count alone.
+   The recovery below ASSERTS that forcing rather than restating it, so a later change to the table cannot
+   move an answer that was never in question.
+   Returns a malloc'd span per shape segment and writes the shape's segment count, or NULL when there is no
+   reading or more than one. */
+static int *path_align(const char *shape, const char *ex, int *nshape) {
+    int n = 0, m = 0, i, j, k;
+    Seg *S = seg_split(shape, &n);
+    Seg *E = seg_split(ex, &m);
+    /* WAYS[i][j] — how many readings match the shape's segments from `i` onward against the example's from
+       `j` onward, saturated at two. Filled backwards so each row reads only the row below it. */
+    unsigned char *w = calloc((size_t)(n + 1) * (size_t)(m + 1), 1);
+    int *span = NULL;
+
+    CHECK(w, "endpoint: OOM aligning a request's shape against the concrete URL a flow computed");
+    w[(size_t)n * (size_t)(m + 1) + (size_t)m] = 1;   /* both exhausted together: one reading, the empty one */
+    for (i = n - 1; i >= 0; i--) {
+        unsigned char *cur = w + (size_t)i * (size_t)(m + 1);
+        const unsigned char *nxt = cur + (m + 1);
+        if (memchr(S[i].p, '{', S[i].n)) {
+            unsigned suf = 0;                        /* the saturated sum of nxt[j + 1 .. m] */
+            for (j = m; j >= 0; j--) {
+                cur[j] = (unsigned char)(suf > 2 ? 2 : suf);
+                suf += nxt[j];
+                if (suf > 2) suf = 2;
+            }
+        } else {
+            for (j = 0; j <= m; j++)
+                cur[j] = (j < m && S[i].n == E[j].n && !memcmp(S[i].p, E[j].p, S[i].n)) ? nxt[j + 1] : 0;
+        }
+    }
+    if (w[0] == 1) {
+        span = malloc((size_t)n * sizeof *span);
+        CHECK(span, "endpoint: OOM recording how many example segments each hole of an address stands over");
+        j = 0;
+        for (i = 0; i < n; i++) {
+            const unsigned char *cur = w + (size_t)i * (size_t)(m + 1);
+            const unsigned char *nxt = cur + (m + 1);
+            /* UNIQUENESS IS WHAT MAKES THIS WALK A READ RATHER THAN A CHOICE, so it is asserted at every step
+               and not once at the top. `w[0] == 1` says the whole match has one reading, and every state on
+               that reading therefore has one too — a hole's `cur[j]` is the saturated sum over the states it
+               can hand on to, so a 1 there is exactly one live successor and the search below cannot be
+               picking between two. */
+            DCHECK(cur[j] == 1,
+                   "an address alignment with exactly one reading reached a state holding a different number "
+                   "of them — this walk is then choosing between readings instead of following the one the "
+                   "count proved, and a hole would carry bytes another reading gives to its neighbour");
+            if (!memchr(S[i].p, '{', S[i].n)) {
+                span[i] = 1;
+            } else {
+                for (k = j + 1; k <= m; k++) if (nxt[k]) break;
+                DCHECK(k <= m,
+                       "a hole on the one reading of an address alignment stands over no example segment at "
+                       "all — the table said this state had a reading and the row below it holds none, so "
+                       "the count and the recovery are two walks over one table that disagree");
+                span[i] = k - j;
+            }
+            /* AND THE EQUAL-COUNT CASE IS STILL THE 1:1 WALK, ASSERTED RATHER THAN ARGUED. It is the whole of
+               why this matcher answers byte-identically to the equal-count one it replaces for every address
+               that already aligned, and an argument in a comment is exactly what a later table change would
+               not have to keep true. */
+            DCHECK(n != m || span[i] == 1,
+                   "an address whose shape and example hold the SAME number of segments aligned with a hole "
+                   "standing over more than one of them — a literal covers exactly one and a hole at least "
+                   "one, so equal counts admit the 1:1 reading and no other, and this is an answer that was "
+                   "never in question moving under a widening made only for the unequal case");
+            j += span[i];
+        }
+        /* THE PARTS SUM TO THE TOTAL — the one identity a reader of this array can check without re-deriving
+           the table, and what makes a span a fact about the example rather than a number. A walk that lost or
+           double-counted a segment hands `path_scan` a value starting or ending mid-run. */
+        DCHECK(j == m,
+               "an address alignment's spans do not cover the example's segments exactly — their sum is what "
+               "says each hole's value is the bytes that stood under it, so a short or long total means some "
+               "param carries a slice of its neighbour's value");
+    }
+    free(w); free(S); free(E);
+    *nshape = n;
+    return span;
+}
+
+/* AN UNKNOWN PATH SEGMENT IS ONE PATH PARAMETER, AND IT IS ATOMIC IN THE TEMPLATE. `/v1/users/{state}.id/posts`
+   has one, and its value is the RUN of example segments `path_align` proved it stands over — one segment for
+   that address (`42`), and more wherever the value the code computed itself holds a `/`. The TEMPLATE is the
+   same either way: it is built out of the SHAPE alone, so nothing the example does can move a hole's
+   boundaries, which is why widening the alignment cannot move the identity `endpoint_mark_asset` recomputes
+   through this same function with no example at all.
    THE BRACES DO NOT DELIMIT THE UNKNOWN, which is the thing that makes this segment-wide rather than
    brace-wide, and reading `concolic_exotic_get` is what says so: a member read composes its display as
    `"%s.%s"` over the parent's, so `state.id` displays as `{state}.id` with the braces around the ROOT SOURCE
@@ -544,7 +695,11 @@ static int path_aligned(const char *shape, const char *ex) {
    the address — lib/learn.js's own reconcile refuses the same segment for the same reason.
    Returns the re-spelled path, malloc'd. */
 static char *path_scan(KvBuf *out, const char *shape, const char *ex) {
-    int aligned = ex && path_aligned(shape, ex);
+    int nseg = 0, i = 0;
+    /* NULL for BOTH of the two ways there is nothing to align against — no example at all, and an example
+       with no unique reading — because the two are one answer to this walk: it has no bytes it can attribute
+       to a hole. `path_align`'s own banner is where they are told apart. */
+    int *span = ex ? path_align(shape, ex, &nseg) : NULL;
     const char *a = shape, *b = ex;
     /* core/json_buf.h's growing byte buffer, appended raw — a fourth private one in this file is the copy its
        own header says it deleted twice. Nothing here is JSON: the emit quotes this string later. */
@@ -557,7 +712,23 @@ static char *path_scan(KvBuf *out, const char *shape, const char *ex) {
         size_t bn = 0, nlen = 0;
         char *seg, *name;
 
-        if (aligned) { be = strchr(b, '/'); bn = be ? (size_t)(be - b) : strlen(b); }
+        if (span) {
+            DCHECK(i < nseg,
+                   "the shape walk ran past the segment count its own alignment was built from — `seg_split` "
+                   "and this loop split ONE string and the span array is sized by the first, so a further "
+                   "segment here is this walk reading past the end of that array");
+            be = seg_run_end(b, span[i]);
+            bn = be ? (size_t)(be - b) : strlen(b);
+            /* THE EXAMPLE RUNS OUT EXACTLY WHEN THE SHAPE DOES, asserted here where the two walks are in one
+               hand and for the reason `kv_pairs` asserts the same of the query half: `path_align` proved the
+               spans cover every example segment, so the LAST shape segment's run reaches the end of the
+               example and no earlier one does. A run that ended early would hand this hole its neighbour's
+               bytes and leave the next one reading past them. */
+            DCHECK(!ae == !be,
+                   "an aligned example path ran out of segments before its shape did, or held segments the "
+                   "shape's last one did not cover — `path_align` proved the spans sum to the example's own "
+                   "segment count, so these two walks disagreeing is that proof and this walk having parted");
+        }
         seg = malloc(an + 1); CHECK(seg, "endpoint: OOM copying a path segment");
         memcpy(seg, a, an); seg[an] = 0;
         /* THE NAME *IS* THE HOLE KEY on this path, SO IT IS SPELLED BY THE ONE SPELLER AND NOT BESIDE IT.
@@ -584,15 +755,22 @@ static char *path_scan(KvBuf *out, const char *shape, const char *ex) {
             json_buf_raw(&p, "{"); json_buf_raw(&p, name); json_buf_raw(&p, "}");
             /* …so a path param looks its domain up by the same string the popup substitutes it by AND by the
                same string decide.c filed it under. The VALUE here is the concrete example aligned out of the
-               URL and carries no braces to read a hole out of. */
-            kv_add(out, name, nlen, aligned ? b : "", aligned ? bn : 0, EP_PATH, name);
+               URL and carries no braces to read a hole out of; it MAY carry a `/`, because a hole stands over
+               the run of example segments its value occupied and that value is free to hold one. */
+            kv_add(out, name, nlen, span ? b : "", span ? bn : 0, EP_PATH, name);
         }
         free(seg); free(name);
+        i++;
         if (!ae) break;
         json_buf_raw(&p, "/");
         a = ae + 1;
-        if (aligned) b = be + 1;
+        if (span) b = be + 1;
     }
+    DCHECK(!span || i == nseg,
+           "the shape walk visited a different number of segments than the alignment was built over — the "
+           "span array is indexed by this loop and sized by `seg_split`, so a short walk leaves a hole "
+           "reading a span that belongs to another segment the next time this address is scanned");
+    free(span);
     return json_buf_take(&p);
 }
 

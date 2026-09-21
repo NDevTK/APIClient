@@ -942,6 +942,16 @@ static const char *HTML =
     " ? 'CSSTEXTOK' : 'CSSTEXTBAD:' + pt));</script>"
     "<script>"
     "fetch('/api/u?uid=' + state.id);"   /* concolic query param -> uid carries {state}.id */
+    /* …AND THE HOLE WHOSE VALUE IS ITSELF SEVERAL SEGMENTS, which is the half an equal-count aligner cannot
+       answer at all. `navigator.userAgent` is concolic with a real Chrome example and that example HOLDS `/`,
+       so this address's FIVE shape segments stand over NINE of the example's and the matcher that required
+       equal counts answered "not aligned" for the whole address — after which `param_add_val` skipped the
+       empty value of every param on it. The address is otherwise the ordinary one, a LITERAL origin region
+       with the hole mid-path exactly like `/v1/vis/` below, so the only thing this statement adds to that one
+       is the example's segment count.
+       IT SITS AHEAD OF THE UA GATE ON PURPOSE. The line below forks on this same source, so running first is
+       what keeps this row a claim about the ALIGNMENT rather than about which arm of that fork reached it. */
+    "fetch('/api/ua/' + navigator.userAgent + '/v4');"
     "if (navigator.userAgent.indexOf('Chrome') >= 0) { fetch('/api/uafork?v=chrome'); } else { fetch('/api/uafork?v=other'); }"   /* THE UA GATE: navigator.userAgent is concolic with a real Chrome example, so the string method computes on the example AND the comparison forks -> BOTH arms' endpoints are learned */
     "if (navigator.maxTouchPoints > 0) { fetch('/api/touch?v=touch'); } else { fetch('/api/touch?v=mouse'); }"
     "if (screen.width < 768) { fetch('/api/layout?v=mobile'); } else { fetch('/api/layout?v=desktop'); }"
@@ -12386,6 +12396,30 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "the record EXISTS with its path hole filled and the QUERY param `deep` is not there carrying "
              "`1` — a path param and a query param on ONE record is the whole claim, so this says one "
              "location overwrote the other rather than coexisting with it");
+    /* THE HOLE THAT STANDS OVER SEVERAL EXAMPLE SEGMENTS — the claim `path-example` above cannot make,
+       because ITS hole covers exactly one and that is the case an equal-count aligner already answered. The
+       product's own spelling is the same shape one region to the left (`fetch(cfg.apiBase + "/v1/users/" +
+       id)`, where the run spans the scheme), and this document has no source whose example is a whole origin;
+       what it has is one whose example holds a `/`, which is the same question asked of the same walk.
+       THE VALUE IS COUNTED AND NOT SPELLED. It is `navigator.userAgent`'s example, a `#define` in
+       core/frame/navigator.c that no header exports, so asserting the bytes here would be a SECOND COPY of a
+       constant this file cannot include — and the day that constant is edited the row would redden for a
+       reason that is not about the engine. What the widening moves is a 0 to a 1: before it the alignment
+       failed on the segment counts alone, so every param on this address carried no value.
+       `path-example` AND `path-param` ARE THIS ROW'S NEGATIVE CONTROL and are deliberately not restated
+       here. Both of their holes cover exactly ONE segment, so `path_align`'s own equal-count assertion forces
+       their spans to 1 and their answers are the ones the equal-count matcher gave; a widening that moved
+       them reddens THOSE rows, which is what says whether a red here is this case or the whole aligner. */
+    const char *path_run_why = NULL; int path_run = 1;
+    fold_row(&path_run, &path_run_why, !!strstr(js, "\"/api/ua/{navigator.userAgent}/v4\""),
+             "NOT REACHED: there is no /api/ua/{navigator.userAgent}/v4 record at all, so the multi-segment "
+             "statement never ran and the clause below is not being reported on. That is the SCHEDULE");
+    fold_row(&path_run, &path_run_why,
+             param_value_count(js, "/api/ua/{navigator.userAgent}/v4", "navigator.userAgent") >= 1,
+             "the record EXISTS and its PATH hole `navigator.userAgent` carries NO value — that hole stands "
+             "over a RUN of example segments because the value the code computed holds a `/`, so a valueless "
+             "param here is path_align refusing an address whose reading is unique, or path_scan reading the "
+             "run at the wrong boundary");
     /* ─── THE `if (cfg.admin)` FAMILY, AND THE RUNG IT NEVER HAD ────────────────────────────────────────────
        SEVEN rows hang off ONE statement — the fork and the three read-backs immediately after it — and every
        one of them was a CONJUNCTION OVER BOTH ARMS with nothing underneath it. So all seven read 0 for a
@@ -16248,6 +16282,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "path-param", path_param, "/v1/users/", SESS_EXPLORE, path_param_why },
         { "body-param", body_param, "firstPost", SESS_EXPLORE, body_param_why },
         { "path-example", path_example, "/v1/vis/", SESS_EXPLORE, path_example_why },
+        { "path-run", path_run, "/api/ua/", SESS_EXPLORE, path_run_why },
         { "role-public", role_public, "/api/data?role=", SESS_EXPLORE, role_public_why },
         { "merged", merged, "/api/data?role=", SESS_EXPLORE, merged_why },
         { "pinned", pinned, "/api/region/", SESS_EXPLORE },
