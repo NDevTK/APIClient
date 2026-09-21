@@ -149,6 +149,22 @@ const BR_IDENTITIES = [
    (w) => w.brHeldUsLife + w.brEmptyUsLife === w.brUsLifeSum],
   ["brMinterLive+brMinterGoneLife==brBornLifeMax", ["brMinterLive", "brMinterGoneLife", "brBornLifeMax"],
    (w) => w.brMinterLive + w.brMinterGoneLife === w.brBornLifeMax],
+  /* THE ONLY BOUND ON THE NUMERATOR OF THE READING THIS DRIVER EXISTS TO TAKE, AND IT WAS THE ONE
+     IDENTITY NOT CHECKED HERE. The banner above gives the reason every other row on this list is
+     checked -- the engine states these as DCHECKs in flow_wfq_census, which are compiled OUT of the
+     release build this driver samples -- and that argument applies hardest to this one. The
+     denominator side is already pinned twice over: brLiveSum==members fixes `members`, and the
+     brMinterLive/brMinterGoneLife identity above fixes the pair against brBornLifeMax. The numerator
+     side was a bare per-bucket load with nothing standing under it, so `minterUsShare` could be
+     published as a fraction of a denominator its numerator is not drawn from -- which is the
+     consequence flow.c names in its own words at the assert this line copies.
+     IT IS COPIED FROM THE ENGINE AND NOT COMPOSED HERE, for the reason CLAUDE.md gives about an
+     auditor deriving its rule from the code that owns it: a restated invariant is a second copy, and
+     the copy that drifts is the one nobody runs against reality. Both conjuncts are one-sided because
+     a maximum and a sum are upper bounds over sets the minter belongs to. */
+  ["brMinterLive<=brLiveMax&&brMinterUsLife<=brHeldUsLife",
+   ["brMinterLive", "brLiveMax", "brMinterUsLife", "brHeldUsLife"],
+   (w) => w.brMinterLive <= w.brLiveMax && w.brMinterUsLife <= w.brHeldUsLife],
 ];
 
 /* A SHARE IS PRINTED WHERE result.c PRESCRIBES THE QUOTIENT AND NOWHERE ELSE, which is the distinction the
@@ -278,9 +294,31 @@ async function main() {
         out.crowdUsShare    = share(w.brCrowdUsLife, w.brHeldUsLife);
         out.minterLiveShare = share(w.brMinterLive,  w.members);
         out.minterUsShare   = share(w.brMinterUsLife, w.brHeldUsLife);
-        out.selectorsAgree  = (typeof w.brMinterUsLife === "number" &&
-                               typeof w.brCrowdUsLife === "number")
-                                ? w.brMinterUsLife === w.brCrowdUsLife : null;
+        /* A COINCIDENCE TEST, AND IT USED TO BE VACUOUS ON THE ONE FRONTIER IT MATTERS MOST ON.
+           This compared the two BURNS alone, so on an un-charged frontier -- both zero -- it answered
+           TRUE for any two buckets whatever, including two that are plainly different. That reads as
+           "the minter IS the crowd", which hands a reader the fixture-scale refutation as though it
+           covered the minter arm, which is the exact conflation the minter rows exist to end. An
+           assert whose two sides cannot disagree is not a weak check, it is a NON-check that certifies
+           whatever it was pointed at, and the early frontier is where a zero burn is likeliest.
+           TWO REPAIRS, NEITHER OF WHICH WEAKENS IT. It now compares the three rows that IDENTIFY a
+           bucket -- its live count, its lifetime mints and its receipt -- so two buckets standing at
+           different sizes no longer read as one because neither has been charged. And where every
+           operand is zero there is nothing to tell any two buckets apart, so it answers null rather
+           than true: an unasked question and a measured agreement are different facts and this stream
+           spells absence as null everywhere else.
+           IT IS STILL A COINCIDENCE TEST AND NOT A PROOF OF IDENTITY, stated here so the next reader
+           does not upgrade it: two distinct buckets may agree on all three rows by chance. What it
+           can do is REFUTE -- a false is conclusive that the two selectors reached different arms. */
+        {
+          const ident = ["brCrowdLive", "brMinterLive", "brCrowdBornLife", "brBornLifeMax",
+                         "brCrowdUsLife", "brMinterUsLife"];
+          if (ident.some((k) => typeof w[k] !== "number")) out.selectorsAgree = null;
+          else if (ident.every((k) => w[k] === 0))         out.selectorsAgree = null;
+          else out.selectorsAgree = (w.brCrowdLive     === w.brMinterLive &&
+                                     w.brCrowdBornLife === w.brBornLifeMax &&
+                                     w.brCrowdUsLife   === w.brMinterUsLife);
+        }
         /* CARRIED BESIDE EVERY RAW BURN ON THIS LINE, because result.c says a raw microsecond total is
            quoted with the quantum's unit and a quotient of two burns is not. */
         out.isCpu = (s.quantum && typeof s.quantum.isCpu === "boolean") ? s.quantum.isCpu : null;
