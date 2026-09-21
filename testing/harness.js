@@ -324,8 +324,42 @@ function resolveUnprivileged(chromePath) {
   }
   try { fs.mkdirSync(PROFILE_DIR, { recursive: true }); execSync(`chown -R ${uid}:${gid} ${JSON.stringify(PROFILE_DIR)}`); }
   catch (e) { throw new Error(`could not hand ${PROFILE_DIR} to ${name}: ${e.message}`); }
+  /* AND A THIRD THING THE TARGET MUST HAVE, WHICH THE TWO ABOVE DO NOT IMPLY: A HOME IT CAN WRITE. `spawn`
+     takes `uid`/`gid` and NOTHING ELSE — it does not call `initgroups` and it does not touch the environment
+     — so the dropped Chrome inherits THIS process's `HOME`, which for root is `/root`. A `/root` at mode 0755
+     is readable by the account and not writable by it, so every check above passes and Chrome dies on its
+     first write under `$HOME`.
+     THE FAILURE POINTS AT THE SANDBOX AND THE CAUSE IS THE ENVIRONMENT, WHICH IS WHY THIS IS A GUARD AND NOT
+     A COMMENT. What Chrome prints is crashpad's `mkdir : No such file or directory` and then
+     `FATAL:content/browser/zygote_host/zygote_host_impl_linux.cc:207 Check failed: . : No such file or
+     directory` — a zygote-host abort naming no path at all. The reader's available conclusion is that the
+     sandbox does not work in this container, and the remedy that conclusion argues for is
+     HARNESS_ALLOW_NO_SANDBOX=1: the exact outcome the block above exists to prevent, reached by believing a
+     correct error message about the wrong subsystem.
+     MEASURED as a controlled pair, same argv and same binary, only `HOME` differing: with `HOME=/root` the
+     launch aborts at that line, and with `HOME` set to the account's own directory it serves /json/version.
+     The account's home is read from the ACCOUNT rather than composed from its name, because the one place
+     that states it is passwd, and it is tested with `-w` AS THAT USER rather than by mode arithmetic here.
+     RETIREMENT: this record goes when `spawn` is given the dropped user's environment by construction — an
+     `env` this function returns whole — so a caller cannot drop privileges and leave root's `HOME` behind. */
+  let home = "";
+  try { home = execSync(`getent passwd ${name}`, { stdio: ["ignore", "pipe", "ignore"] }).toString().split(":")[5] || ""; }
+  catch { home = ""; }
+  const canWrite = (d) => {
+    if (!d) return false;
+    try { execSync(`su -s /bin/sh ${name} -c 'test -w ${JSON.stringify(d)}'`, { stdio: "ignore" }); return true; }
+    catch { return false; }
+  };
+  if (!canWrite(home)) {
+    throw new Error(
+      `\`${name}\` has no writable home (passwd says ${home ? JSON.stringify(home) : "<none>"}), and Chrome\n` +
+      `  writes its crashpad database under $HOME before the zygote comes up. Without one it aborts at\n` +
+      `  zygote_host_impl_linux.cc naming the SANDBOX, which is not the cause. Give the account a home:\n` +
+      `      install -d -o ${name} -g ${name} -m 0750 ${home || `/home/${name}`}\n` +
+      `  This is NOT a reason to set HARNESS_ALLOW_NO_SANDBOX=1 — the sandbox is working.`);
+  }
   log(`dropping privileges to ${name} (uid ${uid}) so Chrome keeps its sandbox`);
-  return { uid, gid, name, chromePath };
+  return { uid, gid, name, chromePath, home };
 }
 
 /* AND THE CLAIM IS CHECKED RATHER THAN ASSERTED. A flag that stops being passed, a kernel that forbids the
@@ -657,7 +691,9 @@ async function cmdStart(args) {
     detached: true,
     stdio: ["ignore", chromeFd, chromeFd],
     windowsHide: false,
-    ...(dropTo ? { uid: dropTo.uid, gid: dropTo.gid } : {}),
+    /* AND ITS HOME, WHICH `uid`/`gid` DOES NOT CARRY — see resolveUnprivileged. Dropping privileges without
+       it leaves the child pointed at root's `$HOME`, which it cannot write. */
+    ...(dropTo ? { uid: dropTo.uid, gid: dropTo.gid, env: { ...process.env, HOME: dropTo.home } } : {}),
   });
   chromeProc.unref();
   if (!chromeProc.pid) { log("failed to spawn Chrome"); process.exit(1); }
