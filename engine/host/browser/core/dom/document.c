@@ -4601,6 +4601,13 @@ void document_record_release(lxb_html_document_t *dom)
     doc_rec_release(d);
 }
 
+/* …AND WHETHER THERE IS STILL ONE TO RELEASE — see document.h for why the destroy may not read `user` itself.
+   It reads and decides nothing, which is what a DCHECK condition must be. */
+bool document_record_names(lxb_html_document_t *dom)
+{
+    return dom && doc_rec(lxb_dom_interface_document(dom)) != NULL;
+}
+
 /* The realm's own path: clear the record FIRST, so the destroy below finds nothing to release and the two
    owners cannot both run. */
 static void doc_rec_free(JSContext *ctx, Document *d)

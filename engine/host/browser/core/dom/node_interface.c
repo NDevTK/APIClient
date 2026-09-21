@@ -16,6 +16,7 @@
 #include "core/dom/node_heap.h"
 #include "core/dom/shadow_root.h"  /* shadow_root_take_owned_by — the ONE spelling of the OWNING element -> shadow
                                       root edge, which is not §4.9's per-flow association and takes no realm */
+#include "core/dom/document.h"      /* document_record_names — the record that names this tree writes through it */
 #include "core/html/html_parse.h"   /* the ONE place a Document is parsed — the destroy asserts it was that one */
 #include "core/dom/node_interface.h"
 #include "solver/attr_shadow.h"     /* …and the taint slots keyed on the dying element go with it */
@@ -391,6 +392,27 @@ void dom_document_destroy(lxb_html_document_t *dom)
            "HTML parser this engine did not build, so its tokens' attribute values had no owner and every "
            "duplicate attribute, every re-attributed `<html>`/`<body>` attribute and every doctype id in that "
            "markup is one text allocation the agent's heap can never give back");
+    /* AND NO `Document` RECORD STILL NAMES IT, which is the one ORDER a document's death has and the one this
+       entry could not previously state. A record holds an UNCOUNTED raw pointer to this tree and CLEARS that
+       tree's back pointer as it is released (core/dom/document.c's doc_rec_release), so a record that outlives
+       its tree turns its own release into a use-after-free WRITE into the arenas this function is about to
+       hand back.
+       IT IS SILENT, WHICH IS WHY IT IS AN ASSERT AND NOT A COMMENT: the write lands in a recycled chunk, the
+       allocator notices at the NEXT unrelated free it walks past, and what a reader is handed is an abort
+       inside whatever object happened to be adjacent — a plausible diagnosis naming a component that did
+       nothing wrong. Measured: the write clobbered a chunk the JS heap later reused, and the process died in
+       `free_object` running a class finalizer for a record that was entirely correct.
+       BOTH CORRECT PATHS ALREADY HOLD THE ORDER AND EACH SAYS SO. solver/dom_cow.c's destroy releases the
+       record and then calls this — "THE RECORD NAMES THE TREE, so it cannot outlive it" — and core/dom's own
+       realm teardown releases the record before it destroys the trees that record owns. A caller reaching here
+       with a record live is a THIRD path, and the remedy is the order rather than a guard: release the record
+       first (document_record_release), or move the destroy to where the record's release has already run. */
+    DCHECK(!document_record_names(dom),
+           "a document is being destroyed while a `Document` record still names it — the record holds a raw "
+           "pointer to this tree and WRITES through it when it is released, so that release becomes a "
+           "use-after-free write into memory this line is about to free, and the corruption surfaces at an "
+           "unrelated allocation with nothing naming the cause. Release the record first, or destroy the tree "
+           "after the release that clears it");
     /* `lxb_dom_node_destroy_deep` DETACHES each node before it frees it, so the document's child list drains
        as the loop runs; it is iterative, so the depth of the page's markup costs no C stack. */
     while ((child = doc->node.first_child) != NULL)

@@ -473,6 +473,17 @@ lxb_dom_element_t *document_create_element_html(lxb_dom_document_t *dom, const c
    cannot leave one behind. A no-op for a document whose record is already gone. */
 void document_record_release(lxb_html_document_t *dom);
 
+/* DOES A RECORD STILL NAME THIS TREE — the one question core/dom/node_interface.c's destroy has to answer
+   before it frees the tree, and it is asked HERE because `doc_rec` is this file's one reader of the back
+   pointer a record is found through. A second copy of that read in the destroy would be a second answer
+   waiting to drift, which is the shape this tree keeps paying for; the destroy asks the owner instead.
+   IT EXISTS BECAUSE THE RELEASE ABOVE WRITES THROUGH THE TREE. A record holds an UNCOUNTED raw pointer to
+   its Lexbor document and clears that document's back pointer as it goes, so the release of a record whose
+   tree is already gone is a use-after-free WRITE — which corrupts the heap silently and surfaces at whatever
+   unrelated allocation the allocator walks past next. The ORDER (record first, tree second) is what makes
+   that impossible, and this predicate is what lets the destroy assert it. */
+bool document_record_names(lxb_html_document_t *dom);
+
 /* §4.5's "INTERNAL createElementNS STEPS" — named as the spec names them because §4.5.1's createDocument step 3
    reaches them on a DIFFERENT document from the one whose implementation was asked. `doc` is that document's
    wrapper; `argv` is (namespace, qualifiedName). */

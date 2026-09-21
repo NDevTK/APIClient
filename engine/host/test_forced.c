@@ -27981,7 +27981,19 @@ int main(int argc, char **argv) {
     engine_run(ctx, scripts.bodies, scripts.srcs, scripts.types, scripts.els, scripts.n, cold_residue);   /* @H + @S detection */
     /* No verify call: the candidate re-fires are FLOWS on the same frontier, so engine_run already ran them. */
     doc_scripts_free(&scripts);
-    dom_document_destroy(dom);
+    /* THE TREE IS NOT DESTROYED HERE ANY MORE — it goes at the END of this function, where main.c's own
+       teardown already puts every document of its agent, and the move is a REPAIR rather than a tidy-up. It
+       stood on this line, and the realm's `Document` record went on naming it for the whole teardown below:
+       that record holds a raw pointer to this tree and clears the tree's back pointer when it is released
+       (document_free, four screens down), so destroying the tree first made that release a use-after-free
+       WRITE into a freed arena. It corrupted the heap silently and the process died later inside JS_RunGC,
+       in a class finalizer that had done nothing wrong. core/dom/node_interface.c's destroy asserts the
+       order now, so this position cannot come back without saying so.
+       AND THE DELTAS GO FIRST FOR A SECOND REASON, stated at core/dom/node_heap.h: the agent's arenas are
+       destroyed with the LAST document that gives up its claim, so "every delta must be released BEFORE the
+       last document detaches" — and `solver_frontier_free` below is what releases them. On this line the
+       destroy ran before the frontier, which is that order exactly backwards; it was harmless only while the
+       frontier happened to have drained. */
     free(cold_residue); cold_residue = NULL;   /* engine_sched_begin rebuilt from it; the text was borrowed */
 
     /* ─── THE COLD TIER'S TWO ENDS, EACH REPORTED PER RECORD KIND ────────────────────────────────────────────
@@ -28247,5 +28259,12 @@ int main(int argc, char **argv) {
        the definition the runtime borrowed. */
     idl_args_pool_free();
     idl_async_iter_free();
+    /* EVERY NODE OF THIS DOCUMENT, LAST — the position main.c's own teardown already gives every document of
+       its agent, and for the reason that file states there: core/dom/node_heap.h puts every node's storage on
+       the AGENT's heap and destroys the arenas with the last document that gives up its claim, so this is the
+       line that carries that out and it may not run while anything still allocating out of them is live. By
+       here the frontier's deltas are released, the realm's record has been released (and cleared this tree's
+       back pointer on its way out), and the runtime is gone. */
+    dom_document_destroy(dom);
     return h_ok ? 0 : 1;
 }
