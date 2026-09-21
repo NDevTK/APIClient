@@ -79,14 +79,33 @@
  * they do not form a context, which is why §E.2 step 8 has an arm for them, and it is why the chain walk below
  * SKIPS such an ancestor rather than stopping at it.
  *
- * WHAT IS NOT HERE, STATED AS A SCOPE AND NOT AS A HEDGE. CSS 2.1 §9.9.1's own sentence names the first
- * item: "In future levels of CSS, other properties may introduce stacking contexts, for example
- * 'opacity'". Those properties — `opacity`, `transform`, `filter`, `will-change`, `contain`, `isolation`,
- * `mix-blend-mode` — are properties
- * core/css/css_computed_value.h does not derive, and it CRASHES by name when asked for one rather than
- * answering a specified value under the word `computed`. So this component cannot silently get them wrong: a
- * page that declares one reaches that crash, which is the forcing function working at the property rather than
- * at the painter. See the residual at the foot of this header for what that costs and how it shows.
+ * A PROPERTY OUTSIDE §9.9.1's OWN SENTENCE CAN CREATE ONE, AND §9.9.1 SAYS SO: "In future levels of CSS,
+ * other properties may introduce stacking contexts, for example 'opacity'". Each such rule lives in the
+ * module that declares the property, each is a DISJUNCT of §9.9.1's sentence rather than an amendment to it,
+ * and each states TWO things this component needs — that a context is created, and WHICH of §9.9.1's layers
+ * the box itself is then painted in. A rule read for the first half alone is not half-built, it is wrong:
+ * the box's descendants get confined correctly and the box lands in layer 3 or 4 with its own stacking
+ * context reported from a layer §9.9.1 says holds none.
+ * ONE OF THEM IS BUILT — css-transforms-1 §2 "The Transform Rendering Model", whose three sentences are the
+ * three entries below. "For elements whose layout is governed by the CSS box model, any value other than
+ * none for the transform property results in the creation of a stacking context" is `stacking_context_forms`;
+ * "Implementations must paint the layer it creates, within its parent stacking context, at the same stacking
+ * order that would be used if it were a positioned element with z-index: 0" is `stacking_layer_of`; and "If
+ * an element with a transform is positioned, the z-index property applies as described in [CSS2], except that
+ * auto is treated as 0 since a new stacking context is always created" is `stacking_level`. It is buildable
+ * where the rest are not for one reason and it is not a property of the standard: core/css/css_computed_value.h
+ * DERIVES `transform`, and core/css/css_transform.h already holds the conjunction of that value with the
+ * property's `Applies to:` line.
+ * THIS PARAGRAPH USED TO SAY THAT THE WHOLE LIST WAS SAFE BECAUSE core/css/css_computed_value.h CRASHES BY
+ * NAME FOR AN UNMODELLED PROPERTY — that `a page that declares one reaches that crash`, and that the crash
+ * was `the forcing function working at the property rather than at the painter` — AND THAT WAS FALSE OF
+ * EVERY MEMBER, BY A MECHANISM WORTH KEEPING RATHER THAN A SLIP. A crash at a computed-value entry is
+ * reached by ASKING, and nothing here asked: this component reads `display`, `position`, `float` and `z-index` and no other
+ * property, so a page declaring `opacity: .5` reached no crash from any of the entries below and was
+ * answered, silently, as though it had declared nothing. The forcing function a missing property really has
+ * is at its READERS, and a component with no reader for it has no forcing function at all — which is why the
+ * residual at the foot of this header now states the absence as a SILENT WRONG ANSWER for every member and
+ * not for `opacity` alone.
  *
  * NOTHING HERE IS STORED, FOR core/layout/used_value.h's REASON AND NOT A SEPARATE ONE. A stacking-context tree
  * is per-flow state — two flows with different DOMs and different cascades have different contexts — so a
@@ -237,24 +256,62 @@ StackingLayer stacking_layer_of(lxb_dom_element_t *el);
 int stacking_order_compare(JSContext *ctx, lxb_dom_element_t *a, lxb_dom_element_t *b);
 
 /* NAMED RESIDUAL — WHAT IS NOT COVERED: a box whose stacking context is created by a property CSS 2.1 does not
-   state one over. CSS 2.1 §9.9.1 names the first of them itself ("In future levels of CSS, other properties may
-   introduce stacking contexts, for example 'opacity'"), and the live list is css-color-4's `opacity`,
-   css-transforms-1's `transform` and `perspective`, css-filter-effects-1's `filter`, css-will-change-1's
-   `will-change`, css-contain-2's `contain`, css-compositing-1's `isolation` and `mix-blend-mode`, and
-   css-position-4 §3's top layer. This component answers as though none of them creates one.
-   WHAT THE NEXT DIFF BUILDS: `opacity`'s computed value in core/css/css_computed_value.c. css-color-4 §3.3
-   "Transparency: the opacity property" gives it a computed value of "specified number, clamped to the range
-   [0,1]", so it is a `<number>` — the one shape that file's TEXT entry carries with NOTHING LOST, which is
-   why its `flex-grow` row already exists and is the same row this one would be — and then one arm in
-   `stacking_context_forms` over it. The others each need their own property first, and `transform` needs
-   css-transforms-1 §7 "The Transform Functions"' whole `<transform-list>` grammar, which
-   core/css/css_computed_value.c crashes for by name today.
+   state one over, MINUS the one such rule the entries above now run. What is left is css-color-4's `opacity`,
+   filter-effects-1's `filter`, css-will-change-1's `will-change`, css-contain-2's `contain`, compositing-1's
+   `isolation` and `mix-blend-mode`, css-transforms-2's `perspective`, and the top layer. This component
+   answers as though none of them creates one, and it answers that SILENTLY — see below.
+   TWO OF THOSE NAMES ARE NOT THE ONES THIS RECORD CARRIED, AND THE CORRECTION IS THE KIND NO INSTRUMENT HERE
+   MAKES: it named `css-filter-effects-1` and `css-compositing-1`, and both shortnames 404 — the documents are
+   `filter-effects-1` "Filter Effects Module Level 1" and `compositing-1` "Compositing and Blending Module
+   Level 1", which were published by the FXTF and whose drafts.fxtf.org pages now say only "Moved to the CSSWG
+   repository". A standard's HOME and its SHORTNAME carry no section number, so nothing in this tree resolves
+   or checks either, and the `css-` prefix is exactly what a reader supplies from the other five names in the
+   same sentence. `perspective` was attributed here to css-transforms-1 and is css-transforms-2's: the word
+   occurs ONCE in css-transforms-1 and as ordinary English.
+   WHAT THE NEXT DIFF BUILDS: `opacity`, in TWO places and not one. First its computed value in
+   core/css/css_computed_value.c, which css-color-4 §3.3 "Transparency: the opacity property" makes the
+   cheapest row in that file — its `Computed value:` line is "specified number, clamped to the range [0,1]",
+   so it is a `<number>`, the one shape that file's TEXT entry carries with NOTHING LOST, and its `flex-grow`
+   row is already the same row. Then BOTH of §3.3's sentences here, as the `transform` arms above are both of
+   css-transforms-1 §2 "The Transform Rendering Model"'s: "If a box has opacity less than 1, it forms a
+   stacking context for its children" is `stacking_context_forms`, and "Furthermore, if the z-index property
+   applies to the box, the auto value is treated as 0 for the element; it is otherwise painted on the same
+   layer within its parent stacking context as positioned elements with stack level 0" is `stacking_layer_of`
+   and `stacking_level`. A diff that builds only the first leaves a box that forms a stacking context sitting
+   in layer 3, which `paint_order.c`'s own classification assert is stated over.
+   THE TOP LAYER IS THE ONE MEMBER WHOSE BLOCKER IS NOT A MISSING PROPERTY, AND IT IS THE LARGER SUBPROBLEM.
+   core/css/top_layer.h already holds the set, so nothing is waiting on a cascade; what is missing is that its
+   entries take a realm and a wrapper while all five entries above take a bare element, and that the rule is
+   not a predicate at all. css-position-4 §3.1 "Top Layer Styling" states three things of such an element —
+   "It generates a new stacking context", "Its parent stacking context is the root stacking context", "It is
+   rendered as an atomic unit as if it were a sibling of the document's root" — of which only the first is a
+   question `stacking_context_forms` has a shape for: the second makes `stacking_context_of` answer the ROOT
+   rather than the nearest forming ancestor, and §3's "the last element in the top layer is rendered on top of
+   everything else" is a SECOND ORDERING RELATION, over the layer's own order, which `stacking_order_compare`
+   has no term for and tree order does not supply. Its `::backdrop` is a third thing again: a pseudo-element,
+   which no entry here takes.
    HOW ITS ABSENCE WOULD SHOW: a comparison that puts a positioned descendant of an `opacity: .5` box in the
    wrong context — the descendant ordered against the outer context's members instead of being confined inside
    its parent's — which is observable as two boxes swapping order with no declaration between them naming
-   either. It is NOT shown by a crash: every property in that list other than `opacity` reaches
-   core/css/css_computed_value.c's own refusal first, so for those the engine stops before it can be wrong,
-   and `opacity` is the one that would silently answer. RETIREMENT: this record goes when
-   `stacking_context_forms` reads a property outside §9.9.1's own sentence. */
+   either, and which a hit test reads as a click landing on the wrong element.
+   IT IS NOT SHOWN BY A CRASH FOR ANY MEMBER, AND THIS CLAUSE USED TO SAY THE OPPOSITE — "every property in
+   that list other than `opacity` reaches core/css/css_computed_value.c's own refusal first, so for those the
+   engine stops before it can be wrong, and `opacity` is the one that would silently answer". That was false
+   of every member of the list, for one reason that outlives the list: a computed-value refusal is reached by
+   ASKING, and no entry in this header asks for any of these properties. It was ALSO false of `transform` in
+   a second and independent way: this record sent its reader to css-transforms-1 §7 "The Transform Functions"
+   for a `<transform-list>` grammar core/css/css_computed_value.c was said to crash for by name, and that file
+   DERIVES `transform` — it has a `computed_transform`, `transform` is in `css_computed_models`, and it is in
+   css_shorthand.c's recorded set, so all three of the asserts between a caller and that value pass. So the
+   member named as the furthest from buildable was the one already in hand.
+   WHETHER THAT CLAUSE WAS STALE OR FALSE AT BIRTH IS NOT ESTABLISHABLE FROM THIS CHECKOUT, and saying so is
+   the honest result rather than a failure to look: this repository is SHALLOW, so the pickaxe answers with
+   the graft commit for any line older than it and a reader who takes that answer is given a confident wrong
+   origin. The two readings prescribe opposite lessons — a stale clause means the mechanism worked and time
+   passed, and a born-wrong one means the author's way of enumerating will produce the next one the same way
+   — so neither is claimed here. What IS checkable today is the method, and it is the part to carry: a
+   residual's WHAT-IS-NOT-COVERED clause was about THIS TREE rather than about a standard, which is the
+   grammatical position this file's own discipline rates as evidence, and it was worth exactly one grep. RETIREMENT: this record goes when `stacking_context_forms` reads a property outside §9.9.1's own
+   sentence AND css-transforms-1 §2 "The Transform Rendering Model". */
 
 #endif
