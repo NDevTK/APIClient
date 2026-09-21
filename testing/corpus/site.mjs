@@ -109,9 +109,31 @@ const PROBE = `(() => ({
      \`params\` therefore mixes two populations that take opposite readings, and its zero is consistent with
      the engine never having learned a single forced-execution param — which is a finding about the LEARNED
      SURFACE one component upstream, not about the domain machinery this column is pointed at.
-     SO THE ENTAILMENT IS PUBLISHED RATHER THAN LEFT TO BE RE-DERIVED. \`astParams:0\` makes all three domain
-     columns entailed zeros carrying no information about a domain, and \`astParams>0\` with all three at 0 is
-     the reading that is actually about this machinery. It is also the reachability witness for the whole
+     SO THE ENTAILMENT IS PUBLISHED RATHER THAN LEFT TO BE RE-DERIVED. \`astParams:0\` makes every domain
+     column an entailed zero carrying no information about a domain, and \`astParams>0\` with them all at 0 is
+     the reading that is closest to being about this machinery.
+     AND \`astParams\` IS STILL ONE POPULATION TOO WIDE, WHICH IS THE SAME DEFECT THIS PARAGRAPH ALREADY FIXED
+     ONCE, RECURRING AT THE NEXT LEVEL DOWN. solver/endpoint.c's \`kv_add\` gates EVERY domain read on
+     \`if (hole)\`, and the hole comes from \`concolic_hole_key\`, whose first line returns NULL for a shape
+     with no brace in it. A QUERY or BODY param is minted for every pair the address holds, so \`?limit=20\`
+     is an \`astParams\` row whose hole is NULL and which therefore CANNOT carry a domain however well the
+     engine narrows — the identical \"rows that cannot contribute to the numerator\" argument the paragraph
+     above makes against \`params\`, one level further in. Its zero is consistent with a page whose forced
+     execution learned only concrete parameters, which is a finding about the LEARNED SURFACE and not about
+     this machinery.
+     \`astPathParams\` IS THE DENOMINATOR THAT IS SOUND BY CONSTRUCTION, and it needs nothing from the engine
+     because the record already states it. solver/endpoint.c's path scan mints a param ONLY for a segment
+     that holds a brace and passes the brace-stripped segment name AS the hole key, so a param whose
+     \`location\` is \"path\" has a non-NULL hole at the read, always, and the record carries \`location\` on
+     every param. A zero over THIS denominator is the one reading that is about the domain machinery: a
+     parameter the engine could look a domain up for, that carried none.
+     WHAT IT DOES NOT COVER IS THE QUERY AND BODY HALF, AND NOTHING IN THE RECORD CAN: the @H param carries
+     \`name\`, \`location\`, \`validValues\` and the four optional domains and no statement of whether its
+     value named a hole, so a query param reading 0 is two facts — concrete, nothing owed, or a hole whose
+     every gate was lost — rendered identically. Partitioning that half is an engine diff (state hole-ness at
+     the emission) and not a probe one. HOW ITS ABSENCE WOULD SHOW: a run reporting \`astParams\` in the single
+     digits with every domain column at 0, read as the narrowing machinery producing nothing, on a page whose
+     forced-execution params were all concrete query pairs. It is also the reachability witness for the whole
      chain: solver/decide.c records a gate under a hole key, solver/endpoint.c reads it back at kv_add and
      emits \`excludes\`/\`bounds\`/\`predicates\`, and lib/learn.js merges those onto exactly the objects walked
      here — every hop present with a live caller, and nothing at any level asserting that one arrives.
@@ -134,7 +156,7 @@ const PROBE = `(() => ({
      RETIREMENT: this record goes when these columns are derived from the field set lib/learn.js declares
      rather than listed here, so a kind added there cannot go missing from this walk. */
   domains: (() => {
-    let params = 0, astParams = 0, withExcl = 0, withBnd = 0, withPred = 0, withLeq = 0, reached = false;
+    let params = 0, astParams = 0, astPathParams = 0, withExcl = 0, withBnd = 0, withPred = 0, withLeq = 0, reached = false;
     for (const svc of globalStore.discoveryDocs.values()) {
       const methods = svc && svc.doc && svc.doc.resources && svc.doc.resources.learned
                    && svc.doc.resources.learned.methods;
@@ -145,6 +167,10 @@ const PROBE = `(() => ({
         for (const p of Object.values(m.parameters)) {
           params++;
           if (p && p._astInferred) astParams++;
+          /* THE SOUND DENOMINATOR — see the banner. A path param exists only where the segment held a brace,
+             and its hole key IS that segment's brace-stripped name, so its domain read is never gated out by
+             a NULL hole the way a concrete query pair's is. */
+          if (p && p._astInferred && p.location === "path") astPathParams++;
           if (p && Array.isArray(p._excludedValues) && p._excludedValues.length) withExcl++;
           if (p && p._bounds && Object.keys(p._bounds).length) withBnd++;
           if (p && Array.isArray(p._predicates) && p._predicates.length) withPred++;
@@ -156,7 +182,7 @@ const PROBE = `(() => ({
         }
       }
     }
-    return reached ? { params, astParams, withExcl, withBnd, withPred, withLeq } : null;
+    return reached ? { params, astParams, astPathParams, withExcl, withBnd, withPred, withLeq } : null;
   })(),
 }))()`;
 
