@@ -2957,8 +2957,16 @@ JSValue flow_world_commit_at(const Flow *f, int i) {
    record about a flow, written from outside any flow's delta, and a delta that captured it would un-commit a
    timeline the moment a sibling switched in — which is exactly the state this field exists to make
    impossible. */
-void flow_world_commit_push(JSContext *ctx, Flow *f, const char *vector, int taken, FlowCommitArm arm) {
+void flow_world_commit_push_at(JSContext *ctx, Flow *f, const char *vector, int taken, FlowCommitArm arm,
+                               const char *file, int line) {
     JSValue e;
+
+    /* THE ADDRESS IS THE ABORT'S AND THE ABORT IS COMPILED OUT IN RELEASE, so it is spent nowhere else and
+       is discarded here rather than left to read as an unused parameter. It is NOT optional to pass: the
+       macro in flow.h supplies it at every call site, which is the whole reason this entry can name its
+       producer at all. */
+    (void)file;
+    (void)line;
 
     DCHECK(vector != NULL && *vector,
            "a receiving timeline recorded a commitment to no world — the record decides which of a sender's "
@@ -3003,6 +3011,16 @@ void flow_world_commit_push(JSContext *ctx, Flow *f, const char *vector, int tak
        RETIRES when the RECEIVED half of this list holds ONE row per sending document, replaced in place as the
        timeline descends — deliver_commit_implied already proves those rows are a CHAIN whose deepest member
        decides every test, and a set of one has no pair to be inconsistent about. */
+/* AND THE REMEDY THIS ABORT NAMES IS NOW CONDITIONAL ON ITS PRODUCER, WHICH IS RECORDED HERE RATHER THAN
+   QUIETLY APPLIED. The message used to name ONE repair with no condition on it — engine_perform's
+   unaddressed operation — and that repair is right for exactly ONE of this entry's four callers. A remedy
+   clause is read once, by somebody who has already decided to do the work, so an unconditional one is not
+   caught at the other three, it is EXECUTED: a park residue would have sent a reader to build an addressee,
+   and a hole in deliver_admits would have been filed under the answer path's cross-product and closed by a
+   mechanism that cannot reach it. The clause was never WRONG; it was unscoped, which for a shared entry
+   with four producers is the same defect wearing a correct sentence.
+   WHAT THE SITE BUYS IS THE SCOPING AND NOT THE COORDINATE. `file:line` is a fact the caller states, so the
+   triage below is selected by evidence instead of by whichever producer a reader happened to think of. */
 #if APICLIENT_DEV
     if (taken) {
         int n = flow_world_commits(f), k;
@@ -3011,28 +3029,53 @@ void flow_world_commit_push(JSContext *ctx, Flow *f, const char *vector, int tak
             JSValue row = flow_world_commit_at(f, k);
             JSValue cv = JS_GetPropertyUint32(ctx, row, 0);
             JSValue tv = JS_GetPropertyUint32(ctx, row, 1);
-            WorldRel rel = WORLD_REL_INDEPENDENT;
 
+            /* A FORECLOSED ROW IS SKIPPED STRUCTURALLY AND NO LONGER THROUGH A SENTINEL. This walk used to
+               hold a `rel` initialised to WORLD_REL_INDEPENDENT OUTSIDE the branch and assert on it below,
+               so a row the walk never examined and a row it examined and cleared arrived at one line
+               carrying one value. The answer is unchanged at every row; what changes is that the skip is
+               the SHAPE of the code rather than a reading of a default, and that the held vector and the
+               arm it records stay in scope for the abort that needs to print them. */
             if (JS_VALUE_GET_TAG(tv) == JS_TAG_INT && JS_VALUE_GET_INT(tv)) {
                 const char *held = JS_ToCString(ctx, cv);
+                JSValue av;
+                WorldRel rel;
+                int held_arm;
 
                 CHECK(held != NULL, "flow: OOM reading which sending timeline a receiving flow is already in — "
                                     "a commitment that cannot be read leaves the one pair this list can be "
                                     "wrong about unchecked");
                 rel = world_vec_relate(vector, held);
+                /* THE HELD ROW'S OWN PRODUCER, WHICH IS THE HALF A THREADED SITE CANNOT REACH. The arriving
+                   row names its pusher by the address the macro captured; the HELD row was pushed at some
+                   earlier step whose address is long gone, and the one thing it still states about its
+                   producer is the minting mechanism it wrote down. Read rather than re-derived — it is the
+                   field flow.h's vocabulary exists for, and no line on this path had ever asked it. */
+                av = JS_GetPropertyUint32(ctx, row, 2);
+                held_arm = (JS_VALUE_GET_TAG(av) == JS_TAG_INT) ? JS_VALUE_GET_INT(av) : -1;
+                JS_FreeValue(ctx, av);
+                DCHECKF(rel != WORLD_REL_CONTRADICT,
+                        "a receiving timeline committed to TWO sending worlds that CONTRADICT — neither is "
+                        "the other continued, so no timeline of the sending document is in both and this "
+                        "flow's state now rests on a pair of peer timelines that never coexisted. PUSHED "
+                        "FROM %s:%d. Arriving <%s>; already held <%s>, whose row states its own minting "
+                        "mechanism as flow.h's FlowCommitArm %d (a -1 there is a row that carried no "
+                        "integer in that field, which is a defect at whichever push wrote it and not this "
+                        "pair). This row RECORDS a fabrication rather than causing one, so the repair is "
+                        "the PRODUCER'S — and WHICH repair is what the address above decides, never this "
+                        "line. solver/engine.c's answer_commit_taken: the cross-product an UNADDRESSED "
+                        "cross-instance operation builds, engine_perform attaching one question to every "
+                        "timeline the peer has, closed by the ADDRESSEE whose members flow_answer_fork's "
+                        "own landing order names (d) and (e). solver/engine.c's deliver_commit_taken: "
+                        "UNREACHABLE by construction, since deliver_admits refuses a contradicting record "
+                        "and RETURNS before that push — so a row from there is a hole in THAT gate and is "
+                        "a different and worse finding than this one. solver/cold.c's park replay: the "
+                        "park DOCUMENT holds a pair no live push would have written, so it is a residue "
+                        "from a build older than this check and the frontier re-derives rather than the "
+                        "engine repairing it. Never widen this row to admit the pair",
+                        file, line, vector, held, held_arm);
                 JS_FreeCString(ctx, held);
             }
-            DCHECK(rel != WORLD_REL_CONTRADICT,
-                   "a receiving timeline committed to TWO sending worlds that CONTRADICT — neither is the "
-                   "other continued, so no timeline of the sending document is in both and this flow's state "
-                   "now rests on a pair of peer timelines that never coexisted. The delivery path cannot "
-                   "produce it (deliver_admits refuses a contradicting record before deliver_commit_taken "
-                   "pushes), so the producer that fired this is another one — grep `flow_world_commit_push(` "
-                   "for it — and it is RECORDING a fabrication rather than causing one. The repair is at the "
-                   "mechanism that let one flow take state from two contradicting peer timelines, which for a "
-                   "cross-instance answer is engine_perform attaching an UNADDRESSED operation to every "
-                   "timeline the peer has (solver/engine.c's flow_answer_fork names the pin that closes it). "
-                   "Never widen this row to admit the pair");
             JS_FreeValue(ctx, cv);
             JS_FreeValue(ctx, tv);
             JS_FreeValue(ctx, row);

@@ -1228,7 +1228,22 @@ static inline int flow_commit_arm_is_member(FlowCommitArm a) {
 
 int     flow_world_commits(const Flow *f);
 JSValue flow_world_commit_at(const Flow *f, int i);
-void    flow_world_commit_push(JSContext *ctx, Flow *f, const char *vector, int taken, FlowCommitArm arm);
+/* THE SITE TRAVELS WITH THE PUSH, because the one coherence check inside this entry is asserted for FOUR
+   producers and a DCHECK stamps the line it is WRITTEN at — so every one of them reported the SAME line of
+   solver/flow.c, and the crash's own remedy could do no better than tell its reader to go and grep for the
+   caller. That is CLAUDE.md's assert-that-names-a-remedy-but-not-a-site exactly, and the cure is its: a
+   __FILE__/__LINE__ pair captured AT THE CALLER and threaded to the check, never derived at the helper and
+   never captured at an intermediate that would name one forwarding function for the whole tree.
+   THE MACRO IS WHAT MAKES IT UNFORGEABLE — it expands at each call site, so a producer added later cannot
+   omit its own address and there is no sentinel for one that has nothing to say. It is not a wrapper
+   introduced to share a check: the check is where it always was, and only the ADDRESS is new.
+   THE NAME THE CALLERS SPELL IS DELIBERATELY UNCHANGED. `flow_world_commit_push(` is the grep the abort
+   names and the string solver/cold.c's row census cites by hand, so a rename would have emptied both at
+   once — a population that answers zero while every member is still there. */
+void    flow_world_commit_push_at(JSContext *ctx, Flow *f, const char *vector, int taken, FlowCommitArm arm,
+                                  const char *file, int line);
+#define flow_world_commit_push(ctx, f, vector, taken, arm) \
+    flow_world_commit_push_at((ctx), (f), (vector), (taken), (arm), __FILE__, __LINE__)
 JSValue flow_world_commit_fork(JSContext *ctx, const Flow *parent);
 
 /* HOW MANY ROWS HAVE BEEN APPENDED TO ANY FLOW'S LEDGER SINCE THE FRONTIER CAME UP — a LIFETIME COUNT OF
