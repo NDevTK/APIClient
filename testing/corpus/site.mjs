@@ -94,8 +94,9 @@ const PROBE = `(() => ({
      forever, and the reading is a property of the container rather than of the engine. The exclusions and
      bounds a branch narrowed live one map over, under the learned discovery doc, per parameter.
      ABSENT AND ZERO ARE KEPT APART, which is the whole point of the column: \`null\` means the probe could
-     not reach a \`parameters\` object at all, and {params:N, withExcl:0, withBnd:0, withPred:0} means it
-     reached them and none carried a domain. Collapsing those two is the defect this column exists to detect,
+     not reach a \`parameters\` object at all, and an object whose every \`with*\` column reads 0 means it
+     reached them and none carried a domain. THE COLUMNS ARE NOT RESTATED HERE: this sentence used to list
+     them and had already gone stale twice over, naming neither \`astParams\` nor \`withLeq\`. Collapsing those two is the defect this column exists to detect,
      performed inside the instrument built to detect it. Every level of the walk is optional in the producer,
      so each is tested rather than chained — a naive \`?.\` chain yields null for a shape that is
      present-but-empty and cannot tell the two readings apart either.
@@ -114,14 +115,26 @@ const PROBE = `(() => ({
      chain: solver/decide.c records a gate under a hole key, solver/endpoint.c reads it back at kv_add and
      emits \`excludes\`/\`bounds\`/\`predicates\`, and lib/learn.js merges those onto exactly the objects walked
      here — every hop present with a live caller, and nothing at any level asserting that one arrives.
-     THERE ARE THREE DOMAIN COLUMNS BECAUSE THERE ARE THREE WAYS A GATE NARROWS ONE, and they must be counted
-     apart or a page whose only gates are prefix checks reads as a page with no gates. An equality determines
-     a value and fills \`withExcl\`; an ordering determines an interval and fills \`withBnd\`; a METHOD CALL
-     determines neither and fills \`withPred\` — CLAUDE.md §@H's own headline shape (\`{startsWith:/api}\`).
-     Summing them would hide exactly the case each column exists to find, which is a page gated only by the
-     third. */
+     THERE IS ONE COLUMN PER WAY A GATE NARROWS A DOMAIN, AND THE KINDS ARE NAMED RATHER THAN COUNTED. An
+     equality's false arm determines a value and fills \`withExcl\`; an ordering determines an interval and
+     fills \`withBnd\`; a METHOD CALL determines neither and fills \`withPred\` — CLAUDE.md §@H's own headline
+     shape (\`{startsWith:/api}\`); and a LOOSE equality's HOLDING arm determines a SET rather than a value,
+     which is why solver/decide.c files it instead of pinning it, and it fills \`withLeq\`. Summing them would
+     hide exactly the case each column exists to find, which is a page gated only by one of them.
+     THIS PARAGRAPH BEGAN \"THERE ARE THREE DOMAIN COLUMNS\" WHILE THE FOURTH WAS EMITTED, MERGED AND
+     UNCOUNTED. solver/endpoint.c writes \`looselyEquals\`, lib/learn.js's \`_mergeLooselyEquals\` merges it
+     onto these very objects, and lib/merge.js intersects it across documents — and nothing here read it, so a
+     page whose gates are \`==\` read as a page with no gates. That is the exact failure the sentence was
+     written to prevent, committed by the sentence, and it is the SECOND instance of one shape rather than an
+     accident: lib/learn.js's own banner records lib/merge.js restating this same record as \"{name, location,
+     validValues[], excludes[], bounds{}}\" and never revisiting it when two kinds were added. So the rule
+     that file states is the cure and is adopted here — THE KINDS ARE A SET AND NEVER A COUNT, because a set
+     is checkable by grepping this file for each name and a number is checkable by nothing. It was the number
+     that made the omission invisible, and this file restates the record in two more comments below.
+     RETIREMENT: this record goes when these columns are derived from the field set lib/learn.js declares
+     rather than listed here, so a kind added there cannot go missing from this walk. */
   domains: (() => {
-    let params = 0, astParams = 0, withExcl = 0, withBnd = 0, withPred = 0, reached = false;
+    let params = 0, astParams = 0, withExcl = 0, withBnd = 0, withPred = 0, withLeq = 0, reached = false;
     for (const svc of globalStore.discoveryDocs.values()) {
       const methods = svc && svc.doc && svc.doc.resources && svc.doc.resources.learned
                    && svc.doc.resources.learned.methods;
@@ -135,10 +148,15 @@ const PROBE = `(() => ({
           if (p && Array.isArray(p._excludedValues) && p._excludedValues.length) withExcl++;
           if (p && p._bounds && Object.keys(p._bounds).length) withBnd++;
           if (p && Array.isArray(p._predicates) && p._predicates.length) withPred++;
+          /* PRESENCE-AND-LENGTH, WHICH IS \`_predicates\`' TEST AND NOT A SECOND ONE — lib/learn.js's
+             \`intersectLooselyEquals\` spells \"this run proved nothing\" as the EMPTY array exactly as
+             \`intersectPredicates\` does, so an empty one is a param an engine run reached and narrowed
+             nothing on, which is not a param carrying a domain. */
+          if (p && Array.isArray(p._looselyEquals) && p._looselyEquals.length) withLeq++;
         }
       }
     }
-    return reached ? { params, astParams, withExcl, withBnd, withPred } : null;
+    return reached ? { params, astParams, withExcl, withBnd, withPred, withLeq } : null;
   })(),
 }))()`;
 
@@ -684,9 +702,10 @@ const row = {
   distinctEndpoints: new Set(mine.flatMap(d => d.sites)).size,
   pageErrors: [...new Set(mine.flatMap(d => d.errs))].slice(0, 40),
   globalEndpoints: (cur.global || []).length,
-  /* `null` = the probe reached no `parameters` object; {params,withExcl,withBnd,withPred} = it did. NOT
-     defaulted to an empty object: absence and zero are different facts here and the column exists to keep
-     them apart. */
+  /* `null` = the probe reached no `parameters` object; an object = it did. NOT defaulted to an empty object:
+     absence and zero are different facts here and the column exists to keep them apart. THE COLUMNS ARE NOT
+     RESTATED HERE either — this sentence listed four of the six and drifted with the one above it, which is
+     why the probe's own banner now carries the set and these two carry none. */
   domains: cur.domains === undefined ? null : cur.domains,
   /* THE ENGINE'S OWN RECORD FIRST, THE CONSOLE ONLY AS A SUPPLEMENT. A console scrape is the wrong surface by
      construction -- the renderer does not tee its stdout -- so a run whose abort reached the result document
