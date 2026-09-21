@@ -852,10 +852,22 @@ static int iframe_content_document_step(JSContext *ctx, JSStepHdr *hdr, void *st
               "a cross-document read's target document name did not fit its record — a truncated name reaches "
               "no instance, and the asking flow parks on a question nothing will ever be asked");
         n += world_serialize(f->world, op + n, sizeof op - (size_t)n);
-        n += snprintf(op + n, sizeof op - (size_t)n, "\tdocument");
+        /* AND THE ADDRESSEE, WHICH THIS SITE OWES EVEN THOUGH ITS RECORD IS DEAD ON ARRIVAL. The DFAIL above
+           is the dev answer and this line is the RELEASE one: compiled out, the record below goes on the wire
+           and the peer parses it, so a record short of the transport's third field would take remote_op.c's
+           own field-count CHECK — which is fatal in release — and lose a whole agent for an
+           `iframe.contentDocument` read. Two grammars on one wire is the state a verb-less emitter creates if
+           it is left behind by a grammar change, and it is worse than the gap it already has: the gap is one
+           refusal this site names, and two grammars is every operation that instance is ever asked.
+           IT IS ALWAYS UNADDRESSED, AND THAT IS A STATEMENT RATHER THAN A PLACEHOLDER. §7.3.1.3 "Child
+           navigables"' step 4 yields a DOCUMENT and the verb it needs does not exist yet (the DFAIL above
+           names it), so there is no answer this read can have taken from that peer and therefore no timeline
+           of it this flow is in. When the verb is built it composes its own record through
+           engine_flow_addressee like the two seams that already do. */
+        n += snprintf(op + n, sizeof op - (size_t)n, "\t%s\tdocument", ENGINE_ADDRESSEE_NONE);
         CHECK((size_t)n < sizeof op,
-              "a cross-document read's member name did not fit its record — the peer would run a program for a "
-              "TRUNCATED member, answering a different question as if it were this one");
+              "a cross-document read's addressee and member did not fit its record — the peer would run a "
+              "program for a TRUNCATED member, answering a different question as if it were this one");
         JS_FreeValue(ctx, nav);
         s->req = engine_host_request(ctx, op);
         hdr->stage = CONTENTDOC_ANSWER;

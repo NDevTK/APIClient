@@ -3623,8 +3623,15 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     if (magic == WP_CLOSED && !JS_IsUndefined(p->parent)) { *presult = JS_FALSE; return JS_STEP_DONE; }
 
     if (s->req == 0) {
-        char op[1024];
+        /* TWO WORLD VECTORS FIT HERE NOW AND THAT IS WHY THE BUFFER MOVED. The record carries the ASKING
+           flow's world and, since the pin, the PEER TIMELINE this flow is already in — each of them a head
+           plus a filtered ancestry, each written by world_serialize's own arithmetic. The CHECKs below are
+           what actually enforce the fit (a truncated vector makes the peer fork a more distant ancestor and
+           silently lose the writes in between, which is world.h's stated reason for crashing rather than
+           sending one); the size is raised so the ordinary two-vector record is not one that has to. */
+        char op[2048];
         Flow *f = flow_running();
+        char *addr;
         int n;
 
         DCHECK(f != NULL, "a cross-document read was issued outside a flow — there would be nothing to suspend");
@@ -3636,6 +3643,15 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
            truth for a flow that has never written there and a LIE for one that forked after writing. Nearest
            first, because the scan stops at the first hit and a further ancestor silently drops the nearer
            one's writes. */
+        /* WHICH OF THAT DOCUMENT'S TIMELINES THIS FLOW IS ALREADY IN — read BEFORE the record is composed,
+           because it is a field of it (solver/engine.h). A flow that has taken no answer from that peer
+           addresses nobody and says so with a token rather than an empty field: every one of the peer's
+           timelines may answer such a read, and all of those answers are true of the document they were
+           computed in. One that HAS taken one is in that sending world from here on, so the peer's other
+           arms are timelines this flow was never in, and a second read answered out of one of them is the
+           off-diagonal member of a cross-product — the fabrication solver/flow.c's commitment record aborts
+           on, arriving as a plausible answer to an ordinary `otherW.length`. */
+        addr = engine_flow_addressee(ctx, f, world_doc_name(p->doc));
         n = snprintf(op, sizeof op, "windowproxy.get\t%s\t", world_doc_name(p->doc));
         /* EVERY FIELD'S FIT IS ASSERTED, not just the world vector's. world_serialize crashes on its own
            truncation (a prefix makes the peer fork a more distant ancestor and lose the nearer writes), and the
@@ -3646,10 +3662,19 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
               "a cross-document read's target document name did not fit its record — a truncated name reaches "
               "no instance, and the asking flow parks on a question nothing will ever be asked");
         n += world_serialize(f->world, op + n, sizeof op - (size_t)n);
-        n += snprintf(op + n, sizeof op - (size_t)n, "\t%s", PROXY_MEMBER[magic]);
+        n += snprintf(op + n, sizeof op - (size_t)n, "\t%s\t%s",
+                      addr ? addr : ENGINE_ADDRESSEE_NONE, PROXY_MEMBER[magic]);
+        free(addr);
+        /* AND THE ADDRESSEE'S FIT IS THIS CHECK'S TOO, which is why its sentence gained a clause rather than
+           a neighbour: a TRUNCATED addressee is a world vector naming a timeline that is not the one this
+           flow committed to, and the peer would then refuse the flows that one contradicts — real timelines
+           dropped on a name nobody wrote. It fails in the same breath as a truncated member and for the same
+           reason, so it is the same statement. */
         CHECK((size_t)n < sizeof op,
-              "a cross-document read's member name did not fit its record — the peer would run a program for a "
-              "TRUNCATED member, answering a different question as if it were this one");
+              "a cross-document read's addressee and member did not fit its record — a TRUNCATED member makes "
+              "the peer run a program for a different question and answer it as if it were this one, and a "
+              "TRUNCATED addressee names a timeline this flow never committed to, so the peer refuses every "
+              "flow that one contradicts and this read is answered out of worlds neither agent was in");
         s->req = engine_host_request(ctx, op);
         return JS_STEP_YIELD;   /* park; siblings run until the peer answers */
     }

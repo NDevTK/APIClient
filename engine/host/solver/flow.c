@@ -3013,7 +3013,10 @@ void flow_world_commit_push_at(JSContext *ctx, Flow *f, const char *vector, int 
        decides every test, and a set of one has no pair to be inconsistent about. */
 /* AND THE REMEDY THIS ABORT NAMES IS NOW CONDITIONAL ON ITS PRODUCER, WHICH IS RECORDED HERE RATHER THAN
    QUIETLY APPLIED. The message used to name ONE repair with no condition on it — engine_perform's
-   unaddressed operation — and that repair is right for exactly ONE of this entry's four callers. A remedy
+   unaddressed operation — and that repair is right for exactly ONE of this entry's four callers, and has
+   since been BUILT, which is the second thing an unscoped remedy clause costs: a clause that names one
+   repair for four producers is not only mis-aimed at three of them, it goes stale for the one it was right
+   about and the staleness is then invisible at the other three. A remedy
    clause is read once, by somebody who has already decided to do the work, so an unconditional one is not
    caught at the other three, it is EXECUTED: a park residue would have sent a reader to build an addressee,
    and a hole in deliver_admits would have been filed under the answer path's cross-product and closed by a
@@ -3065,8 +3068,23 @@ void flow_world_commit_push_at(JSContext *ctx, Flow *f, const char *vector, int 
                         "the PRODUCER'S — and WHICH repair is what the address above decides, never this "
                         "line. solver/engine.c's answer_commit_taken: the cross-product an UNADDRESSED "
                         "cross-instance operation builds, engine_perform attaching one question to every "
-                        "timeline the peer has, closed by the ADDRESSEE whose members flow_answer_fork's "
-                        "own landing order names (d) and (e). solver/engine.c's deliver_commit_taken: "
+                        "timeline the peer has. THE ADDRESSEE THAT CLOSES IT IS BUILT — remote_op.h's third "
+                        "transport field, filled by engine_flow_addressee and consulted by engine_perform's "
+                        "attach loop — so a row from there is no longer that gap and is one of two NARROWER "
+                        "things, which is a repair rather than a queue. EITHER the asking flow addressed "
+                        "NOBODY, which is a positive answer with three readings of its own: it had taken no "
+                        "answer from that peer (correct, and then the pair above is two FIRST answers and "
+                        "the arm for the second is flow_answer_fork's); or the record named a same-origin "
+                        "CHILD of the peer agent, which no row matches because a world carries the minting "
+                        "instance's ROOT document (engine.h's residual on engine_flow_addressee, whose next "
+                        "diff is the row carrying the document it was answered FOR); or two rows for one "
+                        "document were INDEPENDENT and the walk refused to guess, which is a park's "
+                        "generation bump and is engine_perform's own residual. OR the peer answered from a "
+                        "world INDEPENDENT of the addressee and the pin correctly refused nothing — the "
+                        "same park case, arriving at the receiver. READ THE ARRIVING VECTOR'S GENERATION "
+                        "AGAINST THE HELD ONE'S FIRST: equal generations is the first reading and means the "
+                        "record went out unaddressed, and unequal is the park residual and means it went "
+                        "out addressed and inert. solver/engine.c's deliver_commit_taken: "
                         "UNREACHABLE by construction, since deliver_admits refuses a contradicting record "
                         "and RETURNS before that push — so a row from there is a hole in THAT gate and is "
                         "a different and worse finding than this one. solver/cold.c's park replay: the "

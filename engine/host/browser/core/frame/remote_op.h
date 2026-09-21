@@ -45,18 +45,27 @@ void remote_op_agent_free(void);
 typedef struct RemoteOp RemoteOp;
 
 /* `record` is the text the asking instance emitted, VERBATIM:
-     windowproxy.get <doc> <world+ancestry> <member>
-     object.get      <doc> <world+ancestry> <generation>:<id> <key>
-     object.set      <doc> <world+ancestry> <generation>:<id> <key> <value>
-     object.delete   <doc> <world+ancestry> <generation>:<id> <key>
-     object.apply    <doc> <world+ancestry> <generation>:<id> <thisArg> <arg>*
-     object.has      <doc> <world+ancestry> <generation>:<id> <key>
+     windowproxy.get <doc> <world+ancestry> <addressee> <member>
+     object.get      <doc> <world+ancestry> <addressee> <generation>:<id> <key>
+     object.set      <doc> <world+ancestry> <addressee> <generation>:<id> <key> <value>
+     object.delete   <doc> <world+ancestry> <addressee> <generation>:<id> <key>
+     object.apply    <doc> <world+ancestry> <addressee> <generation>:<id> <thisArg> <arg>*
+     object.has      <doc> <world+ancestry> <addressee> <generation>:<id> <key>
    The object is named by (generation, id) because an id is an index into ONE session's export table
    (remote_object.h): the document name is stable across a park by requirement, so an id alone resolves in
    range in every session of that document and names a different object in each.
-   The first two fields are the TRANSPORT'S — which instance, and whose timeline — exactly as they are on a
-   routed delivery, which is what lets one router carry both. Crashes on a verb this agent does not perform: an
-   unanswered record parks the asking flow forever, so the operation has to be built rather than ignored. */
+   The first THREE fields are the TRANSPORT'S — which instance, whose timeline asks, and which of the
+   RECEIVER'S timelines the asker is already in — and the first two are exactly a routed delivery's, which is
+   what lets one router carry both. Crashes on a verb this agent does not perform: an unanswered record parks
+   the asking flow forever, so the operation has to be built rather than ignored.
+   THE ADDRESSEE SITS AFTER THE WORLD AND BEFORE EVERY OPERAND, AND ITS POSITION IS NOT A MATTER OF TASTE.
+   Three trusted-zone files read this grammar POSITIONALLY while relaying the record whole — engine/route.mjs
+   takes `[1]` for the holder and `[2]` for the asking world, and engine/trusted.mjs and extension/bridge.js
+   each take `[1]` — so a field at index 2 would silently re-point route.mjs's second read at a world nobody
+   asked from. That zone's JavaScript is INTERPRETED FROM THE TREE and therefore live on WRITE (CLAUDE.md
+   §A-CROSS-BOUNDARY-DIFF) while this C is live only after a build, so a grammar change those three can see is
+   a diff that deploys itself asymmetrically. At index 3 all three are untouched and the pin lands as C only.
+   Index 3 is also the only fixed slot EVERY verb has: `object.apply`'s tail is variadic. */
 RemoteOp *remote_op_parse(const char *record);
 /* WHOSE TIMELINE THE ANSWER IS TRUE IN — the asking flow's world and its ancestry, in world.h's wire form. The
    caller installs the segment before it runs the program; it is not this file's to install, because which
@@ -64,6 +73,15 @@ RemoteOp *remote_op_parse(const char *record);
 const char *remote_op_worlds(const RemoteOp *op);
 /* WHICH DOCUMENT of the receiving agent owns the object — the record's first operand. */
 const char *remote_op_doc(const RemoteOp *op);
+/* WHICH OF THIS AGENT'S OWN TIMELINES THE ASKER IS ALREADY IN — a world vector of THIS instance's forest,
+   read back off the answer that flow took from one of our flows, or solver/engine.h's ENGINE_ADDRESSEE_NONE
+   when it has taken none. BORROWED from the parsed record.
+   THIS FILE DOES NOT JUDGE IT, and that is the split rather than an omission: what a world vector MEANS is a
+   fact about the world forest and belongs to solver/world.h, which owns the one reader of that grammar. A
+   second reader here would be a second grammar — the defect remote_op.h's own header paragraph names about
+   the record — and this file holds no solver dependency at all. What it owes is the FIELD; what the operand
+   means is asked where the flows are. */
+const char *remote_op_addressee(const RemoteOp *op);
 /* THE PROGRAM THAT PERFORMS IT. Installs every operand on `ctx`'s global as a slot and returns the source,
    BORROWED (static text). Running it is the caller's, and it must be run as a flow. */
 const char *remote_op_program(JSContext *ctx, const RemoteOp *op);

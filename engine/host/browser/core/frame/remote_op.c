@@ -18,7 +18,11 @@
 enum { OP_WPGET, OP_GET, OP_SET, OP_DELETE, OP_APPLY, OP_HAS, OP_N };
 
 /* `need` is the MINIMUM: `object.apply` carries one field per argument and there is no ceiling on how many may
-   cross — a bound on the argument count is a bound on which calls this engine can make. */
+   cross — a bound on the argument count is a bound on which calls this engine can make.
+   IT COUNTS THE TRANSPORT'S THREE FIELDS AS WELL AS THE OPERATION'S — the verb, the document, the asking
+   world and the ADDRESSEE — because the reader below indexes the whole split and a count of operands alone
+   would let a record short by a transport field through the one CHECK that stands between this parse and a
+   read past the fields that did arrive. */
 static const struct { const char *verb; int need; const char *program; } OPS[OP_N] = {
     /* §7.2.1's member of THIS document's Window, read as the IDL getter it IS — §7.2.1.3.4
        CrossOriginGetOwnPropertyHelper ( O, P ) calls "an anonymous built-in function, created in the current
@@ -30,18 +34,18 @@ static const struct { const char *verb; int need; const char *program; } OPS[OP_
        NEITHER OPERAND IS THE PAGE'S. The getter is window_proxy.c's per-realm capture, taken before any of
        this document's script ran; the receiver is JS_GetGlobalObject, not the `globalThis` binding, which is
        an ordinary writable data property of the global that a page may reassign like any other. */
-    { "windowproxy.get", 4, "__apiclientOp(__apiclientGetter, __apiclientThis, __apiclientArgs)" },
+    { "windowproxy.get", 5, "__apiclientOp(__apiclientGetter, __apiclientThis, __apiclientArgs)" },
     /* ECMA-262 10.1.8 — pure syntax, so nothing the page owns is between the operation and its answer. */
-    { "object.get",      5, "__apiclientLent[__apiclientKey]" },
+    { "object.get",      6, "__apiclientLent[__apiclientKey]" },
     /* 10.1.9 through %Reflect.set%: an assignment expression completes with the VALUE, and 10.5.9 step 8 asks
        the trap for the BOOLEAN, which is a different fact and the only one that says whether the write took. */
-    { "object.set",      6, "__apiclientOp(__apiclientLent, __apiclientKey, __apiclientVal)" },
+    { "object.set",      7, "__apiclientOp(__apiclientLent, __apiclientKey, __apiclientVal)" },
     /* 10.1.10, SLOPPY MODE ON PURPOSE: `delete` yields the boolean here and THROWS for a false in strict mode,
        and the boolean is exactly what 10.5.10 step 8 asks the trap for. */
-    { "object.delete",   5, "delete __apiclientLent[__apiclientKey]" },
+    { "object.delete",   6, "delete __apiclientLent[__apiclientKey]" },
     /* 10.2.1 through %Reflect.apply%, because a call needs its argument list SPREAD and `f.apply` is a property
        of the function that the page may replace. */
-    { "object.apply",    5, "__apiclientOp(__apiclientLent, __apiclientThis, __apiclientArgs)" },
+    { "object.apply",    6, "__apiclientOp(__apiclientLent, __apiclientThis, __apiclientArgs)" },
     /* 10.1.7 — pure syntax, like 10.1.8 above it and for the same reason. ECMA-262 13.10.1 Runtime Semantics:
        Evaluation gives `RelationalExpression : RelationalExpression in ShiftExpression` the steps "If
        rightValue is not an Object, throw a TypeError exception" and "Return ? HasProperty(rightValue, ?
@@ -52,7 +56,7 @@ static const struct { const char *verb; int need; const char *program; } OPS[OP_
        the receiver is `__apiclientLent` and the key is `__apiclientKey`, which the keyed branch below installs
        for every verb that is not OP_APPLY, and only OP_SET adds a third. A verb whose record shape is another
        verb's is a row here and nothing else, which is what the one-row-per-operation table is for. */
-    { "object.has",      5, "__apiclientKey in __apiclientLent" },
+    { "object.has",      6, "__apiclientKey in __apiclientLent" },
 };
 
 struct RemoteOp { int op; char *text; char **f; int nf; };
@@ -192,7 +196,7 @@ RemoteOp *remote_op_parse(const char *record)
        §Offensive-programming's security boundary, so the release build must not perform the read either. There
        is deliberately nothing to fall back to — a record naming an unlisted member was not written by this
        engine's asking half, and answering it at all is the defect. */
-    CHECK(o->op != OP_WPGET || window_proxy_cross_origin_property(o->f[3]) != NULL,
+    CHECK(o->op != OP_WPGET || window_proxy_cross_origin_property(o->f[4]) != NULL,
           "a cross-agent record asked this agent to read a Window member HTML §7.2.1.3.1 CrossOriginProperties "
           "( O ) does not list among the cross-origin accessible window property names — performing it would "
           "compute a cross-origin read of this document's own global and relay it to the asking instance as an "
@@ -224,7 +228,7 @@ RemoteOp *remote_op_parse(const char *record)
        %Reflect.apply% over an absent getter and hands back a TypeError, which is a wrong answer rather than an
        unsafe one. BUILD THE OPERATION BRANCH and this goes: it needs a function to be nameable across the
        seam, which is core/frame/remote_object.c's remote-object handle. */
-    DCHECK(o->op != OP_WPGET || window_proxy_cross_origin_property(o->f[3])->needs_get,
+    DCHECK(o->op != OP_WPGET || window_proxy_cross_origin_property(o->f[4])->needs_get,
            "a cross-agent record asked this agent for a Window member whose HTML §7.2.1.3.1 "
            "CrossOriginProperties ( O ) record carries neither [[NeedsGetter]] nor [[NeedsSetter]] — that is "
            "HTML §7.2.1.3.4 CrossOriginGetOwnPropertyHelper's OPERATION branch, whose answer is \"an anonymous "
@@ -248,6 +252,17 @@ const char *remote_op_doc(const RemoteOp *op)
     return op->f[1];
 }
 
+const char *remote_op_addressee(const RemoteOp *op)
+{
+    DCHECK(op != NULL, "the addressee of a cross-agent operation that was never parsed");
+    /* NOT JUDGED HERE — see remote_op.h. The field is handed back as text and what it MEANS is asked where
+       this agent's flows are, because "which of these two timelines is the other continued" is a fact about
+       the world forest and reading it here would be a second reader of that grammar. The one thing this line
+       can state is that a field ARRIVED, which is the transport's own invariant and is what the parse's
+       field-count CHECK has already established. */
+    return op->f[3];
+}
+
 const char *remote_op_program(JSContext *ctx, const RemoteOp *op)
 {
     JSValue g;
@@ -268,7 +283,7 @@ const char *remote_op_program(JSContext *ctx, const RemoteOp *op)
 
         CHECK(!JS_IsException(args),
               "remote op: the empty argument list for §7.2.1.3.4's getter could not be allocated");
-        JS_SetPropertyStr(ctx, g, "__apiclientGetter", window_proxy_cross_origin_getter(ctx, op->f[3]));
+        JS_SetPropertyStr(ctx, g, "__apiclientGetter", window_proxy_cross_origin_getter(ctx, op->f[4]));
         /* §7.2.1.3.4 runs the getter's steps ON O, and O is the peer document's Window — this realm's global
            object, taken from the runtime rather than read out of the realm under whatever name. */
         JS_SetPropertyStr(ctx, g, "__apiclientThis", JS_GetGlobalObject(ctx));
@@ -280,7 +295,7 @@ const char *remote_op_program(JSContext *ctx, const RemoteOp *op)
            RANGE in every one of them, so a name from a session that parked would resolve to an unrelated
            object. A CHECK and not a DCHECK for the reason the field count above is one: the release build
            would read past the field rather than answer a different question. */
-        const char *idf = op->f[3], *sep = strchr(idf, ':');
+        const char *idf = op->f[4], *sep = strchr(idf, ':');
         JSValueConst held;
 
         CHECK(sep != NULL,
@@ -298,15 +313,15 @@ const char *remote_op_program(JSContext *ctx, const RemoteOp *op)
             int i;
             /* THE ARGUMENT LIST IS FLAT ON THE WIRE — one field per argument, in the one grammar — so there is
                no second grammar for a list and no ceiling on how many may cross. */
-            for (i = 5; i < op->nf; i++)
-                JS_SetPropertyUint32(ctx, args, (uint32_t)(i - 5), remote_object_decode(ctx, op->f[i]));
-            JS_SetPropertyStr(ctx, g, "__apiclientThis", remote_object_decode(ctx, op->f[4]));
+            for (i = 6; i < op->nf; i++)
+                JS_SetPropertyUint32(ctx, args, (uint32_t)(i - 6), remote_object_decode(ctx, op->f[i]));
+            JS_SetPropertyStr(ctx, g, "__apiclientThis", remote_object_decode(ctx, op->f[5]));
             JS_SetPropertyStr(ctx, g, "__apiclientArgs", args);
             JS_SetPropertyStr(ctx, g, "__apiclientOp", realm_value_get(ctx, g_apply_slot));
         } else {
-            JS_SetPropertyStr(ctx, g, "__apiclientKey", remote_object_decode(ctx, op->f[4]));
+            JS_SetPropertyStr(ctx, g, "__apiclientKey", remote_object_decode(ctx, op->f[5]));
             if (op->op == OP_SET) {
-                JS_SetPropertyStr(ctx, g, "__apiclientVal", remote_object_decode(ctx, op->f[5]));
+                JS_SetPropertyStr(ctx, g, "__apiclientVal", remote_object_decode(ctx, op->f[6]));
                 JS_SetPropertyStr(ctx, g, "__apiclientOp", realm_value_get(ctx, g_set_slot));
             }
         }

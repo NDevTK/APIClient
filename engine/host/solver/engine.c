@@ -3431,10 +3431,88 @@ static JSValue perform_q_fork(JSContext *ctx, const Flow *parent) {
  * `token` IS THE TRUSTED ZONE'S and is opaque here: this instance echoes it on the answer so the zone can route
  * the completion back to the instance and the request id that asked. It is not the asking flow's request id
  * because that id is unique only within the asking instance, and two peers may ask this one the same number. */
+/* See engine.h. THE ROWS ARE THE FLOW'S AND THE RELATION IS world.h's, which is what keeps this one function
+   rather than a rule about vectors spelled here: "which of these two sending timelines is the other
+   continued" is a fact about the world FOREST, and the forest is that file's. What lives here is the
+   COMMITMENT — engine.c is the component that holds both a record's vector and the receiving flow, which is
+   the split solver/flow.h states from the other side. */
+char *engine_flow_addressee(JSContext *ctx, Flow *f, const char *doc_name)
+{
+    int n, i, ambiguous = 0;
+    char *best = NULL;
+
+    DCHECK(f != NULL, "the addressee of a cross-instance operation was asked of no flow — a commitment is a "
+                      "fact about ONE receiving timeline and there is no such thing as a flowless one");
+    DCHECK(doc_name != NULL && *doc_name,
+           "the addressee of a cross-instance operation was asked without naming the document it addresses — "
+           "a flow may be committed to timelines of several peers at once, and an unkeyed answer would "
+           "address one peer's operation to another peer's world");
+    n = flow_world_commits(f);
+    for (i = 0; i < n; i++) {
+        JSValue e = flow_world_commit_at(f, i);
+        JSValue cv = JS_GetPropertyUint32(ctx, e, 0);
+        JSValue tv = JS_GetPropertyUint32(ctx, e, 1);
+        const char *c = JS_ToCString(ctx, cv);
+
+        CHECK(c != NULL, "engine: OOM reading which sending timeline a flow is in while addressing a "
+                         "cross-instance operation — an unreadable commitment would emit the operation "
+                         "unaddressed, which is the cross-product this field exists to close");
+        /* A FORECLOSED ROW NAMES A SUBTREE THIS TIMELINE IS NOT IN and may never be addressed: the flow on
+           the other side of that branch is the one that took it, and a record sent under that name would be
+           attached to the timelines this flow has expressly refused to hear from. Only a RECEIVED row says
+           where this flow IS. */
+        if (JS_VALUE_GET_TAG(tv) == JS_TAG_INT && JS_VALUE_GET_INT(tv)) {
+            const WorldId *anc;
+            WorldId w;
+
+            world_parse(c, &w, &anc);
+            (void)anc;
+            if (!strcmp(world_doc_name(w.doc), doc_name)) {
+                if (best == NULL) {
+                    best = strdup(c);
+                    CHECK(best != NULL, "engine: OOM naming the peer timeline a cross-instance operation is "
+                                        "addressed to");
+                } else {
+                    WorldRel rel = world_vec_relate(c, best);
+
+                    DCHECK(rel != WORLD_REL_CONTRADICT,
+                           "two RECEIVED commitments to one sending document CONTRADICT on a flow that is "
+                           "addressing its next operation — flow_world_commit_push aborts on exactly that "
+                           "pair at the append, so a pair reaching this walk means a row got onto the list "
+                           "without going through it (the cold tier's replay is the producer that can)");
+                    /* DEEPEST WINS, and `DESCENDANT` is the relation that says so: world_vec_relate(a, b)
+                       answers DESCENDANT when `b` is an ANCESTOR of `a`, so the candidate is below the
+                       incumbent and speaks for a strictly narrower subtree. SAME and ANCESTOR both keep the
+                       incumbent, which is why neither needs an arm. */
+                    if (rel == WORLD_REL_DESCENDANT) {
+                        char *d = strdup(c);
+                        CHECK(d != NULL, "engine: OOM naming the peer timeline a cross-instance operation is "
+                                         "addressed to");
+                        free(best);
+                        best = d;
+                    } else if (rel == WORLD_REL_INDEPENDENT) {
+                        /* TWO GENERATIONS OF ONE DOCUMENT, and no order over them means anything here — see
+                           engine.h. Recorded rather than resolved, and read after the walk so a later row
+                           cannot un-ambiguate it by arriving deeper than one of the two. */
+                        ambiguous = 1;
+                    }
+                }
+            }
+        }
+        JS_FreeCString(ctx, c);
+        JS_FreeValue(ctx, cv);
+        JS_FreeValue(ctx, tv);
+        JS_FreeValue(ctx, e);
+    }
+    if (ambiguous) { free(best); best = NULL; }
+    return best;
+}
+
 void engine_perform(JSContext *ctx, const char *token, const char *record)
 {
     RemoteOp *op;
-    int n;
+    char *addressee = NULL;
+    int n, attached = 0;
 
     DCHECK(record != NULL && *record, "a cross-agent operation arrived with no text to perform");
     DCHECK(token != NULL && *token, "a cross-agent operation arrived with no rendezvous token — the completion "
@@ -3479,6 +3557,28 @@ void engine_perform(JSContext *ctx, const char *token, const char *record)
                "names, and the same reason: stacking one over the other overwrites whichever slot both touched "
                "and unapplies to the baseline rather than to the flow's value");
     }
+    /* WHICH OF THIS INSTANCE'S TIMELINES THE ASKER IS IN — taken off the record BEFORE it is freed, because
+       `addr` points into the parse's own text. Copied rather than borrowed for the same reason: the walk
+       below outlives the record, and the alternative is a lifetime the free above has to be moved for.
+       ENGINE_ADDRESSEE_NONE IS A REAL ANSWER AND THE COMMON ONE (engine.h): a flow that has taken no
+       cross-instance answer is in no timeline of ours, so every one of them may answer it, and the fan-out
+       is required rather than a cost — `otherW.length` is a different number in each and all of them true. */
+    {
+        const char *addr = remote_op_addressee(op);
+
+        DCHECK(addr != NULL && *addr,
+               "a cross-agent operation arrived with an EMPTY addressee field — the grammar spells the "
+               "unaddressed case as a token (solver/engine.h's ENGINE_ADDRESSEE_NONE) precisely so that "
+               "\"this flow addresses nobody\" is something a writer SAYS rather than a hole a reader fills, "
+               "and an empty field is the two ends of this wire disagreeing about which of the two it is");
+        if (strcmp(addr, ENGINE_ADDRESSEE_NONE) != 0) {
+            addressee = strdup(addr);
+            CHECK(addressee != NULL, "engine: OOM copying the timeline a peer addressed a cross-agent "
+                                     "operation to — without it the operation would be performed by every "
+                                     "timeline this instance has, including the ones that peer has already "
+                                     "refused to hear from");
+        }
+    }
     remote_op_free(op);
 
     n = flow_count();
@@ -3487,6 +3587,21 @@ void engine_perform(JSContext *ctx, const char *token, const char *record)
                   "live while that reference exists: build that before this can be answered");
     for (int i = 0; i < n; i++) {
         Flow *f = flow_at(i);
+        /* …AND A TIMELINE THE ADDRESSEE CONTRADICTS IS NOT ONE OF THEM. This is the mirror of deliver_admits,
+           over this instance's LIVE FLOWS instead of over one flow's commitments, and the criterion is
+           world.h's own: within one forest "one is a continuation of the other" is exactly SAME or ANCESTOR,
+           and everything else is CONTRADICT, a pair no single receiving timeline may hold.
+           IT IS NOT IDENTITY, AND THE DIFFERENCE IS THE WHOLE OF WHY THIS LOOP IS SOUND. A fork RETIRES the
+           world it branched at and mints a child for both arms, so every live flow's world is a LEAF: the
+           world the asker was answered from stops naming any flow the first time that timeline branches,
+           which is the ordinary thing a flow does. Its DESCENDANTS are that answering timeline CONTINUED and
+           are real timelines the asker must still explore, so matching on the name would delete them.
+           INDEPENDENT IS NOT A REFUSAL EITHER, for deliver_admits' reason: two forests were never one — a
+           different agent's timeline, or a generation of this document that a park ended — and §Solver-half
+           makes uncertainty KEEP the arm. So a wrong-agent addressee narrows nothing rather than emptying
+           this loop. */
+        if (addressee != NULL && world_vec_relate_held(addressee, f->world) == WORLD_REL_CONTRADICT) continue;
+        attached++;
         /* APPENDED, BECAUSE THEY ARE SEQUENTIAL. A second operation arriving before this flow has started the
            first is an ordinary second question — the asking side parks on each in turn — so it goes on the
            queue behind it, and each is answered under its own token because the token rides the program's row
@@ -3499,6 +3614,22 @@ void engine_perform(JSContext *ctx, const char *token, const char *record)
            flow that was kept alive to answer peers would never be picked to answer one. */
         flow_clear_host_owed(f);
     }
+    free(addressee);
+    /* AND IT REACHED SOMEBODY. The DCHECK above says this document still has timelines; this says the
+       ADDRESSED one is among them, which is a different claim and the only one the pin can falsify. A record
+       attached to no flow is an asking flow parked at the read for the rest of its process — the identical
+       loss the count above exists for, one narrowing further in — and it arrives when every continuation of
+       the answering timeline has left the frontier while its siblings are still running. That is the SAME
+       capability the count above names: a document a peer still holds a reference into must keep the
+       timelines it answered from alive while that reference exists. BUILD THAT; never widen the refusal to
+       admit a contradicting timeline, which would answer this peer's question out of a world neither agent
+       was ever in — the fabrication solver/flow.c's commitment abort exists to refuse. */
+    DCHECK(attached > 0,
+           "a cross-agent operation named a timeline of this document that every LIVE flow CONTRADICTS — the "
+           "peer addressed the world one of our flows answered its last question from, and every "
+           "continuation of that world has since left the frontier while other timelines of this document "
+           "are still running. The asking flow is now parked on a question no timeline of ours will answer");
+    (void)attached;
 }
 
 
@@ -5937,11 +6068,17 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
  * holds a segment for the asker materializes the arm's by forking it. AND THE ARM NOW NAMES THE PEER TIMELINE
  * IT BELONGS TO: the completion crosses back carrying the answering flow's world (flow_answer_perform), the
  * delivery records it beside the answer (PEND_ANSWER_WORLD), and the arm takes it with the answer it was forked
- * over. THE HALF THAT IS STILL MISSING IS THE PIN, and it is the next thing here and nothing else: a SECOND
- * operation from this arm is still written with no addressee, so the peer performs it in every one of its
- * timelines again and this arm forks over all of them — the cross-product, of which every off-diagonal member
- * is a timeline neither agent was ever in (world_vec_relate calls that pair CONTRADICT, and merging one is the
- * same fabrication as merging two senders' worlds at a delivery).
+ * over. THE PIN IS LANDED AND THE BLOCK BELOW IS HISTORY RATHER THAN WORK, which is stated at the top
+ * because the reasoning under it is written in the present tense and reads as a queue. A SECOND operation
+ * from this arm used to be written with no addressee, so the peer performed it in every one of its timelines
+ * again and this arm forked over all of them — the cross-product, of which every off-diagonal member is a
+ * timeline neither agent was ever in (world_vec_relate calls that pair CONTRADICT, and merging one is the
+ * same fabrication as merging two senders' worlds at a delivery). What closes it is the ADDRESSEE: the
+ * operation carries which of the peer's timelines this flow is already in (engine.h's engine_flow_addressee,
+ * remote_op.h's third transport field), and engine_perform attaches it only to the flows that addressee does
+ * not CONTRADICT. WHAT SURVIVES BELOW IS THE RECORD OF HOW THE REMEDY CLAUSE FOR IT WAS WRONG FOUR TIMES,
+ * kept because a remedy clause is read once by somebody who has already decided to do the work, and a reader
+ * who re-derives any of those four will re-propose it.
  *   WHAT THE NEXT DIFF BUILDS — AND THIS CLAUSE WAS WRONG ON EVERY ONE OF ITS THREE PARTS, WHICH IS RECORDED
  *     HERE RATHER THAN QUIETLY REPLACED BECAUSE A REMEDY CLAUSE IS READ ONCE, BY SOMEBODY WHO HAS ALREADY
  *     DECIDED TO DO THE WORK, SO A WRONG ONE IS NOT CAUGHT — IT IS EXECUTED. It read: "the asking flow
@@ -6054,10 +6191,25 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
  *             asserts only that it is one, and the resume deliberately does not check the vocabulary, so a
  *             member past the two that existed round-trips by construction. A member past NINE is the
  *             grammar change, and that assert says so.
- *         (d) THE WRITER-SIDE READ — window_proxy.c and remote_object.c read the carrier for the document
- *             they are addressing. Consumer: (ii)'s field. This is the member the enumeration above omits.
- *         (e) (ii) and (iii), which are ONE landing: a field with no consult is a grammar change that buys
- *             nothing, and a consult with no field reads a slot that is not there.
+ *         (d) LANDED, WITH (e), AS ONE DIFF — window_proxy.c's cross-document read and remote_object.c's
+ *             five traps call engine_flow_addressee for the document they are addressing and write its
+ *             answer into the record. It could not land alone and the enumeration above omitted it: a read
+ *             with no consumer is the write-with-no-reader defect, and (ii)'s field IS its consumer.
+ *             AND THE KEY IS NARROWER THAN THE CLAUSE READ, which is recorded at engine.h as a residual
+ *             with its three clauses rather than here: `mint` stamps an instance's ROOT document on every
+ *             world it makes, so a row names the peer AGENT and the record names a DOCUMENT of it, and a
+ *             read addressed to a same-origin CHILD of a peer matches no row and goes out unaddressed.
+ *         (e) LANDED — (ii) and (iii) were ONE landing, for the reason stated: a field with no consult is a
+ *             grammar change that buys nothing, and a consult with no field reads a slot that is not there.
+ *             THE ENUMERATION WAS SHORT ONE MEMBER AGAIN, AND IT IS THE SAME OMISSION IN A NEW PLACE. (iii)
+ *             needs to relate the addressee against every LIVE FLOW'S world, and this file had no way to ask
+ *             that: world_vec_relate takes two VECTORS, and producing one for a live flow calls that world
+ *             `sent` — the filter world_serialize's own paragraph describes, after which the world is named
+ *             in the ancestry of every vector minted below it, which is the chain growth world_vector_write's
+ *             CHECK exists for, over this instance's WHOLE FRONTIER on EVERY arriving operation. So the
+ *             landing carried a fifth file nobody's call trace reached: solver/world.h's
+ *             world_vec_relate_held, born where the forest is. The scope was drawn by tracing what the
+ *             ALGORITHM READS rather than what it CALLS, which is the one method that terminates in a pass.
  *       AND (c) CANNOT OUTLIVE A PARK UNTIL A RESUMED MEMBER KEEPS ITS PLACE IN THE RESIDUE'S OWN FOREST —
  *         which is NOT "the world its recipe was parked under", and this clause said that it was. cold.c's
  *         park_flow_add calls flow_add with WORLD_NONE, so every member a resume rebuilds is a fresh ROOT of
@@ -6093,7 +6245,9 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
  *         ordering here does not rest on a field a park would lose.
  *         RETIREMENT: this record goes when a resumed member that has posted can carry an ancestry a peer can
  *         fork at, which is a question about what `sent` means across a generation.
- *     (ii) THE FIELD MAY NOT GO BESIDE THE DOCUMENT. `engine/route.mjs` is trusted-zone JavaScript, which
+ *     (ii) LANDED AT INDEX 3, AND THE REASONING BELOW IS WHY IT IS THERE AND NOT AT 2 — kept because the
+ *       position is load-bearing and a reader moving it would re-derive the argument badly.
+ *       THE FIELD MAY NOT GO BESIDE THE DOCUMENT. `engine/route.mjs` is trusted-zone JavaScript, which
  *       §A-CROSS-BOUNDARY-DIFF makes LIVE ON WRITE, and it reads this grammar positionally — `split('\t')[1]`
  *       for the holder and `split('\t')[2]` for the asking world — while relaying the record VERBATIM. An
  *       addressee at index 2 silently re-points that second read at a world nobody asked from. AFTER the world
@@ -6110,7 +6264,8 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
  *         survives an insertion at 3 exactly while the member stays last, and html_iframe.c writes a sixth
  *         record this grammar has no verb for — dead behind its own DFAIL in dev and live in release, so it
  *         shifts with the others or the release wire carries two grammars.
- *     (iii) ADDRESSING IS NOT IDENTITY, AND THE PRESCRIBED CRASH FIRES ON THE PEER BEING CORRECT. A fork
+ *     (iii) LANDED, AND ITS CRITERION IS THE PART TO READ RATHER THAN RE-DERIVE.
+ *       ADDRESSING IS NOT IDENTITY, AND THE PRESCRIBED CRASH FIRES ON THE PEER BEING CORRECT. A fork
  *       RETIRES the world it branched at and mints a child for both arms (world_mint_child), so every live
  *       flow's world is a LEAF: the world an answer named stops naming any flow the first time that peer
  *       timeline takes a branch, which is the ordinary thing a flow does and not a timeline being "gone".
@@ -6133,21 +6288,38 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
  *     both true and false across a peer's arms). The cross-product is wrong because its off-diagonal members
  *     are worlds neither agent was in, never because there are many of them; a narrowing aimed at the count
  *     deletes real ones.
- *   HOW ITS ABSENCE SHOWS, stated as an observation rather than as whichever arm forked last, because
- *     that member is whatever the peer branched into most recently: engine_perform reads no addressee,
- *     so the number of timelines answering ONE token is the peer's whole live frontier for EVERY read.
- *     A read made from an arm that ALREADY names a peer timeline is therefore answered by exactly as
- *     many timelines as one made from a flow that has never taken a cross-instance answer, and both
- *     counts move with the PEER's forking and never with the ASKER's lineage. The pin arriving is those
- *     two counts ceasing to be equal — the addressed one becoming a strict subset whose dropped members
- *     are exactly the worlds the addressee CONTRADICTS, which is ONE only where the peer has not branched
- *     since it answered.
- *   RETIREMENT: this whole block goes when engine_perform's attach loop REFUSES a flow on an addressee a
- *     writer filled from the carrier, at which point the refusal is in the code and the reasoning above is
- *     re-derivable from it. The clause said `consults an addressee` and that is satisfiable by a loop
- *     reading a slot nothing ever writes — a retirement condition whose two sides cannot disagree, which
- *     would have retired this block for a mechanism that does nothing and taken the reasoning with it. A
- *     retirement condition is a check like any other: ask what state of the program makes it FAIL. */
+ *   HOW IT SHOWED, AND HOW ITS ARRIVAL DOES — the same observation read from both sides, kept because it is
+ *     the one thing about this mechanism a reader can check from a drive's own output with no instrument.
+ *     With no addressee, the number of timelines answering ONE token is the peer's whole live frontier for
+ *     EVERY read: a read made from an arm that ALREADY names a peer timeline is answered by exactly as many
+ *     timelines as one made from a flow that has never taken a cross-instance answer, and both counts move
+ *     with the PEER's forking and never with the ASKER's lineage. The pin arriving is those two counts
+ *     ceasing to be equal — the addressed one becoming a strict subset whose dropped members are exactly the
+ *     worlds the addressee CONTRADICTS, which is ONE only where the peer has not branched since it answered.
+ *     engine/route.mjs prints both halves already and needed no change for it: the record it logs at the ask
+ *     carries the addressee verbatim, and the line beside it names how many peer timelines answered and
+ *     which worlds they were.
+ *
+ * NAMED RESIDUAL — THE PIN IS SOUND ACROSS A GENERATION AND BUYS NOTHING THERE, SO THE CROSS-PRODUCT COMES
+ * BACK AFTER A PARK.
+ *   WHAT IS NOT COVERED: the refusal admits WORLD_REL_INDEPENDENT, which is right — two forests were never
+ *   one and §Solver-half keeps the arm — and a park bumps the generation, so a resumed member's world is
+ *   INDEPENDENT of every world any peer named before the park. An addressee written before a park therefore
+ *   refuses nothing after it, and the resumed read fans out over the peer's whole frontier exactly as an
+ *   unaddressed one does. The pin is not WRONG there; it is inert, and it is inert for the population a park
+ *   exists to carry.
+ *   WHAT THE NEXT DIFF BUILDS: nothing at this loop. It is a question about what `sent` means across a
+ *   generation — world_session_resume asserts the minted table is empty, nothing a resume mints has been
+ *   sent, and world_ancestry's filter therefore drops every edge, so a resumed member cannot carry an
+ *   ancestry a peer can fork at. The residual at (c) below is the same question one level down and states
+ *   the same retirement; narrowing INDEPENDENT here to close this would delete real timelines of every
+ *   OTHER peer, which is the one reading of this row that must not be built.
+ *   HOW ITS ABSENCE WOULD SHOW: in a drive that parks and resumes, the answering-timeline count for a read
+ *   the RESUMED session makes staying equal to the peer's whole live frontier while the same read in the
+ *   session that parked reported a strict subset — two populations of one drive, separated by the park and
+ *   by nothing about which document is being read.
+ *   RETIREMENT: this record goes with (c)'s, on the same condition — when a resumed member that has posted
+ *   can carry an ancestry a peer can fork at. */
 static int flow_answer_fork(JSContext *ctx, Flow *f) {
     int n = pending_count(f->pending), i;
 

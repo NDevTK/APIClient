@@ -276,6 +276,35 @@ typedef enum {
 } WorldRel;
 WorldRel world_vec_relate(const char *a, const char *b);
 
+/* …AND THE SAME QUESTION ASKED OF A WORLD THIS INSTANCE STILL HOLDS, against a timeline some peer NAMED back
+ * at it. The relation is the one above and the answers are the same five; what differs is that only ONE side
+ * arrives as text.
+ *
+ * IT IS NOT `world_vec_relate` WITH A SERIALIZED SECOND OPERAND, AND THE DIFFERENCE IS A SIDE EFFECT RATHER
+ * THAN A CONVENIENCE — the identical split `world_name` is held apart from `world_serialize` for. Producing a
+ * vector for a live flow marks its world `sent`, and `sent` is the filter world_serialize's own paragraph
+ * describes: a world called sent is named in the ancestry of every vector minted below it from then on. A
+ * caller that merely wants to COMPARE has sent nothing to anybody, and the one caller this exists for asks it
+ * of EVERY LIVE FLOW on every arriving operation — so serializing to compare would call this instance's whole
+ * frontier sent, and the chain would then grow with the number of BRANCHES rather than with the fork depth,
+ * which is `world_vector_write`'s own CHECK on any page whose boot flow forks freely.
+ *
+ * THE ANCESTRY IS WALKED LOCALLY AND UNFILTERED, WHICH IS STRICTLY MORE EXACT THAN THE WIRE FORM. `w` was
+ * minted here, so this registry holds its fork edges; a vector's transmitted chain names only the ancestors
+ * that have themselves crossed, and a fork point that never sent anything is absent from it. Comparing a
+ * filtered chain against a filtered chain is the sound answer for two FOREIGN vectors (world_vec_relate's own
+ * paragraph says so) and is a FALSE `CONTRADICT` here, where the unfiltered edges are in hand: an addressee
+ * that really is an ancestor of a live flow would read as the other arm of a branch and that flow would be
+ * refused work it is entitled to. So `vec`'s own ancestry field is not read at all — only its HEAD is — and
+ * both directions are decided by walking this table.
+ *
+ * `vec` IS ATTACKER TEXT. It arrives on a record another WASM instance wrote (SECURITY.md makes every one of
+ * them untrusted), so a head that claims THIS document and THIS generation and names a serial past the minted
+ * table is a forgery, and the release build would index past the table rather than answer a different
+ * question — which is why that one is a CHECK. A head naming another document or another generation needs no
+ * such test: it is answered INDEPENDENT before any table is touched, exactly as two foreign vectors are. */
+WorldRel world_vec_relate_held(const char *vec, WorldId w);
+
 /* THE NEAREST FORK POINT A VECTOR NAMES — its first ancestor, as a vector of its own (a head with no ancestry,
    which is all the relation above needs of it). Heap; the caller frees. NULL when the vector names no ancestor.
    NULL IS A REAL ANSWER AND NOT AN ERROR: a ROOT world is a flow its instance created from the baseline, so

@@ -8511,7 +8511,13 @@ static int hostreq_answer_all(JSContext *ctx)
                 /* THE PEER'S HALF of §7.2.5.1's cross-instance [[Get]]. A real host routes this to the
                    instance holding that document and answers under the named world; this fixture stands in for
                    that peer exactly as it stands in for the network, so the SUSPEND/RESUME path is exercised
-                   end to end without a second instance. The member is the last tab-separated field. */
+                   end to end without a second instance. The member is the last tab-separated field.
+                   IT IS STILL THE LAST ONE AFTER THE ADDRESSEE LANDED, which is why this arm did not move: a
+                   `windowproxy.get` is `<verb> <doc> <world> <addressee> <member>` and the pin went in at
+                   index 3, ahead of every operand, so the scan back from this record's end finds the member
+                   exactly as it did. That is a property of THIS verb and not of the grammar — `object.apply`
+                   ends in a variadic argument list — and it is the reason this reader survives a change the
+                   writer beside it had to make. */
                 /* BOUNDED TO THIS RECORD. The joined buffer is `id<TAB>op<NL>` repeated, so it is NOT
                    NUL-terminated at the newline — an strrchr from the op start finds the last tab in every
                    record that follows, and the member read was a field of some later request. Scan back from
@@ -17292,7 +17298,13 @@ static void fixture_ask_remote_op(JSContext *ctx) {
           "the peer world this fixture just materialized is not in the segment table it was materialized into "
           "— the operation below would name a timeline this instance does not hold, and the park's own "
           "hand-back would be exercised against a question no flow was ever given");
-    snprintf(rec, sizeof rec, "windowproxy.get\t%s\t%s\tlength", world_doc_name(world_local_doc()), vector);
+    /* UNADDRESSED, AND THE TOKEN IS WHAT SAYS SO. The addressee is the third TRANSPORT field
+       (core/frame/remote_op.h) and this fixture stands in for an asking instance that has taken no answer
+       from this one — so there is no timeline of ours it is in, and every one of our timelines may answer.
+       An EMPTY field would be the hole solver/engine.h's token exists to keep out of this grammar; a record
+       missing the field entirely takes remote_op.c's field-count CHECK, which is fatal in release too. */
+    snprintf(rec, sizeof rec, "windowproxy.get\t%s\t%s\t%s\tlength",
+             world_doc_name(world_local_doc()), vector, ENGINE_ADDRESSEE_NONE);
     /* THE TOKEN IS THE TRUSTED ZONE'S NAME and this fixture is standing in for the zone, so it mints one. It is
        the thing that may never enter a recipe (solver/engine.h), which is the whole reason the park hands the
        question back instead of carrying it. */

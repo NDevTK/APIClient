@@ -825,11 +825,11 @@ static const char *const REF_APPLY_STEPS[] = { REF_APPLY_STAGES(JS_STEP_STAGE_LA
 static const char *const REF_HAS_STEPS[]   = { REF_HAS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 /* §7.2.1's read, one agent further out, and its four siblings:
-     object.get    <doc> <world+ancestry> <id> <key>
-     object.set    <doc> <world+ancestry> <id> <key> <value>
-     object.delete <doc> <world+ancestry> <id> <key>
-     object.apply  <doc> <world+ancestry> <id> <thisArg> <arg>*
-     object.has    <doc> <world+ancestry> <id> <key>
+     object.get    <doc> <world+ancestry> <addressee> <id> <key>
+     object.set    <doc> <world+ancestry> <addressee> <id> <key> <value>
+     object.delete <doc> <world+ancestry> <addressee> <id> <key>
+     object.apply  <doc> <world+ancestry> <addressee> <id> <thisArg> <arg>*
+     object.has    <doc> <world+ancestry> <addressee> <id> <key>
    The world travels for the same reason it travels with a WindowProxy read — the answer is only true in it, and
    for a WRITE it is stronger than that: two arms of a fork writing through one reference are two contradictory
    timelines, and a peer that performed both against one baseline would fabricate a third neither arm was in. Its
@@ -949,6 +949,22 @@ static int ref_op_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
         rec_add(&rec, "\t");
         world_serialize(f->world, world, sizeof world);
         rec_add(&rec, world);
+        /* …AND WHICH OF THE HOLDING AGENT'S TIMELINES THIS FLOW IS ALREADY IN. It is the third TRANSPORT
+           field and it sits ahead of every operand, which is remote_op.h's positional contract and not a
+           layout choice: the trusted zone reads this grammar by index while relaying the record whole, so the
+           slot after the world is the only one a C-only diff may take.
+           IT MATTERS MORE FOR A WRITE THAN FOR A READ, which is the same argument the world itself travels
+           under one paragraph up. Two arms of a fork writing through one reference are two contradictory
+           timelines; with no addressee the peer performs the operation in EVERY timeline it has, so a flow
+           that has already taken an answer from one of them writes into arms it was never in — and then
+           takes their answers, which is the pair solver/flow.c's commitment record aborts on. */
+        {
+            char *addr = engine_flow_addressee(ctx, f, world_doc_name(r->doc));
+
+            rec_add(&rec, "\t");
+            rec_add(&rec, addr ? addr : ENGINE_ADDRESSEE_NONE);
+            free(addr);
+        }
         /* THE OBJECT'S NAME IS (GENERATION, ID), the same pair the value grammar puts after the document. An
            id alone is an index into whichever of that document's sessions is running when the record lands. */
         snprintf(idbuf, sizeof idbuf, "\t%u:%u", r->session, r->id);

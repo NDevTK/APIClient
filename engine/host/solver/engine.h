@@ -1056,6 +1056,62 @@ void engine_routed_rebuilt(JSContext *ctx, struct Flow *f, const char *record, c
    instance that minted it, and two peers may ask this one the same number. Nothing runs inside this call. */
 void engine_perform(JSContext *ctx, const char *token, const char *record);
 
+/* WHICH TIMELINE OF `doc_name` THIS FLOW HAS ALREADY COMMITTED TO — the ADDRESSEE a cross-agent operation
+ * carries, read out of the commitment record flow.h calls "what it has already BECOME". Heap; the caller
+ * frees. NULL when this flow addresses nobody, which is a POSITIVE answer and the common one.
+ *
+ * WHY THE ASKER MUST SAY IT AND THE RECEIVER CANNOT DERIVE IT. A peer's document state IS its flows, so a
+ * cross-instance read is performed by EVERY live timeline the peer has and every one of those answers is
+ * true of the document it was computed in. A flow that has taken one is in that sending world from here on
+ * (engine.c's answer_commit_taken) — so its NEXT operation is a question of that timeline and of its
+ * continuations, and of nothing that contradicts them. The receiving instance holds the flows and cannot know
+ * which of them this asker took an answer from; the asker holds the commitment and cannot know which flows
+ * the peer has. One fact each, so the fact travels.
+ *
+ * THE DEEPEST ROW AND NOT THE FIRST. Several RECEIVED rows may name worlds of one document — they are
+ * pairwise comparable (flow.c's push aborts on a pair that CONTRADICTS), so they are a CHAIN, and the
+ * shallowest of them speaks for every peer timeline under it while the deepest speaks for exactly the subtree
+ * this flow is actually in. Addressing the shallow one would admit both arms of a branch this flow has
+ * already taken a side at, which is the cross-product the addressee exists to close; reading whichever row
+ * sits first would make the answer depend on push ORDER, which is an ordinal over a set that grows.
+ *
+ * THE KEY IS THE DOCUMENT THE RECORD NAMES, AND IT MATCHES THE ROW'S OWN — WHICH IS NARROWER THAN IT READS.
+ * `mint` stamps `g_doc` on every world an instance makes, and `g_doc` is that instance's ROOT document; an
+ * instance is an origin-keyed AGENT CLUSTER and holds a realm per same-origin document (solver/world.h), so
+ * an answer computed for a same-origin CHILD of a peer still names the peer's root in its world. A read
+ * addressed to that child therefore matches no row and is emitted UNADDRESSED. That is the status quo for
+ * those reads and never a wrong pin: a wrong-agent addressee is INDEPENDENT of every flow the receiver has
+ * and refuses nothing (world.h's world_vec_relate_held), so the only thing an unmatched key costs is the
+ * narrowing, and the only thing it cannot do is take one away.
+ *
+ * AND AN AMBIGUOUS SET ADDRESSES NOBODY RATHER THAN GUESSING. Two rows for one document may be INDEPENDENT —
+ * different GENERATIONS of it, which is every row a park replays into a new session — and there is no reading
+ * of the pair that makes one of them "the" commitment: a generation is the peer's own and this instance has
+ * no order over two of them that means anything. Picking either is the arbitrary default CLAUDE.md names, so
+ * the answer is NULL and the read fans out exactly as it does today.
+ *
+ * NAMED RESIDUAL — AN ADDRESSEE IS KEYED ON A DOCUMENT AND THE ROW NAMES AN AGENT.
+ *   WHAT IS NOT COVERED: a cross-instance operation whose target document is a same-origin CHILD of the peer
+ *   agent gets no addressee, because the rows carry that agent's ROOT document name and the record carries
+ *   the child's. The pin is therefore live for a read of a peer's root document and absent for a read of its
+ *   children, and the cross-product this closes reopens for the second kind.
+ *   WHAT THE NEXT DIFF BUILDS: the association this flow already LEARNED and does not write down — a read of
+ *   document D was answered by a world of agent A, so the row could carry D beside its vector and the key
+ *   would be exact. The row is a triple and solver/cold.c's 'r' record spells it across a park, so that is a
+ *   park-grammar change and a landing of its own rather than a field added here.
+ *   HOW ITS ABSENCE WOULD SHOW: at the receiver, the count of timelines answering ONE token staying equal to
+ *   that instance's whole live frontier for reads naming a document that is not that instance's root, while
+ *   falling to a strict subset for reads naming the root — two populations of one drive, separated by which
+ *   document the record's first operand names and by nothing about the asker. */
+char *engine_flow_addressee(JSContext *ctx, struct Flow *f, const char *doc_name);
+
+/* …AND ITS ABSENCE, SPELLED. A field left EMPTY is the hole a reader fills with whatever it already had; this
+   is the positive statement "this flow addresses nobody", which is a real and common thing for a flow to say
+   — a flow that has taken no cross-instance answer is in no peer timeline and every one of them may answer
+   it. It cannot be mistaken for a vector: world.c writes every head as `<name>:<generation>:<serial>`, so a
+   token with no colon in it is not one. */
+#define ENGINE_ADDRESSEE_NONE "-"
+
 /* THE THIRD INBOUND STATEMENT, AND THE ONE THE BROWSER MAKES RATHER THAN A PEER: the Document named by `doc` is
    no longer the active document of its navigable, because the REAL BROWSER navigated that navigable.
    IT IS HTML §7.4.6.1 "Updating the traversable"'s DEACTIVATE A DOCUMENT FOR A CROSS-DOCUMENT NAVIGATION, and

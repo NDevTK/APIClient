@@ -703,6 +703,70 @@ WorldRel world_vec_relate(const char *a, const char *b)
     return WORLD_REL_CONTRADICT;
 }
 
+/* See world.h. THE WALK IS THIS TABLE'S AND NEITHER SIDE'S TRANSMITTED CHAIN IS READ — `world_ancestry` is
+   not reached, which is what keeps this free of the `sent` mark that entry exists to record, and it is also
+   what makes the two directions below exact where a filtered chain would answer CONTRADICT for an ancestor
+   that never crossed. */
+WorldRel world_vec_relate_held(const char *vec, WorldId w)
+{
+    const WorldId *anc;
+    WorldId a, p;
+
+    DCHECK(vec != NULL && *vec,
+           "a live timeline was compared against a peer's addressee with no vector — the answer decides "
+           "whether this flow is offered a cross-instance operation at all, and a name nobody wrote would "
+           "refuse it or admit it by whatever the parse last left behind");
+    DCHECK(w.doc == g_doc,
+           "a world minted in ANOTHER document was compared as a LIVE one here — only the minting instance "
+           "holds the fork edges this walk reads, so the chain would be one document's edges walked under "
+           "another's name");
+    DCHECK(w.session == g_session,
+           "a world minted in a PREVIOUS session of this document was compared as a live one — the edges "
+           "below are this session's table and the name belongs to a timeline that ended with its session");
+    DCHECK(w.serial != 0 && w.serial <= g_minted_n,
+           "a world never minted here was compared as a live one — the ancestry walk indexes the minted "
+           "table by serial");
+    DCHECK(g_minted[w.serial - 1].held,
+           "a world NO LIVE FLOW HOLDS was compared as a live one — this entry exists to decide which of "
+           "this instance's LIVE timelines a peer addressed, so a retired fork point or a departed flow's "
+           "name here is a caller asking about a timeline that is not on the frontier");
+    /* TWO FORESTS, ASKED FIRST AND BEFORE ANY TABLE IS TOUCHED, exactly as world_vec_relate asks it: `mint`
+       stamps `g_doc` and `g_session` on every world an instance makes, so a head that disagrees about either
+       was never one tree with this one — a different agent's timeline, or a generation of this document that
+       a park ended. Neither is a contradiction and neither may refuse anything. */
+    world_parse_into(vec, &a, &g_rel_a, &g_rel_a_cap, &anc);
+    (void)anc;
+    if (a.doc != w.doc || a.session != w.session) return WORLD_REL_INDEPENDENT;
+    /* AND A HEAD THAT CLAIMS THIS DOCUMENT AND THIS GENERATION IS INDEXED, so it is bounded HERE and with a
+       CHECK. The text came off a record another instance wrote, and the release build has no DCHECK to catch
+       it — it would read `g_minted` past its end and answer this question out of whatever is there. */
+    CHECK(a.serial != 0 && a.serial <= g_minted_n,
+          "a cross-instance record addressed a timeline of THIS document and THIS generation whose serial "
+          "this instance has never minted — a world is named by the instance that minted it, so a name in "
+          "our own namespace that our own table does not hold was composed somewhere else");
+    if (world_eq(a, w)) return WORLD_REL_SAME;
+    /* IS THE ADDRESSEE ABOVE THIS FLOW — the COMMON case and the whole reason the criterion is not identity.
+       A fork retires the point it branched at and mints a child for both arms, so the world a peer answered
+       from stops naming any flow the first time that timeline branches; its descendants are that answering
+       timeline CONTINUED and are exactly the flows the addressee still speaks for. */
+    for (p = g_minted[w.serial - 1].parent; !world_is_none(p); p = g_minted[p.serial - 1].parent) {
+        DCHECK(p.doc == g_doc && p.serial != 0 && p.serial <= g_minted_n,
+               "a fork edge names a world outside this document's minted table — the chain is corrupt");
+        if (world_eq(p, a)) return WORLD_REL_ANCESTOR;
+    }
+    /* AND THE OTHER DIRECTION, ANSWERED RATHER THAN ASSUMED AWAY. A live world is a LEAF — an ancestor is a
+       retired fork point by construction — so this loop is expected to find nothing, and it is walked anyway
+       because "expected to find nothing" is a claim about the caller's operand and not about this table: the
+       assert above states the invariant, and a relation that quietly reported CONTRADICT where the table says
+       DESCENDANT would refuse a flow on a reading nothing had made. */
+    for (p = g_minted[a.serial - 1].parent; !world_is_none(p); p = g_minted[p.serial - 1].parent) {
+        DCHECK(p.doc == g_doc && p.serial != 0 && p.serial <= g_minted_n,
+               "a fork edge names a world outside this document's minted table — the chain is corrupt");
+        if (world_eq(p, w)) return WORLD_REL_DESCENDANT;
+    }
+    return WORLD_REL_CONTRADICT;
+}
+
 char *world_vec_fork_point(const char *vec)
 {
     const WorldId *anc;
