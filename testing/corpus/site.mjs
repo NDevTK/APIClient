@@ -254,6 +254,58 @@ const PROBE = `(() => ({
     return reached ? { params, astParams, astPathParams, astHoleParams, astUnstatedParams,
                        withExcl, withBnd, withPred, withLeq } : null;
   })(),
+  /* THE ADDRESSES \`domains\` ABOVE COULD NOT HAVE COUNTED A PARAMETER FOR, WHICH IS THE ONE READING OF ITS
+     ZERO THAT IS NOT ABOUT PARAMETERS AT ALL. Every denominator up there narrows the set of rows a domain
+     could be looked up for, and each of those narrowings is over rows that REACHED an \`m.parameters\` object.
+     An address whose ORIGIN the code did not determine reaches none: lib/callsite-url.js's
+     \`astCallSiteAddress\` answers \`originKnown:false\` with the shape as \`host\` and the literal remainder as
+     \`path\`, and lib/learn.js's \`learnFromAstCallSite\` returns its entry with a NULL METHOD on that arm before
+     it names one — so the engine's \`params\` for that address, its braced path segments and its query pairs
+     alike, are dropped before \`_astInferred\` is written and no denominator above can see them. lib/merge.js
+     registers the ENDPOINT for that same arm, and its own account of the repair that did so calls that
+     population most of a real corpus — so one address is counted by the endpoint half of the record and by
+     neither half of the parameter one.
+     WITHOUT THIS COLUMN \`astParams:0\` IS TWO SENTENCES THAT TAKE OPPOSITE WORK: the forced execution learned
+     no parameter, and it learned parameters for addresses this walk is never shown. The first is a finding
+     about the solver and the second is a finding about that early return, and they rendered identically.
+     IT IS A SEPARATE KEY AND NOT A FIELD OF \`domains\`, WHICH IS THE WHOLE OF WHY IT CAN ANSWER. That object
+     is null when no method carried a \`parameters\` object at all, and a page every one of whose call sites
+     took that arm is exactly such a page — so a column that explains the null may not live inside the object
+     the null replaces. CLAUDE.md: why a run produced nothing is a different question from what it produced,
+     so it may never be gated on the answer to the second.
+     THE DISCRIMINATOR IS THE RECORD'S OWN, which is \`astPathParams\`' standard and needs nothing from the
+     engine. lib/endpoint-record.js asserts a \`host\` on EVERY endpoint and states that it comes from
+     \`astCallSiteAddress\`; that parser takes the shape arm only where a brace opens inside the authority, and
+     \`host\` is the prefix spanning that brace, so a braced \`host\` names that arm and no other. A PATH hole is
+     deliberately not read here: it lands in \`path\`, and a key-wide or url-wide brace test would have summed
+     the two populations this column exists to separate.
+     \`hostUnstated\` IS THE THIRD STATE AND IS PUBLISHED RATHER THAN SKIPPED, for \`astUnstatedParams\`' reason.
+     A record whose \`host\` is not a string is one lib/endpoint-record.js's own assert forbids, and folding it
+     into "not a shape" would let a broken producer read as a clean split; a nonzero here says the split
+     beside it is UNREADABLE rather than zero.
+     \`shapeSvcMethods\` IS THE CROSS-CHECK THAT THIS COLUMN STILL MEANS WHAT IT SAYS. While that early return
+     stands it is 0, because the arm that would mint a learned method for a shape-origin service returns
+     before minting one. A nonzero says some producer now reaches those docs and the paragraph above has
+     stopped describing them — a finding about lib/learn.js that neither count alone could report.
+     RETIREMENT: this record goes when \`learnFromAstCallSite\` registers a method for an address whose path it
+     resolved and whose origin it did not, because that population is then inside \`domains\`' own denominators
+     and a count of it out here says nothing a parameter-level one does not. */
+  origins: (() => {
+    let eps = 0, shapeOrigin = 0, hostUnstated = 0, shapeSvcs = 0, shapeSvcMethods = 0;
+    for (const ep of globalStore.endpoints.values()) {
+      eps++;
+      if (!ep || typeof ep.host !== "string") { hostUnstated++; continue; }
+      if (ep.host.indexOf("{") >= 0) shapeOrigin++;
+    }
+    for (const svc of globalStore.discoveryDocs.values()) {
+      if (!svc || !svc.doc || typeof svc.doc.rootUrl !== "string") continue;
+      if (svc.doc.rootUrl.indexOf("{") < 0) continue;
+      shapeSvcs++;
+      const ms = svc.doc.resources && svc.doc.resources.learned && svc.doc.resources.learned.methods;
+      shapeSvcMethods += ms ? Object.keys(ms).length : 0;
+    }
+    return { eps, shapeOrigin, hostUnstated, shapeSvcs, shapeSvcMethods };
+  })(),
 }))()`;
 
 const pg = await b.newPage();
