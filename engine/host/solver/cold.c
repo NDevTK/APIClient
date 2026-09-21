@@ -847,11 +847,40 @@ void cold_preview_census(ColdPreviewCensus *out)
 {
     DCHECK(out != NULL, "the cold tier was asked how often a park had been previewed, into nothing");
     *out = g_preview_census;
+    /* AND THE ONE ROW THAT IS NOT A COUNT OF ASKS IS READ HERE AND NOT LATCHED AT AN ASK, WHICH IS WHAT MAKES
+       cold.h's FIRST TWO STATES DISTINGUISHABLE AT ALL — and the proof needs no run, which is why the retired
+       spelling is stated rather than merely removed: every other row of this struct is raised by the preview,
+       so storing this one beside them (`g_preview_census.commit_rows_written = flow_world_commit_rows_written()`,
+       on the ask line below) reads as consistency. `asks_after_commit` is raised at an ask exactly when the
+       ledger stood above 0 THERE, so a value sampled at the LAST ask is positive only if some ask saw it
+       positive — published `commit_rows_written > 0` IMPLIED `asks_after_commit > 0`, and cold.h's second
+       state (written, `asks_after_commit == 0`) could never be published. A document in it published the
+       FIRST, whose prescription is the opposite work: ROUTING where the answer is the MOMENT.
+       THE LEDGER IS MONOTONE WITHIN A DOCUMENT, which is what makes reading it later sound rather than merely
+       fresher: solver/flow.c raises it at one line and zeroes it at one, on the line after the cold_free that
+       zeroes this census, so the two describe ONE document and neither can fall inside it. */
+    out->commit_rows_written = flow_world_commit_rows_written();
+    /* AND THE IMPLICATION cold_park_preview DECLINES TO ASSERT IS ASSERTABLE HERE, BECAUSE THE MOVE IS WHAT
+       STOPS IT BEING A COMPARISON OF A THING WITH ITSELF: there the raise and the check would be one sample,
+       and here the operands are the ledger at an EARLIER instant (some ask) and the ledger NOW. So this is the
+       monotonicity claim above and nothing else, and it is the one way the pair can go back to carrying a
+       single bit without either number looking wrong.
+       RETIREMENT: this check goes when the ledger is no longer a free-standing counter a second file samples —
+       when an ask records its own row count, there is no later reading for this to be a claim about. */
+    DCHECKF(g_preview_census.asks_after_commit == 0 || out->commit_rows_written > 0,
+            "the park preview recorded %ld ask(s) taken after a commitment row had been written, and the "
+            "ledger now says %ld row(s) exist. That ledger is raised once per flow_world_commit_push and "
+            "zeroed once, in solver/flow.c, on the line after the cold_free that zeroes this census — so it "
+            "cannot fall inside one document and a fall means a row stopped being counted. Fix the count, "
+            "never this check: it is the only thing standing between cold.h's three states and two of them "
+            "reading alike again",
+            g_preview_census.asks_after_commit, out->commit_rows_written);
 }
 
 void cold_park_preview(ColdPreview *out)
 {
     const Flow *f;
+    long rows_now;
     int i;
 
     DCHECK(out != NULL, "the cold tier was asked what a park would write into nothing");
@@ -919,8 +948,12 @@ void cold_park_preview(ColdPreview *out)
        a commitment written onto a flow that has since finished is not there to be counted; this is asked of
        solver/flow.h's own count of rows STATED, which no departure can lower. See cold.h for the three states
        the pair separates and for the measurement that made them worth separating. */
-    g_preview_census.commit_rows_written = flow_world_commit_rows_written();
-    if (g_preview_census.commit_rows_written > 0) g_preview_census.asks_after_commit++;
+    /* READ INTO A LOCAL AND NOT INTO THE CENSUS, which is the whole of the fix and is stated at
+       cold_preview_census, where the published value is taken instead. What this ask owes the census is the
+       BIT — whether the ledger stood above 0 when it was taken — and storing the VALUE here published a
+       sample of somebody else's lifetime counter under a key a reader reads as that counter. */
+    rows_now = flow_world_commit_rows_written();
+    if (rows_now > 0) g_preview_census.asks_after_commit++;
     /* THE CONSERVATION IDENTITY, ASSERTED WHERE ALL FOUR ARE IN ONE HAND AND AT EVERY ASK. The three arms are
        one `if` chain over one ask, so a break here is a fourth arm added without a row — which is exactly the
        edit that would publish a total no part of it accounts for, and a reader differencing the parts would
@@ -975,9 +1008,13 @@ void cold_park_preview(ColdPreview *out)
        adjacent lines of this one function over ONE walk, so a break is not a drift between two samples: it is
        a row that reached a flow's `deliver_world_q` WITHOUT going through flow_world_commit_push, which is
        the fourth producer that file's own abort text tells its reader to go and grep for.
-       NOT ASSERTED THE OTHER WAY. `asks_after_commit > 0` implies `commit_rows_written > 0` by the line that
-       raises it, which is a comparison of a thing with itself and would hold under every state of the
-       program — the shape §Offensive-programming names as a NON-check wearing a check's syntax. */
+       NOT ASSERTED THE OTHER WAY HERE, AND THAT IS A STATEMENT ABOUT THIS SITE RATHER THAN ABOUT THE CLAIM.
+       At this line `asks_after_commit` was raised from `rows_now` two statements up, so checking one against
+       the other is a comparison of a thing with itself and would hold under every state of the program — the
+       shape §Offensive-programming names as a NON-check wearing a check's syntax. It IS asserted, at
+       cold_preview_census, where the second operand is the ledger read at a LATER instant and the claim is
+       therefore the ledger's monotonicity; the reason it could not be asserted anywhere was that both
+       operands used to be one sample. */
     DCHECKF(g_preview_census.asks_with_commits <= g_preview_census.asks_after_commit,
             "the park preview counted a frontier HOLDING a commitment at more asks (%ld) than it counted asks "
             "taken after one had been WRITTEN (%ld), over %ld row(s) the ledger says exist. Every row on a "
@@ -987,8 +1024,7 @@ void cold_park_preview(ColdPreview *out)
             "is not among them. Never widen this to admit the pair: the count is what makes an "
             "`asksWithCommits` of 0 readable at all, and a row it cannot see is a receiver the residue is "
             "about to be written without",
-            g_preview_census.asks_with_commits, g_preview_census.asks_after_commit,
-            g_preview_census.commit_rows_written);
+            g_preview_census.asks_with_commits, g_preview_census.asks_after_commit, rows_now);
 }
 
 /* PARK ONE FLOW — the primitive, and the whole-frontier park below is the loop over it. See cold.h. */

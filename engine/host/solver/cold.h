@@ -820,6 +820,14 @@ typedef struct {
        the same document these asks are counted over (the two are reset by one call, which is what makes them
        comparable at all). `asks_after_commit` is an ask count like its neighbours and is the number of asks
        taken at an instant when that ledger had ALREADY been written to.
+       AND BECAUSE IT IS NOT AN ASK COUNT, IT IS READ AT THE READ AND NOT RAISED AT AN ASK — cold_preview_census
+       fills it, cold_park_preview does not store it, and the difference is whether the second and first states
+       below are distinguishable at all. Latched at the ask it is the ledger AS OF THE LAST CONSULTATION, and
+       then `commit_rows_written > 0` can only be published if some ask saw it positive, which is
+       `asks_after_commit > 0` — so the SECOND state could never be reported and a document in it reported the
+       FIRST, whose prescription is the opposite work. That is not a hypothetical reading: it is the 79bf1ef5
+       incident below, recurring in the row added to end it, at the same `routed-delivery 13` against three
+       asks all taken before the first delivery.
        THE THREE STATES, WHICH TAKE THREE DIFFERENT ACTIONS: `commit_rows_written == 0` is a document in which
        no timeline ever received from a peer, and the work is the ROUTING; written with `asks_after_commit == 0`
        is a producer that ran entirely after the last consultation, and the work is the MOMENT; and
