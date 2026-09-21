@@ -252,7 +252,24 @@ StackingLayer stacking_layer_of(lxb_dom_element_t *el);
    "The specifics of hit testing are out of scope of this specification and therefore the exact details of
    elementFromPoint() and caretPositionFromPoint() are therefore too. Hit testing will hopefully be defined in
    a future revision of CSS or HTML." So the ORDER is CSS 2.1's and is this file's; which boxes a point is IN
-   is a user agent's own, and the two must not be assembled as though one document defined both. */
+   is a user agent's own, and the two must not be assembled as though one document defined both.
+   AND THE USER AGENT'S OWN HALF IS TWO QUESTIONS RATHER THAN ONE, WHICH IS THE DECOMPOSITION A READER
+   SCOPING `elementFromPoint` OFF THIS PARAGRAPH GETS WRONG. Order plus geometry answers WHICH BOX IS
+   FRONTMOST UNDER THE POINT, and CSSOM VIEW §5 "Extensions to the Document Interface" says in its own Note
+   that this is NOT the member's answer: "The elementFromPoint() method does not necessarily return the
+   top-most painted element. For instance, an element can be excluded from being a target for hit testing by
+   using the pointer-events CSS property." So a box under the point may be TRANSPARENT TO THE TEST, and a
+   walk of order-plus-geometry returns the element the standard names as the wrong one.
+   THE EXCLUSION IS A THIRD OPERAND AND IT IS NOT THIS FILE'S. css-ui-4 §6.2 "Exclusion from Hit-testing: the
+   pointer-events property" owns it, and that section declines the surrounding algorithm exactly as CSSOM
+   VIEW §5 does. css-ui-4 §6.2: "While this property modifies the normal behavior of hit-testing, this
+   normal hit-testing is currently not specified." So the two standards agree about what they do not define and neither leaves
+   the exclusion undefined. Its computed value is answerable (core/css/css_computed_value.c models it), and
+   the one thing a walk must not do with it is prune: css-ui-4 §6.2's Note keeps `pointer-events: auto` on a
+   descendant of a `none` element participating normally, so the question is asked of EVERY box considered
+   and never of a subtree.
+   RETIREMENT: this note goes when a hit test in this tree reads all three operands, because the reader is
+   then the code rather than this paragraph. */
 int stacking_order_compare(JSContext *ctx, lxb_dom_element_t *a, lxb_dom_element_t *b);
 
 /* NAMED RESIDUAL — WHAT IS NOT COVERED: a box whose stacking context is created by a property CSS 2.1 does not
