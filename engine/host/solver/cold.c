@@ -838,6 +838,17 @@ static int park_writes_document(void)
     return g_park_recs > 0 || flow_count() > 0;
 }
 
+/* THE ASK CENSUS — raised by the preview below, read back by cold_preview_census, and reset with the document
+   in cold_free for the reason the outcome census is: the frontier it describes is the document's. See cold.h
+   for why the ASK and not the OUTCOME is what a park that never happened is attributable from. */
+static ColdPreviewCensus g_preview_census;
+
+void cold_preview_census(ColdPreviewCensus *out)
+{
+    DCHECK(out != NULL, "the cold tier was asked how often a park had been previewed, into nothing");
+    *out = g_preview_census;
+}
+
 void cold_park_preview(ColdPreview *out)
 {
     const Flow *f;
@@ -881,6 +892,71 @@ void cold_park_preview(ColdPreview *out)
        names no flow is a record nothing will ever read back, and the preview promising one the park does not
        write is precisely the disagreement cold_park's two-sided check exists to catch. */
     out->worlds = park_writes_document() ? world_segments_held() : 0;
+    /* AND THE ASK ITSELF IS RECORDED HERE, WHICH IS BEFORE THE CALLER'S CONJUNCTION RATHER THAN AFTER IT.
+       §AN-INVARIANT-OVER-A-GATED-OPERATION: the host's moment is a gate that legitimately declines, so a
+       census taken on the OUTCOME cannot tell a moment that was never met from a host that never asked, and
+       those take opposite work. Every row below is a count of ASKS — see cold.h for the kinds and the
+       identity. */
+    g_preview_census.asks++;
+    /* THE TIER'S OWN VERDICT ON THIS ASK, IN THREE MUTUALLY EXCLUSIVE ARMS. `refuses` first because it
+       outranks the other two: a park taken with one ABORTS at the flow that holds the task, so what it would
+       otherwise have written is not the question. EMPTY is asked through the one predicate the row above is
+       asked through, never restated, so the two cannot disagree about what a document with no flow in it is. */
+    if (out->refuses > 0)             g_preview_census.asks_refusing++;
+    else if (!park_writes_document()) g_preview_census.asks_empty++;
+    else                              g_preview_census.asks_writable++;
+    /* …AND WHICH ROWS STOOD NON-ZERO, one per row of the struct and not one per conjunct any host names. */
+    if (out->flows     > 0) g_preview_census.asks_with_flows++;
+    if (out->cands     > 0) g_preview_census.asks_with_cands++;
+    if (out->deep      > 0) g_preview_census.asks_with_deep++;
+    if (out->deepcands > 0) g_preview_census.asks_with_deepcands++;
+    if (out->worlds    > 0) g_preview_census.asks_with_worlds++;
+    if (out->orphans   > 0) g_preview_census.asks_with_orphans++;
+    if (out->commits   > 0) g_preview_census.asks_with_commits++;
+    if (out->delivers  > 0) g_preview_census.asks_with_delivers++;
+    /* THE CONSERVATION IDENTITY, ASSERTED WHERE ALL FOUR ARE IN ONE HAND AND AT EVERY ASK. The three arms are
+       one `if` chain over one ask, so a break here is a fourth arm added without a row — which is exactly the
+       edit that would publish a total no part of it accounts for, and a reader differencing the parts would
+       then be doing arithmetic over no quantity. */
+    DCHECKF(g_preview_census.asks_refusing + g_preview_census.asks_empty +
+            g_preview_census.asks_writable == g_preview_census.asks,
+            "the park preview's ask census stopped partitioning itself — refusing %ld + empty %ld + writable "
+            "%ld is not asks %ld, so a park moment that never fired is about to be explained from parts that "
+            "no longer describe one population",
+            g_preview_census.asks_refusing, g_preview_census.asks_empty,
+            g_preview_census.asks_writable, g_preview_census.asks);
+    /* AND THE CONTAINMENT, WHICH IS ONE FAILURE MODE AND SO ONE ASSERT: a per-row counter above `asks` is a
+       raise that reached this census from somewhere other than an ask, after which every row here is a count
+       of something else. All nine numbers are printed because they share the message. */
+    DCHECKF(g_preview_census.asks_with_flows     <= g_preview_census.asks &&
+            g_preview_census.asks_with_cands     <= g_preview_census.asks &&
+            g_preview_census.asks_with_deep      <= g_preview_census.asks &&
+            g_preview_census.asks_with_deepcands <= g_preview_census.asks &&
+            g_preview_census.asks_with_worlds    <= g_preview_census.asks &&
+            g_preview_census.asks_with_orphans   <= g_preview_census.asks &&
+            g_preview_census.asks_with_commits   <= g_preview_census.asks &&
+            g_preview_census.asks_with_delivers  <= g_preview_census.asks,
+            "a park-preview row was counted more often than the preview was asked — asks %ld against flows "
+            "%ld, cands %ld, deep %ld, deepcands %ld, worlds %ld, orphans %ld, commits %ld, delivers %ld. "
+            "Each is raised at most once per ask on the lines above, so an excess is a raise that reached this "
+            "census outside cold_park_preview",
+            g_preview_census.asks, g_preview_census.asks_with_flows, g_preview_census.asks_with_cands,
+            g_preview_census.asks_with_deep, g_preview_census.asks_with_deepcands,
+            g_preview_census.asks_with_worlds, g_preview_census.asks_with_orphans,
+            g_preview_census.asks_with_commits, g_preview_census.asks_with_delivers);
+    /* AND THE SUBSET CHAIN, WHICH IS A DIFFERENT FACT AND SO A DIFFERENT ASSERT. `deepcands` is raised only
+       inside the CAND arm and only under `deep`, so its ask count is bounded by BOTH neighbours — which is
+       the statement ColdPreview's own comment makes about why it is a row rather than `cands && deep`. A
+       break here is a kind arm added without its deep arm, and the intersection row would then read as a
+       conjunction the host was told it is not. */
+    DCHECKF(g_preview_census.asks_with_deepcands <= g_preview_census.asks_with_cands &&
+            g_preview_census.asks_with_deepcands <= g_preview_census.asks_with_deep,
+            "the park preview reported a deep CANDIDATE at more asks than it reported a candidate (%ld) or a "
+            "member standing on a segment (%ld) — deepcands %ld is the INTERSECTION and is raised inside the "
+            "candidate arm under `deep`, so an excess means one of the two is no longer being counted and a "
+            "host reading this row is reading `cands && deep`, which cold.h states it is not",
+            g_preview_census.asks_with_cands, g_preview_census.asks_with_deep,
+            g_preview_census.asks_with_deepcands);
 }
 
 /* PARK ONE FLOW — the primitive, and the whole-frontier park below is the loop over it. See cold.h. */
@@ -2102,5 +2178,9 @@ void cold_free(void)
     g_park_segs = 0;
     g_park_gen_written = 0;   /* …and so does the statement of which namespace it was written under */
     memset(&g_parked_census, 0, sizeof g_parked_census);   /* the census is OF the document; it dies with it */
+    /* …AND SO IS THE ASK CENSUS BESIDE IT: the preview walks THIS document's frontier, so how often a host
+       asked about it is a fact about the document and not about the process. The result document is
+       composed before any teardown runs, so the rows are read out before this line. */
+    memset(&g_preview_census, 0, sizeof g_preview_census);
     free(g_walk); g_walk = NULL; g_walk_n = g_walk_cap = 0;
 }

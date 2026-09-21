@@ -1445,6 +1445,14 @@ char *result_swap_json(void) {
      `replayHits` and `replayLeftArms` are ARMS (decision-vector slots) and `replayLeft` is EVENTS (one per
      divergence, whatever it abandoned), so the three may be differenced and only two of them may be compared.
      From `pending_index_*_total` — LIFETIME COUNTS: `replyAsked`, `replyAnswered`.
+     From `cold_preview_census` — LIFETIME COUNTS OF ASKS over this document, and the only rows on this
+     line whose KEY carries its own kind: every `previewAsks*` row counts a CONSULTATION of the cold tier,
+     and a count of events can be differenced and cannot fall. They are the ASK beside a park's OUTCOME —
+     see solver/cold.h for why a census of the outcome cannot tell a moment that was never met from a host
+     that never asked. `previewAsksRefusing`/`previewAsksEmpty`/`previewAsksWritable` PARTITION
+     `previewAsks`, asserted in cold.c at every ask; the eight `previewAsksWith*` rows are contained by it
+     and are not a partition of anything, because a host's moment is a conjunction and several may stand at
+     once.
      From `cold_resumed` — A LAST-EVENT RECORD AND NOT A COUNTER OF ANY KIND: `resumed`, `resumedSegs`,
      `resumedFlows`, `resumedCands`, `resumedWorlds` and `orphanClaims` describe the MOST RECENT rebuild
      (`cold_resume` memsets the record on entry), so they are neither monotone nor a reading of the frontier,
@@ -1798,6 +1806,10 @@ char *result_cold_json(void) {
     char *cursors;
     char *out;
     ColdResumed resumed;
+    /* AND HOW OFTEN THE HOST ASKED THIS TIER WHAT A PARK WOULD WRITE — the ASK beside that OUTCOME, taken
+       in ONE call for the reason the replay ledger below is: the partition over its arms is an assertion
+       about one moment, and four getter calls in an argument list are not one. */
+    ColdPreviewCensus pv;
     EngineFrontierCensus e;
     EngineStepUnitRuns r;
     int ran;
@@ -1879,6 +1891,7 @@ char *result_cold_json(void) {
                "the arm the members are actually stopping at is not the one this row names");
     }
     cold_resumed(&resumed);
+    cold_preview_census(&pv);
     engine_frontier_census(&e);
     /* THE ONE READING OF THE AWAITED-ROWS GAUGE, TAKEN ONCE AND USED TWICE — the assert below and the row
        emitted far down this composef are THE SAME NUMBER by construction. CLAUDE.md §Testing: an identity
@@ -1999,6 +2012,19 @@ char *result_cold_json(void) {
            "an inherited-drive claim was met or lost in a session whose rebuild carried no orphan locator — the "
            "three orphanClaims rows are about to describe a round trip that this document also says did not "
            "happen");
+    /* AND THE PARK PREVIEW'S OWN PARTITION, ASKED HERE FOR THE REASON THE LIFETIME STEP HISTOGRAM'S IS:
+       cold.c asserts it at every ask, where it is exact and where the arm that broke it has just run; this
+       is the other side of the same contract, at the boundary the numbers CROSS. A difference visible here
+       and not there is a row lost between the accessor and this document rather than an arm that failed to
+       record itself, and those are two different files to open. It matters on this row in particular
+       because the four are about to be published as the explanation of a park that did not happen — a
+       total no part of it accounts for would name the wrong conjunct, and naming the wrong one is a diff
+       somebody then builds. */
+    DCHECK(pv.asks_refusing + pv.asks_empty + pv.asks_writable == pv.asks,
+           "the park preview's ask census does not partition itself — `previewAsksRefusing`, "
+           "`previewAsksEmpty` and `previewAsksWritable` are the three arms of one `if` chain over one ask "
+           "and sum to `previewAsks` by construction, so a difference is a row lost crossing into this "
+           "document and the rows are about to be read as which conjunct of a park moment refused");
     /* THE REPLAY LEDGER'S IDENTITY, ASSERTED AT THE ONE MOMENT ALL THREE ARE IN ONE HAND — which is the whole
        reason decide.h hands them back in one call. §Testing: an identity holds WITHIN one sample and nowhere
        else, and this session has already paid for the other reading — two rows taken at two ends of a run were
@@ -2108,6 +2134,29 @@ char *result_cold_json(void) {
                  "\"hostAnswersLate\":%ld,\"hostTerminated\":%ld,"
                  "\"replyAsked\":%ld,\"replyAnswered\":%ld,\"pagedReqs\":%ld,"
                  "\"pagedAsks\":%ld,\"pagedUnarmed\":%ld,\"pagedFloor\":%ld,"
+                 /* AND WHY A PARK THAT NEVER HAPPENED DID NOT, WHICH THE THREE ROWS ABOVE CANNOT SAY.
+                    Those are the ALLOCATOR's edge reaching this engine; this is the HOST asking the cold
+                    tier what a park would write, which is the other door onto the same tier and the one a
+                    fixture-chosen moment comes through. `previewAsks: 0` is the positive statement that no
+                    host consulted it at all — a session that never parks, which is most of them — and every
+                    row below it is meaningless under that 0 rather than a verdict.
+                    THE ROWS EXIST BECAUSE A MOMENT IS A CONJUNCTION AND A 0 IS NOT. A host names several of
+                    ColdPreview's rows at once, so a residue that was never written is one number standing
+                    for one state per conjunct: measured at 69c09793, four conjuncts and fifteen
+                    non-satisfying states, all reported alike. A row that NEVER ROSE wants its producer
+                    built and rows that each rose and never COINCIDED want a different moment, and those are
+                    different diffs.
+                    THE PARTITION IS THE TIER'S OWN VERDICT AND RESTATES NO HOST'S LATCH — refusing is a park
+                    that would ABORT, empty one that would write no bytes, writable one that would write a
+                    residue — which is what lets the eight rows beside it be derived from ColdPreview's
+                    struct rather than from whatever some fixture happens to ask for. */
+                 "\"previewAsks\":%ld,"
+                 "\"previewAsksRefusing\":%ld,\"previewAsksEmpty\":%ld,"
+                 "\"previewAsksWritable\":%ld,"
+                 "\"previewAsksWithFlows\":%ld,\"previewAsksWithCands\":%ld,"
+                 "\"previewAsksWithDeep\":%ld,\"previewAsksWithDeepCands\":%ld,"
+                 "\"previewAsksWithWorlds\":%ld,\"previewAsksWithOrphans\":%ld,"
+                 "\"previewAsksWithCommits\":%ld,\"previewAsksWithDelivers\":%ld,"
                  "\"decEntries\":%ld,\"decKiB\":%ld,\"headEntries\":%ld,\"headKiB\":%ld,"
                  "\"domHeadEntries\":%ld,\"domHeadKiB\":%ld,\"jobs\":%ld,\"pend\":%ld,\"pendReady\":%ld,"
                  "\"stackEmpty\":%ld,\"canDeliver\":%ld,"
@@ -2170,6 +2219,12 @@ char *result_cold_json(void) {
                  pending_index_asked_total(), pending_index_answered_total(),
                  e.paged_reqs,
                  e.paged_asks, e.paged_unarmed, e.paged_floor,
+                 pv.asks,
+                 pv.asks_refusing, pv.asks_empty, pv.asks_writable,
+                 pv.asks_with_flows, pv.asks_with_cands,
+                 pv.asks_with_deep, pv.asks_with_deepcands,
+                 pv.asks_with_worlds, pv.asks_with_orphans,
+                 pv.asks_with_commits, pv.asks_with_delivers,
                  c.dec_entries, c.dec_bytes / 1024, c.head_entries, c.head_bytes / 1024,
                  c.dom_head_entries, c.dom_head_bytes / 1024, c.job_count, c.pend_count, c.pend_ready,
                  c.stack_empty, c.can_deliver,

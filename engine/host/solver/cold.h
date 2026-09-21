@@ -647,8 +647,10 @@ void cold_parked(ColdParked *out);
  * exactly the ones that make a park write 's' records at all — and it answers for the RUNNING flow too, whose
  * decision state is live in decide.c rather than in its blob (the same split cold_census makes, and the reason
  * this cannot be a hand-written loop over `f->dec_blob` in a host: at the moment the host is asked, one flow's
- * blob is NULL because it holds the thread, not because it stands on nothing). Pure measurement: it takes no
- * reference, mutates nothing, and assigns no ordinal. */
+ * blob is NULL because it holds the thread, not because it stands on nothing). It takes no reference, assigns no
+ * ordinal and mutates NO FRONTIER STATE — the one thing it does write is its own ASK census below,
+ * which is a record of the CONSULTATION and not of the frontier, and is why `asks: 0` can be a
+ * positive statement that nobody asked. */
 typedef struct {
     long flows, cands;           /* the records a park taken now would write, per kind */
     long deep;                   /* …of those, the ones standing on a frozen decision segment */
@@ -708,6 +710,57 @@ typedef struct {
     long refuses;
 } ColdPreview;
 void cold_park_preview(ColdPreview *out);
+
+/* HOW OFTEN A HOST ASKED THAT QUESTION AND WHAT THE ANSWER STOOD AT WHEN IT DID — the ASK census beside
+ * ColdParked's OUTCOME census, and the only thing a park that never happened is attributable from.
+ *
+ * A HOST CHOOSES ITS MOMENT AS A CONJUNCTION OVER THE ROWS ABOVE, so a residue that was never written is ONE
+ * 0 standing for one state per conjunct, with no row anywhere saying which of them refused. MEASURED at
+ * 69c09793 on the one host in this tree that parks: FOUR conjuncts, hence fifteen non-satisfying states, every
+ * one of them reported as the same `park-wrote=0`. They do not take the same work — a row that NEVER ROSE
+ * wants its producer built, and rows that each rose and never COINCIDED want a different moment — so they may
+ * not share a number.
+ *
+ * IT COUNTS THE ASK AND NEVER THE PARK, which is why it is here rather than a row of ColdParked. Every row of
+ * that census is written by cold_park, so all of it sits behind the very latch whose failure is the thing to
+ * explain: a census of the OUTCOME reads 0 for a moment that was never met and 0 for a host that never asked,
+ * and a diagnostic may not be gated on the answer it exists to explain. This is raised inside
+ * cold_park_preview, BEFORE the caller's conjunction runs, so `asks: 0` is the positive statement that no host
+ * consulted this tier at all — a real and different answer, and the ordinary one in a session that never parks.
+ *
+ * EVERY ROW IS A LIFETIME COUNT OF ASKS AND ITS KEY SAYS SO. An ask is an EVENT, so none of these is a reading
+ * of the frontier, none can fall, and a reader may difference them — which is the distinction result.c's own
+ * banner records that `finished` beside `live` carries in neither key. They accumulate over the document and
+ * die with it in cold_free, exactly as the outcome census does, because the frontier they describe is the
+ * document's.
+ *
+ * THE FIRST THREE PARTITION `asks` AND THE REST ARE CONTAINED BY IT, which is what makes the set reasonable
+ * FROM rather than merely present: a total that cannot move without one of its parts moving. The partition is
+ * the TIER'S OWN verdict on each ask and restates no host's moment — REFUSING is `refuses > 0`, which is
+ * cold_park_flow's own refusal and means a park taken then ABORTS rather than writing anything; EMPTY is a
+ * park that would write no bytes at all, asked through park_writes_document rather than restated here;
+ * WRITABLE is one that would write a residue. A host's conjunction is then read off the per-row counts beside
+ * it, and this file never has to know what any host asked for.
+ *
+ * THERE IS NO `asksWithRefuses` ROW BECAUSE `asksRefusing` IS THAT NUMBER, and two spellings of one number in
+ * one document is the drift result.c refuses `resumedOrphans` for.
+ *
+ * RETIREMENT: this record goes when a host no longer chooses the moment — when the tier itself decides when to
+ * park — because there is then no conjunction over these rows for a 0 to be ambiguous about. */
+typedef struct {
+    long asks;
+    /* …AND WHAT THE TIER WOULD HAVE DONE AT EACH ONE, WHICH SUM TO IT. */
+    long asks_refusing, asks_empty, asks_writable;
+    /* …AND WHICH ROWS OF ColdPreview STOOD NON-ZERO, one counter per row and EVERY row. A set restricted to
+       the rows some host happens to name would be that host's latch restated here, which is the second copy an
+       auditor may not keep; this one is derived from the struct above and from nothing else.
+       `asks_with_deepcands` IS BOUNDED BY BOTH OF ITS NEIGHBOURS and not by their conjunction, which is the
+       same sentence ColdPreview's own `deepcands` comment makes: the chain is asserted where all three are in
+       one hand, so the intersection row cannot drift into reading as `cands && deep`. */
+    long asks_with_flows, asks_with_cands, asks_with_deep, asks_with_deepcands;
+    long asks_with_worlds, asks_with_orphans, asks_with_commits, asks_with_delivers;
+} ColdPreviewCensus;
+void cold_preview_census(ColdPreviewCensus *out);
 
 /* …AND THE SAME DOCUMENT AS THE JSON ARRAY the result document carries, rendered from the records on demand —
    "[]" when there are none. IndexedDB is what the trusted zone has, so the array is what crosses to it; the
