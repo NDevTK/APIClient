@@ -443,8 +443,48 @@ async function handlePopupMessage(msg, sender, sendResponse) {
              "the trusted zone has no astDispatch to carry this person's egress sentence to — it is the ONE " +
              "entry to the host, so its absence is bridge.js not having loaded in this document and the " +
              "popup would show a permission control that permits nothing");
-      const reply = await self.astDispatch({ type: "AST_EGRESS_POLICY", initiator: msg.initiator,
-                                             subject: msg.subject, grant: msg.grant, revoke: msg.revoke });
+      /* EVERY COMMAND THE SURFACE MAY SEND IS FORWARDED FROM ONE DECLARATION, AND A FIELD THIS RELAY DOES
+         NOT KNOW ABORTS RATHER THAN BEING DROPPED. A relay that names its fields by hand has a hole for
+         every command nobody remembers, and the hole is SILENT AT THE FAR END: the popup composes the field,
+         this frame drops it, the bridge's arm for it tests `!== undefined` and never runs, `changed` comes
+         back false, and the person watches their own checkbox revert against a re-render of the very table
+         they tried to change — no crash, no diagnostic, and a control that reads as having refused them.
+         THAT IS NOT HYPOTHETICAL AND IT IS WHY THIS IS A DECLARATION RATHER THAN A THIRD ARGUMENT. `permit`
+         — the per-signal door, which is the whole of CLAUDE.md §AND-THAT-ABSOLUTE-IS-RETIRED-BY-THE-PROJECT-
+         OWNER's "the person decides which combinations their origin allows" — was composed by popup.js's
+         `renderEgressPolicy`, refused by nothing, and dropped HERE. Every per-signal row this surface renders
+         was therefore INERT: a person could permit an origin's every value with `Allow all` or take the whole
+         origin back with `Revoke`, and could say nothing in between. The registry rows, the checkboxes,
+         `safeFetchSignalUsable`, `safeFetchPermit`, the bridge's `msg.permit` arm and all four of its asserts
+         were built and every one of them correct; ONE FIELD ON ONE RELAY was the whole of it. That is
+         CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS exactly — a name WRITTEN somewhere and READ nowhere, with an
+         absent key standing in for the answer — and its second half held too: the bridge arm's body was dead,
+         so nothing downstream ever missed what it would have written.
+         THE DRIFT DIRECTION IS WHY THE REFUSAL IS OWED HERE AND NOT ONLY AT THE BRIDGE. `_SAFEFETCH_OPTIONS`
+         one file over can be a closed set because a field added to that body and forgotten in the list aborts
+         on its AUTHOR'S own first call. Here it is the reverse: a command added to popup.js and to bridge.js
+         and forgotten in this list is dropped at the one frame neither author is looking at, and the failure
+         belongs to a PERSON clicking a box. So the list is the thing that forwards, and an unknown field is
+         an abort at the author's own first click rather than a silence at somebody else's.
+         THE ENVELOPE IS DECLARED BESIDE THE COMMANDS BECAUSE THE ASSERT HAS TO TELL THEM APART: `type`,
+         `initiator` and `subject` are stated on EVERY message of this kind and are not commands, and a rule
+         that knew only the commands would abort on all three. It is a DCHECK for this file's own
+         discriminator — release still PROCEEDS, dropping the unknown field exactly as it is dropped today,
+         which is the conservative arm because a command not forwarded is a permission not made. */
+      const _EGRESS_ENVELOPE = ["type", "initiator", "subject"];
+      const _EGRESS_COMMANDS = ["grant", "revoke", "permit"];
+      const _egressCmd = { type: "AST_EGRESS_POLICY", initiator: msg.initiator, subject: msg.subject };
+      for (const k of Object.keys(msg)) {
+        DCHECK(_EGRESS_ENVELOPE.indexOf(k) >= 0 || _EGRESS_COMMANDS.indexOf(k) >= 0,
+               "the egress-policy message carries the field `" + k + "`, which this relay neither states nor " +
+               "forwards — so it would be DROPPED IN SILENCE, the bridge's arm for it would never run, and " +
+               "the surface that sent it would re-render the unchanged table while the person read their own " +
+               "control as having refused them. Add it to the COMMAND list if it is a sentence a person can " +
+               "issue about the table, or to the ENVELOPE if it is a fact about the message; what may not " +
+               "happen is a third place that decides which fields cross");
+        if (_EGRESS_COMMANDS.indexOf(k) >= 0) _egressCmd[k] = msg[k];
+      }
+      const reply = await self.astDispatch(_egressCmd);
       DCHECK(reply && reply.success === true && reply.result && Array.isArray(reply.result.origins),
              "the host answered the egress command without the list of origins now in force — the popup " +
              "renders that list as the person's own standing permissions, and a missing one would render as " +

@@ -1294,6 +1294,54 @@ var _DEFAULT_ARMS = [
      RETIREMENT: this record goes when no reader can re-derive the destination-keyed refusal above from the
      signals this file declares — which is to say when the `subresource` value and the arm it feeds are no
      longer separable from the `program` one, and the paragraph has nothing left to be wrong about. */
+  /* AND A FOURTH ARM IS DECIDED AND IS NOT SPELLED HERE, WHICH IS A FINDING ABOUT THE SIGNALS AND NOT A
+     DISAGREEMENT WITH THE DECISION — WRITTEN AT THE SITE BECAUSE THIS LIST IS WHERE THE NEXT READER WILL BE
+     STANDING WHEN THEY ARE TOLD TO ADD IT. The project owner decided, in two sentences: permit unpinned
+     value fetches, `a data fetch whose address carries no value this path pinned fires at every origin`;
+     and, in the SAME sentence, `anything whose address a fork pinned, and every derived probe, is still
+     refused`. The obvious spelling of the first half is
+     `{destination: value} AND {witness: unpinned}`, and it CONTRADICTS the second half, because nothing this
+     file reads separates the two populations the two clauses name.
+     THE TWO ARE BYTE-IDENTICAL ON EVERY GATING SIGNAL, AND THAT IS READ RATHER THAN FEARED. A page's own
+     `fetch()` parks through engine/host/solver/engine.c's `engine_pending_fetch_url`, which pushes with a
+     literal `parser_inserted` of 0 under the comment `a fetch() or an XHR — page code composed it`; and
+     engine/host/solver/pending.c's `pending_prov_compose` ends in two lines, which are
+     `if (path_forced) return PROV_FORCED;` and then
+     `return parser_inserted ? PROV_OBSERVED : PROV_DERIVED;`. So an unforced page `fetch()` arrives
+     DERIVED, and by
+     the nesting solver/flow.h holds, UNPINNED. The AUTOMATIC discovery sweep states, by hand at
+     lib/discovery-probe.js's `_chokepointGetFn`, `provenance: "derived"`, `pinned: "unpinned"`,
+     `docReach: "observed"` and `destination: ""`. Destination, provenance, doc-reach, witness, cookies: the
+     same value on every one. The arm cannot admit the first and refuse the second.
+     THE ONE ROW THAT DOES DIFFER IS `header-authority` AND IT MAY NOT BE USED, WHICH IS SAID SO THAT NOBODY
+     REACHES FOR IT. The sweep passes `headers || {}`, and `{}` is truthy, so it reads `unknown` where the
+     pending relay reads `none` — a property of ONE call site's argument-passing and of whose list it is,
+     never of whether a request is a probe. Keying a permission on it would key it on an idiom, and it would
+     be wrong in outcome too: the XHR relay is a genuine page request and states a list, so the conjunct
+     would refuse every XHR the analysed page makes, which is half of what §Learning-from-replies calls the
+     POINT.
+     THE ROOT IS A PREDICATE ANSWERING TWO QUESTIONS AND THIS FILE ALREADY NAMES IT ONE ARM UP. `observed` is
+     unreachable for a `fetch()` park BY the DCHECKF in `pending_prov_compose`, which is RIGHT about
+     HTML §4.12.1.1 "Processing model" — a parser document belongs to `script` elements and to nothing else —
+     and narrower than what the egress question needs. The egress question is not `did a parser insert this`;
+     it is WHOSE ALGORITHM IS OWED THE REPLY, which is the same sentence `_isDocumentSubresource`'s residual
+     already names as its next diff, arriving here instead of at the CORB class.
+     NAMED RESIDUAL. WHAT IS NOT COVERED: a data request the analysed document's own code made, on a path
+     that pinned nothing, is refused at every origin until a person widens it — so an app whose boot data
+     comes back through its own `fetch()` never initialises, while every script and chunk beside it lands.
+     WHAT THE NEXT DIFF BUILDS: the fact that separates them, stated by the CALLER the way `provenance`,
+     `pinned` and `docReach` already are and asserted here the way they already are — whether a flow in the
+     analysed document is PARKED on this reply. It is already true by construction at both ends and crosses
+     nowhere: the pending relay is by definition answering a park, and every trusted-zone composer
+     (`_chokepointGetFn`, the peer gate, this surface's own probe) by definition is not. GREPPED rather than
+     assumed: `engine_pending_fetches` joins METHOD, DESTINATION, INITIATOR, PROVENANCE, PINNED, CREDENTIALS
+     and URL, and reads `PEND_KIND` at one line of that function, inside a DCHECK — so the kind does not
+     cross today, and its INITIATOR is a parser-or-script token rather than this question. With that signal
+     declared, the owner's arm is spellable as `{destination: value} AND {witness: unpinned} AND {the new
+     row: parked}` and honours BOTH clauses. HOW ITS ABSENCE WOULD SHOW, as an OBSERVATION and never as an
+     instance: a run whose log carries a `blocked-signal:destination=value` refusal for an address the
+     analysed document's own script fetched, with that document's scripts and chunks all answering 200 on
+     the lines around it — the app loading its code and never its state. */
 ];
 var _EXPLORED = Object.create(null);
 /* HAS A HOST SPOKEN YET. Two questions, two fields — never one value answering both, because the
