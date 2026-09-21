@@ -73,7 +73,13 @@ enum { RULE_TYPE_STYLE = 1, RULE_TYPE_IMPORT = 3, RULE_TYPE_MEDIA = 4, RULE_TYPE
           addition anywhere in it — it has no counterpart to CSS Conditional 3 §7.1 at all. So CSSOM §6.4.2's freeze
           took effect BETWEEN the two levels, and the same working group stopped issuing numbers rather than this
           engine failing to find one. */
-       RULE_TYPE_CONTAINER };
+       RULE_TYPE_CONTAINER,
+       /* CSS Transitions 2 §3.3.1 "The CSSStartingStyleRule interface"'s CSSStartingStyleRule — numberless as
+          RULE_TYPE_LAYER_BLOCK, RULE_TYPE_LAYER_STATEMENT, RULE_TYPE_PROPERTY and RULE_TYPE_CONTAINER are, and
+          here that is READ rather than inferred from the freeze: CSS Transitions 2 declares no
+          `partial interface CSSRule` anywhere in it and no `const unsigned short` at all, so it adds nothing to
+          CSSOM §6.4.2's table and a `@starting-style` rule's `type` is that table's own "Otherwise: return 0". */
+       RULE_TYPE_STARTING_STYLE };
 
 /* WHERE A RULE MAY SIT IN A STYLE SHEET. A sheet's rules are a PROLOGUE followed by a body, and three standards
    write that prologue between them:
@@ -245,7 +251,8 @@ static JSClassID g_rule_class;
    with an EXPLICIT prototype chosen from its type, so the class's own proto slot decides nothing. */
 enum { PROTO_RULE = 0, PROTO_GROUPING, PROTO_STYLE, PROTO_CONDITION, PROTO_MEDIA, PROTO_SUPPORTS,
        PROTO_CONTAINER, PROTO_IMPORT, PROTO_NAMESPACE, PROTO_FONT_FACE, PROTO_PAGE, PROTO_MARGIN,
-       PROTO_KEYFRAMES, PROTO_KEYFRAME, PROTO_LAYER_BLOCK, PROTO_LAYER_STATEMENT, PROTO_PROPERTY, PROTO_N };
+       PROTO_KEYFRAMES, PROTO_KEYFRAME, PROTO_LAYER_BLOCK, PROTO_LAYER_STATEMENT, PROTO_PROPERTY,
+       PROTO_STARTING_STYLE, PROTO_N };
 static int g_proto_slot[PROTO_N];
 static int g_id_set_selector = -1, g_id_set_page_selector = -1, g_id_set_key_text = -1,
            g_id_set_keyframes_name = -1, g_id_set_css_text = -1, g_id_insert_rule = -1, g_id_delete_rule = -1,
@@ -563,7 +570,7 @@ static bool rule_type_has_child_rules(uint16_t type)
 {
     return type == RULE_TYPE_STYLE || type == RULE_TYPE_MEDIA || type == RULE_TYPE_SUPPORTS ||
            type == RULE_TYPE_CONTAINER || type == RULE_TYPE_PAGE || type == RULE_TYPE_KEYFRAMES ||
-           type == RULE_TYPE_LAYER_BLOCK;
+           type == RULE_TYPE_LAYER_BLOCK || type == RULE_TYPE_STARTING_STYLE;
 }
 
 /* IS THIS RULE TYPE A CSSOM §6.4.5 GROUPING RULE — "an at-rule that CONTAINS OTHER RULES nested inside itself", plus
@@ -580,11 +587,17 @@ static bool rule_type_has_child_rules(uint16_t type)
    its IDL is `interface CSSLayerBlockRule : CSSGroupingRule`, and CSS Cascade 5 §6.4.4.1 gives the reason behind the
    IDL — "such @layer block rules have the same restrictions and processing as a conditional group rule
    [CSS-CONDITIONAL-3] with a true condition". A CSSConditionRule it is NOT: a layer has no condition, so
-   CSS Conditional 3 §7.2's `conditionText` is not on it and this predicate is not that one. */
+   CSS Conditional 3 §7.2's `conditionText` is not on it and this predicate is not that one.
+   CSS Transitions 2 §3.3.1's CSSStartingStyleRule answers YES to both for the plainest reason any row here has:
+   its IDL is `interface CSSStartingStyleRule : CSSGroupingRule` and CSS Transitions 2 §3.3 says the rule IS one
+   in its own words — "The @starting-style rule is a grouping rule." It is not a CSSConditionRule either, and for
+   the reason CSS Cascade 5 §8.1's is not: it states no condition, so there is nothing for
+   CSS Conditional 3 §7.2's `conditionText` to answer. */
 static bool rule_type_is_grouping(uint16_t type)
 {
     bool grouping = type == RULE_TYPE_STYLE || type == RULE_TYPE_MEDIA || type == RULE_TYPE_SUPPORTS ||
-                    type == RULE_TYPE_CONTAINER || type == RULE_TYPE_PAGE || type == RULE_TYPE_LAYER_BLOCK;
+                    type == RULE_TYPE_CONTAINER || type == RULE_TYPE_PAGE || type == RULE_TYPE_LAYER_BLOCK ||
+                    type == RULE_TYPE_STARTING_STYLE;
 
     DCHECK(!grouping || rule_type_has_child_rules(type),
            "a rule type is a CSSOM §6.4.5 grouping rule and yet holds no child rules — CSSGroupingRule is DEFINED as "
@@ -1170,6 +1183,22 @@ static JSValue layer_statement_rule_new(JSContext *ctx, JSValueConst parent_styl
     return obj;
 }
 
+/* A CSS Transitions 2 §3.3.1 "The CSSStartingStyleRule interface" CSSStartingStyleRule over the `@starting-style`
+   at-rule. THAT SECTION IS THE WHOLE INTERFACE AND IT DECLARES NOT ONE MEMBER — it is one sentence ("The
+   CSSStartingStyleRule interface represents a @starting-style rule.") above `[Exposed=Window] interface
+   CSSStartingStyleRule : CSSGroupingRule { };` — so this creator stores NOTHING and takes no text: there is no
+   prelude, no condition and no name for a member to answer from. Everything a page can read off one of these rules
+   is CSSOM §6.4.5's (`cssRules`, `insertRule`, `deleteRule`) or CSSOM §6.4.2's (`cssText`, `parentRule`,
+   `parentStyleSheet`, `type`), reached through the prototype chain rather than through a field here.
+   SO THE RULE IS COMPLETE AND NOT A SHAPE AWAITING A SECOND DIFF, which is the one question §NO STUBS asks of an
+   interface object that exists: the algorithms that write this interface's observables are the grouping rule's and
+   CSSOM §6.4's serialize a CSS rule, and both are built — there is no member deferred and none to defer. The child
+   list `rule_new` gives it is where the style rules inside it go. */
+static JSValue starting_style_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, JSValueConst parent_rule)
+{
+    return rule_new(ctx, PROTO_STARTING_STYLE, RULE_TYPE_STARTING_STYLE, parent_style_sheet, parent_rule);
+}
+
 /* THE `<custom-property-name>`s AN `@property` AT-RULE DECLARES, as the Array the record holds. It is an Array
    for the reason every other collection on this record is one — it has to park to the IDB cold tier and fork per
    flow, which a malloc'd list of pointers cannot (css_rule.h). It is NOT frozen the way CSS Cascade 5 §8.2's
@@ -1674,6 +1703,28 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
        parse walk already records. */
     if (strcmp(at, "container") == 0)
         return pr->has_block ? container_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude) : JS_UNDEFINED;
+    /* CSS Transitions 2 §3.3 "Defining before-change style: the @starting-style rule" makes `@starting-style` a
+       BLOCK at-rule and gives it NO PRELUDE AT ALL — every example in that section is `@starting-style {`, and the
+       at-rule's own definition states no production for one — so both `@starting-style;` and
+       `@starting-style foo { }` are at-rules whose grammar failed and CSS Syntax 3 §8 drops them. That is the same
+       sentence and the same JS_UNDEFINED the `@supports` and `@container` arms give, and it is a DROP rather than
+       an assert for their reason too: lexbor parses an at-rule it does not know as `_CUSTOM`, which accepts a
+       prelude and accepts a missing block, so both shapes are malformed author CSS and neither is an engine
+       invariant. ITS BODY IS A RULE LIST AND NOTHING ELSE, so the declarations the parse reports for it are not
+       read — the sentence `@supports`, `@container` and `@layer` already get, and for their reason: a declaration
+       written where only rules are admitted would be CSSOM's CSSNestedDeclarations, a rule interface this build
+       does not have and whose absence the parse walk already records. CSS Transitions 2 §3.3 writes exactly that
+       shape in its own example — `h1 { transition: …; @starting-style { background-color: transparent } }` — so
+       the NESTED form is the one that meets it, and it meets it as an empty grouping rule rather than as a drop. */
+    if (strcmp(at, "starting-style") == 0) {
+        DCHECK(pr->prelude != NULL,
+               "an `@starting-style` rule reached the builder with a NULL prelude. cssom_parse_rules reports the "
+               "EMPTY string for an at-rule that wrote none — `@media {}`'s empty media query list is that same "
+               "fact — so a null here is the parse having stopped reporting the field this arm reads to decide "
+               "CSS Transitions 2 §3.3's grammar, and the test below would read it as a prelude-less rule");
+        return pr->has_block && !pr->prelude[0] ? starting_style_rule_new(b->ctx, b->sheet, parent_rule)
+                                                : JS_UNDEFINED;
+    }
     /* CSS Cascade 5 §2 makes `@import` a STATEMENT at-rule terminated by a semicolon, so `@import url(x) {}` is
        an at-rule whose grammar failed and CSS Syntax DROPS it. It is dropped HERE and not asserted against,
        because the shape reaches this file from the PAGE: lexbor parses an at-rule it does not know as
@@ -1795,7 +1846,7 @@ static void *rule_built(void *ud, void *parent, const CssomRule *pr)
  * stylesheet aborted that instance at stage `create` with ZERO flows run, and the reader standing at that abort
  * was told to build one of four things, none of them the one in front of them. It was then rewritten to name
  * three that remain — CSSScopeRule, CSSCounterStyleRule, CSSFontFeatureValuesRule — while the registry beside
- * it recognises TWENTY-EIGHT at-keywords this builder has no arm for. Every one of the other twenty-five was a
+ * it recognised TWENTY-EIGHT at-keywords this builder had no arm for. Every one of the other twenty-five was a
  * page whose `@WHY` would have said "what remains is" and then listed three things that were not it. That is
  * the stale-`DFAIL` failure mode with a spec behind it: authoritative, wrong, and followed.
  *
@@ -1881,8 +1932,6 @@ static const struct {
     { "scope",              "CSSScopeRule",
       "CSS Cascade 6 §4.1 \"The CSSScopeRule interface\" — no CSSOM §6.4.2 type number at all (that table is frozen, "
       "so its `type` is 0, like the CSSLayer*, CSSProperty and CSSContainer rules already built)" },
-    { "starting-style",     "CSSStartingStyleRule",
-      "CSS Transitions 2 §3.3.1 \"The CSSStartingStyleRule interface\"" },
     { "styleset",           "CSSFontFeatureValuesRule",
       "CSS Fonts 4 §12.2 \"The CSSFontFeatureValuesRule interface\" — its `styleset` map attribute" },
     { "stylistic",          "CSSFontFeatureValuesRule",
@@ -2856,6 +2905,21 @@ static bool layer_statement_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf 
     return true;
 }
 
+/* CSS Transitions 2 §3.3.1's arm, DERIVED the way `supports_rule_serialize` and `layer_block_rule_serialize` are and
+   from the same place: CSSOM §6.4's serialize a CSS rule states no arm for CSSStartingStyleRule at all — its list
+   runs CSSStyleRule, CSSImportRule, CSSMediaRule, CSSFontFaceRule, CSSPageRule, CSSNamespaceRule, CSSKeyframesRule,
+   CSSKeyframeRule and stops — so the shape comes from the one arm it DOES state for a grouping rule, with step 1's
+   prefix replaced. THE PREFIX IS THE AT-KEYWORD ALONE AND NOTHING FOLLOWS IT, which is neither of the two shapes
+   beside it: `@media`'s space is unconditional because a media query list always exists, and `@layer`'s is
+   conditional because `<layer-name>?` is an optional production whose absence must be tested for.
+   CSS Transitions 2 §3.3 gives this rule no prelude in its grammar at all, so there is no production here to be
+   present or absent and no separator that could ever be written. `CssRuleData` is not taken:
+   CSS Transitions 2 §3.3.1 declares no member, so this rule stores nothing a serialization could read. */
+static bool starting_style_rule_serialize(JSContext *ctx, JSValueConst rule, RBuf *out)
+{
+    return group_rules_serialize(ctx, rule, "@starting-style", sizeof "@starting-style" - 1, out);
+}
+
 /* CSS Properties and Values API 1 §6.1's `name` — "the custom property name associated with the @property rule" — read
  * out of the LIST CSS Properties and Values API 1 §3 "The @property Rule"'s prelude declares. It is ONE reader because
  * CSS Properties and Values API 1 §6.1's `name` attribute and CSS Properties and Values API 1 §6.1's serialization arm
@@ -3104,6 +3168,7 @@ static bool rule_serialize(JSContext *ctx, JSValueConst rule, RBuf *out)
     case RULE_TYPE_LAYER_BLOCK:     return layer_block_rule_serialize(ctx, r, rule, out);
     case RULE_TYPE_LAYER_STATEMENT: return layer_statement_rule_serialize(ctx, r, out);
     case RULE_TYPE_PROPERTY:        return property_rule_serialize(ctx, r, out);
+    case RULE_TYPE_STARTING_STYLE:  return starting_style_rule_serialize(ctx, rule, out);
     default:
         DCHECK(r->type == RULE_TYPE_STYLE, "CSSOM §6.4's serialize a CSS rule met a rule type it has no arm for");
         return style_rule_serialize(ctx, r, rule, out);
@@ -4387,6 +4452,46 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
         JS_FreeValue(ctx, kids);
         return ok;
     }
+    /* A CSS Transitions 2 §3.3 `@starting-style` CONTRIBUTES NO STYLE RULE TO THE STYLE THIS WALK BUILDS, which
+       is the AFTER-CHANGE STYLE. CSS Transitions 2 §3.3 says so outright — "Style rules in @starting-style do not
+       apply to after-change style" — and states the reason a sentence earlier: "The style rules inside it are used
+       to establish styles to transition from, if the previous style change event did not establish a
+       before-change style for the element whose styles are being computed". Emitting them into the text the
+       selector matcher re-parses would make every declaration inside a `@starting-style` win over the very rule it
+       exists to transition FROM, which is the opposite of what the at-rule is for.
+       AND YET THE CHILDREN ARE WALKED, because this walk has a SECOND effect and CSS Transitions 2 §3.3 requires
+       that one to happen inside the rule exactly as it happens outside: "Global, name-defining at-rules such as
+       @keyframes, @font-face, and @layer are allowed inside @starting-style, and when present behave as if they
+       were outside of @starting-style". Of those three, `@keyframes` and `@font-face` reach this walk's arms and
+       contribute nothing wherever they are written, so "as if they were outside" is, HERE, exactly that a `@layer`
+       inside one still declares its CSS Cascade 5 §6.4.3 layer — and a `return true` would have silently dropped
+       that declaration, which is the whole reason this arm is a walk and not one.
+       THE WALK RUNS INTO A SCRATCH EMITTER THAT SHARES ONLY `order`. Its text and its per-rule layer marks are
+       thrown away, so the layers land and the style rules do not, and no other arm of this walk has to know it is
+       running inside a `@starting-style`. Discarding both halves rather than suppressing the style arm is what
+       keeps them in step: `cascade_emit_mark` writes one entry per rule written into `out`, and a suppression that
+       stopped one without the other would shift every later rule into a neighbour's layer — which is the same
+       per-index correspondence `cascade_emit_one`'s own nesting comment turns on.
+       NAMED RESIDUAL — the STYLE the discarded rules exist to build is not computed anywhere in this engine.
+       NOT COVERED: CSS Transitions 2 §3.3's "Define starting style for an element as the after-change style with
+       @starting-style rules applied in addition". Dropping them from the after-change style is what that section
+       REQUIRES, so this arm is right rather than narrow; what is narrow is that there is no second computation for
+       them to be right in, and no transition ever starts from one. NEXT DIFF: CSS Transitions 1 §3 "Starting of
+       transitions" — the before-change/after-change comparison that would fill core/css/css_cascade.c's
+       CASCADE_BAND_TRANSITION, whose own declaration records that nothing generates one. ITS ABSENCE SHOWS as the
+       text this walk emits for a sheet being byte-identical with a `@starting-style` block present and with it
+       deleted, while that band takes no declaration from any sheet. RETIREMENT: this note goes when that band has
+       a producer. */
+    if (r->type == RULE_TYPE_STARTING_STYLE) {
+        CascadeEmit scratch = { { NULL, 0, 0 }, NULL, 0, 0, e->order };
+        JSValue kids = rule_child_rules(ctx, rule);
+        bool ok = cascade_emit(ctx, kids, &scratch, cur, nest);
+
+        JS_FreeValue(ctx, kids);
+        free(scratch.out.s);
+        free(scratch.layer);
+        return ok;
+    }
     DCHECK(r->type == RULE_TYPE_STYLE, "the author cascade met a rule type it has no arm for");
     sel = rule_text_copy(ctx, r->selector_text, &sl);
     /* A rule with NO selector text cannot be serialized into a sheet at all, and there is no partial answer
@@ -4574,6 +4679,8 @@ void css_rule_init(JSContext *ctx)
         realm_value_declare(ctx, "CSS Cascade 5 §8.2 CSSLayerStatementRule.prototype");
     g_proto_slot[PROTO_PROPERTY] =
         realm_value_declare(ctx, "CSS Properties and Values API 1 §6.1 CSSPropertyRule.prototype");
+    g_proto_slot[PROTO_STARTING_STYLE] =
+        realm_value_declare(ctx, "CSS Transitions 2 §3.3.1 CSSStartingStyleRule.prototype");
     g_id_set_selector = idl_setter_id(ctx, IDL_DOMSTRING, false, js_rule_set_selector, 0);
     g_id_set_page_selector = idl_setter_id(ctx, IDL_DOMSTRING, false, js_rule_set_page_selector, 0);
     g_id_set_key_text = idl_setter_id(ctx, IDL_DOMSTRING, false, js_rule_set_key_text, 0);
@@ -4608,7 +4715,7 @@ void css_rule_install_proto(JSContext *ctx)
 {
     JSValue base, grouping, style, condition, media, supports, container, import_rule, ns, font_face, page,
             margin;
-    JSValue keyframes, keyframe, layer_block, layer_statement, property_rule;
+    JSValue keyframes, keyframe, layer_block, layer_statement, property_rule, starting_style;
 
     DCHECK(g_rule_class != 0, "a realm asked for the rule prototypes before the interfaces existed");
 
@@ -4640,6 +4747,17 @@ void css_rule_install_proto(JSContext *ctx)
     idl_install_accessor(ctx, style, "selectorText", js_rule_get, CR_SELECTOR_TEXT, g_id_set_selector);
     idl_install_accessor(ctx, style, "style", js_rule_style, STYLE_OF_STYLE_RULE,
                          cssom_put_forwards_setter());
+
+    /* CSS Transitions 2 §3.3.1's CSSStartingStyleRule.prototype — `interface CSSStartingStyleRule :
+       CSSGroupingRule`, so it chains off `grouping` DIRECTLY, beside CSSStyleRule and CSSConditionRule rather than
+       under either of them. IT INSTALLS NO MEMBER, AND THAT IS THE SECTION RATHER THAN A GAP HERE:
+       CSS Transitions 2 §3.3.1 is one sentence above an EMPTY interface body, so every member a page can reach on
+       one of these rules is CSSOM §6.4.5's or CSSOM §6.4.2's and arrives down this chain. An accessor written here
+       would be a member the platform does not have, which is the mirror of the missing member §NO STUBS is about
+       and is caught from the other side by the IDL gap audit. */
+    starting_style = JS_NewObjectProto(ctx, grouping);
+    CHECK(!JS_IsException(starting_style), "CSSStartingStyleRule.prototype could not be allocated");
+    idl_interface_tag(ctx, starting_style, "CSSStartingStyleRule");
 
     /* CSS Conditional 3 §7.2's CSSConditionRule.prototype — "all the conditional at-rules, which consist of a
        condition and a statement block". `conditionText` is READONLY: the setter older drafts gave it is gone
@@ -4811,6 +4929,7 @@ void css_rule_install_proto(JSContext *ctx)
 
     /* Each into the realm's own slot, which asserts on its own that this install ran once in this realm. */
     realm_value_set(ctx, g_proto_slot[PROTO_PROPERTY], property_rule);
+    realm_value_set(ctx, g_proto_slot[PROTO_STARTING_STYLE], starting_style);
     realm_value_set(ctx, g_proto_slot[PROTO_KEYFRAMES], keyframes);
     realm_value_set(ctx, g_proto_slot[PROTO_KEYFRAME], keyframe);
     realm_value_set(ctx, g_proto_slot[PROTO_LAYER_BLOCK], layer_block);
@@ -4869,6 +4988,10 @@ void css_rule_install(JSContext *ctx, JSValueConst global)
         /* CSS Properties and Values API 1 §6.1 declares `interface CSSPropertyRule : CSSRule` — index 0 —
            because an `@property` contains no rules and has no declaration block a page can reach. */
         { "CSSPropertyRule",       PROTO_PROPERTY,        0 },
+        /* CSS Transitions 2 §3.3.1 declares `interface CSSStartingStyleRule : CSSGroupingRule` — index 1, the
+           same parent CSSStyleRule and CSSPageRule take, because a `@starting-style` contains other rules and
+           states no condition of its own for CSSConditionRule to sit between them. */
+        { "CSSStartingStyleRule",  PROTO_STARTING_STYLE,  1 },
     };
     JSValue iface[sizeof(IFACES) / sizeof(IFACES[0])];
     unsigned i, n = sizeof(IFACES) / sizeof(IFACES[0]);

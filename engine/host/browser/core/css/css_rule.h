@@ -3,7 +3,8 @@
  * CSS Conditional 3 §7.2's CSSConditionRule, CSS Conditional 3 §7.3's CSSMediaRule and CSS Conditional 3 §7.4's
  * CSSSupportsRule (the `@media` and `@supports` halves of the same object), CSS Fonts 5 §9.1's CSSFontFaceRule,
  * CSS Animations §6.2/§6.3's CSSKeyframeRule and CSSKeyframesRule, CSS Cascade 5 §8.1/§8.2's CSSLayerBlockRule and
- * CSSLayerStatementRule, and CSS Properties and Values API 1 §6.1's CSSPropertyRule.
+ * CSSLayerStatementRule, CSS Properties and Values API 1 §6.1's CSSPropertyRule and CSS Transitions 2 §3.3.1's
+ * CSSStartingStyleRule.
  *
  * A CSSPropertyRule HAS NO `style`, AND THAT IS THE ONE STRUCTURAL THING TO KNOW ABOUT IT.
  * CSS Properties and Values API 1 §6.1's IDL is `interface CSSPropertyRule : CSSRule` with four readonly attributes —
@@ -177,8 +178,9 @@ void css_rule_init(JSContext *ctx);
 /* Every CSSOM §6.4 and CSS Conditional 3 §7 rule prototype for ONE realm — declared into core/realm.h's list. */
 void css_rule_install_proto(JSContext *ctx);
 /* `CSSRule`, `CSSGroupingRule`, `CSSStyleRule`, `CSSConditionRule`, `CSSMediaRule`, `CSSSupportsRule`,
-   `CSSImportRule`, `CSSNamespaceRule`, `CSSFontFaceRule`, `CSSPageRule`, `CSSMarginRule`, `CSSKeyframeRule`,
-   `CSSKeyframesRule`, `CSSLayerBlockRule`, `CSSLayerStatementRule` and `CSSPropertyRule` as globals. */
+   `CSSContainerRule`, `CSSImportRule`, `CSSNamespaceRule`, `CSSFontFaceRule`, `CSSPageRule`, `CSSMarginRule`,
+   `CSSKeyframeRule`, `CSSKeyframesRule`, `CSSLayerBlockRule`, `CSSLayerStatementRule`, `CSSPropertyRule` and
+   `CSSStartingStyleRule` as globals. */
 void css_rule_install(JSContext *ctx, JSValueConst global);
 void css_rule_free(JSRuntime *rt);
 
