@@ -662,8 +662,19 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            IT IS THE RULE AND NOT THE SIGNAL NAME, deliberately. `blocked-signal:witness=pinned` names the ROW
            OF A PERSON'S OWN CONTROL that holds the request and would make it fire if they widened it;
            `blocked-destructive:logout` names a refusal nothing reopens. Collapsing those to one count is the
-           several-states-behind-one-answer shape at the one place a person has to act on it. */
-        egressAsked: eng._egress.asked, egressDeclined: eng._egress.declined,
+           several-states-behind-one-answer shape at the one place a person has to act on it.
+           THE HISTOGRAM IS COPIED AND THE COUNT BESIDE IT IS A NUMBER, SO THE TWO ARE ONE MOMENT. `asked` is
+           copied by value because it is one; the map is not, and relaying the live one would put a reference
+           on a row whose siblings are all snapshots — so `qjs_emit_partial`'s record would go on CHANGING
+           after it was composed, and its `egressAsked` would then be a reading of an earlier instant than the
+           map beside it. That is the two-moments defect this file already had to publish two indices to
+           refuse, arriving through an aliased object rather than through a second read, and the containment
+           asserted below would be checked against a population the row does not hold.
+           A NULL-PROTOTYPE MAP IN, A PLAIN ONE OUT, AND BOTH HALVES ARE DELIBERATE. The counter is
+           `Object.create(null)` so its `in` test is exact rather than answering true for `toString`; the row
+           carries a plain object because every other census on it arrived through `JSON.parse` and is one,
+           and a row is SERIALIZED out of this realm by whoever reads it. */
+        egressAsked: eng._egress.asked, egressDeclined: Object.assign({}, eng._egress.declined),
         endpoints: result.fetchCallSites.length, sinks: result.securitySinks.length,
         park: result._park.length, resumed: resumed, url: (msg && msg.sourceUrl) || "" }
     /* A CRASHED RUN REPORTS NO COUNTERS, and the honest report of that is the ABSENCE, not seven zeroes.
@@ -702,10 +713,14 @@ function linesToAnalysis(lines, msg, outcome, eng) {
      reading above 1 with nothing anywhere saying so. It is asserted rather than left to a reader because a
      sum that cannot be true is the cheapest finding this pair has. */
   if (outcome !== "crashed" && result) {
+    /* READ OFF `m` AND NOT OFF `eng`, WHICH IS WHAT MAKES THIS AN ASSERTION ABOUT THE ROW. The map on the
+       record is a COPY taken at composition, so checking the live one would be checking a population the row
+       does not carry — and the moment this is about is the moment the row states, not the moment the assert
+       runs. */
     let _sum = 0;
-    for (const k of Object.keys(eng._egress.declined)) _sum += eng._egress.declined[k];
-    DCHECK(_sum <= eng._egress.asked,
-           "this zone's egress census counted " + _sum + " refusal(s) against " + eng._egress.asked + " " +
+    for (const k of Object.keys(m.egressDeclined)) _sum += m.egressDeclined[k];
+    DCHECK(_sum <= m.egressAsked,
+           "this zone's egress census counted " + _sum + " refusal(s) against " + m.egressAsked + " " +
            "request(s) asked of it — the two are raised in one loop, one `asked` per delivered pending line " +
            "and at most one refusal inside that same iteration, so a sum above the denominator is a second " +
            "site raising one of them and every share read off this pair is over a population that never ran");
