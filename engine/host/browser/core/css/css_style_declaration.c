@@ -2702,6 +2702,20 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
        grammar still admits — css-align-3 §7.1's `Value:` line carries it as its own term — so it is a declarable keyword
        here and not a sentinel. */
     { "justify-items", "legacy" }, { "justify-self", "auto" },
+    /* css-ui-4 §6.2 "Exclusion from Hit-testing: the pointer-events property", whose `Initial:` line is
+       `auto`. THE ROW IS WHAT MAKES "HIT-TESTABLE" A COMPUTED VALUE RATHER THAN A SILENCE, which is the
+       `transform` argument above word for word: lexbor's registry carries no `pointer-events` entry — 107
+       properties and this is not one of them — so with no row here css-cascade-5 §7.1 has no initial value to
+       fall to and the cascade answers NULL for every element that does not declare one, which is every
+       element on almost every page. A DECLARED `pointer-events` reaches the cascade already, by the same
+       `__CUSTOM` route the `transform` row names, so this row completes the pair rather than standing in for
+       it.
+       ITS `Inherited:` LINE IS `yes` AND core/css/css_defaulting.c ALREADY CARRIES IT, so unlike
+       `justify-items` above this one needs no companion row there — css-cascade-5 §7.2's base case is this value, and the
+       row that supplies it is the one being added here. The two tables were already half agreed: the
+       inheritance half has listed this property since before anything could ask for it, which is why the
+       absence read as a modelled property rather than as an unmodelled one. */
+    { "pointer-events", "auto" },
 };
 
 /* THE INITIAL VALUES LEXBOR'S REGISTRY GETS WRONG, each with the answer it gives today so the row EXPIRES.

@@ -2459,6 +2459,19 @@ bool css_shorthand_complete_for(const char *longhand)
         "overflow-x", "overflow-y", "display", "float", "clear", "position", "box-sizing", "color",
         "white-space",
         "direction", "writing-mode", "transform", "visibility",
+        /* `pointer-events` — NO shorthand in CSS sets it. css-ui-4 §6.2 "Exclusion from Hit-testing: the
+           pointer-events property" declares it as a standalone property with its own `Value:` line
+           (`auto | none`) and its own `Computed value:` line, and the module states no shorthand over it:
+           css-ui-4 §6.3 "Preventing All Interaction: the interactivity property"'s `interactivity` is a
+           SEPARATE property that css-ui-4 §6.3 says acts ON this one's behalf
+           ("Hit-testing must act as if pointer-events was none, regardless of its actual value") rather than
+           setting it, which is a different relation from a shorthand and leaves this longhand's own cascade
+           untouched. It shares its section's subject with `interactivity` and its name with nothing.
+           SVG 2 §15.6 REDECLARES THE SAME PROPERTY NAME with a wider keyword set, which css-ui-4 §6.2's own Note
+           records ("SVG 2 § 15.6 The 'pointer-events' property defines a variant of this property for SVG
+           elements, with more possible values. The effect of such values outside of SVG is currently not
+           defined."), and adds no shorthand either — the same shape `clear` above has with CSS Page Floats 3. */
+        "pointer-events",
         "flex-direction", "flex-wrap", "flex-grow", "flex-shrink", "flex-basis",
         "background-image", "background-position", "background-size", "background-repeat",
         "background-attachment", "background-origin", "background-clip", "background-color",
