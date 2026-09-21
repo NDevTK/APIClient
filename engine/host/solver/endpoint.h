@@ -42,9 +42,17 @@
  * A count of unanswered NAMES is therefore not a measure of lost ADDRESSES, in either direction.
  * WHAT THE NEXT DIFF BUILDS: HTML §9.2.2 steps 8-15 together with HTML §9.2.3 "Processing model", which
  * core/eventsource/event_source_parser.h already scopes and which gives that component its first caller —
- * its step 15 fetch is an endpoint_record site by construction, so the address arrives here with the
- * connection rather than needing an edge of its own. WebSockets §3 is the diff after it and wants a transport
- * this engine does not have; its address is statable at the constructor long before its connection is.
+ * PLUS an endpoint_record call of its own at step 8's request, which is the half this clause first got wrong
+ * and is recorded rather than quietly corrected. It called step 15's fetch
+ * `an endpoint_record site by construction` — shown in backticks and not in quotation marks, because it is
+ * this tree's own retired prose and the quotation channel cannot tell such a run from a fabricated spec
+ * sentence. fetch.c's recording site is inside `js_fetch_step`, the JS `fetch()` builtin's step machine,
+ * whose name occurs nowhere outside that file — so a spec-level fetch reaches it through nothing.
+ * Every other edge here records AT ITS OWN CALL (html_script.c, html_link.c, html_image.c, html_form.c,
+ * navigator_beacon.c, xml_http_request.c), and that is the pattern the constructor follows. The clause was a
+ * claim about THIS TREE written by someone who had just read the SPEC, which is the half a reader cannot
+ * check by fetching anything. WebSockets §3 is the diff after it and wants a transport this engine does not
+ * have; its address is statable at the constructor long before its connection is.
  * HOW ITS ABSENCE WOULD SHOW: a document whose API surface is carried over a socket emits a `@H` array that
  * is empty or holds only its subresource loads, while absent.c's census names the interface as owed — two
  * surfaces disagreeing about one document, with nothing joining them.
