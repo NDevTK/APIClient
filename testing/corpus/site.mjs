@@ -710,20 +710,41 @@ const row = {
      descriptor modules, an icon. Zero derived API addresses. The count was exactly right and the claim made
      from it was not, which is why this sits at the field and not in a report.
      THE SUFFIXES ABOVE ARE A DESCRIPTION AND NOT A CLASSIFIER, deliberately: deciding what a thing IS from
-     its URL suffix is the banned name-matching, and the real classifier reads response magic-bytes. That is
-     the point rather than a caveat -- the classifier COULD NOT RUN, because every one of those addresses was
-     refused at the chokepoint and there was no response to classify. So this is ONE mechanism and not two:
-     the refusal that stopped the descriptor decode is the same refusal that leaves every chunk unclassified,
-     and an unclassified chunk load then reaches the Send panel wearing [UNUSED] -- the badge that is the
-     product's entire differentiator -- because `_methodOrigin` can only answer "asset" for a method whose
-     response was decoded.
-     NAMED RESIDUAL. WHAT IS NOT COVERED: this row cannot state its own composition, because the fact that
-     would split it (is this address an asset) is not in the record it reads -- the classification lives on a
-     decoded response in the offscreen store and never reaches the census. WHAT THE NEXT DIFF BUILDS: the
-     record carrying the classifier's own answer, so this row can publish learned-addresses beside
-     classified-as-asset and neither can be quoted as the other. HOW ITS ABSENCE WOULD SHOW: a census row
-     whose endpoint count is read as an API surface by someone who would have to open the address list to
-     find out otherwise -- which is what happened, and the address list is two fields away. */
+     its URL suffix is the banned name-matching, and the real classifier reads response magic-bytes.
+     THE SENTENCE THAT STOOD HERE SAID THE CLASSIFIER "COULD NOT RUN, BECAUSE EVERY ONE OF THOSE ADDRESSES
+     WAS REFUSED AT THE CHOKEPOINT", and unified the two silences: "the refusal that stopped the descriptor
+     decode is the same refusal that leaves every chunk unclassified". It is REWRITTEN RATHER THAN DELETED
+     because the unification is what a reader re-derives, and because it was a claim about THIS TREE rather
+     than about a standard, so it rotted exactly the way such a claim rots. The chokepoint's default
+     permissions are DATA in lib/safe-fetch.js, and two arms name `destination` `program` and `destination`
+     `subresource` under no further condition -- a script, a module import, a lazy chunk and a stylesheet
+     all fire at an unconfigured origin. A drive of THIS page at engine 3a0929e8 read the engine-side
+     decline counter at zero in three passes. The chunks are FETCHED. Two silences, not one.
+     AND THE RETIREMENT LEAVES THIS ROW WORSE OFF RATHER THAN BETTER, which is why it is not a tidy-up.
+     While everything was refused, "no API surface" and "every API request refused" were one story with one
+     cure. They are now two, they take OPPOSITE work -- improve the driving, or widen the origin -- and
+     NOTHING THIS FILE EMITS SEPARATES THEM. Derive that rather than trust it:
+     `grep -oE '^  [a-zA-Z_]+:' testing/corpus/site.mjs` lists every field this object publishes and no
+     member of that list names a refusal. A page's own `fetch()` carries the EMPTY destination, which is
+     neither permitted word, so it fires only on the arms additionally requiring an unpinned address or an
+     observed pair -- and an address a forced equality PINNED is precisely the gated API surface this
+     product exists to reach. That population is declined by default, correctly and configurably, and is
+     invisible in every column here.
+     NAMED RESIDUAL, AND IT IS NOW TWO. NOT COVERED: (a) this row cannot state its own composition, because
+     the fact that would split it (is this address an asset) is not in the record it reads -- the
+     classification lives on a decoded response in the offscreen store and never reaches the census; (b)
+     this row cannot state what the chokepoint REFUSED, though the chokepoint already names every refusal
+     in a vocabulary of its own. NEXT DIFF: (a) the record carrying the classifier's own answer, so
+     learned-addresses and classified-as-asset are two columns neither quotable as the other; (b) a refusal
+     count split by the SIGNAL that refused, so a row with no API surface says which reading it is.
+     HOW EITHER ABSENCE SHOWS: (a) an endpoint count read as an API surface by a reader who would have to
+     open the address list to find out otherwise; (b) a reader concluding the driving is weak from a low
+     endpoint count, on a run where the driving reached every address and the policy declined them.
+     STILL UNESTABLISHED, said because a retirement that overclaims is worse than what it replaces: whether
+     a refusal of a PARSER-INSERTED subresource reaches that decline counter at all. The zero above is
+     evidence about requests the engine ASKED for and must not be read as evidence about the parser's.
+     RETIREMENT: both halves go when this object publishes a classified-as-asset count and a refusal count,
+     because the two readings are then separated by the row rather than by this paragraph. */
   siteEndpoints: [...new Set(mine.flatMap(d => d.sites))],
   distinctEndpoints: new Set(mine.flatMap(d => d.sites)).size,
   pageErrors: [...new Set(mine.flatMap(d => d.errs))].slice(0, 40),
