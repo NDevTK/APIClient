@@ -4415,7 +4415,13 @@ static const char *HTML =
        Present with records from ONE family only (`t-` or `f-`, not both): only one arm reached this
        statement, and the claim is UNSCORED rather than clean — a leak is visible only to the arm that runs
        SECOND, because the first to arrive always reads undefined. Present with BOTH families: the claim is
-       SCORED, and a leak shows as exactly one `-clean` beside one `-sees-`. Present with NEITHER family:
+       SCORED, AND THE VERDICT IS THE PRESENCE OF ANY `-sees-` PATH, NEVER A COUNT OF RECORDS. This
+       sentence read "exactly one `-clean` beside one `-sees-`" and is rewritten rather than deleted,
+       because that is the two-flow reading a reader re-derives: each family's FIRST arrival always reads
+       undefined and emits `-clean`, so with more than two flows a LATER same-family arrival can emit
+       `-sees-` too and all four arm paths appear. An endpoint's identity carries its path (and its
+       provenance), so each path is ONE record however many flows fetch it — which is what makes
+       PRESENCE, and not multiplicity, the quantity this row is read by. Present with NEITHER family:
        `getElementById` answered null and the assignment threw, which is a fact about this fixture's markup
        and not about isolation. IT IS ANSWERABLE IN A RUN WHOSE `jobs run` IS 0, unlike the two statements
        above it — nothing here sits behind an await, and an endpoint record is emitted BEFORE the park, so a
