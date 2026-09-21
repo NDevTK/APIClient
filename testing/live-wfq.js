@@ -56,6 +56,116 @@ const GAUGES = ["members", "unrun", "neverPicked", "neverPickedGap", "neverPicke
                 "picksLive", "picksMax", "families", "jobsReady", "jobsFramed", "jobsOwed",
                 "delivReady", "delivFramed", "delivOwed", "valTop", "valMin", "valMax"];
 
+/* THE BRANCH SCOPE, WHICH THE TWO LISTS ABOVE DO NOT REACH AND WHICH IS THE ONE FAMILY A PAGE-SCALE
+   SAMPLER EXISTS FOR. solver/result.c publishes twenty-three rows at this scope and says why they are
+   worth reading at all: flow_weight sums flow_branch_bonus over the top-level arm's bucket, so these are
+   "the only published statement of a TERM OF THE ORDERING". engine/build.mjs reads eleven of them on the
+   SMOKE FIXTURE; this file read NONE of them, so the question a branching frontier actually poses — does
+   an arm convert fork factor into thread time — had no instrument outside a fixture whose fork factor is
+   its author's design decision rather than a document's.
+
+   AND THE MINTER TRIPLE HAD NO READER ANYWHERE. `brMinterLive`, `brMinterGoneLife` and `brMinterUsLife`
+   occur in exactly ONE file in this tree — result.c, which emits them — while `brCrowd*` occurs in two.
+   That is the write-with-no-reader half of the record-field contract, and here it is not a tidiness
+   defect: result.c states that the crowd is selected by `brLiveMax`, a MEMBERSHIP fact, while an arm that
+   "forks at every position of an unknown length and lets each arm FINISH mints unboundedly and stands
+   narrow, so it owns the mint maximum, is NOT the crowd, and had no live count and no receipt on this
+   line at all" — and names that, in its own words, as "the shape the whole aging mechanism was written
+   against". `sub_born = live + sub_gone` makes the crowd and the minter ONE bucket only while nothing has
+   departed. So a reader holding only the crowd rows is measuring a different arm from the one the aging
+   question is about, and cannot tell that it is. Both triples are printed side by side here for exactly
+   that reason. */
+const RESULT_C = path.join(__dirname, "..", "engine", "host", "solver", "result.c");
+
+/* THE POPULATION IS TAKEN FROM THE COMPOSER, NEVER FROM A LIST BESIDE IT — engine/build.mjs's `wfqFields()`
+   rule, owed here for the same reason and in BOTH directions. A row this file names that result.c has
+   renamed throws naming the row; a branch-scope row result.c ADDS that this file does not name throws too,
+   because the defect this block closes IS a published row with no reader and a one-way check is how it
+   recurs. Read at startup so it fails before a window of samples is spent. */
+function wfqComposerKeys() {
+  const src = fs.readFileSync(RESULT_C, "utf8");
+  const i = src.indexOf("char *result_wfq_json(void)");
+  if (i < 0) throw new Error("[live-wfq] cannot find `result_wfq_json` in " + RESULT_C + " — this driver " +
+                             "takes its row set from that composer, and a census it cannot read is one " +
+                             "whose rows it would compare as undefined.");
+  const j = src.indexOf("\n}\n", i);
+  if (j < 0) throw new Error("[live-wfq] `result_wfq_json` in " + RESULT_C + " has no closing brace at " +
+                             "column 0 — the span this reader derives its row set from is unbounded.");
+  return new Set([...src.slice(i, j).matchAll(/\\"([A-Za-z_][A-Za-z0-9_]*)\\":/g)].map((m) => m[1]));
+}
+
+/* THE KINDS CANNOT BE DERIVED FROM A FORMAT STRING, so they are written here from result.c's own prose
+   with the reason, exactly as the COUNTERS/GAUGES split above is. result.c: "The only rows on this line a
+   reader may difference are `brUsLifeSum`, `brRetiredUsLife` and `chargedUsLife`, whose population is
+   every microsecond ever charged rather than whichever buckets are standing." Everything else at this
+   scope is a GAUGE or a per-bucket lifetime read at ONE instant — because THE BUCKET SELECTED MOVES
+   BETWEEN SAMPLES, and an extremum over the buckets standing is not its field's kind. Differencing one of
+   those across two rows of this stream is arithmetic about two different arms. */
+const BR_DIFFABLE = ["brUsLifeSum", "brRetiredUsLife", "chargedUsLife"];
+const BR_INSTANT  = ["branches", "brLiveMax", "brLiveMin", "brLiveSum",
+                     "brBornLifeMax", "brBornLifeMin",
+                     "brCrowdLive", "brCrowdBornLife", "brCrowdUsLife",
+                     "brMinterLive", "brMinterGoneLife", "brMinterUsLife",
+                     "brUsLifeMax", "brUsLifeMin", "brHeldUsLife", "brEmptyUsLife",
+                     "brDepthMax", "brFanMax", "brFanSum", "brFanDepth"];
+
+function branchScope() {
+  const keys = wfqComposerKeys();
+  const named = [...BR_INSTANT, ...BR_DIFFABLE];
+  for (const k of named)
+    if (!keys.has(k))
+      throw new Error("[live-wfq] result_wfq_json no longer publishes `" + k + "` — this driver names it " +
+                      "from result.c's own composer, so a row that has gone is one the producer renamed " +
+                      "or dropped rather than one this file invented, and every reading below it would " +
+                      "compare an absent field as undefined.");
+  const published = [...keys].filter((k) => /^(?:branches|br[A-Z])/.test(k) || k === "chargedUsLife");
+  const unread = published.filter((k) => !named.includes(k));
+  if (unread.length)
+    throw new Error("[live-wfq] result_wfq_json publishes branch-scope row(s) no reader here names: " +
+                    unread.join(", ") + ". This check exists because that is precisely how the minter " +
+                    "triple came to be emitted by one file and read by none — name the row and say what " +
+                    "it means, or the census grows a reader-less column again.");
+  return named;
+}
+
+/* THE IDENTITIES result.c STATES AS CHECKABLE ON THIS DOCUMENT, checked rather than trusted — the same
+   treatment `switchDelta` already gets below and for the same reason: a violated one means every other
+   branch row on the line is a number about nothing. They are the engine's own DCHECKs in flow_wfq_census,
+   which are compiled out of the release build this driver samples. */
+/* EACH CARRIES ITS OPERANDS, AND AN IDENTITY WHOSE OPERANDS ARE NOT ALL NUMBERS IS REPORTED AS UNJUDGED
+   RATHER THAN AS HELD. Two absent fields compare EQUAL in JavaScript, so a predicate written as a bare
+   `===` passes on a census carrying neither — an assert whose two sides cannot disagree, which is not a
+   weak check but a non-check that prints like a passing one. The three states are kept apart on the row
+   (`brIdent` null, a list of broken names, or a list under `brUnjudged`) for the same reason every other
+   absence in this stream is spelled null and never 0. */
+const BR_IDENTITIES = [
+  ["brLiveSum==members", ["brLiveSum", "members"],
+   (w) => w.brLiveSum === w.members],
+  ["brUsLifeSum+brRetiredUsLife==chargedUsLife", ["brUsLifeSum", "brRetiredUsLife", "chargedUsLife"],
+   (w) => w.brUsLifeSum + w.brRetiredUsLife === w.chargedUsLife],
+  ["brCrowdLive==brLiveMax", ["brCrowdLive", "brLiveMax"],
+   (w) => w.brCrowdLive === w.brLiveMax],
+  ["brHeldUsLife+brEmptyUsLife==brUsLifeSum", ["brHeldUsLife", "brEmptyUsLife", "brUsLifeSum"],
+   (w) => w.brHeldUsLife + w.brEmptyUsLife === w.brUsLifeSum],
+  ["brMinterLive+brMinterGoneLife==brBornLifeMax", ["brMinterLive", "brMinterGoneLife", "brBornLifeMax"],
+   (w) => w.brMinterLive + w.brMinterGoneLife === w.brBornLifeMax],
+];
+
+/* A SHARE IS PRINTED WHERE result.c PRESCRIBES THE QUOTIENT AND NOWHERE ELSE, which is the distinction the
+   header makes about `starvedPicks / picksLifetime`: that one is withheld because it sums two populations,
+   and these two are the readings result.c names in its own text — "Take the crowd's share of the members
+   standing against its share of the thread the live buckets hold", and "READ `brMinterUsLife /
+   brHeldUsLife` AGAINST `brMinterLive / members`". The three-way verdict those readings carry (at par /
+   near zero / above par) is NOT computed: classifying would pick a threshold the contract leaves to a
+   reader, and the three take opposite diffs.
+   A QUOTIENT OF TWO BURNS IS UNIT-FREE AND A RAW BURN IS NOT. result.c: "A quotient of two burns from ONE
+   run in ONE unit is the same number either way; a raw microsecond total from this line is not, and is
+   quoted with that line beside it." So `isCpu` is carried on every row that prints one.
+   A ZERO DENOMINATOR YIELDS null AND NEVER 0 — an unasked question and a measured zero are different
+   facts, and this stream already spells absence as null everywhere else. */
+const share = (n, d) => (typeof n === "number" && typeof d === "number" && d > 0
+                           ? Number((n / d).toFixed(6)) : null);
+
 async function connect() {
   const lock = JSON.parse(fs.readFileSync(LOCK_FILE, "utf8"));
   return { extId: lock.extId,
@@ -89,17 +199,28 @@ function sample(pg) {
     try { const p = self.rendererPoolProbe(); sched = { alive: p.scheduler.alive }; }
     catch (e) { sched = { PROBE_THREW: String((e && e.message) || e) }; }
     if (!("wfq" in r)) return { run: r.run, NO_WFQ: true, switches: r.switches, sched: sched };
-    return { run: r.run, wfq: r.wfq, switches: r.switches, sched: sched };
+    /* `quantum` rides the same log row (bridge.js composes it beside `wfq`) and its `isCpu` is what makes a
+       RAW burn on this line quotable. Absent is returned as absent; bridge.js asserts its shape upstream. */
+    return { run: r.run, wfq: r.wfq, switches: r.switches, sched: sched,
+             quantum: ("quantum" in r) ? r.quantum : null };
   });
 }
 
 async function main() {
   const urls = process.argv.slice(2);
   if (!urls.length) { console.error("usage: node testing/live-wfq.js <url> [url…]"); process.exit(2); }
+  /* DERIVED BEFORE THE BROWSER IS TOUCHED, so a renamed or reader-less row fails here rather than after a
+     window of samples has been spent on a census this driver cannot describe. */
+  const BR = branchScope();
   console.log("# artifact " + JSON.stringify(artifactStamp()));
   console.log("# windowMs=" + WINDOW + " everyMs=" + EVERY +
               " — COUNTERS (may be differenced): " + COUNTERS.join(",") +
               " | GAUGES (may FALL; never difference): " + GAUGES.join(","));
+  console.log("# branch scope, derived from result_wfq_json (" + BR.length + " rows) — DIFFERENCEABLE: " +
+              BR_DIFFABLE.join(",") + " | AT THIS INSTANT ONLY (the bucket SELECTED moves between " +
+              "samples; never difference): " + BR_INSTANT.join(","));
+  console.log("# crowd is selected by brLiveMax (membership); minter by brBornLifeMax (mint). They are ONE " +
+              "bucket only while nothing has departed — `selectorsAgree` says whether they are, on each row.");
 
   const { browser, extId } = await connect();
   try {
@@ -135,6 +256,34 @@ async function main() {
            other row on this line is a number about nothing. */
         out.switchDelta = (typeof w.picksLifetime === "number" && typeof s.switches === "number")
                             ? w.picksLifetime - s.switches : null;
+        /* AN EMPTY FRONTIER PUBLISHES `{"members":0}` AND NO BRANCH ROW AT ALL, which is not the same fact
+           as a branch scope reading zero — result.c composes that short form on its own path. Absent is
+           said once, as a flag; filling twenty-three nulls would render an unasked question exactly like a
+           measured one, which is the defect the rest of this stream spells with null to avoid. */
+        if (!("branches" in w)) { out.brAbsent = true; console.log(JSON.stringify(out)); continue; }
+        for (const k of BR) out[k] = (k in w) ? w[k] : null;
+        /* THE IDENTITIES, CHECKED. A violated one means every branch row on this line describes some other
+           arrangement than the frontier it claims to, exactly as a non-zero switchDelta does above. */
+        const broke = [], unjudged = [];
+        for (const [name, operands, ok] of BR_IDENTITIES) {
+          if (operands.some((k) => typeof w[k] !== "number")) { unjudged.push(name); continue; }
+          if (!ok(w)) broke.push(name);
+        }
+        out.brIdent = broke.length ? broke : null;
+        out.brUnjudged = unjudged.length ? unjudged : null;
+        /* result.c's OWN two readings, and nothing else divided here. The crowd pair is what a fixture-scale
+           refutation of the aging question is usually quoted from; the minter pair is the arm that question
+           is actually about, and they are the same bucket only when `selectorsAgree`. */
+        out.crowdLiveShare  = share(w.brCrowdLive,   w.members);
+        out.crowdUsShare    = share(w.brCrowdUsLife, w.brHeldUsLife);
+        out.minterLiveShare = share(w.brMinterLive,  w.members);
+        out.minterUsShare   = share(w.brMinterUsLife, w.brHeldUsLife);
+        out.selectorsAgree  = (typeof w.brMinterUsLife === "number" &&
+                               typeof w.brCrowdUsLife === "number")
+                                ? w.brMinterUsLife === w.brCrowdUsLife : null;
+        /* CARRIED BESIDE EVERY RAW BURN ON THIS LINE, because result.c says a raw microsecond total is
+           quoted with the quantum's unit and a quotient of two burns is not. */
+        out.isCpu = (s.quantum && typeof s.quantum.isCpu === "boolean") ? s.quantum.isCpu : null;
         console.log(JSON.stringify(out));
       }
     }
