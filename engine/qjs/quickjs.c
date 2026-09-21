@@ -75854,6 +75854,61 @@ typedef struct BCWriterState {
     int w_sp, w_size;
 } BCWriterState;
 
+/* THE WRITER'S OWNED MEMORY, IN ONE PLACE, ADJACENT TO THE DECLARATION ABOVE — the same rule the COW layouts
+   are built on: a record's owned-value list IS the list its release frees, so a field added to one and not
+   the other is caught by reading them together.
+   THE DEFECT SHAPE THIS ENDS: the release was a field-by-field list spelled TWICE inside JS_WriteObject4,
+   at the success tail and at the fail tail, neither of them near the struct — so a field ADDED to the struct
+   had to be added to two lists nobody reading the struct would see. `w_stack` is what this fork added when
+   the writer stopped being a nine-function recursion, and it was named by neither, so every write lost its
+   work stack. The two lists also DISAGREED with each other about `sab_tab`: the success tail freed it when
+   the caller did not take it and the fail tail freed it never, having just told the caller there was nothing
+   to take.
+   `psab_tab` NON-NULL HANDS THE SAB TABLE OVER and the caller frees it; NULL means this function owns it. A
+   FAILING WRITE PASSES NULL by that rule and not as a convenience: it answers NULL, so the table it built is
+   its own to release.
+   THE ASSERT THAT WOULD MAKE THIS TRUE BY CONSTRUCTION IS NOT AVAILABLE, AND NOT FOR WANT OF LOOKING — the
+   canonical spelling in this file is a malloc-count conservation DCHECK across a scope (JS_OrphanTakeOne has
+   one), and over a WRITE it would be a page-held abort switch: the driver fetches children one at a time
+   precisely so that an element getter runs in order, so PAGE CODE RUNS INSIDE THIS SCOPE and may allocate
+   anything it likes and keep it. A count over JS_WriteObject4 would fire on a page storing an object.
+   RETIREMENT: this record goes when BCWriterState's owned fields are released by construction rather than by
+   a list somebody keeps in step — at which point the two-list shape can no longer be re-derived. */
+static void bcw_state_end(BCWriterState *s, JSSABTab *psab_tab)
+{
+    JSContext *ctx = s->ctx;
+
+    /* DRAINED ON BOTH PATHS: the driver's loop runs down to its own `base` and its unwind runs down to that
+       same `base`, which is 0 at the outermost call. A surviving item is not a tidy-up this function could
+       perform — it OWNS its fetched value when own_val is set, and a queued CLEAR_MARK still owes its object
+       a tmp_mark reset. */
+    DCHECK(s->w_sp == 0,
+           "the bytecode writer reached its teardown with items still on its work stack — an arm returned "
+           "without running the unwind, so every value those items own is lost and a queued CLEAR_MARK never "
+           "dropped its tmp_mark, which makes a later write of the same object report a cycle that is not "
+           "there");
+    js_object_list_end(ctx, &s->object_list);
+    js_free(ctx, s->atom_to_idx);
+    js_free(ctx, s->idx_to_atom);
+    js_free(ctx, s->w_stack);
+    if (psab_tab) {
+        psab_tab->tab = s->sab_tab;
+        psab_tab->len = s->sab_tab_len;
+    } else {
+        js_free(ctx, s->sab_tab);
+    }
+    s->atom_to_idx = NULL;
+    s->atom_to_idx_size = 0;
+    s->idx_to_atom = NULL;
+    s->idx_to_atom_count = 0;
+    s->idx_to_atom_size = 0;
+    s->w_stack = NULL;
+    s->w_size = 0;
+    s->sab_tab = NULL;
+    s->sab_tab_len = 0;
+    s->sab_tab_size = 0;
+}
+
 #ifdef ENABLE_DUMPS // JS_DUMP_READ_OBJECT
 static const char * const bc_tag_str[] = {
     "invalid",
@@ -77048,25 +77103,20 @@ uint8_t *JS_WriteObject4(JSContext *ctx, size_t *psize, JSValueConst obj,
         goto fail;
     if (JS_WriteObjectAtoms(s))
         goto fail;
-    js_object_list_end(ctx, &s->object_list);
-    js_free(ctx, s->atom_to_idx);
-    js_free(ctx, s->idx_to_atom);
+    /* THE DBUF IS THE ONE THING THIS FUNCTION HANDS OUT BESIDE THE SAB TABLE — it is the caller's from here,
+       released with js_free, which is what structured_clone.c's structured_data_free does. Everything else
+       the writer allocated goes back above. */
+    bcw_state_end(s, psab_tab);
     *psize = s->dbuf.size;
-    if (psab_tab) {
-        psab_tab->tab = s->sab_tab;
-        psab_tab->len = s->sab_tab_len;
-    } else {
-        js_free(ctx, s->sab_tab);
-    }
     // don't include version and checksum fields in checksum
     d = &s->dbuf;
     h = bc_csum(&d->buf[5], d->size - 5);
     put_u32(&d->buf[1], h);
     return d->buf;
  fail:
-    js_object_list_end(ctx, &s->object_list);
-    js_free(ctx, s->atom_to_idx);
-    js_free(ctx, s->idx_to_atom);
+    /* NULL, NOT `psab_tab`: A FAILING WRITE HANDS ITS CALLER NOTHING — it answers NULL and zeroes the caller's
+       table below — so the SAB table it built is its own to release rather than the caller's. */
+    bcw_state_end(s, NULL);
     dbuf_free(&s->dbuf);
     *psize = 0;
     if (psab_tab) {
@@ -78668,9 +78718,27 @@ static int JS_ReadObjectAtoms(BCReaderState *s)
     return 0;
 }
 
+/* THE READER'S OWNED MEMORY. `r_stack` was missing here for exactly the reason `w_stack` was missing from the
+   writer's two tails — the frame stack is what this fork added when the reader stopped recursing, and this
+   list predates it — and it is repaired in the same diff rather than left for a later run to surface, because
+   a leak is found by reading the ownership contract at the site that breaks it and the reading that finds one
+   of these finds both. NOTHING HAD EVER REPORTED THIS ONE: the runtime's own leak gate walks gc_obj_list, and
+   a js_malloc block is not a GC object, so no gate in this tree can see either of them.
+   RETIREMENT: this record goes when a raw js_malloc block surviving a runtime teardown is itself a verdict.
+   JS_FreeRuntime's `malloc_count` arm is the one that could say so and it is still behind ENABLE_DUMPS and a
+   JS_DUMP_LEAKS flag — which is the shape JS_FreeRuntime's own `[atomleak]` census was repaired out of, in a
+   paragraph that states the argument against it verbatim: a leak report that exists only in some builds
+   reports only some leaks. */
 static void bc_reader_free(BCReaderState *s)
 {
     int i;
+
+    /* DRAINED ON BOTH PATHS, as the writer's is: the driver returns only where `s->r_sp == base` and its
+       unwind runs down to that same `base`, 0 at the outermost call. A surviving frame holds an owned `obj`,
+       an owned `key` and an owned `atom` — three losses per frame, larger than the array freed below. */
+    DCHECK(s->r_sp == 0,
+           "the bytecode reader reached its teardown with frames still on its stack — an arm returned without "
+           "running the unwind, so each surviving frame's obj, key and atom are lost");
     if (s->idx_to_atom) {
         for(i = 0; i < s->idx_to_atom_count; i++) {
             JS_FreeAtom(s->ctx, s->idx_to_atom[i]);
@@ -78678,6 +78746,14 @@ static void bc_reader_free(BCReaderState *s)
         js_free(s->ctx, s->idx_to_atom);
     }
     js_free(s->ctx, s->objects);
+    js_free(s->ctx, s->r_stack);
+    s->idx_to_atom = NULL;
+    s->idx_to_atom_count = 0;
+    s->objects = NULL;
+    s->objects_count = 0;
+    s->objects_size = 0;
+    s->r_stack = NULL;
+    s->r_size = 0;
 }
 
 JSValue JS_ReadObject4(JSContext *ctx, const uint8_t *buf, size_t buf_len,
