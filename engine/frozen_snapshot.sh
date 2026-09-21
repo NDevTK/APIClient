@@ -421,6 +421,89 @@ echo "engine/qjs $QN entries  (subtree of $SHA; no revision of its own)"
 # distinguishes a gate that read this snapshot's dependency tree from one that walked out to the root fallback,
 # and it states the edition is the source tree's rather than the revision's — see the residual above.
 echo "node_modules $NM entries  (symlink to $SRC/node_modules; edition is whatever is installed there)"
+
+# A GITLINK IS TRACKED AND STILL ARRIVES EMPTY, WHICH IS THE ONE PROVISIONING CASE THE TOOLCHAIN REASONING
+# ABOVE DOES NOT REACH. emsdk and node_modules are provisioned because the clone brings NOTHING that git does
+# not track. A submodule is tracked -- so it reads as covered and is not: `git clone` records the gitlink and
+# populates no files at all, leaving a directory with zero entries. A gate whose inputs live there then runs
+# against a tree with a hole in it, and the hole is silent: an instrument that adds a file with `if (exists)`
+# skips it without a word, and prints a resolved-of-total that is a fraction of a population missing its
+# largest member.
+#
+# MEASURED, and it is why this block exists: a test262 run from a snapshot reported `corpus missing` while the
+# source tree held 53715 test cases. The check that caught it is the one below -- counting entries -- which is
+# the standing rule for a frozen snapshot and which nothing in this script had been performing.
+#
+# THE LIST IS DERIVED FROM THE REVISION AND NEVER HARDCODED. `git ls-tree` reports mode 160000 for a gitlink,
+# so the set is whatever THIS SHA records; a gitlink added by a later diff is provisioned without editing this
+# script, and one removed stops being looked for. That is the same reason idlgen reads the real .idl rather
+# than a table of member names: a rule derived from the artifact cannot drift from it.
+#
+# SYMLINKED RATHER THAN COPIED, by this file's own test -- does the BUILD WRITE TO IT. A corpus is read: the
+# runner opens .js files under it and produces its output elsewhere. Copying 53715 files per freeze would cost
+# minutes and buy nothing, and the object directory is private precisely because the build DOES write there.
+#
+# THE EDITION IS STATED RATHER THAN ASSUMED, which a gitlink allows and node_modules does not: the revision
+# RECORDS a commit, so the source checkout's HEAD can be compared with it exactly. A disagreement is PRINTED
+# and does not refuse -- refusing would block every freeze on a tree whose submodule sits at another commit,
+# and the honest report of a corpus measured at a different edition is the edition, not a failure to measure.
+GITLINKS=$(git -C "$SRC" ls-tree -r "$SHA" 2>/dev/null | awk '$2 == "commit" { print $4 }')
+for gl in $GITLINKS; do
+  want=$(git -C "$SRC" rev-parse "$SHA:$gl" 2>/dev/null || echo "")
+  have=$(git -C "$SRC/$gl" rev-parse HEAD 2>/dev/null || echo "")
+  srcn=$(ls -A "$SRC/$gl" 2>/dev/null | wc -l)
+  if [ "$srcn" -lt 1 ]; then
+    echo "$gl 0 entries  (NOT PROVISIONED -- the source tree's own checkout is empty, so the snapshot has none"
+    echo "             either; any gate reading it will report its own failure. Populate it in $SRC with"
+    echo "             \`git -c submodule.\"$gl\".update=checkout submodule update --init --depth 1 $gl\`"
+    echo "             run FROM THE REPOSITORY ROOT -- git reads .gitmodules only from there, so the same"
+    echo "             command run inside the parent of $gl names a different submodule and answers Skipping.)"
+    continue
+  fi
+  # A SYMLINK AT THE GITLINK PATH MANUFACTURES A FALSE DIRTY CONE, so the link is made ONE LEVEL DOWN.
+  # git compares the WORKING TREE ENTRY'S TYPE against the index: a gitlink replaced by a symlink is a TYPE
+  # CHANGE, so `git status --porcelain -- <cone>` answers ` T <gl>` and gate_revision announces THE COMPILED
+  # CONE IS DIRTY -- on every freeze, about a corpus sitting at exactly the commit the revision records.
+  # That is worse than a missing warning: a red that is wrong on every run is the one a reader learns to skip,
+  # and this particular red says the number cannot be quoted against a commit, which is the whole product of
+  # a freeze. MEASURED on a throwaway clone, all three shapes, one command each:
+  #   uninitialized gitlink (what a plain clone leaves)  -> clean
+  #   symlink AT the gitlink path                        -> ` T`
+  #   real directory holding symlinked CHILDREN          -> clean, and the corpus resolves through it
+  # The third is what this does. git does not look inside an uninitialized submodule directory, so the
+  # children are invisible to it while an ordinary path walk reads straight through them.
+  # THE CHILDREN ARE ENUMERATED, NEVER NAMED: a hand-written `test` and `harness` is a second copy of the
+  # corpus's own layout and drifts the day upstream adds a directory -- the same reason the gitlink list above
+  # is derived from `ls-tree` rather than written down here.
+  rm -rf "$DIR/$gl"
+  mkdir -p "$DIR/$gl"
+  # `.git` IS EXCLUDED AND IT IS THE ONE CHILD THAT MUST BE, because linking it is WORSE than the false dirty
+  # this block exists to avoid. A submodule's `.git` is a FILE holding a path RELATIVE TO THE SOURCE TREE
+  # (`../../../.git/modules/<gl>`), which resolves to nothing from a snapshot -- and git, finding it, stops
+  # treating the directory as an uninitialized submodule and starts treating it as an initialized one whose
+  # repository is missing. MEASURED: `git status --porcelain -- engine/qjs` then answers
+  # `fatal: not a git repository: engine/qjs/test262/../../../.git/modules/engine/qjs/test262`, so the gate
+  # cannot ask its question at all -- an UNASKED cone rather than a dirty one, which is the state gate_revision
+  # carries beside `dirty` precisely because it is not the same claim. The corpus is the CONTENT; its own
+  # repository pointer is a fact about where it was checked out and never about what it contains.
+  for child in "$SRC/$gl"/* "$SRC/$gl"/.[!.]*; do
+    [ -e "$child" ] || continue
+    case "$(basename "$child")" in .git) continue ;; esac
+    ln -s "$child" "$DIR/$gl/$(basename "$child")"
+  done
+  n=$(ls -A "$DIR/$gl" 2>/dev/null | wc -l)
+  if [ "$n" -lt 1 ]; then
+    echo "REFUSING: $DIR/$gl resolves to nothing though $SRC/$gl holds $srcn entries -- this script's own" >&2
+    echo "  provisioning is broken, and a gate reading it would measure an absence as a clean result." >&2
+    exit 1
+  fi
+  if [ -n "$want" ] && [ -n "$have" ] && [ "$want" != "$have" ]; then
+    echo "$gl $n entries  (children linked from $SRC/$gl; EDITION DISAGREES -- $SHA records ${want}, the checkout is at"
+    echo "             ${have}. Every number a gate takes from it belongs to the checkout's edition.)"
+  else
+    echo "$gl $n entries  (children linked from $SRC/$gl, minus .git; at the commit $SHA records)"
+  fi
+done
 echo "load       $(cat /proc/loadavg)"
 if [ $# -eq 0 ]; then
   # PRINT THE INVOCATION THAT NEEDS NO `cd`, because the caller's own `cd` is the one path that degrades into
