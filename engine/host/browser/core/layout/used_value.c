@@ -4626,6 +4626,116 @@ CssPx used_value_abs_offset_px(lxb_dom_element_t *el, bool vertical)
     return uv_abs_solve(el, uv_sized(el, box, vertical).len, vertical).before;
 }
 
+/* CSS 2.2 §9.4.3 "Relative positioning"' USED TRANSLATION ON ONE AXIS — the signed distance §9.4.3 shifts a
+   relatively positioned box by, which is the used `left` horizontally and the used `top` vertically because
+   the section states the direction in its own words: "'Left' moves the boxes to the right" and "'Top' moves
+   the boxes down".
+   IT IS A PAIR AND NOT TWO PROPERTIES, WHICH IS THE WHOLE REASON THIS IS AN ENTRY. §9.4.3 says "the used
+   values are always: left = -right" and states the four cases over BOTH members at once, so neither member
+   is readable without the other and a per-property `used_value_px` row could not answer either one — which
+   is what core/css/css_computed_value.c's CSSOM §9 inset arm names as the second of the three things it is
+   waiting on. A caller wanting the trailing member has the negation of this answer and not a second solve.
+   THE TWO AXES ARE NOT THE SAME RULE AND THE DIFFERENCE IS THE OVER-CONSTRAINED CASE. Horizontally §9.4.3
+   defers to the CONTAINING BLOCK's `direction`: "If the 'direction' property of the containing block is
+   'ltr', the value of 'left' wins and 'right' becomes -'left'. If 'direction' of the containing block is
+   'rtl', 'right' wins and 'left' is ignored." Vertically it names no direction at all — "If neither is
+   'auto', 'bottom' is ignored" — so the leading member wins unconditionally. A shared arm that consulted
+   `direction` on both axes would move a box UP for `top`/`bottom` under `direction: rtl`, which no user
+   agent does and which the section does not say.
+   §9.4.3's TRANSLATION IS NOT A SIZE, so nothing here floors at zero: §9.3.2's `<length>` and `<percentage>`
+   entries both end "Negative values are allowed", and a `css_px_max` copied from the limit resolver above
+   would silently delete every leftward and upward shift on the web. */
+static CssPx uv_rel_offset_resolve(lxb_dom_element_t *el, CssLength len, bool vertical)
+{
+    CssPx basis;
+    char  nbuf[160];
+
+    if (len.kind == CSS_LENGTH_ABSOLUTE) return len.px;
+    if (len.kind != CSS_LENGTH_PERCENTAGE && len.kind != CSS_LENGTH_CALCULATED) {
+        DFAILF("%s: CSS 2.2 §9.3.2 \"Box offsets: 'top', 'right', 'bottom', 'left'\" gives all four insets "
+              "the value line `<length> | <percentage> | auto | inherit`, and `auto` is decided by the caller "
+              "below before any basis is asked for — so a KEYWORD reaching this resolver is a fifth value "
+              "that grammar does not admit",
+              box_subject(el, nbuf, sizeof nbuf));
+        return css_px(0.0);
+    }
+    /* §9.3.2's `Percentages:` line, which differs by AXIS and not by member: `left` and `right` "refer to
+       width of containing block", `top` and `bottom` "refer to height of containing block". */
+    if (!vertical) return css_length_resolve_pct(len, used_value_containing_block_width(el));
+    if (!used_value_containing_block_height(el, &basis)) {
+        DFAILF("%s: CSS 2.2 §9.3.2 makes a percentage `top`/`bottom` refer to \"height of containing block\" "
+              "and §10.1's chain has no height here — `used_value_containing_block_height` answered FALSE, "
+              "which core/layout/used_value.h states is the POSITIVE fact that the basis is indefinite and "
+              "not a missing number. NO STANDARD IN THIS CORPUS STATES A RULE FOR IT, AND THAT WAS CHECKED "
+              "RATHER THAN ASSUMED: §10.5 turns an indefinite basis into `auto` for `height` and §10.7 turns "
+              "it into `0`/`none` for the limits, each in its own sentence, and §9.3.2 and §9.4.3 write "
+              "neither; css-position-3 §3.1 \"Box Insets: the top, right, bottom, left, inset-block-start, "
+              "inset-inline-start, inset-block-end, and inset-inline-end properties\" was FETCHED for this "
+              "message and states only \"refer to size of containing block; see prose\" with prose that adds "
+              "no indefinite arm. So the answer every user agent gives — treat it as zero — is a CONVERGENCE "
+              "and not a sentence anybody wrote, which is why this crashes rather than resolving. BUILD it by "
+              "finding the sentence in a LATER level or in a CSSWG resolution and citing THAT; do not copy "
+              "the release arm below, which is a defined answer chosen because an undefined one is worse",
+              box_subject(el, nbuf, sizeof nbuf));
+        /* THE RELEASE ARM, STATED RATHER THAN FALLEN INTO — `DFAILF` is `APICLIENT_FMT_UNUSED` at
+           `-DAPICLIENT_DEV=0` and neither aborts nor returns, so a function that crashed here and then read
+           `basis` would read an UNINITIALIZED one in every shipped build. §Offensive-programming requires a
+           release arm to be designed with the algorithm: this one is the convergent answer, and it leaves the
+           box at its NORMAL-FLOW position, which is a state the rest of this engine already composes
+           correctly — core/layout/flow_position.c's re-derivation asks this same entry, so the two agree on
+           zero and no record comes apart. */
+        return css_px(0.0);
+    }
+    return css_length_resolve_pct(len, basis);
+}
+
+/* CSS 2.2 §9.4.3's used translation — see used_value.h. */
+CssPx used_value_rel_offset_px(lxb_dom_element_t *el, bool vertical)
+{
+    static const char *const LEADING[2]  = { "left",  "top"    };
+    static const char *const TRAILING[2] = { "right", "bottom" };
+    CssLength lead, trail;
+    bool      lead_auto, trail_auto;
+    char      nbuf[160];
+
+    DCHECK(el != NULL, "CSS 2.2 §9.4.3's used offset was asked for with no element");
+    DCHECKF(uv_computed_is(el, "position", "relative"),
+           "%s: CSS 2.2 §9.4.3 \"Relative positioning\" is stated over a box that \"has been laid out "
+           "according to the normal flow or floated\" and is then \"shifted relative to this position\", and "
+           "this box is not relatively positioned. §9.3.1's positioning scheme decides WHICH section places a "
+           "box before any offset is resolved — an absolutely positioned one is `used_value_abs_offset_px`'s "
+           "§10.3.7 solve and a statically positioned one has no offset at all, §9.3.2's `Applies to:` line "
+           "being \"positioned elements\". A caller that reached here without asking has turned this entry "
+           "into a second answer to a question §9.3.1 already decides",
+           box_subject(el, nbuf, sizeof nbuf));
+
+    /* THE LENGTH IS READ ONCE AND ASKED TWICE. `css_computed_length_is` is the entry for a caller that does
+       NOT already hold the value; holding it, this is core/layout's own idiom for the same test and spends
+       one cascade walk per member instead of two. */
+    lead  = css_computed_length(el, LEADING[vertical ? 1 : 0]);
+    trail = css_computed_length(el, TRAILING[vertical ? 1 : 0]);
+    lead_auto  = lead.kind  == CSS_LENGTH_KEYWORD && strcmp(lead.keyword,  "auto") == 0;
+    trail_auto = trail.kind == CSS_LENGTH_KEYWORD && strcmp(trail.keyword, "auto") == 0;
+
+    /* "If both 'left' and 'right' are 'auto' (their initial values), the used values are '0' (i.e., the boxes
+       stay in their original position)." — and its vertical twin, "If both are 'auto', their used values are
+       both '0'." */
+    if (lead_auto && trail_auto) return css_px(0.0);
+    /* "If 'left' is 'auto', its used value is minus the value of 'right' (i.e., the boxes move to the left by
+       the value of 'right')." — vertically, "If one of them is 'auto', it becomes the negative of the
+       other." */
+    if (lead_auto) return css_px_sub(css_px(0.0), uv_rel_offset_resolve(el, trail, vertical));
+    /* "If 'right' is specified as 'auto', its used value is minus the value of 'left'" — which is a statement
+       about the TRAILING member, so the leading one this entry answers is that value unchanged. */
+    if (trail_auto) return uv_rel_offset_resolve(el, lead, vertical);
+    /* OVER-CONSTRAINED: "If neither 'left' nor 'right' is 'auto', the position is over-constrained, and one of
+       them has to be ignored." The horizontal arm reads the CONTAINING BLOCK's `direction` and the vertical
+       arm has no such sentence — see the note above `uv_rel_offset_resolve`. */
+    if (!vertical && used_value_containing_block_is_rtl(el))
+        return css_px_sub(css_px(0.0), uv_rel_offset_resolve(el, trail, vertical));
+    return uv_rel_offset_resolve(el, lead, vertical);
+}
+
 
 /* css-flexbox-1 §9.4 "Cross Size Determination"' STEP 7's "as if it were an in-flow block-level box". See
    used_value.h for why this is an entry rather than two lines at its caller and for what `min-height: auto`

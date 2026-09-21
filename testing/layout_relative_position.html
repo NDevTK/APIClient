@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<!--
+CSS 2.2 §9.4.3 "Relative positioning" OVER EVERY ARM THE SECTION STATES — a correctness document whose every
+expected number is derived by hand from the section's own sentences, so a divergence names an ARM rather than
+a component.
+
+  node engine/one_document.mjs <native binary> testing/layout_relative_position.html https://fixture.invalid/ <dir>
+
+WHY THIS EXISTS. §9.4.3 is a SHIFT APPLIED TO A PLACEMENT, so it is invisible to every fixture that does not
+carry a relatively positioned box: a document with none is laid out identically whether the section is
+implemented or absent, which is why its absence produced no crash and no wrong number anywhere for as long as
+it lasted. Nothing else in this tree declares `position: relative`.
+
+THE SECTION'S ARMS, AND THE ONE CASE PER ARM BELOW. §9.4.3 states four cases per axis and they are not the
+same four: the horizontal over-constrained arm reads the CONTAINING BLOCK's `direction` ("If the 'direction'
+property of the containing block is 'ltr', the value of 'left' wins and 'right' becomes -'left'. If
+'direction' of the containing block is 'rtl', 'right' wins and 'left' is ignored") and the vertical one names
+no direction at all ("If neither is 'auto', 'bottom' is ignored"). A single shared arm consulting `direction`
+on both axes passes every ltr case here and moves `.c6` under `direction: rtl`, which is why `.r1` exists.
+
+THE EXPECTED GEOMETRY, DERIVED RATHER THAN OBSERVED. Every box is `width: 100px; height: 20px` with no
+margin, border or padding unless named, so normal flow stacks the children of a container at y = 0, 20, 40, …
+and puts each at x = 0 (ltr). The `.cb` container is `width: 400px; height: 200px`, which is what the two
+PERCENTAGE insets resolve against — §9.3.2's `Percentages:` line is "refer to width of containing block" for
+`left`/`right` and "refer to height of containing block" for `top`/`bottom`, so they are DIFFERENT bases and a
+single-basis implementation gets `.c7` wrong on exactly one axis.
+
+  box   declaration                       §9.4.3 arm                          used left / top   ORIGIN
+  .c0   (static)                          — control                                 —            (0,   0)
+  .c1   left: 30px                        "If 'right' is specified as 'auto'"     +30            (30,  20)
+  .c2   right: 12px                       "If 'left' is 'auto', its used value
+                                           is minus the value of 'right'"        -12            (-12, 40)
+  .c3   left: 5px; right: 50px            over-constrained, cb is ltr: left wins   +5            (5,   60)
+  .c4   top: 7px                          vertical, bottom auto                    +7            (0,   87)
+  .c5   bottom: 9px                       vertical, top auto: negative of other    -9            (0,   91)
+  .c6   top: 3px; bottom: 40px            over-constrained: "'bottom' is ignored"  +3            (0,  123)
+  .c7   left: 10%; top: 5%                percentage, two DIFFERENT bases      +40 / +10         (40, 150)
+  .c8   (static)                          — the witness, see below                  —            (0,  160)
+
+  .nest at y = 200 (`.cb` is `height: 200px` and §9.4.3 keeps a box's normal flow size)
+  .par    position: relative; left: 25px; top: 11px; 300x60      ->  (25, 211)
+  .kid    (static, in-flow child of .par)                        ->  (25, 211)
+  .abskid position: absolute; left: 4px; top: 6px                ->  (29, 217)
+
+  .rtl at y = 260, `direction: rtl`, `width: 200px`. §9.4.1 puts a box's RIGHT outer edge at the containing
+  block's right edge here, so the normal-flow x of a 100px box is 200 - 100 = 100.
+  .r0   (static)                                                 ->  (100, 260)
+  .r1   left: 5px; right: 50px    over-constrained, cb is RTL: right wins, used left = -50 -> (50, 280)
+
+THE TWO DISCRIMINATORS THAT ARE NOT A COORDINATE, and each is the whole reason its box is here:
+
+  `.c8` AT 160 IS §9.4.3's SENTENCE ABOUT THE FOLLOWING BOX: "Offsetting a box (B1) in this way has no effect
+  on the box (B2) that follows: B2 is given a position as if B1 were not offset and B2 is not re-positioned
+  after B1's offset is applied." Seven boxes above it are shifted and it must not move by one pixel. A `.c8`
+  that has moved is an implementation that fed a sibling's shifted origin back into the stack walk, which is
+  the one way this section can be got wrong without any arm above being wrong.
+
+  `.kid` AND `.abskid` ARE THE TRANSLATION BEING INHERITED, which is the commonest use of `position: relative`
+  on the web: a relatively positioned parent with an absolutely positioned child. Neither carries a §9.4.3
+  term of its own — `.kid` through §10.1's second case and `.abskid` through §10.1's fourth, both of which
+  compose from `.par`'s own origin — so if either is at the unshifted place the offset was applied somewhere
+  that the origin recursion does not read.
+
+WHAT EACH DIVERGENCE NAMES, so a failing run is attributable without a second experiment:
+  - EVERY box at its unshifted place (.c1 at x 0, .c4 at y 80) is §9.4.3 not applied at all, which is the
+    state this document was written for.
+  - `.c2` at +12 instead of -12, or `.c5` at 109 instead of 91 — the sign of the `auto` leading arm: the used
+    value is MINUS the trailing one, not the trailing one.
+  - `.c3` at -50 or `.c6` at 80 — the over-constrained arm ignoring the wrong member.
+  - `.r1` at 105 — the horizontal over-constrained arm not reading the containing block's `direction`, or
+    reading the BOX's own `direction` instead, which is `rtl` here for both and so cannot tell them apart;
+    `.r1` at 150 is the rtl arm applied with the wrong sign.
+  - `.c6` moving when `.r1` is correct, or vice versa, is one arm shared by both axes.
+  - `.c7` right and every other box wrong is a percentage path that works and a length path that does not;
+    `.c7` at (20, 20) is ONE basis used for both axes.
+  - `.c8` anywhere but 160 — see above; nothing else in this document can produce it.
+  - `.kid` or `.abskid` unshifted while `.par` is shifted — see above.
+  - EVERY number at or near zero is the stylesheet not reaching layout at all, which is a fact about cascade
+    plumbing and not about any of the above.
+
+WHAT THIS DOCUMENT DELIBERATELY DOES NOT EXERCISE, because §9.4.3's answer for it does not exist rather than
+being unimplemented: a PERCENTAGE `top` or `bottom` whose containing block's height is INDEFINITE. CSS 2.x
+states no rule for it, and css-position-3 §3.1 "Box Insets: the top, right, bottom, left, inset-block-start,
+inset-inline-start, inset-block-end, and inset-inline-end properties" states none either — it says only "refer
+to size of containing block; see prose". core/layout/used_value.c CRASHES there by name. `.cb` therefore
+declares an explicit `height`, and a run of this document that aborts in that crash is a `.cb` whose height
+stopped being definite, never a case this file meant to cover.
+-->
+<html><head><meta charset="utf-8"><title>relative positioning</title><style>
+  html, body { margin: 0; padding: 0; }
+  div { width: 100px; height: 20px; }
+  .cb   { width: 400px; height: 200px; }
+  .c1   { position: relative; left: 30px; }
+  .c2   { position: relative; right: 12px; }
+  .c3   { position: relative; left: 5px; right: 50px; }
+  .c4   { position: relative; top: 7px; }
+  .c5   { position: relative; bottom: 9px; }
+  .c6   { position: relative; top: 3px; bottom: 40px; }
+  .c7   { position: relative; left: 10%; top: 5%; }
+  .nest { width: 400px; }
+  .par  { position: relative; left: 25px; top: 11px; width: 300px; height: 60px; }
+  .kid  { width: 50px; height: 20px; }
+  .abskid { position: absolute; left: 4px; top: 6px; width: 30px; height: 10px; }
+  .rtl  { direction: rtl; width: 200px; }
+</style></head>
+<body>
+  <div class="cb">
+    <div class="c0"></div><div class="c1"></div><div class="c2"></div><div class="c3"></div>
+    <div class="c4"></div><div class="c5"></div><div class="c6"></div><div class="c7"></div>
+    <div class="c8"></div>
+  </div>
+  <div class="nest"><div class="par"><div class="kid"></div><div class="abskid"></div></div></div>
+  <div class="rtl"><div class="r0"></div><div class="r1"></div></div>
+</body></html>

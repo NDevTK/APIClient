@@ -961,14 +961,34 @@ static FlowPoint fp_abs_origin(lxb_dom_element_t *el)
     return p;
 }
 
+/* CSS 2.2 §9.4.3 "Relative positioning"' TRANSLATION ON ONE AXIS, OR ZERO WHERE THE SECTION DOES NOT APPLY.
+   THE ZERO IS A POSITIVE STATEMENT AND NOT A DEFAULT PAST A MISSING VALUE. §9.3.1's positioning scheme
+   decides which section places a box before any placement rule runs, and §9.4.3 is the one stated over a box
+   that "has been laid out according to the normal flow or floated" and is then "shifted relative to this
+   position". A box whose `position` is not `relative` is not shifted BY THAT SECTION — it is not a box whose
+   shift this file failed to find — so the translation is zero and `used_value_rel_offset_px` is never asked.
+   ONE TEST AND TWO READERS. The composition below and `fp_origin_agrees` above must add the SAME term or the
+   record stops satisfying its own equation, so the question is asked in one place rather than spelled at
+   both; that is the same reason §10.1's second case is composed once and re-derived once rather than twice. */
+static CssPx fp_relative_offset(lxb_dom_element_t *el, bool vertical)
+{
+    if (!fp_computed_is(el, "position", "relative")) return css_px(0.0);
+    return used_value_rel_offset_px(el, vertical);
+}
+
 /* §10.1's SECOND CASE, RE-DERIVED FROM THE RECORD, FOR AN ASSERTION AND FOR NOTHING ELSE — the check
    core/layout/flow_placement.h's §10.1 section is written around.
    IT IS TWO ANSWERS OFF TWO LINES AND THEY CAN DISAGREE. The recorded point was written by the arm below;
    this reads the CONTAINING BLOCK'S point out of the same record, the box's own stack position out of the
-   OTHER record core/layout/block_flow.c fills, and the two edge terms out of the CASCADE — three sources,
-   one of which is a different component and one of which is not a record at all. A recorded point that no
-   longer satisfies its own equation is the record answering for a box it does not hold, or a computed value
-   that moved inside a span nothing else can see move.
+   OTHER record core/layout/block_flow.c fills, the two edge terms out of the CASCADE, and CSS 2.2 §9.4.3's
+   translation out of core/layout/used_value.h — four sources, one of which is a different component and two
+   of which are not records at all.
+   §9.4.3's TERM IS THE EQUATION'S FOURTH AND WAS ADDED WITH THE SHIFT ITSELF. The recorded point is the
+   normal-flow placement PLUS this box's own relative translation, so a re-derivation stating only §10.1's
+   three terms was correct exactly while no box in this engine was ever shifted — which was the whole of
+   §9.4.3's absence — and would now report every relatively positioned box as a record that has come
+   apart. A recorded point that no longer satisfies its own equation is the record answering for a box it
+   does not hold, or a computed value that moved inside a span nothing else can see move.
    IT READS THE ANCESTOR RATHER THAN ASKING FOR IT, which is what keeps it O(1) and non-recursive: calling
    the entry would trigger that entry's own check, and a check that recomputes through the checked entry is
    exponential in depth. `flow_placement_origin_peek` counts nothing and recurses nowhere.
@@ -996,6 +1016,13 @@ static bool fp_origin_agrees(lxb_dom_element_t *el, const lxb_dom_element_t *cb,
     x = css_px_add(css_px_add(o.x, used_value_leading_edge_px((lxb_dom_element_t *)cb, false)),
                    fp_left_offset(el, used_value_containing_block_width(el)));
     y = css_px_add(css_px_add(o.y, used_value_leading_edge_px((lxb_dom_element_t *)cb, true)), top);
+    /* CSS 2.2 §9.4.3's TERM, WHICH IS PART OF THE EQUATION AND NOT A CORRECTION TO IT. The recorded point is
+       the normal-flow placement PLUS this box's own relative translation (see `flow_border_box_origin`), so a
+       re-derivation that stopped at §10.1's three terms would report every relatively positioned box in the
+       document as a record that no longer satisfies its equation. The ANCESTOR's translation needs no term
+       here: `o` is the containing block's own RECORDED point, which already carries it. */
+    x = css_px_add(x, fp_relative_offset(el, false));
+    y = css_px_add(y, fp_relative_offset(el, true));
     return fp_same_example(x, rec.x) && fp_same_example(y, rec.y);
 }
 
@@ -1135,10 +1162,12 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
     if (flow_placement_origin_ask(el, &p, &cb)) {
         DCHECKF(fp_origin_agrees(el, cb, p),
                 "CSS 2 §10.1's second case puts this box's border-box origin at its containing block's "
-                "origin plus that block's leading border and padding plus §9.4.1's stack position, and the "
-                "point this pass recorded for it no longer satisfies that equation — recorded (%g, %g). The "
-                "three operands come from three places: the containing block's own recorded point, "
-                "core/layout/block_flow.c's placement record, and the CASCADE. So this is one of two things "
+                "origin plus that block's leading border and padding plus §9.4.1's stack position, and CSS "
+                "2.2 §9.4.3 \"Relative positioning\" then SHIFTS that point by this box's own used `left` and "
+                "`top`; the point this pass recorded for it no longer satisfies that equation — recorded "
+                "(%g, %g). The FOUR operands come from four places: the containing block's own recorded "
+                "point, core/layout/block_flow.c's placement record, the CASCADE, and "
+                "core/layout/used_value.h's §9.4.3 pair. So this is one of two things "
                 "and they take opposite work. EITHER the record answered for a box it does not hold — read "
                 "core/layout/flow_placement.c's probe, which is the only code that decides which entry a key "
                 "reaches — OR a computed value moved INSIDE the pass, which is the axis the pass's tree "
@@ -1149,6 +1178,31 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
         return p;
     }
     p = fp_border_box_origin_compute(el, &cb);
+    /* CSS 2.2 §9.4.3 "Relative positioning", APPLIED HERE BECAUSE IT IS A SHIFT OF A PLACEMENT AND NOT A
+       PLACEMENT RULE: "Once a box has been laid out according to the normal flow or floated, it may be
+       shifted relative to this position." Every arm of the composition above answers §9.4.1's, §9.4.2's,
+       §17.5's or §10.1's placement, and §9.4.3 is stated over ALL of them — so it is one term at the one
+       point they converge rather than an addition repeated down each arm, and a new arm cannot forget it.
+       THE RECORD CARRIES THE SHIFTED POINT, WHICH IS WHAT MAKES THE RECURSION CORRECT. §10.1's second case
+       composes a box's origin from its containing block's, so a descendant of a relatively positioned box
+       inherits that box's translation through this same entry with no term of its own — which is why
+       `position: relative` on a parent moves its `position: absolute` child too: `fp_abs_cb_leading`'s
+       §10.1 fourth case reads `flow_padding_box_origin` of that ancestor, and that is this point.
+       §9.4.3's SENTENCE ABOUT THE FOLLOWING BOX HOLDS BY CONSTRUCTION AND IS NOT A CASE HANDLED HERE:
+       "Offsetting a box (B1) in this way has no effect on the box (B2) that follows: B2 is given a position
+       as if B1 were not offset and B2 is not re-positioned after B1's offset is applied." A following
+       sibling's stack position is `block_flow_child_top`, which core/layout/block_flow.c
+       derives from used heights and §8.3.1's collapsing margins and which calls no entry in this file at all
+       — so a sibling's offset is not an input it could read. THAT IS A PROPERTY OF THE OTHER COMPONENT AND
+       NOT OF THIS LINE: a diff that gave the stack walk a border-box origin would break §9.4.3's sentence
+       here with nothing in this file changing.
+       THE TABLE-INTERNAL ARMS TAKE THIS TERM AND THE SECTION PERMITS IT. §9.3.1's `position` value table says
+       "The effect of 'position:relative' on table-row-group, table-header-group, table-footer-group,
+       table-row, table-column-group, table-column, table-cell, and table-caption elements is undefined." That
+       is LATITUDE and not a rule to do nothing, so applying the general term to them is conformant, is what
+       user agents do, and is one behaviour rather than a special case no fixture could exercise. */
+    p.x = css_px_add(p.x, fp_relative_offset(el, false));
+    p.y = css_px_add(p.y, fp_relative_offset(el, true));
     flow_placement_origin_record(el, p, cb);
     return p;
 }

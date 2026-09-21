@@ -496,6 +496,31 @@ UsedValueAbsCb used_value_abs_containing_block(lxb_dom_element_t *el, lxb_dom_el
    day CSSOM §9's inset arm reports a resolved `right`, it is a second view over the same solve. */
 CssPx used_value_abs_offset_px(lxb_dom_element_t *el, bool vertical);
 
+/* CSS 2.2 §9.4.3 "Relative positioning"' USED TRANSLATION ON ONE AXIS — the signed distance a relatively
+   positioned box is shifted by AFTER normal flow has placed it, which is the used `left` horizontally and the
+   used `top` vertically because §9.4.3 states the sign in its own words ("'Left' moves the boxes to the
+   right", "'Top' moves the boxes down").
+   IT IS AN ENTRY BECAUSE §9.4.3 STATES A PAIR, and that is the difference between this and a `used_value_px`
+   row. "Since boxes are not split or stretched as a result of 'left' or 'right', the used values are always:
+   left = -right" — so a per-property answer would have to solve the other member anyway, and the four cases
+   the section writes ("If both … are 'auto'", "If 'left' is 'auto'", "If 'right' is specified as 'auto'", "If
+   neither … is 'auto'") are conditions over BOTH. core/css/css_computed_value.c's CSSOM §9 inset arm names
+   this pair as the second of the three things it waits on; it is the same solve read a second way.
+   IT ANSWERS THE LEADING MEMBER AND THE TRAILING ONE IS ITS NEGATION, for the reason `used_value_abs_offset_px`
+   above answers only the leading offset: a caller composing an origin from both would add a number it had
+   just subtracted. That identity is §9.4.3's own sentence and not this entry's convention.
+   THE TWO AXES DIFFER IN ONE ARM ONLY. Over-constrained horizontally, §9.4.3 reads the CONTAINING BLOCK's
+   `direction` — "If the 'direction' property of the containing block is 'ltr', the value of 'left' wins …
+   If 'direction' of the containing block is 'rtl', 'right' wins and 'left' is ignored" — and asks
+   `used_value_containing_block_is_rtl`, which is the same entry §10.3.3's over-constrained margin arm asks.
+   Over-constrained vertically it names no direction at all: "If neither is 'auto', 'bottom' is ignored".
+   ITS PRECONDITION IS §9.3.1's POSITIONING SCHEME AND IT IS ASSERTED. §9.4.3 is stated over a box already
+   placed by normal flow; an absolutely positioned box is `used_value_abs_offset_px`'s §10.3.7 solve and a
+   statically positioned one has no offset, §9.3.2's `Applies to:` line being "positioned elements". The
+   caller decides which section places the box, exactly as core/layout/flow_position.c already decides it for
+   `absolute` and `fixed`, and this entry refuses rather than answering zero for a box it is not about. */
+CssPx used_value_rel_offset_px(lxb_dom_element_t *el, bool vertical);
+
 /* css-position-3 §2.1 "Containing Blocks of Positioned Boxes"' OPEN LIST OF PROPERTIES, AS ONE FACT WITH TWO
    READERS. §2.1's two Notes name what can make a box establish an absolute or a fixed positioning containing
    block — "Properties that can cause a box to establish an absolute positioning containing block include
