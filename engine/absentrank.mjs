@@ -190,7 +190,10 @@ if (!CORPUS_ARG)
   throw new Error("[absentrank] --corpus <dir> is REQUIRED. It names a directory of responses a real-network "
                   + "drive saved, with its manifest beside it. There is no default: the committed copy of "
                   + "other people's sites that used to be one is deleted, and ranking against an empty "
-                  + "directory would report a clean bill drawn from no files at all.");
+                  + "directory would report a clean bill drawn from no files at all. What writes one is "
+                  + "`NODE_USE_ENV_PROXY=1 SITES=apps.tsv node testing/corpus/fetch.mjs`, which prints the "
+                  + "--corpus path to pass here and the instant it fetched — a figure ranked out of it is a "
+                  + "fact about that instant and about the sites that answered in it.");
 const CORPUS = resolve(CORPUS_ARG);
 const TOP = Number(argOf("--top", "20"));
 const say = (s) => console.log(`[absentrank] ${s}`);
@@ -463,6 +466,23 @@ for (const s of ["function Zz(a){}", "function* Zz(){}", "class Zz extends Q{}",
 for (const s of ["q.Zz = 1", "Zz === 1", "new Zz()", "x instanceof Zz", "Zz.member=1", "{Zz: 1}", "Zz=>1"])
   if (BINDS("Zz").test(s))
     die(`the binder matched ${JSON.stringify(s)} — it is counting a use as a binding.`);
+
+/* NAMED RESIDUAL — A FILE THAT BINDS THE NAME ONTO ITS OWN NAMESPACE OBJECT IS NOT A BINDER HERE, SO ITS
+   OCCURRENCES ARE COUNTED AS PLATFORM USES. WHAT IS NOT COVERED: `q.Zz = 1` sits in the negative list one
+   line up and BELONGS there — `document.title = x` is a member write on the platform's own object and not a
+   binding of `title` — and a module writing `exports.Zz = …` or `e.Zz = …` onto its own namespace is the
+   IDENTICAL SHAPE carrying the opposite meaning. A file that does it then reads its own member back, is
+   never feature-detected (nobody detects their own export), and lands in the THROWS band this file sorts
+   FIRST with `shadow` reading zero — which is the binder answering correctly about a form it was built to
+   refuse, not the binder failing. Measured on a drive of testing/corpus/apps.tsv: two unrelated
+   compiled-to-JavaScript runtimes bind a platform-named symbol that way and the row read THROWS.
+   WHAT THE NEXT DIFF BUILDS: NOT a widened binder. Any predicate that admits a dotted left-hand side also
+   admits a member write on a real platform object, so it can only land as a CLASSIFIER RUN OVER EVERY ROW
+   IT WOULD TOUCH, printing what it retires beside what it keeps — a narrowing whose evidence is one example
+   is a hypothesis about a population nobody counted, and an exclusion wrong in the REMOVING direction is an
+   under-claim nobody finds by acting on it. HOW ITS ABSENCE WOULD SHOW: a THROWS row whose occurrences are
+   all on the receiver channel, concentrated in one or two files, whose sites read as a local namespace's
+   own member rather than as a global. */
 
 const shadow = new Map();        /* name -> channel -> occurrences in a file that BINDS the name */
 const perFile = new Map();       /* name -> channel -> occurrences, tallied per file */

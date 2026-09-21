@@ -1,18 +1,20 @@
-/* WHICH FILES IN THE FROZEN MIRROR ARE PROGRAMS — TAKEN FROM THE ARTIFACT THAT OWNS THAT FACT.
+/* WHICH FILES IN A FETCHED SITE CORPUS ARE PROGRAMS — TAKEN FROM THE ARTIFACT THAT OWNS THAT FACT.
  *
- * engine/absentrank.mjs and engine/nsguardrank.mjs both rank an absence against testing/corpus/mirror, and
- * both used to answer "is this file a program" from its FILENAME EXTENSION. That is the wrong artifact. The
- * mirror is built by testing/corpus/mirror.mjs, which folds a URL's query string into the saved name as a
- * `__q<sha256[0:8]>` suffix -- so a bundle fetched with a query is saved as `all.js__q54b3907e`, whose
- * extension is `.js__q54b3907e` and is in no list anybody would write. THREE genuine shipped bundles are
- * spelled that way in the committed mirror, one of them a 1.5 MB worker, and an extension filter drops all
- * three in silence. A corpus that is quietly smaller reports a smaller absence, and a smaller absence reads
- * as progress: the one direction nothing here would have caught.
+ * engine/absentrank.mjs and engine/nsguardrank.mjs both rank an absence against a directory of real bundles,
+ * and both used to answer "is this file a program" from its FILENAME EXTENSION. That is the wrong artifact.
+ * The fetcher of the day folded a URL's query string into the saved name as a `__q<sha256[0:8]>` suffix -- so
+ * a bundle fetched with a query was saved as `all.js__q54b3907e`, whose extension is `.js__q54b3907e` and is
+ * in no list anybody would write. THREE genuine shipped bundles were spelled that way, one of them a 1.5 MB
+ * worker, and an extension filter drops all three in silence. A corpus that is quietly smaller reports a
+ * smaller absence, and a smaller absence reads as progress: the one direction nothing here would have caught.
  *
- * THE FACT IS STATED IN testing/corpus/provenance.json, WHICH RECORDS THE SERVER'S OWN `Content-Type` FOR
- * EVERY RESOURCE IT SAVED. A filename is this tree's guess at what bytes are; a `Content-Type` is what the
- * origin server said they are, which is also what decides whether a browser COMPILES them. So the population
- * comes from the manifest and the classification is the server's, not ours.
+ * THE FACT IS STATED IN THE `provenance.json` BESIDE THE CORPUS, WHICH RECORDS THE SERVER'S OWN
+ * `Content-Type` FOR EVERY RESOURCE IT SAVED. A filename is this tree's guess at what bytes are; a
+ * `Content-Type` is what the origin server said they are, which is also what decides whether a browser
+ * COMPILES them. So the population comes from the manifest and the classification is the server's, not ours.
+ * WHAT WRITES ONE IS testing/corpus/fetch.mjs, and no capture of anybody's site is committed here: the
+ * driver is tracked and its output is not, for the reason testing/corpus/README.md records. This file is
+ * therefore read by a corpus of TODAY'S bytes, and every figure drawn through it carries that instant.
  *
  * IT JOINS ON CONTENT (sha256) AND NEVER ON PATH, AND THAT IS THE LOAD-BEARING CHOICE RATHER THAN A DETAIL.
  * Two separate traps sit on the path route and the second one bites:
@@ -52,13 +54,16 @@
  *
  * THE CLASSIFICATION IS THIS CORPUS'S OWN VOCABULARY AND IS DELIBERATELY NOT A MIME LIBRARY. The two groups
  * that matter here are both defined in MIME Sniffing §4.6 "MIME type groups", which says of the first:
- * "A JavaScript MIME type is any MIME type whose essence is one of the following:" over a ten-entry list, and
- * gives the second exactly one essence, `text/html`. This tree already states the JavaScript list once, for the CORB gate in
- * extension/lib/safe-fetch.js, which is the shipped chokepoint and the right place for it. Restating all ten
- * entries here would be a third copy of that table in which EIGHT entries no corpus file exercises sit
- * untested -- and an untested entry that is wrong is found by nobody. So each set below holds exactly the
- * essences the committed mirror contains, every one of them exercised on every run, and the assert above is
- * what makes the short list safe. Widening it is one line, and the THROW is what asks for it by name.
+ * "A JavaScript MIME type is any MIME type whose essence is one of the following:" over a SIXTEEN-entry list,
+ * and gives the second exactly one essence, `text/html`. (This paragraph said TEN and the fetched section
+ * lists sixteen -- a count contradicting the document it cites, which is the one check that needs no tree and
+ * no command beyond the `curl` the citation already asks for.) This tree already states the JavaScript list
+ * once, for the CORB gate in extension/lib/safe-fetch.js, which is the shipped chokepoint and the right place
+ * for it. Restating all sixteen entries here would be a third copy of that table in which FOURTEEN entries no
+ * corpus file exercises sit untested -- and an untested entry that is wrong is found by nobody. So each set
+ * below holds exactly the essences a drive of these sites meets, every one of them exercised on every run,
+ * and the assert above is what makes the short list safe. Widening it is one line, and the THROW is what asks
+ * for it by name.
  *
  * WHY THE NON-PROGRAM ESSENCES ARE LISTED RATHER THAN DEFAULTED. `EXCLUDED` could be "everything else", and
  * then a new script essence would fall into it and be dropped exactly as the extension filter dropped the
@@ -69,18 +74,34 @@ import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, relative, dirname } from "node:path";
 
-/* The essences the committed mirror actually serves. PROGRAM and DOCUMENT are the files a browser compiles or
-   parses; EXCLUDED is everything else the mirror holds. Together they must cover the manifest, and the
-   coverage is asserted below rather than assumed. */
-const PROGRAM  = new Set(["text/javascript", "application/javascript"]);
-const DOCUMENT = new Set(["text/html"]);
-const EXCLUDED = new Set(["text/css", "application/json", "font/woff2", "image/svg+xml"]);
+/* The essences a corpus of these sites actually serves. PROGRAM and DOCUMENT are the files a browser compiles
+   or parses; EXCLUDED is everything else a drive saves. Together they must cover what reaches disk, and the
+   coverage is asserted below rather than assumed.
+   EXPORTED BECAUSE THE FETCHER MUST NOT RESTATE THEM. testing/corpus/fetch.mjs decides what to SAVE from the
+   server's own Content-Type, which is the same question this file decides for what is already on disk — so a
+   list retyped there would be a second copy of a rule whose whole point is that it lives in one place, and
+   the copy that drifts is the one nobody runs against reality. The two sides are one set by construction.
+   AND THAT MOVES WHERE `EXCLUDED` IS EXERCISED RATHER THAN RETIRING IT. A fetcher that saves only programs
+   and documents leaves this file's own `nExcluded` at zero, so these entries are no longer exercised by a
+   file on disk -- they are exercised by the DECLINE in fetch.mjs, which is the same question asked one step
+   earlier, and an essence in none of the three sets is loud at both ends. What must never happen is a set
+   that is exercised NOWHERE, because an untested entry that is wrong is found by nobody. */
+export const PROGRAM  = new Set(["text/javascript", "application/javascript"]);
+export const DOCUMENT = new Set(["text/html"]);
+export const EXCLUDED = new Set(["text/css", "application/json", "font/woff2", "image/svg+xml",
+                                 /* A webfont served as the unknown-binary type. It is EXCLUDED rather than
+                                    PROGRAM on the spec's own terms: MIME Sniffing §4.6 "MIME type groups"
+                                    lists the JavaScript essences and `application/octet-stream` is not among
+                                    them, so a `<script src>` served this way is not a program a browser
+                                    compiles either. The THROW below is what asked for this entry by name,
+                                    which is that mechanism working rather than a list somebody guessed. */
+                                 "application/octet-stream"]);
 
 /* A MIME type's ESSENCE: the groups in MIME Sniffing §4.6 "MIME type groups" are stated over the essence,
    which MIME Sniffing §4.2 "MIME type miscellaneous" defines as the type, a solidus, and the subtype — so
    every parameter is outside it. The manifest stores the header verbatim, `text/javascript; charset=utf-8`
    included, so the parameters come off here and nowhere else. */
-const essenceOf = (contentType) => (contentType || "").split(";")[0].trim().toLowerCase();
+export const essenceOf = (contentType) => (contentType || "").split(";")[0].trim().toLowerCase();
 
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
 
@@ -109,8 +130,8 @@ export function corpusPrograms(corpusDir, tag) {
   if (!existsSync(manifestPath))
     die(`no provenance.json beside ${corpusDir} (looked at ${manifestPath}). The corpus population is taken ` +
         `from the manifest's recorded Content-Type, so without it this cannot say which files are programs — ` +
-        `and guessing from the filename is the defect this replaces. Point --corpus at a mirror whose ` +
-        `manifest sits beside it.`);
+        `and guessing from the filename is the defect this replaces. Build one: ` +
+        `\`SITES=apps.tsv node testing/corpus/fetch.mjs\`, then point --corpus at its \`mirror\` directory.`);
   let manifest;
   try { manifest = JSON.parse(readFileSync(manifestPath, "utf8")); }
   catch (e) { die(`${manifestPath} did not parse as JSON (${e.message}).`); }

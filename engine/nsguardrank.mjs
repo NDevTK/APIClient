@@ -88,7 +88,10 @@ if (!CORPUS_ARG)
   throw new Error("[nsguardrank] --corpus <dir> is REQUIRED. It names a directory of responses a real-network "
                   + "drive saved, with its manifest beside it. There is no default: the committed copy of "
                   + "other people's sites that used to be one is deleted, and ranking against an empty "
-                  + "directory would report a clean bill drawn from no files at all.");
+                  + "directory would report a clean bill drawn from no files at all. What writes one is "
+                  + "`NODE_USE_ENV_PROXY=1 SITES=apps.tsv node testing/corpus/fetch.mjs`, which prints the "
+                  + "--corpus path to pass here and the instant it fetched — a figure ranked out of it is a "
+                  + "fact about that instant and about the sites that answered in it.");
 const CORPUS = resolve(CORPUS_ARG);
 /* How far past a namespace test this looks for the member that test lets through. Stated as an input rather
    than buried: it is the residual above, and a reader widening it must re-read the sites it adds. */

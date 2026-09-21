@@ -22,8 +22,21 @@ WHAT WENT WITH IT, so nobody hunts for a file that was deliberately removed: `mi
 have none without it). `corpus_programs.mjs` SURVIVES unchanged in contract: it takes a corpus DIRECTORY and
 reads the manifest beside it, which a real-network drive that saves what it fetched can supply.
 
+AND `fetch.mjs` IS THAT DRIVE. The sentence above named a thing nothing in the tree produced, and for a while
+nothing did — while the figures `absentrank.mjs` prints went on being quoted. CLAUDE.md
+§A-MEASUREMENT-CAN-OUTLIVE-ITS-INSTRUMENT rates that worse than a stale number: the figure is true, the method
+is sound, and a reader who re-derives it finds nothing, so a measurement nobody made and one whose tool was
+never committed render identically. THE SPLIT IS THE POINT AND IT IS NOT A COMPROMISE: the DRIVER is tracked
+and the CORPUS is not. A fresh clone gets the addresses and the code that visits them; it never gets somebody
+else's site. The output lands under `engine/.work/sitecorpus/`, ignored beside the other corpora this tree
+fetches at run time, and the manifest carries the (url, date, sha256) triple for every response — so a figure
+read out of one run is a fact about the instant that run names and about the sites that answered in it, never
+a property of "real bundles".
+
     node list.mjs                       # (a module) the one reader of a site list
     node site.mjs <id> <url> [pass]     # drive it in Chrome, emit one ROW of JSON
+    NODE_USE_ENV_PROXY=1 SITES=apps.tsv node testing/corpus/fetch.mjs   # fetch the programs, write the manifest
+    node engine/absentrank.mjs --corpus engine/.work/sitecorpus/mirror  # ... and rank an absence against them
     LANE=/tmp/mylane ./run.sh a1                          # one pass over sites.tsv, live
     LANE=/tmp/mylane SITES=apps.tsv ./run.sh r1           # one pass over the app pages, live
     SITES=apps.tsv node report.mjs census-r1.jsonl …      # the table + the ranked abort queue
