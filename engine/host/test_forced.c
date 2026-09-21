@@ -4525,11 +4525,12 @@ static const char *HTML_COLD =
     "}"
     "</script>"
     TF_CANVAS_INK
-    /* §State-isolation's PER-FLOW COW DELTA, ASKED ABOUT AN EDGE THE DELTA CANNOT SEE — AND THIS ROW IS
-       EXPECTED TO FAIL. TODAY'S OUTCOME IS THE LEAK: a reader who meets `/api/nwiso/t-sees-f` or
-       `/api/nwiso/f-sees-t` has met the thing this statement was written to catch, and NOT a regression
-       somebody introduced. The repair is a later step of one ordering, and landing it first would mean
-       nobody ever sees the failure.
+    /* §State-isolation's PER-FLOW COW DELTA, ASKED ABOUT AN EDGE THE DELTA CANNOT SEE — AND THE CAPTURE
+       NOW LEARNS THAT EDGE. A reader who meets `/api/nwiso/t-sees-f` or `/api/nwiso/f-sees-t` has met a
+       REGRESSION and not the state this statement was landed in: core/dom/node.c's `node_wrap` mints a
+       node's wrapper inside a `JS_SetFlowGen` baseline bracket, so the ONE entry the identity map holds per
+       node is shared state whose writes the delta captures, and the two `nwiso-*` rows in the probe table
+       assert the absence of both paths.
 
        IT WAS APPENDED TO `HTML` FIRST AND WAS NEVER REACHED THERE. Recorded rather than moved silently,
        because placement is the half of this probe that is easy to get wrong twice. MEASURED at 7c2d6dd4,
@@ -4574,15 +4575,17 @@ static const char *HTML_COLD =
        released only by `node_wrap_forget` when the NODE dies. Its own DCHECK names two objects for one node
        as the error it exists to prevent; one object across two worlds is what that costs here.
 
-       WHY THE WRAPPER IS YOUNG, WHICH IS THE WHOLE OF THE ORDER CONSTRAINT. `node_wrap_peek` exists so the
-       PARSER never mints — its own banner says minting there would put a wrapper in the identity map for
-       every node in the page — so a baseline element's wrapper is minted MID-FLOW by whatever member body
-       asks first, and `getElementById` answers through `node_wrap`. `cow_delta_fork` sets BOTH deltas'
-       fork_gen to the live generation and only THEN bumps it, so a wrapper minted after the fork is strictly
-       younger than both arms' threshold and every expando written on it is skipped by both. A
-       `getElementById` hoisted above the fork would mint at the PRE-fork generation, the write would be
-       CAPTURED and correctly reverted, and this row would read CLEAN while proving nothing — which is worse
-       than unscored, because it looks like an answer. THIS DOCUMENT MAKES THAT CHECKABLE BY READING RATHER
+       WHY THE WRAPPER IS MINTED MID-FLOW, WHICH IS THE WHOLE OF THE ORDER CONSTRAINT AND WHICH SURVIVES THE
+       REPAIR RATHER THAN RETIRING WITH IT. `node_wrap_peek` exists so the PARSER never mints — its own banner
+       says minting there would put a wrapper in the identity map for every node in the page — so a baseline
+       element's wrapper is minted MID-FLOW by whatever member body asks first, and `getElementById` answers
+       through `node_wrap`. `cow_delta_fork` sets BOTH deltas' fork_gen to the live generation and only THEN
+       bumps it, so a wrapper minted after the fork WOULD be strictly younger than both arms' threshold and
+       every expando written on it skipped by both — which is exactly what `node_wrap`'s baseline bracket now
+       prevents, and which this row is the regression detector for. A `getElementById` hoisted above the fork
+       would mint at the PRE-fork generation, so the AGE TEST ALONE would capture the write and revert it, and
+       this row would read CLEAN with the bracket deleted — proving nothing, which is worse than unscored
+       because it looks like an answer. THIS DOCUMENT MAKES THAT CHECKABLE BY READING RATHER
        THAN BY SURVEY, which is the second reason the row is here and not in `HTML`: it is short enough to
        read whole, it performs NO element access anywhere above this line — no `getElementById`, no
        `querySelector`, no collection — and `id=nwisoel` is named by nothing else in this fixture. Insertion
@@ -4616,17 +4619,21 @@ static const char *HTML_COLD =
        run` IS 0: nothing here sits behind an await, and an endpoint record is emitted BEFORE the park, so a
        fire-and-forget `fetch` emits whatever becomes of its reply.
 
-       THERE IS DELIBERATELY NO ROW IN `probes`, AND THIS IS WHERE THAT DECISION IS RECORDED so the next
-       reader adds one rather than rediscovering why there is none. A probe row for this statement would be
-       RED ON EVERY RUN from the day it landed until the repair lands, which is §A-VERDICT-THAT-IS-RED-ON-
-       EVERY-RUN's furniture — the same call `HTML`'s `import.meta.url` paragraph makes, in this file, for
-       the same reason, and worse here because a red row in that table is read by every lane that builds.
-       WHAT THE REPAIR'S DIFF ADDS: two rows keyed on `nwisoel` — one per session — whose `ok` is the
-       ABSENCE of any `-sees-` path from `endpoint_json_array()`, landing in the SAME commit as the capture
-       that closes the edge, so the row is green the first time it is ever read.
+       THERE WAS DELIBERATELY NO ROW IN `probes` UNTIL THE CAPTURE LANDED, AND THAT DECISION IS RECORDED
+       HERE because it is the reason the two rows that exist now have the shape they have. A row landed ahead
+       of the repair would have been RED ON EVERY RUN, which is §A-VERDICT-THAT-IS-RED-ON-EVERY-RUN's
+       furniture — the same call `HTML`'s `import.meta.url` paragraph makes, in this file, for the same
+       reason, and worse here because a red row in that table is read by every lane that builds. So both rows
+       arrived in the SAME commit as the capture that closes the edge, and each reads the ABSENCE of a
+       `-sees-` path from `endpoint_json_array()` and never the PRESENCE of a `-clean` one — which would be
+       red on a session that does not reach the statement, re-introducing exactly that furniture through the
+       clause written to strengthen the row.
 
-       RETIREMENT: when the capture learns this edge, that commit deletes this banner's TODAY'S-OUTCOME
-       sentence and adds the two probe rows named above, and this becomes an ordinary isolation assertion.
+       RETIREMENT: what is left of this banner is the ORDER argument — that nothing reads `#nwisoel` above
+       the document's first fork, so the wrapper is minted young and the row is asked the question it names.
+       That is held by READING today, and this record goes when it is held by CONSTRUCTION: an assertion that
+       fires if this element is first reached before the fork, so a later edit cannot hoist the read and make
+       the row read CLEAN while proving nothing.
 
        APPENDED IN FRONT OF `</body></html>` AND NOT INSERTED, for the reason stated above: this document is
        ONE LINE too, and an insertion re-points every column after it. */
@@ -15530,6 +15537,35 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        solve.h declares, in order, with the payload anchored to its own `poc` key, so a candidate list cannot
        answer it and neither can another sink's entry. */
     int cold_fired = s_poc(js, "eval", "{state}.code", "';X9()//");
+    /* §State-isolation's PER-FLOW COW DELTA OVER THE EDGE THE DELTA CANNOT SEE — the `nwisoel` statement,
+       whose own banner in HTML_COLD holds the four-state verdict table these two rows are one reading of.
+       THE `ok` IS THE ABSENCE OF A `-sees-` PATH, AND THE ASYMMETRY IS WHAT KEEPS THIS OFF THE FURNITURE
+       LIST. A `-sees-` record is emitted only by an arm that RAN and found an expando it never wrote, so the
+       record's own presence proves BOTH arms reached the statement — the first to arrive always reads
+       undefined — and a red here is therefore a SCORED leak that can never be a reading about the schedule.
+       THE GREEN DIRECTION IS THE WEAK ONE AND IS STATED AS SUCH rather than patched: an absence satisfies it
+       identically to a fix, which is §Testing's prediction-of-an-absence, and `/api/nwiso/reach` is the
+       reachability witness that separates the two. It is deliberately NOT folded in — folding it would make
+       this row RED on any session that does not reach the statement, which is the furniture the statement's
+       author declined to land and which this row exists to avoid re-creating.
+       WHOLE-DOCUMENT AND UNSCOPED ON PURPOSE: both clauses are NEGATIVE, where a needle can only fire EARLY
+       (a superstring makes it unable to pass, never unable to fail), which is the sign this file's own
+       `strstr` rule names as correct for the whole-document form — and each is wrapped in its own JSON
+       quotes, so it is a whole-token match besides. */
+    const char *nwiso_why = NULL; int nwiso_iso = 1;
+    fold_row(&nwiso_iso, &nwiso_why, !strstr(js, "\"/api/nwiso/t-sees-f\""),
+             "the TRUE arm read back an expando the FALSE arm wrote: `/api/nwiso/t-sees-f` is in this run's "
+             "records, so a write to `#nwisoel` crossed a fork boundary PAGE-OBSERVABLY. That record is "
+             "itself proof both arms reached the statement, so this is a scored leak and not a reading about "
+             "the schedule. §State-isolation's skip is decided on the AGE of the object written (cow.c's "
+             "`JS_ObjFlowGen(obj) > d->fork_gen`) and core/dom/node.c's identity table hands ONE wrapper to "
+             "both arms with no property write for a hook to see: check that `node_wrap` still mints inside "
+             "its `JS_SetFlowGen` baseline bracket");
+    fold_row(&nwiso_iso, &nwiso_why, !strstr(js, "\"/api/nwiso/f-sees-t\""),
+             "the FALSE arm read back an expando the TRUE arm wrote: `/api/nwiso/f-sees-t` is in this run's "
+             "records. The two directions are separate clauses because they are separate observations — one "
+             "arm leaking and both arms leaking are different facts about which world minted the wrapper, "
+             "and a folded row would name neither");
     /* ─── THE THREE OPERAND-SHAPE STATEMENTS (script id=stk) ───────────────────────────────────────────────
        Each is TWO rows, never one, because each has two independent ways to be wrong and a folded row would
        name neither: whether the path RAN, and whether the operand stack was where the next opcode expected it
@@ -16654,6 +16690,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "park-remoteop-many", cold_park_remoteop_many, "cfg.admin", SESS_PARK, remoteop_many_why },
         { "park-remoteop-once", cold_park_remoteop_once, "cfg.admin", SESS_PARK, remoteop_once_why },
         { "park-remoteop", cold_park_remoteop, "cfg.admin", SESS_PARK, remoteop_why },
+        /* §State-isolation OVER THE EDGE THE DELTA CANNOT SEE — ONE CLAIM AND TWO ANSWERS, for the reason
+           `park-world`/`resumed-world` are two: the sessions run the SAME document and either may be the one
+           that reaches the statement, so a row in only one of them would report nothing on the runs where
+           the other arrived. They share one boolean because they assert one property of one statement; what
+           differs is which run answered it. Keyed on `nwisoel`, the element the statement is about, which
+           HTML_COLD alone names. */
+        { "nwiso-park", nwiso_iso, "nwisoel", SESS_PARK, nwiso_why },
+        { "nwiso-resume", nwiso_iso, "nwisoel", SESS_RESUME, nwiso_why },
     };
     /* WHICH ROWS THIS INVOCATION CARRIES — its SESSION, and whether its document contains the statement. */
     int n = 0;
