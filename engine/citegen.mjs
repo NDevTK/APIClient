@@ -2405,7 +2405,27 @@ const OTHER_SPECS = [
      rule that put these four on this list is what takes them off it. */
   /* `uievents` MOVED TO ITS OWN ROW, with `ui events`, for the reason the webcrypto note above gives: the
      rule that lists a name here is the rule that takes it off once the standard is indexed. */
-  "svg", "mathml", "wasm", "console", "performance",
+  "svg", "mathml",
+  /* THE FOUR ROWS BELOW ARE ONE DEFECT MEASURED FOUR TIMES, AND IT IS THE `mixed` SHAPE THIS LIST ALREADY
+     RECORDS: AN ENTRY THAT IS THE HEAD OF THE NAME THIS TREE WRITES FIRES AT NO SITE. anchorTokens reads AT
+     MOST THREE trailing words and emits them as TAILS, longest first, so a name's FIRST word is never
+     offered on its own — `MathML Core` produces `mathml core` and `core`, and the bare `mathml` that has
+     sat on this list is not among them. The one-word entry is not weak here, it is unreachable.
+     IT IS A POSITION AND NOT A LENGTH, which is why the token-count reading of this hazard does not find
+     it: every entry on both lists is already within the three-word reach, and these four fail anyway
+     because they sit at the wrong END of the name. Derived rather than eyeballed, over every section sign
+     in the audited tree: these four are consulted TRUE at ZERO sites, while seven citations name their
+     standards in front of a section sign and classify to NOTHING.
+     THE HEADS ARE KEPT BESIDE THE SPELLINGS THAT WORK rather than deleted, because a reader who re-derives
+     them will re-add them — a one-word entry is what anyone writes first, and nothing about it looks wrong
+     from the list alone.
+     `core` AND `api` ALONE ARE NOT LISTED AND MUST NOT BE: both are words this tree writes constantly in
+     prose and in paths, and a one-word anchor there is the `database` hazard the indexed table names.
+     WHAT THIS BUYS IS SILENCE AND NOT ANSWERS, which is what a foreign row is for: these citations move
+     from the band that names no standard and no term into the counted-and-openly-unchecked one, where the
+     census can say the standard was seen. Indexing any of them would buy answers and is a DIFFERENT diff. */
+  "mathml core",
+  "wasm", "console", "performance",
   /* `png` IS HERE BECAUSE ITS NUMBERS COLLIDE, WHICH IS THE ARM OF CLAUDE.md's MISSING-ROW RULE THAT
      ACCUSES RATHER THAN THE ONE THAT GOES QUIET. This tree writes `PNG §5.2`, `PNG §7.1` and
      `PNG §11.2.1` — bare numbers that several INDEXED standards also have — so a file whose vote is
@@ -2426,6 +2446,16 @@ const OTHER_SPECS = [
   "png",
   "workers", "websockets", "rfc", "unicode", "utf", "clipboard",
   "notifications", "geolocation", "geometry", "fullscreen", "pointerevents", "webaudio", "webrtc",
+  /* `geolocation api`, `clipboard api` and `webrtc encoded transform` BESIDE THEIR HEADS, for the reason
+     the note above gives and as the same measurement. This tree writes `Geolocation API` and `Clipboard
+     API` in a permission table and `WEBRTC ENCODED TRANSFORM` in a worker residual; the tails those offer
+     are `geolocation api`/`api`, `clipboard api`/`api` and `webrtc encoded transform`/`encoded
+     transform`/`transform`, so none of the three heads is ever produced.
+     THE THREE-WORD FORM IS THE LONGEST TAIL THE TOKENIZER CAN EVER PRODUCE, which is the `cookie store api`
+     argument on the indexed list: a longer spelling would be an entry with no reader.
+     `encoded transform` IS NOT LISTED ON ITS OWN: nothing in this tree writes it without `WEBRTC` in front,
+     and an anchor no citation produces is a claim about a spelling rather than about a document. */
+  "geolocation api", "clipboard api", "webrtc encoded transform",
   "beacon", "referrer", "cors", "cookies",
   /* `mixed` STOOD HERE AND IS NOW AN ANCHOR OF ITS OWN ROW, retired rather than deleted for the reason the
      webcrypto note above gives. It is the entry worth keeping the shape of: it was the WRONG HALF of the
