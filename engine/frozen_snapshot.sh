@@ -387,6 +387,31 @@ echo "evidence   $ROOT/EVIDENCE-*.log  (per-revision logs kept when a snapshot i
 echo "reclaimed  $ROOT/RECLAIMED.log   (why a snapshot that is gone went, and to whose freeze)"
 echo "snapshot   $DIR"
 echo "revision   $SHA"
+# HOW FAR THIS REVISION IS FROM THE BRANCH, PRINTED AT BOTH ENDS BECAUSE ONLY THE SECOND IS THE NUMBER A
+# READER OF THE VERDICT NEEDS. The revision above is chosen when a caller LAUNCHES, and a full build is tens
+# of minutes, so a gate's verdict is stale in proportion to HOW LONG THE GATE TOOK -- the more thorough the
+# run, the further its subject is from the tree, which is the opposite of what a reader assumes about a long
+# gate. Nothing was wrong in the case that produced this: the freeze was correct, the log named its revision
+# correctly, and the number belonged to a revision nobody was working on any more.
+# Measured, and it cost a whole build: a freeze launched with the branch resolved inline measured a revision
+# that was EIGHT commits behind by the time it failed, and one of its two defects named as its repair a thing
+# that had LANDED INSIDE THAT WINDOW. A reader acting on that log would have been sent to build it again.
+# READ WITHOUT FETCHING, AND IT SAYS SO. A remote-tracking ref is only as fresh as its last fetch, so this
+# line would be a silent over-claim if it did not name that; and a gate that fetched to repair its own claim
+# would move a ref every other lane in a shared checkout is reading. An unstated unknown is the whole defect
+# this line exists to end, so the uncertainty is stated rather than closed the wrong way.
+BRANCH="${FROZEN_SNAPSHOT_BRANCH:-origin/main}"
+distance_from_branch() {
+  local n
+  n=$(git -C "$SRC" rev-list --count "$SHA..$BRANCH" 2>/dev/null) || {
+    echo "unknown ($BRANCH does not resolve in $SRC)"; return; }
+  if [ "$n" -eq 0 ]; then
+    echo "AT THE TIP of $BRANCH (as of that ref's last fetch; not fetched here)"
+  else
+    echo "$n commit(s) behind $BRANCH (as of that ref's last fetch; not fetched here)"
+  fi
+}
+echo "distance   $(distance_from_branch)"
 # ENGINE/QJS NO LONGER HAS A REVISION OF ITS OWN. This line used to print the submodule commit the
 # superproject pinned, and a reader could quote it as a revision. After the subtree merge the only thing
 # `<sha>:engine/qjs` names is a TREE, which is not a revision and must not be printed where one was — so what
@@ -406,4 +431,15 @@ if [ $# -eq 0 ]; then
   exit 0
 fi
 cd "$DIR"
+# THE COMMAND'S OWN STATUS IS THIS SCRIPT'S, AND THAT IS WHY IT IS CAPTURED RATHER THAN LEFT TO `set -e`.
+# A gate's non-zero exit IS its verdict, so a line printed after the command may not swallow it and may not
+# be allowed to become the status either. The capture is the whole of what makes the closing line safe.
+set +e
 "$@"
+FROZEN_SNAPSHOT_STATUS=$?
+set -e
+# AND THE DISTANCE IS RE-READ HERE, WHICH IS THE POINT OF THE PAIR. The line in the banner is what the gate
+# was AIMED at; this one is what it MEASURED AGAINST, computed at the moment a reader is about to quote the
+# verdict, and the difference between the two is exactly the commits that landed while the gate ran.
+echo "distance   $(distance_from_branch)  [AT COMPLETION -- the verdict above belongs to $SHA and to nothing else]"
+exit "$FROZEN_SNAPSHOT_STATUS"
