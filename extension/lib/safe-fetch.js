@@ -1313,6 +1313,19 @@ var _DEFAULT_ARMS = [
      lib/discovery-probe.js's `_chokepointGetFn`, `provenance: "derived"`, `pinned: "unpinned"`,
      `docReach: "observed"` and `destination: ""`. Destination, provenance, doc-reach, witness, cookies: the
      same value on every one. The arm cannot admit the first and refuse the second.
+     AND THE SAME ROW SORTS A THIRD POPULATION BACKWARDS, WHICH IS WHAT SHOWS THE AXIS TO BE WRONG RATHER
+     THAN MERELY SHORT. The analysed page's own XHR reaches this file through bridge.js's `xhr.send` relay,
+     which states `destination: ""` and `pinned: "unstated"` — CORRECTLY, and for the reason `_pinnedOf`
+     already gives one screen up: an `xhr.send` record is not a PARK, so it carries no witness mark at all
+     and writing `unpinned` there would be a claim nobody made. So the arm as spelled would PERMIT this
+     tool's own automatic probe and REFUSE the analysed page's own XHR, which is the SAME POPULATION as the
+     `fetch()` it was written to admit. Three populations, two of them sorted the wrong way: that is not a
+     conjunct that is missing, it is a row that is not about this question.
+     AND IT ESCALATES `_pinnedOf`'s OWN RESIDUAL RATHER THAN MERELY CITING IT. That paragraph records the
+     `unstated`/`unpinned` split as a difference in OUTCOME at an origin a person has already WIDENED — the
+     discovery sweep firing while the XHR relay is refused. An arm here reading the witness row would move
+     that same split into the DEFAULT, so what it decides stops being a person's audit of a widened origin
+     and becomes whether this engine answers the analysed page's own XHR at all.
      THE ONE ROW THAT DOES DIFFER IS `header-authority` AND IT MAY NOT BE USED, WHICH IS SAID SO THAT NOBODY
      REACHES FOR IT. The sweep passes `headers || {}`, and `{}` is truthy, so it reads `unknown` where the
      pending relay reads `none` — a property of ONE call site's argument-passing and of whose list it is,
