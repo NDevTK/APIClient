@@ -325,12 +325,14 @@ const char *engine_take_dumps(void);
  * skips that member, the assert stays, and the party that knows a finish is deferred is this one rather than
  * a host that has no entry reporting it.
  */
-/* ONE PICTURE PER WORLD, FOR EVERY WORLD THIS RUN MINTS FROM HERE ON — the entry above photographs a FRONTIER
- * and this one photographs a RUN, and they are different questions rather than two strengths of one.
- *   IT IS THE ENTRY ABOVE PLUS THE MINT, and it has to be both. The walk names the members standing now — on a
- * document that has not stepped, that is the boot flow, which no mint-side mark can ever reach because it was
- * born before the ask. The mint names every member born afterwards — which is every forked arm, and is the
- * population §Boot's `if (__FLAGS.admin)` sibling lives in and the one this whole mechanism exists for.
+/* ONE PICTURE PER WORLD, FOR EVERY WORLD THIS RUN MINTS FROM HERE ON — `paint_mark_standing_members` alone
+ * photographs a FRONTIER and this entry photographs a RUN, and they are different questions rather than two
+ * strengths of one.
+ *   IT IS `paint_mark_standing_members` PLUS `flow_new`, and it has to be both. The walk names the members
+ * standing now — on a document that has not stepped, that is the boot flow, which no mint-side mark can ever
+ * reach because it was born before the ask. The mint names every member born afterwards — which is every
+ * forked arm, and is the population §Boot's `if (__FLAGS.admin)` sibling lives in and the one this whole
+ * mechanism exists for.
  *   IT IS ONE-WAY, and flow.h's `flow_paint_every_world` says why: a mode that could be turned off would let a
  * run write a world-named image for some arms and not others, with nothing in the artifact to say which, so a
  * directory that reads as a document's complete set of worlds would be a sample of them.
