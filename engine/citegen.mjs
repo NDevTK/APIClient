@@ -2861,6 +2861,29 @@ const OTHER_SPECS = [
 ];
 const ANCHOR_TO_KEY = new Map();
 for (const s of SPECS) for (const a of s.anchors) ANCHOR_TO_KEY.set(a, s.key);
+/* AN ANCHOR IS STORED AS IT IS WRITTEN AND ASKED IN LOWER CASE, SO A ROW CARRYING A CAPITAL IS UNREACHABLE —
+ * AND THAT IS ENFORCED HERE FOR THE REASON THE EDITION DECLARATION IS ENFORCED AT ITS ROW: the failure it
+ * guards against is a ROW EDIT and not a citation. Every reader of these two lists lowercases its token
+ * before asking, at four call sites across three functions — classifyAnchor lowercases each tail it tests,
+ * joinLevel lowercases the words it builds its base and its joined form out of, and nameStart is only ever
+ * handed one of those words. So a capital does not make an anchor WEAK, it makes it unaskable: the row
+ * would match at no site, classify nothing, and for ever, with nothing anywhere saying so, because a name
+ * that fires at no site is indistinguishable from a standard this tree does not cite. That is the `mixed`
+ * shape both lists already record by name, and it is the reason the registry header states the rule in
+ * prose — which is a thing a reader re-derives rather than a thing a diff trips over.
+ * MEASURED WHEN THIS LANDED: no row on either list carried a capital, which is what makes this latent
+ * rather than live, and one keystroke is the whole distance between the two. A rule true only by convention
+ * is a finding about the code, and the assert is shorter than the paragraph and cannot go stale.
+ * BOTH LISTS, ONE LOOP, because it is ONE fact about how a token is asked; a check spelled once per list is
+ * the second copy that drifts. RETIREMENT: this record goes when a row cannot be written in the wrong case
+ * at all — the lists built through something that lowercases as it stores, which is a different diff from
+ * the one that makes the wrong case impossible to LAND. */
+for (const [where, names] of [...SPECS.map((s) => [s.key, s.anchors]), ["OTHER_SPECS", OTHER_SPECS]])
+  for (const a of names)
+    if (a !== a.toLowerCase())
+      throw new Error(`${where}: the name "${a}" carries a capital, and every reader of these two lists ` +
+        `lowercases its token before asking — so this row would be consulted at no site, would classify ` +
+        `nothing, and would say nothing about having done so. Write it in lower case.`);
 /* A levelled CSS shortname (`css-sizing-3`, `selectors-4`) is how this tree spells a CSS module most of the
  * time, and it must classify as ANOTHER standard rather than as no anchor at all. */
 const LEVELLED = /^[a-z]+(-[a-z0-9]+)*-[0-9]+$/;
@@ -2912,9 +2935,16 @@ const MODULE_BEFORE_VERSION = /[ \t]+Module(?=[ \t]+[0-9]+(?:\.[0-9]+)*$)/i;
    that by construction rather than by measurement. A tail ending on a close parenthesis classifies NULL TODAY
    at every site, always, so the parenthesised arm can only ADD. A tail ending on a digit and `e` emits that
    token plus at most two letter-initial words before it, and the only way such a token classifies today is a
-   list row ending the same way or a LEVELLED match — LEVELLED requires a trailing DIGIT, and of the 218 rows
-   on the two lists NONE ends in a digit and `e`, none contains a parenthesis and none holds more than three
+   list row ending the same way or a LEVELLED match — LEVELLED requires a trailing DIGIT, and of the rows on
+   the two lists NONE ends in a digit and `e`, none contains a parenthesis and none holds more than three
    words. Read off the lists rather than reasoned from them.
+   THE ROW COUNT THAT USED TO STAND IN THAT SENTENCE IS GONE RATHER THAN CORRECTED, because the argument
+   needs NONE and has never needed HOW MANY. It was already wrong before the commit that added rows to one
+   of those lists and left it untouched, which is what a count does — it is the one coordinate produced by
+   RUNNING something and then written down in the flat declarative of something read, so it rots on the
+   next row anyone adds and nothing announces the rot. A reader who wants today's figure walks
+   `SPECS.flatMap((s) => s.anchors)` and `OTHER_SPECS`. RETIREMENT: this record goes when no number in
+   this file describes the size of a list the same file declares.
    AND IT IS CASE-INSENSITIVE FOR THE REASON THE FOUR SHAPE PATTERNS ABOVE ARE: this codebase writes a banner
    in CAPITALS, so an arm enumerating one casing of `Edition` would miss the spelling a banner uses.
    NAMED RESIDUAL — WHAT THIS DOES NOT COVER. Trimming an edition EXPOSES a hazard that was always in
