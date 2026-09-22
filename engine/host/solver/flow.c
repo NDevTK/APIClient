@@ -5301,12 +5301,43 @@ void flow_wfq_census(WfqCensus *out) {
            AT ALL; it binds to `seq_compiles` now — `a program STARTS on this step` — so a member parked on an
            external script row does reach its jobs and this row is exact for it. What is left is the member
            whose next row is RUNNABLE: the sequence arm takes every such step, so no pick reaches that job and
-           this row still calls it ready. NEXT DIFF: the per-source task queue that arm's own residual names —
-           a source on a `jobs` entry as it is now on a row — after which the arm's reachability stops
-           depending on the cursor at all and the ready/framed line is exact for both kinds.
+           this row still calls it ready. THAT HALF IS EXACT AND HAS BEEN MEASURED EXACT: on two independent
+           real-page runs every pick that ever reached an unframed member took the sequence arm and raised
+           `progStarts`, and `_jobsRun` stayed at zero — `progStarts` equals the number of frame-ends the run
+           consumed plus one (the boot flow, which had no prior frame-end) in BOTH runs, 22 against 21 and 17
+           against 16. Not one pick of this population has ever reached the job arm.
+           NEXT DIFF: REWRITTEN RATHER THAN DELETED, BECAUSE THE CLAUSE THAT STOOD HERE IS THE ONE A READER
+           RE-DERIVES FROM THE SENTENCE ABOVE IT AND IT IS REFUTED. It read: the per-source task queue that
+           arm's own residual names — a source on a `jobs` entry as it is now on a row — after which the arm's
+           reachability stops depending on the cursor at all and the ready/framed line is exact for both kinds.
+           It is a claim about the LADDER, it is true about the ladder, and it moves no number: it decides
+           WHICH ARM RUNS FOR A MEMBER THAT IS PICKED, and this population is not being picked at all. Measured
+           on both runs, by the four-bucket step partition rather than by inference — `units + midProgram +
+           parked + checkpointOwed == steps` is asserted at engine_frontier_census, and every bucket an
+           unframed member's step could land in is held flat over the interval (`progStarts` frozen, `jobsRun`
+           0, `run-a-task` 0, `microtask-checkpoint` 0, `unitParked` 0, `unitCheckpointOwed` 0,
+           `deliver-one-reply` flat at the reply count) — so the population received ZERO of 21983 and 3554
+           dispatches while growing to 273 and 124 members. A lane sent to build the named thing would have
+           landed it correctly and watched `_jobsRun` stay at zero, and this clause is what would have sent it.
+           WHAT IS UPSTREAM OF THE ARM ORDER IS THEREFORE THE QUESTION, AND THIS ROW'S OWN PAIR STATES IT AS AN
+           IMPOSSIBILITY RATHER THAN A MECHANISM. `job_w_gap` is `w_top` minus the best weight any member of
+           this population offers, both taken through `flow_weight` and `w_top` taken from flow_best's own
+           return — one function, one walk — so a gap of zero says the front of the order IS one of these
+           members. It reads zero at EVERY census of both runs that has one, and `cur_deep_w_gap` reads zero
+           beside it. Two readings survive and they take opposite work: the order ranks this population at its
+           front and the dispatch does not take it, or `w_top` and `job_w_max` are not the quantities the
+           dispatch compares. Neither is established here, and naming one would be the wrong-narrowing move
+           this file refuses everywhere else. What IS established is that the reading `jobs_ready` publishes —
+           `waits on RANK ALONE` — is not an ordering problem the weight can be shown to have, because the
+           same census says these members are already at the front of it.
            HOW ITS ABSENCE SHOWS: a census publishing `jobsReady` above zero with `jobWGap` at zero, on a run
            whose LIFETIME `_jobsRun` never leaves zero — a backlog standing at the front of the order that the
-           order cannot move, which is the pair this row exists to make impossible to say. */
+           order cannot move, which is the pair this row exists to make impossible to say. IT HAS FIRED, on
+           every real-page census of both runs, which is why the paragraphs above exist: the clause was written
+           as a thing to watch for and it is a description of the ordinary state of this engine on a real
+           document. RETIREMENT: this record goes when a census in this tree publishes a lifetime count of
+           dispatches taken by a member satisfying flow_stack_empty, because the two readings above are then
+           separated by a row instead of by this paragraph. */
         {
             int jn = flow_job_pending(f);
             if (jn > 0) {
