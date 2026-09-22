@@ -2324,6 +2324,14 @@ char *result_cold_json(void) {
                     no overruns is cheap however often it is taken, and an arm whose two counts are EQUAL is a
                     step that cannot rest. See solver/engine.h's `over_arms`. */
                  "\"stepUnitOverruns\":%s,"
+                 /* AND WHICH PHASE OF A START STEP SPENT THE TIME, which no row above can say. A start is a
+                    COMPILE and then an EXECUTION and only the second runs bytecode, so only the second can
+                    reach one of the page's own raise points; the compile is O(a length the page chose) with
+                    no raise point in it at all. `classicCompileOverruns` counts compiles whose OWN duration
+                    met the slice — spans no ordering could have rested — and `classicCompiles` read against
+                    the programs this document reached says whether a compile is repeated per flow. See
+                    solver/engine.h's `classic_compiles` for the three states the pair separates. */
+                 "\"classicCompiles\":%ld,\"classicCompileOverruns\":%ld,"
                  /* AND WHY EVERY TURN THAT DID NOT END A UNIT OF WORK DID NOT — the three rows without
                     which `_unitsDone` reading low is three states behind one answer. It is a GATED count, so
                     a low value is equally consistent with a thread that did nothing and with one that spent
@@ -2374,6 +2382,7 @@ char *result_cold_json(void) {
                  (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes + c.dyn_bytes) / 1024,
                  r.steps, (long long)r.step_us,
                  (long long)r.slice_us, (long long)r.sched_us, (long long)r.slice_overruns, runs, over,
+                 r.classic_compiles, r.classic_compile_overruns,
                  r.unit_mid_program, r.unit_parked, r.unit_checkpoint_owed,
                  c.out_of_programs,
                  c.out_of_programs_unrun, c.out_of_programs_framed, c.out_of_programs_at_the_ladder,

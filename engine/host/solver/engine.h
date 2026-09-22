@@ -1607,6 +1607,27 @@ typedef struct {
      * is uninterrupted because the BYTECODE it is running offered no raise point, and only the page decides
      * that. */
     long over_arms[STEP_UNIT_N];
+    /* …AND THE ONE PHASE OF A START STEP THAT CANNOT REST AT ANY INPUT SIZE, which the two rows above can
+     * locate to an ARM and never to a PHASE. A start is a COMPILE and then an EXECUTION, only the second runs
+     * bytecode, and quickjs raises its yield request from exactly four kinds of site of which three are the
+     * interpreter's own dispatch — so a parse offers no raise point for its whole length, and its length is
+     * `body_n`, the page-chosen quantity solver/rest_unit.h's bound (1) forbids in a step's cost.
+     * READ AS A PAIR AND AGAINST A THIRD NUMBER, never alone: `classic_compiles` against the programs a
+     * document reached says whether the compile is REPEATED per flow, and `classic_compile_overruns` says
+     * whether ONE compile alone exceeds the slice. Those are three different diffs — the bytecode between the
+     * page's own raise points, a per-flow materialization ceiling, and the parser's descent loop — and a
+     * reader holding either row by itself cannot tell them apart.
+     * WHY A COUNT AND NOT A TIME, which `over_arms` above already argues for its own axis: a count answers
+     * WHICH SPAN CANNOT REST, a time answers WHERE THE RUN WENT, and only the first is what §NO BOUNDS'
+     * suspend-at-any-depth requirement is about. It also partitions a total this struct already publishes, so
+     * it is asserted rather than believed — `classic_compile_overruns <= slice_overruns` holds by
+     * construction and is checked where all three are in one hand.
+     * THEY DECIDE NOTHING AND BOUND NOTHING (§NO BOUNDS): no source is refused for its length, no compile is
+     * capped and no arm is skipped on either reading.
+     * RETIREMENT: they go when a compile can REST — when the parse is a pull whose granularity
+     * solver/rest_unit.h owns, after which a compile that met the slice is an ordinary preempted span. */
+    long classic_compiles;           /* classic program compiles taken at flow_step's start site */
+    long classic_compile_overruns;   /* …of those, the ones whose COMPILE ALONE met or passed the slice */
     /* WHY THE TURNS THAT DID NOT END A UNIT OF WORK DID NOT — the three-state answer behind `_unitsDone`
      * reading low, and the rows a reader needs before that number means anything at all.
      *

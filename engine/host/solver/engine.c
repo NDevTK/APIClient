@@ -9279,6 +9279,50 @@ static int64_t g_slice_us, g_sched_us;
    answer the question their own banner asks. Counted from the SAME two readings the slice arm is accumulated
    from, so a turn cannot be charged to one and counted by the other. */
 static int64_t g_slice_over;
+/* …AND THE ONE PHASE INSIDE A STEP THAT IS O(A LENGTH THE PAGE CHOSE) AND OFFERS NO RAISE POINT AT ALL.
+   The row above says a turn met the slice and the histogram beside it says in which ARM. Neither can say
+   which PHASE of that arm spent the time, and for the start arms the two phases take OPPOSITE work: a start
+   step is a COMPILE (JS_FlowNew -> JS_Eval over `body_n` bytes) and then an EXECUTION (JS_FlowResume), and
+   only the second runs bytecode.
+   THE COMPILE CANNOT BE PREEMPTED AT ANY INPUT SIZE, which is structural rather than measured. quickjs.h
+   declares exactly four raise kinds — JS_PREEMPT_BACKEDGE, _FORK, _CALL and _HOST — and the first three are
+   raised only from the interpreter's own dispatch, so a parse raises nothing and polls nothing for its whole
+   length; the parser's own banner at next_token states the other half, that every production is a state on
+   js_parse_descent's explicit frame stack, so the span is flat C with one driving loop and no seam in it.
+   Its size is `body_n`, which is the quantity solver/rest_unit.h's bound (1) names as the one that must never
+   appear in a step's cost — `the one the ATTACKER chooses`.
+   WHY THIS IS NOT THE PER-ARM TIME solver/engine.h DECLINES. That paragraph refuses a time accumulator per arm
+   because it answers WHERE THE RUN WENT, which is a question about MASS, where the arm histogram answers WHICH
+   ARM CANNOT REST, which is about TRANSPORT. These two are the second question: a COUNT of compiles whose own
+   duration met the slice counts spans that could not have rested however the scheduler was ordered.
+   AND IT SETTLES A DISAGREEMENT THIS TREE ALREADY HAS WITH ITSELF. solver/engine.h's `over_arms` records a
+   retired mechanism — that a unit running ENGINE C rather than page bytecode has nothing to raise the request
+   — and refutes it on the native smoke: `start-ended-its-frame` ran 153 times and overran NOT ONCE, so
+   `the compile is not what holds the slice`. That refutation is sound about the population it was taken over
+   cannot reach this one, and the reason is not merely that a fixture's programs are short. The two start rows
+   it compares differ in OUTCOME, and outcome is CORRELATED WITH SOURCE LENGTH — a program that runs to
+   completion inside one step is a short program and one still running at the slice boundary is a long one —
+   so the comparison is STRATIFIED BY THE VERY VARIABLE IN QUESTION and 0 of 153 is evidence about short
+   compiles only. These rows answer it without inferring anything from an outcome.
+   THE THREE STATES THEY SEPARATE, which is what makes the pair a reading rather than two numbers. Against the
+   count of programs a document actually reached: `classicCompiles` near that count with `classicCompileOverruns`
+   at 0 says the compile is not the cost and the next question is the bytecode between the page's own raise
+   points; a nonzero `classicCompileOverruns` says one compile ALONE exceeded the slice, which no ordering can
+   fix and which names the parser's descent loop as the span to convert; and `classicCompiles` far above that
+   count says the compile is being REPEATED per flow that crosses a program boundary, which is
+   §A-CAPABILITY-MATERIALIZED-PER-FLOW in time rather than in memory and is a third diff again.
+   TWO EXTRA CLOCK READS PER COMPILE AND NOT PER TURN, stated for `g_slice_us`' reason: `quantum_thread_us`
+   crosses into the embedder on the host that ships, so frequency is the whole of the price — and a compile
+   happens once per program a flow starts, where the turn's own pair is taken once per dispatch.
+   A REPORT AND NEVER A BOUND (§NO BOUNDS). Nothing reads either to decide anything: no refusal of a long
+   source, no cap on what a compile may cost, no fallback that skips one. A per-compile duration test is
+   exactly what a watchdog on a large chunk would be built from, which is why that is said here as well as at
+   the header where a reader meets the numbers.
+   RETIREMENT: these two rows go when a compile can REST — when the parse is a pull whose granularity
+   solver/rest_unit.h owns, at which point a compile that met the slice is an ordinary preempted span and the
+   count has nothing left to report. */
+static long g_classic_compiles;       /* classic program compiles taken at flow_step's start site */
+static long g_classic_compile_over;   /* …of those, the ones whose COMPILE ALONE met or passed the slice */
 /* THE WIDTH, MADE A BUILD FAILURE RATHER THAN A SENTENCE. A comment saying "this must be 64-bit" is read by
    whoever is already thinking about it; the one edit that matters is the one that narrows the type back to
    match its neighbours on this page, and the author of that edit is precisely the reader the comment misses.
@@ -10759,7 +10803,19 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 if (started) module_report_rejection(prog_ctx, ev);   /* §8.1.4.4 step 8 */
                 JS_FreeValue(prog_ctx, ev);
             } else {
+                /* THE COMPILE, BRACKETED — see g_classic_compiles. Both readings are in the slice's own
+                   measure (quantum_thread_us), so the comparison below is the same inequality
+                   quantum_expired() asks and not a second opinion about the budget.
+                   ONLY THE CLASSIC ARM IS BRACKETED, AND THAT IS THE POINT RATHER THAN AN OMISSION:
+                   JS_FlowEvalModule above compiles AND EVALUATES, so a bracket around it would time a
+                   compile and an execution together — which is the conflation these rows exist to end.
+                   A FAILED COMPILE IS COUNTED, because it PARSED the bytes and spent the time; the row is
+                   about what the span cost, never about what it produced. Nothing branches on either. */
+                int64_t t_comp0 = quantum_thread_us();
                 f->frame = JS_FlowNew(prog_ctx, body, body_n, prog_name, src_flags);   /* classic non-strict global */
+                g_classic_compiles++;
+                if (quantum_thread_us() - t_comp0 >= (int64_t)ENGINE_QUANTUM_MS * 1000)
+                    g_classic_compile_over++;
                 started = (f->frame != NULL);
                 /* §4.12.1.1's CLASSIC arm, steps 1-2, and the reason they are HERE and not around a call: the
                    arm's third step ("run the classic script") is the JS_FlowNew above plus every JS_FlowResume
@@ -11400,6 +11456,12 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
     out->slice_us = g_slice_us;
     out->sched_us = g_sched_us;
     out->slice_overruns = g_slice_over;
+    /* …AND THE COMPILE PHASE, TAKEN IN THE SAME READING AS THE OVERRUN TOTAL IT IS CONTAINED IN — for
+       `step_us`' reason below: the pair is read against rows the dispatch loop moves, so a copy taken one
+       call later than `out->slice_overruns` would be a subset reported against a population of another
+       instant, which is exactly what the containment assert would then fail to catch. */
+    out->classic_compiles         = g_classic_compiles;
+    out->classic_compile_overruns = g_classic_compile_over;
     for (i = 0; i < STEP_UNIT_N; i++) out->over_arms[i] = g_step_unit_over[i];
     /* AND THE UNIT BOUNDARY'S REFUSAL ARMS, TAKEN IN THE SAME READING AS THE `steps` THEY PARTITION — for
        `step_us`' reason one line up and with a sharper edge: these three are read against a denominator that
@@ -11417,6 +11479,28 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
             "dispatch turn from the same two clock readings the slice arm is accumulated from, so it can only "
             "outrun its denominator if one of the two moved without the other",
             (long long)out->slice_overruns, (long long)out->steps);
+    /* THE COMPILE PHASE'S OWN CONTAINMENT, for the reason directly above: a subset larger than its population
+       is the one arithmetic tell this project names as free, and it is the only check a reader of these two
+       rows can make without re-deriving the mechanism behind them. */
+    DCHECKF(out->classic_compile_overruns <= out->classic_compiles,
+            "solver/engine.c: classic_compile_overruns %ld exceeds classic_compiles %ld — both are raised on "
+            "the same line of the one compile site, the second unconditionally and the first under a test of "
+            "that compile's own duration, so a subset that outruns its population is one of them being "
+            "raised somewhere else",
+            out->classic_compile_overruns, out->classic_compiles);
+    /* AND THE CROSS-ROW ONE, WHICH IS WHAT TIES THE NEW PHASE TO THE TURN IT IS A PHASE OF. A compile whose
+       own duration met the slice sits inside a step whose duration is therefore at least as large, and the
+       step's own reading brackets flow_step from outside — flow_step has exactly ONE caller and the slice
+       accounting after it is unconditional, with no `continue`, `break`, `return` or `goto` between the two —
+       so every compile overrun is also a slice overrun BY CONSTRUCTION. A violation is that bracket having
+       been broken: a second caller of flow_step, or an arm that returns past the accounting, either of which
+       would silently stop `sliceOverruns` covering the turns these rows are drawn from. */
+    DCHECKF(out->classic_compile_overruns <= out->slice_overruns,
+            "solver/engine.c: classic_compile_overruns %ld exceeds slice_overruns %lld — a compile that alone "
+            "met the slice is inside a step that therefore met it too, so this says the step containing it "
+            "was not counted: flow_step has gained a caller outside the dispatch loop's clock bracket, or an "
+            "arm that returns before the slice accounting",
+            out->classic_compile_overruns, (long long)out->slice_overruns);
     /* THE IDENTITY, ASSERTED WHERE ALL THREE ARE IN ONE HAND — see g_slice_us for why the halves are rows and
        not a subtraction. Both arms are added inside the same iteration the charge is taken in, from the same
        two clock readings, so a difference is a THIRD phase having been added to the turn without an arm of its
