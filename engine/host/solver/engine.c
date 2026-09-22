@@ -8579,6 +8579,13 @@ static unsigned g_seen_gen = 0; static Flow *g_seen_cur = NULL; static Flow *g_r
    this invariant, and it will hold it at its own update site rather than at one cached rival. */
 static int64_t g_rival_own_notch = 0, g_rival_visits = 0;
 static double g_rival_val = 0.0, g_rival_dist = 0.0;
+/* …AND THE FIFTH SUMMAND, WHICH THE FOUR ABOVE OMITTED AND WHICH IS THE ONE A FORK MOVES FOR A WHOLE ARM AT
+   ONCE. flow_weight sums flow_branch_bonus, `1.0 / sub_born` over the member's top-level arm; `sub_born` is a
+   BUCKET field, so it is not a reading of this member at all and one sibling forking re-ranks every member of
+   the arm simultaneously. The INTEGER is snapshotted and not the quotient, for solver/flow.h's reason: the
+   term is a pure function of it, so this comparison entails the term's and is exact where a double's would be
+   a last-bit question asked of a quotient recomputed at another instant. */
+static long g_rival_branch_born = 0;
 /* WHAT THE FLOW HOLDING THE THREAD WAS RANKED ON WHEN IT TOOK IT — the quantities the value yield's
    verdict is a pure function of, recorded at the switch-in and read by the assertion in the hook's value
    clause. They are not policy and they are not a cache: nothing is decided from them, and the hook's answer is
@@ -8746,6 +8753,7 @@ static int preempt_hook(int kind) {
         if (g_rival) {
             g_rival_own_notch = flow_service_notch(g_rival); g_rival_visits = g_rival->visits;
             g_rival_val = flow_reward(g_rival); g_rival_dist = flow_distance(g_rival);
+            g_rival_branch_born = flow_branch_born(g_rival);
         }
     }
     /* (0) BLOCKED BEATS BOTH RANKINGS. A flow holding an unanswered synchronous host request cannot make
@@ -8767,22 +8775,32 @@ static int preempt_hook(int kind) {
        DEV-ONLY AND O(1), which is the whole reason it can stand in a per-opcode hook at all: the walk the
        equivalent claim over the frontier would cost is precisely the walk this assertion exists to make
        replaceable.
-       NOT COVERED: THE BRANCH BONUS, which is the fifth summand of flow_weight and the one this list omits.
-       `1.0 / sub_born` over the member's top-level arm moves for EVERY member of that arm whenever any of them
-       forks, and the raise sits in flow_fork_inherit — one statement AFTER the flow_new that bumps the
-       generation, so nothing observes the pair out of order today and the omission costs nothing that has been
-       shown. It is omitted because flow_branch_bonus is file-static to solver/flow.c and publishing an
-       accessor for it is a wider diff than this assertion, not because the term is exempt.
-       WHAT THE NEXT DIFF BUILDS: that accessor, and a fifth clause here reading it. HOW ITS ABSENCE WOULD
-       SHOW: a member whose branch mints an arm through some path that does not pass flow_new would re-rank
-       with the generation standing still, and every row in this hook and in the census would agree that
-       nothing had changed — the same silence the host-owed mark produced before a mark became a rank change,
-       and the one state this assertion is otherwise written to make loud. */
+       THE BRANCH BONUS IS THE FIFTH CLAUSE AND IT USED TO BE A NAMED RESIDUAL HERE. That residual said the
+       term was omitted because flow_branch_bonus is file-static to solver/flow.c and publishing an accessor
+       was a wider diff than this assertion — never because the term was exempt — and it named the next diff
+       as "that accessor, and a fifth clause here reading it". Both halves were exactly right and both are
+       built, which is worth recording because this file mostly records the other outcome: a remedy clause is
+       a claim about this tree written by somebody guessing at what fills a gap, and CLAUDE.md rates it a
+       HYPOTHESIS for that reason. This one was checked before it was obeyed — `FlowAcct` really is private to
+       flow.c, `sub_born` really has exactly two writers (its initialisation at flow_new and the join in
+       flow_fork_inherit), and no accessor existed.
+       WHAT IT COST WHILE IT STOOD WAS NOTHING THAT HAD BEEN SHOWN, AND THAT IS STILL TRUE — the raise sits in
+       flow_fork_inherit, one statement after the flow_new that bumps the generation, and no interpreter opcode
+       runs between them, so this hook cannot observe the pair out of order on any path that exists today. The
+       clause is here for the path that does not: a bucket minted into WITHOUT passing flow_new re-ranks a
+       whole arm with the generation standing still, and every row in this hook and in the census would agree
+       that nothing had changed — the same silence the host-owed mark produced before a mark became a rank
+       change, and the one state this assertion is otherwise written to make loud.
+       IT READS IN EVERY BUILD AND ADDS NO EXPOSURE THIS DECISION DID NOT ALREADY HAVE: flow_weight reaches the
+       same two indirections through flow_branch_bonus for EVERY member of EVERY pick, so the dereference this
+       line makes of the one member the hook is already holding is one the order performs anyway. */
     DCHECK(!g_rival ||
            (flow_service_notch(g_rival) == g_rival_own_notch && g_rival->visits == g_rival_visits &&
-            flow_reward(g_rival) == g_rival_val && flow_distance(g_rival) == g_rival_dist),
+            flow_reward(g_rival) == g_rival_val && flow_distance(g_rival) == g_rival_dist &&
+            flow_branch_born(g_rival) == g_rival_branch_born),
            "a term of the cached RIVAL's weight moved while the frontier generation stood still — its reward, "
-           "its completed-unit count, its fitness distance or its OWN service notch is not what it was when "
+           "its completed-unit count, its fitness distance, its branch bucket's mint count or its OWN service "
+           "notch is not what it was when "
            "this hook chose it, and none of those may change without a rank change being raised. Two things "
            "are now false at once: this hook is ranking against a rival the scheduler's pick would no longer "
            "have returned, and the ONE-BIT claim every sub-linear spelling of the order rests on — that "

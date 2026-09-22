@@ -4144,6 +4144,25 @@ static double flow_branch_bonus(const Flow *f) {
     return 1.0 / (double)br->sub_born;
 }
 
+/* THE DENOMINATOR THAT TERM DIVIDES BY, AND NOTHING ELSE — see solver/flow.h for why it is published and why
+   it is the INTEGER rather than the quotient. Read through the same two indirections flow_branch_bonus reads,
+   so the two cannot come to disagree about which bucket the member is in; a second spelling that walked to the
+   bucket some other way would be exactly the drift this file refuses everywhere else.
+   THE PRECONDITIONS ARE ASSERTED HERE AND NOT BORROWED FROM flow_branch_bonus, because this is an entry from
+   OUTSIDE this file and a caller of it has no other statement of them. They are the same two, in the same
+   order, and a member that fails either is one the branch census cannot reach either. */
+long flow_branch_born(const Flow *f) {
+    DCHECK(f != NULL && f->acct != NULL && f->acct->branch != NULL,
+           "a member's branch bucket was asked for with no bucket to ask — flow_new opens one for every node "
+           "and the fork moves membership rather than clearing it, so a null here is a member whose share of "
+           "the order's fifth term is attributed to nobody and whose weight cannot be reconciled");
+    DCHECK(f->acct->branch->sub_born >= 1,
+           "a member's own branch bucket reports that it has never minted anybody while that member is "
+           "standing in it — `sub_born` is a LIFETIME count written to 1 at flow_new and raised at the fork, "
+           "so a value below one is a retraction of a counter that may never fall");
+    return f->acct->branch->sub_born;
+}
+
 static double flow_nonreward(const Flow *f) {
     /* THE TWO READINGS AND THE ONE TAG, which is what this sum is now made of explicitly: the optimism
        bonus and the fitness distance are facts about THIS FLOW, and the aging is the queue coordinate it

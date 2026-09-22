@@ -2873,6 +2873,25 @@ int64_t flow_silence_notch(const Flow *f);
 int64_t flow_silence_phase(const Flow *f);
 int flow_silence_carry(const Flow *f);
 
+/* …AND THE ONE SUMMAND THAT CLAIM DOES NOT COVER, PUBLISHED SO THAT IT CAN. The pair above says that between
+   two frontier generations the ONLY per-member quantity in the weight that moves is the aging's carry, and
+   engine.c's rival assertion is where that is checked rather than asserted in prose — over the rival's own
+   service notch, its completed-unit count, its reward and its fitness distance. flow_weight has a FIFTH
+   summand: flow_branch_bonus, `1.0 / sub_born` over the member's top-level arm, and `sub_born` is a bucket
+   field every member of that arm reads through one pointer — so ONE fork raises it for ALL of them at once.
+   Nothing was watching it, and the reason was reach and not exemption: `FlowAcct` is file-private to flow.c,
+   so the term had no spelling outside that file for an assertion to name.
+   IT PUBLISHES THE DENOMINATOR AND NOT THE TERM, WHICH IS THE STRONGER OF THE TWO AND THE ONLY EXACT ONE.
+   `1.0 / sub_born` is a pure function of this integer, so equality here ENTAILS equality of the term, while a
+   double would be compared with `==` against a quotient recomputed at another instant — the last-bit
+   comparison flow.c's own phase pair refuses for an index, refused here for the same reason. It is also what
+   a reader can reconcile against `brBornMax`/`brBornMin`, which are this field over the whole frontier.
+   IT IS NOT A TERM AND NOTHING RANKS BY IT: flow_weight is untouched, no fork carries this and no arrival
+   copies it. Its one reader is an assertion about what may move while the generation stands still.
+   RETIREMENT: this goes with the pair above and for its reason — when the ask no longer walks the frontier,
+   the index is what holds this invariant and holds it at its own update site. */
+long flow_branch_born(const Flow *f);
+
 /* THE LOWEST-PRIORITY MEMBER OTHER THAN `exclude` — the TAIL the cold tier gives up first at the RAM floor, and
  * the SAME comparator as flow_best read in the other direction. Not a second ranking: the flow that is paged
  * out has to be the flow the WFQ would have run last, or the engine evicts what it was about to do and keeps
