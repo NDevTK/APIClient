@@ -2421,6 +2421,30 @@ typedef struct {
      *                   beside it — the same pair, and the same correction, that `deliv_framed` already
      *                   carries below and that this row was missing for longer. Read them before reading a
      *                   large `jobs_framed` as the precondition working.
+     *                   AND THAT PAIR IS A FLOOR FOR BOTH OF THE QUESTIONS IT IS HANDED TO, BECAUSE IT IS ONE
+     *                   RATIO ANSWERING TWO AND THE ROW WHERE THEY DIVERGE IS LEFT OUT OF EACH. The engine
+     *                   states "a program COMPLETED" at the line that advances `g_completed`, and that line
+     *                   stands ABOVE the naming line which splits the frame-clearing outcomes — so it covers
+     *                   `resume-ended-its-frame` and `report-an-exception` alike. It states "this member is
+     *                   UNFRAMED", which is what makes this row's whole ladder reachable, as
+     *                   `f->frame == NULL` — which `resume-ended-its-frame` and `program-detached-its-base`
+     *                   both satisfy and `report-an-exception` does not, the report taking the slot the
+     *                   program just vacated. The two populations therefore differ by ONE ROW APIECE IN
+     *                   OPPOSITE DIRECTIONS and `resume-ended-its-frame` is their INTERSECTION: read as a
+     *                   completion rate it drops every program that ended by THROWING, and read as a
+     *                   frame-clearing rate it drops every one that suspended at a TOP-LEVEL AWAIT. Forced
+     *                   execution is what makes the first omission large rather than marginal — a flow
+     *                   throwing on unknown input is the exploration surface working, so the row the
+     *                   completion reading drops is one this engine produces on purpose.
+     *                   MEASURED, AND IT IS WHY THIS IS WRITTEN HERE RATHER THAN LEFT TO WHOEVER MEETS IT: a
+     *                   lane drove two fresh browsers over one real application, read this prescribed pair at
+     *                   2.3% and 1.1%, and reported that almost no program which survives a preempt ever
+     *                   completes — a total taken from a floor, on the one ratio this file tells its reader
+     *                   to take it from, and offered as the row that explained an empty learned surface. Sum
+     *                   the arms for whichever question is being asked: they sum to `steps`, the addition is
+     *                   free, and no single arm of this histogram is a rate.
+     *                   RETIREMENT: this record goes when neither of the two readings above can be taken from
+     *                   one arm of this histogram.
      *                   RETIRES when this row can no longer be read without that rate — that is, when a
      *                   frame-ending count stands on this census beside it and the pairing is one sample.
      *   `jobs_ready`  — neither: an empty stack and no mark, so the member reaches its jobs at the very next
@@ -2529,6 +2553,15 @@ typedef struct {
      *                    that ended in the step that STARTED it, which a program long enough to issue a
      *                    request and go on running never is. `finished` beside them is how many flows have
      *                    ever retired.
+     *                    AND `ever COMPLETES` IS THE HALF OF THAT SENTENCE WHICH TRAVELS, WHICH IS WHY THE
+     *                    CORRECTION LIVES AT `jobs_framed` AND IS POINTED AT FROM HERE. The clause after it
+     *                    is EXACT for this row's own question — freeing a reply-holder needs
+     *                    `f->frame == NULL`, and `report-an-exception` leaves the report standing in that
+     *                    slot — while the completion reading in front of it drops that same row, because
+     *                    `g_completed` is advanced above the line that names either. A reader who carries the
+     *                    sentence away carries the WIDER claim, and one has. See `jobs_framed` for the two
+     *                    populations, for the row each reading omits, and for what quoting one arm as a rate
+     *                    has already cost.
      *                    WHAT A FRAMED ROW NEAR `live` MEANS WHEN THAT RATE IS NEAR ZERO is not that the arm
      *                    lost a ranking. flow_stack_empty's first line is `if (f->frame) return 0;` AND
      *                    engine.c encloses its whole task ladder — the delivery arm with it — in
