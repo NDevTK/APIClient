@@ -47,12 +47,16 @@
  * the forcing function; a shape-only object with the right member names would be the stub the audit exists to
  * expose. */
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "check.h"
 #include "quickjs.h"
 #include "solver/concolic.h"
+#include "solver/cow.h"        /* the instance's record is a component's own C state — it time-travels */
 #include "core/agent_state.h"
 #include "core/file/storage_manager.h"
 #include "core/frame/navigator.h"
@@ -150,8 +154,60 @@ static const char *const NAV_MODE_EXCLUDED[] = { "taintEnabled", "oscpu" };
    sends the reader to a section saying nothing about receivers reads as authority and is checkable only by
    someone who fetches the text, which is why a WRONG number is worse than none. */
 static JSClassID g_nav_class;
-static int g_vals_slot = -1;   /* this realm's member VALUES, indexed by the enum above */
-static int g_obj_slot  = -1;   /* this realm's one Navigator */
+static int g_obj_slot  = -1;   /* this realm's one Navigator — `window.navigator`'s [SameObject] holder */
+
+/* THE RECORD — the environment §8.10.1's members answer from, and the member values, carried by the Navigator
+ * rather than by the realm.
+ *
+ * WHY THE INSTANCE AND NOT THE REALM. A C member runs in the realm that DEFINED it (js_call_c_function does
+ * `ctx = p->u.cfunc.realm`), so a member reading a per-REALM slot answers out of whichever realm's prototype
+ * the call went through, not out of the receiver. HTML §6.4.4 "The UserActivation interface" says "the
+ * userActivation getter steps are to return THIS's relevant global object's associated UserActivation", and
+ * PERMISSIONS §6.1's member is the same shape — the input is the receiver's global, and a realm slot is
+ * structurally unable to supply it.
+ *
+ * THE ASSERT THAT STOOD HERE WAS A PAGE-HELD ABORT SWITCH. It compared the receiver against this realm's own
+ * Navigator and DCHECKed them equal — and a receiver is PAGE-SUPPLIED INPUT, which a DCHECK may never stand on
+ * (CLAUDE.md §WHOSE-BYTES-STATE-THE-VALUE). `Object.getOwnPropertyDescriptor(Navigator.prototype, "userAgent")
+ * .get.call(otherFrame.navigator)` is two lines of ordinary JavaScript and ended the process, and a FORCING
+ * solver writes receivers like that constantly. What Web IDL §3.7.6/§3.7.7 ask is the BRAND and nothing
+ * beside it; `nav_brand` already answers that with a TypeError, so the realm comparison was a different
+ * question with no standing rather than a stricter version of the same one.
+ *
+ * TWO FIELDS FOR TWO FACTS. `vals` is what the X-list members answer with — a per-realm array, so it has to
+ * ride the object that names the realm. `realm` is the ENGINE's handle on the environment, for the two members
+ * whose value belongs to ANOTHER component keyed by realm (user_activation.c's and permissions.c's): those
+ * answer state read at the call rather than a stored value, so what they need is the receiver's context.
+ *
+ * `global` IS WHAT MAKES `realm` SAFE, and it is a declared JSValue edge rather than a `JS_DupContext`. A raw
+ * JSContext in a record whose object can outlive its realm is a dangling handle — a page can hold
+ * `otherFrame.navigator` after the frame is gone — and holding the realm's GLOBAL closes it, because the
+ * global's members are C function objects each holding a counted reference to the realm that defined them, so
+ * a live global is a live realm. A context reference hung off an opaque would be invisible to gc_decref and
+ * would make the realm PERMANENTLY uncollectable; a JSValue in the layout below is marked, freed and dup'd like
+ * any other, so the collector can still break the cycle. core/timing/performance.c states this same reasoning
+ * at its own record and is where it was read from.
+ *
+ * EVERY CROSS-REALM RECEIVER THAT CAN REACH THIS IS SAME-AGENT, so `realm` is always a context of this runtime:
+ * SECURITY.md keys an instance on `(browsing context group, origin)`, and HTML §7.2.1.3.1's
+ * CrossOriginProperties(Window) does not carry `Navigator`, so a cross-ORIGIN document's interface object is
+ * not reachable as a JS object at all. What IS reachable is a same-origin document of this agent, which is one
+ * heap. */
+typedef struct {
+    JSContext *realm;    /* the environment the two component-owned members answer from. NOT a counted ref */
+    JSValue    global;   /* "this's relevant global object" — OWNED, and what holds `realm` up */
+    JSValue    vals;     /* §8.10.1's member values, indexed by the enum above. OWNED. */
+} Navigator;
+
+/* THE ONE STATEMENT OF WHAT THE RECORD OWNS — the same list the finalizer frees and the gc_mark walks, which
+   is why all three are written here together. `realm` is not in it: it is a pointer and not a JSValue, so the
+   capture copies its BYTES with the rest of the record and never dups or frees it, which is exactly right for
+   a handle whose lifetime the value beside it guarantees. */
+static const uint16_t NAV_VAL_OFF[] = {
+    (uint16_t)offsetof(Navigator, global),
+    (uint16_t)offsetof(Navigator, vals),
+};
+static const CowRecord NAV_REC = { sizeof(Navigator), NAV_VAL_OFF, 2 };
 static int g_id_java_enabled = -1;
 
 /* WEB IDL §3.7.6 "Attributes"' BRAND CHECK. `Navigator.prototype.userAgent` read off a plain object is a TypeError, and a
@@ -179,38 +235,76 @@ bool navigator_is(JSValueConst v)
     return JS_GetClassID(v) == g_nav_class;
 }
 
-/* THE HALF OF "THIS's ..." THIS ENGINE CAN ANSWER, asserted rather than assumed — the same shape, and the same
-   reason, as user_activation.c's. A C member runs in the realm that DEFINED it (js_call_c_function takes `ctx`
-   from the function object), so an ordinary `navigator.userAgent` arrives with the ctx of the document whose
-   prototype it went through, which is the right Navigator. What does NOT arrive right is one realm's getter
-   applied to ANOTHER realm's Navigator: the values would come out of the getter's realm, so `languages` would
-   answer a frozen array belonging to a different document (breaking the SameObject the spec states for it) and
-   `userActivation` would report a different Window's interaction. */
-static void nav_assert_this_realm(JSContext *ctx, JSValueConst this_val)
+/* THE ACCESSOR EVERY MEMBER REACHES THE RECORD THROUGH, and the capture is IN it for solver/cow.h's reason: a
+   record a flow has REACHED is one it may write, the delta dedups to one entry per (flow, object), and there is
+   then no write site left to miss. Bounded by §8.10.1's own shape — one Navigator per realm, so at most one
+   delta entry per realm per flow.
+   NOT nav_brand and NOT navigator_is: a brand check is a QUESTION, asked of values that are not Navigators at
+   all, and a question must not capture. */
+static Navigator *nav_rec(JSValueConst v)
 {
-    JSValue own = realm_value_get(ctx, g_obj_slot);
-    bool same = JS_VALUE_GET_PTR(own) == JS_VALUE_GET_PTR(this_val);
+    Navigator *n = g_nav_class ? JS_GetOpaque(v, g_nav_class) : NULL;
 
-    JS_FreeValue(ctx, own);
-    DCHECK(same, "a Navigator member was reached through ONE realm's Navigator.prototype on ANOTHER realm's "
-                 "Navigator — answering out of the member's own realm reports the wrong document's values. "
-                 "BUILD the Navigator that carries its own realm's record: give the instance the record as its "
-                 "class opaque (with the finalizer, gc_mark and cow_capture_host_record contract that entails) "
-                 "so the member reads it off THIS, and delete the two realm slots below");
+    if (n) cow_capture_host_record(v, n, &NAV_REC);
+    return n;
 }
 
-/* THE VALUE A MEMBER ANSWERS WITH, out of this realm's record. Owned — the caller returns it. */
-static JSValue nav_value(JSContext *ctx, int idx)
+/* JS_GetAnyOpaque and not JS_GetOpaque in BOTH of these — core/agent_state.h's rule: the collector dispatched
+   here THROUGH the class, so the id is a fact it already has and must not look up. */
+static void nav_finalizer(JSRuntime *rt, JSValue val)
 {
-    JSValue rec = realm_value_get(ctx, g_vals_slot);
+    JSClassID id = 0;
+    Navigator *n = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
+    DCHECK(n != NULL, "a Navigator was finalized with no record — §8.10.1's object has exactly one mint and it "
+                      "attaches the record with nothing in between that could collect");
+    JS_FreeValueRT(rt, n->global);
+    JS_FreeValueRT(rt, n->vals);
+    free(n);
+}
+
+static void nav_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
+{
+    JSClassID id = 0;
+    Navigator *n = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
+    DCHECK(n != NULL, "a Navigator was marked with no record — its global and its member array are counted "
+                      "references, and an unmarked child keeps the internal count gc_decref subtracts, so "
+                      "gc_scan reads it as rooted from OUTSIDE the heap and it is never collected at all");
+    JS_MarkValue(rt, n->global, mark_func);
+    JS_MarkValue(rt, n->vals, mark_func);
+}
+
+/* "THIS's RELEVANT GLOBAL OBJECT", ANSWERED RATHER THAN ASSERTED ABOUT — the environment the two members below
+   name, taken off the RECEIVER. Every assert here is about a value THIS component wrote at the mint, which is
+   the only thing a DCHECK may stand on; the receiver itself is page-supplied and its brand is a TypeError one
+   line above every caller. */
+static JSContext *nav_environment(JSValueConst this_val)
+{
+    Navigator *n = nav_rec(this_val);
+
+    DCHECK(n != NULL, "a Navigator reached a member with no record — the brand is the class and the mint "
+                      "attaches the record before the object leaves it, so a branded object without one came "
+                      "from a second mint that does not exist");
+    DCHECK(n->realm != NULL, "a Navigator names no environment — §8.10.1's mint is the one writer of this "
+                             "field and it writes the realm it is installing into");
+    return n->realm;
+}
+
+/* THE VALUE A MEMBER ANSWERS WITH, out of THE RECEIVER'S record. Owned — the caller returns it. */
+static JSValue nav_value(JSValueConst this_val, int idx)
+{
+    Navigator *n = nav_rec(this_val);
     JSValue v;
 
     DCHECK(idx >= 0 && idx < NAV_N, "a Navigator getter was installed with a magic that is not a member index "
                                     "— the magic IS the index into the one member X-list");
-    v = JS_GetPropertyUint32(ctx, rec, (uint32_t)idx);
-    JS_FreeValue(ctx, rec);
-    DCHECK(!JS_IsUndefined(v), "a Navigator member's realm record holds nothing at its index — the member list "
-                               "and the record builder are one X-list, so an empty index means a member was "
+    DCHECK(n != NULL, "a Navigator reached a member with no record — see nav_environment");
+    v = JS_GetPropertyUint32(n->realm, n->vals, (uint32_t)idx);
+    DCHECK(!JS_IsUndefined(v), "a Navigator member's record holds nothing at its index — the member list and "
+                               "the record builder are one X-list, so an empty index means a member was "
                                "declared and never given the value its IDL says it answers with");
     return v;
 }
@@ -220,8 +314,7 @@ static JSValue nav_value(JSContext *ctx, int idx)
 static JSValue js_nav_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
     if (!nav_brand(ctx, this_val)) return JS_EXCEPTION;
-    nav_assert_this_realm(ctx, this_val);
-    return nav_value(ctx, magic);
+    return nav_value(this_val, magic);
 }
 
 /* HTML §8.10.1.6: "The NavigatorPlugins mixin's javaEnabled() method steps are to return false." A no-effect
@@ -243,8 +336,10 @@ static JSValue js_nav_user_activation(JSContext *ctx, JSValueConst this_val, int
 {
     (void)magic;
     if (!nav_brand(ctx, this_val)) return JS_EXCEPTION;
-    nav_assert_this_realm(ctx, this_val);
-    return user_activation_object(ctx);
+    /* THE ENVIRONMENT IS THE RECEIVER'S AND NOT `ctx` — §6.4.4 says "this's relevant global object's
+       associated UserActivation", so the argument is what makes this member §6.4.4 rather than one that
+       reports whichever document's interaction the page reached the getter through. */
+    return user_activation_object(nav_environment(this_val));
 }
 
 /* PERMISSIONS §6.1: `partial interface Navigator { [SameObject] readonly attribute Permissions permissions; }`,
@@ -255,8 +350,10 @@ static JSValue js_nav_permissions(JSContext *ctx, JSValueConst this_val, int mag
 {
     (void)magic;
     if (!nav_brand(ctx, this_val)) return JS_EXCEPTION;
-    nav_assert_this_realm(ctx, this_val);
-    return permissions_object(ctx);
+    /* THE ENVIRONMENT IS THE RECEIVER'S AND NOT `ctx`, for §6.4.4's reason one member up: [SameObject] comes
+       from where the permissions component KEEPS its object, and which object that is depends on whose realm
+       is asking. */
+    return permissions_object(nav_environment(this_val));
 }
 
 /* HTML §7.2.2 "The Window object"'s two Window members that name this object — that is where the IDL sits, and
@@ -415,6 +512,7 @@ static JSValue nav_build_values(JSContext *ctx)
 static void navigator_install_realm(JSContext *ctx)
 {
     JSValue proto, prev, global, nav;
+    Navigator *n;
     int i;
 
     /* WEB IDL §3.8 "Platform objects implementing interfaces"' internally create a new object implementing the
@@ -457,8 +555,6 @@ static void navigator_install_realm(JSContext *ctx)
     DCHECK(JS_IsNull(prev), "navigator_install_realm ran twice in one realm — everything already holding the "
                             "first Navigator.prototype would answer out of a discarded object");
     JS_FreeValue(ctx, prev);
-
-    realm_value_set(ctx, g_vals_slot, nav_build_values(ctx));
 
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "Navigator.prototype could not be allocated");
@@ -504,6 +600,16 @@ static void navigator_install_realm(JSContext *ctx)
     nav = JS_NewObjectProtoClass(ctx, proto, g_nav_class);
     JS_FreeValue(ctx, proto);
     CHECK(!JS_IsException(nav), "the Window's associated Navigator could not be allocated");
+    /* THE RECORD, ATTACHED BEFORE THE OBJECT LEAVES THIS FUNCTION — which is what nav_environment's "a branded
+       object without one came from a second mint that does not exist" rests on, and there is no second mint.
+       The values are built HERE rather than on first read because a value minted lazily is built inside
+       whichever FLOW got there first, making that flow's baseline everyone's. */
+    n = calloc(1, sizeof *n);
+    CHECK(n != NULL, "this realm's Navigator record could not be allocated");
+    n->realm  = ctx;
+    n->global = JS_DupValue(ctx, global);
+    n->vals   = nav_build_values(ctx);
+    JS_SetOpaque(nav, n);
     realm_value_set(ctx, g_obj_slot, nav);
 
     idl_install_accessor(ctx, global, "navigator", js_win_navigator, 0, -1);
@@ -513,22 +619,21 @@ static void navigator_install_realm(JSContext *ctx)
 
 void navigator_init(JSContext *ctx)
 {
-    JSClassDef d = { "Navigator" };
+    JSClassDef d = { "Navigator", .finalizer = nav_finalizer, .gc_mark = nav_gc_mark };
 
-    DCHECK(g_vals_slot < 0, "navigator_init ran twice — the class and the slots are declared once per AGENT");
+    DCHECK(g_obj_slot < 0, "navigator_init ran twice — the class and the slot are declared once per AGENT");
     /* THE CLASS IS BOTH THE PER-REALM PROTOTYPE SLOT AND THE BRAND: the one object per realm WEARS it, so
        §3.7.6/§3.7.7's check is a class-id comparison and a page cannot forge one. */
     JS_NewClassID(JS_GetRuntime(ctx), &g_nav_class);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_nav_class, &d) == 0,
           "Navigator: the per-realm prototype slot could not be declared");
-    g_vals_slot = realm_value_declare(ctx, "HTML §8.10.1 the Navigator's member values");
     g_obj_slot  = realm_value_declare(ctx, "HTML §8.10.1 the Window's associated Navigator");
     /* DECLARED once per agent and INSTALLED per realm, like every other member: a declaration builds a pool
        entry and a member has ONE, so declaring inside the install would mint a second entry for the second
        realm's prototype — which is what the pool's seal asserts against. */
     g_id_java_enabled = idl_method_id(ctx, NULL, 0, js_nav_java_enabled, 0);
-    agent_state_id("navigator", &g_vals_slot, "§8.10.1's member-values realm slot, and the declaration latch");
-    agent_state_id("navigator", &g_obj_slot, "HTML §8.10.1's associated-Navigator realm slot");
+    agent_state_id("navigator", &g_obj_slot,
+                   "HTML §8.10.1's associated-Navigator realm slot, and the declaration latch");
     agent_state_id("navigator", &g_id_java_enabled, "§8.10.1's javaEnabled declaration");
     /* BEACON §2.1's member, declared HERE for the reason Permissions §6's whole component is declared below:
        a host that has a Navigator has `navigator.sendBeacon`, so a per-host line would be exactly the
@@ -548,9 +653,10 @@ void navigator_init(JSContext *ctx)
 void navigator_free(void)
 {
     /* The prototypes, the interface objects, the Navigators and their records are the REALMS' — each is
-       released with its context. What the agent holds is the two slots and the member's pool id, and a slot id
-       is a class id in a runtime that is going away with it. */
-    g_vals_slot = -1;
+       released with its context, and a Navigator's record goes with it through nav_finalizer. What the agent
+       holds is the associated-Navigator slot and the member's pool id, and a slot id is a class id in a runtime
+       that is going away with it. (It read "the two slots": the member-values slot moved onto the instance, so
+       there is one.) */
     g_obj_slot = -1;
     g_id_java_enabled = -1;
     /* BEACON §2.1's member is declared from navigator_init, so it is released from here — the same rule the
