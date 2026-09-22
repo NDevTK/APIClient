@@ -3061,11 +3061,27 @@ static const JSCFunctionListEntry XHR_CONSTANTS[] = {
    real effect. Absent, this engine is exactly a user agent that does not ship the API, which most browsers
    are, and the page's own TypeError is the forcing function.
    THE SAME DECISION'S OTHER HALF IS core/fetch/request.c's REQUEST_INIT, which declines to declare the
-   `privateToken` member PRIVATE STATE TOKEN API §6.1 Definitions adds to `RequestInit`, for this reason and
-   one more that applies here too: `PrivateToken`'s `issuers` is `sequence<USVString>`, and there is no such
-   row in IdlArgType — `IDL_SEQUENCE_DOMSTRING` is a DIFFERENT type, since WEB IDL §3.2.12 USVString replaces
-   every unpaired surrogate with U+FFFD and an issuer is an origin that goes on the wire.
-   WHAT WOULD CHANGE THIS IS THE FEATURE, never the signature. */
+   `privateToken` member PRIVATE STATE TOKEN API §6.1 "Definitions" adds to `RequestInit` — FOR THE REASON
+   ABOVE AND NO OTHER. The two halves state ONE argument, so a reason retired at either is retired here, and
+   that file holds the full record of the one that was.
+   A SECOND REASON STOOD IN THIS PARAGRAPH AND IS RETIRED, named rather than deleted because a reader who
+   re-derives it will re-introduce it: it said `PrivateToken`'s `issuers` is `sequence<USVString>` and that
+   IdlArgType had no such row, which made the member undeclarable whatever anyone decided about the feature.
+   Its REASONING was right and is why that row exists at all — `IDL_SEQUENCE_DOMSTRING` is a DIFFERENT type,
+   since WEB IDL §3.2.12 "USVString" converts its value to a sequence of scalar values (every unpaired
+   surrogate replaced) and an issuer is an origin that goes on the wire. Only its claim about THIS TREE
+   moved: `IDL_SEQUENCE_USVSTRING` is a row of IdlArgType at core/idl_args.h, added for File System Access's
+   accepted file types, so all four of `PrivateToken`'s members are declarable today and no re-derivation of
+   the retired reason survives one grep of that enum — which is what retires this record rather than a date.
+   IT ALSO CONTRADICTED THE LINE IT SAT ABOVE, which is how a drifting half announces itself from inside one
+   of them: this paragraph ended "never the signature" while the sentence before it gave a signature reason,
+   so the file held two answers to one question and a reader got whichever they reached last. Nothing
+   mechanical reports that — both sentences are prose, and the audit row the decision is kept visible by
+   (`node engine/idlgen.mjs` naming `RequestInit: privateToken`) says nothing about the reason either half
+   gives for it.
+   WHAT WOULD CHANGE THIS IS THE FEATURE, AND NOW NOTHING ELSE — the issuing protocol, the redemption and
+   the header field named above, no one of them a signature and no one of them supplied by installing a
+   member. */
 static const char *const XHR_ABSENT[] = { "setPrivateToken" };
 
 /* XHR §3 "Interface XMLHttpRequest"'s THREE Web IDL §3.7.3 INTERFACE PROTOTYPE OBJECTS, their §3.7.1 INTERFACE
