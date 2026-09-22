@@ -148,6 +148,20 @@ for _row in "${SITE_ROWS[@]}"; do
     TARGET=http://127.0.0.1:$FIXPORT/
   fi
   ( cd "$LANE" && timeout 240 node testing/harness.js restart "$PORT" ) >"$CORP/logs/$id.restart" 2>&1
+  RC=$?
+  # A FAILED `restart` IS ITS OWN FATAL AND MUST NOT FALL THROUGH TO THE IDENTITY POLL BELOW, because that
+  # poll answers with ONE SENTENCE for TWO STATES that take opposite work: somebody else's browser is on this
+  # port (go and find it), and our own launch refused or died before any browser existed (read why it
+  # refused). The identity poll cannot tell them apart -- it asks whether the port serves OUR id, and both
+  # states answer no -- so with the exit code discarded a reader met the port-collision reading first and
+  # went looking for a peer that was never there. `harness.js` states the discriminating cause in its own
+  # refusal, and that refusal lands in this log: the only thing missing was anything reading the status.
+  # 124 is `timeout`'s, which is the launch taking longer than the window rather than refusing.
+  if [ "$RC" -ne 0 ]; then
+    echo "{\"id\":\"$id\",\"url\":\"$url\",\"fatal\":\"harness restart exited $RC, so no browser of ours was ever launched on $PORT -- read logs/$id.restart, whose last paragraph names the cause; this is NOT the port-collision reading\"}" >> "$OUT"
+    [ -n "$SRV" ] && { kill $SRV 2>/dev/null; wait $SRV 2>/dev/null; }
+    continue
+  fi
   # CONFIRM THE BROWSER IS OURS BEFORE DRIVING IT. `restart` can report "started" while its Chrome is
   # already gone, and one lane then silently drove another agent's browser and lost a whole pass.
   MYID=$(node -e "const c=require('crypto');const h=c.createHash('sha256').update(Buffer.from(process.argv[1],'utf8')).digest('hex').slice(0,32);let i='';for(const x of h)i+=String.fromCharCode(97+parseInt(x,16));console.log(i)" "$LANE/extension")
