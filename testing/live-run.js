@@ -326,7 +326,19 @@ const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "u
  * THE COORDINATES HERE ROT AND THE SHAPE DOES NOT: a minified bundle's chunk names, hashes and index numbers
  * change on every deploy, so re-derive the table with the grep above rather than trusting the index, and read
  * the rest as what a webpack bundle IS. */
-const CENSUS_LIFETIME = ["stepUnitRuns"];
+/* …AND THE HALF OF THAT PAIR THIS DRIVER CARRIED WITHOUT. solver/engine.h's `over_arms` states the contract
+ * in its own words — "the PAIR is the reading: an arm with many runs and no overruns is cheap however often
+ * it is taken, and an arm whose two counts are EQUAL is a step that cannot rest" — and this list held the
+ * RUNS half alone, which is the half that banner says means nothing by itself. Both are LIFETIME histograms
+ * over solver/step_unit.h's one arm list, `sum(runs) == steps` and `sum(over) == sliceOverruns` asserted
+ * where each pair is in one hand, so they are differenceable across two samples of ONE instance.
+ * MEASURED, WHICH IS WHY IT IS HERE AND NOT ARGUED: on gitlab.com/explore, two fresh browsers, the terminal
+ * census reads `start-a-classic-program` overrunning 9 of 12 and 6 of 10 while `start-ended-its-frame` — a
+ * start that COMPILED AND FINISHED inside the step — overran 0 of 10 and 0 of 7, and `resume-program`
+ * overran 227 of 5797 and 20 of 25102. Those three rows name three different diffs and the runs half alone
+ * names none of them. The reading took an ad-hoc script against scratchpad probe JSON because no tracked
+ * driver in this tree read either row; `testing/step_unit_read.py` is that derivation, tracked. */
+const CENSUS_LIFETIME = ["stepUnitRuns", "stepUnitOverruns"];
 /* …AND THE REPLY DOOR'S ONE LEVEL, FILED WITH THE GAUGES AND NOT WITH ITS OWN THREE SIBLINGS, which is the
    whole reason this driver splits the two lists: `replyOutstanding` is the count of records the host may still
    be shown AT THE INSTANT the census was composed, so it may FALL and differencing it reads a level as a rate.
@@ -380,7 +392,37 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      (one per divergence, whatever it abandoned). Three lifetime counts in two units under one banner is the
      kind-stated/unit-unstated half of §A-GAUGE-AND-A-LIFETIME-COUNTER, and a reader who divides one by the
      other gets a ratio of two things. */
-  "replayHits", "replayLeft", "replayLeftArms"];
+  "replayHits", "replayLeft", "replayLeftArms",
+  /* AND THE DENOMINATOR EVERY ROW ABOVE IS A SHARE OF, PLUS THE FOUR-WAY ANSWER TO WHY A TURN DID NOT END A
+     UNIT OF WORK. `steps` is what solver/result.c names as `_unitsDone`'s denominator — it says so at the
+     `_unitsDone` line and deliberately does not re-emit itself there — and this driver carried `unitsDone` in
+     COUNTERS with no denominator anywhere in its output, so every reading of it was a numerator alone.
+     THE THREE `unit*` ROWS ARE THE REFUSAL ARMS OF THAT SAME GATE and the fourth arm is `unitsDone` itself,
+     in the OTHER object of the result document; solver/engine.c asserts all four sum to `steps` at the line
+     the credited arm is written on, which is the only thing that makes composing the split across this
+     driver's two lists legitimate. Without them `unitsDone` reading low is three states behind one answer.
+     MEASURED on gitlab.com/explore, terminal censuses of two fresh browsers: `unitParked` and
+     `unitCheckpointOwed` read ZERO at every one of 28 censuses while `unitMidProgram` carried 96.6% and 98.6%
+     of all steps — so the turns are not parked on the host and not owed a checkpoint, which is a pair of
+     NEGATIVES no other row in this driver's output can state. The same counters read 12-19 and 34-38 on the
+     native smoke at the same revisions, so that zero is an armed measurement and not a dead probe.
+     `sliceOverruns` IS THE TURNS THAT MET THE COOPERATIVE SLICE and `sliceUs` is what those turns spent; the
+     pair is the only way to price an overrun, because the count alone cannot tell a turn 1.2x past the slice
+     from one 7400x past it and this document's real-page runs contain both. Read them together or not at all.
+     `classicCompiles`/`classicCompileOverruns` SPLIT A START'S COMPILE FROM ITS EXECUTION and landed later
+     than the rest; an artifact older than them prints `-`, which is this driver's absent-versus-zero rule and
+     is the honest answer — the run did not state them. As of this commit NO measurement artifact in this tree
+     carries either one, so the phase question they exist to settle has never been measured on either host.
+     `rootPrograms`/`deepest`/`completed`/`deepestLeft` ARE THIS FILE'S OWN NAMED NEXT DIFF, taken now: the
+     banner above says in as many words that without `rootPrograms` "`deepest` names a distance with no length
+     beside it, and the same absence produced a landed analysis that read `progStarts` as a script count and
+     reported scripts that never start". They are MAXIMA and not counts — solver/engine.h calls them so — and a
+     maximum saturates and then plateaus, so a plateau in one is NOT a ceiling and the series length is part of
+     quoting it. `finished` is the departure fact and is a genuine lifetime count. */
+  "steps", "sliceUs", "sliceOverruns",
+  "unitMidProgram", "unitParked", "unitCheckpointOwed",
+  "classicCompiles", "classicCompileOverruns",
+  "rootPrograms", "deepest", "completed", "deepestLeft", "finished"];
 
 /* WHERE THE FRONTIER STOOD, WHAT ITS STEPS DID, AND WHAT GREW IT — read off the row bridge.js wrote, never
    recomputed. `forkAt` is taken WHOLE and is not truncated to its heaviest rows: it is already a Space-Saving
