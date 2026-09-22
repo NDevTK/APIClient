@@ -24,12 +24,22 @@
  * and it is quickjs's per-context prototype slot, which is what makes §3.7.3's interface prototype object a
  * per-REALM object rather than a module static answering every document from whichever realm ran first.
  *
- * IT ANSWERS FOR `this`'s REALM AND THAT IS ASSERTED. §7.1 and §7.2 both say "this's relevant global object",
- * and a C member runs in the realm that DEFINED it (js_call_c_function sets `ctx = p->u.cfunc.realm`), so an
- * ordinary `performance.now()` arrives with the right realm and `topWindow.Performance.prototype.now.call(
- * iframeWindow.performance)` does not — it would answer the TOP document's clock and origin for the FRAME's
- * Performance. The same shape and the same assert as core/frame/visual_viewport.c's, and the same repair named
- * in it: give the instance a record as its class opaque so the member reads its environment off `this`.
+ * IT ANSWERS FOR `this`'s REALM AND THAT IS NOW BUILT RATHER THAN ASSERTED. §7.1 and §7.2 both say "this's
+ * relevant global object", and a C member runs in the realm that DEFINED it (js_call_c_function sets
+ * `ctx = p->u.cfunc.realm`), so an ordinary `performance.now()` arrives with the right realm and
+ * `topWindow.Performance.prototype.now.call(iframeWindow.performance)` does not. The instance carries its own
+ * environment — a record as its class opaque, holding the realm and §7's own "relevant global object" — and the
+ * members read it off `this`; performance.c states the record, its layout, and why the global is in it.
+ *
+ * THIS PARAGRAPH USED TO END "and the same repair NAMED IN IT", pointing at core/frame/visual_viewport.c's
+ * assert as the shared shape, AND THE ASSERT IT POINTED AT WAS THE DEFECT. A receiver is page-supplied input,
+ * so a DCHECK on it hands any page an abort switch over the whole engine: the getter pulled off one realm's
+ * `Performance.prototype` and applied to another realm's `performance` is a call Web IDL §3.7.6 ADMITS — its
+ * refusal is "If jsValue does not implement target", and target is the INTERFACE — and this component aborted
+ * the run on
+ * it, taking every finding with it, which a FORCING solver reaches as routine work. The sentence is rewritten
+ * rather than deleted because the SHAPE it named is real and still stands at the siblings: what was wrong was
+ * treating the assert as the mechanism rather than as the thing to replace.
  *
  * WHAT IS HONESTLY ABSENT HERE. §7's IDL is three members and all three are built. Every other member a page
  * finds on `performance` in a browser comes from a PARTIAL in another standard. WHICH of them are absent is a
