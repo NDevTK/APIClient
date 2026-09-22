@@ -2433,9 +2433,12 @@ typedef struct {
      *                   OPPOSITE DIRECTIONS and `resume-ended-its-frame` is their INTERSECTION: read as a
      *                   completion rate it drops every program that ended by THROWING, and read as a
      *                   frame-clearing rate it drops every one that suspended at a TOP-LEVEL AWAIT. Forced
-     *                   execution is what makes the first omission large rather than marginal — a flow
-     *                   throwing on unknown input is the exploration surface working, so the row the
-     *                   completion reading drops is one this engine produces on purpose.
+     *                   execution is what makes the first omission a POPULATION rather than an edge case — a
+     *                   flow throwing on unknown input is the exploration surface working, so the row the
+     *                   completion reading drops is one this engine produces on purpose. HOW LARGE IT IS ON
+     *                   ANY RUN IS NOT ASSERTED HERE AND MUST NOT BE, because it is a number `stepUnitRuns`
+     *                   already prints and a magnitude written into this paragraph would be a claim competing
+     *                   with the command that answers it.
      *                   MEASURED, AND IT IS WHY THIS IS WRITTEN HERE RATHER THAN LEFT TO WHOEVER MEETS IT: a
      *                   lane drove two fresh browsers over one real application, read this prescribed pair at
      *                   2.3% and 1.1%, and reported that almost no program which survives a preempt ever
