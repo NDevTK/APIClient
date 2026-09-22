@@ -460,6 +460,54 @@ static const ElReflect R_TEMPLATE[] = {
     { "shadowRootCustomElementRegistry", "shadowrootcustomelementregistry", REFLECT_STRING },
 };
 static const ElReflect R_DATA[]   = { { "value", "value", REFLECT_STRING } };
+/* HTML §16.3.3 "Other elements, attributes and APIs" — TEN INTERFACES WHOSE ENTIRE OWN SURFACE IS THIS, and
+   the reason none of them had a row is that the section states them as IDL and almost no prose: a reader
+   looking for the behaviour to implement finds a `partial interface` block and nothing else, which reads as
+   nothing to do. It is not nothing. Each member is `[CEReactions, Reflect]` over a `DOMString` or a `boolean`
+   with NO argument, so HTML §2.6.2 "Using reflect via IDL extended attributes" decides the content attribute
+   name outright — "its reflected content attribute name is the string value it takes if one is provided;
+   otherwise, it is the IDL attribute name converted to ASCII lowercase" — which is why `noShade` names
+   `noshade` and every other row here names itself. There is no getter of its own to write and no setter of its
+   own to write: §2.6.1's steps ARE the member, so a row is the whole of it and a row is complete on arrival.
+   THE SECTION WAS READ FOR THE ONE THING ITS IDL CANNOT STATE, and carries none of it. The phrase §2.6.1
+   spends its enumerated branches on occurs ZERO times in §16.3.3, and so do the two phrases that would give a
+   member steps of its own — grep the committed corpus for `limited to only known values`, `getter steps` and
+   `setter steps` under that number and all three answer nothing. That is the check R_INPUT's `autocomplete`
+   note and the `dir` mirror exist because of: an enumerated attribute declared REFLECT_STRING answers the raw
+   bytes, which is a different VALUE and not a lenient reading. It is a question about the SECTION'S TEXT
+   rather than about the IDL, so the IDL cannot be asked it and it has to be asked every time.
+   WHAT IS DELIBERATELY NOT HERE, and why each would be a WRONG value rather than a missing one:
+     - §16.3.3's `HTMLFontElement.color` is `[CEReactions, Reflect] attribute [LegacyNullToEmptyString]
+       DOMString color`, and the ElReflect row has no field for that extended attribute. Web IDL §3.4.6
+       "[LegacyNullToEmptyString]" is a conversion on the value going IN — "instead of being stringified to
+       null, which is the default, it will be converted to the empty string" — so a plain REFLECT_STRING row
+       would write the four characters `null` into the content attribute where a browser writes nothing at
+       all, silently, in the one direction a page clearing a colour actually uses. `face` and `size` are plain
+       and would both be correct, and the interface is left WHOLE rather than split: two right rows beside a
+       wrong one is worse than three absent, because the wrong one is then certified by its neighbours.
+     - `HTMLPreElement.width`, `HTMLLIElement.value` and `HTMLOListElement.start` are `attribute long`, and the
+       kind enum in core/dom/element.h offers REFLECT_ULONG with no signed twin. `<li value="-3">` is markup a
+       page really writes, so a ULONG row answers a clamped positive for it — a wrong value again, and this
+       time one the member audit reports as installed. THE NEXT DIFF IS THE KIND: a REFLECT_LONG beside
+       REFLECT_ULONG running §2.6.1's signed parse, after which those three are three rows. ITS ABSENCE SHOWS
+       as an interface whose string and boolean reflections read complete while a `long`-typed one beside them
+       is still reported absent. */
+static const ElReflect R_P[]       = { { "align", "align", REFLECT_STRING } };
+static const ElReflect R_H[]       = { { "align", "align", REFLECT_STRING } };
+static const ElReflect R_LEGEND[]  = { { "align", "align", REFLECT_STRING } };
+static const ElReflect R_CAPTION[] = { { "align", "align", REFLECT_STRING } };
+static const ElReflect R_BR[]      = { { "clear", "clear", REFLECT_STRING } };
+static const ElReflect R_HR[]      = {
+    { "align", "align", REFLECT_STRING }, { "color", "color", REFLECT_STRING },
+    { "size", "size", REFLECT_STRING },   { "width", "width", REFLECT_STRING },
+    { "noShade", "noshade", REFLECT_BOOL },
+};
+static const ElReflect R_DL[]      = { { "compact", "compact", REFLECT_BOOL } };
+static const ElReflect R_DIR[]     = { { "compact", "compact", REFLECT_BOOL } };
+static const ElReflect R_MENU[]    = { { "compact", "compact", REFLECT_BOOL } };
+static const ElReflect R_UL[]      = {
+    { "compact", "compact", REFLECT_BOOL }, { "type", "type", REFLECT_STRING },
+};
 /* §4.10.14's `meter` HAS NO ROW HERE, and its absence is the point rather than an omission. It had one, holding
    `min` and `max` as REFLECT_STRING, and both were WRONG members rather than partial ones: §4.10.14 declares
    `attribute double min` whose getter steps are "return this's minimum value" — the NUMBER 0 for an absent
@@ -537,6 +585,18 @@ static const struct { const char *iface; const ElReflect *refl; int nrefl; } IFA
     { "HTMLSlotElement",       RL(R_SLOT) },
     { "HTMLTemplateElement",   RL(R_TEMPLATE) },
     { "HTMLFrameSetElement",   RL(R_FRAMESET) },
+    /* HTML §16.3.3 "Other elements, attributes and APIs" — see the tables above for what each closes and for
+       the three `long` reflections and the one [LegacyNullToEmptyString] one it deliberately does not. */
+    { "HTMLParagraphElement",  RL(R_P) },
+    { "HTMLHeadingElement",    RL(R_H) },
+    { "HTMLLegendElement",     RL(R_LEGEND) },
+    { "HTMLTableCaptionElement", RL(R_CAPTION) },
+    { "HTMLBRElement",         RL(R_BR) },
+    { "HTMLHRElement",         RL(R_HR) },
+    { "HTMLDListElement",      RL(R_DL) },
+    { "HTMLDirectoryElement",  RL(R_DIR) },
+    { "HTMLMenuElement",       RL(R_MENU) },
+    { "HTMLUListElement",      RL(R_UL) },
 };
 #define IFACE_REFL_N ((int)(sizeof(IFACE_REFL) / sizeof(IFACE_REFL[0])))
 
