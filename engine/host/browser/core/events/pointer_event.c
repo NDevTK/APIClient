@@ -51,7 +51,27 @@
  * population that calls pointer capture unguarded are the same drag libraries.
  * ITS ABSENCE SHOWS as a run that takes the pointer branch, registers the listeners this file made possible,
  * and then reports an uncaught `TypeError` at the first handler body it enters.
- * RETIREMENT: this record goes when core/dom/element.c carries Pointer Events 4 §4's members.
+ * RETIREMENT: THE CLAUSE THAT STOOD HERE NAMED THE WRONG DIFF, AND IS REWRITTEN RATHER THAN DELETED BECAUSE
+ * IT IS THE ONE A READER RE-DERIVES FROM THE MEASUREMENT ABOVE. It read "this record goes when
+ * core/dom/element.c carries Pointer Events 4 §4's members" — a clause naming a MECHANISM, and the mechanism
+ * closes nothing. Pointer Events 4 §8.2 "Setting pointer capture" opens "If the pointerId provided as the
+ * method's argument does not match any of the active pointers, then throw a "NotFoundError" DOMException",
+ * and Pointer Events 4 §3 defines an active pointer as "Any touch contact, pen/stylus, mouse cursor, or
+ * other pointer that can produce events". THIS ENGINE HAS NONE — core/html/user_activation.h's banner states
+ * it "dispatches no trusted keydown/mousedown/pointerdown/pointerup/touchend" — so that set is EMPTY and
+ * every call of Pointer Events 4 §4's members throws on its FIRST STEP. Building Pointer Events 4 §4 alone
+ * only renames the exception a drag handler dies on; and at the minority of corpus sites that guard PER
+ * MEMBER it is WORSE than the absence, because the guard flips TRUE and the bundle abandons a fallback arm
+ * that COMPLETES — CLAUDE.md §NO-STUBS' hazard arriving through a member instead of an interface object.
+ * SO THE LANDING UNIT IS THE SOURCE. Pointer Events 4 §3.2.9 "maybe send pointerdown event" is what
+ * populates the active-pointer set and the ACTIVE BUTTONS STATE that Pointer Events 4 §8.2's step 5
+ * terminates on, and Pointer Events 4 §4's three members, Pointer Events 4 §8.2, Pointer Events 4 §8.3 and
+ * Pointer Events 4 §3.1.3.2 "Process pending pointer capture" land WITH it rather than before it: Pointer
+ * Events 4 §4's own prose makes hasPointerCapture read the PENDING POINTER CAPTURE TARGET OVERRIDE that only
+ * Pointer Events 4 §8.2 writes and only Pointer Events 4 §3.1.3.2 promotes. core/html/html_dialog.c's named
+ * residual is blocked on that same absent source, so the source has consumers and the members alone have
+ * none — a reader arriving here from the measurement above builds the source, never the members.
+ * RETIREMENT: this record goes when this engine dispatches a trusted `pointerdown`.
  * `navigator.maxTouchPoints` (Pointer Events 4 §6 "Extensions to the Navigator interface") is not behind this
  * guard and answers falsey either way — and the retired sentence gave its count as ONE, which is withdrawn
  * for the same reason and over the same missing corpus. Its BARE `§6` is repaired too: this file's own
