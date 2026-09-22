@@ -156,9 +156,24 @@ void embedder_policy_obtain(EmbedderPolicy *out, const HeaderList *headers, bool
     if (!secure_context)
         return;
     ep_read(headers, "cross-origin-embedder-policy", &out->value, &out->endpoint);
-    /* §7.1.4's report-only branch sets `policy's ENDPOINT` — not the report only one. That is the standard's
-       own sentence; see embedder_policy.h for why it is reproduced rather than corrected here. */
-    ep_read(headers, "cross-origin-embedder-policy-report-only", &out->report_only_value, &out->endpoint);
+    /* EACH ARM WRITES ITS OWN ENDPOINT, WHICH IS THE ITEM HTML §7.1.4.1 "The headers" NAMES AT EACH ARM. The
+       two sentences are "Set policy's reporting endpoint to parsedItem[1]["report-to"]" and "Set policy's
+       report-only reporting endpoint to parsedItem[1]["report-to"]" — two of §7.1.4's four items, never one
+       item written twice.
+       THIS CALL USED TO PASS `&out->endpoint` TOO, under a comment quoting a sentence that set `policy's
+       endpoint` in BOTH arms and deferring to embedder_policy.h for why the collapse was faithful. That header
+       had ALREADY retired the quotation as one occurring nowhere in HTML — and the code written to it outlived
+       the retraction, so the collapse went on standing under a header that said in its own words that each arm
+       writes its own. A FIX THAT RETIRES AN ARGUMENT FALSIFIES EVERY SITE THAT ARGUED IT, and this is the site
+       that was missed; it is recorded rather than quietly corrected because the next reader who re-derives the
+       collapse will re-derive it from the same absent sentence.
+       THE COST WAS NOT THE UNREAD ITEM. A response that sends BOTH headers had the enforce arm's `report-to`
+       OVERWRITTEN by the report-only arm's, because the second call wrote the field the first had just filled —
+       so the endpoint §7.1.4.2 step 5 reports an ENFORCED violation to was whichever of the two headers the
+       response happened to send second, and a report-only header could silently re-address an enforced
+       violation's report. */
+    ep_read(headers, "cross-origin-embedder-policy-report-only", &out->report_only_value,
+            &out->report_only_endpoint);
 }
 
 /* §7.1.4.2's CHECK A NAVIGATION RESPONSE'S ADHERENCE TO ITS EMBEDDER POLICY, steps 3-6. Steps 1 and 2 belong to
@@ -181,11 +196,11 @@ bool embedder_policy_check_navigation_response(SerializedEmbedderPolicy parent_p
        response, "navigation", parentPolicy's REPORT ONLY REPORTING ENDPOINT, "reporting", and navigable's
        container document's relevant settings object." It does not decide the return value — step 4 is asked
        afterwards either way, and a parent that sends the report-only header alone still loads its frame.
-       THE ENDPOINT THIS STEP NAMES IS ONE §7.1.4's OWN OBTAIN NEVER WRITES, and that is the standard's text
-       rather than a gap here: both branches of obtain set "policy's ENDPOINT" (see embedder_policy.h), so
-       `report_only_endpoint` holds its initial empty string for every policy this engine parses. Whoever builds
-       the report below reads it anyway — implementing the sentence, not the evident intention, is what keeps
-       the divergence visible on the day that sentence is corrected. */
+       THE ENDPOINT THIS STEP NAMES IS §7.1.4's REPORT-ONLY REPORTING ENDPOINT, AND OBTAIN WRITES IT NOW. This
+       paragraph used to say the opposite — that obtain never writes it, because both of its arms set `policy's
+       endpoint` — and it was the second site of the fabricated quotation embedder_policy.h retired: the arm
+       above writes the item §7.1.4.1 names at it, so a parent that sent `report-to` on its report-only header
+       is reported to the endpoint that header named. */
     if (embedder_policy_compatible_with_cross_origin_isolation(parent_policy.report_only_value) &&
         !embedder_policy_compatible_with_cross_origin_isolation(response_policy.value))
         DFAIL("HTML §7.1.4.2 \"Embedder policy checks\" reached QUEUE A CROSS-ORIGIN EMBEDDER POLICY "
