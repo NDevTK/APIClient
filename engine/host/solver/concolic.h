@@ -1008,7 +1008,37 @@ RelOp       concolic_rel(JSValueConst v, const char **ptok, double *pnum, const 
  * relation and a call's `holds` would each need their own inversion, and the third has none — §RUN-DON'T-MATCH
  * forbids deciding what `startsWith` MEANS, so there is no paired method to flip to. The arm is one XOR and is
  * the same statement for all three. See concolic_branch_ident_c for the key, and pred_carry_through_not for
- * why the record travels verbatim. */
+ * why the record travels verbatim.
+ *
+ * NAMED RESIDUAL — NOT COVERED: a gate that puts an OPERATOR between the derivation and the branch. The
+ * headline above says a call is filed WHOSE RESULT A BRANCH TESTS, and that is exact: the subject of every
+ * domain fact this engine files is the value the branch was over, so where the page writes an operator in
+ * between, the fact is filed under the DERIVATION's key. The property, which is what generalises past any
+ * list of spellings: a domain fact whose subject is a derivation of a hole is filed under a key NO EMITTED
+ * ADDRESS NAMES, so the observation is made and is unreachable. It is not a missing fork and not a missing
+ * observation — both arms run and the constraint is recorded; it is a record nothing can look up.
+ * IT IS NOT THE INVERSION THE PARAGRAPH ABOVE REFUSES, AND THAT REFUSAL IS RIGHT. Carrying a claim about
+ * `x.slice(1)` up onto `x` would mean knowing what `slice` does, which §RUN-DON'T-MATCH forbids. What is
+ * missing is narrower and needs no meaning: the branch evaluated `indexOf(t) === 0`, and BOTH halves of that
+ * were run, so the transcript this record already carries — the name the page wrote, the arguments it
+ * passed, the arm the flow took — simply stops one operator short of the thing the page actually tested.
+ * WHAT THE NEXT DIFF BUILDS: a predicate record that states the COMPARISON the branch was over beside the
+ * call it was over the result of, filed under the RECEIVER's hole — `{method, arguments, compare, operand,
+ * holds}` where today there is `{method, arguments, holds}` — and the same for the ORDERING class, whose
+ * `length` case is a property READ rather than a call and so is a second producer rather than this one
+ * widened. Nothing is inverted, nothing is invented, and no consumer learns what a method MEANS: the
+ * operator and its operand are two more things the run observed, spelled the way `args` already are.
+ * HOW ITS ABSENCE WOULD SHOW: a `@H` parameter whose record carries none of `predicates`, `bounds`,
+ * `excludes` or `looselyEquals` — which the emission states as "nothing narrowed this on any observed path"
+ * — on a run whose own fork census shows the flow taking both arms of a branch over that source. The
+ * surface's silence and the census's forks disagree about one gate, with nothing joining them.
+ * MEASURED, five gates over one source in one document, driving the built engine: `startsWith` and
+ * `includes` tested DIRECTLY each file their predicate, while `indexOf(t) === 0`, `charAt(0) === c` and
+ * `length > 3` file nothing onto the parameter the request carries. The first two are the ES5 and the
+ * pre-`String.prototype.startsWith` spelling of the first gate, and the third is the commonest validation a
+ * bundle writes, so the uncovered half is not an edge of this class — it is most of it.
+ * RETIREMENT: this record goes when a branch over a comparison of a call result files a domain fact under
+ * the receiver's hole. */
 typedef struct {
     const char *method;         /* the property NAME the page read off the unknown — an atom, never a guess */
     const char *const *args;    /* every argument, each as the page's own §7.1.19 ToString of it */
