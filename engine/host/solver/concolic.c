@@ -996,6 +996,16 @@ static ConsSeg *g_pins_base = NULL;                                        /* th
    pays at every source-member read, and which this would otherwise add to every example read in the engine
    (each `+` over an unknown asks for two). */
 static int g_ex_contra_any;
+/* HAS ANY FLOW IN THIS AGENT EVER PINNED A VALUE — the sibling latch, and it exists for the cost the
+   paragraph above names rather than for a second question. concolic_example asks concretize-on-pin of every
+   value whose `src` names it, and `cons_lookup` walks every frozen segment under the head, so without this a
+   document with no equality gate at all would pay a chain probe at each such read.
+   IT IS SAFE FOR THE SAME REASON AND BY THE SAME BOUND: it is set at the ONE line that writes a pin value and
+   cleared only when the agent is, and a pin chain never arrives from outside this agent — cold.c restores a
+   resumed flow with `concolic_pins_blob_empty` and lets it re-derive by replaying its decision vector. So a
+   set entry with a clear latch is not a state this agent can be in, which is what makes the fast path a fast
+   path and not a second answer. */
+static int g_pin_any;
 
 static uint32_t cons_hash(const char *k) {   /* FNV-1a over the constraint key */
     uint32_t h = 2166136261u;
@@ -1215,6 +1225,7 @@ void concolic_pin(const char *src, const char *root, ConcolicLit kind, const cha
         c = cons_entry(src);
         free(c->val); c->val = strdup(val); CHECK(c->val, "concolic: OOM pin value");
         c->valkind = (signed char)kind;
+        g_pin_any = 1;   /* the ONE write of a pin value, so the ONE place the latch can be raised */
         /* `c` IS DEAD FROM HERE. cons_entry may grow the head, and the growth is a realloc — so the second
            entry is taken only after the first has been written, and nothing below may reach back through it. */
     }
@@ -5209,6 +5220,9 @@ void concolic_free(void)
        the NEXT agent probe a chain in which nothing has been contradicted — not a wrong answer, but a cost
        carried by a document that never earned it, and a fact about a session that is gone. */
     g_ex_contra_any = 0;
+    /* …AND THE PIN LATCH, for that sentence exactly: both are one-directional fast paths over a chain that
+       dies with this agent, and a latch left set costs the next document a probe it never earned. */
+    g_pin_any = 0;
     /* §Solver's VALUE CLASS IS DELIBERATELY NOT GIVEN BACK HERE, and that is asserted rather than commented —
        the same statement core/dom/document.c makes about §gc's realm-mark hook, for the same reason. Every live
        Concolic OUTLIVES this call: the objects are freed by JS_FreeRuntime, whose finalizer reaches each
@@ -5328,19 +5342,26 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue
            "domain. Without one this value's every gate is observed and discarded, and its parameter reports "
            "provenance with no constraint. Spell the shape as the src in braces (core/frame/location.h is the "
            "pattern); a shape that is not simply `{src}` is fine as long as it names its hole");
-    /* CONCRETIZE-ON-PIN, AT THE MINT WHERE `src` IS THE VALUE'S OWN IDENTITY — which is what makes this the
-       one derivation the pin may be read at. §solver: "once `x==='admin'` pins the value, a later READ of that
+    /* CONCRETIZE-ON-PIN, AT THE MINT WHERE `src` IS THE VALUE'S OWN IDENTITY — which is what makes this one of
+       the two derivations the pin may be read at. §solver: "once `x==='admin'` pins the value, a later READ of that
        source returns the pinned bytes, so a later branch on it is decided by RUNNING the real predicate on a
        real string and does not fork at all". A pin is a fact about THIS value, so it applies exactly where the
        value being minted IS the pinned one; concolic_derived must NOT ask it, because an arithmetic or builtin
        result carries its OPERAND's `src` and pinning `location.hash` would then hand `+location.hash` the
        operand's string instead of a number the run computed.
-       IT IS WHAT A PER-READ MINT NEEDS AND A ONCE-INSTALLED SOURCE NEVER DID. A source held as a plain
-       property is minted once, so a re-read finds the same object and no second mint could disagree with the
-       flow's constraint; an INJECTED-STATE member is minted at every read, and without this the arm that
-       PROVED `__FLAGS.role === "admin"` would keep re-reading the example the server sent a logged-out
-       visitor and compose `/api/user` — an @H value the run contradicted, which §@H calls an invention rather
-       than a partial answer.
+       IT IS WHAT A PER-READ MINT NEEDS, AND A VALUE ALREADY IN HAND NEEDS THE SAME ANSWER FROM THE OTHER
+       READ SITE. An INJECTED-STATE member is minted at every read, and without this the arm that PROVED
+       `__FLAGS.role === "admin"` would keep re-reading the example the server sent a logged-out visitor and
+       compose `/api/user` — an @H value the run contradicted, which §@H calls an invention rather than a
+       partial answer.
+       THIS PARAGRAPH USED TO SAY A ONCE-INSTALLED SOURCE NEVER NEEDED IT, on the ground that "a re-read finds
+       the same object and no second mint could disagree with the flow's constraint". That is true about
+       DISAGREEMENT and says nothing about what the object ANSWERS: a value materialised into a page variable
+       before its own gate goes on handing back the example that gate contradicted, or no example at all, so
+       `var role = q("role"); if (role === "admin") fetch("…?role=" + role)` emitted a shape where the run had
+       determined a literal. The other read site is concolic_example, which asks the same question of the same
+       chain under the same `src_self` precondition; the mint is where a pin stops a source RE-FORKING, and
+       that accessor is where it reaches a value the page is still holding.
        AFTER THE CANDIDATE AND NEVER BEFORE IT: a candidate re-fire is delivering the attacker's bytes at this
        exact source, and a pin the exploring run happened to take must not stand in front of them. */
     if (!cand_matches(src)) {
@@ -5439,10 +5460,54 @@ int concolic_branch_neg(JSValueConst v) {
  * A VALUE WHOSE IDENTITY THIS ENGINE CANNOT SPELL KEEPS ITS EXAMPLE, and that is the sound direction rather
  * than a gap: with no key there is nowhere to file a per-flow fact, and filing it anywhere else would make one
  * flow's proof silence another flow's value. Such a value's arm is still marked FORCED (decide.c does not need
- * a key for that), so the request it builds still says what it is. */
+ * a key for that), so the request it builds still says what it is.
+ *
+ * AND A PROOF OUTRANKS AN OBSERVATION, WHICH IS WHY CONCRETIZE-ON-PIN IS ASKED HERE FIRST AND IS NOT A SECOND
+ * KIND OF EXAMPLE. §Solver-half says a READ of a pinned source answers the pinned bytes, and a flow can ask
+ * "what is this value" in exactly two places: at the MINT, and at this accessor. Until this arm existed the
+ * pin was answered at one of them, so a value MATERIALISED INTO A PAGE VARIABLE BEFORE ITS OWN GATE — which
+ * is never re-minted, and is the commonest gated-endpoint shape a bundle writes
+ * (`var role = q("role"); if (role === "admin") fetch("…?role=" + role)`) — composed its address out of the
+ * example the same gate had just contradicted, or out of no example at all where the source never had one.
+ * The concatenation then emitted a SHAPE at the one position this run had DETERMINED a literal, which §@H
+ * calls a wrong report rather than a partial one: the reviewer is offered `{location.search}.slice(1)` where
+ * the code proved `admin`.
+ *
+ * IT IS NOT THE SUBSTITUTION concolic.h FORBIDS, AND THE PROHIBITION IS DIRECTIONAL. What must never happen is
+ * an EXAMPLE becoming a PIN: a loaded `features.admin:false` deciding a gate DELETES the world the admin
+ * endpoint lives in, which §Solver-half names by name. This is the other direction — a PIN answering the
+ * EXAMPLE — and it deletes nothing. The value stays CONCOLIC, so every later branch over it still forks;
+ * `real_arm` chooses which arm this flow runs FIRST and never which arms exist, and a flow that has proved
+ * `x === "admin"` now marks a later `x === "guest"` true arm FORCED instead of UNOBSERVED, which is a grade
+ * the request was entitled to and was not getting. What changes is only which bytes the page's own
+ * concatenation computes.
+ *
+ * BOTH OF CONCRETIZE-ON-PIN'S PRECONDITIONS ARE CHECKED HERE RATHER THAN ARGUED. The determination must come
+ * from a predicate THIS FLOW evaluated — the pin is read out of this flow's own constraint chain and nothing
+ * else — and it must be about THIS VALUE, which is exactly what `src_self` says: a DERIVED value legitimately
+ * carries its first unknown operand's `src`, so answering it the pin under that key would hand `"x-" + theme`
+ * the operand's bytes. That is the same precondition concolic_pin_bytes stands on and it is checked the same
+ * way, because a derived value reaching here is ordinary page code and not a defect.
+ *
+ * THE COST IS TWO PREDICATES WHERE NOTHING IS PINNED. `cons_lookup` walks every frozen segment under the head,
+ * so `g_pin_any` keeps a document with no equality gate at one test and `src_self` keeps every DERIVED value
+ * at a second — which is most example reads in this engine, since each `+` over an unknown asks for two. What
+ * pays the walk is a source or member read on a page that has pinned something, and that is the population
+ * `pin_of` already pays for at the mint. */
 JSValue concolic_example(JSContext *ctx, JSValueConst v) {
     Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
-    if (!c || JS_IsUndefined(c->example)) return JS_UNDEFINED;
+    if (!c) return JS_UNDEFINED;
+    /* WHAT THIS FLOW HAS *PROVED*, ASKED BEFORE WHAT IT WAS HANDED — see the paragraph above for why a proof
+       outranks an observation, and concolic.h's concolic_pin for the pin itself.
+       IT NEEDS NO CANDIDATE GUARD, WHICH THE MINT'S ARM DOES, AND THE REASON IS STRUCTURAL RATHER THAN A CASE
+       NOBODY THOUGHT ABOUT: a substituted source never becomes a concolic at all — concolic_deliver hands back
+       the attacker's own bytes as a plain string — so there is no record here to carry `src_self`, and a pin
+       the exploring run took cannot stand in front of a payload this accessor is never asked about. */
+    if (g_pin_any && c->src_self && c->src) {
+        JSValue pv = pin_of(ctx, c->src);
+        if (!JS_IsUninitialized(pv)) return pv;
+    }
+    if (JS_IsUndefined(c->example)) return JS_UNDEFINED;
     if (g_ex_contra_any && c->ident) {
         const Cons *e = cons_lookup(c->ident);
         if (e && e->ex_contra) return JS_UNDEFINED;

@@ -117,11 +117,17 @@ void        concolic_set_example(JSContext *ctx, JSValueConst v, JSValue example
 
 /* WHAT THIS FLOW HAS *PROVED* THIS VALUE IS — CONCRETIZE-ON-PIN, asked of a VALUE and answered in BYTES.
  *
- * IT IS NOT THE EXAMPLE ABOVE AND THE TWO MUST NEVER BE SUBSTITUTED FOR EACH OTHER. An example is what a
+ * IT IS NOT THE EXAMPLE ABOVE AND THE SUBSTITUTION IS FORBIDDEN IN ONE DIRECTION. An example is what a
  * document or a server SUPPLIED, and §Solver-half is explicit that a loaded value "must NOT concretize the
  * gate"; this is what the flow's OWN predicate determined — `parsed.theme === 'dark'` taken true — which is a
  * fact the run established rather than one it read. §@H draws that line by whether a VALUE was determined, and
  * this is the determined side of it.
+ * WHICH DIRECTION, STATED, BECAUSE THIS LINE READ AS AN ABSOLUTE AND ONE HALF OF IT IS THE ENGINE'S JOB. An
+ * EXAMPLE MAY NOT BECOME A PIN: a loaded `features.admin:false` answering a gate deletes the world the admin
+ * endpoint lives in, which is the loss §Solver-half names. A PIN ANSWERING THE EXAMPLE IS THE OPPOSITE AND IS
+ * WHAT concolic_example DOES: the value stays concolic, every later branch over it still forks, and what
+ * changes is which bytes the page's own concatenation computes — §@H's "a param pinned by `x === 'v'`
+ * concretizes to `v`", reaching a value the page materialised before the gate and therefore never re-minted.
  *
  * WHY A CALLER MAY NOT SPELL THE KEY ITSELF, which is the whole reason this is value-keyed. A pin is stored
  * under `src`, and `src` is the INJECTION identity: a derivation inherits its first unknown operand's, so
@@ -130,9 +136,10 @@ void        concolic_set_example(JSContext *ctx, JSValueConst v, JSValue example
  * The record knows which of the two it is and a caller holding only a JSValue cannot, so the question is asked
  * of the value and the key is never exposed.
  *
- * WHY BYTES, WHERE THE TWO IN-FILE READS ANSWER A JSValue. Those two are re-mints: a READ of a source returns
- * the pinned value, so it must be of the pinned value's TYPE and a caller handed bytes would have to decide
- * what they mean. This is asked by a consumer whose slot is a STRING by definition — DOM §4.9 "Interface
+ * WHY BYTES, WHERE THE IN-FILE READS ANSWER A JSValue. Those answer a VALUE: two of them are re-mints (a READ
+ * of a source returns the pinned value) and the third is the example accessor, whose result an operator is
+ * about to run §13.15.3 over — so each must be of the pinned value's TYPE and a caller handed bytes would
+ * have to decide what they mean. This is asked by a consumer whose slot is a STRING by definition — DOM §4.9 "Interface
  * Element"'s attribute value, which `setAttribute` reaches through a Web IDL DOMString conversion — so the
  * §7.1.19 ToString of the pinned value IS the answer rather than a lossy rendering of it, and the store
  * already holds exactly that (literal_tok spells its token as the operand's ToString, and concolic_pin refuses

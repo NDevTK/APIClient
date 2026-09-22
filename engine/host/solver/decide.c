@@ -2130,9 +2130,16 @@ static int decide_real_arm(JSContext *ctx, JSValueConst cond) {
  * two facts on the same two arms. What §Re-execution forbids is deriving a value by INVERTING a transform,
  * and nothing here is inverted: both directions of the equality are read off observations this run made.
  * BOTH ARMS ARE COVERED AND THE PIN ONLY COVERS ONE. On the true arm of `x === 'admin'` over an example of
- * `'guest'`, concretize-on-pin makes a LATER MINT of `x` answer `'admin'`; a source minted ONCE and held in a
- * page variable is never re-minted, so it kept answering `'guest'` on a path that had proved otherwise. The
- * degrade reaches it because it is asked at the READ.
+ * `'guest'`, concretize-on-pin makes a LATER MINT of `x` answer `'admin'`; a source held in a page variable is
+ * never re-minted, so nothing at the mint reaches it. The degrade does, because it is asked at the READ.
+ * AND THE DEGRADE IS NOT THE WHOLE ANSWER FOR THAT VALUE, WHICH IS WHAT THIS PARAGRAPH USED TO IMPLY. Dropping
+ * `'guest'` stops the flow emitting bytes it disproved and leaves a SHAPE where the same gate DETERMINED
+ * `'admin'` — §@H's wrong report rather than a partial one, at the commonest gated-endpoint shape a bundle
+ * writes. concolic_example now asks the pin before it asks the example, under the `src_self` precondition, so
+ * the two arms of this one observation land on the same value: the failing arm degrades it and the holding arm
+ * concretizes it, wherever the page is holding it. Nothing here changes — the contradiction is still recorded
+ * on both operands, and it is what the pin-free cases (an ordering, a loose equality, a call predicate) still
+ * rest on entirely.
  *
  * THE SUBJECT IS NAMED BY ITS OWN IDENTITY AND NOT BY THE HOLE THE EXCLUSION USES, AND THAT PAIR IS NOT AN
  * INCONSISTENCY TO UNIFY. They are two names for two consumers: the hole is what the EMISSION reconstructs
