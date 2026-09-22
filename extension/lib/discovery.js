@@ -594,6 +594,31 @@ function mapJsonSchemaType(prop) {
 // sniff in this extension is lib/safe-fetch.js's, over bytes SAFEFETCH fetched,
 // which this function is never handed and never asks.
 //
+// AND IT IS NOT MIME Sniffing §7 "Determining the computed MIME type of a resource" EITHER, WHICH IS THE
+// SENTENCE THE NEXT READER NEEDS AND THE ONE NOBODY WROTE. The paragraph above separates the two sniffs by
+// their INPUT — a body intercept.js captured against a body safeFetch fetched — and that is true and is not
+// what keeps them apart. They answer DIFFERENT QUESTIONS, and the difference is checkable rather than a
+// matter of taste: §7 reaches the bytes at three of its nine steps and its last step is "The computed MIME
+// type is the supplied MIME type.", so a PNG served `text/plain` computes `text/plain` in every browser,
+// while the classifier below answers `image/png` for it on purpose — its own paragraph says magic bytes are
+// authoritative and the header is a weaker cross-check, which is the correct rule for `has this body a
+// schema worth extracting` and the INVERSE of §7 for `what is this resource`. Two of its answer shapes are
+// not MIME types at all (`opaque-cross-origin`, `binary-structured`), and its font answers are ones §7
+// cannot produce from bytes at any setting: §7.1 "Identifying a resource with an unknown MIME type" runs
+// §6.1 "Matching an image type pattern", §6.2 "Matching an audio or video type pattern" and §6.4 "Matching
+// an archive type pattern", and never §6.3 "Matching a font type pattern", which only §8.7 "Sniffing in a
+// font context" invokes — so a browser never sniffs a font, and a font-typed answer can only ever come from
+// a server that declared one.
+// SO THIS FUNCTION IS NOT THE ANSWER TO A THIN SNIFF IN `lib/safe-fetch.js`, AND ROUTING safeFetch HERE
+// WOULD NOT BE A REPAIR. It reads as one — this file holds the magic-byte tables and that file held none —
+// and the diff it invites would make the chokepoint state a type no browser computes, on the one field the
+// engine is TOLD rather than allowed to derive. What safeFetch owed §7 is §7.1's own tables, which it now
+// walks two of; what it does not owe is this function's rule.
+// RETIREMENT: this paragraph goes when the ASSET verdict the @H surface acts on stops being read off §7's
+// answer — when `engine/host/solver/reply_decode.c`'s `is_asset` is replaced by a verdict the trusted zone
+// states beside `computedType` — because the two questions are then two fields and neither is a candidate
+// to route to the other.
+//
 // Sniff magic bytes on a Uint8Array. Returns a MIME-like label or null.
 function sniffBinaryMagic(bytes) {
   if (!bytes || bytes.length < 2) return null;

@@ -254,6 +254,100 @@ function _determineNosniff(v) {
   if (typeof v !== "string") return false;   // absent header = §"values is null" = false
   return v.split(",")[0].replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "").toLowerCase() === "nosniff";
 }
+/* MIME Sniffing §6 "Matching a MIME type pattern", and the two of §7.1 "Identifying a resource with an unknown
+   MIME type"'s tables whose answers any reader of `computedType` can act on.
+
+   THIS IS A MIRROR OF `engine/host/browser/core/mime/mime_sniff.c` AND NOT A RIVAL TO IT, for the reason
+   `engine/host/check.h` is mirrored by `extension/check.js`: that component is inside the WASM sandbox and
+   this is the trusted zone, and no call crosses between them in either direction. CLAUDE.md §Architecture puts
+   the sniff HERE by name — "TYPE SNIFFING STAYS IN JAVASCRIPT, in `safeFetch`, where SECURITY.md puts it" —
+   while `mime_sniff.c` answers HTML §7.4.5's computed type for a NAVIGATION this engine is about to parse into
+   its own document, which its own header states is a C algorithm no host can answer instead. Neither can serve
+   the other, so the two carry the SAME spec citations and the SAME cell encoding: a reader repairing one can
+   find the other by grepping the section number, which is the only thing that keeps two mirrors from drifting.
+
+   ONE ARRAY CARRIES BOTH OF §6's COLUMNS — each cell is the pattern mask byte in bits 8-15 and the byte pattern
+   byte in bits 0-7 — and that is `mime_sniff.c`'s encoding kept for its reason rather than copied for
+   symmetry: §6's very first step is "Assert: pattern's length is equal to mask's length", and a pair of
+   hand-written arrays is the shape that assert exists to catch. With one array the two lengths cannot
+   disagree, so there is nothing here for an assert to check.
+
+   §5.2 "Reading the resource header" bounds what §7 LOOKS AT: "the number of bytes in buffer is greater than or
+   equal to 1445". It is not a truncation of the body — every byte still reaches the reader below and the
+   record still carries the whole sequence. */
+var _MS_RESOURCE_HEADER_MAX = 1445;
+
+/* §6.1 "Matching an image type pattern" — the table in the standard's own row order, which is also the order
+   `mime_sniff.c`'s IMAGE_TABLE states it in. */
+var _MS_IMAGE = [
+  { cells: [0xFF00, 0xFF00, 0xFF01, 0xFF00], type: "image/x-icon" },   // a Windows Icon signature
+  { cells: [0xFF00, 0xFF00, 0xFF02, 0xFF00], type: "image/x-icon" },   // a Windows Cursor signature
+  { cells: [0xFF42, 0xFF4D], type: "image/bmp" },                      // the string BM
+  { cells: [0xFF47, 0xFF49, 0xFF46, 0xFF38, 0xFF37, 0xFF61], type: "image/gif" },   // GIF87a
+  { cells: [0xFF47, 0xFF49, 0xFF46, 0xFF38, 0xFF39, 0xFF61], type: "image/gif" },   // GIF89a
+  { cells: [0xFF52, 0xFF49, 0xFF46, 0xFF46, 0x0000, 0x0000, 0x0000, 0x0000,
+            0xFF57, 0xFF45, 0xFF42, 0xFF50, 0xFF56, 0xFF50], type: "image/webp" },  // RIFF, four bytes, WEBPVP
+  { cells: [0xFF89, 0xFF50, 0xFF4E, 0xFF47, 0xFF0D, 0xFF0A, 0xFF1A, 0xFF0A], type: "image/png" },
+  { cells: [0xFFFF, 0xFFD8, 0xFFFF], type: "image/jpeg" }              // SOI, then another marker's indicator
+];
+/* §6.4 "Matching an archive type pattern". */
+var _MS_ARCHIVE = [
+  { cells: [0xFF1F, 0xFF8B, 0xFF08], type: "application/x-gzip" },
+  { cells: [0xFF50, 0xFF4B, 0xFF03, 0xFF04], type: "application/zip" },              // PK, then ETX EOT
+  { cells: [0xFF52, 0xFF61, 0xFF72, 0xFF21, 0xFF1A, 0xFF07, 0xFF00], type: "application/x-rar-compressed" }
+];
+
+/* §6's PATTERN MATCHING ALGORITHM, given a byte sequence and one row's packed pattern-and-mask.
+   §6's STEPS 3 AND 4 ARE ABSENT AND THAT IS THE TABLES' OWN STATEMENT RATHER THAN A SHORTCUT: they advance past
+   the `ignored` set, and every row of §6.1 and §6.4 prints that column as None — so `s` never moves ahead of
+   `p` and the two indices are one. A table with a non-empty ignored column may not be walked by this. */
+function _msPatternMatch(input, cells) {
+  var p, masked;
+  if (input.length < cells.length) return false;                        // step 2
+  for (p = 0; p < cells.length; p++) {                                  // steps 5-6
+    masked = input[p] & ((cells[p] >> 8) & 0xFF);
+    if (masked !== (cells[p] & 0xFF)) return false;
+  }
+  return true;                                                          // step 7
+}
+/* "Execute the following steps for each row row in the following table ... If patternMatched is true, return
+   the value in the fourth column of row" — the shape §6.1 and §6.4 share. `null` is the standard's undefined. */
+function _msTable(rows, header) {
+  for (var i = 0; i < rows.length; i++)
+    if (_msPatternMatch(header, rows[i].cells)) return rows[i].type;
+  return null;
+}
+/* §7.1's IMAGE STEP THEN ITS ARCHIVE STEP, in the standard's own order, and `null` where neither answers.
+
+   NAMED RESIDUAL — WHAT IS NOT COVERED IS A PROPERTY AND NOT A LIST OF INPUTS: every row of §7.1 other than the
+   two tables above. That is §6.2 "Matching an audio or video type pattern" with its three signature
+   sub-algorithms, §7.1's sniff-scriptable table, its PostScript-and-BOM table, and its closing
+   contains-no-binary-data-bytes fall-through; and, one level up, §7's steps 1, 4 and 5-6. Where neither table
+   answers, `_computedType` returns the answer it returned before this existed, so the code is CORRECT for what
+   it decides and NARROWER than §7 — never a different answer from it. The two tables may be walked alone
+   because no row of §7.1 that precedes them can match a byte sequence either of them matches: the scriptable
+   table's rows all open 0x3C, its other table's open 0x25, 0xFE, 0xFF 0xFE or 0xEF, and the only image row
+   opening 0xFF is 0xFF 0xD8 0xFF.
+
+   WHAT THE NEXT DIFF BUILDS is §6.2's table and its §6.2.1 MP4, §6.2.2 WebM and §6.2.3 MP3-without-ID3
+   signature algorithms, mirrored from `mime_sniff.c` (GREPPED there as `sniff_av_pattern` and its helpers) —
+   AND §7.1's PostScript-and-BOM table IN THE SAME DIFF, which is an ordering constraint rather than a
+   preference: §6.2.3 finds an MP3 frame by a sync whose first two bytes are 0xFF and any byte with its top
+   three bits set, and §7.1's UTF-16LE BOM row is 0xFF 0xFE, which satisfies that sync — so §6.2 landed without
+   the BOM row in front of it computes `audio/mpeg` for a UTF-16LE text document. §7.1 orders the BOM table
+   first for exactly this reason and the order is the algorithm.
+
+   HOW ITS ABSENCE WOULD SHOW, as an OBSERVATION and never as an instance: an endpoint record on the @RESULT
+   surface for an address whose reply carried no `Content-Type` at all, or one of §7 step 2's three unknown
+   essences, and whose first bytes match a §6.2 audio-or-video pattern — the learned surface naming as an API
+   a resource whose own bytes are a media stream, with the reply's header list beside it saying no server
+   named it anything. */
+function _msUnknownTypePattern(header) {
+  var m = _msTable(_MS_IMAGE, header);
+  if (m) return m;
+  return _msTable(_MS_ARCHIVE, header);
+}
+
 // CORB's own sniff, over BYTES — the check decoding the evidence it judges, which is
 // what Chrome's ORB does too (it attempts a JSON parse of the body). The head is
 // decoded first and the whole body only in the branch that actually needs it, so a
@@ -273,31 +367,104 @@ function _determineNosniff(v) {
 // back to the head in its catch, so the ANSWER is "either parses" either way, and
 // asking the head first means a body that fits in 4 KiB — which is most JSON an API
 // returns — is never parsed twice and a large one costs exactly what it cost before.
+// AND THE THIRD FIELD IS MIME Sniffing §7.1's, WHICH IS A THIRD QUESTION OVER THIS ONE PASS AND NOT A
+// WIDENING OF EITHER ANSWER ABOVE. `protected` is CORB's — may these cross-origin bytes reach a code loader —
+// and `type` is `did the bytes contradict a label this zone acts on`, which is why its only non-null value is
+// `application/json` and why `_computedType` lets it OVERRIDE a declared essence. Neither is MIME Sniffing
+// §7 "Determining the computed MIME type of a resource", and `unknownType` is: it is that algorithm's step 2
+// arm, the one case where the standard lets the BYTES name a resource the server did not. Three questions,
+// one fact, one pass — CLAUDE.md's own cure for a predicate answering two, which this file already applies at
+// `_isScriptLike` / `_isSubresource` over the destination string.
+// IT IS COMPUTED OVER §5.2 "Reading the resource header"'s BYTES AND NOT OVER THE DECODED HEAD `h`, because
+// §6.1's and §6.4's rows all state their leading-bytes-to-be-ignored column as None: a whitespace skip here
+// would match a pattern at an offset the standard does not look at.
 function _sniff(bytes) {
   var dec = new TextDecoder("utf-8");   // strips a UTF-8 BOM, exactly as resp.text() did
+  var hdr = bytes.subarray(0, _MS_RESOURCE_HEADER_MAX);
+  var unknown = _msUnknownTypePattern(hdr);
   var h = dec.decode(bytes.subarray(0, 4096)).replace(/^﻿/, "").replace(/^\s+/, "");
-  if (h.charAt(0) === "<") return { protected: true, type: null };   // HTML/XML/SVG/markup
+  if (h.charAt(0) === "<") return { protected: true, type: null, unknownType: unknown };   // HTML/XML/SVG/markup
   if (h.charAt(0) === "{" || h.charAt(0) === "[") {
-    try { JSON.parse(h); return { protected: true, type: "application/json" }; }
+    try { JSON.parse(h); return { protected: true, type: "application/json", unknownType: unknown }; }
     catch (e) {
-      try { JSON.parse(new TextDecoder("utf-8").decode(bytes)); return { protected: true, type: "application/json" }; }
+      try {
+        JSON.parse(new TextDecoder("utf-8").decode(bytes));
+        return { protected: true, type: "application/json", unknownType: unknown };
+      }
       catch (_) {}
     }
   }
-  return { protected: false, type: null };
+  return { protected: false, type: null, unknownType: unknown };
 }
-// WHAT THIS RESPONSE IS, AS ONE STATEMENT THE RENDERER IS TOLD. §4.2's ESSENCE — the
-// type, a solidus, the subtype — of the server's `Content-Type` when it stated one,
-// and what the bytes say when it did not or when they contradict it. The empty
-// string is §5.1's "the supplied MIME type is undefined" surviving the sniff: the
+// WHAT THIS RESPONSE IS, AS ONE STATEMENT THE RENDERER IS TOLD. MIME Sniffing §4.2 "MIME type
+// miscellaneous"'s ESSENCE — the type, a solidus, the subtype — of the server's
+// `Content-Type` when it stated one, and what the bytes say when it did not or when
+// they contradict it. The empty string is MIME Sniffing §5.1 "Interpreting the resource
+// metadata"'s "the supplied MIME type is undefined" surviving the sniff: the
 // server named nothing and the bytes named nothing either, which is a POSITIVE
 // answer and not a hole (a reader that must distinguish it reads it as absent, the
 // way `mime_type_extract` reads a null header).
 // NOSNIFF IS FINAL. The server has said its label is the last word, so this returns
 // the essence unchanged whatever the body looks like — the same sentence that stops
 // the CORB rule below from sniffing past it.
+//
+// AND A DECLARED TYPE THE BYTES CONTRADICT IS THE SERVER'S TO NAME, WHICH IS THE ONE THING A READER OF THIS
+// FUNCTION KEEPS RE-DERIVING BACKWARDS. MIME Sniffing §7 "Determining the computed MIME type of a resource"
+// reaches the bytes at exactly three of its nine steps — step 2 (the supplied type is undefined or unknown),
+// step 4 (the check-for-apache-bug flag), and steps 5-6 (the supplied type is already an image or an
+// audio-or-video type the user agent renders, where the bytes only REFINE it within its own group) — and its
+// last step is "The computed MIME type is the supplied MIME type." So a PNG served `text/plain` computes
+// `text/plain` IN EVERY BROWSER, and a classifier that answers `image/png` for it is not a more faithful
+// sniff, it is a different question. THAT IS WHY `classifyResponseAsset` IN `extension/lib/discovery.js` IS
+// NOT ROUTED TO FROM HERE AND MUST NOT BE: its own header says magic bytes are authoritative and the header is
+// a weaker cross-check, which is the correct rule for the question IT asks (has this captured body a schema
+// worth extracting) and the inverse of §7 for the question this one answers. Its answer set says so on its
+// face — it returns `opaque-cross-origin`, `binary-structured` and `font/woff2`, of which the first two are
+// not MIME types at all and the third is one §7 CANNOT PRODUCE FROM BYTES, since §7.1 runs §6.1, §6.2 and
+// §6.4 and never §6.3 "Matching a font type pattern", which only §8.7 "Sniffing in a font context" invokes.
+// A browser never sniffs a font, so a font-typed record here can only ever come from a server that declared
+// one, and that is faithful rather than a gap.
+// RETIREMENT: this paragraph goes when the two classifiers cannot be confused — when the asset verdict the
+// @H surface acts on is a field of its own beside `computedType` rather than `solver/reply_decode.c`'s
+// `is_asset` asked of §7's answer, at which point one of them stops being a candidate to route to.
 function _computedType(declared, nosniff, sniff) {
   var mime = String(declared == null ? "" : declared).split(";")[0].trim().toLowerCase();
+  DCHECK(sniff !== null && typeof sniff === "object" &&
+         (sniff.unknownType === null || typeof sniff.unknownType === "string"),
+         "the sniff handed to `_computedType` carries no §7.1 answer — `_sniff` writes that field on every " +
+         "arm, as `null` for a resource whose bytes match no pattern it walks, so an absent one is a SECOND " +
+         "sniff from somewhere else and the arm below would silently take the answer that has no bytes " +
+         "behind it");
+  // §7 STEP 2, AND IT IS ASKED BEFORE STEP 3's NOSNIFF BECAUSE THE STANDARD ASKS IT THERE: "If the supplied
+  // MIME type is undefined or if the supplied MIME type's essence is "unknown/unknown", "application/unknown",
+  // or "*/*", execute the rules for identifying an unknown MIME type with the sniff-scriptable flag equal to
+  // the inverse of the no-sniff flag and abort these steps." A server that sent `nosniff` and NO
+  // `Content-Type` has not named a label for nosniff to make final, so the flag narrows WHICH of §7.1's tables
+  // may run rather than stopping the algorithm — and neither of the two tables walked here is in the
+  // sniff-scriptable half, so both run under either setting and the flag has nothing to gate yet. The day
+  // §7.1's first table lands, that gate lands with it: the DCHECK below is what makes forgetting it loud.
+  // THE QUOTATION IS IN A LINE COMMENT AND NOT IN THE BLOCK ONES EITHER SIDE OF IT BECAUSE OF WHAT IS IN IT:
+  // the step's third essence is U+002A U+002F U+002A, which closes a block comment, so `mime_sniff.c` writes
+  // that essence out in prose and says it cannot be written in a C comment. It can be written here, and a
+  // quotation that PARAPHRASES the one token a reader would grep for is the mis-transcription CLAUDE.md
+  // §Browser half rates as worse than no quotation — this one was caught by the citation audit reading it.
+  if (!mime || mime === "unknown/unknown" || mime === "application/unknown" || mime === "*/*") {
+    if (sniff.unknownType) {
+      /* NOT A VACUOUS ASSERT: it cannot fail over the two tables above, and it is exactly constructible over
+         the next diff those tables name. §7.1's sniff-scriptable table returns `text/html`, `text/xml` and
+         `application/pdf`, every one of which is a CORB-protected or scriptable type, and §7.2's own note is
+         that these rules must "never determine the computed MIME type to be a scriptable MIME type, as this
+         could allow a privilege escalation attack". `computedType` is read by `solver/engine.c` to decide
+         whether a reply's bytes are QUEUED AS A PROGRAM, so a row added here without §7.1's flag in front of
+         it is that escalation with this engine's own compiler on the end of it. This fires there instead. */
+      DCHECK(!_jsMime(sniff.unknownType) && !_corbProtectedMime(sniff.unknownType),
+             "§7.1's unknown-type sniff answered `" + sniff.unknownType + "`, which is a JavaScript or a " +
+             "CORB-protected type — the tables walked here are §6.1's and §6.4's and neither can produce one, " +
+             "so a row was added from §7.1's SNIFF-SCRIPTABLE table without the flag that gates it, and a " +
+             "reply is one `computedType` read away from being compiled as a program");
+      return sniff.unknownType;
+    }
+  }
   if (nosniff) return mime;
   if (!mime) return sniff.type || "";
   // The bytes contradict the label: a JSON body under `text/plain` or under a
@@ -2759,9 +2926,10 @@ async function safeFetch(url, opts) {
      rule someone follows — there is no second call to make, on this path or on any
      other, so a second answer cannot exist to disagree with the first.
      ABSENCE IS READ AS A POSITIVE STATEMENT, never filled in: a response with no
-     `Content-Type` is §5.1's "the supplied MIME type is undefined", which is what
-     `_computedType` reads a missing header as, and is a different input from the
-     empty string a `|| ""` would manufacture. */
+     `Content-Type` is MIME Sniffing §5.1 "Interpreting the resource metadata"'s
+     "the supplied MIME type is undefined", which is what `_computedType` reads a
+     missing header as, and is a different input from the empty string a `|| ""`
+     would manufacture. */
   var _nosniff = _determineNosniff(headers["x-content-type-options"]);
   var _sn = _sniff(body);
   var _computed = _computedType(headers["content-type"], _nosniff, _sn);
