@@ -137,9 +137,19 @@ const DOCS = [
   /* THE ONE ORIGIN WHOSE READING IS NOT IN ANY COLUMN site.mjs PUBLISHES, APPENDED FOR THE REASON STATED
      ABOVE. HTML §4.6.8.20 Link type "preload"'s image branch selects one source out of a set, and
      core/html/html_link.c records EVERY candidate on the @H surface and then the selected one again, deduped
-     on method+url -- so `siteEndpoints` holds the same addresses whichever candidate was chosen and is blind
-     to the selection BY CONSTRUCTION. What separates them is that exactly one is REQUESTED, and the only
-     reader of that outside the engine is the `REQ` log below. Its rungs are therefore the first here whose
+     on method+url. THE CLAUSE THAT FOLLOWED THAT READ `so siteEndpoints holds the same addresses whichever
+     candidate was chosen and is blind to the selection BY CONSTRUCTION`, AND IT IS FALSE IN THE DIRECTION
+     THAT COSTS A READING. It is kept in its own words because the dedup really does make the candidates
+     indistinguishable ON THE MINT, so a reader re-deriving it from the recording site writes it again. What
+     the dedup cannot see is the REPLY: exactly one candidate is REQUESTED, solver/reply_decode.c reads that
+     reply's computed type, an image is marked an ASSET, and endpoint.c skips every asset when it composes
+     the array -- the first and only place a record is dropped. So the census row is the SHARPEST reader of
+     the selection here, and it reads it as a HOLE: the selected address is the one that is MISSING. A reader
+     holding the retired clause expects every candidate present, counts one fewer, and reports a correct
+     decline as a lost endpoint -- which is what happened, once, before this was repaired.
+     THE `REQ` LOG BELOW REMAINS THE POSITIVE ORACLE and the census row is a NEGATIVE one.
+     RETIREMENT: this note goes when the engine publishes the classifier's answer BESIDE fetchCallSites, so
+     the hole is a stated column rather than an absence a reader has to know about. Its rungs are therefore the first here whose
      primary oracle is this server rather than the census row, which is also why they may share one document
      where every other question got an origin: the log survives an abort that would blind every column. */
   ['preload-image.html', 'control-preload'],
