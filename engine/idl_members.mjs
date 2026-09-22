@@ -320,7 +320,13 @@ export function unplacedInterfaces(idl) {
  * WHAT ITS ABSENCE COST, WHICH IS NOT THE COST THE OTHER THREE HAD. Sources 1-3 decide whether a name reaches
  * browser/platform_names.h, and solver/absent.c's read hook does NOT throw on a name it finds there — it
  * LEAVES THE READ ALONE, so ordinary ECMAScript semantics run and `if (window.webkitURL)` takes §10.1.8.1
- * OrdinaryGet ( O, P, Receiver ) step 2.b's `undefined` arm. A name the table is MISSING takes the other arm:
+ * OrdinaryGet ( obj, propertyKey, receiver ) step 2.b's `undefined` arm. THAT PARAMETER LIST IS THE CURRENT
+ * SPELLING AND IT WAS FETCHED: this line carried `( O, P, Receiver )`, an earlier edition's, and the live
+ * standard holds that form ZERO times against two of the current one. NO CHANNEL HERE COULD HAVE SEEN IT --
+ * the citation auditor compares NUMBERS, TITLES and QUOTATIONS, and an operation's parameter list is none of
+ * the three, so a stale one is the strongest-looking half of a citation with nothing standing behind it.
+ * RETIREMENT: this clause goes when a parameter list is checked against the indexed heading, which already
+ * carries it. A name the table is MISSING takes the other arm:
  * the hook mints an example-free concolic under the source identity of server-injected app state, and the
  * guard FORKS. So the loss was not a missing throw. It was a fabricated world — an arm in which this engine
  * pretends to hold an API it has not built, whose very next member call has nothing to reach, which is the
