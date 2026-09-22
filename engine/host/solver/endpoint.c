@@ -498,9 +498,13 @@ static const char *kv_run_end(const char *b, int npair,
        that aligned `{k}=1` would emit a param NAMED `{k}`, and the request that went out would carry a
        literal parameter called `{k}` — a FABRICATED request rather than a thin one, which is worse than the
        refusal it replaces and is what §@H forbids. The landing unit is therefore the aligner arm AND a
-       consumer that can substitute a parameter NAME, together; and the ORDER is the consumer FIRST, because
-       it is the half that has a caller today (every query param already flows through that line) while the
-       aligner half has no reader until it does.
+       consumer that can substitute a parameter NAME, and it is ONE LANDING rather than two ordered ones.
+       AN EARLIER FORM OF THIS SENTENCE SAID `together` AND THEN GAVE AN ORDER — consumer first, on the
+       ground that every query param already flows through that line — WHICH INVITES THE ONE READING THAT IS
+       A DEFECT: name substitution landed alone is a READER WITH NO WRITER, because nothing in this tree
+       emits a braced query param name and this walk is what would start. A set that cannot land except
+       together is ONE landing and is numbered as one, which is the rule the earlier sentence stated and
+       then broke in its own next clause.
      HOW ITS ABSENCE WOULD SHOW: an address whose query params are all emitted with no example while its path
        params carry theirs, on a record whose shape spells at least one param name inside braces.
    Returns a malloc'd span per shape pair and writes the shape's pair count, or NULL when there is no reading
