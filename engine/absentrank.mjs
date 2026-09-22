@@ -544,6 +544,16 @@ for (const [k, re] of Object.entries(CONTROL)) controls.set(k, tally(re));
    hidden: the count prints in its own column and a row that falls to zero still prints, under its own
    `shadowed` class, so the reason is visible rather than the row silently vanishing — which is the shape the
    `qjs` column already has and is there for the same reason.
+   AND WHICH OCCURRENCES THOSE ARE IS A PER-OCCURRENCE QUESTION, WHICH THIS PARAGRAPH USED TO ANSWER PER
+   FILE. It read that a bundle shipping `function Animation(...)` makes EVERY `Animation.tweeners` in that
+   file a read of its own function, and that is true of the occurrences INSIDE the binding's scope and false
+   of the rest: one enormous vendor bundle can bind a platform name in one module and read the platform's
+   own name freely in another, and a whole-file bit discards the second with the first. That is an exclusion
+   wrong in the REMOVING direction, which is an under-claim nobody finds by acting on it — so the reader
+   below is asked of every occurrence of every file it can parse, INCLUDING a file the binder flags, and a
+   marked occurrence is counted however the binder answered. MEASURED when this landed: the corpus held no
+   such occurrence, which is a population empty TODAY rather than empty by construction and is exactly why
+   the order of the two questions is fixed in the code rather than left to whichever one fires.
 
    THE STRING LITERAL RESIDUAL IS DISCHARGED FOR THESE CHANNELS AND ITS FLOORS ARE NOT, AND IT KEEPS ITS NAME
    BECAUSE FOUR PARAGRAPHS BELOW POINT AT IT. It read: the channels read raw text, so a bundle that embeds
@@ -575,20 +585,46 @@ for (const s of ["function Zz(a){}", "function* Zz(){}", "class Zz extends Q{}",
 for (const s of ["q.Zz = 1", "Zz === 1", "new Zz()", "x instanceof Zz", "Zz.member=1", "{Zz: 1}", "Zz=>1"])
   if (BINDS("Zz").test(s))
     die(`the binder matched ${JSON.stringify(s)} — it is counting a use as a binding.`);
-/* NAMED RESIDUAL — THIS BINDER IS A SPELLING WHERE THE READING BELOW IS A SCOPE RESOLUTION, SO THE `shadow`
-   COLUMN UNDER-REPORTS AND THE `notcode` COLUMN QUIETLY CARRIES THE DIFFERENCE. WHAT IS NOT COVERED: the
-   three forms above are `function X(`, `class X` and `X =`, and a declaration that binds without any of them
-   is invisible here — measured on the corpus this was landed against, `var ML;(function(e){…})(ML||={})`,
-   which is the ordinary TypeScript enum emit: `var ML;` carries no `=` and `ML||=` puts a `|` between the
-   name and the `=`, so the binder answers FALSE and every `ML.Resize` in that file was ranked as a platform
-   read. It was the TOP ROW of list A's THROWS band. `??=`, `&&=`, a destructured binding, a parameter and an
-   imported binding are the same shape. WHAT THE NEXT DIFF BUILDS: NOT a wider regex — engine/js_code_refs.mjs
-   already answers this question from the parser's own binding resolution, and a second correct answer to one
-   question is the shape that drifts; what it builds is `shadow` taken FROM that reader, so the two columns
-   stop being two derivations of one fact. That is a change to what `shadow` MEANS and needs its own
-   measurement, which is why it is not folded into the diff that landed the reader. HOW ITS ABSENCE WOULD
-   SHOW: a row whose `notcode` column stands far above its `shadow` column, whose sites open as a file-local
-   object read through its own name rather than as text. */
+/* THIS BINDER IS A SPELLING AND THE PARSE IS A RESOLUTION, SO THE PARSE IS ASKED FIRST AND THIS IS ITS FLOOR.
+   The three forms above are `function X(`, `class X` and `X =`; `var X;` with no initialiser, `X ||= {}`,
+   `??=`, a destructure, a parameter and an import all bind without any of them, and the ordinary TypeScript
+   enum emit is two of those at once — `var ML;(function(e){…})(ML||={})`, where `var ML;` carries no `=` and
+   `ML ||=` puts a `|` between the name and the `=`. `reader.bindsTopLevel` answers every one of them from
+   the same binding resolution the rename uses, and what is left for this binder is a binding in an INNER
+   scope, which no reference appended to the program can be resolved against.
+
+   THE RESIDUAL THAT STOOD HERE IS REWRITTEN RATHER THAN DELETED AND ITS TWO ERRORS ARE KEPT, because the
+   reading that produced them is the reading the next author will reach for. It said the binder's blindness
+   meant `every ML.Resize in that file was ranked as a platform read. It was the TOP ROW of list A's THROWS
+   band.` Re-derived against the tree its own commit produced: that commit landed the reader, `define` does
+   not substitute a name bound at TOP LEVEL either, so those occurrences were already read as bare and
+   already excluded — the row stood at COUNT ZERO in the no-evidence band, at the BOTTOM of the sort, and
+   nothing was ranked. The clause was not stale; it described the state its own diff had just repaired, and
+   a reader taking it at face value would have been sent to fix a rank that no longer moved. What was ACTUALLY
+   wrong was the WORD: ten occurrences of a page's own enum printed under `notcode`, the column whose sites a
+   reader is told to open as text.
+   ITS REMEDY CLAUSE WAS HALF RIGHT AND THE WRONG HALF IS THE INSTRUCTIVE ONE. `shadow` taken FROM the reader
+   is right about where the answer comes from and wrong about what the reader can be asked: `define` marks a
+   FREE reference, so an occurrence it leaves bare is text OR a binding and the rename cannot tell which —
+   taking `shadow` wholly from it would MERGE the two columns that exist to be told apart, and would also
+   drop the three positions the reader is silent on, where this binder is the only exclusion there is. The
+   answer is a DIFFERENT QUESTION put to the same resolution, which is what `bindsTopLevel` is.
+   AND ITS `HOW ITS ABSENCE WOULD SHOW` CLAUSE WAS EXACT AND IS WHAT FOUND THE DEFECT — a row whose `notcode`
+   stood far above its `shadow`, opening as a file-local object read through its own name. That is the clause
+   to trust in a residual and the remedy is the clause to re-derive.
+
+   NAMED RESIDUAL — A BINDING IN AN INNER SCOPE IS ANSWERED BY A SPELLING AND NOT BY A RESOLUTION. WHAT IS
+   NOT COVERED: the appended reference stands at the program's top level, so a file whose only binding of the
+   name sits inside a function or a block answers FREE, and the three spellings above are all that then
+   decides the bucket; a binding that is inner AND spelled some other way prints under `notcode`. This costs
+   no rank — both columns are subtracted identically — and it costs a reader the reason a row is empty.
+   WHAT THE NEXT DIFF BUILDS: not a wider binder and not a second probe. `define` can only be asked from a
+   scope a reference can be WRITTEN into, and there is no such seam inside an arbitrary inner scope, so the
+   question needs a parser that reports its SCOPE TREE rather than a re-print — which is the same SCOPE
+   READER the global-alias widening below was built, measured and declined over, and the one two other
+   designs in this file are already blocked on. HOW ITS ABSENCE WOULD SHOW: a row printed under `not-code`
+   whose `--dump-notcode` sites open as a file-local object read through its own name INSIDE a function,
+   rather than as a string, a template or a comment. */
 
 /* NAMED RESIDUAL — A FILE THAT BINDS THE NAME ONTO ITS OWN NAMESPACE OBJECT IS NOT A BINDER HERE, SO ITS
    OCCURRENCES ARE COUNTED AS PLATFORM USES. WHAT IS NOT COVERED: `q.Zz = 1` sits in the negative list one
@@ -607,35 +643,16 @@ for (const s of ["q.Zz = 1", "Zz === 1", "new Zz()", "x instanceof Zz", "Zz.memb
    all on the receiver channel, concentrated in one or two files, whose sites read as a local namespace's
    own member rather than as a global. */
 
-const shadow = new Map();        /* name -> channel -> occurrences in a file that BINDS the name */
+const shadow = new Map();        /* name -> channel -> occurrences that are the FILE'S OWN name */
 const perFile = new Map();       /* name -> channel -> occurrences, tallied per file */
-for (const t of parts) {
-  const bound = new Map();
-  for (const [k, re] of Object.entries(CHANNELS)) {
-    for (const m of t.matchAll(new RegExp(re.source, "g"))) {
-      const n = m[1];
-      if (!perFile.has(n)) perFile.set(n, new Map());
-      perFile.get(n).set(k, (perFile.get(n).get(k) || 0) + 1);
-      if (!bound.has(n)) bound.set(n, BINDS(n).test(t));
-      if (!bound.get(n)) continue;
-      if (!shadow.has(n)) shadow.set(n, new Map());
-      shadow.get(n).set(k, (shadow.get(n).get(k) || 0) + 1);
-    }
-  }
-}
-/* THE PARTS SUM TO THE TOTAL, ASSERTED RATHER THAN ASSUMED. `freeOf` SUBTRACTS a per-file count from a count
-   taken over the JOINED corpus, and two tallies over different populations would make that difference mean
-   nothing — and could make it negative, which would read as a name used fewer than zero times. The two are
-   not obviously equal either: the joined text carries a separator between files precisely so a match cannot
-   straddle two of them, and `X.member`'s leading `(?:^|[^\w$.])` anchors differently in a join than in a
-   file. Measured at 0 differing name/channel pairs out of 6344 when this landed. */
-for (const [n, chans] of perFile)
-  for (const [k, c] of chans)
-    if (((hits.get(n) || new Map()).get(k) || 0) !== c)
-      die(`the per-file tally of ${n} on channel ${k} is ${c} and the joined tally is ` +
-          `${(hits.get(n) || new Map()).get(k) || 0}. The shadow count is not a subset of the total, so ` +
-          `subtracting it is a difference between two populations.`);
-
+const bump = (m, n, k, c) => {
+  if (!c) return;
+  if (!m.has(n)) m.set(n, new Map());
+  m.get(n).set(k, (m.get(n).get(k) || 0) + c);
+};
+/* BOTH ARE FILLED BY THE ONE PASS BELOW, which is where the reader is, because the binding answer this
+   column prints is the reader's for every position the reader can judge. The assertion that the parts sum
+   to the total therefore sits after that pass rather than here. */
 /* ---- what the corpus EVALUATES, asked of a real parse rather than of the raw bytes ---------------------- */
 /* THE STRING LITERAL RESIDUAL ABOVE NAMES THIS AND engine/js_code_refs.mjs IS IT. Every channel here matches
    RAW TEXT, and raw text carries more than code — a codegen template, a plugin shipped as a string, a debug
@@ -684,62 +701,115 @@ const notcode = new Map();                             /* name -> channel -> occ
 const ncOf = (n, k) => ((notcode.get(n) || new Map()).get(k) || 0);
 const ncAll = (n) => [...(notcode.get(n) || new Map()).values()].reduce((a, b) => a + b, 0);
 let refFiles = 0, refRefused = 0, refTick = 0, refMigrated = 0, refBytes = 0;
+let refBindAsked = 0, refBindRefused = 0;
 const refWhy = new Map(), refExcluded = [];
-if (!REF_NAMES.length) {
+const reader = REF_NAMES.length ? await referenceReader(REF_NAMES) : null;
+if (!reader) {
   /* NOT A QUIET SKIP. A corpus that names none of the ranked names has nothing to retire, and saying so is
-     the honest statement; a zero printed with no line explaining it would read as a mask that found nothing. */
+     the honest statement; a zero printed with no line explaining it would read as a mask that found nothing.
+     The pass below still runs: with no reader every position is one the parse cannot judge, so the binder
+     answers alone, which is the same arm a REFUSED file takes and is not a second code path. */
   say(`  code/not-code reading NOT RUN — this corpus names none of the ${ABSENT_GLOBAL.size} absent global ` +
       `name(s) or ${absentBy.size} absent-member interface(s), so there is no occurrence to judge.`);
-} else {
-  const reader = await referenceReader(REF_NAMES);
-  refExcluded.push(...reader.excluded);
-  const EXCL = new Set(reader.excluded);
-  const NAMED = new Set(REF_NAMES);
-  for (const t of parts) {
-    const got = await reader.read(t);
-    if (!got.parsed) { refRefused++; refWhy.set(got.why, (refWhy.get(got.why) || 0) + 1); continue; }
-    refFiles++; refBytes += t.length;
-    const bound = new Map();
-    for (const [k, re] of Object.entries(CHANNELS)) {
-      if (REF_BLIND.has(k)) continue;
-      const rawJ = new Map(), code = new Map();
-      for (const m of t.matchAll(new RegExp(re.source, "g"))) {
-        const n = m[1];
-        if (!NAMED.has(n) || EXCL.has(n)) continue;
-        if (REF_QUOTED.has(k) && !quotedKeyJudgeable(m[0])) { refTick++; continue; }
-        if (!bound.has(n)) bound.set(n, BINDS(n).test(t));
-        if (bound.get(n)) continue;                    /* `shadow` owns it; the two must stay disjoint */
-        rawJ.set(n, (rawJ.get(n) || 0) + 1);
-      }
-      if (!rawJ.size) continue;
-      for (const m of got.text.matchAll(new RegExp(re.source, "g"))) {
-        if (!m[1].endsWith(REF_MARK)) continue;
-        const n = m[1].slice(0, -REF_MARK.length);
-        if (rawJ.has(n)) code.set(n, (code.get(n) || 0) + 1);
-      }
-      for (const [n, rj] of rawJ) {
-        const c = code.get(n) || 0;
-        if (c > rj) refMigrated += c - rj;              /* a shape the re-print moved INTO this channel */
-        const nc = Math.max(0, rj - c);
-        if (!nc) continue;
-        if (!notcode.has(n)) notcode.set(n, new Map());
-        notcode.get(n).set(k, (notcode.get(n).get(k) || 0) + nc);
-      }
+} else refExcluded.push(...reader.excluded);
+const EXCL = new Set(refExcluded);
+const NAMED = new Set(REF_NAMES);
+
+/* ONE PASS, AND THE ORDER OF THE TWO QUESTIONS IS THE WHOLE DESIGN. The reader is asked FIRST, of every
+   occurrence of a ranked name in every file it can parse — INCLUDING a file the binder flags. A marked
+   occurrence is a free reference the parser resolved past every enclosing scope, so it is the platform's
+   name and is COUNTED, and the binder's whole-file bit no longer discards it. Only a BARE occurrence is
+   bucketed, and the bucket is a REPORTING split rather than a second subtraction: `shadow` and `notcode`
+   are subtracted identically by `freeOf`, so moving an occurrence between them changes the word a row
+   prints and no rank anywhere. */
+for (const t of parts) {
+  const got = reader ? await reader.read(t) : { parsed: false, why: null };
+  if (reader) {
+    if (got.parsed) { refFiles++; refBytes += t.length; }
+    else { refRefused++; refWhy.set(got.why, (refWhy.get(got.why) || 0) + 1); }
+  }
+  const bound = new Map();                             /* the binder's answer, memoised per name per file */
+  const isBound = (n) => {
+    if (!bound.has(n)) bound.set(n, BINDS(n).test(t));
+    return bound.get(n);
+  };
+  const bare = new Map();                              /* name -> channel -> bare occurrences to bucket */
+  for (const [k, re] of Object.entries(CHANNELS)) {
+    const rawJ = new Map();
+    for (const m of t.matchAll(new RegExp(re.source, "g"))) {
+      const n = m[1];
+      bump(perFile, n, k, 1);
+      /* The four positions the reader cannot speak about are named at their own site above; each one falls
+         through to the binder here rather than to silence, which is what keeps the `global["X"]` channel,
+         a backtick key, a refused file and an excluded name covered by SOMETHING. */
+      let judge = got.parsed && NAMED.has(n) && !EXCL.has(n) && !REF_BLIND.has(k);
+      if (judge && REF_QUOTED.has(k) && !quotedKeyJudgeable(m[0])) { refTick++; judge = false; }
+      if (!judge) { if (isBound(n)) bump(shadow, n, k, 1); continue; }
+      rawJ.set(n, (rawJ.get(n) || 0) + 1);
+    }
+    if (!rawJ.size) continue;
+    const code = new Map();
+    for (const m of got.text.matchAll(new RegExp(re.source, "g"))) {
+      if (!m[1].endsWith(REF_MARK)) continue;
+      const n = m[1].slice(0, -REF_MARK.length);
+      if (rawJ.has(n)) code.set(n, (code.get(n) || 0) + 1);
+    }
+    for (const [n, rj] of rawJ) {
+      const c = code.get(n) || 0;
+      if (c > rj) refMigrated += c - rj;                /* a shape the re-print moved INTO this channel */
+      bump(bare, n, k, Math.max(0, rj - c));
     }
   }
-  /* THE THREE PARTS OF A RAW COUNT DO NOT OVERLAP, ASSERTED RATHER THAN ASSUMED. `shadow` is taken over
-     binding files and `notcode` over non-binding ones, so they are disjoint by construction and this cannot
-     fire today — it is armed against the edit that drops the `bound.get(n)` skip above, whose symptom would
-     be a free count below zero rather than a crash. */
-  for (const [n, chans] of notcode)
-    for (const [k, c] of chans) {
-      const raw = (hits.get(n) || new Map()).get(k) || 0, sh = (shadow.get(n) || new Map()).get(k) || 0;
-      if (c + sh > raw)
-        die(`${n} on channel ${k}: ${c} not-code + ${sh} shadowed exceeds ${raw} raw occurrence(s). The two ` +
-            `exclusions overlap, so subtracting both is a difference between two populations and the free ` +
-            `count would read below zero.`);
-    }
+  if (!bare.size) continue;
+  /* THE BUCKET IS ASKED OF THE PARSER AND THE BINDER IS ITS FLOOR, IN THAT ORDER AND NOT THE OTHER WAY.
+     The parser answers for the TOP-LEVEL scope exactly — which is the form the binder cannot spell — and it
+     answers nothing about a binding in an INNER scope, which is the form the binder can. So the two are not
+     two answers to one question: the parser decides where it can decide, and the binder is consulted only
+     for what is left, exactly as `quotedKeyJudgeable` floors the quoted-key position. */
+  const ask = [...bare.keys()];
+  /* A BARE OCCURRENCE EXISTS ONLY WHERE THE READER JUDGED ONE, so reaching here without a reader is the two
+     halves of that sentence having come apart. Asserted rather than left to a TypeError on a null, because
+     the state it forbids is the reader going missing between two lines that both depend on it. */
+  if (!reader) die(`a bare occurrence was bucketed with no reader — nothing can be bare unless a parse left ` +
+                   `it so, and this file only parses when there is a reader.`);
+  refBindAsked++;
+  const b = await reader.bindsTopLevel(t, ask);
+  if (!b.parsed) refBindRefused++;
+  for (const [n, chans] of bare) {
+    const own = (b.parsed && b.bound.has(n)) || isBound(n);
+    for (const [k, c] of chans) bump(own ? shadow : notcode, n, k, c);
+  }
 }
+
+/* THE PARTS SUM TO THE TOTAL, ASSERTED RATHER THAN ASSUMED. `freeOf` SUBTRACTS a per-file count from a count
+   taken over the JOINED corpus, and two tallies over different populations would make that difference mean
+   nothing — and could make it negative, which would read as a name used fewer than zero times. The two are
+   not obviously equal either: the joined text carries a separator between files precisely so a match cannot
+   straddle two of them, and `X.member`'s leading `(?:^|[^\w$.])` anchors differently in a join than in a
+   file. Measured at 0 differing name/channel pairs out of 6344 when this landed. */
+for (const [n, chans] of perFile)
+  for (const [k, c] of chans)
+    if (((hits.get(n) || new Map()).get(k) || 0) !== c)
+      die(`the per-file tally of ${n} on channel ${k} is ${c} and the joined tally is ` +
+          `${(hits.get(n) || new Map()).get(k) || 0}. The shadow count is not a subset of the total, so ` +
+          `subtracting it is a difference between two populations.`);
+
+/* THE THREE PARTS OF A RAW COUNT DO NOT OVERLAP, ASSERTED RATHER THAN ASSUMED. THE REASON CHANGED WITH THE
+   PASS ABOVE AND IS REWRITTEN RATHER THAN DELETED, because the retired one is what a reader re-derives: it
+   read "`shadow` is taken over binding files and `notcode` over non-binding ones, so they are disjoint by
+   construction", which was true while the binder's whole-file bit SKIPPED a file from the reader. It no
+   longer does. What makes them disjoint now is narrower and stronger — every occurrence is bucketed EXACTLY
+   ONCE, into `shadow` or into `notcode` or into neither, and never into both — so this still cannot fire
+   today and is armed against the edit that buckets one twice, whose symptom would be a free count below
+   zero rather than a crash. */
+for (const [n, chans] of notcode)
+  for (const [k, c] of chans) {
+    const raw = (hits.get(n) || new Map()).get(k) || 0, sh = (shadow.get(n) || new Map()).get(k) || 0;
+    if (c + sh > raw)
+      die(`${n} on channel ${k}: ${c} not-code + ${sh} shadowed exceeds ${raw} raw occurrence(s). The two ` +
+          `exclusions overlap, so subtracting both is a difference between two populations and the free ` +
+          `count would read below zero.`);
+  }
 
 /* ---- the receiver-anchored member channel -------------------------------------------------------------- */
 /* AN ABSENT MEMBER DOES NOT THROW WHERE AN ABSENT GLOBAL DOES, SO THE USE/GUARD BANDING ABOVE MAY NOT BE
@@ -1239,7 +1309,12 @@ if (REF_NAMES.length)
     `esbuild's mangleQuoted; the \`global["X"]\` channel judged not at all; ` +
     `${refExcluded.length ? `${refExcluded.length} ranked name(s) the reader excludes by name (${refExcluded.join(", ")})` : "no ranked name excluded by the reader"}. ` +
     `${refMigrated} marked occurrence(s) arrived on a channel its raw form did not match, which can only ` +
-    `make a subtraction smaller.`);
+    `make a subtraction smaller. The BUCKET a bare occurrence prints in was asked of the parser in ` +
+    `${refBindAsked} file(s)` +
+    (refBindRefused ? `, of which ${refBindRefused} did not parse WITH the appended probe though the file ` +
+                      `itself did — the binder alone bucketed those, and a probe that refuses a file the ` +
+                      `reader accepts is a finding about the probe rather than about the file`
+                    : ` and refused in none`) + `.`);
 for (const [k, t] of controls) {
   const top = [...t].sort((a, b) => b[1] - a[1]).slice(0, 6);
   const plat = top.filter(([n]) => PLATFORM.has(n)).length;
@@ -1253,16 +1328,23 @@ say(`   A page naming one of these gets a ReferenceError on the line that touche
     `the ${distinct.size}-member count: an interface that does not exist has no members to be missing.`);
 say(`   The count is a CEILING. qjs = times the name occurs as a quoted string under engine/qjs, which is ` +
     `outside the audited tree; a non-zero qjs is a row to read before believing.`);
-say(`   shadow = occurrences in a file that BINDS the name itself (a page's own \`function X\`, \`class X\` or ` +
-    `\`X =\`), which are that file's name and not the platform's. They are EXCLUDED from the count and the ` +
-    `class; the column is printed so a row that falls to zero shows why instead of vanishing.`);
+say(`   shadow = occurrences that are the FILE'S OWN name rather than the platform's. Which those are is ` +
+    `asked of the PARSE first — a reference appended to the program is marked only where nothing at top ` +
+    `level binds the name, so \`var X;\`, \`X ||= {}\`, a destructure and an import all answer here — and of ` +
+    `the binder (\`function X\`, \`class X\`, \`X =\`) only for what the parse cannot reach, which is a ` +
+    `binding in an INNER scope and every position the reader could not judge. EXCLUDED from the count and ` +
+    `the class; the column is printed so a row that falls to zero shows why instead of vanishing.`);
 say(`   notcode = occurrences a REAL PARSE says the program does not evaluate as this name (engine/` +
     `js_code_refs.mjs). Same treatment as shadow: EXCLUDED from the count and the class, printed so a row ` +
     `that falls to zero shows why instead of vanishing. It is a FLOOR and never a mask — the channel lines ` +
-    `above name every position the parse could not judge. IT MERGES TWO STATES AND SAYS SO: source carried ` +
-    `AS DATA (a codegen template, a worker shipped as a string, a log line, a localisation key), and a ` +
-    `BINDING the \`shadow\` regex cannot see. They take different work, the count does not separate them, ` +
-    `and \`--dump-notcode\` prints the (name, channel) pairs so the sites can be opened.`);
+    `above name every position the parse could not judge. THE TWO WORDS ARE A REPORTING SPLIT AND NOT TWO ` +
+    `SUBTRACTIONS: \`freeOf\` takes both away identically, so which column an occurrence prints in changes ` +
+    `no rank — it changes whether a reader is sent to open the sites. WHAT IS STILL MERGED HERE IS NARROWER ` +
+    `THAN IT WAS AND IS NOT NOTHING: source carried AS DATA (a codegen template, a worker shipped as a ` +
+    `string, a log line, a localisation key) and a binding in an INNER scope, which neither the appended ` +
+    `reference nor the binder can always see. \`--dump-notcode\` prints the (name, channel) pairs so the ` +
+    `sites can be opened, and a site that opens as a file-local object read through its own name inside a ` +
+    `function is the second of those two.`);
 say(`   ORDERED BY WHAT THE ABSENCE COSTS, NOT BY VOLUME: THROWS (every use of this name is unguarded, so it ` +
     `raises a ReferenceError and ends the flow) before mixed (both forms present — read the site) before ` +
     `detect-only (the corpus only ever feature-detects it, so absence is the answer a browser without it gives).`);

@@ -127,6 +127,31 @@ const esc = (n) => n.replace(/[$]/g, "\\$");
    the matched text, which carries its own delimiter. */
 export const quotedKeyJudgeable = (matchText) => !matchText.includes("\x60");
 
+/* A CALLER ALSO NEEDS TO KNOW WHICH OF TWO STATES A *BARE* OCCURRENCE IS IN, AND THE RENAME ABOVE CANNOT SAY.
+   `define` substitutes a FREE reference, so an occurrence it leaves bare is one of two things that take
+   opposite work: text a page never runs, or a reference to a binding THE FILE ITSELF MAKES. Both are equally
+   not-the-platform and a caller subtracting them needs no split; a caller PRINTING them does, because
+   "source carried as data" sends a reader to open the sites and "the page's own name" tells them not to.
+   The question is answered by the same binding resolution and NOT by a second spelling rule: a reference
+   APPENDED to the program is marked IFF nothing in scope at that point binds the name. The sentinel is a
+   string so the tail can be located in the re-print without matching on the caller's own names.
+   WHAT IT COVERS IS THE SCOPE THE APPENDED REFERENCE STANDS IN, WHICH IS THE TOP-LEVEL ONE, and the arming
+   below asserts both halves of that: every top-level binding form answers BOUND — `var X;` with no
+   initialiser, `X ||= {}`, a destructure, an import, `let`/`const`/`function`/`class` — and a string, a
+   template, a comment, a free read and a binding in an INNER scope all answer FREE. The inner-scope answer
+   is correct for what this entry claims (nothing at the end of the program binds the name) and is NOT the
+   caller's whole question, which is why the caller keeps its own binder as the floor for that one case.
+   THE PROBE PERTURBS THE PROGRAM AND SO IS ITS OWN TRANSFORM, NEVER THE ONE THE CALLER COUNTS FROM: adding
+   a free reference is exactly what makes esbuild rename a colliding inner binding out of the way (measured
+   in the header above), so an occurrence count taken from this re-print would be smaller than the truth —
+   the REMOVING direction. Read the tail; discard the body. */
+export const BIND_SENTINEL = "AbsentRankBindProbe";
+/* The appended statement, and the bounded test for one marked name in its re-print. `endsWith`/`includes`
+   would be wrong here: `Text` and `TextEvent` are both platform names, and an unbounded test for the first
+   would read the second's mark as its own. */
+const bindProbe = (names) => `\n;[${JSON.stringify(BIND_SENTINEL)},${names.join(",")}];\n`;
+const markedIn = (text, n) => new RegExp(`(?<![\\w$])${esc(n)}${esc(MARK)}(?![\\w$])`).test(text);
+
 export async function referenceReader(names) {
   const die = (s) => { throw new Error(`[js_code_refs] ${s}`); };
   const bad = names.filter((n) => !/^[A-Za-z_$][\w$]*$/.test(n));
@@ -227,6 +252,41 @@ export async function referenceReader(names) {
         `reader can now judge — the caller is floored for no reason. Re-measure it and delete the ` +
         `refusal.\n--- output ---\n${tick}`);
 
+  /* THE BIND PROBE IS ARMED IN BOTH DIRECTIONS TOO, AND ITS NEGATIVES ARE THE FORMS IT EXISTS TO REFUSE. A
+     probe that answered BOUND for everything would call a page's own DATA a binding, which moves an
+     occurrence into the caller's `shadow` column and out of the one whose sites a reader is told to open;
+     one that answered FREE for everything would leave the caller exactly where it was and read as a probe
+     that found nothing. The last negative is this entry's own stated LIMIT rather than a defect: a binding
+     in an INNER scope does not bind the appended reference, and the caller's own binder is the floor for it. */
+  {
+    const P = probe;
+    const ask = async (src) => {
+      const out = await transform(src + bindProbe([P]));
+      const i = out.lastIndexOf(JSON.stringify(BIND_SENTINEL));
+      if (i < 0)
+        die(`the bind probe's sentinel did not survive its own control, so the tail cannot be located and ` +
+            `every name would read BOUND.\n--- output ---\n${out}`);
+      return markedIn(out.slice(i), P) ? "free" : "bound";
+    };
+    const WANT = [
+      [`var ${P};`, "bound"], [`var ${P};${P} ||= {};`, "bound"], [`let ${P} = 1;`, "bound"],
+      [`const ${P} = 1;`, "bound"], [`function ${P}(){}`, "bound"], [`class ${P}{}`, "bound"],
+      [`var {${P}} = q;`, "bound"], [`var [${P}] = q;`, "bound"], [`import {${P}} from "m";`, "bound"],
+      [`var s = "${P}";`, "free"], [`var s = \`${P}\`;`, "free"], [`/* ${P} */ var q = 1;`, "free"],
+      [`${P}.x;`, "free"], [``, "free"],
+      [`function g(){ var ${P}; return ${P}.x }`, "free"],   /* the stated LIMIT: an inner scope */
+    ];
+    for (const [src, want] of WANT) {
+      const got = await ask(src);
+      if (got !== want)
+        die(`the bind probe answered ${got} for ${JSON.stringify(src)} and must answer ${want}. ` +
+            (want === "bound"
+              ? `A top-level binding form it cannot see is a page's own name reported as the platform's.`
+              : `A string, a template, a comment or a binding in an INNER scope, reported as a top-level ` +
+                `binding, moves an occurrence into a column that says the page owns the name.`));
+    }
+  }
+
   return {
     MARK, excluded, control: CONTROL_NAME,
     /* Returns the re-printed program with every evaluated reference marked, or {parsed:false} and the
@@ -237,6 +297,34 @@ export async function referenceReader(names) {
             `bundle's own text. Change MARK rather than filtering the file out.`);
       try { return { parsed: true, text: await transform(src) }; }
       catch (e) { return { parsed: false, text: null, why: String((e && e.message) || e).split("\n")[1] || String(e) }; }
+    },
+    /* Which of `names` the program BINDS at its top level, from the same resolution. `{parsed:false}` where
+       the probed program does not parse, and nothing is claimed about it — the caller's floor decides. */
+    async bindsTopLevel(src, names) {
+      /* AN EXCLUDED NAME IS REFUSED RATHER THAN DROPPED, because it is the one input this entry answers
+         WRONGLY AND SILENTLY: `window` is never defined, so the appended reference to it is never marked
+         and every file would read BOUND — a page's own binding claimed for every corpus there is. A caller
+         is told, exactly as `excluded` tells it about the rename. A reserved word cannot reach here at all;
+         the constructor already died on one, so a filter for it would be a second answer to that. */
+      const bad = names.filter((n) => GLOBAL_RECEIVERS.has(n));
+      if (bad.length)
+        die(`bindsTopLevel was asked about ${bad.join(", ")}, which this reader excludes from the rename. ` +
+            `Nothing defines them, so the probe cannot mark them and every file would answer BOUND. A ` +
+            `caller must read \`excluded\` and say so, never take this entry's answer for one.`);
+      if (!names.length) return { parsed: true, bound: new Set() };
+      const ask = names;
+      let text;
+      try { text = await transform(src + bindProbe(ask)); }
+      catch (e) { return { parsed: false, bound: null, why: String((e && e.message) || e).split("\n")[1] || String(e) }; }
+      const i = text.lastIndexOf(JSON.stringify(BIND_SENTINEL));
+      if (i < 0)
+        die(`the bind probe's own sentinel is absent from the re-print, so the tail cannot be located and ` +
+            `every name would read BOUND — which is the direction that calls a page's data its own binding. ` +
+            `esbuild is no longer emitting the appended statement; read the output before trusting this.`);
+      const tail = text.slice(i);
+      const bound = new Set();
+      for (const n of ask) if (!markedIn(tail, n)) bound.add(n);
+      return { parsed: true, bound };
     },
   };
 }
