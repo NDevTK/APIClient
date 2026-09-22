@@ -454,7 +454,7 @@ function predicatesPhrase(ps) {
 /* THE LOOSE EQUALITIES THE BUNDLE'S OWN CODE HELD OF THIS PARAMETER, rendered as the operator the page wrote.
    `== 0` says what `== 0` says, and this file does not say more: ECMAScript §7.2.13 IsLooselyEqual ( x, y )'s
    holding set differs per operand type and its step 12 arm runs the page's own ToPrimitive, so spelling out
-   "0, \"\", false or any object coercing to zero" here would be re-implementing fourteen spec steps in a
+   `0`, `""`, `false` or any object coercing to zero here would be re-implementing fourteen spec steps in a
    renderer — the recogniser CLAUDE.md §RUN-DON'T-MATCH forbids, one hop downstream of the engine that refused
    to build it. The reviewer reads JavaScript.
    THE OPERAND IS PRINTED IN ITS OWN TYPE AND NOT AS THE ENGINE'S TRANSPORT STRING, which is the whole reason
