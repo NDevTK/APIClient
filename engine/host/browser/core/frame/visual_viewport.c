@@ -1,11 +1,15 @@
 /* THE VISUAL VIEWPORT — CSSOM VIEW §12. See visual_viewport.h for what this component owns (one fact: the
    scale factor), why every other member is a derivation over viewport.c's layout viewport, and why it is per
    realm. */
+#include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "check.h"
 #include "quickjs.h"
+#include "solver/cow.h"        /* the instance's record is a component's own C state — it time-travels */
 #include "core/agent_state.h"
 #include "core/events/event_target.h"
 #include "core/frame/viewport.h"
@@ -21,6 +25,43 @@
 
 static JSClassID g_vv_class;
 static int g_obj_slot = -1;      /* §2's "the VisualViewport object associated with the document" */
+
+/* THE RECORD — the document §12's members are about, carried by the VisualViewport rather than looked up from
+ * the realm the getter was DEFINED in.
+ *
+ * WHY. §12's members report "this's associated document"'s visual viewport. A C member runs in the realm that
+ * DEFINED it (js_call_c_function sets `ctx = p->u.cfunc.realm`), so a getter reading the geometry off `ctx`
+ * answered for whichever realm's prototype the call went through — and the geometry genuinely differs: a child
+ * navigable's viewport is 300 CSS pixels wide and the top-level traversable's is 1280.
+ *
+ * AND THE DAMAGE IS NOT ONLY A WRONG NUMBER. core/frame/viewport.h's `viewport_env_value` states that THE
+ * DOCUMENT IS PART OF THE KEY, "so `innerWidth` is a different question in each and one key would let a branch
+ * taken in the parent decide the iframe's" — so a cross-realm read minted the iframe's value under the PARENT's
+ * key, and a flow that pinned one would prune an arm of the other that nothing had contradicted. That is the
+ * wrong-narrowing failure CLAUDE.md §Solver-half forbids, reached through a member rather than through a gate.
+ * (core/frame/screen.c is deliberately the opposite and both are right: a UA presents every document of a page
+ * on ONE screen, so a Screen member IS its own source and must NOT be keyed per document.)
+ *
+ * THE ASSERT THAT STOOD HERE WAS A PAGE-HELD ABORT SWITCH: it compared the receiver against this realm's own
+ * VisualViewport and DCHECKed them equal, and a receiver is PAGE-SUPPLIED INPUT, which a DCHECK may never
+ * stand on. `Object.getOwnPropertyDescriptor(VisualViewport.prototype, "width").get
+ * .call(otherFrame.visualViewport)` is two lines of ordinary JavaScript and ended the process. `vv_brand`
+ * answers Web IDL §3.7.6's question one line above every caller and is the whole of what §3.7.6 asks.
+ *
+ * `global` IS WHAT MAKES `realm` SAFE, and it is a declared JSValue edge rather than a `JS_DupContext`: a
+ * context reference hung off an opaque is invisible to gc_decref and would make the realm permanently
+ * uncollectable, while a live global is a live realm. core/timing/performance.c states that reasoning at its
+ * own record. It matters here more than most: §4 hands a page `null` once the document stops being fully
+ * active, but a reference TAKEN EARLIER stays live, so this object outliving its presentation is the ordinary
+ * case rather than the exotic one. */
+typedef struct {
+    JSContext *realm;    /* the document §12's members report. NOT a counted reference */
+    JSValue    global;   /* "this's relevant global object" — OWNED, and what holds `realm` up */
+} VisualViewportRec;
+
+/* THE ONE STATEMENT OF WHAT THE RECORD OWNS — the same list the finalizer frees and the gc_mark walks. */
+static const uint16_t VV_VAL_OFF[] = { (uint16_t)offsetof(VisualViewportRec, global) };
+static const CowRecord VV_REC = { sizeof(VisualViewportRec), VV_VAL_OFF, 1 };
 static int g_resize_slot = -1;   /* §13.1 step 2's "since the last time these steps were run" */
 
 /* ---- §12's attributes ------------------------------------------------------------------------------------ */
@@ -64,23 +105,59 @@ static bool vv_brand(JSContext *ctx, JSValueConst this_val)
     return false;
 }
 
-/* THE HALF OF "THIS's ASSOCIATED DOCUMENT" THIS ENGINE CAN ANSWER, asserted rather than assumed — the same
-   shape and the same reason as navigator.c's. A C member runs in the realm that DEFINED it, so an ordinary
-   `visualViewport.width` arrives with the ctx of the document whose prototype it went through, which is the
-   right document. What does NOT arrive right is one realm's getter applied to ANOTHER realm's VisualViewport:
-   the geometry would come out of the getter's realm, so an iframe's object read through the top-level realm's
-   prototype would report 1280 where §12 says 300. */
-static void vv_assert_this_realm(JSContext *ctx, JSValueConst this_val)
+/* THE ACCESSOR EVERY MEMBER REACHES THE RECORD THROUGH, and the capture is IN it for solver/cow.h's reason: a
+   record a flow has REACHED is one it may write, the delta dedups to one entry per (flow, object), and there
+   is then no write site left to miss. Bounded by §2's own shape — one VisualViewport per document.
+   NOT vv_brand: a brand check is a QUESTION, asked of values that are not VisualViewports at all, and a
+   question must not capture. */
+static VisualViewportRec *vv_rec(JSValueConst v)
 {
-    JSValue own = realm_value_get(ctx, g_obj_slot);
-    bool same = JS_VALUE_GET_PTR(own) == JS_VALUE_GET_PTR(this_val);
+    VisualViewportRec *r = g_vv_class ? JS_GetOpaque(v, g_vv_class) : NULL;
 
-    JS_FreeValue(ctx, own);
-    DCHECK(same, "a VisualViewport member was reached through ONE realm's VisualViewport.prototype on ANOTHER "
-                 "realm's VisualViewport — the geometry would be answered for the member's own document. "
-                 "BUILD the VisualViewport that carries its own realm: give the instance a record as its class "
-                 "opaque (with the finalizer, gc_mark and cow_capture_host_record contract that entails) so "
-                 "the member reads its document off THIS, and delete the object slot below");
+    if (r) cow_capture_host_record(v, r, &VV_REC);
+    return r;
+}
+
+/* JS_GetAnyOpaque and not JS_GetOpaque in BOTH — core/agent_state.h's rule, and this component's release
+   column sets `g_vv_class` back to 0, so reading the static would make a finalizer running after it answer
+   NULL for a record that is there. */
+static void vv_finalizer(JSRuntime *rt, JSValue val)
+{
+    JSClassID id = 0;
+    VisualViewportRec *r = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
+    DCHECK(r != NULL, "a VisualViewport was finalized with no record — §2's object has exactly one mint and it "
+                      "attaches the record with nothing in between that could collect");
+    JS_FreeValueRT(rt, r->global);
+    free(r);
+}
+
+static void vv_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
+{
+    JSClassID id = 0;
+    VisualViewportRec *r = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
+    DCHECK(r != NULL, "a VisualViewport was marked with no record — its global is a counted reference and an "
+                      "unmarked child keeps the internal count gc_decref subtracts, so gc_scan reads it as "
+                      "rooted from OUTSIDE the heap and it is never collected at all");
+    JS_MarkValue(rt, r->global, mark_func);
+}
+
+/* "THIS's ASSOCIATED DOCUMENT" — the environment §12's members report, ANSWERED off the receiver rather than
+   asserted about. Every assert here stands on a value THIS component wrote at the mint, which is the only
+   thing a DCHECK may stand on; the receiver's own brand is a TypeError one line above every caller. */
+static JSContext *vv_environment(JSValueConst this_val)
+{
+    VisualViewportRec *r = vv_rec(this_val);
+
+    DCHECK(r != NULL, "a VisualViewport reached a member with no record — the brand is the class and the mint "
+                      "attaches the record before the object leaves it, so a branded object without one came "
+                      "from a second mint that does not exist");
+    DCHECK(r->realm != NULL, "a VisualViewport names no document — §2's mint is the one writer of this field "
+                             "and it writes the realm it is installing into");
+    return r->realm;
 }
 
 /* §12's `offsetLeft`/`offsetTop`: "the offset of the left edge of the visual viewport from the left edge of the
@@ -161,14 +238,20 @@ static JSValue js_vv_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
     VisualViewportMember m = (VisualViewportMember)magic;
     char member[64];
+    JSContext *env;
     JSValue v;
 
     if (!vv_brand(ctx, this_val)) return JS_EXCEPTION;
-    vv_assert_this_realm(ctx, this_val);
-    v = JS_NewFloat64(ctx, vv_value(ctx, m));
+    /* THE DOCUMENT IS THE RECEIVER'S AND `ctx` IS THE CALL'S — §12's members report "this's associated
+       document"'s visual viewport, and `js_call_c_function` sets `ctx = p->u.cfunc.realm`. Every read below
+       takes `env`, including the MINT: core/frame/viewport.h keys a viewport source BY THE DOCUMENT, so
+       minting through `ctx` would file an iframe's value under the parent's key and let a branch taken in one
+       decide the other. That split is what the deleted assert was standing in for. */
+    env = vv_environment(this_val);
+    v = JS_NewFloat64(ctx, vv_value(env, m));
     /* The not-fully-active zero every §12 attribute opens with is the SPEC's answer rather than a geometry this
        UA chose, so it stays concrete for the same reason viewport.c's does. */
-    if (!vv_is_source(m) || !viewport_exists(ctx)) return v;
+    if (!vv_is_source(m) || !viewport_exists(env)) return v;
     DCHECK(magic >= 0 && magic < VV_NAMES && VV_MAGIC[magic] == magic,
            "the VisualViewport member list is no longer in enum order, so a member's source identity would "
            "name a different member and two attributes would share one branch");
@@ -176,7 +259,7 @@ static JSValue js_vv_get(JSContext *ctx, JSValueConst this_val, int magic)
            "a VisualViewport member name longer than any in the IDL — a truncated one would key two members' "
            "branches together");
     snprintf(member, sizeof member, "visualViewport.%s", VV_NAME[magic]);
-    return viewport_env_value(ctx, member, v);
+    return viewport_env_value(env, member, v);
 }
 
 JSValue visual_viewport_object(JSContext *ctx)
@@ -259,6 +342,7 @@ bool visual_viewport_resize_changed(JSContext *ctx)
 static void visual_viewport_install(JSContext *ctx)
 {
     JSValue proto, prev, global, obj, rec;
+    VisualViewportRec *r;
     int i;
 
     rec = JS_NewObjectProto(ctx, JS_NULL);
@@ -294,6 +378,13 @@ static void visual_viewport_install(JSContext *ctx)
     obj = JS_NewObjectProtoClass(ctx, proto, g_vv_class);
     JS_FreeValue(ctx, proto);
     CHECK(!JS_IsException(obj), "the document's associated VisualViewport could not be allocated");
+    /* THE RECORD, ATTACHED BEFORE THE OBJECT LEAVES THIS FUNCTION — which is what vv_environment's "a branded
+       object without one came from a second mint that does not exist" rests on, and there is no second mint. */
+    r = calloc(1, sizeof *r);
+    CHECK(r != NULL, "this document's VisualViewport record could not be allocated");
+    r->realm = ctx;
+    r->global = JS_DupValue(ctx, global);   /* OWNED by the record from here */
+    JS_SetOpaque(obj, r);
     realm_value_set(ctx, g_obj_slot, obj);
 
     /* §4: `[SameObject, Replaceable] readonly attribute VisualViewport? visualViewport`. */
@@ -303,7 +394,7 @@ static void visual_viewport_install(JSContext *ctx)
 
 void visual_viewport_init(JSContext *ctx)
 {
-    JSClassDef d = { "VisualViewport" };
+    JSClassDef d = { "VisualViewport", .finalizer = vv_finalizer, .gc_mark = vv_gc_mark };
 
     DCHECK(g_obj_slot < 0, "visual_viewport_init ran twice — the class and the slots are declared once per "
                            "AGENT");
