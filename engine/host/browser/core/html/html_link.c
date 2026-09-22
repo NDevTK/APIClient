@@ -782,13 +782,24 @@ static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueCon
                                     integrity ? integrity : "", integrity_n,
                                     parser_metadata);
 
-    /* Fetch §4.1 "Main fetch" step 7 — "If should request be blocked due to a bad port … or should request be
-       blocked by Content Security Policy returns blocked, then set response to a network error". It runs HERE,
-       in the engine, because a policy is the DOCUMENT's; the destination the caller computed is what CSP
-       §6.8.1 "Get the effective directive for request" switches on, so `as=script` is governed by `script-src`
-       and `as=style` by `style-src`. IT IS THE TRANSLATED VALUE and that matters at one member: `as=fetch`
-       reaches §6.8.1 as the EMPTY string and is governed by its FIRST row, `connect-src`. Passing the keyword
-       got the same directive out of §6.8.1's trailing "Return connect-src" for an unlisted destination — the
+    /* Fetch §4.1 "Main fetch" step 7 — "If should request be blocked due to a bad port, should fetching
+       request be blocked as mixed content, should request be blocked by Content Security Policy, or should
+       request be blocked by Integrity Policy Policy returns blocked, then set response to a network error".
+       THE STEP HAS FOUR DISJUNCTS AND THIS SITE QUOTED THREE, by a MARKED ellipsis that cut from after the
+       first disjunct to the standard's own `or` — which introduces the FOURTH. Every word was real and the
+       cut was marked, so the elision read as tidying and the sentence read as one whose last arm is Content
+       Security Policy. It was cut where this paragraph's own subject ends: everything below argues the
+       CSP disjunct and the destination that selects its directive, so an author trimming to what the
+       paragraph argues trims exactly the word the sentence turns on. The three sibling copies
+       (core/fetch/fetch.h, core/html/html_image.c, core/xhr/xml_http_request.c) carry four, and the CODE
+       here was never short — `fetch_main_blocked` asks all four. RETIREMENT: this record goes when this
+       site no longer quotes the sentence, because there is then no copy here to cut.
+       IT RUNS HERE, in the engine, because a policy is the DOCUMENT's; the destination the caller computed
+       is what CSP §6.8.1 "Get the effective directive for request" switches on, so `as=script` is governed
+       by `script-src` and `as=style` by `style-src`. IT IS THE TRANSLATED VALUE and that matters at one
+       member: `as=fetch` reaches §6.8.1 as the EMPTY string and is governed by its FIRST row,
+       `connect-src`. Passing the keyword got the same directive out of §6.8.1's trailing "Return
+       connect-src" for an unlisted destination — the
        right answer for the wrong reason, which is a coincidence rather than a rule and would have moved the
        day §2.2.5 or §6.8.1 gained a row. A blocked request is a NETWORK ERROR, and each type's own response
        steps answer one: §4.6.8.20's processResponse fires `error` for it, and §4.6.8.12 step 14.1 fires
