@@ -207,12 +207,30 @@ function renderMethodDropdown() {
             if (prov !== null) tag += " [" + prov + "]";
             /* THE METHOD ID AS THE STORE HOLDS IT. A rewrite stood here that substituted a declared name
                recovered from the page's source map into each `{hole}` of the displayed id (`{e}` → `{owner}`)
-               — reading `p._sourceMapName` and `p.location === "path"`. Neither name has a producer: nothing
-               in engine/host has ever emitted a source-map name, and lib/learn.js writes every @H param with
-               `location: "query"` because endpoint.c mints params only out of the query string. So the loop
-               could not fire on any parameter of any method, and it read as a working feature.
-               If the rename is wanted it is the ENGINE's to emit beside the param it renames — a view cannot
-               recover a declared name from a minified one. */
+               — reading `p._sourceMapName` and `p.location === "path"`. It could not fire, and the reason is
+               `_sourceMapName` ALONE: nothing in engine/host has ever emitted a source-map name, so the loop
+               read a field the engine's param record does not have. lib/popup-form.js and lib/send.js each
+               record the same absence at their own read of it.
+               THE SECOND HALF OF THAT REASON IS RETIRED AND IS REWRITTEN RATHER THAN DELETED, BECAUSE IT IS
+               AN UNDER-CLAIM AND THOSE ARE THE ONE KIND NOBODY DISCOVERS BY ACTING ON THEM. It said
+               `lib/learn.js writes every @H param with location: "query" because endpoint.c mints params
+               only out of the query string`, which closes the question — a reader told there are no path
+               params does not go looking for one. solver/endpoint.h's own banner says that was true once and
+               names the repair, whole rather than trimmed where the sentence turns: "It named one of them for
+               the whole life of the file — the query — while every consumer branched on a `location` field
+               nothing wrote, so the path-parameter registration and the entire request-body schema had never
+               run once and both read as live." Both run now: endpoint.c mints `location` as "path", "query"
+               or "body", and lib/learn.js registers a path hole as `location: "path"` with `_astValueClass`
+               beside it.
+               MEASURED at aa36410c, driving the stamped wasm at a one-page probe carrying
+               `fetch("/api/user/" + location.hash.slice(1) + "/profile")`: the @H record carries
+               `{"name":"location.hash.slice(1)","location":"path","valueClass":"unknown"}` and the method
+               this file reads carries that same parameter with `location: "path"` and `required: true`.
+               WHAT DOES NOT CHANGE IS THE DECISION. If the rename is wanted it is the ENGINE's to emit
+               beside the param it renames — a view cannot recover a declared name from a minified one — and
+               the half that makes the loop dead is the name, which still has no producer.
+               RETIREMENT: this record goes when `_sourceMapName` has a writer in engine/host, because the
+               sentence it corrects cannot then be re-derived from a dead loop. */
             opt.textContent = `[${m.httpMethod}] ${m.id}${tag}`;
             opt.dataset.method = m.httpMethod;
             opt.dataset.isVirtual = "true";
