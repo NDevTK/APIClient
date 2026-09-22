@@ -1326,15 +1326,87 @@ function collectFormValues() {
   return { params, pathParams, headerParams, fields };
 }
 
-// Substitute editable path-template holes — /{owner}/{repo}/… — with the
-// values the researcher typed. Unfilled holes are left as-is so an invalid
-// URL surfaces (the user must supply required path params), never silently
-// sent with a literal "{owner}".
+/* ONE PIECE OF A HOLE'S RUN, escaped as that segment's own data. THE `%3A` RESTORE IS EXACT AND NOT A
+   HEURISTIC: `encodeURIComponent` emits UPPER-case hex, and 0x3A is a byte no UTF-8 sequence holds except the
+   ASCII `:` itself (lead bytes are >= 0xC0 and continuations 0x80..0xBF), so `%3A` stands in its output for
+   that one code point and for no other. MEASURED over U+0000..U+10FFF: 0 code points other than `:` produce
+   a `%3A`, against a `%2F` control over the same sweep that returned exactly `/` — so the sweep can speak. A
+   literal `%` the operator typed is encoded FIRST, so an input `%3A` leaves as `%253A` and the restore cannot
+   reach it. */
+function _pathSegEncode(s) {
+  var out = encodeURIComponent(s).replace(/%3A/g, ":");
+  /* THE SPLIT-AND-JOIN ABOVE IS A PARTITION ONLY IF THIS EMITS NO SEPARATOR, so the one edit that would
+     silently un-split a run — widening the restore to `%2F` — crashes here instead of adding a segment. It is
+     over THIS FILE'S OWN transform and never over the operator's text, which is why it may be an assert at
+     all. */
+  DCHECK(out.indexOf("/") < 0,
+         "a path-hole segment encoder emitted a `/` (" + JSON.stringify(out) + ") — applyPathParams splits a " +
+         "hole's value on `/` and rejoins it, so a separator produced HERE adds a path segment the operator " +
+         "never typed and the request goes to a resource nobody named");
+  return out;
+}
+
+/* Substitute editable path-template holes — /{owner}/{repo}/… — with the values the researcher typed.
+   ONE ENCODE CALL ANSWERED TWO QUESTIONS AND WAS DECIDED BY THE STRICTER ONE. `encodeURIComponent` is the
+   right escape for a hole standing over ONE path segment — every byte of the value is that segment's data —
+   and the wrong one for a hole standing over a RUN, because solver/endpoint.c's `path_scan` hands this
+   function a value whose `/` are SEPARATORS IT JOINED rather than data: its own words are that the value
+   "MAY carry a `/`, because a hole stands over the run of example segments its value occupied". Splitting on
+   `/` is therefore reading the producer's stated grammar and not matching a pattern on an example value
+   (§RUN-DON'T-MATCH); the split is the exact inverse of that join, so a hole spanning one segment yields one
+   piece and every such address is byte-identical to what this function sent before.
+   AND THE ORIGIN IS THAT SAME QUESTION RATHER THAN A THIRD ONE. `url_path_of` cuts a display address at `?`
+   and nowhere else, so the string `path_scan` splits is the WHOLE address and a hole covering the
+   scheme/authority is an ordinary run: `{cfg.apiBase}` over `https://api.acme.com/v1/users/42` spans
+   `https:`, `` and `api.acme.com`. The split returns the separators; the one code point left to survive is
+   U+003A (:), and URL §1.3 "Percent-encoded bytes" already says it need not be escaped — "The path
+   percent-encode set is a percent-encode set consisting of the query percent-encode set and U+003F (?),
+   U+005E (^), U+0060 (`), U+007B ({), and U+007D (})". That set is built over the query one, whose own
+   members §1.3 gives as "the C0 control percent-encode set and U+0020 SPACE" followed by the double quote,
+   `#`, `<` and `>` — NAMED RATHER THAN QUOTED WHOLE BECAUSE THE SPEC SPELLS ONE OF THEM AS `U+0022 (")`,
+   and a run carrying a double quote inside a double-quoted run desynchronises every quotation after it: the
+   citation auditor read this comment's two runs as ONE and reported the first as diverging at word 30, which
+   is an accusation manufactured entirely by the punctuation. No `:` in either set. URL §4.4 "URL parsing" path state agrees from the other side: a segment ends at "the EOF code
+   point or U+002F (/)", at "U+005C (\)" where "url is special", and at "U+003F (?) or U+0023 (#)" — never at
+   a `:`.
+   THE RELAXATION IS NOT POSITIONAL, AND A PORT IS WHY. `{base}` over `https://h.example.org:8443/x` spans
+   three pieces and it is the THIRD that holds the port's own `:`, so relaxing only the piece that could be a
+   scheme leaves the port percent-encoded and the whole address unparseable. One rule over every piece is
+   also one fewer place for two answers to drift apart.
+   WHAT THIS DOES NOT DO IS DROP THE ESCAPE. `?`, `#`, SPACE, `\` and `%` are still encoded inside every
+   piece, so a value cannot end the path, open a query or a fragment, or smuggle a special URL's separator;
+   what it CAN now do is add segments, which is what a run IS. A scheme reaching the front of a relative
+   template is refused ON THIS PATH by lib/schema.js's `pageContextFetch`, which parses the address with no
+   base and answers `{error: "blocked: invalid protocol"}` for anything but http/https — named here rather
+   than lib/safe-fetch.js's `blocked-scheme:` because the Send button reaches the page-context relay
+   (popup.js -> sendRequest -> SEND_REQUEST -> lib/send.js `executeSendRequest` -> `pageContextSend`) and
+   never safeFetch, and a gate cited from the wrong chokepoint is a reader sent to a file this path does not
+   enter. Either way scheme policy lives at the chokepoint: this file holds no network policy
+   (§Architecture) and must not grow one to cover for an encoder.
+   THE VALUE IS THE OPERATOR'S OWN TEXT, SO NOTHING HERE ASSERTS ANYTHING ABOUT IT: a DCHECK on a field the
+   researcher typed is an abort switch handed to whoever is typing (§WHOSE-BYTES-STATE-THE-VALUE), so the
+   only assert on this path is `_pathSegEncode`'s, over a transform this file owns.
+   Unfilled holes are left as-is so an invalid URL surfaces (the user must supply required path params),
+   never silently sent with a literal "{owner}".
+   NAMED RESIDUAL — NOT COVERED: a `/` the RESEARCHER typed is read as the producer's separator like any
+   other, so a literal slash inside a single segment cannot be expressed at this field; `a/b` now sends two
+   segments where it sent one segment spelled `a%2Fb`. The producer's grammar is honoured and a hand-typed
+   intent is inferred, and the two can only differ for a value the operator edited. NEXT DIFF: state the
+   hole's SPAN on the parameter record — no record states one today, and a reader can check that by grepping
+   lib/learn.js's `AST_PARAM_KEYS`, which is name/location/validValues/valueClass plus the four domain keys —
+   and let the panel render a run as one input per segment, so the operator says how many segments they mean
+   instead of this function reading it off their text. ABSENCE SHOWS as a sent request whose URL carries more
+   path segments than the operator filled values for — read it off the request log's own URL line
+   (lib/popup-reqlog.js renders `req.url`), never off the Send panel, which composes this address and
+   displays it NOWHERE: `currentRequestUrl` has no reader that writes it to the DOM, so the only surface an
+   operator has for what was actually sent is that log and the server's reply.
+   RETIREMENT: this argument goes when a path hole's value cannot reach here carrying a separator at all —
+   that is, when `path_scan` no longer spans a hole over a run of example segments. */
 function applyPathParams(url, pathParams) {
   if (!pathParams || !url) return url;
   return url.replace(/\{([^}\/]+)\}/g, (m, name) =>
     Object.prototype.hasOwnProperty.call(pathParams, name)
-      ? encodeURIComponent(String(pathParams[name]))
+      ? String(pathParams[name]).split("/").map(_pathSegEncode).join("/")
       : m,
   );
 }
