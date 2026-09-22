@@ -1,0 +1,204 @@
+<!doctype html><meta charset="utf-8"><title>path-param holes: the VALUE and the DOMAIN, in one run</title>
+<!-- @H ORACLE FIXTURE for the chain solver/endpoint.c `path_scan` -> `pathParams` + `pathParamDomains`
+     -> lib/send.js's hole literal -> lib/popup-form.js's badge and placeholder. It is not a demo: every
+     arm below is a CONTROLLED reading, and each one names what a WRONG answer looks like.
+
+     WHAT IT IS FOR. CLAUDE.md §@H: "A SHAPE STATES TWO FACTS AND CARRYING ONLY ONE OF THEM IS A WRONG
+     REPORT, NOT A PARTIAL ONE." PROVENANCE is who must supply the parameter; DOMAIN is what the value must
+     look like. A hole a run narrowed to `> 5` and a hole nothing ever tested render with identical bytes
+     unless the domain travels, and that silence reads as the positive claim "anything goes".
+
+     THE LINE THIS DOCUMENT IS BUILT ON, and it is the one every arm is arranged around: §@H's rule is that
+     the line is whether a VALUE was determined, NEVER whether a CONSTRAINT was. An equality that held
+     DETERMINES the value (§7.2.14 IsStrictlyEqual step 1 — "If SameType(x, y) is false, return false" —
+     makes the holding arm reachable only where the operand IS the token), so a pinned hole owes a VALUE.
+     An ordering, a method call and a loose equality determine NOTHING, so those holes owe a DOMAIN AND NO
+     VALUE: emitting `{exclusiveMinimum: 5}` is not inventing, because `> 5` on the arm this flow took is a
+     fact the run OBSERVED exactly as a pin is — while emitting `6` for it is the fabrication §@H forbids
+     by name.
+
+     THE DESIGN CONSTRAINT EVERY ARM OBEYS, AND WHY IT IS NOT COSMETIC. A domain fact is filed under the
+     HOLE KEY of the value the BRANCH was over (solver/concolic.h `concolic_cmp_subject`), and it is looked
+     up at the request under the hole key read off the ADDRESS's own segment (solver/endpoint.c `kv_add`).
+     Where the page writes an operator BETWEEN the derivation and the branch, those two keys are different
+     strings and the observation is made, is correct, and is unreachable. So in every arm that expects a
+     fact, THE GATED EXPRESSION AND THE INTERPOLATED EXPRESSION ARE LEXICALLY IDENTICAL, and both are a
+     BARE SOURCE READ rather than a derivation — the shortest key there is, so a zero cannot be blamed on
+     the spelling. Arm K below is that same mismatch built DELIBERATELY, as the armed negative control.
+
+     THE ORACLE IS TWO ARTIFACTS AND THEY ANSWER DIFFERENT QUESTIONS. Asking one of them alone is how a
+     zero comes to mean two things.
+       (1) REACHABILITY — the fixture server's access log, which is evidence from OUTSIDE the engine. Every
+           arm requests a CONSTANTS-ONLY path before and after its subject. CLAUDE.md
+           §A-WITNESS-MAY-NOT-BE-COMPOSED-FROM-A-VALUE-THE-SUBJECT-CAN-MAKE-UNKNOWN: a witness whose path
+           embeds a measured value is not a string in an engine whose whole purpose is to make values
+           unknown, so the request never goes out and an arm that RAN reads exactly like an arm that did
+           not. Every witness path here is a literal. The SUBJECT fetches are the opposite by construction:
+           their addresses carry holes, so they are NOT expected in the log and their absence is not a
+           finding.
+       (2) THE SUBJECT — the engine's emitted @H endpoint record, read from the run's `@RESULT`. That is
+           where `location`, `valueClass`, `validValues` and the four domain keys live, and it is the only
+           place the question this document asks is answered.
+     THE LOG HAS TWO AUTHORS AND `referer` TELLS THEM APART, exactly as testing/fixtures/scrstat_status_error.html
+     documents: driving this through testing/harness.js loads it twice, and real Chrome sends a `Referer` on
+     every handler `fetch` while safeFetch sends none. A witness line WITH a referer is Chrome and is a
+     control; one WITHOUT is the engine. Chrome takes none of the forced arms below (its `name` is empty,
+     its `document.referrer` is not a partner host, and so on), so a refereed witness line for any arm but
+     `parsed` would itself be a finding about the harness rather than about the engine.
+
+     WHAT THIS DOCUMENT CANNOT SEE, stated so a reader does not take its silence for a result: the page's
+     own JavaScript has no access to the engine's record, so there is no in-page `throw` that can score any
+     of this. The assertions are the EXPECTATIONS written at each arm; the scoring is done by whoever reads
+     the @RESULT beside the access log.
+-->
+<script>
+/* PARSED — the one witness both authors produce, and the third state beside "the arm ran" and "the arm did
+   not". A run that never executed this document at all leaves it absent, which is neither. */
+fetch("/api/pathdom/w/parsed");
+
+/* ── ARM P/B — CONCRETIZE-ON-PIN, AND THE ONE AXIS THAT SEPARATES ITS TWO SPELLINGS ─────────────────────
+   §Solver-half: once `x === 'admin'` pins the value, a later READ of that source returns the pinned bytes.
+   The pin is keyed by the value's own identity and is answered AT THE READ (solver/concolic.h
+   `concolic_pin`: "`src` now reads `val` … FOR THIS FLOW"), so a value already materialised into a
+   variable BEFORE the gate is a JSValue minted before the pin existed and carries its unpinned example.
+
+   THE TWO ADDRESSES ARE A CONTROLLED PAIR INSIDE ONE FLOW, which is the strongest form available and the
+   reason they are not two arms: same source, same gate, same token, same request shape, same instant —
+   differing in EXACTLY which expression reaches the address. CLAUDE.md §ONE-RUN-OF-A-LIVE-SITE-IS-NOT-A-
+   MEASUREMENT is about comparisons across runs; a pair inside one run cannot be confounded by the
+   run-to-run spread at all, so a difference here is the engine and nothing else.
+   `var role = q("role"); if (role === "admin") fetch("…?role=" + role)` is the commonest gated-endpoint
+   shape a bundle writes, so `team` is the REAL-WORLD spelling and `tenant` is the one that is easy.
+
+   EXPECTED.  tenant -> valueClass "concrete", validValues ["admin"].
+              team   -> the same, and §@H is satisfied only if it is.
+   A WRONG ANSWER LOOKS LIKE: `team` carrying valueClass "unknown" with the bare shape `{window.name}` in
+   `validValues` while `tenant` carries "admin". That is not a thin report — the reviewer is offered a
+   SHAPE at the one position where the run determined a literal, so the Send panel's field is empty where
+   a value was proved. Read the two rows together; either is meaningless alone.
+   WHAT MUST NOT BE CONCLUDED FROM THEM AGREEING AT "unknown": both reading the shape is consistent with
+   the pin never firing at all, which the multi-value arm below separates (it cannot produce two values
+   without two pins). */
+var nameBefore = name;                                   /* materialised BEFORE the gate */
+if (name === "admin") {                                  /* the gate — this is what pins the source */
+  fetch("/api/pathdom/w/pin-enter");
+  fetch("/api/pathdom/team/"   + nameBefore + "/settings");   /* pre-gate variable  */
+  fetch("/api/pathdom/tenant/" + name       + "/settings");   /* post-gate read     */
+  fetch("/api/pathdom/w/pin-done");
+}
+
+/* ── ARM M — TWO VALUES FOR ONE KEY, AND `excludes` AS THE OTHER ARM OF THE SAME GATES ──────────────────
+   The product question this fixture exists for is a drop-down, and a drop-down offers MORE THAN ONE value
+   per key. Both gates are over the SAME source and both requests are the SAME address template, so the
+   two flows that reach them must merge onto ONE endpoint record (lib/merge.js, keyed by the template) and
+   that record must carry BOTH values.
+   IT ALSO ARMS `excludes` WITHOUT A LINE OF ITS OWN, which is why the gates are stacked rather than
+   parallel: the flow that reaches `silver` is the one where `=== "admin"` and `=== "gold"` BOTH took their
+   FALSE arm, so its parameter carries an exclusion for each. That is the fact §@H names as the difference
+   between a value the code computed and a constraint the code stated, and it is the one the merge law has
+   to INTERSECT rather than union (a value accumulates; a domain is a claim about the address and holds
+   only where every observed path obeyed it).
+
+   EXPECTED.  ONE record for `/api/pathdom/zone/{…}/index` whose param carries validValues containing BOTH
+              "gold" and "silver", and `excludes` containing "admin" — the intersection of the two flows'
+              exclusion sets (["admin"] from the gold flow, ["admin","gold"] from the silver one), NOT
+              their union.
+   A WRONG ANSWER LOOKS LIKE: two separate records for one template (the identity key is not the template);
+   or one record carrying a single value (the pools do not union); or `excludes` carrying "gold" (the
+   domains were UNIONED, which would state of the gold flow a constraint that flow disproved — a wrong
+   report arriving through a merge, and the direction that invents rather than the one that loses). */
+if (name === "gold") {
+  fetch("/api/pathdom/w/multi-gold");
+  fetch("/api/pathdom/zone/" + name + "/index");
+} else if (name === "silver") {
+  fetch("/api/pathdom/w/multi-silver");
+  fetch("/api/pathdom/zone/" + name + "/index");
+}
+
+/* ── ARM R/L — AN ORDERING AND A LOOSE EQUALITY: DOMAIN, AND DELIBERATELY NO VALUE ──────────────────────
+   §@H forbids inventing `6` for `x > 5`. Both gates here are over the SAME source ON PURPOSE and the
+   co-location is stated rather than hidden: it means a flow that took both true arms carries `bounds` AND
+   `looselyEquals` on one parameter, which is a stronger reading than either alone (it proves the record
+   can hold two facts of different kinds at once) and a WEAKER one for attribution (it cannot say which
+   gate produced which key if only one appears). Read the keys, not the count.
+   THE TWO ARE DIFFERENT PREDICATES AND NEITHER PRUNES THE OTHER: §Solver-half keys contradiction detection
+   on the PREDICATE's own identity — operator and both operands — so `> 5` and `== 0` decide themselves and
+   never each other, and all four combinations of their arms are explored.
+   `== 0` IS THE LOOSE ARM AND IT DETERMINES NOTHING, which is the whole reason it is a separate fact from
+   a pin: §7.2.13 IsLooselyEqual coerces, so its holding arm leaves a SET, and choosing one member of that
+   set as the value is the same fabrication as inventing 6 for `x > 5`.
+
+   EXPECTED.  `/api/pathdom/item/{…}/detail`  -> bounds {"exclusiveMinimum": 5}, and NO invented member of
+              that interval anywhere in validValues.
+              `/api/pathdom/seat/{…}/state`   -> looselyEquals naming the `0` gate, and again no value.
+              The number is written UNQUOTED and is the PAGE'S OWN spelling `5` (JSON Schema Validation
+              2020-12 §6.2.5 "exclusiveMinimum" takes a number; the draft-04 boolean form is a different
+              keyword shape and a `true` here would be read as a bound of 1).
+   A WRONG ANSWER LOOKS LIKE: either address's param carrying a concrete number in validValues — that is a
+   value nobody computed, and §@H calls it a fabricated observation rather than a helpful default. The
+   OTHER wrong answer is both keys absent with valueClass "unknown", which is the silence this whole
+   fixture exists to make visible: it states that no gate of either kind held on any observed path, which
+   is false of this document by construction. */
+if (location.hash > 5) {
+  fetch("/api/pathdom/w/bound-enter");
+  fetch("/api/pathdom/item/" + location.hash + "/detail");
+  fetch("/api/pathdom/w/bound-done");
+}
+if (location.hash == 0) {
+  fetch("/api/pathdom/w/loose-enter");
+  fetch("/api/pathdom/seat/" + location.hash + "/state");
+  fetch("/api/pathdom/w/loose-done");
+}
+
+/* ── ARM S — A METHOD-CALL GATE: `predicates`, the class §@H names in its own headline example ───────────
+   An equality gives `excludes`, an ordering gives `bounds`, and a method call gives NEITHER — so a
+   parameter whose only gate was `startsWith(...)` renders exactly like one nothing ever tested unless this
+   third key travels. The gate is the SOURCE READ itself and the address interpolates that same read, so
+   the branch's subject key and the address's hole key are one string.
+
+   EXPECTED.  `/api/pathdom/origin/{…}/feed` -> predicates naming `startsWith` with the token
+              "https://partner." and the arm it took (TRUE), and valueClass "unknown" with NO value: a
+              prefix test determines a prefix and not a string, so a report that filled this in would be
+              inventing the rest of it.
+   A WRONG ANSWER LOOKS LIKE: the key absent. Note that this arm is ALSO the one with a published sibling
+   measurement to compare against — `location.hash.startsWith("#/api")` was measured recording a predicate
+   while `indexOf(t) === 0` and `charAt(0) === "#"`, its transpiled and pre-ES6 spellings, recorded
+   nothing. So a predicate appearing HERE and nowhere in a real bundle is the expected shape today, and is
+   a statement about coverage rather than about this channel. */
+if (document.referrer.startsWith("https://partner.")) {
+  fetch("/api/pathdom/w/pred-enter");
+  fetch("/api/pathdom/origin/" + document.referrer + "/feed");
+  fetch("/api/pathdom/w/pred-done");
+}
+
+/* ── ARM K — THE ARMED NEGATIVE CONTROL: A FACT OBSERVED, CORRECT, AND UNREACHABLE ──────────────────────
+   CLAUDE.md §A-CONTROL-ARMS-ONLY-ON-A-SITE-THE-INSTRUMENT-CAN-JUDGE: a probe that has never made its check
+   speak has calibrated nothing, and the failure direction is the expensive one, since this file's
+   prescribed response to a blind spot is to go and BUILD an instrument for it. Every arm above expects a
+   key to APPEAR; without this one, a run where all four read zero cannot tell "the domain channel is
+   dead" from "my gates were spelled wrong", and those take opposite work.
+   THIS ARM IS SPELLED WRONG ON PURPOSE AND IN EXACTLY ONE WAY. The gate is over `document.cookie.length`
+   — a DERIVATION — and the address interpolates `document.cookie` itself, so the fact is filed under the
+   derivation's key and looked up under the source's. The observation IS made and IS correct; no emitted
+   address names the key it is under.
+   IT IS NOT A GAP DRESSED AS A CONTROL, and the distinction matters: the refusal to carry a claim about
+   `x.length` UP onto `x` is CORRECT, because doing so would mean knowing what `length` means, which
+   §RUN-DON'T-MATCH forbids. What is missing needs no meaning — both halves of the comparison were RUN.
+
+   EXPECTED.  `/api/pathdom/badge/{…}/list` -> valueClass "unknown", NO `bounds`, and no other domain key.
+   A WRONG ANSWER LOOKS LIKE: `bounds {"exclusiveMinimum": 40}` appearing here. That would not be the
+   channel working better than expected — it would mean a claim about a value's LENGTH had been carried up
+   onto the VALUE, which states of a cookie that it is numerically greater than 40, and that is false. It
+   is the one outcome of this whole document that is worse than a silence. */
+if (document.cookie.length > 40) {
+  fetch("/api/pathdom/w/keymiss-enter");
+  fetch("/api/pathdom/badge/" + document.cookie + "/list");
+  fetch("/api/pathdom/w/keymiss-done");
+}
+
+/* DONE — the terminal witness. Its ABSENCE beside a present `parsed` says the document stopped part way,
+   which is a fact about the run and not about any arm; CLAUDE.md §A-RUN-THAT-SPENDS-ITS-WHOLE-BUDGET
+   warns that an absent abort is not a correct value, and this line is what separates "no arm fired" from
+   "the run never got here". */
+fetch("/api/pathdom/w/parsed-done");
+</script>
