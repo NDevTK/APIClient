@@ -56,7 +56,39 @@ let engineRuns = null;
    deliberately, so "not asked yet" is not the same value as "asked, and there is no round". */
 let hostOrder;
 let currentSchema = null;
+/* THE ADDRESS TEMPLATE THIS PANEL COMPOSES AGAINST — `base + pathTemplate` from the endpoint dropdown, or a
+   logged request's own concrete address on the replay path. It is NOT the address a send used: that is
+   `lastSentUrl` below, and the two were ONE SLOT until this comment was written.
+   THE COST OF THAT WAS THREE DEFECTS OFF ONE ROOT, all measured on the live panel. `sendRequest` wrote its
+   composed address back over this slot, which DESTROYS THE HOLES — so after the first Send (a) every later
+   edit of a PATH parameter was discarded, the panel holding `SUBJOWNER` in the field and the request going
+   to the `CTLOWNER` of the previous send, because `applyPathParams` had no `{owner}` left to substitute;
+   (b) a query parameter the operator CLEARED could never be removed, since `composeSendUrl` reaches its
+   `searchParams.set` only for a parameter the form still states and an absent one leaves the baked-in copy
+   standing; and (c) `renderSendUrl`'s address row — the surface SECURITY.md's `pageContextFetch` exemption
+   is named after, "a human at a surface that shows them the bytes" — showed one answer while the operator's
+   own form field showed another. A panel giving two answers about one quantity does not weaken that
+   authorization, it FORGES it, which is the argument `composeSendUrl` already makes one file over.
+   It is the §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS shape arriving in a variable: one slot answering both
+   "what is this endpoint's template" and "what address did the last send use", decided by the stricter
+   consumer (the send needs a resolved address) with the looser one (every composer, which needs the holes)
+   losing silently — and silently is exact, because the address it then produced was a REAL address that a
+   server answered. */
 let currentRequestUrl = "";
+/* THE ADDRESS THE LAST SEND ACTUALLY USED. A fact about a past ACT, so it is written by `sendRequest` alone
+   and read by whoever is describing that act's RESULT — never by a composer, which must compose from the
+   template. `""` is the positive statement that this panel's current subject has not been sent to; every
+   reader already answers that case rather than defaulting past it. */
+let lastSentUrl = "";
+/* THE ONE WRITER OF THE TEMPLATE, WHICH IS WHAT KEEPS THE PAIR FROM DRIFTING. Re-pointing the panel at a
+   different request necessarily retires the address the last send used, and the four sites that do the
+   re-pointing used to be free to update one without the other — a hand-copied obligation, which is the shape
+   this file's own per-realm-intrinsics rule warns about. Going through here makes the pairing structural:
+   there is no spelling of "change the template" that leaves a stale sent address behind it. */
+function setRequestTemplate(url) {
+  currentRequestUrl = url;
+  lastSentUrl = "";
+}
 let currentRequestMethod = "POST";
 let currentContentType = "application/json";
 let currentBodyMode = "form"; // "form" | "raw" | "graphql" | "multipart" | "msgconsole"
@@ -578,9 +610,13 @@ document.addEventListener("DOMContentLoaded", async () => {
        form's PATH parameters at all: `collectFormValues` fills a `pathParams` bucket and no reader of one
        existed anywhere in this file, so an endpoint whose address is a template exported as curl carrying a
        literal `{owner}` the panel had the operator's value for. `currentRequestUrl` is the TEMPLATE
-       (`base + pathTemplate`, where the endpoint dropdown assigns it) until `sendRequest` writes the composed
-       address back over it, so the snippet was right or wrong depending on whether the operator had pressed
-       Send first — which is what made it survive.
+       (`base + pathTemplate`, where the endpoint dropdown assigns it), and it USED TO STOP BEING ONE: this
+       clause read "until `sendRequest` writes the composed address back over it, so the snippet was right or
+       wrong depending on whether the operator had pressed Send first — which is what made it survive", which
+       was an accurate account of the write-back and read it as the reason a bug SURVIVED rather than as a bug.
+       It was the larger one. That write destroyed the holes, so after one Send no later edit of a path
+       parameter could reach this snippet OR the wire, and the address row disagreed with the operator's own
+       field; the slot is split at its declaration now and nothing writes a composed address over a template.
        THE HEADER HALF DIVERGED THE OTHER WAY (see `sendPanelHeaders`, lib/popup-form.js), so the snippet the
        operator copies and the request the button fires were two different requests in two directions, and the
        one that was wrong on the wire was the one that actually went out. SECURITY.md scopes
@@ -2210,7 +2246,7 @@ function onSendEndpointSelected() {
        of ours to DCHECK — it is a service that did not say where it lives, and the panel says so and offers
        nothing to send. */
     if (baseUrl === null) {
-      currentRequestUrl = "";
+      setRequestTemplate("");
       currentRequestMethod = validMethod;
       currentSchema = null;
       setSendPanelVisible(false);
@@ -2228,7 +2264,7 @@ function onSendEndpointSelected() {
       base = base.slice(0, -1);
     }
 
-    currentRequestUrl = base + pathTemplate;
+    setRequestTemplate(base + pathTemplate);
     currentRequestMethod = validMethod;
 
     select.dataset.svc = svc;
@@ -2240,7 +2276,7 @@ function onSendEndpointSelected() {
   }
 
   // Fallback if no matching endpoint found — hide everything below the dropdowns
-  currentRequestUrl = "";
+  setRequestTemplate("");
   currentRequestMethod = "POST";
   currentSchema = null;
   // Exit console mode if active
@@ -2542,7 +2578,7 @@ async function replayRequest(reqId, sourceTabId) {
     }
 
     // Set current state from the replayed request
-    currentRequestUrl = req.url;
+    setRequestTemplate(req.url);
     currentRequestMethod = "POST"; // Default for replayed backend requests or detect from req
     if (req.method) currentRequestMethod = req.method;
 

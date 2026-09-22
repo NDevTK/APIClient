@@ -145,9 +145,16 @@ function renderResultBody(result) {
      the resolved `methodId` beside it rather than the raw echo: it was handed a RESOLVED service and an
      UNRESOLVED method id as one pair, and the two halves of that pair name one method. */
   if (isAsyncChunkedResponse(rawBody)) {
+    /* THE ADDRESS THIS RESPONSE CAME FROM, WHICH IS `lastSentUrl` AND NOT THE PANEL'S TEMPLATE.
+       `renderAsyncResponse` takes the last non-empty PATH SEGMENT of this address and names a discovery
+       schema from it, so a template whose last segment is a hole would look that schema up under
+       `%7Bid%7D_chunk0Response` and find nothing. This read `currentRequestUrl`, which worked only because
+       `sendRequest` wrote its composed address back over the template — the write that cost three defects in
+       the Send panel and is gone (see popup.js's declaration of the pair). `""` is this panel's current
+       subject not having been sent to, which the `req.url ? … : null` below already answers. */
     return renderAsyncResponse(
       rawBody,
-      { service: svc, url: currentRequestUrl },
+      { service: svc, url: lastSentUrl },
       discoveryInfo?.doc,
     );
   }

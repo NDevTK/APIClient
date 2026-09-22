@@ -1432,8 +1432,14 @@ function applyPathParams(url, pathParams) {
    all: SECURITY.md scopes `pageContextFetch` out of the credentialed destructive-path deny list on the
    ground that the request is "authorized by a human at a surface that shows them the bytes", so a surface
    showing an address the request does not carry does not weaken that authorization, it FORGES it.
-   IT IS PURE AND IT WRITES NOTHING. `currentRequestUrl` is assigned by `sendRequest` alone; this function is
-   called once per keystroke by the renderer and must leave the panel exactly as it found it. */
+   IT IS PURE AND IT WRITES NOTHING, and this clause used to give the wrong reason for that: it read
+   "`currentRequestUrl` is assigned by `sendRequest` alone", which was TRUE and was the defect. `sendRequest`
+   assigned it the COMPOSED address, so the template this function is handed stopped carrying holes after the
+   first Send and every later edit of a path parameter composed into nothing. The template now has ONE writer
+   (`setRequestTemplate`, popup.js) and `sendRequest` writes `lastSentUrl` instead, so what makes this
+   function's purity safe is that NOBODY writes a composed address over a template — not that its one writer
+   was somewhere else. It is called once per keystroke by the renderer and must leave the panel exactly as it
+   found it. */
 function composeSendUrl(template, formValues) {
   let url = applyPathParams(template, formValues.pathParams);
   if (Object.keys(formValues.params).length > 0) {
@@ -1687,6 +1693,10 @@ async function sendRequest() {
      What this panel CANNOT know is stated at the row rather than omitted: lib/send.js re-parses this address
      and may add a `key` query parameter from a key store the popup cannot read. */
   let url = sendPanelAddress();
+  /* THE TEMPLATE THIS ADDRESS WAS COMPOSED FROM, SNAPSHOT SO THE ASSERT BELOW CAN SPEAK. Everything from
+     here to that assert is one synchronous stretch — the only `await` in this function is the send itself —
+     so the only thing that can move this value in that window is a line somebody adds. */
+  const _templateAtCompose = currentRequestUrl;
   renderSendUrl();
   const httpMethod = currentRequestMethod;
   const contentType = currentContentType;
@@ -1758,15 +1768,13 @@ async function sendRequest() {
   let body;
   if (httpMethod === "GET" || httpMethod === "DELETE") {
     // The form's path and query parameters are already in `url` — `sendPanelAddress` applied them under this
-    // same `bodyMode === "form"` gate. Only the write-back is left.
-    if (bodyMode === "form") {
-      currentRequestUrl = url;
-    }
+    // same `bodyMode === "form"` gate, and it recomposes them from the TEMPLATE on every call, so there is
+    // nothing here to write back. Recording the address this send used is `lastSentUrl`, set once below for
+    // every body mode rather than once per arm.
     body = { mode: "raw", formData: null, rawBody: null, frameId: currentReplayRequest?.frameId };
   } else if (bodyMode === "form") {
     const formValues = collectFormValues();
     // As above: `url` already carries this form's path and query parameters.
-    currentRequestUrl = url;
     if (formValues.fields.length === 0) {
       // No body fields in schema — fall back to raw body (e.g. replayed form-urlencoded body)
       const rawFallback = document.getElementById("send-raw-body").value;
@@ -1798,6 +1806,26 @@ async function sendRequest() {
       frameId: currentReplayRequest?.frameId,
     };
   }
+
+  /* THE COMPOSER MAY NOT WRITE THE TEMPLATE, ASSERTED RATHER THAN AGREED. Two arms above used to end with
+     `currentRequestUrl = url`, which replaced the template with its own composed output — and a composed
+     address has no `{holes}` in it, so `applyPathParams` could never substitute again: after one Send the
+     operator's later edits to a path field were discarded, a cleared query parameter could not be removed,
+     and `renderSendUrl`'s row showed an address that disagreed with the form field beside it. All three are
+     one root and this is the line that keeps it dead. It stands on a value this file computed — the slot's
+     own contents across a window with no `await` in it — and the one program state that fails it is that
+     assignment being re-added. */
+  DCHECK(currentRequestUrl === _templateAtCompose,
+         "the address template changed while this send was being composed (" +
+         JSON.stringify(_templateAtCompose) + " -> " + JSON.stringify(currentRequestUrl) + ") — " +
+         "`setRequestTemplate` (popup.js) is its only writer and nothing re-points the panel inside this " +
+         "synchronous stretch, so this is a composer writing its own output back over the template: the " +
+         "holes go, and every later edit of a path parameter is silently dropped while the panel goes on " +
+         "showing the operator the value they typed");
+  /* THE ADDRESS THIS SEND USED, recorded once for every body mode. It is read by whoever describes this
+     send's RESULT (lib/popup-response.js hands it to the async-chunk renderer, which names a schema from its
+     last path segment), and by nothing that composes — a composer takes the template. */
+  lastSentUrl = url;
 
   const sel = document.getElementById("send-ep-select");
   const selectedOpt = sel.options[sel.selectedIndex];
