@@ -1160,7 +1160,94 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       `resources` row does not.
                       NOTHING IS PREDICTED HERE ABOUT WHAT ANY OF THE 267 SCORES. */
                    "html/semantics/forms/the-input-element", "html/semantics/forms/the-select-element",
-                   "html/semantics/forms/form-submission-0"];
+                   "html/semantics/forms/form-submission-0",
+                   /* THE TWO STANDARDS THAT DECIDE AN `@S` VERDICT, AND WHICH NOTHING IN THIS TREE HAS EVER
+                      JUDGED. Every other row here buys CONFORMANCE: a wrong answer is a divergence from a
+                      browser. These two buy something else, and CLAUDE.md §@S names it in one line -- a PoC
+                      has to run under the page's ACTUAL policy, and the worked example it gives is an
+                      inline `onerror` that a `script-src 'self'` kills -- so a wrong CSP answer does not
+                      surface as a failing subtest, it
+                      surfaces as a FALSE SECURITY VERDICT in a report a human acts on. The `cspBlocks` field
+                      is produced in solver/solve.c out of policy_allows_inline and
+                      policy_allows_string_compilation, which run core/frame/csp_source_list.c's source-list
+                      match; a defect anywhere under that call chain is a breakout badged clean, or a real
+                      sink badged blocked, with no oracle anywhere that would say so.
+                      IT IS NOT AN ABSENT FEATURE, WHICH IS WHY IT IS WORTH A ROW. A previous reading of this
+                      tree reported that there is no named component for either standard, deriving it from WPT
+                      AREA NAMES not matching directory names, which is a claim about the naming and not
+                      about the engine. What is on disk, read rather than name-matched:
+                      core/frame/csp_directive_list.c is one parse of the grammar, core/frame/csp_source_list.c
+                      is the source-list grammar and its matching, core/html/html_meta_csp.c is
+                      HTML §4.2.5.3 "Pragma directives", and core/html/trusted_types.c is the sink half.
+                      Fetch §4.1 "Main fetch" step 7 asks ALL FOUR of its disjuncts at one site in
+                      core/fetch/fetch.c, the third of them being
+                      CSP §4.1.2 "Should request be blocked by Content Security Policy?", reached from four
+                      production callers (html_image.c, html_link.c, xml_http_request.c, and the park in
+                      solver/engine.c that covers `<script src>` and `fetch()`).
+                      SO THE QUESTION THIS ROW OPENS IS NOT "IS IT BUILT" BUT "IS IT RIGHT", AND THE PARTS
+                      THAT ARE NOT BUILT ARE ALREADY NAMED BY THE TREE ITSELF rather than by this comment,
+                      which is what keeps them from rotting here:
+                        `git grep -n policy_allows_inline -- '*.c'` and the same for
+                      `policy_allows_string_compilation`
+                      answers which of CSP's inline checks have a caller and which have none, and
+                      csp_source_list.c's own DCHECK under 'strict-dynamic' states in its own words that this
+                      engine runs the inline check over a `<style>` element and over an event-handler
+                      attribute and over no inline `<script>` element at all. CSP §5.5 "Report a violation" is
+                      refused the same way, by a DCHECK in policy_container.c that fires only when a blocking
+                      policy DECLARES an endpoint. Read those; do not take a list from here.
+                      IT COSTS 1699 BLOBS AND 2492419 BYTES AT THE PINNED REVISION -- 1361 and 1835203 for
+                      `content-security-policy`, 338 and 657216 for `trusted-types`. Both are top level, so
+                      neither drags another directory's own level onto disk and neither can move the stray
+                      census by itself. Re-price either with
+                        git -C engine/.work/wpt ls-tree -r -l <rev> -- <dir> | awk '{n++;b+=$4} END{print n,b}'
+                      BOTH ARE WPT_PATHS ENTRIES AND NOT WPT_OWN_LEVEL ONES, because neither standard is on
+                      disk at all: an own-level entry adds nothing to a checkout, and there is nothing here
+                      for it to have already materialized.
+                      EVERY DECLARED FIXTURE WAS RESOLVED BEFORE THE ROW WENT IN, through THIS FILE'S OWN
+                      resolution rather than a second copy of it -- SCRIPT_EL, markupOnly, scriptMetadata,
+                      metaScripts and SERVER_REWRITES sliced out of this file at run time and applied to the
+                      1116 files the corpus's own classifier names for the three rows this diff adds: 3475
+                      declared references, ZERO outside the cone. Four resolve to a path the pinned revision
+                      does not have, and three of those four are the TEST'S OWN SUBJECT -- `<script src="x">`,
+                      `src="a">`, `src="v">` are bogus addresses those trusted-types files load on purpose to
+                      provoke a violation, so a 404 is what a browser answers too. The fourth is
+                      `content-security-policy/parsing/support/helper.sub.js`, which is absent from WPT at
+                      this revision and is a fact about the corpus that no entry here can change. Eight more
+                      are `{{sub}}` templates, a `data:` URL and cross-origin addresses, which this file
+                      classifies as unresolved BY DESIGN because wptserve resolves them and the driver does
+                      not.
+                      THAT ZERO IS A FLOOR AND IT SAYS SO. It sees a `<script src>` element and a
+                      `// META: script=` line and nothing else, so a fixture a test reaches by a runtime
+                      `fetch()`, an `<iframe src>`, an `<img src>` or a `?pipe=` handler is outside what it
+                      can look at. The TELL for one is the same one the `interfaces` row above is written
+                      about: if every member of a family reports the SAME SMALL subtest count, that count is a
+                      declared fixture that never arrived, and the per-file subtest column is what makes it
+                      visible.
+                      WHAT THE COLLECTOR TAKES IS MEASURED, through the corpus's own classifier rather than
+                      this file's port of it:
+                        python3 engine/wpt_classify.py engine/.work/wpt
+                      NOTHING IS PREDICTED HERE ABOUT WHAT ANY OF IT SCORES. Not one of these files has ever
+                      run in this tree, and a sentence claiming which capability they will name would be a
+                      guess sitting where the next reader takes it for a fact. */
+                   "content-security-policy", "trusted-types",
+                   /* AND THE ONE HELPER THOSE ROWS NAME THAT IS NOT UNDER EITHER OF THEM.
+                      `reporting/resources/report-helper.js` is declared by TEN of the files above -- nine
+                      under `content-security-policy/report-hash` and one under
+                      `content-security-policy/reporting` -- seven of them as a `// META: script=`, which is
+                      a fixture the DRIVER hands over and therefore a run this gate REFUSES rather than
+                      measures when it is absent.
+                      IT IS A `resources` ROW, WHICH IS EXACTLY THE SHAPE THAT MOVES THE STRAY CENSUS. Cone
+                      mode materializes every directory ON THE PATH, so naming it puts `reporting`'s own
+                      level on disk -- 40 blobs, 53073 bytes -- and TWENTY-FIVE of those are testharness
+                      tests. Left unclaimed they are precisely the stray the census at the foot of this file
+                      FAILS the gate for, and the WPT_OWN_LEVEL row below is part of this entry rather than a
+                      separate thought. `reporting`'s ONLY subdirectory is `resources`, so the pair costs 60
+                      blobs and 69395 bytes and nothing else comes with it.
+                      LISTING `reporting` ITSELF WOULD BE THE SAME CHECKOUT TODAY AND A DIFFERENT CLAIM. A
+                      WPT_PATHS entry claims a SUBTREE, so it would silently absorb any directory upstream
+                      adds under `reporting` later; the pair below claims the level that is on disk and
+                      nothing more, which is what this row is actually buying. */
+                   "reporting/resources"];
 
 /* AND THE DIRECTORIES WHOSE OWN LEVEL CONE MODE HAS ALREADY PUT ON DISK. A cone-mode checkout materializes every
    file of every directory ON THE PATH to a listed one, so naming one helper's `resources` lands its standard's
@@ -1230,7 +1317,16 @@ const WPT_OWN_LEVEL = [
      in a directory and those are two different sets: that entry claims `interfaces.html` and
      `rellist-feature-detection.html`, and this one claims five different files one directory down. Cone mode
      put both on disk and only a path claims either. */
-  "html/semantics/forms"];
+  "html/semantics/forms",
+  /* The twenty-five files at `reporting`'s own level, on disk because `reporting/resources` is listed above --
+     ten files under `content-security-policy` name `report-helper.js`, seven of them as a `// META: script=`,
+     which is a fixture the driver hands over and so a run this gate refuses rather than measures when it is
+     absent. `reporting`'s only subdirectory IS `resources`, so this entry claims everything the pair put on
+     disk and there is no unlisted sibling left to be a decision for anybody.
+     A ROW HERE RATHER THAN `reporting` IN WPT_PATHS, although the two are the same 60 blobs today: a
+     WPT_PATHS entry claims the SUBTREE, so it would absorb a directory upstream adds later without anyone
+     deciding to measure it, and this list exists to say what is measured. */
+  "reporting"];
 
 if (!existsSync(join(WPT, "resources", "testharness.js"))) {
   /* NO --depth 1. The corpus is PINNED, and a depth-1 clone has only the tip — `git checkout bf4714d` in it
