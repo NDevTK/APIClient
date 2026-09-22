@@ -1,5 +1,5 @@
-/* MIXED CONTENT §4.1, §4.3 and §4.4 — see mixed_content.h, including why every number here is counted and
-   never checked. */
+/* MIXED CONTENT §4.1, §4.3 and §4.4 — see mixed_content.h, including §4.5, the fourth algorithm Fetch
+   integrates and this component does not have. */
 #include <stdlib.h>
 #include <string.h>
 

@@ -1,5 +1,5 @@
-/* SUBRESOURCE INTEGRITY §3.8 and §3.8.2 — see integrity_policy.h, including why every number here is
-   counted and never checked. */
+/* SUBRESOURCE INTEGRITY §3.8 and §3.8.2 — see integrity_policy.h, including which of §3.8's three lists this
+   engine stores and which one is a named residual. */
 #include <string.h>
 
 #include "check.h"
