@@ -24,14 +24,33 @@
    for active discovery ("CORS-bounded both ways") arriving from the other direction.
    AND IT IS NOT THE RAW HEADER EITHER, WHICH IS THE CHANGE THIS PARAGRAPH USED TO ARGUE AGAINST ITSELF. What
    stood here read `Content-Type` off the record's header list and ran Fetch §3.5 `Content-Type` header's
-   extract-a-MIME-type on it, and defended that as "the server's own STATEMENT, which the renderer legitimately parses". The parse is
+   extract-a-MIME-type on it, and defended that as `the server's own STATEMENT, which the renderer legitimately parses`. The parse is
    legitimate; deciding FROM IT WHAT THE RESOURCE IS is the thing that was already decided, by the zone that
    held the bytes, one hop earlier — so two zones were answering one question about one response with nothing
    to make them agree, and the one that could see the body was not the one being believed. `computedType` is
    that zone's answer (`extension/lib/safe-fetch.js`, CLAUDE.md §Architecture: "TYPE SNIFFING STAYS IN
    JAVASCRIPT, in `safeFetch`"), and reading it is what makes the sniff single-sourced rather than absent.
    The paragraph that stood here ended "The order is: the plumbing, then the reader." The plumbing is
-   `fetch_reply_new`'s `computed_type` parameter and safeFetch's stamp; this is the reader. */
+   `fetch_reply_new`'s `computed_type` parameter and safeFetch's stamp; this is the reader.
+   NAMED RESIDUAL — THIS PREDICATE ASKS A FIDELITY ANSWER A REPORTING QUESTION, AND THE TWO DIVERGE BY DESIGN.
+     WHAT IS NOT COVERED: `computedType` is MIME Sniffing's computed type, and that standard's
+       §7 "Determining the computed MIME type of a resource" ends "The computed MIME type is the supplied
+       MIME type" — so a resource a server MISLABELS computes the label, faithfully, and no browser says
+       otherwise. This predicate then answers NOT-AN-ASSET for it and the address is kept. The engine is not
+       wrong and neither is safeFetch: what a browser COMPUTES a resource to be and whether an address is a
+       STATIC ASSET RATHER THAN AN ENDPOINT are two questions, and CLAUDE.md states the second as
+       `magic-byte + content-type, not URL suffix` while §7 reaches the bytes at only three of its nine
+       steps and never runs §6.3 "Matching a font type pattern" at all — that one is §8.7 "Sniffing in a
+       font context"'s alone.
+     WHAT THE NEXT DIFF BUILDS: ONE LANDING, the trusted zone's own asset verdict stated BESIDE
+       `computedType` as a second field and read here in place of this predicate — the two-pool shape this
+       codebase has chosen twice rather than a grade on the existing one. The producer alone is a write with
+       no reader and is not a first member; the reader alone has nothing to read. `extension/lib/discovery.js`
+       already holds the speller (`classifyResponseAsset` over `sniffBinaryMagic`), so neither half is new
+       logic — what is missing is the field between them.
+     HOW ITS ABSENCE WOULD SHOW: an address on the @H surface whose reply carried a declared type the bytes
+       contradict, reported to a person as an endpoint, with the record's own header list beside it naming the
+       type the server sent. */
 static bool is_asset(const MimeType *m)
 {
     return mime_type_is_image(m) || mime_type_is_audio_or_video(m) ||
