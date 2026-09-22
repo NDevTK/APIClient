@@ -940,6 +940,32 @@ static const char *HTML =
     "fetch('/api/csspropText?v=' + (pt === '@property --pfull { syntax: \"<percentage>\"; inherits: false;"
     " initial-value: 0%; }~@property --pbare { syntax: \"*\"; inherits: true; }'"
     " ? 'CSSTEXTOK' : 'CSSTEXTBAD:' + pt));</script>"
+    /* HTML §4.12.1 "The script element"'s DATA BLOCK, WHOSE BYTES ARE A QUERY — the one source this
+       document can hold whose EXAMPLE carries a `&` while its DISPLAY SHAPE cannot, which is exactly the
+       population `query_align` was widened for and the one the widening landed without a witness for.
+       THE SHAPE IS `&`-FREE BY CONSTRUCTION AND NOT BY LUCK, which is what makes this a witness rather than
+       a coincidence. core/loader/data_block.c names a block by its `id` when `id_is_spellable` admits it —
+       ASCII alphanumerics plus `_`, `-`, `.` and `$`, which does not contain `&` — and by its `script[N]`
+       position otherwise, which holds only digits. So the minted shape `{script#qrun}` cannot hold the query
+       separator whatever the block is called, while the EXAMPLE is the block's own bytes and this document
+       chooses them. Every other unknown here fails one half or the other: `navigator.userAgent`'s example
+       holds `/` and no `&`, `location.hash` and `location.search` are empty at `https://x.test/p` (the
+       document's own address, which is where their examples come from), and a string METHOD over a concolic
+       composes its derivation into the display byte for byte with its arguments (concolic.h), so
+       `.replace('/','&')` would put the separator in the shape as well and align nothing.
+       NOT A REPLY, WHICH IS WHAT WAS PROPOSED AND IS REFUTED BY READING THE ENGINE. A served reply's HEADER
+       is a plain string — core/fetch/reply_source.h's name is minted at the BODY source only
+       (core/fetch/response.c and core/xhr/xml_http_request.c are its two callers) — so
+       `r.headers.get('content-type')` is CONCRETE and its address has no hole in it to align. The reply's
+       BODY does carry the triple, and `json()`/`text()` are measured in this file's own then-chain row as
+       settling for nothing at all, so a row built on one would stand at NOT REACHED and could not fail.
+       A DATA BLOCK NEEDS NO DELIVERY AT ALL: the bytes are in the document, the read is synchronous, and the
+       only thing between the statement and the mint is whether the statement ran.
+       IT ADDS NO PROGRAM AND MOVES NO INDEX. core/loader/document_scripts.c skips a non-executing type in
+       BOTH of its walks — the document's JS identity hash and its executable inventory — so this document's
+       program list and the frontier key it is filed under are unchanged, and the block is named by its `id`
+       rather than by its position so nothing later inserted can rename it. */
+    "<script type='application/x-www-form-urlencoded' id='qrun'>a=1&page=2</script>"
     "<script>"
     "fetch('/api/u?uid=' + state.id);"   /* concolic query param -> uid carries {state}.id */
     /* …AND THE HOLE WHOSE VALUE IS ITSELF SEVERAL SEGMENTS, which is the half an equal-count aligner cannot
@@ -949,9 +975,31 @@ static const char *HTML =
        empty value of every param on it. The address is otherwise the ordinary one, a LITERAL origin region
        with the hole mid-path exactly like `/v1/vis/` below, so the only thing this statement adds to that one
        is the example's segment count.
-       IT SITS AHEAD OF THE UA GATE ON PURPOSE. The line below forks on this same source, so running first is
-       what keeps this row a claim about the ALIGNMENT rather than about which arm of that fork reached it. */
+       IT SITS AHEAD OF THE UA GATE ON PURPOSE. `navigator.userAgent.indexOf('Chrome')` below forks on this
+       same source, so running first is what keeps this row a claim about the ALIGNMENT rather than about
+       which arm of that fork reached it. THE GATE IS NAMED AND NOT POINTED AT: this said "the line below"
+       until the query-half twin of this statement was written between the two, at which point a sentence
+       whose subject was a POSITION resolved to a statement it is not about — and a sweep over the gate's
+       own spelling could not have found it. */
     "fetch('/api/ua/' + navigator.userAgent + '/v4');"
+    /* …AND THE SAME QUESTION ASKED OF THE OTHER HALF OF THE ADDRESS: A QUERY HOLE WHOSE VALUE IS ITSELF
+       SEVERAL PAIRS. The shape holds TWO `&`-separated pairs (`f={script#qrun}` and `tail=z`) and the
+       example holds THREE (`f=a=1`, `page=2`, `tail=z`), so an aligner requiring equal counts answers "not
+       aligned" for the WHOLE query and `kv_pairs` emits every param on it with its shape in place of the
+       bytes the code computed. That is the product's own spelling — `fetch("/s?" + new
+       URLSearchParams(f))`, a bundle composing its own filter list — and it is the case `query_align`'s
+       banner names.
+       THE LITERAL PAIR AFTER THE HOLE IS WHAT MAKES THE READING UNIQUE, and it is why `tail=z` is here
+       rather than the hole ending the address: the run's first pair is anchored by the shape pair's own
+       name (`f`), and its LAST is pinned by the next literal pair, so the hole covers `a=1&page=2` and
+       nothing else. With no `tail` the hole could equally cover one, two or three pairs, the reading count
+       would saturate at two, and the walk would refuse — a correct refusal that witnesses nothing.
+       ITS REACHABILITY IS `path-run`'s, WHICH IS THE POINT OF PUTTING IT IN THIS `<script>`: the two are
+       ADJACENT STATEMENTS OF ONE PROGRAM with nothing between them at all, so a flow that emitted the one
+       above has reached this line. `query-run` at NOT REACHED beside a `path-run` that is not is therefore a
+       statement about THIS statement — the read is DOM §4.4's descendant walk and that is a step machine,
+       so it can park — and not about whether the program was scheduled. */
+    "fetch('/api/qrun?f=' + document.getElementById('qrun').textContent + '&tail=z');"
     "if (navigator.userAgent.indexOf('Chrome') >= 0) { fetch('/api/uafork?v=chrome'); } else { fetch('/api/uafork?v=other'); }"   /* THE UA GATE: navigator.userAgent is concolic with a real Chrome example, so the string method computes on the example AND the comparison forks -> BOTH arms' endpoints are learned */
     "if (navigator.maxTouchPoints > 0) { fetch('/api/touch?v=touch'); } else { fetch('/api/touch?v=mouse'); }"
     "if (screen.width < 768) { fetch('/api/layout?v=mobile'); } else { fetch('/api/layout?v=desktop'); }"
@@ -12420,6 +12468,62 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "over a RUN of example segments because the value the code computed holds a `/`, so a valueless "
              "param here is path_align refusing an address whose reading is unique, or path_scan reading the "
              "run at the wrong boundary");
+    /* THE SAME HOLE ONE HALF OF THE ADDRESS OVER — A QUERY HOLE STANDING OVER A RUN OF EXAMPLE PAIRS, which
+       is the claim `query_align` landed WITHOUT A WITNESS and said so in its own commit. The row is here
+       rather than a clause of `path-run` because the two walks are two functions over two grammars: the path
+       aligns `/`-separated segments with no anchor, and the query aligns `&`-separated pairs whose run must
+       BEGIN at a pair carrying the shape pair's own name, which is a refusal the path half does not make.
+       THE EQUAL-COUNT POPULATION IS GUARDED BY AN ASSERT AND NOT BY A ROW, AND NO ROW CAN GUARD IT. The
+       widening's own landing commit named `path-example` and `path-param` as this case's negative controls,
+       and re-deriving that is what this paragraph is: BOTH halves of it are wrong, in two different ways,
+       and the second is the one worth keeping.
+       `path-param` HAS NO QUERY AT ALL — `fetch('/v1/users/' + state.id + '/posts', {…})`, and
+       `endpoint_record` calls `kv_pairs` only for a display holding a `?` with a byte after it — so it has
+       zero query params and controls nothing about this walk. That is an ordinary miscount.
+       `path-example`'s query pair IS equal-count (`deep=1` in the shape and `deep=1` in the example, ONE
+       pair each), and it STILL cannot be a control, which is the structural half: at equal counts the two
+       matchers emit the SAME BYTES. A literal pair like `deep` takes the shape's own value under every
+       alignment and under none, and a HOLE at equal counts is forced to span one, whose run end IS the first
+       pair's end — so `kv_pairs` writes `evn` either way. A row over such a param is the check whose two
+       sides cannot disagree, and this document has no query row that a regression at equal counts could
+       redden. What holds that case is `query_align`'s own `DCHECK(n != m || span[i] == 1)`, which ABORTS a
+       dev build; restating it as a probe row would be the second copy §AN-AUDITOR-DERIVES-THE-RULE forbids,
+       and it would read 1 in every build where the abort is compiled in.
+       `uid-param` IS A REAL CONTROL AND IS FOR A DIFFERENT ARM. `state.id` determines no example, so
+       `kv_pairs` never calls the aligner at all (`ex ? query_align(…) : NULL`) and the param carries its
+       SHAPE `{state}.id` — which says the widening left the exampleless query hole reporting what it always
+       reported. It is not restated here.
+       THE CORRECTION IS RECORDED HERE AND NOT AT `query_align`, WHOSE BANNER NEVER MADE THE CLAIM: it was
+       made in a commit message, which is durable, greppable and attributable, and a reader counting this
+       walk's controls off it would count two that do not exist and would conclude the equal-count case is
+       watched by rows when it is watched by an abort.
+       THE THREE CLAUSES ARE ENTAILED AND THE LOWEST 0 IS THE LOCALISATION. The third implies the second (a
+       param carrying the run's bytes carries a value the SHAPE does not spell, so its shape held a brace)
+       and the second implies the first. There is NO fourth clause over `tail`: its shape value holds no
+       brace, so `kv_pairs` emits the SHAPE for it under every alignment and under none, and an assertion
+       that reads `z` in every world is the check whose two sides cannot disagree. */
+    const char *query_run_why = NULL; int query_run = 1;
+    fold_row(&query_run, &query_run_why, !!strstr(js, "\"/api/qrun\""),
+             "NOT REACHED: there is no /api/qrun record at all, so the data-block statement never ran and "
+             "the clauses below are not being reported on. That is the SCHEDULE, and it says nothing "
+             "whatever about how a query hole is aligned");
+    fold_row(&query_run, &query_run_why,
+             emitted_record_has(js, "/api/qrun",
+                                "\"name\":\"f\",\"location\":\"query\",\"valueClass\":\"unknown\""),
+             "the record EXISTS and its `f` param is not a HOLE: `valueClass` is `concrete`, so "
+             "`document.getElementById('qrun').textContent` reached the address as a plain string and there "
+             "was no alignment question to ask. THAT IS THE §4.12.1 DATA-BLOCK MINT AND NOT THE ALIGNER — "
+             "core/loader/data_block.c wraps the child text content of a `script` whose type is none of the "
+             "four HTML §4.12.1.1 names, and this block's type is `application/x-www-form-urlencoded` — and "
+             "it is its own clause for exactly that reason");
+    fold_row(&query_run, &query_run_why,
+             param_value_is(js, "/api/qrun", "f", "a=1&page=2"),
+             "the `f` param IS a hole and does not carry the RUN it stands over. Two readings and they take "
+             "different work: `{script#qrun}` there is `query_align` refusing an address whose reading is "
+             "unique — the shape holds two pairs and the example three, which is the count difference the "
+             "widening exists for — while `a=1` alone is the alignment having succeeded and `kv_pairs` "
+             "reading the run at its FIRST pair's value instead of from that value's start to the end of "
+             "the last pair");
     /* ─── THE `if (cfg.admin)` FAMILY, AND THE RUNG IT NEVER HAD ────────────────────────────────────────────
        SEVEN rows hang off ONE statement — the fork and the three read-backs immediately after it — and every
        one of them was a CONJUNCTION OVER BOTH ARMS with nothing underneath it. So all seven read 0 for a
@@ -16283,6 +16387,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "body-param", body_param, "firstPost", SESS_EXPLORE, body_param_why },
         { "path-example", path_example, "/v1/vis/", SESS_EXPLORE, path_example_why },
         { "path-run", path_run, "/api/ua/", SESS_EXPLORE, path_run_why },
+        /* KEYED ON THE STATEMENT'S OWN SPELLING, for the reason `lazy` states: `/api/qrun` is composed by
+           a `+` over a data block's text and the record's address is the PATH half alone, so the key is the
+           `fetch` this document writes and not the answer it produces. */
+        { "query-run", query_run, "/api/qrun?f=", SESS_EXPLORE, query_run_why },
         { "role-public", role_public, "/api/data?role=", SESS_EXPLORE, role_public_why },
         { "merged", merged, "/api/data?role=", SESS_EXPLORE, merged_why },
         { "pinned", pinned, "/api/region/", SESS_EXPLORE },
