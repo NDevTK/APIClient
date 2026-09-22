@@ -18,6 +18,7 @@
 #include "core/dom/element.h"    /* §4.12.1.1's children changed steps are RECORDED for the ONE drain that can run them */
 #include "core/dom/document.h"   /* which DOCUMENT this program belongs to: the realm it is compiled in */
 #include "core/dom/document_current_script.h"   /* "execute the script element" step 6's classic arm, steps 1-2 and 4 */
+#include "core/frame/policy_container.h"   /* §4.12.1.1 step 21's inline check, asked of the NODE DOCUMENT's policy */
 #include "core/events/report_exception.h"       /* §8.1.4.4 "Calling scripts" step 8's third bullet */
 #include "core/events/event.h"           /* §4.12.1.1's error arm dispatches an Event, so it MINTS one */
 #include "core/events/event_target.h"    /* …through DOM §2.9's one dispatch, which runs the PAGE's listeners */
@@ -794,6 +795,56 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
                "PERFORMED THE WRITE compiles this element's program in another document's Window and resolves "
                "its `src` against another document's base URL. Derive it at the call site with "
                "document_realm_of(el), never from the member's own ctx");
+    }
+    /* STEPS 20 AND 21 — THE PAGE'S OWN CONTENT SECURITY POLICY, ASKED BEFORE ANYTHING COMPILES. Step 20 is
+       "Let cspType be \"script speculationrules\" if el's type is \"speculationrules\"; otherwise,
+       \"script\"" and step 21 is "If el does not have a src content attribute, and the Should element's
+       inline behavior be blocked by Content Security Policy? algorithm returns \"Blocked\" when given el,
+       cspType, and source text, then return" — which is CSP §4.2.3 "Should element's inline type behavior be
+       blocked by Content Security Policy?" with type "script", the type CSP §6.8.2 "Get the effective
+       directive for inline checks" maps to `script-src-elem` and §6.8.3 falls back through `script-src` to
+       `default-src`. So `script-src 'self'` kills every inline `<script>` on the page while leaving its
+       `<script src>` alone, which is the state §@S(a) requires a PoC to be judged against rather than assumed
+       away — and the engine was wrong in the opposite direction: this algorithm compiled and RAN inline
+       programs under a policy that forbids them, so every flow behind one explored a world the page cannot be
+       in and every endpoint it learned is one a browser never reaches. The @S verdict already reported such a
+       sink as CSP-blocked (solver/solve.c asks this same container), so the two halves of one run disagreed
+       about one policy.
+       CSPTYPE IS ALWAYS "script" HERE AND THAT IS THIS ALGORITHM'S OWN ORDER RATHER THAN AN APPROXIMATION.
+       §4.12.1.1 reaches step 20 for every executing type, and an element whose type is `speculationrules`
+       leaves these steps at the type switch above — a divergence this file already names in that switch's own
+       crash — so "script speculationrules" is unreachable at this line. It is also a string CSP does not
+       define: §4.2.3's own note is "The valid values for type are \"script\", \"script attribute\",
+       \"style\", and \"style attribute\"", so §6.8.2 returns null for HTML's fifth spelling and a policy
+       would govern nothing. That mismatch belongs to the two standards and not to this engine, and
+       CspInlineType is the four CSP names for exactly that reason.
+       THE POLICY IS THE ELEMENT'S NODE DOCUMENT'S, which is §4.2.3's own quantifier — "for each policy of
+       element's document's global object's csp list's policies" — and not the running realm's. Two
+       same-origin documents are ONE agent, so `frame.contentDocument.body.appendChild(s)` reaches these steps
+       from the PARENT's realm about a CHILD's element, and asking the mutating realm would enforce the wrong
+       page's policy. The step 18 block above has already asserted that `ctx` IS that document's realm, so the
+       two agree here; asking the document is what keeps them agreeing when a fourth caller does not.
+       THE SOURCE TEXT IS READ AGAIN RATHER THAN HELD FROM STEP 6, for the reason step 6's own note gives —
+       the first read is discarded on the path that keeps going, and holding it would mean owning it across
+       every return between. These are the bytes §6.7.3.3 step 5.1 hashes, so they are the element's CHILD
+       text content and the same concatenation step 5 named: a hash-source policy matches an inline script
+       only if the digest is taken over exactly what the standard says it is taken over.
+       RETURNING IS THE WHOLE OF THE BLOCKED BEHAVIOUR AND THE PAGE SEES NO THROW. Step 21 says "then
+       return", and `already started` is TRUE by now (step 15), so a blocked element is inert for ever rather
+       than retryable — which is why a page that re-appends the same element under the same policy runs
+       nothing the second time either. A MALFORMED OR BLOCKING POLICY IS A REFUSAL AND NEVER AN ABORT: these
+       bytes were sent by whichever server served the document, so nothing about them is an invariant this
+       engine computed and there is nothing here for a DCHECK to stand on. §4.2.3's other half is the
+       violation report, which this engine emits for no caller of this check; that is a gap the check itself
+       owns rather than this site. */
+    if (!has_src) {
+        size_t csp_n = 0;
+        char *csp_text = dom_child_text_content(n, &csp_n);
+        bool allowed = policy_allows_inline(document_policy_of(n->owner_document), CSP_INLINE_SCRIPT, el,
+                                            csp_text, csp_n);
+
+        free(csp_text);
+        if (!allowed) return;
     }
     /* An UNKNOWN src is a URL this engine cannot fetch, but it is still a request the page makes — recorded so
        it reaches the @H surface as the shape it is, rather than disappearing. */

@@ -46,6 +46,9 @@
 #include "core/crypto/secure_hash.h"
 #include "core/fetch/subresource_integrity.h"
 #include "core/frame/csp_source_list.h"
+#include "core/html/html_script.h"   /* step 5.2.1 asks the ELEMENT whether it is parser-inserted, and that is
+                                        where §4.12.1.1 records the answer — see the arm for why it is read off
+                                        the element rather than carried down as a parameter */
 
 static bool csp_base64_char(char c)
 {
@@ -507,25 +510,35 @@ CspMatch csp_element_match_source_list(const CspDirective *directive, const lxb_
                parser-inserted: "If type is \"script\", and element is not parser-inserted, return
                \"Matches\"". Every other type falls through, which is the standard's answer and not a gap —
                'strict-dynamic' does not apply to style.
-               THE ELEMENT'S `parser document` EXISTS NOW AND THIS ALGORITHM STILL CANNOT ASK FOR IT, which is
-               a different absence from the one that used to stand here and is why the crash is kept rather
-               than deleted. core/html/html_script.h records the flag for every element §4.12.1.1 prepared and
-               core/frame/policy_container.h reads it into a REQUEST's Fetch §2.2.5 parser metadata for
-               §6.7.1.1 step 1.3 — but §6.7.3.3 is asked about an ELEMENT through policy_allows_inline, whose
-               three callers are a `<style>`, an event-handler attribute and an @S breakout with no element,
-               so none of them is this arm's subject and none of them can state its answer. Answering "Does
-               Not Match" instead would report a script real Chrome runs as blocked, in the one direction
-               'strict-dynamic' exists to invert. */
+               THE ARGUMENT THAT USED TO STAND HERE IS RETIRED BY ITS OWN REMEDY AND IS REWRITTEN RATHER THAN
+               DELETED, because a reader who re-derives it will re-add the crash. It said the flag was
+               recorded but that this arm had no way to ask for it, since "this engine runs CSP §4.2.3 over a
+               `<style>` element and over an event-handler attribute and over NO inline `<script>` element at
+               all", and it told the next diff to build that caller "and let it carry the element's answer
+               down". HTML §4.12.1.1 "Processing model" step 21 is now a caller, so the first half is false;
+               the second half was a guess and it is the half that did not survive, for the reason
+               solver/engine.c states at the only other site in this tree that reads this fact: it is READ OFF
+               THE ELEMENT AND NOT TAKEN AS A PARAMETER, because the element is the one thing every caller
+               still holds. §6.7.3.3 already takes the element, HTML defines parser-inserted as a property OF
+               that element ("initially null", so an unmarked element answers "not parser-inserted"), and a
+               parameter would have to be stated by two callers — a `<style>` and an event-handler attribute —
+               for whom this arm is unreachable, which is the seam field nobody adds next time.
+               NAMED RESIDUAL — WHAT IS NOT COVERED: a NULL element, which the standard does not contemplate
+               here at all (§4.2.3 step 1 is "Assert: element is not null"). It reaches this file from the @S
+               breakout check, whose injected content has been inserted nowhere, so this engine cannot say
+               which delivery vector it is modelling — and the vector is the whole answer, since a
+               `document.write` breakout is parser-inserted and refused while a `createElement`/`appendChild`
+               one is not and is allowed. Falling through is the NARROWER of the two, and the narrow direction
+               is the one §@S already sanctions: an unsolved sink is a parked search rather than a clean bill.
+               WHAT THE NEXT DIFF BUILDS: the delivery vector carried on the @S candidate, so its check states
+               the parser-inserted answer its own construction already fixed. HOW ITS ABSENCE WOULD SHOW: an
+               @S inline-script verdict against a policy whose script directive carries 'strict-dynamic' and
+               matches neither a nonce-source nor a listed digest reports the sink as blocked by CSP whatever
+               vector the candidate was built from. */
             if (csp_token_is(e, "'strict-dynamic'")) {
-                DCHECK(!(type == CSP_INLINE_SCRIPT && element != NULL),
-                       "§6.7.3.3 step 5.2.1 reached a real script element under 'strict-dynamic' and this "
-                       "algorithm was given no way to say whether that element is PARSER-INSERTED. The flag "
-                       "itself is recorded (core/html/html_script.h's html_script_parser_metadata); what is "
-                       "missing is the caller — this engine runs CSP §4.2.3 over a `<style>` element and over "
-                       "an event-handler attribute and over NO inline `<script>` element at all, so the "
-                       "§4.12.1.1 caller that would reach this arm does not exist yet. Build that caller and "
-                       "let it carry the element's answer down, then return Matches for a null parser "
-                       "document");
+                if (type == CSP_INLINE_SCRIPT && element != NULL &&
+                    html_script_parser_metadata(element) != HTML_SCRIPT_PARSER_METADATA_PARSER_INSERTED)
+                    return CSP_MATCHES;
                 continue;
             }
             /* STEP 5.2.2 — the DIGEST:
