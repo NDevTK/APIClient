@@ -16,9 +16,17 @@
 #include "solver/concolic.h"
 
 /* §2's ELEVEN WRITABLE ATTRIBUTES IN THE ORDER THE IDL DECLARES THEM, FOLLOWED BY `status`. The enumerator IS
-   the index into the state Array, IS the accessor's magic and IS the index into both tables below, so a name
-   installed with no case to answer it is the one way this can go wrong — which is what the getter's own assert
-   is, and what the two length assertions in font_face_init are. */
+   the index into the state Array, IS the accessor's magic and IS the index into all THREE tables below
+   (FF_ATTR_ID, FF_ATTR_DESCRIPTOR, FF_ATTR_DEFAULT) and into `g_id_set`, so a name installed with no case to
+   answer it is the one way this can go wrong — which is what the getter's own assert is, and what
+   font_face_init's FF_UNICODE_RANGE row check and its FF_ATTR_ID-to-DESCRIPTORS bijection are.
+   IT SAID `BOTH TABLES` AND `THE TWO LENGTH ASSERTIONS`, AND EACH WAS A COUNT THAT DISAGREED WITH ITS OWN
+   LIST — rewritten rather than deleted because the reason both were written is still live: this enumerator
+   really is one index over several lists, so a reader will keep reaching for a number. There were three
+   tables and not two; and of the two assertions, ONE was a length check and the other demanded that
+   `DESCRIPTORS` be in this enumerator's order, which is a claim about a list this enumerator does not index
+   at all. Name what is there rather than counting it — a count goes stale the next time a list gains a
+   member, and this one went stale in the direction that made a wrong assert look like a matched pair. */
 typedef enum {
     FF_FAMILY = 0,
     FF_STYLE,
