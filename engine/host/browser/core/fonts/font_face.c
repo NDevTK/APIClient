@@ -381,20 +381,34 @@ void font_face_init(JSContext *ctx)
                     optional FontFaceDescriptors descriptors = {})` — two required positions, so Web IDL §3.7.1
        "Interface object"'s length is 2, which idl_step_constructor derives from this declaration. */
     static const IdlArgType CTOR_ARGS[3] = { IDL_DOMSTRING, IDL_STRING_OR_BUFFERSOURCE, IDL_DICT };
-    /* `dictionary FontFaceDescriptors` — TEN members, every one a CSSOMString with a default, and the
-       defaults are the table above rather than a second copy here: the enumerator is the index into both, and
-       the two length assertions below are what keep that one fact rather than two. */
+    /* `dictionary FontFaceDescriptors` — TEN members, every one a CSSOMString with a default.
+       IT IS IN WEB IDL §3.2.17 Dictionary types' READ ORDER AND NOT IN `FontFaceSlot`'s, WHICH ARE TWO
+       DIFFERENT ORDERS OVER ONE SET OF NAMES. This list's order is consumed by ONE thing: idl_args.c's
+       member loop walks it in array order and performs §3.2.17 (ES-to-IDL list) step 4.1.3.1's `? Get` on
+       the page's object in that order, which a page observes by passing an object whose members are getters.
+       The standard fixes that order — step 3 is "in order from least to most derived" (the `level` column,
+       and this dictionary INHERITS NOTHING so all ten are level 0) and step 4's inner loop is "in
+       lexicographical order". The loop then PLACES each converted value BY NAME
+       (`JS_SetPropertyStr(ctx, w->out, dm->name, ...)`), and js_ff_ctor reads it back BY NAME
+       (`JS_GetPropertyStr(ctx, argv[2], FF_ATTR_ID[i])`) — so no index of this array reaches anything, and
+       lexicographical order costs this file nothing.
+       THE DEFAULTS ARE A SECOND COPY OF FF_ATTR_DEFAULT AND ARE ASSERTED EQUAL TO IT BELOW. They cannot be
+       ONE copy: these rows are a `static const` initializer, and C does not admit `FF_ATTR_DEFAULT[i]` in
+       one. The comment that used to stand here claimed "the defaults are the table above rather than a
+       second copy here: the enumerator is the index into both" — which was never true of these rows, and is
+       recorded rather than deleted because a reader who believes it will go looking for a sharing mechanism
+       that has never existed and cannot. What makes them one FACT is the assert, not the storage. */
     static const IdlDictMember DESCRIPTORS[FF_ATTR_COUNT - 1] = {
-        { "style",             IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_STRING, "normal" },
-        { "weight",            IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_STRING, "normal" },
-        { "stretch",           IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_STRING, "normal" },
-        { "unicodeRange",      IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_STRING, "U+0-10FFFF" },
-        { "featureSettings",   IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_STRING, "normal" },
-        { "variationSettings", IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_STRING, "normal" },
-        { "display",           IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_STRING, "auto" },
         { "ascentOverride",    IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_STRING, "normal" },
         { "descentOverride",   IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_STRING, "normal" },
+        { "display",           IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_STRING, "auto" },
+        { "featureSettings",   IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_STRING, "normal" },
         { "lineGapOverride",   IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_STRING, "normal" },
+        { "stretch",           IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_STRING, "normal" },
+        { "style",             IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_STRING, "normal" },
+        { "unicodeRange",      IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_STRING, "U+0-10FFFF" },
+        { "variationSettings", IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_STRING, "normal" },
+        { "weight",            IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_STRING, "normal" },
     };
     JSClassDef d = { "FontFace" };
     int i;
@@ -410,34 +424,76 @@ void font_face_init(JSContext *ctx)
     for (i = 0; i < FF_ATTR_COUNT; i++)
         g_id_set[i] = -1;
 
-    /* THE THREE TABLES AND THE DICTIONARY ARE FOUR SPELLINGS OF ONE LIST, and these are the asserts that keep
-       them one. `FontFaceSlot` is the index every one of them is written over — the identifier table, the
-       descriptor table, the default table and the setter-id array — so an attribute added to one without the
-       others would silently re-aim all four. Both operands of each are in scope at this line, which is what
-       makes these checks rather than restatements of a literal. */
-    /* THE ARRAY IS SIZED `[FF_ATTR_COUNT - 1]`, so its LENGTH cannot disagree with the enumeration and an
-       assert over `sizeof` would be comparing a thing with itself — a check whose two sides cannot differ.
-       What CAN disagree is the INITIALIZER, which C lets be short: a list of nine leaves the tenth row zeroed,
-       whose `name` is NULL and whose type is IDL_ANY, and idl_method_id_dict would then declare a nameless
-       member this file's own reader looks for by identifier and never finds. The LAST row is therefore checked
-       by NAME against the enumeration's last attribute, which is the one statement that fails if the list is
-       short and passes only if every row of it was written. */
-    DCHECK(DESCRIPTORS[FF_ATTR_COUNT - 2].name != NULL &&
-           strcmp(DESCRIPTORS[FF_ATTR_COUNT - 2].name, FF_ATTR_ID[FF_ATTR_COUNT - 1]) == 0,
-           "`dictionary FontFaceDescriptors`'s initializer is short of the array it fills, or its last member "
-           "is not this file's last attribute — the dictionary is the eleven writable attributes MINUS "
-           "`family`, so its last row IS `lineGapOverride` and a zeroed row past the end of a short list is a "
-           "nameless member idl_method_id_dict would declare and this body could never read");
+    /* THE THREE TABLES AND THE SETTER-ID ARRAY ARE FOUR SPELLINGS OF ONE LIST, and this is the assert that
+       keeps them one. `FontFaceSlot` is the index every one of them is written over — the identifier table,
+       the descriptor table, the default table and the setter-id array — so an attribute added to one without
+       the others would silently re-aim all four. Both operands are in scope at this line, which is what makes
+       this a check rather than a restatement of a literal.
+       IT USED TO SAY `AND THE DICTIONARY`, COUNTING `DESCRIPTORS` AS A FIFTH SPELLING, AND THAT WAS THE
+       DEFECT RATHER THAN A LOOSE WORDING — it is recorded rather than deleted because the four names really
+       are the same ten words plus `family`, so a reader will re-derive it. `DESCRIPTORS` is indexed by
+       NOTHING: no consumer reads a row of it by position (idl_args.c's member loop walks it in order to fix
+       the order of §3.2.17 step 4.1.3.1's `? Get`, then places BY NAME, and js_ff_ctor reads back BY NAME),
+       and its order is fixed by a DIFFERENT standard's rule — §3.2.17's lexicographic one, which
+       idl_dict_order_check enforces at the declaration. Calling it a fifth spelling of `FontFaceSlot` bought
+       two asserts that demanded `FontFaceSlot`'s order of it, and BOTH ARE GONE: one required
+       `DESCRIPTORS[FF_UNICODE_RANGE - 1]` to be `unicodeRange`, under a message whose own reason refutes it
+       ("the constructor reads each member by the identifier table's name" is exactly why the order cannot
+       matter); the other pinned the LAST row to `lineGapOverride` in order to catch a SHORT INITIALIZER,
+       which is a real obligation and is discharged by the loop below instead. */
     DCHECK(strcmp(FF_ATTR_ID[FF_UNICODE_RANGE], "unicodeRange") == 0 &&
            strcmp(FF_ATTR_DESCRIPTOR[FF_UNICODE_RANGE], "unicode-range") == 0 &&
            strcmp(FF_ATTR_DEFAULT[FF_UNICODE_RANGE], "U+0-10FFFF") == 0,
            "the three per-attribute tables are not in the order `FontFaceSlot` declares — this is the one row "
            "whose three entries differ from each other in all three tables, so it is the pair that can be "
            "checked without re-listing the enumeration");
-    DCHECK(strcmp(DESCRIPTORS[FF_UNICODE_RANGE - 1].name, FF_ATTR_ID[FF_UNICODE_RANGE]) == 0,
-           "`dictionary FontFaceDescriptors`'s member order is not `FontFaceSlot`'s — the constructor reads "
-           "each member by the identifier table's name, so a dictionary declared in another order would place "
-           "the right values and this file would read them into the wrong slots");
+
+#if APICLIENT_DEV
+    /* WHAT ACTUALLY COUPLES `DESCRIPTORS` TO `FontFaceSlot` IS A SET AND NOT AN ORDER, AND THIS IS THAT SET.
+       js_ff_ctor reads the converted dictionary with `JS_GetPropertyStr(ctx, argv[2], FF_ATTR_ID[i])` for
+       every attribute past `family`, so an identifier this list does not declare is one Web IDL §3.2.17
+       never placed: the read answers `undefined`, the `JS_IsUndefined(m)` arm substitutes
+       `FF_ATTR_DEFAULT[i]`, and a member the dictionary does not have reads back a plausible value with
+       nothing anywhere to say the page's own was never looked for. That is the failure this file must not
+       have, and it is a BIJECTION rather than a sequence — the two lists have equal length by the array's
+       own sizing, so an injection from the identifiers into the rows is onto.
+       IT IS STRICTLY STRONGER THAN THE TWO ASSERTS IT REPLACES AND NOT A WEAKENING TO FIT THE NEW ORDER.
+       A SHORT INITIALIZER leaves a trailing row zeroed, whose `name` is NULL: it matches no identifier, so
+       some identifier matches no row and this fires — for a hole at ANY length rather than only for a list
+       short by exactly the last row, which is all the previous check could see. A MISSPELT row, a row added
+       to this list and not to the enumeration, and a row whose default has drifted from `FF_ATTR_DEFAULT`
+       are three more it catches and neither of the old two could.
+       AND IT SAYS NOTHING ABOUT ROW ORDER, which is the point: §3.2.17's order is idl_dict_order_check's to
+       enforce, at the declaration, over every dictionary in the engine — a second statement of it here would
+       be this file's own answer to a question the machine already asks. */
+    for (i = FF_FAMILY + 1; i < FF_ATTR_COUNT; i++) {
+        int at = -1, j;
+
+        for (j = 0; j < FF_ATTR_COUNT - 1; j++)
+            if (DESCRIPTORS[j].name != NULL && strcmp(DESCRIPTORS[j].name, FF_ATTR_ID[i]) == 0) {
+                DCHECKF(at < 0,
+                        "`dictionary FontFaceDescriptors` declares §2's `%s` TWICE — two rows of one "
+                        "identifier are two §3.2.17 step 4.1.3.1 `Get`s of one property, and because the "
+                        "second placement wins, the row a reader edits is not necessarily the one that "
+                        "answers", FF_ATTR_ID[i]);
+                at = j;
+            }
+        DCHECKF(at >= 0,
+                "§2's writable attribute `%s` is not a declared member of `dictionary "
+                "FontFaceDescriptors` — either a row of the initializer is missing or zeroed (a short list "
+                "leaves `name` NULL), or one of the two lists gained a name the other did not. The "
+                "constructor reads this identifier off the converted dictionary, so an undeclared one reads "
+                "`undefined` and is silently answered by this file's own default instead of by the page's "
+                "value", FF_ATTR_ID[i]);
+        DCHECKF(at < 0 || (DESCRIPTORS[at].dflt == IDL_DEFAULT_STRING && DESCRIPTORS[at].dflt_str != NULL &&
+                           strcmp(DESCRIPTORS[at].dflt_str, FF_ATTR_DEFAULT[i]) == 0),
+                "§2's `%s` has one default in `dictionary FontFaceDescriptors` and another in "
+                "FF_ATTR_DEFAULT — §3.2.17 step 4.1.5 places the FORMER when the page omits the member, and "
+                "js_ff_ctor's omitted-member arm substitutes the LATTER, so the two disagreeing means one "
+                "value is read back by a page that passed no descriptors and a different one by a page that "
+                "passed `undefined` for it", FF_ATTR_ID[i]);
+    }
+#endif
 
     JS_NewClassID(JS_GetRuntime(ctx), &g_class);
     JS_NewClass(JS_GetRuntime(ctx), g_class, &d);
