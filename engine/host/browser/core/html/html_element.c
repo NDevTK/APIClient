@@ -397,16 +397,36 @@ static const ElReflect R_MAP[]    = { { "name", "name", REFLECT_STRING } };
 static const ElReflect R_TIME[]   = { { "dateTime", "datetime", REFLECT_STRING } };
 static const ElReflect R_QUOTE[]  = { { "cite", "cite", REFLECT_URL } };
 static const ElReflect R_MOD[]    = { { "cite", "cite", REFLECT_URL }, { "dateTime", "datetime", REFLECT_STRING } };
-/* §4.4.5's two plus HTML §16.3.3 "Other elements, attributes and APIs"'s `compact`, which the §16.3.3 block
-   below LEFT BEHIND on its first pass while naming this element in its own exclusion list. The exclusion was
-   written per MEMBER — `start` is `attribute long` and there is no signed reflect kind — and it was read as if
-   it were per INTERFACE, so the boolean beside it went with a reason that was never about it. A residual that
-   names a member excludes that member and says nothing whatever about its siblings. */
+/* §4.4.5 "The ol element"'s THREE OWN MEMBERS plus HTML §16.3.3 "Other elements, attributes and APIs"'s
+   `compact`, which the §16.3.3 block in this file LEFT BEHIND on its first pass while naming this element in
+   its own exclusion list. The exclusion was written per MEMBER — it was about `start` alone, which the enum
+   then had no kind for — and it was read as if it were per INTERFACE, so the boolean beside it went with a
+   reason that was never about it. A RESIDUAL THAT NAMES A MEMBER EXCLUDES THAT MEMBER and says nothing
+   whatever about its siblings; that is the durable half, and the kind it was waiting on is REFLECT_LONG.
+   AND `start` IS ALSO WHY THIS TABLE AND R_LI ARE WRITTEN OUT RATHER THAN DECLARED LIKE ANY OTHER NUMERIC
+   ROW. Both are §2.6.1 `long` reflections of one type under one section, and they answer DIFFERENT numbers
+   for the identical input — `<ol>` with no `start` is 1 and `<li>` with no `value` is 0 — because §4.4.5's
+   IDL is `[CEReactions, Reflect, ReflectDefault=1] attribute long start` and §4.4.8's is
+   `[CEReactions, Reflect] attribute long value`. THE DEFAULT IS NOT DERIVABLE FROM THE TYPE and it is not in
+   either section's prose either: §2.6.2 moved it into the IDL, so the only way to get it right is to READ
+   THE DECLARATION, and a row written from the type alone answers 0 for `<ol>.start` — a wrong value rather
+   than a missing one, on the markup the element is most often written with. */
 static const ElReflect R_OL[]     = {
     { "type", "type", REFLECT_STRING }, { "reversed", "reversed", REFLECT_BOOL },
+    { "start", "start", REFLECT_LONG, 1, true },
     { "compact", "compact", REFLECT_BOOL },
 };
-static const ElReflect R_LI[]     = { { "type", "type", REFLECT_STRING } };
+/* §4.4.8 "The li element" — "The value attribute, if present, must be a valid integer", which is §2.3.4.1's
+   production and carries the sign: `<li value="-3">` is -3 and NOT a parse error, which is the whole reason
+   this row is REFLECT_LONG. Under §2.3.4.2's rules the same bytes are an error, and the `unsigned long`
+   getter answers its minimum for an error — 0 here — so a ULONG row would report the member installed and
+   the value wrong. */
+static const ElReflect R_LI[]     = {
+    { "type", "type", REFLECT_STRING }, { "value", "value", REFLECT_LONG },
+};
+/* §16.3.3's `partial interface HTMLPreElement { [CEReactions, Reflect] attribute long width; }` — the whole
+   of that interface's own surface, and the element's only reason to have a row here. */
+static const ElReflect R_PRE[]    = { { "width", "width", REFLECT_LONG } };
 static const ElReflect R_TABLE[]  = { { "summary", "summary", REFLECT_STRING } };
 /* §4.9.11's two SPANS. Both carry `[ReflectDefault=1]` and both carry a `[ReflectRange]`, and the pair is what
    makes the two steps distinguishable: `colSpan`'s range starts at 1 where its default also is, but
@@ -493,13 +513,29 @@ static const ElReflect R_DATA[]   = { { "value", "value", REFLECT_STRING } };
        all, silently, in the one direction a page clearing a colour actually uses. `face` and `size` are plain
        and would both be correct, and the interface is left WHOLE rather than split: two right rows beside a
        wrong one is worse than three absent, because the wrong one is then certified by its neighbours.
-     - `HTMLPreElement.width`, `HTMLLIElement.value` and `HTMLOListElement.start` are `attribute long`, and the
-       kind enum in core/dom/element.h offers REFLECT_ULONG with no signed twin. `<li value="-3">` is markup a
-       page really writes, so a ULONG row answers a clamped positive for it — a wrong value again, and this
-       time one the member audit reports as installed. THE NEXT DIFF IS THE KIND: a REFLECT_LONG beside
-       REFLECT_ULONG running §2.6.1's signed parse, after which those three are three rows. ITS ABSENCE SHOWS
-       as an interface whose string and boolean reflections read complete while a `long`-typed one beside them
-       is still reported absent. */
+       THE `long` LANDING BELOW IS EVIDENCE FOR THAT JUDGEMENT RATHER THAN AGAINST IT, and the line between
+       the two is core/dom/element.h's own test for the enum: what made those three buildable as rows is that
+       the kind they needed ANSWERS BOTH DIRECTIONS FROM THE ATTRIBUTE ALONE. A `[LegacyNullToEmptyString]`
+       member does not — the extended attribute is a conversion on the value going IN, which is a field on the
+       declaration and not a step in §2.6.1 — so it is not a kind at all and cannot arrive the same way.
+       ITS ABSENCE SHOWS as an interface whose audit row counts all three of its own members missing while two
+       of them are ordinary `DOMString` mirrors this table writes forty of.
+   THE THREE `long` REFLECTIONS THIS BLOCK USED TO DEFER ARE ROWS NOW — `HTMLPreElement.width` here,
+   `HTMLLIElement.value` at §4.4.8 and `HTMLOListElement.start` at §4.4.5 — and TWO THINGS THE RETIRED CLAUSE
+   GOT WRONG ARE WHY IT IS REWRITTEN HERE INSTEAD OF DELETED, since a reader who re-derives it from the same
+   evidence will write the same two.
+     - IT SAID TO BUILD A SIGNED PARSE AND THERE WAS NOTHING TO BUILD. core/html/integer_microsyntax.h had held
+       §2.3.4.1's rules for parsing integers since before the clause was written, and its own header names this
+       exact consumer in its own words — "§2.6.1's reflected `long` and `unsigned long` getters run one each
+       and then apply their OWN range". A next-diff clause naming a MECHANISM is a claim about this tree and is
+       checked by grepping it; this one was never checked in either direction, and the cost of believing it is
+       a second answer to a question this codebase had already answered.
+     - IT NAMED THE TYPE AND NOT THE DECLARATION, so its own three-row remedy would have built one of the three
+       WRONG. §2.6.2 moved the default into the IDL, and `start` carries `[ReflectDefault=1]` where the other
+       two carry nothing — so three rows written from `attribute long` answer 0 for `<ol>.start` where a
+       browser answers 1. THE ENUMERATION IN A NOT-COVERED CLAUSE IS THE PART THAT ROTS EVEN WHEN THE CLAUSE IS
+       RIGHT: it listed the members correctly and the property it named them by — the TYPE — is not the
+       property that decides what a row must say. */
 /* `div` WAS THE SIBLING THE FIRST PASS OF THIS BLOCK MISSED, and the reason is worth more than the row: the
    candidate set was drawn from the audit rows carrying NO-ROW — the ones whose file list the auditor derived
    from a §3.7.3 tag — and HTMLDivElement HAS a row, so it sat in a different part of the same report with the
@@ -590,6 +626,7 @@ static const struct { const char *iface; const ElReflect *refl; int nrefl; } IFA
     { "HTMLModElement",        RL(R_MOD) },
     { "HTMLOListElement",      RL(R_OL) },
     { "HTMLLIElement",         RL(R_LI) },
+    { "HTMLPreElement",        RL(R_PRE) },
     { "HTMLTableElement",      RL(R_TABLE) },
     { "HTMLTableCellElement",  RL(R_TD) },
     { "HTMLTableColElement",   RL(R_COL) },
@@ -600,7 +637,7 @@ static const struct { const char *iface; const ElReflect *refl; int nrefl; } IFA
     { "HTMLTemplateElement",   RL(R_TEMPLATE) },
     { "HTMLFrameSetElement",   RL(R_FRAMESET) },
     /* HTML §16.3.3 "Other elements, attributes and APIs" — see the tables above for what each closes and for
-       the three `long` reflections and the one [LegacyNullToEmptyString] one it deliberately does not. */
+       the one [LegacyNullToEmptyString] member it deliberately does not. */
     { "HTMLDivElement",        RL(R_DIV) },
     { "HTMLParagraphElement",  RL(R_P) },
     { "HTMLHeadingElement",    RL(R_H) },

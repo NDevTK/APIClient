@@ -97,8 +97,43 @@ JSValue element_proto(JSContext *ctx);
    default), by two different steps that happen to agree here and do not for `rowspan`, whose range starts at
    0 and whose default is 1.
 
+   A SIGNED LONG is §2.6.1's `long` model, and it is the §2.3.4.1 half of the pair the unsigned kind is the
+   §2.3.4.2 half of. The section states the two branches separately and they differ in every step: this one
+   runs "integer parsing" — §2.3.4.1's rules for parsing integers, which take "one or more ASCII digits,
+   optionally prefixed with a U+002D HYPHEN-MINUS character (-)" — then asks only "If parsedValue is not an
+   error and is within the long range, then return parsedValue", Web IDL §2.13.8 "long" being the type whose
+   "`long` type corresponds to 32-bit signed integers". There is no minimum, no maximum and no clamp: the
+   fall-through is "If the reflected IDL attribute has a default value, then return defaultValue" and then
+   "Return 0".
+   A REFLECT_ULONG ROW FOR ONE OF THESE IS A WRONG VALUE AND NOT A NARROWER ONE, which is why the kind exists
+   rather than the nearest one being reused: the rules above are §2.3.4.1's, and §2.3.4.2 "Non-negative
+   integers" is those rules plus one step — "If value is less than zero, return an error" — so
+   `<li value="-3">` is an ERROR to the unsigned rules and the unsigned getter then answers its
+   minimum — 0 for a member with no range — where a browser answers -3. `<li value="-3">` is markup a page
+   really writes, and a member audit reports the row as installed either way.
+   THE ARM THIS KIND DOES NOT HAVE IS THE ONE §2.6.2 GATES BY AN EXTENDED ATTRIBUTE. §2.6.1's `long` branch is
+   headed "optionally limited to only non-negative numbers and optionally with a default value defaultValue",
+   and the first of those is §2.6.2's `[ReflectNonNegative]`, which that section says "must only appear on
+   attributes with a type of long" and which no `[Reflect]` row can carry — the primary reflection extended
+   attributes "must not appear on anything other than an interface member attribute, and only one of these can
+   be used at a time". So the getter's "If the reflected IDL attribute is limited to only non-negative numbers,
+   then return −1" and the setter's "If the reflected IDL attribute is limited to only non-negative numbers
+   and the given value is negative, then throw an" IndexSizeError are both unreachable for every row this enum
+   can hold, and building either would be a branch no declaration can select. The day a
+   `[ReflectNonNegative]` member is built it is a KIND of its own for the reason REFLECT_STRING_NULLABLE and
+   REFLECT_ENUM_NULLABLE are: the pair (kind, declaration) is what the assert stands over, and a flag beside
+   this kind would be a fourth thing a row could get wrong silently.
+   AND A DEFAULT IS DECLARED AND NEVER DERIVED FROM THE TYPE. §2.6.2 permits `[ReflectDefault]` here — it
+   "must only be used on attributes with a type of double, long, or unsigned long" — so a `long` row's absent
+   attribute answers 0 or answers the declared default, and only the IDL says which. `<ol>.start` is 1 and
+   `<li>.value` is 0, from one type and one section, because the first is declared
+   `[CEReactions, Reflect, ReflectDefault=1] attribute long start` and the second is not. A RANGE is the other
+   way round and the declaration asserts it: `[ReflectRange]` "must only be used on attributes with a type of
+   unsigned long", so a signed row carrying one names two steps its getter has none of.
+
    AN ENUM is §2.6.1's "LIMITED TO ONLY KNOWN VALUES", and it is a KIND rather than a component for exactly the
-   reason stated three paragraphs up: it answers both directions from the attribute alone. Its setter is
+   reason A KIND MUST ANSWER BOTH DIRECTIONS FROM THE ATTRIBUTE ALONE states above: it answers both directions
+   from the attribute alone. Its setter is
    §2.6.1's plain "set the content attribute with the given value" — the same one `DOMString` runs, which is why
    there is no separate setter body below — and its getter is the section's own two branches over §2.3.3's
    determine-the-state: "if contentAttributeValue does not correspond to any state of attributeDefinition ..., or
@@ -125,7 +160,7 @@ JSValue element_proto(JSContext *ctx);
    defining the attribute owns, so `method` and `formmethod` share one keyword table and differ only in their
    defaults, and the six interfaces that reflect `referrerpolicy` share one definition rather than six copies. */
 enum { REFLECT_STRING = 0, REFLECT_BOOL, REFLECT_STRING_NULLABLE, REFLECT_URL, REFLECT_ULONG,
-       REFLECT_ENUM, REFLECT_ENUM_NULLABLE };
+       REFLECT_LONG, REFLECT_ENUM, REFLECT_ENUM_NULLABLE };
 /* The numeric fields are TRAILING so that every row declaring none of them is unchanged — an omitted brace
    initialiser zeroes them, and each is read only through the `has_` flag beside it. That flag is a POSITIVE
    statement that the IDL declares no default/range, never a hole a `?:` fills: §2.6.1's steps ask "if the
