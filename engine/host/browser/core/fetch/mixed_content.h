@@ -9,22 +9,48 @@
  * internalResponse to request be blocked as mixed content" — and this engine does not ask that step at all,
  * so the header line above it enumerates the three algorithms this component HAS rather than the four Fetch
  * integrates.
- * THE OTHER THREE DISJUNCTS OF THAT STEP ARE NOT THIS COMPONENT'S AND ONE OF THEM IS ALREADY ANSWERED
- * ELSEWHERE, which is stated here so the next diff does not build a second copy of it: the step's MIME-type
- * and nosniff pair is a question about whether a body may be READ AS CODE, and the dangerous direction of it
- * is answered outside this engine entirely, by the trusted zone's CORB gate at its network chokepoint
- * (SECURITY.md). That is a different question asked at a different layer and it is NOT this step; what is
- * absent is the step.
- * WHAT THE NEXT DIFF BUILDS: §4.5 here beside §4.4, and a step-20 entry at core/fetch/fetch.h beside
- * fetch_main_blocked that asks it of the delivered response — ONE component with N callers and not a check
- * per delivery site, for the reason that header already gives about step 7: four hand-written copies is what
- * step 7 was before it was one component, and the copy nobody remembered to write is the one that ran no
- * check at all.
- * HOW ITS ABSENCE WOULD SHOW: a response fetched over `http` is delivered to a document this engine answers
- * PROHIBITS for, and nothing between the two refuses it — where a browser sets that response to a network
- * error. Observe it at the delivery seam rather than at a member: compare the scheme of the address a
- * response was actually fetched from against mixed_content_settings_prohibit for the document receiving it,
- * and the pair that a browser would have refused arrives here carrying a body.
+ * THE OTHER THREE DISJUNCTS OF THAT STEP ARE NOT THIS COMPONENT'S, AND THE SENTENCE THAT STOOD HERE
+ * ACCOUNTED FOR TWO OF THEM AND CALLED THEM ONE. It read `one of them is already answered elsewhere`
+ * and then named a PAIR — which is true of that pair and SILENT about the third, so a reader finished the
+ * sentence with all three settled. The pair is right and is kept: the MIME-type and nosniff disjuncts ask
+ * whether a body may be READ AS CODE, and the dangerous direction of that is answered outside this engine
+ * entirely, by the trusted zone's CORB gate at its network chokepoint (SECURITY.md) — a different question
+ * at a different layer, so the next diff must not build a second copy of it. THE THIRD IS
+ * CSP §4.1.3 "Should response to request be blocked by Content Security Policy?", and it is asked NOWHERE
+ * in this engine. Derive it rather than take it, with its own control, because the count moves as the work
+ * is done: `git grep -il post-request -- engine/host/browser/` against `git grep -il pre-request --
+ * engine/host/browser/` — the second names the files that run §6.7.2.1's pre-request walk, and the first
+ * names only this header, which is this note and not a site. The mechanism beneath it is not small: CSP
+ * §6.7.1.2 "Script directives post-request check" plus a post-request check per fetch directive, a second
+ * walk beside the pre-request one policy_container.c already runs.
+ * It is a SIBLING RESIDUAL of this one rather than a clause of it, and it belongs at the policy component
+ * whose walk would grow; it is named here because this is the only site that enumerates step 20's disjuncts.
+ * WHAT THE NEXT DIFF BUILDS, AND THE CLAUSE THAT STOOD HERE NAMED NO CALL SITE — so a reader building to it
+ * produced a component and an entry with NO CONSUMER, which is a write with no reader and not a landing.
+ * The three members land TOGETHER, as ONE diff, because none of them has a reader until the last does:
+ *   (1) a reader for §2.2.6 "Responses"' URL LIST on the reply record. §4.5 judges the RESPONSE's url, which
+ *       is that list's LAST item (Fetch §5.5 "Response class"), and fetch.h exports no accessor for it — the
+ *       record CARRIES the field and `fetch()`'s own delivery reads it with a raw property get, which is the
+ *       second-copy shape that header already condemns for the status and the header list;
+ *   (2) §4.5 here beside §4.4, over (this document's settings, the response's url, the request's
+ *       destination, whether the target has a parent). Every operand exists:
+ *       mixed_content_settings_prohibit is condition 1, core/frame/secure_context.h's
+ *       secure_context_url_potentially_trustworthy is condition 2, and condition 4 is the destination and
+ *       the top-level test fetch_main_blocked already passes to §4.4;
+ *   (3) a step-20 entry at core/fetch/fetch.h beside fetch_main_blocked — ONE component with N callers and
+ *       not a check per delivery site, for the reason that header gives about step 7 — CALLED FROM
+ *       flow_deliver_one_reply (engine/host/solver/engine.c), which is where a host reply first enters this
+ *       engine for EVERY park kind and which already runs HTML §8.1.4.2 "Fetching scripts"' whole-response
+ *       null-or-non-ok test at that one point. The landing therefore spans core/fetch and solver.
+ * HOW ITS ABSENCE WOULD SHOW, AND THE REDIRECT IS THE HALF STEP 7 STRUCTURALLY CANNOT REACH. Step 7 judges
+ * the address BEFORE the wire; the trusted zone fetches with `redirect: "follow"`, so the browser walks the
+ * chain and the reply record reports where it LANDED. Of that zone's post-redirect gates none is a scheme
+ * test — its scheme allowlist admits `http:` and `https:` and runs on the INITIAL url only, and what it
+ * re-asks after a redirect is the private-host and destructive-path pair. So a request judged on an `https`
+ * address that lands on an `http` one is judged for mixed content by nothing at all. Observe it at the
+ * delivery seam rather than at a member: compare the SCHEME OF THE LAST ITEM of a delivered reply's url list
+ * against the address step 7 was asked with, and against mixed_content_settings_prohibit for the document
+ * receiving it. The pre-wire case is the same observation with a chain of one.
  *
  * THIS STANDARD IS INDEXED AND EVERY CITATION HERE IS CHECKED — engine/specindex/mixedcontent.json, at the
  * editor's draft, carrying all twenty of that document's numbered sections. The paragraph that stood here
