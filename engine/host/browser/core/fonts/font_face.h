@@ -94,11 +94,60 @@ bool font_face_is(JSValueConst v);
  *   (1) §2 + §2.1 — THIS FILE. Its consumer is every `new FontFace(` in the corpus; it needs nothing that does
  *       not exist. It flips no guard, because the corpus carries none on this name.
  *
- *   (2) §2.2 "The load() method", the `loaded` attribute and the [[FontStatusPromise]] slot behind them. It is
- *       (2) and not (3) because it is the only member of this standard left that FLIPS NOTHING: a corpus site
- *       reaches it on a face it constructed itself (`n.load().then(() => …add(n))`), unguarded, so an absent
- *       one already throws on the page's own line and a built one simply answers. Every other landing below
- *       arrives through `document.fonts`, which is a GUARDED SURFACE — see (3).
+ *   (2) §2.2 "The load() method", the `loaded` attribute and the [[FontStatusPromise]] slot behind them ARE
+ *       NOT A LANDING OF THEIR OWN — they are members of the §3 landing below. This entry keeps its number,
+ *       where a reader goes looking for them, because what made them (2) is re-derivable from the corpus and
+ *       will be re-derived unless what refutes it stands beside it.
+ *       IT SAID: "it is the only member of this standard left that FLIPS NOTHING: a corpus site reaches it on
+ *       a face it constructed itself (`n.load().then(() => …add(n))`), unguarded, so an absent one already
+ *       throws on the page's own line and a built one simply answers." The site is real and the quotation is
+ *       exact. What is false is REACHES. The call and the face are in TWO methods: the one that mints the
+ *       face opens `let a = t.fonts; for (let t of a) …` and ends `return a.add(s), …`, so the flow dies
+ *       ITERATING `undefined` several statements earlier, in a function the quoted line does not name. The
+ *       clause was read off the line it is ABOUT rather than off the line that REACHES it, which is the
+ *       hop-by-hop trace that terminates at the first file holding what you need.
+ *       AND THIS FILE ALREADY HELD THE REFUTATION, which is worth more than the incident: the WHAT THE SITES
+ *       ACTUALLY READ paragraph above enumerates every member the corpus touches, and `load` is not among
+ *       them. One file, two paragraphs, and the MEASURED one was right.
+ *       THE DERIVATION, because a corpus moves and a count of one rots — and every hit is OPENED, since
+ *       `.load()` is a name an application owns as readily as the platform does:
+ *           NODE_USE_ENV_PROXY=1 SITES=apps.tsv node testing/corpus/fetch.mjs
+ *           cd engine/.work/sitecorpus/mirror && grep -rloE '[.]load\(\)' .    # then OPEN each receiver
+ *       Over one fetch of it THREE files answered and exactly ONE receiver was a FontFace; the others were an
+ *       IndexedDB-backed library store and a passcode widget. A receiver-anchored `fontFace[s]?[.]load`
+ *       pattern finds NONE of the three, the real one included — keying on the receiver carries no
+ *       information about the member, which is why that channel reads clean here and is not.
+ *       AND §3.2 SETTLES THE MERGE FROM THE STANDARD RATHER THAN FROM THE CORPUS, so it holds whatever a
+ *       later fetch says: §3.2's own step is "For all of the font faces in the font face list, call their
+ *       load() method", and the step beside it resolves "with the result of waiting for all of the
+ *       [[FontStatusPromise]]s of each font face in the font face list, in order". §3.2 cannot be built
+ *       without both, so they were never AFTER §3 — they are INSIDE it.
+ *       WHAT §2.2 NEEDS THAT NOTHING ELSE IN THIS ORDER NAMES, because a member merged into a landing is a
+ *       member whose own prerequisites go missing with it:
+ *         — A PROMISE THAT CAN NEVER SETTLE IS WORSE THAN AN ABSENT MEMBER, which is (3)'s `ready` sentence
+ *           owed to this slot. `load()` RETURNS [[FontStatusPromise]] without touching it on the arm §2.2
+ *           states as "If font face's [[Urls]] slot is null, or its status attribute is anything other than
+ *           "unloaded", return font face's [[FontStatusPromise]] and abort these steps" — so the slot must
+ *           ALREADY settle for a BufferSource face and for a face §2.1's parse failed, or `load()` hands
+ *           those two a promise nothing in this engine will ever settle, where today they get a TypeError
+ *           that ends the flow with a name on it. Both settle paths are §2.1's own and are the two NAMED
+ *           RESIDUALS in font_face.c; they land WITH §2.2, never after it.
+ *         — THE `src` DESCRIPTOR HAS NO VALUE GRAMMAR HERE, and §2.2's fetch arm is stated over the parsed
+ *           one: "Using the value of font face's [[Urls]] slot, attempt to load a font as defined in
+ *           [CSS-FONTS-3], as if it was the value of a @font-face rule's src descriptor." What the slot holds
+ *           is the RAW string, because core/css/ does not type this descriptor and the collector keeps an
+ *           untyped one verbatim — which is (0) below, met at a second place and with a sharper consequence
+ *           than the descriptors have, since a url list that was never parsed cannot be fetched at all:
+ *               git grep -n 'css_shorthand_validates_longhand' engine/host/browser/core/css/css_shorthand.c
+ *           And no CSS url is fetched anywhere in this engine yet — grep the subresource seam for its
+ *           callers and both are elements rather than values:
+ *               git grep -n 'engine_pending_resource_url' engine/host/browser/core/
+ *         — AND THE BASE URL IS AN OPEN ISSUE IN THE STANDARD ITSELF rather than a gap here, so a builder
+ *           who expects to find the answer by reading harder will not: §2.1 carries "Need to define the base
+ *           url, so relative urls can resolve. Should it be the url of the document? Is that correct for
+ *           workers too, or should they use their worker url? Is that always defined?"
+ *       RETIREMENT: this entry goes when (3) has landed, because it is (3)'s MEMBERSHIP that it corrects and
+ *       the correction is spent with it.
  *
  *   (3) §3 "The FontFaceSet Interface", §4 "The FontFaceSource Mixin"'s `Document.fonts`, §3.2 "The load()
  *       method" and §3.3 "The check() method" — WHICH IS ONE LANDING, AND THE SPLIT THAT STOOD HERE IS THE

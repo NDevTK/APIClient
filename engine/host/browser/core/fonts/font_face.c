@@ -148,10 +148,15 @@ bool font_face_is(JSValueConst v)
  *     attribute that reflects it are the LOADING half and are absent here — a promise created with no member
  *     able to reach it would be an observable this engine invented rather than one §2 gives a page.
  *   WHAT THE NEXT DIFF BUILDS: the slot, `loaded`, and §2.2's `load()`, together — which font_face.h's ORDER
- *     names as the landing after this one. IT IS NAMED BY ITS SECTION AND NOT BY THAT LIST'S ORDINAL, which is
- *     what stood here and went stale the first time the ORDER was re-derived: an ordinal is a reference to a
- *     POSITION in a list a later reading may reorder, and it resolves — to whatever now occupies that rank —
- *     rather than going quiet, so the next reader is sent somewhere with confidence.
+ *     names as MEMBERS OF THE §3 LANDING rather than a landing of their own. IT IS NAMED BY ITS SECTION AND
+ *     NOT BY THAT LIST'S ORDINAL, which is what stood here and went stale the first time the ORDER was
+ *     re-derived: an ordinal is a reference to a POSITION in a list a later reading may reorder, and it
+ *     resolves — to whatever now occupies that rank — rather than going quiet, so the next reader is sent
+ *     somewhere with confidence. IT ALSO SAID `the landing after this one`, WHICH IS THE SAME DEFECT WITH NO
+ *     NUMBER IN IT and is rewritten rather than deleted because a reader who re-derives the ORDER from §2's
+ *     own section numbering will re-write it: `after this one` is an ordinal spelled in English, it went
+ *     false when §2.2 was measured to have no reachable consumer, and it resolved — to §3 — instead of going
+ *     quiet. A clause naming a landing names the SECTIONS in it.
  *   HOW ITS ABSENCE WOULD SHOW: `new FontFace("x", "not-a-src").loaded` is undefined rather than a promise, so
  *     a page that awaits it throws a TypeError at its own line; and nothing anywhere fires an unhandled
  *     rejection for a face that failed to parse, where a browser fires one. */
@@ -252,8 +257,17 @@ static bool ff_place_parsed(JSContext *ctx, JSValue state, int slot, JSValueCons
  *     settling into "loaded" or "error". For a `[[Urls]]` source those steps set the slot and nothing else, so
  *     a URL-sourced face's `status` of "unloaded" is what a browser reads back too until §2.2's `load()` is
  *     called — which is why this residual is about the BufferSource arm and not about both.
- *   WHAT THE NEXT DIFF BUILDS: §2.2's `load()` and the [[FontStatusPromise]] slot beside it, which is the same
- *     landing the error-arm residual above names; the data parse then has somewhere to settle.
+ *   WHAT THE NEXT DIFF BUILDS: the [[FontStatusPromise]] slot and this arm's own parse — NOT §2.2's `load()`,
+ *     which is what stood here and is recorded because the two residuals really do share a slot and a reader
+ *     will merge them again. §2.1 settles the BufferSource arm ITSELF and names no `load()` anywhere in it
+ *     ("Asynchronously, attempt to parse the data in it as a font. When this is completed, successfully or
+ *     not, queue a task … fulfill font face's [[FontStatusPromise]] with font face … Otherwise, reject … with
+ *     a DOMException named "SyntaxError""), and §2.2's own first arm RETURNS that promise untouched for a
+ *     face whose [[Urls]] is null — so `load()` is what makes this arm's promise OBSERVABLE and never what
+ *     settles it. Building `load()` for it would be building the member that hands a page a promise this arm
+ *     had not yet learned to settle. The parse this arm owes is an sfnt validation over page-supplied bytes,
+ *     which core/fonts/open_type_metrics.h already declares as `open_type_metrics_read` and already states is
+ *     offensive from its first line BECAUSE its input is attacker-supplied.
  *   HOW ITS ABSENCE WOULD SHOW: a face constructed from an ArrayBuffer or a typed array reads `status` of
  *     "unloaded" for ever, where a browser moves it to "loading" without the page asking and then to "loaded"
  *     or "error" — so a page that polls `status` after constructing from bytes never sees it change. */
