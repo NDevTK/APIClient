@@ -241,6 +241,27 @@ function corpus() {
      extension JavaScript however the document around it is named. */
   for (const p of walk(join(ROOT, "extension")))
     if (extname(p) === ".html") files.push({ path: p, lang: "html", area: "extension" });
+  /* NAMED RESIDUAL — THE SAME DEFECT THE PARAGRAPH ABOVE RECORDS FOR `.html`, RECOMMITTED HERE FOR `.mjs` BY
+     THE BLOCK DIRECTLY BELOW IT. That paragraph's own rule is "a file is in for WHERE it is and WHAT it is",
+     and this selector asks WHAT ITS EXTENSION IS. `testing/` holds thirteen `.mjs` drivers beside its `.js`
+     ones, so a Node driver that loads the glue and reaches the ABI is in no namespace at all.
+     WHAT IS NOT COVERED — A PROPERTY AND NOT A LIST: any `testing/` driver written as an ES module is read by
+     no channel here, so its ccalls do not reach `abiCcalls` and its record fields are neither audited nor
+     refused. The ABI channel is where that is visible today; it is not where it is bounded.
+     WHAT THE NEXT DIFF BUILDS: this selector taking `.mjs` and `.cjs` beside `.js` under the same
+     `area: "testing drivers"` banding, so new findings land in a row that already exists.
+     HOW ITS ABSENCE WOULD SHOW — AN OBSERVATION AND NOT AN INSTANCE: an exported ABI entry a `testing/*.mjs`
+     driver ccalls is reported by the row below as one nothing calls, and a reader who greps the tree for that
+     entry's name finds the caller the gate said was not there.
+     WHY IT IS NOT LANDED WITH THE BANDING BESIDE IT, AND WHO MAY LAND IT: widening a corpus is a claim about
+     COVERAGE priced in FALSE ACCUSATIONS, and the two are measured together or the trade is not being made —
+     thirteen files entering every channel at once cannot be priced from the ABI channel's enumerable
+     thirty-eight entries, which is all a lane can hand-price. It needs a whole-corpus before/after taken with
+     this instrument IN PLACE in a frozen snapshot, which is the one measurement a lane may not take. A reader
+     who runs the observation, gets the defer answer and correctly leaves this standing is asked to SAY SO
+     rather than to wait, since nothing anywhere accumulates those readings.
+     RETIREMENT: this record goes when a `testing/` driver's extension cannot decide whether the gate reads
+     it. */
   cone.push(":(glob)testing/*.js");
   for (const p of walk(join(ROOT, "testing")))
     if (extname(p) === ".js" && dirname(p) === join(ROOT, "testing") && !basename(p).startsWith("debug-"))
@@ -3543,6 +3564,7 @@ const abiBindings = new Map();  // method -> {fn, ret, out, file, line}
 const mojomMethods = new Map(); // "<iface>#Step" -> {file, line, iface, reply:[names], unresolved:[…]}
 const servedInterfaces = [];    // {iface, file, line} — the interface a binding table's own document names
 const abiCcalls = new Map();    // qjs_x -> [{file,line}]        a driver reaching the entry directly
+const abiInProcCallers = new Map(); // qjs_x -> [{file,line}]    this process's OWN C reaching it — a fixture
 const mojoReplyReads = [];      // {file,line,method,name}       `(await x.m()).f` — the CALLER'S read of a reply
 
 /* The C side: the marker the entry source puts on every ABI body, with the type in front of the name. */
@@ -3552,6 +3574,35 @@ function collectAbiC(file, src, code, struct) {
   while ((m = RE.exec(struct))) {
     if (abiEntries.has(m[2])) continue;
     abiEntries.set(m[2], { file, line: lineOf(src, m.index), ret: m[1].replace(/\s+/g, " ").trim() });
+  }
+
+  /* AND THE CALLERS INSIDE THIS PROCESS, WHICH ARE A THIRD STATE AND NOT A SECOND SPELLING OF EITHER OTHER ONE.
+     `abiCcalls` above answers "a party outside this process reaches this entry"; the row below it answered
+     "nobody does" from that map alone, so an entry whose ONLY caller is test_forced.c was reported in the same
+     sentence as one with no caller anywhere. Those two take opposite work — one is an entry to BUILD A
+     CONSUMER FOR and the other may be an entry to DELETE — and qjs_abi.h's paint residual is written on
+     exactly this distinction, in its own words: "an ABI entry whose only caller is a FIXTURE is exercised at
+     exactly the cadence the fixture is run and never at the one the product is". A gate that cannot say which
+     of the two it found is the three-states-behind-one-answer shape standing over a decision somebody already
+     reasoned out and wrote down.
+     THE EXCLUSION IS DERIVED FROM THE ARTIFACT AND NOT RESTATED: every declaration and every definition of an
+     ABI entry carries QJS_EXPORT — that marker is how `abiEntries` above is built, so it is present on
+     precisely the population that must not be read as a call, by construction rather than by a rule that can
+     drift. A comment cannot supply one either way: `maskC` blanks comment bodies in `struct`, which is why
+     this reads `struct` and not `src` — main.c's paint block MENTIONS `qjs_paint_width()` in a costing
+     paragraph, and over raw text that mention reads as a caller.
+     NOTHING IS EXEMPTED BY WHAT THIS COLLECTS. A row it reaches is re-phrased, never silenced, because an
+     in-process caller is not evidence that the product reaches anything.
+     The entry filter is deliberately NOT applied here: files are read in an order this does not choose, so an
+     entry declared in a file read later would drop its own callers. Filtered at use. */
+  const CALL = /\b(qjs_\w+)\s*\(/g;
+  let c;
+  while ((c = CALL.exec(struct))) {
+    const b = Math.max(struct.lastIndexOf(";", c.index), struct.lastIndexOf("{", c.index),
+                       struct.lastIndexOf("}", c.index));
+    if (/\bQJS_EXPORT\b/.test(struct.slice(b + 1, c.index))) continue;
+    if (!abiInProcCallers.has(c[1])) abiInProcCallers.set(c[1], []);
+    abiInProcCallers.get(c[1]).push({ file, line: lineOf(src, c.index) });
   }
 }
 
@@ -5034,6 +5085,7 @@ const upperFirst = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
 const abiDefects = [];   // {kind, name, text}
 let abiServed = null;    // the interface the binding table's own document is implemented against
+let abiInProcOnly = 0;   // exported entries whose ONLY caller is this process's own C — counted where decided
 {
   const boundFns = new Set([...abiBindings.values()].map((b) => b.fn));
   /* THE INTERFACE THE BINDING TABLE SERVES, taken from that table's own document rather than guessed from an
@@ -5052,10 +5104,28 @@ let abiServed = null;    // the interface the binding table's own document is im
   for (const [fn, e] of abiEntries) {
     if (!abiExported.has(fn)) continue;   /* the build's own stage owns this pair and states it better */
     if (boundFns.has(fn) || abiCcalls.has(fn)) continue;
+    /* THE TWO STATES THIS ROW USED TO SUM. Neither is exempt and neither is the other's remedy: an entry a
+       FIXTURE calls is in the program and in nobody's product path, which is a consumer to build; an entry
+       with no caller anywhere may be a superseded system to delete. A reader handed one sentence for both
+       cannot tell which, and the harsher one reads as authoritative — the shape `qjs_result` had is quoted
+       BELOW rather than above because it is a claim about the second state only. */
+    const inproc = abiInProcCallers.get(fn);
+    if (inproc && inproc.length) {
+      const where = inproc.slice(0, 3).map((x) => `${x.file}:${x.line}`).join(", ");
+      abiDefects.push({ kind: "an EXPORTED entry ONLY THIS PROCESS'S OWN C CALLS", name: fn,
+                        place: `${e.file}:${e.line}`,
+                        text: `defined and exported, and no binding names it and no driver ccalls it — its ` +
+                              `only caller is in this process (${where}${inproc.length > 3 ? ", …" : ""}), so ` +
+                              `it is exercised at the cadence that caller is run and never at the product's. ` +
+                              `§Testing rates that the same as a translation unit that is in the program and ` +
+                              `in nobody's build. THE REMEDY IS A CONSUMER, NEVER A DELETION` });
+      abiInProcOnly++;
+      continue;
+    }
     abiDefects.push({ kind: "an EXPORTED entry nothing calls", name: fn, place: `${e.file}:${e.line}`,
-                      text: "defined and exported, and no binding names it and no driver ccalls it — the shape " +
-                            "`qjs_result` had while the zone that should have read the result document " +
-                            "defaulted it away instead" });
+                      text: "defined and exported, and no binding names it, no driver ccalls it and no caller " +
+                            "exists in this process either — the shape `qjs_result` had while the zone that " +
+                            "should have read the result document defaulted it away instead" });
   }
   for (const [method, b] of abiBindings) {
     if (!abiEntries.has(b.fn))
@@ -5750,7 +5820,8 @@ show(`RETURN DOMAIN UNDECLARED — ${undeclaredDomain.length} producer(s) a cons
    that were never read print the same silence. */
 log(`── qjs_* ABI ── ${abiEntries.size} QJS_EXPORT entr(ies), ${abiExported.size} on the build's export list, ` +
     `${abiBindings.size} bound to a mojo method, ${mojomMethods.size} method(s) the typed boundary declares, ` +
-    `${abiCcalls.size} reached directly by a driver` +
+    `${abiCcalls.size} reached directly by a driver, ` +
+    `${abiInProcOnly} reached ONLY by this process's own C` +
     (abiServed ? `; the table is implemented against ${abiServed}, so both directions were asked`
                : " — NO SERVED INTERFACE IS NAMED by a document carrying bindings, so the declared-versus-bound " +
                  "direction was NOT asked and its silence is not an answer") +
