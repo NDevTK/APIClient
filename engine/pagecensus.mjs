@@ -362,6 +362,27 @@ for (;;) {
       fail(`a pending line states the provenance \`${provenance}\`, which is none of the three tokens ` +
            "solver/engine.h declares — the vocabulary moved under every host that reads it");
 
+    /* TWO FACTS, TWO NAMES — THE ADDRESS TO FETCH AND THE KEY THAT ANSWERS THE PARK, WHICH THIS LOOP HELD
+       IN ONE VARIABLE. `readReply` needs an ABSOLUTE url because it goes over the network; the engine's
+       register is keyed on the string `qjs_pending` LISTED, and `new URL()` is not an identity on that
+       string. URL Standard §4.4 "URL parsing"'s path percent-encode set contains `{` and `}`, so a learned
+       address carrying a HOLE — `/api/user/{location.hash}.slice(1)/profile`, which is what a concolic
+       address looks like on this line — comes back re-spelled `%7B…%7D` and `qjs_provide` then answers a
+       request no flow is parked on. The engine says exactly that and aborts (main.c: "a reply was provided
+       for a request no flow is parked on and none was paged out"), which is that assert working and this
+       driver having asked the wrong question.
+       IT IS INVISIBLE FOR EVERY ADDRESS IT DOES NOT BREAK, which is why one variable survived this long: a
+       CONCRETE address is already absolute on the pending line, so the round trip is an identity on it and
+       changes only the shape-carrying ones — the exact class a real bundle produces and the whole class this
+       driver exists to be pointed at. A driver that dies at its first hole-bearing reply measures no real
+       page at all, and the death looks like an engine defect because it arrives as the engine's own `@WHY`.
+       THE SHAPE TO COPY IS ALREADY IN THE TREE, at the one host that is not a driver: extension/bridge.js
+       reads the line once (`pendingRequest`) and hands `engineProvide(eng, method, url, answer)` the url as
+       listed while `safeFetch` resolves its own; engine/solvergate.mjs and engine/route.mjs take `u` as
+       listed for the same reason and never needed this note because neither of them fetches.
+       THE ROW BELOW REPORTS `abs`, WHICH IS THE ADDRESS THIS DRIVER FETCHED, and it is deliberately not the
+       park key: `status`, `type` and `bytes` are facts about the resource at that address, and the request
+       they answer is named on the pending line the loop is walking. */
     const abs = new URL(u, finalUrl).href;
     const rep = await readReply(abs);
     /* BOTH CHANNELS IN ONE CALL, so no path here can deliver the record and forget the bytes. A network error
@@ -371,14 +392,14 @@ for (;;) {
     if (rep.meta === null) {
       emit({ n, at: "reply", method, url: abs, networkError: rep.note });
       M.ccall("qjs_provide", "void", ["number", "number", "number", "number", "number"],
-              [cs(method), cs(abs), cs("null"), 0, 0]);
+              [cs(method), cs(u), cs("null"), 0, 0]);
     } else {
       const b = rep.bytes;
       const p = M._malloc(b.length + 1);
       M.HEAPU8.set(b, p);
       try {
         M.ccall("qjs_provide", "void", ["number", "number", "number", "number", "number"],
-                [cs(method), cs(abs), cs(JSON.stringify(rep.meta)), p, b.length]);
+                [cs(method), cs(u), cs(JSON.stringify(rep.meta)), p, b.length]);
       } finally { M._free(p); }
       emit({ n, at: "reply", method, url: abs, status: rep.meta.status,
              type: rep.meta.computedType, bytes: b.length });
