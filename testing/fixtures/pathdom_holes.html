@@ -58,9 +58,12 @@ fetch("/api/pathdom/w/parsed");
 
 /* ── ARM P/B — CONCRETIZE-ON-PIN, AND THE ONE AXIS THAT SEPARATES ITS TWO SPELLINGS ─────────────────────
    §Solver-half: once `x === 'admin'` pins the value, a later READ of that source returns the pinned bytes.
-   The pin is keyed by the value's own identity and is answered AT THE READ (solver/concolic.h
-   `concolic_pin`: "`src` now reads `val` … FOR THIS FLOW"), so a value already materialised into a
-   variable BEFORE the gate is a JSValue minted before the pin existed and carries its unpinned example.
+   The pin is keyed by the value's own `src` and there are TWO reads that answer it — the MINT
+   (solver/concolic.c's `concolic_new`, where the pin hands back a bare primitive and the source stops
+   forking) and the EXAMPLE accessor (`concolic_example`, where it reaches a value the page is still
+   holding). This arm's whole subject is that second one: a JSValue materialised into a variable BEFORE the
+   gate is never re-minted, so until the accessor asked the pin it kept composing addresses out of the
+   example that same gate had contradicted — or out of no example at all.
 
    THE TWO ADDRESSES ARE A CONTROLLED PAIR INSIDE ONE FLOW, which is the strongest form available and the
    reason they are not two arms: same source, same gate, same token, same request shape, same instant —
@@ -70,15 +73,31 @@ fetch("/api/pathdom/w/parsed");
    `var role = q("role"); if (role === "admin") fetch("…?role=" + role)` is the commonest gated-endpoint
    shape a bundle writes, so `team` is the REAL-WORLD spelling and `tenant` is the one that is easy.
 
-   EXPECTED.  tenant -> valueClass "concrete", validValues ["admin"].
-              team   -> the same, and §@H is satisfied only if it is.
-   A WRONG ANSWER LOOKS LIKE: `team` carrying valueClass "unknown" with the bare shape `{window.name}` in
-   `validValues` while `tenant` carries "admin". That is not a thin report — the reviewer is offered a
-   SHAPE at the one position where the run determined a literal, so the Send panel's field is empty where
-   a value was proved. Read the two rows together; either is meaningless alone.
-   WHAT MUST NOT BE CONCLUDED FROM THEM AGREEING AT "unknown": both reading the shape is consistent with
-   the pin never firing at all, which the multi-value arm below separates (it cannot produce two values
-   without two pins). */
+   THE TWO SPELLINGS DO NOT PRODUCE THE SAME RECORD, AND THIS ARM'S EXPECTATION USED TO SAY THEY DO.
+   It read "tenant -> valueClass \"concrete\", validValues [\"admin\"]. team -> the same", and a PATH param
+   can never be concrete in either spelling — which lib/learn.js asserts by name (`location:"path"` beside
+   `valueClass:"concrete"` is a DCHECK there). A pin is answered by handing the read a BARE primitive,
+   deliberately, because that forgetting is what stops a pinned source re-forking (solver/decide.c states
+   it at the pin). So the post-gate read composes an address with NO unknown in it at all, and
+   solver/endpoint.c's `path_scan` mints a hole only where a segment carries a brace.
+
+   EXPECTED.  team   -> ONE record `/api/pathdom/team/{window.name}/settings`, its `window.name` param
+                        `location:"path"`, `valueClass:"unknown"` — the value DID name a hole, which is
+                        what that word states — and `validValues` EXACTLY ["admin"].
+              tenant -> ONE record whose path is the LITERAL `/api/pathdom/tenant/admin/settings`, with NO
+                        params at all. That is not a thinner answer than `team`'s: it is the pin having
+                        been spent at the read, and it is why the PRE-GATE spelling is the one worth
+                        having — only a surviving hole can carry `excludes`, `bounds` or `predicates`,
+                        and only a templated address is something the Send panel can offer a field for.
+   A WRONG ANSWER LOOKS LIKE: `team` carrying the bare shape `{window.name}` in `validValues`. That is not
+   a thin report — the reviewer is offered a SHAPE at the one position where the run determined a
+   literal, so the Send panel's field is empty where a value was proved. It is the state this engine was
+   in until concretize-on-pin was asked at the EXAMPLE read as well as at the mint (solver/concolic.c's
+   `concolic_example`), and `engine/tests/solver/pin_and_shape.html` is the same claim one source over.
+   THE OTHER WRONG ANSWER IS `tenant` CARRYING A PARAM: a path hole where the address holds no unknown
+   would mean a pinned read had stayed concolic, which re-forks every later gate over that source.
+   WHAT MUST NOT BE CONCLUDED FROM `team` READING THE SHAPE: it is consistent with the pin never firing at
+   all, which the multi-value arm below separates (it cannot produce two values without two pins). */
 var nameBefore = name;                                   /* materialised BEFORE the gate */
 if (name === "admin") {                                  /* the gate — this is what pins the source */
   fetch("/api/pathdom/w/pin-enter");
@@ -92,6 +111,13 @@ if (name === "admin") {                                  /* the gate — this is
    per key. Both gates are over the SAME source and both requests are the SAME address template, so the
    two flows that reach them must merge onto ONE endpoint record (lib/merge.js, keyed by the template) and
    that record must carry BOTH values.
+   IT INTERPOLATES THE PRE-GATE VARIABLE AND MUST, WHICH THIS ARM USED TO GET WRONG BY INTERPOLATING THE
+   GATED READ. A read taken AFTER its own gate is answered with a bare primitive, so `"/zone/" + name` past
+   `name === "gold"` composes the LITERAL `/api/pathdom/zone/gold/index` — no hole, no param, and two flows
+   producing two different flat addresses that share no template and therefore merge onto nothing. There is
+   no revision of this engine at which the gated read could have produced the record below; `excludes` was
+   equally unreachable, since a domain is looked up by a HOLE KEY and there was no hole. The pre-gate
+   variable keeps the hole AND, once concretize-on-pin is answered at the example read, carries the value.
    IT ALSO ARMS `excludes` WITHOUT A LINE OF ITS OWN, which is why the gates are stacked rather than
    parallel: the flow that reaches `silver` is the one where `=== "admin"` and `=== "gold"` BOTH took their
    FALSE arm, so its parameter carries an exclusion for each. That is the fact §@H names as the difference
@@ -109,10 +135,10 @@ if (name === "admin") {                                  /* the gate — this is
    report arriving through a merge, and the direction that invents rather than the one that loses). */
 if (name === "gold") {
   fetch("/api/pathdom/w/multi-gold");
-  fetch("/api/pathdom/zone/" + name + "/index");
+  fetch("/api/pathdom/zone/" + nameBefore + "/index");
 } else if (name === "silver") {
   fetch("/api/pathdom/w/multi-silver");
-  fetch("/api/pathdom/zone/" + name + "/index");
+  fetch("/api/pathdom/zone/" + nameBefore + "/index");
 }
 
 /* ── ARM R/L — AN ORDERING AND A LOOSE EQUALITY: DOMAIN, AND DELIBERATELY NO VALUE ──────────────────────
