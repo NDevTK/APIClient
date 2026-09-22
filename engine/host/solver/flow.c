@@ -15,6 +15,7 @@
 #include "solver/world.h"    /* …and whether two sending timelines it committed to can both be true */
 #include "check.h"
 #include <stdlib.h>
+#include <string.h>    /* memset — the census's residue map is cleared per sample, never stamped */
 
 static Flow **g_flows = NULL;
 static int g_flows_n = 0, g_flows_cap = 0;
@@ -3677,6 +3678,54 @@ int64_t flow_silence_notch(const Flow *f) {
     return (flow_own_silence(f) + acct_family_us(f)) / FLOW_SERVICE_US;
 }
 
+/* …AND THE TWO PIECES OF THAT NOTCH ITS OWN PUBLISHED HALVES DO NOT ACCOUNT FOR. The notch is `(own + fam) / S`
+   and the two rows beside it are `own / S` and `fam / S`, and THOSE DO NOT SUM TO IT: integer division of a
+   SUM is the sum of the divisions plus a CARRY. The carry is a whole notch — FLOW_AGE_QUANTUM, 0.012 points —
+   against a whole-order spread this file has measured at 0.030 and 0.036 on two documents and two artifacts.
+   A THIRD OF THE ORDER LIVES IN A BIT NOTHING PUBLISHED, and flow_silence_notch's own prose calls the aging
+   "the SUM of the two notches above" while the code divides their operands' sum, which is the same sentence
+   one carry short.
+   WHY THE SPLIT IS THE ANSWER TO WHAT AN ASK COSTS RATHER THAN A SECOND READING OF WHAT IT ANSWERS. Write
+   `own = k*S + p` and `fam = K*S + R`, with `p` and `R` the two residues below and `S` = FLOW_SERVICE_US.
+   Then, exactly and for every non-negative pair,
+        notch = k + K + (p + R >= S)
+   and the three terms have three DIFFERENT TEMPOS, which is the whole of what a walk is currently paying for:
+     k  moves only when the flow being CHARGED crosses a quantum, and flow_age_running charges exactly one
+        member — the running one — so between two dispatches this moves for at most ONE member of the frontier.
+     K  is the FAMILY's, read by every member of it through one pointer, so it is a COMMON OFFSET that orders
+        nothing within a family — and a real page's whole frontier is one family (`families: 1` on both
+        documents this file records).
+     the carry is ONE BIT, and its threshold `S - R` is common too and sweeps DOWNWARD as the family burns, so
+        members cross it in descending order of `p` and every crossing is the BOUNDARY MOVING rather than a
+        member being re-keyed.
+   THAT IS WHY flow_pick's "N heap updates per dispatch" IS A COUNT OF CROSSINGS AND NOT OF UPDATES, which is
+   the one clause of its argument this pair corrects. It is right that every member straddles its own boundary
+   once per quantum of family time; it reads that as N re-keyings because the straddle looked like a per-member
+   PHASE. It is a per-member RESIDUE against a COMMON threshold: indexed by `p`, the sweep costs nothing per
+   member at all and the maximum is the larger of two CONTIGUOUS RANGES of `p`. That is the sub-linear ask its
+   retirement clause asks for, and this pair is the key such an index would be built on.
+   WHAT THIS PAIR IS NOT, AND THE SECOND CLAUSE IS WHY flow_weight IS UNTOUCHED BY THIS DIFF. It is not a term,
+   nothing ranks by it, and it is not a second spelling of the notch: `-(double)notch * FLOW_AGE_QUANTUM` is ONE
+   multiply of ONE exact integer, and an index that summed three products instead would differ from it in the
+   last bit and reorder two members the order currently ties. An index over this key therefore decides WHICH
+   members can be the maximum and the exact comparison stays flow_weight's, or it has changed the answer.
+   NO ASSERT ON THE IDENTITY ABOVE, DELIBERATELY. It is a theorem of integer division for non-negative
+   operands, both of which are non-negative by flow_age_running's own charge assert, so a DCHECK comparing the
+   two spellings is one whose sides cannot disagree — a NON-check wearing the syntax of a check. What is NOT a
+   theorem is that nothing ELSE in the weight moves between two frontier generations, and that is asserted
+   where it can fail and costs O(1): engine.c's preempt hook, over the RIVAL it caches across exactly that
+   interval.
+   RETIREMENT: this pair goes when the ask no longer walks the frontier — at which point the index IS its
+   reader and these stop being a census row. */
+int64_t flow_silence_phase(const Flow *f) { return flow_own_silence(f) % FLOW_SERVICE_US; }
+
+/* …AND THE BIT ITSELF, WHICH IS THE ONE PART OF A NON-RUNNING MEMBER'S WEIGHT THAT MOVES WITH NO GENERATION
+   BUMP BEHIND IT. `int` and not `int64_t` because its only readers COUNT members that carry it: a quantity
+   whose whole range is {0,1} typed as a 64-bit integer is an invitation to sum it into a notch. */
+int flow_silence_carry(const Flow *f) {
+    return (flow_silence_phase(f) + acct_family_us(f) % FLOW_SERVICE_US) >= FLOW_SERVICE_US;
+}
+
 /* THE FLOW'S PLACE IN THE QUEUE — every term of the weight that is a TAG rather than a reading, which is
    exactly the set an ARRIVAL has to reproduce. It is split out of flow_weight for one reason and it is the
    defect that forced it: flow_arrive_at_virtual_time's own prose says it "assigns every term the weight is made
@@ -4335,6 +4384,20 @@ int flow_paint_owed(const Flow *f) {
    often none) handed the thread to g_flows[0] on every single iteration and paid a full COW delta swap for a
    ranking that had not changed at all. It is not a hysteresis margin, a minimum service or a switch budget:
    there is no number in it, and a strictly better flow takes the thread at the very next opcode. */
+/* WHICH SUB-QUANTUM RESIDUES THE FRONTIER ACTUALLY OCCUPIES — one byte per possible value of
+   flow_silence_phase, stamped during the census walk and read once at its end to produce `sil_phases`. It is
+   the census's own scratch and never a term: nothing ranks by it and no flow points at it.
+   AN ARRAY OVER THE KEY DOMAIN AND NOT A SET OVER THE MEMBERS, because the domain is FIXED at one cooperative
+   quantum while the frontier is not, so this stays 12 KB while `members` reaches tens of thousands — which is
+   also the shape the index this row exists to size would take. CLEARED PER CENSUS rather than generation-
+   stamped: a census is taken per sample and a `memset` of the domain is not the term anybody is paying here,
+   where a stamp would cost four bytes per slot to save it.
+   THE SIZE IS A COMPILE-TIME RELATION AND NOT A HOPE. The domain is ENGINE_QUANTUM_MS * 1000, so a quantum
+   measured in seconds rather than milliseconds would silently ask for a megabyte of static per instance; this
+   is the one thing no run can tell you broke, so it is a compile error instead. */
+typedef char flow_phase_domain_is_affordable[(FLOW_SERVICE_US > 0 && FLOW_SERVICE_US <= 65536) ? 1 : -1];
+static unsigned char g_phase_seen[(size_t)FLOW_SERVICE_US];
+
 /* WHAT ASKING THE ORDER COSTS — see solver/flow.h's FLOW_SCANS for why the entries are counted apart, why the
    quantity is a COUNT and not a clock, and why nothing may read these. Lifetime, never reset, and `long`
    because they are compared against `steps` and `forks`, which are. */
@@ -4958,6 +5021,12 @@ void flow_wfq_census(WfqCensus *out) {
        three pick rows a reader may difference across two censuses. */
     out->picks_lifetime = g_picks_total;
     out->svc_max = out->svc_min = out->svc_fam_max = out->svc_fam_min = 0;
+    /* …AND THE TWO ROWS THAT SAY WHAT THE NOTCH ABOVE COSTS TO ASK, cleared beside it because they are read
+       over the same walk and off the same quantity (flow.c's flow_silence_phase). The residue map is cleared
+       HERE and not at its declaration, because it is a reading of THIS frontier and a byte surviving from the
+       previous sample would count a phase no member is standing at. */
+    out->sil_phases = out->sil_carry = 0;
+    memset(g_phase_seen, 0, sizeof g_phase_seen);
     out->families = 0;
     out->branches = 0;
     out->br_live_max = out->br_live_min = out->br_live_sum = 0;
@@ -5257,6 +5326,22 @@ void flow_wfq_census(WfqCensus *out) {
             }
         }
         if (s > out->svc_max) out->svc_max = s;
+        /* …AND THE SUB-QUANTUM REMAINDER `s` THREW AWAY, WHICH IS WHAT DECIDES WHETHER ASKING THE ORDER HAS
+           TO WALK AT ALL. `s` is `own / S` and this is `own % S`: the member's PHASE against the family's,
+           and the only per-member quantity in flow_weight that moves between two frontier generations
+           (flow_silence_phase states the decomposition). Counted here because the walk is already holding the
+           member and has already paid for the read `s` came from.
+           DISTINCT VALUES AND NOT A SPREAD, because the two answer different questions and only one of them
+           is about an index. A spread says how far apart two members stand; what an index over this key needs
+           to know is HOW MANY GROUPS the frontier partitions into, and `sil_phases: 1` is the strongest
+           possible answer — every member crosses the carry boundary at the same instant, so the bit is a
+           COMMON OFFSET, nothing reorders between generation bumps at all, and a single cached maximum is
+           exact. Any larger reading is the number of ranges a sweep has to move through. */
+        {
+            int64_t ph = flow_silence_phase(f);
+            if (!g_phase_seen[(size_t)ph]) { g_phase_seen[(size_t)ph] = 1; out->sil_phases++; }
+            out->sil_carry += flow_silence_carry(f);
+        }
         /* …AND THE FAMILY THIS MEMBER BELONGS TO, in the SAME notch — which is now the notch the AGING term
            actually reads, so `svc_fam_max` against `svc_max` is no longer a diagnostic beside the order, it is
            the order's own denominator against one member's share of it. Read per member rather than per family

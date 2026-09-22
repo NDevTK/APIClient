@@ -8555,6 +8555,30 @@ static int64_t engine_now_ms(void);   /* the WALL clock, for the gap census belo
    generation, so the rescan re-runs before a departed member could be read. That is asserted where the pointer
    is taken rather than where it is read, because membership is an O(flows) scan and the read is per-opcode. */
 static unsigned g_seen_gen = 0; static Flow *g_seen_cur = NULL; static Flow *g_rival = NULL;
+/* …AND WHAT THAT RIVAL WAS WORTH IN EVERY TERM THE FRONTIER GENERATION IS SUPPOSED TO SPEAK FOR — recorded
+   where the pointer is taken and read at every consultation until the generation next moves. It is the mirror
+   of the `g_ranked_*` block below and asks the opposite question: that one holds the INCUMBENT, whose own
+   terms the scheduler expects to move while it runs, and this one holds a member that is NOT running and
+   therefore must not move at all except through the one quantity that legitimately does.
+   THE CLAIM IS THE PRECONDITION OF EVERY SUB-LINEAR ORDER ANYBODY CAN BUILD HERE, WHICH IS WHY IT IS ASSERTED
+   RATHER THAN ARGUED. solver/flow.c's flow_pick walks the whole frontier at every ask because flow_weight is a
+   sum whose summands move underneath a key; flow_silence_phase states the decomposition that says only ONE of
+   them can move between two generations — the aging's carry bit, whose threshold is the family's and is
+   therefore common. If a reward, a completed-unit count, a fitness distance or a member's OWN service notch
+   can move with the generation standing still, then an index keyed on anything but the walk is already wrong,
+   and this is where that is found out: an O(1) reading of a member the hook is holding anyway.
+   IT ALSO HARDENS THE CACHE ABOVE, WHICH IS WHY IT IS NOT A DIAGNOSTIC LOOKING FOR A HOME. The pointer's
+   safety argument is that every change worth rescanning for raises the generation; that argument is stated at
+   the declaration and nothing checked it for anything but MEMBERSHIP. A term that moved without a bump would
+   leave this hook comparing against a rival the pick would no longer have chosen, silently, which is exactly
+   the shape the host-owed mark had before it was made a ranking change.
+   WRITTEN IN EVERY BUILD AND READ IN NONE BUT DEV, in the `g_ranked_*` pattern below and for its reason: the
+   writes are four stores in a branch that has just performed an O(members) walk, and guarding them would put
+   the assertion's operands behind a second condition that could drift from the assertion itself.
+   RETIREMENT: this record goes when the ask is no longer a walk — the index is then the thing that has to hold
+   this invariant, and it will hold it at its own update site rather than at one cached rival. */
+static int64_t g_rival_own_notch = 0, g_rival_visits = 0;
+static double g_rival_val = 0.0, g_rival_dist = 0.0;
 /* WHAT THE FLOW HOLDING THE THREAD WAS RANKED ON WHEN IT TOOK IT — the quantities the value yield's
    verdict is a pure function of, recorded at the switch-in and read by the assertion in the hook's value
    clause. They are not policy and they are not a cache: nothing is decided from them, and the hook's answer is
@@ -8713,6 +8737,16 @@ static int preempt_hook(int kind) {
                "the value yield cached a rival that is not in the frontier — the pointer is read until the "
                "generation next moves, so a departure that did not raise the generation leaves this hook "
                "ranking against freed memory");
+        /* THE RIVAL'S OWN TERMS, FROZEN WITH THE POINTER, AND AFTER THE MEMBERSHIP ASSERT ABOVE RATHER THAN
+           BEFORE IT: these four readings DEREFERENCE the pointer, so they may not run ahead of the one line
+           that says the pointer is a member of the frontier at all — see the block where these are declared. The OWN
+           service notch and not the silence notch: the silence sums the member's own with its FAMILY's, and
+           the family half advances on every step of whoever holds the thread, so asserting the sum would fire
+           on the one movement this interval is supposed to permit. */
+        if (g_rival) {
+            g_rival_own_notch = flow_service_notch(g_rival); g_rival_visits = g_rival->visits;
+            g_rival_val = flow_reward(g_rival); g_rival_dist = flow_distance(g_rival);
+        }
     }
     /* (0) BLOCKED BEATS BOTH RANKINGS. A flow holding an unanswered synchronous host request cannot make
        progress no matter how it ranks, and the answer cannot arrive while it holds the thread — the host is
@@ -8722,6 +8756,38 @@ static int preempt_hook(int kind) {
        holds is WHICH flow the rival is; what this line computes is what the two are worth right now. The
        rival's weight was cached once, on the reasoning that a parked flow's weight cannot move — see the
        cache's own declaration for why that is false, and for the abort it produced. */
+    /* NOTHING BUT THE AGING MOVED UNDER THE CACHED RIVAL — asserted here rather than at the rescan because
+       here is where the interval has ELAPSED. Reaching this line means neither the generation nor `cur`
+       differs from what the block above recorded (both are that block's own condition), so the rival is the
+       member those four readings were taken of, and every one of them is a term of flow_weight that the
+       frontier generation claims to speak for. `flow_service_notch` is the member's OWN silence: it moves
+       only when flow_age_running charges it, and flow_age_running charges `g_running`, which this member is
+       not. What is deliberately absent is the FAMILY notch and the carry bit, which are the aging's shared
+       half and the one quantity that is allowed to move here (solver/flow.c's flow_silence_phase).
+       DEV-ONLY AND O(1), which is the whole reason it can stand in a per-opcode hook at all: the walk the
+       equivalent claim over the frontier would cost is precisely the walk this assertion exists to make
+       replaceable.
+       NOT COVERED: THE BRANCH BONUS, which is the fifth summand of flow_weight and the one this list omits.
+       `1.0 / sub_born` over the member's top-level arm moves for EVERY member of that arm whenever any of them
+       forks, and the raise sits in flow_fork_inherit — one statement AFTER the flow_new that bumps the
+       generation, so nothing observes the pair out of order today and the omission costs nothing that has been
+       shown. It is omitted because flow_branch_bonus is file-static to solver/flow.c and publishing an
+       accessor for it is a wider diff than this assertion, not because the term is exempt.
+       WHAT THE NEXT DIFF BUILDS: that accessor, and a fifth clause here reading it. HOW ITS ABSENCE WOULD
+       SHOW: a member whose branch mints an arm through some path that does not pass flow_new would re-rank
+       with the generation standing still, and every row in this hook and in the census would agree that
+       nothing had changed — the same silence the host-owed mark produced before a mark became a rank change,
+       and the one state this assertion is otherwise written to make loud. */
+    DCHECK(!g_rival ||
+           (flow_service_notch(g_rival) == g_rival_own_notch && g_rival->visits == g_rival_visits &&
+            flow_reward(g_rival) == g_rival_val && flow_distance(g_rival) == g_rival_dist),
+           "a term of the cached RIVAL's weight moved while the frontier generation stood still — its reward, "
+           "its completed-unit count, its fitness distance or its OWN service notch is not what it was when "
+           "this hook chose it, and none of those may change without a rank change being raised. Two things "
+           "are now false at once: this hook is ranking against a rival the scheduler's pick would no longer "
+           "have returned, and the ONE-BIT claim every sub-linear spelling of the order rests on — that "
+           "between two generations nothing per-member moves but the aging's carry — is not true of this "
+           "tree. Raise frontier_rank_changed() at whichever writer moved it");
     if (cur && g_rival && flow_weight(g_rival) > flow_weight(cur)) {   /* value yield */
         /* THE VALUE YIELD MAY ONLY FIRE ON A RANK CHANGE, AND THIS IS WHERE THAT IS EITHER TRUE OR A SENTENCE
            IN CLAUDE.md. §scheduler says the yield fires "the moment a parked flow outranks (or on an emit/fork/

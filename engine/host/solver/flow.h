@@ -1858,6 +1858,34 @@ typedef struct {
        the family charge was added for. */
     long families;
 
+    /* HOW MANY SUB-QUANTUM RESIDUES THE FRONTIER OCCUPIES — the count of DISTINCT values of
+       flow_silence_phase over the members, and the one number that says whether asking the order has to walk
+       it. The aging notch is `(own + fam) / S`, which decomposes EXACTLY into the member's own notch, the
+       family's, and a CARRY BIT whose threshold is the family's residue and is therefore common (flow.c). So
+       between two frontier generations nothing in any member's weight moves except that bit, and the members
+       that flip it together are exactly the ones sharing a phase.
+       `1` IS THE STRONGEST READING AND IT IS NOT A DEGENERATE ONE. Every member then crosses at the same
+       instant, the bit is a COMMON OFFSET, no two members reorder between generation bumps at all, and a
+       single cached maximum is exact — which is a whole class of index cheaper than the sweep a larger
+       reading needs. A fork COPIES its parent's `cpu` and window mark verbatim (flow_fork_inherit) and an
+       emission sends every member of a family to a phase of zero in one statement (flow_credit_emit), so the
+       state is reachable by construction rather than by luck; what refills it is a member being CHARGED, and
+       only the running one ever is.
+       READ IT AGAINST `members`, NEVER ALONE: `sil_phases` at 1 with `members` at one is the frontier being
+       empty of the question, and at tens of thousands it is the finding. Read it against `picksLifetime` too
+       — a member that has never held the thread carries the phase it was forked with, so a reading far below
+       the dispatch count says the residues are inherited rather than earned. */
+    long sil_phases;
+    /* …AND HOW MANY MEMBERS ARE STANDING ON THE FAR SIDE OF THAT BOUNDARY RIGHT NOW. It is a GAUGE and may
+       fall between two samples — the threshold sweeps downward as the family burns and RESETS every member at
+       once when the family's residue wraps — so it may not be differenced, and it is published beside
+       `sil_phases` rather than instead of it because the two answer different halves of one question: how many
+       groups there are, and where the boundary between them currently sits.
+       0 OR `members` IS THE BIT CONTRIBUTING NOTHING AT THAT INSTANT, which is an observation about one sample
+       and never the structural claim `sil_phases: 1` makes — the same two-states-one-number distinction
+       `families` above draws against `svc_fam_max == svc_fam_min`, one scope down. */
+    long sil_carry;
+
     /* THE THIRD ACCOUNTING SCOPE — A FORK SUBTREE — AND THE ELEVEN ROWS THAT MAKE "THE TWO SIDES OF THIS
      * BRANCH RECEIVED X AND Y" A NUMBER INSTEAD OF AN ARGUMENT.
      *
@@ -2828,6 +2856,22 @@ int64_t flow_family_notch(const Flow *f);
    two of these notches, and between two of the flow's completed units, its weight cannot move except through
    an emission. That pair is exactly the invariant engine.c's seam assertion holds the value yield to. */
 int64_t flow_silence_notch(const Flow *f);
+
+/* …AND THE TWO PIECES OF IT THE PAIR ABOVE DOES NOT ACCOUNT FOR, WHICH IS A CORRECTION TO THAT SENTENCE AND
+   NOT AN ADDITION TO IT. `flow_silence_notch` is `(own + fam) / S` and the two notches above are `own / S` and
+   `fam / S`; integer division of a SUM is the sum of the divisions PLUS A CARRY, so the three rows a reader
+   has do not reconcile and the missing bit is a WHOLE NOTCH — one FLOW_AGE_QUANTUM, 0.012 points, against a
+   whole-order spread measured at 0.030 and 0.036 on two documents.
+   THEY EXIST TO PRICE AN ASK, NOT TO ORDER ANYTHING. No term of flow_weight reads either, no fork carries
+   either, and flow_weight's own arithmetic is untouched by their existence: the split says that between two
+   frontier generations the ONLY per-member quantity in the weight that moves is this carry, whose threshold is
+   COMMON to the family and sweeps monotonically — so members cross it in descending order of their phase and a
+   maximum over the frontier is a maximum over two CONTIGUOUS RANGES of it. flow.c states the derivation, and
+   flow_pick's own "why this is still a walk at all" is where the claim it corrects lives.
+   RETIREMENT: this pair goes when the ask no longer walks the frontier, at which point an index is their
+   reader and `sil_phases` below stops being a row. */
+int64_t flow_silence_phase(const Flow *f);
+int flow_silence_carry(const Flow *f);
 
 /* THE LOWEST-PRIORITY MEMBER OTHER THAN `exclude` — the TAIL the cold tier gives up first at the RAM floor, and
  * the SAME comparator as flow_best read in the other direction. Not a second ranking: the flow that is paged

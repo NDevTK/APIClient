@@ -818,6 +818,24 @@ char *result_wfq_json(void) {
                         statement and each may FALL between two samples. `topForgiven` below counts those
                         events and is the only row on this line that is a lifetime count of them. */
                      "\"svcMax\":%lld,\"svcMin\":%lld,\"svcFamMax\":%lld,\"svcFamMin\":%lld,\"families\":%ld,"
+                     /* …AND WHAT ASKING THE ORDER COSTS, WHICH IS A PROPERTY OF THOSE SAME NOTCHES AND NOT
+                        A SIXTH ONE. The seven quotients above divide `<thread time> / FLOW_SERVICE_US` and
+                        THROW THE REMAINDER AWAY; the aging term does not, because it divides the SUM of two
+                        of them, and a sum's quotient is the quotients plus a CARRY. `silPhases` is how many
+                        DISTINCT remainders the frontier is standing on and `silCarry` is how many members are
+                        currently on the far side of the carry boundary.
+                        WHY A READER WANTS THEM: between two frontier generations the ONLY per-member quantity
+                        in the order that moves is that carry, and members sharing a remainder flip it
+                        together. `silPhases: 1` therefore says NOTHING IN THE FRONTIER REORDERS between
+                        generation bumps — the bit is a common offset and one cached maximum is exact — while
+                        a large reading is the number of groups a maximum has to sweep through. It is a
+                        statement about what a sub-linear ask would have to index, never about what the order
+                        decided; no term of flow_weight reads either row.
+                        THE KINDS DIFFER AND THE NAMES DO NOT SAY SO, as with the notch rows above: `silPhases`
+                        is a count of distinct keys and `silCarry` is a GAUGE that may FALL between samples,
+                        because the boundary sweeps downward as the family burns and every member resets at
+                        once when the family's own remainder wraps. Neither may be differenced. */
+                     "\"silPhases\":%ld,\"silCarry\":%ld,"
                      /* AND THE SCOPE BETWEEN THOSE TWO — a FORK SUBTREE, which neither of the pairs on the
                         line above can reach. `svcMax`/`svcMin` are one MEMBER's silence; `svcFamMax`/
                         `svcFamMin` are the FAMILY ROOT's and, on the `families: 1` frontier a real page
@@ -1178,6 +1196,7 @@ char *result_wfq_json(void) {
                      (long long)w.picks_live, (long long)w.picks_max, (long long)w.picks_lifetime,
                      (long long)w.svc_max, (long long)w.svc_min,
                      (long long)w.svc_fam_max, (long long)w.svc_fam_min, w.families,
+                     w.sil_phases, w.sil_carry,
                      w.branches, w.br_live_max, w.br_live_min, w.br_live_sum,
                      w.br_born_max, w.br_born_min,
                      w.br_crowd_live, w.br_crowd_born, (long long)w.br_crowd_us,
