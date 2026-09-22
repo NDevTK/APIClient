@@ -179,6 +179,7 @@
  * as the producer of an engine field name is the false COMPLETE idl_installed.mjs was rewritten to remove.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join, extname, relative, basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
@@ -3741,6 +3742,35 @@ const files = corpus();
    is a file whose reported line number names something else by the time anyone opens it. */
 const REV_AT_START = gateRevision(cone);
 for (const l of revisionLines(REV_AT_START)) console.log(l);
+
+/* AND THE WALK IS WIDER THAN THE CONE BY EVERY UNTRACKED FILE, WHICH THE COMMENT AT `cone` ASSERTS IT IS NOT.
+   That comment says the cone is wider than the walk "by exactly this file". It states a RELATIONSHIP BETWEEN
+   TWO POPULATIONS rather than a property of either, so it is a claim to be tested against behaviour and never
+   read for its grammar, and it is measured FALSE in the direction it does not mention: the cone is a set of
+   GIT PATHSPECS and the walk is a DISK WALK, so a peer's scratch `.mjs` left at `engine/` depth 1 joins the
+   corpus and `gateRevision` cannot name it in EITHER direction — a file in no revision is neither clean nor
+   dirty, so the stamp printed above is TRUE AND SILENT ABOUT IT. That is precisely the false clean bill this
+   file's own revision line exists to prevent, arriving through the POPULATION instead of through the STAMP,
+   and it is live: measured with a lane's 1342-line probe in the corpus while the revision line read clean.
+   REPORTED AND NEVER EXCLUDED, for the reason the `_layout` band is reported: dropping these would stop
+   auditing a file a lane is about to commit, which is an under-claim and nobody discovers one by acting on
+   it. The reader is told what the stamp does not cover, and the audit goes on covering it.
+   ASKED OF THE CONE AND INTERSECTED IN MEMORY rather than passing seven hundred paths to git, because an
+   argv that grows with the corpus is a command that starts failing at a size nobody chose. */
+const coneUntracked = (() => {
+  const walked = new Set(files.map((f) => relative(ROOT, f.path)));
+  const r = spawnSync("git", ["ls-files", "--others", "--exclude-standard", "--", ...cone],
+                      { cwd: ROOT, encoding: "utf8" });
+  if (r.status !== 0 || typeof r.stdout !== "string") return null;
+  return r.stdout.split("\n").filter((q) => q && walked.has(q));
+})();
+if (coneUntracked === null)
+  console.log("[field-gate] git could not be asked which walked files it tracks, so the revision above is " +
+              "silent about an UNKNOWN number of them — that is not a clean bill, it is an unanswered question");
+else if (coneUntracked.length)
+  console.log(`[field-gate] \u2500\u2500 NOT IN ANY REVISION \u2014 ${coneUntracked.length} walked file(s) the cone ` +
+              `cannot name, so the revision above is TRUE AND SILENT about them. A number this run prints is ` +
+              `a number about these bytes too: ${coneUntracked.join(", ")} \u2500\u2500`);
 
 const jsScans = [];
 /* THE PRODUCER'S OWN BYTES, KEPT FROM THE ONE READ THAT SCANNED THEM. §THE DERIVED READER resolves a region a
