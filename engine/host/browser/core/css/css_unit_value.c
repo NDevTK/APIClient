@@ -15,6 +15,7 @@
 #include "quickjs.h"
 
 #include "core/agent_state.h"
+#include "core/css/css_keyword_value.h"
 #include "core/css/css_length.h"
 #include "core/css/css_math_value.h"
 #include "core/css/css_numeric_value.h"
@@ -238,12 +239,17 @@ JSValue css_unit_value_serialize(JSContext *ctx, JSValueConst v)
  * "Otherwise, serialize a CSSMathValue from this, and return the result." Neither minimum nor maximum is
  * passed by a stringifier, so §6.4's fourth step cannot run from here.
  *
- * NAMED RESIDUAL — §6 DISPATCHES OVER EIGHT SUBCLASSES AND THIS ENGINE HAS BUILT SEVEN.
- * WHAT IS NOT COVERED: §6.1 CSSUnparsedValue Serialization, §6.2 CSSKeywordValue Serialization and §6.6 CSSTransformValue
- * and CSSTransformComponent Serialization
- * have no arm here, because no component mints an object of any of those interfaces. §6.5's arm IS built —
- * it arrived with core/css/css_math_value.c, which is what the previous form of this residual named as the
- * next diff — and §6.3's is the two-way dispatch below rather than an arm of its own.
+ * NAMED RESIDUAL — §6 DISPATCHES OVER THE §4 SUBCLASSES AND TWO OF THEM HAVE NO ARM HERE.
+ * WHAT IS NOT COVERED: §6.1 "CSSUnparsedValue Serialization" and §6.6 "CSSTransformValue and
+ * CSSTransformComponent Serialization" have no arm here, because no component mints an object of either of
+ * those interfaces. §6.5's arm IS built — it arrived with core/css/css_math_value.c — and §6.2's arrived with
+ * core/css/css_keyword_value.c, which is what the previous form of this residual named as the next diff;
+ * §6.3's is the two-way dispatch below rather than an arm of its own.
+ * THE COUNT THIS PARAGRAPH USED TO OPEN WITH IS GONE ON PURPOSE. It read "§6 DISPATCHES OVER EIGHT SUBCLASSES
+ * AND THIS ENGINE HAS BUILT SEVEN", and a sentence carrying BOTH a number and the list that number is of has
+ * two things to keep true where the list alone has one — the list is what a reader can act on, and the digit
+ * is what they would quote onward. Every diff that adds a §6 arm shortens the list by a name and nothing
+ * else.
  * WHAT THE NEXT DIFF BUILDS: the subclass it adds arrives with its own §6 arm and this body grows the branch,
  * so the brand test and the question "is `this` a CSSStyleValue at all" stop coinciding at the same moment one
  * of them stops being true.
@@ -255,6 +261,7 @@ static JSValue js_css_style_value_to_string(JSContext *ctx, JSValueConst this_va
 {
     (void)argc; (void)argv; (void)magic;
     if (css_math_value_is(this_val)) return css_math_value_serialize(ctx, this_val);
+    if (css_keyword_value_is(this_val)) return css_keyword_value_serialize(ctx, this_val);
     if (!css_unit_value_is(this_val))
         return JS_ThrowTypeError(ctx, "CSSStyleValue.prototype.toString was reached on something that is not "
                                       "a CSSStyleValue");
@@ -354,6 +361,14 @@ static void css_unit_value_install_realm(JSContext *ctx)
     ctor = idl_interface_object(ctx, "CSSStyleValue", sv_proto);
     CHECK(!JS_IsException(ctor), "the CSSStyleValue interface object could not be allocated");
     idl_define_global_property_reference(ctx, global, "CSSStyleValue", ctor);
+
+    /* §4.2's CSSKeywordValue, over the object one line up. It is built HERE rather than from a realm intrinsic
+       of its own for the §3.7.3 Interface prototype object reason this whole install exists for — the chain is
+       one object graph, and two intrinsics ordered independently would be two files that have to agree about
+       an order. The component still owns its own class, its own members and its own interface object; what
+       crosses is the one prototype §3.7.3 makes its proto. It is installed before §4.3.1's because that is the
+       order the standard numbers them in and the two are independent subclasses of the same base. */
+    css_keyword_value_install_realm(ctx, sv_proto);
 
     /* §4.3.1's CSSNumericValue. §3.7.3 Interface prototype object: "if interface is declared to inherit from
        another interface, then set proto to the interface prototype object IN REALM of that inherited

@@ -9,6 +9,7 @@
 #include "core/canvas/path_2d.h"
 #include "core/console/console.h"
 #include "core/crypto/crypto.h"
+#include "core/css/css_keyword_value.h"
 #include "core/css/css_math_value.h"
 #include "core/css/css_namespace.h"
 #include "core/css/css_numeric_value.h"
@@ -164,6 +165,7 @@ typedef struct {
 static void d_console(JSContext *c, const PlatformAgent *a) { (void)a; console_init(c); }
 static void d_css_namespace(JSContext *c, const PlatformAgent *a) { (void)a; css_namespace_init(c); }
 static void d_css_numeric_value(JSContext *c, const PlatformAgent *a) { (void)a; css_numeric_value_init(c); }
+static void d_css_keyword_value(JSContext *c, const PlatformAgent *a) { (void)a; css_keyword_value_init(c); }
 static void d_css_math_value(JSContext *c, const PlatformAgent *a) { (void)a; css_math_value_init(c); }
 static void d_css_unit_value(JSContext *c, const PlatformAgent *a) { (void)a; css_unit_value_init(c); }
 static void d_url(JSContext *c, const PlatformAgent *a) { (void)a; url_init(c); }
@@ -276,6 +278,7 @@ static void r_input_device_capabilities(JSRuntime *rt) { input_device_capabiliti
 static void r_console(JSRuntime *rt) { (void)rt; console_free(); }
 static void r_css_namespace(JSRuntime *rt) { (void)rt; css_namespace_free(); }
 static void r_css_numeric_value(JSRuntime *rt) { (void)rt; css_numeric_value_free(); }
+static void r_css_keyword_value(JSRuntime *rt) { (void)rt; css_keyword_value_free(); }
 static void r_css_math_value(JSRuntime *rt) { css_math_value_free(rt); }
 static void r_css_unit_value(JSRuntime *rt) { (void)rt; css_unit_value_free(); }
 static void r_hr_time(JSRuntime *rt) { (void)rt; hr_time_free(); }
@@ -1238,6 +1241,12 @@ static const PlatformComponent PLATFORM[] = {
        else. It sits AFTER `css_numeric_value` because its constructors brand their `CSSNumberish` arm against
        that component's predicate, and BEFORE `css_unit_value` because that row's install reads these ids. */
     { "css_math_value",      d_css_math_value,      NULL,        r_css_math_value },
+    /* §4.2's CSSKeywordValue, BEFORE the row that installs it, for the reason the two rows above are before
+       it: this component owns no realm state either — its interface prototype object is built from
+       `css_unit_value`'s realm intrinsic, where §3.7.3 Interface prototype object's chain is created — so what
+       it declares is one class id and two argument-pool entries, and an id read before it was declared aborts
+       rather than installing a constructor under a pool entry belonging to someone else. */
+    { "css_keyword_value",   d_css_keyword_value,   NULL,        r_css_keyword_value },
     { "css_unit_value",      d_css_unit_value,      NULL,        r_css_unit_value },
     { "css_namespace",       d_css_namespace,       NULL,        r_css_namespace },
     /* INTERSECTION OBSERVER, AFTER `element` and after the two GEOMETRY rows. After element because its
@@ -1427,6 +1436,10 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "CSSStyleValue",         "css_unit_value" },
     { "CSSNumericValue",       "css_unit_value" },
     { "CSSUnitValue",          "css_unit_value" },
+    /* §4.2's, whose interface object this realm's `css_unit_value` install puts on the global by calling
+       core/css/css_keyword_value.c — so the WITNESS is attributed to the row that owns the install, which is
+       the row whose failure would take it with it, exactly as §4.3.4's eight below are. */
+    { "CSSKeywordValue",       "css_unit_value" },
     /* §4.3.4's eight, whose interface objects this realm's `css_unit_value` install puts on the global by
        calling core/css/css_math_value.c — so the WITNESS is attributed to the row that owns the install, which
        is the row whose failure would take them all with it. `x instanceof CSSMathSum` is how a page tells one
