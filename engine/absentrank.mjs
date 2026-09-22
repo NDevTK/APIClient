@@ -157,14 +157,19 @@
  * ABSENT_GLOBAL, and a minifier local cannot collide with a platform name. It is stated because the raw
  * number is what a reader would otherwise quote.
  *
- * NAMED RESIDUAL — a FUNCTION PARAMETER at the second position is counted as an argument. WHAT IS NOT
- * COVERED: `f(a,B)` and `function f(a,B)` and `{m(a,B){}}` are one shape to this pattern, so a bundle
- * declaring a parameter named after a platform interface is read as using it — and because nobody
- * feature-detects their own parameter, it would land in THROWS. WHAT THE NEXT DIFF BUILDS: the code/not-code
- * mask the residual below already names, which subsumes this one, since the same mask is what separates a
- * declaration's parameter list from a call's argument list once a tokenizer is producing both. HOW ITS
- * ABSENCE WOULD SHOW: a list-A row in the THROWS band whose whole count is on this channel and whose sites
- * all read as the head of a function rather than as a call.
+ * THE FUNCTION-PARAMETER RESIDUAL THAT STOOD HERE IS DISCHARGED BY CONSTRUCTION AND WAS NOT EXERCISED, AND
+ * BOTH HALVES OF THAT ARE STATED. It read: `f(a,B)`, `function f(a,B)` and `{m(a,B){}}` are one shape to this
+ * pattern, so a bundle declaring a parameter named after a platform interface is read as USING it, and
+ * because nobody feature-detects their own parameter it lands in THROWS. The code/not-code reading below is
+ * the thing it named as its next diff, and a parameter IS a binding the parser resolves, so the reading
+ * answers it without a second pattern — a marked occurrence is a free reference and a parameter is never
+ * one. WHAT IS NOT ESTABLISHED IS THAT IT EVER FIRED: over the corpus this was landed against, the `f(a,X)`
+ * channel retired ZERO occurrences of any ranked name, so the discharge rests on the reader's own armed
+ * negative control (`function g(){var X=1;return X}` marks nothing) and not on a site in this corpus.
+ * Retiring it on the strength of an unexercised argument is how a clause goes wrong, so it is recorded as
+ * discharged-and-unexercised rather than deleted. HOW ITS ABSENCE WOULD SHOW, if the discharge is wrong: a
+ * list-A row in the THROWS band whose whole count is on this channel, with `notcode` reading 0, and whose
+ * sites all read as the head of a function rather than as a call.
  *
  * AN IDENTIFIER MEANS WHAT ITS BINDING SAYS, SO A FILE THAT BINDS A PLATFORM NAME IS NOT EVIDENCE ABOUT THE
  * PLATFORM. Every channel matches an identifier, and a bundle is free to declare one: jQuery ships
@@ -219,6 +224,7 @@ import { dirname, join, extname, resolve, relative } from "node:path";
 import { loadEnvironment, installedMembers } from "./idl_installed.mjs";
 import { loadIdl } from "./idl_members.mjs";
 import { corpusPrograms } from "./corpus_programs.mjs";
+import { referenceReader, quotedKeyJudgeable, MARK as REF_MARK } from "./js_code_refs.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argOf = (flag, dflt) => {
@@ -539,18 +545,24 @@ for (const [k, re] of Object.entries(CONTROL)) controls.set(k, tally(re));
    `shadowed` class, so the reason is visible rather than the row silently vanishing — which is the shape the
    `qjs` column already has and is there for the same reason.
 
-   NAMED RESIDUAL — a match inside a STRING LITERAL or COMMENT is still counted. WHAT IS NOT COVERED: the
-   channels read raw text, so a bundle that embeds source AS DATA — a codegen template, a plugin shipped as a
-   string, a log message naming an API — contributes matches that no page ever evaluates. WHAT THE NEXT DIFF
-   BUILDS: a real JS tokenizer producing a code/not-code mask per file, applied to `.js`/`.mjs` only, with
-   `.html` left whole because its markup is not JS. A SCANNER WAS WRITTEN FOR THIS AND MEASURED AND IS
-   DELIBERATELY NOT LANDED, which is the part worth keeping: a hand-rolled mask that chose DIVISION whenever
-   it could not tell a regex from one — the conservative direction — still mis-masked a span of one real
-   bundle and excluded a genuine `new FontFace(...)` and a genuine `e instanceof ImageData`, i.e. it removed
-   TRUE rows from the very band this file exists to rank, while retiring ~85 occurrences across 13 names that
-   nobody had audited. An exclusion that is wrong in the removing direction is an under-claim, and an
-   under-claim is not found by acting on it. HOW ITS ABSENCE WOULD SHOW: a row whose whole count comes from
-   one file, sitting in the THROWS band, whose sites all read as text a page never runs. */
+   THE STRING LITERAL RESIDUAL IS DISCHARGED FOR THESE CHANNELS AND ITS FLOORS ARE NOT, AND IT KEEPS ITS NAME
+   BECAUSE FOUR PARAGRAPHS BELOW POINT AT IT. It read: the channels read raw text, so a bundle that embeds
+   source AS DATA — a codegen template, a plugin shipped as a string, a log message naming an API —
+   contributes matches that no page ever evaluates, and what the next diff builds is a real JS tokenizer
+   producing a code/not-code mask per file. That mask is engine/js_code_refs.mjs and the reading below is it.
+   WHAT STAYS FROM THE OLD CLAUSE IS ITS WARNING, WHICH IS WHY THE READING IS SHAPED THE WAY IT IS: a
+   HAND-ROLLED scanner was written for this and measured and DELIBERATELY NOT LANDED, because one that chose
+   DIVISION whenever it could not tell a regex from one — the conservative direction — still mis-masked a span
+   of one real bundle and excluded a genuine `new FontFace(...)` and a genuine `e instanceof ImageData`. An
+   exclusion wrong in the REMOVING direction is an under-claim and an under-claim is not found by acting on
+   it, so the reading below asks a real parser rather than a lexer, retires only where that parser can speak,
+   and FLOORS the four positions where it cannot.
+   WHAT IS STILL NOT COVERED, which is a smaller residual and not the same one: the `global["X"]` channel is
+   judged not at all, a BACKTICK-delimited quoted key is outside esbuild's `mangleQuoted` and is kept, a file
+   the parser REFUSES is kept whole, and the receiver-anchored channels of section B(anchored) are not wired
+   to the reader at all — each is named at its own site below with what it would take. HOW THE REMAINING
+   ABSENCE WOULD SHOW: a row in the THROWS band whose whole count is on `global["X"]`, or whose occurrences
+   all sit in a file this run reported as refused. */
 const esc = (n) => n.replace(/[$]/g, "\\$");
 const BINDS = (n) => new RegExp(`\\bfunction\\s*\\*?\\s*${esc(n)}\\s*\\(|\\bclass\\s+${esc(n)}\\b|` +
                                 `(?:^|[^\\w$.])${esc(n)}\\s*=(?![=>])`);
@@ -563,6 +575,20 @@ for (const s of ["function Zz(a){}", "function* Zz(){}", "class Zz extends Q{}",
 for (const s of ["q.Zz = 1", "Zz === 1", "new Zz()", "x instanceof Zz", "Zz.member=1", "{Zz: 1}", "Zz=>1"])
   if (BINDS("Zz").test(s))
     die(`the binder matched ${JSON.stringify(s)} — it is counting a use as a binding.`);
+/* NAMED RESIDUAL — THIS BINDER IS A SPELLING WHERE THE READING BELOW IS A SCOPE RESOLUTION, SO THE `shadow`
+   COLUMN UNDER-REPORTS AND THE `notcode` COLUMN QUIETLY CARRIES THE DIFFERENCE. WHAT IS NOT COVERED: the
+   three forms above are `function X(`, `class X` and `X =`, and a declaration that binds without any of them
+   is invisible here — measured on the corpus this was landed against, `var ML;(function(e){…})(ML||={})`,
+   which is the ordinary TypeScript enum emit: `var ML;` carries no `=` and `ML||=` puts a `|` between the
+   name and the `=`, so the binder answers FALSE and every `ML.Resize` in that file was ranked as a platform
+   read. It was the TOP ROW of list A's THROWS band. `??=`, `&&=`, a destructured binding, a parameter and an
+   imported binding are the same shape. WHAT THE NEXT DIFF BUILDS: NOT a wider regex — engine/js_code_refs.mjs
+   already answers this question from the parser's own binding resolution, and a second correct answer to one
+   question is the shape that drifts; what it builds is `shadow` taken FROM that reader, so the two columns
+   stop being two derivations of one fact. That is a change to what `shadow` MEANS and needs its own
+   measurement, which is why it is not folded into the diff that landed the reader. HOW ITS ABSENCE WOULD
+   SHOW: a row whose `notcode` column stands far above its `shadow` column, whose sites open as a file-local
+   object read through its own name rather than as text. */
 
 /* NAMED RESIDUAL — A FILE THAT BINDS THE NAME ONTO ITS OWN NAMESPACE OBJECT IS NOT A BINDER HERE, SO ITS
    OCCURRENCES ARE COUNTED AS PLATFORM USES. WHAT IS NOT COVERED: `q.Zz = 1` sits in the negative list one
@@ -610,6 +636,111 @@ for (const [n, chans] of perFile)
           `${(hits.get(n) || new Map()).get(k) || 0}. The shadow count is not a subset of the total, so ` +
           `subtracting it is a difference between two populations.`);
 
+/* ---- what the corpus EVALUATES, asked of a real parse rather than of the raw bytes ---------------------- */
+/* THE STRING LITERAL RESIDUAL ABOVE NAMES THIS AND engine/js_code_refs.mjs IS IT. Every channel here matches
+   RAW TEXT, and raw text carries more than code — a codegen template, a plugin shipped as a string, a debug
+   line naming an API — so an occurrence a page never evaluates is counted, and it lands in the THROWS band
+   this file sorts FIRST because nobody feature-detects their own string. The reader asks esbuild to RENAME
+   each ranked name wherever the program EVALUATES it, and an occurrence the re-print leaves unmarked is one
+   the parse says is not a reference.
+
+   IT RETIRES ONLY WHERE THE READER CAN SPEAK, AND THE REST IS A FLOOR RATHER THAN A SILENT REMOVAL. A
+   hand-rolled mask for exactly this was written, measured and DELIBERATELY NOT LANDED because it removed a
+   genuine `new FontFace(...)` and a genuine `e instanceof ImageData`; an exclusion wrong in the REMOVING
+   direction is an under-claim, and an under-claim is not found by acting on it, because acting on it means
+   not looking there. So every position below is MEASURED against the reader rather than assumed, and the
+   four the reader cannot judge are KEPT and counted:
+     - `global["X"]` IS BLIND AND THE REASON IS A NORMALISATION, NOT A COVERAGE GAP. esbuild re-prints
+       `window["X"]` as `window.X`, so a bracket key that IS code cannot be seen by a pattern requiring the
+       bracket: measured, the channel's own form re-prints marked=0 bare=0 on its own channel and the mark
+       lands on `window.X` instead. Subtracting there would retire EVERY bracket key in the corpus. The
+       channel is therefore never subtracted from, and its occurrences migrate INTO `window.X`'s code count,
+       which can only make that channel's subtraction SMALLER — the keeping direction.
+     - A TEMPLATE-LITERAL KEY is outside esbuild's `mangleQuoted`, which is js_code_refs.mjs's own measured
+       and armed claim, and it is not an edge case: bundles here are emitted with every string spelled with a
+       backtick. `quotedKeyJudgeable()` is asked per MATCH, so a `"`/`'` key is judged and a backtick key is
+       left standing and counted into the floor.
+     - A FILE THE PARSER REFUSES has nothing claimed about it and every occurrence in it is kept. A document
+       refuses at its opening `<html>`, which is where the residual's "`.html` left whole" falls out of the
+       parser rather than out of a filename.
+     - A NAME THE READER EXCLUDES — `window`, `self`, `globalThis`, which are themselves platform names — is
+       reported BY NAME and never subtracted from, because defining them rewrites every receiver this file
+       anchors on literally.
+
+   AND IT IS DISJOINT FROM `shadow` BY CONSTRUCTION RATHER THAN BY CLAMPING. A file that BINDS the name is
+   skipped entirely here: its occurrences are that file's own name, `shadow` already owns them, and
+   subtracting both from one total would drive a free count NEGATIVE — a name used fewer than zero times. The
+   assertion below cannot fire on today's code and is armed against the edit that would make it fire, which
+   is the same standing the USE_CH/GUARD_CH assertion has.
+
+   A COMMENT-BORNE OCCURRENCE IS WHY THE MARKED SIDE IS COUNTED AND NEVER `raw - bare`. esbuild DROPS
+   comments, so such an occurrence is absent from the re-print entirely — neither marked nor bare — and the
+   two subtractions are not the same number: measured, `/* new FontFace(1) *\/` re-prints as `var q = 1;`.
+   Counting the MARKED occurrences retires it, which is right; counting the bare ones would keep it. */
+const REF_QUOTED = new Set(['"X" in global']);         /* judged per match by quotedKeyJudgeable() */
+const REF_BLIND  = new Set(['global["X"]']);           /* re-printed into `window.X`; never subtracted from */
+const REF_NAMES  = [...new Set([...ABSENT_GLOBAL, ...absentBy.keys()])].filter((n) => hits.has(n)).sort();
+const notcode = new Map();                             /* name -> channel -> occurrences the parse calls text */
+const ncOf = (n, k) => ((notcode.get(n) || new Map()).get(k) || 0);
+const ncAll = (n) => [...(notcode.get(n) || new Map()).values()].reduce((a, b) => a + b, 0);
+let refFiles = 0, refRefused = 0, refTick = 0, refMigrated = 0, refBytes = 0;
+const refWhy = new Map(), refExcluded = [];
+if (!REF_NAMES.length) {
+  /* NOT A QUIET SKIP. A corpus that names none of the ranked names has nothing to retire, and saying so is
+     the honest statement; a zero printed with no line explaining it would read as a mask that found nothing. */
+  say(`  code/not-code reading NOT RUN — this corpus names none of the ${ABSENT_GLOBAL.size} absent global ` +
+      `name(s) or ${absentBy.size} absent-member interface(s), so there is no occurrence to judge.`);
+} else {
+  const reader = await referenceReader(REF_NAMES);
+  refExcluded.push(...reader.excluded);
+  const EXCL = new Set(reader.excluded);
+  const NAMED = new Set(REF_NAMES);
+  for (const t of parts) {
+    const got = await reader.read(t);
+    if (!got.parsed) { refRefused++; refWhy.set(got.why, (refWhy.get(got.why) || 0) + 1); continue; }
+    refFiles++; refBytes += t.length;
+    const bound = new Map();
+    for (const [k, re] of Object.entries(CHANNELS)) {
+      if (REF_BLIND.has(k)) continue;
+      const rawJ = new Map(), code = new Map();
+      for (const m of t.matchAll(new RegExp(re.source, "g"))) {
+        const n = m[1];
+        if (!NAMED.has(n) || EXCL.has(n)) continue;
+        if (REF_QUOTED.has(k) && !quotedKeyJudgeable(m[0])) { refTick++; continue; }
+        if (!bound.has(n)) bound.set(n, BINDS(n).test(t));
+        if (bound.get(n)) continue;                    /* `shadow` owns it; the two must stay disjoint */
+        rawJ.set(n, (rawJ.get(n) || 0) + 1);
+      }
+      if (!rawJ.size) continue;
+      for (const m of got.text.matchAll(new RegExp(re.source, "g"))) {
+        if (!m[1].endsWith(REF_MARK)) continue;
+        const n = m[1].slice(0, -REF_MARK.length);
+        if (rawJ.has(n)) code.set(n, (code.get(n) || 0) + 1);
+      }
+      for (const [n, rj] of rawJ) {
+        const c = code.get(n) || 0;
+        if (c > rj) refMigrated += c - rj;              /* a shape the re-print moved INTO this channel */
+        const nc = Math.max(0, rj - c);
+        if (!nc) continue;
+        if (!notcode.has(n)) notcode.set(n, new Map());
+        notcode.get(n).set(k, (notcode.get(n).get(k) || 0) + nc);
+      }
+    }
+  }
+  /* THE THREE PARTS OF A RAW COUNT DO NOT OVERLAP, ASSERTED RATHER THAN ASSUMED. `shadow` is taken over
+     binding files and `notcode` over non-binding ones, so they are disjoint by construction and this cannot
+     fire today — it is armed against the edit that drops the `bound.get(n)` skip above, whose symptom would
+     be a free count below zero rather than a crash. */
+  for (const [n, chans] of notcode)
+    for (const [k, c] of chans) {
+      const raw = (hits.get(n) || new Map()).get(k) || 0, sh = (shadow.get(n) || new Map()).get(k) || 0;
+      if (c + sh > raw)
+        die(`${n} on channel ${k}: ${c} not-code + ${sh} shadowed exceeds ${raw} raw occurrence(s). The two ` +
+            `exclusions overlap, so subtracting both is a difference between two populations and the free ` +
+            `count would read below zero.`);
+    }
+}
+
 /* ---- the receiver-anchored member channel -------------------------------------------------------------- */
 /* AN ABSENT MEMBER DOES NOT THROW WHERE AN ABSENT GLOBAL DOES, SO THE USE/GUARD BANDING ABOVE MAY NOT BE
    REUSED HERE AND ITS ABSENCE NEEDS A REASON RATHER THAN A SILENCE. List A sorts by cost because an absent
@@ -618,8 +749,12 @@ for (const [n, chans] of perFile)
    chain and whose step 2.b is "If parent is null, return undefined" — so the read ALWAYS succeeds and
    ALWAYS answers `undefined`, whatever the page then does with it. Where the cost lands is therefore not a
    property of the read at all: it is a property of whatever CONSUMES the undefined, one or more statements
-   later, which is the reachability question the two residuals above already name as needing a span of CODE
-   where this file has only ever had a span of TEXT. `document.fonts` answering undefined costs nothing; the
+   later, which is the reachability question the two residuals above already name as needing a span of CODE.
+   THAT CLAUSE USED TO END `where this file has only ever had a span of TEXT` AND IS NARROWED RATHER THAN
+   DELETED: the identifier channels of list A are now read against a real parse, and THESE channels are not —
+   the reader's rename would rewrite the very receiver they anchor on literally, which is the same
+   measurement that excludes `window`/`self`/`globalThis` from it. So the sentence is true HERE and is no
+   longer true of the file, and a reader who re-derives it from this paragraph would re-assert it of both. `document.fonts` answering undefined costs nothing; the
    `for (const f of document.fonts)` on the next line raises a TypeError, and no pattern over `fonts` can
    see it. THERE IS THEREFORE NO CLASS COLUMN HERE, and inventing one would be a claim the text cannot
    support in the one direction a reader dispatches from. A COUNT IS A REASON TO OPEN THE SITES.
@@ -657,12 +792,17 @@ for (const [n, chans] of perFile)
    toast is ADJACENT TEXT. Arming on adjacent text establishes that the window reaches successor CHARACTERS;
    it establishes nothing about a successor STATEMENT, and a sink is the second. The probe passes its own
    control and answers a question nobody asked.
-   WHAT WOULD HAVE TO EXIST is not a better window and not a wider vocabulary: it is a span of CODE where
-   this file has only ever had a span of TEXT — the code/not-code mask the STRING LITERAL residual above
-   names, plus the scope reader the GLOBAL-ALIAS widening was declined over, and then a reachability
-   question asked FROM the read rather than from its offset. That makes a value column the THIRD design
-   blocked on one unbuilt primitive, which is worth more than any of the three: three independent designs
-   blocked on one thing is evidence about what to build, and not one of them is blocked on anything else.
+   WHAT WOULD HAVE TO EXIST is not a better window and not a wider vocabulary: it is a span of CODE, plus
+   the scope reader the GLOBAL-ALIAS widening was declined over, and then a reachability question asked FROM
+   the read rather than from its offset.
+   THIS PARAGRAPH SAID THOSE WERE THREE DESIGNS BLOCKED ON ONE UNBUILT PRIMITIVE AND THE PRIMITIVE HAS SINCE
+   LANDED, WHICH DID NOT UNBLOCK THIS ONE — the argument is kept because it was right and because the
+   conclusion a reader draws from a landed primitive is the wrong one. engine/js_code_refs.mjs answers
+   WHETHER AN OCCURRENCE IS EVALUATED, which is what the STRING LITERAL residual asked for; it does not
+   answer WHAT ENCLOSES IT, and a reachability question is entirely the second. So the count of designs
+   blocked has gone from three to two and the evidence-about-what-to-build reading survives with its subject
+   changed: what two independent designs are now blocked on is a SCOPE reader, which is a different artifact
+   from the one that landed and is the one the GLOBAL-ALIAS measurement already named.
    NOR IS THE VOCABULARY DERIVABLE TODAY AT THE SHARPNESS SUCH A COLUMN WOULD NEED, which is a second and
    independent refusal and is measured rather than assumed. The engine detects a sink and an endpoint by
    HOOKING the operation, never by matching text, so it owns no list of spellings — what it owns is the set
@@ -788,6 +928,24 @@ for (const [k, re] of [...Object.entries(RCHAN), ...Object.entries(RPRINT)]) {
           `alternation no longer holds every derived receiver.`);
   }
 }
+/* NAMED RESIDUAL — THESE FIVE CHANNELS ARE NOT READ AGAINST A PARSE, SO EVERY COUNT BELOW STILL HOLDS SOURCE
+   CARRIED AS DATA. WHAT IS NOT COVERED: the code/not-code reading wired into list A above judges the
+   IDENTIFIER channels and is not asked here at all, so `document.fonts` inside a localisation key, a codegen
+   template or a log line is counted exactly as it was — and this section's own heading already says a count
+   here is a reason to OPEN the sites, which is the mitigation a reader has today. THE REASON IT IS NOT
+   SIMPLY REUSED is measured rather than assumed: the reader answers an identifier position by RENAMING the
+   identifier, and `document`, `navigator` and `performance` are the very receivers these patterns anchor on
+   LITERALLY — renaming them makes every pattern here stop matching, which is the identical measurement that
+   excludes `window`/`self`/`globalThis` from the reader (its own header records those two channels reading
+   ZERO for a name the corpus reads 92 times). WHAT THE NEXT DIFF BUILDS: the MEMBER side rather than the
+   receiver side — `mangleProps` already marks a dot property, so `document.fonts` re-prints as
+   `document.fonts<mark>` with the receiver untouched and every pattern here still matching; what it costs is
+   a second define/mangle set over the absent MEMBER names, and what it must be measured against before
+   landing is the same thing this one was: every row it retires, read by hand, with the population printed
+   beside the finding count. HOW ITS ABSENCE WOULD SHOW: a ranked pair here whose whole count sits in one
+   file and whose sites open as a string — the telegram localisation bundle in this corpus carries eleven
+   `Text.`-prefixed keys and three `Permissions.`-prefixed ones that list B's identifier channel now retires
+   and this section would not. */
 /* An occurrence counts only where the member is one the auditor's own ABSENT row for THAT interface lists,
    so every ranked pair is a SUBSET of the population calibrated above rather than a second reading of it. */
 const rAbsent = (r, mem) => {
@@ -871,11 +1029,20 @@ for (const [pair, m] of rBy) {
 }
 
 const shadowOf = (n, k) => ((shadow.get(n) || new Map()).get(k) || 0);
-const freeOf = (n, k) => ((hits.get(n) || new Map()).get(k) || 0) - shadowOf(n, k);
+const freeOf = (n, k) => ((hits.get(n) || new Map()).get(k) || 0) - shadowOf(n, k) - ncOf(n, k);
 const shadowed = (n) => [...(shadow.get(n) || new Map()).values()].reduce((a, b) => a + b, 0);
 const uses = (n) => [...(hits.get(n) || new Map()).keys()].reduce((a, k) => a + freeOf(n, k), 0);
 const shape = (n) => [...(hits.get(n) || new Map()).keys()].map((k) => [k, freeOf(n, k)])
   .filter(([, v]) => v > 0).map(([k, v]) => `${k}=${v}`).join(" ");
+/* A ROW THAT FALLS TO ZERO SAYS WHICH EXCLUSION EMPTIED IT, because the two take opposite work: a shadowed
+   row is the corpus reading its own local and there is nothing to read, while a text-only row is source
+   carried AS DATA and the sites are worth opening to see whose. One word for both would be the several-
+   states-behind-one-answer shape in the one column a reader dispatches from. */
+const emptyWhy = (n) => {
+  const s = shadowed(n), t = ncAll(n);
+  return s && t ? "(every occurrence shadowed or not evaluated)"
+       : t ? "(no occurrence is one the program evaluates as this name)" : "(every occurrence shadowed)";
+};
 
 /* WHAT AN ABSENCE COSTS IS NOT HOW OFTEN THE NAME APPEARS, AND ORDERING BY COUNT GETS IT BACKWARDS.
    A name a bundle FEATURE-DETECTS costs nothing when it is absent: `"undefined" != typeof X` answers false,
@@ -907,15 +1074,21 @@ const shape = (n) => [...(hits.get(n) || new Map()).keys()].map((k) => [k, freeO
        either: solver/absent.h hooks on "the base the read missed on". Every channel here reads the LEFT of
        a dot or an operator, so such a read is INVISIBLE rather than merely unguarded.
      - A USE INSIDE A BRANCH THAT A SIBLING CAPABILITY'S ABSENCE MAKES DEAD, which the residual below names.
-     - A USE INSIDE SOURCE CARRIED AS DATA, which the STRING LITERAL residual below names, and whose
-       HOW-ITS-ABSENCE-WOULD-SHOW clause is written for precisely this symptom.
+     - A USE INSIDE SOURCE CARRIED AS DATA, which the STRING LITERAL residual below names and which the
+       code/not-code reading now EXCLUDES from the count for every channel but `global["X"]` and for every
+       file the parser accepted. What is left of this defeater is exactly that floor, so it is narrowed here
+       rather than struck: a use carried as data can still reach this band through a bracket-quoted key or
+       through a file reported as refused, and through nothing else these channels can see.
      - A USE WHOSE THROW IS CAUGHT. `try { new X(...) } catch {}` DOES raise the ReferenceError, so every
        channel here is right about the position and wrong about the cost: the flow does not end, the catch
        arm runs, and what the page does next is what it would do in a real browser that lacks X — which is
        the detect-only verdict reached by a different route. It is not reachable by widening any channel,
        for the reason the two residuals below give about themselves: a channel matches one EXPRESSION and a
-       `try` block is a SCOPE, so whether an occurrence is inside one is the same question the code/not-code
-       mask is named for, asked over a span of CODE this file has only ever had as TEXT.
+       `try` block is a SCOPE, so whether an occurrence is inside one is a question about what ENCLOSES the
+       occurrence. THAT IS NOT THE QUESTION THE LANDED READING ANSWERS, which is worth saying because the
+       sentence this replaces pointed at the code/not-code mask and that mask now exists: it answers whether
+       an occurrence is EVALUATED, one occurrence at a time, and a caught throw is evaluated. This defeater is
+       untouched by it.
    WHAT THE BAND MEANS IS THEREFORE NARROWER, AND IS STILL WORTH SORTING FIRST: no channel here saw a
    non-throwing read of this name ANYWHERE in the corpus. That is a reason to OPEN a row's sites, never a
    statement that those sites throw — and it is cheap to act on, because a row's whole count IS its number of
@@ -943,8 +1116,10 @@ const shape = (n) => [...(hits.get(n) || new Map()).keys()].map((k) => [k, freeO
    made wider — a reader who proposes one has mis-read which identifier the guard tests. WHAT THE NEXT DIFF
    BUILDS: a REACHABILITY question rather than a channel — for a use occurrence, whether the expression that
    dominates it — or any statement of the block that precedes it — reads something this tree does not install,
-   on EITHER list, which needs the code/not-code mask the STRING LITERAL residual names to land first, because
-   its operand is a span of CODE and this file has only ever had a span of TEXT. HOW ITS ABSENCE WOULD SHOW: a
+   on EITHER list. ITS FIRST BLOCKER IS GONE AND IT IS STILL BLOCKED, which is stated because the clause it
+   replaces named the code/not-code mask as what had to land first and that mask has landed: the reading below
+   says which occurrences are evaluated and says nothing about what DOMINATES one, so the operand this needs
+   is still a span of code this file does not have. HOW ITS ABSENCE WOULD SHOW: a
    row in the THROWS band whose use occurrences all sit downstream, in their own block, of a read of something
    this tree does not install — which a reader sees by opening the row and looking LEFT of the occurrence
    rather than at it.
@@ -995,12 +1170,31 @@ const partOf = (n, set) =>
    support, and the honest statement is that this corpus offers no evidence about the platform name at all. */
 const klass = (n) => {
   const u = partOf(n, USE_CH), g = partOf(n, GUARD_CH);
-  if (!u && !g) return "shadowed";
+  if (!u && !g) {
+    const s = shadowed(n), t = ncAll(n);
+    return s && t ? "shadow+notcode" : t ? "not-code" : "shadowed";
+  }
   if (u && !g) return "THROWS";
   if (u && g) return "mixed";
   return "detect-only";
 };
-const RANK = { THROWS: 0, mixed: 1, "detect-only": 2, shadowed: 3 };
+/* The three no-evidence classes sort together at the bottom: each says the corpus offers no evidence about
+   the PLATFORM name, and they differ only in why, which the class word carries. */
+const RANK = { THROWS: 0, mixed: 1, "detect-only": 2, shadowed: 3, "not-code": 3, "shadow+notcode": 3 };
+
+/* THE DERIVATION THAT OPENS THE SITES, BECAUSE A RETIREMENT NOBODY CAN READ IS A RETIREMENT NOBODY CAN
+   REFUSE. The `notcode` column says HOW MANY and this says WHICH (name, channel) pair carries them, which is
+   what turns "read every retirement by hand" from an instruction into a command:
+     node engine/absentrank.mjs --corpus <dir>/mirror --dump-notcode | grep '^NOTCODE'
+     cd <dir>/mirror && grep -rn 'WebAssembly[.]' . | head        # then open one pair's sites
+   It prints on every run it is asked for, including the run where nothing is retired, so a zero here is a
+   measured zero rather than a question nobody asked. */
+if (process.argv.includes("--dump-notcode")) {
+  for (const [n, chans] of [...notcode].sort())
+    for (const [k, c] of chans)
+      console.log(`NOTCODE\t${n}\t${k}\t${c}\t/raw ${(hits.get(n)||new Map()).get(k)||0}\t/shadow ${(shadow.get(n)||new Map()).get(k)||0}`);
+  console.log(`REFNAMES\t${JSON.stringify(REF_NAMES)}`);
+}
 
 /* The submodule string witness for the declared boundary above. Read as a REASON TO OPEN THE FILE. */
 const QJS = join(HERE, "qjs");
@@ -1023,9 +1217,29 @@ say(`calibration — absent members ${distinct.size} distinct / ${pairs} pairs, 
 say(`this tree reaches ${REACHED.size} distinct name(s) on a global — ${n38} §3.8 define(s) and ${nMember} ` +
     `member install(s) on ${chain.join("/")} — leaving ${ABSENT_GLOBAL.size} platform global name(s) it does not`);
 say(`corpus ${relative(join(HERE, ".."), CORPUS)} — ${files.length} file(s), ${bytes} byte(s): ${nProgram} program + ${nDocument} document, ${nExcluded} other, ${onDisk} on disk — typed by the server's own Content-Type in provenance.json, never by extension`);
-for (const [k, t] of perChannel)
+for (const [k, t] of perChannel) {
+  /* THE NOT-CODE FIGURE IS OVER THE RANKED NAMES ONLY AND SAYS SO, because the channel total beside it is
+     over EVERY identifier the pattern captured and the two are not a fraction of each other. A reader
+     subtracting one from the other would be subtracting a ranked-name count from a whole-corpus count. */
+  const nc = REF_NAMES.reduce((a, n) => a + ncOf(n, k), 0);
   say(`  channel ${k.padEnd(15)} ${String([...t.values()].reduce((a, b) => a + b, 0)).padStart(6)} occurrence(s), ` +
-      `${String(t.size).padStart(4)} distinct identifier(s)`);
+      `${String(t.size).padStart(4)} distinct identifier(s)` +
+      (REF_BLIND.has(k) ? ` — the parse CANNOT judge this channel (re-printed into window.X); nothing retired`
+                        : ` — of the ranked names, ${nc} occurrence(s) the parse says are not code`));
+}
+/* A COVERAGE FIGURE STATES WHAT IT IS A FRACTION OF, AND THE FLOORS ARE NAMED RATHER THAN LEFT TO BE
+   SUBTRACTED. A reader who takes the retirements above as complete is reading an exclusion as a total, and
+   an exclusion read as a total is the direction that under-claims. */
+if (REF_NAMES.length)
+  say(`  code/not-code — engine/js_code_refs.mjs asked esbuild which occurrences of the ${REF_NAMES.length} ` +
+    `ranked name(s) this corpus EVALUATES: ${refFiles} of ${files.length} file(s) parsed (${refBytes} byte(s)), ` +
+    `${refRefused} refused and kept whole` +
+    (refWhy.size ? ` (${[...refWhy].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([w, c]) => `${c}x ${JSON.stringify(String(w).slice(0, 48))}`).join(", ")})` : "") +
+    `. FLOOR: ${refTick} backtick-delimited quoted key(s) left standing because a template literal is outside ` +
+    `esbuild's mangleQuoted; the \`global["X"]\` channel judged not at all; ` +
+    `${refExcluded.length ? `${refExcluded.length} ranked name(s) the reader excludes by name (${refExcluded.join(", ")})` : "no ranked name excluded by the reader"}. ` +
+    `${refMigrated} marked occurrence(s) arrived on a channel its raw form did not match, which can only ` +
+    `make a subtraction smaller.`);
 for (const [k, t] of controls) {
   const top = [...t].sort((a, b) => b[1] - a[1]).slice(0, 6);
   const plat = top.filter(([n]) => PLATFORM.has(n)).length;
@@ -1042,6 +1256,13 @@ say(`   The count is a CEILING. qjs = times the name occurs as a quoted string u
 say(`   shadow = occurrences in a file that BINDS the name itself (a page's own \`function X\`, \`class X\` or ` +
     `\`X =\`), which are that file's name and not the platform's. They are EXCLUDED from the count and the ` +
     `class; the column is printed so a row that falls to zero shows why instead of vanishing.`);
+say(`   notcode = occurrences a REAL PARSE says the program does not evaluate as this name (engine/` +
+    `js_code_refs.mjs). Same treatment as shadow: EXCLUDED from the count and the class, printed so a row ` +
+    `that falls to zero shows why instead of vanishing. It is a FLOOR and never a mask — the channel lines ` +
+    `above name every position the parse could not judge. IT MERGES TWO STATES AND SAYS SO: source carried ` +
+    `AS DATA (a codegen template, a worker shipped as a string, a log line, a localisation key), and a ` +
+    `BINDING the \`shadow\` regex cannot see. They take different work, the count does not separate them, ` +
+    `and \`--dump-notcode\` prints the (name, channel) pairs so the sites can be opened.`);
 say(`   ORDERED BY WHAT THE ABSENCE COSTS, NOT BY VOLUME: THROWS (every use of this name is unguarded, so it ` +
     `raises a ReferenceError and ends the flow) before mixed (both forms present — read the site) before ` +
     `detect-only (the corpus only ever feature-detects it, so absence is the answer a browser without it gives).`);
@@ -1049,12 +1270,17 @@ const rankA = [...ABSENT_GLOBAL].filter((n) => hits.has(n))
   .sort((a, b) => RANK[klass(a)] - RANK[klass(b)] || uses(b) - uses(a) || a.localeCompare(b));
 const nThrow = rankA.filter((n) => klass(n) === "THROWS").length;
 const nShadow = rankA.filter((n) => klass(n) === "shadowed").length;
+const nText = rankA.filter((n) => klass(n) === "not-code").length;
+const nBoth = rankA.filter((n) => klass(n) === "shadow+notcode").length;
 say(`   ${rankA.length} of ${ABSENT_GLOBAL.size} absent global name(s) are named by this corpus at all; ` +
-    `${nThrow} of those ${rankA.length} is/are unguarded, and ${nShadow} is/are named ONLY by a file that ` +
-    `binds the name itself, which is no evidence about the platform name either way.`);
+    `${nThrow} of those ${rankA.length} is/are unguarded. ${nShadow} is/are named ONLY by a file that ` +
+    `binds the name itself, ${nText} ONLY in occurrences a real parse says the program does not evaluate ` +
+    `as this name, and ` +
+    `${nBoth} only by the two together — none of those three is evidence about the platform name either ` +
+    `way, and they print rather than vanishing.`);
 for (const n of rankA.slice(0, TOP))
-  say(`   ${klass(n).padStart(11)}  ${String(uses(n)).padStart(4)}  qjs=${String(qjsHits(n)).padStart(3)}  ` +
-      `shadow=${String(shadowed(n)).padStart(3)}  ${n.padEnd(24)} ${shape(n) || "(every occurrence shadowed)"}`);
+  say(`   ${klass(n).padStart(12)}  ${String(uses(n)).padStart(4)}  qjs=${String(qjsHits(n)).padStart(3)}  ` +
+      `shadow=${String(shadowed(n)).padStart(3)}  notcode=${String(ncAll(n)).padStart(4)}  ${n.padEnd(24)} ${shape(n) || emptyWhy(n)}`);
 /* AN INSTRUMENT THAT TRUNCATES SAYS SO, AND THIS ONE DID NOT — WHICH AMPUTATED A WHOLE CLASS RATHER THAN A
    TAIL. `--top` caps the rows PRINTED and the sort above is by CLASS FIRST, so the cut is not a random tail:
    it takes the lowest-ranked classes ENTIRELY. Measured on the run that found this, at the default 20: 65
@@ -1094,7 +1320,7 @@ say(`   The per-MEMBER order a page's own spelling supports is section B(anchore
     `INTERFACE NAME, which is not how a bundle reaches an interface.`);
 const rankB = [...absentBy.keys()].sort((a, b) => uses(b) - uses(a) || a.localeCompare(b));
 for (const n of rankB.slice(0, TOP))
-  say(`   ${String(uses(n)).padStart(4)}  ${n.padEnd(26)} ABSENT ${String(absentBy.get(n).length).padStart(3)}  ${shape(n) || "(named nowhere in the corpus)"}`);
+  say(`   ${String(uses(n)).padStart(4)}  ${n.padEnd(26)} ABSENT ${String(absentBy.get(n).length).padStart(3)}  ${shape(n) || (ncAll(n) || shadowed(n) ? emptyWhy(n) : "(named nowhere in the corpus)")}`);
 /* SAME CUT, SAME OBLIGATION. This list is ordered by corpus use rather than by class, so a `--top` cut here
    really is a tail — but a tail whose size is unstated is still a floor being read as a total, which is the
    defect the paragraph in list A is about. */
