@@ -111687,11 +111687,27 @@ int JS_IntrinsicName(JSContext *ctx, JSValueConst v, char *buf, size_t buf_size)
        `%C.prototype%` is a prototype, told apart by a `.` that no class name in this engine contains — which
        is also what keeps a class name clear of a well-known symbol's description, since every one of those
        opens `Symbol.`. A class registered with a dot in its name breaks both separations at once. */
-    DCHECK(strchr(name, '.') == NULL && strcmp(name, "globalThis") != 0,
-           "a class was registered under a name that collides with another of this engine's intrinsic "
-           "spellings: a dot makes `X.prototype` wear the name of class X's prototype and `Symbol.iterator` "
-           "the name of that well-known symbol, and `globalThis` is the global object's own name — each of "
-           "which puts two intrinsics under one constraint key and one property atom");
+    /* AND IT NAMES THE OFFENDING NAME AND THE SLOT THAT HOLDS IT, which is the whole difference between a
+       crash a reader can act on and one they cannot. This walk is reached from EVERY class slot in the
+       registry, so the abort stamps ONE file and line for every class there is: the message stated the RULE
+       and never the OPERAND, and CLAUDE.md §AN-ASSERT-THAT-NAMES-A-REMEDY-BUT-NOT-A-SITE is exactly that —
+       an assert inside a shared helper reports the helper for every caller, and the remedy then names an
+       action with no object. MEASURED, which is why this is a diff and not a note: this abort fired 2 of 2
+       fresh-browser drives of a real application through the shipped extension, identical ROOT and identical
+       eight-frame chain both times (`concolic_key_read_hook` -> `ident_of_operand` -> `intrinsic_name`), and
+       the reader could not say WHICH class from it — no static `JSClassDef` in either tree carries a dotted
+       literal, so the name is an ATOM and the slot is the only thing that identifies it.
+       THE CLASS ID IS PRINTED AS WELL AS THE NAME because the name is a BRAND and this file says so forty
+       lines up: several slots deliberately share one (six are `Object`, five `Function`), so a name alone
+       does not name a slot and the id does. RETIRES when the message can no longer be read without the
+       operand it is about — that is, only by this pair going away with the check. */
+    DCHECKF(strchr(name, '.') == NULL && strcmp(name, "globalThis") != 0,
+            "a class was registered under a name that collides with another of this engine's intrinsic "
+            "spellings: a dot makes `X.prototype` wear the name of class X's prototype and `Symbol.iterator` "
+            "the name of that well-known symbol, and `globalThis` is the global object's own name — each of "
+            "which puts two intrinsics under one constraint key and one property atom. THE NAME IS `%s` and "
+            "it is class id %d's, taken as %s",
+            name, (int)i, want_proto ? "a prototype" : "a constructor");
     if (strchr(name, '.') || !strcmp(name, "globalThis")) return -1;
     return snprintf(buf, buf_size, want_proto ? "%%%s.prototype%%" : "%%%s%%", name);
 }
