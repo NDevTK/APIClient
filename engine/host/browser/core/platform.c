@@ -692,7 +692,6 @@ static void i_fetch(JSContext *c, JSValueConst g, const PlatformDocument *d) { (
 static void i_dom_rect_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_rect_list_install(c, g); }
 static void i_intersection_observer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; intersection_observer_install(c, g); }
 static void i_resize_observer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; resize_observer_install(c, g); }
-static void i_font_face(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; font_face_install(c, g); }
 static void i_document(JSContext *c, JSValueConst g, const PlatformDocument *d)
 {
     document_install(c, g, d->dom, d->url, d->kind, d->policy, d->permissions_policy, d->sandbox_flags,
@@ -1279,8 +1278,18 @@ static const PlatformComponent PLATFORM[] = {
        sits beside the observer above because that is where a reader looks for a small self-contained
        interface, and NOT because anything requires it. §3's FontFaceSet does carry one when it lands
        (`interface FontFaceSet : EventTarget`), which is a fact about THAT row and is stated in
-       core/fonts/font_face.h's ORDER rather than anticipated here. */
-    { "font_face",           d_font_face,           i_font_face,       r_font_face },
+       core/fonts/font_face.h's ORDER rather than anticipated here.
+       AND ITS INSTALL COLUMN IS NULL BECAUSE `[Exposed=(Window,Worker)]`, WHICH IS THE ONE PROPERTY THAT
+       DECIDES A COLUMN. This row carried an `i_font_face` that placed the interface object from the
+       per-document column, and that column is reached only by a realm a Document is installed over — so a
+       WorkerGlobalScope realm ran the per-realm intrinsic that builds `FontFace.prototype` and never got the
+       name. The placement is in the intrinsic now, beside the prototype, exactly as the `url` row's is and for
+       the same reason. THE RULE IS NOT `SMALL INTERFACES GO IN THE INTRINSIC`: it is that a name this column
+       places is a name only a Window realm can have, so an interface whose exposure set reaches a worker may
+       not be placed from here. `resize_observer`, `intersection_observer`, `media_query_list`, `dom_rect_list`,
+       `page_reveal`, `xml_serializer` and `document`'s XMLDocument are all `[Exposed=Window]`, which is why
+       their rows are right where they are and why this one was the only one that could be wrong. */
+    { "font_face",           d_font_face,           NULL,              r_font_face },
     { "html_iframe",         d_iframe,              NULL,        r_iframe },
     /* RFC 6265 §5.3's COOKIE STORE, before the component whose §3.1.4 members read it. It is the first row with
        a RELEASE, and the reason is the reason it is a row at all: the store is the USER AGENT's by the

@@ -536,12 +536,45 @@ void font_face_init(JSContext *ctx)
         agent_state_id("font_face", &g_id_set[i], "one of §2's eleven attribute setter declarations");
 }
 
+/* WEB IDL §3.7.3 "Interface prototype object" AND §3.8 "Platform objects implementing interfaces" TOGETHER,
+ * IN ONE PER-REALM INTRINSIC — which is not tidiness but the only column that can serve this interface.
+ *
+ * WHICH COLUMN A §3.8 PLACEMENT BELONGS IN IS DECIDED BY THE INTERFACE'S [Exposed] SET AND BY NOTHING ELSE.
+ * core/platform.c has two: a PER-REALM intrinsic list that every realm of every kind runs, and a PER-DOCUMENT
+ * install column that only a realm a Document is installed over ever reaches. A WorkerGlobalScope realm runs
+ * the first and never the second. So an interface whose exposure set contains a worker global may not have its
+ * interface object placed from the second column — and §2's does: the harvested IDL every instrument here
+ * consumes declares `[Exposed=(Window,Worker)] interface FontFace`.
+ *
+ * THE DEFECT SHAPE, WHICH IS WHAT SURVIVES THIS BEING FIXED: a prototype built in every realm and a global
+ * name placed in some of them is WORSE THAN EITHER HALF ALONE, and it is not the absence a page can feature-
+ * detect. `typeof FontFace` still answers "undefined", so a guard on the NAME reads exactly as it does with the
+ * component absent — while `[object FontFace]` comes off a live prototype the page can reach through any
+ * instance, and `x instanceof FontFace` THROWS where an absent interface makes it throw for a different reason
+ * and a present one answers false. A half-exposed interface is a third state neither §NO STUBS' "honestly
+ * absent" nor a real install, and no page can tell it from either.
+ *
+ * IT IS ASSERTED AND NOT MERELY WRITTEN CORRECTLY. core/realm.c's §3.7.3-census-against-§3.8-asks walk is the
+ * check, and it is the reason this is one function: it runs at the end of EVERY finished realm, reads §3.3.7
+ * [Exposed]'s own "is exposed in realm" so a Window-only interface's prototype in a worker is correctly
+ * skipped, and fires by name on a prototype whose property reference nobody asked for. A component that splits
+ * the two halves across the two columns cannot pass it in a worker realm, whatever it writes here.
+ *
+ * AND THE DOOR IS CALLED UNCONDITIONALLY, WHICH IS THE POINT RATHER THAN AN OVERSIGHT. §3.8's step 1 is "Let
+ * interfaces be a list that contains every interface that is exposed in realm", and core/idl_args' door asks
+ * §3.3.7 for itself — so a realm this interface is not exposed in refuses INSIDE the door, with the ask
+ * recorded either way. An `if` here would be a second copy of §3.3.7 in a file that has no business holding
+ * one, and the copy that drifts is the one nobody runs against reality. */
 void font_face_install_proto(JSContext *ctx)
 {
-    JSValue proto, prev;
+    JSValue proto, prev, ctor;
     int i;
 
     DCHECK(g_class != 0, "a realm asked for FontFace.prototype before the interface was declared");
+    DCHECK(g_id_ctor >= 0,
+           "FontFace.prototype was built in an agent that never declared §2.1's constructor — the interface "
+           "object is minted from that declaration in this same function, so a prototype built without one "
+           "would be the half-exposed state this file's own banner is about");
     prev = JS_GetClassProto(ctx, g_class);
     DCHECK(JS_IsNull(prev), "font_face_install_proto ran twice in one realm");
     JS_FreeValue(ctx, prev);
@@ -552,21 +585,19 @@ void font_face_install_proto(JSContext *ctx)
         idl_install_accessor(ctx, proto, FF_ATTR_ID[i], js_ff_get, i, g_id_set[i]);
     /* `readonly attribute FontFaceLoadStatus status` — no setter id, which is what makes it readonly. */
     idl_install_accessor(ctx, proto, "status", js_ff_get, FF_STATUS, -1);
+
+    {
+        /* §3.7.1 "Interface object" then §3.8, in that order, and BOTH BEFORE the JS_SetClassProto below —
+           which consumes `proto`, so the local is no longer this frame's to read after it. */
+        JSValue global = JS_GetGlobalObject(ctx);
+
+        ctor = idl_step_constructor(ctx, "FontFace", g_id_ctor);
+        CHECK(!JS_IsException(ctor), "the FontFace interface object could not be allocated");
+        JS_SetConstructor(ctx, ctor, proto);
+        idl_define_global_property_reference(ctx, global, "FontFace", ctor);
+        JS_FreeValue(ctx, global);
+    }
     JS_SetClassProto(ctx, g_class, proto);
-}
-
-void font_face_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctor, proto;
-
-    DCHECK(g_id_ctor >= 0, "FontFace was installed before font_face_init declared it");
-    ctor = idl_step_constructor(ctx, "FontFace", g_id_ctor);
-    CHECK(!JS_IsException(ctor), "the FontFace interface object could not be allocated");
-    proto = JS_GetClassProto(ctx, g_class);
-    DCHECK(!JS_IsNull(proto), "FontFace was installed in a realm that never ran its prototype install");
-    JS_SetConstructor(ctx, ctor, proto);
-    JS_FreeValue(ctx, proto);
-    idl_define_global_property_reference(ctx, global, "FontFace", ctor);
 }
 
 /* THIS CLASS HAS NO FINALIZER AND NO gc_mark, which is why zeroing its id below reaches nothing — see

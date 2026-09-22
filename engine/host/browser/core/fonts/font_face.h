@@ -63,15 +63,18 @@
 void font_face_init(JSContext *ctx);
 void font_face_free(JSRuntime *rt);
 
-/* WEB IDL §3.7.3 "Interface prototype object" FOR §2's INTERFACE, for one realm — reached through
-   realm_declare_intrinsic, like every other per-realm install, so a realm this agent builds cannot be missing
-   it. CSS Font Loading §2 declares no inherited interface, so browser/idl_inheritance.h carries
-   `{ "FontFace", NULL, IDL_PROTO_OBJECT }` and the object is built over this realm's %Object.prototype%. */
+/* WEB IDL §3.7.3 "Interface prototype object" AND §3.8 "Platform objects implementing interfaces" FOR §2's
+   INTERFACE, for one realm — reached through realm_declare_intrinsic, like every other per-realm install, so a
+   realm this agent builds cannot be missing it. CSS Font Loading §2 declares no inherited interface, so
+   browser/idl_inheritance.h carries `{ "FontFace", NULL, IDL_PROTO_OBJECT }` and the object is built over this
+   realm's %Object.prototype%.
+   THE TWO HALVES ARE ONE ENTRY BECAUSE THE INTERFACE IS `[Exposed=(Window,Worker)]`, and the argument is at the
+   definition. This header used to declare a SECOND entry for the §3.8 half, which core/platform.c drove from
+   its per-document install column — a column no WorkerGlobalScope realm reaches — so a worker realm built the
+   prototype and never got the name. It is recorded rather than deleted because the split reads natural: the
+   two halves ARE two algorithms, and nothing about a §3.8 entry says which column may call it. What decides
+   that is the exposure set alone. */
 void font_face_install_proto(JSContext *ctx);
-
-/* Web IDL §3.8 "Platform objects implementing interfaces"' define-the-global-property-references, for `FontFace`.
-   `global` is BORROWED. */
-void font_face_install(JSContext *ctx, JSValueConst global);
 
 /* Web IDL §3.7 Interfaces' implementation-check, for the one caller that will need it and does not exist yet:
    CSS Font Loading §3 "The FontFaceSet Interface"'s `FontFaceSet add(FontFace font)` declares an
