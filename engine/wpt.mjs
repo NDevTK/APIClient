@@ -1104,14 +1104,63 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       `option-disabled-manual.html` at the NAME, `dynamic-content-change-rendering.html` and
                       its `-ref.html` for holding no testharness element, and `option-label-value.js` for
                       being a `.js` with no global in its meta.
-                      THE OTHER EIGHTEEN DIRECTORIES OF `forms` ARE DELIBERATELY NOT LISTED, on the same
-                      ground the `compat` row above states: each would put test files on disk that a decision
-                      has to be taken about first. They are 847 blobs and 1464338 bytes, the largest being
-                      `the-select-element` at 335 and `the-input-element` at 185, and the derivation for
-                      whoever takes them is the two commands that row already names.
-                      NOTHING IS PREDICTED HERE ABOUT WHAT ANY OF THE 24 SCORES. */
+                      THE REMAINING DIRECTORIES OF `forms` ARE DELIBERATELY NOT LISTED, on the same ground
+                      the `compat` row above states: each would put test files on disk that a decision has to
+                      be taken about first. The derivation for whoever takes them is the two commands that row
+                      already names, and the count is NOT restated here -- the sentence this replaced said
+                      EIGHTEEN where `git ls-tree --name-only <rev> html/semantics/forms/` answers TWENTY-TWO
+                      subdirectories of which three were listed, so NINETEEN, while the same sentence\'s blob
+                      and byte totals (847 and 1464338) reproduced to the digit. A count computed once and
+                      edited around goes wrong where the totals beside it do not, so what is written here is
+                      the command and not the number. */
                    "html/semantics/forms/the-option-element", "html/semantics/forms/the-legend-element",
-                   "html/semantics/forms/form-control-infrastructure"];
+                   "html/semantics/forms/form-control-infrastructure",
+                   /* THE TWO LARGEST FORM-CONTROL DIRECTORIES AND THE SUBMISSION DIRECTORY ONE OF THEM
+                      DEPENDS ON -- the decision the row above says has to be taken, taken for three of them.
+                      WHY THESE THREE AND NOT THE OTHER SIXTEEN. Each names an engine component that ships
+                      and is measured by nothing. `the-input-element` is the oracle for core/html/
+                      input_value.c, input_number.c, input_picker.c and text_control_selection.c;
+                      `the-select-element` is the oracle for the FC_SELECT row of html_form.c\'s form-control
+                      table, and it is the SIBLING of the already-listed `the-option-element` -- an option
+                      suite without a select suite is an incoherent pair, since an option\'s index, its
+                      selectedness and its form owner are all answered from its select.
+                      `form-submission-0` is the oracle for form_entry_list.c, form_data.c, form_data_event.c
+                      and form_submission_attributes.c, AND it is a fixture: `the-input-element/
+                      input-type-change-submit.html` names
+                      `../form-submission-0/resources/targetted-form.js`, which is the ONE unmet reference in
+                      all three directories. Listing it is what closes that, and it is listed as a WPT_PATHS
+                      row rather than pointed at its `resources` subdirectory precisely because a
+                      resources-only row would materialize `form-submission-0`\'s own level -- 35 testharness
+                      tests -- as the stray the census at the foot of this file FAILS the gate for.
+                      EVERY FIXTURE WAS RESOLVED BEFORE THE ENTRY WENT IN, mechanically rather than by eye,
+                      and through THIS FILE\'S OWN resolution rather than a second copy of it: SCRIPT_EL,
+                      markupOnly, scriptMetadata and SERVER_REWRITES read out of this file at run time, then
+                      the rule metaScripts and docScriptFixtures already state -- rewrite first, a `/`-rooted
+                      ref is corpus-root-relative, anything else resolves against the test\'s own directory,
+                      a query or fragment cut before the lookup. Over the three directories: 789 script
+                      references, ZERO that resolve outside cone+candidate, ZERO absent from the corpus, ZERO
+                      naming another origin or a `{{}}` template. The checker was ARMED BEFORE ITS ZERO WAS
+                      BELIEVED -- run against the already-listed `the-option-element` it answers 24
+                      references and no finding, and run against that same directory with `resources` removed
+                      from the cone it names testharness.js and testharnessreport.js, 11 files each. A zero
+                      from a probe that has never spoken is a statement about the probe.
+                      WHAT THE COLLECTOR TAKES IS MEASURED, through the corpus\'s own classifier rather than
+                      this file\'s port of it:
+                        python3 engine/wpt_classify.py <corpus>
+                      answers 8468 testharness files / 9852 runs WITHOUT these rows -- reproducing to the
+                      digit the figure the block above publishes, which is what licenses reading the rest --
+                      and 8735 / 10119 WITH them. The diff of the two listings is EXACTLY the 267 files these
+                      three directories contribute, 119 + 113 + 35, and nothing moved the other way.
+                      THE COST IS 568 BLOBS AND 935313 BYTES, which `df` will show on the first run that
+                      opens them rather than at checkout, because the clone is filtered. It drags NO new
+                      directory: all three are siblings of rows already listed, so cone mode materializes no
+                      ancestor level that was not already on disk, and the file set grows by exactly 568 --
+                      every one of them named by one of these rows. The stray census is therefore unmoved BY
+                      CONSTRUCTION rather than by measurement, which is the property a leaf row has and a
+                      `resources` row does not.
+                      NOTHING IS PREDICTED HERE ABOUT WHAT ANY OF THE 267 SCORES. */
+                   "html/semantics/forms/the-input-element", "html/semantics/forms/the-select-element",
+                   "html/semantics/forms/form-submission-0"];
 
 /* AND THE DIRECTORIES WHOSE OWN LEVEL CONE MODE HAS ALREADY PUT ON DISK. A cone-mode checkout materializes every
    file of every directory ON THE PATH to a listed one, so naming one helper's `resources` lands its standard's
