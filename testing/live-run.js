@@ -358,6 +358,27 @@ const CENSUS_GAUGE = ["stepUnits", "programCursors", "replyOutstanding"];
    top of the queue holds a runnable job"); `memUnframed` separates `jobsReady: 0`'s two silences; and
    `wfqMembers` is the population all of them are taken over. */
 const WFQ_JOB_SPLIT = ["jobsReady", "jobsFramed", "jobsOwed", "jobWGap", "memUnframed", "visZero"];
+/* …AND THE ONE @WFQ ROW THAT IS A LIFETIME COUNT, FILED APART FROM THEM BECAUSE THE KINDS ARE OPPOSITE AND
+   THE NAMES DO NOT SAY. Every row above is a walk of the frontier at one instant and may FALL;
+   `unframedPicksLifetime` is raised once per dispatch in flow_credit_pick and lowered by nothing, so it is
+   the one of the set a reader may difference — and a series of it that decreases is the free tell that the
+   filing is wrong. Putting it in the list above would be a counter read as a gauge, which is the defect
+   CLAUDE.md records as a per-member gauge read as a lifetime histogram INVERTING a conclusion.
+   IT IS THE ROW THIS DRIVER EXISTS TO CARRY TO A REAL PAGE. `memUnframed` beside it says who stands with an
+   empty JavaScript execution context stack; this says how many dispatches that state has EVER received, and
+   the pair is what separates the two readings of a `jobWGap: 0` that solver/flow.c's job-split residual
+   states and refuses to choose between — zero with dispatches made says the order never handed the thread to
+   one of them and the DISPATCH PATH is the subject, above zero refutes that for the unframed population as a
+   whole. engine/build.mjs's `unframedPickSentence` renders the verdict; this carries the number so a run over
+   a real document can be read without it.
+   ITS DENOMINATOR IS ALREADY IN `COUNTERS` UNDER ANOTHER NAME and that is not a coincidence to be relied on
+   silently: solver/result.c DCHECKs `picks_lifetime == engine_switch_count()`, so `switches` on this line IS
+   the denominator, and a share taken against anything else is a fraction over the wrong population. Read the
+   two together — this row at 0 with `switches` at 0 is the ABSENT reading of a zero and is about neither.
+   GATED ON `live` WITH ITS NEIGHBOURS EVEN THOUGH IT IS NOT A READING OF THE WALK, because solver/result.c
+   composes `{members: 0}` with NO term rows at all: on an empty frontier the row is absent from the document
+   and `null` is the honest answer, never 0. */
+const WFQ_LIFETIME = ["unframedPicksLifetime"];
 const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered",
   /* AND THE OTHER THREE ENDS OF THE REPLY DOOR, WITHOUT WHICH `replyAsked - replyAnswered` IS A NUMBER WITH
      THREE READINGS THAT TAKE OPPOSITE WORK. A record ends answered, REFUSED by this tool's own egress policy,
@@ -445,6 +466,7 @@ function census(r) {
   const live = w && typeof w === "object" && w.members > 0;
   o.wfqMembers = w && typeof w.members === "number" ? w.members : null;
   for (const k of WFQ_JOB_SPLIT) o[k] = live && typeof w[k] === "number" ? w[k] : null;
+  for (const k of WFQ_LIFETIME) o[k] = live && typeof w[k] === "number" ? w[k] : null;
   return o;
 }
 
@@ -597,7 +619,7 @@ async function main() {
   /* THE KIND OF EVERY CENSUS ROW, STATED WHERE THE ROWS ARE FILED UNDER IT — §Testing: a quantity whose kind
      you cannot name FROM ITS OUTPUT is one you are not entitled to do arithmetic on, and the names do not say. */
   console.log("# frontier.* — LIFETIME (may be differenced): " +
-              CENSUS_LIFETIME.concat(COLD_COUNTERS).join(",") + ", and every `forkAt` row" +
+              CENSUS_LIFETIME.concat(COLD_COUNTERS).concat(WFQ_LIFETIME).join(",") + ", and every `forkAt` row" +
               " | UNITS: replayHits+replayLeftArms are ARMS (decision-vector slots), replayLeft is EVENTS" +
               " | GAUGES (may FALL; never difference): " +
               CENSUS_GAUGE.concat(WFQ_JOB_SPLIT).concat(["wfqMembers"]).join(","));

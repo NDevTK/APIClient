@@ -2512,6 +2512,74 @@ typedef struct {
      * silence, which is the whole reason this row is here. */
     long mem_unframed;
 
+    /* …AND HOW MANY DISPATCHES THAT POPULATION HAS EVER RECEIVED — the LIFETIME half of the row above, and
+     * the one row on this census that can say whether the ORDER has ever offered the thread to a member
+     * standing in the state the row above counts. It is raised in flow_credit_pick, beside `picks_lifetime`
+     * and conditionally on the same flow_stack_empty the job and delivery splits are asked through, so the
+     * numerator and the population it is drawn from move together and the containment is by construction.
+     *
+     * THE KIND IS IN THE NAME AND IT IS THE OPPOSITE OF ITS NEIGHBOUR'S. `mem_unframed` is a GAUGE: a member
+     * that departs or that frames itself by running leaves it, so it may FALL between two censuses and
+     * differencing it is arithmetic over no quantity. This is a LIFETIME COUNTER, raised once per event and
+     * lowered by nothing, so it is the one of the pair a reader may difference across two samples — and a
+     * series of it that DECREASES is the free tell that it has stopped being one.
+     *
+     * READ IT BESIDE `picks_lifetime` AND NEVER ALONE, because a zero has an absent reading and a measured one
+     * and they take opposite work. With `picks_lifetime` at 0 this instance has dispatched nothing at all and
+     * the row is silent about the order; with `picks_lifetime` large it is a measurement. That pair is the
+     * denominator rule CLAUDE.md states for every count offered as a share of another, and it is the whole of
+     * what makes the two readings below distinguishable:
+     *
+     *   0 with dispatches made   the order has NEVER handed the thread to a member with an empty stack, and
+     *                            this arm is DECISIVE FOR THE READY HOLDERS TOO. `jobs_ready`'s arm is
+     *                            reached only through flow_stack_empty — the assert at the end of this scan
+     *                            states exactly that — so a ready holder is inside this row's population by
+     *                            construction, and a zero here is a zero for it. Every reading this census
+     *                            publishes about that population (`jobs_ready`'s "waits on RANK ALONE",
+     *                            `job_w_gap`'s "the front of the order is holding one") is then a statement
+     *                            about members the dispatch does not take, and the defect is in the DISPATCH
+     *                            PATH rather than in the terms: the front of the order is one of these
+     *                            members and flow_next_to_run's caller is not running it.
+     *   above 0                  "ranked at the front and never taken" is REFUTED for the unframed population
+     *                            as a whole, and THAT IS ALL IT ESTABLISHES — stated as a refutation rather
+     *                            than as a proof because the two are not the same claim and this row can only
+     *                            make the first. What is left open is whether `w_top` and the ready holder's
+     *                            weight are the quantities the dispatch compares at all, which is where a
+     *                            gap of zero over members the order really does reach has to be read next.
+     *
+     * NAMED RESIDUAL, AND IT IS THE PRICE OF THE PAIRING RATHER THAN AN OVERSIGHT.
+     * NOT COVERED: a dispatch to a member that is unframed and holds NO job is counted here exactly as one to
+     * a ready HOLDER is, because the predicate is flow_stack_empty alone. That is deliberate — it is the
+     * population `mem_unframed` is taken over, and a counter whose denominator is not on the line is the
+     * defect CLAUDE.md names for every count offered as a share of another — and it makes the two arms above
+     * ASYMMETRIC. The zero arm is decisive for the ready holders by the containment above; the non-zero arm
+     * is a bound and not a measurement of them, because this superset can be non-zero while the ready subset
+     * is still zero.
+     * WHAT THE NEXT DIFF BUILDS: the same count restricted to the arm's own three conjuncts
+     * (`!flow_host_owed && flow_stack_empty && flow_job_pending > 0`), which is a SECOND row and not a
+     * narrowing of this one, published beside `jobs_ready` as this is published beside `mem_unframed`, so
+     * each counter stands beside the gauge it is the lifetime half of.
+     * HOW ITS ABSENCE WOULD SHOW: a census reporting this row non-zero while `_jobsRun` never leaves zero over
+     * the same run — a reader may then conclude the dispatch reaches the job backlog, and nothing published
+     * anywhere contradicts them.
+     *
+     * WHAT WOULD MAKE IT UNTRUSTWORTHY, stated here because a row whose failure modes are not written down is
+     * one a reader will rationalise after the fact. Three things, and each already has a check: the
+     * containment against `picks_lifetime` (asserted at the end of flow_wfq_census, and re-asserted by the
+     * build's reader because the DCHECK is compiled out of a release); `picks_lifetime == _switches` across
+     * the document, which is what says this census's denominator is the engine's own dispatch count and not a
+     * second one; and a re-spelling of flow_stack_empty at the RAISE but not at the census's arms, which
+     * cannot happen while both call the function rather than restating it. If any of the three is broken the
+     * row is a count of some other event and neither reading above is available.
+     *
+     * IT IS A REPORT AND NOT A BOUND. Nothing reads it inside the ordering, no fork carries it, nothing resets
+     * it and nothing branches on it — which matters more here than for the pick rows beside it, because a
+     * count of dispatches a population has not received is exactly the numerator a watchdog over a flow that
+     * never finishes anything would be built from. §NO BOUNDS forbids that, and flow_credit_pick's own
+     * paragraph states the property this leans on: a quantity the ordering consumes stops being able to
+     * answer the question it exists for. */
+    int64_t unframed_picks_lifetime;
+
     /* THE DELIVERY BACKLOG, SPLIT THE SAME WAY AND FOR THE SAME REASON — the missing twin of the four rows
      * above. The cold census says how many register entries are ANSWERED AND UNTAKEN (`pendReady`) and how
      * many members could take one right now (`canDeliver`); neither says WHERE THOSE MEMBERS STAND IN THE

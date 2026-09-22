@@ -45,6 +45,32 @@ static long g_world_commit_rows;
    exactly ONE caller and engine.c increments its own `g_switches` on the line beside it, so this must equal
    the result document's `_switches` for the same instance, and a divergence names a second dispatch path. */
 static int64_t g_picks_total = 0;
+/* …AND HOW MANY OF THOSE DISPATCHES REACHED A MEMBER WHOSE JAVASCRIPT EXECUTION CONTEXT STACK WAS EMPTY —
+   the LIFETIME half of the census's `mem_unframed`, and the row that decides between the two readings the job
+   split's residual below could state and deliberately would not choose between.
+   A GAUGE CANNOT ANSWER IT, WHICH IS WHY IT IS A SECOND QUANTITY AND NOT A SECOND SPELLING. `mem_unframed` is
+   taken over the members standing at ONE instant, so it says who is in that state and is silent on whether the
+   scheduler has ever handed one of them the thread: a member dispatched while unframed that then framed itself
+   by running has left that count entirely, and a member that departed took its share of it away. Only a
+   counter can say how many such dispatches there were, and that is the fact the residual needs.
+   RAISED IN flow_credit_pick BESIDE `g_picks_total` AND NOWHERE ELSE, which is what makes the containment
+   asserted at the end of flow_wfq_census hold by CONSTRUCTION rather than by two writers agreeing: it is a
+   conditional increment in the same statement block as the unconditional one it is a subset of, so the two
+   are credited at ONE moment and the pair cannot become a numerator over somebody else's denominator. That is
+   the defect CLAUDE.md records as a starvation count raised inside a SELECTOR against a denominator raised at
+   a SWITCH, and the arithmetic tell for it — a subset exceeding its population — is the assert.
+   ASKED THROUGH flow_stack_empty, WHICH IS THE PREDICATE THE CENSUS'S OWN ARMS ARE WRITTEN AGAINST, so an edit
+   to HTML §8.1.4.4 "Calling scripts"' clean up after running script step 3 as this engine states it reaches
+   the numerator and the population it is a count of together. A second spelling here — `f->frame` alone —
+   would be two sets wearing one word, which is exactly the drift the job split above had to be repaired for.
+   NOT RESET BY flow_registry_init, for `g_picks_total`'s reason and without costing the identity: both are
+   totals of the INSTANCE, so a reset of one and not the other is the incommensurability that rule is about.
+   IT DECIDES NOTHING AND IT MOVES NO RANK, for flow_credit_pick's reason — flow_weight does not read it, no
+   fork carries it, nothing resets it, and nothing anywhere branches on it. A count of dispatches a population
+   has NOT received is exactly the numerator a watchdog over a flow that "never finishes anything" would be
+   built from, and §NO BOUNDS forbids one: this is a REPORT, and the moment anything decides from it the
+   question it exists to answer is no longer askable. */
+static int64_t g_unframed_picks_total = 0;
 /* EVERY MEMBER THIS INSTANCE HAS EVER ADMITTED TO THE FRONTIER, AND EVERY ONE IT HAS EVER LET GO — the two
    LIFETIME counters that say whether the ORDER is deciding anything at all, which no row in this file could
    ask and which the one row that looks as though it could is not.
@@ -1775,6 +1801,16 @@ void flow_credit_pick(Flow *f) {
        gauges is not a number of dispatches. Counted here because this is the one line every dispatch passes
        through, so the two cannot be credited at different moments. */
     g_picks_total++;
+    /* …AND THE SUBSET OF THEM THAT REACHED A MEMBER WITH AN EMPTY JAVASCRIPT EXECUTION CONTEXT STACK — see
+       `g_unframed_picks_total` for why the census's gauge cannot answer this and for why the increment is
+       here, in the same statement block as the total it is contained in, rather than at the call site. The
+       predicate is the one flow_checkpoint_due and the census's job and delivery arms all call, so the
+       numerator and the population it is a count of move together.
+       IT READS THE SAME ON EITHER SIDE OF THE SWITCH, which is why the caller's ordering does not matter:
+       engine.c credits this after flow_switch_in, and flow_switch_in writes the delta, the decision cursor,
+       the pins and the ranked-at terms and touches neither `frame` nor the program cursor this predicate is
+       made of. */
+    if (flow_stack_empty(f)) g_unframed_picks_total++;
 }
 
 /* IS THIS FLOW'S JAVASCRIPT EXECUTION CONTEXT STACK EMPTY?
@@ -5039,6 +5075,11 @@ void flow_wfq_census(WfqCensus *out) {
        `nonreward_max` is — the same number on an empty scan as on a full one — and it is the only one of the
        three pick rows a reader may difference across two censuses. */
     out->picks_lifetime = g_picks_total;
+    /* …AND ITS UNFRAMED SUBSET, ASSIGNED IN THE SAME BREATH AND FOR THE SAME REASON: it is a count of
+       dispatches this instance has made, not a reading of this walk, so it is the same number on an empty scan
+       as on a full one. Publishing the two together is what makes the containment below checkable from
+       outside this process on the document, where the DCHECK is compiled out. */
+    out->unframed_picks_lifetime = g_unframed_picks_total;
     out->svc_max = out->svc_min = out->svc_fam_max = out->svc_fam_min = 0;
     /* …AND THE TWO ROWS THAT SAY WHAT THE NOTCH ABOVE COSTS TO ASK, cleared beside it because they are read
        over the same walk and off the same quantity (flow.c's flow_silence_phase). The residue map is cleared
@@ -5335,9 +5376,16 @@ void flow_wfq_census(WfqCensus *out) {
            order cannot move, which is the pair this row exists to make impossible to say. IT HAS FIRED, on
            every real-page census of both runs, which is why the paragraphs above exist: the clause was written
            as a thing to watch for and it is a description of the ordinary state of this engine on a real
-           document. RETIREMENT: this record goes when a census in this tree publishes a lifetime count of
-           dispatches taken by a member satisfying flow_stack_empty, because the two readings above are then
-           separated by a row instead of by this paragraph. */
+           document. THE RETIREMENT CLAUSE THAT STOOD HERE IS SATISFIED AND THE ROW IT ASKED FOR IS
+           `unframedPicksLifetime`, raised in flow_credit_pick and published beside `memUnframed`. What that
+           retires is this paragraph's standing in for a MEASUREMENT: the two readings are separated by a row
+           now, and the legend that says which value means which lives at `unframed_picks_lifetime` in
+           flow.h, beside the gauge it is the counter for, where a reader who meets the number will be. What
+           is NOT retired is the analysis above it, because the row has been published and not yet READ, and
+           a reader who deleted the reasoning would be left holding a digit with no statement of what either
+           of its outcomes implies. RETIREMENT: this paragraph goes when a run in this tree has read that row,
+           because one of the two readings is then established and the other is refuted — and whichever it
+           is, it is recorded at the site it names rather than here. */
         {
             int jn = flow_job_pending(f);
             if (jn > 0) {
@@ -5600,6 +5648,19 @@ void flow_wfq_census(WfqCensus *out) {
            "flow_credit_pick raises both in one statement and is the only writer of either, so a member's "
            "`picks` has been written from somewhere else and every reading derived from these rows is about "
            "dispatches that did not happen");
+    /* AND THE SAME IDENTITY FOR THE SUBSET OF THOSE DISPATCHES THAT REACHED AN UNFRAMED MEMBER, which is the
+       one property of it a reader can check and is therefore what makes it a counter rather than a digit.
+       CLAUDE.md records the defect this refuses: a count offered as a share of another, raised at a different
+       event from its denominator, whose free tell is a subset exceeding the population it claims to be drawn
+       from. Here the two are raised in ONE statement block of flow_credit_pick — an `if` beside a `++` — so
+       the inequality is by construction and can fail only on an edit that gives one of them a second writer,
+       which is precisely the edit that would make every reading of the pair a statement about two different
+       dispatch paths. It costs one comparison of two integers already in hand. */
+    DCHECK(out->unframed_picks_lifetime <= out->picks_lifetime,
+           "the scheduler has dispatched an UNFRAMED member more often than it has dispatched at all: "
+           "flow_credit_pick raises both in one statement block, the second conditionally on the first, so "
+           "one of them now has a writer elsewhere and the row that separates `memUnframed`'s two readings "
+           "is a fraction over the wrong denominator");
     /* THE FATTEST LIVE BUCKET'S OWN THREE NUMBERS, TAKEN FROM THE ONE NODE THE WALK RETAINED — see flow.h for
        the three states they separate and for why three extrema over a population cannot separate them. This
        is the SECOND reading of that bucket's membership pair: branch_take folded the first into a running

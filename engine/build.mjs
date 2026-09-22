@@ -1164,6 +1164,43 @@ const ageQuantum = () =>
   hostDefine("solver/flow.c", "FLOW_SILENCE_US",
              "the @WFQ reader prices the aging term from flow.c's FLOW_AGE_QUANTUM factors");
 
+/* WHICH OF TWO READINGS A FRONT-OF-QUEUE SENTENCE ABOUT THE UNFRAMED POPULATION HAS — the one thing the rest
+   of this reading cannot say, and the question solver/flow.c's job-split residual states and deliberately
+   refuses to decide. Both arms below reach a sentence that closes a question: `jobWGap: 0` renders "nothing
+   the ordering can do would run these sooner", and the second-silence arm renders "read where jobs are
+   queued". Each is true of a population the ORDER has reached and each is a wrong instruction for one it has
+   not, and no row on that line could tell the two apart — `memUnframed` is a gauge over one instant and says
+   who is standing in the state, never whether the scheduler has ever offered one of them the thread.
+   IT IS STATED AS WHAT EACH OUTCOME REFUTES RATHER THAN AS WHAT IT PROVES, which is the only form this row
+   earns: a zero refutes "the dispatch takes them" outright, and a non-zero refutes "the dispatch never takes
+   them" outright, and neither settles by itself what the remaining defect IS. The share against
+   `picksLifetime` is the follow-on reading and is printed so it can be taken rather than assumed.
+   THE DENOMINATOR IS READ FIRST AND THAT IS NOT A CAVEAT. `unframedPicksLifetime: 0` on an instance that has
+   dispatched NOTHING is the absent reading of a zero and is about neither — the pair CLAUDE.md prescribes for
+   every count offered as a share of another, and the one arm here that says so instead of judging. */
+function unframedPickSentence(w) {
+  if (w.picksLifetime === 0)
+    return `. This instance has made no dispatch at all, so \`unframedPicksLifetime: 0\` beside that is the ` +
+           `ABSENT reading of a zero rather than a measured one, and it says nothing about the order either ` +
+           `way.`;
+  return w.unframedPicksLifetime === 0
+    ? `. AND THE ORDER HAS NEVER HANDED THE THREAD TO ONE OF THEM — ${w.picksLifetime} dispatch(es) in this ` +
+      `instance's lifetime and NOT ONE went to a member whose JavaScript execution context stack was empty. ` +
+      `So the sentence above is about a population the dispatch does not take, and every front-of-queue ` +
+      `reading over it (\`jobWGap\`, \`curDeepWGap\`) is a statement about members that are ranked and not ` +
+      `run. Read the DISPATCH PATH — solver/engine.c's \`best != cur\` block and flow_next_to_run — before ` +
+      `any weight term.`
+    : `. Those members ARE dispatched: ${w.unframedPicksLifetime} of ${w.picksLifetime} dispatch(es) ` +
+      `(${(100 * w.unframedPicksLifetime / w.picksLifetime).toFixed(1)}%) went to one whose JavaScript ` +
+      `execution context stack was empty, so "ranked at the front and never taken" is REFUTED for the ` +
+      `unframed population as a whole — and THAT IS ALL IT ESTABLISHES. This row's predicate is ` +
+      `flow_stack_empty alone, so it is a SUPERSET of the ready holders and may be non-zero while the ready ` +
+      `subset is still zero; the zero arm is decisive for them by containment and this arm is a bound. What ` +
+      `a gap of zero cannot establish either way is that \`wTop\` and the ready holder's weight are the ` +
+      `quantities the dispatch compares — read the census's own quantities against flow_next_to_run's ` +
+      `comparator, and read this share against \`memUnframed\`.`;
+}
+
 function wfqReading(out) {
   const s = [];
   for (const m of out.matchAll(/^@WFQ (\{.*\})$/gm)) { try { s.push(JSON.parse(m[1])); } catch { /* truncated tail */ } }
@@ -1345,6 +1382,20 @@ function wfqReading(out) {
                     `one of ${w.members} members holds a frame — the ready arm is reached only through ` +
                     `!frame, so these are the same predicate asked twice in one loop and one of them has ` +
                     `been re-spelled.`);
+  /* AND THE LIFETIME HALF OF THAT ROW AGAINST THE TOTAL IT IS A SUBSET OF, re-asserted here for the reason the
+     `jobWGap` guard above is: flow_wfq_census DCHECKs it and that DCHECK is compiled out of a release build,
+     where this reader still runs. It is a count offered as a share of another, so the arithmetic tell
+     CLAUDE.md names for that shape — a subset exceeding the population it claims to be drawn from — is the
+     check, and it is available here because the engine publishes both. A violation means flow_credit_pick is
+     no longer the only writer of one of them, and the discriminator the reading below turns on is then a
+     fraction over the wrong denominator rather than a fact about dispatches. */
+  if (!(w.unframedPicksLifetime >= 0) || w.unframedPicksLifetime > w.picksLifetime)
+    throw new Error(`[build] the @WFQ census reports unframedPicksLifetime ${w.unframedPicksLifetime} ` +
+                    `against picksLifetime ${w.picksLifetime} — the first is raised in flow_credit_pick's ` +
+                    `own statement block, conditionally on flow_stack_empty, beside the unconditional ` +
+                    `increment that raises the second, so it is contained in it by construction. Outside ` +
+                    `that range one of the two has a writer elsewhere and neither reading of the pair is ` +
+                    `about the dispatches this instance made.`);
 
   /* EACH TERM OF flow_weight AGAINST THE SPREAD IT COULD ORDER — the reading that says which term is deciding
      this run, rather than which one is largest. A term's magnitude and a term's RANGE take opposite actions:
@@ -1442,12 +1493,12 @@ function wfqReading(out) {
             `outranked: read flow_step`
           : `${w.memUnframed} of ${w.members} member(s) DO hold an empty stack and none of them holds a ` +
             `job — so the backlog sits on members inside programs while the members that could take one ` +
-            `have nothing: read where jobs are queued`)
+            `have nothing: read where jobs are queued` + unframedPickSentence(w))
       : `${w.jobsReady} of ${jobsTotal} queued job(s) wait on RANK ALONE (${w.jobsFramed} framed, ` +
         `${w.jobsOwed} owed by the host)` +
         (w.jobWGap === 0
           ? `, and the front of the order is holding one — the backlog is NOT outranked, so nothing the ` +
-            `ordering can do would run these sooner`
+            `ordering can do would run these sooner` + unframedPickSentence(w)
           : rangeVal > 0 && w.jobWGap >= rangeVal
             ? `, standing ${w.jobWGap.toFixed(3)} points behind the front — at or beyond this frontier's ` +
               `whole reward spread (${rangeVal.toFixed(3)}), so the backlog IS outranked and it is the ` +

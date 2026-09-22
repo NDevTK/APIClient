@@ -1012,6 +1012,22 @@ char *result_wfq_json(void) {
                         jobs are queued. Printed beside the split rather than beside `visZero` because it
                         is that split's denominator and not a second extremum over the frontier. */
                      "\"memUnframed\":%ld,"
+                     /* …AND THE LIFETIME HALF OF IT, WHICH THE GAUGE BESIDE IT STRUCTURALLY CANNOT BE.
+                        `memUnframed` says who stands with an empty stack at this instant; this says how many
+                        dispatches that state has EVER received, so a member that was picked and then framed
+                        itself by running is in the second and not the first. Raised in flow_credit_pick beside
+                        `picksLifetime` and conditionally on the same flow_stack_empty the split above is asked
+                        through, so it is contained in `picksLifetime` by construction — flow_wfq_census
+                        asserts that, and engine/build.mjs asserts it again because the DCHECK is compiled out
+                        of a release build where this reader still runs.
+                        IT IS WHAT SEPARATES `jobWGap: 0`'s TWO READINGS, which no other row on this line can:
+                        a gap of zero says the front of the order IS a ready holder, and that is consistent
+                        both with the order ranking this population first while the dispatch does not take it
+                        and with `wTop` not being the quantity the dispatch compares at all. Zero here with
+                        `picksLifetime` large is the first; above zero is the second. Read beside
+                        `picksLifetime` and never alone — with no dispatch made at all this is 0 for a third
+                        reason that is about neither. solver/flow.h carries the legend. */
+                     "\"unframedPicksLifetime\":%lld,"
                      "\"delivReady\":%ld,\"delivFramed\":%ld,\"delivOwed\":%ld,\"delivWGap\":%.3f,"
                      /* AND WHICH TERM THAT GAP IS, AT THE TWO MEMBERS IT IS BETWEEN — solver/flow.h states
                         why the OPTIMISM operand is the one of flow_weight's four summands that has no row
@@ -1212,7 +1228,7 @@ char *result_wfq_json(void) {
                      (long long)w.top_svc, (long long)w.top_svc_fam, (long long)w.top_forgiven,
                      w.nonreward_max,
                      w.jobs_ready, w.jobs_framed, w.jobs_owed, w.job_w_gap,
-                     w.mem_unframed,
+                     w.mem_unframed, (long long)w.unframed_picks_lifetime,
                      w.deliv_ready, w.deliv_framed, w.deliv_owed, w.deliv_w_gap,
                      (long long)w.deliv_w_gap_vis, (long long)w.w_top_vis,
                      w.cur_deep, w.cur_deep_live, w.cur_deep_w_gap,
