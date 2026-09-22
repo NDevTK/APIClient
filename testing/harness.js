@@ -358,6 +358,55 @@ function resolveUnprivileged(chromePath) {
       `      install -d -o ${name} -g ${name} -m 0750 ${home || `/home/${name}`}\n` +
       `  This is NOT a reason to set HARNESS_ALLOW_NO_SANDBOX=1 — the sandbox is working.`);
   }
+  /* AND THE PROFILE, WHICH THE PARAGRAPH ABOVE ALREADY CLAIMS IS ASKED AS THE TARGET USER AND WAS NOT.
+     assertExtDirReachable's banner says "the binary, the profile and the home are each asked as the target
+     user above; the extension directory was the one launch input nobody asked about" — and of those three
+     only two were. The binary is asked (`canExec`) and the home is asked (`canWrite`); the profile was
+     CHOWNED, as root, which answers a different question. `chown -R` establishes the LEAF's owner and says
+     nothing about whether the account can REACH it, and traversability is a property of the ANCESTORS, which
+     this harness does not own and must not widen (assertExtDirReachable's own refusal-rather-than-repair
+     argument, which holds here for the same reason).
+     ASKED WITH `test -w` AS THAT USER, which covers both halves in one question: POSIX `test` resolves the
+     path, so a component the account cannot search makes it fail exactly as an unwritable leaf does. That is
+     the same mechanism, the same spelling and the same function the home is asked with one block up, rather
+     than a second way to ask one question.
+     WHY IT IS WORSE THAN THE EXTENSION CASE AND NOT A SMALLER VERSION OF IT. An unreachable EXT_DIR leaves a
+     browser holding NO extension, so `/json/list` names no chrome-extension:// origin and a lane can see it.
+     An unreachable PROFILE leaves everything looking right — the extension loads, the offscreen comes up, the
+     content script runs, requests are intercepted — and kills only the STORAGE SERVICE, which resolves the
+     profile path in a process of its own. `indexedDB.open` then answers `UnknownError: Internal error opening
+     backing store`, bridge.js DFAILs on the cross-session frontier's preference read, no engine is ever
+     seated, and testing/live-run.js reports `budget-elapsed(no-row)` with the scheduler ALIVE and
+     `kicksRefused: 0` — which that driver's own comment defines as "a document that was admitted and never
+     provisioned an engine". A lane that meets this concludes something false about the ENGINE, which is the
+     outcome the extension guard was written to prevent, arriving through the other path.
+     MEASURED as a controlled pair, same artifact, same URL, same command, only PROFILE_DIR differing: under a
+     session scratchpad whose top component is mode 0700 root, `reservations.made` 0, `_engineLog` empty and
+     no engine row in 90 s; with the profile under the account's own home, the identical run produced a real
+     engine row. The probe was run with both controls — an invented method answers `absent` and the cure
+     answers `{ok:true}` — because a launch guard nobody has seen refuse anything is not a guard.
+     NAMED RESIDUAL — NOT COVERED: this names the PROFILE and not the outermost ANCESTOR that denies it, where
+     assertExtDirReachable walks the components and names the one blocker plus the modes root sees. WHAT THE
+     NEXT DIFF BUILDS: one parameterised walk that both callers reach, taking the leaf test (`-r` + manifest
+     for the extension, `-w` for the profile) and the consequence sentence, so there is one quoting surface,
+     one DONE marker and one outermost-blocker rule rather than two. HOW ITS ABSENCE WOULD SHOW: a refusal
+     that names a profile directory and leaves the reader to find the blocking ancestor by hand. */
+  if (!canWrite(PROFILE_DIR)) {
+    throw new Error(
+      `\`${name}\` (uid ${uid}) cannot reach the profile directory, so Chrome would launch, load the\n` +
+      `  extension, answer /json/version — and its storage service would fail to open IndexedDB. The\n` +
+      `  cross-session frontier is persisted there, so the offscreen DFAILs on its preference read, no\n` +
+      `  engine is ever seated, and every run reads as a document that was admitted and never provisioned\n` +
+      `  one. Refusing before launch rather than measuring that.\n` +
+      `    profile: ${PROFILE_DIR}\n` +
+      `  \`chown -R\` already ran and PASSED — it sets the leaf's owner and cannot see whether ${name} can\n` +
+      `  TRAVERSE the path to it, which is a property of the ancestors. Root's view of them is not the\n` +
+      `  answer; this was asked as ${name} with \`test -w\`.\n` +
+      `  Put the profile somewhere the account can reach (its own home is always safe):\n` +
+      `      HARNESS_PROFILE=${home || `/home/${name}`}/harness-profile node testing/harness.js restart\n` +
+      `  Widening a directory this harness does not own is a security decision it is not entitled to make,\n` +
+      `  which is why this refuses rather than repairing.`);
+  }
   log(`dropping privileges to ${name} (uid ${uid}) so Chrome keeps its sandbox`);
   return { uid, gid, name, chromePath, home };
 }
