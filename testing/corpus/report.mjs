@@ -316,7 +316,8 @@ for (const p of passes) for (const r of p.rows) {
        `unitsDone` near zero is either flows reaching that boundary and finding nothing to do, or NO FLOW
        EVER REACHING IT. `jobsQueued`/`jobsRun` is the pair that separates them, and site.mjs carries both.
        DERIVATION -- AND THE ONE THAT STOOD HERE DID NOT RUN, WHICH IS WORSE THAN A QUOTED FIGURE BECAUSE IT
-       PROMISED ONE THAT DID. It read "the figure above is re-runnable rather than quoted: `node
+       PROMISED ONE THAT DID. The sentence that used to be here read "the figure above is re-runnable
+       rather than quoted: `node
        testing/corpus/report.mjs` over the committed `census-cc-*.jsonl` rows", and BOTH halves are false.
        That command reads `census.jsonl`, which this argv default names and which does not exist, so it exits
        ENOENT before parsing a row; and with the files passed it exits again demanding `SITES=`, because the
