@@ -538,9 +538,12 @@ const shape = (n) => [...(hits.get(n) || new Map()).keys()].map((k) => [k, freeO
    false, and it is the sentence that made this band dispatchable without opening anything. Its premise
    quantifies over CHANNEL HITS and its conclusion over GUARDED USES, and those are not the same set: a
    channel hit is a SPELLING this file can see, while a use is kept from throwing by anything at all in the
-   program — so the step holds only if every non-throwing shape has a channel. Three shapes measured over
+   program — so the step holds only if every non-throwing shape has a channel. FOUR shapes measured over
    this corpus have none, and each was found by OPENING the sites behind a THROWS row, which is the only
-   instrument that has ever separated them:
+   instrument that has ever separated them. THIS LIST READ `Three` UNTIL A READER OPENED THE TOP ROW OF THE
+   BAND AND FOUND THE FOURTH AT IT, which is the enumeration failing in the direction that matters: a list of
+   the shapes that defeat a band is read by exactly the person about to dispatch from that band, so a member
+   missing from it is a demotion nobody makes:
      - A NON-THROWING READ SPELLED ON A GLOBAL ALIAS. A file is free to bind the global object to a local
        name, and a member read on that name is then an ordinary property miss answering undefined — the same
        read, on the same object, that `window.X` is, which is why the engine does not distinguish them
@@ -549,6 +552,13 @@ const shape = (n) => [...(hits.get(n) || new Map()).keys()].map((k) => [k, freeO
      - A USE INSIDE A BRANCH THAT A SIBLING CAPABILITY'S ABSENCE MAKES DEAD, which the residual below names.
      - A USE INSIDE SOURCE CARRIED AS DATA, which the STRING LITERAL residual below names, and whose
        HOW-ITS-ABSENCE-WOULD-SHOW clause is written for precisely this symptom.
+     - A USE WHOSE THROW IS CAUGHT. `try { new X(...) } catch {}` DOES raise the ReferenceError, so every
+       channel here is right about the position and wrong about the cost: the flow does not end, the catch
+       arm runs, and what the page does next is what it would do in a real browser that lacks X — which is
+       the detect-only verdict reached by a different route. It is not reachable by widening any channel,
+       for the reason the two residuals below give about themselves: a channel matches one EXPRESSION and a
+       `try` block is a SCOPE, so whether an occurrence is inside one is the same question the code/not-code
+       mask is named for, asked over a span of CODE this file has only ever had as TEXT.
    WHAT THE BAND MEANS IS THEREFORE NARROWER, AND IS STILL WORTH SORTING FIRST: no channel here saw a
    non-throwing read of this name ANYWHERE in the corpus. That is a reason to OPEN a row's sites, never a
    statement that those sites throw — and it is cheap to act on, because a row's whole count IS its number of
@@ -562,16 +572,25 @@ const shape = (n) => [...(hits.get(n) || new Map()).keys()].map((k) => [k, freeO
    NAMED RESIDUAL — A USE THAT A SIBLING CAPABILITY'S ABSENCE MAKES UNREACHABLE IS COUNTED AS A USE. WHAT IS
    NOT COVERED: a conjunction that tests one member and then evaluates another name behind it — the test
    names a DIFFERENT identifier from the one it protects, so when the tested member is also missing here the
-   protected name is never reached and cannot throw. WHY NO CHANNEL CAN REACH IT, which is the part that
+   protected name is never reached and cannot throw. THIS CLAUSE SAID `a conjunction` AND THAT IS THE NARROWER
+   HALF OF THE SHAPE, measured by opening the sites behind a THROWS row: the commoner form is an ORDINARY
+   PRECEDING STATEMENT in the same block that reads the absent sibling and throws on its `undefined` before
+   the ranked name is ever evaluated — nothing short-circuits, so a reader looking for an operator finds none.
+   AND THE SIBLING IS NOT ALWAYS A LIST-A NAME, WHICH IS THE HALF THAT WOULD HAVE MADE A LANDED WIDENING MISS
+   IT: it can be an absent MEMBER of an interface that exists, so the receiver resolves, the read answers
+   `undefined`, and the throw lands at whatever consumes it. A next diff that asks only whether the dominating
+   expression tests `a name this tree reaches on no global` is looking in the wrong population as well as at
+   the wrong construct. WHY NO CHANNEL CAN REACH IT, which is the part that
    keeps this from being an unbuilt widening: every channel above is keyed on the name being ranked, and the
    evidence lives at an identifier that name does not appear in, so no pattern over this name exists to be
    made wider — a reader who proposes one has mis-read which identifier the guard tests. WHAT THE NEXT DIFF
    BUILDS: a REACHABILITY question rather than a channel — for a use occurrence, whether the expression that
-   dominates it tests a name this tree also reaches on no global — which needs the code/not-code mask the
-   STRING LITERAL residual names to land first, because its operand is a span of CODE and this file has only
-   ever had a span of TEXT. HOW ITS ABSENCE WOULD SHOW: a row in the THROWS band whose use occurrences all
-   sit to the right of a short-circuiting operator whose left operand tests a member of an interface this
-   tree does not install.
+   dominates it — or any statement of the block that precedes it — reads something this tree does not install,
+   on EITHER list, which needs the code/not-code mask the STRING LITERAL residual names to land first, because
+   its operand is a span of CODE and this file has only ever had a span of TEXT. HOW ITS ABSENCE WOULD SHOW: a
+   row in the THROWS band whose use occurrences all sit downstream, in their own block, of a read of something
+   this tree does not install — which a reader sees by opening the row and looking LEFT of the occurrence
+   rather than at it.
    RETIREMENT: when that question is asked at the occurrence rather than left to whoever opens the row.
 
    THE GLOBAL-ALIAS WIDENING WAS BUILT AND MEASURED AND DECLINED, and the measurement is the part worth
