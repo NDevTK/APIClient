@@ -1,0 +1,180 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>control — an as=image preload SELECTS a source, and out of which set</title>
+<!--
+  INSTRUMENT CONTROL, ITS OWN ORIGIN — the reachability witness for HTML §4.6.8.20 Link type "preload"'s
+  image branch. That branch is two sentences: "Update the source set for el" in its fetch-and-process steps,
+  and, in "to preload", `If options's destination is "image" and options's source set is not null, then set
+  options's href to the result of selecting an image source from options's source set.` Both sentences are
+  quoted here from the fetched standard.
+
+  WHY A FIXTURE AT ALL, AND THIS IS THE WHOLE ARGUMENT FOR THE DOCUMENT. The commit that built this branch
+  could only predict that the ABORT it replaced is gone — "the path COMPLETES" — and not that the SELECTION
+  is right, because no real document reachable from this corpus separates the two: the one mirrored index
+  serving `<link … imagesrcset>` carried every one of its candidates in an `<img srcset>` in the same
+  document, so a candidate on the surface is explained by the img and says nothing about the link.
+  EVERY ADDRESS BELOW IS UNDER `/px/` AND `/px/` APPEARS NOWHERE ELSE IN THIS DIRECTORY, which is what makes
+  each one attributable to the link that names it and to nothing else.
+
+  AND THE ENDPOINT SURFACE CANNOT ANSWER THE QUESTION THIS DOCUMENT ASKS, WHICH IS WHY THE ORACLE IS THE
+  SERVER. core/html/html_link.c records EVERY image source in the set as an endpoint and then records the
+  SELECTED one again, deduped on method+url — so `siteEndpoints` holds the same five addresses whichever
+  candidate the selection picked, and is blind to the selection BY CONSTRUCTION. What separates the five is
+  that exactly ONE of them is REQUESTED, and the only reader of that fact outside the engine is serve.mjs's
+  own `REQ` log. The two columns are therefore not two readings of one rung: the surface says THE SET WAS
+  PARSED and the log says WHICH SOURCE WAS CHOSEN, and neither substitutes for the other.
+
+  THE LOG ALSO SURVIVES AN ABORT, which is why four rungs may share one document here where this directory's
+  rule is normally one question per origin. An abort blinds every column site.mjs reads; it does not blind a
+  server that already answered. So rungs A, B and D report through a channel an engine crash cannot erase,
+  and rung C's reading is a NEGATIVE in that same log whose reachability witness is the three positives
+  beside it — an absence in a document that provably ran, rather than an absence that reads as a document
+  that never did.
+
+  EVERY BYTE OF EVERY WITNESS IS A CONSTANT IN THIS MARKUP. CLAUDE.md forbids composing a witness out of
+  anything the engine COMPUTED: a payload that can itself become unknown is never emitted, and its absence
+  then reads as the path not being taken. Rung C is the one rung whose address is deliberately unknown, and
+  its witness is the CONSTANT PREFIX `/px/c-undecided-`, never the whole address.
+
+  ==== RUNG A — the selection, and WHICH candidate it picks =================================================
+
+  DERIVED, NOT CHOSEN, and the derivation is here so a reader can refute it without running anything:
+
+    1. §4.8.4.3.9 "Updating the source set" step 3 replaces `elements` only for "an img element whose parent
+       node is a picture element". A `link` is not an img, so `elements` stays « el » and step 5.1 runs at
+       once — which the section's own note states: "If el is a link element, then elements contains only el,
+       so this step will be reached immediately and the rest of the algorithm will not run."
+    2. Step 5.1 takes srcset from `imagesrcset`, sizes from `imagesizes` (ABSENT here) and default source
+       from `href` (ABSENT here).
+    3. §4.8.4.3.8 "Creating a source set from attributes" step 3 sets the source size from sizes. An absent
+       `imagesizes` is the empty string, and §4.8.4.3.11 "Parsing a sizes attribute" ends "Return 100vw."
+       core/frame/viewport.c answers that with `VIEWPORT_TOP_WIDTH`, which is 1280 for a top-level document.
+       THIS DOCUMENT MUST THEREFORE BE THE TOP-LEVEL ONE — in a child navigable the same markup resolves
+       against a different width and picks a different candidate. serve.mjs answers it at `/` and at no
+       other path for exactly that reason.
+    4. Step 4 does not append the default source: it is the empty string, and there are width descriptors.
+    5. §4.8.4.3.12 "Normalizing the source densities": "replace the width descriptor with a pixel density
+       descriptor with a value of the width descriptor value divided by source size and a unit of x".
+    6. §4.8.4.3.7 "Selecting an image source" leaves the choice open — "In an implementation-defined manner,
+       choose one image source from sourceSet" — and this engine's `iss_choose` states it: the SMALLEST
+       density at or above the output device's, and the LARGEST otherwise. `viewport_device_pixel_ratio` is
+       1.0.
+
+  So, at a source size of 1280 and a device pixel ratio of 1.0:
+
+        /px/a-320w.gif    320w   ->  0.25     below the ratio
+        /px/a-1600w.gif  1600w   ->  1.25     at or above
+        /px/a-960w.gif    960w   ->  0.75     below the ratio
+        /px/a-1280w.gif  1280w   ->  1.00     at or above, and the SMALLEST such  <-- SELECTED
+        /px/a-3200w.gif  3200w   ->  2.50     at or above
+
+  EVERY QUOTIENT ABOVE IS EXACT IN BINARY (1280 = 2^8 * 5, and each width is 1280 times a dyadic rational
+  times a small odd factor that divides out), so no rounding stands between the arithmetic and the compare.
+
+  THE CANDIDATE SET IS CHOSEN SO THAT EVERY WRONG ANSWER IS A DIFFERENT LOG LINE, which is the only property
+  that makes the log worth reading:
+
+        picked first in markup order            -> /px/a-320w.gif
+        picked last in markup order             -> /px/a-3200w.gif
+        picked the largest density (the         -> /px/a-3200w.gif
+          fallback arm taken when it should
+          not be)
+        picked the smallest or largest WIDTH    -> /px/a-320w.gif  /  /px/a-3200w.gif
+        source size 720  (the viewport HEIGHT)  -> /px/a-960w.gif
+        source size 1920 (the SCREEN width)     -> /px/a-3200w.gif
+        source size 300  (a child navigable's   -> /px/a-320w.gif
+          default replaced width)
+        device pixel ratio 2 rather than 1      -> /px/a-3200w.gif
+
+  The selected address is fourth of five and is none of those. `/px/a-960w.gif` exists ONLY to separate the
+  viewport's width from its height, which a set without it cannot do — both answer `/px/a-1280w.gif`.
+
+  WITNESS: `REQ control-preload GET /px/a-1280w.gif` in the server log, exactly once, and no other `/px/a-`
+  line. And all five `/px/a-*.gif` addresses in `siteEndpoints`, which says the SET was parsed.
+
+  ==== RUNG B — an `as=image` preload carrying only an `href` ===============================================
+
+  The same branch with nothing to select from but the href. §4.8.4.3.8 step 4 appends the default source
+  (the set holds no 1x source and no width descriptor), §4.8.4.3.12 gives it 1x, and §4.8.4.3.7 returns it —
+  so the selection ROUND-TRIPS to the address it started from. This rung exists because that round trip is
+  the one arm in which the selection could silently lose an address that a pre-selection implementation
+  simply used: a set that came out empty returns with no request at all, and nothing else would say so.
+
+  WITNESS: `REQ control-preload GET /px/b-href-only.gif`, exactly once. Its ABSENCE is the finding.
+
+  ==== RUNG C — an `imagesrcset` composed out of unknown input ==============================================
+
+  `window.__PRELOAD_CFG` is absent, which CLAUDE.md §Attacker-sources makes unknown server-injected input
+  rather than a ReferenceError — the same unknown `url-operands.html` uses, and deliberately not an attacker
+  source, which would put candidate flows on the frontier and make this rung compete with its neighbours for
+  one dwell. The element is built by script rather than written in markup because an attribute spelled in
+  markup is a CONSTANT: only an assignment can carry a taint. That is also the shape the population is
+  really in — the commit that built this branch found the token inside a JS chunk in six of seven apps that
+  have it, because it is `ReactDOM.preload()` composing the element at runtime.
+
+  WHICH SOURCE THIS LINK PRELOADS IS NOT A QUESTION ANY HOST CAN BE ASKED, and it is still a request the
+  page makes, so the SHAPE must reach the @H surface rather than disappearing. THE READING IS THREE-VALUED,
+  and it is written that way rather than as pass/fail because the third state is a statement about this
+  document's instrument and not about the engine:
+
+    - a `/px/c-undecided-` request in the log      -> DEFECT. The taint was lost, an example was taken for
+                                                     the value, and a fabricated address was fetched.
+    - no such request, and a `siteEndpoints` entry -> correct. The request is reported as a shape and not
+      containing `/px/c-undecided-`                   performed.
+    - no such request, and no such entry           -> UNRESOLVED, not a pass. Rungs A, B and D prove the
+                                                     document ran, so this is a statement about whether an
+                                                     undecided URL reaches `siteEndpoints` at all — which
+                                                     the author of this fixture could not establish without
+                                                     driving it, and names here rather than leaving a silent
+                                                     zero to be read as a green.
+
+  ==== RUNG D — a `<link>` inside a `<picture>` ============================================================
+
+  REACHABLE FROM ORDINARY PARSED MARKUP AND NOT ONLY FROM SCRIPT. HTML §13.2.6.4.7 The "in body" insertion
+  mode sends a `link` start tag to §13.2.6.4.4 The "in head" insertion mode, whose arm is "Insert an HTML
+  element for the token. Immediately pop the current node off the stack of open elements." — and inserting
+  is into the current node, which is the open `picture`. So the link below really is a child of a picture.
+
+  §4.8.4.3.9 step 3 tests that el is an IMG, so this link must use ITS OWN `imagesrcset` and must never walk
+  the picture's `source` children. `/px/d-source-trap.gif` is what the walk would have picked if the test
+  were on the PARENT alone (it is a `source` with a 1x candidate, and step 5.2 would take it before ever
+  reaching the link). IT IS SERVED rather than 404'd, for the reason serve.mjs already serves `/f/bare.js`:
+  a 404 cannot tell "never requested" from "requested and missing".
+
+  WITNESS: `REQ control-preload GET /px/d-link-own.gif` exactly once, and `/px/d-source-trap.gif` in NO log
+  line and in NO `siteEndpoints` entry.
+
+  ==== WHAT THIS DOCUMENT DOES NOT WITNESS =================================================================
+
+  THE `imagesizes` ATTRIBUTE. §4.8.4.3.9 step 5.1 pairs it with an img's `sizes`, and §4.8.4.3.11 step 3.3's
+  auto-sizes branch is unreachable for a link because "allows auto-sizes" is defined over an img's `loading`
+  and `sizes` and a link has neither. A rung over `imagesizes` would move the source size and therefore move
+  rung A's expected address, so the two cannot share a document without one of them being read against the
+  other's arithmetic. It is named here rather than left out.
+-->
+
+<!-- RUNG A. The order is scrambled on purpose: the selected candidate is neither first nor last. -->
+<link rel="preload" as="image" imagesrcset="/px/a-320w.gif 320w, /px/a-1600w.gif 1600w, /px/a-960w.gif 960w, /px/a-1280w.gif 1280w, /px/a-3200w.gif 3200w">
+
+<!-- RUNG B. No imagesrcset at all: the href must survive the round trip through the source set. -->
+<link rel="preload" as="image" href="/px/b-href-only.gif">
+
+<!-- RUNG D. The source is the trap; the link's own imagesrcset is the answer. -->
+<picture>
+  <source srcset="/px/d-source-trap.gif 1x">
+  <link rel="preload" as="image" imagesrcset="/px/d-link-own.gif 1280w">
+</picture>
+
+<h1>as=image preload</h1>
+<p>Four rungs over one branch: a set that selects, an href that round-trips, an undecided set that must
+   report a shape rather than fetch an example, and a link under a picture that must not walk it.</p>
+
+<script>
+  /* RUNG C. The unknown is an ABSENT server-injected global, and the constant prefix below is the whole of
+     the witness — the rest of the address is the part that must stay unknown. */
+  var l = document.createElement('link');
+  l.setAttribute('rel', 'preload');
+  l.setAttribute('as', 'image');
+  l.setAttribute('imagesrcset', '/px/c-undecided-' + window.__PRELOAD_CFG.slug + '.gif 1280w');
+  document.head.appendChild(l);
+</script>

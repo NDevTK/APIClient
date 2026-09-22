@@ -75,7 +75,11 @@
 //     sends `content-type` and nothing else — so both fields had never been non-empty in any run, and a
 //     correct path nobody has seen fire is a path nobody has measured.
 //
-// Ten rows, and a census wants all ten (PORT sets the base; the others follow it):
+// THE ROWS, AND A CENSUS WANTS ALL OF THEM (PORT sets the base; the others follow it). THE LIST IS THE
+// CLAIM AND THERE IS NO COUNT BESIDE IT: this line read "Ten rows, and a census wants all ten" while the
+// list beneath it held eleven, which is CLAUDE.md's rule that a sentence carrying both a count and the
+// enumeration it counts will have the two disagree — the list gains a member when a document lands and the
+// digit does not follow. Send the list and drop the number.
 //     node site.mjs control      http://127.0.0.1:8899/ <pass>
 //     node site.mjs control-sec  http://127.0.0.1:8900/ <pass>
 //     node site.mjs control-url  http://127.0.0.1:8901/ <pass>
@@ -87,6 +91,7 @@
 //     node site.mjs control-csp-open http://127.0.0.1:8907/ <pass>
 //     node site.mjs control-method http://127.0.0.1:8908/ <pass>
 //     node site.mjs control-gated http://127.0.0.1:8909/ <pass>
+//     node site.mjs control-preload http://127.0.0.1:8910/ <pass>
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -129,6 +134,15 @@ const DOCS = [
      than an abort, which is why it is its own document: a rung added to injected-state.html would have
      moved that channel's published baseline instead. */
   ['gated-hole.html', 'control-gated'],
+  /* THE ONE ORIGIN WHOSE READING IS NOT IN ANY COLUMN site.mjs PUBLISHES, APPENDED FOR THE REASON STATED
+     ABOVE. HTML §4.6.8.20 Link type "preload"'s image branch selects one source out of a set, and
+     core/html/html_link.c records EVERY candidate on the @H surface and then the selected one again, deduped
+     on method+url -- so `siteEndpoints` holds the same addresses whichever candidate was chosen and is blind
+     to the selection BY CONSTRUCTION. What separates them is that exactly one is REQUESTED, and the only
+     reader of that outside the engine is the `REQ` log below. Its rungs are therefore the first here whose
+     primary oracle is this server rather than the census row, which is also why they may share one document
+     where every other question got an origin: the log survives an abort that would blind every column. */
+  ['preload-image.html', 'control-preload'],
 ];
 
 /* THE ONE NON-SCRIPT SUBRESOURCE ANY ROW FETCHES, and it is answered by every origin for the same reason the
@@ -138,6 +152,14 @@ const DOCS = [
    gates on are present and `false`, and one it gates on is absent — see loaded-config.html, which names what
    each one is for and why answering either of them concretely loses an endpoint. */
 const CONFIG = '{"region":"us-east-1","tier":"gold","admin":false,"nested":{"beta":false}}';
+
+/* THE ONE IMAGE ANY ROW FETCHES, and it is a CONSTANT for the reason preload-image.html states about every
+   byte of its witnesses: a payload composed from anything the engine computed can itself become unknown, and
+   the request is then never made while its absence reads as the path not being taken. These 42 bytes are a
+   1x1 GIF89a -- real magic bytes and a real `image/gif`, because the address classifier this corpus feeds
+   reads a response's magic bytes and never a URL suffix, so an image served as anything else would be
+   measuring a different classification than the one a browser makes. */
+const PX_GIF = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
 
 /* A REACT FLIGHT STREAM, FROZEN, AND EVERY ROW OF IT IS A RUNG. `text/x-component` is the type React's own
    server responses carry and the type solver/reply_decode.c reads a client reference under; what makes this
@@ -169,6 +191,18 @@ DOCS.forEach(([doc, name], i) => {
   const port = BASE + i;
   createServer((req, res) => {
     const p = new URL(req.url, 'http://x').pathname;
+    /* THE ACCESS LOG, AND IT IS THE ONLY ORACLE IN THIS DIRECTORY THAT IS NOT THE ENGINE REPORTING ON
+       ITSELF. What a row's census columns say is what the engine LEARNED; this line is what the engine
+       ASKED FOR, and for any question of the form "which of these addresses did it choose" the two are not
+       interchangeable -- the surface carries every candidate and the request carries one. It also survives
+       an engine abort, because a server that has already answered cannot be blinded by one.
+       IT IS EVERY REQUEST AND NOT ONLY THE ROUTE THAT NEEDED IT: a log confined to one path is a carve-out
+       in the middle of a general server, and serve-faithful.mjs's own MISS lines were called the only
+       record of what the browser actually REQUESTED -- the half a census row cannot reconstruct.
+       THE BIND LINES ARE STILL FOUND BY GREP AND NOT BY POSITION, which they always were; what changed is
+       that `control ready on …` is no longer the LAST line once a browser starts asking. A driver that
+       waited for it with `tail` rather than with `grep -q` was already racing the second origin's bind. */
+    console.log(`REQ ${name} ${req.method} ${p}`);
     if (p.startsWith('/api/')) {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end('{"ok":true}');
@@ -189,6 +223,14 @@ DOCS.forEach(([doc, name], i) => {
     if (/^\/f\/[a-z-]+\.js$/.test(p)) {
       res.writeHead(200, { 'content-type': 'application/javascript' });
       return res.end(`fetch('/api/flight-${p.slice(3, -3)}');\n`);
+    }
+    /* THE PRELOAD RUNGS' IMAGES. EVERY ONE IS SERVED, INCLUDING THE TWO THAT MUST NEVER BE REQUESTED --
+       `/px/d-source-trap.gif`, which a `<link>` inside a `<picture>` must not reach, and the four `/px/a-`
+       candidates the selection did not choose. That is the same reason `/f/bare.js` is served: a 404 cannot
+       tell "never requested" from "requested and missing", and both of those rungs read an ABSENCE. */
+    if (/^\/px\/[a-z0-9-]+\.gif$/.test(p)) {
+      res.writeHead(200, { 'content-type': 'image/gif' });
+      return res.end(PX_GIF);
     }
     const f = p === '/' ? join(D, doc)
             : /^\/[a-z0-9_-]+\.js$/.test(p) ? join(D, p.slice(1))

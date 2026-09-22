@@ -80,7 +80,11 @@ provably load an artifact no other lane can rebuild under you mid-pass.
 
 `control/` is the INSTRUMENT CONTROL and is not a corpus site. It is one document per question, and a census
 wants every row — `serve.mjs`'s own `DOCS` list is the set, and a count written here instead would be a
-second copy of it that goes quiet when the next document lands:
+second copy of it that goes quiet when the next document lands. THE LIST BELOW IS THAT SECOND COPY AND IT
+HAD ALREADY DRIFTED: it stopped at `control-method` while `DOCS` carried `control-gated` after it, so the
+paragraph above warned against a count and then reproduced the enumeration the count was a summary of.
+A row's PORT IS ITS INDEX IN `DOCS` PLUS THE BASE, so read that array rather than this block whenever the
+two disagree — this block is a convenience and `DOCS` is the fact:
 
     node site.mjs control      http://127.0.0.1:8899/ <pass>  # the endpoint column
     node site.mjs control-sec  http://127.0.0.1:8900/ <pass>  # the @S column
@@ -92,6 +96,8 @@ second copy of it that goes quiet when the next document lands:
     node site.mjs control-csp  http://127.0.0.1:8906/ <pass>  # a document that carries a POLICY
     node site.mjs control-csp-open http://127.0.0.1:8907/ <pass>  # the same document with none
     node site.mjs control-method http://127.0.0.1:8908/ <pass>  # the request METHOD axis (non-GET)
+    node site.mjs control-gated http://127.0.0.1:8909/ <pass>  # a gated value that also carries a hole
+    node site.mjs control-preload http://127.0.0.1:8910/ <pass>  # an `as=image` preload SELECTS a source
 
 ONE PORT PER DOCUMENT AND NOT ONE PATH PER DOCUMENT, because `site.mjs` isolates a row by ORIGIN: it selects
 the row's runs and documents with `d.url.startsWith(origin)`, so three documents on one origin make every
