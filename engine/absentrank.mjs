@@ -1074,7 +1074,7 @@ const emptyWhy = (n) => {
        either: solver/absent.h hooks on "the base the read missed on". Every channel here reads the LEFT of
        a dot or an operator, so such a read is INVISIBLE rather than merely unguarded.
      - A USE INSIDE A BRANCH THAT A SIBLING CAPABILITY'S ABSENCE MAKES DEAD, which the residual below names.
-     - A USE INSIDE SOURCE CARRIED AS DATA, which the STRING LITERAL residual below names and which the
+     - A USE INSIDE SOURCE CARRIED AS DATA, which the STRING LITERAL residual ABOVE names and which the
        code/not-code reading now EXCLUDES from the count for every channel but `global["X"]` and for every
        file the parser accepted. What is left of this defeater is exactly that floor, so it is narrowed here
        rather than struck: a use carried as data can still reach this band through a bracket-quoted key or
