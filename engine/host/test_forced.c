@@ -15736,7 +15736,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        leaving the token on an un-run appended row while every member is host-owed. That is the condition
        under which a token SURVIVES a slice, and it says nothing about the condition under which one comes to
        EXIST — which is the half this host fails, and the half no provider schedule can reach.
-       (1) A PICK MUST HAPPEN BETWEEN THE ASK AND THE PARK, AND ON THIS HOST NONE DOES. run_scheduler's loop
+       THE TWO ARE LABELLED BY WHEN THEY LAND AND NOT BY THE ORDER THEY WERE DERIVED IN, which is a repair
+       to this paragraph rather than to the argument under it. They were numbered (1) and (2) in the order
+       above, with the LANDING order stated in the sentence beneath them — and a numbered list is read as
+       an instruction while a sentence under one is read as commentary, so the labels said to build the
+       window first and the sentence said not to. The cost of taking the labels is named below and is not
+       hypothetical: three rungs that pass today go to 0.
+       (SECOND TO LAND) A PICK MUST HAPPEN BETWEEN THE ASK AND THE PARK, AND ON THIS HOST NONE DOES. run_scheduler's loop
        is hook, engine_sched_step, payment; `fixture_ask_remote_op` is called from the PAYMENT; and
        engine_sched_slice honours engine_request_park BEFORE its pick loop. The moment is LATCHED, so the
        consultation after the one that asked returns 1 and the park is taken with the frontier untouched —
@@ -15745,7 +15751,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        clause above was written as though the gap an ASK needs were the gap that paragraph denies. They are
        two different gaps: that paragraph is about a STARTED operation surviving a slice, this is about one
        ever starting, and the second is upstream of everything the clause described.
-       (2) AND THE CURSOR MUST STAND AT A ROW THE MEMBER CANNOT PASS, WHICH IS ONE KIND AND THIS DOCUMENT HAS
+       (FIRST TO LAND) AND THE CURSOR MUST STAND AT A ROW THE MEMBER CANNOT PASS, WHICH IS ONE KIND AND THIS DOCUMENT HAS
        NONE OF IT. flow_step's sequence arm stands ABOVE every resting arm, so a member whose sequence was
        EXHAUSTED and which gains one appended row has `script_i < dyn_n` at a compilable row, sets
        `seq_compiles` and RUNS the operation on its very next step — after which flow_answer_perform has
@@ -15760,6 +15766,35 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        IS LANDABLE ALONE and the second is the dangerous one — the window without the blocked cursor lets the
        operation COMPLETE in that slice, which takes `park-remoteop-asked`, `-many` and `-once` from 1 to 0,
        so a diff that builds the window first regresses the three rungs that currently pass.
+       AND THE SCOPE OF THE FIRST IS SHORT BY ONE FILE, WHICH IS A CLAIM ABOUT THIS TREE RATHER THAN ABOUT THE
+       DESIGN — re-derived at a later revision by a reader who came to build it, and recorded here because the
+       clause reads as a change confined to THIS file and is not one. `the provider withholds` names a thing
+       fixture_provide MAY NOT DO. A `<script src>` row is put on its flow's pending register at creation
+       (solver/engine.c's engine_pending_docscript, from engine_queue_into's DYN_SCRIPT_SRC arm), and
+       engine_pending_fetches() joins that register — so a withheld reply is an entry still standing at the
+       next payment, and run_scheduler asserts against exactly that, unconditionally whenever a provider is
+       installed: a DCHECK that engine_pending_fetches() is empty, reading `the smoke host paid and a reply is
+       still owed`. The first park that tried to withhold would abort in dev at that line, before any of this
+       row's rungs were read. THE ASSERT IS RIGHT ABOUT TODAY'S PROVIDER AND ITS OWN MESSAGE SAYS WHY — this
+       one `answers out of its OWN tables … and has nothing it may legitimately still owe once it has run` —
+       so what the first subproblem needs is for that premise to stop being true: the provider gains a
+       DELIBERATE decline that it STATES, and the payment's question becomes what the provider still OWES
+       rather than whether the register is empty. It keeps catching the two things it exists to catch (a
+       record never handed, a record walked past) and stops forbidding the one an in-flight reply is. That is
+       a change in solver/engine.c, and the clause above was written from inside this file by an author who
+       had no reason to look there.
+       THE DERIVATION RATHER THAN THE COORDINATE, because the lines move:
+       `git grep -n 'engine_pending_fetches() == ' engine/host/solver/engine.c` names the assert, and
+       `git grep -n engine_pending_docscript engine/host/solver/engine.c` names the arm that puts a
+       `<script src>` row on the register it reads.
+       AND THE OTHER HALF IS STRONGER THAN IT WAS STATED, WHICH IS WORTH THE SAME AS THE CORRECTION: the
+       zero-pick window is not a property of this host's schedule that a cleverer moment could dodge, it is
+       FORCED. The conjunction fixture_cold_moment latches reads state that only a STEP changes; the loop is
+       hook, step, payment, so the payment is the FIRST consultation after any step and the hook is the
+       SECOND — the latch can only ever be taken at a payment, and fixture_provide asks the operation on the
+       very line that takes it. `on this host none does` is therefore `none can, while the moment is a
+       function of post-step state`, and fixture_want_park now asserts the consequence at the seam rather than
+       leaving it to be re-derived from three rows reading 0.
        (The seam the surviving half rests on is flow_step's own order, and it is RE-DERIVED here rather than
        inherited: the `flow_perform_pending` branch sits under `if (!f->frame)` and ABOVE both the networking
        delivery and the sequence arm, so a member with no live frame that is owed a reply converts an arrival
@@ -17677,7 +17712,41 @@ static int fixture_want_park(void) {
        about MEMORY and hands it no realm. g_probe_ctx is set in main before the scheduler is seeded, which is
        the same realm the provider is handed and the one the probe table renders its result document from. */
     fixture_route_peer_post(g_probe_ctx);
-    return fixture_cold_moment();
+    /* THE MOMENT IS CONSULTED EXACTLY ONCE HERE, AND THE COUNT IS PART OF THE SHAPE RATHER THAN A STYLE
+       CHOICE. cold_park_preview raises the ask census on every call — which is the whole reason the latch has
+       a second read-only entry at all (fixture_cold_moment_met) — so `previewAsks` is a function of how often
+       this host consults, and the payment's own paragraph quotes that figure as a MEASUREMENT. One call, and
+       the assert below reads the flag the ask sets rather than asking the tier a second time. */
+    if (!fixture_cold_moment()) return 0;
+    /* AND THE PEER'S QUESTION WAS ASKED BEFORE THE PARK IS REQUESTED — the precondition the three
+       `park-remoteop` rungs rest on, asserted at the seam that decides it instead of being inferred from
+       three rows reading 0 in a log. Returning non-zero HERE is engine_request_park (run_scheduler's loop
+       asks this and calls it on the spot), and engine_sched_slice honours that request before its first pick,
+       so the frontier the park walks is the frontier standing at this line — and a frontier no peer question
+       has been attached to yet is one engine_retract_span's arrival-slot half finds nothing in.
+       IT HOLDS TODAY BY A PROPERTY NOTHING ELSE STATES, WHICH IS THE WHOLE REASON IT IS WRITTEN DOWN. The
+       conjunction fixture_cold_moment latches is a function of state only a STEP changes; run_scheduler's
+       loop is hook, step, payment, so the payment is the FIRST consultation after any step and this hook is
+       the second. The latch is therefore always taken at the payment, and fixture_provide asks the operation
+       on the very line that latches it. A moment that latched HERE instead would request the park in the same
+       iteration, the payment for that slice would never run, fixture_ask_remote_op would never be called, and
+       `park-remoteop-asked`, `-many` and `-once` would all read 0 — with rung 1's own `why` sending the reader
+       to fixture_ask_remote_op, which would be correct about the file and silent about the cause.
+       THE STATE IT FORBIDS IS CONSTRUCTIBLE AND IS EXACTLY WHAT THE NEXT DIFF MOVES, so this is a guard and
+       not a tautology: this row's banner names a WINDOW between the ask and the park as the second of its two
+       remaining subproblems, every spelling of that window edits this consultation order, and a spelling that
+       requests the park ahead of the ask is the one failure it can have. Nothing else this host carries would
+       report it — the three rungs would simply stop passing.
+       RETIREMENT: this goes when the ask and the park request are one ordered pair that cannot be spelled
+       apart, because the order is then true by construction rather than by this line. */
+    DCHECK(g_op_asked,
+           "the cold park is being requested and no cross-agent operation has been asked of this frontier — "
+           "the moment latched at this park hook rather than at the payment, so fixture_ask_remote_op never "
+           "ran, and the park is about to walk a frontier holding no peer question at all. "
+           "`park-remoteop-asked`, `-many` and `-once` will read 0 for a reason that is THIS CONSULTATION "
+           "ORDER and not the arrival-slot walk those rungs are about: read run_scheduler's loop (hook, step, "
+           "payment) and fixture_provide's tail, never engine_retract_span");
+    return 1;
 }
 
 /* XML 1.0 (Fifth Edition) §2.2 Characters, §2.3 Common Syntactic Constructs' [3] `S`, and §2.11 End-of-Line
