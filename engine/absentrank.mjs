@@ -71,6 +71,55 @@
  * new row to list A and re-weighted three, moving one of them to the top — a widening worth taking because it
  * changed the answer, not because it enlarged the table.
  *
+ *
+ * AND THE RECEIVER ANSWERS A SECOND QUESTION THE INTERFACE NAME CANNOT: WHICH ABSENT MEMBER. List B ranks a
+ * member by how often the corpus names its INTERFACE, which its own heading calls THIN by construction — and
+ * the thinness has a shape worth naming, because it decides what to build. A page never writes `Document`; it
+ * writes `document`, and Web IDL says on Window `[SameObject] readonly attribute Document document;`. So the
+ * member that ACTUALLY ends a flow is invisible in a ranking keyed on the string `Document`, and the ranking
+ * a reader dispatches from is ordered by a name pages do not use.
+ * THE RECEIVER MAP IS DERIVED FROM THAT SENTENCE AND FROM NOTHING ELSE — Window's own flattened attributes,
+ * kept where the DECLARED TYPE is an interface the corpus declares — so `navigator`, `location`, `history`,
+ * `performance`, `localStorage` and the rest arrive without a pasted pair anywhere, and it is cross-checked
+ * against platform_names.h, of which it is a strict subset. A hand list here would be the third copy of a
+ * generated fact; CLAUDE.md records this project having been wrong about exactly such a list seven times.
+ * THE ANCHOR IS THE WHOLE CHANNEL, by the same argument that discards `.member`: over one corpus `document.all`
+ * and a bare `.all` differ by nearly three orders of magnitude, so the identifier in front is what turns a
+ * member count from a tally of an English word into evidence about the platform. The derivation, never the
+ * figure, because a corpus moves:
+ *   node engine/absentrank.mjs --corpus <dir>/mirror --top 40
+ *   cd <dir>/mirror && grep -rohE '\bdocument[[:space:]]*\.[[:space:]]*all\b' . | wc -l   # one row, by hand
+ * AND IT DOES NOT INHERIT LIST A'S COST BANDING, WHICH IS THE ONE THING A READER ARRIVING FROM ABOVE WILL
+ * ASSUME. An absent GLOBAL is an unresolvable reference and the read raises; an absent MEMBER on a receiver
+ * that resolves is ECMAScript §10.1.8.1 "OrdinaryGet ( obj, propertyKey, receiver )", whose step 2.b returns
+ * undefined — so the read ALWAYS succeeds and what the absence costs is a property of whatever CONSUMES the
+ * undefined a statement later. `document.fonts` costs nothing; the `for (const f of document.fonts)` beside
+ * it raises a TypeError, and no pattern over `fonts` can see that. A THROWS band here would be a claim the
+ * text cannot support in the one column a reader dispatches from, so there is none and its absence is
+ * argued at the site rather than left to be noticed.
+ * ITS MEASURED PRICE, by the standard the widenings above are held to. It moved NOTHING in list A, list B,
+ * the overlap or any channel total — the diff is a pure addition and the only lines of a before/after that
+ * differ are the three carrying idlgen's own absent-member total, which moved because three peer commits
+ * landed between the two runs and which `node engine/idlgen.mjs` alone reproduces without this file in the
+ * picture. What it BUYS is the ranking it adds: a per-member order whose head is `Navigator.clipboard`,
+ * where list B's head is `HTMLElement` — an interface whose count is carried almost entirely by `instanceof`.
+ * THE THREE SPELLINGS IT COUNTS ARE THE ONES ALREADY TRUSTED HERE AND THE TWO IT PRINTS ARE THE ONES THAT
+ * ARE NOT. `window.document.fonts` is admitted because `window`/`self`/`globalThis` are exactly the three
+ * receivers the channels above already treat as the global, so it costs no new assumption — and it is not
+ * decoration: it carries a third of `Performance.getEntriesByType` and half of `Navigator.userAgentData`,
+ * which moves that row five places. `someAlias.document.fonts` is NOT counted and IS printed, because
+ * opening its sites finds both halves — real global aliases (`n.window.document.startViewTransition`,
+ * `t.WINDOW.performance.navigation`) and the string `"browser.performance.navigation"`, a preference key in
+ * three bundles — and the identifier in front is precisely the per-file minifier alias the GLOBAL-ALIAS
+ * widening below was built, measured and DECLINED over. A column says which rows it would move; a rank would
+ * assert an identity this file cannot establish. `"m" in R` is printed for the opposite reason: it is the one
+ * spelling that is evidence the page HANDLES the absence, and it is not a class, because
+ * `Navigator.serviceWorker` carries both and only reading the sites says whether the guard covers the read.
+ * WHAT NO SPELLING REACHES IS MEASURED RATHER THAN IMAGINED and is stated at the site: an alias for the
+ * RECEIVER itself, a destructure, a dynamic key, a receiver returned by a call, and a receiver of the right
+ * type reached some other way. Every count is a FLOOR and the alias column is the measured size of one part
+ * of what it floors.
+ *
  * AN IDENTIFIER PASSED AS AN ARGUMENT IS EVALUATED, AND EVERY CHANNEL ABOVE READS ONLY THE OPERATORS.
  * `new X(`, `instanceof X` and `X.member` are the three shapes that evaluate a binding, and they are all
  * OPERATOR shapes — so `Ue(a, ImageData)` names the interface, throws a ReferenceError when it is absent, and
@@ -285,6 +334,54 @@ for (let n = "Window"; ;) {
 if (!chain.includes("EventTarget"))
   die(`Window's inheritance chain read as ${chain.join(" -> ")} and does not reach EventTarget. Window's ` +
       `event members are reached through it, so a chain without it reports addEventListener absent.`);
+
+/* ---- the receiver map: which BARE IDENTIFIER a page reads an interface off, DERIVED --------------------- */
+/* LIST B RANKS A MEMBER BY HOW OFTEN THE CORPUS NAMES ITS INTERFACE, AND A PAGE DOES NOT NAME INTERFACES.
+   That list's own heading already calls its signal THIN by construction, and the shape of the thinness is
+   worth stating because it decides what to build instead: a bundle reaches `Document` by writing `document`,
+   so the member that actually ends a flow is invisible in a ranking keyed on the string `Document`. Measured
+   over this corpus: `document.all` occurs 4 times and a bare `.all` occurs 3358, so the ANCHOR is what makes
+   a member count evidence about the platform rather than a count of an English word — the same objection
+   that discards the `.member` channel, answered rather than restated.
+
+   THE MAP IS DERIVED AND THERE IS NO PASTED PAIR ANYWHERE. `document` is a `Document` because Web IDL says
+   `[SameObject] readonly attribute Document document;` on Window, and every other binding a page uses is the
+   same sentence in the same file: `navigator`, `location`, `history`, `performance`, `localStorage`. So the
+   map is Window's own flattened attribute list, keyed by the attribute's DECLARED TYPE, kept where that type
+   is an interface the corpus declares. A hand-written `{document: "Document", ...}` is the second copy of a
+   generated fact — CLAUDE.md records this project having been wrong about exactly such a list seven times —
+   and it would go stale in the direction nothing here would catch, since a missing pair reports a smaller
+   absence and reads as progress.
+
+   WHAT THE DERIVATION DOES NOT REACH IS NAMED RATHER THAN PATCHED. `window`, `self`, `frames`, `top` and
+   `parent` are declared `WindowProxy`, which HTML defines in prose and not as an IDL interface, so they are
+   absent from this map by construction — and they need no entry, because a Window member is reached with no
+   receiver at all and is a platform GLOBAL NAME, which is list A's population and already has four channels
+   of its own. Adding them by hand would double-count that population into both lists. */
+const RECEIVER = new Map();
+for (const m of idl.flatten("Window")) {
+  if (m.type !== "attribute") continue;
+  const t = m.idlType && m.idlType.idlType;               /* a union's idlType is an ARRAY, not a string */
+  if (typeof t !== "string" || !idl.byName.has(t) || idl.byName.get(t).type !== "interface") continue;
+  RECEIVER.set(m.name, t);
+}
+if (!RECEIVER.size)
+  die(`Window declares no interface-typed attribute, so the receiver map is empty and the anchored member ` +
+      `channel would rank nothing while printing a clean table. Read idl.flatten("Window") — either the IDL ` +
+      `corpus failed to load or webidl2's attribute shape changed.`);
+/* THE MAP IS CROSS-CHECKED AGAINST THE GENERATED TABLE RATHER THAN AGAINST ITSELF, which is the only check
+   available that is not a restatement of the derivation. platform_names.h's second source is "every member of
+   the Window interface itself, flattened" — so every receiver here is a STRICT SUBSET of it, and a name that
+   is not is either a table this run must not rank against or a flatten that reaches something the table's
+   own generator filters. Both are a statement about this file having gone stale against its subject. */
+{
+  const off = [...RECEIVER.keys()].filter((n) => !PLATFORM.has(n));
+  if (off.length)
+    die(`${off.length} receiver(s) derived from Window's IDL attributes are not in platform_names.h — ` +
+        `${off.slice(0, 8).join(", ")}. Every Window member is in that table by construction, so the two ` +
+        `disagree: regenerate it with \`node engine/idlgen.mjs --regen\` and re-run. Ranking a member off a ` +
+        `receiver the engine's own name table does not carry is a ranking against a different platform.`);
+}
 
 const env = loadEnvironment(HOST);
 const world = installedMembers([...env.sources.keys()].filter((p) => p.endsWith(".c")), env);
@@ -513,6 +610,206 @@ for (const [n, chans] of perFile)
           `${(hits.get(n) || new Map()).get(k) || 0}. The shadow count is not a subset of the total, so ` +
           `subtracting it is a difference between two populations.`);
 
+/* ---- the receiver-anchored member channel -------------------------------------------------------------- */
+/* AN ABSENT MEMBER DOES NOT THROW WHERE AN ABSENT GLOBAL DOES, SO THE USE/GUARD BANDING ABOVE MAY NOT BE
+   REUSED HERE AND ITS ABSENCE NEEDS A REASON RATHER THAN A SILENCE. List A sorts by cost because an absent
+   GLOBAL is an unresolvable reference and the read itself raises. A member read on a receiver that RESOLVES
+   is ECMAScript §10.1.8.1 "OrdinaryGet ( obj, propertyKey, receiver )", whose step 2 walks the prototype
+   chain and whose step 2.b is "If parent is null, return undefined" — so the read ALWAYS succeeds and
+   ALWAYS answers `undefined`, whatever the page then does with it. Where the cost lands is therefore not a
+   property of the read at all: it is a property of whatever CONSUMES the undefined, one or more statements
+   later, which is the reachability question the two residuals above already name as needing a span of CODE
+   where this file has only ever had a span of TEXT. `document.fonts` answering undefined costs nothing; the
+   `for (const f of document.fonts)` on the next line raises a TypeError, and no pattern over `fonts` can
+   see it. THERE IS THEREFORE NO CLASS COLUMN HERE, and inventing one would be a claim the text cannot
+   support in the one direction a reader dispatches from. A COUNT IS A REASON TO OPEN THE SITES.
+
+   WHAT IS COUNTED IS THREE SPELLINGS AND WHAT IS PRINTED IS FIVE, and the split is by whether the receiver's
+   IDENTITY is settled by something this file already trusts rather than by how likely it looks:
+     - `document.fonts`                — the bare receiver, no prefix. Unambiguous.
+     - `window.document.fonts`         — prefixed by `window`/`self`/`globalThis`, which are the three
+                                         receivers the channels above ALREADY treat as the global, so this
+                                         costs no new assumption. It is not decoration: it is 12 of the 22
+                                         reads of `Performance.getEntriesByType` and half of
+                                         `Navigator.userAgentData`'s, which moves that row five places.
+     - `document["fonts"]`             — the computed form with a STATIC key. Measured to add nothing over
+                                         this corpus; kept and ARMED so that its zero is a measured zero
+                                         rather than a question nobody asked, which is the same reason
+                                         `global["X"]` is kept above at three occurrences.
+   and printed beside them, ranking NOTHING:
+     - `someAlias.document.fonts`      — a receiver reached off SOME OTHER identifier. Opening the sites says
+                                         these are overwhelmingly real (`n.window.document.startViewTransition`,
+                                         `t.WINDOW.performance.navigation`), and the identifier in front is
+                                         exactly the per-file minifier alias the GLOBAL-ALIAS widening above
+                                         was BUILT, MEASURED AND DECLINED over — a per-file alias set
+                                         attributes an inner scope's parameter to the global, and the fix is
+                                         a SCOPE reader rather than a spelling. Reading the sites also finds
+                                         the string `"browser.performance.navigation"`, a preference key in
+                                         three bundles, which is the STRING LITERAL residual above. So it is
+                                         a COLUMN: a row whose count is mostly alias is a row to open, and a
+                                         row invisible without it does not silently vanish.
+     - `"fonts" in document`           — ECMAScript §13.10.1's HasProperty, which answers false and does not
+                                         throw, so it is the one spelling here that is evidence the page
+                                         HANDLES the absence. It is not summed into the rank and it is not a
+                                         class: `Performance.interactionCount` reads 7 and 7, and only
+                                         opening the sites says whether the guard covers the read.
+   WHAT NO SPELLING HERE SEES, measured rather than listed from imagination: a local alias for the receiver
+   itself (`const d = document; d.fonts`), a destructure (`const {fonts} = document`), a dynamic key
+   (`document[k]`), a receiver returned by a call (`getWin().navigator.clipboard` — one occurrence over this
+   corpus, and neither the bare nor the alias anchor admits a `)` prefix), and a receiver of the right TYPE
+   reached some other way (`iframe.contentDocument.fonts`). Every count below is therefore a FLOOR, and the
+   alias column is the measured size of one part of what it floors. Occurrences, never lines.
+
+   The derivation a reader runs instead of quoting any figure printed here:
+     node engine/absentrank.mjs --corpus <dir>/mirror --top 40   # the ranked head, with its own controls
+     cd <dir>/mirror && grep -rohE '\bdocument[[:space:]]*\.[[:space:]]*fonts\b' . | wc -l   # one row, by hand */
+const RALT = [...RECEIVER.keys()].sort((a, b) => b.length - a.length).map(esc).join("|");
+const GLOB = "(?:window|self|globalThis)";
+const MEMB = "([A-Za-z_$][\\w$]*)";
+const RCHAN = {
+  "R.m":        new RegExp(`(?<![\\w$.])(${RALT})\\s*(?:\\?\\.|\\.)\\s*${MEMB}`, "g"),
+  "g.R.m":      new RegExp(`(?<![\\w$.])${GLOB}\\s*(?:\\?\\.|\\.)\\s*(${RALT})\\s*(?:\\?\\.|\\.)\\s*${MEMB}`, "g"),
+  'R["m"]':     new RegExp(`(?<![\\w$.])(${RALT})\\s*(?:\\?\\.)?\\[\\s*["'\x60]${MEMB}["'\x60]\\s*\\]`, "g"),
+};
+const RPRINT = {
+  "x.R.m":      new RegExp(`(?<![\\w$.])(?!${GLOB}(?![\\w$]))[A-Za-z_$][\\w$]*\\s*(?:\\?\\.|\\.)\\s*(${RALT})\\s*(?:\\?\\.|\\.)\\s*${MEMB}`, "g"),
+  '"m" in R':   new RegExp(`["'\x60]${MEMB}["'\x60]\\s*in\\s+(${RALT})(?![\\w$])`, "g"),
+};
+/* ARMED POSITIVE AND NEGATIVE BEFORE ANY COUNT IS READ, exactly as every channel above is, and with the
+   three near misses this shape specifically has: a LONGER receiver name the alternation could bite in half
+   (`documentPictureInPicture` is a receiver in its own right and must never be read as `document` plus a
+   member), a prefix that belongs to a DIFFERENT one of these five patterns, and a dynamic computed key. A
+   control that has never rejected the thing it exists to reject is not a control. */
+const RARM = {
+  "R.m":      [['document.AbsentRankPos', 'document?.AbsentRankPos'],
+               ['xdocument.AbsentRankNeg', 'q.document.AbsentRankNeg', 'window.document.AbsentRankNeg']],
+  "g.R.m":    [['window.document.AbsentRankPos', 'globalThis.navigator.AbsentRankPos',
+                'self?.document?.AbsentRankPos'],
+               ['document.AbsentRankNeg', 'q.document.AbsentRankNeg', 'mywindow.document.AbsentRankNeg']],
+  'R["m"]':   [['document["AbsentRankPos"]', 'document[\x60AbsentRankPos\x60]', "navigator['AbsentRankPos']"],
+               ['document.AbsentRankNeg', 'document[AbsentRankNeg]', 'q.document["AbsentRankNeg"]']],
+  "x.R.m":    [['q.document.AbsentRankPos', 'Ie.navigator.AbsentRankPos'],
+               ['document.AbsentRankNeg', 'window.document.AbsentRankNeg', 'self.document.AbsentRankNeg']],
+  '"m" in R': [['"AbsentRankPos" in document', '\x60AbsentRankPos\x60 in navigator'],
+               ['"AbsentRankNeg in document"', '"AbsentRankNeg" in opts',
+                '"AbsentRankNeg" in documentish', '\x60${AbsentRankNeg}\x60 in document']],
+};
+for (const [k, re] of [...Object.entries(RCHAN), ...Object.entries(RPRINT)]) {
+  const [pos, neg] = RARM[k] || die(`receiver channel ${k} has no positive/negative control — add one before reading it.`);
+  const mem = (s) => [...s.matchAll(new RegExp(re.source, "g"))].map((m) => (k === '"m" in R' ? m[1] : m[2]));
+  const rcv = (s) => [...s.matchAll(new RegExp(re.source, "g"))].map((m) => (k === '"m" in R' ? m[2] : m[1]));
+  for (const good of pos) {
+    if (!mem(good).includes("AbsentRankPos"))
+      die(`receiver channel ${k} did not match its own form in ${JSON.stringify(good)} — its 0 would mean nothing.`);
+    if (rcv(good).some((r) => !RECEIVER.has(r)))
+      die(`receiver channel ${k} captured ${JSON.stringify(rcv(good))} as the receiver in ${JSON.stringify(good)}, ` +
+          `and that is not a name the map derives. The capture groups are in the wrong order.`);
+  }
+  for (const bad of neg)
+    if (mem(bad).includes("AbsentRankNeg"))
+      die(`receiver channel ${k} matched its near miss ${JSON.stringify(bad)} — it is counting something else.`);
+  /* THE RECEIVER CAPTURED MUST BE THE LONGEST NAME THAT FITS — `documentPictureInPicture` is a receiver in
+     its own right, and reading it as `document` carrying a member called `PictureInPicture` would score a
+     DocumentPictureInPicture read against Document's ABSENT row. WHAT SECURES THAT IS THE MANDATORY DOT, NOT
+     THE SORT, and that is stated because the obvious reading is the other way round and this control was
+     first written with it: alternation BACKTRACKS, so with `\.` required, `document` fails on the `P` and
+     the engine falls through to the long alternative whatever order they are in. MEASURED by mutation —
+     sorting the alternation SHORTEST-first alone does not move the answer and this control correctly does
+     not fire; it fires when the dot is made optional (giving `["document","PictureInPicture"]`) and when an
+     alternative is dropped (giving `[]`). The sort is kept as the cheaper of the two guarantees, and the
+     message names both causes rather than the one that reads as obvious. */
+  if (k === "R.m") {
+    const g = [...("documentPictureInPicture.AbsentRankPos").matchAll(new RegExp(re.source, "g"))];
+    if (!(g.length === 1 && g[0][1] === "documentPictureInPicture" && g[0][2] === "AbsentRankPos"))
+      die(`the receiver alternation read documentPictureInPicture.AbsentRankPos as ` +
+          `${JSON.stringify(g.map((m) => [m[1], m[2]]))} and not as that one receiver carrying that one ` +
+          `member. Either the separator between receiver and member stopped being REQUIRED — in which case ` +
+          `a long receiver is being bitten in half and scored against a short one's interface — or the ` +
+          `alternation no longer holds every derived receiver.`);
+  }
+}
+/* An occurrence counts only where the member is one the auditor's own ABSENT row for THAT interface lists,
+   so every ranked pair is a SUBSET of the population calibrated above rather than a second reading of it. */
+const rAbsent = (r, mem) => {
+  const i = RECEIVER.get(r);
+  return i && absentBy.has(i) && absentBy.get(i).includes(mem);
+};
+const rKey = (r, mem) => `${RECEIVER.get(r)}\u0000${mem}`;
+const rTally = (re, swap) => {
+  const out = new Map(), by = new Map();
+  for (const m of SRC.matchAll(re)) {
+    const r = swap ? m[2] : m[1], mem = swap ? m[1] : m[2];
+    if (!rAbsent(r, mem)) continue;
+    const k = rKey(r, mem);
+    out.set(k, (out.get(k) || 0) + 1);
+    if (!by.has(k)) by.set(k, new Map());
+    by.get(k).set(r, (by.get(k).get(r) || 0) + 1);
+  }
+  return { out, by };
+};
+/* THE PER-RECEIVER BREAKDOWN IS BUILT FROM THE RANKING CHANNELS ALONE AND IS ASSERTED TO SUM TO THE RANK.
+   It was first built from all five, and the row then printed `navigator=101` beside a rank of 97 — the
+   breakdown silently summing the ranked reads, the alias-prefixed ones and the `in` guards, which is three
+   populations behind one number in the one column a reader uses to check the row.
+   THE ASSERT BELOW CANNOT FIRE ON TODAY'S CODE AND THAT IS SAID RATHER THAN LEFT TO BE DISCOVERED: `out` and
+   `by` are two decompositions of ONE pass, so they agree by construction. What it is armed against is the
+   EDIT that produced the defect — a channel added to the ranking set whose occurrences never reach the
+   breakdown, or a breakdown fed from a printing channel — which is the same standing the USE_CH/GUARD_CH
+   assertion above has and is there for the same reason: the next channel cannot skip it. */
+const rHit = new Map(), rBy = new Map();
+for (const [k, re] of [...Object.entries(RCHAN), ...Object.entries(RPRINT)]) {
+  const { out, by } = rTally(re, k === '"m" in R');
+  rHit.set(k, out);
+  if (!(k in RCHAN)) continue;
+  for (const [pair, m] of by) {
+    if (!rBy.has(pair)) rBy.set(pair, new Map());
+    for (const [r, c] of m) rBy.get(pair).set(r, (rBy.get(pair).get(r) || 0) + c);
+  }
+}
+/* A FILE THAT BINDS THE RECEIVER'S NAME IS READING ITS OWN OBJECT, and the same binder the identifier
+   channels use answers it — `function document(...)`, `class navigator`, `,document=…`. MEASURED AT ZERO
+   OVER THIS CORPUS, which is exactly why the column is computed rather than reasoned away: a zero from a
+   probe nobody ran is the reading this file refuses everywhere else, and the next corpus is free to differ.
+   The per-file tally is asserted EQUAL to the joined one for the same reason the identifier channels assert
+   it: subtracting a per-file count from a joined count is a difference between two populations unless they
+   are the same population, and the joined text carries a separator the per-file text does not. */
+const rShadow = new Map();
+{
+  const perFileR = new Map();
+  for (const t of parts) {
+    const bound = new Map();
+    for (const [k, re] of Object.entries(RCHAN)) {
+      for (const m of t.matchAll(new RegExp(re.source, "g"))) {
+        const r = m[1], mem = m[2];
+        if (!rAbsent(r, mem)) continue;
+        const pk = `${k}\u0000${rKey(r, mem)}`;
+        perFileR.set(pk, (perFileR.get(pk) || 0) + 1);
+        if (!bound.has(r)) bound.set(r, BINDS(r).test(t));
+        if (!bound.get(r)) continue;
+        rShadow.set(rKey(r, mem), (rShadow.get(rKey(r, mem)) || 0) + 1);
+      }
+    }
+  }
+  for (const [pk, c] of perFileR) {
+    const i = pk.indexOf("\u0000");
+    const k = pk.slice(0, i), pair = pk.slice(i + 1);
+    const j = (rHit.get(k) || new Map()).get(pair) || 0;
+    if (j !== c)
+      die(`the per-file receiver tally of ${pair.replace("\u0000", ".")} on ${k} is ${c} and the joined tally ` +
+          `is ${j}. The shadow count is not a subset of the total, so subtracting it is a difference between ` +
+          `two populations.`);
+  }
+}
+const rOf = (k, pair) => (rHit.get(k) || new Map()).get(pair) || 0;
+const rRank = (pair) => Object.keys(RCHAN).reduce((a, k) => a + rOf(k, pair), 0) - (rShadow.get(pair) || 0);
+for (const [pair, m] of rBy) {
+  const b = [...m.values()].reduce((a, c) => a + c, 0), r = rRank(pair) + (rShadow.get(pair) || 0);
+  if (b !== r)
+    die(`the per-receiver breakdown of ${pair.replace("\u0000", ".")} sums to ${b} and its ranking channels ` +
+        `sum to ${r}. A breakdown that does not add up to the number beside it is several populations wearing ` +
+        `one column.`);
+}
+
 const shadowOf = (n, k) => ((shadow.get(n) || new Map()).get(k) || 0);
 const freeOf = (n, k) => ((hits.get(n) || new Map()).get(k) || 0) - shadowOf(n, k);
 const shadowed = (n) => [...(shadow.get(n) || new Map()).values()].reduce((a, b) => a + b, 0);
@@ -729,6 +1026,12 @@ say(`── B. INTERFACES THAT EXIST AND CARRY ABSENT MEMBERS, RANKED BY CORPUS 
 say(`   Ordered by the unambiguous channels only. A bundle reaches an element through the DOM far more often ` +
     `than it names the interface, so this signal is THIN by construction and the numbers are small: read it ` +
     `as which interfaces the corpus names, never as how much of the page each one carries.`);
+/* AND THE READER IS SENT ON RATHER THAN LEFT WITH THE THIN ANSWER. This heading has said "THIN by
+   construction" for as long as it has existed, and a caveat a reader cannot act on is a caveat they read as
+   permission to use the number anyway. The section below answers the same question on the axis a page
+   actually writes, so the pointer is part of the caveat rather than a cross-reference. */
+say(`   The per-MEMBER order a page's own spelling supports is section B(anchored) below; this one ranks the ` +
+    `INTERFACE NAME, which is not how a bundle reaches an interface.`);
 const rankB = [...absentBy.keys()].sort((a, b) => uses(b) - uses(a) || a.localeCompare(b));
 for (const n of rankB.slice(0, TOP))
   say(`   ${String(uses(n)).padStart(4)}  ${n.padEnd(26)} ABSENT ${String(absentBy.get(n).length).padStart(3)}  ${shape(n) || "(named nowhere in the corpus)"}`);
@@ -737,6 +1040,78 @@ for (const n of rankB.slice(0, TOP))
    defect the paragraph in list A is about. */
 if (rankB.length > TOP)
   say(`   ... ${rankB.length - TOP} further interface(s) NOT PRINTED at --top=${TOP} — raise --top to read them.`);
+
+console.log("");
+say(`── B(anchored). ABSENT MEMBERS RANKED BY READS OFF A RECEIVER THE IDL BINDS TO THEIR INTERFACE ──`);
+say(`   List B above ranks a member's INTERFACE NAME, and a page does not name interfaces — it writes ` +
+    `\`document\`, and the IDL says that is a Document. So this ranks the MEMBER, anchored on the receiver.`);
+say(`   The anchor is the whole channel: over this corpus a bare \`.all\` and \`document.all\` differ by ` +
+    `nearly three orders of magnitude, which is the same objection that discards the .member diagnostic below.`);
+say(`   AN ABSENT MEMBER READ DOES NOT THROW. ECMAScript §10.1.8.1 "OrdinaryGet ( obj, propertyKey, ` +
+    `receiver )" step 2.b returns undefined, so unlike list A there is NO cost class here and none is ` +
+    `invented: what the absence costs is decided by whatever CONSUMES the undefined a statement later. ` +
+    `A COUNT IS A REASON TO OPEN THE SITES, NEVER A STATEMENT THAT THEY THROW.`);
+say(`   rank = R.m + window.R.m + R["m"], minus shadow. alias = the same read off SOME OTHER identifier ` +
+    `(usually a real global alias, sometimes a string) — printed, RANKS NOTHING. guard = \`"m" in R\`, ` +
+    `which answers false and handles the absence. shadow = occurrences in a file that BINDS the receiver's ` +
+    `own name. bare = the unanchored \`.m\` count, so each row carries the price of its own anchor.`);
+{
+  const ifaceOf = new Map();                       /* interface -> the receiver name(s) that reach it */
+  for (const [r, i] of RECEIVER) {
+    if (!ifaceOf.has(i)) ifaceOf.set(i, []);
+    ifaceOf.get(i).push(r);
+  }
+  const anchorable = [...ifaceOf.keys()].filter((i) => absentBy.has(i));
+  const askable = anchorable.reduce((a, i) => a + absentBy.get(i).length, 0);
+  /* A COVERAGE FIGURE STATES WHAT IT IS A FRACTION OF. The receivers whose interface carries no absent
+     member contribute nothing and are NOT a gap — the parts are printed so they sum to the map. */
+  if (anchorable.length + [...ifaceOf.keys()].filter((i) => !absentBy.has(i)).length !== ifaceOf.size)
+    die(`the anchorable/complete split of the receiver map does not sum to the map — the partition is wrong.`);
+  say(`   ${RECEIVER.size} receiver(s) derived from Window's interface-typed IDL attributes, reaching ` +
+      `${ifaceOf.size} interface(s); ${anchorable.length} of those carry an ABSENT row, which makes ` +
+      `${askable} of the ${pairs} absent (interface, member) pair(s) ASKABLE on this channel at all. The ` +
+      `rest sit on interfaces a page reaches through the DOM rather than off a named global, and no count ` +
+      `here is evidence about them either way.`);
+
+  const pairsSeen = new Set();
+  for (const k of [...Object.keys(RCHAN), ...Object.keys(RPRINT)])
+    for (const p of rHit.get(k).keys()) pairsSeen.add(p);
+  const rows = [...pairsSeen].map((p) => ({
+    p, rank: rRank(p), alias: rOf("x.R.m", p), guard: rOf('"m" in R', p), sh: rShadow.get(p) || 0,
+  })).sort((a, b) => b.rank - a.rank || b.alias - a.alias || b.guard - a.guard || a.p.localeCompare(b.p));
+  const dotC = controls.get(".member (discarded)");
+  const onlyAlias = rows.filter((r) => !r.rank && r.alias).length;
+  const onlyGuard = rows.filter((r) => !r.rank && !r.alias && r.guard).length;
+  say(`   ${rows.length} of those ${askable} pair(s) are read off such a receiver anywhere in this corpus; ` +
+      `${rows.length - onlyAlias - onlyGuard} carry a ranked read, ${onlyAlias} is/are visible ONLY through ` +
+      `an alias-prefixed receiver and ${onlyGuard} ONLY through \`in\` — both print, neither ranks.`);
+  for (const r of rows.slice(0, TOP)) {
+    const mem = r.p.slice(r.p.indexOf("\u0000") + 1), bare = dotC.get(mem) || 0;
+    say(`   ${String(r.rank).padStart(4)}  alias=${String(r.alias).padStart(3)} guard=${String(r.guard).padStart(3)} ` +
+        `shadow=${String(r.sh).padStart(2)}  bare=${String(bare).padStart(6)}` +
+        `${r.rank ? ` (${(bare / r.rank).toFixed(0)}x)` : "      "}  ` +
+        `${r.p.replace("\u0000", ".").padEnd(40)} ${[...(rBy.get(r.p) || new Map())].map(([n, c]) => `${n}=${c}`).join(" ")}`);
+  }
+  /* SAME CUT, SAME OBLIGATION AS LIST A — and here the cut is BOTH a tail and a class, because the sort is
+     rank-first and a row with no ranked read sorts below every row that has one. So the rows a `--top` cut
+     removes first are exactly the alias-only and guard-only ones, which are the two this section prints
+     precisely because nothing else would show them. The partition is stated so their absence above is not
+     read as the corpus being silent about them. */
+  const cut = rows.slice(TOP);
+  if (cut.length)
+    say(`   ... ${cut.length} further ranked row(s) NOT PRINTED at --top=${TOP}: ` +
+        `ranked=${cut.filter((r) => r.rank).length} alias-only=${cut.filter((r) => !r.rank && r.alias).length} ` +
+        `guard-only=${cut.filter((r) => !r.rank && !r.alias && r.guard).length} — raise --top to read them. ` +
+        `The sort is rank-first, so the alias-only and guard-only rows are cut FIRST and their absence above ` +
+        `is not evidence the corpus does not read them.`);
+  for (const [k, re] of [...Object.entries(RCHAN), ...Object.entries(RPRINT)]) {
+    void re;
+    const t = rHit.get(k);
+    say(`   channel ${k.padEnd(10)} ${String([...t.values()].reduce((a, b) => a + b, 0)).padStart(5)} ` +
+        `occurrence(s) over ${String(t.size).padStart(3)} absent (interface, member) pair(s)` +
+        `${k in RPRINT ? " — PRINTED, RANKS NOTHING" : ""}`);
+  }
+}
 
 const overlap = rankB.filter((n) => ABSENT_GLOBAL.has(n));
 console.log("");
