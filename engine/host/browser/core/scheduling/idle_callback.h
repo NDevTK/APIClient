@@ -2,13 +2,43 @@
  *
  * THE STANDARD IS ITS OWN DOCUMENT AND NOT A PART OF HTML — "Cooperative Scheduling of Background Tasks",
  * whose Editor's Draft the W3C Web Performance group maintains at https://w3c.github.io/requestidlecallback/.
- * NOTHING IN THIS TREE INDEXES IT: engine/specindex/ has no row for it and engine/citegen.mjs's registry names
- * no anchor that resolves to it, so every §-number in this file and in idle_deadline.c is COUNTED by that
- * auditor and CHECKED by nothing. That is a silent zero rather than a clean bill, and it is stated here rather
- * than left to be discovered: the fix is one registry row (key "requestidlecallback", kind respec, base
- * https://w3c.github.io/requestidlecallback/, anchors "requestidlecallback" / "cooperative scheduling of
- * background tasks") plus a `--regen` of that key, and until it lands a reader who wants a number verified
- * fetches the document.
+ * THIS STANDARD HAS NO TEXT CORPUS AND CANNOT GET ONE, AND ITS CITATIONS ARE NAMED RATHER THAN SILENT.
+ * engine/specindex/ holds no row for it, and engine/citegen.mjs carries a FOREIGN entry `background tasks`
+ * which is what makes that visible: a citation naming this standard is gated OUT of judging and appears, with
+ * its tally, on the auditor's `standards seen but not indexed` census line. Run
+ * `node engine/citegen.mjs engine/host/browser/core/scheduling/idle_callback.c` for today's split; MEASURED at
+ * 6cc8439a that file read 82 citations, 4 of them counted under `background tasks` and 8 resolved on their own
+ * evidence with 2 step references compared. So the honest statement is a COUNTED zero over THIS STANDARD and
+ * not a silence over these files, and a reader who wants one of its numbers verified fetches the document.
+ *   THREE SENTENCES STOOD HERE AND ALL THREE WERE WRONG, IN THE ONE DIRECTION A COVERAGE NOTE CANNOT AFFORD.
+ *   They are recorded rather than deleted because each is what a reader re-derives from the missing row, and
+ *   because the only reader of an absence claim is somebody deciding whether to BUILD an instrument for the
+ *   axis — so a stale one argues for a second auditor standing beside a working one and nothing mechanical
+ *   ever reports that it rotted.
+ *   (1) `engine/citegen.mjs's registry names no anchor that resolves to it`. It does: the FOREIGN entry above,
+ *   which is the difference between a citation this tree cannot see and one a file vote hands to whichever
+ *   INDEXED standard happens to own a section by that number. That second outcome is the accusing one, and it
+ *   is what the entry exists to stop.
+ *   (2) `every §-number in this file and in idle_deadline.c is COUNTED by that auditor and CHECKED by nothing`.
+ *   The FILE is the one thing a coverage note may not name, because a file cites more than one standard: at
+ *   6cc8439a idle_deadline.c had 4 citations resolved on their own evidence — its Web IDL ones — and
+ *   idle_callback.c 8, with 2 step references compared. Saying the auditor checks nothing here tells a reader
+ *   to discount findings a live channel is already able to make.
+ *   (3) `the fix is one registry row (key "requestidlecallback", kind respec, base
+ *   https://w3c.github.io/requestidlecallback/ ...) plus a --regen`. That row cannot work, and this is the
+ *   half that would have been EXECUTED rather than merely believed. MEASURED by fetching both, with the
+ *   `permissions` row as the positive control because citegen already carries it as a working `kind: respec`:
+ *   the requestidlecallback base answers 28,765 bytes carrying a `respecConfig`, ZERO `secno` headings and no
+ *   `dt-published`, because ReSpec numbers a document IN THE BROWSER at render time — the bytes hold no
+ *   section numbers at all — while the permissions base answers 336,720 bytes with NO `respecConfig`, 100
+ *   `secno` headings and a `dt-published`. THE PRESENCE OF `respecConfig` IS THE TELL THAT A PAGE IS THE
+ *   SOURCE, and it reads exactly like evidence that the respec reader is the right one; it is the opposite.
+ *   engine/citegen.mjs's own `background tasks` entry records the same measurement and why the remaining
+ *   answers are no better: the /TR/ rendering is a path the edition assertion refuses for a maintained row,
+ *   and numbering the source by document order would be this codebase restating ReSpec's own algorithm.
+ *   RETIREMENT: this record goes when a coverage note in this tree cannot name a FILE as the thing an
+ *   unindexed standard leaves unchecked, and cannot name a base URL as indexable without the fetched heading
+ *   count beside it.
  *
  * §4 GIVES EVERY Window THREE ASSOCIATED CONCEPTS and this component holds all three, per REALM, in one
  * object built with the realm:

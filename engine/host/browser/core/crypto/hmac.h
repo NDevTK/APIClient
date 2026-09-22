@@ -32,12 +32,28 @@
  *   §3   Cryptographic Keys         — the over-long key is hashed first
  *   §4   HMAC Specification         — the equation, and Table 1's nine steps
  * The quotations below are pasted from the fetched document. NOTE FOR ANY READER CHECKING THEM: FIPS 198-1 is
- * a NIST publication and `engine/specindex` holds no index for it, so `engine/citegen.mjs` COUNTS every
- * citation in this file and CHECKS none of them — not the number, not the title and not the quotation. That is
+ * a NIST publication and `engine/specindex` holds no index for it, so `engine/citegen.mjs` COUNTS THIS FILE'S
+ * FIPS CITATIONS and CHECKS none of them — not the number, not the title and not the quotation. That is
  * a COUNTED zero rather than a clean bill: the standard is NAMED, with its tally, on the auditor's
  * "standards seen but not indexed" census line, so this is a blind spot a reader can see the size of
- * rather than a silence. It is still why each citation here names the section's own title and quotes its
- * own words — a reader with the PDF open is the only instrument these have.
+ * rather than a silence. It is still why each FIPS citation here names the section's own title and quotes
+ * its own words — a reader with the PDF open is the only instrument those have.
+ *   THAT SCOPE READ `every citation in this file`, AND THE FILE IS THE ONE THING A COVERAGE NOTE MAY NOT NAME.
+ *   It is REWRITTEN rather than deleted because the FIPS half is true and a reader who re-derives it from the
+ *   census line will re-add it at the same scope. The defect is not a wording slip: an absence claim's only
+ *   reader is somebody deciding whether to BUILD an instrument for the axis, so a note saying the auditor
+ *   checks NOTHING here reads as an instruction to discount every finding in the file — including the ones a
+ *   live channel is already making, which nothing anywhere reports. The Web Cryptography half of this file is
+ *   INDEXED and JUDGED, and the split is a command rather than a number a reader has to trust:
+ *   `node engine/citegen.mjs engine/host/browser/core/crypto/hmac.h` prints how many citations resolved on
+ *   their own evidence, how many step references were compared, and — on its `standards seen but not indexed`
+ *   line — how many were FIPS 198-1's. MEASURED at 6cc8439a it was 10 resolved of 62 read, 8 steps compared,
+ *   1 quotation compared, and 4 FIPS; the quotation compared is this file's own opening one, and corrupting
+ *   ONE word of it in a copy outside the tree took that run from 0 findings to 1 and named the word, so the
+ *   channel is ARMED rather than merely quiet.
+ *   RETIREMENT: this record goes when no coverage note in this tree names a FILE as the thing an unindexed
+ *   standard leaves unchecked. `git grep -ci` over the phrase `citation in this file` is the sweep, and it is
+ *   run case-insensitively because this tree writes its load-bearing statements in capitals.
  *
  * §4's ONE EQUATION, VERBATIM:  MAC(text) = HMAC(K, text) = H((K0 ^ opad )|| H((K0 ^ ipad) || text))
  *

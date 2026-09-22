@@ -28,9 +28,22 @@
  *   §7.1   Algorithm for the Authenticated Encryption Function — Algorithm 4, GCM-AE
  *   §7.2   Algorithm for the Authenticated Decryption Function — Algorithm 5, GCM-AD
  * NOTE FOR ANY READER CHECKING THE CITATIONS: SP 800-38D is a NIST publication and `engine/specindex` holds no
- * index for it, so `engine/citegen.mjs` COUNTS every citation in this file and CHECKS none of them — not the
+ * index for it, so `engine/citegen.mjs` COUNTS THIS FILE'S NIST CITATIONS and CHECKS none of them — not the
  * number, not the title and not the quotation. That is a silent zero rather than a clean bill, and it is why
  * each citation here names its section's own title and quotes its own words.
+ *   THAT SCOPE READ `every citation in this file`, AND THE FILE IS THE ONE THING A COVERAGE NOTE MAY NOT NAME
+ *   — the same defect core/crypto/hmac.h records at length, kept here in short form because a reader
+ *   re-deriving it from the NIST half will re-add it at the same scope. The only reader of a coverage claim is
+ *   somebody deciding whether to BUILD an instrument for that axis, so `CHECKS none of them` said of a FILE
+ *   argues for a second auditor beside a working one and tells everyone else to discount a live channel.
+ *   THE SPLIT IS A COMMAND AND NOT A NUMBER TO TRUST: `node engine/citegen.mjs
+ *   engine/host/browser/core/crypto/aes_gcm.h` prints how many citations resolved on their own evidence and
+ *   names, on its `standards seen but not indexed` line, the standards it counted and did not check. MEASURED
+ *   at 6cc8439a it was 2 resolved of 80 read, `fips 197=1` on that line, and 0 findings — so the NIST numbers
+ *   here are mostly BARE, which is a different silence from a named-and-counted one and the one a file vote
+ *   can still reach.
+ *   RETIREMENT: this record goes when every NIST number in this file carries its standard's name in front of
+ *   it, so the census line states the count and the vote can no longer reach them.
  *
  * IT IS ONE WALK AND NOT TWO, AND THE STANDARD SAYS THAT IS ALLOWED IN ITS OWN WORDS. Read literally,
  * Algorithm 4 encrypts the WHOLE plaintext at step 3 and only then hashes the whole ciphertext at step 5 — two

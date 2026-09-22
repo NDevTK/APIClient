@@ -53,12 +53,30 @@
 
      WHERE THE CITATIONS ABOVE ARE ACTUALLY CHECKED, because it is not here. `engine/citegen.mjs` audits
      `.c/.h/.md/.js/.mjs` and walks `engine/host`, `extension` and `engine/*.mjs`; an `.html` under `testing/`
-     is outside both, and pointing the tool at this file directly resolves its section numbers and compares
-     ZERO of its quotations — a silent zero, not a clean bill. So the load-bearing quotations are ALSO carried
-     by scrstat_bad.js and scrstat_ok.js beside this file, where `node engine/citegen.mjs testing/fixtures/
-     scrstat_bad.js testing/fixtures/scrstat_ok.js` compares and VERIFIES every one of them against the
+     is outside both, so no whole-tree run reads this file at all — MEASURED at 6cc8439a, `testing/fixtures`
+     occurs ZERO times in the output of a bare `node engine/citegen.mjs`. So the load-bearing quotations are
+     ALSO carried by scrstat_bad.js and scrstat_ok.js beside this file, where
+     `node engine/citegen.mjs testing/fixtures/scrstat_bad.js testing/fixtures/scrstat_ok.js`
+     compares and VERIFIES every one of them against the
      committed corpus. If a quotation here is ever edited, edit it there too — that is the copy an instrument
-     can read. -->
+     can read.
+     THIS SAID THE TOOL `compares ZERO of its quotations` WHEN POINTED AT THIS FILE, AND THAT WAS THE ONE CLAIM
+     A COVERAGE NOTE MAY NOT GET WRONG: it is an absence, so nobody discovers it by acting on it, and it tells
+     a reader that any finding here is impossible. It is rewritten rather than deleted because the sentence
+     around it is right and a reader who re-derives it from the walk will re-add it. MEASURED at 6cc8439a,
+     `node engine/citegen.mjs testing/fixtures/scrstat_status_error.html` resolves every citation it reads,
+     compares ONE quotation and reports ONE finding. The COUNTS are deliberately left to that command and not
+     written here, because the diff carrying this paragraph moved them: adding a backticked citation below
+     raised the resolved population by one, which is what a repair that names a standard is supposed to do.
+     That ONE finding is a FALSE POSITIVE this markup manufactures
+     and not a defect in the prose: the citation `status §2.2.3` sits at the end of a comment line and the next
+     double-quoted run in the file is the `src` ATTRIBUTE VALUE beneath it, so the quotation channel compares a
+     URL against Fetch and reports it diverging at word zero. A `.c` file cannot produce that shape, which is
+     why it appears only when the tool is aimed here by hand. The point the sentence was making stands and is
+     now checkable: run the two `.js` siblings for the judged copies, and do not read a run over this file as
+     evidence about them.
+     RETIREMENT: this record goes when a coverage note in this tree cannot state what an instrument compares
+     without the command that measured it standing beside the claim. -->
 <script>fetch("/scrstat-doc-parsed.txt");</script>
 
 <!-- THE SUBJECT: an ok-typed, well-formed JavaScript body under a status §2.2.3 excludes. -->

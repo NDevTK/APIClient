@@ -55,8 +55,16 @@
  * neighbour of every other and can move findings in files it has nothing to do with. HOW ITS ABSENCE WOULD
  * SHOW, as an observation: a run of the citation audit reports a quotation of css-values-5 as diverging from
  * a document the site does not name, and the divergence word is the second or third rather than a late one.
- * RETIREMENT: this record goes when the audit's census line stops counting css-values-5 among the standards
- * it indexes no text for.
+ * RETIREMENT: this record goes when `ls engine/specindex/text/` lists a css-values-5 row.
+ *   THAT CONDITION READ `when the audit's census line stops counting css-values-5 among the standards it
+ *   indexes no text for`, AND IT WAS SATISFIED FROM THE DAY IT WAS WRITTEN — which is the one way a retirement
+ *   condition fails that nothing reports, because it retires a residual whose gap is still open. The census
+ *   line counts a standard only where a citation NAMES it beside a number, and this appendix has no numbers:
+ *   `git grep -ci` over `css-values-5 §` answers ZERO across the tree, so `css-values-5=` appears nowhere in
+ *   a whole-run census and the line can never stop counting what it never counted. It is recorded rather than
+ *   silently replaced because a condition phrased over an INSTRUMENT'S OUTPUT is the natural thing to reach
+ *   for and is wrong whenever the population that output is drawn from cannot contain the subject; a
+ *   condition phrased over the ARTIFACT cannot fail that way.
  *
  * NAMED RESIDUAL — THE ENCODING IS UNFORGEABLE BY ARGUMENT AND NOT BY CONSTRUCTION. WHAT IS NOT COVERED: an
  * author's declaration value is bytes css-syntax-3 §3.3 "Preprocessing the input stream" replaces only U+0000

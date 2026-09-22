@@ -43,11 +43,26 @@
  * The quotations below are transcribed from the fetched PDF, with the standard's SMALL-CAPS rendering of a
  * function name normalized (the document sets CIPHER() in small capitals, which extracts as spaced letters).
  * NOTE FOR ANY READER CHECKING THEM: FIPS 197 is a NIST publication and `engine/specindex` holds no index for
- * it, so `engine/citegen.mjs` COUNTS every citation in this file and CHECKS none of them — not the number, not
+ * it, so `engine/citegen.mjs` COUNTS THIS FILE'S FIPS CITATIONS and CHECKS none of them — not the number, not
  * the title and not the quotation. That is a silent zero rather than a clean bill, which is why each citation
  * here names its section's own title, and it is why the S-BOX BELOW IS NOT TRANSCRIBED FROM TABLE 4 AT ALL: it
  * was DERIVED from §5.1.1's equations (5.2) and (5.3) and then checked, so a reader who distrusts the table can
  * re-derive it rather than proof-read 256 hexadecimal bytes against a PDF.
+ *   THAT SCOPE READ `every citation in this file`, AND THE FILE IS THE ONE THING A COVERAGE NOTE MAY NOT NAME
+ *   — the same defect core/crypto/hmac.h records at length, kept here in short form because a reader
+ *   re-deriving it from the FIPS half will re-add it at the same scope. A coverage claim is read by somebody
+ *   deciding whether to BUILD an instrument, so `CHECKS none of them` said of a FILE tells them to discount a
+ *   channel that is running. The Web Cryptography citations here are INDEXED and JUDGED; the split is a
+ *   command rather than a number to trust: `node engine/citegen.mjs engine/host/browser/core/crypto/aes.h`,
+ *   MEASURED at 6cc8439a as 3 resolved of 37 read with 2 quotations compared and 0 findings.
+ *   AND THE SILENCE OVER THE FIPS NUMBERS IS NOT THE SAME SILENCE hmac.h HAS, which is worth one line because
+ *   the two look identical from the sentence above. Every FIPS 197 number in this file is written BARE, so it
+ *   names no standard, resolves to nothing, and lands in the auditor's unanchored band — it is NOT on the
+ *   `standards seen but not indexed` census line, which for this file names only `sp 800-38d`. So a reader
+ *   cannot see the size of this blind spot the way hmac.h's reader can, and a bare number in a file that also
+ *   carries indexed anchors is the shape a file vote places on whichever indexed standard owns that number.
+ *   RETIREMENT: this record goes when every FIPS number in this file carries `FIPS 197` in front of it, so the
+ *   census line states the count and the vote can no longer reach them.
  *
  * THERE IS NO INVERSE CIPHER, AND THAT IS A DECISION RATHER THAN AN OMISSION. GCM never runs AES backwards.
  * SP 800-38D §6.5's GCTR builds a KEYSTREAM with CIPH_K and exclusive-ors it into the data, so decryption uses
