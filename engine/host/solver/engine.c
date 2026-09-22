@@ -8794,18 +8794,52 @@ static int preempt_hook(int kind) {
        IT READS IN EVERY BUILD AND ADDS NO EXPOSURE THIS DECISION DID NOT ALREADY HAVE: flow_weight reaches the
        same two indirections through flow_branch_bonus for EVERY member of EVERY pick, so the dereference this
        line makes of the one member the hook is already holding is one the order performs anyway. */
-    DCHECK(!g_rival ||
-           (flow_service_notch(g_rival) == g_rival_own_notch && g_rival->visits == g_rival_visits &&
-            flow_reward(g_rival) == g_rival_val && flow_distance(g_rival) == g_rival_dist &&
-            flow_branch_born(g_rival) == g_rival_branch_born),
-           "a term of the cached RIVAL's weight moved while the frontier generation stood still — its reward, "
-           "its completed-unit count, its fitness distance, its branch bucket's mint count or its OWN service "
-           "notch is not what it was when "
-           "this hook chose it, and none of those may change without a rank change being raised. Two things "
-           "are now false at once: this hook is ranking against a rival the scheduler's pick would no longer "
-           "have returned, and the ONE-BIT claim every sub-linear spelling of the order rests on — that "
-           "between two generations nothing per-member moves but the aging's carry — is not true of this "
-           "tree. Raise frontier_rank_changed() at whichever writer moved it");
+    /* AND IT NAMES WHICH OF THE FIVE, BECAUSE THE REMEDY IT CARRIES HAS NO OBJECT WITHOUT THAT. The
+       condition below is unchanged — the same five terms, the same population, the same abort — and the
+       message was a DISJUNCTION being read as a diagnosis: five candidate movers behind one answer, under an
+       instruction to raise the rank change "at whichever writer moved it" that names an action with no site.
+       Every writer of every one of those terms is in another component, so a reader who meets this has to
+       re-derive all of them by hand before the instruction means anything, which is the shape
+       CLAUDE.md's §AN-ASSERT-THAT-NAMES-A-REMEDY-BUT-NOT-A-SITE is about, arriving as five states behind one
+       answer rather than as a missing file:line.
+       THE SIXTH READING IS THE ONE THE DISJUNCTION HID AND IT IS NOT A TERM MOVE AT ALL. This pointer is
+       cached across opcodes and a departure FREES the flow, so a rival that has left answers 0 for its reward
+       and 0 for its own notch through the two early returns that ask `family` — and reports here as a term
+       that moved. Those two take opposite work: one is a missing raise at a writer, the other is a departure
+       the cache outlived, and no reading of the five pairs alone separates them. flow_is_member is the
+       question that does, and it is free on the passing path because DCHECKF evaluates its arguments only
+       inside the branch the condition has already failed — which is what lets a walk of the frontier stand in
+       a per-opcode hook at all, and is why the membership claim at the rescan above may stay where it is.
+       WHAT WAS ESTABLISHED BEFORE WRITING THIS, so the next reader starts from it rather than from the
+       enumeration: every writer in solver/flow.c of the fields these five accessors read raises the rank
+       change inside the SAME C call, with no interpreter opcode between the write and the raise — including
+       the branch bucket's mint count, whose one increment sits in flow_fork_inherit and whose sole caller
+       has already been through the flow_new that raised. The one weight term whose writer raises nothing is
+       the completed-unit count at flow_credit_visit, and its sole caller credits the flow the hook is holding
+       as `cur`, which forces the rescan above by the second half of its own condition. So the pair printed
+       below is the evidence nobody had, and the enumeration is not it.
+       RETIREMENT: this record goes when the hook holds no POINTER across a generation — an index that names a
+       member by identity rather than by address states both facts at its own update site. */
+    DCHECKF(!g_rival ||
+            (flow_service_notch(g_rival) == g_rival_own_notch && g_rival->visits == g_rival_visits &&
+             flow_reward(g_rival) == g_rival_val && flow_distance(g_rival) == g_rival_dist &&
+             flow_branch_born(g_rival) == g_rival_branch_born),
+            "a term of the cached RIVAL's weight moved while the frontier generation stood still — cached "
+            "against current: own service notch %lld -> %lld, completed units %lld -> %lld, reward %g -> %g, "
+            "fitness distance %g -> %g, branch bucket mint count %ld -> %ld, and the rival is still a member "
+            "of the frontier: %d. A mint count of -1 is this hook declining to ask a departed flow for its "
+            "bucket, and a `still a member` of 0 is a DEPARTURE this cache outlived rather than a writer that "
+            "moved a term — the two take opposite diffs. None of these may change without a rank change being "
+            "raised. Two things are now false at once: this hook is ranking against a rival the scheduler's "
+            "pick would no longer have returned, and the ONE-BIT claim every sub-linear spelling of the order "
+            "rests on — that between two generations nothing per-member moves but the aging's carry — is not "
+            "true of this tree. Raise frontier_rank_changed() at the writer the pair above names",
+            (long long)g_rival_own_notch, (long long)flow_service_notch(g_rival),
+            (long long)g_rival_visits, (long long)g_rival->visits,
+            g_rival_val, flow_reward(g_rival),
+            g_rival_dist, flow_distance(g_rival),
+            g_rival_branch_born, flow_is_member(g_rival) ? flow_branch_born(g_rival) : -1L,
+            flow_is_member(g_rival));
     if (cur && g_rival && flow_weight(g_rival) > flow_weight(cur)) {   /* value yield */
         /* THE VALUE YIELD MAY ONLY FIRE ON A RANK CHANGE, AND THIS IS WHERE THAT IS EITHER TRUE OR A SENTENCE
            IN CLAUDE.md. §scheduler says the yield fires "the moment a parked flow outranks (or on an emit/fork/
