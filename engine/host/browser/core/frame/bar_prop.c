@@ -74,16 +74,59 @@ static void bar_finalizer(JSRuntime *rt, JSValue val)
  * here; the six instances a realm installs chain to ITS prototype, so ITS getter carries ITS ctx. */
 static JSValue js_bar_visible(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    BarProp *b = JS_GetOpaque(this_val, g_bar_class);
     (void)magic;
-    DCHECK(b != NULL, "BarProp.visible was read off something that is not a BarProp");
+    /* WEB IDL §3.7.6 "Attributes"' creating an attribute getter, in the TRY-LIST of its step 1 — "If jsValue
+       does not implement target, then:", whose two arms are "If attribute was specified with the
+       [LegacyLenientThis] extended attribute, then return undefined." and "Otherwise, throw a TypeError."
+       (The list is named rather than sub-numbered because that step holds TWO sibling lists, the try-list and
+       the "And then, if an exception E was thrown" list, and both restart at .1.) HTML §7.2.2.5's IDL, as the
+       harvested corpus every instrument here consumes declares it, is `[Exposed=Window] interface BarProp {
+       readonly attribute boolean visible; };` — no [LegacyLenientThis], so the arm is the throw.
+
+       A THROW AND NOT AN ASSERT, BECAUSE THE RECEIVER IS THE PAGE'S INPUT AND NEVER THIS ENGINE'S COMPUTATION.
+       A DCHECK asserts that this codebase's own logic is correct, so it may only ever stand on a value this
+       codebase COMPUTED; `this` is whatever a page passed. This getter is reachable off the prototype with
+       `.call` on anything at all — `Object.getOwnPropertyDescriptor(BarProp.prototype, "visible").get.call({})`
+       is four lines of ordinary JavaScript — so the assert that stood here was a remote party holding an abort
+       switch on the engine. It was not theoretical: measured on the shipped artifact, that expression ended the
+       process on SIGABRT and took the run's whole @RESULT with it, so the page reached it and NOTHING was
+       reported — not the findings it had already made, not the errors, not the census. A FORCING solver meets
+       this constantly, because calling a member with an unusual receiver is what forced execution does.
+
+       THE CLASS ID IS THE WHOLE OF §3.7.6's "implement" HERE, AND THAT IS A FACT ABOUT THIS INTERFACE RATHER
+       THAN A SHORTCUT. core/idl_args.h states the condition under which a class comparison can answer
+       "implements" at all — an interface whose values are exactly one class — and BarProp meets it: it declares
+       no inheritance, browser/idl_inheritance.h gives it no parent, and no interface in the platform's IDL
+       inherits from it, so every value that implements it is an object of this one class and no other. An
+       interface anything inherits from must use the owning component's own `…_is` predicate instead, because a
+       subclass wrapper carries a different class id and a comparison would refuse a receiver the spec admits.
+       JS_GetClassID answers JS_INVALID_CLASS_ID for a non-object, so a primitive receiver is refused by the
+       same line rather than needing one of its own.
+
+       AND §3.7.7 "Operations"' ORDERING HAZARD DOES NOT REACH A GETTER, which is why this is in the body and
+       an operation's may not be. An operation's brand sits in its try-list at step 2.1.2.3, BEFORE step 2.1.4
+       computes the effective overload set, so a test written in an operation's body would run the page's own
+       `toString` first and throw afterwards — observably wrong. An attribute getter takes no arguments, so
+       there is no conversion this test could be late for. core/timing/performance.c reaches the same
+       conclusion for the same reason and also throws from the body.
+
+       THE RECORD IS NOT READ AND NO LONGER ASKED FOR. The opaque fetch that used to stand here WAS the brand
+       test, so it goes with the assert it fed rather than staying beside the real one as a second and weaker
+       copy of the same question: BarProp's record carries no field any member reads — it exists so the six
+       instances are distinct objects with a class to check — and that it exists at all is asserted where it is
+       established, at the CHECK in bar_prop_new, rather than re-asked at every read. */
+    if (JS_GetClassID(this_val) != g_bar_class) {
+        JS_ThrowTypeError(ctx, "'visible' called on an object that does not implement interface BarProp");
+        return JS_EXCEPTION;
+    }
     /* THE ANSWER IS THE NAVIGABLE'S, and that is why there is no assert here that the realm's proxy names THIS
        realm's document. There was one, and it was true only while nothing could navigate: HTML §7.2.3 The
        WindowProxy exotic object's replace moves the navigable's active document to a new realm while a flow
        parked in the superseded one keeps
        running, and that flow reading `window.toolbar` is reading a fact about the NAVIGABLE — which has moved
        on — not about the document it is standing in. An assert that fires for a correct read is worse than
-       none; the brand check above is the one that still says something. */
+       none; the refusal above is the one that still says something, and it says it to the PAGE rather than to
+       this process. */
     return JS_NewBool(ctx, !window_proxy_is_popup(document_window_proxy(ctx)));
 }
 
