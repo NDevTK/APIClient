@@ -2790,6 +2790,57 @@ async function safeFetch(url, opts) {
       return _refused("network", "blocked-final-url-unparseable", [parsed.href], {});
     _finalUrl = _fu;
   }
+  /* AND THE ENTRY ALLOWLIST IS COMPLETE AFTER A REDIRECT WITHOUT BEING RE-ASKED — ASSERTED HERE RATHER THAN
+     ARGUED, BECAUSE THE ARGUMENT IS WHAT A READER RE-DERIVES AND THEY RE-DERIVE IT WRONG. The scheme test is
+     the one gate in this function that reads `parsed` and is never re-pointed at the landed address — a
+     count of `protocol` over this file answers 2 and both of them are that gate — and beside `_readBody`'s
+     `WHICH GATES READ WHICH` enumeration, where every other name carries a `both` or reads `_finalOrigin`,
+     that asymmetry reads as a hole. It is not one, because the BROWSER refuses the targets this gate
+     excludes:
+     Fetch §4.5 "HTTP-redirect fetch" step 6 is "If locationURL's scheme is not an HTTP(S) scheme, then
+     return a network error", and this function's `redirect: "follow"` means that has already run at every
+     hop by the time this line does. So `file:`, `data:`, `blob:` and `chrome-extension:` are unreachable as
+     a redirect target at any depth. The DCHECK is that sentence made falsifiable: a firing means the
+     platform guarantee this gate's one-sidedness rests on no longer holds and the allowlist owes an arm
+     here.
+     DCHECK AND NOT CHECK, ON THIS FILE'S OWN DISCRIMINATOR — WHO DETERMINES THE VALUE. A server only
+     PROPOSES a `Location`; it is the browser that accepts or refuses one, so a landed scheme is a platform
+     guarantee and not the hostile input `blocked-final-url-unparseable` refuses on, and it is asserted
+     exactly as this function's `resp.status !== 0` DCHECK is asserted on Fetch's default `cors` mode. */
+  DCHECK(_finalUrl.protocol === "https:" || _finalUrl.protocol === "http:",
+         "the landed URL names a scheme the entry allowlist refuses, which " +
+         "Fetch §4.5 \"HTTP-redirect fetch\" step 6 makes unreachable as a redirect target — that gate " +
+         "runs on the initial URL " +
+         "ONLY because the browser refuses a non-HTTP(S) locationURL, so a firing here means that is no " +
+         "longer true and the allowlist owes a post-redirect arm: " + _finalUrl.protocol);
+  /* AND THE QUESTION A READER IS ACTUALLY HOLDING WHEN THEY REACH FOR A POST-REDIRECT SCHEME TEST IS MIXED
+     CONTENT, WHICH IS A DIFFERENT QUESTION AND IS NOT THIS ZONE'S — SO WHAT THEY HAVE FOUND HERE IS A
+     DECISION AND NOT A GAP. The gap they came for is REAL: an `https` request that lands on `http` is judged
+     for mixed content by nothing, because this engine asks
+     Mixed Content §4.4 "Should fetching request be blocked as mixed content?" BEFORE the wire
+     (Fetch §4.1 "Main fetch" step 7, reached through `fetch_main_blocked`) and nothing asks that section's
+     step 20 response-side disjunct. It is a NAMED RESIDUAL already, at core/fetch/mixed_content.h, whose
+     three members land together and whose call site is `flow_deliver_one_reply` — and that residual's own
+     absence clause names this allowlist, which is the route by which a reader arrives here.
+     SPELLING IT HERE AS A SCHEME TEST WOULD BE WRONG IN BOTH DIRECTIONS, WHICH IS WHY THE SECOND COPY IS NOT
+     WORTH MAKING.
+     Mixed Content §4.5 "Should response to request be blocked as mixed content?" allows on four conditions
+     and this zone can compute one of them. Its first is
+     Mixed Content §4.3 "Does settings prohibit mixed security contexts?", whose subject is the analysed
+     document's settings object and its ancestor navigables — which this zone does not hold, so a gate here
+     would refuse a plain `http:` page its OWN `http:` subresources: the population that section answers
+     "does not restrict" for, and the one every default arm of the egress policy exists to let through. Its
+     second is not a scheme test either:
+     Secure Contexts §3.1 "Is origin potentially trustworthy?" returns trustworthy where a host "matches one
+     of the CIDR notations 127.0.0.0/8 or ::1/128", so `protocol !== "https:"` would refuse a redirect to
+     loopback that a browser allows and that this file's own private-host rule is written to permit. Its
+     fourth is the top-level navigation exemption — destination `document` with no parent browsing context —
+     and `navigationLoad` is exactly that, while this zone holds no navigable and cannot state it.
+     WHAT THIS ZONE OWES THAT RESIDUAL IS ALREADY SHIPPED AND NEEDS NO DIFF: `urlList` on the record this
+     function returns is Fetch §2.2.6 "Responses"' response URL list, whose LAST item is the `response's url`
+     that Mixed Content §4.5 judges, and this is the only zone that can report it.
+     RETIREMENT: this record goes when the Mixed Content §4.5 residual at core/fetch/mixed_content.h no
+     longer names this file's scheme allowlist in its absence clause. */
   /* AND THE HREF IS TAKEN OFF THAT SAME RECORD RATHER THAN OFF `resp.url` AGAIN, which is
      what makes "one answer" true of the string that LEAVES this function and not only of the
      gates inside it: `bridge.js` reads the URL list's last item and decides a Document's
