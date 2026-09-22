@@ -45,7 +45,7 @@ const fs = require("fs");
 const fsp = fs.promises;
 const http = require("http");
 const crypto = require("crypto");
-const { spawn, execSync } = require("child_process");
+const { spawn, spawnSync, execSync } = require("child_process");
 const puppeteer = require("puppeteer");
 
 // Deterministic Chrome extension ID for an unpacked extension at the
@@ -362,6 +362,172 @@ function resolveUnprivileged(chromePath) {
   return { uid, gid, name, chromePath, home };
 }
 
+/* AND THE DIRECTORY CHROME IS HANDED MUST BE REACHABLE BY THE UID THAT WILL RUN IT, WHICH IS A DIFFERENT
+   QUESTION FROM WHETHER *THIS* PROCESS CAN READ IT — AND THE TWO ANSWERS DIVERGE EXACTLY WHERE IT COSTS MOST.
+   `assertEngineAbiPairing` has already read five files out of EXT_DIR as root and succeeded, so the harness
+   has PROVED to itself that the extension is fine and then hands the path to a uid that cannot open it. The
+   binary, the profile and the home are each asked as the target user above; the extension directory was the
+   one launch input nobody asked about.
+   WHAT CHROME DOES WITH AN UNLOADABLE `--load-extension` IS COME UP ANYWAY. It serves /json/version, it holds
+   NO extension, and this function's caller then prints `started. chrome pid=… extId=…` — where `extId` is
+   `computeExtensionId(EXT_DIR)`, a pure function of the PATH STRING and therefore a CLAIM rather than an
+   observation. Every measurement taken afterwards reads exactly like a page that had nothing to find, which
+   is CLAUDE.md §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES: an ABSENT result and a ZERO result are different facts
+   and must never be averaged. A lane that meets this concludes something false about the ENGINE.
+   MEASURED, and it is the ordinary case rather than an exotic one: a lane directory under a session
+   scratchpad is mode 0700 at two levels, so the dropped account could not traverse it; the harness printed
+   `started.` with an extId, /json/version answered, and /json/list carried only `chrome://newtab/`.
+   IT IS KNOWABLE BEFORE LAUNCH, so it is asserted at the point the directory is chosen rather than diagnosed
+   from an empty run afterwards — and it REFUSES rather than repairing. Widening somebody's directory is a
+   security decision this harness is not entitled to make, and a `chmod` it performs silently is one nobody
+   can find later.
+   ASKED AS THE TARGET USER, never by mode arithmetic here, for the reason resolveUnprivileged already gives
+   about `-w`: passwd is the only thing that states the account's supplementary groups, and no mode arithmetic
+   here can see an ACL. The modes printed below are for the READER; they decide nothing.
+   NAMED RESIDUAL — WHAT THIS DOES NOT COVER: an EXT_DIR the account can read whose contents Chrome then
+   refuses (a manifest it will not parse, a version it will not load) still produces the same silent
+   extensionless browser, because `extId=` is still computed rather than observed. WHAT THE NEXT DIFF BUILDS:
+   the success line states the id Chrome actually MINTED, read from a `chrome-extension://` target after the
+   port answers, and refuses when none appears or it differs — `testing/corpus/site.mjs` already records
+   exactly that observation as `loadedExtId`, so the value has a precedent and a consumer. HOW ITS ABSENCE
+   WOULD SHOW: a launch reports an extId while the browser's own target list names no chrome-extension://
+   origin. It is not built here because proving a post-launch check requires launching Chrome, and a guard
+   nobody has seen refuse anything is not a guard. */
+function assertExtDirReachable(extDir, dropTo) {
+  /* NOT A GUARD THAT SWALLOWS A FAILURE, AND NOT A VACUOUS ONE: with nothing dropped, Chrome runs as THIS
+     process, and the uid whose reachability is in question is the one `assertEngineAbiPairing` has just
+     proved by really reading renderer.html, qjs.mjs, check.js, mojo.js and mojom.js out of this same
+     directory and throwing if any of them would not open. There is no second party to ask about, so asking
+     would be one question with two answering mechanisms — which is how the two drift. */
+  if (!dropTo) return;
+  const abs = path.resolve(extDir);
+  const manifest = path.join(abs, "manifest.json");
+  /* ONE `su`, not one per component: the answer must describe a single instant, and a walk that spawns eight
+     processes is eight instants. No path ever reaches the script's `echo` — the shell reports an INDEX and
+     this function maps it back — so there is exactly ONE quoting surface and it is `shq`, which is the POSIX
+     single-quote escape rather than `JSON.stringify`. The two `su` calls above use `JSON.stringify` inside a
+     single-quoted shell word, which is double-quote semantics and therefore live for `$`, backtick and `\`;
+     they are LEFT ALONE deliberately, because both FAIL CLOSED — a quoting slip there makes `test` fail and
+     the guard THROW — whereas this one must be able to report a CLEAN answer, so a slip here would be
+     silent. `spawnSync` with an argv array means node runs no shell of its own. */
+  const shq = (x) => "'" + String(x).replace(/'/g, "'\\''") + "'";
+  const comps = [];
+  for (let d = abs; ; d = path.dirname(d)) {
+    comps.unshift(d);
+    if (path.dirname(d) === d) break;
+  }
+  const script = [
+    ...comps.map((d, i) => `[ -x ${shq(d)} ] || echo "X ${i}"`),
+    `[ -r ${shq(abs)} ] || echo "L"`,
+    `[ -r ${shq(manifest)} ] || echo "M"`,
+    `echo DONE`,
+  ].join("\n");
+  const r = spawnSync("su", ["-s", "/bin/sh", dropTo.name, "-c", script],
+                      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const out = String(r.stdout || "").split("\n").map((l) => l.trim()).filter(Boolean);
+  /* THE COMPLETION MARKER IS THE POSITIVE STATEMENT, because an empty stdout is what a REACHABLE directory
+     looks like AND what a `su` that never ran looks like — the absent-versus-zero pair, arriving in the
+     instrument instead of in the subject. An unasked question may not be recorded as a passing one. */
+  if (out[out.length - 1] !== "DONE") {
+    throw new Error(
+      `could not ask \`${dropTo.name}\` whether it can reach ${abs} — \`su\` did not run the check to\n` +
+      `  completion (status ${r.status}${r.error ? `, ${r.error.message}` : ""}), so the answer is UNKNOWN and\n` +
+      `  this is NOT "the directory is fine". The same mechanism answered twice already in\n` +
+      `  resolveUnprivileged (the binary's -x and the home's -w), so a failure here is anomalous.\n` +
+      (String(r.stderr || "").trim() ? `  su said: ${String(r.stderr).trim().split("\n").slice(-3).join("\n           ")}\n` : ""));
+  }
+  const unsearchable = out.filter((l) => l.startsWith("X ")).map((l) => comps[Number(l.slice(2))]);
+  const unlistable = out.includes("L");
+  const unreadableManifest = out.includes("M");
+  if (!unsearchable.length && !unlistable && !unreadableManifest) return;
+  /* ONLY THE OUTERMOST FAILURE IS ESTABLISHED, AND THE REST ARE UNASKED RATHER THAN FAILING. A component
+     nobody can traverse hides everything beneath it, so `test -x` on the inner ones answered false for a
+     reason that is not about their modes at all — and the first draft of this message listed three 0755
+     directories and a 0644 file as unreachable, which is a report naming more than it measured and would
+     have sent a reader to widen paths that were already fine. Same defect as a count that sums two
+     populations: what is printed below is ONE cause plus the modes root can see, labelled as what they are.
+     The reader fixes the named one and re-runs, and this guard then names the next if there is one — which
+     is the forcing function rather than a guess at how deep the problem goes. */
+  const describe = (d) => {
+    try {
+      const st = fs.statSync(d);
+      return `${d}   mode ${(st.mode & 0o7777).toString(8).padStart(4, "0")}  owner ${st.uid}:${st.gid}`;
+    } catch (e) { return `${d}   (cannot stat: ${e.code || e.message})`; }
+  };
+  const blocker = unsearchable.length ? unsearchable[0] : null;
+  const masked = blocker ? comps.slice(comps.indexOf(blocker) + 1) : [];
+  throw new Error(
+    `\`${dropTo.name}\` (uid ${dropTo.uid}) cannot reach the extension directory, so Chrome would launch with\n` +
+    `  NO EXTENSION IN IT, answer /json/version, and every run against it would read as a page that had\n` +
+    `  nothing to find. Refusing before launch rather than measuring that.\n` +
+    `    extension: ${abs}\n` +
+    (blocker
+      ? `    ${dropTo.name} cannot traverse this component, which is the OUTERMOST one that denies it:\n` +
+        `      ${describe(blocker)}\n` +
+        (masked.length
+          ? `    everything below it could not be asked about at all while it stands. Root sees:\n` +
+            masked.map((d) => `      ${describe(d)}\n`).join("")
+          : "")
+      : "") +
+    (!blocker && unlistable ? `    ${dropTo.name} cannot read (list) it:\n      ${describe(abs)}\n` : "") +
+    (!blocker && unreadableManifest ? `    ${dropTo.name} cannot read the manifest Chrome must parse:\n      ${describe(manifest)}\n` : "") +
+    `  A directory at mode 0700 under a home or a session scratchpad is the usual cause. Widening it is the\n` +
+    `  OWNER'S decision, so this harness will not chmod anything on your behalf. Either:\n` +
+    (blocker
+      ? `      chmod a+x ${JSON.stringify(blocker)}\n` +
+        `        (traversal only — it does NOT make the directory listable; then re-run, and this check\n` +
+        `         names the next component if one is still in the way)\n`
+      : "") +
+    (!blocker && (unlistable || unreadableManifest) ? `      chmod -R a+rX ${JSON.stringify(abs)}\n` : "") +
+    `  or put the lane somewhere already traversable, or run this harness as ${dropTo.name} so nothing is\n` +
+    `  dropped, or set HARNESS_USER to an account that can read it.\n` +
+    `  THIS IS NOT A REASON TO SET HARNESS_ALLOW_NO_SANDBOX=1 — the sandbox is working; the path is the\n` +
+    `  problem, and an unsandboxed run would load the extension and hide this for good.\n` +
+    `  AND IT IS NOT A PORT COLLISION. A caller that polls /json/list for our extension id reports BOTH\n` +
+    `  states with one sentence ("port N is not serving our extension"), which reads as somebody else's\n` +
+    `  browser on the port; this refusal, in the launch log, is what tells the two apart.`);
+}
+
+/* AND `HARNESS_EXT_DIR` IS A CLAIM THAT MUST AGREE WITH EXT_DIR, NEVER A SECOND WAY TO CHOOSE IT.
+   IT IS NOT A WRITE WITH NO READER, WHICH IS THE READING THIS CHECK EXISTS TO STOP SOMEBODY ACTING ON:
+   `testing/corpus/run.sh` exports it and `testing/artifact_stamp.js`, `testing/corpus/site.mjs` and
+   `testing/probe_globals.mjs` all read it. The one thing that does NOT read it is this file, and that is
+   DELIBERATE and stated in run.sh's own header: a lane holds a private COPY of harness.js and of
+   `extension/`, harness.js derives EXT_DIR from its OWN location, and Chrome's unpacked-extension id is
+   derived from that path — which is what makes the browser provably load an artifact nobody can rebuild
+   under it. Teaching this file to obey the variable would add a SECOND door onto the one decision, and the
+   first thing through it would be a harness in the shared checkout loading a lane's extension, or the
+   reverse: exactly the artifact-swap the lane copy exists to prevent.
+   WHAT IS REAL IS THE DIVERGENCE, AND IT IS SILENT. When the variable names a different directory than this
+   file's location does, the browser loads ONE extension while the stamp, the census row and the globals
+   probe describe ANOTHER — a row whose `wasmSha256` and `builtFromHeadClaim` belong to bytes Chrome never
+   opened. site.mjs says so in its own words and answers it AFTER THE FACT, by recording the id Chrome
+   minted; this answers it BEFORE, by making the disagreement impossible instead of detectable.
+   COMPARED BY REALPATH, so a trailing slash or a symlinked lane is not a false alarm. What it deliberately
+   does NOT judge is two different STRINGS naming one real directory: the bytes are then the same bytes,
+   which is what the stamp is about, and only the derived id would differ. Unset is not a disagreement —
+   the readers above then fall back to their own documented defaults, which is their contract, not ours. */
+function assertExtDirAgreement(extDir) {
+  const stated = process.env.HARNESS_EXT_DIR;
+  if (!stated) return;
+  const realOf = (d) => { try { return fs.realpathSync(d); } catch (e) { return null; } };
+  const mine = realOf(extDir);
+  const theirs = realOf(stated);
+  if (mine !== null && mine === theirs) return;
+  throw new Error(
+    `HARNESS_EXT_DIR names a different extension than this harness would load, and the two would not be\n` +
+    `  reported as different by anything: Chrome takes THIS file's location and the stamp, the census row\n` +
+    `  and the globals probe take the variable.\n` +
+    `    this harness would load: ${path.resolve(extDir)}${mine && mine !== path.resolve(extDir) ? `   -> ${mine}` : ""}${mine === null ? "   (does not resolve)" : ""}\n` +
+    `    HARNESS_EXT_DIR says:    ${stated}${theirs && theirs !== stated ? `   -> ${theirs}` : ""}${theirs === null ? "   (does not resolve)" : ""}\n` +
+    `  This harness does NOT obey the variable — a lane holds a copy of harness.js beside its copy of\n` +
+    `  extension/, and the unpacked-extension id Chrome mints is derived from that path, which is what makes\n` +
+    `  the browser provably load an artifact nobody can rebuild under it. So the fix is to run the copy that\n` +
+    `  sits beside the extension you meant:\n` +
+    `      cd ${path.dirname(path.resolve(stated))} && node testing/harness.js restart <port>\n` +
+    `  or unset HARNESS_EXT_DIR if you meant this checkout's.`);
+}
+
 /* AND THE CLAIM IS CHECKED RATHER THAN ASSERTED. A flag that stops being passed, a kernel that forbids the
    namespace, a Chrome that degrades quietly — each leaves a harness that reports a sandboxed run and delivers
    an unsandboxed one, which is worse than never having claimed it. Linux states the answer per process:
@@ -574,6 +740,12 @@ async function cmdStart(args) {
   /* BEFORE ANYTHING ELSE, INCLUDING THE ALREADY-RUNNING SHORTCUT BELOW: a browser that is already up is
      running the same pair, so returning early would report a healthy launch for the same broken engine. */
   assertEngineAbiPairing();
+  /* HERE FOR THE SAME REASON THE LINE ABOVE IS HERE: a browser that is already up was launched from
+     this same location, so returning early below would leave a disagreeing HARNESS_EXT_DIR unstated for
+     the whole pass — and site.mjs names a REFUSED `restart` as precisely the case in which the row
+     describes an extension the browser never opened. It asks nothing of the target uid, so it costs no
+     subprocess and does not belong down at the launch. */
+  assertExtDirAgreement(EXT_DIR);
   const existing = await readLock();
   if (existing) {
     const ver = await pingPort(existing.port);
@@ -630,6 +802,10 @@ async function cmdStart(args) {
      flag was quietly making. */
   const dropTo = resolveUnprivileged(chromePath);
   if (dropTo && dropTo.chromePath) chromePath = dropTo.chromePath;
+  /* AND THE LAST LAUNCH INPUT NOBODY ASKED THE TARGET UID ABOUT. `dropTo` is known exactly here and
+     EXT_DIR goes onto the command line on the next line, so this is the origin of the claim that Chrome
+     can load what it is being handed. */
+  assertExtDirReachable(EXT_DIR, dropTo);
   const chromeArgs = [
     `--disable-extensions-except=${EXT_DIR}`,
     `--load-extension=${EXT_DIR}`,
@@ -750,7 +926,15 @@ async function cmdStart(args) {
                           chromeProc.pid);
 
   await writeLock({ port, pid: chromeProc.pid, extId, startedAt: Date.now() });
-  log(`started. chrome pid=${chromeProc.pid} port=${port} extId=${extId || "(unknown)"}`);
+  /* THE ID SAYS WHERE IT CAME FROM, BECAUSE IT IS A CLAIM AND IT READ AS AN OBSERVATION. `extId` is
+     `computeExtensionId(EXT_DIR)` — a pure function of the PATH STRING — so this line printed an extension id
+     for a browser holding no extension at all, which is the state `assertExtDirReachable` above now refuses
+     before launch. Labelling it costs nothing (nothing outside this file parses this line) and it is the
+     difference between a reader taking the id as proof the extension loaded and knowing to ask. The
+     observation that would settle it, and why it is not made here, is the named residual at
+     `assertExtDirReachable`. */
+  log(`started. chrome pid=${chromeProc.pid} port=${port} ` +
+      `extId=${extId || "(unknown)"} (derived from ${EXT_DIR}; not read back from the browser)`);
 }
 
 async function cmdPage(args) {
