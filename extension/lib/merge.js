@@ -833,8 +833,6 @@ function _mergeResourcesInto(eres, nres, docKey) {
     }
   }
 }
-/* AN EMPTY PAIR, NAMED ONCE: what a record that has no such hole contributes to the fold below. */
-const _NO_HOLE_POOLS = Object.freeze({ valid: Object.freeze([]), forced: Object.freeze([]) });
 /* THE FLAT RECORDS' OWN MERGE — two sightings of ONE address, met wherever they meet, folded by the ONE law
    per field. IT IS CALLED AT BOTH SEAMS AND USED TO BE CALLED AT ONE, which is the whole of why it is no
    longer named for holes. The engine's endpoint identity is (method, path, provenance, param-set) and

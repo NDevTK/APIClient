@@ -123,14 +123,12 @@ const ENDPOINT_ABSENT = Object.freeze({
    is a field name; a domain is a fact about the HOLE and is the same claim whichever pool a value of it
    landed in. Spelling it per entry of both lists would put two copies of one fact on one record, free to
    disagree — the two-spellings defect this file spends its length refusing.
-   A NAME MAY APPEAR HERE AND IN NEITHER POOL. A hole every path gated with `x > 5` and none ever pinned has a
-   domain and no offerable example; §@H permits the domain-annotated shape and forbids inventing `6` for it.
-   NOTHING READS SUCH AN ENTRY YET — lib/send.js walks `endpointHolePairs`, so a hole with no value declares no
-   parameter and the domain has no field to badge. NAMED RESIDUAL: what is not covered is a hole this record
-   states a domain for and no value; the next diff walks the UNION of the two names in lib/send.js's hole loop
-   so such a hole declares a parameter out of its domain alone; its absence shows as a Send panel whose URL
-   template still carries a literal `{name}` no input can fill, on an address whose service resolves no
-   discovery doc. */
+   A NAME MAY APPEAR HERE AND IN NEITHER POOL, AND THAT POPULATION IS WHY THIS FIELD IS KEYED THE WAY IT IS.
+   A hole every path gated with `x > 5` and none ever pinned has a domain and no offerable example; §@H
+   permits the domain-annotated shape and forbids inventing `6` for it. lib/send.js's hole loop walks the
+   UNION of this list's names and the two pools', so such a hole declares a path parameter out of its domain
+   alone — the four claims badge, the placeholder repeats the narrowest, and the box stays EMPTY, because
+   §@H's line is whether a VALUE was determined and no gate of this kind determines one. */
 
 /* WHY THE BODY TAKES TWO FIELDS AND NOT ONE WITH A GRADE ON IT — the same choice the two hole pools make
    above, reached from the other side of the seam and for a sharper reason.
@@ -516,6 +514,15 @@ function endpointHolePairs(ep, where) {
   take("pathParamsForced", "forced");
   return out;
 }
+
+/* AN EMPTY PAIR, NAMED ONCE: what a record that does not NAME a hole contributes wherever that hole's name
+   arrived from somewhere else. It lives beside the walk that mints pairs because BOTH its readers are one
+   seam out and neither owns it — lib/merge.js's moat fold, where the name came out of the OTHER record's key
+   set, and lib/send.js's hole loop, where it came out of `pathParamDomains`. Two frozen literals would be two
+   answers to one question, and the question is this walk's: an absent entry is the positive statement that no
+   path filled this segment, never a list to default. It is FROZEN because a caller that mutated a shared
+   empty pool would corrupt every later miss, which is the one way a shared constant fails silently. */
+const _NO_HOLE_POOLS = Object.freeze({ valid: Object.freeze([]), forced: Object.freeze([]) });
 
 /* THE RECORD'S PROVED DOMAINS AS PER-NAME CLAIMS — `endpointHolePairs` for the other half of the shape, and
    written beside it for the same reason: the moat's cross-document fold and the Send panel's attach both need

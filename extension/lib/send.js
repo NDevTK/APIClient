@@ -441,9 +441,32 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
      the run had narrowed to `> 5` reaching a reviewer with the same bytes as one nothing ever tested. */
   const _epDomains = ep ? endpointHoleDomains(ep, "lib/send.js resolving the Send-panel schema for " +
                                                   JSON.stringify(epKeyUsed)) : null;
-  if (_epHoles && _epHoles.size) {
+  /* THE WALK IS THE UNION OF THE TWO NAME SETS AND NOT THE POOLS' KEYS — the named residual
+     lib/endpoint-record.js states at `pathParamDomains`, retired here, and keying it on the pools alone was a
+     WRONG report rather than a thin one. lib/merge.js builds the two lists by two different SKIP rules and
+     says so at its own mint: a hole with values and no domain is in the pools and not in the domain list, and
+     a hole with a domain and no value is in the domain list and in NEITHER pool, because every pool entry is
+     required to carry a value. So the second population arrived on the record complete and declared no
+     parameter at all: the panel offered no box for a segment this run had narrowed, and the address kept a
+     literal `{name}` nothing could fill. §@H's line is whether a VALUE was determined, never whether a
+     CONSTRAINT was — `x > 5` on the arm this flow took is a fact the run OBSERVED exactly as a pin is, so the
+     domain owes a field, and inventing `6` to put in it is the fabrication that rule forbids by name.
+     THE PAIR IS EMPTY FOR SUCH A NAME AND THAT IS THE RECORD'S OWN STATEMENT RATHER THAN A `||`. The pools do
+     not name this hole, which is the positive claim that no path filled it at either grade — the same claim
+     `endpointHolePairs` makes by minting no entry. `_NO_HOLE_POOLS` is the one spelling of it
+     (lib/endpoint-record.js, beside that walk), shared with lib/merge.js's moat fold, which asks the identical
+     question one seam over and would otherwise be a second answer to it.
+     AND A HOLE WITH VALUES AND NO DOMAIN IS UNCHANGED BY THIS, which is the controlled pair: it was already in
+     the set the pools' keys produce, it still reads the all-null `_hd` below, and it goes through the same
+     fold with the same operands. Neither direction has a branch of its own, so neither can drift from the
+     other — the only thing this diff changes is WHICH NAMES reach the loop. */
+  const _holeNames = new Set();
+  if (_epHoles !== null) for (const _n of _epHoles.keys()) _holeNames.add(_n);
+  if (_epDomains !== null) for (const _n of _epDomains.keys()) _holeNames.add(_n);
+  if (_holeNames.size) {
     parameters = parameters || {};
-    for (const [_hn, _hp] of _epHoles) {
+    for (const _hn of _holeNames) {
+      const _hp = (_epHoles !== null && _epHoles.has(_hn)) ? _epHoles.get(_hn) : _NO_HOLE_POOLS;
       /* A NAME THE RESOLVED SCHEMA DOES NOT DECLARE IS NOT A HOLE — it is the schema stating it has no such
          parameter, and a templated path segment the engine learned a value for is one the panel must show
          anyway. So the miss is answered by DECLARING the parameter out of what this hole's entry already
@@ -476,6 +499,23 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
          all. Both are the same statement to a FieldDef, which is why one literal serves them. */
       const _hd = (_epDomains !== null && _epDomains.has(_hn)) ? _epDomains.get(_hn)
                 : { excludes: null, bounds: null, predicates: null, looselyEquals: null };
+      /* NAMED RESIDUAL — THE FOUR CLAIMS LAND ONLY ON A PARAMETER THIS BRANCH DECLARES.
+           WHAT IS NOT COVERED: a hole whose name the resolved schema ALREADY declares. `_hd` is read for it
+             and then dropped, because `cur` is the doc-derived parameter and only the literal below writes
+             the four onto one. That parameter carries the domain of THIS DOCUMENT'S matched method
+             parameter; this record's entry is the moat's fold of the same four across every document that
+             reached the address (lib/merge.js intersects the three lists and WIDENS the interval to the
+             hull). They are two claims about one segment, and the panel renders one of them with nothing
+             saying the other was asked.
+           WHAT THE NEXT DIFF BUILDS: that fold, at this attach, ROUTED to the rules that already spell it
+             rather than spelled a third time — `intersectExcludedValues` / `widenBoundsInto` /
+             `intersectPredicates` / `intersectLooselyEquals` (lib/learn.js), over `cur`'s four and `_hd`'s,
+             which is exactly what `_foldEndpointRecordInto` calls one seam over for the two records' own
+             copies. The declaration would then meet the record's by the law that governs both, instead of
+             winning by having been written first.
+           HOW ITS ABSENCE WOULD SHOW: a declared path parameter whose badge states a constraint that the
+             same address's `pathParamDomains` entry for that name does not carry — readable side by side in
+             one @RESULT, on any record the moat folded from more than one document. */
       const cur = declared ? parameters[_hn]
                            : { name: _hn, customName: false, number: null, type: "string", location: "path",
                                required: true, description: "AST-learned path segment",
