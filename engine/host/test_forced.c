@@ -367,6 +367,12 @@ static int hostreq_answer_all(JSContext *ctx);   /* the SYNCHRONOUS half — see
    taken, so it is asked at the moment; a POSTED MESSAGE has to have been RECEIVED by then, so it is routed as
    early as this host can route one and the moment waits for the residue to show that it was. */
 static int  fixture_cold_moment(void);
+/* AND THE LATCH READ RATHER THAN ASKED, which is a SECOND entry and not a parameter on the first.
+   fixture_cold_moment CONSULTS the tier — cold_park_preview raises the ask census on every call — and the
+   probe table has to be able to state whether the moment was met without itself becoming a host that asked.
+   A probe clause is read as side-effect-free everywhere in this tree (check.h), and a clause that moved a
+   census would make this run's own diagnostic a function of how often it was reported. */
+static int  fixture_cold_moment_met(void);
 static void fixture_ask_remote_op(JSContext *ctx);
 static void fixture_route_peer_post(JSContext *ctx);
 
@@ -519,13 +525,29 @@ static int fixture_provide(JSContext *ctx) {
         urls = nl + 1;
     }
     url_record_free(&base);
-    /* THE PEER'S POST GOES IN AT THE FIRST PAYMENT AND THE MOMENT WAITS FOR IT, WHICH IS THE ORDER AND NOT A
-       PREFERENCE. A commitment is written when a timeline RECEIVES, so the record has to be in the document
-       before the moment can ever be true — and routing it here, where the frontier is still the boot flow,
-       is what makes every member of the eventual frontier a descendant of a receiver rather than a sibling of
-       one. It is idempotent and SESS_PARK-only at its own definition, so this line is the payment's cadence
-       and not a second gate. */
-    fixture_route_peer_post(ctx);
+    /* THE PEER'S POST IS NOT ROUTED HERE ANY MORE, AND THE MOVE IS A REPAIR RATHER THAN A TIDY-UP — the
+       reasoning that put it here is kept because it is what a reader re-derives. It said: a commitment is
+       written when a timeline RECEIVES, so the record has to be in the document before the moment can ever be
+       true, and routing it at the first PAYMENT — where the frontier is still the boot flow — is what makes
+       every member of the eventual frontier a descendant of a receiver rather than a sibling of one.
+       EVERY CLAUSE OF THAT IS TRUE AND IT IS ONE CONSULTATION LATE, which is the whole of the defect. The host
+       is consulted at the TOP of run_scheduler's loop and paid at the BOTTOM of it, so the payment is the
+       SECOND ask of a slice and the hook is the first; the forward declaration of this pair already states the
+       intent the position did not meet — the post "is routed as early as this host can route one". It is the
+       park hook that is as early as this host can route one, because engine_sched_begin has already seeded the
+       boot flow by the time the loop is entered, so the frontier the old comment wanted is there a slice
+       sooner and nothing else about the argument changes.
+       WHAT IT COST, MEASURED OFF ONE PARK SESSION'S OWN `_cold` LINE: `previewAsks 3`, all three WRITABLE,
+       `previewAsksWithDeepCands 2`, `previewAsksWithOrphans 2`, `previewAsksWithCommits 0` — and
+       `previewCommitRowsWritten 13` against `previewAsksAfterCommit 0`. That pair is solver/cold.h's SECOND
+       state by name: thirteen timelines really did receive, and every one of them received after the last
+       consultation, so the conjunct was never observable and the session wrote no residue at all. The ask
+       count is forced arithmetic rather than a reading — two call sites over a loop that ran twice is
+       hook/payment/hook, the third slice never happening because the second returned DONE — and the census
+       taken at the end of the first iteration carries `previewAsks 2`, which is that sequence exactly.
+       `fixture_ask_remote_op` STAYS, because it is the opposite question: an OPERATION must still be held when
+       the park is taken, so it is asked AT the moment and not before it. The two halves of what a peer does are
+       asked at opposite ends of the run, which is why they were two functions before this line moved. */
     if (fixture_cold_moment()) fixture_ask_remote_op(ctx);
     return filled + hostreq_answer_all(ctx);
 }
@@ -15541,6 +15563,105 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int cold_park_wrote = g_sess == SESS_PARK && cold_park_records() > 0;
     int cold_park_deep  = g_sess == SESS_PARK && g_cp.segs > 0;
     int cold_park_cand  = g_sess == SESS_PARK && g_cp.cands > 0;
+    /* AND BENEATH ALL THREE OF THEM, THE PARK'S REACHABILITY LADDER — because every row above is an OUTCOME
+       row and `park-wrote=0` is ONE column over a CONJUNCTION. solver/cold.h has already counted what that
+       column folds: FOUR conjuncts, hence fifteen non-satisfying states, every one of them reported as the
+       same 0. They do not take the same work — a conjunct that NEVER ROSE wants its producer built, and
+       conjuncts that each rose and never COINCIDED want a different moment — so they may not share a number.
+       THE DISCRIMINATOR ALREADY EXISTED AND THIS TABLE COULD NOT SEE IT, which is the whole of what this
+       closes. cold_preview_census is raised INSIDE cold_park_preview, BEFORE any host's conjunction runs, and
+       it is published on the RESULT document's `_cold` line — a DIFFERENT document from this one, which this
+       stage's verdict never reads. So a build can FAIL on `park-wrote=0` while the three rows that attribute
+       that 0 are printed by the same process, a few hundred bytes away, and joined to nothing: the
+       write-with-no-reader half of the defaulted-field defect, with the reader one document over.
+       IT DERIVES FROM THAT ACCESSOR AND RESTATES NOTHING. Every row here is read off ColdPreviewCensus, so a
+       conjunct added to the moment grows a counter there and this ladder goes stale LOUDLY; a second walk of
+       the frontier written here would be the second copy an auditor may not keep.
+       THE THREE OUTER RUNGS ARE A CHAIN AND THE CHAIN IS ASSERTED BELOW RATHER THAN DESCRIBED. `park-asked`
+       is the REACHABILITY clause — did any host consult this tier at all — and a 0 there makes every park row
+       beside it UNATTRIBUTABLE rather than false. `park-residue` says some consultation stood at a residue
+       the park would have WRITTEN, as against found EMPTY or REFUSED; that is the TIER'S own verdict on the
+       ask and restates no host's moment. `park-moment` says this host's conjunction held at one of them.
+       Each implies the one below it, and `park-wrote` implies all three, so the LOWEST 0 localises.
+       AND THE THREE CONJUNCT ROWS BETWEEN THEM ARE SIBLINGS AND NOT RUNGS, said plainly because reading them
+       as a ladder is exactly the error a ladder's discipline exists to prevent. They are the three facts the
+       moment is a conjunction OF: each may rise without the others, none implies another, and `park-moment`
+       is 1 only when all three stood at ONE ask. A row that does not imply its neighbour is a finding, so
+       these are not dressed as one. The fourth conjunct (`refuses == 0`) has no row of its own because it
+       already has one: a REFUSING ask is the arm `park-residue` excludes, so a park moment that fails only on
+       that conjunct is a `park-residue` of 0. */
+    ColdPreviewCensus pvc;
+    int cold_park_asked, cold_park_residue, cold_park_moment;
+    int cold_park_mom_deep, cold_park_mom_orphan, cold_park_mom_commit;
+    const char *park_asked_why =
+        "no host consulted the cold tier in this session — `previewAsks` is 0. That counter is raised inside "
+        "cold_park_preview BEFORE any host's conjunction runs, so this is the positive statement that the "
+        "seam was never reached, and every park row printed beside it is UNATTRIBUTABLE rather than false. "
+        "Read engine_set_park_hook's call site and run_scheduler's loop; nothing in cold_park is implicated.";
+    const char *park_residue_why =
+        "the tier was consulted and NO consultation stood at a residue it would have WRITTEN — every ask took "
+        "its EMPTY or its REFUSING arm, which are the two `previewAsks` arms `previewAsksWritable` is not "
+        "(cold.c asserts the three partition it). That is a statement about this DOCUMENT and about "
+        "cold_park_flow's refusal, never about a moment: a park taken at any of those asks would have written "
+        "no bytes at all, or aborted at the member holding a task a replay will not re-cause.";
+    const char *park_mom_deep_why =
+        "no consultation stood at a CANDIDATE SESSION ON A FROZEN DECISION SEGMENT (`previewAsksWithDeepCands` "
+        "is 0) — the one member whose record carries attacker text AND names a segment ordinal, which is what "
+        "makes one residue cross park_hex and the 's' ordinals at once. `previewAsksWithCands` and "
+        "`previewAsksWithDeep` on the same line say whether either half ever stood alone, and this row is "
+        "bounded by both of them rather than by their conjunction.";
+    const char *park_mom_orphan_why =
+        "no consultation stood at a DRIVEN ORPHAN (`previewAsksWithOrphans` is 0), so no ask would have "
+        "written an 'o' record and the next session would inherit this document's explored paths and none of "
+        "its uncalled code. A drive is seeded when a flow has run out of everything else, so a 0 here is a "
+        "moment standing AHEAD of the drives rather than a document that has none.";
+    const char *park_mom_commit_why =
+        "no consultation stood at a member HOLDING a commitment (`previewAsksWithCommits` is 0), so no ask "
+        "would have written an 'r' record. READ IT WITH THE TWO ROWS solver/cold.h NAMES FOR IT AND NEVER "
+        "ALONE: `previewCommitRowsWritten` and `previewAsksAfterCommit` on the same `_cold` line separate its "
+        "THREE states, and they take three different actions. No ledger row at all is a document in which no "
+        "timeline ever received from a peer, and the work is the ROUTING (fixture_route_peer_post). Rows "
+        "written with `previewAsksAfterCommit` 0 is a producer that ran entirely AFTER the last consultation, "
+        "and the work is the MOMENT (fixture_cold_moment) — the tier is consulted BETWEEN slices, so a "
+        "document whose receivers are born, commit and depart inside ONE of them reads here exactly like a "
+        "document where nothing ever received. Asks taken after a row was written with this still 0 is the "
+        "only one of the three that is a defect in the engine: a commitment left the frontier, which no walk "
+        "of the registry can otherwise see.";
+    const char *park_moment_why =
+        "this host's conjunction never held at any consultation, so engine_request_park was never called, no "
+        "park was taken, and every OUTCOME row beside this one is 0 about that rather than about the tier. "
+        "The three conjunct rows printed with it say which of the facts it is a conjunction of never rose; a "
+        "run in which all three read 1 and this reads 0 is three facts that never COINCIDED, and the fix for "
+        "that is the moment and never the park.";
+
+    /* READ AND NOT ASKED, exactly as the latch beside it is: this call is a copy of a static plus one
+       monotonicity check, and cold_park_preview — the thing that would move these counters — is not on it. */
+    cold_preview_census(&pvc);
+    cold_park_asked      = g_sess == SESS_PARK && pvc.asks > 0;
+    cold_park_residue    = g_sess == SESS_PARK && pvc.asks_writable > 0;
+    cold_park_mom_deep   = g_sess == SESS_PARK && pvc.asks_with_deepcands > 0;
+    cold_park_mom_orphan = g_sess == SESS_PARK && pvc.asks_with_orphans > 0;
+    cold_park_mom_commit = g_sess == SESS_PARK && pvc.asks_with_commits > 0;
+    cold_park_moment     = g_sess == SESS_PARK && fixture_cold_moment_met();
+    /* THE CHAIN, ASSERTED AND NOT DESCRIBED — which is what makes "the lowest 0 localises" a contract rather
+       than a reading convention, and it is the one claim neither file can make alone: cold.h holds the census
+       and says outright that it never has to know what any host asked for, and this host holds the latch. */
+    DCHECKF(!cold_park_moment ||
+            (pvc.asks_with_deepcands > 0 && pvc.asks_with_orphans > 0 &&
+             pvc.asks_with_commits > 0 && pvc.asks_writable > 0),
+            "this host latched its park moment and the tier's own ask census did not record the conjuncts it "
+            "latched on: deepcands at %ld ask(s), orphans at %ld, commits at %ld, writable %ld of %ld ask(s). "
+            "The latch is set from ONE cold_park_preview call and that same call raises every one of those "
+            "counters before returning, so they cannot disagree unless a conjunct was read from somewhere "
+            "other than the preview — which makes this row a statement about a frontier the census never saw",
+            pvc.asks_with_deepcands, pvc.asks_with_orphans, pvc.asks_with_commits,
+            pvc.asks_writable, pvc.asks);
+    DCHECKF(!cold_park_wrote || cold_park_moment,
+            "this session wrote %ld park record(s) and its own moment never latched. engine_request_park has "
+            "exactly one caller reachable from this program — run_scheduler's park hook, which is "
+            "fixture_want_park — so a residue written without the latch is a second door into cold_park, and "
+            "the ladder printed above it stops being able to say why a park did or did not happen",
+            cold_park_records());
     int cold_resumed_any   = g_sess == SESS_RESUME && (g_cr.flows + g_cr.cands) > 0;
     int cold_resumed_segs  = g_sess == SESS_RESUME && g_cr.segs > 0;
     int cold_resumed_cand  = g_sess == SESS_RESUME && g_cr.cands > 0;
@@ -16827,6 +16948,16 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            a 'c' record at all, so the row still names a statement of the document it runs over; the SESSION is
            what tells the two apart, because they run the SAME document and one is about what a park WROTE while
            the other is about what a resume REBUILT out of it. */
+        /* THE REACHABILITY LADDER FIRST, LOWEST RUNG FIRST — read these in order and the lowest 0 is the
+           localisation, which is asserted where they are computed and not merely promised here. The three
+           `park-moment-*` rows between `park-residue` and `park-moment` are SIBLINGS: they are the facts the
+           moment is a conjunction of, so none implies another and the ladder resumes at `park-moment`. */
+        { "park-asked", cold_park_asked, "state.code", SESS_PARK, park_asked_why },
+        { "park-residue", cold_park_residue, "state.code", SESS_PARK, park_residue_why },
+        { "park-moment-deep", cold_park_mom_deep, "state.code", SESS_PARK, park_mom_deep_why },
+        { "park-moment-orphan", cold_park_mom_orphan, "state.code", SESS_PARK, park_mom_orphan_why },
+        { "park-moment-commit", cold_park_mom_commit, "state.code", SESS_PARK, park_mom_commit_why },
+        { "park-moment", cold_park_moment, "state.code", SESS_PARK, park_moment_why },
         { "park-wrote", cold_park_wrote, "state.code", SESS_PARK },
         { "park-deep", cold_park_deep, "state.code", SESS_PARK },
         { "park-cand", cold_park_cand, "state.code", SESS_PARK },
@@ -17306,8 +17437,14 @@ static int fixture_cold_moment(void) {
            RECEIVER — the row a timeline writes when it takes a peer's message (solver/engine.c's
            deliver_commit_taken) — so the residue carries one exactly when some member has already received
            one, and no amount of asking at a cleverer instant produces that on its own. That is why the post
-           is ROUTED at the first payment below and the moment is what waits: the two halves are a routing
-           this host performs and a state it observes, and only the second can be a predicate.
+           is ROUTED by fixture_want_park, one line ahead of this call, and the moment is what waits: the two
+           halves are a routing this host performs and a state it observes, and only the second can be a
+           predicate. THAT SENTENCE READ `at the first payment below` AND THE POSITION IS WHAT MOVED — the
+           payment is the SECOND consultation of a slice and the hook is the first, so a record routed there
+           was received a whole slice later than it had to be, and on a document that drains in two slices
+           there was then no consultation left at which any member was holding the row. The argument is
+           unchanged and is the reason the routing is early at all; see the payment for what the late position
+           measured.
            THE FOURTH CONJUNCT WAS `delivers == 0` AND IT IS RETIRED BY MEASUREMENT, NOT BY TASTE — the
            reasoning is kept because it is what a reader re-derives, and it is wrong in one specific place.
            It read: `delivers` is the transient, it rises once at the routing and falls to zero as each member
@@ -17338,6 +17475,13 @@ static int fixture_cold_moment(void) {
     }
     return g_cold_moment;
 }
+
+/* THE SAME LATCH, WITHOUT THE CONSULTATION — see the forward declaration for why the two are separate
+   entries. It is the one fact about this host's moment that solver/cold.h's census structurally cannot
+   hold: that file says outright that it "never has to know what any host asked for", so the relation
+   between this conjunction and those counters is this host's to state, and the probe table below is where
+   it is stated. */
+static int fixture_cold_moment_met(void) { return g_cold_moment; }
 
 /* A PEER'S POSTED MESSAGE, ROUTED IN AS THE TRUSTED ZONE ROUTES ONE — the other half of what this fixture
  * stands in for, and the only producer of an 'r' record there is on a host with one instance.
@@ -17483,6 +17627,22 @@ static void fixture_ask_remote_op(JSContext *ctx) {
    park after the operation completed, when engine_retract_span has no token left to strip, so the row it was
    protecting would still read 0 with the park now claiming to have exercised it. */
 static int fixture_want_park(void) {
+    /* THE PEER'S POST, ROUTED AT THE EARLIEST INSTANT THIS HOST HAS, AND STRICTLY BEFORE THE MOMENT IS ASKED.
+       This seam is the TOP of run_scheduler's loop, so it is the first thing the host does after
+       engine_sched_begin has seeded the frontier and the first thing it does in every slice thereafter — one
+       consultation ahead of the provider, which is where this call used to sit and which is a slice too late
+       for the commitment it exists to produce (see the payment for the measurement).
+       THE ORDER ON THIS LINE IS THE LOAD-BEARING PART and it is a statement rather than an argument
+       expression, for the same reason the delivery's own fork/commit pair is: the record must be in the
+       document before the conjunction that asks whether the residue carries one can be true, and C does not
+       order the operands of an `&&` the way two lines order two effects.
+       IT IS IDEMPOTENT AND SESS_PARK-ONLY AT ITS OWN DEFINITION, so this is the hook's cadence and not a
+       second gate — and the two guards agree by construction rather than by convention: g_sess is SESS_PARK
+       exactly when --cold-park was given, which is exactly when this hook is the one installed.
+       THE CONTEXT IS THE FIXTURE'S OWN, because this seam takes none: the scheduler asks the host a question
+       about MEMORY and hands it no realm. g_probe_ctx is set in main before the scheduler is seeded, which is
+       the same realm the provider is handed and the one the probe table renders its result document from. */
+    fixture_route_peer_post(g_probe_ctx);
     return fixture_cold_moment();
 }
 
