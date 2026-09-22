@@ -257,3 +257,55 @@ artifact, every site's ABORT-or-not was identical in all three, and so was every
 endpoint count. Only `flows` moved, and it moved a lot (one site 9550-18521), which
 is exactly the wall-clock/CPU variance above. So a single pass settles whether a
 site aborts and on what; it settles nothing about how much work got done.
+
+## What `distinctEndpoints` is a fraction OF
+
+It is the addresses that SURVIVED the engine's asset skip, and the population they were
+drawn from is recorded nowhere. `endpoint_json_array` drops every record the reply
+classifier marked before the `@RESULT` document exists, `bridge.js` copies that array
+through untouched, and this census unions it -- so a removed address is absent from every
+field of every row and no rewriting of `site.mjs` can count it. Derive both halves rather
+than trust them: `git grep -n 'is_asset) continue' engine/host/solver/endpoint.c` is the
+drop, and `git grep -nE 'assetSkipped|endpointsMinted|epsTotal' engine extension` is the
+pre-skip counter that would make the removed number readable -- it answers 0, against a
+`g_eps_n` control in the same scope that answers 9, so the zero is an ABSENCE and not a
+malformed question. `learnedSurfaceScope` says this on the row itself.
+
+SO A LOW COUNT HAS THREE READINGS AND THE ROW SEPARATES TWO. The driving never derived
+those requests; this tool's own egress policy refused them (`egressAsked` /
+`egressDeclined`); or the engine learned them and the classifier CORRECTLY removed them.
+The third takes no work at all -- it is the design doing what CLAUDE.md §Attacker-sources
+asks of it -- which is exactly why it has to be named: a reader who takes a refusal-free
+row as evidence about the driving has merged a correct removal into a failure to drive.
+
+AND THE HOLE IS NOT A CONSTANT SIZE, which is the part no amount of care about the
+number reaches. The verdict is taken from the ONE type decision `extension/lib/safe-fetch.js`
+stamps, and `_computedType` returns the server's own declared essence UNCHANGED whenever
+the response carries `nosniff`, while `_sniff` beside it can produce only
+`application/json` or nothing at all. So the five groups `solver/reply_decode.c`'s
+`is_asset` names can only ever be reached from a type a SERVER DECLARED: the size of what
+this skip removes is a property of HOW THE SITES IN A CENSUS LABEL THEIR MEDIA, never of
+the engine, and two rows' counts are not comparable as driving even in principle.
+
+MEASURED ONCE, WITH THE CONTROLS, so the shape above is not an argument: gitlab.com serves
+its `.woff2` assets as `content-type: application/octet-stream` with
+`x-content-type-options: nosniff` (`curl -I`, against a `.css` control on the same host
+that returns `text/css`), so `is_asset` is FALSE on all five predicates and those font
+addresses survive the skip CORRECTLY. A reader who takes them as API surface is not
+looking at an engine defect, and a reader who "fixes" the predicate to catch them is
+proposing the URL-suffix matching §RUN-DON'T-MATCH bans.
+
+AND THE TWO ENDPOINT COLUMNS ARE NOT A SUBTRACTION. `endpoints` is ONE RUN's counter and
+`distinctEndpoints` is a UNION over runs -- `countersScope` says so on the row -- and BOTH
+are post-skip, so their difference is two MOMENTS of one surface and never the removed
+population. A census row carrying `endpoints: 188` beside `distinctEndpoints: 97` is not
+reporting 91 assets; it is reporting one incremental snapshot against one log entry.
+
+ANY SUFFIX SPLIT OF `siteEndpoints` IS A FLOOR AND NAMES WHAT IT CANNOT SEE. Counting how
+many survivors end `.js`, `.css`, `.woff2` is a DESCRIPTION and not a classifier -- the
+same sentence `site.mjs` already carries at that field -- so it cannot see an asset served
+at an extensionless address, a `data:` URL, a media file under a `.js` name, or the shape
+addresses a concolic request files under (`GET /api/{cfg.region}/x`, which parses as no URL
+at all and is the whole of the control corpus's surface). Report such a split as a floor,
+say whether you counted LINES (`grep -c`) or OCCURRENCES (`grep -o | wc -l`), and never
+sum it against a counter from the one-run block.

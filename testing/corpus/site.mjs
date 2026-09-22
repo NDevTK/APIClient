@@ -603,6 +603,13 @@ const frontierPrograms = (() => {
   out.from = coldLive.i;
   return out;
 })();
+/* THE ONE EXPRESSION THE THREE SURFACE ROWS BELOW SHARE, computed once. `siteEndpoints`, `distinctEndpoints`
+   and `learnedSurfaceScope` were three spellings of one set, and a third copy is how two of them come to
+   disagree about a row nobody re-derived -- which is the defect `countersScope` exists one row down to keep
+   two DIFFERENTLY-SCOPED numbers from committing. This is the same cure applied to one scope.
+   RETIREMENT: it goes when the three rows are one field, which is a rename and waits for a pass that can
+   re-derive every archived comparison rather than being smuggled in beside a fix. */
+const learnedAddrs = [...new Set(mine.flatMap(d => d.sites))];
 const row = {
   id, url, finalUrl, status, nav, artifact, measuredAt: new Date().toISOString(),
   dwellMs: DWELL, cores: cpus().length, loadBefore, loadAfter,
@@ -882,20 +889,68 @@ const row = {
      parser's requests as well as the engine's, and the caution that stood here was conservative rather than
      correct. Derive it rather than trust it: `grep -n 'g_declined_total++' engine/host/solver/pending_index.c`
      and read the function it sits in.
-     NAMED RESIDUAL, AND IT IS BACK TO ONE. NOT COVERED: this row cannot state its own composition, because
-     the fact that would split it (is this address an asset) is not in the record it reads -- the
-     classification lives on a decoded response in the offscreen store and never reaches the census. NEXT
-     DIFF: the record carrying the classifier's own answer, so learned-addresses and classified-as-asset are
-     two columns neither quotable as the other. HOW ITS ABSENCE SHOWS: an endpoint count read as an API
-     surface by a reader who would have to open the address list to find out otherwise.
+     NAMED RESIDUAL, AND IT IS BACK TO ONE. ITS NOT-COVERED CLAUSE IS NARROWED RATHER THAN RETIRED, and the
+     sentence it replaces is kept because a reader who re-derives it will write it again: it read "this row
+     cannot state its own composition, because the fact that would split it (is this address an asset) is not
+     in the record it reads". The REASON half is still exactly true and `learnedSurfaceScope` below now states
+     it -- so what is uncovered is no longer the READING, which the row names, but the COUNT, which no field
+     of this document and no counter in the engine holds.
+     NOT COVERED: how many addresses the classifier REMOVED. NEXT DIFF: the record carrying the classifier's
+     own answer, so learned-addresses and classified-as-asset are two columns neither quotable as the other.
+     HOW ITS ABSENCE SHOWS: a reader comparing two rows' endpoint counts as a measure of driving, on a pair
+     whose servers labelled their media differently.
      RETIREMENT: it goes when this object publishes a classified-as-asset count, because the composition is
      then stated by the row rather than by this paragraph. */
-  siteEndpoints: [...new Set(mine.flatMap(d => d.sites))],
-  distinctEndpoints: new Set(mine.flatMap(d => d.sites)).size,
-  /* WHICH READING THE TWO ROWS ABOVE ARE, WHICH THEY CANNOT SAY ALONE AND WHICH IS THE WHOLE POINT OF THEM.
-     A low endpoint count has two causes that take OPPOSITE WORK -- the driving never derived those requests,
-     or this tool's own egress policy REFUSED them -- and until these two rows nothing this file emitted
-     separated them. `egressAsked` is extension/bridge.js's count of pending requests it handed to the
+  siteEndpoints: learnedAddrs,
+  distinctEndpoints: learnedAddrs.length,
+  /* WHAT `siteEndpoints` AND `distinctEndpoints` ARE A COUNT OF, STATED BY THE ROW RATHER THAN BY THE
+     PARAGRAPH ABOVE THEM. They are the addresses that SURVIVED the engine's asset skip, and the population
+     they were drawn FROM is in no field of this document. solver/endpoint.c's `endpoint_json_array` drops
+     every record `endpoint_mark_asset` marked before the @RESULT document is composed, and extension/bridge.js
+     copies that array through untouched -- so an address the classifier removed never reaches `_astResults`,
+     never reaches `sites`, and cannot be counted here however this file is written. Derive both halves rather
+     than trust them: `git grep -n 'is_asset) continue' engine/host/solver/endpoint.c` is the drop, and
+     `git grep -nE 'assetSkipped|endpointsMinted|epsTotal' engine extension` is the pre-skip counter that would
+     make the removed number readable -- it answers nothing, and a control that DOES answer (`g_eps_n`) is what
+     says the zero is an absence rather than a malformed question.
+     SO A LOW COUNT HAS THREE READINGS AND THE PAIR BELOW SEPARATES TWO. The driving never derived those
+     requests; this tool's own egress policy refused them; or the engine learned them and the classifier
+     CORRECTLY removed them. The third takes NO WORK AT ALL -- it is the design doing its job, and CLAUDE.md
+     §Attacker-sources says so in those words -- which is exactly why it must be named: a reader who takes a
+     refusal-free row as evidence about the driving has merged a correct removal into a failure to drive, and
+     nothing below can contradict them.
+     AND IT IS NOT A CONSTANT-SIZED HOLE, WHICH IS THE PART THAT CANNOT BE REASONED PAST. The asset verdict is
+     taken from the ONE type decision extension/lib/safe-fetch.js stamps, and that function returns the
+     server's own declared essence unchanged whenever the response carries `nosniff`, while its sniff can
+     produce only `application/json` or nothing at all. So the size of what this skip removes is a property of
+     HOW THE SITES IN A CENSUS LABEL THEIR MEDIA, not of the engine -- two rows' counts are not comparable as
+     driving even in principle. Derive it rather than trust it: read `_computedType` and `_sniff` in
+     extension/lib/safe-fetch.js and ask which of the five groups solver/reply_decode.c's `is_asset` names can
+     ever come out of the sniff arm.
+     IT IS A STRING AND NOT A COUNT, for `countersScope`'s reason one row up: a count can be summed,
+     differenced or compared against a neighbour, and the neighbour it would be differenced against is the
+     thing that is missing -- `endpoints` minus `distinctEndpoints` is TWO MOMENTS of one post-skip surface
+     and never the removed population, which this row would otherwise invite. The name matches no `\w*` sweep
+     over `siteEndpoints`, `distinctEndpoints`, `endpoints` or `egress`, so every query already written against
+     an archived census keeps measuring what it measured.
+     ABSENT STAYS ABSENT: a row written before this field existed omits it, and that is a different fact from
+     a row that states its scope.
+     RETIREMENT: it goes when this object carries a classified-as-asset COUNT, because the composition is then
+     a number this row states rather than a sentence about a number it cannot. */
+  learnedSurfaceScope: learnedAddrs.length + ' address(es) that SURVIVED solver/endpoint.c\'s asset skip -- '
+    + 'the pre-skip population they are a fraction OF is held by no counter in the engine and by no field of '
+    + 'this row, so an address the classifier correctly REMOVED and an address the driving never LEARNED are '
+    + 'one silence here',
+  /* WHICH READING `siteEndpoints` AND `distinctEndpoints` ARE, WHICH THEY CANNOT SAY ALONE AND WHICH IS THE
+     WHOLE POINT OF THEM. THIS SENTENCE NAMED THEM BY POSITION ("the two rows above") AND A FIELD WAS LATER
+     INSERTED BETWEEN, which is the reference CLAUDE.md §AND-THE-FORM-THAT-SURVIVES-EVERY-SWEEP describes: it
+     always RESOLVES, to whatever now occupies that position, so no grep over the moved name could ever return
+     it. Names, from here on.
+     A low endpoint count has THREE causes that take OPPOSITE WORK and these two rows separate TWO of them --
+     the driving never derived those requests, or this tool's own egress policy REFUSED them. The third is the
+     engine having learned the address and the asset classifier having correctly removed it; `learnedSurfaceScope`
+     names it and nothing here separates it. Until these two rows nothing this file emitted separated even the
+     first two. `egressAsked` is extension/bridge.js's count of pending requests it handed to the
      chokepoint, raised at the CALL and never at the outcome; `egressDeclined` is the histogram of the ones
      refused, keyed on the chokepoint's own whole reason token.
      THE PAIR, NEVER EITHER HALF. `{}` under a nonzero `egressAsked` is the positive statement THE POLICY
