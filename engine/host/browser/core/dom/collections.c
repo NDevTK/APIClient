@@ -1,8 +1,9 @@
 /* NodeList and HTMLCollection — DOM §4.2.10 Old-style collections: NodeList and HTMLCollection, whose two
  * subsections are §4.2.10.1 Interface NodeList and §4.2.10.2 Interface HTMLCollection.
  *
- * THE NUMBER §4.2.11 STOOD HERE AND IN TWO COMMENTS BELOW, AND THERE IS NO §4.2.11 — §4.2 ends at §4.2.10 and
- * §4.3 is Mutation observers. It read as authoritative for as long as nobody opened it, which is the whole
+ * THE NUMBER §4.2.11 STOOD HERE AND IN TWO COMMENTS BELOW, AND DOM HAS NO SUCH SECTION —
+ * DOM §4.2 "Node tree" ends at §4.2.10 and DOM §4.3 "Mutation observers" follows it.
+ * It read as authoritative for as long as nobody opened it, which is the whole
  * failure mode: a named-but-unnumbered claim can be checked, and a plausible wrong number sends the reader to a
  * section that does not exist and cannot say so.
  *
@@ -43,9 +44,9 @@
 #include "solver/concolic.h"
 #include "solver/dom_cow.h"
 
-/* PER REALM — §3.7, and here it decides ANSWERS: a C member runs in the realm that DEFINED it, so one shared
-   prototype answers every document out of whichever realm built it first. Held in quickjs's per-context
-   class-proto slots. */
+/* PER REALM — Web IDL §3.7 "Interfaces", and here it decides ANSWERS: a C member runs in the realm
+   that DEFINED it, so one shared prototype answers every document out of whichever realm built it
+   first. Held in quickjs's per-context class-proto slots. */
 static JSClassID g_nodelist_class, g_htmlcoll_class;
 /* Declared once per AGENT (the IDL pool is sealed after agent init); installed per realm. */
 static int g_item_id = -1, g_named_item_id = -1;
@@ -61,12 +62,25 @@ static int     g_ready;
    take. The two child kinds walk the owner's child list; the two by-name kinds walk its whole subtree, which is
    what makes getElementsByTagName's result track a page that inserts a matching element anywhere under it. */
 enum { COLL_CHILD_NODES = 0, COLL_CHILDREN, COLL_STATIC, COLL_BY_TAG, COLL_BY_TAG_NS, COLL_BY_CLASS,
-       COLL_LINKS, COLL_NAMED };
+       COLL_LINKS, COLL_NAMED, COLL_BY_ELEM_NAME };
 
 static bool coll_is_descendant(int kind)
 {
     return kind == COLL_BY_TAG || kind == COLL_BY_TAG_NS || kind == COLL_BY_CLASS ||
-           kind == COLL_LINKS || kind == COLL_NAMED;
+           kind == COLL_LINKS || kind == COLL_NAMED || kind == COLL_BY_ELEM_NAME;
+}
+
+/* WHICH KINDS ARE §4.2.10.2 HTMLCollectionS, stated POSITIVELY — the traversal and the interface are two
+   independent facts about a kind, and reading the second off the first was true only while every descendant
+   walk happened to be an HTMLCollection. HTML §3.1.7's getElementsByName is a DESCENDANT walk returning a
+   NodeList, so `!coll_is_descendant(kind)` stopped being a test for "this is a NodeList" the moment it
+   existed; written the old way, HTMLCollection.prototype.namedItem.call(<that NodeList>, x) would have walked
+   it and answered. coll_new asserts this predicate against the interface decl each collection is actually
+   built with, so the two cannot drift apart in silence. */
+static bool coll_is_htmlcollection(int kind)
+{
+    return kind == COLL_CHILDREN || kind == COLL_BY_TAG || kind == COLL_BY_TAG_NS ||
+           kind == COLL_BY_CLASS || kind == COLL_LINKS || kind == COLL_NAMED;
 }
 
 static JSValue coll_slots(JSContext *ctx, JSValueConst v)
@@ -98,9 +112,9 @@ static int coll_kind(JSContext *ctx, JSValueConst v, JSValue *powner)
     return kind;
 }
 
-/* §4.9's class matching: the element must carry EVERY token the query asks for. Both sides are ASCII-whitespace
-   separated token lists, which is why this is a nested scan and not a string compare — `getElementsByClassName
-   ('a b')` matches `class="b x a"`. */
+/* DOM §4.9 "Interface Element"'s class matching: the element must carry EVERY token the query asks
+   for. Both sides are ASCII-whitespace separated token lists, which is why this is a nested scan and
+   not a string compare — `getElementsByClassName('a b')` matches `class="b x a"`. */
 static bool coll_is_space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'; }
 
 static bool coll_token_in(const char *hay, size_t hlen, const char *tok, size_t tlen)
@@ -132,11 +146,12 @@ static bool coll_has_all_classes(const lxb_dom_element_t *el, const char *q, siz
         any = true;
         if (!coll_token_in((const char *)v, vlen, q + st, i - st)) return false;
     }
-    /* §4.9: an EMPTY token list matches nothing, which is not the same as matching everything. */
+    /* DOM §4.9: an EMPTY token list matches nothing, which is not the same as matching everything. */
     return any;
 }
 
-/* ASCII case-insensitive compare — §4.5's rule is ASCII-only, so a locale-aware one would be wrong. */
+/* ASCII case-insensitive compare — DOM §4.5 "Interface Document"'s rule is ASCII-only, so a
+   locale-aware one would be wrong. */
 static bool coll_ascii_ieq(const char *a, const char *b, size_t n)
 {
     size_t i;
@@ -151,8 +166,9 @@ static bool coll_ascii_ieq(const char *a, const char *b, size_t n)
 
 /* Is this node one the collection counts? A NodeList counts every node; an HTMLCollection counts elements; a
    by-name collection counts the elements whose name matches what it was built with. */
-/* §4.5 STATES TWO BY-NAME ALGORITHMS AND THEY TAKE DIFFERENT OPERANDS. "list of elements with qualified name
-   qualifiedName" matches ONE string against the qualified name, with the HTML-document lowercasing rule.
+/* DOM §4.5 "Interface Document" STATES TWO BY-NAME ALGORITHMS AND THEY TAKE DIFFERENT OPERANDS.
+   "list of elements with qualified name qualifiedName" matches ONE string against the qualified
+   name, with the HTML-document lowercasing rule.
    "list of elements with namespace namespace and local name localName" matches TWO, against the NAMESPACE and
    the LOCAL name, with `*` meaning "any" in each position INDEPENDENTLY and with no lowercasing anywhere. They
    are not one algorithm with an optional argument, so a query is a record a walk carries rather than a bare
@@ -165,7 +181,7 @@ typedef struct {
     size_t      nslen;
 } CollQuery;
 
-/* Does this element's namespace match the query's? §4.5: the empty string was already turned into null by
+/* Does this element's namespace match the query's? DOM §4.5: the empty string was already turned into null by
    validate-and-extract's first step, `*` matches any, and null matches an element in NO namespace — which is
    what Lexbor answers with an empty or absent namespace URL for. */
 static bool coll_ns_matches(const CollQuery *q, const lxb_dom_node_t *c)
@@ -189,11 +205,11 @@ static bool coll_takes(int kind, const CollQuery *qy, const lxb_dom_node_t *c)
     if (kind == COLL_BY_TAG) {
         size_t qn = 0;
         const lxb_char_t *q;
-        /* §4.5: `*` is every element, and it is the form a page uses to count a subtree. */
+        /* DOM §4.5: `*` is every element, and it is the form a page uses to count a subtree. */
         if (nlen == 1 && name[0] == '*') return true;
         q = lxb_dom_element_qualified_name((lxb_dom_element_t *)c, &qn);
         if (!q || qn != nlen) return false;
-        /* §4.5: in an HTML document the query is matched against the qualified name LOWERCASED, for elements in
+        /* DOM §4.5: in an HTML document the query is matched against the qualified name LOWERCASED, for elements in
            the HTML namespace. Lexbor already stores those lowercased, so what this has to do is accept an
            uppercase query — `getElementsByTagName('I')` found nothing until it did, and `DIV` is how a great
            deal of older code spells it. A non-HTML element matches exactly, which is the other half of the
@@ -233,13 +249,32 @@ static bool coll_takes(int kind, const CollQuery *qy, const lxb_dom_node_t *c)
         v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"name", 4, &vl);
         return v && vl == nlen && memcmp(v, name, nlen) == 0;
     }
+    if (kind == COLL_BY_ELEM_NAME) {
+        /* HTML §3.1.7 "DOM tree accessors"' getElementsByName, verbatim: "return a live NodeList containing
+           all the HTML elements in that document that have a name attribute whose value is identical to the
+           elementName argument, in tree order".
+           HTML ELEMENTS IS HALF THE FILTER, and the half a by-attribute walk would drop: HTML §2.1.3
+           "XML compatibility" defines the term as "any element in that namespace, even in XML
+           documents" — the namespace being the HTML one — so `<svg name=x>` and an XML
+           `<thing name=x>` are not matches however their attribute reads.
+           IDENTICAL IS BYTE EQUALITY. No lowercasing of either side, unlike DOM §4.5's
+           qualified-name match one arm up, whose HTML rule is about the TAG and says nothing about
+           an attribute VALUE. */
+        size_t vl = 0;
+        const lxb_char_t *v;
+        if (c->ns != LXB_NS_HTML) return false;
+        v = lxb_dom_element_get_attribute((lxb_dom_element_t *)c, (const lxb_char_t *)"name", 4, &vl);
+        return v && vl == nlen && memcmp(v, name, nlen) == 0;
+    }
     if (kind == COLL_LINKS) {
-        /* §3.1.7 `document.links` is `a` AND `area` elements THAT HAVE AN href — the attribute is half the
-           definition, so an anchor used as a scroll target is not a link.
+        /* HTML §3.1.7 "DOM tree accessors"' `document.links` is `a` AND `area` elements THAT HAVE
+           AN href — the attribute is half the definition, so an anchor used as a scroll target is
+           not a link.
            HAVING IT IS `has_attribute` AND NOT A NON-NULL VALUE: lexbor's tree construction sets a value only
            where the token carried one, so `<a href>` has the attribute with NO value and `get_attribute`
            answers NULL for it exactly as for an absent one — the element would have been dropped from the
-           collection. core/layout/replaced_element.c writes out the same split for §4.8.3's `alt`. */
+           collection. core/layout/replaced_element.c writes out the same split for
+           HTML §4.8.3 "The img element"'s `alt`. */
         size_t qn = 0;
         const lxb_char_t *q = lxb_dom_element_qualified_name((lxb_dom_element_t *)c, &qn);
         if (!q || !((qn == 1 && q[0] == 'a') || (qn == 4 && memcmp(q, "area", 4) == 0))) return false;
@@ -325,7 +360,7 @@ static void coll_query(JSContext *ctx, JSValueConst self, int kind, CollQuery *q
     JS_FreeValue(ctx, nv);
     if (kind == COLL_BY_TAG_NS) {
         /* THE NULL NAMESPACE IS A REAL QUERY, so it is JS_NULL in the slot and NULL here — not the empty
-           string, which §4.5's first step has already turned into null and which would otherwise match an
+           string, which DOM §4.5's first step has already turned into null and which would otherwise match an
            element whose namespace URL is genuinely empty by accident rather than by the algorithm. */
         JSValue nsv = JS_GetPropertyStr(ctx, slots, "ns");
         if (!JS_IsNull(nsv) && !JS_IsUndefined(nsv))
@@ -467,8 +502,19 @@ static JSValue coll_named(JSContext *ctx, JSValueConst self, const char *name)
 
     n = node_of(owner);
     JS_FreeValue(ctx, owner);
-    /* §4.2.10.2's named getter belongs to HTMLCollection, which is every kind here except the two NodeLists. */
-    if (!n || (kind != COLL_CHILDREN && !coll_is_descendant(kind))) return JS_UNDEFINED;
+    /* §4.2.10.2's named getter belongs to HTMLCollection AND TO NO OTHER KIND, which is why the test names
+       those kinds rather than excluding the NodeLists: `kind != COLL_CHILDREN && !coll_is_descendant(kind)`
+       said the same thing only while every descendant walk was an HTMLCollection, and getElementsByName is a
+       descendant walk that is not one. A foreign receiver reaches here with kind -1 and is excluded by the
+       same line — which is why this is a refusal and not a DCHECK: `this` is page-supplied, and
+       HTMLCollection.prototype.namedItem.call({}, "x") is a page's input rather than a broken invariant.
+       NAMED RESIDUAL — a NodeList reaching this member answers `null` where Web IDL §3.7.7 Operations
+       requires a TypeError for a receiver that does not implement HTMLCollection. WHAT THE NEXT DIFF BUILDS:
+       an `idl_this_iface` declaration on `namedItem` naming a `collections_is_htmlcollection` predicate this
+       component would export, which is the same shape core/dom/document.c already declares for its own
+       members. HOW ITS ABSENCE WOULD SHOW: calling that member with any receiver the corpus can reach — a
+       NodeList, a plain object, a DOMTokenList — and observing a value where a browser throws. */
+    if (!n || !coll_is_htmlcollection(kind)) return JS_UNDEFINED;
     for (c = coll_first_node(kind, n); c; c = coll_adv(kind, n, c, 1)) {
         const lxb_char_t *v;
         if (c->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
@@ -502,16 +548,17 @@ static JSValue js_coll_length(JSContext *ctx, JSValueConst this_val, int magic)
 
    THE INDEX IS `unsigned long`, AND THE BODY NO LONGER RE-STATES THAT. This read used to be `JS_ToInt64` plus
    `if (i < 0) return JS_NULL`, under a declaration of `long` — a signed type Web IDL §3.2.4.5 long converts
-   with §3.2.4.9 Abstract operations' ConvertToInt(V, 32, "signed"), whose final step is "If signedness is
+   with Web IDL §3.2.4.9 Abstract operations' ConvertToInt(V, 32, "signed"), whose final step is "If signedness is
    'signed' and x ≥ 2^(bitLength−1), then return x − 2^bitLength". So `item(2**31)` denoted −2147483648 where
    §3.2.4.6 unsigned long's ConvertToInt(V, 32, "unsigned") denotes 2147483648, and the body's negative branch
    is what turned that back into the null a browser answers. THE COMPENSATION IS WHY THE WRONG TYPE SURVIVED: it
    made the declaration's error unobservable through this member (a collection cannot hold 2^31 nodes, so every
    value ≥ 2^31 is past the end under either sign), so nothing ever fired. The declaration is the spec of the
-   conversion; a body re-deriving the sign is the second copy of §3.2.4.9's arithmetic that idl_args.c exists to
+   conversion; a body re-deriving the sign is the second copy of Web IDL §3.2.4.9's arithmetic that idl_args.c exists to
    prevent. */
 /* IT IS A STEP MACHINE BECAUSE ITS ONE ARGUMENT CAN BE UNKNOWN. The index reaches this body unconverted
- * because §3.2's conversion is a boundary unknown external input crosses AS ITSELF (idl_concolic_rule answers
+ * because Web IDL §3.2 "JavaScript type mapping"'s conversion is a boundary unknown external
+ * input crosses AS ITSELF (idl_concolic_rule answers
  * IDL_CONCOLIC_CROSSES for every integer type), and reading it with a raw numeric coercion — which is what
  * stood here — is the shape core/idl_args.h bans by name: a concolic is an object, so ToNumber reaches
  * ToPrimitive from a plain C frame and the engine aborts INSIDE the coercion rather than at this member. The
@@ -543,7 +590,7 @@ static int js_coll_item(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
            "chain of questions it may ask is a cursor on this machine's own state rather than a stage apiece");
     DCHECK(argc == 1,
            "§4.2.10's `item` reached its body with an argument count its declaration does not produce — its "
-           "one `unsigned long index` is required, so §3.6's argument-count check refuses a shorter call");
+           "one `unsigned long index` is required, so Web IDL §3.6's argument-count check refuses a shorter call");
     if (concolic_is(argv[0])) {
         int rc = idl_index_chain_run(ctx, hdr, s, argv[0], coll_length(ctx, hdr->this_val),
                                      COLL_ITEM_ALGORITHM, &i, &past_end);
@@ -584,9 +631,18 @@ static JSValue js_coll_named_item(JSContext *ctx, JSValueConst this_val, int arg
 static JSValue coll_new(JSContext *ctx, JSValueConst proto, const IdlIndexedDecl *decl, int kind,
                         JSValueConst owner, const char *name, const char *ns)
 {
-    JSValue obj = idl_indexed_new(ctx, proto, decl), slots;
+    JSValue obj, slots;
     JSAtom k;
 
+    /* THE KIND AND THE INTERFACE ARE ONE FACT ASSERTED IN TWO PLACES, so they are compared where both are in
+       hand — coll_named keys §4.2.10.2's named getter on the KIND while the dispatcher reaches it through the
+       DECL, and a kind added on one side and not the other is a divergence no reader of either site can see.
+       Both operands are this engine's own (a builder picks them together), never a page's, which is what
+       makes this a DCHECK rather than a refusal. */
+    DCHECK((decl == &HTMLCOLL_INDEXED) == coll_is_htmlcollection(kind),
+           "a collection's kind and its interface disagree — coll_is_htmlcollection must name exactly the "
+           "kinds built with HTMLCOLL_INDEXED, or §4.2.10.2's named getter answers for a NodeList");
+    obj = idl_indexed_new(ctx, proto, decl);
     if (JS_IsException(obj)) return obj;
     slots = JS_NewObjectProto(ctx, JS_NULL);
     CHECK(!JS_IsException(slots), "collections: OOM allocating a collection's slots");
@@ -655,7 +711,8 @@ JSValue collections_children(JSContext *ctx, JSValueConst owner)
     }
 }
 
-/* §4.5/§4.9 getElementsByTagName / getElementsByClassName — LIVE, and not [SameObject]: the spec returns a new
+/* DOM §4.5 "Interface Document" and §4.9 "Interface Element" getElementsByTagName /
+   getElementsByClassName — LIVE, and not [SameObject]: the spec returns a new
    collection per call (unlike childNodes), because the query is part of what the collection IS. */
 JSValue collections_by_name(JSContext *ctx, JSValueConst owner, const char *name, bool by_class)
 {
@@ -663,7 +720,7 @@ JSValue collections_by_name(JSContext *ctx, JSValueConst owner, const char *name
     return coll_new_hc(ctx, by_class ? COLL_BY_CLASS : COLL_BY_TAG, owner, name, NULL);
 }
 
-/* §4.5's "list of elements with namespace namespace and local name localName" — getElementsByTagNameNS on both
+/* DOM §4.5's "list of elements with namespace namespace and local name localName" — getElementsByTagNameNS on both
    Document and Element. LIVE and not [SameObject], like its qualified-name sibling. `ns` NULL is the NULL
    NAMESPACE, which matches an element in no namespace; the empty string became null at the member. */
 JSValue collections_by_tag_ns(JSContext *ctx, JSValueConst owner, const char *ns, const char *local)
@@ -672,7 +729,7 @@ JSValue collections_by_tag_ns(JSContext *ctx, JSValueConst owner, const char *ns
     return coll_new_hc(ctx, COLL_BY_TAG_NS, owner, local, ns);
 }
 
-/* §3.1.7's `document.links` — `a`/`area` WITH an href, which is a predicate rather than a name, so it is its
+/* HTML §3.1.7's `document.links` — `a`/`area` WITH an href, which is a predicate rather than a name, so it is its
    own kind rather than a by-tag collection that would also count the anchors with no href. */
 JSValue collections_named(JSContext *ctx, JSValueConst owner, const char *name)
 {
@@ -684,6 +741,22 @@ JSValue collections_links(JSContext *ctx, JSValueConst owner)
 {
     DCHECK(g_ready, "a links collection was built before collections_init ran");
     return coll_new_hc(ctx, COLL_LINKS, owner, NULL, NULL);
+}
+
+/* HTML §3.1.7 "DOM tree accessors"' getElementsByName — a descendant walk like the four above it and a
+   NodeList unlike any of them, which is what its IDL line says it returns and is the whole reason this does
+   not go through coll_new_hc. NOT [SameObject] and not cached: the member's own text makes reusing the
+   earlier object a MAY and a fresh NodeList a MUST in every other case, so returning a new one is the
+   answer that is conformant for both arms. */
+JSValue collections_by_element_name(JSContext *ctx, JSValueConst owner, const char *name)
+{
+    JSValue proto, r;
+
+    DCHECK(g_ready, "a by-element-name collection was built before collections_init ran");
+    proto = nodelist_proto(ctx);
+    r = coll_new(ctx, proto, &NODELIST_INDEXED, COLL_BY_ELEM_NAME, owner, name, NULL);
+    JS_FreeValue(ctx, proto);
+    return r;
 }
 
 JSValue collections_static(JSContext *ctx, JSValue nodes)
@@ -703,7 +776,7 @@ JSValue collections_static(JSContext *ctx, JSValue nodes)
 void collections_init(JSContext *ctx)
 {
     /* §4.2.10.1 and §4.2.10.2 both write `getter Node? item(unsigned long index)` — NEITHER carries
-       [EnforceRange], so §3.2.4.9 Abstract operations' ConvertToInt modulo IS the specified behaviour and there
+       [EnforceRange], so Web IDL §3.2.4.9 Abstract operations' ConvertToInt modulo IS the specified behaviour and there
        is nothing here to throw. The type states the SIGN, which is the whole of what it decides. */
     static const IdlArgType ONE_ULONG[1] = { IDL_UNSIGNED_LONG };
     static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
@@ -745,9 +818,10 @@ void collections_install_protos(JSContext *ctx)
     idl_install_method(ctx, nlp, "item", g_item_id);
     idl_install_method(ctx, hcp, "item", g_item_id);
     idl_install_method(ctx, hcp, "namedItem", g_named_item_id);
-    /* §3.7.9 step 1.2: NodeList's IDL declares `iterable<Node>`, so it gets the value-iterator members.
-       HTMLCollection declares NO iterable — it is iterable only through the indexed getter, which §3.7.9's
-       step 1.1 gives @@iterator for and nothing else. Two interfaces, two answers, because that is what the two IDLs say. */
+    /* Web IDL §3.7.9 "Iterable declarations" step 1.2: NodeList's IDL declares `iterable<Node>`, so
+       it gets the value-iterator members. HTMLCollection declares NO iterable — it is iterable only
+       through the indexed getter, which Web IDL §3.7.9's step 1.1 gives @@iterator for and nothing
+       else. Two interfaces, two answers, because that is what the two IDLs say. */
     idl_indexed_install_iterable(ctx, nlp);
     idl_indexed_install_value_iterator(ctx, nlp);   /* §4.2.10 `iterable<Node>` */
     idl_indexed_install_iterable(ctx, hcp);

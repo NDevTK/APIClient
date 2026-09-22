@@ -735,6 +735,40 @@ static JSValue js_doc_shortcut(JSContext *ctx, JSValueConst this_val, int magic)
     return collections_by_name(ctx, this_val, TAGS[magic], false);
 }
 
+/* HTML §3.1.7 "DOM tree accessors"' `NodeList getElementsByName(DOMString elementName)`, whose steps are, in
+   the standard's own words, "to return a live NodeList containing all the HTML elements in that document that
+   have a name attribute whose value is identical to the elementName argument, in tree order".
+   IT IS A DOCUMENT MEMBER AND NOT A NODE ONE, which is why it is here rather than beside js_node_by_name:
+   DOM §4.5 "Interface Document" and §4.9 "Interface Element" both declare the by-name walks, and this member
+   is declared on Document alone, so a shared entry would put it on every element in the tree.
+   WHY IT IS WORTH A MEMBER AT ALL, measured over the committed site corpus rather than argued: every read of
+   it there is UNGUARDED — no `in document`, no `typeof`, no `?.`, no try — so the absent member did not
+   degrade to a fallback, it ended the flow with a TypeError at the call. Two of those sites are Next.js's
+   AppRouterAnnouncer, which runs on every app-router mount rather than only on a hash navigation, and the
+   rest are its hash-scroll path, reached exactly when getElementById has already answered null.
+   THE WALK IS THE COLLECTION COMPONENT'S, as it is for §4.5's siblings: what belongs here is the receiver and
+   the argument. */
+static JSValue js_doc_by_element_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                      int magic)
+{
+    const char *name;
+    JSValue r;
+
+    (void)magic;
+    DCHECK(argc >= 1, "getElementsByName reached its body with no argument — its declaration states one "
+                      "REQUIRED DOMString and no idl_optional_from, so Web IDL §3.6's argument-count "
+                      "TypeError did not run for it");
+    /* THE ARGUMENT MAY BE UNKNOWN and an unknown denotes its SHAPE — the same conversion DOM §4.5's
+       getElementsByTagName takes for the same reason: `getElementsByName(decodeURIComponent(location.hash))`
+       is the ordinary spelling at three of the corpus's sites, and a plain ToString of an unknown would spend
+       its provenance for bytes no run computed. */
+    name = concolic_name_cstr(ctx, argv[0]);
+    if (!name) return JS_EXCEPTION;
+    r = collections_by_element_name(ctx, this_val, name);
+    JS_FreeCString(ctx, name);
+    return r;
+}
+
 /* §4.5 createDocumentFragment(). A page batches inserts into one and attaches it once, which is the ordinary
    way to add many nodes — and it is the same object `new DocumentFragment()` builds, so this is the member
    name for a constructor that already exists rather than a second way to make one. */
@@ -3145,7 +3179,7 @@ static int g_id_create_element = -1, g_id_create_text = -1, g_id_create_comment 
            g_id_create_fragment = -1, g_id_create_element_ns = -1, g_id_create_iterator = -1,
            g_id_create_walker = -1, g_id_create_range = -1, g_id_create_event = -1,
            g_id_create_cdata = -1, g_id_create_pi = -1, g_id_doc_ctor = -1, g_id_adopt_node = -1,
-           g_id_title_set = -1, g_id_dir_set = -1, g_id_location_set = -1;
+           g_id_title_set = -1, g_id_dir_set = -1, g_id_location_set = -1, g_id_by_element_name = -1;
 /* THE SAME FOUR TOUCH HANDLERS core/html/html_element.c excludes, and for the same reason — this interface
    includes the same `GlobalEventHandlers`, so §Touch Events Level 2's "this mixin must not be implemented"
    reaches it too. The list is stated HERE rather than shared from there because idl_members_excluded reads the
@@ -3190,6 +3224,12 @@ static void document_declare_members(JSContext *ctx)
        which it was not, and `new Document()` is how a page gets an XML document without DOMImplementation. */
     g_id_doc_ctor = idl_method_id(ctx, NULL, 0, js_doc_ctor, 0);
     g_id_create_fragment = idl_method_id(ctx, NULL, 0, js_doc_create_fragment, 0);
+    idl_this_iface(document_is, "Document");
+    /* HTML §3.1.7's `NodeList getElementsByName(DOMString elementName)`. The receiver's brand is declared
+       rather than tested in the body, because Web IDL §3.7.7 "Operations" throws for a foreign receiver
+       BEFORE the argument conversion — and the argument here is a DOMString, so a body-side test would run a page's
+       `toString` first and only then throw, which is observable. */
+    g_id_by_element_name = idl_method_id(ctx, IDL_1STR, 1, js_doc_by_element_name, 0);
     idl_this_iface(document_is, "Document");
     g_id_create_element_ns = idl_method_id(ctx, IDL_NSSTR_STR, 2, js_doc_create_element_ns, 0);
     {
@@ -3240,6 +3280,7 @@ static void document_declare_members(JSContext *ctx)
     agent_state_id("document", &g_id_create_pi, "§4.5's createProcessingInstruction");
     agent_state_id("document", &g_id_doc_ctor, "§4.5's `new Document()`");
     agent_state_id("document", &g_id_create_fragment, "§4.5's createDocumentFragment");
+    agent_state_id("document", &g_id_by_element_name, "HTML §3.1.7's getElementsByName");
     agent_state_id("document", &g_id_create_element_ns, "§4.5's createElementNS");
     agent_state_id("document", &g_id_create_iterator, "§4.5's createNodeIterator");
     agent_state_id("document", &g_id_create_walker, "§4.5's createTreeWalker");
@@ -3259,6 +3300,7 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
     idl_install_method(ctx, proto, "createCDATASection", g_id_create_cdata);
     idl_install_method(ctx, proto, "createProcessingInstruction", g_id_create_pi);
     idl_install_method(ctx, proto, "createDocumentFragment", g_id_create_fragment);
+    idl_install_method(ctx, proto, "getElementsByName", g_id_by_element_name);
     {
         /* §3.1.7's five element shortcuts, each a LIVE HTMLCollection over the document. */
         static const char *const NAMES[] = { "forms", "images", "scripts", "embeds", "links" };
