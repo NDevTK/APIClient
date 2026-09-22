@@ -1705,7 +1705,7 @@ export function loadEnvironment(root) {
   };
   for (let pass = 0; pass < 4; pass++) {
     let grew = aliasSpellings();
-    for (const { masked } of sources.values()) {
+    for (const [path, { masked, orig }] of sources) {
       for (const fn of functions(masked)) {
         if (!fn.name || forms.has(fn.name)) continue;
         let fnLocals = null;
@@ -1720,8 +1720,35 @@ export function loadEnvironment(root) {
             const tgt = stripCast(site.args[form.target] || "");
             /* A WRAPPER DEFINES WHAT ITS CALLEE DEFINES. The kind rides the derivation for the same reason
                the name position does: `nav_env` installs whatever idl_install_accessor installs. */
-            const derived = { target: fn.params.indexOf(tgt), ambiguous: !!form.ambiguous, kind: form.kind,
-                              globalRef: !!form.globalRef };
+            const derived = { ambiguous: !!form.ambiguous, kind: form.kind, globalRef: !!form.globalRef };
+            /* AND WHERE THE TARGET IS NAMED IS PART OF THE DERIVATION, BECAUSE A WRAPPER NEED NOT FORWARD ONE.
+               `fn.params.indexOf(tgt)` was written straight into `target`, so a wrapper that installs on an
+               object OF ITS OWN — a slot bag it allocated, a listener map it looked up, the object
+               idl_global_member_target_at resolved for it — got the position -1. Nothing rejected that: the
+               call site then read `site.args[-1]`, which is `undefined`, which `stripCast(… || "")` turns into
+               the EMPTY STRING, and the empty string fails the named-object test — so every call of such a
+               wrapper was answered `the install target `` is not a named object`, a sentence about an argument
+               the caller never wrote, reported at the caller's line. The one consumer that already knew -1 was
+               not a position is the record-contradiction check a few lines below, which guards `form.target >= 0`;
+               this one indexed with it.
+               IT COMPOUNDS, WHICH IS WHY THE POPULATION IS NOT THE ONE THE VERDICT SHOWED: a wrapper around
+               such a wrapper reads `""` as ITS forwarded target and gets -1 too, so one unreadable object
+               poisons a whole forwarding chain. MEASURED at 58e89cd5: 45 of 98 derived forms carried -1 and
+               680 install sites reached one. ONE of them surfaced as a blind spot; the other 679 came through
+               an `ambiguous` form, where an empty target makes both `ifaces` and `candidates` empty and the
+               arm below files the site as installed on an object NO INTERFACE DECLARATION REACHES — a positive
+               claim about an object this reader never looked at, wearing an exoneration's grammar instead of an
+               accusation's, in the one bucket nobody counts as blindness.
+               SO A TARGET THAT IS NOT A PARAMETER IS CARRIED AS THE SITE IT STANDS AT, and the interface
+               question is asked THERE, in the wrapper's own file and function, by the same `interfacesOf` every
+               other install goes through. A wrapper whose callee already carries one INHERITS it: the object is
+               the callee's, and a further hop does not move it. */
+            const tp = form.target === undefined ? -1 : fn.params.indexOf(tgt);
+            if (tp >= 0) derived.target = tp;
+            else if (form.targetAt) derived.targetAt = form.targetAt;
+            else derived.targetAt = { path, rel: path.startsWith(root) ? path.slice(root.length + 1) : path,
+                                      fn, expr: tgt, at: fn.start + site.at,
+                                      line: lineOf(orig, fn.start + site.at) };
             if (direct >= 0) derived.name = direct;
             else { derived.tableArg = via; derived.field = col[2]; }
             forms.set(fn.name, derived);
@@ -1733,6 +1760,28 @@ export function loadEnvironment(root) {
       }
     }
     if (!grew) break;
+  }
+
+  /* EVERY FORM NAMES ITS TARGET EXACTLY ONE WAY — an argument POSITION, or the SITE the object stands at.
+     This is the invariant the defect above violated, and it is asserted rather than described because the
+     violation was not a wrong answer but an ABSENT one wearing an index: `fn.params.indexOf(tgt)` returns -1
+     for "not a parameter", `args[-1]` is `undefined`, and every consumer downstream reasoned about the empty
+     string it became. Nothing failed and nothing was refused — 680 install sites were answered about an object
+     no reader had ever looked at. A form with BOTH names two objects; a form with NEITHER, or with a `target`
+     that is not a real index, is that state returning, so it stops the run HERE rather than surfacing 2000
+     lines later as a property of the components.
+     THE CHECK IS OVER `target`'s PRESENCE and not over its value being -1, because -1 is only the spelling
+     this defect happened to have: any expression that is not a parameter index leaves the same hole. */
+  for (const [callee, form] of forms) {
+    const stated = "target" in form;
+    const index = Number.isInteger(form.target) && form.target >= 0;
+    if (stated === !!form.targetAt || (stated && !index))
+      throw new Error(`[idl-installed] the install form \`${callee}\` does not name its target exactly one ` +
+                      `way: \`target\` is ${stated ? `\`${form.target}\`` : "absent"} and a site is ` +
+                      `${form.targetAt ? `${form.targetAt.rel}:${form.targetAt.line}` : "absent"}. An argument ` +
+                      `POSITION and a SITE are the two ways an object is named here — with both, the form ` +
+                      `names two objects; with neither, every one of its call sites is answered about the ` +
+                      `empty string`);
   }
 
   const key = (path, fnName, v) => `${path}::${fnName}::${v}`;
@@ -2373,6 +2422,21 @@ export function installedMembers(paths, env) {
     return { ifaces: certain, candidates: [], why: null };
   };
 
+  /* WHICH INTERFACE A WRAPPER'S OWN TARGET IS — the mirror of the hoist above. That one exists because a
+     SELECTED installer's target is resolved in the CALLER's file and function; this one because a wrapper that
+     installs on an object it holds itself resolves in the CALLEE's. Both are `interfacesOf` asked in the scope
+     the expression actually stands in, which is the only scope that can answer it.
+     THE REASON TRAVELS WITH THE ANSWER. A refusal composed in the wrapper's scope names an identifier the
+     caller never wrote, so read at the caller's line it is a sentence about the wrong file — the
+     mis-addressed-assert defect arriving in a blind spot's text. Every `why` from here therefore says whose
+     object it is and where that object is held, so the line a reader is sent to is the line that decides it. */
+  const wrapperTarget = (w) => {
+    const a = interfacesOf(w.path, w.fn, w.expr, w.at);
+    if (!a.why) return a;
+    return { ...a, why: `${a.why} — the object installed on is \`${w.expr || "(nothing)"}\`, which ` +
+                        `\`${w.fn.name}\` holds at ${w.rel}:${w.line}, so no argument at this call site names it` };
+  };
+
   /* EVERY CALL OF A FUNCTION, corpus-wide, with the function and file it stands in — what a SELECTED
      installer's subset is resolved against. */
   const callersOf = (name) => {
@@ -2637,7 +2701,10 @@ export function installedMembers(paths, env) {
            section 5 from the array the C reads, so the install line inside it names nothing on its own. */
         if (GENERATED_FORMS.some((g) => g.fn === f.name)) continue;
         const target = stripCast(site.args[form.target] || "");
-        const a = interfacesOf(path, f, target, site.at);
+        /* A DERIVED WRAPPER MAY INSTALL ON AN OBJECT OF ITS OWN — see `targetAt`'s block in loadEnvironment.
+           Where it does, no argument here names the target and the question belongs in the wrapper's scope. */
+        const a = form.targetAt ? wrapperTarget(form.targetAt) : interfacesOf(path, f, target, site.at);
+        const targetShown = form.targetAt ? form.targetAt.expr : target;
         if (form.ambiguous && !a.ifaces.length && !a.candidates.length) {
           /* AN OBJECT NO INTERFACE DECLARATION REACHES — see the header. §3.7.3's tag, §3.7.1's interface
              object, the per-realm class-prototype slot and [Global] are how the corpus says a page can reach an
@@ -2650,8 +2717,8 @@ export function installedMembers(paths, env) {
              otherwise missing. Neither answer is silent. */
           const names = scoped(f).strings(site.args[pos] || "", localsFor(f));
           for (const n of names || [])
-            offInstaller.push({ name: n, file: path, line: lineOf(orig, site.at), target, form: callee,
-                                why: a.why });
+            offInstaller.push({ name: n, file: path, line: lineOf(orig, site.at), target: targetShown,
+                                form: callee, why: a.why });
           continue;
         }
         if (site.args[pos] === undefined) { report(site.at, callee, "(no argument)"); continue; }
