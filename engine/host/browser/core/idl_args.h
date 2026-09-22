@@ -688,6 +688,32 @@ typedef enum {
        a sequence driven from the body runs after every later argument's conversion, which is observable the
        moment a later argument is a dictionary with a getter on it. */
     IDL_SEQUENCE_BLOBPART,
+    /* `(CSSOMString or BufferSource)` — CSS Font Loading §2.1 "The Constructor"'s `source`, and the only union
+       in this platform whose Object arm is reached by an INTERNAL SLOT rather than by Object-ness. §3.2.25
+       Union types decides it in two clauses and the rest of that algorithm is skipped by what the union does
+       NOT name: step 11 "If V is an Object" is entered for every Object, and of its sub-clauses only the
+       buffer-source one can match here, because this union names no dictionary, no sequence, no record, no
+       callback, no frozen array and no interface type — so a plain `{}` falls PAST step 11 to step 15 "If
+       types includes a string type, then return the result of converting V to that type".
+       THE BUFFER ARM CONVERTS RATHER THAN CROSSING, which is why §3.2.26's refusals are performed at this
+       boundary and not in the member's body: step 11's buffer clause returns "the result of converting V to
+       that type", and that conversion is §3.2.26 Buffer source types, whose shared-buffer and resizable-buffer
+       refusals §4.2's typedef does not admit. It is the same idl_buffer_source_refuse call the bare
+       IDL_BUFFERSOURCE row makes, so one typedef has one answer rather than two that can drift.
+       CSSOMString IS DOMString HERE and that is not this row's choice to make — CSSOM §3 leaves the binding to
+       the implementation and core/css/css_serialize.h is where this engine states which it chose, once, for
+       every CSSOM member. This row routes to it rather than restating it.
+       WHAT UNKNOWN EXTERNAL INPUT DOES HERE IS DECIDED AND NOT FORKED, which is idl_concolic_rule's default
+       CROSSES and is stated at the row because the neighbouring unions are the opposite. The unions that fork
+       do so because their arm asks "is V an Object", which a concolic WEARS — solver/concolic.c gives it an
+       ordinary Object so a method on an unknown yields another unknown — so the arm would be decided by a fact
+       about this engine's value class rather than by the page's value. This union's arm asks for an
+       [[ArrayBufferData]] or [[ViewedArrayBuffer]] INTERNAL SLOT, which a concolic has no more than any other
+       slot-less value has: the string arm is the arm for every unknown exactly as it is for every plain
+       object, and §3.2's string boundary then passes the unknown through as itself with its domain and its
+       example intact. That is the same sentence IDL_DOUBLE_UNLESS_IFACE's row already carries about §3.2.25's
+       platform-object clause, arriving at the buffer clause. */
+    IDL_STRING_OR_BUFFERSOURCE,
     /* `BufferSource` — §4.2's `typedef (ArrayBufferView or ArrayBuffer) BufferSource`, converted by §3.2.26
        Buffer source types. An ArrayBuffer, a typed array or a DataView crosses as itself and anything else is a
        TypeError, which is a check the body must not make: written by hand it was right twice and wrong the

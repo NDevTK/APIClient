@@ -39,6 +39,7 @@
 #include "core/file/file_system_handle.h"
 #include "core/file/file_system_writable.h"
 #include "core/file/storage_manager.h"
+#include "core/fonts/font_face.h"
 #include "core/frame/agent_cluster.h"
 #include "core/frame/browsing_context_group.h"
 #include "core/frame/history.h"
@@ -259,6 +260,7 @@ static void d_dom_string_list(JSContext *c, const PlatformAgent *a) { (void)a; d
 static void d_element(JSContext *c, const PlatformAgent *a) { (void)a; element_init(c); }
 static void d_intersection_observer(JSContext *c, const PlatformAgent *a) { (void)a; intersection_observer_init(c); }
 static void d_resize_observer(JSContext *c, const PlatformAgent *a) { (void)a; resize_observer_init(c); }
+static void d_font_face(JSContext *c, const PlatformAgent *a) { (void)a; font_face_init(c); }
 static void d_iframe(JSContext *c, const PlatformAgent *a) { (void)a; iframe_init(c); }
 static void d_document(JSContext *c, const PlatformAgent *a) { (void)a; document_init(c); }
 static void d_cookie_jar(JSContext *c, const PlatformAgent *a) { (void)a; cookie_jar_init(c); }
@@ -528,6 +530,7 @@ static void r_document(JSRuntime *rt) { document_agent_free(rt); }
 static void r_element(JSRuntime *rt) { element_free(rt); }
 static void r_intersection_observer(JSRuntime *rt) { intersection_observer_free(rt); }
 static void r_resize_observer(JSRuntime *rt) { resize_observer_free(rt); }
+static void r_font_face(JSRuntime *rt) { font_face_free(rt); }
 static void r_iframe(JSRuntime *rt) { iframe_free(rt); }
 static void r_dom_rect_list(JSRuntime *rt) { dom_rect_list_free(rt); }
 static void r_dom_string_list(JSRuntime *rt) { dom_string_list_free(rt); }
@@ -689,6 +692,7 @@ static void i_fetch(JSContext *c, JSValueConst g, const PlatformDocument *d) { (
 static void i_dom_rect_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_rect_list_install(c, g); }
 static void i_intersection_observer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; intersection_observer_install(c, g); }
 static void i_resize_observer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; resize_observer_install(c, g); }
+static void i_font_face(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; font_face_install(c, g); }
 static void i_document(JSContext *c, JSValueConst g, const PlatformDocument *d)
 {
     document_install(c, g, d->dom, d->url, d->kind, d->policy, d->permissions_policy, d->sandbox_flags,
@@ -1270,6 +1274,13 @@ static const PlatformComponent PLATFORM[] = {
        all three with it. Its per-realm half — ResizeObserver.prototype and §3.2.1's [[resizeObservers]] —
        goes on through realm_declare_intrinsic, so this list has no per-realm line to remember. */
     { "resize_observer",     d_resize_observer,     i_resize_observer, r_resize_observer },
+    /* CSS FONT LOADING §2's FontFace. It inherits nothing — §2 declares no base interface — so its prototype
+       is built over this realm's %Object.prototype% and this row is under no ordering constraint at all; it
+       sits beside the observer above because that is where a reader looks for a small self-contained
+       interface, and NOT because anything requires it. §3's FontFaceSet does carry one when it lands
+       (`interface FontFaceSet : EventTarget`), which is a fact about THAT row and is stated in
+       core/fonts/font_face.h's ORDER rather than anticipated here. */
+    { "font_face",           d_font_face,           i_font_face,       r_font_face },
     { "html_iframe",         d_iframe,              NULL,        r_iframe },
     /* RFC 6265 §5.3's COOKIE STORE, before the component whose §3.1.4 members read it. It is the first row with
        a RELEASE, and the reason is the reason it is a row at all: the store is the USER AGENT's by the
@@ -1498,6 +1509,13 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
        `new ResizeObserver(...)` on a realm that never ran the install is a ReferenceError that kills the
        script and every endpoint behind it — which is the exact defect this install ends, so an install that
        silently stopped happening would restore it with nothing to say so. */
+    /* CSS FONT LOADING §2's one name. It matters for exactly the reason the three below it do and with a
+       measurement behind it: `FontFace` is on browser/platform_names.h, so the absent-global seam declines to
+       mint a concolic for it and leaves the read alone — and every occurrence of the name in a corpus of real
+       application bundles is an UNGUARDED `new FontFace(`, with no feature detection anywhere. So an install
+       that silently stopped happening would restore a ReferenceError on the line that touches it, killing the
+       script and every endpoint behind it, which is the exact defect this install ends. */
+    { "FontFace",              "font_face" },
     { "ResizeObserver",        "resize_observer" },
     { "ResizeObserverEntry",   "resize_observer" },
     { "ResizeObserverSize",    "resize_observer" },

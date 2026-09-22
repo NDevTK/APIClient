@@ -5537,6 +5537,23 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             }
         }
 
+        /* `(CSSOMString or BufferSource)`: a buffer source converts as one; EVERYTHING else — null and
+           undefined included, since this union names no nullable type and no Object arm a plain object can
+           take — falls to §3.2.25 step 15's string arm. The brand test and the §3.2.26 refusal behind it are
+           the union's own rule stated once; see the row's comment in the header for why an unknown takes the
+           string arm rather than forking. */
+        if (t == IDL_STRING_OR_BUFFERSOURCE) {
+            if (JS_IsArrayBuffer(a) || JS_GetTypedArrayType(a) >= 0 || JS_IsDataView(a)) {
+                if (idl_buffer_source_refuse(ctx, a, "BufferSource", false, false)) {
+                    JS_FreeValue(ctx, cb_result);
+                    return JS_STEP_ABRUPT;
+                }
+                t = IDL_ANY;
+            } else {
+                t = IDL_DOMSTRING;
+            }
+        }
+
         /* `(File or USVString or FormData)?`: the same shape as BodyInit's, over the arms HTML §4.13.7.3
            names. A plain Blob is not one of them, so it takes the USVString arm and stringifies. */
         if (t == IDL_FORMVALUE_NULLABLE) {

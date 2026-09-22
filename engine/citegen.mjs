@@ -2426,6 +2426,26 @@ const OTHER_SPECS = [
      census can say the standard was seen. Indexing any of them would buy answers and is a DIFFERENT diff. */
   "mathml core",
   "wasm", "console", "performance",
+  /* CSS FONT LOADING, FOR THE ARM OF CLAUDE.md's MISSING-ROW RULE THAT ACCUSES RATHER THAN THE ONE THAT GOES
+     QUIET — the same reason `png` below is here, met at a standard whose numbers are the LOWEST there are.
+     This tree writes `CSS Font Loading §2`, `§2.1`, `§3` and `§4`, and every indexed standard has sections at
+     those numbers, so a file whose vote is carried by one of them resolves a font-loading citation to it and
+     the title and step channels then judge it against a document it never named. MEASURED with an armed
+     control before this line was written, over the two files of core/fonts/font_face: without this entry the
+     run reports `2 finding(s) … of 15 resolved`, and the two are `idl §2 states "The FontFace Interface"; §2
+     is "Interface definition language"` and a term claim judged against Web IDL §2 — an accusation
+     manufactured entirely by the missing row. The repairs those two named were made anyway, because a
+     mis-aimed accusation can still be about a real defect and the two have to be told apart by reading rather
+     than by silencing.
+     THE SPELLING IS THE THREE-WORD TAIL AND NOT THE HEAD, which is the defect the four rows above record:
+     anchorTokens reads AT MOST THREE trailing words, so `css font loading` is offered and the bare `css`
+     that a reader writes first would fire at no site. `font loading` alone is NOT listed and must not be —
+     `loading` and `font` are words this tree writes constantly in prose, and a two-word anchor whose head is
+     `font` would claim every `FONT LOADING` sentence in core/fonts/ for a standard the sentence is not about.
+     WHAT THIS BUYS IS SILENCE AND NOT ANSWERS. Indexing the standard would buy answers and is a DIFFERENT
+     diff — it is the one that would let the quotation channel judge §2.1's own sentences, which this
+     component quotes at length and which nothing currently compares against anything. */
+  "css font loading",
   /* `png` IS HERE BECAUSE ITS NUMBERS COLLIDE, WHICH IS THE ARM OF CLAUDE.md's MISSING-ROW RULE THAT
      ACCUSES RATHER THAN THE ONE THAT GOES QUIET. This tree writes `PNG §5.2`, `PNG §7.1` and
      `PNG §11.2.1` — bare numbers that several INDEXED standards also have — so a file whose vote is
