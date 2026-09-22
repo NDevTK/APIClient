@@ -952,6 +952,18 @@ function coercionOf(struct, code, from, to, subst, boundHere) {
    anything, for the same reason a fixture page's object literal must not credit an engine field. */
 const cEmitted = new Set();
 
+/* AND WHETHER A ROW IS ADDRESSABLE AT ALL, WHICH IS THE PRODUCER'S OWN BRACE STRUCTURE AND NEVER A PROPERTY
+   OF THE NAME. A key written inside another key's object is reachable only THROUGH that key: no consumer can
+   name it without naming its parent first, so "nothing reads this row" is not an independent fact about it —
+   it is the same fact about the parent, said again once per row. Counted as peers, N of them inflate the
+   finding by however many rows the composer happened to nest, which is a number about the producer's shape
+   rather than about the defect.
+   BOTH HALVES ARE KEPT AND THE TOP-LEVEL ONE WINS, because a name can be an inner row of one record and a
+   top-level row of another: a name some producer emits addressably IS addressable, and nesting elsewhere does
+   not take that back. */
+const cNestedIn = new Map();    // field name -> the key whose object it is written inside
+const cTopLevel = new Set();    // field name written at some emission's own top level
+
 /* AND IT ANCHORS AS A SHAPE, NOT AS A NAME, because a name on its own cannot say which record it came from.
    `name`, `url`, `type` and `source` are emitted by this engine AND are what every other object in a JS corpus
    calls its fields, so a receiver anchored by one of them anchors everything — an AST node read as an endpoint
@@ -1000,6 +1012,39 @@ const decidedOperand = [];  // {file,line,name,recv,form,by}
    a word. */
 const JSON_KEY = /"([A-Za-z_$][\w$]*)"\s*:/g;
 const keysIn = (text) => { const out = []; let m; JSON_KEY.lastIndex = 0; while ((m = JSON_KEY.exec(text))) out.push(m[1]); return out; };
+
+/* THE SAME TEXT READ AS A STRUCTURE RATHER THAN AS A SEQUENCE, which is the one question `keysIn` cannot
+   answer: which object each key was written into. A key position is `"name":`; the brace that FOLLOWS one
+   opens that key's object and every key inside it runs to the match. A string VALUE is skipped whole, so a
+   brace inside one is not structure — the rule `struct` applies one view up, applied here because a format
+   string has become text by the time it reaches this.
+   READ OFF THE PRODUCER AND OFF NOTHING ELSE, for `censusComposerFields`' reason exactly: the nesting is a
+   fact the composer states in its own bytes, so a row that moves into or out of an object is known on the run
+   it moves. A list of which rows are nested would be the second copy this whole file is about. */
+const nestingIn = (text) => {
+  const out = [];          // {name, parent} — parent null at an emission's own top level
+  const stack = [];        // the key that opened each open object, or null for an anonymous one
+  let pending = null;      // a key whose value has not been reached yet
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      const k = /^"([A-Za-z_$][\w$]*)"\s*:/.exec(text.slice(i));
+      if (k) {
+        pending = k[1];
+        out.push({ name: k[1], parent: stack.length ? stack[stack.length - 1] : null });
+        i += k[0].length - 1;
+        continue;
+      }
+      const v = /^"(?:[^"\\]|\\.)*"/.exec(text.slice(i));
+      if (v) i += v[0].length - 1;
+      continue;
+    }
+    if (c === "{") { stack.push(pending); pending = null; }
+    else if (c === "}") { stack.pop(); pending = null; }
+    else if (c === ",") pending = null;
+  }
+  return out;
+};
 
 /* A stream marker is `@TAG` at the very start of an emission — `printf("@COLD {...")`. Unlike a member name,
    `@COLD` in a string literal cannot mean anything else in this tree, so for THIS namespace a literal is the
@@ -1340,6 +1385,18 @@ function scanC(file, src) {
     for (const k of ks) {
       (isWrite ? rec(fields, k).writes : rec(fields, k).reads).push(site(off));
       if (isWrite) { cEmitted.add(k); shapeOf(bodyOf(off)).add(k); }
+    }
+    /* READ FROM THE SAME BYTES AND NEVER JOINED POSITIONALLY AGAINST `ks`: the two scans answer different
+       questions, and an index-for-index join would go wrong the moment one regex admitted a key the other
+       skipped. Only names `keysIn` has already returned are recorded, so this can add nothing to the
+       namespace and cannot move any count above it. */
+    if (isWrite) {
+      const seen = new Set(ks);
+      for (const { name, parent } of nestingIn(text)) {
+        if (!seen.has(name)) continue;
+        if (parent === null) cTopLevel.add(name);
+        else if (!cNestedIn.has(name)) cNestedIn.set(name, parent);
+      }
     }
     return ks.length;
   };
@@ -5155,7 +5212,98 @@ const derivedRead = new Map();   // field name -> the locator that answers for i
    a construct SPELLS the token, and `derivedRead` says a consumer requires the row without spelling it. Merged,
    the band below could not print which rows are answered by which, and a derivation that silently stopped
    covering a region would look exactly like a row that grew a literal reader. */
-const writeNoReader = [...fields].filter(([n, e]) => cEmitted.has(n) && e.writes.length && !readAnywhere.has(n) && !derivedRead.has(n));
+/* ---- the NAMESPACE HOLDER ------------------------------------------------------------------------------ */
+/* A THIRD ANSWER, AND IT IS A BAND RATHER THAN A CREDIT, WHICH IS THE WHOLE OF WHAT IT CLAIMS. `readAnywhere`
+ * asks whether a construct SPELLS the token and `derivedRead` whether a consumer DELIMITED the producer's
+ * region. A consumer can do neither and still require the row: it holds the record's names in a COLLECTION
+ * and puts that collection to an operation nothing here interprets — a membership test, a key filter, a
+ * whole-value comparison driven off the document's own keys. The literal is there, in a position neither
+ * matcher can read, and reporting the row as unread is this file accusing a subject for its own blindness.
+ *   WHY IT MAY NOT BE A CREDIT, WHICH IS THE LINE THIS BAND EXISTS TO HOLD. What the holder DOES with a name
+ * is exactly what this does not establish, and the two possibilities take OPPOSITE work: a collection that
+ * REQUIRES each name is a reader stronger than any member expression, and one that EXCLUDES each name is the
+ * opposite — a row dropped from every comparison, which is the licence-standing-over-nothing this tree's
+ * sibling gates fail on by name. Crediting would answer that by assumption, in the direction CLAUDE.md
+ * §AN-UNDER-CLAIM names as the one nobody discovers by acting on it. So the row leaves the accusation, enters
+ * a named band, and carries its holder — a reader disagrees in one line, which an accusation had taken away.
+ *   ANCHORED ON THE RECORD AND NOT ON THE NAME, because a bare literal equal to some field name is a
+ * COINCIDENCE at the scale of one: `url`, `value`, `method`, `steps` and `source` are what every JS corpus
+ * calls its own strings, and this corpus holds over a hundred files spelling exactly one such word. A holder
+ * must hold at least `NAMESPACE_HOLD_MIN` names OF ONE EMISSION, so what is recognised is a file operating on
+ * a record's NAMESPACE rather than a file containing a word.
+ *   ITS BLAST RADIUS IS BOUNDED BY CONSTRUCTION AND THAT IS WHY IT CANNOT BLIND ANYTHING. `heldBy` is
+ * consulted ONLY over rows that would otherwise be accused; a name already spelled or already derived never
+ * reaches it. So `spelled`, `derived` and `both` are arithmetically untouched, the JUDGED total holds, and a
+ * falling judged count — the blinding signature — is not a thing this band can produce. The holders are
+ * printed on every run for the reason the derived-composer line is: if this scan's literal parse ever
+ * collapsed, rows would come BACK as findings and the holder list would be the only thing saying why.
+ *   NAMED RESIDUAL — WHAT THIS DOES NOT ESTABLISH. It reads that a consumer HOLDS the name; it does not read
+ * what the holder does with the collection, for `derivedRead`'s reason — that would mean interpreting the
+ * callee. So a record whose names are held ONLY to be excluded is banded here where it should be accused, and
+ * this file then UNDER-reports over that holder's names. The next diff that needs it resolves the
+ * collection's own consumer in the holding file and states whether it REQUIRES or EXCLUDES, which turns the
+ * band into a credit for one holder at a time. Its absence shows as a banded row whose holder a reader opens
+ * and finds an exclusion list with no presence check anywhere over it. */
+const NAMESPACE_HOLD_MIN = 3;
+const namespaceHolders = [];  // {file, of, n} — printed whole, because this is the band's own denominator
+const heldBy = new Map();     // field name -> the holder that names it
+{
+  /* SPELLED OUT RATHER THAN THROUGH `place`, WHICH IS A `const` DECLARED BELOW THIS BLOCK. A reference
+     to it here is a temporal-dead-zone throw that `node --check` passes on, which is the same trap
+     `wfqFields` records in engine/build.mjs — a derivation that runs at its own line reaching a name
+     the file binds later. */
+  const siteOf = (n) => { const e = fields.get(n); return e && e.writes.length ? `${e.writes[0].file}:${e.writes[0].line}` : null; };
+  /* MATCHED ON `code`, where a comment is blank and a literal's own characters are intact — so a field name
+     written in English prose is not a holder, and the bytes read are the bytes the program holds. */
+  const HELD = /"([A-Za-z_$][\w$]*)"|'([A-Za-z_$][\w$]*)'/g;
+  for (const s of jsScans) {
+    const held = new Map();   // emission place -> Set(name)
+    let m;
+    HELD.lastIndex = 0;
+    while ((m = HELD.exec(s.code))) {
+      const n = m[1] || m[2];
+      if (!cEmitted.has(n)) continue;
+      /* A KEY POSITION IS THIS FILE PRODUCING RATHER THAN HOLDING — `{ "_flows": x }` writes the name, and a
+         write is audited as a write one category over. */
+      if (/^\s*:/.test(s.code.slice(m.index + m[0].length))) continue;
+      /* AND `o["n"]` IS A SPELLED READ, which `readAnywhere` has already answered for. Counting it here would
+         put one construct in two bands and make the numbers below overlap with nothing saying so. */
+      if (/\[\s*$/.test(s.code.slice(Math.max(0, m.index - 3), m.index))) continue;
+      const q = siteOf(n);
+      if (!q) continue;
+      if (!held.has(q)) held.set(q, new Set());
+      held.get(q).add(n);
+    }
+    for (const [q, ns] of held) {
+      if (ns.size < NAMESPACE_HOLD_MIN) continue;
+      namespaceHolders.push({ file: s.file, of: q, n: ns.size });
+      for (const n of ns) if (!heldBy.has(n)) heldBy.set(n, { file: s.file, of: q, n: ns.size });
+    }
+  }
+}
+
+/* THE ROWS NOTHING ANSWERED, SPLIT BY WHY AND NEVER SUMMED — the rule this file already states of every other
+   count it prints. "I found a defect" and "I cannot read this construct" are two populations that take
+   opposite work, and a verdict adding them is the three-states-behind-one-answer shape arriving in the
+   instrument built to end it. */
+const unanswered = [...fields].filter(([n, e]) => cEmitted.has(n) && e.writes.length && !readAnywhere.has(n) && !derivedRead.has(n));
+/* AN INNER ROW'S PARENT, and only where the name is inner EVERYWHERE — see `cTopLevel`. */
+const parentOf = (n) => (cNestedIn.has(n) && !cTopLevel.has(n) ? cNestedIn.get(n) : null);
+const answeredSomehow = (n) => readAnywhere.has(n) || derivedRead.has(n) || heldBy.has(n);
+const unclassified = [];      // [[name, entry], why] — refused an accusation AND refused a credit
+const writeNoReader = [];
+for (const row of unanswered) {
+  const [n] = row;
+  const h = heldBy.get(n);
+  if (h) { unclassified.push([row, `HELD at ${h.file}, with ${h.n - 1} other name(s) of ${h.of}`]); continue; }
+  const par = parentOf(n);
+  if (par && answeredSomehow(par)) {
+    unclassified.push([row, `a row of \`${par}\`, which is answered and is taken WHOLE — nothing here reads ` +
+                            `what a consumer of \`${par}\` does with its rows`]);
+    continue;
+  }
+  writeNoReader.push(row);
+}
 const mReadNoWriter = [...markers].filter(([, e]) => e.reads.length && !e.writes.length);
 const mWriteNoReader = [...markers].filter(([, e]) => e.writes.length && !e.reads.length);
 
@@ -5211,21 +5359,79 @@ show(`READ with no writer — ${readNoWriter.length} record field name(s) a cons
   const both = judged.filter((n) => readAnywhere.has(n) && derivedRead.has(n)).length;
   log(`serialized field names JUDGED for a reader — ${judged.length}: ${spelled} named by a construct that ` +
       `SPELLS them, ${derived} required by a consumer that DERIVES its row set from the producer (${both} both), ` +
+      `${unclassified.length} in a construct this scan can see and cannot read as either, ` +
       `${writeNoReader.length} answered by neither`);
+  /* THE PARTS SUM TO THE TOTAL, ASSERTED RATHER THAN HOPED. Four numbers a reader takes on trust are four
+     numbers that can drift apart while each still looks like a measurement, and one direction is the one that
+     matters: a band that silently swallowed a row would shrink the accusation and leave the total alone,
+     which is coverage collapsing and reading as accuracy. The overlap is the ONE stated pair — a judged row
+     is spelled, derived, both, or in exactly one of the two bands — so this is arithmetic, and a failure of
+     it is this file double-counting or dropping a row rather than anything about the tree. */
+  if (spelled + derived - both + unclassified.length + writeNoReader.length !== judged.length)
+    throw new Error(`[field-gate] ${spelled} spelled + ${derived} derived - ${both} both + ` +
+                    `${unclassified.length} named-unclassified + ${writeNoReader.length} unanswered does not ` +
+                    `reach ${judged.length} judged. These four are a PARTITION of the judged population and ` +
+                    `this file computes every one of them, so a total that does not close is this scan ` +
+                    `double-counting or dropping a row — and every number it goes on to print is drawn from ` +
+                    `the same set.`);
 }
 
 if (writeNoReader.length) {
+  const accused = new Set(writeNoReader.map(([n]) => n));
+  /* AN INNER ROW WHOSE PARENT IS ACCUSED TOO IS NOT A SECOND FINDING. A consumer reaches it only through the
+     parent, so the two cannot be separately true or separately fixed: one unread object is ONE fact and its
+     rows are that fact's extent. Named under the parent rather than dropped — the extent is what a reader
+     needs in order to price the fix, and a count that hid it would be the mirror defect. */
+  const entailed = new Map();   // parent -> [rows]
+  for (const [n] of writeNoReader) {
+    const par = parentOf(n);
+    if (par && accused.has(par)) { if (!entailed.has(par)) entailed.set(par, []); entailed.get(par).push(n); }
+  }
   const bySite = new Map();
   for (const [n, e] of writeNoReader) {
+    const par = parentOf(n);
+    if (par && accused.has(par)) continue;
     const k = place(e.writes[0]);
     if (!bySite.has(k)) bySite.set(k, []);
     bySite.get(k).push(n);
   }
-  log(`── WRITE with no reader — ${writeNoReader.length} record field name(s) a producer emits and nothing reads, ` +
-      `from ${bySite.size} emission(s) ──`);
-  for (const [k, ns] of [...bySite].sort((a, b) => b[1].length - a[1].length))
+  const shown = [...bySite.values()].reduce((t, ns) => t + ns.length, 0);
+  log(`── WRITE with no reader — ${shown} record field name(s) a producer emits and nothing reads, from ` +
+      `${bySite.size} emission(s)` +
+      (entailed.size ? `, whose objects carry ${writeNoReader.length - shown} nested row(s) that are the same ` +
+                       `fact and are named under them` : ``) + ` ──`);
+  for (const [k, ns] of [...bySite].sort((a, b) => b[1].length - a[1].length)) {
     log(`  ${k}  ${ns.length} of the shape: ${ns.sort().join(" ")}`);
+    for (const n of ns.slice().sort())
+      if (entailed.has(n))
+        log(`      \`${n}\` is an OBJECT — its ${entailed.get(n).length} row(s) are reachable only through ` +
+            `it and are one fact with it: ${entailed.get(n).slice().sort().join(" ")}`);
+  }
 }
+
+/* PRINTED IN FULL AND NOT A DEFECT, on the rule the DERIVED READER band is printed under: a decided negative
+   nobody can see is the concealment this file exists to report, performed on its own output. Every row here
+   is one this scan refused to ACCUSE and refused to CREDIT, with the construct that stopped it, so the whole
+   population is one screen and a reader who disagrees has the place to go. The holders are printed whether or
+   not the band has rows, because a collapse of that literal scan empties this band silently while pushing its
+   rows back into the accusation above — and the holder list is then the only thing that says why.
+   RETIREMENT: a row leaves this band when the holder's own consumer is resolved and states whether it
+   REQUIRES its collection's names or EXCLUDES them, which turns the row into a credit or into a finding; and
+   a nested row leaves it when its parent does. */
+if (unclassified.length) {
+  log(`── NAMED OR NESTED, NOT CLASSIFIED — ${unclassified.length} row(s) no construct SPELLS as a read and no ` +
+      `consumer DERIVES, which this scan will not accuse either. This is what it cannot read, never a clean ` +
+      `bill: adding a spelling reader to satisfy the accusation would re-create the hand list a holder or a ` +
+      `derivation replaced ──`);
+  for (const [[n], why] of unclassified.slice().sort((a, b) => a[0][0].localeCompare(b[0][0])))
+    log(`  ${n.padEnd(24)} ${why}`);
+}
+log(`── NAMESPACE HOLDERS — ${namespaceHolders.length} file(s) holding ${NAMESPACE_HOLD_MIN}+ field names of ` +
+    `ONE emission as bare literals, which is what the band above rests on. A file holding FEWER is a word ` +
+    `collision and is not one${namespaceHolders.length ? ` ──` : `; an empty list means that scan found ` +
+    `nothing and every row it would have banded is in the accusation above ──`}`);
+for (const h of namespaceHolders.slice().sort((a, b) => b.n - a.n))
+  log(`  ${h.file}  holds ${h.n} name(s) of ${h.of}`);
 
 /* PRINTED IN FULL AND NOT A DEFECT, on the rule DECIDED PLATFORM is printed under: a decided negative nobody
    can see is the concealment this file exists to report, performed on its own output. Every locator is a claim
@@ -5631,8 +5837,13 @@ const cats = [
 const blind = [
   ["receivers whose record identity is AMBIGUOUS — unanswerable, so unaudited", ambiguous.length],
   ["constructs REFUSED — unreadable, so unaudited", refusals.length],
+  /* A ROW THIS SCAN CAN SEE AND CANNOT READ AS EITHER ANSWER BELONGS HERE AND NOT IN THE FINDINGS, which is
+     the whole of what the band above buys: an instrument that cannot read a construct has not found a defect
+     in the subject, and summing the two is how a verdict becomes furniture. */
+  ["record field names a consumer NAMES, or nests under one, in a construct this scan cannot read as a read " +
+   "— unclassified, so unaudited", unclassified.length],
 ].filter(([, n]) => n);
-const blindN = ambiguous.length + refusals.length;
+const blindN = ambiguous.length + refusals.length + unclassified.length;
 for (const [k, n] of blind) log(`  ${String(n).padStart(5)}  ${k}`);
 log(`  ── UNAUDITED: ${blindN} construct(s) this scan cannot read. Zero is the armed state — each is a place a ` +
     `field name could be hiding, and a scan that guessed past one would report a plausible answer. This is a ` +
