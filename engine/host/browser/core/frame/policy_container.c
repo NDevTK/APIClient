@@ -673,16 +673,43 @@ static bool policy_blocks_request(const CspPolicy *policy, const UrlRecord *url,
     if (csp_source_list_match_url(d, url, self_origin, redirect_count) == CSP_MATCHES)
         return false;
     /* §4.1.2 STEP 3.3.1 — "execute §5.5 Report a violation on the result of executing §2.4.2 Create a
-       violation object for request, and policy" — WHICH THIS ENGINE DOES NOT PERFORM, and here is where that
-       becomes visible rather than merely absent. A violation has exactly two observables: a
-       `securitypolicyviolation` event at the Document, and a report POSTed to the endpoints a policy names.
-       The second is DECLARED IN THE POLICY ITSELF, so it is a gap this function can see coming and refuse. */
-    DCHECK(!csp_policy_directive(policy, "report-uri") && !csp_policy_directive(policy, "report-to"),
-           "a request was BLOCKED by a policy that declares a reporting endpoint, and §4.1.2 step 3.3.1's "
-           "report is not built — the page's server is owed a report it will never receive, and a test that "
-           "waits for one waits forever. Build CSP §2.4.2's violation object and §5.5's report a violation, "
-           "whose two observables are the `securitypolicyviolation` event fired at the Document and the POST "
-           "to the endpoints named by `report-to`/`report-uri`");
+       violation object for request, and policy" — WHICH THIS ENGINE DOES NOT PERFORM. The BLOCK itself is
+       right and whole: §4.1.2's own "Set result to Blocked" is what the `return true` below is, so the answer
+       this walk gives the page is the standard's answer. What is unbuilt is the violation's OBSERVABLES.
+
+       THIS USED TO BE A `DCHECK` ON THE POLICY'S OWN `report-uri`/`report-to`, AND IT STOOD ON A STRANGER'S
+       BYTES. The retired argument is kept because it re-derives easily and reads as rigour: an endpoint is
+       DECLARED IN THE POLICY, so a report nobody can deliver looks like a gap this function can see coming
+       and refuse. A policy is bytes whichever server served the document sent, and both directives are
+       ordinary and widely deployed — so the guard handed EVERY ORIGIN an abort switch for the dev engine, on
+       the one input this product exists to run. A `DCHECK` asserts that this codebase's OWN logic is correct,
+       and no byte of a policy is this codebase's. core/timing/timer.c states the same rule in its own words at
+       the string-compilation refusal, and CSP's other refusal paths in this engine already obey it
+       and block in silence — `git grep -n policy_allows_inline -- '*.c'` and the same for
+       `policy_allows_string_compilation` names them, and not one carries an assert.
+
+       AND THE CONDITION WAS AN UNDER-CLAIM ABOUT ITS OWN GAP, SO REMOVING IT NARROWS NOTHING. CSP §5.5 gates
+       only the report POST on those two directives — "If violation's policy's directive set contains a
+       directive named "report-uri" directive" — while the event step ahead of it is unconditional: CSP §5.5
+       "Report a violation" says "If target implements EventTarget, fire an event named securitypolicyviolation
+       that uses the SecurityPolicyViolationEvent interface at target". A blocking policy that names NO
+       endpoint therefore owes an event exactly as one that does, and the guard certified those as fine.
+
+       NAMED RESIDUAL — WHAT IS NOT COVERED: CSP §5.5 "Report a violation", both observables, for every
+       violation this walk decides and not only for the endpoint-bearing ones. WHAT THE NEXT DIFF BUILDS: the
+       EVENT half, which needs no network at all — §2.4.2's violation object, §5.2's blockedURI and §5.4's
+       strip-url over its fields, and a SecurityPolicyViolationEvent built the way
+       core/events/hash_change_event.h builds its own, as a mint handing back an owned event with
+       event_target_fire as the queued reach §5.5's "Queue a task to run the following steps" asks for. The
+       interface and the fire land TOGETHER: core/events/event_target.c installs `onsecuritypolicyviolation`
+       and nothing in this tree writes it, and an interface installed alone would flip a page's own
+       `if (window.SecurityPolicyViolationEvent)` true while leaving the branch behind it unreachable.
+       THE POST HALF IS NEITHER THE NEXT DIFF NOR THIS COMPONENT'S: §5.5 gives that request method "POST", so
+       whether it is sent is a firing decision for the trusted zone's one chokepoint to make out of its method,
+       its credential state and the provenance of the path that reached it — a violation this engine FORCED is
+       a report no real client would have sent. The engine composes a violation; it does not decide an egress.
+       HOW ITS ABSENCE WOULD SHOW: a page that counts `securitypolicyviolation` events at its own document
+       reads zero across every refusal this engine makes, where a browser fires one per violation. */
     return true;
 }
 

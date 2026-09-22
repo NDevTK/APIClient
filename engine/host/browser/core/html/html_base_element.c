@@ -80,16 +80,22 @@ static bool base_allowed_for_document(const PolicyContainer *policy, const UrlRe
 
         if (!d) continue;   /* "if source list is null, skip to the next policy" */
         if (csp_source_list_match_url(d, base, list->self_origin, 0) == CSP_MATCHES) continue;
-        /* §6.3.1.1's violation steps, of which §5.5's REPORT is not built — the same gap
-           core/frame/policy_container.c refuses at, and refused in the same words, because the endpoint is
-           DECLARED IN THE POLICY and is therefore a gap this function can see coming. */
-        DCHECK(!csp_policy_directive(&list->policies[i], "report-uri") &&
-                   !csp_policy_directive(&list->policies[i], "report-to"),
-               "a `<base href>` was BLOCKED by a policy that declares a reporting endpoint, and CSP §5.5's "
-               "report a violation is not built — the page's server is owed a report it will never receive. "
-               "Build §2.4.1's violation object (resource \"inline\", effective directive \"base-uri\") and "
-               "§5.5's report a violation, whose two observables are the `securitypolicyviolation` event fired "
-               "at the Document and the POST to the endpoints `report-to`/`report-uri` name");
+        /* §6.3.1.1's violation steps, of which CSP §5.5 "Report a violation" is not built. The REFUSAL is
+           right and whole — §6.3.1.1 returns "Blocked" and this `return false` is that answer — and what is
+           unbuilt is the violation's observables.
+           THIS USED TO BE A `DCHECK` ON THE POLICY'S OWN `report-uri`/`report-to`, RETIRED FOR THE REASON
+           policy_blocks_request states at length in core/frame/policy_container.c: a policy is a stranger's
+           header, so an assert over one hands every origin an abort switch, and CSP §5.5 gates only the report
+           POST on those directives while firing the event unconditionally — so the condition was also an
+           under-claim about the gap it named. That site holds the argument and this one does not repeat it,
+           but the residual is OWED SEPARATELY HERE because the violation object differs: §6.3.1.1 creates it
+           through CSP §2.4.1 "Create a violation object for global, policy, and directive" with effective
+           directive "base-uri", where a request creates one through CSP §2.4.2.
+           NAMED RESIDUAL — WHAT IS NOT COVERED: §5.5 for a `<base href>` refusal. WHAT THE NEXT DIFF BUILDS:
+           CSP §2.4.1's violation object beside CSP §2.4.2's, over the one SecurityPolicyViolationEvent mint
+           core/frame/policy_container.c names. HOW ITS ABSENCE WOULD SHOW: a page that counts
+           `securitypolicyviolation` events at its own document reads zero when its own `<base href>` is
+           refused, where a browser fires one. */
         return false;   /* every policy this build parses has disposition "enforce" */
     }
     return true;

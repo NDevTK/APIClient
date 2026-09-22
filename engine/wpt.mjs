@@ -1193,8 +1193,22 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       csp_source_list.c's own DCHECK under 'strict-dynamic' states in its own words that this
                       engine runs the inline check over a `<style>` element and over an event-handler
                       attribute and over no inline `<script>` element at all. CSP §5.5 "Report a violation" is
-                      refused the same way, by a DCHECK in policy_container.c that fires only when a blocking
-                      policy DECLARES an endpoint. Read those; do not take a list from here.
+                      unbuilt too, and is a NAMED RESIDUAL at core/frame/policy_container.c and
+                      core/html/html_base_element.c rather than a crash. IT USED TO BE A `DCHECK` THAT FIRED
+                      ONLY WHEN A BLOCKING POLICY DECLARED AN ENDPOINT, and that is recorded because this row
+                      is what would have met it: a policy is a header whichever server served the document
+                      sent, so the guard was an assert over a stranger's bytes, and §5.5 gates only the report
+                      POST on `report-uri`/`report-to` while firing the `securitypolicyviolation` event
+                      unconditionally — so it was also silent about the endpoint-free policies that owe an
+                      event just the same. FIFTEEN files under this row serve an ENFORCE
+                      `Content-Security-Policy` carrying one of those two directives at the pinned revision,
+                      and `base-uri/report-uri-does-not-respect-base-uri.sub.html` is one of them, which is
+                      the second site's own subject. Re-derive with
+                        for p in $(git -C engine/.work/wpt ls-tree -r --name-only <rev> -- \
+                                   content-security-policy | grep \.headers$); do \
+                          git -C engine/.work/wpt show <rev>:$p | grep -i '^Content-Security-Policy:' | \
+                          grep -qiE 'report-uri|report-to' && echo $p; done | wc -l
+                      Read those; do not take a list from here.
                       IT COSTS 1699 BLOBS AND 2492419 BYTES AT THE PINNED REVISION -- 1361 and 1835203 for
                       `content-security-policy`, 338 and 657216 for `trusted-types`. Both are top level, so
                       neither drags another directory's own level onto disk and neither can move the stray
