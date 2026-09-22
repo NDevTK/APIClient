@@ -2792,8 +2792,9 @@ async function safeFetch(url, opts) {
   }
   /* AND THE ENTRY ALLOWLIST IS COMPLETE AFTER A REDIRECT WITHOUT BEING RE-ASKED — ASSERTED HERE RATHER THAN
      ARGUED, BECAUSE THE ARGUMENT IS WHAT A READER RE-DERIVES AND THEY RE-DERIVE IT WRONG. The scheme test is
-     the one gate in this function that reads `parsed` and is never re-pointed at the landed address — a
-     count of `protocol` over this file answers 2 and both of them are that gate — and beside `_readBody`'s
+     the one gate in this function that reads `parsed` and is never re-pointed at the landed address: the
+     only `protocol` read that DECIDES a request is that one. That is a property to READ and deliberately
+     not a count, since the count would have to include this very paragraph. Beside `_readBody`'s
      `WHICH GATES READ WHICH` enumeration, where every other name carries a `both` or reads `_finalOrigin`,
      that asymmetry reads as a hole. It is not one, because the BROWSER refuses the targets this gate
      excludes:
