@@ -94,24 +94,58 @@ bool font_face_is(JSValueConst v);
  *   (1) §2 + §2.1 — THIS FILE. Its consumer is every `new FontFace(` in the corpus; it needs nothing that does
  *       not exist. It flips no guard, because the corpus carries none on this name.
  *
- *   (2) §3 "The FontFaceSet Interface" TOGETHER WITH §4 "The FontFaceSource Mixin"'s `Document.fonts`. They are
- *       ONE landing and not two: `setlike<FontFace>` and `add(FontFace font)` have no meaning without a
- *       FontFaceSet to be reached through, and `document.fonts` with no set behind it is a member whose type
- *       does not exist. Its consumers are the sites that iterate `document.fonts` and then `add` a face to it.
- *       IT IS THE LANDING THAT CARRIES THE ONE MEASURED GUARD IN THIS SURFACE — a corpus site spelled
- *       `` if (`fonts` in document) try { await document.fonts.ready } catch {} `` — so it is the one that
- *       must arrive with that guard's TRUE branch survivable. `await undefined` yields and resumes, so an
- *       ABSENT `ready` is survivable and a PERMANENTLY PENDING `ready` is not: a promise created pending and
- *       never fulfilled hangs that flow for ever, which is strictly worse than the absence it replaced. §3's
- *       [[ReadyPromise]] is fulfilled by "switch the FontFaceSet to loaded", which exits early while the set is
- *       PENDING ON THE ENVIRONMENT — "the document is still loading", "pending stylesheet requests", "pending
- *       layout operations" — so `ready` is owed that condition or it is owed nothing at all.
+ *   (2) §2.2 "The load() method", the `loaded` attribute and the [[FontStatusPromise]] slot behind them. It is
+ *       (2) and not (3) because it is the only member of this standard left that FLIPS NOTHING: a corpus site
+ *       reaches it on a face it constructed itself (`n.load().then(() => …add(n))`), unguarded, so an absent
+ *       one already throws on the page's own line and a built one simply answers. Every other landing below
+ *       arrives through `document.fonts`, which is a GUARDED SURFACE — see (3).
  *
- *   (3) §2.2 "The load() method", §3.2 "The load() method" and §3.3 "The check() method", which is the FONT
- *       MATCHING half: §3.5 "Interaction with CSS Font Loading and Matching". A corpus site calls
- *       `document.fonts.check(font, text)` and `document.fonts.load(font, text)`, and until this lands that
- *       site dies at the `check` — one call further on than it dies today, which is progress and is not
- *       completion, and saying which of the two it is belongs here rather than in a report.
+ *   (3) §3 "The FontFaceSet Interface", §4 "The FontFaceSource Mixin"'s `Document.fonts`, §3.2 "The load()
+ *       method" and §3.3 "The check() method" — WHICH IS ONE LANDING, AND THE SPLIT THAT STOOD HERE IS THE
+ *       DEFECT THIS ENTRY EXISTS TO RECORD. §3-with-§4 was (2) and the two font-matching members were (3), on
+ *       the ground that a site landing (2) alone "dies at the `check`, one call further on than it dies
+ *       today, which is progress". Both halves of that are wrong, and they are wrong for one reason:
+ *       `document.fonts` IS A SURFACE GUARD, so its TRUE branch is not one member but every member the page
+ *       goes on to read off the set.
+ *         — A guarded site's true branch CALLS `load()`: `` if (!(`fonts` in document)) return
+ *           Promise.resolve(); … document.fonts.load(font, text) ``, on a real messenger's boot line,
+ *           immediately before the dynamic `import()` of its bootstrap chunk. Today the guard reads false and
+ *           the early return is taken. Install the set without `load()` and the guard flips, `undefined(…)`
+ *           throws SYNCHRONOUSLY out of a non-async function, and the import — with the thirty-odd chunks its
+ *           dep list names — never happens. That is §NO STUBS' hazard exactly: the branch behind the guard
+ *           cannot complete AND the branch that was working is abandoned, so BOTH arms are worse than the
+ *           state they replaced.
+ *         — The UNGUARDED site the split was justified by does not move at all. It reads
+ *           `x.fonts.check(font, text) || await x.fonts.load(font, text)` with `x` its own
+ *           `ownerDocument ?? document`, so today it throws reading `.check` off `undefined` and after a
+ *           set-without-`check` it throws CALLING `undefined` — the same flow, the same line, one token
+ *           later. One token is not one call and is not progress.
+ *       SO THE RULE, WHICH IS WHAT SURVIVES ANY CORPUS: where a surface is reached through a GUARDED
+ *       ACCESSOR, the landing unit is the accessor PLUS every member the guarded branch calls — never the
+ *       accessor alone — because there is no install of the accessor that does not flip the guard.
+ *       AND `ready` IS OWED ITS FULFILLING CONDITION OR IS DELIBERATELY ABSENT. `await undefined` yields and
+ *       resumes and `x?.ready && x.ready.then(…)` skips, so an ABSENT `ready` is survivable; a PERMANENTLY
+ *       PENDING one is not, because a promise created pending and never fulfilled hangs that flow for ever.
+ *       §3's [[ReadyPromise]] is fulfilled by "switch the FontFaceSet to loaded", which exits early while the
+ *       set is PENDING ON THE ENVIRONMENT — "the document is still loading", "pending stylesheet requests",
+ *       "pending layout operations" — so the condition is what makes `ready` buildable at all.
+ *       WHICH MEMBERS THE GUARDED BRANCH ACTUALLY CALLS IS A FACT ABOUT A CORPUS AND ABOUT ONE FETCH OF IT, so
+ *       it is a command and never a list. KEY ON THE MEMBER AND NEVER ON THE RECEIVER, which is the way both
+ *       readings before this one went short: a `document\.fonts` pattern misses `i.fonts`, `x.fonts` and
+ *       `contentDocument.fonts`, and those are where `check`, `add` and `has` live.
+ *           NODE_USE_ENV_PROXY=1 SITES=apps.tsv node testing/corpus/fetch.mjs
+ *           cd engine/.work/sitecorpus/mirror
+ *           for m in check load ready add delete clear forEach status size size_NO_SUCH_MEMBER
+ *           do printf '%-9s ' "$m"; grep -rlE "[.]fonts[.]$m[^A-Za-z0-9_]" . | cut -d/ -f2 | sort -u | tr '\n' ' '
+ *              echo; done
+ *           grep -rlE "fonts[\"'\`][[:space:]]*in[[:space:]]" .      # the SURFACE guards
+ *       THE TRAILING `[^A-Za-z0-9_]` IS NOT TIDINESS AND THE INVENTED MEMBER IS NOT CEREMONY. `fonts` is a
+ *       field name an application owns as readily as the platform does — one corpus site's own font manager
+ *       answers `.fonts.loadRequiredFontsForCurrentPage`, which an unanchored `[.]fonts[.]load` claims for
+ *       §3.2 — so this channel FALSE-POSITIVES as well as under-reads, and every hit is OPENED rather than
+ *       counted. The invented member is what says a zero is about the corpus rather than about the grep.
+ *       RETIREMENT: this entry goes when §3, §4, §3.2 and §3.3 have landed together, because the ordering
+ *       claim is then spent.
  *
  *   (4) §4.2 "Interaction with CSS's @font-face Rule" — the CSS-CONNECTED faces. Until it lands a document's
  *       set starts EMPTY, which is a narrower answer than a browser's for a document that declares

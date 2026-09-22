@@ -147,8 +147,11 @@ bool font_face_is(JSValueConst v)
  *     "SyntaxError"". That slot is not on this record, because §2.2 "The load() method" and the `loaded`
  *     attribute that reflects it are the LOADING half and are absent here — a promise created with no member
  *     able to reach it would be an observable this engine invented rather than one §2 gives a page.
- *   WHAT THE NEXT DIFF BUILDS: the slot, `loaded`, and §2.2's `load()`, together — landing (3) in font_face.h's
- *     ORDER, which is where the rest of the loading half is.
+ *   WHAT THE NEXT DIFF BUILDS: the slot, `loaded`, and §2.2's `load()`, together — which font_face.h's ORDER
+ *     names as the landing after this one. IT IS NAMED BY ITS SECTION AND NOT BY THAT LIST'S ORDINAL, which is
+ *     what stood here and went stale the first time the ORDER was re-derived: an ordinal is a reference to a
+ *     POSITION in a list a later reading may reorder, and it resolves — to whatever now occupies that rank —
+ *     rather than going quiet, so the next reader is sent somewhere with confidence.
  *   HOW ITS ABSENCE WOULD SHOW: `new FontFace("x", "not-a-src").loaded` is undefined rather than a promise, so
  *     a page that awaits it throws a TypeError at its own line; and nothing anywhere fires an unhandled
  *     rejection for a face that failed to parse, where a browser fires one. */
