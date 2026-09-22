@@ -158,13 +158,29 @@
  * not the reason it appears, and the member is grouped with the four decisions above rather than apart from
  * them — what it awaits is the enum value, not a repair to the audit.
  *
- * AND THE CITATIONS OF Resource Timing, Event Timing AND THE Measure Memory API ABOVE ARE READ, COUNTED AND
- * JUDGED BY NOTHING, because those are not standards this tree's citation audit holds a corpus for. It reports
- * that about itself rather than about them — run it on this file and read the line naming what stood in front
- * of a § that no list knows, beside the count of citations naming no standard. Said here so a reader does not
- * take silence at these lines for a clean bill: the repair is a corpus row over there and never an edit at
- * this site, and until there is one their numbers are checked the way any reader checks one, by fetching the
- * standard. The three standards beside them that the audit does index are judged on every run, which is the
+ * AND THE CITATIONS OF Resource Timing, Event Timing AND THE Measure Memory API ABOVE ARE READ AND NOT JUDGED
+ * — but NOT for the reason this paragraph used to give, and NOT findable by the command it used to name. It
+ * said the repair was a corpus row over there and never an edit at this site, and sent its reader to the line
+ * naming what stood in front of a § that no list knows. MEASURED by running the audit on this file: the
+ * unindexed-standards line reads `none`, that very line reads `none` too on a plain run, and the not-checked
+ * line reads `0 name a standard this tool indexes no text for`. A READER FOLLOWING THE INSTRUCTION MET `none`
+ * THREE TIMES AND READ IT AS THE CLEAN BILL THIS NOTE EXISTS TO PREVENT. The signal is under the floor of 8
+ * and only `--all` prints it, as `TIMING=2`: these sites fall in the 22 that name NO STANDARD AND NO TERM, not
+ * in the unindexed band, and the two take different repairs. So the old clause was wrong in both halves — a
+ * corpus row alone cannot reach a citation whose anchor no list holds, and the audit's own output says an edit
+ * at the site is what drains the name-no-standard band. Until then their numbers are checked the way any
+ * reader checks one, by fetching the standard.
+ * RESIDUAL — NOT COVERED: no SPECS or OTHER_SPECS entry in engine/citegen.mjs is reachable from what this
+ * file's Resource Timing, Event Timing and Measure Memory citations tokenize to, so no channel asks whether
+ * their numbers or their titles are real. NEXT DIFF: fetch each standard and ask whether its bytes carry
+ * rendered section numbers at all — the check that file already made for `background tasks`, where an
+ * unrendered ReSpec draft made a foreign row the honest state rather than an index — then add the entry in a
+ * spelling the tokenizer PRODUCES. That file warns at its own site why this is not the spelling an author
+ * would choose: an entry keyed on a fragment the reader's window made protects nothing at best, and where the
+ * fragment's real standard IS indexed it REMOVES resolutions the site already had. HOW ITS ABSENCE SHOWS: a
+ * reader running the audit on this file with `--all` sees the under-floor line name a bare WORD where a
+ * standard belongs.
+ * The three standards beside them that the audit does index are judged on every run, which is the
  * whole of the difference and is not visible from any one line of this comment.
  *
  * NONE OF THE ABSENT MEMBERS IS SHAPED. `performance.getEntriesByType("navigation")` is a TypeError naming the
