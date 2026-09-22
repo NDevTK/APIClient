@@ -337,13 +337,32 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
   const _addr = astCallSiteAddress(callSite.url, (tab && tab.url) ? tab.url : scriptUrl);
   const csUrl = _addr.originKnown ? _addr.url : null;
 
-  // Classification at AST-time is an OPEN question — we don't have a
-  // response body to magic-byte-sniff, and request shape alone (GET
-  // with no query / body) can mean either "static asset fetch" or
-  // "plain API endpoint." We register the method regardless and defer
-  // real API-vs-asset classification to the moment real traffic flows
-  // (handleResponseBody stamps _responseKind="asset" via magic bytes —
-  // classifyResponseAsset in lib/discovery.js).
+  /* API-VS-ASSET IS ANSWERED IN TWO PLACES AND ONLY ONE OF THEM IS DOWNSTREAM OF HERE. The sentence that
+     stood here said classification is an OPEN question at AST time, that there is no response body to
+     magic-byte-sniff, and that the real answer is DEFERRED to the moment real traffic flows. Every name in
+     it is still correct and the deferral describes only half the tree. It is REWRITTEN RATHER THAN DELETED
+     because the half it named is real and a reader who re-derives it will write it again.
+     THE PASSIVE HALF ANNOTATES, SO AN ADDRESS STAYS. intercept.js captures a live response,
+     lib/response-decode.js's handleResponseBody runs lib/discovery.js's classifyResponseAsset over the
+     bytes, and the method gains _responseKind and _responseLabel, which lib/popup-send.js reads.
+     THE LEARNED HALF IS ANSWERED BEFORE IT REACHES THIS FUNCTION AND ITS ANSWER IS A REMOVAL.
+     lib/safe-fetch.js sniffs what the engine fetched and stamps computedType on the reply record;
+     solver/reply_decode.c reads it in reply_decode_learn, whose only caller is engine_provide, and calls
+     solver/endpoint.c's endpoint_mark_asset, whose mark the @H serializer SKIPS. That drop is CORRECT and
+     endpoint.c states the rule at the skip. Its groups are media, font and archive; application/json is in
+     none of them, so a reply this tool would call an API answer keeps its record and arrives here.
+     WHAT A READER HERE MUST TAKE FROM IT: an address absent from analysis.fetchCallSites has TWO readings --
+     the run never learned it, and the run learned it and the classifier correctly declined it -- and nothing
+     crossing this boundary separates them. Somebody has already read the second as the first, from a
+     controlled pair whose only variable was whether one requested address was served its bytes or a 404.
+     NAMED RESIDUAL. NOT COVERED: that split, in either direction, anywhere this zone can read; and the moat
+     is cumulative while the verdict is not, so an address registered from a run that had not yet fetched it
+     is not retracted by a later run that did. WHAT THE NEXT DIFF BUILDS: the classifier's own answer emitted
+     BESIDE fetchCallSites as its own array -- the two-pool shape lib/endpoint-record.js's
+     provenanceOffersExample already argues for, and not a flag on an entry, since a flag puts every reader
+     back to remembering to consult it. HOW ITS ABSENCE WOULD SHOW: a served-request log holding an address
+     this report does not, with nothing on this side able to say which of the two readings it is.
+     RETIREMENT: it goes when this function can read that array. */
 
 
   // Get-or-create docEntry — same prologue as learnFromRequest. WHICH RULE NAMED THIS BUCKET is stated on the
