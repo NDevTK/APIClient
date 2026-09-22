@@ -303,6 +303,16 @@ typedef struct {
  * aborts the engine on page markup — the page-held abort switch §Offensive-programming forbids, reached by
  * asserting on a value this component was never told. An assert is owed the same inputs as the algorithm it
  * re-runs.
+ * AND THE CLAUSE ABOVE CANNOT BE SPELLED AS IT IS WRITTEN, WHICH IS THE PART A READER WILL ONLY FIND BY
+ * BUILDING IT: fetch_main_upgrade returns a `char *`, so RE-RUNNING IT ALLOCATES, and §Offensive-programming
+ * requires a DCHECK's condition to be side-effect-free — a condition that is unevaluated in release may not
+ * own a reference nothing frees, which is the reason solver/engine.c states verbatim at its own urlList read.
+ * So the assert is a DEV BLOCK that runs the upgrade, tests the answer and FREES it, with the DCHECK inside
+ * on a plain bool; a non-allocating `mixed_content_url_is_upgradeable` beside §4.1 would do as well and is
+ * the shape to prefer if a second caller ever wants the question. THE OTHER HALF OF THE COST IS THE CALL
+ * SITES: the INITIATOR goes on THIS entry's signature, not on fetch_main_upgrade's, which already carries one
+ * — `git grep -n "fetch_main_blocked(" -- engine/host/browser/` names the callers that must state it, and
+ * every one of them has the value its own algorithm computed for the step-6 call it already makes.
  * HOW ITS ABSENCE WOULD SHOW: the address this step JUDGED and the address the request is finally owed at
  * `fetch_owe` are one value where step 6 ran at the caller and two where it did not, and nothing compares
  * them — so observe it at those two seams for one request. What a reader sees instead is an element firing
