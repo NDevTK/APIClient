@@ -2374,6 +2374,40 @@ async function safeFetch(url, opts) {
      is where a real browser puts it too. */
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:")
     return _refused("network", "blocked-scheme:" + parsed.protocol, [parsed.href], {});
+  /* AND AN ADDRESS THAT CARRIES ITS OWN AUTHORITY IN ITS USERINFO, WHICH IS A FACT ABOUT THE URL AND NOT A
+     POLICY QUESTION. URL Standard §4.2 "URL miscellaneous": "A URL includes credentials if its username or
+     password is not the empty string." Fetch §5.4 "Request class" refuses one outright — "If parsedURL
+     includes credentials, then throw a TypeError" — and §5.6 "Fetch methods" says what a page sees, because
+     that constructor runs inside `fetch()`: "Let requestObject be the result of invoking the initial value of
+     Request as constructor with input and init as arguments. If this throws an exception, reject p with it
+     and return p", which is the same rejection §5.6 gives a network error ("If response is a network error,
+     then reject p with a TypeError").
+     NETWORK AND NOT DECLINE, ON THIS FILE'S OWN DISCRIMINATOR: a real browser performing this same request
+     rejects it identically, so §5.6's network error IS the faithful answer and the flow's failure path is
+     where a real page's would be. No widening reopens it and none should — this is what the transport is.
+     WITHOUT THIS LINE THE `fetch` BELOW THROWS AND THE REFUSAL HAS NO RECORD AT ALL. Nothing on this path
+     catches that TypeError, so the address is neither fired nor reported: no `blocked-` row, no grade, no
+     `statusText` — and §Attacker-sources says a derived-and-unfired request "is not a gap in the report, it
+     IS the report". Every other arm of this function answers with a record; this address answered with an
+     exception, which is the one outcome a caller cannot tell from this zone being broken.
+     IT IS A REFUSAL AND NOT A ROW OF THE EGRESS REGISTRY, WHICH IS THE PART A READER WILL OTHERWISE RE-OPEN.
+     Userinfo is the one form of URL-carried authority this zone can compute with CERTAINTY rather than as
+     `url-authority`'s lower bound, so that row looks like where it belongs. A signal is a fact a person may
+     PERMIT, and this address cannot be sent at any setting — so a checkbox over it would be a control with
+     one outcome, promising a widening that could never fire, and `_urlAuthorityMarker` would be answering
+     `present` for a population the walk beneath it never reaches.
+     THE REDIRECT CASE IS THE BROWSER'S AND IS DELIBERATELY NOT RE-ASKED BELOW: `redirect: "follow"` means
+     Fetch §4.5 "HTTP-redirect fetch" has already run, and it returns a network error when "request's mode is
+     `cors`, locationURL includes credentials, and request's origin is not same origin with locationURL's
+     origin" — which is every http(s) target of a `fetch()` made from this extension's own origin.
+     THE REASON NAMES NO GROUND, ALONE AMONG THE `blocked-` REASONS HERE, BECAUSE THE GROUND IS THE SECRET.
+     `statusText` travels to the engine and into a person's report; the URL list still carries `parsed.href`,
+     which the caller handed in and therefore already holds.
+     RETIREMENT: this record goes when no reader can re-derive a `url-authority` row for userinfo from the
+     paragraphs around it — which is to say when a value no setting can permit is unspellable in that
+     registry, and this paragraph has nothing left to be wrong about. */
+  if (parsed.username !== "" || parsed.password !== "")
+    return _refused("network", "blocked-url-credentials", [parsed.href], {});
   /* AND WHETHER THIS REPLY MAY BE HANDED OVER A PIECE AT A TIME — asked HERE, of the REQUEST, before the
      target is judged and long before the wire, because it is a fact about what the caller asked for and about
      this file's own gates rather than anything a server will say. See `_bodyGated` for the measurement that
