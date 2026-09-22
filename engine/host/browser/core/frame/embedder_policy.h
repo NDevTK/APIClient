@@ -38,7 +38,12 @@
  * is CLAUDE.md's worst failure in this class stated exactly — a wrong number sends a reader to the wrong place
  * where they find out, and a fabricated quotation tells them not to go — and it stood here because every other
  * check passed: the number resolves, §7.1.4 is real, the algorithm does live there. Only the words were made
- * up, and only reading the section could say so. */
+ * up, and only reading the section could say so.
+ * AND REWRITING THIS PARAGRAPH DID NOT REACH THE CODE, WHICH IS THE HALF THIS RECORD WAS MISSING. `obtain`
+ * went on passing one field to both of its arms for as long as the retraction stood here unaccompanied, so
+ * the collapse survived under a header saying it was wrong — a retired argument falsifies every SITE that
+ * argued it, and a prose-only retirement leaves the site that matters. Both arms write their own item now.
+ * RETIREMENT: this record goes when `obtain` cannot name one endpoint field twice. */
 #ifndef ENGINE_HOST_BROWSER_CORE_FRAME_EMBEDDER_POLICY_H
 #define ENGINE_HOST_BROWSER_CORE_FRAME_EMBEDDER_POLICY_H
 #include <stdbool.h>
@@ -157,7 +162,11 @@ void embedder_policy_obtain(EmbedderPolicy *out, const HeaderList *headers, bool
  * the carried one is CLAUDE.md's work-item defect with the operands reversed: a real policy, belonging to a real
  * document, answering a different question, and identical to the right answer in every case anyone tests first.
  *
- * ITS REPORTING ARMS CRASH — see embedder_policy.c, which is where what has to be built is named. */
+ * ITS REPORTING ARMS ARE UNBUILT AND DO NOT CRASH. Both are named residuals in embedder_policy.c, which is
+ * where what has to be built is named and where the reason an assert may not stand on either of these two
+ * policies is given: every byte of both is a stranger's. The BLOCKED NAVIGATION is a different gap and it does
+ * still crash — at this function's CALLERS, because a false answer they cannot act on is a wrong answer rather
+ * than a missing observable. */
 bool embedder_policy_check_navigation_response(SerializedEmbedderPolicy parent_policy,
                                                SerializedEmbedderPolicy response_policy);
 
