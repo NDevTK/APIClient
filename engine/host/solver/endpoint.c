@@ -488,8 +488,19 @@ static const char *kv_run_end(const char *b, int npair,
      WHAT IS NOT COVERED: a shape pair whose NAME holds a brace — `{k}=1`, what `"?" + key + "=1"` displays as.
        Such a pair takes the literal arm, whose name comparison is byte-wise, so it matches no example pair and
        the whole query aligns nowhere.
-     WHAT THE NEXT DIFF BUILDS: a third arm for a name-hole pair, covering a run whose LAST pair is anchored by
-       the shape's next literal pair instead of by its own name, since a name-hole has no name to anchor on.
+     WHAT THE NEXT DIFF BUILDS: NOT the third arm on its own, WHICH IS WHAT THIS CLAUSE USED TO SAY AND IS
+       RECORDED HERE BECAUSE A NEXT-DIFF CLAUSE IS READ ONCE, BY SOMEBODY WHO HAS ALREADY DECIDED TO DO THE
+       WORK. It read: a third arm for a name-hole pair, covering a run whose LAST pair is anchored by the
+       shape's next literal pair instead of by its own name. The ALIGNER half of that is right and it is half
+       a diff: the CONSUMER sends a query parameter's NAME verbatim — lib/popup-form.js's collectFormValues
+       writes `params[result.name] = result.value` and the only hole substitution anywhere on that path is
+       applyPathParams, whose grammar runs over the PATH string and never over a parameter name. So an arm
+       that aligned `{k}=1` would emit a param NAMED `{k}`, and the request that went out would carry a
+       literal parameter called `{k}` — a FABRICATED request rather than a thin one, which is worse than the
+       refusal it replaces and is what §@H forbids. The landing unit is therefore the aligner arm AND a
+       consumer that can substitute a parameter NAME, together; and the ORDER is the consumer FIRST, because
+       it is the half that has a caller today (every query param already flows through that line) while the
+       aligner half has no reader until it does.
      HOW ITS ABSENCE WOULD SHOW: an address whose query params are all emitted with no example while its path
        params carry theirs, on a record whose shape spells at least one param name inside braces.
    Returns a malloc'd span per shape pair and writes the shape's pair count, or NULL when there is no reading
