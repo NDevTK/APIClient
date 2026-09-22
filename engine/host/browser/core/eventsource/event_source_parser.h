@@ -59,10 +59,46 @@
  * installed ahead of the connection sends that bundle down a branch nothing can complete and OUT of the
  * fallback branch this engine would otherwise execute, losing the endpoints on both sides.
  *
- * SO THE FIRST DIFF THAT GIVES THIS FILE A CALLER IS HTML §9.2.2's STEPS 8-15 AND HTML §9.2.3 TOGETHER,
- * in that order: the potential-CORS request whose credentials mode core/html/cors_settings_attribute.h's
- * `cors_potential_request_credentials` states, then the fetch, then announce the connection, then the three
- * sink entries below, then fail the connection.
+ * SO THE FIRST DIFF THAT GIVES THIS FILE A CALLER IS ONE LANDING AND NOT A SEQUENCE, and its members are
+ * numbered as one because none of them has a consumer without the others: HTML §9.2.2 "The EventSource
+ * interface"'s constructor — ALL SIXTEEN of its top-level steps, counted with list depth tracked — with
+ * HTML §9.2.3 "Processing model"'s announce the connection and fail the connection, and with the PER-GLOBAL
+ * SET of live EventSource objects that HTML §7.5.9 "Unloading documents" and HTML §9.2.9 "Garbage
+ * collection" each read from one end. Inside it the order is the standard's: the potential-CORS request whose
+ * credentials mode core/html/cors_settings_attribute.h's `cors_potential_request_credentials` states, then
+ * the fetch, then announce the connection, then the three sink entries below, then fail the connection.
+ *
+ * THIS CLAUSE READ `STEPS 8-15 AND HTML §9.2.3 TOGETHER` AND IS REWRITTEN RATHER THAN DELETED, because that
+ * span really is the one that reaches THIS file — step 15's success arm is what interprets the body — so a
+ * reader standing here re-derives it. What it is, is a scope list drawn from where its author was standing,
+ * and it is short at BOTH ends.
+ *   AT THE FRONT, steps 1-7 are not plumbing already done. The constructor's `USVString url` and its
+ * `optional EventSourceInit eventSourceInitDict = {}` are Web IDL conversions that RUN PAGE CODE and
+ * therefore PARK, so they are DECLARED through core/idl_args.h — IDL_USVSTRING, and IDL_DICT over one
+ * `boolean withCredentials = false` — and the body runs once they are real. A body that converted by hand
+ * would drive a page's `toString` to completion, which is the one shape §C-stack forbids outright.
+ *   AT THE BACK, the per-global set is not the diff after that. §7.5.9's unloading document cleanup steps
+ * are "For each EventSource object eventSource whose relevant global object is equal to window, forcibly
+ * close eventSource", under "If document's salvageable state is false" — which is a SET and not a walk —
+ * and HTML §9.2.9 reads the same set from the other side: "there must be a strong reference from the Window
+ * or WorkerGlobalScope object that the EventSource object's constructor was invoked from to the EventSource
+ * object itself", while readyState is CONNECTING or OPEN and a listener is registered. Without it
+ * `new EventSource(u).onmessage = f` retains nothing, so the object is collectable between the constructor
+ * and the delivery and THE ENDPOINT THE CONSTRUCTOR COMPUTED goes with it. That is this project's own
+ * subject failing rather than a conformance row, which is why the set lands with the constructor.
+ * RETIREMENT: this record goes when that set exists and both of its readers take it.
+ *
+ * TWO ARMS OF STEP 15 ITS OWN WORDING MISLEADS ABOUT, AND NEITHER IS THIS FILE'S TO DECIDE. Its refusal is
+ * over `res`'s `Content-Type`, and that term is HTML §2.5.2 "Determining the type of a resource"'s — "The
+ * Content-Type metadata of a resource must be obtained and interpreted in a manner consistent with the
+ * requirements of MIME Sniffing" — so the test is over a PARSED type's ESSENCE and never over the header's
+ * bytes: core/mime/mime_type.h's `mime_type_extract` and then `mime_type_essence`, which is what makes
+ * `text/event-stream;` open where `text/x-bogus` fails. And HTML §9.2.3's fail the connection "fires an
+ * event named error at the EventSource object" and names no interface, which DOM §2.10 "Firing events"
+ * step 1 settles — "If eventConstructor is not given, then let eventConstructor be Event" — so the
+ * MessageEvent mint core/events/message_event.h states is for `message` ALONE, and an `error` carrying a
+ * `data` property is the wrong interface on the wire.
+ * RETIREMENT: both go when that arm is built and asserts them at its own site.
  * THAT ENTRY'S COMMENT NAMES THIS CONSTRUCTOR AND THAT IS A FACT ABOUT THE STANDARD, NOT ABOUT THE WIRING.
  * This sentence used to cite it flat, as `one of its three callers`, and the flat form is what turned it
  * into EVIDENCE: a caller list is read as a claim about THIS TREE, so quoting one back made a statement
