@@ -1395,11 +1395,13 @@ function _pathSegEncode(s) {
    hole's SPAN on the parameter record — no record states one today, and a reader can check that by grepping
    lib/learn.js's `AST_PARAM_KEYS`, which is name/location/validValues/valueClass plus the four domain keys —
    and let the panel render a run as one input per segment, so the operator says how many segments they mean
-   instead of this function reading it off their text. ABSENCE SHOWS as a sent request whose URL carries more
-   path segments than the operator filled values for — read it off the request log's own URL line
-   (lib/popup-reqlog.js renders `req.url`), never off the Send panel, which composes this address and
-   displays it NOWHERE: `currentRequestUrl` has no reader that writes it to the DOM, so the only surface an
-   operator has for what was actually sent is that log and the server's reply.
+   instead of this function reading it off their text. ABSENCE SHOWS as an address carrying more path
+   segments than the operator filled values for, read off the Send panel's own address row
+   (`renderSendUrl`, lib/popup-send.js) BEFORE the request goes out, or off the request log's URL line
+   (lib/popup-reqlog.js renders `req.url`) after it. THIS CLAUSE USED TO SAY THE PANEL DISPLAYS THIS ADDRESS
+   NOWHERE and to send the reader to the log alone; that was true when written and the row retires it, so a
+   reader re-deriving it from `currentRequestUrl` having had no DOM reader will re-add a clause the surface
+   has already answered.
    RETIREMENT: this argument goes when a path hole's value cannot reach here carrying a separator at all —
    that is, when `path_scan` no longer spans a hole over a run of example segments. */
 function applyPathParams(url, pathParams) {
@@ -1409,6 +1411,50 @@ function applyPathParams(url, pathParams) {
       ? String(pathParams[name]).split("/").map(_pathSegEncode).join("/")
       : m,
   );
+}
+
+/* THE SEND PANEL'S ADDRESS HAS ONE SPELLER, BECAUSE THE SURFACE THAT SHOWS IT AND THE PATH THAT SENDS IT
+   MUST BE THE SAME BYTES. This body stood TWICE inside `sendRequest`, character for character, in the
+   GET/DELETE arm and in the form-body arm — two right answers to one question, which is the shape that
+   drifts. A DISPLAY built beside them would have been a THIRD, and a third copy is worse than no display at
+   all: SECURITY.md scopes `pageContextFetch` out of the credentialed destructive-path deny list on the
+   ground that the request is "authorized by a human at a surface that shows them the bytes", so a surface
+   showing an address the request does not carry does not weaken that authorization, it FORGES it.
+   IT IS PURE AND IT WRITES NOTHING. `currentRequestUrl` is assigned by `sendRequest` alone; this function is
+   called once per keystroke by the renderer and must leave the panel exactly as it found it. */
+function composeSendUrl(template, formValues) {
+  let url = applyPathParams(template, formValues.pathParams);
+  if (Object.keys(formValues.params).length > 0) {
+    try {
+      const urlObj = new URL(url);
+      for (const [k, v] of Object.entries(formValues.params)) {
+        urlObj.searchParams.set(k, String(v));
+      }
+      url = urlObj.toString();
+    } catch (_) {
+      /* The template is the operator's own text and may legitimately fail to parse (an unfilled `{host}`
+         hole in front of the scheme), so this is not a producer being broken and may not be an assert
+         (CLAUDE.md §WHOSE-BYTES-STATE-THE-VALUE). The address stays as composed and the panel's own row
+         then says it does not parse, which is what the send path will also find. */
+      console.warn("[Send] URL construction failed:", _);
+    }
+  }
+  return url;
+}
+
+/* THE ADDRESS THIS PANEL WILL SEND TO, FROM THE PANEL'S CURRENT STATE. The composition is gated on
+   `currentBodyMode === "form"` because that is the gate `sendRequest` applies: its GET/DELETE arm runs the
+   composition under `if (bodyMode === "form")` and its body arm IS `else if (bodyMode === "form")`, so
+   across both arms the address is composed exactly when the mode is `form` and is the bare template
+   otherwise. That gate lives here so the renderer and the send cannot disagree about it either.
+   AND THIS MOVES `collectFormValues`'s DEV ABORTS EARLIER, WHICH IS WHERE THEY BELONG. That walk DFAILs on a
+   cookie parameter (nowhere on this path to put one) and on a parameter whose location is not in
+   lib/field-def.js's PARAM_LOCATIONS, and until now the first thing that ran it was the Send click — so a
+   panel the operator could not send from looked sendable until they tried. The renderer runs it per
+   keystroke, so the abort now fires at the panel that built the field rather than at the act. */
+function sendPanelAddress() {
+  if (currentRequestUrl === "" || currentBodyMode !== "form") return currentRequestUrl;
+  return composeSendUrl(currentRequestUrl, collectFormValues());
 }
 
 function collectSingleField(rootWrapper) {
@@ -1579,7 +1625,14 @@ async function sendRequest() {
   _sendInProgress = true;
 
   const bodyMode = currentBodyMode;
-  let url = currentRequestUrl;
+  /* THE ADDRESS IS COMPOSED ONCE, HERE, AND RENDERED FROM THE SAME CALL. `renderSendUrl` re-runs
+     `sendPanelAddress` in this same synchronous turn over a DOM nothing between these two lines mutates, so
+     the row the operator is looking at when this handler returns is the string this request carries — which
+     is the whole of what SECURITY.md's "a surface that shows them the bytes" buys the page-context relay.
+     What this panel CANNOT know is stated at the row rather than omitted: lib/send.js re-parses this address
+     and may add a `key` query parameter from a key store the popup cannot read. */
+  let url = sendPanelAddress();
+  renderSendUrl();
   const httpMethod = currentRequestMethod;
   const contentType = currentContentType;
   const epKey = document.getElementById("send-ep-select").value;
@@ -1643,38 +1696,15 @@ async function sendRequest() {
 
   let body;
   if (httpMethod === "GET" || httpMethod === "DELETE") {
-    // Collect URL params from form fields even for GET/DELETE
+    // The form's path and query parameters are already in `url` — `sendPanelAddress` applied them under this
+    // same `bodyMode === "form"` gate. Only the write-back is left.
     if (bodyMode === "form") {
-      const formValues = collectFormValues();
-      url = applyPathParams(url, formValues.pathParams);
-      if (Object.keys(formValues.params).length > 0) {
-        try {
-          const urlObj = new URL(url);
-          for (const [k, v] of Object.entries(formValues.params)) {
-            urlObj.searchParams.set(k, String(v));
-          }
-          url = urlObj.toString();
-        } catch (_) {
-          console.warn("[Send] URL construction failed:", _);
-        }
-      }
       currentRequestUrl = url;
     }
     body = { mode: "raw", formData: null, rawBody: null, frameId: currentReplayRequest?.frameId };
   } else if (bodyMode === "form") {
     const formValues = collectFormValues();
-    url = applyPathParams(url, formValues.pathParams);
-    if (Object.keys(formValues.params).length > 0) {
-      try {
-        const urlObj = new URL(url);
-        for (const [k, v] of Object.entries(formValues.params)) {
-          urlObj.searchParams.set(k, String(v));
-        }
-        url = urlObj.toString();
-      } catch (_) {
-        console.warn("[Send] URL construction failed:", _);
-      }
-    }
+    // As above: `url` already carries this form's path and query parameters.
     currentRequestUrl = url;
     if (formValues.fields.length === 0) {
       // No body fields in schema — fall back to raw body (e.g. replayed form-urlencoded body)

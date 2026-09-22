@@ -1762,6 +1762,41 @@ details summary:hover {
   gap: 12px;
   flex-wrap: wrap;
 }
+/* The address row takes a whole line of the wrapping flex row above, so the address is never truncated by
+   the buttons beside it and never shares a line with the control that acts on it. */
+.send-url-row {
+  flex: 1 0 100%;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.send-url-label {
+  color: #484f58;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-right: 6px;
+}
+.send-url-value {
+  font-family: "Cascadia Code", "Fira Code", monospace;
+  color: #c9d1d9;
+  overflow-wrap: anywhere;
+}
+.send-url-none {
+  font-family: "Segoe UI", system-ui, sans-serif;
+  color: #8b949e;
+  font-style: italic;
+}
+.send-url-rewritten {
+  font-family: "Cascadia Code", "Fira Code", monospace;
+  color: #d29922;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+.send-url-note {
+  color: #8b949e;
+  font-size: 10px;
+  margin-top: 3px;
+}
 .export-row {
   display: flex;
   align-items: center;

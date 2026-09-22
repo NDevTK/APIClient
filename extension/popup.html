@@ -231,6 +231,11 @@
       </div>
 
       <div class="send-actions hidden">
+        <!-- The address this panel will send to. Written only by renderSendUrl (lib/popup-send.js), which
+             composes it with the same function sendRequest uses, so the row and the request cannot differ.
+             It sits INSIDE .send-actions deliberately: setSendPanelVisible hides that container exactly when
+             there is nothing to send, so the row's visibility needs no second rule of its own. -->
+        <div id="send-url-row" class="send-url-row"></div>
         <button id="btn-send" type="button">Send Request</button>
         <div class="export-row">
           <span class="export-label">Export:</span>

@@ -246,6 +246,12 @@ function setBodyMode(mode) {
     isConsole ? "none" : "";
   document.querySelector(".export-row").style.display =
     isConsole ? "none" : "";
+  /* THE ADDRESS ROW IS RECOMPUTED, NEVER LEFT STANDING. A display taken once is stale the moment the panel
+     changes, and a stale address at THIS surface is the defect the row exists to end — SECURITY.md scopes
+     the page-context relay out of the destructive-path deny list on the ground that a human saw the bytes,
+     and bytes that were true a mode ago are not the bytes. This is the mode hook; the endpoint hook is at
+     loadVirtualSchema's tail and the typing hook is the delegated listener in init(). */
+  renderSendUrl();
 }
 
 
@@ -468,6 +474,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     _lastLogFp = "";
     renderResponsePanel();
   });
+
+  /* THE ADDRESS THE OPERATOR IS LOOKING AT TRACKS WHAT THEY TYPE. A path parameter can move the request's
+     ORIGIN (a hole spans the run of example segments it occupied, scheme and authority included), so a row
+     computed once and left standing would show a host the request no longer goes to — which is worse than
+     showing nothing. Delegated on the panel rather than bound per input because buildFormFields replaces
+     those inputs wholesale on every schema load, and a per-input binding would silently stop covering the
+     fields it was written for. `input` carries typing, `change` carries selects and radios. */
+  document.getElementById("panel-send").addEventListener("input", renderSendUrl);
+  document.getElementById("panel-send").addEventListener("change", renderSendUrl);
 
   // HAR export
   document.getElementById("btn-export-har").addEventListener("click", exportHar);
@@ -2324,6 +2339,11 @@ async function loadVirtualSchema(service, methodId, initialData = null) {
     renderChainInfo(schema.chains);
     renderKeySelector();
     renderServiceOriginHint();
+    /* AFTER buildFormFields AND NOT BEFORE. `setBodyMode` above already rendered the row, and it ran while
+       the path and query inputs did not exist yet — so that render showed the template with its `{holes}`
+       unfilled. This is the only site that builds those inputs, so it is the only site whose defaults the
+       row would otherwise never see. */
+    renderSendUrl();
   } catch (err) {
     // An invariant abort travels ON through here (check.js RETHROW_FATAL). The GET_ENDPOINT_SCHEMA
     // sendMessage genuinely can reject — the offscreen document is not answering — and that IS the

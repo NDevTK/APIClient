@@ -406,6 +406,111 @@ function renderServiceOriginHint() {
     ' <a class="service-origin-open" data-url="' + esc(lastUrl) + '">Open \u2197</a></span>';
 }
 
+// ─── The Address This Panel Will Send To ────────────────────────────
+
+/* THE SURFACE SECURITY.md'S EXEMPTION IS NAMED AFTER, WHICH DID NOT EXIST.
+ *
+ * `pageContextFetch` is scoped OUT of the credentialed destructive-path deny list, and lib/schema.js states
+ * the one ground for it in SECURITY.md's own words: a path answering the operator "is authorized by a human
+ * at a surface that shows them the bytes". The Send panel was that surface and it rendered the endpoint
+ * dropdown, the verb, the headers and the body — and never the ADDRESS. `currentRequestUrl` had no reader
+ * anywhere that wrote it to the DOM, so the strongest authorization grade this project has rested on a
+ * sentence that was not true of the panel making the claim.
+ *
+ * IT STOPPED BEING COSMETIC WHEN A PATH HOLE GAINED THE POWER TO MOVE THE ORIGIN. `applyPathParams`
+ * (lib/popup-form.js) substitutes a hole PER SEGMENT because solver/endpoint.c spans a hole over the run of
+ * example segments its value occupied, and `url_path_of` cuts at `?` and nowhere else — so a hole can cover
+ * the scheme and the authority, and an operator typing into a path field can retarget the request at a host
+ * nobody named. Before that, such an endpoint could not be sent at all.
+ *
+ * WHAT MAKES THIS SAFE TO DISPLAY IS THAT IT IS NOT A DISPLAY COMPOSER. It calls `sendPanelAddress`, which
+ * is the function `sendRequest` itself calls for the string it puts in the message — one speller, so the two
+ * cannot disagree. A second composer here would be worse than no row: an address that differs from the
+ * request is not a wrong number in a report, it is a person deciding on a fact nobody established, and it
+ * would FORGE the authorization the relay's exemption rests on rather than supply it.
+ *
+ * WHAT IT CANNOT KNOW IS SAID RATHER THAN OMITTED. `executeSendRequest` (lib/send.js) re-parses this address
+ * and MAY add a `key` query parameter, from `collectKeysForService` over the offscreen's per-tab store and
+ * `globalStore.apiKeys` — a cross-session store the popup does not hold, so whether it will is not a small
+ * fact this file declined to compute, it is UNKNOWN from here. Replicating that condition would be exactly
+ * the second copy the paragraph above refuses. `content.js` then appends a `#_uasr_send` fragment, which the
+ * server never sees: RFC 3986 §3.5 "Fragment" — "the fragment identifier is not used in the scheme-specific
+ * processing of a URI; instead, the fragment identifier is separated from the rest of the URI prior to a
+ * dereference".
+ *
+ * THIS IS A DISPLAY AND NEVER A GATE. It adds no confirmation, no token list and no veto — CLAUDE.md and
+ * SECURITY.md both record a gate built at that relay and REMOVED, because a token list standing there is the
+ * tool vetoing its operator on a substring they never saw. The floor under an operator's act is the operator
+ * seeing it, and this row is the seeing. */
+function renderSendUrl() {
+  var row = document.getElementById("send-url-row");
+  DCHECK(!!row, "the Send panel carries no #send-url-row — extension/popup.html declares it as the first " +
+         "child of .send-actions and this is its only writer, so an absent element is that markup broken " +
+         "and the operator would press Send with no address in front of them, which is the state " +
+         "SECURITY.md's page-context exemption is written against");
+  while (row.firstChild) row.removeChild(row.firstChild);
+
+  /* The message console composes no HTTP request — `setBodyMode` hides `btn-send` for that mode — so there
+     is no address for this row to be about and an address left standing would be about the last endpoint. */
+  if (currentBodyMode === "msgconsole") {
+    row.classList.add("hidden");
+    return;
+  }
+  row.classList.remove("hidden");
+
+  var label = document.createElement("span");
+  label.className = "send-url-label";
+  label.textContent = "Sending to";
+  row.appendChild(label);
+
+  var sent = sendPanelAddress();
+  var value = document.createElement("span");
+  value.className = "send-url-value";
+
+  /* NO ADDRESS IS SAID, NEVER LEFT BLANK. popup.js writes `""` for a service that published no rootUrl or
+     baseUrl and for "no method selected"; both also hide .send-actions, so this row is normally not on
+     screen in that state — but a blank row read as an address is the exact defect this whole surface exists
+     to prevent, so the empty case states itself rather than relying on being hidden. */
+  if (sent === "") {
+    value.classList.add("send-url-none");
+    value.textContent = "no address — this panel has nothing to send";
+    row.appendChild(value);
+    return;
+  }
+  value.textContent = sent;
+  row.appendChild(value);
+
+  /* THE PARSER IS PART OF THE SEND PATH, SO ITS ANSWER IS PART OF THE BYTES. `executeSendRequest` does
+     `new URL(msg.url)` and sends `parsedUrl.toString()`, and that round trip is not identity: it lowercases
+     the host, punycodes an IDN, drops a default port and RESOLVES `..` segments — every one of which can
+     move the request to a different origin or resource than the composed string reads as. This is the SAME
+     platform primitive on the SAME input, not a second composer: `new URL(x)` with no base in one document
+     of this browser answers what it answers in another. Shown only when the two differ, so the common case
+     stays one line. */
+  if (URL.canParse(sent)) {
+    var parsed = new URL(sent).toString();
+    if (parsed !== sent) {
+      var rewritten = document.createElement("div");
+      rewritten.className = "send-url-rewritten";
+      rewritten.textContent = "The URL parser rewrites this before it is sent: " + parsed;
+      row.appendChild(rewritten);
+    }
+  } else {
+    var unparseable = document.createElement("div");
+    unparseable.className = "send-url-rewritten";
+    unparseable.textContent = "This does not parse as a URL — the send path will refuse it.";
+    row.appendChild(unparseable);
+  }
+
+  var note = document.createElement("div");
+  note.className = "send-url-note";
+  note.textContent =
+    "Not decided here: an API key whose learned location is the URL is attached downstream as a `key` " +
+    "query parameter, from a key store this panel cannot read — whether that happens to this request is " +
+    "UNKNOWN from here. A `#_uasr_send` fragment is also appended; a fragment is not sent to the server.";
+  row.appendChild(note);
+}
+
 // ─── API Key Selector ────────────────────────────────────────────────────────
 
 function renderKeySelector() {
