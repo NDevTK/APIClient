@@ -434,6 +434,13 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
      compute reached no reviewer at all. */
   const _epHoles = ep ? endpointHolePairs(ep, "lib/send.js resolving the Send-panel schema for " +
                                               JSON.stringify(epKeyUsed)) : null;
+  /* AND WHAT THE RUN'S OWN GATES PROVED ABOUT THOSE HOLES, off the same record and read here rather than
+     re-derived, because the literal below is where its absence was being STATED. §@H: a shape states
+     PROVENANCE and DOMAIN and dropping either is a wrong report; this block had the first and wrote `null`
+     for all four of the second, which lib/popup-form.js renders as no badge and no placeholder — a segment
+     the run had narrowed to `> 5` reaching a reviewer with the same bytes as one nothing ever tested. */
+  const _epDomains = ep ? endpointHoleDomains(ep, "lib/send.js resolving the Send-panel schema for " +
+                                                  JSON.stringify(epKeyUsed)) : null;
   if (_epHoles && _epHoles.size) {
     parameters = parameters || {};
     for (const [_hn, _hp] of _epHoles) {
@@ -463,6 +470,12 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
          that speaks half this record's vocabulary — which is the asymmetry that stood here, and it was the
          half the endpoint had no way to fill. */
       const declared = Object.prototype.hasOwnProperty.call(parameters, _hn);
+      /* A HOLE THE RECORD STATES NO DOMAIN FOR IS `null` AT ALL FOUR, which is this parameter's own spelling
+         of "nothing proved" and not a hole a `||` filled: lib/endpoint-record.js's walk returns `null` per
+         claim for a hole it names, and a `Map` miss is that record stating it narrowed this segment not at
+         all. Both are the same statement to a FieldDef, which is why one literal serves them. */
+      const _hd = (_epDomains !== null && _epDomains.has(_hn)) ? _epDomains.get(_hn)
+                : { excludes: null, bounds: null, predicates: null, looselyEquals: null };
       const cur = declared ? parameters[_hn]
                            : { name: _hn, customName: false, number: null, type: "string", location: "path",
                                required: true, description: "AST-learned path segment",
@@ -470,8 +483,21 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
                                _requiredConfidence: null, _detectedEnum: false,
                                _defaultValue: null, _defaultConfidence: null, _range: null,
                                _exampleValue: null, _exampleValueSource: null,
-                               _excludedValues: null, _bounds: null, _predicates: null,
-                               _looselyEquals: null,
+                               /* THE FOUR DOMAIN FACTS ARE THE RECORD'S, NOT A STATED EMPTY. The paragraph
+                                  above is right that a templated segment has no enum, no format and no
+                                  observed range — those come from a DISCOVERY DECLARATION or from traffic
+                                  statistics and there is none for a hole. These four do not: they are the
+                                  ENGINE'S own forced execution, merged by lib/learn.js onto the very method
+                                  parameter lib/merge.js copies the value pools from, and they arrive here on
+                                  the flat record. `null` for them was one sentence covering two sources and
+                                  true of only one — for the other it asserted that no gate of that kind held
+                                  on every observed path to a segment the run may well have narrowed, which
+                                  §@H calls a WRONG report rather than a thin one. A hole with no entry, and a
+                                  hole whose entry carries no claim of a kind, both read `null` here: the
+                                  record spells a disproved claim by omitting the key, so `null` IS this
+                                  parameter's "nothing proved" (lib/field-def.js) at both. */
+                               _excludedValues: _hd.excludes, _bounds: _hd.bounds,
+                               _predicates: _hd.predicates, _looselyEquals: _hd.looselyEquals,
                                _astForcedValues: null,
                                _astValidValues: null };
       DCHECK(cur && typeof cur === "object",

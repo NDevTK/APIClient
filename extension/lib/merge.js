@@ -41,6 +41,39 @@ function _astPathParamPool(method, poolField) {
   return out.length ? out : null;
 }
 
+/* ONE METHOD'S TEMPLATED-HOLE DOMAINS, PROJECTED ONTO THE FLAT ENDPOINT RECORD — the OTHER half of the shape
+   §@H says a report must carry, off the SAME objects `_astPathParamPool` already reads and takes only the
+   values from. lib/learn.js merges all four onto the method parameter beside the two pools; this walk was
+   copying the pools and leaving the domains on an object the Send panel cannot always reach, so a hole a
+   `>` gate had narrowed arrived at lib/send.js indistinguishable from one nothing ever tested.
+   IT IS A SEPARATE WALK FROM THE POOL ONE RATHER THAN A WIDENING OF IT, because the two have different
+   SKIP rules and folding them would need one loop to answer both: a hole with values and no domain belongs in
+   the pool and not here, and a hole with a domain and no value belongs here and not in the pool (lib/send.js
+   requires every pool entry to carry a value). Two lists, two rules, neither of which can quietly become the
+   other's.
+   EACH CLAIM IS COPIED ONLY WHERE IT SURVIVED, AND THE VOCABULARY IS THE METHOD PARAMETER'S. lib/learn.js
+   spells a disproved exclusion/predicate/loose-equality as the EMPTY ARRAY and a disproved interval as
+   `null`, and this record spells both by OMITTING the key — which is why the tests below are presence-and-
+   non-emptiness rather than truthiness, and why a parameter no engine run ever touched contributes no entry
+   at all instead of four disproofs it never observed. */
+function _astPathParamDomains(method) {
+  if (!method || !method.parameters) return null;
+  var out = [];
+  for (var pn in method.parameters) {
+    var pd = method.parameters[pn];
+    if (!pd || pd.location !== "path") continue;
+    var e = { name: pn };
+    if (Array.isArray(pd._excludedValues) && pd._excludedValues.length) e.excludes = pd._excludedValues.slice();
+    if (pd._bounds !== null && pd._bounds !== undefined && Object.keys(pd._bounds).length)
+      e.bounds = Object.assign({}, pd._bounds);
+    if (Array.isArray(pd._predicates) && pd._predicates.length) e.predicates = pd._predicates.slice();
+    if (Array.isArray(pd._looselyEquals) && pd._looselyEquals.length) e.looselyEquals = pd._looselyEquals.slice();
+    if (Object.keys(e).length === 1) continue;   /* the name alone is not a claim — see the record's own check */
+    out.push(e);
+  }
+  return out.length ? out : null;
+}
+
 /* TWO PARAMETERS ARE GONE AND NEITHER WAS EVER READ. `tabId` was passed by every caller and used by no line
    in this file — the DocView it merges into carries its own `tabId`, so the argument was a second copy of a
    fact the first argument already states, and a caller passing the wrong one would have been believed by
@@ -400,6 +433,14 @@ function mergeASTResultsIntoVDD(tab, results) {
                its own row as the real observation it is. */
             pathParams: _astPathParamPool(_learned.method, "_astValidValues"),
             pathParamsForced: _astPathParamPool(_learned.method, "_astForcedValues"),
+            /* AND THE OTHER HALF OF EVERY ONE OF THOSE HOLES, OFF THE SAME METHOD PARAMETERS. The two pools
+               above are what the code COMPUTED for a segment; this is what its own gates PROVED the segment
+               must satisfy, and §@H is explicit that a shape carrying one of the two is a WRONG report rather
+               than a thin one — a hole gated `> 5` reaching lib/send.js with its values and none of its
+               domain renders exactly as a hole nothing ever tested, which reads as "anything goes". It is ONE
+               field for both pools because a domain is a fact about the HOLE and a grade is a fact about a
+               VALUE; see lib/endpoint-record.js for why that makes it a third field and not a third pool. */
+            pathParamDomains: _astPathParamDomains(_learned.method),
             /* THE PARAGRAPH THAT STOOD HERE SAID "No request body on THIS record" AND IS A SCAR, KEPT IN ITS
                OWN TERMS BECAUSE ITS ARGUMENT IS WHAT A READER RE-DERIVES. It said the body surface lands in
                the doc model — endpoint.c reads the request's own payload, lib/learn.js files its fields as
@@ -846,6 +887,64 @@ function _foldEndpointRecordInto(into, from, key) {
   };
   into.pathParams = _project("valid");
   into.pathParamsForced = _project("forced");
+  /* THE DOMAIN HALF OF THE SAME HOLES, WHICH MERGES BY THE OPPOSITE LAW TO THE POOLS ABOVE AND ROUTES TO THE
+     RULES THAT ALREADY SPELL IT. A VALUE is knowledge that accumulates, so the pools UNION; a DOMAIN is a
+     claim about the address, so it belongs on the record only where EVERY observed path obeyed it and the four
+     facts INTERSECT (an interval to the weaker HULL). Those four rules are lib/learn.js's
+     `intersectExcludedValues` / `widenBoundsInto` / `intersectPredicates` / `intersectLooselyEquals`, which
+     `_mergeParamInto` in this same file already calls for the METHOD parameter — so this is that law ROUTED
+     rather than a fifth copy of it (CLAUDE.md §A-FIX-OF-THE-FORM-"X-IS-NOT-HOW-TO-ASK-Q": two right answers
+     to one question is the shape that drifts).
+     A HOLE ONLY ONE SIDE NAMES IS TAKEN WHOLE, AND THAT IS NOT THE POOLS' `_NO_HOLE_POOLS` SHORTCUT ONE FIELD
+     OVER. For a pool, a side with no such hole contributes an empty list and the union is unchanged either
+     way. For a domain the two absences are different facts: a record that does not NAME the hole observed no
+     path through that segment and disproves nothing, while a record that names it and carries no claim of a
+     kind reached the request without that gate and DISPROVES the other side's. Folding the first as the second
+     would let a document that never saw a segment erase a constraint another document proved, which is the
+     wrong report §@H forbids arriving through a merge.
+     THE TRANSLATION INTO `[]`/`null` IS THIS HOP'S AND NOT THE RULES'. lib/endpoint-record.js spells an absent
+     claim as `null` because lib/send.js writes these four straight onto a parameter record; lib/learn.js's
+     rules spell "this sighting proved nothing" as the empty array and, for the interval, as `null`. Both are
+     stated vocabularies and the conversion belongs at the seam between them. */
+  const _da = endpointHoleDomains(from, "lib/merge.js moat-folding the stored record's hole domains for " +
+                                        JSON.stringify(key));
+  const _db = endpointHoleDomains(into, "lib/merge.js moat-folding this document's hole domains for " +
+                                        JSON.stringify(key));
+  const _domains = [];
+  for (const name of new Set([..._da.keys(), ..._db.keys()])) {
+    /* ONE SIDE ONLY: nothing to intersect against, so the claim stands exactly as that record states it. */
+    if (!_da.has(name) || !_db.has(name)) {
+      const only = _da.has(name) ? _da.get(name) : _db.get(name);
+      const e = { name: name };
+      if (only.excludes !== null) e.excludes = only.excludes;
+      if (only.bounds !== null) e.bounds = only.bounds;
+      if (only.predicates !== null) e.predicates = only.predicates;
+      if (only.looselyEquals !== null) e.looselyEquals = only.looselyEquals;
+      _domains.push(e);
+      continue;
+    }
+    const x = _da.get(name), y = _db.get(name);
+    const t = {};
+    const _list = (v) => (v === null ? [] : v);
+    intersectExcludedValues(t, _list(x.excludes));
+    intersectExcludedValues(t, _list(y.excludes));
+    widenBoundsInto(t, x.bounds);
+    widenBoundsInto(t, y.bounds);
+    intersectPredicates(t, _list(x.predicates));
+    intersectPredicates(t, _list(y.predicates));
+    intersectLooselyEquals(t, _list(x.looselyEquals));
+    intersectLooselyEquals(t, _list(y.looselyEquals));
+    const e = { name: name };
+    if (Array.isArray(t._excludedValues) && t._excludedValues.length) e.excludes = t._excludedValues;
+    if (t._bounds !== null && t._bounds !== undefined && Object.keys(t._bounds).length) e.bounds = t._bounds;
+    if (Array.isArray(t._predicates) && t._predicates.length) e.predicates = t._predicates;
+    if (Array.isArray(t._looselyEquals) && t._looselyEquals.length) e.looselyEquals = t._looselyEquals;
+    /* EVERY CLAIM DISPROVED IS A HOLE WITH NO ENTRY, which is this record's one spelling of it — the same
+       skip `_astPathParamDomains` performs at the mint, so the two producers of this list cannot disagree
+       about what an entry with only a name would mean. */
+    if (Object.keys(e).length > 1) _domains.push(e);
+  }
+  into.pathParamDomains = _domains.length ? _domains : null;
   /* THE HEADER HALF. `into` is the record that SURVIVES, so it is the prior side of the fold and a header
      both sightings attached keeps its value unless the incoming one is a LITERAL over an opaque — the
      promotion, which is the whole reason this is a fold and not a union. Neither side's absence is

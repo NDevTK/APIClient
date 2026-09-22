@@ -60,6 +60,10 @@ const ENDPOINT_ABSENT = Object.freeze({
   pathParamsForced: null, // [{name, values}] the same holes at the one grade that must never be offered —
                           // values EVERY sighting of which stood on a forced arm. null = the run forced
                           // nothing into a hole. `[]` never reaches here, for the reason above.
+  pathParamDomains: null, // [{name, excludes?, bounds?, predicates?, looselyEquals?}] what this address's
+                          // own gates PROVED about each templated hole, keyed by the SAME name the two pools
+                          // above are keyed by; null = no gate's claim survived every observed path to any
+                          // hole of this address. `[]` never reaches here: lib/merge.js writes null for it.
   bodySent: null,         // {mime, base64} the forced execution observed this request SEND; null = no body
                           // whose bytes the run knows. Replayable: these are the bytes, under that type.
   bodyShape: null,        // {mime, shape} the DISPLAY SPELLING of a body built out of unknown external
@@ -96,6 +100,37 @@ const ENDPOINT_ABSENT = Object.freeze({
    from one path and a forced one from another; the same STRING in both is the per-value fold not having
    happened, which `checkEndpointRecord` asserts against below and `foldValuePools` is the one place that
    performs. */
+
+/* AND THE DOMAIN IS A THIRD FIELD, WHICH IS NOT A THIRD POOL AND DOES NOT MERGE LIKE ONE.
+   CLAUDE.md §@H: "A SHAPE STATES TWO FACTS AND CARRYING ONLY ONE OF THEM IS A WRONG REPORT, NOT A PARTIAL
+   ONE." The two pools above are the PROVENANCE-and-example half — values the code COMPUTED, graded by the arm
+   they were computed on. `pathParamDomains` is the other half: what this address's own gates PROVED the hole
+   must satisfy, which solver/endpoint.c emits per param as `excludes`/`bounds`/`predicates`/`looselyEquals`
+   and lib/learn.js merges onto the METHOD parameter beside the very pools this record already copies.
+   IT WAS BEING DROPPED AT THE COPY, AND THE DROP IS A WRONG REPORT RATHER THAN A THIN ONE. `_astPathParamPool`
+   reads the method parameter and takes `_astValidValues` off it; the four domain facts sit on that SAME object
+   and reached this record nowhere. lib/send.js then declares a hole the resolved schema does not name out of
+   what this record states, and stated `_excludedValues: null, _bounds: null, _predicates: null,
+   _looselyEquals: null` — which lib/popup-form.js renders as no badge and no placeholder, byte-identical to a
+   segment nothing ever tested. A range-gated hole and an unconstrained one rendered the same, which is the
+   positive claim "anything goes" about a parameter the run had narrowed.
+   THAT FALLBACK'S OWN ARGUMENT FOR THE NULLS IS SOUND FOR THREE FIELDS AND FALSE FOR THESE FOUR, which is why
+   the repair is here and not there: `enum`, `format` and `_range` come from a DISCOVERY DECLARATION or from
+   traffic statistics, and for a templated segment there genuinely is none. These four come from the ENGINE'S
+   OWN forced execution. Two sources, one sentence, and the sentence was true of only one of them.
+   IT IS KEYED BY NAME AND NOT BY VALUE, WHICH IS WHY IT IS ONE FIELD WHERE THE POOLS ARE TWO. A grade is a
+   fact about a VALUE, so a consumer of `pathParams` must not be able to be handed a forced one and the split
+   is a field name; a domain is a fact about the HOLE and is the same claim whichever pool a value of it
+   landed in. Spelling it per entry of both lists would put two copies of one fact on one record, free to
+   disagree — the two-spellings defect this file spends its length refusing.
+   A NAME MAY APPEAR HERE AND IN NEITHER POOL. A hole every path gated with `x > 5` and none ever pinned has a
+   domain and no offerable example; §@H permits the domain-annotated shape and forbids inventing `6` for it.
+   NOTHING READS SUCH AN ENTRY YET — lib/send.js walks `endpointHolePairs`, so a hole with no value declares no
+   parameter and the domain has no field to badge. NAMED RESIDUAL: what is not covered is a hole this record
+   states a domain for and no value; the next diff walks the UNION of the two names in lib/send.js's hole loop
+   so such a hole declares a parameter out of its domain alone; its absence shows as a Send panel whose URL
+   template still carries a literal `{name}` no input can fill, on an address whose service resolves no
+   discovery doc. */
 
 /* WHY THE BODY TAKES TWO FIELDS AND NOT ONE WITH A GRADE ON IT — the same choice the two hole pools make
    above, reached from the other side of the seam and for a sharper reason.
@@ -482,6 +517,37 @@ function endpointHolePairs(ep, where) {
   return out;
 }
 
+/* THE RECORD'S PROVED DOMAINS AS PER-NAME CLAIMS — `endpointHolePairs` for the other half of the shape, and
+   written beside it for the same reason: the moat's cross-document fold and the Send panel's attach both need
+   it, and two walks would be free to disagree about what an absent claim CONTRIBUTES. That is the whole of the
+   question here, because a domain has two absences and they are not the same one.
+   A HOLE THIS RECORD DOES NOT NAME IS A `Map` MISS, AND A CLAIM IT DOES NOT CARRY IS `null`. The first says
+   this record observed no path through that segment, so it disproves nothing and a fold must take the other
+   side whole; the second says this record's own sightings DID reach the request and no claim of that kind
+   survived them, which DISPROVES the other side's. Collapsing them would let a document that never saw a hole
+   erase a domain another document proved — the direction §@H calls a wrong report, arriving in a merge.
+   `null` AND NOT `[]` IS lib/field-def.js's VOCABULARY, carried unrenamed because lib/send.js writes these
+   four straight onto a parameter record. The fold below translates them into lib/learn.js's `[]`/`null`
+   spelling of "this sighting proved nothing" at the one hop that needs it. */
+function endpointHoleDomains(ep, where) {
+  const out = new Map();
+  DCHECK(ep.pathParamDomains === null || Array.isArray(ep.pathParamDomains),
+         "an endpoint's `pathParamDomains` is neither a list nor its stated absence (" + where + ") — this " +
+         "is the one walk of it, so every caller hands it a record `checkEndpointRecord` has passed, and a " +
+         "third form here means it did not");
+  if (ep.pathParamDomains === null) return out;
+  for (const hd of ep.pathParamDomains) {
+    const get = (k) => (Object.prototype.hasOwnProperty.call(hd, k) ? hd[k] : null);
+    DCHECK(!out.has(hd.name),
+           "an endpoint's `pathParamDomains` names the hole `" + hd.name + "` twice (" + where + ") — " +
+           "lib/merge.js builds this list from the method parameters keyed by name, so one name cannot " +
+           "produce two entries and two claims about one segment would render as whichever this walk read last");
+    out.set(hd.name, { excludes: get("excludes"), bounds: get("bounds"),
+                       predicates: get("predicates"), looselyEquals: get("looselyEquals") });
+  }
+  return out;
+}
+
 /* THE KEY — THE NAME THIS RECORD IS FILED UNDER — MINTED HERE AND SPELLED NOWHERE ELSE.
 
    THE RECORD HAD ONE DESCRIPTION AND ITS NAME HAD NONE, and the two halves fail the same way for the same
@@ -680,7 +746,63 @@ function checkEndpointRecord(ep, where) {
          "existed carries no such key, and it must crash rather than be read as the absence, because " +
          "\"stored by an older build\" and \"this run forced nothing\" are different facts and only one of " +
          "them is something the moat observed");
+  DCHECK(ep.pathParamDomains === null || Array.isArray(ep.pathParamDomains),
+         "an endpoint record's `pathParamDomains` is neither a list of proved domains nor a stated absence (" +
+         where + ") — `null` MEANS no gate's claim survived every observed path to a templated hole of this " +
+         "address, and a record that cannot say that has to say it through the four silences lib/send.js " +
+         "writes for a hole the resolved schema does not declare, which lib/popup-form.js renders exactly " +
+         "as it renders a segment nothing ever tested. `undefined` here is the IndexedDB door and not the " +
+         "producer, for the reason `pathParamsForced` states one line up");
+  _checkHoleDomains(ep, where);
   _checkPathParamPools(ep, where);
+}
+
+/* EVERY DOMAIN ENTRY STATES A HOLE AND AT LEAST ONE CLAIM ABOUT IT, because an entry stating none is the
+   `[]` this field's declaration says never reaches here — a hole no gate narrowed is a hole with no entry, and
+   an entry carrying only a name would be a THIRD statement beside "no hole of this address was narrowed"
+   (`null`) and "here is what this one must satisfy", which no reader has. The four claims are carried in
+   solver/endpoint.c's own vocabulary and lib/field-def.js's, unrenamed at every hop, so this asserts the
+   SHAPE it was handed rather than a spelling of its own. */
+function _checkHoleDomains(ep, where) {
+  if (ep.pathParamDomains === null) return;
+  for (const hd of ep.pathParamDomains) {
+    DCHECK(!!hd && typeof hd === "object" && !Array.isArray(hd) && typeof hd.name === "string" && hd.name !== "",
+           "an endpoint's `pathParamDomains` entry names no hole (" + where + ") — the name is what joins " +
+           "this claim to the two pools and to the `{name}` in the record's own path, so an entry without " +
+           "one states a constraint about a segment no reader can find");
+    const has = (k) => Object.prototype.hasOwnProperty.call(hd, k);
+    DCHECK(has("excludes") || has("bounds") || has("predicates") || has("looselyEquals"),
+           "an endpoint's `pathParamDomains` entry for `" + hd.name + "` carries no claim at all (" + where +
+           ") — lib/merge.js SKIPS a hole no gate narrowed, so an empty entry would state that this segment " +
+           "was constrained and say nothing about how, which is a third statement beside the two this field " +
+           "has");
+    for (const k of Object.keys(hd))
+      DCHECK(k === "name" || k === "excludes" || k === "bounds" || k === "predicates" || k === "looselyEquals",
+             "an endpoint's `pathParamDomains` entry for `" + hd.name + "` carries `" + k + "`, which is none " +
+             "of the four facts solver/endpoint.c emits about a hole (" + where + ") — a fifth would be a " +
+             "domain this record holds and lib/send.js is silent about, which renders as absent");
+    if (has("excludes"))
+      DCHECK(Array.isArray(hd.excludes) && hd.excludes.length > 0,
+             "an endpoint's `pathParamDomains` entry for `" + hd.name + "` carries an `excludes` that is not " +
+             "a non-empty list (" + where + ") — `[]` is lib/learn.js's spelling of a claim a later path " +
+             "DISPROVED, and this record spells that by omitting the key");
+    if (has("bounds"))
+      DCHECK(!!hd.bounds && typeof hd.bounds === "object" && !Array.isArray(hd.bounds) &&
+             Object.keys(hd.bounds).length > 0,
+             "an endpoint's `pathParamDomains` entry for `" + hd.name + "` carries a `bounds` that is not an " +
+             "interval (" + where + ") — lib/learn.js spells a disproved interval as `null` and this record " +
+             "spells it by omitting the key, so neither `null` nor `{}` is a thing that reaches here");
+    if (has("predicates"))
+      DCHECK(Array.isArray(hd.predicates) && hd.predicates.length > 0,
+             "an endpoint's `pathParamDomains` entry for `" + hd.name + "` carries a `predicates` that is not " +
+             "a non-empty list (" + where + ") — the empty list is a claim another path disproved and this " +
+             "record omits the key for it");
+    if (has("looselyEquals"))
+      DCHECK(Array.isArray(hd.looselyEquals) && hd.looselyEquals.length > 0,
+             "an endpoint's `pathParamDomains` entry for `" + hd.name + "` carries a `looselyEquals` that is " +
+             "not a non-empty list (" + where + ") — the empty list is a claim another path disproved and " +
+             "this record omits the key for it");
+  }
 }
 
 /* THE TWO HOLE POOLS ARE DISJOINT PER (NAME, VALUE), AND THAT DISJOINTNESS *IS* THE FOLD — the same
