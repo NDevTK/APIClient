@@ -19,20 +19,29 @@
  * bundle that compares them is asking whether the OS reserves chrome (a taskbar), which is a different question
  * with its own two answers, and one shared source would tie the two branches together.
  *
- * THE VALUES ARE MINTED WITH THE REALM, in the realm's own record, for the reason §3.7 makes every prototype
+ * THE VALUES ARE MINTED WITH THE REALM AND CARRIED BY THE SCREEN, for the reason §3.7 makes every prototype
  * per realm: a C member runs in the realm that DEFINED it (js_call_c_function takes `ctx` off the function
  * object), so one prototype shared between documents would answer every document's `screen.width` out of
  * whichever realm built it first — and a value minted lazily on the first READ is built inside whichever FLOW
- * got there first, making that flow's baseline everyone's.
+ * got there first, making that flow's baseline everyone's. THIS SENTENCE READ "in the realm's own record", and
+ * a realm record is exactly what the per-realm prototype does NOT fix: a getter pulled off one realm's
+ * prototype and applied to another realm's Screen still runs with the FIRST realm's `ctx`, so a per-realm slot
+ * answers the wrong document for the one call shape the per-realm prototype cannot reach. The values ride the
+ * INSTANCE instead — see the record below, and CSSOM VIEW §2.3, whose algorithm takes "this's relevant global
+ * object's browsing context" and therefore names the receiver as the input.
  *
  * `orientation`, `isExtended` and `onchange` are honestly ABSENT — Screen Orientation's `orientation` is its
  * own interface with its own state machine, and Window Management's two are [SecureContext] members of a
  * partial interface that makes Screen an EventTarget. The IDL audit names all three until they exist. */
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdlib.h>
 
 #include "check.h"
 #include "quickjs.h"
 #include "solver/concolic.h"
+#include "solver/cow.h"        /* the instance's record is a component's own C state — it time-travels */
 #include "core/agent_state.h"
 #include "core/frame/screen.h"
 #include "core/idl_args.h"
@@ -90,11 +99,56 @@ static const char *const SCR_HOLE[] = { SCREEN_MEMBERS(SCREEN_HOLE_ONE) };
 /* THE CLASS IS THE BRAND. Web IDL §3.7.6 Attributes' check on every getter is "If jsValue does not implement
    target" — this interface declares attributes and nothing else. THE NUMBER READ §3.7.5, WHICH IS Constants,
    and the phrase quoted beside it named `esValue`, the identifier an OLDER edition used. And
-   the one object per realm WEARS the class, so the check is a class-id comparison a page cannot forge. It
-   carries no per-object data — the values are the realm's — so it needs no finalizer and no gc_mark. */
+   the one object per realm WEARS the class, so the check is a class-id comparison a page cannot forge.
+   IT CARRIES THE MEMBER VALUES, and the sentence here used to say it carried no per-object data because "the
+   values are the realm's" — see the record below for why that was the defect rather than a saving. */
 static JSClassID g_screen_class;
-static int g_vals_slot = -1;   /* this realm's member VALUES, indexed by the enum above */
-static int g_obj_slot  = -1;   /* this realm's one Screen */
+
+/* THE RECORD — §4.3's six member values, carried by the Screen the realm minted rather than by the realm.
+ *
+ * WHY THE INSTANCE AND NOT THE REALM. A C member runs in the realm that DEFINED it (js_call_c_function does
+ * `ctx = p->u.cfunc.realm`), so a getter reading a per-REALM slot answers out of whichever realm's prototype
+ * the call went through — not out of the receiver. §4.3 says each of the six "must return the width/height of
+ * the web exposed [available] screen area", and CSSOM VIEW §2.3 "Web-exposed screen information" defines that
+ * area with an algorithm whose FIRST STEP is "let target be THIS's relevant global object's browsing context".
+ * The input is the receiver's global, so the answer has to be read off the receiver, and a realm slot is
+ * structurally unable to do it.
+ *
+ * THE ASSERT THAT STOOD HERE WAS A PAGE-HELD ABORT SWITCH. It compared the receiver against this realm's own
+ * Screen and DCHECKed them equal — and a receiver is PAGE-SUPPLIED INPUT, which a DCHECK may never stand on
+ * (CLAUDE.md §WHOSE-BYTES-STATE-THE-VALUE). `Object.getOwnPropertyDescriptor(Screen.prototype, "width").get
+ * .call(otherFrame.screen)` is two lines of ordinary JavaScript and ended the process; a FORCING solver writes
+ * receivers like that constantly, because calling a member with an unusual receiver is what forcing does. What
+ * Web IDL §3.7.6 asks is the BRAND and nothing beside it, and `screen_brand` already answers that with a
+ * TypeError — so the realm comparison was not a weaker check, it was a different question with no standing.
+ *
+ * AND ITS STATED REASON WAS WRONG, WHICH IS RECORDED RATHER THAN QUIETLY DROPPED because the next reader will
+ * otherwise re-derive it. It said answering out of the member's own realm "hands back a concolic belonging to
+ * a different document, so a branch pinned in one realm leaves the other's value unpinned". The two realms'
+ * values share one identity: `SCR_HOLE`/`SCR_SRC` are string literals off the one X-list, so every realm mints
+ * `{screen.width}`, and solver/concolic.h's `concolic_hole_key` is the shape with the braces removed — one key,
+ * looked up the same from either document. A pin in one realm therefore reaches the other and the sentence
+ * describes a loss that cannot happen. core/layout/used_value.c states the same fact from the other side and
+ * REQUIRES it ("that row's source key must be screen.c's own `screen.width` rather than a per-document one"),
+ * so this file and that one disagreed about one mechanism and that one was right. The OBLIGATION the assert
+ * named survives its reason: §2.3's algorithm reads the receiver's global, and its own third arm — "the area
+ * of the VIEWPORT in css pixels" — is a quantity that genuinely differs between a top-level document and a
+ * child navigable, so two realms' answers are free to differ even though their identities do not.
+ *
+ * NO JSContext IN THE RECORD, unlike core/timing/performance.c's. That one holds a realm because HR-TIME §4's
+ * time origin is keyed by context; the six members here are read with `JS_GetPropertyUint32` off an ordinary
+ * array, which is a heap operation any context of this runtime performs identically — and every cross-realm
+ * receiver that can reach a member is SAME-AGENT, so there is one heap. A field that would need a global to
+ * hold it up is a field this record does not have. */
+typedef struct {
+    JSValue vals;   /* §4.3's six members, indexed by the enum above. OWNED. */
+} Screen;
+
+/* THE ONE STATEMENT OF WHAT THE RECORD OWNS — the same list the finalizer frees and the gc_mark walks, which
+   is why all three are written here together: a field added to one and not the others is the defect this
+   arrangement exists to make unspellable. */
+static const uint16_t SCREEN_VAL_OFF[] = { (uint16_t)offsetof(Screen, vals) };
+static const CowRecord SCREEN_REC = { sizeof(Screen), SCREEN_VAL_OFF, 1 };
 
 int screen_color_depth(void)
 {
@@ -135,42 +189,69 @@ static bool screen_brand(JSContext *ctx, JSValueConst this_val)
     return false;
 }
 
-/* THE HALF OF "THIS's ..." THIS ENGINE CAN ANSWER, asserted rather than assumed — the same shape, and the same
-   reason, as navigator.c's. An ordinary `screen.width` arrives with the ctx of the document whose prototype it
-   went through, which is the right Screen. What does NOT arrive right is one realm's getter applied to
-   ANOTHER realm's Screen: the values would come out of the getter's realm, so the two objects' members would
-   answer with the same numbers wearing different identities and a flow pinning one would leave the other
-   unpinned. */
-static void screen_assert_this_realm(JSContext *ctx, JSValueConst this_val)
+/* THE ACCESSOR EVERY MEMBER REACHES THE RECORD THROUGH, and the capture is IN it for solver/cow.h's reason: a
+   record a flow has REACHED is one it may write, the delta dedups to one entry per (flow, object), and there is
+   then no write site left to miss. The cost is bounded by §4's own shape rather than argued — there is exactly
+   ONE Screen per realm, so this can add at most one delta entry per realm per flow.
+   NOT the brand: a brand check is a QUESTION, asked of values that are not Screens at all, and a question must
+   not capture. `screen_brand` is asked first and separately, one line above every caller. */
+static Screen *screen_rec(JSValueConst v)
 {
-    JSValue own = realm_value_get(ctx, g_obj_slot);
-    bool same = JS_VALUE_GET_PTR(own) == JS_VALUE_GET_PTR(this_val);
+    Screen *s = g_screen_class ? JS_GetOpaque(v, g_screen_class) : NULL;
 
-    JS_FreeValue(ctx, own);
-    DCHECK(same, "a Screen member was reached through ONE realm's Screen.prototype on ANOTHER realm's Screen — "
-                 "answering out of the member's own realm hands back a concolic belonging to a different "
-                 "document, so a branch pinned in one realm leaves the other's value unpinned. BUILD the "
-                 "Screen that carries its own realm's record: give the instance the record as its class opaque "
-                 "(with the finalizer, gc_mark and cow_capture_host_record contract that entails) so the member "
-                 "reads it off THIS, and delete the two realm slots above");
+    if (s) cow_capture_host_record(v, s, &SCREEN_REC);
+    return s;
+}
+
+/* JS_GetAnyOpaque and not JS_GetOpaque in BOTH of these, deliberately — core/agent_state.h states the rule and
+   this file is one of the cases it was written for: the collector dispatched here THROUGH the class, and
+   screen_free sets `g_screen_class` back to 0 before the runtime is torn down, so reading the static would
+   make a finalizer running after that column answer NULL for a record that is there and leak it silently. */
+static void screen_finalizer(JSRuntime *rt, JSValue val)
+{
+    JSClassID id = 0;
+    Screen *s = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
+    DCHECK(s != NULL, "a Screen was finalized with no record — §4's object has exactly one mint and it attaches "
+                      "the record with nothing in between that could collect");
+    JS_FreeValueRT(rt, s->vals);
+    free(s);
+}
+
+static void screen_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
+{
+    JSClassID id = 0;
+    Screen *s = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
+    DCHECK(s != NULL, "a Screen was marked with no record — its member array is a counted reference and an "
+                      "unmarked child keeps the internal count gc_decref subtracts, so gc_scan reads it as "
+                      "rooted from OUTSIDE the heap and it is never collected at all");
+    JS_MarkValue(rt, s->vals, mark_func);
 }
 
 /* EVERY DECLARED MEMBER'S GETTER, once. Its magic is its index; there is nothing per member to write, which is
-   what stops a member from arriving with a hand-written getter that forgets the brand check. */
+   what stops a member from arriving with a hand-written getter that forgets the brand check.
+   THE ANSWER IS THE RECEIVER'S — see the record above. CSSOM VIEW §2.3's algorithm takes "this's relevant
+   global object's browsing context", so reading the values off THIS is what makes this member §4.3 rather than
+   a member that answers for whichever realm the page reached the getter through. */
 static JSValue js_screen_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    JSValue rec, v;
+    Screen *s;
+    JSValue v;
 
     if (!screen_brand(ctx, this_val)) return JS_EXCEPTION;
-    screen_assert_this_realm(ctx, this_val);
     DCHECK(magic >= 0 && magic < SCR_N, "a Screen getter was installed with a magic that is not a member index "
                                         "— the magic IS the index into the one member X-list");
-    rec = realm_value_get(ctx, g_vals_slot);
-    v = JS_GetPropertyUint32(ctx, rec, (uint32_t)magic);
-    JS_FreeValue(ctx, rec);
-    DCHECK(!JS_IsUndefined(v), "a Screen member's realm record holds nothing at its index — the member list and "
-                               "the record builder are one X-list, so an empty index means a member was "
-                               "declared and never given the value its IDL says it answers with");
+    s = screen_rec(this_val);
+    DCHECK(s != NULL, "a Screen reached a member with no record — the brand is the class and the mint attaches "
+                      "the record before the object leaves it, so a branded object without one came from a "
+                      "second mint that does not exist");
+    v = JS_GetPropertyUint32(ctx, s->vals, (uint32_t)magic);
+    DCHECK(!JS_IsUndefined(v), "a Screen member's record holds nothing at its index — the member list and the "
+                               "record builder are one X-list, so an empty index means a member was declared "
+                               "and never given the value its IDL says it answers with");
     return v;
 }
 
@@ -196,8 +277,8 @@ static void screen_env(JSContext *ctx, JSValueConst rec, int idx, JSValue exampl
     JS_SetPropertyUint32(ctx, rec, (uint32_t)idx, v);
 }
 
-/* THIS REALM'S MEMBER VALUES, built with the realm. Returns an OWNED array; the caller hands it to the realm
-   slot. */
+/* THIS REALM'S MEMBER VALUES, built with the realm. Returns an OWNED array; the caller hands it to the
+   Screen's own record, which is what frees it (screen_finalizer). */
 static JSValue screen_build_values(JSContext *ctx)
 {
     JSValue rec = JS_NewArray(ctx);
@@ -244,14 +325,13 @@ static JSValue screen_build_values(JSContext *ctx)
 static void screen_install_realm(JSContext *ctx)
 {
     JSValue proto, prev, global, scr;
+    Screen *s;
     int i;
 
     prev = JS_GetClassProto(ctx, g_screen_class);
     DCHECK(JS_IsNull(prev), "screen_install_realm ran twice in one realm — everything already holding the first "
                             "Screen.prototype would answer out of a discarded object");
     JS_FreeValue(ctx, prev);
-
-    realm_value_set(ctx, g_vals_slot, screen_build_values(ctx));
 
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "Screen.prototype could not be allocated");
@@ -269,37 +349,59 @@ static void screen_install_realm(JSContext *ctx)
     scr = JS_NewObjectProtoClass(ctx, proto, g_screen_class);
     JS_FreeValue(ctx, proto);
     CHECK(!JS_IsException(scr), "the Window's associated Screen could not be allocated");
+    /* THE RECORD, ATTACHED BEFORE THE OBJECT LEAVES THIS FUNCTION — which is what `screen_rec`'s "a branded
+       object without one came from a second mint that does not exist" rests on, and there is no second mint.
+       The values are built HERE rather than on first read for the reason the file comment gives: a value minted
+       lazily is built inside whichever FLOW got there first, making that flow's baseline everyone's. */
+    s = calloc(1, sizeof *s);
+    CHECK(s != NULL, "this realm's Screen record could not be allocated");
+    s->vals = screen_build_values(ctx);
+    JS_SetOpaque(scr, s);
     /* CSSOM VIEW §4's Window extension: `[SameObject, Replaceable] readonly attribute Screen screen`. It was a
        plain data property, which is neither half of that — SameObject means every read is the one object this
        realm built, and Replaceable means an assignment REPLACES the accessor with the assigned value rather
-       than being ignored, which is a distinction the corpus reads the descriptor on both sides of. */
-    idl_install_replaceable_value(ctx, global, "screen", JS_DupValue(ctx, scr));
-    realm_value_set(ctx, g_obj_slot, scr);
+       than being ignored, which is a distinction the corpus reads the descriptor on both sides of.
+       THE PROPERTY IS THE ONLY OWNER, and [SameObject] is satisfied BY it: the value is held by the member
+       rather than by a realm slot beside it, so there is no second reference that could answer a read. The slot
+       that stood here existed only to feed the realm comparison this diff deleted, and keeping it would have
+       been a second owner of one object with no reader — which is the write-with-no-reader half of
+       CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS. */
+    idl_install_replaceable_value(ctx, global, "screen", scr);   /* CONSUMED on every path, refusal included */
     JS_FreeValue(ctx, global);
 }
 
 void screen_init(JSContext *ctx)
 {
-    JSClassDef d = { "Screen" };
+    JSClassDef d = { "Screen", .finalizer = screen_finalizer, .gc_mark = screen_gc_mark };
 
-    DCHECK(g_vals_slot < 0, "screen_init ran twice — the class and the slots are declared once per AGENT");
+    DCHECK(g_screen_class == 0, "screen_init ran twice — the class is declared once per AGENT");
     /* THE CLASS IS BOTH THE PER-REALM PROTOTYPE SLOT AND THE BRAND: the one object per realm WEARS it, so
-       §3.7.6 Attributes' check is a class-id comparison and a page cannot forge one. */
+       §3.7.6 Attributes' check is a class-id comparison and a page cannot forge one. It now also carries the
+       member values, so it has a finalizer and a gc_mark — see the record above. */
     JS_NewClassID(JS_GetRuntime(ctx), &g_screen_class);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_screen_class, &d) == 0,
           "Screen: the per-realm prototype slot could not be declared");
-    g_vals_slot = realm_value_declare(ctx, "CSSOM VIEW §4.3 the Screen's member values");
-    g_obj_slot  = realm_value_declare(ctx, "CSSOM VIEW §4 the Window's associated Screen");
-    agent_state_id("screen", &g_vals_slot, "§4.3's member-values realm slot, and the declaration latch");
-    agent_state_id("screen", &g_obj_slot, "§4's associated-Screen realm slot");
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED UNDER ITS OWN ROW — `screen` is a row on
+       core/platform.c's list with `r_screen` in its release column, and the two realm-slot declarations that
+       stood here were all it had. Deleting those slots without this line would have left the row's release
+       column and this component's declarations BOTH empty, which core/frame/bar_prop.c records as the state in
+       which a pairing reads two silences as one another's confirmation — so the class id below is declared
+       here because this diff is what made it the only thing left to declare. */
+    agent_state_class("screen", &g_screen_class,
+                      "CSSOM VIEW §4.3 The Screen Interface: Screen's per-realm prototype slot and brand");
     realm_declare_intrinsic(screen_install_realm);
 }
 
 void screen_free(void)
 {
     /* The prototypes, the interface objects, the Screens and their records are the REALMS' — each is released
-       with its context. What the agent holds is the two slots, and a slot id is a class id in a runtime that is
-       going away with it. */
-    g_vals_slot = -1;
-    g_obj_slot = -1;
+       with its context, and a Screen's record goes with it through screen_finalizer. What the AGENT holds is
+       the class id, and this line is the one that gives it back.
+       A CLASS ID IS A REGISTRATION IN A RUNTIME, so a carried one names a class in a runtime that is gone:
+       JS_NewClassID hands a NON-ZERO slot back unchanged rather than allocating, so a second agent's
+       screen_init would call JS_NewClass on the FIRST agent's number — a number the new runtime's own
+       allocator never issued and will issue to whichever component asks next. core/frame/bar_prop.c states the
+       same reasoning at its own release and is where this was read from. screen_finalizer reads its record
+       through JS_GetAnyOpaque precisely because this line runs before the collection that reaches it. */
+    g_screen_class = 0;
 }
