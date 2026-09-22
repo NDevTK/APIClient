@@ -398,35 +398,170 @@ static const char *kv_pair_next(const char *p, const char **nm, size_t *nn, cons
     return p + plen;
 }
 
-/* DOES THE EXAMPLE'S QUERY LINE UP WITH THE SHAPE'S, PAIR BY PAIR? The question `path_align` asks of the path,
-   asked of the other half of the address and for the same reason: the two strings are ONE concatenation
-   rendered twice, so a hole's value may be read across only where everything around it still agrees. Same
-   pair count, same names, and every hole-free value byte-equal.
-   NAMED RESIDUAL — THIS HALF STILL REQUIRES EQUAL PAIR COUNTS AND THE PATH HALF NO LONGER DOES.
-     WHAT IS NOT COVERED: a query hole whose computed value contains the pair separator. Such a value splits
-       the example into more pairs than the shape holds, this walk answers "not aligned" for the WHOLE query,
-       and every query param on that address is emitted with no example — the failure `path_align` was
-       widened to end, one half of the address over.
-     WHAT THE NEXT DIFF BUILDS: the uniqueness rule `path_align` states, over PAIRS rather than segments — a
-       hole covering one-or-more whole pairs, anchored on the pair NAMES either side, taken only where the
-       reading is unique. The name equality this walk already enforces makes those anchors stronger than the
-       path's, so the ambiguous population should be smaller here rather than larger.
-     HOW ITS ABSENCE WOULD SHOW: an endpoint whose path params all carry values beside query params on the
-       SAME record carrying none — the two halves are aligned by two walks over one concatenation, so a
-       record split that way is this clause and not a fact about the page. */
-static int query_aligned(const char *shape, const char *ex) {
-    const char *a = shape, *b = ex;
-    for (;;) {
-        const char *an, *av, *bn, *bv, *na, *nb;
-        size_t ann, avn, bnn, bvn;
+/* ONE `&`-SEPARATED PAIR OF ONE ADDRESS HALF, borrowed out of the string it was split from. `nm`/`vl` are the
+   name and value spans `kv_pair_next` reads; `end` is the byte after the pair's last, so a RUN of pairs is the
+   bytes from the first pair's value start to the last pair's `end` exactly as the code computed them. */
+typedef struct { const char *end, *nm, *vl; size_t nn, vn; } Pair;
 
-        na = kv_pair_next(a, &an, &ann, &av, &avn);
-        nb = kv_pair_next(b, &bn, &bnn, &bv, &bvn);
-        if (!na || !nb) return !na && !nb;
-        if (ann != bnn || memcmp(an, bn, ann)) return 0;
-        if (!memchr(av, '{', avn) && (avn != bvn || memcmp(av, bv, avn))) return 0;
-        a = na; b = nb;
+/* THE PAIRS OF ONE ADDRESS HALF, malloc'd — ONE walk, so the aligner below and the emission that consumes its
+   answer index the same split and cannot disagree about where a pair ends. An empty list is ZERO pairs, and a
+   run of `&` is no pair at all, which is the arithmetic `kv_pair_next` already performs. */
+static Pair *kv_split(const char *s, int *n_out) {
+    int n = 0, i = 0;
+    const char *p = s, *next;
+    const char *nm, *vl;
+    size_t nn, vn;
+    Pair *v;
+
+    while ((p = kv_pair_next(p, &nm, &nn, &vl, &vn)) != NULL) n++;
+    v = malloc((size_t)(n ? n : 1) * sizeof *v);
+    CHECK(v, "endpoint: OOM splitting an address half into query pairs");
+    p = s;
+    while ((next = kv_pair_next(p, &nm, &nn, &vl, &vn)) != NULL) {
+        DCHECK(i < n,
+               "a query list split into more pairs than its own counting walk found — the count and the fill "
+               "are two readings of one string and the array is sized by the first, so a further pair here "
+               "is this walk writing past its end");
+        v[i].end = next; v[i].nm = nm; v[i].nn = nn; v[i].vl = vl; v[i].vn = vn;
+        i++;
+        p = next;
     }
+    DCHECK(i == n,
+           "a query list filled a different number of pairs than its own separator walk counted — a "
+           "disagreement means this walk left a row nobody filled and the aligner would read it");
+    *n_out = n;
+    return v;
+}
+
+/* THE END OF A RUN OF `npair` WHOLE PAIRS STARTING AT `b`, with the FIRST pair's name and value spans written
+   out. It walks the same splitter the alignment was built from so no build can read a pair boundary two ways:
+   a span this is asked for was proved against this same string, so a disagreement is a DCHECK to read rather
+   than a pointer to fall over in release. */
+static const char *kv_run_end(const char *b, int npair,
+                              const char **nm, size_t *nn, const char **vl, size_t *vn) {
+    const char *p = b;
+    int k;
+
+    DCHECK(npair >= 1,
+           "a query pair run was asked for no pairs at all — every span `query_align` records is at least "
+           "one, a literal covering exactly one pair and a hole covering the value that stood there");
+    for (k = 0; k < npair; k++) {
+        const char *xn = NULL, *xv = NULL, *next;
+        size_t xnn = 0, xvn = 0;
+
+        next = kv_pair_next(p, &xn, &xnn, &xv, &xvn);
+        DCHECK(next != NULL,
+               "a query pair run ran off the end of the example it was measured against — `query_align` "
+               "proved this span against this same string, so a run wanting more pairs than the string holds "
+               "is that proof and this walk reading two different addresses");
+        if (!next) break;
+        if (k == 0) { *nm = xn; *nn = xnn; *vl = xv; *vn = xvn; }
+        p = next;
+    }
+    return p;
+}
+
+/* DOES THE EXAMPLE'S QUERY LINE UP WITH THE SHAPE'S, AND IN EXACTLY ONE WAY? The question `path_align` asks of
+   the path, asked of the other half of the address and answered by the same table, because the two strings are
+   ONE concatenation rendered twice and a hole's value may be read across only where everything around it still
+   agrees. Every hole-free pair of the shape must stand over an example pair with the same NAME and the same
+   VALUE, and every pair whose VALUE holds a hole covers ONE OR MORE whole example pairs — one at least,
+   because a hole is a value the code computed and a value that computed to the empty string still occupies its
+   own pair; more than one wherever that value itself holds a `&`.
+   THE RUN'S FIRST PAIR CARRIES THE PARAM'S OWN NAME, which is the anchor the path half has no equivalent of
+   and the reason this walk refuses less than that one: `b={x}` over `b=p&q=r` reads the hole as `p&q=r` and
+   nothing else, because no other reading starts a `b` pair where the shape says one stands.
+   THE MULTI-PAIR HOLE IS THE PRODUCT'S OWN CASE RATHER THAN AN EDGE. `fetch("/s?" + new URLSearchParams(f))`
+   — a bundle that computes its own filter list — displays as `/s?q={f}` and computes `/s?q=a&page=2`, so its
+   one hole stands over two example pairs. Requiring equal counts answered "not aligned" for the WHOLE query,
+   and `kv_pairs` then emitted EVERY param on that address with no example under it, which is the failure
+   `path_align` was widened to end, one half of the address over.
+   AMBIGUITY IS A REFUSAL AND NEVER A GUESS, for §@H's reason: an invented value is a WRONG report rather than
+   a thin one. What is computed is the COUNT of readings, saturated at two, because "more than one" is the
+   whole of what a second reading has to say.
+   IT IS A STRICT EXTENSION OF THE MATCHER IT REPLACES, AND THAT IS ARITHMETIC: a literal pair covers exactly
+   one example pair and a hole at least one, so where the two pair counts are EQUAL every hole is FORCED to
+   exactly one and the only candidate reading is the 1:1 walk the old matcher took, whose per-pair test was
+   this one — name equality always, value equality only where the shape's value holds no brace. The recovery
+   below ASSERTS that forcing rather than restating it.
+   NAMED RESIDUAL — A HOLE IN A PAIR'S NAME IS STILL REFUSED.
+     WHAT IS NOT COVERED: a shape pair whose NAME holds a brace — `{k}=1`, what `"?" + key + "=1"` displays as.
+       Such a pair takes the literal arm, whose name comparison is byte-wise, so it matches no example pair and
+       the whole query aligns nowhere.
+     WHAT THE NEXT DIFF BUILDS: a third arm for a name-hole pair, covering a run whose LAST pair is anchored by
+       the shape's next literal pair instead of by its own name, since a name-hole has no name to anchor on.
+     HOW ITS ABSENCE WOULD SHOW: an address whose query params are all emitted with no example while its path
+       params carry theirs, on a record whose shape spells at least one param name inside braces.
+   Returns a malloc'd span per shape pair and writes the shape's pair count, or NULL when there is no reading
+   or more than one. A shape with NO pairs has the one empty reading and returns a non-NULL array. */
+static int *query_align(const char *shape, const char *ex, int *nshape) {
+    int n = 0, m = 0, i, j, k;
+    Pair *S = kv_split(shape, &n);
+    Pair *E = kv_split(ex, &m);
+    /* WAYS[i][j] — how many readings match the shape's pairs from `i` onward against the example's from `j`
+       onward, saturated at two. Filled backwards so each row reads only the row below it. */
+    unsigned char *w = calloc((size_t)(n + 1) * (size_t)(m + 1), 1);
+    int *span = NULL;
+
+    CHECK(w, "endpoint: OOM aligning a request's query against the concrete URL a flow computed");
+    w[(size_t)n * (size_t)(m + 1) + (size_t)m] = 1;   /* both exhausted together: one reading, the empty one */
+    for (i = n - 1; i >= 0; i--) {
+        unsigned char *cur = w + (size_t)i * (size_t)(m + 1);
+        const unsigned char *nxt = cur + (m + 1);
+        if (memchr(S[i].vl, '{', S[i].vn)) {
+            unsigned suf = 0;                        /* the saturated sum of nxt[j + 1 .. m] */
+            for (j = m; j >= 0; j--) {
+                int anchored = j < m && S[i].nn == E[j].nn && !memcmp(S[i].nm, E[j].nm, S[i].nn);
+                cur[j] = anchored ? (unsigned char)(suf > 2 ? 2 : suf) : 0;
+                suf += nxt[j];
+                if (suf > 2) suf = 2;
+            }
+        } else {
+            for (j = 0; j <= m; j++)
+                cur[j] = (j < m && S[i].nn == E[j].nn && !memcmp(S[i].nm, E[j].nm, S[i].nn)
+                          && S[i].vn == E[j].vn && !memcmp(S[i].vl, E[j].vl, S[i].vn)) ? nxt[j + 1] : 0;
+        }
+    }
+    if (w[0] == 1) {
+        span = malloc((size_t)(n ? n : 1) * sizeof *span);
+        CHECK(span, "endpoint: OOM recording how many example pairs each hole of a query stands over");
+        j = 0;
+        for (i = 0; i < n; i++) {
+            const unsigned char *cur = w + (size_t)i * (size_t)(m + 1);
+            const unsigned char *nxt = cur + (m + 1);
+            /* UNIQUENESS IS WHAT MAKES THIS WALK A READ RATHER THAN A CHOICE, so it is asserted at every step
+               and not once at the top — the same argument `path_align` states over its own table. */
+            DCHECK(cur[j] == 1,
+                   "a query alignment with exactly one reading reached a state holding a different number of "
+                   "them — this walk is then choosing between readings instead of following the one the "
+                   "count proved, and a hole would carry bytes another reading gives to its neighbour");
+            if (!memchr(S[i].vl, '{', S[i].vn)) {
+                span[i] = 1;
+            } else {
+                for (k = j + 1; k <= m; k++) if (nxt[k]) break;
+                DCHECK(k <= m,
+                       "a hole on the one reading of a query alignment stands over no example pair at all — "
+                       "the table said this state had a reading and the row below it holds none, so the "
+                       "count and the recovery are two walks over one table that disagree");
+                span[i] = k - j;
+            }
+            DCHECK(n != m || span[i] == 1,
+                   "a query whose shape and example hold the SAME number of pairs aligned with a hole "
+                   "standing over more than one of them — a literal covers exactly one and a hole at least "
+                   "one, so equal counts admit the 1:1 reading and no other, and this is an answer that was "
+                   "never in question moving under a widening made only for the unequal case");
+            j += span[i];
+        }
+        /* THE PARTS SUM TO THE TOTAL — the one identity a reader of this array can check without re-deriving
+           the table, and what makes a span a fact about the example rather than a number. */
+        DCHECK(j == m,
+               "a query alignment's spans do not cover the example's pairs exactly — their sum is what says "
+               "each hole's value is the bytes that stood under it, so a short or long total means some param "
+               "carries a slice of its neighbour's value");
+    }
+    free(w); free(S); free(E);
+    *nshape = n;
+    return span;
 }
 
 /* `a=1&b=2` — the QUERY STRING's grammar, and `application/x-www-form-urlencoded`'s, which are the same
@@ -441,31 +576,41 @@ static int query_aligned(const char *shape, const char *ex) {
    and falls back to the shape exactly as it did before. It is the same read path_scan already performs for a
    path segment, which is why a templated PATH carried its value and a templated QUERY did not. */
 static void kv_pairs(KvBuf *b, const char *text, const char *ex, EpLoc loc) {
-    int aligned = ex && query_aligned(text, ex);
+    int npair = 0, i = 0;
+    /* NULL for BOTH of the two ways there is nothing to align against — no example at all, and an example with
+       no unique reading — because the two are one answer to this walk: it has no bytes it can attribute to a
+       hole. `query_align`'s own banner is where they are told apart. */
+    int *span = ex ? query_align(text, ex, &npair) : NULL;
     const char *a = text, *e = ex;
 
     for (;;) {
-        const char *nm, *vl, *en = NULL, *ev = NULL, *na, *ne;
+        const char *nm, *vl, *en = NULL, *ev = NULL, *na, *ne = NULL;
         size_t nn, vn, enn = 0, evn = 0;
         char *shapeval, *hole;
 
         na = kv_pair_next(a, &nm, &nn, &vl, &vn);
         if (!na) break;
         a = na;
-        /* THE TWO WALKS ARE ONE RULE AND THIS IS WHERE THEY ARE HELD TO IT. query_aligned established the
+        /* THE TWO WALKS ARE ONE RULE AND THIS IS WHERE THEY ARE HELD TO IT. `query_align` established the
            pairing with the SAME splitter; asserting it again here is what stops the alignment test and the
            emission drifting into two readings of one list, which is the only way a value could be attributed
            to the wrong param. */
-        if (aligned) {
-            ne = kv_pair_next(e, &en, &enn, &ev, &evn);
-            DCHECK(ne != NULL,
-                   "an aligned example query ran out of pairs before its shape did — query_aligned proved the "
-                   "two lists have the same pair count with this same splitter, so the two walks disagree");
-            DCHECK(ne && enn == nn && !memcmp(en, nm, nn),
+        if (span) {
+            DCHECK(i < npair,
+                   "the shape walk ran past the pair count its own alignment was built from — `kv_split` and "
+                   "this loop split ONE string and the span array is sized by the first, so a further pair "
+                   "here is this walk reading past the end of that array");
+            ne = kv_run_end(e, span[i], &en, &enn, &ev, &evn);
+            DCHECK(enn == nn && !memcmp(en, nm, nn),
                    "an aligned example query's pair names a different param than the shape's at the same "
                    "position — the example value would be attributed to a param the code never computed it "
                    "for, which is a fabricated @H value and not a thin one");
+            /* THE RUN'S BYTES, NOT ITS FIRST PAIR'S VALUE. A hole standing over more than one example pair
+               computed a value holding the separator, so what it computed is every byte from its own value's
+               start to the end of the run — which is `evn` exactly when the span is one. */
+            evn = (size_t)(ne - ev);
             e = ne;
+            i++;
         }
         if (!nn) continue;   /* `&&` / a leading `=`: no name, so no param — see kv_add's assert */
         shapeval = malloc(vn + 1);
@@ -473,13 +618,18 @@ static void kv_pairs(KvBuf *b, const char *text, const char *ex, EpLoc loc) {
         if (vn) memcpy(shapeval, vl, vn);
         shapeval[vn] = 0;
         hole = concolic_hole_key(shapeval);   /* the DOMAIN is a fact about the shape, whatever the value is */
-        if (aligned && memchr(vl, '{', vn))
+        if (span && memchr(vl, '{', vn))
             kv_add(b, nm, nn, ev, evn, loc, hole);
         else
             kv_add(b, nm, nn, vl, vn, loc, hole);
         free(hole);
         free(shapeval);
     }
+    DCHECK(!span || i == npair,
+           "the shape walk visited a different number of pairs than the alignment was built over — the span "
+           "array is indexed by this loop and sized by `kv_split`, so a short walk leaves a hole reading a "
+           "span that belongs to another pair the next time this address is scanned");
+    free(span);
 }
 
 /* The path half of a display URL (everything before `?`), malloc'd. */
