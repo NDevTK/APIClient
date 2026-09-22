@@ -9014,6 +9014,38 @@ function since(ref, argv) {
 }
 
 const argv = process.argv.slice(2);
+/* AN UNRECOGNISED ARGUMENT IS REFUSED, BECAUSE `audit`'s target filter DISCARDS EVERY `--` TOKEN AND A FLAG
+ * THIS FILE IGNORES IS INDISTINGUISHABLE FROM ONE IT HONOURS UNTIL THE ANSWER IS ALREADY WRONG. Measured, and
+ * not hypothetical: a reader ran `--file <path>` against this tool for a whole session. Every answer happened
+ * to be RIGHT, because the path is picked up POSITIONALLY and the unknown token was dropped — and `--file`
+ * with no path beside it would have walked the DEFAULT TARGETS and reported a whole-tree figure as a per-file
+ * one, which is the coverage defect with the denominator silently replaced rather than stated. The reader
+ * would have had no way to tell: the output is well-formed either way, and the only tell is a number they had
+ * no baseline for.
+ * THE SET IS DERIVED FROM THE CODE THAT READS IT AND NEVER TYPED BESIDE IT — a second copy of a flag list is
+ * exactly the thing that drifts, and the drift is silent in the permissive direction. What this reads is this
+ * file's own `argv.includes(...)` and `argv.indexOf(...)` sites, so a flag gains recognition by gaining a
+ * READER, and a flag added without one is refused LOUDLY rather than honoured silently.
+ * AND THE DERIVATION STATES ITS OWN ARMING, because a pattern that matches nothing would accept everything
+ * and read exactly like a tool with no flags: an empty set is refused rather than trusted. */
+const OWN_FLAGS = new Set(
+  (readFileSync(fileURLToPath(import.meta.url), "utf8")
+    .match(/argv\.(?:includes|indexOf)\("--[a-z][a-z-]*"\)/g) || [])
+    .map((m) => m.slice(m.indexOf('"') + 1, m.lastIndexOf('"'))));
+if (OWN_FLAGS.size === 0) {
+  console.error("citegen: the flag set derived from this file's own argv readers is EMPTY, so every argument "
+    + "would be accepted and an unknown flag would go unreported. That is this check unable to run, never a "
+    + "tool without flags — repair the derivation before trusting any run.");
+  process.exit(2);
+}
+const badFlags = argv.filter((a) => a.startsWith("--") && !OWN_FLAGS.has(a));
+if (badFlags.length) {
+  console.error("citegen: unrecognised argument(s) " + badFlags.join(" ") + ". This tool takes PATHS "
+    + "positionally — `node engine/citegen.mjs <path>` — and its flags are: "
+    + [...OWN_FLAGS].sort().join(" ") + ". An unknown token used to be DROPPED, which is why this refuses: a "
+    + "run scoped by a flag nothing reads answers about a population you did not choose.");
+  process.exit(2);
+}
 const sinceAt = argv.indexOf("--since");
 if (sinceAt >= 0) {
   const ref = argv[sinceAt + 1] && !argv[sinceAt + 1].startsWith("--") ? argv[sinceAt + 1] : "origin/main";
