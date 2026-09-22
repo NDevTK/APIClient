@@ -15727,15 +15727,47 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        the level-1 yield floor. The moment's own paragraph carries the argument in full.
        SO THIS ROW IS NARROWER THAN engine_retract_span, BY EXACTLY ONE LOOP, and that is what a 0 here says.
        WHAT IS NOT COVERED: the `dyn_token` strip — the `g_retract_started++` loop — which no park this fixture
-       takes has ever reached. WHAT THE NEXT DIFF BUILDS: a provider payment that asks the operation and does
-       NOT answer the replies its members are parked on, so each member converts the arrival to a row and then
-       re-blocks at the cursor it was already owed a reply at, leaving the token on an un-run appended row while
-       every member is host-owed — which is the stall exit, and the one slice end that is a statement rather
-       than a race. (The seam that clause rests on is flow_step's own order: the `flow_perform_pending` branch
-       sits under `if (!f->frame)` and ABOVE the fetch-await branches, so a member with no live frame that is
-       owed a reply converts an arrival to a row on one step and reports OWED on a later one. A member parked
-       MID-FRAME never reaches that branch at all — JS_ResumeParkedFlow answers first — which is why the clause
-       says "at the cursor it was already owed a reply at" and not "mid-expression".)
+       takes has ever reached.
+       WHAT THE NEXT DIFF BUILDS IS TWO INDEPENDENT THINGS, AND THE CLAUSE THAT STOOD HERE NAMED ONE. It is
+       recorded rather than deleted because the half it named is CORRECT about this engine, so a reader who
+       re-derives it will re-derive that half and stop exactly where its author stopped. It read: a provider
+       payment that asks the operation and does NOT answer the replies its members are parked on, so each
+       member converts the arrival to a row and then re-blocks at the cursor it was already owed a reply at,
+       leaving the token on an un-run appended row while every member is host-owed. That is the condition
+       under which a token SURVIVES a slice, and it says nothing about the condition under which one comes to
+       EXIST — which is the half this host fails, and the half no provider schedule can reach.
+       (1) A PICK MUST HAPPEN BETWEEN THE ASK AND THE PARK, AND ON THIS HOST NONE DOES. run_scheduler's loop
+       is hook, engine_sched_step, payment; `fixture_ask_remote_op` is called from the PAYMENT; and
+       engine_sched_slice honours engine_request_park BEFORE its pick loop. The moment is LATCHED, so the
+       consultation after the one that asked returns 1 and the park is taken with the frontier untouched —
+       ZERO picks, so flow_perform cannot run whatever the provider does about replies. fixture_cold_moment's
+       own paragraph states that seam correctly ("there is no gap for the scheduler to work in"), and the
+       clause above was written as though the gap an ASK needs were the gap that paragraph denies. They are
+       two different gaps: that paragraph is about a STARTED operation surviving a slice, this is about one
+       ever starting, and the second is upstream of everything the clause described.
+       (2) AND THE CURSOR MUST STAND AT A ROW THE MEMBER CANNOT PASS, WHICH IS ONE KIND AND THIS DOCUMENT HAS
+       NONE OF IT. flow_step's sequence arm stands ABOVE every resting arm, so a member whose sequence was
+       EXHAUSTED and which gains one appended row has `script_i < dyn_n` at a compilable row, sets
+       `seq_compiles` and RUNS the operation on its very next step — after which flow_answer_perform has
+       cleared the token and the strip finds nothing. The only cursor this engine cannot pass is a
+       DYN_SCRIPT_SRC row whose bytes have not come back: that arm sets `seq_awaits`, compiles nothing and
+       rests. HTML_COLD's fetches are UNAWAITED, so its members rest on `pending_outstanding` with the
+       sequence exhausted, which is precisely the shape that runs the appended row. "The replies its members
+       are parked on" is true of this document and is the wrong KIND of reply.
+       SO THE ORDERED SUBPROBLEMS ARE, AND THE ORDER IS A LANDING ORDER: first a row in this document whose
+       reply the provider withholds across the park, so a member rests at a cursor the append lands BEHIND;
+       then the ask moved one consultation ahead of the park request, so a slice runs between them. NEITHER
+       IS LANDABLE ALONE and the second is the dangerous one — the window without the blocked cursor lets the
+       operation COMPLETE in that slice, which takes `park-remoteop-asked`, `-many` and `-once` from 1 to 0,
+       so a diff that builds the window first regresses the three rungs that currently pass.
+       (The seam the surviving half rests on is flow_step's own order, and it is RE-DERIVED here rather than
+       inherited: the `flow_perform_pending` branch sits under `if (!f->frame)` and ABOVE both the networking
+       delivery and the sequence arm, so a member with no live frame that is owed a reply converts an arrival
+       to a row on one step and reports OWED on a later one. A member parked MID-FRAME never reaches that
+       branch at all — JS_ResumeParkedFlow answers first — which is why the clause says "at the cursor it was
+       already owed a reply at" and not "mid-expression".)
+       RETIREMENT: this record goes when `g_retract_started` is raised by a park this fixture takes, because
+       the clause is then built rather than described.
        HOW ITS ABSENCE SHOWS: this row reads 0 while all three rungs below it read 1 — the arrival-slot half of
        the same call having run over many timelines, handed back once, without the row half ever existing.
        AND THE THREE RUNGS BELOW IT ARE A LADDER FOR THE ACCESSOR'S REASON, WHICH IS THE CORRECTION THIS
@@ -15793,11 +15825,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* Rung 4: the named residual — a STARTED operation was met and its row stripped. */
     const char *remoteop_why =
         "no member carried a peer's rendezvous token on a PROGRAM ROW at this park. That is the `dyn_token` "
-        "strip, and for a single-instance host it is a NAMED RESIDUAL rather than a defect: flow_perform "
-        "appends the operation's program DYN_POS_APPEND and leaves the flow RUNNABLE, so a member mid-answer "
-        "is in neither the stall exit nor the exhausted one, and the only slice exits that could end one over "
-        "a started operation are the CPU quantum and the level-1 yield floor — a row resting on either would "
-        "be a flaky green. THIS ROW IS NOT ABOUT THE RESIDUE KINDS: it reads engine_retract_census, so what "
+        "strip, and for a single-instance host it is a NAMED RESIDUAL rather than a defect — but the FIRST "
+        "cause is not the one this string used to name. `fixture_ask_remote_op` runs at the PAYMENT and "
+        "engine_sched_slice honours a requested park BEFORE its pick loop, so with the moment latched there "
+        "are ZERO picks between the ask and the park and flow_perform cannot run at all; and a member that "
+        "DID convert one would compile the appended row on its very next step, because flow_step's sequence "
+        "arm stands above every resting arm. Read this row's banner for the two ordered subproblems, and "
+        "never engine_retract_span. THIS ROW IS NOT ABOUT THE RESIDUE KINDS: it reads engine_retract_census, so what "
         "park.recipes carries, and whether a resume rebuilt it, says nothing about it in either direction. "
         "The rungs printed beside this one are where what the park DID exercise is stated.";
     cold_park_remoteop      = g_sess == SESS_PARK && retract_started > 0;
