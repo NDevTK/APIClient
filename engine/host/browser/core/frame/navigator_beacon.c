@@ -89,23 +89,6 @@ static bool beacon_brand(JSContext *ctx, JSValueConst this_val)
     return false;
 }
 
-/* THE HALF OF "THIS's relevant settings object" THIS ENGINE CAN ANSWER — the same assert core/frame/navigator.c
-   makes of its own members, and it is here for the same reason: `js_call_c_function` takes `ctx` from the
-   FUNCTION object, so a member reached through ONE realm's Navigator.prototype on ANOTHER realm's Navigator
-   would resolve steps 1 and 2 (the API base URL and the origin) out of the wrong document and record the
-   endpoint against the wrong address. */
-static void beacon_assert_this_realm(JSContext *ctx, JSValueConst this_val)
-{
-    JSValue own = navigator_object(ctx);
-    bool same = JS_VALUE_GET_PTR(own) == JS_VALUE_GET_PTR(this_val);
-
-    JS_FreeValue(ctx, own);
-    DCHECK(same, "§3's sendBeacon was reached through ONE realm's Navigator.prototype on ANOTHER realm's "
-                 "Navigator — steps 1 and 2 read the API base URL and the origin of the member's own realm, "
-                 "so the request would be composed against a document that did not make the call. BUILD the "
-                 "Navigator that carries its own realm (core/frame/navigator.c names the same gap)");
-}
-
 /* §2.1.4's RETURN VALUE for a request the algorithm did reach step 7 with. See the file comment for why this
    is a concolic rather than a constant, and for the one case that is concrete instead.
    `url_text` is the address this beacon names — its serialized URL, or an unknown URL's display shape. It is
@@ -172,10 +155,26 @@ static JSValue js_nav_send_beacon(JSContext *ctx, JSValueConst this_val, int arg
     char *url_owned = NULL;        /* url_serialize'd, freed with free */
     const char *url_text;
     JSValue ret = JS_UNDEFINED;
+    JSContext *env;
 
     (void)magic;
     if (!beacon_brand(ctx, this_val)) return JS_EXCEPTION;
-    beacon_assert_this_realm(ctx, this_val);
+    /* "THIS's RELEVANT SETTINGS OBJECT", ANSWERED RATHER THAN ASSERTED ABOUT. §3 "Processing Model" opens
+       "Set base to this's relevant settings object's API base URL" and "Set origin to this's relevant settings
+       object's origin", and step 7's request carries `client` = "this's relevant settings object" — so the
+       environment those read is the RECEIVER'S, and `ctx` is whichever realm's Navigator.prototype the call
+       went through (`js_call_c_function` sets `ctx = p->u.cfunc.realm`). The two coincide for every ordinary
+       `navigator.sendBeacon`.
+       WHAT STOOD HERE WAS A DCHECK THAT THEY COINCIDED, and a receiver is PAGE-SUPPLIED INPUT, which a DCHECK
+       may never stand on: `Object.getOwnPropertyDescriptor(Navigator.prototype, "sendBeacon")` is not even
+       needed — `Navigator.prototype.sendBeacon.call(otherFrame.navigator, "/x")` is one line and ended the
+       process. Web IDL §3.7.7 asks the BRAND and nothing beside it, and `beacon_brand` answers that above.
+       ITS CITATION IS CORRECTED RATHER THAN DROPPED: it said "§3's sendBeacon", and §3 is "Processing Model"
+       while the METHOD is §2.1 "sendBeacon() Method" — §3 defines its steps and does not declare it.
+       `ctx` IS STILL THE RIGHT ARGUMENT FOR EVERYTHING ELSE in this member, which is the split the deleted
+       assert was hiding: the coercions, the throws, the strings and the returned value are the CALL's, and only
+       the environment reads below are THIS's. */
+    env = navigator_environment(this_val);
 
     DCHECK(argc >= 2, "§2.1's sendBeacon was called with fewer positions than its declaration lists — the args "
                       "machine converts a declared optional position with a default (`data = null`) even when "
@@ -208,8 +207,11 @@ static JSValue js_nav_send_beacon(JSContext *ctx, JSValueConst this_val, int arg
         if (!url_c) return JS_EXCEPTION;
         url_record_init(&rec);
         /* THE BASE IS STEP 1's, and fetch_parse_url is the ONE operation in this engine that resolves a URL a
-           page wrote against HTML's API base URL — restating it here would be a second answer to one question. */
-        ok = fetch_parse_url(ctx, &rec, url_c, strlen(url_c));
+           page wrote against HTML's API base URL — restating it here would be a second answer to one question.
+           IT TAKES `env` AND NOT `ctx`: step 1 names "this's relevant settings object's API base URL", and the
+           base is what decides which document a relative address resolves against, so a member applied to
+           another realm's Navigator would otherwise record an endpoint at an address no document asked for. */
+        ok = fetch_parse_url(env, &rec, url_c, strlen(url_c));
         if (ok && (!rec.scheme || (strcmp(rec.scheme, "http") && strcmp(rec.scheme, "https")))) {
             url_record_free(&rec);
             JS_FreeCString(ctx, url_c);
@@ -328,7 +330,21 @@ static JSValue js_nav_send_beacon(JSContext *ctx, JSValueConst this_val, int arg
            "§3 step 7 was reached with a body record naming no bytes — a body is bytes WITH a type, and a "
            "record holding one of the two is what solver/endpoint.h refuses to represent");
 
-    /* ---- §3 step 7's REQUEST, derived and recorded. See the file comment for why it is not fetched. ------- */
+    /* ---- §3 step 7's REQUEST, derived and recorded. See the file comment for why it is not fetched. -------
+       `ctx` AND NOT `env`, DELIBERATELY: endpoint_record's context is what it reads the URL VALUE with
+       (url_display and url_example of the argument beside it) and carries no environment fact of its own, so
+       passing `env` here would change nothing and would imply a keying this surface does not have.
+
+       NAMED RESIDUAL — §3's steps 2 and 7 do not separately read the environment. NOT COVERED: step 2's
+       "Set origin to this's relevant settings object's origin" and step 7's request `client` = "this's
+       relevant settings object" are not modelled as fields of the recorded request at all; only step 1's base
+       is answered from THIS, which is what makes the ADDRESS correct. WHAT THE NEXT DIFF BUILDS: an origin
+       and a client on the recorded request, taken from `env` at this line, once solver/endpoint.h's record
+       carries either — it carries neither today, so there is no field to write and nothing here is narrowing
+       a capability that exists. HOW ITS ABSENCE WOULD SHOW: a beacon sent through one document's Navigator on
+       another same-origin document's would be recorded with an address resolved against the right base and a
+       request whose origin and client name whichever document the surface infers, so two sightings that a
+       browser distinguishes by client would be indistinguishable in the emitted @H surface. */
     endpoint_record(ctx, "POST", url_value, nhdrs ? hdrs : NULL, nhdrs, ebp,
                     engine_prov_of_running_path());
 
