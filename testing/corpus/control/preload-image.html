@@ -18,11 +18,21 @@
 
   AND THE ENDPOINT SURFACE CANNOT ANSWER THE QUESTION THIS DOCUMENT ASKS, WHICH IS WHY THE ORACLE IS THE
   SERVER. core/html/html_link.c records EVERY image source in the set as an endpoint and then records the
-  SELECTED one again, deduped on method+url — so `siteEndpoints` holds the same five addresses whichever
-  candidate the selection picked, and is blind to the selection BY CONSTRUCTION. What separates the five is
-  that exactly ONE of them is REQUESTED, and the only reader of that fact outside the engine is serve.mjs's
-  own `REQ` log. The two columns are therefore not two readings of one rung: the surface says THE SET WAS
-  PARSED and the log says WHICH SOURCE WAS CHOSEN, and neither substitutes for the other.
+  SELECTED one again, deduped on method+url, so the surface cannot say which of them was chosen by carrying
+  one of them. What separates the candidates is that exactly ONE of them is REQUESTED, and the only reader of
+  that fact outside the engine is serve.mjs's own `REQ` log. The two columns are therefore not two readings
+  of one rung: the surface says THE SET WAS PARSED and the log says WHICH SOURCE WAS CHOSEN, and neither
+  substitutes for the other.
+
+  THIS PARAGRAPH SAID `siteEndpoints` HOLDS THE SAME FIVE ADDRESSES WHICHEVER CANDIDATE WAS PICKED, AND A
+  DRIVE REFUTED IT — REWRITTEN RATHER THAN DELETED, BECAUSE THE REASONING IS SOUND AND A READER WHO RE-DERIVES
+  IT FROM THE RECORDING SITE WILL WRITE IT AGAIN. Both `endpoint_record` calls really do run and the surface
+  really does dedupe them, and the surface still comes back with FOUR: an address that received a REPLY is
+  not on it. Measured, with the markup untouched and only the server changed — every candidate answered 200
+  gives four `/px/a-` entries, and `/px/a-1280w.gif` alone answering 404 gives five. So against a server that
+  answers, the surface states the selection BY COMPLEMENT, which is a weaker and more fragile reading than
+  the log's and is not the one any rung below is scored on: it holds only while every other candidate is
+  served and nothing else on the page asks for one.
 
   THE LOG ALSO SURVIVES AN ABORT, which is why four rungs may share one document here where this directory's
   rule is normally one question per origin. An abort blinds every column site.mjs reads; it does not blind a
@@ -89,8 +99,28 @@
   The selected address is fourth of five and is none of those. `/px/a-960w.gif` exists ONLY to separate the
   viewport's width from its height, which a set without it cannot do — both answer `/px/a-1280w.gif`.
 
-  WITNESS: `REQ control-preload GET /px/a-1280w.gif` in the server log, exactly once, and no other `/px/a-`
-  line. And all five `/px/a-*.gif` addresses in `siteEndpoints`, which says the SET was parsed.
+  WITNESS: `REQ control-preload GET /px/a-1280w.gif dest=empty` in the server log, exactly once, and no
+  other `/px/a-` line CARRYING `dest=empty`.
+
+  THE QUALIFIER IS THE WHOLE OF THE WITNESS AND IT WAS ADDED AFTER A DRIVE, BECAUSE WITHOUT IT THIS RUNG
+  ACCUSES A BROWSER OF THE ONE DEFECT IT WAS BUILT TO FIND. The harness loads this document TWICE — real
+  Chrome navigates to it and the engine fetches it through its own chokepoint — and Chrome's own preload
+  scanner selects out of these same five candidates at ITS viewport, measured at 800 CSS px and dpr 1, which
+  makes 960/800 = 1.2 the smallest density at or above the ratio and requests `/px/a-960w.gif`. That is
+  exactly the address the table above reserves for a source size of 720, so a reader obeying the unqualified
+  witness reports the viewport's HEIGHT being read for its WIDTH, and the line is Chrome's. serve.mjs logs
+  `sec-fetch-dest` for this one reason: `image` and `document` are the browser's, `empty` is the engine's.
+
+  AND `siteEndpoints` CARRIES FOUR OF THE FIVE RATHER THAN FIVE, WHICH IS THIS RUNG'S OWN CLAUSE REFUTED BY
+  ITS OWN SERVER. The four candidates the selection did NOT choose are on the surface and the CHOSEN one is
+  absent, and what decides that is the REPLY rather than the selection: with every candidate answered 200 the
+  surface reads four `/px/a-` addresses, and with `/px/a-1280w.gif` alone answering 404 and this markup
+  untouched it reads five. Rungs B and D say the same thing with one candidate each — both are requested
+  and neither is on any surface column this row reads. So serving every candidate, which is what makes the
+  LOG readable, is what makes the surface clause false; the two halves of the old witness could not both hold
+  against this directory's own server. THE SET-WAS-PARSED CLAIM IS THEREFORE CARRIED BY THE FOUR UNCHOSEN
+  CANDIDATES, and the chosen one is carried by the log line above and by nothing else — which is the split
+  this document's opening already states, sharpened by a run rather than weakened by one.
 
   ==== RUNG B — an `as=image` preload carrying only an `href` ===============================================
 
@@ -100,7 +130,9 @@
   the one arm in which the selection could silently lose an address that a pre-selection implementation
   simply used: a set that came out empty returns with no request at all, and nothing else would say so.
 
-  WITNESS: `REQ control-preload GET /px/b-href-only.gif`, exactly once. Its ABSENCE is the finding.
+  WITNESS: `REQ control-preload GET /px/b-href-only.gif dest=empty`, exactly once. Its ABSENCE is the
+  finding. The `dest` qualifier is owed here for the reason rung A states: Chrome requests this address out
+  of the same markup, so a count taken over both clients reads two for a round trip that happened once.
 
   ==== RUNG C — an `imagesrcset` composed out of unknown input ==============================================
 
@@ -128,6 +160,19 @@
                                                      driving it, and names here rather than leaving a silent
                                                      zero to be read as a green.
 
+  MEASURED, AND IT IS THE SECOND READING: no `/px/c-undecided-` line in the log at either `dest`, and
+  `siteEndpoints` carries `GET /px/{c-undecided-__PRELOAD_CFG.slug.gif 1280w}`. The constant prefix is there
+  and the unknown stayed unknown, so the request is reported as a shape and not performed. The third state is
+  retired: an undecided URL does reach the surface. The reachability witness is the one this document was
+  built to supply and it held — rungs A, B and D each produced their own `dest=empty` request in the same
+  runs, so this is an absence in a document that provably ran rather than one that never did.
+
+  AND THE ENTRY SHOWS ONE THING THIS RUNG DID NOT ASK ABOUT, NAMED HERE BECAUSE A READER WILL TAKE IT FOR AN
+  ADDRESS: the hole spans the WIDTH DESCRIPTOR as well as the URL — `.gif 1280w` is inside the brace — so
+  what reaches the surface is the whole unparsed `imagesrcset` ITEM rather than a candidate URL. For a value
+  the run could not decide that is honest rather than wrong, and it is still not a shape a consumer could
+  splice an address out of, because filling the hole yields a string with a descriptor on the end of it.
+
   ==== RUNG D — a `<link>` inside a `<picture>` ============================================================
 
   REACHABLE FROM ORDINARY PARSED MARKUP AND NOT ONLY FROM SCRIPT. HTML §13.2.6.4.7 The "in body" insertion
@@ -141,8 +186,11 @@
   reaching the link). IT IS SERVED rather than 404'd, for the reason serve.mjs already serves `/f/bare.js`:
   a 404 cannot tell "never requested" from "requested and missing".
 
-  WITNESS: `REQ control-preload GET /px/d-link-own.gif` exactly once, and `/px/d-source-trap.gif` in NO log
-  line and in NO `siteEndpoints` entry.
+  WITNESS: `REQ control-preload GET /px/d-link-own.gif dest=empty` exactly once, and `/px/d-source-trap.gif`
+  in NO log line at any `dest` and in NO `siteEndpoints` entry. MEASURED twice on two virgin browsers: the
+  trap is absent from both channels, and from Chrome's own population as well, which is the stronger
+  statement — a real browser does not walk the picture for a link either, so this rung's negative is
+  confirmed in the same log by an oracle outside this engine.
 
   ==== WHAT THIS DOCUMENT DOES NOT WITNESS =================================================================
 

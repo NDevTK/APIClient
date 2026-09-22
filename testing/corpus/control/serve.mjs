@@ -201,8 +201,20 @@ DOCS.forEach(([doc, name], i) => {
        record of what the browser actually REQUESTED -- the half a census row cannot reconstruct.
        THE BIND LINES ARE STILL FOUND BY GREP AND NOT BY POSITION, which they always were; what changed is
        that `control ready on …` is no longer the LAST line once a browser starts asking. A driver that
-       waited for it with `tail` rather than with `grep -q` was already racing the second origin's bind. */
-    console.log(`REQ ${name} ${req.method} ${p}`);
+       waited for it with `tail` rather than with `grep -q` was already racing the second origin's bind.
+       AND IT CARRIES `dest` BECAUSE TWO CLIENTS LOAD EVERY DOCUMENT HERE AND THE LINE COULD NOT TELL THEM
+       APART. The harness drives REAL CHROME at the row's URL and the engine fetches the same document through
+       its own chokepoint, so every subresource the markup names is requested TWICE -- and wherever the markup
+       leaves a CHOICE the two answer it differently, because they are two browsers with two viewports.
+       Measured on preload-image.html, two drives each: Chrome's viewport is 800 CSS px at dpr 1 and selects
+       `/px/a-960w.gif` out of that rung's five candidates, while the engine's is 1280 and selects
+       `/px/a-1280w.gif`, so a witness reading `exactly one /px/a- line` is FALSE of the log and TRUE of the
+       engine -- and the extra line is the very address that rung reserves for reading the viewport's HEIGHT,
+       so an unqualified reader reports a defect that is Chrome behaving correctly.
+       `sec-fetch-dest` separates them with no heuristic in it: a browser subresource load states `image` and
+       its navigation `document`, and every request the engine makes arrives `empty`. It is APPENDED, so a
+       grep for the old prefix still matches every line it used to. */
+    console.log(`REQ ${name} ${req.method} ${p} dest=${req.headers['sec-fetch-dest'] || '-'}`);
     if (p.startsWith('/api/')) {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end('{"ok":true}');
