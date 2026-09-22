@@ -836,7 +836,22 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
        bytes were sent by whichever server served the document, so nothing about them is an invariant this
        engine computed and there is nothing here for a DCHECK to stand on. §4.2.3's other half is the
        violation report, which this engine emits for no caller of this check; that is a gap the check itself
-       owns rather than this site. */
+       owns rather than this site.
+       NAMED RESIDUAL — WHAT IS NOT COVERED: the inline `<script>` elements of a Document this engine
+       NAVIGATES to, which is the population a page's own policy most governs. Those never reach these steps
+       at all: the parse runs before the Document has a realm, so `html_script_parser_inserted`'s door below
+       returns at its realm test and core/loader/document_scripts.c's inventory runs those rows instead —
+       core/frame/navigable.c says the same thing from the other end, that `html_script_prepare` never ran
+       over these elements and the flag slot is UNSTATED for exactly this population. What this line DOES
+       govern is every `<script>` a program inserts or writes text into, and every one a `document.write`
+       prepares into a document that already has a realm. WHAT THE NEXT DIFF BUILDS: the ordering
+       core/html/html_script.h already owes by name — HTML §7.5.1 "Shared document creation infrastructure"
+       creating the Document and its realm before HTML §7.5.2 "Loading HTML documents" creates the parser —
+       after which the door prepares the markup's own scripts and this check governs them with nothing here
+       to change; the same diff answers it for HTML §7.5.3 "Loading XML documents", whose door is the same
+       one. HOW ITS ABSENCE WOULD SHOW: a navigated document under `script-src 'self'` runs its own inline
+       `<script>` programs and their endpoints reach the @H surface, while a byte-identical program the page
+       inserts is refused at this line — one document, one policy, two answers. */
     if (!has_src) {
         size_t csp_n = 0;
         char *csp_text = dom_child_text_content(n, &csp_n);
