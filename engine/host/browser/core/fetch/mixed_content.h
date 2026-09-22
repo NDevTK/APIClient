@@ -3,19 +3,46 @@
  * SECOND disjunct) and Mixed Content §4.1 "Upgrade a mixed content request to a potentially trustworthy URL, if
  * appropriate" (Fetch §4.1 step 6). See mixed_content.c.
  *
- * EVERY NUMBER AND QUOTATION THIS COMPONENT GIVES FOR THAT STANDARD IS CHECKED AGAINST THE WRONG DOCUMENT,
- * WHICH IS WORSE THAN THE SILENCE A MISSING CORPUS ROW USUALLY BUYS AND IS WHY IT IS STATED FIRST. Subresource
- * Integrity has no row either and its numbers (§3.8.x) collide with nothing, so its citations are simply
- * unread. THIS standard's numbers are §4.1, §4.3 and §4.4 — and Fetch HAS a §4.1, a §4.3 and a §4.4, all
- * different algorithms. With no row to resolve to, the auditor places these by a FILE VOTE at Fetch, so its
- * quotation channel compares Mixed Content's words against Fetch's Main fetch and Scheme fetch and reports a
- * MISMATCH. Two of this file's quotations are accused that way today and both are pasted verbatim from the
- * fetched editor's draft. Naming the standard in the citation does not help, because the name resolves to
- * nothing and the vote wins anyway.
- * THE REPAIR IS ONE FETCH AND IT IS NOT THIS COMPONENT'S TO MAKE: that standard's editor's draft renders with
- * 46 numbered headings, so a corpus row would make every citation here checked like any other and would turn
- * both accusations into verifications. Until then, read a finding on a §4.x citation in this file as the
- * auditor answering about Fetch.
+ * THERE IS A FOURTH ALGORITHM THIS STANDARD OWNS AND THIS COMPONENT DOES NOT HAVE, AND IT IS A NAMED
+ * RESIDUAL. WHAT IS NOT COVERED: Mixed Content §4.5 "Should response to request be blocked as mixed
+ * content?", the RESPONSE-side mirror of §4.4. Fetch asks it at §4.1 "Main fetch" step 20 — "should
+ * internalResponse to request be blocked as mixed content" — and this engine does not ask that step at all,
+ * so the header line above it enumerates the three algorithms this component HAS rather than the four Fetch
+ * integrates.
+ * THE OTHER THREE DISJUNCTS OF THAT STEP ARE NOT THIS COMPONENT'S AND ONE OF THEM IS ALREADY ANSWERED
+ * ELSEWHERE, which is stated here so the next diff does not build a second copy of it: the step's MIME-type
+ * and nosniff pair is a question about whether a body may be READ AS CODE, and the dangerous direction of it
+ * is answered outside this engine entirely, by the trusted zone's CORB gate at its network chokepoint
+ * (SECURITY.md). That is a different question asked at a different layer and it is NOT this step; what is
+ * absent is the step.
+ * WHAT THE NEXT DIFF BUILDS: §4.5 here beside §4.4, and a step-20 entry at core/fetch/fetch.h beside
+ * fetch_main_blocked that asks it of the delivered response — ONE component with N callers and not a check
+ * per delivery site, for the reason that header already gives about step 7: four hand-written copies is what
+ * step 7 was before it was one component, and the copy nobody remembered to write is the one that ran no
+ * check at all.
+ * HOW ITS ABSENCE WOULD SHOW: a response fetched over `http` is delivered to a document this engine answers
+ * PROHIBITS for, and nothing between the two refuses it — where a browser sets that response to a network
+ * error. Observe it at the delivery seam rather than at a member: compare the scheme of the address a
+ * response was actually fetched from against mixed_content_settings_prohibit for the document receiving it,
+ * and the pair that a browser would have refused arrives here carrying a body.
+ *
+ * THIS STANDARD IS INDEXED AND EVERY CITATION HERE IS CHECKED — engine/specindex/mixedcontent.json, at the
+ * editor's draft, carrying all twenty of that document's numbered sections. The paragraph that stood here
+ * said the opposite and ended by telling its reader to read any §4.x finding in this file as the auditor
+ * answering about Fetch. THAT INSTRUCTION IS WHY IT IS REWRITTEN RATHER THAN DELETED: a note telling a reader
+ * to DISCOUNT a channel outlives the gap it was written for, nothing reports that it has, and its only effect
+ * afterwards is to make a real finding here look like a known artefact.
+ *
+ * WHY A MISSING ROW ACCUSED RATHER THAN WENT SILENT, WHICH IS THE PART THAT GENERALISES AND IS WHY THE ROW
+ * WAS WORTH FETCHING. This standard's numbers are §4.1, §4.3 and §4.4, and Fetch HAS a §4.1, a §4.3 and a
+ * §4.4, all different algorithms. A citation naming an UNINDEXED standard resolves to nothing, so a file vote
+ * placed these at Fetch and the quotation channel compared this standard's words against Main fetch and
+ * Scheme fetch — a fabrication charge manufactured by the ABSENCE of a row, landing on the sites whose author
+ * had pasted from the fetched draft. Naming the standard in the citation did not help, because the name
+ * resolved to nothing and the vote won anyway. A missing row is SILENT only where the numbers collide with
+ * nothing; where they collide with an indexed standard's it is ACCUSING, and the accused sites are the
+ * carefully-written ones because a citation carrying no quotation has nothing to fail on.
+ * RETIREMENT: this note goes when a coverage claim here carries the command that read engine/specindex.
  *
  * THE STEP THAT REWRITES RUNS BEFORE THE STEP THAT JUDGES, AND THAT ORDER IS THE WHOLE DESIGN. Fetch §4.1
  * puts the upgrade at step 6 and the disjunction at step 7, so §4.4 is asked of an address §4.1 may already

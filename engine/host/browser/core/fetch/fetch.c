@@ -239,10 +239,11 @@ int fetch_main_blocked(JSContext *ctx, const char *url, const char *destination,
            "that a browser loads. State the mode the algorithm creating this request names (HTML §2.5.1's "
            "create a potential-CORS request answers it from the element's `crossorigin` state)");
     url_record_init(&rec);
-    /* THE DISJUNCTION IS §4.1 STEP 7'S AND IS WRITTEN AS ONE — bad port, Content Security Policy, and
-       Subresource Integrity §3.8.2's Integrity Policy. MIXED CONTENT, THE SECOND OF THE FOUR, IS STILL ABSENT
-       and is the residual in core/fetch/fetch.h: it is gated by §4.1 step 6, which REWRITES the address this
-       step judges, so it cannot be added here without that step first.
+    /* THE DISJUNCTION IS §4.1 STEP 7'S AND IS WRITTEN AS ONE — bad port, MIXED CONTENT, Content Security
+       Policy, and Subresource Integrity §3.8.2's Integrity Policy. ALL FOUR ARE ASKED HERE, and
+       core/fetch/fetch.h keeps the shape of why the second of them landed last. This sentence named mixed
+       content as STILL ABSENT while the call to it stood six lines below, which is the way an absence note
+       fails: it closes the question, so nobody greps, and it outlives the thing it denies.
        C's `||` IS THE STANDARD'S OWN SHORT-CIRCUIT and not an optimisation: a request blocked by a bad port
        is a network error whatever a policy would have said, so the later checks are not merely redundant but
        are asked of a request the algorithm has already answered. */

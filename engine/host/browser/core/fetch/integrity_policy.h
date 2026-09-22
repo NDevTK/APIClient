@@ -2,11 +2,13 @@
  * "Should request be blocked by Integrity Policy", which is Fetch §4.1 "Main fetch" step 7's FOURTH disjunct.
  * See integrity_policy.c.
  *
- * EVERY NUMBER AND QUOTATION THIS COMPONENT GIVES FOR THAT STANDARD IS COUNTED AND NEVER CHECKED.
- * engine/specindex holds no row for Subresource Integrity, so the citation auditor resolves nothing here,
- * compares no quotation of it, and reports zero — which is SILENCE ABOUT THIS STANDARD and not a clean bill.
- * Treat the numbers as this file's claim. Its two WebAppSec siblings (csp, securecontexts) are indexed at the
- * same editor's-draft base, so the row is one fetch away and would make these checked like any other.
+ * THIS STANDARD IS INDEXED AND EVERY CITATION HERE IS CHECKED — engine/specindex/sri.json, at the editor's
+ * draft, and the sections this component cites are in it. The paragraph that stood here said the numbers were
+ * counted and never checked and told its reader to treat them as this file's own claim. It is REWRITTEN
+ * RATHER THAN DELETED because of who reads such a sentence: the only reader of an unchecked-axis note is
+ * somebody deciding whether to BUILD an instrument for that axis, so a stale one argues for a second auditor
+ * standing beside a working one for as long as it stands, and nothing mechanical ever reports that it rotted.
+ * RETIREMENT: this note goes when a coverage claim here carries the command that read engine/specindex.
  *
  * IT IS NOT A STANDARD OF ITS OWN, WHICH IS THE FIRST THING A READER GETS WRONG. There is no "Integrity
  * Policy" document — both plausible homes answer a real 404 — and Fetch's own cross-reference data resolves

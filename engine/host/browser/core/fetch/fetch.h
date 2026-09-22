@@ -258,16 +258,19 @@ typedef struct {
  * by the whole of step 6, its address plumbing, and the request MODE and INITIATOR neither step could ask for
  * until they were carried.
  *
- * TWO STANDARDS THIS STEP DEPENDS ON ARE COUNTED AND NEVER CHECKED. Neither Subresource Integrity nor Mixed
- * Content has a row in engine/specindex, so the citation auditor resolves none of their numbers and compares
- * none of their quotations, and reports zero for both — silence about them rather than a clean bill. Mixed
- * Content's editor's draft renders with 46 numbered headings, so its row is ONE FETCH from existing.
+ * BOTH STANDARDS THIS STEP DEPENDS ON ARE INDEXED AND CHECKED — engine/specindex holds `mixedcontent` and
+ * `sri`, each at its editor's draft, so every number and quotation the two components give is resolved and
+ * compared like any other. This paragraph said the opposite, and is REWRITTEN RATHER THAN DELETED because of
+ * the direction it was wrong in: the only reader of `no tool can see this axis` is somebody deciding whether
+ * to BUILD one, so a stale absence argues for a second auditor standing beside a working one. Its figure was
+ * never right either — it priced Mixed Content's draft at 46 numbered headings, and that document has TWENTY,
+ * every one of them in the row.
+ * RETIREMENT: this note goes when a coverage claim here carries the command that read engine/specindex.
  *
  * WHAT REMAINS IS NOT A DISJUNCT. Mixed Content §4.3's ancestor-navigable walk answers only for ancestors in
  * a PEER instance and is the residual at core/fetch/mixed_content.h; SRI §3.8.3's violation report and its
- * report-only policy are the residuals at core/fetch/integrity_policy.h and core/frame/policy_container.c;
- * and the §7.1.7 container item is still absent from the two CROSS-BOUNDARY carriers named at
- * engine/host/main.c and engine/host/wpt_runner.c. Each is named where its own algorithm lives.
+ * report-only policy are the residuals at core/fetch/integrity_policy.h and core/frame/policy_container.c.
+ * Each is named where its own algorithm lives.
  *
  * IT WAS FOUR HAND-WRITTEN COPIES, ONE PER ENTRY, and the fifth entry is what proved that shape wrong: a
  * `<script src>` ran NO CSP check at all, because §4.12.1.1's fetch is the one nobody remembered to add a copy
@@ -285,6 +288,26 @@ typedef struct {
  * had and is kept deliberately: every copy guarded its disjunction with `url_parse(...) && (...)`, so a
  * failure answered ALLOWED and the caller's own algorithm dealt with the unparseable address. §4.1 step 7 is
  * a question about a request's URL and there is no request to ask it of.
+ *
+ * THE ORDER THIS ENTRY DEPENDS ON IS A CONVENTION NOTHING CHECKS, AND THAT IS A NAMED RESIDUAL.
+ * WHAT IS NOT COVERED: this component cannot tell whether §4.1 step 6 ran on the address it is handed. The
+ * step-6-then-step-7 order is stated in prose beside each request-creating pair and enforced by no code, so a
+ * site that judges the pre-upgrade address is a defect this entry accepts silently — which is the hazard the
+ * paragraph above describes without offering a caller any way to act on it.
+ * WHAT THE NEXT DIFF BUILDS: Fetch §2.2.5's INITIATOR on this signature, and a dev-only assert that re-running
+ * fetch_main_upgrade over the address answers NULL. That is sound because Mixed Content §4.1 is IDEMPOTENT —
+ * its only path to a non-NULL answer requires an `http` scheme and writes `https` — so a second run can change
+ * nothing a first run already changed, and a non-NULL answer here means no first run happened. THE INITIATOR
+ * IS LOAD-BEARING AND NOT DECORATION: Mixed Content §4.1 step 1.5 exempts an `image` whose initiator is
+ * `imageset`, so an assert that cannot see it answers non-NULL for a request step 6 CORRECTLY left alone and
+ * aborts the engine on page markup — the page-held abort switch §Offensive-programming forbids, reached by
+ * asserting on a value this component was never told. An assert is owed the same inputs as the algorithm it
+ * re-runs.
+ * HOW ITS ABSENCE WOULD SHOW: the address this step JUDGED and the address the request is finally owed at
+ * `fetch_owe` are one value where step 6 ran at the caller and two where it did not, and nothing compares
+ * them — so observe it at those two seams for one request. What a reader sees instead is an element firing
+ * `error` where a browser fires `load`, with no abort at either seam and no row naming the step that was
+ * skipped.
  *
  * Answers non-zero for BLOCKED. `url` is the request's serialized current URL. */
 int fetch_main_blocked(JSContext *ctx, const char *url, const char *destination,
