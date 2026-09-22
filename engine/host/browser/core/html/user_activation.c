@@ -1,6 +1,9 @@
 /* USER ACTIVATION — HTML §6.4. See user_activation.h for why this is state and not a constant. */
 #include <math.h>
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdlib.h>
 
 #include "check.h"
 #include "quickjs.h"
@@ -14,6 +17,7 @@
 #include "core/html/user_activation.h"
 #include "core/timing/hr_time.h"
 #include "solver/concolic.h"
+#include "solver/cow.h"        /* the instance's record is a component's own C state — it time-travels */
 
 /* §6.4.1's TWO PER-WINDOW VALUES, and the initial value of each is the whole of what "never activated" means.
  *
@@ -574,6 +578,45 @@ void user_activation_consume_history_action(JSContext *ctx)
 static JSClassID g_ua_class;
 static int g_obj_slot = -1;
 
+/* THE RECORD — the Window §6.4.4's getters answer about, carried by the UserActivation rather than looked up
+ * from the realm the getter was DEFINED in.
+ *
+ * WHY. §6.4.4 says "The hasBeenActive getter steps are to return true if this's relevant global object has
+ * sticky activation" and "The isActive getter steps are to return true if this's relevant global object has
+ * transient activation" — the subject is THIS's global. A C member runs in the realm that DEFINED it
+ * (js_call_c_function sets `ctx = p->u.cfunc.realm`), so a getter reading the per-realm §6.4.1 record answered
+ * about whichever realm's prototype the call went through.
+ *
+ * THE ASSERT THAT STOOD HERE WAS A PAGE-HELD ABORT SWITCH: it compared the receiver against this realm's own
+ * UserActivation and DCHECKed them equal, and a receiver is PAGE-SUPPLIED INPUT, which a DCHECK may never
+ * stand on. `Object.getOwnPropertyDescriptor(UserActivation.prototype, "isActive").get
+ * .call(otherFrame.navigator.userActivation)` is two lines of ordinary JavaScript and ended the process.
+ * `ua_brand` answers Web IDL §3.7.6's question one line above every caller and is the whole of what §3.7.6 asks.
+ *
+ * ITS REMEDY CLAUSE NAMED A DIFFERENT MECHANISM AND IS RECORDED AS WRONG RATHER THAN QUIETLY DROPPED, because
+ * a reader who re-derives it will build it. It said to "hand each realm's UserActivation its navigable's
+ * WindowProxy once §7.4 has built one, resolve it with window_proxy_realm, and read the timestamps out of THAT
+ * realm". A WINDOWPROXY IS THE WRONG HANDLE FOR THIS FACT, and the difference is not a simplification: HTML
+ * §7.2.3 makes a WindowProxy's realm FOLLOW its navigable across a navigation, so an object resolved through
+ * one would start answering about a document that replaced the one it belongs to. §6.4.4's subject is "this's
+ * relevant global object", and this object is minted with its Window and belongs to that Window for its whole
+ * life, so the handle is the REALM. core/frame/bar_prop.c reaches the opposite conclusion for `visible` and is
+ * right to: that member's answer is a fact about the NAVIGABLE, which does move on. The clause also gated the
+ * repair on §7.4 having built a WindowProxy, and nothing here needs one.
+ *
+ * `global` IS WHAT MAKES `realm` SAFE, and it is a declared JSValue edge rather than a `JS_DupContext`: a
+ * context reference hung off an opaque is invisible to gc_decref and would make the realm permanently
+ * uncollectable, while a live global is a live realm because its members hold counted references to the realm
+ * that defined them. core/timing/performance.c states that reasoning at its own record. */
+typedef struct {
+    JSContext *realm;    /* the W §6.4.1's timestamps are stored for. NOT a counted reference */
+    JSValue    global;   /* "this's relevant global object" — OWNED, and what holds `realm` up */
+} UserActivationRec;
+
+/* THE ONE STATEMENT OF WHAT THE RECORD OWNS — the same list the finalizer frees and the gc_mark walks. */
+static const uint16_t UA_VAL_OFF[] = { (uint16_t)offsetof(UserActivationRec, global) };
+static const CowRecord UA_REC = { sizeof(UserActivationRec), UA_VAL_OFF, 1 };
+
 /* WEB IDL §3.7.6 Attributes' BRAND CHECK. `UserActivation.prototype.isActive` read off a plain object is a
    TypeError, and
    a page tells that apart from `false` — which is the whole reason the members cannot be plain data properties
@@ -588,23 +631,58 @@ static bool ua_brand(JSContext *ctx, JSValueConst this_val)
     return false;
 }
 
-/* THE HALF OF "THIS'S RELEVANT GLOBAL OBJECT" THIS ENGINE CAN ANSWER, asserted rather than assumed. A C member
-   runs in the realm that DEFINED it (js_call_c_function takes `ctx` from the function object), so an ordinary
-   `navigator.userActivation.isActive` arrives with the ctx of the document whose prototype it went through —
-   the right Window, because this realm's object is reached through this realm's prototype. What does NOT
-   arrive right is one realm's getter applied to another's object; the two then name different Windows, and
-   there is no third thing to consult, because the object holds nothing that says whose it is. */
-static void ua_assert_this_window(JSContext *ctx, JSValueConst this_val)
+/* THE ACCESSOR EVERY MEMBER REACHES THE RECORD THROUGH, and the capture is IN it for solver/cow.h's reason: a
+   record a flow has REACHED is one it may write, the delta dedups to one entry per (flow, object), and there
+   is then no write site left to miss. Bounded by §6.4.4's own shape — one UserActivation per realm.
+   NOT ua_brand: a brand check is a QUESTION, asked of values that are not UserActivations at all, and a
+   question must not capture. */
+static UserActivationRec *ua_rec(JSValueConst v)
 {
-    JSValue own = realm_value_get(ctx, g_obj_slot);
-    bool same = JS_VALUE_GET_PTR(own) == JS_VALUE_GET_PTR(this_val);
+    UserActivationRec *r = g_ua_class ? JS_GetOpaque(v, g_ua_class) : NULL;
 
-    JS_FreeValue(ctx, own);
-    DCHECK(same, "§6.4.4's getter steps read THIS's relevant global object, and this UserActivation belongs to "
-                 "a different realm of this agent than the prototype it was reached through — answering out of "
-                 "the getter's own realm would report another document's activation. BUILD the object that "
-                 "names its own Window: hand each realm's UserActivation its navigable's WindowProxy once §7.4 "
-                 "has built one, resolve it with window_proxy_realm, and read the timestamps out of THAT realm");
+    if (r) cow_capture_host_record(v, r, &UA_REC);
+    return r;
+}
+
+/* JS_GetAnyOpaque and not JS_GetOpaque in BOTH — core/agent_state.h's rule: the collector dispatched here
+   THROUGH the class, so the id is a fact it already has and must not look up. */
+static void ua_finalizer(JSRuntime *rt, JSValue val)
+{
+    JSClassID id = 0;
+    UserActivationRec *r = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
+    DCHECK(r != NULL, "a UserActivation was finalized with no record — §6.4.4's object has exactly one mint "
+                      "and it attaches the record with nothing in between that could collect");
+    JS_FreeValueRT(rt, r->global);
+    free(r);
+}
+
+static void ua_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
+{
+    JSClassID id = 0;
+    UserActivationRec *r = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
+    DCHECK(r != NULL, "a UserActivation was marked with no record — its global is a counted reference and an "
+                      "unmarked child keeps the internal count gc_decref subtracts, so gc_scan reads it as "
+                      "rooted from OUTSIDE the heap and it is never collected at all");
+    JS_MarkValue(rt, r->global, mark_func);
+}
+
+/* "THIS's RELEVANT GLOBAL OBJECT" — the W §6.4.4's two getters are about, ANSWERED off the receiver rather
+   than asserted about. Every assert here stands on a value THIS component wrote at the mint, which is the only
+   thing a DCHECK may stand on; the receiver's own brand is a TypeError one line above every caller. */
+static JSContext *ua_environment(JSValueConst this_val)
+{
+    UserActivationRec *r = ua_rec(this_val);
+
+    DCHECK(r != NULL, "a UserActivation reached a getter with no record — the brand is the class and the mint "
+                      "attaches the record before the object leaves it, so a branded object without one came "
+                      "from a second mint that does not exist");
+    DCHECK(r->realm != NULL, "a UserActivation names no Window — §6.4.4's mint is the one writer of this field "
+                             "and it writes the realm it is installing into");
+    return r->realm;
 }
 
 /* §6.4.4's TWO GETTERS, AND THEY ARE STEP MACHINES — which for a getter that takes no arguments and runs none
@@ -653,9 +731,18 @@ static int ua_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
     JS_FreeValue(ctx, cb_result);
     DCHECK(hdr->stage == UA_GET_ASK, "a UserActivation getter resumed into a stage §6.4.4 does not have");
     if (!ua_brand(ctx, hdr->this_val)) return -1;
-    ua_assert_this_window(ctx, hdr->this_val);
-    rc = (magic == UA_GET_TRANSIENT) ? user_activation_transient_run(ctx, hdr, &s->phase, &state)
-                                     : user_activation_sticky_run(ctx, hdr, &s->phase, &state);
+    /* THE W IS THE RECEIVER'S, AND `ctx` IS THE CALL'S. §6.4.4's two getters are about "this's relevant global
+       object", so the Window whose §6.4.1 timestamps are read is the one THIS belongs to — while the brand's
+       TypeError above and the boolean below belong to the realm that made the call. That split is what the
+       deleted assert was standing in for.
+       IT IS THE `ctx` PARAMETER OF `*_run` AND NOT A NEW ARGUMENT, because that parameter ALREADY means the W:
+       `ua_now`'s own declaration says so in as many words — "`ctx` IS the W the standard names — the three
+       questions below are asked of a Window and answered against a timestamp stored in that same Window's
+       record, so both ends of every comparison are measured from one origin". Passing the receiver's realm
+       makes that sentence true for the one call shape it was not true for; it does not widen the contract. */
+    rc = (magic == UA_GET_TRANSIENT)
+             ? user_activation_transient_run(ua_environment(hdr->this_val), hdr, &s->phase, &state)
+             : user_activation_sticky_run(ua_environment(hdr->this_val), hdr, &s->phase, &state);
     if (rc) return rc;
     *presult = JS_NewBool(ctx, state);
     return JS_STEP_DONE;
@@ -682,6 +769,7 @@ static void user_activation_install_realm(JSContext *ctx)
 {
     JSValue rec = JS_NewObjectProto(ctx, JS_NULL);
     JSValue proto, prev, global, obj;
+    UserActivationRec *r;
 
     CHECK(!JS_IsException(rec), "user activation: OOM building a realm's §6.4.1 record");
     /* THE UNKNOWN IS BAKED INTO THE BASELINE, which is where it belongs: whether the user has interacted with
@@ -719,12 +807,21 @@ static void user_activation_install_realm(JSContext *ctx)
     obj = JS_NewObjectProtoClass(ctx, proto, g_ua_class);
     JS_FreeValue(ctx, proto);
     CHECK(!JS_IsException(obj), "the Window's associated UserActivation could not be allocated");
+    /* THE RECORD, ATTACHED BEFORE THE OBJECT LEAVES THIS FUNCTION — which is what ua_environment's "a branded
+       object without one came from a second mint that does not exist" rests on, and there is no second mint.
+       The quoted sentence above is why the realm written here is the right one: the object is "created in the
+       Window object's relevant realm", so the realm it is installed into IS the W it answers about. */
+    r = calloc(1, sizeof *r);
+    CHECK(r != NULL, "this realm's UserActivation record could not be allocated");
+    r->realm = ctx;
+    r->global = JS_GetGlobalObject(ctx);   /* OWNED by the record from here */
+    JS_SetOpaque(obj, r);
     realm_value_set(ctx, g_obj_slot, obj);
 }
 
 void user_activation_init(JSContext *ctx)
 {
-    JSClassDef d = { "UserActivation" };
+    JSClassDef d = { "UserActivation", .finalizer = ua_finalizer, .gc_mark = ua_gc_mark };
 
     DCHECK(g_slot < 0, "user_activation_init ran twice — the record's slot is declared once per AGENT");
     g_slot = realm_value_declare(ctx, "HTML §6.4.1 the Window's user activation timestamps");
@@ -745,8 +842,9 @@ void user_activation_init(JSContext *ctx)
 void user_activation_free(void)
 {
     /* The RECORDS, the prototypes, the interface objects and the Window-associated objects are the realms' —
-       each is released with its context. What the agent holds is the two slots, and a slot id is a class id in
-       a runtime that is going away with it. */
+       each is released with its context, and a UserActivation's own record goes with it through ua_finalizer.
+       What the agent holds is the two slots, and a slot id is a class id in a runtime that is going away with
+       it. */
     g_slot = -1;
     g_obj_slot = -1;
     g_id_has_been_active = -1;
