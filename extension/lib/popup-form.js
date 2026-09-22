@@ -1405,7 +1405,19 @@ function _pathSegEncode(s) {
    RETIREMENT: this argument goes when a path hole's value cannot reach here carrying a separator at all —
    that is, when `path_scan` no longer spans a hole over a run of example segments. */
 function applyPathParams(url, pathParams) {
-  if (!pathParams || !url) return url;
+  /* THE BUCKET IS ASSERTED AND THE ADDRESS IS NOT, and the difference is whose bytes each one is.
+     `pathParams` is `collectFormValues`'s, which is its only producer and returns it unconditionally, so an
+     absent one is OUR producer changed shape — and the `!pathParams ||` that stood here answered with the
+     TEMPLATE, holes and all, which is exactly the address `buildCurrentRequest` was exporting until it
+     started calling `sendPanelAddress`: a literal `{owner}` carried onward with nothing anywhere saying a
+     substitution had been skipped. The ADDRESS is the operator's own text and may legitimately be empty
+     (CLAUDE.md §WHOSE-BYTES-STATE-THE-VALUE forbids asserting on it), so it keeps its guard. */
+  DCHECK(!!pathParams,
+         "applyPathParams was handed no `pathParams` bucket — lib/popup-form.js `collectFormValues` is its " +
+         "only producer and fills one on every call, so this is that function changed shape, and the arm " +
+         "that survived it returned the un-substituted template: the request would go out carrying a " +
+         "literal `{hole}` the panel had the operator's value for");
+  if (!url) return url;
   return url.replace(/\{([^}\/]+)\}/g, (m, name) =>
     Object.prototype.hasOwnProperty.call(pathParams, name)
       ? String(pathParams[name]).split("/").map(_pathSegEncode).join("/")
@@ -1455,6 +1467,49 @@ function composeSendUrl(template, formValues) {
 function sendPanelAddress() {
   if (currentRequestUrl === "" || currentBodyMode !== "form") return currentRequestUrl;
   return composeSendUrl(currentRequestUrl, collectFormValues());
+}
+
+/* THE HEADERS THIS PANEL WILL SEND, FROM THE PANEL'S CURRENT STATE — THE HEADER HALF OF `sendPanelAddress`,
+   AND A FUNCTION FOR THE SAME REASON.
+   A HEADER PARAMETER IS DELIVERED AS A HEADER: `collectFormValues` buckets by the parameter's own `location`
+   (lib/field-def.js PARAM_LOCATIONS); before it did, everything that was not a path parameter went into the
+   QUERY STRING, so an imported spec's `X-Api-Key` header parameter was sent as `?X-Api-Key=…` — the panel
+   rendered `header` beside the input and the request carried it somewhere else.
+   AND THAT SPLIT WAS ONLY EVER HONOURED BY THE EXPORT. This body stood inside `buildCurrentRequest`
+   (popup.js) as a local `_applyHeaderParams`, and `sendRequest` — thirty lines below this one — did not read
+   `headerParams` at all: it built its header map from the typed header rows, the learned required headers and
+   the opaque-header inputs, and the bucket the form filled reached no wire. So the curl the operator copies
+   carried their header parameters and the request the Send button fired did not, which is the SAME two-right-
+   answers defect `composeSendUrl` was extracted to end, in the other direction and with the wrong answer on
+   the side that leaves the browser. A parameter this project's engine SOLVED and this panel dropped is the
+   product's own output failing to reach the wire.
+   THE GATE IS `currentBodyMode === "form"`, the one `sendPanelAddress` applies, because a header parameter is
+   a form field and no other mode renders form fields — `buildCurrentRequest` reached this body under exactly
+   that gate in both of its arms, spelled twice, and stating it once here is what stops the two drifting
+   again.
+   THE EXPLICITLY TYPED HEADER ROWS ARE APPLIED AFTER, so an operator who names a header in the headers UI
+   overrides the form's value for it rather than being silently overridden by it. In `sendRequest` that also
+   settles the form value against the two loops below it: this map is built BEFORE the learned-required-header
+   loop computes its override set, so a header the operator filled in the form beats a literal the analyzer
+   learned — which is the rule that loop already states for a typed row, and a form input is the same
+   operator typing. */
+function sendPanelHeaders(typedHeaders) {
+  const merged = {};
+  if (currentBodyMode === "form") {
+    const formValues = collectFormValues();
+    /* `collectFormValues` is the ONE producer of this bucket and fills one on every call, so an absent one
+       is that function changed shape. Read through a `||` instead, the surviving arm builds a request with
+       every header parameter the operator filled in silently missing — a request that is VALID, that the
+       server answers, and that differs from the panel the operator is looking at, which is the exact state
+       this function exists to end. */
+    DCHECK(!!formValues.headerParams,
+           "a form-values record reached sendPanelHeaders with no `headerParams` bucket — " +
+           "`collectFormValues` is its only producer and fills one on every call, so this is that function " +
+           "changed shape, and the request built past it would go out missing every header parameter the " +
+           "operator filled in with nothing on the wire or in the panel to say so");
+    for (const [k, v] of Object.entries(formValues.headerParams)) merged[k] = String(v);
+  }
+  return Object.assign(merged, typedHeaders);
 }
 
 function collectSingleField(rootWrapper) {
@@ -1637,14 +1692,20 @@ async function sendRequest() {
   const contentType = currentContentType;
   const epKey = document.getElementById("send-ep-select").value;
 
-  const headers = {};
+  const _typedHeaders = {};
   for (const row of document.querySelectorAll(
     "#send-headers-list .header-row",
   )) {
     const key = row.querySelector(".header-key").value.trim();
     const val = row.querySelector(".header-val").value.trim();
-    if (key) headers[key] = val;
+    if (key) _typedHeaders[key] = val;
   }
+  /* THE FORM'S HEADER PARAMETERS, WHICH THIS FUNCTION DID NOT CARRY. `collectFormValues` fills a
+     `headerParams` bucket and the only readers were the re-render (`formValuesToInitialData`) and the EXPORT
+     (`buildCurrentRequest`), so an imported spec's header parameter appeared in the panel, appeared in the
+     copied curl, and did not appear on the wire. `sendPanelHeaders` is the one speller for both, exactly as
+     `sendPanelAddress` is for the address, and it applies `_typedHeaders` last so a typed row still wins. */
+  const headers = sendPanelHeaders(_typedHeaders);
   /* Auto-attach learned required headers — the engine captured these
      from the bundle's own fetch init.headers / XHR setRequestHeader
      (per-header literal/opaque provenance). Without this, the popup

@@ -571,8 +571,24 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   async function buildCurrentRequest() {
     const bodyMode = currentBodyMode;
-    let url = currentRequestUrl;
-    if (!url) return null;
+    if (!currentRequestUrl) return null;
+    /* THE EXPORTED REQUEST IS COMPOSED BY THE FUNCTIONS THAT COMPOSE THE SENT ONE, never by a second
+       spelling here. This read `currentRequestUrl` and applied the form's QUERY parameters through a local
+       `_applyFormParamsToUrl` — `composeSendUrl`'s query half written a second time — and it never applied the
+       form's PATH parameters at all: `collectFormValues` fills a `pathParams` bucket and no reader of one
+       existed anywhere in this file, so an endpoint whose address is a template exported as curl carrying a
+       literal `{owner}` the panel had the operator's value for. `currentRequestUrl` is the TEMPLATE
+       (`base + pathTemplate`, where the endpoint dropdown assigns it) until `sendRequest` writes the composed
+       address back over it, so the snippet was right or wrong depending on whether the operator had pressed
+       Send first — which is what made it survive.
+       THE HEADER HALF DIVERGED THE OTHER WAY (see `sendPanelHeaders`, lib/popup-form.js), so the snippet the
+       operator copies and the request the button fires were two different requests in two directions, and the
+       one that was wrong on the wire was the one that actually went out. SECURITY.md scopes
+       `pageContextFetch` out of the credentialed destructive-path deny list on the ground that the request is
+       "authorized by a human at a surface that shows them the bytes"; an export that shows bytes the send does
+       not carry does not weaken that authorization, it FORGES it, which is the argument `composeSendUrl`
+       already makes for the address row. One speller each, so the two cannot disagree. */
+    const url = sendPanelAddress();
 
     const httpMethod = currentRequestMethod;
     const contentType = currentContentType;
@@ -589,52 +605,15 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (key) headers[key] = val;
     }
 
-    // Local helper: apply form-field params to the URL's query string. canParse
-    // guard so an unparseable Send-tab URL stays as-is rather than catching a
-    // throw — the URL field's validity is checked upstream when the user types,
-    // so reaching here unparseable means a real bug we want surfaced.
-    function _applyFormParamsToUrl(rawUrl, params) {
-      if (!URL.canParse(rawUrl)) {
-        console.warn("[popup:send] URL.canParse(%s) failed — form params not applied", rawUrl);
-        return rawUrl;
-      }
-      const urlObj = new URL(rawUrl);
-      for (const [k, v] of Object.entries(params)) urlObj.searchParams.set(k, String(v));
-      return urlObj.toString();
-    }
-    /* A HEADER PARAMETER IS DELIVERED AS A HEADER. `collectFormValues` buckets by the parameter's own
-       `location` (lib/field-def.js PARAM_LOCATIONS); before it did, everything that was not a path
-       parameter went into the QUERY STRING, so an imported spec's `X-Api-Key` header parameter was sent as
-       `?X-Api-Key=…` — the panel rendered `header` beside the input and the request carried it somewhere
-       else. The explicitly typed header rows are applied AFTER, so an operator who names a header in the
-       headers UI overrides the form's value for it rather than being silently overridden by it. */
-    function _applyHeaderParams(hp) {
-      const merged = {};
-      for (const [k, v] of Object.entries(hp)) merged[k] = String(v);
-      return Object.assign(merged, headers);
-    }
-
     let body;
-    let headerParams = {};
     if (httpMethod === "GET" || httpMethod === "DELETE") {
-      // Collect URL params from form fields even for GET/DELETE
-      if (bodyMode === "form") {
-        const formValues = collectFormValues();
-        headerParams = formValues.headerParams;
-        if (Object.keys(formValues.params).length > 0) {
-          url = _applyFormParamsToUrl(url, formValues.params);
-        }
-      }
+      // The form's path and query parameters are already in `url` — `sendPanelAddress` applied them under
+      // the same `bodyMode === "form"` gate both of these arms used to spell for themselves.
       body = null;
     } else if (bodyMode === "form") {
-      const formValues = collectFormValues();
-      headerParams = formValues.headerParams;
-      if (Object.keys(formValues.params).length > 0) {
-        url = _applyFormParamsToUrl(url, formValues.params);
-      }
       body = {
         mode: "form",
-        formData: { fields: formValues.fields },
+        formData: { fields: collectFormValues().fields },
       };
     } else if (bodyMode === "graphql") {
       body = {
@@ -668,7 +647,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         url,
         httpMethod,
         contentType,
-        headers: _applyHeaderParams(headerParams),
+        headers: sendPanelHeaders(headers),
         body,
         apiKeyOverride: currentKeyOverride,
       });
