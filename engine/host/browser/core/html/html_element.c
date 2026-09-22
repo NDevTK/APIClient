@@ -460,7 +460,7 @@ static const ElReflect R_TEMPLATE[] = {
     { "shadowRootCustomElementRegistry", "shadowrootcustomelementregistry", REFLECT_STRING },
 };
 static const ElReflect R_DATA[]   = { { "value", "value", REFLECT_STRING } };
-/* HTML §16.3.3 "Other elements, attributes and APIs" — TEN INTERFACES WHOSE ENTIRE OWN SURFACE IS THIS, and
+/* HTML §16.3.3 "Other elements, attributes and APIs" — ELEVEN INTERFACES WHOSE ENTIRE OWN SURFACE IS THIS, and
    the reason none of them had a row is that the section states them as IDL and almost no prose: a reader
    looking for the behaviour to implement finds a `partial interface` block and nothing else, which reads as
    nothing to do. It is not nothing. Each member is `[CEReactions, Reflect]` over a `DOMString` or a `boolean`
@@ -492,6 +492,12 @@ static const ElReflect R_DATA[]   = { { "value", "value", REFLECT_STRING } };
        REFLECT_ULONG running §2.6.1's signed parse, after which those three are three rows. ITS ABSENCE SHOWS
        as an interface whose string and boolean reflections read complete while a `long`-typed one beside them
        is still reported absent. */
+/* `div` WAS THE SIBLING THE FIRST PASS OF THIS BLOCK MISSED, and the reason is worth more than the row: the
+   candidate set was drawn from the audit rows carrying NO-ROW — the ones whose file list the auditor derived
+   from a §3.7.3 tag — and HTMLDivElement HAS a row, so it sat in a different part of the same report with the
+   identical member, the identical kind and the identical section. A population selected by a property of the
+   INSTRUMENT'S OUTPUT is not the population the SPEC defines, and §16.3.3 is what defines this one. */
+static const ElReflect R_DIV[]     = { { "align", "align", REFLECT_STRING } };
 static const ElReflect R_P[]       = { { "align", "align", REFLECT_STRING } };
 static const ElReflect R_H[]       = { { "align", "align", REFLECT_STRING } };
 static const ElReflect R_LEGEND[]  = { { "align", "align", REFLECT_STRING } };
@@ -587,6 +593,7 @@ static const struct { const char *iface; const ElReflect *refl; int nrefl; } IFA
     { "HTMLFrameSetElement",   RL(R_FRAMESET) },
     /* HTML §16.3.3 "Other elements, attributes and APIs" — see the tables above for what each closes and for
        the three `long` reflections and the one [LegacyNullToEmptyString] one it deliberately does not. */
+    { "HTMLDivElement",        RL(R_DIV) },
     { "HTMLParagraphElement",  RL(R_P) },
     { "HTMLHeadingElement",    RL(R_H) },
     { "HTMLLegendElement",     RL(R_LEGEND) },
