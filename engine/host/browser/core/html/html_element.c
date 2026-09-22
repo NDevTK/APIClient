@@ -397,7 +397,15 @@ static const ElReflect R_MAP[]    = { { "name", "name", REFLECT_STRING } };
 static const ElReflect R_TIME[]   = { { "dateTime", "datetime", REFLECT_STRING } };
 static const ElReflect R_QUOTE[]  = { { "cite", "cite", REFLECT_URL } };
 static const ElReflect R_MOD[]    = { { "cite", "cite", REFLECT_URL }, { "dateTime", "datetime", REFLECT_STRING } };
-static const ElReflect R_OL[]     = { { "type", "type", REFLECT_STRING }, { "reversed", "reversed", REFLECT_BOOL } };
+/* §4.4.5's two plus HTML §16.3.3 "Other elements, attributes and APIs"'s `compact`, which the §16.3.3 block
+   below LEFT BEHIND on its first pass while naming this element in its own exclusion list. The exclusion was
+   written per MEMBER — `start` is `attribute long` and there is no signed reflect kind — and it was read as if
+   it were per INTERFACE, so the boolean beside it went with a reason that was never about it. A residual that
+   names a member excludes that member and says nothing whatever about its siblings. */
+static const ElReflect R_OL[]     = {
+    { "type", "type", REFLECT_STRING }, { "reversed", "reversed", REFLECT_BOOL },
+    { "compact", "compact", REFLECT_BOOL },
+};
 static const ElReflect R_LI[]     = { { "type", "type", REFLECT_STRING } };
 static const ElReflect R_TABLE[]  = { { "summary", "summary", REFLECT_STRING } };
 /* §4.9.11's two SPANS. Both carry `[ReflectDefault=1]` and both carry a `[ReflectRange]`, and the pair is what
