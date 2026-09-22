@@ -624,6 +624,66 @@ for (const [n, chans] of perFile)
    see it. THERE IS THEREFORE NO CLASS COLUMN HERE, and inventing one would be a claim the text cannot
    support in the one direction a reader dispatches from. A COUNT IS A REASON TO OPEN THE SITES.
 
+   AND THE COUNT IS A COUNT OF VOLUME, WHICH IS NOT A COUNT OF VALUE — THE HEAD OF THIS CHANNEL CAN BE ITS
+   TAIL. A row's rank is how often a page READS the member; what this product is for is what sits BEHIND the
+   read, which is CLAUDE.md's what-the-tool-produces asking for the endpoints and sinks a bundle CAN reach
+   and did not. Those are two orders and nothing here has ever said so, so a coordinator dispatching at the
+   top row of this list is dispatching on volume while reading it as value. A row can be MAXIMALLY COSTLY —
+   every read unguarded, the flow ending at it — and worth NOTHING, with a toast behind it and no more.
+
+   A DOWNSTREAM-WINDOW VALUE COLUMN WAS BUILT AND MEASURED AND DECLINED, and the measurement is the part
+   worth keeping, because the idea is cheap, obvious and will be re-derived: take N characters after each of
+   a row's occurrences, count the endpoint and sink spellings in them, rank by that. It reads as a
+   REACHABILITY question and it is a TEXT ADJACENCY one, and in a minified bundle those are not close — a
+   control-flow successor is a callback, a promise arm or a helper defined elsewhere in the module, while
+   the adjacent text is an unrelated sibling of it.
+   WHAT KILLS IT IS NOT THE FALSE POSITIVES, IT IS THAT ITS ZERO CARRIES NO INFORMATION, and the statistic
+   that says so is the one such a column never prints: the BASE RATE of its own vocabulary in a window of
+   that width taken at a RANDOM offset. A row of n sites expects n times that rate by chance, so a zero is
+   evidence only where n times the rate stands well above one. Measured over a real-bundle corpus at a
+   500-character width, the union of every endpoint and sink spelling this tree owns stands under one
+   percent — which puts the chance expectation of a hundred-site row below a single hit and of every other
+   row in this list's head below a quarter of one. Every zero such a column prints is therefore exactly what
+   an instrument that can see NOTHING prints, and exactly what one that can see EVERYTHING prints for a row
+   with nothing behind it, and the two are indistinguishable.
+   WIDENING THE WINDOW BUYS NOISE RATHER THAN POWER, WHICH THE COLUMN'S OWN ORDER DEMONSTRATES: at four
+   times that width the head of the new column is the SAME row that heads the volume order, and every hit
+   behind it opened by hand is a separate top-level function of one minified module — one a
+   `createHTMLDocument` helper nine hundred-odd characters along with no path to the read at all. A column
+   that promotes the row it was commissioned to demote is not a weak column.
+   AND THE CONTROL THAT MAKES SUCH A PROBE LOOK SOUND IS A CONTROL FOR A DIFFERENT PROPOSITION, which is
+   what made the first measurement of this credible and is the part to carry. A window over clipboard writes
+   arms handsomely on a toast or a state set, because such a call really is the next expression — and a
+   toast is ADJACENT TEXT. Arming on adjacent text establishes that the window reaches successor CHARACTERS;
+   it establishes nothing about a successor STATEMENT, and a sink is the second. The probe passes its own
+   control and answers a question nobody asked.
+   WHAT WOULD HAVE TO EXIST is not a better window and not a wider vocabulary: it is a span of CODE where
+   this file has only ever had a span of TEXT — the code/not-code mask the STRING LITERAL residual above
+   names, plus the scope reader the GLOBAL-ALIAS widening was declined over, and then a reachability
+   question asked FROM the read rather than from its offset. That makes a value column the THIRD design
+   blocked on one unbuilt primitive, which is worth more than any of the three: three independent designs
+   blocked on one thing is evidence about what to build, and not one of them is blocked on anything else.
+   NOR IS THE VOCABULARY DERIVABLE TODAY AT THE SHARPNESS SUCH A COLUMN WOULD NEED, which is a second and
+   independent refusal and is measured rather than assumed. The engine detects a sink and an endpoint by
+   HOOKING the operation, never by matching text, so it owns no list of spellings — what it owns is the set
+   of C files whose members call the recorders, and the two derivations available from that are wrong in
+   both directions at once. Taking every member those files install over-generates into ordinary English
+   (`value`, `id`, `close`, `abort`), which is the objection that discards the `.member` diagnostic below;
+   and it simultaneously MISSES the sink class the same tree names first, because that one is a JS-engine
+   builtin and is installed nowhere under the audited browser tree. A vocabulary both too broad and too
+   narrow cannot be reported as a ceiling or as a floor. The sharp derivation exists and is a file-local
+   symbol walk from each recorder call to the install line that names the member, and it is not worth
+   building for a column whose statistic is already refuted above.
+   THE DERIVATION, never a figure, because a corpus moves and so does the base rate a window is priced
+   against. The ranked head, and one row by hand:
+     node engine/absentrank.mjs --corpus <dir>/mirror --top 40
+     cd <dir>/mirror && grep -rohE 'navigator[[:space:]]*[.][[:space:]]*clipboard' . | wc -l
+   and the price of any window column proposed later is one pass over the same corpus: count the windows of
+   a row that hold the vocabulary, count how many RANDOM windows of that width hold it, and compare those
+   two before reading either.
+   RETIREMENT: this paragraph goes when a value column exists whose operand is a span of code, at which
+   point a window's base rate stops being the thing that bounds it.
+
    WHAT IS COUNTED IS THREE SPELLINGS AND WHAT IS PRINTED IS FIVE, and the split is by whether the receiver's
    IDENTITY is settled by something this file already trusts rather than by how likely it looks:
      - `document.fonts`                — the bare receiver, no prefix. Unambiguous.
