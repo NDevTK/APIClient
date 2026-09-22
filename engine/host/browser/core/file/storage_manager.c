@@ -438,9 +438,6 @@ static const IdlStepDecl SG_DECL = {
    minted with the realm. */
 static JSValue sm_get_storage(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    JSValue own;
-    bool same;
-
     (void)magic;
     /* WEB IDL §3.7.6 "Attributes"' ATTRIBUTE GETTER, the step every regular attribute begins with: "If jsValue
        does not implement target, then: If attribute was specified with the [LegacyLenientThis] extended
@@ -458,22 +455,20 @@ static JSValue sm_get_storage(JSContext *ctx, JSValueConst this_val, int magic)
         JS_ThrowTypeError(ctx, "storage was reached on something that is not a Navigator");
         return JS_EXCEPTION;
     }
-    /* THE HALF OF "THIS's relevant settings object" THIS ENGINE CAN ANSWER — the same assert
-       core/frame/navigator.c makes of its own members and core/frame/navigator_beacon.c of §2.1's, here for
-       the same reason and newly OWED, because a member on a prototype can be applied to another realm's
-       Navigator and a member on the instance could not. `js_call_c_function` takes `ctx` from the FUNCTION
-       object, so the line below answers out of the realm whose prototype the call went through — and §8 says
-       "The storage getter steps are to return this's relevant settings object's StorageManager object", which
-       is THIS's realm and not the getter's. The two coincide for every ordinary `navigator.storage`. */
-    own = navigator_object(ctx);
-    same = JS_VALUE_GET_PTR(own) == JS_VALUE_GET_PTR(this_val);
-    JS_FreeValue(ctx, own);
-    DCHECK(same, "Storage §8's storage was reached through ONE realm's Navigator.prototype on ANOTHER realm's "
-                 "Navigator — the getter answers out of its own realm's slot, so the page would be handed a "
-                 "StorageManager belonging to a document that did not make the call, and [SameObject] would "
-                 "be false of two reads through two prototypes. BUILD the Navigator that carries its own "
-                 "realm (core/frame/navigator.c names the same gap)");
-    return realm_value_get(ctx, g_obj_slot);
+    /* "THIS's RELEVANT SETTINGS OBJECT", ANSWERED — §8 says "Each environment settings object has an
+       associated StorageManager object" and "The storage getter steps are to return this's relevant settings
+       object's StorageManager object", so the slot to read is the RECEIVER's realm's and not `ctx`'s:
+       `js_call_c_function` takes `ctx` from the FUNCTION object, so `ctx` is whichever realm's
+       Navigator.prototype the call went through. The two coincide for every ordinary `navigator.storage`.
+       WHAT STOOD HERE WAS A DCHECK THAT THE TWO COINCIDED, and a receiver is PAGE-SUPPLIED INPUT, which a
+       DCHECK may never stand on — `Object.getOwnPropertyDescriptor(Navigator.prototype, "storage").get
+       .call(otherFrame.navigator)` is two lines of ordinary JavaScript and ended the process. It also named
+       the wrong remedy for the right gap: it said [SameObject] "would be false of two reads through two
+       prototypes", and [SameObject] is per-OBJECT — two reads of ONE Navigator's `storage` answer one object
+       under either arrangement, and what the old line really broke was that reads of TWO Navigators answered
+       the SAME object. The Navigator carries its environment now (core/frame/navigator.h), so the right slot
+       is reachable and the assert is not a check that had to be weakened but a question that is now answered. */
+    return realm_value_get(navigator_environment(this_val), g_obj_slot);
 }
 
 /* See storage_manager.h for why this takes the PROTOTYPE and why the includer calls it rather than this

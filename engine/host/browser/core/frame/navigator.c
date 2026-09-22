@@ -277,11 +277,14 @@ static void nav_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
     JS_MarkValue(rt, n->vals, mark_func);
 }
 
-/* "THIS's RELEVANT GLOBAL OBJECT", ANSWERED RATHER THAN ASSERTED ABOUT — the environment the two members below
+/* "THIS's RELEVANT GLOBAL OBJECT", ANSWERED RATHER THAN ASSERTED ABOUT — the environment §8.10.1's members
    name, taken off the RECEIVER. Every assert here is about a value THIS component wrote at the mint, which is
    the only thing a DCHECK may stand on; the receiver itself is page-supplied and its brand is a TypeError one
-   line above every caller. */
-static JSContext *nav_environment(JSValueConst this_val)
+   line above every caller.
+   EXPORTED, because a member another STANDARD puts on Navigator needs the same environment and cannot reach
+   this record: Storage §8's `storage` is the first such caller. A caller asks the BRAND first — this asserts
+   rather than refuses, so it may only be reached with a value `navigator_is` has already answered true for. */
+JSContext *navigator_environment(JSValueConst this_val)
 {
     Navigator *n = nav_rec(this_val);
 
@@ -339,7 +342,7 @@ static JSValue js_nav_user_activation(JSContext *ctx, JSValueConst this_val, int
     /* THE ENVIRONMENT IS THE RECEIVER'S AND NOT `ctx` — §6.4.4 says "this's relevant global object's
        associated UserActivation", so the argument is what makes this member §6.4.4 rather than one that
        reports whichever document's interaction the page reached the getter through. */
-    return user_activation_object(nav_environment(this_val));
+    return user_activation_object(navigator_environment(this_val));
 }
 
 /* PERMISSIONS §6.1: `partial interface Navigator { [SameObject] readonly attribute Permissions permissions; }`,
@@ -353,7 +356,7 @@ static JSValue js_nav_permissions(JSContext *ctx, JSValueConst this_val, int mag
     /* THE ENVIRONMENT IS THE RECEIVER'S AND NOT `ctx`, for §6.4.4's reason one member up: [SameObject] comes
        from where the permissions component KEEPS its object, and which object that is depends on whose realm
        is asking. */
-    return permissions_object(nav_environment(this_val));
+    return permissions_object(navigator_environment(this_val));
 }
 
 /* HTML §7.2.2 "The Window object"'s two Window members that name this object — that is where the IDL sits, and

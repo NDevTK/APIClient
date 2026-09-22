@@ -33,12 +33,24 @@ void navigator_init(JSContext *ctx);
    "API"'s, and §8 declares no partial interface at all — it declares `interface mixin NavigatorStorage` with
    two `includes` statements, which §3.7.3 treats differently from a partial in the one way that matters, a
    mixin having no prototype object of its own.
-   WHAT IT IS FOR IS THE REALM QUESTION, and both of its callers ask exactly that: a member reached through
-   ONE realm's Navigator.prototype on ANOTHER realm's Navigator answers out of the member's own realm, because
-   `js_call_c_function` takes `ctx` from the function object — so a getter compares what arrived against what
-   this realm holds and asserts they are the same object. Pair it with `navigator_is` below, which answers the
-   §3.7.6/§3.7.7 BRAND: the two are different questions and a member that needs the realm needs both. */
+   WHAT IT IS FOR IS A NAMED REALM'S Navigator, and that is now all it is for. It read "THE REALM QUESTION,
+   and both of its callers ask exactly that", and described those callers comparing what arrived against what
+   this realm holds and ASSERTING they are the same object. That assert is retired: a receiver is page-supplied
+   input, so a DCHECK may not stand on one at all, and `navigator_environment` below answers the question the
+   comparison was standing in for. The sentence is rewritten rather than deleted because a reader who
+   re-derives the old reason writes the old assert again. */
 JSValue navigator_object(JSContext *ctx);
+
+/* THE ENVIRONMENT A Navigator ANSWERS FROM, taken off the OBJECT — for a member another STANDARD puts on this
+   interface, whose steps are written against "this's relevant settings object" (Storage §8 "API": "The storage
+   getter steps are to return this's relevant settings object's StorageManager object") or "this's relevant
+   global object". `js_call_c_function` sets `ctx = p->u.cfunc.realm`, so the context such a member is handed is
+   the realm that DEFINED it and never the receiver's — which for an ordinary `navigator.storage` are the same
+   realm and for a member pulled off one realm's Navigator.prototype and applied to another's are not.
+   ASK `navigator_is` FIRST. This ASSERTS its operand is a Navigator rather than refusing one: the brand is Web
+   IDL §3.7.6/§3.7.7's own step and belongs at the member, as a TypeError the page can read, so passing an
+   unbranded value here is this codebase's own logic being wrong and is the one thing a DCHECK may say. */
+JSContext *navigator_environment(JSValueConst nav);
 
 /* THE WEB IDL BRAND, for a member of a `partial interface Navigator` another component owns. §3.7.6
    "Attributes" and §3.7.7 "Operations" both begin by refusing a receiver that "does not implement the
