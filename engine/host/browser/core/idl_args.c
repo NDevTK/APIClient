@@ -3880,8 +3880,22 @@ static int idl_buffer_source_refuse(JSContext *ctx, JSValueConst v, const char *
  * conversion. A receiver brand written in a member's BODY runs after all of that, which is what
  * `Iface.prototype.member.call({}, {toString(){ … }})` reads: the page's `toString` runs, and only then does the
  * TypeError arrive. A browser runs none of it. §3.7.6's two algorithms put the same pair at the same place —
- * the getter's try-list at 2.1.2.2 / 2.1.2.3 and the setter at step 4.5.2 / 4.5.4, whose 4.5.3 computes
+ * the getter's try-list at 1.1.2.2 / 1.1.2.3 and the setter at step 4.5.2 / 4.5.4, whose 4.5.3 computes
  * `validThis` — and the setter's `V` is only READ at step 4.2, never converted, until step 4.6.
+ *
+ * (THE GETTER'S PAIR READ 2.1.2.2 / 2.1.2.3 HERE, WHICH IS §3.7.7's NUMBERING WRITTEN ONTO §3.7.6's
+ * GETTER — corrected at the site the claim was made, after fetching and counting rather than recalling.
+ * THE TWO ALGORITHMS DIFFER AT THE TOP LEVEL AND NOWHERE ELSE, which is the whole of why this is easy to
+ * write and hard to see: §3.7.7's create an operation function opens "Let id be op's identifier", so its
+ * `Let steps be` is step 2 and its try-list is 2.1; §3.7.6's getter opens AT `Let steps be`, so its
+ * try-list is 1.1. Every sub-number BELOW the first is then identical between them, so a copied pair
+ * looks right at every digit a reader checks except the one they do not.
+ * THE FILE ALREADY DISAGREED WITH ITSELF AND THAT WAS THE FINDING: the paragraph immediately below says
+ * "§3.7.6's attribute-getter step 1", and the second named residual in idl_implementation_check says
+ * "§3.7.6's 1.1.2.1". A citation that contradicts its own siblings is either the only correct one or the
+ * only wrong one, and here the majority was right. The same substitution runs the OTHER WAY at
+ * idl_set_global_ancestor_terms, where the SETTER's step was given as the getter's 1.1.2.3 — so the
+ * defect to look for is a SIBLING ALGORITHM'S numbering, in either direction, and not a typo.)
  *
  * (§3.7.7 step 2 and §3.7.6's attribute-getter step 1 each hold TWO sibling lists — the try-list, and the "And
  * then, if an exception E was thrown" list that both restart at .1 — so the sub-numbers above are the try-list's;
@@ -7925,7 +7939,7 @@ void idl_set_global_ancestor_terms(JSValue (*proto_of_realm)(JSContext *ctx), Id
 {
     DCHECK((proto_of_realm == NULL) == (this_is == NULL),
            "Web IDL §3.7.3's not-[Global] terms were registered with an object and no brand or the other way "
-           "round — §3.7.6 Attributes' create an attribute setter step 1.1.2.3 asks whether the receiver "
+           "round — §3.7.6 \"Attributes\"' create an attribute setter step 4.5.3 asks whether the receiver "
            "implements `target`, and on this arm `target` is the DECLARING interface, so the object and the "
            "predicate that answers for it are one fact and are stated together or not at all");
     DCHECK((proto_of_realm == NULL) == (iface == NULL),
