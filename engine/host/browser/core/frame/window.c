@@ -409,7 +409,7 @@ static JSValue js_win_set_name(JSContext *ctx, JSValueConst this_val, JSValueCon
  * §7.2.1 DOES NOT LIST IT, so a cross-origin `otherW.status` is a SecurityError and not `undefined` — that is
  * already true without a line here, because §7.2.3.5 steps 4-6 answer every name the fixed list omits and this
  * member is reached only through the same-origin forward that precedes them. */
-static int g_status_slot = -1;
+static JSClassID g_status_slot = JS_INVALID_CLASS_ID;
 
 /* THIS REALM'S §7.2.2.5 RECORD. Owned — the caller frees. */
 static JSValue win_status_record(JSContext *ctx)
@@ -864,7 +864,7 @@ void window_init(JSContext *ctx)
     bar_prop_init(ctx);   /* §7.2.2.5's BarProp class, one per agent */
     /* §7.2.2.5's `status` lives in a PER-REALM record, so the slot it lives in is declared once per AGENT —
        a slot is a class id, and a class id is a registration in the one runtime. */
-    DCHECK(g_status_slot < 0, "window_init ran twice — §7.2.2.5's status slot is declared once per agent, and "
+    DCHECK(g_status_slot == JS_INVALID_CLASS_ID, "window_init ran twice — §7.2.2.5's status slot is declared once per agent, and "
                               "a second declaration would leave every realm built under the first one reading "
                               "a slot nothing sets");
     g_status_slot = realm_value_declare(ctx, "HTML §7.2.2.5 the Window's status");
@@ -1105,7 +1105,7 @@ void window_free(JSRuntime *rt)
        is going away, so what is given back here is the id, exactly as the two class ids above are. window_init
        asserts it is back at -1, which is the half that makes a forgotten reset crash rather than hand a second
        agent a slot in a runtime that no longer exists. */
-    g_status_slot = -1;
+    g_status_slot = JS_INVALID_CLASS_ID;
     /* AND THE FIVE POOL ENTRIES, which this release kept — the same slots window_proxy_free was keeping one file
        over, and the same consequence: a declaration is a registration in a runtime, so a carried index names an
        entry in a pool the next agent has not built, read by the first window_install that agent runs. Their

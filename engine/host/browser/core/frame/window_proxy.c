@@ -1864,7 +1864,7 @@ static JSAtom g_xo_fallback[XO_FALLBACK_N];
    realm-slot entry, whose `*slot > 0` is what a row declared above its assignment fires on. The reason is
    rewritten rather than deleted because a reader who re-derives the old one will conclude the sentinel is
    free to move while that assert still reads the sign. */
-static int g_xo_getter_slot = -1;
+static JSClassID g_xo_getter_slot = JS_INVALID_CLASS_ID;
 
 /* §7.2.1.3.1 CrossOriginProperties ( O )'s WINDOW ARM, ASKED BY NAME — the one list answering one more caller.
  *
@@ -1992,7 +1992,7 @@ void window_proxy_install_window_getters(JSContext *ctx, JSValueConst global)
     JSValue getters;
     int i;
 
-    DCHECK(g_xo_getter_slot > 0,
+    DCHECK(g_xo_getter_slot != JS_INVALID_CLASS_ID,
            "§7.2.1.3.4's getters were captured for a realm before window_proxy_init declared the slot to hold "
            "them — the declaration is core/platform.c's declare column and this is its install column, so "
            "reaching here without it is an install into an agent that was never brought up");
@@ -3938,7 +3938,7 @@ void window_proxy_free(JSRuntime *rt)
     /* AND THE REALM-VALUE SLOT, for the same sentence one line up: it is a class id in a runtime that is going
        away, so a carried number is an index into a pool the next agent has not built — read by the first
        cross-instance member read that agent performs, which would then run whatever function now sits there. */
-    g_xo_getter_slot = -1;
+    g_xo_getter_slot = JS_INVALID_CLASS_ID;
     /* AND THE CLASS ID, for the reason core/agent_state.h states: a class is registered in a runtime, the id
        doubles as no latch here but names a class that is gone, and every JS_GetOpaque against it would answer
        about whichever class the next agent's runtime hands that number to. proxy_finalizer and proxy_gc_mark

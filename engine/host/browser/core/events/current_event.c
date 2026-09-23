@@ -70,7 +70,7 @@
 /* THE PER-REALM RECORD'S SLOT, declared once per AGENT. A slot is a class id and a class id is a registration
    in the one runtime, so a second declaration would leave every realm built under the first one reading a slot
    nothing sets — which is the assert core/frame/window.c's `status` slot carries for the same reason. */
-static int g_slot = -1;
+static JSClassID g_slot = JS_INVALID_CLASS_ID;
 
 /* THE FIELD NAME ON THAT RECORD. One spelling, read and written here and nowhere else: a name spelled twice is
    a reader and a writer that can come apart, and the value they would then disagree about renders as §2.3's
@@ -131,7 +131,7 @@ static JSValue js_current_event_get(JSContext *ctx, JSValueConst this_val, int m
 
 void current_event_init(JSContext *ctx)
 {
-    DCHECK(g_slot < 0,
+    DCHECK(g_slot == JS_INVALID_CLASS_ID,
            "current_event_init ran twice — DOM §2.3's per-realm slot is declared once per agent, and a second "
            "declaration would leave every realm built under the first one reading a slot nothing sets");
     g_slot = realm_value_declare(ctx, "DOM §2.3 the Window's current event");
@@ -168,8 +168,8 @@ void current_event_free(JSRuntime *rt)
        RECORD it names is a REALM's object and dies with that realm's class-proto slot, the same shape
        core/frame/window.c's `status` has. So there is nothing to free above this and the undo is the whole
        release, given back from the ONE list that already names the handle — see core/agent_state.h's
-       agent_state_undo for why writing `g_slot = -1` here would be a second copy of the declaration rather
-       than its inverse, even at one line long. Undoing it is also what lets a second agent in one process
+       agent_state_undo for why writing `g_slot = JS_INVALID_CLASS_ID` here would be a second copy of the
+       declaration rather than its inverse, even at one line long. Undoing it is also what lets a second agent in one process
        declare it again, and what makes current_event_init's assert fire on a real double-declaration instead
        of on an orderly teardown. */
     agent_state_undo("current_event");

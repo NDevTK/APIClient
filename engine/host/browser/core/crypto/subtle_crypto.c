@@ -75,7 +75,7 @@
 #include "solver/concolic.h"
 
 static JSClassID g_subtle_class;
-static int       g_obj_slot = -1;
+static JSClassID g_obj_slot = JS_INVALID_CLASS_ID;
 static int       g_id_digest = -1;
 static int       g_id_sign = -1;
 static int       g_id_verify = -1;
@@ -3029,7 +3029,7 @@ void subtle_crypto_init(JSContext *ctx)
        value it would be the copy nobody updates. */
     IDL_ENUM_VALUES(KEY_FORMATS, "raw", "spki", "pkcs8", "jwk");
 
-    DCHECK(g_obj_slot < 0, "subtle_crypto_init ran twice — the class, the slot and the member's pool id are "
+    DCHECK(g_obj_slot == JS_INVALID_CLASS_ID, "subtle_crypto_init ran twice — the class, the slot and the member's pool id are "
                            "the AGENT's");
     /* §13's INTERFACE IS THIS COMPONENT'S DEPENDENCY and is declared here, for the reason core/crypto/crypto.c
        gives about this one: every absent method of §14.3 takes a CryptoKey or mints one, so the component that
@@ -3147,7 +3147,7 @@ void subtle_crypto_init(JSContext *ctx)
 void subtle_crypto_free(void)
 {
     crypto_key_free();
-    if (g_obj_slot < 0)
+    if (g_obj_slot == JS_INVALID_CLASS_ID)
         return;
     DCHECK(g_rt != NULL, "SubtleCrypto was declared without recording the runtime its atoms belong to");
     JS_FreeAtomRT(g_rt, g_atom_name);
@@ -3158,7 +3158,7 @@ void subtle_crypto_free(void)
     JS_FreeAtomRT(g_rt, g_atom_tag_length);
     g_atom_name = g_atom_hash = g_atom_length = JS_ATOM_NULL;
     g_atom_iv = g_atom_additional_data = g_atom_tag_length = JS_ATOM_NULL;
-    g_obj_slot = -1;
+    g_obj_slot = JS_INVALID_CLASS_ID;
     g_id_digest = -1;
     g_id_sign = -1;
     g_id_verify = -1;

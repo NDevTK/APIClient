@@ -64,7 +64,7 @@
    answer there, so the dependency runs the way the layering allows and this line is gone. */
 
 static JSClassID g_factory_class;
-static int       g_obj_slot = -1;
+static JSClassID g_obj_slot = JS_INVALID_CLASS_ID;
 static int       g_id_cmp   = -1;
 static int       g_id_open  = -1;
 static int       g_id_delete = -1;
@@ -556,7 +556,7 @@ void indexed_db_init(JSContext *ctx)
     static const IdlArgType OPEN_ARGS[2] = { IDL_DOMSTRING, IDL_UNRESTRICTED_DOUBLE };
     static const IdlArgType DELETE_ARGS[1] = { IDL_DOMSTRING };
 
-    DCHECK(g_obj_slot < 0, "indexed_db_init ran twice — the class and the slot are declared once per AGENT");
+    DCHECK(g_obj_slot == JS_INVALID_CLASS_ID, "indexed_db_init ran twice — the class and the slot are declared once per AGENT");
     JS_NewClassID(JS_GetRuntime(ctx), &g_factory_class);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_factory_class, &d) == 0,
           "IDBFactory: the per-realm prototype slot could not be declared");
@@ -610,8 +610,8 @@ void indexed_db_init(JSContext *ctx)
    RUNTIME (core/agent_state.h's one policy). */
 void indexed_db_free(void)
 {
-    DCHECK(g_obj_slot >= 0, "§4.3's IDBFactory was released in an agent that never declared it");
+    DCHECK(g_obj_slot != JS_INVALID_CLASS_ID, "§4.3's IDBFactory was released in an agent that never declared it");
     g_id_cmp = g_id_open = g_id_delete = g_id_databases = g_id_databases_task = -1;
-    g_obj_slot = -1;
+    g_obj_slot = JS_INVALID_CLASS_ID;
     g_factory_class = 0;
 }

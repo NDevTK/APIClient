@@ -83,7 +83,7 @@
    that fire two different events (a viewport fires none; a Document fires at its Window). */
 enum { FA_NONE = 0, FA_ELEMENT, FA_VIEWPORT, FA_DOCUMENT, FA_NAVIGABLE };
 
-static int g_focus_slot = -1;
+static JSClassID g_focus_slot = JS_INVALID_CLASS_ID;
 static int g_id_el_focus = -1, g_id_el_blur = -1, g_id_win_focus = -1, g_id_has_focus = -1;
 static int g_id_win_blur = -1;        /* §6.6.6's `Window.blur()`, whose method steps are TO DO NOTHING */
 static int g_id_set_tab_index = -1;   /* §6.6.3's `tabIndex` setter — the mixin's, installed beside focus/blur */

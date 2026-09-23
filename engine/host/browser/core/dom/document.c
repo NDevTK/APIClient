@@ -2207,7 +2207,7 @@ JSValue document_url_value(JSContext *ctx)
  * A private Symbol on the Document would have done the first job and not the second cleanly — and it would
  * have been an AGENT-wide value freed by a PER-REALM teardown (document_free runs once per realm, from
  * navigable.c's realm sweep), which is one document dropping the key the others still read through. */
-static int g_ready_slot = -1;
+static JSClassID g_ready_slot = JS_INVALID_CLASS_ID;
 
 /* HTML §3.1.5's THREE READINESS VALUES, in the order the enum declares them — the strings `readyState` answers
    with and the only place they are written down. */
@@ -2309,7 +2309,7 @@ const char *document_readiness_of(const lxb_dom_node_t *doc)
  * already use, and for the same two reasons: the record is unreachable from the page, so nothing but this
  * component can write the flag; and the write is an ordinary property write, so the heap COW captures it and
  * one arm of a fork can unload its document without touching its sibling's. */
-static int g_showing_slot = -1;
+static JSClassID g_showing_slot = JS_INVALID_CLASS_ID;
 
 bool document_page_showing(JSContext *ctx)
 {

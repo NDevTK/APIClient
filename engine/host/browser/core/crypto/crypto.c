@@ -14,7 +14,7 @@
 #include "solver/cow.h"       /* the §10.1 draw position is shared baseline state a flow mutates */
 
 static JSClassID g_crypto_class;
-static int       g_obj_slot = -1;
+static JSClassID g_obj_slot = JS_INVALID_CLASS_ID;
 static int       g_id_get_random_values = -1;
 static int       g_id_random_uuid = -1;
 
@@ -327,7 +327,7 @@ void crypto_init(JSContext *ctx)
        brands the object is also what gives it back. */
     JSClassDef d = { "Crypto", .finalizer = crypto_finalizer };
 
-    DCHECK(g_obj_slot < 0, "crypto_init ran twice — the class and the slot are declared once per AGENT");
+    DCHECK(g_obj_slot == JS_INVALID_CLASS_ID, "crypto_init ran twice — the class and the slot are declared once per AGENT");
     /* §14's INTERFACE IS THIS COMPONENT'S DEPENDENCY and is declared here rather than by each host, for the
        reason core/realm.h gives: a host that installed Crypto and not SubtleCrypto would answer `subtle` with
        an object built in some other realm, or with nothing at all. core/realm.h runs the per-realm installs in
@@ -354,7 +354,7 @@ void crypto_init(JSContext *ctx)
 
 void crypto_free(void)
 {
-    g_obj_slot = -1;
+    g_obj_slot = JS_INVALID_CLASS_ID;
     g_id_get_random_values = -1;
     g_id_random_uuid = -1;
     g_crypto_class = 0;

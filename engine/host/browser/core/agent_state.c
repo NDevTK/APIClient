@@ -8,7 +8,7 @@
 
 typedef enum {
     SLOT_ID,     /* pre-init: -1 */
-    SLOT_REALM,  /* pre-init: -1 */
+    SLOT_REALM,  /* pre-init: JS_INVALID_CLASS_ID */
     SLOT_FLAG,   /* pre-init: 0 */
     SLOT_CLASS,  /* pre-init: 0 */
     SLOT_ATOM,   /* pre-init: JS_ATOM_NULL */
@@ -98,21 +98,28 @@ void agent_state_id_at(const char *c, const int *slot, const char *what, const c
    entry does that agent_state_id could not is the assert: a realm slot is HANDED OUT BY core/realm.c's
    realm_value_declare, whose body is JS_NewClassID plus JS_NewClass and whose local starts at 0, so it always
    mints and what it returns is a real class id — which is `rt->js_class_id_alloc` at the moment of the call
-   and therefore never 0 and never negative. A row declared while its slot still holds the component's own
+   and therefore never JS_INVALID_CLASS_ID. THE PREDICATE READ `*slot > 0` AND COULD NOT SURVIVE THE TYPE:
+   a slot is a JSClassID, which is unsigned, so a range over the sign admits every value there is bar one and
+   refuses the one state this assert is about only by accident. `!= JS_INVALID_CLASS_ID` names that state.
+   IT IS NOT core/realm.c's JS_IsRegisteredClass, WHICH IS THE STRONGER QUESTION AND CANNOT BE ASKED HERE: a
+   declaration carries no JSRuntime, and inventing a parameter to carry one would make every component's
+   declaration depend on a runtime it does not otherwise need. What this entry can see is whether the slot has
+   been assigned, and that is exactly the state a row declared above its assignment is in. A row declared while its slot still holds the component's own
    pre-init is a row that will be COUNTED against the allocator and contributed nothing TO it, so the identity
    this kind exists to make possible would come out short by one and report a mint nobody made. That is the
    accusing direction, and it is a state a diff reaches by putting the declaration one line too early.
    THE NULL IS LEFT TO slot_declare, deliberately: it refuses a null address in its own words and with the
    right remedy, and short-circuiting to it here is what keeps ONE message for that state rather than two. */
-void agent_state_realm_slot_at(const char *c, const int *slot, const char *what, const char *f, int l)
+void agent_state_realm_slot_at(const char *c, const JSClassID *slot, const char *what, const char *f, int l)
 {
-    DCHECKF(slot == NULL || *slot > 0,
-            "`%s` declared a per-realm value slot (%s) at %s:%d that has not been minted yet — it reads %d, "
+    DCHECKF(slot == NULL || *slot != JS_INVALID_CLASS_ID,
+            "`%s` declared a per-realm value slot (%s) at %s:%d that has not been minted yet — it reads %u, "
             "and core/realm.c's realm_value_declare never returns that: it hands back a class id, which this "
             "runtime's allocator starts at JS_CLASS_INIT_COUNT. The declaration stands BELOW the line that "
             "assigns the slot, because a row declared above one is counted as a class id this agent minted "
             "while the allocator was never asked for it",
-            c ? c : "(unnamed)", what ? what : "(undescribed)", f ? f : "(no file)", l, slot ? *slot : 0);
+            c ? c : "(unnamed)", what ? what : "(undescribed)", f ? f : "(no file)", l,
+            slot ? *slot : (JSClassID)JS_INVALID_CLASS_ID);
     slot_declare(c, slot, what, SLOT_REALM, f, l);
 }
 void agent_state_flag_at(const char *c, const int *slot, const char *what, const char *f, int l) { slot_declare(c, slot, what, SLOT_FLAG, f, l); }
@@ -157,7 +164,7 @@ static int slot_is_pre_init(const AgentSlot *s)
 {
     switch (s->kind) {
     case SLOT_ID:    return *(const int *)s->slot == -1;
-    case SLOT_REALM: return *(const int *)s->slot == -1;
+    case SLOT_REALM: return *(const JSClassID *)s->slot == JS_INVALID_CLASS_ID;
     case SLOT_FLAG:  return *(const int *)s->slot == 0;
     case SLOT_CLASS: return *(const JSClassID *)s->slot == 0;
     case SLOT_ATOM:  return *(const JSAtom *)s->slot == JS_ATOM_NULL;
@@ -186,7 +193,7 @@ static void slot_set_pre_init(const AgentSlot *s)
 
     switch (s->kind) {
     case SLOT_ID:    *(int *)p = -1; break;
-    case SLOT_REALM: *(int *)p = -1; break;
+    case SLOT_REALM: *(JSClassID *)p = JS_INVALID_CLASS_ID; break;
     case SLOT_FLAG:  *(int *)p = 0; break;
     case SLOT_CLASS: *(JSClassID *)p = 0; break;
     case SLOT_ATOM:  *(JSAtom *)p = JS_ATOM_NULL; break;

@@ -9,7 +9,7 @@
 #include "core/events/event.h"
 #include "core/rendering/page_reveal.h"
 
-static int      g_slot = -1;          /* the per-realm "has been revealed" record (a baseline object) */
+static JSClassID g_slot = JS_INVALID_CLASS_ID;          /* the per-realm "has been revealed" record (a baseline object) */
 static JSAtom   g_atom_revealed = JS_ATOM_NULL;
 static JSClassID g_class;             /* §7.2.7.5's prototype slot, in quickjs's own per-context table */
 static int      g_id_ctor = -1;
@@ -344,7 +344,10 @@ void page_reveal_free(JSRuntime *rt)
     g_key = JS_UNDEFINED;
     JS_FreeAtomRT(rt, g_atom_revealed);
     g_atom_revealed = JS_ATOM_NULL;
-    g_slot = g_id_ctor = -1;
+    /* TWO STATEMENTS: `g_slot` is a per-realm value slot and therefore a CLASS ID, whose pre-declaration
+       value is JS_INVALID_CLASS_ID; `g_id_ctor` is a method id, whose is `-1`. */
+    g_slot = JS_INVALID_CLASS_ID;
+    g_id_ctor = -1;
     /* AND THE CLASS ID, which this release kept. core/agent_state.h settles it: a class is registered in a
        RUNTIME, so a carried id names a class in a runtime that is gone — and because JS_NewClassID returns a
        non-zero slot UNCHANGED rather than allocating, a second agent's page_reveal_init would hand JS_NewClass

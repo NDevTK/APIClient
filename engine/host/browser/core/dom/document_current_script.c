@@ -18,7 +18,7 @@
    shape §3.1.5's readiness uses and it is chosen for the same two reasons: the record is unreachable from the
    page, so nothing can write `currentScript` but §4.12.1.1; and the field is an ordinary property write, so the
    heap COW delta captures it and two script flows over one document never see each other's. */
-static int g_cs_slot = -1;
+static JSClassID g_cs_slot = JS_INVALID_CLASS_ID;
 
 /* THE ONE FIELD NAME, spelled once — a name read in one place and written in another is the broken contract
    CLAUDE.md's §Offensive-programming rule is about, and two string literals is how it becomes one. */
@@ -214,7 +214,7 @@ static JSValue js_doc_current_script(JSContext *ctx, JSValueConst this_val, int 
 
 void document_current_script_init(JSContext *ctx)
 {
-    DCHECK(g_cs_slot < 0, "document_current_script_init ran twice — the slot is declared once per AGENT and the "
+    DCHECK(g_cs_slot == JS_INVALID_CLASS_ID, "document_current_script_init ran twice — the slot is declared once per AGENT and the "
                           "record is built once per REALM");
     g_cs_slot = realm_value_declare(ctx, "HTML §3.1.7 currentScript");
     /* DECLARED UNDER `document`, because that is the row of core/platform.c's one list this component is
@@ -227,7 +227,7 @@ void document_current_script_install(JSContext *ctx, JSValueConst proto)
 {
     JSValue rec;
 
-    DCHECK(g_cs_slot >= 0, "§3.1.7's currentScript was installed into a realm before it was declared — the "
+    DCHECK(g_cs_slot != JS_INVALID_CLASS_ID, "§3.1.7's currentScript was installed into a realm before it was declared — the "
                            "declaration is the AGENT's and the install is the REALM's");
     /* §3.1.1: `readonly attribute HTMLOrSVGScriptElement? currentScript` — no setter, so the setter id is -1
        and an assignment is a TypeError in strict mode rather than a slot the page can forge. */
@@ -243,7 +243,7 @@ void document_current_script_install(JSContext *ctx, JSValueConst proto)
 
 void document_current_script_free(void)
 {
-    DCHECK(g_cs_slot >= 0, "§3.1.7's currentScript was released in an agent that never declared it");
+    DCHECK(g_cs_slot != JS_INVALID_CLASS_ID, "§3.1.7's currentScript was released in an agent that never declared it");
     /* THE RECORDS ARE THE REALMS' — each is in its own per-context slot and released with its context. What
        this component itself holds is the slot id, and it is a slot and not a reference, so there is nothing
        to free here and nothing above this that guards one. It is declared under `document` — this is a

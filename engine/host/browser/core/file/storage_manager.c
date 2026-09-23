@@ -79,7 +79,7 @@
 #include "core/storage/storage_shed.h"
 
 static JSClassID g_sm_class;
-static int       g_obj_slot = -1;
+static JSClassID g_obj_slot = JS_INVALID_CLASS_ID;
 static int       g_id_get_directory = -1;
 /* Storage §8's three members share ONE algorithm shape and differ by magic, so they share one declaration. */
 static int       g_id_storage[3] = { -1, -1, -1 };
@@ -475,7 +475,7 @@ static JSValue sm_get_storage(JSContext *ctx, JSValueConst this_val, int magic)
    component reaching for a prototype of its own. */
 void storage_manager_install_navigator_storage(JSContext *ctx, JSValueConst proto)
 {
-    DCHECK(g_obj_slot >= 0, "Storage §8's `storage` was installed before storage_manager_init declared the "
+    DCHECK(g_obj_slot != JS_INVALID_CLASS_ID, "Storage §8's `storage` was installed before storage_manager_init declared the "
                             "realm slot the getter answers from — the member would be defined on a prototype "
                             "whose getter aborts in core/realm.c on the first read. This component is gone "
                             "from core/platform.c's table, or its row was moved after core/frame/navigator.c "
@@ -561,7 +561,7 @@ void storage_manager_init(JSContext *ctx)
     JSClassDef d = { "StorageManager" };
     int m;
 
-    DCHECK(g_obj_slot < 0, "storage_manager_init ran twice — the class and the slot are declared once per AGENT");
+    DCHECK(g_obj_slot == JS_INVALID_CLASS_ID, "storage_manager_init ran twice — the class and the slot are declared once per AGENT");
     JS_NewClassID(JS_GetRuntime(ctx), &g_sm_class);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_sm_class, &d) == 0,
           "StorageManager: the per-realm prototype slot could not be declared");
@@ -603,7 +603,7 @@ void storage_manager_free(void)
 {
     int m;
 
-    g_obj_slot = -1;
+    g_obj_slot = JS_INVALID_CLASS_ID;
     g_id_get_directory = -1;
     g_persistent_storage = -1;
     for (m = 0; m < SG_MEMBER_N; m++) g_id_storage[m] = -1;

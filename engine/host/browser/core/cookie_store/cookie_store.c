@@ -52,7 +52,7 @@
 #define CS_SOURCE "cookieStore"
 
 static JSClassID g_cs_class;
-static int       g_obj_slot = -1;
+static JSClassID g_obj_slot = JS_INVALID_CLASS_ID;
 static int       g_id_get = -1;
 static int       g_id_get_all = -1;
 
@@ -393,7 +393,7 @@ void cookie_store_init(JSContext *ctx)
     const int NOPT = (int)(sizeof(COOKIE_STORE_GET_OPTIONS) / sizeof(COOKIE_STORE_GET_OPTIONS[0]));
     JSClassDef d = { "CookieStore" };
 
-    DCHECK(g_obj_slot < 0, "cookie_store_init ran twice — the class and the slot are declared once per AGENT");
+    DCHECK(g_obj_slot == JS_INVALID_CLASS_ID, "cookie_store_init ran twice — the class and the slot are declared once per AGENT");
     JS_NewClassID(JS_GetRuntime(ctx), &g_cs_class);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_cs_class, &d) == 0,
           "CookieStore: the per-realm prototype slot could not be declared");

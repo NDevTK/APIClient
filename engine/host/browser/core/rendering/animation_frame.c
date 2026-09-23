@@ -15,7 +15,7 @@
    through the realm. The slot holds ONE object for the realm's whole life and is never replaced: what
    time-travels is the object's PROPERTIES, which the heap COW captures, and replacing the slot would put one
    flow's map where every other flow looks. */
-static int g_slot = -1;
+static JSClassID g_slot = JS_INVALID_CLASS_ID;
 static int g_id_request = -1, g_id_cancel = -1;
 static JSAtom g_atom_queue = JS_ATOM_NULL, g_atom_next = JS_ATOM_NULL;
 static int g_ready;
@@ -327,7 +327,7 @@ void animation_frame_free(JSRuntime *rt)
     JS_FreeAtomRT(rt, g_atom_queue);
     JS_FreeAtomRT(rt, g_atom_next);
     g_atom_queue = g_atom_next = JS_ATOM_NULL;
-    g_slot = -1;
+    g_slot = JS_INVALID_CLASS_ID;
     /* AND THE TWO MEMBER DECLARATIONS, which this release used to keep. They name entries in a pool
        idl_args_pool_free restarts at 0 and step definitions registered with a runtime that is going away
        with them (core/agent_state.h). */

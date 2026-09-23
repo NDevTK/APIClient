@@ -19,7 +19,7 @@
 /* §4's THREE ASSOCIATED CONCEPTS, as three fields of one per-realm record. The slot holds ONE object for the
    realm's whole life and is never replaced: what time-travels is that object's PROPERTIES, which the heap COW
    captures, and replacing the slot would put one flow's lists where every other flow looks. */
-static int    g_slot = -1;
+static JSClassID g_slot = JS_INVALID_CLASS_ID;
 static JSAtom g_atom_pending = JS_ATOM_NULL;    /* §4's "list of idle request callbacks" */
 static JSAtom g_atom_runnable = JS_ATOM_NULL;   /* §4's "list of runnable idle callbacks" */
 static JSAtom g_atom_next = JS_ATOM_NULL;       /* §4's "idle callback identifier" */

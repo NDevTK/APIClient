@@ -347,7 +347,7 @@ JSValue viewport_env_value(JSContext *ctx, const char *member, JSValue computed)
 #define VP_POS_X "x"
 #define VP_POS_Y "y"
 
-static int g_scroll_slot = -1;
+static JSClassID g_scroll_slot = JS_INVALID_CLASS_ID;
 
 static double vp_scroll_axis(JSContext *ctx, const char *field)
 {
@@ -824,7 +824,7 @@ static JSValue js_vp_get(JSContext *ctx, JSValueConst this_val, int magic)
 #define VP_RESIZE_W   "width"
 #define VP_RESIZE_H   "height"
 
-static int g_resize_slot = -1;
+static JSClassID g_resize_slot = JS_INVALID_CLASS_ID;
 
 bool viewport_resize_changed(JSContext *ctx)
 {
@@ -1064,7 +1064,7 @@ static void viewport_install(JSContext *ctx)
 
 void viewport_init(JSContext *ctx)
 {
-    DCHECK(g_resize_slot < 0, "viewport_init ran twice — the §13.1 record's slot is declared once per AGENT");
+    DCHECK(g_resize_slot == JS_INVALID_CLASS_ID, "viewport_init ran twice — the §13.1 record's slot is declared once per AGENT");
     g_resize_slot = realm_value_declare(ctx, "CSSOM VIEW §13.1 the viewport as the resize steps last saw it");
     g_scroll_slot = realm_value_declare(ctx, "CSSOM VIEW §3.1 the viewport's current scroll position");
     /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. It is the slot this init's own
@@ -1087,8 +1087,8 @@ void viewport_free(void)
 {
     /* The records are the REALMS' — each is released with its context. What the agent holds is the slots, and a
        slot id is a class id in a runtime that is going away with it. */
-    g_resize_slot = -1;
-    g_scroll_slot = -1;
+    g_resize_slot = JS_INVALID_CLASS_ID;
+    g_scroll_slot = JS_INVALID_CLASS_ID;
     /* §4's three scroll members' ids are the AGENT's too, and the pool they live in goes with the runtime. A
        component that kept one would hand a second agent a member id from a runtime that no longer exists,
        which is the same failure the slots above are reset for. */

@@ -63,7 +63,7 @@ struct RemoteOp { int op; char *text; char **f; int nf; };
 
 /* ---- THE TWO INTRINSICS, PER REALM ----------------------------------------------------------------------- */
 
-static int g_set_slot = -1, g_apply_slot = -1;
+static JSClassID g_set_slot = JS_INVALID_CLASS_ID, g_apply_slot = JS_INVALID_CLASS_ID;
 
 /* CAPTURED BEFORE THIS REALM'S SCRIPTS RUN, which is what makes them the intrinsics rather than whatever the
    page has left on `Reflect` by the time a peer asks. Both reads are ordinary data properties of objects the
@@ -117,9 +117,9 @@ void remote_op_init(JSContext *ctx)
    by remote_op_program at the first cross-agent [[Set]] or [[Call]] that agent is asked to perform. */
 void remote_op_agent_free(void)
 {
-    DCHECK(g_set_slot >= 0 && g_apply_slot >= 0,
+    DCHECK(g_set_slot != JS_INVALID_CLASS_ID && g_apply_slot != JS_INVALID_CLASS_ID,
            "the cross-agent operation performer was released in an agent that never declared it");
-    g_set_slot = g_apply_slot = -1;
+    g_set_slot = g_apply_slot = JS_INVALID_CLASS_ID;
 }
 
 /* ---- THE RECORD ------------------------------------------------------------------------------------------ */

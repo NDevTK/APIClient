@@ -51,7 +51,11 @@
    moment another timeline reached, which §Time-travel-resume's razor calls a cap. The record it moved to is a heap
    object whose property writes the per-flow COW delta captures, so the field is still ONE per agent and is
    now also one per timeline. */
-static int    g_stepid = -1, g_driver_slot = -1;
+static int       g_stepid = -1;
+/* THE DRIVER SLOT IS SPLIT OFF `g_stepid` BECAUSE THEY ARE NOT THE SAME QUANTITY. One `static int` held a
+   step id and a per-realm value slot, and a slot is a CLASS ID — the erasure core/realm.h's declare entry
+   is about, arriving as a declaration list. */
+static JSClassID g_driver_slot = JS_INVALID_CLASS_ID;
 static int    g_ready;
 
 /* ---- steps 2 to 5 ----------------------------------------------------------------------------------------
@@ -1338,5 +1342,5 @@ void rendering_free(JSRuntime *rt)
        away with it, and a second agent's declaration would have re-registered over the top of a number issued
        by a dead one — core/agent_state.h's fetch defect, asserted by the registry. */
     g_stepid = -1;
-    g_driver_slot = -1;   /* the drivers are the REALMS' — each goes with its context */
+    g_driver_slot = JS_INVALID_CLASS_ID;   /* the drivers are the REALMS' — each goes with its context */
 }

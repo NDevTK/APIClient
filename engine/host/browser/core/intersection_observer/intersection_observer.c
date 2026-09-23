@@ -77,8 +77,8 @@ static JSAtom    g_atom_state = JS_ATOM_NULL;
 static JSValue   g_reg_key = JS_UNDEFINED;      /* §3.1.2's [[RegisteredIntersectionObservers]] on a target */
 static JSAtom    g_atom_reg = JS_ATOM_NULL;
 static JSAtom    g_atom_queued = JS_ATOM_NULL;  /* §3.1.1's IntersectionObserverTaskQueued flag */
-static int       g_docobs_slot = -1;            /* this realm's document-observer list */
-static int       g_notify_slot = -1;            /* this realm's §3.2.5 driver */
+static JSClassID g_docobs_slot = JS_INVALID_CLASS_ID;            /* this realm's document-observer list */
+static JSClassID g_notify_slot = JS_INVALID_CLASS_ID;            /* this realm's §3.2.5 driver */
 static int       g_notify_stepid = -1;
 static int       g_id_ctor = -1, g_id_observe = -1, g_id_unobserve = -1;
 static int       g_id_disconnect = -1, g_id_take = -1;
@@ -1859,7 +1859,11 @@ void intersection_observer_free(JSRuntime *rt)
        a runtime that is going away with this one, and the CLASS ID names a registration in it — kept, it would
        hand a second agent in one process a class registered in a runtime that no longer exists, which is
        core/agent_state.h's dom_rect defect exactly. */
-    g_docobs_slot = g_notify_slot = g_notify_stepid = -1;
+    /* THREE STATEMENTS AND NOT ONE: the two slots are CLASS IDS whose pre-declaration value is
+       JS_INVALID_CLASS_ID, and the step id's is `-1`. A chain hands every target the same value, so a `-1`
+       would reach a JSClassID as 0xFFFFFFFF. */
+    g_docobs_slot = g_notify_slot = JS_INVALID_CLASS_ID;
+    g_notify_stepid = -1;
     g_id_ctor = g_id_observe = g_id_unobserve = g_id_disconnect = g_id_take = -1;
     g_class = 0;
     g_ready = 0;

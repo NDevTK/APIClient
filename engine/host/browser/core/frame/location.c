@@ -170,13 +170,13 @@ enum { LOC_ASSIGN, LOC_REPLACE };
    properties of that object, so the only way to reach a getter with the wrong receiver is to pull it out with
    Object.getOwnPropertyDescriptor and apply it — which a browser answers with a TypeError, so this does. */
 static JSClassID g_loc_class;
-static int g_obj_slot = -1;   /* this realm's one Location */
+static JSClassID g_obj_slot = JS_INVALID_CLASS_ID;   /* this realm's one Location */
 /* §7.2.4 gives every Location an ASSOCIATED EMPTY DOMStringList, and it is a FIELD of the Location rather than
    a value the getter mints, which is the whole of what its first step promises: a Location whose relevant
    Document is null answers the SAME object on every read. Per realm because a Location is. The standard notes
    why it can be shared this way — it "cannot carry state across navigations because it is only returned when
    there is no relevant Document". */
-static int g_empty_asl_slot = -1;
+static JSClassID g_empty_asl_slot = JS_INVALID_CLASS_ID;
 
 /* DECLARED ONCE PER AGENT, INSTALLED PER REALM — the IDL pool is sealed after agent init, so a helper that
    mints inline works for the first realm and aborts on the second (core/html/hyperlink.c states the same
@@ -1423,7 +1423,7 @@ void location_init(JSContext *ctx)
     static const IdlArgType URL_ARG[] = { IDL_USVSTRING };
     int i;
 
-    DCHECK(g_obj_slot < 0, "location_init ran twice — the class, the slot and the two sources are declared once "
+    DCHECK(g_obj_slot == JS_INVALID_CLASS_ID, "location_init ran twice — the class, the slot and the two sources are declared once "
                            "per AGENT");
     /* §7.2.4's EIGHT SETTERS AND THREE OPERATIONS, declared here because the IDL pool is sealed after agent
        init: minting one inside location_install_realm would work for the first realm and abort on the second,
@@ -1490,12 +1490,12 @@ void location_free(void)
 {
     int i;
 
-    DCHECK(g_obj_slot >= 0, "§7.2.4's Location was released in an agent that never declared it");
+    DCHECK(g_obj_slot != JS_INVALID_CLASS_ID, "§7.2.4's Location was released in an agent that never declared it");
     /* The prototypes, the interface objects and the Locations are the REALMS' — each is released with its
        context. What the agent holds is the brand, the slots and the member ids the IDL pool issued — every one
        this file declares, §7.2.2's forwarding setter included. */
-    g_obj_slot = -1;
-    g_empty_asl_slot = -1;
+    g_obj_slot = JS_INVALID_CLASS_ID;
+    g_empty_asl_slot = JS_INVALID_CLASS_ID;
     g_loc_class = 0;
     for (i = 0; i < LOC_N; i++) g_loc_set[i] = -1;
     g_loc_assign = g_loc_replace = g_loc_reload = -1;

@@ -16,7 +16,7 @@
 #include "solver/cow.h"
 
 static JSClassID g_mql_class, g_ev_class;
-static int  g_slot = -1;                      /* this document's collection, in creation order */
+static JSClassID g_slot = JS_INVALID_CLASS_ID;                      /* this document's collection, in creation order */
 static int  g_id_match = -1, g_id_add = -1, g_id_remove = -1, g_id_ev_ctor = -1;
 static JSValue g_ev_key = JS_UNDEFINED;       /* the private Symbol MediaQueryListEvent's two slots live under */
 /* THE RUNTIME THIS COMPONENT WAS DECLARED IN, and the only slot that says "declared". It replaces a `g_ready`

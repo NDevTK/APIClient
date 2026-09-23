@@ -173,7 +173,7 @@
    and not a property of the field. */
 enum { TE_HANDLE = 0, TE_WHEN, TE_REPEAT, TE_TIMEOUT, TE_THIS, TE_NEST, TE_SEQ, TE_HANDLER, TE_ARG0 };
 
-static int      g_slot = -1;
+static JSClassID g_slot = JS_INVALID_CLASS_ID;
 static JSAtom   g_atom_map = JS_ATOM_NULL, g_atom_next = JS_ATOM_NULL;
 static int      g_ready;
 /* §8.7 Timers's timer initialization steps step 9's TASK, declared once per agent — see js_timer_task_step. */
@@ -2462,7 +2462,7 @@ void timer_free(JSRuntime *rt)
     JS_FreeAtomRT(rt, g_atom_map);
     JS_FreeAtomRT(rt, g_atom_next);
     g_atom_map = g_atom_next = JS_ATOM_NULL;
-    g_slot = -1;
+    g_slot = JS_INVALID_CLASS_ID;
     /* THE FOUR MEMBER DECLARATIONS, GIVEN BACK. They name entries in an id pool that goes with the agent, and
        `idl_install_method` reads them at every realm — so a carried one would install this agent's setTimeout
        from the last agent's pool entry. Nothing frees a pool id, which is exactly why nothing but this line

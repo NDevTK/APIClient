@@ -51,10 +51,10 @@ static JSAtom    g_atom_state = JS_ATOM_NULL;
    list — the same place core/intersection_observer/intersection_observer.c keeps §3.1.1's, and for the same
    reason: it is per-global state a flow writes, so it must ride a value the COW delta already captures. */
 static JSAtom    g_atom_queued = JS_ATOM_NULL;
-static int       g_reg_slot = -1;      /* this realm's §2 list of registered performance observer objects */
-static int       g_notify_slot = -1;   /* this realm's §5.3 task callee */
-static int       g_types_slot = -1;    /* this realm's §4.5 frozen array of supported entry types */
-static int       g_buf_slot = -1;      /* this realm's §2 performance entry buffer map, keyed by entry type */
+static JSClassID g_reg_slot = JS_INVALID_CLASS_ID;      /* this realm's §2 list of registered performance observer objects */
+static JSClassID g_notify_slot = JS_INVALID_CLASS_ID;   /* this realm's §5.3 task callee */
+static JSClassID g_types_slot = JS_INVALID_CLASS_ID;    /* this realm's §4.5 frozen array of supported entry types */
+static JSClassID g_buf_slot = JS_INVALID_CLASS_ID;      /* this realm's §2 performance entry buffer map, keyed by entry type */
 static int       g_notify_stepid = -1;
 static int       g_id_ctor = -1, g_id_observe = -1, g_id_take = -1, g_id_disconnect = -1;
 static int       g_ready;

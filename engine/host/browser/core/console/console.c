@@ -36,7 +36,7 @@
  * `parseInt = () => 0` must not change what `console.log("%d", x)` does. core/realm.h states the rule and the
  * store: a per-realm value lives in quickjs's own per-context slot, read at the realm's creation before any
  * script of that document has run. */
-static int g_rec_slot = -1;
+static JSClassID g_rec_slot = JS_INVALID_CLASS_ID;
 
 /* THE MEMBERS, WHICH ARE ALSO §2.1's LOG LEVELS. Every one of §1.1-§1.4's operations performs Logger or
    Printer with a logLevel that is spelled exactly like the operation, so the two lists are one list. */
@@ -1048,7 +1048,7 @@ void console_init(JSContext *ctx)
     static const IdlArgType DIR_ARGS[]    = { IDL_ANY, IDL_OBJECT_NULLABLE };
     int i;
 
-    DCHECK(g_rec_slot < 0, "console_init ran twice — the twenty pool entries and the realm-value slot are the "
+    DCHECK(g_rec_slot == JS_INVALID_CLASS_ID, "console_init ran twice — the twenty pool entries and the realm-value slot are the "
                            "AGENT's and are declared once in it");
     for (i = 0; i < M_N; i++) g_id[i] = -1;
     g_rec_slot = realm_value_declare(ctx, "Console §1.2/§1.3/§1.4 the console namespace object's count map, "
@@ -1121,5 +1121,5 @@ void console_free(void)
     int i;
 
     for (i = 0; i < M_N; i++) g_id[i] = -1;
-    g_rec_slot = -1;
+    g_rec_slot = JS_INVALID_CLASS_ID;
 }

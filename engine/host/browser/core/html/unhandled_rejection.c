@@ -148,13 +148,18 @@ static JSValue g_pre_key = JS_UNDEFINED;
    document's unhandled rejection fired at the ROOT window, which is the same defect a shared
    EventTarget.prototype has one link up. A rejection RECORDS the driver of the realm it rejected in, so the
    job carries its realm with it rather than the notify pass guessing one. */
-static int g_notify_slot = -1, g_notify_stepid = -1;
+/* THE SLOT AND THE STEP ID ARE SEPARATE DECLARATIONS BECAUSE THEY ARE SEPARATE QUANTITIES: a per-realm
+   value slot is a CLASS ID (core/realm.h's declare entry), and a step id is not. They shared one
+   `static int`, which is the erasure that let one C type stand for both. */
+static JSClassID g_notify_slot = JS_INVALID_CLASS_ID;
+static int       g_notify_stepid = -1;
 /* §8.1.6.4 step 7.4's fire, which is a DIFFERENT ALGORITHM from step 4.1's and gets its own machine rather than
    a mode flag on that one: it fires a NON-cancelable event, reports nothing, and appends to nothing. Sharing a
    driver would mean one `.algorithm` string naming two sections, which is the citation defect this component's
    own header is about. It is per realm for the same reason the notify driver is, and it is ALSO the marker
    §8.1.3.3's weak set is spelled with — see g_out_key. */
-static int g_handled_slot = -1, g_handled_stepid = -1;
+static JSClassID g_handled_slot = JS_INVALID_CLASS_ID;   /* a class id — see g_notify_slot above */
+static int       g_handled_stepid = -1;
 static void  (*g_report)(JSContext *ctx, JSValueConst reason, RejectionReportEdge edge);
 
 void unhandled_rejection_set_report_hook(void (*fn)(JSContext *ctx, JSValueConst reason,
@@ -746,8 +751,13 @@ void unhandled_rejection_free(JSRuntime *rt)
     /* THE TWO REGISTRATIONS, GIVEN BACK. They name a realm slot and a step machine in a runtime that is going
        away — but they are also what the init above would find set, and this file's own paragraph about the
        early-return is the argument for why leaving them is not harmless. */
-    g_notify_slot = g_notify_stepid = -1;
-    g_handled_slot = g_handled_stepid = -1;
+    /* FOUR STATEMENTS AND NOT TWO: a chained assignment gives every target the ONE value on its right, and
+       the slots' pre-declaration value is JS_INVALID_CLASS_ID while the step ids' is `-1`. Chained, a `-1`
+       would reach a JSClassID as 0xFFFFFFFF, which is the wild index the type exists to make unspellable. */
+    g_notify_slot = JS_INVALID_CLASS_ID;
+    g_notify_stepid = -1;
+    g_handled_slot = JS_INVALID_CLASS_ID;
+    g_handled_stepid = -1;
     /* AND THE CLASS WITH ITS CONSTRUCTOR'S POOL ENTRY. The class is registered in `rt`, which is going away;
        the pool entry names a member declaration of an agent that is going away. Neither is freed by anything —
        what makes leaving them wrong is that both are READ by the next agent, the class id by `JS_NewClassID`

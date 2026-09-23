@@ -246,7 +246,7 @@ static const char *const NAV_MODE_EXCLUDED[] = { "taintEnabled", "oscpu" };
    sends the reader to a section saying nothing about receivers reads as authority and is checkable only by
    someone who fetches the text, which is why a WRONG number is worse than none. */
 static JSClassID g_nav_class;
-static int g_obj_slot  = -1;   /* this realm's one Navigator — `window.navigator`'s [SameObject] holder */
+static JSClassID g_obj_slot = JS_INVALID_CLASS_ID;   /* this realm's one Navigator — `window.navigator`'s [SameObject] holder */
 
 /* THE RECORD — the environment §8.10.1's members answer from, and the member values, carried by the Navigator
  * rather than by the realm.
@@ -716,7 +716,7 @@ void navigator_init(JSContext *ctx)
 {
     JSClassDef d = { "Navigator", .finalizer = nav_finalizer, .gc_mark = nav_gc_mark };
 
-    DCHECK(g_obj_slot < 0, "navigator_init ran twice — the class and the slot are declared once per AGENT");
+    DCHECK(g_obj_slot == JS_INVALID_CLASS_ID, "navigator_init ran twice — the class and the slot are declared once per AGENT");
     /* THE CLASS IS BOTH THE PER-REALM PROTOTYPE SLOT AND THE BRAND: the one object per realm WEARS it, so
        §3.7.6/§3.7.7's check is a class-id comparison and a page cannot forge one. */
     JS_NewClassID(JS_GetRuntime(ctx), &g_nav_class);
@@ -752,7 +752,7 @@ void navigator_free(void)
        holds is the associated-Navigator slot and the member's pool id, and a slot id is a class id in a runtime
        that is going away with it. (It read "the two slots": the member-values slot moved onto the instance, so
        there is one.) */
-    g_obj_slot = -1;
+    g_obj_slot = JS_INVALID_CLASS_ID;
     g_id_java_enabled = -1;
     /* BEACON §2.1's member is declared from navigator_init, so it is released from here — the same rule the
        line below states for Permissions §6, and the same failure if it is not on this list. */

@@ -21,7 +21,7 @@
 #define SE_PAIR_TARGET 0
 #define SE_PAIR_TYPE   1
 
-static int g_slot = -1;
+static JSClassID g_slot = JS_INVALID_CLASS_ID;
 
 static uint32_t se_len(JSContext *ctx, JSValueConst arr)
 {
@@ -245,7 +245,7 @@ static void scroll_events_install(JSContext *ctx)
 
 void scroll_events_init(JSContext *ctx)
 {
-    DCHECK(g_slot < 0, "scroll_events_init ran twice — the §13.2 record's slot is declared once per AGENT");
+    DCHECK(g_slot == JS_INVALID_CLASS_ID, "scroll_events_init ran twice — the §13.2 record's slot is declared once per AGENT");
     g_slot = realm_value_declare(ctx, "CSSOM VIEW §13.2 a Document's pending scroll events, and the set of "
                                      "scrolling boxes that were scrolled");
     agent_state_realm_slot("scroll_events", &g_slot,

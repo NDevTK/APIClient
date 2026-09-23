@@ -29,7 +29,7 @@ static JSClassID g_nav_class;
    values that declaration produced. navigation_init used to latch on `g_obj_slot < 0`, which is a REALM-VALUE
    SLOT and not a statement about this component at all; the latch is this now and the slot is only a slot. */
 static JSRuntime *g_nav_rt;
-static int       g_obj_slot = -1;
+static JSClassID g_obj_slot = JS_INVALID_CLASS_ID;
 static int       g_id_entries = -1, g_id_update_current_entry = -1;
 
 /* WEB IDL §3.7.6 Attributes' AND §3.7.7 Operations' BRAND AS A FACT ABOUT THE OBJECT, WITH THE DECLARATION
@@ -81,7 +81,7 @@ JSValue navigation_object(JSContext *ctx)
 {
     JSValue nav;
 
-    DCHECK(g_obj_slot >= 0, "a Navigation was asked for before navigation_init declared the slot");
+    DCHECK(g_obj_slot != JS_INVALID_CLASS_ID, "a Navigation was asked for before navigation_init declared the slot");
     nav = realm_value_get(ctx, g_obj_slot);
     DCHECK(nav_is(nav),
            "a realm answered for its §7.2.6.2 navigation API with something that is not a Navigation — the "
@@ -875,7 +875,7 @@ void navigation_free(JSRuntime *rt)
        what JS_FreeRuntime's gc_obj_list walk reports and what core/events/event_target.c was caught by. */
     JS_FreeValueRT(rt, g_key);
     g_key = JS_UNDEFINED;
-    g_obj_slot = -1;
+    g_obj_slot = JS_INVALID_CLASS_ID;
     g_id_entries = g_id_update_current_entry = -1;
     /* AND THE CLASS ID, which this release kept. core/agent_state.h settles it: a class is registered in a
        RUNTIME, so a carried id names a class in a runtime that is gone — and JS_NewClassID returns a non-zero

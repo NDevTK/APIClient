@@ -21,7 +21,7 @@
 #define HR_TIME_RESOLUTION_MS          0.1
 #define HR_TIME_RESOLUTION_ISOLATED_MS 0.005
 
-static int g_origin_slot = -1;
+static JSClassID g_origin_slot = JS_INVALID_CLASS_ID;
 
 /* §4's ESTIMATED MONOTONIC TIME OF THE UNIX EPOCH — "Each group of environment settings objects that could
  * possibly communicate in any way has an estimated monotonic time of the Unix epoch, a moment on the monotonic
@@ -404,7 +404,7 @@ JSValue hr_time_current(JSContext *ctx)
 
 void hr_time_init(JSContext *ctx)
 {
-    DCHECK(g_origin_slot < 0, "hr_time_init ran twice — the TIME ORIGIN's slot is declared once per AGENT");
+    DCHECK(g_origin_slot == JS_INVALID_CLASS_ID, "hr_time_init ran twice — the TIME ORIGIN's slot is declared once per AGENT");
     DCHECK(!g_epoch_known, "hr_time_init ran twice — §4's estimated monotonic time of the Unix epoch is the "
                            "GROUP's, so a second agent starting on the first one's estimate would place its "
                            "clock's zero against a wall-clock reading taken in a process that is gone");
@@ -420,7 +420,7 @@ void hr_time_free(void)
 {
     /* The moments are the REALMS' — each is released with its context. What the agent holds is the slot, and a
        slot id is a class id in a runtime that is going away with it. */
-    g_origin_slot = -1;
+    g_origin_slot = JS_INVALID_CLASS_ID;
     /* §4's estimate is the GROUP's and this group is over. The double goes back with its latch rather than
        being left to be read under a `g_epoch_known` a later agent has re-raised: it names a moment on a
        monotonic clock that no longer runs, and the pair is one fact. */

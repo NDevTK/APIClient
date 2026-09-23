@@ -60,7 +60,7 @@
 #include "solver/concolic.h"
 
 static JSClassID g_history_class;
-static int g_obj_slot = -1;
+static JSClassID g_obj_slot = JS_INVALID_CLASS_ID;
 static int g_id_push = -1, g_id_replace = -1, g_id_scroll_setter = -1;
 static int g_id_go = -1, g_id_back = -1, g_id_forward = -1;
 
@@ -713,7 +713,7 @@ void history_init(JSContext *ctx)
 {
     JSClassDef d = { "History" };
 
-    DCHECK(g_obj_slot < 0, "history_init ran twice — the class, the slot and the member declarations are made "
+    DCHECK(g_obj_slot == JS_INVALID_CLASS_ID, "history_init ran twice — the class, the slot and the member declarations are made "
                            "once per AGENT");
     JS_NewClassID(JS_GetRuntime(ctx), &g_history_class);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_history_class, &d) == 0,
@@ -786,7 +786,7 @@ void history_free(void)
     /* The prototypes, the interface objects and the History objects are the REALMS' — each is released with
        its context. What the agent holds is the slot, and a slot id is a class id in a runtime that is going
        away with it. */
-    g_obj_slot = -1;
+    g_obj_slot = JS_INVALID_CLASS_ID;
     g_id_push = g_id_replace = g_id_scroll_setter = -1;
     g_id_go = g_id_back = g_id_forward = -1;
 }

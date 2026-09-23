@@ -22,7 +22,7 @@
 #include "core/url/url.h"
 #include "solver/route_seed.h"   /* §7.4.4 step 8 is where an application declares one of its own pages */
 
-static int g_slot = -1;
+static JSClassID g_slot = JS_INVALID_CLASS_ID;
 
 /* ---- §7.4.1.1's SESSION HISTORY ENTRY, and §7.4.1.2's DOCUMENT STATE -----------------------------------------
  *
@@ -590,7 +590,7 @@ bool session_history_is_fragment_navigation(JSContext *ctx, const char *url)
     char *bare_target, *bare_active;
     bool same;
 
-    DCHECK(g_slot >= 0, "§7.4.2.2's same-document test ran before session_history_init declared the record");
+    DCHECK(g_slot != JS_INVALID_CLASS_ID, "§7.4.2.2's same-document test ran before session_history_init declared the record");
     DCHECK(url != NULL, "§7.4.2.2's same-document test was asked about no URL — its caller has a destination "
                         "or it is not navigating");
     url_record_init(&target);
@@ -1332,7 +1332,7 @@ void session_history_url_update_begin(JSContext *ctx, SessionHistoryUrlUpdate *w
     JSValue scroll_v;
     StructuredData undef;
 
-    DCHECK(g_slot >= 0, "§7.4.4's URL and history update steps ran before session_history_init declared the "
+    DCHECK(g_slot != JS_INVALID_CLASS_ID, "§7.4.4's URL and history update steps ran before session_history_init declared the "
                         "record");
     DCHECK(!JS_IsUndefined(new_url) && !JS_IsNull(new_url),
            "§7.4.4 runs with a URL — its step 2 defaults newURL to the document's own address, so the caller "
@@ -1537,7 +1537,7 @@ void session_history_fragment_nav_visit(JSContext *ctx, SessionHistoryFragmentNa
 void session_history_fragment_nav_begin(JSContext *ctx, SessionHistoryFragmentNav *w, const char *url,
                                         const char *history_handling)
 {
-    DCHECK(g_slot >= 0, "§7.4.2.3.3's navigate to a fragment ran before session_history_init declared the "
+    DCHECK(g_slot != JS_INVALID_CLASS_ID, "§7.4.2.3.3's navigate to a fragment ran before session_history_init declared the "
                         "record");
     DCHECK(url != NULL && *url, "§7.4.2.3.3 was begun with no destination — §7.4.2.2's fourth conjunct is that "
                                 "the URL has a non-null FRAGMENT, so a caller that reached this branch has one");
@@ -1910,7 +1910,7 @@ void session_history_traverse_by_delta(JSContext *ctx, int32_t delta)
     JSValueConst argv[1];
     JSValue fn, d;
 
-    DCHECK(g_slot >= 0, "§7.4.3's traverse-the-history-by-a-delta ran before session_history_init declared the "
+    DCHECK(g_slot != JS_INVALID_CLASS_ID, "§7.4.3's traverse-the-history-by-a-delta ran before session_history_init declared the "
                         "record");
     DCHECK(delta != 0, "§7.4.3 was reached with a delta of 0 — §7.2.5's delta traverse step 4 turns that into a "
                        "RELOAD of the document's node navigable and returns, so it never gets this far");
@@ -2090,7 +2090,7 @@ void session_history_install_document(JSContext *ctx)
     JSValue rec, entry, entries;
     StructuredData nul, undef;
 
-    DCHECK(g_slot >= 0, "a document reached §7.4.1 before session_history_init declared the record");
+    DCHECK(g_slot != JS_INVALID_CLASS_ID, "a document reached §7.4.1 before session_history_init declared the record");
     rec = sh_record(ctx);
     {
         JSValue prev = JS_GetPropertyStr(ctx, rec, SH_R_ACTIVE);
@@ -2165,7 +2165,7 @@ void session_history_install_document(JSContext *ctx)
 
 void session_history_init(JSContext *ctx)
 {
-    DCHECK(g_slot < 0, "session_history_init ran twice — §7.4.1's record is declared once per AGENT");
+    DCHECK(g_slot == JS_INVALID_CLASS_ID, "session_history_init ran twice — §7.4.1's record is declared once per AGENT");
     g_slot = realm_value_declare(ctx, "HTML §7.4.1 the session history entries, the current session history "
                                       "step, and the History object's state, length and index");
     /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The traversal machine's id is
@@ -2187,6 +2187,6 @@ void session_history_free(void)
 {
     /* The records are the REALMS' — each is released with its context. What the agent holds is the slot and the
        traversal machine's registered id, and both name things in a runtime that is going away with them. */
-    g_slot = -1;
+    g_slot = JS_INVALID_CLASS_ID;
     g_traverse_stepid = -1;
 }

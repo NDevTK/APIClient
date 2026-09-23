@@ -63,7 +63,7 @@ static JSClassID g_class;
 static JSValue   g_state_key = JS_UNDEFINED;    /* the observer's own state slot */
 static JSAtom    g_atom_state = JS_ATOM_NULL;
 static JSAtom    g_atom_depth = JS_ATOM_NULL;   /* §3.4.5 step 1's shallowestTargetDepth, on the realm's list */
-static int       g_docobs_slot = -1;            /* this realm's §3.2.1 [[resizeObservers]] */
+static JSClassID g_docobs_slot = JS_INVALID_CLASS_ID;            /* this realm's §3.2.1 [[resizeObservers]] */
 static int       g_id_ctor = -1, g_id_observe = -1, g_id_unobserve = -1, g_id_disconnect = -1;
 static int       g_ready;
 
@@ -1009,7 +1009,7 @@ void resize_observer_free(JSRuntime *rt)
     JS_FreeAtomRT(rt, g_atom_state);
     JS_FreeAtomRT(rt, g_atom_depth);
     g_atom_state = g_atom_depth = JS_ATOM_NULL;
-    g_docobs_slot = -1;
+    g_docobs_slot = JS_INVALID_CLASS_ID;
     g_id_ctor = g_id_observe = g_id_unobserve = g_id_disconnect = -1;
     g_class = 0;
     g_ready = 0;

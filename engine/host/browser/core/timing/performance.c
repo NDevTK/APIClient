@@ -30,7 +30,7 @@ static JSClassID g_perf_class;
    member's realm" (a REALM TEST, which §3.7.6 does not ask and which is the defect). Deleting the slot would
    have taken §8.1's singleton with it; splitting the questions is the fix, and the record above is the half
    that was missing. RETIREMENT: this record goes when no reader can reach the deletion clause. */
-static int g_perf_slot = -1;
+static JSClassID g_perf_slot = JS_INVALID_CLASS_ID;
 static int g_id_now = -1;      /* §7.1 now() */
 static int g_id_tojson = -1;   /* §7.3 toJSON(), which is Web IDL §3.7.7.1.1's algorithm */
 
@@ -395,7 +395,7 @@ void performance_init(JSContext *ctx)
 {
     JSClassDef d = { "Performance", perf_finalizer, perf_gc_mark };
 
-    DCHECK(g_perf_slot < 0, "performance_init ran twice — the class, the slot and the two operations are "
+    DCHECK(g_perf_slot == JS_INVALID_CLASS_ID, "performance_init ran twice — the class, the slot and the two operations are "
                             "declared once per AGENT");
     /* THE CLASS IS THE PER-REALM PROTOTYPE SLOT, THE BRAND AND THE RECORD'S DOOR: the one object per realm
        WEARS it, so §3.7.6 Attributes' and §3.7.7 Operations' check is a class-id comparison a page cannot
@@ -445,7 +445,7 @@ void performance_free(void)
        finalizer, which runs AFTER this column, and both hooks reach it through JS_GetAnyOpaque and read no
        static of this file — so a zeroed class id is invisible to them. */
     g_perf_class = 0;
-    g_perf_slot = -1;
+    g_perf_slot = JS_INVALID_CLASS_ID;
     g_id_now = -1;
     g_id_tojson = -1;
 }

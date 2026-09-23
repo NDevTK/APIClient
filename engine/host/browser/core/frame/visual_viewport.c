@@ -24,7 +24,7 @@
 #define VISUAL_VIEWPORT_SCALE 1.0
 
 static JSClassID g_vv_class;
-static int g_obj_slot = -1;      /* §2's "the VisualViewport object associated with the document" */
+static JSClassID g_obj_slot = JS_INVALID_CLASS_ID;      /* §2's "the VisualViewport object associated with the document" */
 
 /* THE RECORD — the document §12's members are about, carried by the VisualViewport rather than looked up from
  * the realm the getter was DEFINED in.
@@ -62,7 +62,7 @@ typedef struct {
 /* THE ONE STATEMENT OF WHAT THE RECORD OWNS — the same list the finalizer frees and the gc_mark walks. */
 static const uint16_t VV_VAL_OFF[] = { (uint16_t)offsetof(VisualViewportRec, global) };
 static const CowRecord VV_REC = { sizeof(VisualViewportRec), VV_VAL_OFF, 1 };
-static int g_resize_slot = -1;   /* §13.1 step 2's "since the last time these steps were run" */
+static JSClassID g_resize_slot = JS_INVALID_CLASS_ID;   /* §13.1 step 2's "since the last time these steps were run" */
 
 /* ---- §12's attributes ------------------------------------------------------------------------------------ */
 
@@ -396,7 +396,7 @@ void visual_viewport_init(JSContext *ctx)
 {
     JSClassDef d = { "VisualViewport", .finalizer = vv_finalizer, .gc_mark = vv_gc_mark };
 
-    DCHECK(g_obj_slot < 0, "visual_viewport_init ran twice — the class and the slots are declared once per "
+    DCHECK(g_obj_slot == JS_INVALID_CLASS_ID, "visual_viewport_init ran twice — the class and the slots are declared once per "
                            "AGENT");
     /* THE CLASS IS BOTH THE PER-REALM PROTOTYPE SLOT AND THE BRAND: the one object per realm WEARS it, so
        §3.7.6 Attributes' check is a class-id comparison and a page cannot forge one. */
@@ -439,6 +439,6 @@ void visual_viewport_free(void)
        released with its context. What the agent holds is the two slots and a class id, and both are
        registrations in a runtime that is going away with them. */
     g_vv_class = 0;
-    g_obj_slot = -1;
-    g_resize_slot = -1;
+    g_obj_slot = JS_INVALID_CLASS_ID;
+    g_resize_slot = JS_INVALID_CLASS_ID;
 }
