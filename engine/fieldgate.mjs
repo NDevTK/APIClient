@@ -215,6 +215,9 @@ function walk(dir, out = []) {
    instrument is not a party to the seam it MEASURES (see below), but its own bytes decide every answer it
    gives, so a modified `fieldgate.mjs` is precisely a run whose number no revision describes. */
 const cone = [];
+/* THE JAVASCRIPT THIS SCAN READS, SPELLED AS A LANGUAGE AND NOT AS A FILENAME — see the testing block below,
+   where taking only one of these three left a whole class of driver in no namespace at all. */
+const TESTING_JS = new Set([".js", ".mjs", ".cjs"]);
 function corpus() {
   const files = [];
   cone.push("engine/host");
@@ -241,30 +244,59 @@ function corpus() {
      extension JavaScript however the document around it is named. */
   for (const p of walk(join(ROOT, "extension")))
     if (extname(p) === ".html") files.push({ path: p, lang: "html", area: "extension" });
-  /* NAMED RESIDUAL — THE SAME DEFECT THE PARAGRAPH ABOVE RECORDS FOR `.html`, RECOMMITTED HERE FOR `.mjs` BY
-     THE BLOCK DIRECTLY BELOW IT. That paragraph's own rule is "a file is in for WHERE it is and WHAT it is",
-     and this selector asks WHAT ITS EXTENSION IS. `testing/` holds thirteen `.mjs` drivers beside its `.js`
-     ones, so a Node driver that loads the glue and reaches the ABI is in no namespace at all.
-     WHAT IS NOT COVERED — A PROPERTY AND NOT A LIST: any `testing/` driver written as an ES module is read by
-     no channel here, so its ccalls do not reach `abiCcalls` and its record fields are neither audited nor
-     refused. The ABI channel is where that is visible today; it is not where it is bounded.
-     WHAT THE NEXT DIFF BUILDS: this selector taking `.mjs` and `.cjs` beside `.js` under the same
-     `area: "testing drivers"` banding, so new findings land in a row that already exists.
-     HOW ITS ABSENCE WOULD SHOW — AN OBSERVATION AND NOT AN INSTANCE: an exported ABI entry a `testing/*.mjs`
-     driver ccalls is reported by the row below as one nothing calls, and a reader who greps the tree for that
-     entry's name finds the caller the gate said was not there.
-     WHY IT IS NOT LANDED WITH THE BANDING BESIDE IT, AND WHO MAY LAND IT: widening a corpus is a claim about
-     COVERAGE priced in FALSE ACCUSATIONS, and the two are measured together or the trade is not being made —
-     thirteen files entering every channel at once cannot be priced from the ABI channel's enumerable
-     thirty-eight entries, which is all a lane can hand-price. It needs a whole-corpus before/after taken with
-     this instrument IN PLACE in a frozen snapshot, which is the one measurement a lane may not take. A reader
-     who runs the observation, gets the defer answer and correctly leaves this standing is asked to SAY SO
-     rather than to wait, since nothing anywhere accumulates those readings.
-     RETIREMENT: this record goes when a `testing/` driver's extension cannot decide whether the gate reads
-     it. */
-  cone.push(":(glob)testing/*.js");
+  /* THE TESTING DRIVERS ARE TAKEN BY LANGUAGE AND NO LONGER BY THEIR SPELLING OF IT, which is what the named
+     residual that stood here asked for. Its argument is kept in its own words because it is the one a reader
+     re-derives and because the hesitation in it was right: this selector used to ask WHAT ITS EXTENSION IS
+     where the paragraph above it rules that a file is in for WHERE it is and WHAT it is; `testing/` holds ES
+     module and CommonJS drivers beside its `.js` ones, so a Node driver that loads the glue and reaches the
+     ABI was in no namespace at all — its ccalls did not reach `abiCcalls` and its record fields were neither
+     audited nor refused.
+     ITS ABSENCE CLAUSE WAS EXACT AND ITS POPULATION WAS THE WHOLE CATEGORY. It said an exported entry such a
+     driver ccalls is reported below as one nothing calls, and a reader who greps the tree for that name finds
+     the caller the gate said was not there. Measured before the widening: ALL FIFTEEN rows of the disagree
+     category named an entry a `testing/` module driver reaches, and two of them carried the harsher sentence
+     that no caller exists in this process either — one of those, `qjs_dumps`, reads as a delete candidate and
+     is what the engine dump driver takes its records out of.
+     THE PRICE, WHICH IS THE THING THE RESIDUAL REFUSED TO GUESS AT, taken as a before/after with this
+     instrument IN PLACE in a frozen snapshot: entries reached directly by a driver 13 -> 23, entries reached
+     ONLY by this process's own C 13 -> 7, disagree rows 15 -> 8. AGAINST THAT, 16 fresh DEFAULTED reads, and
+     NOT ONE fresh row in the two channels an accusation is expensive in — read-with-no-writer and
+     write-with-no-reader both stayed at 0 for the new area, and no other area moved by a single count in any
+     column. Unaudited went 93 -> 105, which is the honest half of the same trade: 9 more ambiguous receivers
+     and 3 more refused constructs, banded where they cannot be read as findings.
+     WHAT THE 16 ARE, BECAUSE A COUNT THAT NOBODY OPENED IS NOT A PRICE. Three are a plain disjunction over an
+     endpoint record the engine emitted, which is the textbook shape the verdict below describes. Seven stand
+     under a catch that answers the engine with a network error, so an absent address would be reported to the
+     engine as a failed fetch. One turns an absent address into the named wrong answer `unparseable address`.
+     The remaining five sit in probe harnesses whose catch RECORDS the throw as the measured outcome; they are
+     the rule above working exactly as it is written, and whether a harness wants that is a question for the
+     harness and not for this selector.
+     THE RESIDUAL'S LAST CLAUSE WAS THE ONE THAT WAS WRONG, AND IT IS THE CLAUSE THAT KEPT THIS SHUT. It said
+     the measurement "is the one measurement a lane may not take". What a lane may not do is BUILD; this gate
+     is node reading text, `engine/frozen_snapshot.sh` symlinks the dependency tree into a private clone, and
+     an instrument A/B belongs in exactly such a clone — in place relative to its own corpus, and unreachable
+     from the tree every peer is editing. The deferral was real, its reason was not, and a reason that names
+     the wrong prohibition defers forever because nobody can ever satisfy it.
+     RETIREMENT — CARRIED FORWARD RATHER THAN DISCHARGED, BECAUSE THE SPELLING AXIS CLOSED AND A SECOND ONE
+     OPENED UNDER IT. The 8 rows that survive are not this corpus's to answer for and are not defects either:
+     every one is an entry a driver reaches through a LOCAL HELPER, `u(name)` and `str(name)`, so the literal
+     the matcher below requires as the first argument of a ccall is at the helper's call site and never at the
+     ccall. That is a count of a SPELLING wearing a total's clothes, one level in from the one just repaired.
+     WHAT IS NOT COVERED: an entry named by anything but a string literal in the ccall itself. WHAT THE NEXT
+     DIFF BUILDS: the ccall matcher resolving a first argument that is a parameter of a single-expression local
+     helper back to that helper's own call sites, which is the same resolution `originOfExpr` already performs
+     for a returned value. HOW ITS ABSENCE WOULD SHOW — AN OBSERVATION AND NOT AN INSTANCE: an entry appears in
+     the disagree category as one only this process's C calls, and grepping the drivers for its name finds it
+     as the argument of a one-line wrapper rather than of a ccall. */
+  cone.push(":(glob)testing/*.js", ":(glob)testing/*.mjs", ":(glob)testing/*.cjs");
+  /* THREE PATHSPECS AND NOT ONE BRACE, BECAUSE A BRACE MATCHES NOTHING AND SAYS NOTHING. git's pathspec globs
+     are wildmatch, which has no brace expansion, so `:(glob)testing/*.{js,mjs}` is a pathspec that matches
+     ZERO files — measured, against 29 for the three written out. The cone is what `gateRevision` asks git
+     about, so a cone that matches nothing reports the paths under it CLEAN at every revision whatever anybody
+     edited: a silent failure in the reassuring direction, in the one check that decides whether this gate's
+     number may be quoted against a commit at all. */
   for (const p of walk(join(ROOT, "testing")))
-    if (extname(p) === ".js" && dirname(p) === join(ROOT, "testing") && !basename(p).startsWith("debug-"))
+    if (TESTING_JS.has(extname(p)) && dirname(p) === join(ROOT, "testing") && !basename(p).startsWith("debug-"))
       files.push({ path: p, lang: "js", area: "testing drivers" });
   return files;
 }

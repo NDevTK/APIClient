@@ -5255,6 +5255,39 @@ function defaultTargets(notify = () => {}) {
     const p = join(ROOT, dir);
     if (existsSync(p)) out.push(...walk(p));
   }
+  /* AND THE HARNESS, WHICH MEASURES EVERYTHING ELSE AND WAS MEASURED BY NOTHING. The argument is the one the
+     two blocks above already make, and it had never been made about this directory: a file the gate does not
+     COLLECT is an excluded file, and the total LOOKS complete. `testing/` is not some other tool's subject
+     here — it is prose this project wrote, it argues standards out loud exactly as the gates beside it do, and
+     a wrong number in the driver that decides what a real page proves misleads a reader precisely as one in a
+     C file does.
+
+     THE ONE SENTENCE THAT EVER POINTED AT IT POINTED THE WRONG WAY, WHICH IS WHY NOBODY ASKED. This file's own
+     paragraph about the delta selector names `testing` in one breath with `engine/lexbor` and `engine/qjs`, as
+     directories none of which any run of this audit has ever read. That is TRUE as a statement of fact and the
+     company it keeps is wrong: those two are UPSTREAM and this one is ours. A directory grouped with upstream
+     reads as a decision somebody made, and a decision is what a reader stops questioning. It is an INCIDENTAL
+     gap wearing a deliberate one's clothes, and the tell is free — the sentence states WHAT IS NOT READ and
+     gives a reason for only two of the three things it lists.
+
+     WALK AND NOT readdir, AND THE WHOLE TREE. The two subdirectories hold fixture pages and corpus drivers,
+     and the reason a sibling gate holds those out does not transfer: that gate's subject is a PRODUCER-CONSUMER
+     contract, where crediting a fixture's own literal as the producer of an engine name would be a false
+     COMPLETE. A citation has no such asymmetry — a number is right or wrong wherever it is written, and the
+     corpus driver that reports a real page carries as many as the harness above it.
+
+     WHAT THE CAPTURED BUNDLES COST, MEASURED RATHER THAN ASSUMED. `testing/fixtures` holds captured minified
+     third-party chunks, which are exactly the bytes the skip list in `walk` exists for: a citation nobody here
+     wrote is not one this tree can be held to, which is the line `lexbor` and `qjs` are already drawn on. They
+     are NOT skipped by name, because the extractor already excludes them by construction and a name list is
+     the thing that drifts — it reads comment bodies and string literals, a minifier strips the first, and the
+     two captures in this tree answered ZERO citations read between them when this tool was pointed at them
+     directly. HOW THAT WOULD CHANGE, stated so the next reader runs it instead of re-deriving it: point this
+     tool at a capture alone and read the citations-read figure beside its findings. A capture whose string
+     literals carry a dotted number answers nonzero, and the honest repair then is a RULE for captured bytes
+     and still never a list of their names. */
+  const testingDir = join(ROOT, "testing");
+  if (existsSync(testingDir)) out.push(...walk(testingDir));
   /* AND THE GATES, which were named as a stated limit one commit ago and are collected one commit later,
    * because the reason they were outside has been built. A gate's prose is where this project reasons about
    * the standards out loud — idlgen argues Web IDL's §3.7.3 for five paragraphs, trusted.mjs argues Fetch's
