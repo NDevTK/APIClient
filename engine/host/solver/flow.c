@@ -4378,6 +4378,25 @@ static double flow_member_key(const Flow *f) {
            + flow_optimism(f) + flow_distance(f) + flow_branch_bonus(f);
 }
 
+#if APICLIENT_DEV
+/* WHAT AN INDEX OVER THAT KEY WOULD COMPARE, WRITTEN ONCE SO THE CHECK AND ITS PROSE CANNOT DRIFT — the
+   member's own half, shifted by the two quantities an index would hold PER ACCOUNT rather than per member.
+   `acct_family_val` and `flow_family_notch` are read through one pointer by every arm of a family, so they
+   are a COMMON OFFSET that orders nothing within one; the carry is the single per-member bit that moves
+   between two frontier generations, and `flow_silence_phase` decomposes it out. That is the whole of
+   `notch = k + K + (p + R >= S)` spelled as the thing a candidate set would be taken from.
+   IT IS A RE-ASSOCIATION AND THAT IS THE POINT RATHER THAN A DEFECT. flow_weight sums ONE product of ONE
+   exact integer; this sums two, so it may differ from the comparator in the last bit. Were it bit-identical
+   there would be nothing to measure — the fold in flow_pick exists precisely to find out whether the
+   difference ever reaches the ANSWER, and solver/flow.h's FlowIndexChecks says what each outcome licenses.
+   DEV-ONLY, and it raises no scan counter: flow.h's FLOW_SCANS banner says those rows count the flow_weight
+   the scan itself performed and never the ones a DCHECK below it makes, and every caller of this is one. */
+static double flow_index_surrogate(const Flow *f) {
+    return acct_family_val(f) + flow_member_key(f)
+           - (double)(flow_family_notch(f) + flow_silence_carry(f)) * FLOW_AGE_QUANTUM;
+}
+#endif
+
 static double flow_nonreward(const Flow *f) {
     /* THE TWO READINGS AND THE ONE TAG, which is what this sum is now made of explicitly: the optimism
        bonus and the fitness distance are facts about THIS FLOW, and the aging is the queue coordinate it
@@ -4683,6 +4702,9 @@ static long g_scan_weights[FLOW_SCAN_N];
    build and that composer has no dev arm to put them behind. */
 static FlowKeyChecks g_key_checks;
 FlowKeyChecks flow_key_checks(void) { return g_key_checks; }
+
+static FlowIndexChecks g_index_checks;
+FlowIndexChecks flow_index_checks(void) { return g_index_checks; }
 #if APICLIENT_DEV
 static long key_checks_total(void) {
     return g_key_checks.armed + g_key_checks.stale_gen + g_key_checks.first_seen + g_key_checks.running;
@@ -4843,6 +4865,10 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
     /* THE TWO SIDES OF THE ONE IDENTITY THAT MAKES THE ARMING COUNT A MEASUREMENT RATHER THAN A SUM OF ITS OWN
        SUMMANDS — snapshotted here and compared where the loop ends. See solver/flow.h's FlowKeyChecks. */
     long kc_before = key_checks_total(), sw_before = g_scan_weights[why];
+    /* …AND THE MEMBER AN INDEX OVER THE MEMBER KEY WOULD HAVE RETURNED, folded beside the comparator's own
+       maximum over exactly the same population and with exactly the same tie-break. See solver/flow.h's
+       FlowIndexChecks for what the comparison licenses and why it is a reading rather than an argument. */
+    const Flow *sur_best = NULL; double sur_w = 0.0;
 #endif
     for (int i = 0; i < g_flows_n; i++) {
         double w;
@@ -4967,6 +4993,16 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
            estimate, an age or a "cheapest to rebuild" score would be exactly that disagreement. One comparator,
            one scan, one direction bit. */
         if (!best || (worst ? w < bw : w > bw)) { best = g_flows[i]; bw = w; }
+#if APICLIENT_DEV
+        /* THE SAME FOLD ON THE SURROGATE, AND THE COMPARISON IS COPIED FROM THE LINE ABOVE RATHER THAN
+           WRITTEN AGAIN. A tie-break that differed from the comparator's would make the two name different
+           members for a reason that is not the surrogate disagreeing, which is the one thing this check must
+           not confuse — so the direction bit, the strictness and the empty-accumulator arm are the same. */
+        {
+            double s = flow_index_surrogate(g_flows[i]);
+            if (!sur_best || (worst ? s < sur_w : s > sur_w)) { sur_best = g_flows[i]; sur_w = s; }
+        }
+#endif
     }
 #if APICLIENT_DEV
     /* THE PARTITION AGAINST THE COUNTER IT IS A PARTITION OF, WITH BOTH DELTAS IN ONE HAND. The four buckets
@@ -5014,7 +5050,46 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
         }
         if (seed->picks == 0 && (!never || w >= never_w)) { never = seed; never_w = w; }
         if (!best || (worst ? w <= bw : w >= bw)) { best = (Flow *)seed; bw = w; }
+#if APICLIENT_DEV
+        /* AND THE SEED TAKES THE SURROGATE BACK ON THE SAME NON-STRICT COMPARISON, for the reason the block
+           above this one gives: ties go to the incumbent in the comparator, so a surrogate that kept the
+           loop's winner on a tie would name a different member by TIE-BREAK and not by disagreement. */
+        {
+            double s = flow_index_surrogate(seed);
+            if (!sur_best || (worst ? s <= sur_w : s >= sur_w)) { sur_best = seed; sur_w = s; }
+        }
+#endif
     }
+#if APICLIENT_DEV
+    /* WHETHER AN INDEX WOULD HAVE ANSWERED WHAT THE COMPARATOR ANSWERED — solver/flow.h's FlowIndexChecks
+       holds the whole argument and the three readings. Asked here rather than inside the loop because it is
+       a claim about the SCAN'S ANSWER and not about a member, and after the seed fold because the seed is
+       part of that answer.
+       IT COMPARES WEIGHTS AND NOT POINTERS, WHICH IS WHAT MAKES IT A CHECK RATHER THAN A TAUTOLOGY ON ONE
+       SIDE AND A FALSE ALARM ON THE OTHER. Two members standing at one weight are a state this frontier is
+       measured to be in most of the time — `neverPickedGap` 0.000 at every sample, 73-93% of members tied at
+       the top — so requiring the same POINTER would fire on every tie, which is the order working. What an
+       index must not do is return a member the comparator calls WORSE, and that is exactly this equality.
+       EXACT `==` AND NO EPSILON, this file's idiom: a tolerance here would accept the last-bit divergence
+       this check exists to detect, which would make it agree by construction with whatever it was pointed at.
+       THE EXTRA WEIGHING IS INSIDE THE DCHECK AND RAISES NO SCAN COUNTER, for flow_index_surrogate's reason;
+       it is O(1) per scan rather than per member, so it is in a different class from the per-member stamp
+       above and needs no separate argument about cost. */
+    if (best && sur_best) {
+        g_index_checks.index_asked++;
+        if (sur_best != best) g_index_checks.index_differed++;
+        DCHECKF(flow_weight(sur_best) == bw,
+                "an index over the member key would have returned a member this comparator calls WORSE — the "
+                "surrogate is `acct_family_val + flow_member_key - (family notch + carry) * FLOW_AGE_QUANTUM`, "
+                "which is flow_weight RE-ASSOCIATED, and a fire here is that re-association reaching the "
+                "ANSWER rather than the last bit. It is the proof that no candidate set may be taken from "
+                "this key until flow_weight is composed so its member half is a SUBEXPRESSION of it — which "
+                "is an ORDER change in the last bit and a decision rather than a diff, so this abort is a "
+                "finding to report and not a line to soften. The surrogate chose a member weighing %.17g "
+                "where the scan's maximum is %.17g, over %d member(s), with the surrogate reading %.17g",
+                flow_weight(sur_best), bw, g_flows_n, sur_w);
+    }
+#endif
     /* §scheduler'S SENTENCE, ASSERTED WHERE THE CHOICE IS MADE — "CPU-AGING so a monopolizer that burns CPU
        without emitting sinks below productive+unrun flows". This is the one line in the engine that decides
        which flow runs, so it is where the claim is either true or a comment. WHAT IT CATCHES IS AN EDIT TO

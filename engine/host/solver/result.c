@@ -692,6 +692,7 @@ char *result_wfq_json(void) {
        frontier older than the scan rows it is contained by, and the containment below would be slack by that
        walk for no reason. Nothing between this line and the composition steps anything. */
     FlowKeyChecks kc = flow_key_checks();
+    FlowIndexChecks ic = flow_index_checks();
     /* THE ONE CLAIM ABOUT THE PARTITION THAT HOLDS IN BOTH BUILDS. Every bucket is raised on the statement
        after a scan's own `g_scan_weights[why]++`, so a classification without a weighing is impossible and the
        four can never sum above the weighings this instance performed. The EQUALITY is not asserted here and
@@ -1190,6 +1191,31 @@ char *result_wfq_json(void) {
                         while the order demonstrably weighed something is the build, and nothing else. */
                      "\"keyArmedLifetime\":%ld,\"keyStaleGenLifetime\":%ld,"
                      "\"keyFirstSeenLifetime\":%ld,\"keyRunningLifetime\":%ld,"
+                     /* …AND WHETHER AN INDEX OVER THAT KEY WOULD HAVE ANSWERED WHAT THE COMPARATOR ANSWERED,
+                        WHICH THE FOUR ROWS ABOVE CANNOT SAY AND WHICH IS THE ONE QUESTION A SUB-LINEAR ORDER
+                        IS UNBUILDABLE WITHOUT. Those score whether the member key STANDS STILL between two
+                        frontier generations; these score whether it ORDERS. Two different claims, and a
+                        candidate set rests on the second — flow_pick's own words are that an index over this
+                        key "decides WHICH members can be the maximum and the exact comparison stays
+                        flow_weight's, or it has changed the answer".
+                        THEY ARE A PAIR AND NEITHER IS READ ALONE, the same shape as `keyArmedLifetime`
+                        against its three exemptions. `keyIndexAskedLifetime` is how many scans folded the
+                        surrogate and had a maximum to compare it against, so it is the reachability witness
+                        without which a zero beside it is satisfied identically by agreement and by a fold
+                        that never ran. `keyIndexDifferedLifetime` is the subset in which the surrogate and
+                        the comparator named DIFFERENT MEMBERS and the assert still held — which is the
+                        ordinary state when two members tie, is NOT a defect, and is the row that says the
+                        check examined anything at all rather than comparing a pointer with itself. A zero
+                        there with a large ask is the strongest result available: the surrogate picked the
+                        same member every time.
+                        A FIRE IS NOT ON THIS LINE AND CANNOT BE — the disagreement that matters ABORTS at
+                        flow_pick rather than being counted, because an index built over a key that returns a
+                        member the comparator calls worse has changed the answer, which solver/flow.h's
+                        FlowIndexChecks says is a decision to report rather than a rate to watch.
+                        BOTH ARE LIFETIME COUNTS raised under APICLIENT_DEV, so two zeros are a question about
+                        the BUILD before they are a question about the run — the same caveat the four rows
+                        above carry and for the same reason. */
+                     "\"keyIndexAskedLifetime\":%ld,\"keyIndexDifferedLifetime\":%ld,"
                      /* AND THE DENOMINATOR THE HOOK'S RESCAN COUNT HAS. `scanRivalRuns / scanNextRuns` is
                         a COST — scan work per step — and it was being read as the hook's cadence, which it
                         is not: the rescan fires on a rank change or an incumbent switch, so a step that
@@ -1334,6 +1360,7 @@ char *result_wfq_json(void) {
                      flow_scan_runs(FLOW_SCAN_CENSUS), flow_scan_weights(FLOW_SCAN_CENSUS),
                      (unsigned long long)engine_preempt_asks(),
                      kc.armed, kc.stale_gen, kc.first_seen, kc.running,
+                     ic.index_asked, ic.index_differed,
                      flow_starved_picks(), flow_starved_picks_idle(),
                      (long long)w.arrivals, (long long)w.departures,
                      (long long)w.credit_calls, (long long)w.credit_paid, (long long)w.credit_dropped,

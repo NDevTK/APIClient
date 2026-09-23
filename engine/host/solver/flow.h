@@ -3130,6 +3130,48 @@ typedef struct {
 } FlowKeyChecks;
 FlowKeyChecks flow_key_checks(void);
 
+/* …AND WHETHER AN INDEX OVER THAT KEY WOULD HAVE RETURNED THE SAME MEMBER THE COMPARATOR DID, WHICH IS THE
+   ONE QUESTION THE PAIR ABOVE DOES NOT REACH AND THE ONE A SUB-LINEAR ORDER IS UNBUILDABLE WITHOUT.
+   flow.c's flow_pick says an index over this key "decides WHICH members can be the maximum and the exact
+   comparison stays flow_weight's, or it has changed the answer".  The check above scores whether the key
+   STANDS STILL; this scores whether the key ORDERS — two different claims, and only the second is what a
+   candidate set rests on.
+
+   WHY IT CANNOT BE SETTLED BY ARGUMENT, WHICH IS WHY IT IS A COUNTER AND NOT A PARAGRAPH.  In exact real
+   arithmetic the surrogate is the order: within one account the reward and the family notch are common, so
+   ordering by `member_key - carry*Q` is ordering by flow_weight, and that is the whole of the decomposition
+   `notch = k + K + (p + R >= S)`.  In FLOAT it is not an identity, and the reason is the summand ORDER
+   rather than the terms: flow_nonreward evaluates `((qn + opt) + dist) + bb` with the only VARYING term
+   FIRST, so every partial sum depends on it and the stable tail cannot be factored out.  A surrogate is
+   therefore a RE-ASSOCIATION, which flow.c's own words say "would differ from it in the last bit and reorder
+   two members the order currently ties".  The two available repairs are both refused here: an epsilon band
+   is not this file's idiom and cannot be made exact, and re-composing flow_weight so its member half is a
+   SUBEXPRESSION is an ORDER change in the last bit and is a decision rather than a diff.
+
+   SO THE QUESTION IS ASKED OF THE RUN INSTEAD, WHICH IS WHAT THIS PROJECT DOES WITH A CLAIM NO ARGUMENT
+   SETTLES.  flow_pick folds the surrogate over exactly the population and exactly the tie-break its own
+   comparison uses, and asserts that the member the surrogate picks carries the weight the comparator called
+   maximal.  THE ASSERT IS THE POINT AND IT CAN FAIL: a fire is the proof that the re-composition above is
+   REQUIRED before any index is built, and a long silence is the evidence that the surrogate IS the order on
+   real frontiers and the index may be built on it with this as its standing guard.
+
+   READ THE PAIR AND NEVER EITHER ALONE — the same shape as `armed` against its three exemptions.  `asked` is
+   how many scans made the comparison at all, so it is the reachability witness without which a zero
+   `differed` is satisfied identically by agreement and by a walk that never ran.  `differed` is the subset in
+   which the surrogate and the comparator named DIFFERENT MEMBERS and the assert still held, which is the
+   ordinary state when two members tie — informative, not a defect, and the row that says the check is
+   examining anything at all rather than comparing a pointer with itself.
+   BOTH ARE LIFETIME COUNTS, raised under APICLIENT_DEV, and neither decides anything: no term of flow_weight
+   reads either, no pick branches on them, nothing is bounded by them.
+   RETIREMENT: this pair goes when the ask no longer walks the frontier — the index is then the thing being
+   asked and its agreement with flow_weight is held at its own update site, so there is no fold left to
+   count. */
+typedef struct {
+    long index_asked;      /* scans that folded the surrogate and had a maximum to compare it against */
+    long index_differed;   /* …of those, the ones where the surrogate named a DIFFERENT member of equal weight */
+} FlowIndexChecks;
+FlowIndexChecks flow_index_checks(void);
+
 /* HOW MANY TIMES THE ORDER CHANGED — the denominator the hook's rescan count has and `scanNextRuns` is NOT,
  * and without which the two readings of that count disagree with each other.
  *

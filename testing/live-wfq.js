@@ -190,7 +190,19 @@ const COST = ["scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeig
    driver samples is a DEV build, by the presence of that walk's own abort text in the shipped wasm with an
    invented string as the control, so a zero here is a statement about the run and not about the build.  A
    reader meeting four zeros should re-take that control before concluding anything. */
-const KEYCHK = ["keyArmedLifetime", "keyStaleGenLifetime", "keyFirstSeenLifetime", "keyRunningLifetime"];
+/* …AND THE SECOND PAIR AT THE SAME SCOPE, WHICH SCORES A DIFFERENT CLAIM ABOUT THE SAME KEY. The four above
+   score whether the member key STANDS STILL between two frontier generations; `keyIndexAskedLifetime` and
+   `keyIndexDifferedLifetime` score whether it ORDERS — whether an index over it would have returned a member
+   the comparator also calls maximal. A candidate set rests on the second and nothing measured it.
+   READ THEM AS A PAIR. The ask is the reachability witness: a zero `differed` beside a zero ask is a fold
+   that never ran, and beside a large ask it is the strongest available result — the surrogate picked the
+   SAME member every time. A nonzero `differed` is two members tied, which is this frontier's ordinary state
+   and not a defect; the disagreement that matters ABORTS in flow_pick and is on no row here.
+   They are named here because result.c publishes them and `keyScope`'s derived check would throw otherwise —
+   which is that check doing the one thing it exists for. An artifact older than these rows prints null for
+   each, which is this stream's absent-versus-zero rule and is the honest answer: the run did not state them. */
+const KEYCHK = ["keyArmedLifetime", "keyStaleGenLifetime", "keyFirstSeenLifetime", "keyRunningLifetime",
+                "keyIndexAskedLifetime", "keyIndexDifferedLifetime"];
 
 /* THE SAME TWO-WAY CHECK AGAIN, AGAINST THE SAME COMPOSER AND FOR THE SAME REASON. */
 function keyScope() {
