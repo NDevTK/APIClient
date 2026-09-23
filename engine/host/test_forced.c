@@ -946,6 +946,26 @@ static const char *HTML =
        does not name the same byte. */
     "var pfa = []; var owa = ['ow1B', 'ow2B']; var _sad = new Set();"
     "var _mm = new Map([['mmk1', 'base'], ['mmk2', 'base']]);"
+    /* WEB IDL §3.7.9.1 "Default iterator objects"' ITERATOR OVER A BASELINE TARGET, MINTED HERE FOR THE
+       REASON THE FOUR LINES ABOVE ARE AND FOR ONE MORE PARTICULAR TO IT. The paragraph above settles the
+       general half: solver/decide.c's `decide_arm` asks `concolic_branch_decided` above the fork, so only
+       the document's FIRST `cfg.admin`
+       branch mints a sibling and everything minted below it is flow-PRIVATE in every arm — cow.c's
+       `JS_ObjFlowGen(obj) > d->fork_gen` returns before the capture, each arm mints its own, and a row written
+       over it measures reachability while reading as isolation. This <script> is the first to name `state`, so
+       these two are baseline by construction and the arms SHARE them.
+       THE PARTICULAR HALF IS THAT THE OWNER OF THE PER-FLOW STATE IS THE *ITERATOR* AND NOT THE TARGET. The
+       cursor §3.7.9.1 calls `index` lives in the malloc'd record behind the ITERATOR object's class
+       opaque (core/idl_iter.c), and `idl_pair_iter_of` is the accessor that captures it — the OWNER handed to
+       cow_capture_host_record is that iterator. So `itsp` being baseline is not enough and is not what this
+       line is for: `itcur` is the object whose generation decides whether the capture runs at all, and it is
+       minted here rather than beside the statement that steps it.
+       URL §6.2 "URLSearchParams class" AND NOT `Headers`, deliberately, and the `/api/hdriter` statement
+       below carries the reading: a Headers iteration SORTS by name and COMBINES each name's values, so a walk
+       that lost turns could still spell a plausible string, while a URLSearchParams list keeps insertion order
+       and one entry per pair. The claim below is about WHICH PAIRS a cursor reached, so the interface whose
+       order is the list's own is the one to make it over. */
+    "var itsp = new URLSearchParams('itk1=1&itk2=2'); var itcur = itsp.entries();"
     /* AND THE POSITIVE WITNESS, WHICH IS WHY IT STANDS HERE AND NOT AFTER THE FORK. Every other row of this
        family is a two-world claim whose 0 is "never reached" OR "a world was lost"; this one is a SINGLE
        world emitted by the pre-fork flow, so its 1 says the statement RAN with nothing else folded into it.
@@ -3365,6 +3385,39 @@ static const char *HTML =
       " var es = ''; for (var e of h) { es += e[0] + '=' + e[1] + ';'; }"
       " var fe = ''; h.forEach(function(v, k, t){ fe += k + ':' + v + ';'; if (t !== h) fe += 'BADTHIS'; });"
       " fetch('/api/hdriter?k=' + ks + '&v=' + vs + '&e=' + es + '&f=' + fe); })();"
+    /* WEB IDL §3.7.9.1 "Default iterator objects"' ITERATOR IN A CYCLE WITH THE OBJECT IT ITERATES,
+       WHICH IS THE ONLY SHAPE THIS CLASS'S gc_mark IS OBSERVABLE THROUGH. The record behind the iterator's
+       class opaque holds ONE owned value, `target`, and that reference lives nowhere the collector can walk unless
+       the class declares a mark — not a property, not a slot, only the malloc'd record. A class declaring the FREE
+       and not the WALK does not merely under-report: mark_children reads `rt->class_array[p->class_id].gc_mark`, a
+       NULL one is not called, `gc_decref` never subtracts the internal reference, `gc_scan` then reads `target` as
+       rooted from OUTSIDE the heap, and NEITHER object is ever collected. `h.it = h.entries()` is the whole of it,
+       because §3.7.9 "Iterable declarations"' iterator is reachable from the very object it holds; the IIFE is what
+       DROPS the pair, so once it returns the cycle is the only thing keeping either of them alive.
+       NOTHING IN THE RESULT DOCUMENT CAN STATE THE LEAK AND THE ROW OVER THIS STATEMENT DOES NOT CLAIM TO. A
+       probe reads the emitted document and a leak is not in it, so `iter-cycle` is a REACHABILITY WITNESS on
+       `weak-reach`'s terms and says so at its own computation. What names the leak is JS_FreeRuntime's
+       gc_obj_list walk at this host's own teardown — main's `JS_RunGC(rt)` and then `JS_FreeRuntime(rt)` — and
+       it is LOUD rather than a column: a non-empty list prints the `[gcleak]` census, subtracts every
+       reference the heap makes of itself, prints `[gcroot]` and dumps each object still held from outside it,
+       and then aborts on `DCHECK(list_empty(&rt->gc_obj_list))`. An unmarked cycle is exactly what that
+       subtraction cannot reduce, so both objects land in the `[gcroot]` dump. It stays silent when there is
+       nothing to say, which is why the statement above has to exist for its silence to mean anything, and it
+       arrives a whole run later pointing at no component at all.
+       THAT IS WHY THE STATEMENT IS WORTH HAVING WITH NO ROW ABLE TO SCORE IT. Before it this fixture built no
+       cycle through a pair iterator anywhere — every other iterating statement here drops the iterator into an
+       `Array.from` or a `for...of` and keeps no reference back — so the walk was asked NOTHING, and a clean
+       leak report over a document that never built one is the absent crash that is not a correct value.
+       THE `c` PARAM IS THE CYCLE ITSELF AND NOT DECORATION. If a Headers instance did not take the expando the
+       assignment would be silent, there would be no cycle at all, the walk would again be asked nothing, and
+       every other clause of the row would still answer — so the round-trip is read back and emitted, and it is
+       the clause that fails first. */
+    "(function(){ var h = new Headers({'x-cyc': 'cv'});"
+      " var it0 = h.entries(); h.it = it0;"
+      " var e = it0.next();"
+      " fetch('/api/itercycle?v=' + e.value[0] + '&w=' + e.value[1]"
+      "   + '&c=' + (h.it === it0 ? 'cyc' : 'nocyc')"
+      "   + '&d=' + (it0.next().done ? 'done' : 'more')); })();"
     /* §5.1's SEQUENCE arm, which Web IDL picks because the init is ITERABLE. It is the iterator protocol twice
        over — once for the pairs, once for each pair's two items — so a GENERATOR init proves it is the protocol
        and not an array walk, and a MAP proves the same for the shape that is iterable without being an array.
@@ -3580,6 +3633,23 @@ static const char *HTML =
     "fetch('/api/weakdel?v=wd' + (wmIso.has(wmDel1) ? '1' : '0') + (wmIso.has(wmDel2) ? '1' : '0'));"
     "fetch('/api/weakset?v=ws' + (wsIso.has(wsAddA) ? '1' : '0') + (wsIso.has(wsAddP) ? '1' : '0')"
     " + (wsIso.has(wsDelA) ? '1' : '0') + (wsIso.has(wsDelP) ? '1' : '0'));"
+    /* WEB IDL §3.7.9.1 "Default iterator objects"' `index` IS PER-FLOW STATE — the claim the weak family
+       above makes for a record inside a collection, made for a record behind a CLASS OPAQUE, where the write is
+       seen by no property hook and no engine hook. `itcur` is ONE iterator over ONE baseline
+       URLSearchParams, minted in the document's FIRST <script>; see the paragraph there for why it may not be
+       minted on this line, and for what makes the ITERATOR rather than its target the object whose generation
+       decides the capture. Both arms reach this line and each steps that one cursor to exhaustion.
+       THE READ IS ORDER-INDEPENDENT, WHICH IS WHAT MAKES THIS AN ISOLATION CLAIM RATHER THAN A REACHABILITY
+       ONE — the repair `owfork` and `mapmutfork` above carry. The cursor is not a slot each arm writes and
+       reads back: it is CONSUMED. The instant idl_pair_iter_of's capture is missing, whichever arm runs SECOND
+       finds `index` already standing at the length, its `while` makes no turn at all, and it emits `-itADMIN`
+       or `-itPUBLIC` with an EMPTY walk — a value NEITHER world names, under either ordering. With the capture
+       each arm's delta holds its own `index` off a base of 0 and both walk the whole list.
+       THE PAIR KEYS ARE CARRIED AND NOT THE VALUES, because §3.7.9's `entries` arm yields [key, value] and the
+       key is what the cursor's position selects; a row built on the values of `itk1=1&itk2=2` would read `12`
+       and pass over a list walked in the wrong order. */
+    "(function(){ var s = ''; var e; while (!(e = itcur.next()).done) { s += e.value[0]; }"
+      " fetch('/api/iteriso?v=' + s + '-' + (cfg.admin ? 'itADMIN' : 'itPUBLIC')); })();"
     "(async function(){ function* afsf(){ if (cfg.admin) { yield 'afsA'; } else { yield 'afsP'; } } var out=[]; for await (var x of afsf()) { out.push(x); } fetch('/api/afsfork?v=' + out[0]); })();"   /* for-await(GEN) consumer fork: the sync gen body branches while driven by the async-from-sync consumer (CONT_ASYNC_FROM_SYNC) on the tramp — clone_deep_flow clones the JSAsyncFromSync state with a FRESH wrapper promise per arm -> both afsA and afsP */
     "function* paf(){ if (cfg.admin) { yield Promise.resolve('pafA'); } else { yield Promise.resolve('pafP'); } } Promise.all(paf()).then(function(a){ fetch('/api/paffork?v=' + a[0]); });"   /* Promise.all(GEN) consumer fork at index==0: the gen branches during the FIRST .next() before any element .then is attached (CONT_PROMISE_ALL) — clone_deep_flow clones the JSPromiseAll aggregate fresh per arm -> both pafA and pafP */
     "function* paf2(){ yield Promise.resolve('p0'); if (cfg.admin) { yield Promise.resolve('pf2A'); } else { yield Promise.resolve('pf2P'); } } Promise.all(paf2()).then(function(a){ fetch('/api/paf2fork?v=' + a[0] + '-' + a[1]); });"   /* Promise.all(GEN) consumer fork at index>0: the gen yields element 0 THEN branches (fork during .next() #2, index==1). The retained pre-fork element wrapper (p0) is RE-ATTACHED to the sibling aggregate -> BOTH arms resolve a[0]=='p0' AND their own a[1] (p0-pf2A and p0-pf2P) */
@@ -13669,6 +13739,57 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "§5.2 forEach hands the callback (value, key, headers) IN THAT ORDER: /api/hdriter' `f` is not "
              "exactly the forEach spelling — the first two arguments arrived swapped, or the third was not the "
              "headers object, which appends BADTHIS and is why no separate clause looks for it");
+    /* WEB IDL §3.7.9.1 "Default iterator objects"' ITERATOR AS A GC CYCLE — AND THIS ROW IS THE
+       REACHABILITY WITNESS AND NOT THE LEAK CLAIM, on `weak-reach`'s terms and for a harder reason than that
+       row has. It is a positive statement standing in front of four rows that CAN see their subject; this one
+       stands in front of an instrument no probe can read at all. A probe reads the emitted document; the leak the
+       class's gc_mark exists to prevent is named by JS_FreeRuntime's gc_obj_list walk at teardown, which runs
+       after this document is composed and is a `[gcleak]`/`[gcroot]` report and a DCHECK on the process rather
+       than a column of anything. So a 1 here says the cycle was BUILT and stepped, which is exactly what that
+       walk needs in order to have been asked anything at all, and it says nothing whatever about what the walk
+       then answered — that verdict is the run's own teardown, and a reader scoring this pair reads BOTH.
+       WHAT MAKES IT ABLE TO FAIL, WHICH A WITNESS OWES MORE THAN A TWO-WORLD ROW DOES. Delete the statement,
+       or let the flow park before it, and the first clause is 0. Build the engine on a runtime where a class
+       instance refuses an expando and `c` is `nocyc`: the pair exists, both walks answer, and there is no
+       cycle — the one state in which every other clause here is satisfied by a document that asked the walk
+       nothing. Give the header list a wrong order or lose the value and `v`/`w` names which half moved.
+       Return a pair where the list holds one and `d` is `more`.
+       ASKED AS `_only` AND NOT `_is` FOR THE REASON THE SIX HEADERS CLAUSES ABOVE ARE: every one of these four
+       is a value the code DETERMINED off a Headers this statement built out of literals, so a SECOND DISTINCT
+       value on any of them means the flow forked where this statement cannot, which is a finding rather than a
+       match.
+       NAMED RESIDUAL. WHAT IS NOT COVERED: whether the cycle this statement builds was COLLECTED. That is a
+       fact about the process's teardown and this row is a fact about the document, and the two are reported in
+       different places by different mechanisms, so a reader scoring core/idl_iter.c's gc_mark has to read both
+       and nothing says so in either. WHAT THE NEXT DIFF BUILDS: main's teardown already runs `JS_RunGC(rt)`
+       and `JS_FreeRuntime(rt)`, and JS_FreeRuntime already prints `[gcleak]` and `[gcroot]` and aborts on a
+       non-empty list — so what is missing is not a walk but a STATEMENT of its outcome in the stream this
+       table's verdict is composed into, on the clean day as well as the bad one, the way `@HUNASKED` states
+       what it could not ask. HOW ITS ABSENCE WOULD SHOW: a run that reports `=> OK` over this table having
+       collected the cycle and a run that reports it having never been able to is one line of output, and the
+       difference is recoverable only by knowing that a dev build would have aborted instead — which is an
+       inference about a build mode and not a reading of a result. */
+    const char *itercyc_why = NULL; int itercyc_tt = 1;
+    fold_row(&itercyc_tt, &itercyc_why, strstr(js, "\"/api/itercycle\"") != NULL,
+             "NOT REACHED: there is no /api/itercycle record at all, so the statement that builds a pair "
+             "iterator into a cycle with its own target never ran — JS_FreeRuntime's gc_obj_list walk was "
+             "therefore asked NOTHING about core/idl_iter.c's gc_mark on this run, and a clean leak report "
+             "from it is not evidence about that entry either way. That is the SCHEDULE");
+    fold_row(&itercyc_tt, &itercyc_why, param_value_only(js, "/api/itercycle", "c", "cyc"),
+             "the statement RAN and `c` is not exactly `cyc`: the expando `h.it` did not read back as the "
+             "iterator it was assigned, so THERE IS NO CYCLE — the iterator holds its target and nothing "
+             "holds the iterator, the pair dies by refcount, and the gc_obj_list walk is asked nothing "
+             "however clean it reports. This is the clause the whole statement exists for");
+    fold_row(&itercyc_tt, &itercyc_why, param_value_only(js, "/api/itercycle", "v", "x-cyc"),
+             "the statement RAN and `v` is not exactly `x-cyc`: the first pair's KEY is not the name the "
+             "Headers was built with, so the iterator this cycle is made of is not stepping the list it "
+             "holds, and what the cycle reaches is not what this row believes it reaches");
+    fold_row(&itercyc_tt, &itercyc_why, param_value_only(js, "/api/itercycle", "w", "cv"),
+             "the statement RAN and `w` is not exactly `cv`: the first pair's VALUE is not the one the "
+             "Headers was built with");
+    fold_row(&itercyc_tt, &itercyc_why, param_value_only(js, "/api/itercycle", "d", "done"),
+             "the statement RAN and `d` is not exactly `done`: a one-header list answered a SECOND pair, so "
+             "the cursor is not bounded by the list it iterates");
     /* §5.1's sequence arm: a generator init (the protocol, not an array walk), a Map (iterable, not an array),
        an array, a malformed pair, and null — which is NOT "no init". */
     int hdrseq = (param_value_only(js, "/api/hdrseq", "g", "g1, g2") &&
@@ -13972,6 +14093,25 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        JS_FreeCowWeakRef's neutralised-cell DCHECK and JS_FreeRuntime's gc_obj_list walk, and both run at
        TEARDOWN and both report by staying silent, which is the shape this family was added to stop being the
        whole of the evidence. */
+    /* WEB IDL §3.7.9.1 "Default iterator objects"' `index` ACROSS A FORK — the weak family's claim for a
+       record behind a CLASS OPAQUE, whose write is seen by no property hook and no engine hook and had to be
+       captured at the record's own accessor. One iterator, minted baseline in the document's first <script>,
+       stepped to exhaustion by BOTH arms.
+       A 0 HERE IS THE TWO STATES FORK_ROW SEPARATES AND NOTHING ELSE, which is why it is spelled as one and
+       not as a ladder: the statement is synchronous, it carries no reply and no timer, so "never reached" is
+       the schedule and "a world was lost" is the capture. There is no third reading — an arm that runs and
+       walks nothing emits its own tag with an EMPTY key string, which is neither world, so the row cannot
+       pass on the loss by either ordering.
+       ITS SUBJECT IS THE ACCESSOR AND NOT THE LAYOUT, and the difference is worth naming because the layout
+       invites the wrong reading: IDL_PAIR_ITER_VALS names `target` alone, and `index` is covered because
+       cow_state_save memcpy's the record's BYTES before it dups the named values. So this row is 0 when the
+       CAPTURE is missing and stays 1 under every correct reading of what the layout names — a second entry
+       added to that list would not make it pass and its absence is not what makes it fail. */
+    const char *iteriso_why = NULL; int iteriso_tt = 1;
+    FORK_ROW(js, &iteriso_tt, &iteriso_why, "/api/iteriso", "v",
+             "idl_pair_iter_of's capture of the record Web IDL §3.7.9.1's `index` lives in, which lets two arms "
+             "sharing ONE iterator each walk the whole list instead of splitting one enumeration between them",
+             "itk1itk2-itADMIN", "itk1itk2-itPUBLIC");
     /* for-await(GEN) consumer fork: the sync gen body branches while driven by the async-from-sync consumer
        (CONT_ASYNC_FROM_SYNC) ⇒ clone_deep_flow cloned the JSAsyncFromSync state with a fresh wrapper promise
        per arm, so each for-await arm delivered its OWN value. */
@@ -17031,6 +17171,11 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "hdr-seq", hdrseq, "/api/hdrseq", SESS_EXPLORE },
         { "hdr-record", hdrrec, "/api/hdrrec", SESS_EXPLORE },
         { "mp-escape", mpesc, "/api/mpesc", SESS_EXPLORE },
+        /* THE REACHABILITY WITNESS FOR core/idl_iter.c's gc_mark, and NOT a claim that nothing leaked — a
+           probe reads the document and the leak walk runs at teardown. It sits after the `hdr-*` run rather
+           than inside it so that prefix grouping keeps the Headers family whole; its own prefix pairs it
+           with `iter-iso` below. See its computation. */
+        { "iter-cycle", itercyc_tt, "/api/itercycle", SESS_EXPLORE, itercyc_why },
         { "pending", pending_await, "/api/lazy", SESS_EXPLORE, pending_await_why },
         { "promise-state", promise_state, "/api/shared", SESS_EXPLORE, promise_state_why },
         { "delete-iso", delete_iso, "/api/tok", SESS_EXPLORE, delete_iso_why },
@@ -17118,6 +17263,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "weak-over", weakover_tt, "/api/weakover", SESS_EXPLORE, weakover_why },
         { "weak-del", weakdel_tt, "/api/weakdel", SESS_EXPLORE, weakdel_why },
         { "weak-set", weakset_tt, "/api/weakset", SESS_EXPLORE, weakset_why },
+        /* THE SAME PER-FLOW-RECORD CLAIM THE FIVE ROWS ABOVE MAKE, over a record behind a CLASS OPAQUE rather
+           than one inside a collection. Its baseline is minted in the same <script> as theirs and for the
+           same reason. */
+        { "iter-iso", iteriso_tt, "/api/iteriso", SESS_EXPLORE, iteriso_why },
         { "afsfork", afsfork_tt, "/api/afsfork", SESS_EXPLORE, afsfork_why },
         { "paffork", paffork_tt, "/api/paffork?", SESS_EXPLORE, paffork_why },
         { "paf2fork", paf2fork_tt, "/api/paf2fork", SESS_EXPLORE, paf2fork_why },
