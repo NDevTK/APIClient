@@ -1459,6 +1459,28 @@ function wfqReading(out) {
                     `that range one of the two has a writer elsewhere and neither reading of the pair is ` +
                     `about the dispatches this instance made.`);
 
+  /* AND THE INNER HALF OF THE SAME ROW, WHICH IS WHAT MAKES THE ONE ABOVE A MEASUREMENT OF THE JOB BACKLOG
+     RATHER THAN A BOUND ON IT — re-asserted here for the reason the guard above is, and the reason is the
+     whole of why this line exists: flow_wfq_census DCHECKs it and that DCHECK is compiled out of a release
+     build, where this reader still runs. The engine's own words for the failure are that the ready count "is
+     raised inside the unframed count's own `if` in flow_credit_pick, so it has acquired a second writer and
+     the row that turns `unframedPicksLifetime` from a bound into a measurement of the job backlog is a
+     fraction over the wrong denominator". The containment is by construction, so this can fail only on an
+     edit that lifts the raise out of that `if` — and that edit is exactly the one that makes the two rows a
+     ratio over two dispatch paths while every number on the line goes on looking like a measurement.
+     IT IS THE SECOND HALF OF A THREE-ROW READING AND NOT A THIRD OPINION. solver/result.c states at the
+     emission which triple separates which states — this, `unframedPicksLifetime`, and the run's `jobsRun` —
+     so a reader who takes this row alone has a numerator whose denominator is the row above it, and the
+     arithmetic tell CLAUDE.md names for a count offered as a share of another is the check available here. */
+  if (!(w.readyPicksLifetime >= 0) || w.readyPicksLifetime > w.unframedPicksLifetime)
+    throw new Error(`[build] the @WFQ census reports readyPicksLifetime ${w.readyPicksLifetime} against ` +
+                    `unframedPicksLifetime ${w.unframedPicksLifetime} — the first is raised INSIDE the ` +
+                    `second's own \`if\` in flow_credit_pick, under the ready arm's own conjuncts, so it is ` +
+                    `contained in it by construction. Outside that range the raise has been lifted out of ` +
+                    `that block and the pair is two dispatch paths wearing one ratio, so neither the ` +
+                    `dispatch-never-reaches-a-job-holder reading nor the flow_step-declines-it reading is ` +
+                    `about this instance.`);
+
   /* EACH TERM OF flow_weight AGAINST THE SPREAD IT COULD ORDER — the reading that says which term is deciding
      this run, rather than which one is largest. A term's magnitude and a term's RANGE take opposite actions:
      an aging term of 856 points whose two ends are identical orders nothing at all and is a common offset.
