@@ -405,7 +405,32 @@ void    endpoint_surface_census(long *minted, long *assets, long *emitted, long 
    from one whose ask a gate correctly refused, and the repair is to record at the CALL rather than to relocate
    the outcome. endpoint_record is the ONE door every HTTP-shaped edge in this engine passes through (see this
    header's funnel note above and the derivation beside it), so a count taken at its entry, BEFORE the
-   suppression gate, is the number of times this engine's execution REACHED a network call site.
+   suppression gate, is the number of times this engine's execution COMPOSED a request — every field of it,
+   through every step its standard states — and offered the address to this surface.
+   THAT SENTENCE READ `the number of times this engine's execution REACHED a network call site`, AND THE
+   CONCLUSION DOES NOT FOLLOW FROM THE PREMISE ABOVE IT. Being the ONLY door says every request that is
+   RECORDED passes here; it says nothing whatever about a request that was STARTED and never recorded, and the
+   two are different populations. What stands between a page's call and this door is the whole of the host
+   edge's own algorithm: core/fetch/fetch.c's machine records in `FETCH_CALL`, its SIXTH stage, so Fetch
+   §5.4's steps 10-27, steps 32-33 and steps 35-39 and §5.6 step 4's already-aborted signal all stand in front
+   of it — each of them a TypeError the standard states, and two of them stages that run the page's own code
+   and can therefore PARK and never be resumed. A `fetch()` the page called and the engine threw out of, or
+   parked inside and never came back to, is a network call site REACHED and is in none of these five rows.
+   THE COST OF THE WRONG READING IS THE ARM NAMED `NEVER REACHED` BELOW, which inherits it: `asks ==
+   preProgram` says no post-program request was fully COMPOSED, and a reader who takes it for `no arm arrived
+   at a network call site` looks for the defect upstream of every host edge when it may be inside one.
+   NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: the host edge's OWN entry, so a run reading
+   `asks == preProgram` cannot say whether the page called a request-composing API at all. WHAT THE NEXT DIFF
+   BUILDS: a count raised at each script-API edge's one-time capture — core/fetch/fetch.c's `!s->captured` arm
+   and core/xhr/xml_http_request.c's `send()` — published beside these rows. IT MUST NOT BE PAIRED WITH THESE
+   BY A CONTAINMENT, and that is the trap rather than a detail: a step state is BYTE-COPIED at a deep fork and
+   the copy inherits the capture flag, so one `fetch()` whose `input` ToString forks composes TWO requests
+   against ONE capture and `composed <= called` is FALSE — an assert on it would fire on a legitimate state,
+   which is the concession shape §Offensive-programming refuses. The sound pairing is per STATE rather than
+   per call: raise at the capture AND at the state's teardown-without-composing, partitioned by the stage the
+   state died at, which the machine's own `js_fetch_steps[]` already names. HOW ITS ABSENCE WOULD SHOW: a
+   document whose `asks` equals its `preProgram`, reported as a page whose code never reached a network call
+   site, on a run where the code called one and the call died in a construction stage.
    WHAT IT SEPARATES, WHICH IS THE PRODUCT'S OWN QUESTION AND WAS UNMEASURABLE. `emitted - preProgram` is
    documented above as a CEILING on what forced execution contributed, and a ZERO there has at least two
    readings that take opposite work:
@@ -426,7 +451,22 @@ void    endpoint_surface_census(long *minted, long *assets, long *emitted, long 
    the SURFACE's: they are reset wherever `g_eps_n` is, so they answer for the session whose records the census
    above is walking and never for the process.
    A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing branches on one, no ask is refused because of one, and no
-   arm is narrowed by one. */
-void    endpoint_ask_census(long *asks, long *pre_program, long *suppressed, long *merged, long *minted);
+   arm is narrowed by one.
+   …AND THE SIXTH, WHICH IS THE ARM NAMED `REACHED AND ALREADY KNOWN` STATED RATHER THAN BOUNDED. The
+   paragraph above offers `asks - preProgram` as the separation between the two readings, and that is a CEILING
+   on the second exactly as `emitted - preProgram` is a ceiling on forced execution's contribution: the
+   subtraction is also nonzero for a post-program ask that MINTED, and for one that merged into a record
+   post-program code had itself minted, and neither of those is running code re-composing the MARKUP's
+   addresses. `merged_pre_program` is that population and only that one — the ask was made with a program
+   running and the record it reached was minted before any program had, which is the one shape that leaves
+   every figure on both censuses byte-identical to a run in which nothing reached a network call site at all.
+   IT IS CONTAINED IN `merged` AND IN `asks - preProgram`, asserted at the accessor where every term is in one
+   hand, and it is a CUT rather than a fourth arm: the three arms partition the door's exits and this selects
+   inside one of them on a fact about the RECORD, so it may not be summed with them.
+   READ ITS ZERO THROUGH THE ROWS BESIDE IT AND NEVER ALONE — it is four states (no post-program ask;
+   suppressed; minted, which `emitted - preProgram` then shows unless the reply classified them as files; or
+   merged only into post-program records), and its NONZERO is one statement. */
+void    endpoint_ask_census(long *asks, long *pre_program, long *suppressed, long *merged, long *minted,
+                            long *merged_pre_program);
 
 #endif

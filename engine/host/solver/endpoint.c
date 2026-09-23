@@ -151,20 +151,27 @@ static int g_suppress = 0;   /* a candidate/verify re-run's requests are @S arti
    component that never asked from one whose ask a gate correctly refused, and the repair is to record at the
    CALL rather than to relocate the outcome. These are that recording. endpoint_record is the one door every
    HTTP-shaped edge in this engine passes through (endpoint.h's own funnel note and the derivation beside it),
-   so a count taken at its entry is the number of times a network call site was REACHED, which is a question
-   about this engine's execution and not about its surface.
+   so a count taken at its entry is the number of times this engine COMPOSED a request and offered its address
+   to this surface, which is a question about this engine's execution and not about its surface.
+   THAT CLAUSE READ `the number of times a network call site was REACHED` AND THE INFERENCE IS INVALID — see
+   endpoint.h's retirement of it, which names the five Fetch §5.4 stages standing in front of this door and the
+   residual for the count that would make the stronger sentence true. It is rewritten rather than deleted
+   because the premise above it is correct and a reader who re-derives the conclusion from it will re-add it.
    WHAT THE OUTCOME ROWS CANNOT SAY, AND IT IS THE PRODUCT'S OWN QUESTION. `emitted - preProgram` is documented
    in endpoint.h as a CEILING on what forced execution contributed, and a zero there has at least two readings
-   that take opposite work: no arm ever reached a network call site at all, or arms reached one and every
-   address they composed was already on the surface. The second is invisible to every row the census has,
+   that take opposite work: no arm ever composed a request at all, or arms composed one and every address they
+   built was already on the surface. The second is invisible to every row the census has,
    because a repeat sighting MERGES — the record exists, its `pre_program` was decided at ITS mint and is
    deliberately not re-armed (see the struct), and nothing anywhere moves. `asks - preProgram` reads nonzero in
-   the second case and zero in the first, which is the separation, and it costs one read of a bit the mint was
-   already taking.
-   FIVE ROWS AND TWO PARTITIONS OVER ONE EVENT. By OUTCOME, `suppressed + merged + minted == asks`, asserted
-   where all four are in one hand; by PROGRAM STATE, `preProgram <= asks`, a containment rather than a second
-   partition for `endpoint_surface_census`'s reason exactly — the complement is what a reader computes and a
-   stored complement is a second raise free to drift from the first.
+   the second case and zero in the first, which is the separation it is offered as — and it is a CEILING on
+   that reading rather than the reading itself, because it is nonzero for a post-program ask that MINTED and
+   for one that merged into a record post-program code had itself minted. `merged_pre_program` below is the
+   reading stated exactly.
+   SIX ROWS, TWO PARTITIONS AND A CUT, OVER ONE EVENT. By OUTCOME, `suppressed + merged + minted == asks`,
+   asserted where all four are in one hand; by PROGRAM STATE, `preProgram <= asks`, a containment rather than a
+   second partition for `endpoint_surface_census`'s reason exactly — the complement is what a reader computes
+   and a stored complement is a second raise free to drift from the first. The sixth is a CUT INSIDE the
+   merged arm and is summed with nothing; its own two containments are asserted at the accessor.
    EVERY ONE IS A LIFETIME COUNT AND NONE IS A GAUGE, which is stated here because CLAUDE.md §Testing records
    this tree being misled by that twice: they may be differenced across samples and they may be accumulated,
    they cannot decrease, and a sample lower than its predecessor is this file and not the run. Their SCOPE is
@@ -179,10 +186,30 @@ static long g_asks_pre_program; /* …of those, the ones asked before this insta
 static long g_ask_suppressed;   /* declined AT the gate: a candidate/verify re-fire is an @S artifact */
 static long g_ask_merged;       /* reached a record this surface already held — the invisible arm */
 static long g_ask_minted;       /* created a record — the arm, and the only one, that moves `epMinted` */
+/* AND THE ONE CUT OF THE MERGED ARM THAT ANSWERS THE RAZOR'S OWN SENTENCE, WHICH `asks - preProgram` STATES
+   AND DOES NOT MEASURE. endpoint.h names two readings of a zero `emitted - preProgram` and offers that
+   subtraction as the separation between them; it is nonzero in the arm it names (an ask made after a program
+   started, reaching an address the surface already held) and ALSO in two arms it does not — a post-program ask
+   that MINTED, and a post-program ask that merged into a record post-program code had itself minted. So the
+   subtraction bounds the "reached and already known" reading from above and never states it. This is that
+   reading: the ask was made with a program running AND the record it reached was minted before any program
+   had run, which is running code composing an address the MARKUP had already named. Nothing else in either
+   census can be that, because a merge moves no figure on the surface at all.
+   IT IS A CUT AND NOT A FOURTH ARM. The three arms partition the door's exits; this selects inside one of
+   them on a fact about the RECORD, so it is contained in `merged` and contained in `asks - preProgram`, and
+   both containments are asserted in endpoint_ask_census where every term is in one hand. A stored complement
+   would be a second raise free to drift from the first, which is the reason `preProgram` has none either.
+   ITS ZERO IS FOUR STATES AND THE OTHER ROWS SEPARATE THEM, which is what makes it worth publishing rather
+   than a fifth number nobody can read: no post-program ask was made at all (`asks == preProgram`); they were
+   made and SUPPRESSED; they were made and MINTED, which `emitted - preProgram` then shows unless the reply
+   classified them as files; or they merged only into records post-program code had minted itself. A NONZERO
+   is one statement and one only. */
+static long g_ask_merged_pre_program;
 
 void endpoint_init(void) {
     g_eps = NULL; g_eps_n = 0; g_eps_cap = 0; g_suppress = 0;
     g_asks = g_asks_pre_program = g_ask_suppressed = g_ask_merged = g_ask_minted = 0;
+    g_ask_merged_pre_program = 0;
 }
 void endpoint_suppress(int on) { g_suppress = on ? 1 : 0; }
 
@@ -1687,6 +1714,12 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                code composed every address the markup had already named is byte-identical, on all four rows, to
                one in which running code composed nothing at all. This is where those two part. */
             g_ask_merged++;
+            /* …AND WHICH OF THE TWO POPULATIONS THIS MERGE WAS, READ HERE BECAUSE HERE IS THE ONLY PLACE BOTH
+               FACTS EXIST. The ask's own program state is the local the door read at its entry, and the
+               RECORD's is the flag its mint decided and deliberately never re-arms — so a census taken later
+               holds the second and can never recover the first, and a raise anywhere else would be asking one
+               of them about the wrong instant. */
+            if (!ask_pre_program && g_eps[i].pre_program) g_ask_merged_pre_program++;
             goto done;
         }
     }
@@ -1807,7 +1840,7 @@ void endpoint_surface_census(long *minted, long *assets, long *emitted, long *pr
            "addresses running code could have composed would read a negative count as a large one");
     /* AND THE ONE IDENTITY THAT SPANS THE TWO INSTRUMENTS, ASSERTED HERE BECAUSE THIS IS THE ONLY PLACE THE
        RECORD ARRAY AND THE MINT COUNT ARE IN ONE HAND. It is neither decoration on this walk nor a second copy
-       of endpoint_ask_census's: that function asserts the two PARTITIONS, over the five numbers only it holds,
+       of endpoint_ask_census's: that function asserts the two PARTITIONS and the CUT, over the six numbers only it holds,
        and this asserts a relation NEITHER instrument can check alone — a count of CALLS against a count of
        RECORDS. What it fires on is the failure that would make every figure on this line unreadable, a record
        reaching `g_eps` by a path that did not pass endpoint_record's door. endpoint.h's funnel note is a claim
@@ -1823,20 +1856,21 @@ void endpoint_surface_census(long *minted, long *assets, long *emitted, long *pr
 
 /* THE ASK SIDE OF THE SAME SURFACE — see endpoint.h for what it separates that the four numbers above
    structurally cannot, and the statics at the head of this file for why each row is what it is.
-   FIVE AND NOT FOUR, AND IT IS A SECOND CALL RATHER THAN FOUR MORE OUT-PARAMETERS ON THE WALK ABOVE. That
+   SIX AND NOT FOUR, AND IT IS A SECOND CALL RATHER THAN MORE OUT-PARAMETERS ON THE WALK ABOVE. That
    one's own note says a fifth number would be "a second accessor … a second instant", and the reason it gives
    is that it is ONE WALK OVER A MUTABLE ARRAY. These are not on the array: they are monotone scalars raised on
    the three paths out of one door, so reading them at a different instant than the walk costs nothing a reader
    can observe — the walk's figures can only have grown since, and by a mint the mint arm already counted.
-   THE TWO PARTITIONS ARE ASSERTED HERE BECAUSE THIS IS THE ONLY PLACE ALL FIVE ARE IN ONE HAND. The cross
+   THE TWO PARTITIONS AND THE CUT ARE ASSERTED HERE BECAUSE THIS IS THE ONLY PLACE ALL SIX ARE IN ONE HAND. The cross
    identity against the record array is asserted in endpoint_surface_census for the same reason and not here,
    where `g_eps_n` is a fact about a different structure that this function has no business reading. */
-void endpoint_ask_census(long *asks, long *pre_program, long *suppressed, long *merged, long *minted) {
-    DCHECK(asks && pre_program && suppressed && merged && minted,
-           "the @H ask census was asked for with somewhere to put fewer than five of its numbers — the two "
-           "partitions are the whole point and a caller taking one of them is reading a bare count again, "
-           "which for this instrument means reading a total that cannot say whether running code ever reached "
-           "a network call site");
+void endpoint_ask_census(long *asks, long *pre_program, long *suppressed, long *merged, long *minted,
+                         long *merged_pre_program) {
+    DCHECK(asks && pre_program && suppressed && merged && minted && merged_pre_program,
+           "the @H ask census was asked for with somewhere to put fewer than six of its numbers — the two "
+           "partitions and the cut are the whole point and a caller taking one of them is reading a bare count again, "
+           "which for this instrument means reading a total that cannot say whether running code ever composed "
+           "a request at all");
     DCHECK(g_asks == g_ask_suppressed + g_ask_merged + g_ask_minted,
            "the @H surface's asks do not sum over the three things that can happen to one — they are three "
            "arms of ONE door, counted on the three paths out of it, so a total that moves without an arm "
@@ -1847,8 +1881,34 @@ void endpoint_ask_census(long *asks, long *pre_program, long *suppressed, long *
            "pre-program count is raised only inside the one entry that raises the total, so a value above it "
            "is a second raise, and a reader computing `asks - preProgram` as the number of network call sites "
            "running code reached would read a negative count as a large one");
+    /* AND THE TWO CONTAINMENTS OF THE CUT, ASSERTED HERE FOR THE REASON THE TWO PARTITIONS ABOVE ARE: this is
+       the only place every term of either is in one hand. They are not one check written twice — the cut
+       selects on TWO independent facts and each containment fires on a different way of getting it wrong.
+       THE FIRST IS AGAINST THE ARM IT SITS INSIDE. It is raised only on the line after `g_ask_merged`, so a
+       value above it is a second raise added outside that arm — which is exactly how a reader would come to
+       subtract it from `merged` and read a negative complement as a large one. */
+    DCHECKF(g_ask_merged_pre_program <= g_ask_merged,
+            "the @H surface counted more asks merging into a record minted before the first program (%ld) "
+            "than asks that merged at all (%ld) — the cut is raised only inside the merge arm that raises the "
+            "total, so a larger cut is a raise added outside it, and a reader taking the rest of the merges "
+            "as the arm where running code re-composed its OWN addresses would read a negative count as a "
+            "large one", g_ask_merged_pre_program, g_ask_merged);
+    /* AND THE SECOND IS AGAINST THE OTHER FACT THE CUT SELECTS ON, WHICH THE FIRST CANNOT SEE. Every member of
+       this cut was asked with a program running, so it is also contained in the complement of the
+       program-state partition — and that is the quantity endpoint.h offers as the separation between the two
+       readings of a zero razor, so a cut exceeding it would make the row it exists to refine arithmetically
+       impossible. The two sides are raised at different events (one at the door's entry, one at the merge), so
+       they part company exactly when the door's program bit and the record's stop meaning one instant, which
+       is the state the mint's own DCHECK guards from the other side. */
+    DCHECKF(g_ask_merged_pre_program <= g_asks - g_asks_pre_program,
+            "the @H surface counted more asks merging into markup-minted records (%ld) than asks made after a "
+            "program had started at all (%ld of %ld) — both facts are read at the same door, the ask's from "
+            "the entry and the record's from its mint, so this fires when those two stop describing one "
+            "instant and the cut is then a fraction of a population the ask census does not hold",
+            g_ask_merged_pre_program, g_asks - g_asks_pre_program, g_asks);
     *asks = g_asks; *pre_program = g_asks_pre_program;
     *suppressed = g_ask_suppressed; *merged = g_ask_merged; *minted = g_ask_minted;
+    *merged_pre_program = g_ask_merged_pre_program;
 }
 
 /* Serialize the @H surface DIRECTLY to a JSON string in C (caller frees) — no JS-object round-trip. The
@@ -2126,8 +2186,9 @@ void endpoint_free(void) {
        the per-session teardown (solver/engine.c resets its own per-session rows on the same line it calls
        this, and says why), so a count left standing would report a previous document's asks under this
        document's name — and it would do it in the flattering direction, since `asks > preProgram` is the
-       reading that says running code reached a network call site. The mint arm is reset with `g_eps_n` for a
+       reading that says running code composed a request. The mint arm is reset with `g_eps_n` for a
        second reason: the identity between them is asserted every time the surface is read, so leaving one of
        the pair behind would abort the next session's first census. */
     g_asks = g_asks_pre_program = g_ask_suppressed = g_ask_merged = g_ask_minted = 0;
+    g_ask_merged_pre_program = 0;
 }

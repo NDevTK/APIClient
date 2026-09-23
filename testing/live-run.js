@@ -584,7 +584,15 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      is an identity; `endpoints: 43` beside it is not, and was the number being quoted before these rows had a
      reader. */
   "epMinted", "epAssets", "epEmitted", "epPreProgram",
-  "epAsks", "epAskPreProgram", "epAskSuppressed", "epAskMerged", "epAskMinted"];
+  "epAsks", "epAskPreProgram", "epAskSuppressed", "epAskMerged", "epAskMinted",
+  /* AND THE CUT INSIDE THE MERGED ARM, WHICH IS THE RAZOR'S SECOND READING STATED RATHER THAN BOUNDED. The
+     five rows above make `asks - preProgram` readable and that subtraction is a CEILING on "running code
+     reached a network call site and every address it built was already known" — it is nonzero for a
+     post-program MINT and for a merge into a post-program record too. This row is that population and only
+     it. A NONZERO here beside `epBeyondMarkup: 0` is the whole finding in two numbers: the page's own code
+     ran, composed addresses, and composed the `<head>`'s. It is a LIFETIME count like its neighbours and it
+     is CONTAINED in `epAskMerged`, so it is never added to the three arms beside it. */
+  "epAskMergedPreProgram"];
 
 /* WHERE THE FRONTIER STOOD, WHAT ITS STEPS DID, AND WHAT GREW IT — read off the row bridge.js wrote, never
    recomputed. `forkAt` is taken WHOLE and is not truncated to its heaviest rows: it is already a Space-Saving
