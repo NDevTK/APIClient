@@ -78,7 +78,21 @@ const MINTS = [
   ["class", /JS_NewClassID\s*\(\s*[^,]+,\s*&\s*([A-Za-z_]\w*)\s*\)/g],
   ["realm", /(?<![>.*])\b([A-Za-z_]\w*)(?:\s*\[[^\]]*\])?\s*=\s*realm_value_declare\s*\(/g],
 ];
-const DECLARED = /agent_state_(?:id|flag|class|atom|value|ptr)(?:_at)?\s*\([^;]*?&\s*([A-Za-z_]\w*)\s*[,)]/gs;
+/* THE DECLARING KINDS ARE DERIVED FROM core/agent_state.h AND NOT RESTATED HERE. CLAUDE.md: an auditor
+   derives the rule it checks from the code that owns it, because a restated rule is a SECOND COPY and the one
+   that drifts is the copy nobody runs against reality. A kind added to that header and not to an alternation
+   typed out here would move every slot declared through it OUT of `declared` and into `NOT reset` -- an
+   accusation manufactured entirely by this file, against the components that had just been routed correctly.
+   The entries that DECLARE a slot are exactly the ones taking a `what`; agent_state_undo_at and
+   agent_state_reached_at take (component, file, line) and are not declarations. */
+const HEADER = "engine/host/browser/core/agent_state.h";
+const KINDS = [...read(HEADER).matchAll(/\bagent_state_(\w+)_at\s*\(\s*const char \*component,[^;]*?const char \*what\b/g)]
+  .map((m) => m[1]);
+if (!KINDS.length)
+  throw new Error(`agentstate: no declaring entry was found in ${HEADER} -- this sweep's whole `
+                + `\`declared\` band is derived from that list, so an empty one would report every declared `
+                + `slot in the tree as undeclared. Either the header's entry shape changed or the path is wrong.`);
+const DECLARED = new RegExp(`agent_state_(?:${KINDS.join("|")})(?:_at)?\\s*\\([^;]*?&\\s*([A-Za-z_]\\w*)\\s*[,)]`, "gs");
 
 /* Top-level function bodies, by brace balance -- used only to ask whether a RELEASE resets a slot, so a
    miss here can only move a row into the louder band, never out of it. */
@@ -105,8 +119,16 @@ for (const p of files) {
     for (const m of s.matchAll(new RegExp(rx.source, "g"))) {
       const id = m[1];
       if (seen.has(id)) continue;
-      /* a file static and not a local or a parameter -- the registry takes an address that outlives a call */
-      if (!new RegExp(`^\\s*static\\s[^;=]*\\b${id}\\b`, "m").test(s)) continue;
+      /* A FILE STATIC AND NOT A LOCAL OR A PARAMETER -- the registry takes an address that outlives a call.
+         THE EXCLUDED CHARACTER IS `(` AND IT USED TO BE `=`, which dropped every member but the FIRST of a
+         comma-separated declaration list: `static int g_stepid = -1, g_driver_slot = -1;` puts an `=` before
+         the second name, so the test failed for it and the row left this sweep entirely. That is the UNDER-
+         counting direction, which nothing announces -- the slot is simply absent from every band. Measured at
+         8de85780 on the realm channel alone: `rendering.c`'s g_driver_slot and `remote_op.c`'s g_apply_slot,
+         both declared, both invisible. `(` keeps the protection the `=` was really buying, which is the one
+         recorded in the MINTS comment above: a static FUNCTION whose PARAMETER shares the name cannot match,
+         because a parameter is always preceded by the function's open paren. */
+      if (!new RegExp(`^\\s*static\\s[^;(]*\\b${id}\\b`, "m").test(s)) continue;
       seen.add(id);
       const line = s.slice(0, m.index).split("\n").length;
       let band;
@@ -128,6 +150,7 @@ if (!rows.length)
 
 console.log(`agent-state coverage over ${files.length} files at ${REV ?? "the WORKING TREE (moves under the scan)"}`);
 console.log(`spellings searched: ${MINTS.map(([k]) => k).join(", ")} -- anything else minted is invisible here`);
+console.log(`declaring kinds, read from ${HEADER}: ${KINDS.join(", ")}`);
 for (const k of [...tally.keys()].sort()) console.log(`  ${String(tally.get(k)).padStart(4)}  ${k}`);
 for (const r of rows.sort((a, b) => (a.band + a.p).localeCompare(b.band + b.p)))
   if (r.band.includes("UNDECLARED") && (!BAND || r.band.includes(BAND)))
