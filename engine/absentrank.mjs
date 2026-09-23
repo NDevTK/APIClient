@@ -919,10 +919,57 @@ for (const [n, chans] of notcode)
                                          a COLUMN: a row whose count is mostly alias is a row to open, and a
                                          row invisible without it does not silently vanish.
      - `"fonts" in document`           — ECMAScript §13.10.1's HasProperty, which answers false and does not
-                                         throw, so it is the one spelling here that is evidence the page
-                                         HANDLES the absence. It is not summed into the rank and it is not a
-                                         class: `Performance.interactionCount` reads 7 and 7, and only
-                                         opening the sites says whether the guard covers the read.
+                                         throw, so it is evidence the page HANDLES the absence. It is not
+                                         summed into the rank and it is not a class: only opening the sites
+                                         says whether the guard covers the read.
+                                         THIS READ `it is the one spelling here that is evidence the page
+                                         HANDLES the absence`, AND THAT IS REFUTED BY THIS FILE'S OWN
+                                         REGEXES. Three other spellings are evidence of handling and all
+                                         three are counted as BARE READS by `RCHAN["R.m"]`, whose
+                                         `(?:\?\.|\.)` admits an optional chain in the RECEIVER position
+                                         and says nothing about the MEMBER one. Exercised against the
+                                         patterns themselves, with `zzz.notclipboardy` as the armed negative
+                                         control answering 0/0:
+                                           `R.m?.x`        bare=1 guard=0 — ECMAScript §13.3.9 "Optional
+                                                           Chains", whose §13.3.9.1 "Runtime Semantics:
+                                                           Evaluation" returns undefined for an undefined
+                                                           base rather than reaching the member, so the
+                                                           absence costs nothing and is counted as a read
+                                                           that costs everything;
+                                           `R.m && R.m.x`  bare=2 guard=0 — the guard and the guarded read
+                                                           BOTH counted, so one handled use reads as two
+                                                           unhandled ones;
+                                           `typeof R.m`    bare=1 guard=0;
+                                           `"m" in R`      bare=0 guard=1 — the only one the column sees.
+                                         THE DIRECTION IS THE ACCUSING ONE, which is why this is a
+                                         correction and not a note: every miss makes a member look LESS
+                                         handled than it is, so a page that guards carefully ranks ABOVE one
+                                         that does not, in the column a reader dispatches from. Measured
+                                         over one 409-file corpus, `Navigator.clipboard` reads bare=75
+                                         guard=2 while `navigator.clipboard?.`=6, `navigator.clipboard&&`=5
+                                         and `typeof navigator.clipboard`=1 stand beside it — at least 14 of
+                                         77 occurrences handled where the column says 2.
+                                         IT IS A CORRECTION TO THE CLAIM AND NOT YET A WIDENING, because a
+                                         widening is priced in what it takes with it and that price has not
+                                         been measured here. NAMED RESIDUAL — WHAT IS NOT COVERED: the guard
+                                         column counts one of at least four spellings that handle an absent
+                                         member, so it is a FLOOR and its prose called it a total. WHAT THE
+                                         NEXT DIFF BUILDS: a member-position optional-chain channel, an
+                                         `X.m &&` channel and a `typeof X.m` channel beside `"m" in R`, each
+                                         armed positive and negative like every channel here, and each
+                                         landed with the measured pair this file holds every widening to —
+                                         how many rows it re-weights against how many names it newly admits.
+                                         HOW ITS ABSENCE WOULD SHOW: a row whose `guard` is small against a
+                                         `bare` that a hand grep for the member's own optional-chained and
+                                         `&&` spellings answers a large fraction of.
+                                         THE DERIVATION, never the figures, because a corpus moves — the
+                                         shell strings below are SINGLE-quoted deliberately, because a
+                                         double-quoted run in a comment is read as the quotation belonging
+                                         to the nearest preceding section number and this block names two:
+                                           cd <dir>/mirror
+                                           grep -rohE 'navigator[[:space:]]*[.][[:space:]]*clipboard' . | wc -l
+                                           grep -rohE 'navigator[[:space:]]*[.][[:space:]]*clipboard[[:space:]]*[?][.]' . | wc -l
+                                           grep -rohE 'navigator[[:space:]]*[.][[:space:]]*clipboard[[:space:]]*&&' . | wc -l
    WHAT NO SPELLING HERE SEES, measured rather than listed from imagination: a local alias for the receiver
    itself (`const d = document; d.fonts`), a destructure (`const {fonts} = document`), a dynamic key
    (`document[k]`), a receiver returned by a call (`getWin().navigator.clipboard` — one occurrence over this

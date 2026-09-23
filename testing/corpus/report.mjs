@@ -73,7 +73,18 @@ const passes = files.map((f) => {
               findings the page's own policy kills, which is the one distinction §@S says must never be made
               by omission. */
            policy: measured.length === 0 ? 'nothing-measured'
-             : measured.some((r) => 'policyEnvelope' in r) ? 'carried' : 'predates' };
+             : measured.some((r) => 'policyEnvelope' in r) ? 'carried' : 'predates',
+           /* AND A FOURTH, FOR THE ABSENT-GLOBAL CENSUS, asked separately for the reason the three above
+              are. IT HAS A STATE THE OTHERS DO NOT, and folding it in would be the defect the field exists
+              to report: site.mjs matches absent.c's member names by a distinctive SUBSTRING and writes
+              `absentFatal` when a substring stops matching exactly one key, so a row carrying that is a
+              RENAME in the engine's composer and not an old instrument. `'absentAsked' in r` is false for
+              both, so a probe that asked only that would print `predates` over a live drift and the column
+              would go quietly dark while a shout said the pass was simply old. The two are separated here
+              and the fatal one is shouted below with the message the row carries. */
+           absent: measured.length === 0 ? 'nothing-measured'
+             : measured.some((r) => 'absentFatal' in r) ? 'fatal'
+             : measured.some((r) => 'absentAsked' in r) ? 'carried' : 'predates' };
 });
 /* THE LIST THIS CENSUS MEASURED, NAMED AND THEN CHECKED AGAINST THE ROWS. This file used to read `sites.tsv`
    unconditionally and look every row's id up in it — and the app-page census walks twelve ids that appear in
@@ -468,6 +479,29 @@ for (const p of passes) for (const r of p.rows) {
        while a paragraph certifies that it has one. `unitsDone` is read above now; `candidates` still is
        not, and saying so is the only thing that keeps that true or false rather than merely claimed. */
     oask: r.orphansAsked, odrv: r.orphansDriven,
+    /* THE ABSENT-GLOBAL PAIR, WHICH IS THE ONE ABSENCE THIS PROJECT'S FORCING FUNCTION CANNOT SURFACE AND
+       WHICH THIS FILE WAS AGAIN THE CONSUMER THAT NEVER ASKED. §NO STUBS makes an unbuilt web API an HONEST
+       absence whose forcing function is the page's own throw, and that argument rests on the page THROWING:
+       a real bundle writes `if (window.X)`, the solver correctly declines to fork a read whose answer a real
+       browser without X also gives, the fallback branch runs, and every endpoint and sink behind the true
+       branch is unreachable with NOTHING ANYWHERE SAYING SO. It is the inverse of every other absence here —
+       a crash names what to build, an honest throw names the component, an empty grep leaves a near miss,
+       and this one produces a run that completes, emits, and looks healthy.
+       THE CHAIN WAS BUILT TO THIS LINE AND STOPPED AT IT, exactly as the orphan pair above did and for the
+       same reason: solver/absent.c counts the misses and classifies each against the three generated global
+       vocabularies, solver/result.c emits `_absent`, extension/bridge.js asserts its shape and relays it onto
+       every run record, and site.mjs writes `absentAsked`/`absentOwed` into every census row under a comment
+       arguing at length that BOTH NUMBERS OR NEITHER is the whole point. MEASURED before this diff, with the
+       orphan pair as the armed positive control: `git grep -l absentAsked` answered ONE path — the file that
+       WRITES it, whose other occurrences are its own prose — against ten-odd for `orphansAsked`. Computed,
+       asserted, relayed, stored, and read by nobody, on the column that answers the product loss.
+       BOTH OR NEITHER, AND THE ORDER IS THE MECHANISM'S. `miss` is every read of the global object the hook
+       was asked about; `owed` is the cut of those on a name one of the three standards puts on a global and
+       this realm has none of. So `N>0` is the POSITIVE statement that this engine answered every standard
+       name the page asked for, `N>M` is M reads of a component this build owes, and `0>0` is a census that
+       was never reached — which is a scheduling result about the run and not a fact about the page. A
+       numerator alone reproduces the ambiguity the pair exists to remove. */
+    aask: r.absentAsked, aowed: r.absentOwed,
     sigs, wasm: (r.artifact && r.artifact.wasmSha256 || '').slice(0, 12),
     /* THE ARTIFACT IS NAMED BY ITS HASH ALONE. This read `r.artifact.head`, a field site.mjs deliberately
        renamed to `builtFromHeadClaim` when it stopped being trustworthy, so it resolved to '' for every row
@@ -551,6 +585,11 @@ const table = [...seen.entries()].map(([id, ms]) => ({
      spread per number rather than as a ratio, because a ratio of two spreads is a number nobody measured. */
   orphans: ['oask', 'odrv'].map((k) => spread(ms, k)).join('>'),
   policy: ['pent', 'pcsp', 'ptt'].map((k) => spread(ms, k)).join('>'),
+  /* `miss>owed` READ LEFT TO RIGHT IS HOW FAR THE GLOBAL-ABSENCE QUESTION GOT, in the order the mechanism
+     travels — a read misses on the global object and is COUNTED, and it is then classified against the
+     vocabularies and may be OWED. Two spreads and never a ratio, for the reason `ask>drv` gives: a ratio of
+     two spreads is a number nobody measured. */
+  absent: ['aask', 'aowed'].map((k) => spread(ms, k)).join('>'),
   epMax: Math.max(-1, ...ms.map((m) => m.endpoints).filter((x) => typeof x === 'number')),
   epAnswered: ms.filter((m) => typeof m.endpoints === 'number').length,
   sigs: [...new Set(ms.flatMap((m) => m.sigs))],
@@ -570,7 +609,7 @@ console.log(`list: ${list.rel} (${list.rows.length} sites, ${table.length} measu
 console.log('\n' + pad('site', 20) + pad('outcome', 20) + pad('abort/n', 8) + pad('fin/n', 7) +
   pad('terminal', termW) +
   pad('ep', 8) + pad('sinks', 7) + pad('src>reach>taint>sup', 21) + pad('ask>drv', 13) +
-  pad('sink>csp>tt', 16) +
+  pad('sink>csp>tt', 16) + pad('miss>owed', 13) +
   pad('flows', 12) + pad('switches', 12) + pad('units', 9) + pad('fl/unit', 14) + pad('gone', 6) +
   pad('load', 10) + 'signature');
 for (const t of table)
@@ -578,7 +617,7 @@ for (const t of table)
     pad(t.finishedPasses + '/' + t.n, 7) + pad(t.terminal, termW) +
     pad(t.ep, 8) + pad(t.sk, 7) + pad(t.arrival, 21) +
     pad(t.orphans, 13) +
-    pad(t.policy, 16) +
+    pad(t.policy, 16) + pad(t.absent, 13) +
     pad(t.fl, 12) + pad(t.sw, 12) + pad(t.un, 9) + pad(t.fpu, 14) + pad(t.gone, 6) +
     pad(t.ld, 10) + (t.sigs[0] ? t.sigs[0].split(' :: ')[0] : '-'));
 
@@ -626,6 +665,32 @@ if (pPredates.length)
     '`policyEnvelope` field), so a `-` there is this instrument being unable to ask, NOT a corpus whose ' +
     'findings all survive their pages\' policies. A `-` on a CARRIED pass is a site no document of which ' +
     'was ever answered, which is a third fact again. ***');
+
+/* AND THE FOURTH, FOR THE ABSENT-GLOBAL PAIR, WITH A SECOND LINE THE OTHER THREE DO NOT NEED. The predates
+   shout is the same argument as theirs. The FATAL one is not a variant of it: `absentFatal` means site.mjs
+   found a distinctive substring matching other than exactly one key of the engine's census, which is
+   solver/absent.c having renamed or duplicated a composer row — so the column is dark because the SEAM
+   moved, not because the pass is old, and the two prescribe opposite work (re-derive site.mjs's key match
+   against absent_json's composer, against wait for a newer pass). It is shouted with the row's own message
+   because that message names which substring and how many keys it matched, which is the whole of what the
+   next reader needs and is not recoverable from a `-`. */
+const aPredates = passes.filter((p) => p.absent === 'predates').map((p) => p.label);
+const aCarried = passes.filter((p) => p.absent === 'carried').map((p) => p.label);
+const aFatal = passes.filter((p) => p.absent === 'fatal').map((p) => p.label);
+if (aPredates.length)
+  console.log('\n*** THE `miss>owed` COLUMN IS OVER ' + aCarried.length + ' OF ' + passes.length +
+    ' PASS(ES) — ' + aPredates.join(', ') + ' predate(s) the absent-global census entirely (the rows carry ' +
+    'no `absentAsked` field), so a `-` there is this instrument being unable to ask, NOT a page that read ' +
+    'no absent global and NOT an engine that answered every name one was asked for. ***');
+if (aFatal.length)
+  console.log('\n*** THE `miss>owed` COLUMN IS DARK ON ' + aFatal.join(', ') + ' BECAUSE THE ENGINE\'S ' +
+    'CENSUS KEYS MOVED, NOT BECAUSE THE PASS IS OLD — site.mjs matched a distinctive substring against ' +
+    'other than exactly one key of solver/absent.c\'s composer. This is a seam to repair rather than a ' +
+    'measurement to wait for. ***\n' +
+    passes.filter((p) => p.absent === 'fatal')
+      .map((p) => '    ' + p.label + ': ' +
+        (p.rows.filter((r) => r.absentFatal).map((r) => r.id + ' — ' + r.absentFatal)[0] || '(no message)'))
+      .join('\n'));
 
 /* THE WORK QUEUE. A DFAIL's reason names what to build, so it is printed rather than summarised -- but only
    the head of it, because one 1169-character reason per row buries the RANKING, which is the thing this
