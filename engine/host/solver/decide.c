@@ -236,6 +236,24 @@ static long g_fork_total;
    per divergence however many arms that divergence abandoned. Reading it as arms is the `svcMax` defect
    exactly (a quantity quoted in the unit its NAME suggests instead of the one its ACCESSOR computes), so the
    accessor states the pair and decide.h states it again where a reader will be standing. */
+/* …AND `g_replay_hits` NONZERO WITH NO COLD RESUME IS THE ORDINARY STATE AND IS NOT A PREFIX BEING RE-RUN,
+   WHICH IS A SECOND SENSE ERROR ON THE SAME ROW AND COSTS MORE THAN THE UNIT ONE ABOVE. The unit trap is
+   reading arms as steps; this one is reading a REPLAY as RE-EXECUTION, and the word is the whole of why — an
+   arm consumed here is one recorded QUESTION re-asked and matched, and a flow consuming it has not re-run a
+   single opcode it did not have to. A forked sibling resumes over its parent's FRAME SNAPSHOT and an O(1)
+   shared base segment (engine_sibling_assemble, whose DCHECK refuses the frameless case precisely because
+   that one WOULD "compile that program's row again and replay every side effect the parent has already
+   performed"), so what it consumes here is the arm it was forked to take, not a prefix.
+   THE DISCRIMINATOR IS `resumed` AND IT IS ALREADY PUBLISHED BESIDE THIS ROW, so the pair is read together or
+   neither is read: `replayHits` large with `resumed` at ZERO is siblings taking their own recorded arms in
+   session, which is the design; `replayHits` large with `resumed` above zero is the cold tier rebuilding, and
+   only THAT population re-executes anything. MEASURED on one real page, two runs, artifact 9c2c239d:
+   `replayHits` 3345 and 3439 with `resumed` 0, `park` 0, `replayLeft` 0 and `replayLeftArms` 0 in both — no
+   rebuild happened, no divergence abandoned an arm, and every hit was a fork arm.
+   IT IS RECORDED HERE BECAUSE THE MISREADING WAS ACTED ON: a lane offered the replay as the one admissible
+   lever left against a frontier that cannot drain — on the premise that every arm re-executes its parent's
+   prefix — and there is no such re-execution to spare. solver/flow.c carries the unit half of this and
+   engine.c's flow_switch_in carries the comment that produced it. */
 static long g_replay_hits;        /* ARMS consumed on a matching question (dec_replay)                  */
 static long g_replay_left;        /* EVENTS: divergences (dec_leave_path)                               */
 static long g_replay_left_arms;   /* ARMS abandoned by those divergences, summed                        */

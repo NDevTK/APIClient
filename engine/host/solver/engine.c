@@ -12177,8 +12177,26 @@ static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply
            "a flow that has never run carries a recorded decision path — decide_enter is about to ignore it "
            "and the flow's first suspend will overwrite the pointer, so the path is dropped AND its segment "
            "reference leaked. Whatever installed it set `dec_blob` without `started`");
-    if (!f->started) { f->started = 1; decide_enter(ctx, f); }   /* fresh flow: replay from cursor 0 */
-    else {                                                        /* paused flow: restore where it left off */
+    /* A FRESH FLOW REPLAYS NOTHING, AND THIS LINE USED TO SAY `replay from cursor 0` — REWRITTEN RATHER THAN
+       DELETED BECAUSE A READER WHO RE-DERIVES IT FROM THE CURSOR WILL WRITE IT AGAIN. `cursor 0` is the start
+       of the vector, so the phrase reads as REPLAYING A PREFIX FROM THE BEGINNING, and `replay` is this
+       engine's word for exactly that. decide_enter sets `g_dec_n = 0` before anything — the vector is EMPTIED,
+       not rewound — and the DCHECK directly above forbids a never-run flow from carrying a recorded path at
+       all, so there is nothing to replay and the assert is what makes that true rather than intended.
+       THE TWO ARMS ARE THE OPPOSITE WAY ROUND FROM HOW THE PAIR READS, WHICH IS THE WHOLE COST. The arm
+       labelled `replay` replays nothing; the arm NOT labelled replay is the one that installs a recorded
+       path — and a forked SIBLING takes that one, because engine_sibling_assemble sets `started` on it. So a
+       reader looking for where a sibling replays finds the word on the branch a sibling never takes.
+       MEASURED, AS A HYPOTHESIS THIS SENTENCE PRODUCED AND A LANE HANDED ON BEFORE CHECKING IT: that a
+       forked arm re-executes its parent's prefix, so the replay was the one admissible lever left against a
+       frontier that cannot drain. It does not. engine_sibling_assemble's own DCHECK requires a frame snapshot
+       for a fork of a flow INSIDE a program, in the words "the sibling would be marked hot with nothing to
+       resume, and its first step would compile that program's row again and replay every side effect the
+       parent has already performed" — which is the state it REFUSES, so a sibling resumes where its parent
+       stands over an O(1) shared base segment and re-runs no prefix at all. solver/flow.c records the same
+       correction one file over, reached independently and by a different route. */
+    if (!f->started) { f->started = 1; decide_enter(ctx, f); }   /* fresh flow: an EMPTY vector, nothing recorded */
+    else {                                                        /* paused flow OR forked sibling: install its path */
         decide_resume(f->dec_blob, f->fn);   decide_blob_free(f->dec_blob); f->dec_blob = NULL;
         concolic_pins_resume(f->pin_blob);   concolic_pins_blob_free(f->pin_blob); f->pin_blob = NULL;
     }
