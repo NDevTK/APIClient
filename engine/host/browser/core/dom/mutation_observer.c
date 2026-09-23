@@ -1052,12 +1052,35 @@ void mutation_observer_init(JSContext *ctx)
     g_atom_queued = JS_NewAtom(ctx, "queued");
     CHECK(g_atom_mo != JS_ATOM_NULL && g_atom_ro != JS_ATOM_NULL && g_atom_queued != JS_ATOM_NULL,
           "a §4.3 slot key could not be interned");
+    /* §4.3's FIVE SLOT-KEY HANDLES, DECLARED — core/agent_state.h. The row is `element` for the reason the
+       class above carries it: DOM §4.3 is declared from element_init, and a sub-component names the row whose
+       release reaches it. They are declared BELOW the CHECK rather than beside each assignment because that
+       is the line at which all five are known to hold a handle; a declaration above it would stand over a
+       slot an allocation failure had left at its pre-init.
+       THE REFERENCE AND THE HANDLE ARE TWO OBLIGATIONS AND ONLY THE SECOND MOVES. The undo resets HANDLES and
+       never what a handle names, so the JS_FreeValueRT and JS_FreeAtomRT below stay where they are and keep
+       their own null beside them — that null is what stops the rest of `element`'s cascade reading a freed
+       value, and element.c's release says so in its own words. What the declaration adds is that the null is
+       now CHECKED at the end of the column instead of being a line somebody remembered to write. */
+    agent_state_value("element", &g_mo_key, "DOM §4.3.1's MutationObserver state slot key, the Symbol itself");
+    agent_state_atom("element", &g_atom_mo, "DOM §4.3.1's MutationObserver state slot key, interned");
+    agent_state_value("element", &g_ro_key,
+                      "DOM §4.3.3's registered observer list slot key, the Symbol itself");
+    agent_state_atom("element", &g_atom_ro, "DOM §4.3.3's registered observer list slot key, interned");
+    agent_state_atom("element", &g_atom_queued,
+                     "DOM §4.3's \"mutation observer microtask queued\" flag's property name, interned");
 
     g_pending = JS_NewArray(ctx);
     CHECK(!JS_IsException(g_pending), "the agent's pending mutation observers could not be allocated");
     JS_SetProperty(ctx, g_pending, g_atom_queued, JS_FALSE);
+    agent_state_value("element", &g_pending,
+                      "DOM §4.3's \"pending mutation observers\" — the AGENT's set, and the object its "
+                      "microtask-queued flag is a property of");
     g_notify_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_mo_notify_def);
     CHECK(g_notify_stepid >= 0, "no step id for §4.3's notification driver");
+    agent_state_id("element", &g_notify_stepid,
+                   "DOM §4.3's notify-mutation-observers driver, the step definition every realm's own "
+                   "function object is minted from");
     g_notify_slot = realm_value_declare(ctx, "§4.3 notifyMutationObservers");
     /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The row is `element` and
        NOT this file: DOM §4.3 is declared from element_init, so element_free is the release that reaches this
@@ -1076,9 +1099,24 @@ void mutation_observer_init(JSContext *ctx)
     idl_optional_from(1);   /* §4.3.1: `observe(Node target, optional MutationObserverInit options = {})` */
     g_id_disconnect = idl_method_id(ctx, NULL, 0, js_mo_disconnect, 0);
     g_id_take = idl_method_id(ctx, NULL, 0, js_mo_take_records, 0);
+    /* §4.3.1's FOUR POOL ENTRIES. These hold no reference at all — an entry is an index into the agent's
+       member pool, valid in a runtime that is still alive at this component's release and read by nobody
+       between that release and `element`'s undo — which is exactly the population element.c's own release
+       names as the one whose hand-written enumeration the undo replaces. */
+    agent_state_id("element", &g_id_ctor, "DOM §4.3.1's MutationObserver constructor");
+    agent_state_id("element", &g_id_observe, "DOM §4.3.1's `observe(target, options)`");
+    agent_state_id("element", &g_id_disconnect, "DOM §4.3.1's `disconnect()`");
+    agent_state_id("element", &g_id_take, "DOM §4.3.1's `takeRecords()`");
 
     realm_declare_intrinsic(mutation_observer_install_proto);
     g_ready = 1;
+    /* THIS COMPONENT'S DECLARATION LATCH, WHICH IS WHY IT IS DECLARED LAST AND WHY ITS RESET STAYS BELOW.
+       core/agent_state.h asks a component to name the latch its own init consults first among its slots, and
+       this is the one the `if (g_ready) return;` at the top of this function reads — carried, a second agent
+       would get a MutationObserver that reported itself declared with every other handle of this file null. */
+    agent_state_flag("element", &g_ready,
+                     "DOM §4.3's declaration latch — what this component's init consults to decide it has "
+                     "already run, and what its release consults to decide it has anything to give back");
 }
 
 void mutation_observer_install_proto(JSContext *ctx)
@@ -1134,16 +1172,49 @@ void mutation_observer_free(JSRuntime *rt)
     JS_FreeAtomRT(rt, g_atom_ro);
     JS_FreeAtomRT(rt, g_atom_queued);
     g_atom_mo = g_atom_ro = g_atom_queued = JS_ATOM_NULL;
-    /* TWO STATEMENTS: a chain gives every target the ONE value on its right, and the slot's
-       pre-declaration value is JS_INVALID_CLASS_ID while the step id's is `-1`. */
-    g_notify_stepid = -1;
-    g_id_observe = g_id_disconnect = g_id_take = g_id_ctor = -1;
+    /* THE FIVE POOL ENTRIES ARE NOT PUT BACK HERE ANY MORE, AND NOR IS THE REALM SLOT. All six are declared
+       under `element`, whose release ends in agent_state_undo — one reset, computed from the registry that
+       already holds each slot's address and its kind. A line here as well would be a SECOND resetter beside
+       that one, which is the pair core/agent_state.h's undo exists to stop being kept by hand. The sentence
+       that stood here — two statements, a chain giving every target the ONE value on its right, the realm
+       slot's pre-declaration value being JS_INVALID_CLASS_ID while a step id's is `-1` — is kept as the
+       reason those two may not share a chain rather than as a description of a line, because a reader who
+       re-derives the shorter spelling re-introduces the value that reads as a live class id.
+       NOTHING ABOVE THEM WAS FREED, which is what makes them the population element.c's own release names as
+       the one the undo replaces: an entry is an index into the agent's member pool and a realm slot is a
+       class id, both valid in a runtime that is still alive here and read by nobody between this line and
+       that undo. The references directly above DO keep their reset, for the opposite half of the same rule.
+       g_any_observer KEEPS ITS RESET AND IS NOT DECLARED — see the residual below. */
     g_any_observer = false;
+    /* THE LATCH IS RESET HERE AS WELL AS BY THE UNDO, AND THAT IS NOT THE SECOND RESETTER THE PARAGRAPH
+       ABOVE FORBIDS: those two answer different questions about one slot. The undo's write is what a fresh
+       AGENT needs, at the end of the column; this one is what makes THIS FUNCTION idempotent, at the top of
+       which `if (!g_ready) return;` is the guard that stops a second call re-freeing every reference above.
+       The undo runs a dozen releases later, so a reset left to it would leave that window open — and the
+       undo's own write over an already-zero flag is the no-op that costs nothing.
+
+       NAMED RESIDUAL — g_any_observer IS A `bool`, AND NO KIND TAKES ONE.
+         NOT COVERED: core/agent_state.h's flag entry takes `const int *` and `&g_any_observer` is a
+           `bool *`. That is a constraint violation and the compiler diagnoses it — AS A WARNING at this
+           project's own settings, which was measured rather than assumed, because the obvious reading is
+           that it refuses and it does not: `-Wincompatible-pointer-types` is not in build.mjs's
+           QUIET_WARNINGS `-Werror=` pair, so the exact text a build would print is
+           `warning: incompatible pointer types passing 'bool *' to parameter of type 'const int *'`
+           and the object file is still produced. So the miswiring is LOUD and not IMPOSSIBLE, and routing
+           this slot through that entry would read four bytes of a one-byte object rather than check it.
+           The slot is agent-lifetime state by every other test: it is the latch this file's five §4.2.3
+           entry points gate on, it is set once and cleared only here, and a carried `true` would have the
+           next agent's tree mutations walk an observer list belonging to a torn-down runtime.
+         THE NEXT DIFF BUILDS: a `bool` kind in that header, taking `const bool *`, pre-init `false` —
+           which closes this slot and joins the same type gap that registry already has, whose other
+           members `node engine/agentstate.mjs --rev <rev>` bands as `no kind takes long`, `size_t` and
+           `uint32_t`.
+         HOW ITS ABSENCE WOULD SHOW: the reset above may be deleted and agent_state_check_released's report
+           is byte-identical either way — and a `bool` reset raises no row in that sweep's reset channel
+           either, because the channel matches a pre-init SPELLING and `false` is not among the ones it
+           reads out of the header. So this slot sits in NO band of either instrument rather than in a
+           counted one, which is a weaker state than being reported as undeclarable. */
     g_ready = 0;
-    /* THE SLOT IS NOT PUT BACK HERE ANY MORE. It is declared under `element`, whose release ends in
-       agent_state_undo — one reset, computed from the registry that already holds this slot's address
-       and its kind. A line here as well would be a SECOND resetter beside that one, which is the pair
-       core/agent_state.h's undo exists to stop being kept by hand. */
     /* AND THE CASCADE REACHED THIS FILE — the claim that entitles element_free's last line to put this
        file's slot back. See core/agent_state.h's agent_state_reached. */
     agent_state_reached("element");
