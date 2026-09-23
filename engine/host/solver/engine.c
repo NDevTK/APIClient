@@ -9440,24 +9440,35 @@ static int64_t g_slice_over;
    offered is exactly what a "this flow is not yielding, take the thread" watchdog would be built from. */
 static uint64_t g_over_asks;       /* suspend points offered, summed over the turns that met the slice */
 static long     g_over_seamless;   /* …and how many of those turns offered NOT ONE */
-/* …AND THE ONE PHASE INSIDE A STEP THAT IS O(A LENGTH THE PAGE CHOSE) AND OFFERS NO RAISE POINT AT ALL.
+/* …AND THE ONE PHASE INSIDE A STEP THAT IS O(A LENGTH THE PAGE CHOSE), AND HOW COARSELY IT RESTS.
+   (This headline read `AND OFFERS NO RAISE POINT AT ALL` while the paragraphs under it were rewritten for the
+   seam that gave it one — a retirement that edits the tail and leaves the headline is the shape that goes on
+   asserting the withdrawn claim to anyone who reads only the first line.)
    `g_slice_over` says a turn met the slice and `g_step_unit_over` beside it says in which ARM. (This
    sentence said `the row above` until two rows were inserted between it and that one — a reference by
    POSITION resolves to whatever now occupies the position, so it carries their NAMES.) Neither can say
    which PHASE of that arm spent the time, and for the start arms the two phases take OPPOSITE work: a start
    step is a COMPILE (JS_FlowNew -> JS_Eval over `body_n` bytes) and then an EXECUTION (JS_FlowResume), and
    only the second runs bytecode.
-   THE COMPILE CANNOT BE PREEMPTED AT ANY INPUT SIZE, which is structural rather than measured. quickjs.h
-   declares exactly four raise kinds — JS_PREEMPT_BACKEDGE, _FORK, _CALL and _HOST — and the first three are
-   raised only from the interpreter's own dispatch, so a parse raises nothing and polls nothing for its whole
-   length; the parser's own banner at next_token states the other half, that every production is a state on
-   js_parse_descent's explicit frame stack, so the span is flat C with one driving loop and no seam in it.
-   Its size is `body_n`, which is the quantity solver/rest_unit.h's bound (1) names as the one that must never
-   appear in a step's cost — `the one the ATTACKER chooses`.
+   THIS BLOCK USED TO READ `THE COMPILE CANNOT BE PREEMPTED AT ANY INPUT SIZE, which is structural rather
+   than measured`, and derived it: quickjs.h declares exactly four raise kinds — JS_PREEMPT_BACKEDGE, _FORK,
+   _CALL and _HOST — the first three are raised only from the interpreter's own dispatch, so a parse raised
+   nothing and polled nothing for its whole length; the parser's own banner at next_token states the other
+   half, that every production is a state on js_parse_descent's explicit frame stack, so the span was flat C
+   with one driving loop and no seam in it. Its size is `body_n`, the quantity solver/rest_unit.h's bound (1)
+   names as the one that must never appear in a step's cost — `the one the ATTACKER chooses`.
+   IT IS REWRITTEN RATHER THAN DELETED BECAUSE EVERY CLAUSE OF IT IS STILL EXACTLY RIGHT ABOUT THE
+   INTERPRETER'S RAISE KINDS, so a reader who re-derives it from quickjs.h will re-add it. What it is no
+   longer right about is the PARSE: JS_FlowNewStep polls the same budget hook and the same preempt policy
+   from the parse's own production dispatch and hands the parse back through `f->compile`, so the span these
+   rows were written about now RESTS. The rows stay and what they COUNT changed with it — see THE TWO ROWS
+   ARE COUNTS OF DIFFERENT EVENTS below, which is the half that was not carried to the checks that read them.
    WHY THIS IS NOT THE PER-ARM TIME solver/engine.h DECLINES. That paragraph refuses a time accumulator per arm
    because it answers WHERE THE RUN WENT, which is a question about MASS, where the arm histogram answers WHICH
-   ARM CANNOT REST, which is about TRANSPORT. These two are the second question: a COUNT of compiles whose own
-   duration met the slice counts spans that could not have rested however the scheduler was ordered.
+   ARM CANNOT REST, which is about TRANSPORT. These two are the second question: a COUNT of compile STINTS
+   whose own duration met the slice counts spans in which the parse's rest seam DID NOT FIRE — which used to
+   be `spans that could not have rested however the scheduler was ordered`, and is now the sharper statement,
+   because a stint that reaches the slice is one whose rest point was too far apart to be reached in time.
    AND IT SETTLES A DISAGREEMENT THIS TREE ALREADY HAS WITH ITSELF. solver/engine.h's `over_arms` records a
    retired mechanism — that a unit running ENGINE C rather than page bytecode has nothing to raise the request
    — and refutes it on the native smoke: `start-ended-its-frame` ran 153 times and overran NOT ONCE, so
@@ -9470,8 +9481,10 @@ static long     g_over_seamless;   /* …and how many of those turns offered NOT
    THE THREE STATES THEY SEPARATE, which is what makes the pair a reading rather than two numbers. Against the
    count of programs a document actually reached: `classicCompiles` near that count with `classicCompileOverruns`
    at 0 says the compile is not the cost and the next question is the bytecode between the page's own raise
-   points; a nonzero `classicCompileOverruns` says one compile ALONE exceeded the slice, which no ordering can
-   fix and which names the parser's descent loop as the span to convert; and `classicCompiles` far above that
+   points; a nonzero `classicCompileOverruns` says one STINT of a parse ran to the slice boundary with the
+   seam not firing in it, which names the production dispatch's own GRANULARITY — how much of a parse one
+   rest point covers — and no longer names the descent loop as a span to convert, because it has been; and
+   `classicCompiles` far above that
    count says the compile is being REPEATED per flow that crosses a program boundary, which is
    §A-CAPABILITY-MATERIALIZED-PER-FLOW in time rather than in memory and is a third diff again.
    TWO EXTRA CLOCK READS PER COMPILE AND NOT PER TURN, stated for `g_slice_us`' reason: `quantum_thread_us`
@@ -9481,11 +9494,41 @@ static long     g_over_seamless;   /* …and how many of those turns offered NOT
    source, no cap on what a compile may cost, no fallback that skips one. A per-compile duration test is
    exactly what a watchdog on a large chunk would be built from, which is why that is said here as well as at
    the header where a reader meets the numbers.
-   RETIREMENT: these two rows go when a compile can REST — when the parse is a pull whose granularity
-   solver/rest_unit.h owns, at which point a compile that met the slice is an ordinary preempted span and the
-   count has nothing left to report. */
-static long g_classic_compiles;       /* classic program compiles taken at flow_step's start site */
-static long g_classic_compile_over;   /* …of those, the ones whose COMPILE ALONE met or passed the slice */
+   THE TWO ROWS ARE COUNTS OF DIFFERENT EVENTS AND NEITHER IS A SUBSET OF THE OTHER, which is what the rest
+   seam changed and is stated here because the site raises them on two lines a few apart and they read as a
+   pair. A PROGRAM is parsed over one or more STINTS. `g_classic_compiles` is raised once per PROGRAM, at
+   the stint that FINISHES the parse whatever that parse produced; `g_classic_compile_over` is raised once
+   per STINT whose own duration met the slice. So a program parsed over several overrunning stints
+   contributes SEVERAL overruns and ONE compile, and `over <= compiles` is not an invariant and has not been
+   one since the seam landed. It is §AND-THE-DENOMINATOR-CAN-BE-THE-RIGHT-KIND exactly: two counters, each
+   honest about its own event, raised at DIFFERENT events and read as a ratio. The denominator stays
+   per-PROGRAM deliberately — the reason is at the raise site and it is the reading `classicCompiles` exists
+   for, so re-basing it on stints would answer how many times the scheduler LOOKED at a parse instead.
+   AND THE OVERRUN'S OWN DENOMINATOR IS DERIVED RATHER THAN MINTED, because this file already counts both
+   ways a stint can end and a third accumulator would be a second answer to a question already answered
+   (CLAUDE.md §A-FIX-OF-THE-FORM-"X-IS-NOT-HOW-TO-ASK-Q": two right answers to one question is the shape
+   that drifts). Every stint ends in exactly one of two arms of ONE straight-line block: it PARKS (`cr == 0`),
+   which names the step STEP_UNIT_COMPILE_YIELDED and therefore raises `g_step_unit_runs[]` at that arm when
+   flow_step returns; or it FINISHES, which raises `g_classic_compiles`. That step name is set at exactly one
+   site in the whole file, the arm count is raised unconditionally at the one convergence point after
+   flow_step, and none of the three accumulators is ever released — so the identity is exact for the life of
+   the process and survives a session close, which is why it is an equality and not a floor:
+
+       compile STINTS == g_classic_compiles + g_step_unit_runs[STEP_UNIT_COMPILE_YIELDED]
+
+   and `g_classic_compile_over <= that sum` is the containment engine_step_unit_runs asserts, where all
+   three are in one hand.
+   RETIREMENT: these two rows go when the parse is a pull whose GRANULARITY solver/rest_unit.h owns — which
+   is NOT the condition that has already landed, and the distinction is the whole of why they are still
+   here. This clause used to read `when a compile can REST`, apposed to the rest_unit half as though they
+   were one condition; a compile CAN rest now, rest_unit.h declares no JS-production kind, and a reader
+   checking the old clause against the tree would have retired two rows that are still the only thing
+   reporting on the new seam. How much of a parse one rest point covers is still decided inside the parser
+   rather than by the scheduler, and these rows are what says whether that granularity is coarse enough to
+   matter. When the ask moves to rest_unit_items, a stint that met the slice is an ordinary preempted span
+   and the count has nothing left to report. */
+static long g_classic_compiles;       /* classic program compiles, ONE PER PROGRAM, at flow_step's start site */
+static long g_classic_compile_over;   /* compile STINTS that met the slice — NOT a subset of the row above */
 /* THE WIDTH, MADE A BUILD FAILURE RATHER THAN A SENTENCE. A comment saying "this must be 64-bit" is read by
    whoever is already thinking about it; the one edit that matters is the one that narrows the type back to
    match its neighbours on this page, and the author of that edit is precisely the reader the comment misses.
@@ -11056,7 +11099,17 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    overrun row counted spans that could not have rested however the scheduler was ordered.
                    It times one STINT now, and that is a sharper reading rather than a weaker one: a stint
                    that meets the slice is a stint the seam DID NOT FIRE IN, so the row stops being a
-                   measurement of the page's source length and becomes a measurement of this seam. */
+                   measurement of the page's source length and becomes a measurement of this seam.
+                   AND IT CHANGED THE ROW'S SUBJECT AND NOT ONLY ITS SHARPNESS, which is the half that was
+                   written here and never carried to the check that reads it. The numerator below is now PER
+                   STINT while `g_classic_compiles` a few lines down is PER PROGRAM, so `over <= compiles`
+                   stopped holding the instant this seam landed and the assert in engine_step_unit_runs went
+                   on stating it — measured, 15 against 14 on the native smoke, which is one program that
+                   took two overrunning stints rather than a counter raised somewhere else, and the assert's
+                   own text sent its reader looking for that second raise site. The denominator this
+                   numerator actually has is derived at the declaration (g_classic_compiles) out of the two
+                   arms every stint ends in; nothing extra is counted here, and a third accumulator beside
+                   these two would be the second answer that drifts. */
                 int64_t t_comp0 = quantum_thread_us();
                 JSValue *newframe = NULL;
                 int cr = JS_FlowNewStep(prog_ctx, body, body_n, prog_name, src_flags, &newframe, &f->compile);
@@ -11827,6 +11880,12 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
     out->classic_compiles         = g_classic_compiles;
     out->classic_compile_overruns = g_classic_compile_over;
     for (i = 0; i < STEP_UNIT_N; i++) out->over_arms[i] = g_step_unit_over[i];
+    /* …AND THE ARM HISTOGRAM ITSELF, TAKEN HERE RATHER THAN AT THIS FUNCTION'S TAIL, because the compile
+       pair's containment below READS one of its arms: `arms[STEP_UNIT_COMPILE_YIELDED]` is the other half
+       of the compile-stint population `classic_compile_overruns` is drawn from. Taken at the tail it would
+       be a reading of another instant against the pair copied here, which is precisely the state that check
+       would then be unable to catch — the same reason the two lines above give for themselves. */
+    for (i = 0; i < STEP_UNIT_N; i++) out->arms[i] = g_step_unit_runs[i];
     /* …AND WHETHER THOSE TURNS OFFERED A SUSPEND POINT, TAKEN IN THE SAME READING AS THE POPULATION THEY
        ARE A PROPERTY OF — for the compile pair's reason two lines up. Both are raised inside the overrun
        branch itself, so a copy one call later would report a consultation total against an overrun count of
@@ -11849,27 +11908,55 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
             "dispatch turn from the same two clock readings the slice arm is accumulated from, so it can only "
             "outrun its denominator if one of the two moved without the other",
             (long long)out->slice_overruns, (long long)out->steps);
-    /* THE COMPILE PHASE'S OWN CONTAINMENT, for the reason directly above: a subset larger than its population
-       is the one arithmetic tell this project names as free, and it is the only check a reader of these two
-       rows can make without re-deriving the mechanism behind them. */
-    DCHECKF(out->classic_compile_overruns <= out->classic_compiles,
-            "solver/engine.c: classic_compile_overruns %ld exceeds classic_compiles %ld — both are raised on "
-            "the same line of the one compile site, the second unconditionally and the first under a test of "
-            "that compile's own duration, so a subset that outruns its population is one of them being "
-            "raised somewhere else",
-            out->classic_compile_overruns, out->classic_compiles);
-    /* AND THE CROSS-ROW ONE, WHICH IS WHAT TIES THE NEW PHASE TO THE TURN IT IS A PHASE OF. A compile whose
-       own duration met the slice sits inside a step whose duration is therefore at least as large, and the
-       step's own reading brackets flow_step from outside — flow_step has exactly ONE caller and the slice
+    /* THE COMPILE PHASE'S OWN CONTAINMENT, AGAINST THE POPULATION THE NUMERATOR IS ACTUALLY DRAWN FROM — a
+       subset larger than its population is the one arithmetic tell this project names as free, and it is the
+       only check a reader of these rows can make without re-deriving the mechanism behind them.
+       THIS ASSERT USED TO READ `out->classic_compile_overruns <= out->classic_compiles` and its message said
+       a violation was "one of them being raised somewhere else". IT FIRED, at 15 against 14 on the native
+       smoke, and neither counter had moved: the parse gained a rest seam, the numerator became PER STINT,
+       the denominator stayed PER PROGRAM, and a program parsed over several overrunning stints outruns its
+       own count BY CONSTRUCTION. The old form is recorded rather than deleted because it is what a reader
+       re-derives from two counters raised a few lines apart at one site, and because its ARITHMETIC
+       observation was right while its REASON was wrong — which is the shape that sends the next reader
+       hunting a second raise site that does not exist.
+       WHAT IS ASSERTED NOW IS THE SAME CLAIM WITH THE RIGHT DENOMINATOR. Every stint ends in exactly one of
+       two arms of one straight-line block: PARKED, which names the step `compile-handed-the-thread-back`,
+       or FINISHED, which raises `classic_compiles` — so their sum IS the stint population, exactly, and for
+       the life of the process (see g_classic_compiles for why it is an equality rather than a floor). A
+       violation is therefore a stint that raised the overrun and ended in NEITHER: a third exit added to
+       that block, or a yielded stint whose step name was overwritten before flow_step returned.
+       THE CROSS-ROW CHECK BELOW READS THE SAME NUMERATOR AND IS UNAFFECTED BY THIS CORRECTION; its own
+       comment carries the premise the kind change made load-bearing there. */
+    DCHECKF(out->classic_compile_overruns
+                <= out->classic_compiles + out->arms[STEP_UNIT_COMPILE_YIELDED],
+            "solver/engine.c: classic_compile_overruns %ld exceeds the %ld compile stint(s) it is drawn from "
+            "(%ld program(s) whose parse finished + %ld stint(s) that handed the thread back) — the overrun "
+            "is raised once per STINT and every stint ends in exactly one of those two arms of one "
+            "straight-line block, so a subset larger than their sum is a third exit from the compile block, "
+            "or a yielded stint whose step name was overwritten before flow_step returned",
+            out->classic_compile_overruns,
+            out->classic_compiles + out->arms[STEP_UNIT_COMPILE_YIELDED],
+            out->classic_compiles, out->arms[STEP_UNIT_COMPILE_YIELDED]);
+    /* AND THE CROSS-ROW ONE, WHICH IS WHAT TIES THE NEW PHASE TO THE TURN IT IS A PHASE OF. A compile stint
+       whose own duration met the slice sits inside a step whose duration is therefore at least as large, and
+       the step's own reading brackets flow_step from outside — flow_step has exactly ONE caller and the slice
        accounting after it is unconditional, with no `continue`, `break`, `return` or `goto` between the two —
        so every compile overrun is also a slice overrun BY CONSTRUCTION. A violation is that bracket having
        been broken: a second caller of flow_step, or an arm that returns past the accounting, either of which
-       would silently stop `sliceOverruns` covering the turns these rows are drawn from. */
+       would silently stop `sliceOverruns` covering the turns these rows are drawn from.
+       AND THE SECOND PREMISE THE OTHER CHECK'S CORRECTION MADE LOAD-BEARING HERE: the numerator is PER STINT
+       now, so the mapping onto steps is only an injection while a turn holds AT MOST ONE stint. It does:
+       flow_step's own `continue`s are the microtask arm and the task arm, BOTH above the script row, and
+       every exit at or past the compile — parked, did-not-compile, module-evaluated, and the fall-through to
+       the frame tail — returns. So a second compile in one turn would need a `continue` added below the
+       script row, and that single edit would make this check false with nothing else changing. It is named
+       because it is the one premise here a reader cannot see from these two rows. */
     DCHECKF(out->classic_compile_overruns <= out->slice_overruns,
-            "solver/engine.c: classic_compile_overruns %ld exceeds slice_overruns %lld — a compile that alone "
-            "met the slice is inside a step that therefore met it too, so this says the step containing it "
-            "was not counted: flow_step has gained a caller outside the dispatch loop's clock bracket, or an "
-            "arm that returns before the slice accounting",
+            "solver/engine.c: classic_compile_overruns %ld exceeds slice_overruns %lld — a compile stint that "
+            "alone met the slice is inside a step that therefore met it too, and a turn reaches the compile "
+            "at most once, so this says the step containing it was not counted: flow_step has gained a caller "
+            "outside the dispatch loop's clock bracket, an arm that returns before the slice accounting, or a "
+            "`continue` below the script row that lets one turn take two compile stints",
             out->classic_compile_overruns, (long long)out->slice_overruns);
     /* THE TWO OVERRUN-PATH ROWS' EQUIVALENCE, ASSERTED RATHER THAN DESCRIBED — see solver/engine.h's
        `slice_overrun_asks`. A turn adds to the sum precisely when it is not counted as seamless, by the order
@@ -11919,7 +12006,6 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
             "flow_step's `if (!f->frame)` block, and both are counted per pass through that block, so an ask "
             "outside that containment is a second path to the seed rather than a fact about the frontier",
             g_orphan_asks, g_unframed_steps);
-    for (i = 0; i < STEP_UNIT_N; i++) out->arms[i] = g_step_unit_runs[i];
 }
 
 /* TWO FACTS THE SCHEDULER HAS AND HAS NEVER SAID, and both of them are questions that were being ANSWERED BY

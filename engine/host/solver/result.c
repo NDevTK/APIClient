@@ -2499,11 +2499,19 @@ char *result_cold_json(void) {
                     and not about this engine. See solver/engine.h's `slice_overrun_asks`. */
                  "\"sliceOverrunAsks\":%llu,\"sliceOverrunSeamless\":%ld,"
                  /* AND WHICH PHASE OF A START STEP SPENT THE TIME, which no row above can say. A start is a
-                    COMPILE and then an EXECUTION and only the second runs bytecode, so only the second can
-                    reach one of the page's own raise points; the compile is O(a length the page chose) with
-                    no raise point in it at all. `classicCompileOverruns` counts compiles whose OWN duration
-                    met the slice — spans no ordering could have rested — and `classicCompiles` read against
-                    the programs this document reached says whether a compile is repeated per flow. See
+                    COMPILE and then an EXECUTION and only the second runs bytecode; the compile is O(a
+                    length the page chose), and it RESTS — JS_FlowNewStep hands the parse back part way
+                    through, so one program is parsed over one or more STINTS. (This banner said the compile
+                    had `no raise point in it at all` and that the overruns were `spans no ordering could
+                    have rested`; both were true of the parse before that seam and are kept in their own
+                    words because a reader re-derives them from quickjs's four raise kinds.)
+                    THE TWO ROWS COUNT DIFFERENT EVENTS, SO THEY ARE NOT A RATIO. `classicCompiles` is ONE
+                    PER PROGRAM and, read against the programs this document reached, says whether a compile
+                    is repeated per flow. `classicCompileOverruns` is ONE PER STINT that met the slice, and
+                    says the parse's rest point is too coarse for a stint to stay under it. The denominator
+                    the second one is drawn from is not published as a row because it is DERIVED from two
+                    that are: `classicCompiles + stepUnitRuns[compile-handed-the-thread-back]` is the stint
+                    population exactly, and the engine asserts the containment against that sum. See
                     solver/engine.h's `classic_compiles` for the three states the pair separates. */
                  "\"classicCompiles\":%ld,\"classicCompileOverruns\":%ld,"
                  /* AND WHY EVERY TURN THAT DID NOT END A UNIT OF WORK DID NOT — the three rows without

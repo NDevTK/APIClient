@@ -1885,30 +1885,48 @@ typedef struct {
      * the same population and these rows are a second copy of it. */
     uint64_t slice_overrun_asks;      /* suspend points OFFERED, summed over the turns that met the slice */
     long     slice_overrun_seamless;  /* …and how many of those turns offered NOT ONE */
-    /* …AND THE ONE PHASE OF A START STEP THAT CANNOT REST AT ANY INPUT SIZE, which `slice_overruns` and
-     * `over_arms` can locate to an ARM and never to a PHASE. (This sentence said `the two rows above` until
-     * two rows were inserted between it and them — a reference by POSITION resolves to whatever now occupies
-     * that position, which is why it carries their NAMES now.) A start is a COMPILE and then an EXECUTION,
-     * only the second runs
-     * bytecode, and quickjs raises its yield request from exactly four kinds of site of which three are the
-     * interpreter's own dispatch — so a parse offers no raise point for its whole length, and its length is
-     * `body_n`, the page-chosen quantity solver/rest_unit.h's bound (1) forbids in a step's cost.
+    /* …AND THE ONE PHASE OF A START STEP THAT `slice_overruns` AND `over_arms` CAN LOCATE TO AN ARM AND
+     * NEVER TO A PHASE. (This sentence said `the two rows above` until two rows were inserted between it and
+     * them — a reference by POSITION resolves to whatever now occupies that position, which is why it
+     * carries their NAMES now.) A start is a COMPILE and then an EXECUTION, and only the second runs
+     * bytecode.
+     * THIS PARAGRAPH'S HEADLINE READ `THAT CANNOT REST AT ANY INPUT SIZE`, and derived it: quickjs raises its
+     * yield request from exactly four kinds of site of which three are the interpreter's own dispatch, so a
+     * parse offered no raise point for its whole length, and its length is `body_n`, the page-chosen quantity
+     * solver/rest_unit.h's bound (1) forbids in a step's cost. It is REWRITTEN RATHER THAN DELETED because
+     * the derivation is still exactly right about the INTERPRETER and a reader will re-derive it. It is no
+     * longer right about the PARSE: JS_FlowNewStep polls the same hook from the parse's own production
+     * dispatch and hands the parse back through `f->compile`, so a compile now RESTS.
+     * AND THAT MOVED ONE ROW'S SUBJECT AND NOT THE OTHER'S, WHICH IS THE WHOLE OF WHAT A READER OF THIS PAIR
+     * HAS TO KNOW. `classic_compiles` is ONE PER PROGRAM — raised at the stint that finishes a parse — and
+     * `classic_compile_overruns` is ONE PER STINT whose own duration met the slice. They are two counters
+     * raised at DIFFERENT EVENTS, so NEITHER IS A SUBSET OF THE OTHER and their quotient is not a rate: a
+     * program parsed over several overrunning stints contributes several overruns and one compile. The
+     * containment that does hold is against the stint population, which is DERIVED rather than counted
+     * separately, because every stint ends in exactly one of two already-counted arms:
+     *     compile STINTS == classic_compiles + arms[`compile-handed-the-thread-back`]
+     * and `classic_compile_overruns <= that sum` is asserted at engine_step_unit_runs where all three are in
+     * one hand. `classic_compile_overruns <= slice_overruns` also still holds by construction and is checked
+     * there; that one additionally rests on a turn reaching the compile at most once, which its own comment
+     * names.
      * READ AS A PAIR AND AGAINST A THIRD NUMBER, never alone: `classic_compiles` against the programs a
      * document reached says whether the compile is REPEATED per flow, and `classic_compile_overruns` says
-     * whether ONE compile alone exceeds the slice. Those are three different diffs — the bytecode between the
-     * page's own raise points, a per-flow materialization ceiling, and the parser's descent loop — and a
-     * reader holding either row by itself cannot tell them apart.
+     * whether the rest seam is firing often enough inside a parse for a stint to stay under the slice. Those
+     * are three different diffs — the bytecode between the page's own raise points, a per-flow
+     * materialization ceiling, and the GRANULARITY of the parse's rest point — and a reader holding either
+     * row by itself cannot tell them apart.
      * WHY A COUNT AND NOT A TIME, which `over_arms` above already argues for its own axis: a count answers
-     * WHICH SPAN CANNOT REST, a time answers WHERE THE RUN WENT, and only the first is what §NO BOUNDS'
-     * suspend-at-any-depth requirement is about. It also partitions a total this struct already publishes, so
-     * it is asserted rather than believed — `classic_compile_overruns <= slice_overruns` holds by
-     * construction and is checked where all three are in one hand.
+     * WHICH SPAN DID NOT REST, a time answers WHERE THE RUN WENT, and only the first is what §NO BOUNDS'
+     * suspend-at-any-depth requirement is about.
      * THEY DECIDE NOTHING AND BOUND NOTHING (§NO BOUNDS): no source is refused for its length, no compile is
      * capped and no arm is skipped on either reading.
-     * RETIREMENT: they go when a compile can REST — when the parse is a pull whose granularity
-     * solver/rest_unit.h owns, after which a compile that met the slice is an ordinary preempted span. */
-    long classic_compiles;           /* classic program compiles taken at flow_step's start site */
-    long classic_compile_overruns;   /* …of those, the ones whose COMPILE ALONE met or passed the slice */
+     * RETIREMENT: they go when the parse is a pull whose GRANULARITY solver/rest_unit.h OWNS. This clause
+     * read `when a compile can REST` apposed to that, as though the two were one condition; a compile can
+     * rest NOW and rest_unit.h declares no JS-production kind, so a reader checking the old clause would
+     * have retired the only rows reporting on the new seam. When the ask moves to rest_unit_items, a stint
+     * that met the slice is an ordinary preempted span and these have nothing left to report. */
+    long classic_compiles;           /* classic program compiles, ONE PER PROGRAM, at flow_step's start site */
+    long classic_compile_overruns;   /* compile STINTS that met the slice — NOT a subset of the row above */
     /* WHY THE TURNS THAT DID NOT END A UNIT OF WORK DID NOT — the three-state answer behind `_unitsDone`
      * reading low, and the rows a reader needs before that number means anything at all.
      *
