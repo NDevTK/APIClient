@@ -148,15 +148,22 @@
  * AND WHAT THE SHIPPED PATH'S ASKS ARE IS DERIVABLE BY READING CALLERS, WHICH THE COUNT CANNOT SAY AND WHICH
  * DECIDES THE NEXT DIFF. GREPPED: `cssom_cascaded_value` has three callers — this component's computed-value
  * entry, core/html/html_element_view.c's chain detector and core/layout/used_value.c's positioning
- * containing-block detector — and the first is reached from about twenty layout and view components, so the
- * route is NOT one entry and no sentence naming one is true. What IS true is a statement about ORIGINS and it
- * is the one the span question needs: `document_paint` is the only originator in this engine that is not
- * either a JS member call or a step of HTML §8.1.7.3 "Processing model"'s update the rendering, and it has no
- * shipped caller. So on a non-painting path every ask begins in one of those two, and BETWEEN two of them
- * arbitrary page code runs — which the three write-side crashes above forbid inside a span, and which
- * CLAUDE.md's per-opcode attention makes a possible flow SWITCH, the one case the tree version exists to
- * crash on. A SPAN HELD ACROSS TWO ORIGINS IS THEREFORE NOT MERELY UNBUILT, IT IS UNSOUND, which is a
- * stronger and more useful statement than `there is no caller`.
+ * containing-block detector — and the first is reached from many layout and view components, which is a
+ * DERIVATION rather than a figure because it grows with the tree: `git grep -l 'css_computed_value(' --
+ * '*.c'`, minus that entry's own file. So the route is NOT one entry and no sentence naming one is true.
+ * THE FIGURE THAT STOOD HERE WAS `about twenty` AND IT WAS READ OFF A TRUNCATED LIST, which is recorded
+ * because the defect is this file's own and the repair is the one CLAUDE.md prescribes: a `head -20` answered
+ * with exactly twenty rows, the cap was dropped in transcription, and a FLOOR was written down as a total —
+ * the command above answers 30 today. A count over a population that grows is handed over as the command
+ * that derives it, never as the number a reader will quote onward.
+ * WHAT IS TRUE IS A STATEMENT ABOUT ORIGINS, and it is the one the span question needs: `document_paint` is
+ * the only originator in this engine that is not either a JS member call or a step of HTML §8.1.7.3
+ * "Processing model"'s update the rendering, and it has no shipped caller. So on a non-painting path every
+ * ask begins in one of those two, and BETWEEN two of them arbitrary page code runs — which the three
+ * write-side crashes above forbid inside a span, and which CLAUDE.md's per-opcode attention makes a possible
+ * flow SWITCH, the one case the tree version exists to crash on. A SPAN HELD ACROSS TWO ORIGINS IS THEREFORE
+ * NOT MERELY UNBUILT, IT IS UNSOUND, which is a stronger and more useful statement than `there is no
+ * caller`.
  * A SPAN INSIDE ONE MEMBER CALL IS SOUND AND ITS WORTH IS UNMEASURED, WHICH IS THE HONEST STATE RATHER THAN A
  * PROPOSAL. One member call is one C activation: no page code runs in it, and the per-opcode preempt is in
  * the interpreter and not in a C body, so all three of this record's assertions hold over it by construction
