@@ -205,8 +205,18 @@ function _convertSchemaPropertyStep(pDef, prefix, components, docSchemas, deferr
     description: pDef.description || "",
     $ref: null,
   };
+  /* THE OTHER HALF OF lib/openapi-export.js's INFERRED-MEMBERSHIP SPLIT, landed in the same commit
+     because an export that annotates a key nothing reads back is a round trip that silently drops it.
+     `enum` is a DECLARED membership and stays one; `x-observed-values` is a membership some run INFERRED,
+     and it is read back onto the same field with the bit that says so, so re-exporting states the same
+     claim rather than promoting the inference to a declaration. */
   if (pDef.enum) {
     prop.enum = pDef.enum;
+    prop._detectedEnum = false;
+    prop.enumDescriptions = pDef["x-enumDescriptions"] || null;
+  } else if (fdDocList(pDef["x-observed-values"]) !== null) {
+    prop.enum = fdDocList(pDef["x-observed-values"]);
+    prop._detectedEnum = true;
     prop.enumDescriptions = pDef["x-enumDescriptions"] || null;
   }
   return prop;
@@ -474,13 +484,20 @@ function convertOpenApiToDiscovery(openapi, sourceUrl) {
            a hole. `enum`/`description` have declared absences and take them. */
         const pType = fdDocString(pSchema.type) === null ? fdDocString(p.type) : fdDocString(pSchema.type);
         const pEnum = fdDocList(pSchema.enum) === null ? fdDocList(p.enum) : fdDocList(pSchema.enum);
+        /* THE INFERRED MEMBERSHIP, READ BACK AS ONE — see `_openApiPropToDiscovery` above and
+           lib/openapi-export.js's parameter site for why the two keys are not interchangeable. It goes
+           through `fdDocList` like every other field here because an imported document is third-party bytes:
+           a malformed value is REFUSED and yields the declared absence, never asserted and never defaulted. */
+        const pObserved = fdDocList(pSchema["x-observed-values"]) === null
+                        ? fdDocList(p["x-observed-values"]) : fdDocList(pSchema["x-observed-values"]);
         const pDesc = fdDocString(p.description);
         m.parameters[pName] = {
           type: pType === null ? "string" : pType,
           location: pLoc,
           required: p.required === true,
           description: pDesc === null ? "" : pDesc,
-          enum: pEnum,
+          enum: pEnum === null ? pObserved : pEnum,
+          _detectedEnum: pEnum === null && pObserved !== null,
         };
       }
 

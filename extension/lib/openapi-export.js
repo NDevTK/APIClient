@@ -94,7 +94,16 @@ function discoverySchemaToOpenApi(schema, allSchemas, visited) {
       } else {
         const ts = discoveryTypeToJsonSchema(prop.type || "string");
         result.properties[fieldName] = { ...ts };
-        if (prop.enum) result.properties[fieldName].enum = prop.enum;
+        /* AN INFERRED MEMBERSHIP IS NOT `enum` — the same conversion this file already made for `_range`,
+           owed here and at the parameter site below. See that site for the argument; the two are ONE defect
+           and a fix at either alone leaves the other exporting the fabrication. lib/learn.js's
+           `_applyStatsToField` writes `field.enum` beside `field._detectedEnum = true` when `analyzeEnum`
+           infers a membership from what traffic HAPPENED to carry, and `prop` here iterates those very
+           records, so this line spread an inference into a validation keyword. */
+        if (prop.enum) {
+          if (prop._detectedEnum === true) result.properties[fieldName]["x-observed-values"] = prop.enum.slice();
+          else result.properties[fieldName].enum = prop.enum;
+        }
       }
 
       if (prop.description) result.properties[fieldName].description = prop.description;
@@ -221,7 +230,33 @@ function convertDiscoveryToOpenApi(doc, serviceName) {
               const pType = fdDocString(pDef.type);
               const paramSchema = {
                 type: pType === null ? "string" : pType,
-                ...(pDef.enum ? { enum: pDef.enum } : {}),
+                /* AN INFERRED MEMBERSHIP IS NOT A VALIDATION KEYWORD, WHICH THIS FILE HAS ALREADY DECIDED
+                   THREE TIMES FOR EVERY OTHER DOMAIN FIELD AND NEVER ASKED OF THIS ONE. `_range` became
+                   `x-observed-range` because writing it as §6.2.4 "minimum"/§6.2.2 "maximum" asserts that
+                   the API REJECTS anything outside — "a domain claim manufactured out of a sample". The
+                   `_excludedValues` site below says of this very keyword that "IT IS NOT `enum`, WHICH
+                   ASSERTS THE OPPOSITE — that these are the only values the parameter takes — and that
+                   inversion is the one way this export could turn an observation into a lie", and the
+                   `_looselyEquals` site says "`enum` over the holding set is the same fabrication with more
+                   members". Every one of those is about a membership the run did not observe, and this line
+                   spread one unconditionally.
+                   THE DISTINGUISHING BIT WAS ALREADY ON THE RECORD AND READ BY NOBODY HERE. lib/field-def.js
+                   declares `_detectedEnum` ("the `enum` above was inferred from observations, not declared")
+                   and DCHECKs it as a boolean; lib/learn.js sets it true at BOTH inferred-enum producers.
+                   So a DECLARED membership — a fetched Discovery document's own `enum`, which is that
+                   document's assertion and not ours — keeps `enum`, and an INFERRED one is annotated. The
+                   presence test is deliberate and is not a `||` default: absence means no inferred-enum
+                   producer touched this record, which for a third-party declaration is the POSITIVE
+                   statement "declared", exactly as the omission rules elsewhere in this file are.
+                   OAS 3.0.3 Specification Extensions permit `^x-` on a Schema Object, which is where
+                   `x-observed-range`, `x-observed-predicates` and `x-observed-loosely-equals` already live.
+                   lib/openapi-import.js reads this key in the SAME commit; exporting it alone would have
+                   silently broken the round trip, which is why this diff spans two files. */
+                ...(pDef.enum
+                    ? (pDef._detectedEnum === true
+                        ? { "x-observed-values": pDef.enum.slice() }
+                        : { enum: pDef.enum })
+                    : {}),
                 ...(pDef.format ? { format: pDef.format } : {}),
                 ...(pDef._defaultValue != null ? { default: pDef._defaultValue } : {}),
                 /* THE OBSERVED SPAN IS NOT A SCHEMA ASSERTION AND MUST STOP BEING WRITTEN AS ONE.
