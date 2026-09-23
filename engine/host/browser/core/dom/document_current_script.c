@@ -220,7 +220,7 @@ void document_current_script_init(JSContext *ctx)
     /* DECLARED UNDER `document`, because that is the row of core/platform.c's one list this component is
        released from: document_init declares it and document_agent_free gives it back, exactly as §3.1.5's
        readiness slot beside it. */
-    agent_state_id("document", &g_cs_slot, "the per-realm slot HTML §3.1.7's currentScript lives in");
+    agent_state_realm_slot("document", &g_cs_slot, "the per-realm slot HTML §3.1.7's currentScript lives in");
 }
 
 void document_current_script_install(JSContext *ctx, JSValueConst proto)

@@ -1463,9 +1463,9 @@ void location_init(JSContext *ctx)
     g_empty_asl_slot = realm_value_declare(ctx, "HTML §7.2.4 the Location's associated empty DOMStringList");
     realm_declare_intrinsic(location_install_realm);
     agent_state_class(LOC_COMPONENT, &g_loc_class, "§7.2.4's per-realm prototype slot and brand");
-    agent_state_id(LOC_COMPONENT, &g_obj_slot, "the per-realm slot §7.2.4's one Location lives in");
-    agent_state_id(LOC_COMPONENT, &g_empty_asl_slot,
-                   "the per-realm slot §7.2.4's associated empty DOMStringList lives in");
+    agent_state_realm_slot(LOC_COMPONENT, &g_obj_slot, "the per-realm slot §7.2.4's one Location lives in");
+    agent_state_realm_slot(LOC_COMPONENT, &g_empty_asl_slot,
+                           "the per-realm slot §7.2.4's associated empty DOMStringList lives in");
 }
 
 /* THE AGENT'S HALF, UNDONE — core/platform.h's third column, which this component was NOT on: `location_free`

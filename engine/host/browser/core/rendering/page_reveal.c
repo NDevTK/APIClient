@@ -261,9 +261,9 @@ void page_reveal_init(JSContext *ctx)
     agent_state_atom("page_reveal", &g_atom_revealed,
                      "HTML §7.4.6.3 Revealing the document's `has been revealed`, interned as the key of the "
                      "per-realm record");
-    agent_state_id("page_reveal", &g_slot,
-                   "the per-realm slot HTML §7.4.6.3 Revealing the document's `has been revealed` record "
-                   "lives in");
+    agent_state_realm_slot("page_reveal", &g_slot,
+                           "the per-realm slot HTML §7.4.6.3 Revealing the document's `has been revealed` record "
+                           "lives in");
     agent_state_id("page_reveal", &g_id_ctor,
                    "HTML §7.2.7.5 The PageRevealEvent interface's constructor declaration");
     realm_declare_intrinsic(page_reveal_install_proto);

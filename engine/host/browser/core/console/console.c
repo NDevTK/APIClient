@@ -1110,7 +1110,7 @@ void console_init(JSContext *ctx)
 
     for (i = 0; i < M_N; i++)
         DCHECK(g_id[i] >= 0, CONSOLE_MEMBER[i]);
-    agent_state_id("console", &g_rec_slot, "the per-realm record's slot number");
+    agent_state_realm_slot("console", &g_rec_slot, "the per-realm record's slot number");
     for (i = 0; i < M_N; i++)
         agent_state_id("console", &g_id[i], "one of §1.1-§1.4's twenty operations");
     realm_declare_intrinsic(console_install_realm);

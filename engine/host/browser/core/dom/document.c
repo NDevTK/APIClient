@@ -4412,8 +4412,9 @@ void document_init(JSContext *ctx)
                     "the runtime §4.5's interface and its ten sub-components declared into, and the latch");
     agent_state_class("document", &g_document_class, "§4.5's interface prototype slot and brand");
     agent_state_class("document", &g_xml_document_class, "DOM §4.5's XMLDocument interface prototype slot");
-    agent_state_id("document", &g_ready_slot, "the per-realm slot §3.1.5's current document readiness lives in");
-    agent_state_id("document", &g_showing_slot, "the per-realm slot §7.5.9's page showing lives in");
+    agent_state_realm_slot("document", &g_ready_slot,
+                           "the per-realm slot §3.1.5's current document readiness lives in");
+    agent_state_realm_slot("document", &g_showing_slot, "the per-realm slot §7.5.9's page showing lives in");
 }
 
 /* §3.1.1's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM. */

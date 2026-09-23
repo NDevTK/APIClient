@@ -277,8 +277,8 @@ void animation_frame_init(JSContext *ctx)
                      "HTML §8.12 Animation frames's map-of-animation-frame-callbacks key on a Window's record");
     agent_state_atom("animation_frame", &g_atom_next,
                      "HTML §8.12 Animation frames's animation-frame-callback-identifier key on that record");
-    agent_state_id("animation_frame", &g_slot,
-                   "the per-realm slot HTML §8.12 Animation frames's map is held in");
+    agent_state_realm_slot("animation_frame", &g_slot,
+                           "the per-realm slot HTML §8.12 Animation frames's map is held in");
 }
 
 /* THE MAP IS BUILT AT REALM INSTALL, which puts it in the pre-boot BASELINE. Built lazily on the first

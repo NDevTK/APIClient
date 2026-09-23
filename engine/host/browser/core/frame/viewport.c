@@ -1070,12 +1070,12 @@ void viewport_init(JSContext *ctx)
     /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. It is the slot this init's own
        latch consults, so a release that kept it would hand a second agent a component reporting itself
        declared and holding a realm-value id from a runtime that no longer exists. */
-    agent_state_id("viewport", &g_resize_slot,
-                   "CSSOM VIEW §13.1 Resizing viewports' realm-value slot for the viewport as the resize steps "
-                   "last saw it, and this component's declaration latch");
-    agent_state_id("viewport", &g_scroll_slot,
-                   "CSSOM VIEW §3.1 Scrolling's realm-value slot for the viewport's current scroll position — "
-                   "the state §3.1's perform a scroll writes and §4's `scrollX`/`scrollY` read");
+    agent_state_realm_slot("viewport", &g_resize_slot,
+                           "CSSOM VIEW §13.1 Resizing viewports' realm-value slot for the viewport as the resize steps "
+                           "last saw it, and this component's declaration latch");
+    agent_state_realm_slot("viewport", &g_scroll_slot,
+                           "CSSOM VIEW §3.1 Scrolling's realm-value slot for the viewport's current scroll position — "
+                           "the state §3.1's perform a scroll writes and §4's `scrollX`/`scrollY` read");
     /* §4's three scroll members, declared ONCE PER AGENT like every other member declaration — the install
        above is per realm and the declaration is not. */
     g_id_scroll    = vp_declare_scroll(ctx, VP_SCROLL_ABSOLUTE);

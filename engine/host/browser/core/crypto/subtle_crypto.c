@@ -3120,7 +3120,7 @@ void subtle_crypto_init(JSContext *ctx)
        agent state cannot be asserted to have undone anything") is asking about the pair. Naming a component
        with no row of its own would leave these slots on the registry with nothing on the release column to be
        the inverse of. */
-    agent_state_id("crypto", &g_obj_slot, "§10.2.1's per-realm SubtleCrypto slot, and the declaration latch");
+    agent_state_realm_slot("crypto", &g_obj_slot, "§10.2.1's per-realm SubtleCrypto slot, and the declaration latch");
     agent_state_id("crypto", &g_id_digest, "§14.3.5's digest machine");
     agent_state_id("crypto", &g_id_sign, "§14.3.3's sign machine");
     agent_state_id("crypto", &g_id_verify, "§14.3.4's verify machine");

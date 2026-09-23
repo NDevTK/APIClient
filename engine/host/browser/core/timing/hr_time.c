@@ -409,7 +409,7 @@ void hr_time_init(JSContext *ctx)
                            "GROUP's, so a second agent starting on the first one's estimate would place its "
                            "clock's zero against a wall-clock reading taken in a process that is gone");
     g_origin_slot = realm_value_declare(ctx, "HR-TIME §4 the environment settings object's time origin");
-    agent_state_id("hr_time", &g_origin_slot, "HR-TIME §4's time-origin realm slot");
+    agent_state_realm_slot("hr_time", &g_origin_slot, "HR-TIME §4's time-origin realm slot");
     agent_state_flag("hr_time", &g_epoch_known,
                      "HR-TIME §4's estimated monotonic time of the Unix epoch, and the latch that says the "
                      "first realm's install has stamped it");

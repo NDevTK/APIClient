@@ -591,8 +591,8 @@ void storage_manager_init(JSContext *ctx)
         idl_returns_promise();
         agent_state_id("storage_manager", &g_id_storage[m], WHAT[m]);
     }
-    agent_state_id("storage_manager", &g_obj_slot,
-                   "Storage §8's associated-StorageManager realm slot, and the declaration latch");
+    agent_state_realm_slot("storage_manager", &g_obj_slot,
+                           "Storage §8's associated-StorageManager realm slot, and the declaration latch");
     agent_state_id("storage_manager", &g_id_get_directory, "File System §3's getDirectory machine");
     agent_state_id("storage_manager", &g_persistent_storage,
                    "Storage §5's \"persistent-storage\" row in Permissions §4's registry");

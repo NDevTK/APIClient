@@ -1085,17 +1085,18 @@ void performance_observer_init(JSContext *ctx)
     agent_state_atom("performance_observer", &g_atom_state, "the observer's state-slot key, interned");
     agent_state_atom("performance_observer", &g_atom_queued,
                      "§5.3's performance observer task queued flag's field name");
-    agent_state_id("performance_observer", &g_reg_slot,
-                   "the per-realm slot §2's list of registered performance observer objects is held in");
-    agent_state_id("performance_observer", &g_notify_slot, "the per-realm slot §5.3's callee is held in");
-    agent_state_id("performance_observer", &g_types_slot, "the per-realm slot §4.5's frozen array is held in");
+    agent_state_realm_slot("performance_observer", &g_reg_slot,
+                           "the per-realm slot §2's list of registered performance observer objects is held in");
+    agent_state_realm_slot("performance_observer", &g_notify_slot, "the per-realm slot §5.3's callee is held in");
+    agent_state_realm_slot("performance_observer", &g_types_slot,
+                           "the per-realm slot §4.5's frozen array is held in");
     /* THE SLOT §2's PERFORMANCE ENTRY BUFFER MAP IS HELD IN. It was assigned in this function and declared
        NOWHERE for as long as the map existed, which is the silent half of this registry rather than the loud
        one: an undeclared slot is invisible to agent_state_check_released, so no release could ever have been
        caught forgetting it — the failure the first paragraph of core/agent_state.h records for fetch_free,
        where a carried handle answers with a number naming a table that is gone and nothing crashes anywhere. */
-    agent_state_id("performance_observer", &g_buf_slot,
-                   "the per-realm slot §2's performance entry buffer map is held in");
+    agent_state_realm_slot("performance_observer", &g_buf_slot,
+                           "the per-realm slot §2's performance entry buffer map is held in");
     agent_state_id("performance_observer", &g_notify_stepid, "§5.3's task machine");
     agent_state_id("performance_observer", &g_id_ctor, "§4's constructor declaration");
     agent_state_id("performance_observer", &g_id_observe, "§4.2's observe declaration");

@@ -135,9 +135,9 @@ void current_event_init(JSContext *ctx)
            "current_event_init ran twice — DOM §2.3's per-realm slot is declared once per agent, and a second "
            "declaration would leave every realm built under the first one reading a slot nothing sets");
     g_slot = realm_value_declare(ctx, "DOM §2.3 the Window's current event");
-    agent_state_id("current_event", &g_slot,
-                   "the per-realm slot DOM §2.3 Legacy extensions to the Window interface' current event "
-                   "record lives in");
+    agent_state_realm_slot("current_event", &g_slot,
+                           "the per-realm slot DOM §2.3 Legacy extensions to the Window interface' current event "
+                           "record lives in");
 }
 
 void current_event_install(JSContext *ctx, JSValueConst global)

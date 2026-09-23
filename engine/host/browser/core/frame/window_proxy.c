@@ -3865,8 +3865,8 @@ void window_proxy_init(JSContext *ctx)
                    "§7.2.2.1 Opening and closing windows' `close` declaration");
     agent_state_id(WP_COMPONENT, &g_wp_location_setter_id,
                    "§7.2.2 The Window object's `location` [PutForwards=href] setter declaration");
-    agent_state_id(WP_COMPONENT, &g_xo_getter_slot,
-                   "the realm-value slot holding §7.2.1.3.4 CrossOriginGetOwnPropertyHelper's captured getters");
+    agent_state_realm_slot(WP_COMPONENT, &g_xo_getter_slot,
+                           "the realm-value slot holding §7.2.1.3.4 CrossOriginGetOwnPropertyHelper's captured getters");
     for (i = 0; i < CROSS_ORIGIN_NAME_N; i++)
         agent_state_atom(WP_COMPONENT, &g_xo_atom[i],
                          "one of §7.2.1.3.1 CrossOriginProperties ( O )'s names, interned");

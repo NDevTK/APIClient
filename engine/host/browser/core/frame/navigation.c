@@ -831,9 +831,9 @@ void navigation_init(JSContext *ctx)
     agent_state_value("navigation", &g_key,
                       "§7.2.6.3's internal-slot key, the Symbol the entry list and the current entry index "
                       "hang off");
-    agent_state_id("navigation", &g_obj_slot,
-                   "the per-realm slot HTML §7.2.6.2 The Navigation interface's Window-associated navigation "
-                   "API lives in");
+    agent_state_realm_slot("navigation", &g_obj_slot,
+                           "the per-realm slot HTML §7.2.6.2 The Navigation interface's Window-associated navigation "
+                           "API lives in");
     agent_state_id("navigation", &g_id_entries,
                    "HTML §7.2.6.6 The history entry list's `entries()` declaration");
     agent_state_id("navigation", &g_id_update_current_entry,

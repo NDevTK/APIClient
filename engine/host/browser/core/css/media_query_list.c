@@ -446,8 +446,8 @@ void media_query_list_init(JSContext *ctx)
     agent_state_value("media_query_list", &g_ev_key,
                       "§4.2's internal-slot key, the Symbol MediaQueryListEvent's `media` and `matches` live "
                       "under");
-    agent_state_id("media_query_list", &g_slot,
-                   "the per-realm slot CSSOM View §4.2's collection of MediaQueryList objects lives in");
+    agent_state_realm_slot("media_query_list", &g_slot,
+                           "the per-realm slot CSSOM View §4.2's collection of MediaQueryList objects lives in");
     agent_state_id("media_query_list", &g_id_match,
                    "CSSOM View §4 Extensions to the Window Interface's `matchMedia(query)` declaration");
     agent_state_id("media_query_list", &g_id_add,

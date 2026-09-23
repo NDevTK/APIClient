@@ -632,9 +632,9 @@ void unhandled_rejection_init(JSContext *ctx)
     agent_state_value("unhandled_rejection", &g_pre_key, "PromiseRejectionEvent's internal-slot key");
     agent_state_value("unhandled_rejection", &g_out_key,
                       "§8.1.3.3's outstanding rejected promises weak set — its marker key IS the set");
-    agent_state_id("unhandled_rejection", &g_notify_slot, "§8.1.4.7's notifyRejected realm slot");
+    agent_state_realm_slot("unhandled_rejection", &g_notify_slot, "§8.1.4.7's notifyRejected realm slot");
     agent_state_id("unhandled_rejection", &g_notify_stepid, "§8.1.4.7's notification driver machine");
-    agent_state_id("unhandled_rejection", &g_handled_slot, "§8.1.6.4's fireRejectionHandled realm slot");
+    agent_state_realm_slot("unhandled_rejection", &g_handled_slot, "§8.1.6.4's fireRejectionHandled realm slot");
     agent_state_id("unhandled_rejection", &g_handled_stepid, "§8.1.6.4's rejectionhandled driver machine");
     agent_state_class("unhandled_rejection", &g_pre_class, "§8.1.4.7's PromiseRejectionEvent class");
     agent_state_id("unhandled_rejection", &g_id_pre_ctor, "§8.1.4.7's PromiseRejectionEvent constructor declaration");

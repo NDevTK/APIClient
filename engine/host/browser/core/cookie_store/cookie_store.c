@@ -415,7 +415,7 @@ void cookie_store_init(JSContext *ctx)
        statements of one thing; see the residual below. */
     concolic_declare_source(CS_COMPONENT, CS_SOURCE, " \",;\\", 0, SRC_DELIVER_PLANT);
 
-    agent_state_id(CS_COMPONENT, &g_obj_slot, "§6.1's per-realm CookieStore slot, and the declaration latch");
+    agent_state_realm_slot(CS_COMPONENT, &g_obj_slot, "§6.1's per-realm CookieStore slot, and the declaration latch");
     agent_state_id(CS_COMPONENT, &g_id_get, "Cookie Store API §3.1's get");
     agent_state_id(CS_COMPONENT, &g_id_get_all, "Cookie Store API §3.2's getAll");
     agent_state_class(CS_COMPONENT, &g_cs_class, "Cookie Store API §3 CookieStore's per-realm slot and brand");

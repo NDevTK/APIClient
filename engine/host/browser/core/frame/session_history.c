@@ -2173,10 +2173,10 @@ void session_history_init(JSContext *ctx)
        registry's question is what this component's release owes, and a slot that is sometimes set is one the
        release owes on exactly the runs where it was. A declaration that only existed on those runs would be a
        release column nothing checks on the others. */
-    agent_state_id("session_history", &g_slot,
-                   "HTML §7.4.1 Session history's realm-value slot for the session history entries, the "
-                   "current session history step and the History object's state, length and index — and this "
-                   "component's declaration latch");
+    agent_state_realm_slot("session_history", &g_slot,
+                           "HTML §7.4.1 Session history's realm-value slot for the session history entries, the "
+                           "current session history step and the History object's state, length and index — and this "
+                           "component's declaration latch");
     agent_state_id("session_history", &g_traverse_stepid,
                    "HTML §7.4.3 Reloading and traversing's traverse-the-history-by-a-delta step definition, "
                    "registered with the runtime");

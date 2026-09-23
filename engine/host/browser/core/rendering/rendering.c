@@ -1307,7 +1307,7 @@ void rendering_init(JSContext *ctx)
     engine_set_rendering_hook(rendering_run_opportunity);
     agent_state_flag("rendering", &g_ready, "the declaration latch");
     agent_state_id("rendering", &g_stepid, "§8.1.7.3's update-the-rendering machine");
-    agent_state_id("rendering", &g_driver_slot, "the per-realm slot the task source's driver is held in");
+    agent_state_realm_slot("rendering", &g_driver_slot, "the per-realm slot the task source's driver is held in");
 }
 
 void rendering_install_driver(JSContext *ctx)

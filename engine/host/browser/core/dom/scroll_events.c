@@ -248,9 +248,9 @@ void scroll_events_init(JSContext *ctx)
     DCHECK(g_slot < 0, "scroll_events_init ran twice — the §13.2 record's slot is declared once per AGENT");
     g_slot = realm_value_declare(ctx, "CSSOM VIEW §13.2 a Document's pending scroll events, and the set of "
                                      "scrolling boxes that were scrolled");
-    agent_state_id("scroll_events", &g_slot,
-                   "CSSOM VIEW §13.2 Scrolling's realm-value slot for a Document's pending scroll events and "
-                   "its was-scrolled set");
+    agent_state_realm_slot("scroll_events", &g_slot,
+                           "CSSOM VIEW §13.2 Scrolling's realm-value slot for a Document's pending scroll events and "
+                           "its was-scrolled set");
     realm_declare_intrinsic(scroll_events_install);
 }
 

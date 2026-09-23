@@ -942,8 +942,8 @@ void resize_observer_init(JSContext *ctx)
     agent_state_value("resize_observer", &g_state_key, "the observer's state-slot key");
     agent_state_atom("resize_observer", &g_atom_state, "the observer's state-slot key, interned");
     agent_state_atom("resize_observer", &g_atom_depth, "§3.4.5 step 1's shallowestTargetDepth field name");
-    agent_state_id("resize_observer", &g_docobs_slot,
-                   "the per-realm slot §3.2.1's [[resizeObservers]] is held in");
+    agent_state_realm_slot("resize_observer", &g_docobs_slot,
+                           "the per-realm slot §3.2.1's [[resizeObservers]] is held in");
     agent_state_id("resize_observer", &g_id_ctor, "§2.1's constructor declaration");
     agent_state_id("resize_observer", &g_id_observe, "§2.1's observe declaration");
     agent_state_id("resize_observer", &g_id_unobserve, "§2.1's unobserve declaration");

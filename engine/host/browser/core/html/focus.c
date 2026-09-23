@@ -1939,8 +1939,8 @@ void focus_init(JSContext *ctx)
        a sub-component names the row whose RELEASE reaches it, and document_agent_free is what reaches
        focus_free. Each `what` names §6.6's own standard for the same reason — the line is read out of a report
        headed by document's row. */
-    agent_state_id("document", &g_focus_slot,
-                   "the per-realm slot HTML §6.6.2 Data model's FOCUSED AREA OF THE DOCUMENT record lives in");
+    agent_state_realm_slot("document", &g_focus_slot,
+                           "the per-realm slot HTML §6.6.2 Data model's FOCUSED AREA OF THE DOCUMENT record lives in");
     agent_state_id("document", &g_id_el_focus,
                    "HTML §6.6.6 Focus management APIs' HTMLOrSVGOrMathMLElement `focus(options)` declaration");
     agent_state_id("document", &g_id_el_blur,

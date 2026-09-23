@@ -768,9 +768,9 @@ void history_init(JSContext *ctx)
        which is why this is written down at the site rather than worked around: the fix is ONE policy for a
        class id across every component, and it belongs in core/agent_state.h beside the kind table that
        already names 0 as a class id's pre-init value. */
-    agent_state_id("history", &g_obj_slot,
-                   "HTML §7.2.5 The History interface's realm-value slot for the Document's associated "
-                   "History, and this component's declaration latch");
+    agent_state_realm_slot("history", &g_obj_slot,
+                           "HTML §7.2.5 The History interface's realm-value slot for the Document's associated "
+                           "History, and this component's declaration latch");
     agent_state_id("history", &g_id_push, "HTML §7.2.5 The History interface's pushState declaration");
     agent_state_id("history", &g_id_replace, "HTML §7.2.5 The History interface's replaceState declaration");
     agent_state_id("history", &g_id_scroll_setter,

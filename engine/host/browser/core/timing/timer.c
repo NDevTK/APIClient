@@ -2390,7 +2390,7 @@ void timer_init(JSContext *ctx)
     agent_state_flag("timer", &g_ready, "the declaration latch");
     agent_state_atom("timer", &g_atom_map, "§8.7 Timers's map key on a global's timer record");
     agent_state_atom("timer", &g_atom_next, "§8.7 Timers's next-handle key on that record");
-    agent_state_id("timer", &g_slot, "the per-realm slot §8.7 Timers's map is held in");
+    agent_state_realm_slot("timer", &g_slot, "the per-realm slot §8.7 Timers's map is held in");
     agent_state_id("timer", &g_id_set_timeout, "§8.7 Timers's setTimeout declaration");
     agent_state_id("timer", &g_id_set_interval, "§8.7 Timers's setInterval declaration");
     agent_state_id("timer", &g_id_clear_timeout, "§8.7 Timers's clearTimeout declaration");

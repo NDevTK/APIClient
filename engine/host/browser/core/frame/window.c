@@ -891,9 +891,9 @@ void window_init(JSContext *ctx)
     agent_state_class("window", &g_window_props_class,
                       "HTML §7.2.2.3 Named access on the Window object's WindowProperties per-realm prototype "
                       "slot and brand");
-    agent_state_id("window", &g_status_slot,
-                   "the per-realm slot HTML §7.2.2.5 Historical browser interface element APIs' `status` "
-                   "record lives in");
+    agent_state_realm_slot("window", &g_status_slot,
+                           "the per-realm slot HTML §7.2.2.5 Historical browser interface element APIs' `status` "
+                           "record lives in");
     agent_state_id("window", &g_id_opener_set,
                    "HTML §7.2.2.4 Accessing related windows' `opener` setter declaration");
     agent_state_id("window", &g_id_name_set,

@@ -1755,10 +1755,10 @@ void intersection_observer_init(JSContext *ctx)
     agent_state_atom("intersection_observer", &g_atom_queued,
                      "§3.1.1's IntersectionObserverTaskQueued flag name");
     agent_state_id("intersection_observer", &g_notify_stepid, "§3.2.5's notification machine");
-    agent_state_id("intersection_observer", &g_notify_slot,
-                   "the per-realm slot §3.2.5's driver is held in");
-    agent_state_id("intersection_observer", &g_docobs_slot,
-                   "the per-realm slot §3.1.1's document observer list is held in");
+    agent_state_realm_slot("intersection_observer", &g_notify_slot,
+                           "the per-realm slot §3.2.5's driver is held in");
+    agent_state_realm_slot("intersection_observer", &g_docobs_slot,
+                           "the per-realm slot §3.1.1's document observer list is held in");
     agent_state_id("intersection_observer", &g_id_ctor, "§3.2.1's constructor declaration");
     agent_state_id("intersection_observer", &g_id_observe, "§3.2.2's observe declaration");
     agent_state_id("intersection_observer", &g_id_unobserve, "§3.2.3's unobserve declaration");

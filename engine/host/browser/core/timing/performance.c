@@ -421,9 +421,9 @@ void performance_init(JSContext *ctx)
     agent_state_class("performance", &g_perf_class,
                       "HR-TIME §7 Performance's class — its per-realm prototype slot and Web IDL §3.7.6 "
                       "Attributes' and §3.7.7 Operations' brand");
-    agent_state_id("performance", &g_perf_slot,
-                   "HR-TIME §8.1's realm-value slot for the global's Performance, and this component's "
-                   "declaration latch");
+    agent_state_realm_slot("performance", &g_perf_slot,
+                           "HR-TIME §8.1's realm-value slot for the global's Performance, and this component's "
+                           "declaration latch");
     agent_state_id("performance", &g_id_now, "HR-TIME §7.1 now()'s declaration");
     agent_state_id("performance", &g_id_tojson, "HR-TIME §7.3 toJSON()'s declaration");
     realm_declare_intrinsic(performance_install);

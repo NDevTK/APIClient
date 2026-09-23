@@ -424,12 +424,12 @@ void visual_viewport_init(JSContext *ctx)
     agent_state_class("visual_viewport", &g_vv_class,
                       "CSSOM VIEW §12 VisualViewport's class — its per-realm prototype slot and Web IDL "
                       "§3.7.6 Attributes' brand");
-    agent_state_id("visual_viewport", &g_obj_slot,
-                   "CSSOM VIEW §4 Extensions to the Window Interface's realm-value slot for `visualViewport`, "
-                   "and this component's declaration latch");
-    agent_state_id("visual_viewport", &g_resize_slot,
-                   "CSSOM VIEW §13.1 Resizing viewports' realm-value slot for the VisualViewport as the resize "
-                   "steps last saw it");
+    agent_state_realm_slot("visual_viewport", &g_obj_slot,
+                           "CSSOM VIEW §4 Extensions to the Window Interface's realm-value slot for `visualViewport`, "
+                           "and this component's declaration latch");
+    agent_state_realm_slot("visual_viewport", &g_resize_slot,
+                           "CSSOM VIEW §13.1 Resizing viewports' realm-value slot for the VisualViewport as the resize "
+                           "steps last saw it");
     realm_declare_intrinsic(visual_viewport_install);
 }
 

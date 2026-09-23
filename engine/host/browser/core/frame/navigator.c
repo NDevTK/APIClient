@@ -727,8 +727,8 @@ void navigator_init(JSContext *ctx)
        entry and a member has ONE, so declaring inside the install would mint a second entry for the second
        realm's prototype — which is what the pool's seal asserts against. */
     g_id_java_enabled = idl_method_id(ctx, NULL, 0, js_nav_java_enabled, 0);
-    agent_state_id("navigator", &g_obj_slot,
-                   "HTML §8.10.1's associated-Navigator realm slot, and the declaration latch");
+    agent_state_realm_slot("navigator", &g_obj_slot,
+                           "HTML §8.10.1's associated-Navigator realm slot, and the declaration latch");
     agent_state_id("navigator", &g_id_java_enabled, "§8.10.1's javaEnabled declaration");
     /* BEACON §2.1's member, declared HERE for the reason Permissions §6's whole component is declared below:
        a host that has a Navigator has `navigator.sendBeacon`, so a per-host line would be exactly the

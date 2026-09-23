@@ -26,11 +26,13 @@
  * would have found there. A release that frees a value and forgets the handle now CRASHES at the release,
  * naming the component and the slot, instead of handing out a torn-down world an agent later.
  *
- * THE KIND IS THE PRE-INIT VALUE. `-1` for an id (a pool entry, a step definition, a realm slot), `0` for a
- * class id or a flag, JS_ATOM_NULL for an interned name, JS_UNDEFINED for a JSValue, NULL for a pointer — the
- * same values C gives a static before anything runs, except where the component's own initialiser states
- * otherwise. There is one function per kind rather than one function and an enum, so the COMPILER checks that
- * the slot really is what its declaration says it is.
+ * THE KIND IS THE PRE-INIT VALUE. `-1` for an id (a pool entry, a step definition) and for a per-realm value
+ * slot, `0` for a class id or a flag, JS_ATOM_NULL for an interned name, JS_UNDEFINED for a JSValue, NULL for
+ * a pointer — the same values C gives a static before anything runs, except where the component's own
+ * initialiser states otherwise. There is one function per kind rather than one function and an enum, so the
+ * COMPILER checks that the slot really is what its declaration says it is — EXCEPT BETWEEN AN ID AND A REALM
+ * SLOT, which are both `int` and which no signature can therefore separate. That one pair is the reason
+ * agent_state_realm_slot exists at all and is argued at its own entry below.
  *
  * AND A CLASS ID IS GIVEN BACK LIKE EVERY OTHER SLOT — ONE POLICY, WRITTEN HERE BECAUSE TWO SELF-CONSISTENT
  * ONES ARE WORSE THAN EITHER OF THEM. Components had been settling this per file and had settled it BOTH WAYS:
@@ -163,12 +165,93 @@ void agent_state_value_at(const char *component, const JSValue *slot, const char
    was written about; memcmp reads unsigned chars and is legal for every object there is. */
 void agent_state_ptr_at(const char *component, const void *slot, const char *what,
                         const char *file, int line);
+/* A PER-REALM VALUE SLOT — core/realm.h's realm_value_declare handed this out, and it is A CLASS ID.
+ *
+ * WHY IT IS NOT AN id, WHICH IS WHAT IT WAS. `int` is the C type of three unrelated quantities in this
+ * engine — a step id from JS_RegisterStepDef, a method id from core/idl_args' idl_method_id (which IS a step
+ * id: that function's last line returns one), and a per-realm value slot — and while all three went through
+ * agent_state_id the registry could not tell them apart. That is not untidiness. A slot and a class id are
+ * THE SAME OBJECT: realm_value_declare's body is JS_NewClassID plus JS_NewClass over a local that starts at
+ * 0, so it always mints, and what it returns is `rt->js_class_id_alloc` at the moment of the call. So the
+ * registry holds, between SLOT_CLASS and this kind, every class id anybody told it about — and `js_class_id_alloc`
+ * less JS_CLASS_INIT_COUNT is exactly how many this agent minted. Those two numbers are a CONSERVATION
+ * IDENTITY over ONE allocator, which no spelling of a mint can evade, and it is what turns an undeclared
+ * class id from something a text sweep COUNTS into something that cannot be constructed. It could not be
+ * written while a realm slot and a step id were one kind, because the left-hand side was not derivable.
+ * RETIREMENT: this paragraph goes when the identity below is asserted, because the reason for the kind is
+ * then re-derivable from the assert instead of from here.
+ *
+ * WHY THE PRE-INIT IS `-1` AND NOT `0`, WHICH IS THE ANSWER THE ARGUMENT ABOVE INVITES AND WHICH THIS TREE
+ * REFUTES. A class id's never-minted value is 0; core/realm.c says so of its own slots in as many words
+ * (`Zero is the 'not declared' value because it is also the invalid slot realm_value_set asserts against`);
+ * and both accessors refuse `slot > 0`. Every step of that is true and it does not reach this entry, for two
+ * measured reasons and one read one.
+ *   - THE ACCESSORS DO NOT PICK. realm_value_set_at and realm_value_get_at assert `slot > 0`, which is a
+ *     RANGE: `0` and `-1` are both absent to them, so neither is the sentinel the read side asks for.
+ *   - THE COMPONENTS HAVE PICKED, AND THEY PICKED `-1`. Derived at 8de85780, over every realm slot in
+ *     engine/host: 61 of 75 initialise their own static to `-1` and 28 of those gate their re-declaration on
+ *     its SIGN (`< 0` / `>= 0`); the 14 that rely on C's implicit `0` gate on ZERO where they gate at all.
+ *     Those are two self-consistent conventions, which is the same mixture the class-id paragraph at the top
+ *     of this file condemns — and the split is not even: every one of the 43 slots this registry was already
+ *     told about is a `-1` slot, and 21 of those gate on the sign. A kind whose pre-init were `0` would put a
+ *     `-1`-gated init back at a value
+ *     its own latch reads as DECLARED, so the next agent would skip the mint and every realm_value_set in it
+ *     would abort; and it would make agent_state_check_released fire on the 24 rows that hand-reset to `-1`,
+ *     which are correct today. So `-1` is not the cautious half of a tie here: it is what the declared
+ *     population IS, and `0` is a sweep across those components rather than a property of this entry.
+ *     Re-derive rather than believing the figures: `node engine/agentstate.mjs --rev <rev>` bands them.
+ *   - AND `-1` IS WORSE IN EXACTLY ONE PLACE, WHICH IS WHY THAT SWEEP IS WORTH SOMEBODY'S DIFF AND IS NOT
+ *     THIS ONE. The closing paragraph of this file already forbids a finalizer or a gc_mark to read a slot
+ *     its own release has reset. Where one does it anyway, the two sentinels are not alike in a RELEASE
+ *     build, where every assert between the read and the array is compiled out: realm_value_get_at casts the
+ *     slot to JSClassID and indexes `ctx->class_proto`, so `0` reads element zero — in bounds, null, a wrong
+ *     ANSWER — and `-1` reads element 0xFFFFFFFF, which is not a wrong answer but a wild read. That is a
+ *     reading of two functions and not a run; it is recorded here because it is the one argument for `0` that
+ *     survives the measurements above, and because the sweep it argues for has to move the latches and the
+ *     hand-resets in the same diff or it breaks the 41.
+ * RETIREMENT: this paragraph goes when a realm slot's C type is JSClassID, because `-1` is then unspellable
+ * and the question cannot be re-opened.
+ *
+ * WHAT THE COMPILER CANNOT CHECK HERE, SAID PLAINLY BECAUSE THE TOP OF THIS FILE PROMISES IT CAN. Every other
+ * kind is separated by its slot's TYPE, so a miswired declaration does not compile. A realm slot is `int` and
+ * so is an id, so this entry and agent_state_id have the same signature and a call routed to the wrong one is
+ * silent — which is the type erasure at the root: realm_value_declare returns `int` for a JSClassID, and that
+ * is what let a class id through the id door in the first place. Closing it is a signature change at 327 call
+ * sites across 56 files (`realm_value_declare` 98, `realm_value_set` 118, `realm_value_get` 111, at
+ * 8de85780) plus 75 statics, which is why it is not this diff. What stands in for the compiler meanwhile is
+ * the assert in agent_state.c's own entry: a realm slot is a MINTED class id at the moment it is declared,
+ * so it is `> 0` there, and a row declared above the line that assigns it fires.
+ * RETIREMENT: this paragraph goes with the one above it, for the same reason.
+ *
+ * NAMED RESIDUAL — THE IDENTITY IS NOT ASSERTED, ONLY MADE DERIVABLE.
+ *   NOT COVERED: a class id minted and never declared is COUNTED and not IMPOSSIBLE. This kind gives the
+ *     registry the left-hand side of the conservation identity — the class ids it was told about, being its
+ *     SLOT_CLASS rows plus its SLOT_REALM ones — and nothing here compares that against the allocator that
+ *     handed them out, so nothing refuses a mint that skipped this registry.
+ *   THE NEXT DIFF BUILDS: three things must exist afterward. (1) A way for the host to read how many class
+ *     ids a runtime has handed out. `rt->js_class_id_alloc` is private to engine/qjs/quickjs.c and there is
+ *     no public entry for it — `git grep -nE "JS_(GetClass(Count|IdAlloc)|ClassCount)" -- engine/qjs`
+ *     answers 0 at 8de85780, and `js_class_id_alloc` occurs at three lines of quickjs.c and none of
+ *     quickjs.h; grep both again before building, because that is a claim about a tree that moves. (2) A
+ *     count over this registry of the two class-id kinds. (3) An equality between them, asserted where the
+ *     declare column ends. It will not hold on the day it is written and that is the forcing function rather
+ *     than a reason to defer it: what it names is every mint that never came through here, and closing those
+ *     is a mint that DECLARES — one door taking the slot's address and the component's row, which is the root
+ *     the identity exists to force.
+ *   HOW ITS ABSENCE WOULD SHOW: `node engine/agentstate.mjs --rev <rev>` reports a nonzero UNDECLARED band
+ *     in either channel while every dev build of that revision is silent. A gap a text sweep can see and no
+ *     run of the engine can is the whole of what is missing; when the identity stands, the run sees it first.
+ */
+void agent_state_realm_slot_at(const char *component, const int *slot, const char *what,
+                               const char *file, int line);                           /* pre-init: -1 */
 #define agent_state_id(component, slot, what)    agent_state_id_at((component), (slot), (what), __FILE__, __LINE__)
 #define agent_state_flag(component, slot, what)  agent_state_flag_at((component), (slot), (what), __FILE__, __LINE__)
 #define agent_state_class(component, slot, what) agent_state_class_at((component), (slot), (what), __FILE__, __LINE__)
 #define agent_state_atom(component, slot, what)  agent_state_atom_at((component), (slot), (what), __FILE__, __LINE__)
 #define agent_state_value(component, slot, what) agent_state_value_at((component), (slot), (what), __FILE__, __LINE__)
 #define agent_state_ptr(component, slot, what)   agent_state_ptr_at((component), (slot), (what), __FILE__, __LINE__)
+#define agent_state_realm_slot(component, slot, what) \
+    agent_state_realm_slot_at((component), (slot), (what), __FILE__, __LINE__)
 
 /* How many slots this component declared — core/platform.c's row check, and nothing else. IT CANNOT ANSWER
    THE THIRD DIRECTION: a caller can only ask it about a name the caller already has, so 0 is returned both

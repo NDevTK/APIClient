@@ -591,9 +591,9 @@ void indexed_db_init(JSContext *ctx)
        JS_FreeRuntime's censuses, since each is an int, and read by nothing until the next agent's
        `indexed_db_init` consults `g_obj_slot` to decide it need not run. */
     agent_state_class("indexed_db", &g_factory_class, "Indexed Database §4.3's IDBFactory class");
-    agent_state_id("indexed_db", &g_obj_slot,
-                   "Indexed Database §4.3's realm-value slot for the realm's one [SameObject] IDBFactory, "
-                   "and this component's declaration latch");
+    agent_state_realm_slot("indexed_db", &g_obj_slot,
+                           "Indexed Database §4.3's realm-value slot for the realm's one [SameObject] IDBFactory, "
+                           "and this component's declaration latch");
     agent_state_id("indexed_db", &g_id_cmp, "Indexed Database §4.3's cmp declaration");
     agent_state_id("indexed_db", &g_id_open, "Indexed Database §4.3's open declaration");
     agent_state_id("indexed_db", &g_id_delete, "Indexed Database §4.3's deleteDatabase declaration");

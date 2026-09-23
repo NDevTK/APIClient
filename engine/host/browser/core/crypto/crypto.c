@@ -340,7 +340,7 @@ void crypto_init(JSContext *ctx)
     g_obj_slot = realm_value_declare(ctx, "Web Cryptography §10 this realm's Crypto object");
     g_id_get_random_values = idl_method_id(ctx, GRV_ARGS, 1, js_crypto_get_random_values, 0);
     g_id_random_uuid = idl_method_id(ctx, NULL, 0, js_crypto_random_uuid, 0);
-    agent_state_id("crypto", &g_obj_slot, "§10's per-realm Crypto slot, and the declaration latch");
+    agent_state_realm_slot("crypto", &g_obj_slot, "§10's per-realm Crypto slot, and the declaration latch");
     agent_state_id("crypto", &g_id_get_random_values, "Web Cryptography §10.1.1's getRandomValues");
     agent_state_id("crypto", &g_id_random_uuid, "Web Cryptography §10.1.2's randomUUID");
     /* THE CLASS IS DECLARED NOW THAT IT CARRIES A FINALIZER. It was held across every successor agent this

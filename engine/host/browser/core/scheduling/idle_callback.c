@@ -473,7 +473,7 @@ void idle_callback_init(JSContext *ctx)
     agent_state_atom("idle_callback", &g_atom_runnable,
                      "§4's list-of-runnable-idle-callbacks key on that record");
     agent_state_atom("idle_callback", &g_atom_next, "§4's idle-callback-identifier key on that record");
-    agent_state_id("idle_callback", &g_slot, "the per-realm slot §4's three concepts are held in");
+    agent_state_realm_slot("idle_callback", &g_slot, "the per-realm slot §4's three concepts are held in");
 }
 
 /* THE THREE CONCEPTS ARE BUILT AT REALM INSTALL, which puts them in the pre-boot BASELINE. Built lazily on the

@@ -100,12 +100,12 @@ void remote_op_init(JSContext *ctx)
        already had a `_free` and the name was TAKEN: `remote_op_free` frees ONE parsed record, per operation.
        A name collision is not a release, and the pairing in core/platform.c could not see the difference —
        the row declared nothing and released nothing, which is the arm that passes in silence. */
-    agent_state_id("remote_op", &g_set_slot,
-                   "the realm-value slot holding %Reflect.set%, the intrinsic a peer performs a cross-agent "
-                   "[[Set]] through");
-    agent_state_id("remote_op", &g_apply_slot,
-                   "the realm-value slot holding %Reflect.apply%, the intrinsic a peer performs a cross-agent "
-                   "[[Call]] through");
+    agent_state_realm_slot("remote_op", &g_set_slot,
+                           "the realm-value slot holding %Reflect.set%, the intrinsic a peer performs a cross-agent "
+                           "[[Set]] through");
+    agent_state_realm_slot("remote_op", &g_apply_slot,
+                           "the realm-value slot holding %Reflect.apply%, the intrinsic a peer performs a cross-agent "
+                           "[[Call]] through");
     realm_declare_intrinsic(remote_op_install);
 }
 
