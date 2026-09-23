@@ -4119,20 +4119,31 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
          * and that is retired, `DedicatedWorkerGlobalScope` being the second — so idl_attribute_this asserts it
          * at the read. On a PROTOTYPE the interface is the member's to declare and this machine is where it
          * would be asked, which is what leaves the shape standing.
-         * AND EVERY INTERFACE CONVERTED TO idl_this_iface LEAVES EXACTLY ITS ATTRIBUTE GETTERS BEHIND, which is
-         * why this names the SHAPE and not a list of them: converting a component deletes its operations' and
-         * setters' own brand tests and cannot touch its getters', so each conversion adds members to this
-         * residual rather than retiring it. `grep -l idl_this_iface` names the components that have been
-         * converted; the brand helper still standing in each of them is what is left.
-         * WHAT THE NEXT DIFF BUILDS: a pool entry for a plain getter — `idl_mint_accessor` takes a STEP id and
-         * asks the pool for it, so there is no entry to route an `IdlGetter` through and one has to be minted
-         * for it, at idl_mint_plain_getter, which is the one place a plain getter is created. THAT CLAUSE USED
-         * TO NAME idl_define_accessor AND IT WAS WRONG ABOUT THIS TREE: there were TWO such mints, and the
-         * other one — idl_install_replaceable's readonly form — is what installs CSSOM VIEW §4 Extensions to
-         * the Window Interface's thirteen Window members, HTML §7.2.2.4 Accessing related windows' `parent`
-         * and HTML §7.2.2.2 Indexed access on the Window object's `length`, so a diff obeying the clause as
-         * written would have left fifteen global attributes unrouted and believed itself finished. The two
-         * mints have since been made one; the clause names that one.
+         * WHAT IS NOT COVERED IS NOW THE PROTOTYPE ATTRIBUTE THAT STATES NO INTERFACE. This sentence stood here
+         * saying that EVERY INTERFACE CONVERTED TO idl_this_iface LEAVES EXACTLY ITS ATTRIBUTE GETTERS BEHIND,
+         * so each conversion ADDS members to this residual rather than retiring it — and it is rewritten rather
+         * than deleted because the reasoning that produced it is what a reader re-derives: converting a
+         * component's OPERATIONS really does leave its attributes where they were, since idl_this_iface is read
+         * at a POOL ENTRY and an attribute has none. What that missed is that the step does not need the pool.
+         * idl_install_accessor_this states the same predicate at the same DECLARATION and performs the same
+         * step at idl_mint_plain_getter's own wrapper, so a getter converts too and the population here
+         * SHRINKS. `git grep -l idl_install_accessor_this engine/host/browser` names the components whose
+         * attributes have been converted; every plain getter still installed through idl_install_accessor is
+         * what is left, and the derivation rather than a count is what stays true as they land.
+         * AND THE CLAUSE THIS ONE REPLACES NAMED A MECHANISM THAT WAS THE WRONG ONE, WHICH IS RECORDED HERE
+         * BECAUSE THE CLAUSE WAS A HYPOTHESIS AND THE READER WHO OBEYS ONE EXECUTES IT. It used to read that
+         * what the next diff builds is a pool entry for a plain getter, since idl_mint_accessor takes a STEP id
+         * and asks the pool for it, so there is no entry to route an IdlGetter through and one has to be minted
+         * for it at idl_mint_plain_getter, the one place a plain getter is created. Its LOCATION was exactly
+         * right and its MECHANISM was not: a pool entry is what §3.6 Overload resolution algorithm's argument
+         * CONVERSION rides, and an attribute getter takes no arguments — so minting one for every plain getter
+         * would turn a body that runs none of the page's code into a step machine to buy a test that needs only
+         * a predicate and an identifier, which is the answer idl_args.h's own no-user-code block already
+         * separates from the step-machine question in as many words. What it cost to obey is why the correction
+         * is kept: the clause named a change to ~468 install sites where the step needed one declaration table,
+         * and the clause's LOCATION is what made its MECHANISM look checked.
+         * THE `length` NUMBER BELOW IS A CORRECTION FROM THAT SAME CLAUSE AND SURVIVES IT, because it is about
+         * a SECTION and not about this tree.
          * THE `length` NUMBER IS A CORRECTION RECORDED AT THE SITE THAT MADE THE CLAIM. This sentence read
          * "HTML §7.2.2.4's `parent` and `length`", pairing two members under one section, and §7.2.2.4 holds
          * `top`, `opener`, `parent` and `frameElement` — `length`'s getter steps are stated in §7.2.2.2, whose
@@ -7443,6 +7454,12 @@ static JSValue idl_mint_plain_getter(JSContext *ctx, JSValueConst target, const 
    one stands above them. */
 static JSValue idl_lenient_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic);
 static int idl_lenient_setter_declare(IdlThisIs is, const char *iface, const char *member);
+/* Web IDL §3.7 Interfaces' implementation-check for a PLAIN-C attribute getter, and its declaration table —
+   defined beside the same §3.7.6 receiver machinery below, and forward-declared here for the same reason: the
+   install form that mints one stands above them. */
+static JSValue idl_this_attribute_get(JSContext *ctx, JSValueConst this_val, int magic);
+static int idl_this_getter_declare(IdlGetter getter, int magic, IdlThisIs is,
+                                   const char *iface, const char *member);
 
 /* IS THIS INSTALL PUTTING AN OWN PROPERTY ON THE REALM'S [Global] OBJECT? Web IDL §3.7.6's opening prose —
    "Regular attributes are exposed on the interface prototype object, unless the attribute is unforgeable or if
@@ -8333,6 +8350,25 @@ void idl_install_accessor_at(JSContext *ctx, JSValueConst target, const char *na
                         JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE, /*no_user_code*/false, at_file, at_line);
 }
 
+/* THE SAME INSTALL, WITH THE MEMBER STATING THE INTERFACE ITS RECEIVER MUST IMPLEMENT — see idl_args.h for what
+   Web IDL §3.7.6 "Attributes" owes a foreign receiver and why a plain getter had nowhere to be asked it.
+
+   THE MEMBER'S OWN BODY AND MAGIC RIDE THE DECLARATION AND THE WRAPPER TAKES THEIR PLACE, so this arrives at
+   idl_define_accessor as an ordinary plain getter and inherits the whole of it: Web IDL §3.3.7 "[Exposed]"'s
+   continue-step, the ONE mint (and with it the [Global] arm's own opening steps, which then hand this test the
+   RESOLVED idlObject — the order §3.7.6 states), the setter's pool entry and §3.7.6's descriptor. Nothing about
+   where an attribute is placed differs because it stated its interface. */
+void idl_install_accessor_this_at(JSContext *ctx, JSValueConst target, const char *name,
+                                  IdlGetter getter, int getter_magic, int setter_stepid,
+                                  IdlThisIs this_is, const char *iface,
+                                  const char *at_file, int at_line)
+{
+    idl_define_accessor(ctx, target, name, idl_this_attribute_get,
+                        idl_this_getter_declare(getter, getter_magic, this_is, iface, name),
+                        setter_stepid, JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE,
+                        /*no_user_code*/false, at_file, at_line);
+}
+
 /* THE SAME INSTALL, WITH THE GETTER'S BODY DECLARING WHAT IT REACHES — see idl_args.h for what the claim buys
    and what it costs. It is a separate entry point rather than a parameter on the one above for a reason that is
    not convenience: a parameter would have to be answered at every one of the hundreds of existing installs, and
@@ -8706,6 +8742,117 @@ static JSValue idl_mint_plain_getter(JSContext *ctx, JSValueConst target, const 
                              JS_CFUNC_getter_magic, getter_magic);
     CHECK(!JS_IsException(f), "an IDL attribute's getter could not be allocated");
     return f;
+}
+
+/* ---- WEB IDL §3.7 "Interfaces"' IMPLEMENTATION-CHECK, FOR A PLAIN-C ATTRIBUTE GETTER --------------------
+ *
+ * §3.7.6 "Attributes"' create an attribute getter reaches the member's own steps only past step 1.1.2.3 —
+ * Web IDL §3.7.6 "Attributes": "If jsValue does not implement target, then:", whose second arm is Web IDL
+ * §3.7.6 "Attributes": "Otherwise, throw a TypeError." An attribute installed through idl_install_accessor is
+ * a raw JS_CFUNC_getter_magic with no pool entry, so idl_implementation_check — the one place a DECLARED
+ * member has that step performed for it — is never reached and the receiver arrives at the body exactly as
+ * the page wrote it. Every component in that position hand-wrote the test into its own bodies, which is where
+ * the two defects this removes come from: a body ANSWERING a foreign receiver where the standard throws, and a
+ * body ASSERTING on one, which is a page-held abort switch in dev and a page-held dereference in release.
+ *
+ * THE MEMBER STATES THE INTERFACE AT ITS DECLARATION AND THIS PERFORMS THE STEP — the same division
+ * idl_this_iface already makes for a member WITH a pool entry, reaching the same `…_is` predicate, so a
+ * component that owns both kinds names ONE function for both and its operations' brand and its attributes'
+ * cannot come apart. It is per INSTALL and not per member for the reason idl_install_accessor_lenient_setter_at
+ * states: a mixin member lands on every interface that includes the mixin and brands differently on each.
+ *
+ * IT IS NOT A SELECTOR AND SELECTS AGAINST NOTHING. Delete every hand-written body test and this is still the
+ * only thing that asks §3.7's step 3 for such a member; the plain form above stays what a member whose
+ * interface its TARGET settles uses — an own property of the realm's [Global] object, where idl_attribute_this
+ * answers the same question off the realm and the member has nothing to state — exactly as
+ * idl_install_accessor stays what a member with no [Exposed] condition uses beside idl_install_accessor_exposed.
+ *
+ * THE TABLE IS THE SHAPE g_gattr, g_lenient AND g_rtarget ALREADY USE, for the identical reason: a C function's
+ * `magic` is 16 bits, what this step needs is a predicate and two identifiers, and the same member installed
+ * once per realm must find its entry rather than append one per realm for the life of the agent. The predicate
+ * is NOT stored in a JSCFunctionType and NOT boxed into a JSValue, which is the strict-aliasing shape
+ * §C-stack names; it rides an INDEX, the way every other magic in this file does. */
+typedef struct IdlThisGetter {
+    IdlGetter   getter;   /* §3.7.6 step 1.1.3's "getter steps of attribute", run once the brand has passed */
+    int         magic;    /* the member's own magic, which this wrapper's has displaced */
+    IdlThisIs   is;       /* §3.7 implementation-check step 3's "object does not implement interface" */
+    const char *iface;    /* the identifier that TypeError names; a static, per the caller */
+    const char *member;   /* the identifier §3.7.6 keys the property by, for the same message */
+} IdlThisGetter;
+static IdlThisGetter *g_tgetter;
+static int            g_tgetter_n, g_tgetter_cap;
+
+static int idl_this_getter_declare(IdlGetter getter, int magic, IdlThisIs is,
+                                   const char *iface, const char *member)
+{
+    int i;
+
+    DCHECK(getter != NULL,
+           "a §3.7.6 attribute stated a receiver interface and no getter steps — the brand test exists to "
+           "decide whether the member's own steps run, and a member with none has nothing to decide");
+    DCHECK(is != NULL,
+           "a §3.7.6 attribute was installed through the receiver-stating form with no predicate — the whole "
+           "of what this form adds is §3.7 Interfaces' implementation check, and a check that cannot ask has no "
+           "arm to take");
+    DCHECK(iface != NULL && *iface,
+           "a §3.7.6 attribute stated a receiver predicate and no interface identifier — step 1.1.2.3.2's "
+           "TypeError names the interface, and a message naming none sends its reader nowhere");
+    DCHECK(member != NULL && *member,
+           "a §3.7.6 attribute stated a receiver interface and no identifier of its own");
+    for (i = 0; i < g_tgetter_n; i++)
+        if (g_tgetter[i].getter == getter && g_tgetter[i].magic == magic && g_tgetter[i].is == is &&
+            strcmp(g_tgetter[i].iface, iface) == 0 && strcmp(g_tgetter[i].member, member) == 0)
+            return i;
+    if (g_tgetter_n == g_tgetter_cap) {
+        int cap = g_tgetter_cap ? g_tgetter_cap * 2 : 16;
+        IdlThisGetter *t = realloc(g_tgetter, (size_t)cap * sizeof *t);
+
+        CHECK(t != NULL, "the Web IDL §3.7.6 receiver-stating attribute table could not grow — a member that "
+                         "cannot be installed is an API the page cannot read");
+        g_tgetter = t;
+        g_tgetter_cap = cap;
+    }
+    /* THE MAGIC IS 16 BITS AND THIS INDEX BECOMES ONE — asserted at the DECLARATION, where the count is, rather
+       than at the read, where the damage would already be one member's brand answering for another's. */
+    DCHECKF(g_tgetter_n < 32767,
+            "the §3.7.6 receiver-stating attribute table passed what a C function's magic can carry at '%s' — "
+            "the index is stored in u.cfunc.magic, which is 16 bits, so the next entry would brand-check as an "
+            "earlier member",
+            member);
+    g_tgetter[g_tgetter_n] = (IdlThisGetter){ getter, magic, is, iface, member };
+    return g_tgetter_n++;
+}
+
+void idl_this_getters_free(void)
+{
+    free(g_tgetter);
+    g_tgetter = NULL;
+    g_tgetter_n = g_tgetter_cap = 0;
+}
+
+/* §3.7.6 step 1.1.2.3's refusal and then step 1.1.3's "running the getter steps of attribute with idlObject as
+   this". A THROW AND NEVER A DCHECK: the receiver is PAGE-SUPPLIED INPUT, and
+   `Object.getOwnPropertyDescriptor(I.prototype, "m").get.call({})` is a question the standard answers with a
+   TypeError — an assert there is a page-held abort switch in dev and, where the body then dereferences what
+   the receiver was supposed to carry, a page-held segfault in release.
+   THE MESSAGE NAMES THE MEMBER AND THE INTERFACE THE DECLARATION STATED, because one shared body serves every
+   such attribute and a message written from here would name this file rather than the component that owns them
+   — the §AN-ASSERT-THAT-NAMES-A-REMEDY address problem, which the captured identifiers are what close.
+   §3.5's SECURITY CHECK IS NOT ASKED HERE, AND THAT IS THE STATE EVERY PLAIN-C GETTER ON A PROTOTYPE IS
+   ALREADY IN — see the residual idl_implementation_check's own block names, which this narrows rather than
+   retires. */
+static JSValue idl_this_attribute_get(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    const IdlThisGetter *a;
+
+    DCHECK(magic >= 0 && magic < g_tgetter_n,
+           "a §3.7.6 receiver-stating attribute getter ran at an index this table never made — the index rides "
+           "the function object's magic and is written only by idl_this_getter_declare");
+    a = &g_tgetter[magic];
+    if (!a->is(this_val))
+        return JS_ThrowTypeError(ctx, "Illegal invocation: reading '%s' on an object that does not implement "
+                                      "%s", a->member, a->iface);
+    return a->getter(ctx, this_val, a->magic);   /* step 1.1.3, with idlObject as this */
 }
 
 /* ---- WEB IDL §3.4.2 [LegacyLenientSetter] ----------------------------------------------------------------
@@ -10051,6 +10198,9 @@ void idl_args_pool_free(void)
     /* AND §3.7.3's [Replaceable] TARGET TABLE, which is the same kind of table for the same reason and goes
        back through its own entry for the same one. */
     idl_replaceable_targets_free();
+    /* AND §3.7.6's RECEIVER-STATING ATTRIBUTE TABLE, which is the same kind of table for the same reason and
+       goes back through its own entry for the same one. */
+    idl_this_getters_free();
 #if APICLIENT_DEV
     /* AND THE §3.7.1 CONSTRUCTOR-MINT RECORD, which is the same kind of table again — malloc'd, holding no
        JSValue and no atom, and its entries naming a previous agent's identifiers. The strings are COPIES this

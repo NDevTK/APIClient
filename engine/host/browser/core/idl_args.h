@@ -2507,6 +2507,9 @@ void idl_lenient_setters_free(void);
 /* And for §3.7.3's [Replaceable] `target` table, which is the same shape for the same reason. */
 void idl_replaceable_targets_free(void);
 
+/* And for §3.7.6's RECEIVER-STATING ATTRIBUTE table, which is the same shape for the same reason. */
+void idl_this_getters_free(void);
+
 JSValue idl_interface_object(JSContext *ctx, const char *name, JSValueConst proto);
 
 /* WEB IDL §3.8's `define the global property references`, as the ONE door an interface's name reaches the
@@ -3037,6 +3040,48 @@ void idl_install_accessor_lenient_setter_at(JSContext *ctx, JSValueConst target,
 #define idl_install_accessor_lenient_setter(ctx, target, name, getter, magic, this_is, iface) \
     idl_install_accessor_lenient_setter_at((ctx), (target), (name), (getter), (magic), (this_is), (iface), \
                                            IDL_SITE)
+
+/* WEB IDL §3.7.6 "Attributes"' RECEIVER TEST, FOR AN ATTRIBUTE WHOSE GETTER IS A PLAIN C FUNCTION — the same
+ * install as the plain form above, PLUS the interface the receiver must implement.
+ *
+ * WHY THE PLAIN FORM CANNOT ASK IT. §3.7.6's create an attribute getter refuses a foreign receiver before the
+ * member's own steps run — Web IDL §3.7.6 "Attributes": "If jsValue does not implement target, then:", and its
+ * second arm, Web IDL §3.7.6 "Attributes": "Otherwise, throw a TypeError." A member with a POOL ENTRY has that
+ * performed for it at one place, idl_implementation_check, off the interface idl_this_iface states at its
+ * DECLARATION. A plain getter has no pool entry, so it converges on nothing that could ask, and the receiver
+ * reaches the body as the page wrote it. This is the declaration for that member.
+ *
+ * IT IS THE DECLARATION SIDE AND THAT IS THE WHOLE POINT. A body that tests its own receiver answers LATE —
+ * after Web IDL §3.6 "Overload resolution algorithm" has converted arguments, so a page's own `valueOf` has
+ * already run where a browser throws with none of it having run. An attribute takes no arguments, so that
+ * ordering is not what a getter is wrong about; what a getter is wrong about is that a body-side test is
+ * WRITTEN N TIMES, and the two ways it gets written wrong are both live. ANSWERING is one: a body that reads
+ * its receiver's record and returns undefined, null or 0 when there is none reports a member's value where the
+ * standard reports a TypeError, and a page branches on the difference. ASSERTING is the other and is worse: a
+ * receiver is PAGE-SUPPLIED INPUT, so a DCHECK on it is an abort switch a page holds, and in release, where the
+ * DCHECK is compiled out, the body dereferences the NULL the assert was standing on — which is what
+ * `DocumentType.prototype.name` did, through `doc_type->node.owner_document->attrs`.
+ *
+ * `this_is` IS THE COMPONENT'S OWN PREDICATE, NAMED AND NOT RESTATED, and it is the SAME function
+ * idl_this_iface takes for the same sentence of §3.7 — so an interface that owns operations and attributes
+ * brands both out of one answer, and converting its getters cannot make them disagree with its operations. It
+ * cannot be a class comparison for the reason idl_this_iface states: a member declared on Document is reached
+ * on an XMLDocument, and a mixin member is reached on every interface that includes the mixin. It is therefore
+ * per INSTALL and not per member.
+ *
+ * `iface` IS THE IDENTIFIER STEP 1.1.2.3.2's TypeError NAMES, a static the caller owns, exactly as
+ * idl_install_accessor_lenient_setter_at's is.
+ *
+ * WHAT IT DOES NOT ADD IS §3.5's SECURITY CHECK, which is the state every plain-C getter on an interface
+ * prototype is already in — core/idl_args.c's idl_implementation_check block names that residual and this
+ * NARROWS it rather than retiring it. */
+void idl_install_accessor_this_at(JSContext *ctx, JSValueConst target, const char *name,
+                                  IdlGetter getter, int getter_magic, int setter_stepid,
+                                  IdlThisIs this_is, const char *iface,
+                                  const char *at_file, int at_line);
+#define idl_install_accessor_this(ctx, target, name, getter, magic, setter, this_is, iface) \
+    idl_install_accessor_this_at((ctx), (target), (name), (getter), (magic), (setter), (this_is), (iface), \
+                                 IDL_SITE)
 
 void idl_install_accessor_unforgeable_at(JSContext *ctx, JSValueConst target, const char *name,
                                          IdlGetter getter, int getter_magic, int setter_stepid,

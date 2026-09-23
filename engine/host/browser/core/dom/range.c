@@ -105,9 +105,10 @@ static void range_live_drop(void)
  *
  * JS_GetAnyOpaque, because the collector dispatched here THROUGH the class — the id is a fact it already has
  * and must not look up. It is NOT compared against `g_range_class` either: that is the guaranteed-false `@WHY`
- * agent_state.h records for remote_object.c. `range_here` keeps the class test, because that one is Web IDL
+ * agent_state.h records for remote_object.c. `range_is` keeps the class test, because that one is Web IDL
  * §3.7.6 "Attributes"' and Web IDL §3.7.7 "Operations"' BRAND — §5.5 declares both member kinds — and runs
- * while the agent is live. */
+ * while the agent is live. (This named `range_here`, the getter-side wrapper that has since been deleted for
+ * the install form that states the interface; the predicate it routed to is the one that was ever meant.) */
 static void range_finalizer(JSRuntime *rt, JSValue val)
 {
     JSClassID id = 0;
@@ -151,9 +152,12 @@ static void range_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fun
 
    AND IT ANSWERS `b != NULL` FOR FREE, which is what lets a converted body ASSERT where it used to BRANCH: an
    object of this class always carries its record (range_finalizer says why — one mint, nothing between that can
-   throw), so this is exactly the test range_here already made, and a receiver it admits has a record in EVERY
-   build. The declaration is therefore the guard that survives release; the DCHECK below it asserts only that
-   the declaration was made, so nothing here promotes a dev-only check into a release dereference. */
+   throw), so a receiver this admits has a record in EVERY build. The declaration is therefore the guard that
+   survives release; the DCHECK below it asserts only that the declaration was made, so nothing here promotes a
+   dev-only check into a release dereference. That sentence used to name `range_here`, the getter-side wrapper
+   this file kept while §5.5's one attribute had no way to state its interface; it is deleted and the reason
+   is the same one — ONE ANSWER TO ONE QUESTION — now that idl_install_accessor_this reaches this predicate
+   for an attribute exactly as idl_this_iface reaches it for an operation. */
 static bool range_is(JSValueConst v)
 {
     return JS_GetOpaque(v, g_range_class) != NULL;
@@ -168,24 +172,11 @@ static RangeBounds *range_receiver(JSValueConst v)
     RangeBounds *b = JS_GetOpaque(v, g_range_class);
 
     DCHECK(b != NULL, "a §5.5 member reached its body on a receiver that is not a Range — its declaration "
-                      "states Web IDL §3.7 Interfaces' implementation check, so reaching the body means "
-                      "idl_implementation_check did not run for it");
+                      "states Web IDL §3.7 Interfaces' implementation check, at idl_this_iface for an "
+                      "operation and at idl_install_accessor_this for an attribute, so reaching the body "
+                      "means neither door's check ran for it");
     cow_capture_host_record(v, b, &RANGE_BOUNDS_REC);
     return b;
-}
-
-/* THE SAME QUESTION FOR THE ONE MEMBER THAT CANNOT STATE IT. `commonAncestorContainer` is minted by
-   idl_install_accessor as a plain JS_CFUNC_getter_magic with no pool entry, so it converges on nothing that
-   could ask Web IDL §3.7 "Interfaces" for it — the residual core/idl_args.c names at the site it would reach.
-   ONE ANSWER TO ONE QUESTION: this routes to the predicate above, so the two ways into a §5.5 member cannot
-   drift. When a plain getter gains a pool entry, this function goes with it. */
-static RangeBounds *range_here(JSContext *ctx, JSValueConst v)
-{
-    if (!range_is(v)) {
-        JS_ThrowTypeError(ctx, "not a Range");
-        return NULL;
-    }
-    return range_receiver(v);
 }
 
 static lxb_dom_node_t *bounds_start(const RangeBounds *b) { return node_of(b->start_node); }
@@ -656,10 +647,14 @@ static lxb_dom_node_t *common_ancestor(lxb_dom_node_t *start, lxb_dom_node_t *en
 /* §5.5's commonAncestorContainer. No page code, one walk up. */
 static JSValue js_range_common_ancestor(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    RangeBounds *b = range_here(ctx, this_val);
+    RangeBounds *b = range_receiver(this_val);
 
     (void)magic;
-    if (!b) return JS_EXCEPTION;
+    /* NO `if (!b)` HERE, AND THAT IS THE CONVERSION RATHER THAN A SHORTCUT. §3.7.6's receiver test is stated at
+       this member's install and performed before the body, so a receiver that reaches here IS a Range and
+       range_finalizer's one-mint argument makes its record non-NULL in EVERY build. The branch that used to
+       stand here was this file's own `range_here`, which asked §3.7's step 3 because a plain getter converged
+       on nothing that could — its comment said so and said what would retire it, and this is that. */
     return node_wrap(ctx, common_ancestor(bounds_start(b), bounds_end(b)));
 }
 
@@ -2010,7 +2005,8 @@ void range_install_proto(JSContext *ctx)
     idl_interface_tag(ctx, proto, "Range");
     JS_SetPropertyFunctionList(ctx, proto, js_range_consts,
                                (int)(sizeof(js_range_consts) / sizeof(js_range_consts[0])));
-    idl_install_accessor(ctx, proto, "commonAncestorContainer", js_range_common_ancestor, 0, -1);
+    idl_install_accessor_this(ctx, proto, "commonAncestorContainer", js_range_common_ancestor, 0, -1,
+                              range_is, "Range");
     idl_install_method(ctx, proto, "setStart", g_id[R_SET_START]);
     idl_install_method(ctx, proto, "setEnd", g_id[R_SET_END]);
     idl_install_method(ctx, proto, "setStartBefore", g_id[R_SET_START_BEFORE]);

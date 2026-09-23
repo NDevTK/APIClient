@@ -773,6 +773,28 @@ const CALL_FORMS = new Map(Object.entries({
      interface rather than on its prototype and non-configurable. It is an install like any other — where it
      LANDS is what differs, and the attribution graph already follows the object. */
   idl_install_accessor_unforgeable: { target: 1, name: 2, fn: 3, kind: "accessor" },
+  /* WEB IDL §3.7.6 "Attributes"' RECEIVER-STATING ACCESSOR (`idl_install_accessor_this`) IS NOT A ROW HERE,
+     AND THE MEASUREMENT IS WHY — the §3.8 row below says "A new install spelling is a row here, in the same
+     diff that writes it", and that instruction is TRUE OF A DOOR THIS FIXED POINT CANNOT REACH and FALSE OF A
+     FORM THAT FORWARDS ITS OWN `name` PARAMETER INTO ONE IT ALREADY KNOWS. The new form does the second: it
+     hands its `name` straight to core/idl_args.c's `idl_define_accessor`, which the derivation below already
+     picks up, so a hand row would be the SECOND COPY of a fact this file computes — the same argument that
+     deleted node.c's two rows a few lines down, where the copy's real cost was that it could not carry the
+     door's `globalRef` mark.
+     MEASURED WITH AN ARMED CONTROL, over the tree that converted core/dom/document_type.c's three members and
+     core/dom/range.c's one, counting `installedMembers().records` and the four converted members by name and
+     file. THE CONTROL SPEAKS: with ALL FOUR accessor seeds removed (`idl_install_accessor`,
+     `idl_install_accessor_this`, `idl_install_accessor_step`, `JS_DefinePropertyGetSet`) records fall
+     2965 -> 1814 and the four converted members read 0. THE ROW IS INERT: removing the `_this` row alone
+     leaves records at 2965 and the four members at 4, and so does removing all three `idl_install_accessor*`
+     rows together — `JS_DefinePropertyGetSet` alone carries the family through `idl_define_accessor`, and the
+     three rows alone carry it without `JS_DefinePropertyGetSet` (2930, four members still 4). Every seed in
+     this family is redundant with the others for it.
+     SO THE QUESTION A NEW SPELLING MUST ANSWER IS NOT "is it listed" BUT "does it forward a caller's name into
+     a form already here". Where it does, a row adds nothing and drifts; where it does not — a door that names
+     the member itself, or one whose name argument is a table column the derivation cannot follow — the §3.8
+     row's instruction stands unchanged and the row is owed. The way to tell them apart is the control above and
+     not a reading of this map. */
   idl_install_accessor_step:     { target: 1, name: 2, kind: "accessor" },
   /* WEB IDL §3.4.2 [LegacyLenientSetter] — the same §3.7.6 accessor as the plain form, plus the no-op setter
      §3.4.2 asks for. It is registered with a MARK and not merely as another install spelling, because the mark
