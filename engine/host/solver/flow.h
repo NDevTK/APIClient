@@ -1083,6 +1083,33 @@ typedef struct Flow {
        document's state is its flows. JS_UNDEFINED on a flow with nothing outstanding, which is nearly all of
        them, so the common case stays a tag test. */
     JSValue perform_q;
+
+    /* WHAT THIS MEMBER'S OWN HALF OF THE WFQ'S WEIGHT READ THE LAST TIME A SCAN WEIGHED IT, AND AT WHICH
+       FRONTIER GENERATION — the operands of the one assertion the whole sub-linear-ordering question rests
+       on. flow_weight is `the family's coordinate + this member's + a carry bit`; the family's half is read
+       through ONE pointer by every arm of it, so it is a COMMON OFFSET that orders nothing within a family,
+       and flow.c's flow_silence_phase decomposes the carry out. What is left is flow_member_key, and the
+       claim every index, heap or cached maximum anybody proposes here is derived from is that it CANNOT MOVE
+       for a member that is not holding the thread while the generation stands still.
+       IT IS STAMPED IN THE WALK RATHER THAN AT THE WRITERS, because the walk is already holding every member
+       and the pointer and the key, and because the writers are nine functions that would each have to
+       remember. The scan is where the invariant is spent, so it is where it is asked.
+       DEV-ONLY IN BOTH BUILDS' SENSE — the fields as well as the check. engine.c's rival snapshot is written
+       in every build and read in none but dev, for a reason that does not reach here: it is FOUR STATICS and
+       this is three fields on EVERY MEMBER of a frontier that grows because forking is the point, and the
+       stamp is not a load but a call to flow_member_key, whose four terms are an integer division and three
+       divides. Paying that per member per scan in the build the product ships, for a check that build does
+       not make, would be an instrument changing the run it samples — which is the one thing solver/flow.h's
+       FLOW_SCANS banner says a census may not do.
+       `key_stamped` AND NOT A SENTINEL GENERATION, because `g_gen` starts at zero and flow_registry_init
+       RESETS it, so any value a fresh member could be born holding is one a live generation can reach. A flow
+       that has never been weighed and one weighed at generation zero are two different states and only one of
+       them has anything to compare against. */
+#if APICLIENT_DEV
+    double   key_last;
+    unsigned key_gen;
+    int      key_stamped;
+#endif
 } Flow;
 
 /* `doc_name` is THIS INSTANCE'S DOCUMENT identity, and it is a parameter rather than a separate init call so a

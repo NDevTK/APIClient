@@ -4288,6 +4288,34 @@ long flow_branch_born(const Flow *f) {
     return f->acct->branch->sub_born;
 }
 
+/* EVERY TERM OF THE WEIGHT THAT IS A READING OF **THIS MEMBER** — the key an index over this frontier would
+   be built on, and the quantity whose invariance between two frontier generations is the precondition of
+   every sub-linear order anybody can propose here. flow_weight is the family's coordinate plus this member's
+   minus a carry bit: the reward and the family's aging notch are read through ONE pointer by every arm of a
+   family, so they are a COMMON OFFSET that orders nothing within one — and a real page's whole frontier is one
+   family — while flow_silence_phase decomposes the carry out as a single bit against a threshold that is the
+   family's and therefore common too. What is left is this.
+   IT IS NOT A TERM AND NOTHING RANKS BY IT, which is flow_silence_phase's own sentence and holds here for the
+   same arithmetic: `-(double)notch * FLOW_AGE_QUANTUM` is ONE multiply of ONE exact integer, and a weight
+   rebuilt as this plus the family's halves would sum three products where flow_weight sums one, differ from it
+   in the last bit, and reorder two members the order currently ties. flow_weight is untouched and must stay
+   so. This exists to be STAMPED AND COMPARED WITH ITSELF, where equality of doubles is exact because it is the
+   same expression on the same operands — the property flow_fork_inherit's equality over flow_weight already
+   rests on, not a tolerance.
+   THE SUMMANDS ARE IN flow_nonreward'S ORDER, DELIBERATELY, AND THAT IS WHAT ARMS THE GUARD BELOW. Where the
+   family has burned nothing since its last emission the notch IS this member's own and the carry is zero, so
+   the two functions are the same sequence of operations on the same operands and must agree BIT FOR BIT. That
+   state is not a corner: flow_credit_emit sends every member of a family to a family notch of zero in one
+   statement, so the guard is armed in ordinary operation. It is what catches the one way this pair rots — a
+   sixth summand reaching flow_nonreward and not reaching this — which is the silent narrowing that would make
+   every assertion derived from the decomposition true of less than it claims.
+   MENTIONED ONLY INSIDE DCHECK CONDITIONS, so release neither calls it nor emits it — the shape acct_vt_leads
+   and flow_is_min_weight already establish in this file. */
+static double flow_member_key(const Flow *f) {
+    return -(double)flow_service_notch(f) * FLOW_AGE_QUANTUM
+           + flow_optimism(f) + flow_distance(f) + flow_branch_bonus(f);
+}
+
 static double flow_nonreward(const Flow *f) {
     /* THE TWO READINGS AND THE ONE TAG, which is what this sum is now made of explicitly: the optimism
        bonus and the fitness distance are facts about THIS FLOW, and the aging is the queue coordinate it
@@ -4299,6 +4327,20 @@ static double flow_nonreward(const Flow *f) {
            "span at most a finding, and §scheduler's 'a never-run flow is never starved' is a claim about a "
            "quantity nobody bounded. Bound the term in flow_queue_nonreward or flow_distance, or state its "
            "range in FLOW_NONREWARD_MAX beside the three that are already stated there");
+    /* …AND THE ONE STATE IN WHICH flow_member_key MUST REPRODUCE THIS EXACTLY — see that function for why the
+       summand order is what makes this a check rather than a tolerance. With the family's aging at zero and no
+       carry, flow_queue_nonreward IS `-(double)flow_service_notch(f) * FLOW_AGE_QUANTUM` spelled identically
+       and the three terms after it are the same calls in the same order, so a difference here is a summand
+       that reached one of the two and not the other.
+       IT IS ASKED HERE AND NOT AT flow_member_key BECAUSE THIS IS THE SITE A NEW TERM IS ADDED TO. A guard
+       written at the reader would go on passing for as long as nobody re-read it; written at the writer it
+       fires on the diff that causes it. */
+    DCHECK(!(flow_family_notch(f) == 0 && flow_silence_carry(f) == 0) || flow_member_key(f) == n,
+           "the member half of the WFQ's weight is no longer what flow_weight computes — with this family's "
+           "aging at zero and no carry the two are the same expression on the same operands, so a difference "
+           "is a summand that reached one of them and not the other. Every claim that a non-running member's "
+           "rank cannot move between two frontier generations is derived from that pair agreeing, and the "
+           "assertion in flow_best's walk would now be asking it of less than the order is made of");
     return n;
 }
 
@@ -4726,6 +4768,55 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
            and the host-owed ones without pricing them, so a trip count would charge this scan for members it
            never weighed — and `members` on the same census already says how big the frontier was. */
         w = flow_weight(g_flows[i]); g_scan_weights[why]++;
+        /* …AND THE PRECONDITION OF EVERY SUB-LINEAR ORDER, ASKED OF EVERY MEMBER RATHER THAN OF ONE.
+           engine.c's preempt hook holds this over the ONE rival it caches across a frontier generation, and
+           its own retirement clause says the index, when it exists, "will hold it at its own update site
+           rather than at one cached rival". This walk is already holding every member, its pointer and its
+           weight, so asking it here is strictly more of the same check for nothing — the shape the `reg_i`
+           DCHECK at the top of this loop is written in, and for its reason.
+           WHAT IT ASSERTS IS flow_silence_phase'S DECOMPOSITION, OVER THE WHOLE FRONTIER INSTEAD OF OVER A
+           SAMPLE OF ONE: between two frontier generations the only thing that may move in a non-running
+           member's weight is its family's common half and the carry bit, so the MEMBER half must stand still.
+           Every writer of the four quantities that half is made of raises the generation — flow_observe_replay,
+           flow_observe_survival and flow_observe_rung for the fitness distance, flow_credit_visit for the
+           optimism, flow_new and flow_remove for the branch bucket, and flow_credit_emit through
+           frontier_vt_serve for the emission that sends the own half to zero.
+           THE RUNNING FLOW IS EXEMPT BECAUSE IT IS THE ONE MEMBER THE REMAINING WRITER IS ABOUT. flow_age_running
+           raises no generation and charges only the flow holding the thread, which is not an omission but the
+           quantity the aging term exists to read; its family half reaches everybody and is common, and its own
+           half reaches nobody else.
+           TWO OF THOSE WRITERS ARE CORRECT BY ADJACENCY RATHER THAN BY CONSTRUCTION, AND THAT IS THE REASON
+           THIS IS AN ASSERT AND NOT A PARAGRAPH. flow_fork_inherit raises `sub_born` for the bucket the arm
+           JOINS — re-ranking every live member of that arm at once — and raises no generation of its own; it
+           is sound only because flow_add_unseeded bumped one immediately before it and nothing weighs the
+           frontier in between. acct_depart raises `sub_gone` just before flow_remove's bump, on the same
+           argument. A diff that puts a weighing between either pair would re-rank a whole arm with the
+           generation standing still, silently, and there is no other instrument in this engine that would say
+           so.
+           IT RAISES NO SCAN COUNTER, which is what keeps `scanNextWeights` a count of what the ORDER cost:
+           flow.h's FLOW_SCANS banner says the rows count the flow_weight the scan itself performed and never
+           the ones a DCHECK below it makes, and this is one of those. It is dev-only in both the check and the
+           stamp, for the reason the fields carry in solver/flow.h — a second evaluation of the member half per
+           member per scan is affordable in the build that makes the check and is an instrument changing the
+           run it samples in the build that does not. */
+#if APICLIENT_DEV
+        {
+            Flow *m = g_flows[i];
+            double mk = flow_member_key(m);
+            DCHECKF(m == g_running || !m->key_stamped || m->key_gen != g_gen || mk == m->key_last,
+                    "a member that is not holding the thread changed its own half of the WFQ's weight with "
+                    "the frontier generation standing still — flow_silence_phase's decomposition says only "
+                    "the family's common half and the carry bit may move between two generations, and every "
+                    "index, heap or cached maximum anybody builds over this frontier is derived from that. "
+                    "Either a writer of the optimism, the fitness distance, the branch bucket or this "
+                    "member's own silence has stopped raising the generation, or a weighing has been "
+                    "introduced between one of those writes and its bump — flow_fork_inherit's `sub_born++` "
+                    "and acct_depart's `sub_gone++` are both correct only by adjacency. At generation %u the "
+                    "member half was %.17g and is now %.17g",
+                    g_gen, m->key_last, mk);
+            m->key_last = mk; m->key_gen = g_gen; m->key_stamped = 1;
+        }
+#endif
         if (g_flows[i]->visits == 0 && flow_silence_notch(g_flows[i]) == 0 && (!unrun || w > unrun_w)) {
             unrun = g_flows[i]; unrun_w = w;
         }
