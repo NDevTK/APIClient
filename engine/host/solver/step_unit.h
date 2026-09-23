@@ -167,6 +167,17 @@
     X(START_PROGRAM,      "start-a-classic-program")                              \
     X(EVALUATE_MODULE,    "evaluate-a-module-program")                            \
     X(NO_COMPILE,         "program-did-not-compile")                              \
+    /* AND THE COMPILE THAT HANDED THE THREAD BACK PART WAY THROUGH, which is */ \
+    /* neither of those and is not an OUTCOME of a compile at all: the parse  */ \
+    /* is suspended at an exact production, the row's program has NOT started */ \
+    /* and the cursor has NOT moved, so the next step continues the same      */ \
+    /* parse. It is its own row because the three states a reader has to      */ \
+    /* separate here — started, did not parse, still parsing — take opposite  */ \
+    /* work, and because this is the one row that says the PARSE seam fired   */ \
+    /* at all. A frontier standing in it is one whose documents are big       */ \
+    /* enough that the compile is worth interleaving, which is the state that */ \
+    /* used to be indistinguishable from a step that simply took a long time. */ \
+    X(COMPILE_YIELDED,    "compile-handed-the-thread-back")                       \
     /* AND THE ROW THAT NEVER HAD A PROGRAM TO COMPILE, which is a different  */ \
     /* event and not a shade of the one above: `program-did-not-compile` is a */ \
     /* PARSER verdict on bytes that arrived, and this is HTML §4.12.1.1       */ \

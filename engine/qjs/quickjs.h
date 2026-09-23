@@ -2730,6 +2730,29 @@ JS_EXTERN void JS_SetEvalSinkHook(JSEvalSinkFunc *cb);
    CALLBACK that parks a running flow lives in JSFlowControlHooks above; these are the host-driven counterpart.)
    A flow runs as a preemptible heap-resident async-function frame, so it interleaves under the WFQ. */
 JS_EXTERN JSValue *JS_FlowNew(JSContext *ctx, const char *src, size_t len, const char *filename, int eval_flags);
+/* …AND THE SAME THING WITH THE COMPILE'S OWN SUSPEND POINT ARMED. The PARSE is the one span in this engine
+   that is O(a length the PAGE chose) and could not rest at any input size: the three interpreter raise kinds
+   above are raised from DISPATCH, which a parse never reaches, so a compile polled nothing for its whole
+   length. It polls now, from its own production dispatch, through the SAME budget hook and the SAME preempt
+   policy as the interpreter — one park decision, still in one place.
+     Answers 1 (the flow is built and *pframe holds it), 0 (the compile HANDED THE THREAD BACK — *pcompile
+   holds it and the host calls again, with the same src/len/filename/eval_flags, when it next wants to spend
+   time here) or -1 (the compile failed; the exception is pending). A `pcompile` of NULL is a host that
+   DECLINES this edge, exactly as a NULL `budget` above is, and it gets the parse it always got: JS_FlowNew is
+   that spelling and is a wrapper over this entry rather than a second implementation.
+     THE RESUME IS BYTE-IDENTICAL AND NOT A RE-PARSE. What is suspended is the descent's explicit frame stack,
+   whose chunks are allocated once and never moved, so the frames, the JSFunctionDef chain and every
+   break/continue linkage stay at the addresses they already hold; nothing is serialised and nothing is
+   rebuilt. That is also why a parked compile is an IN-RAM park only: it cannot be serialised, and it does not
+   need to be, because a compile is RE-DERIVABLE from the source the host is holding — a flow paged out
+   mid-parse drops the parse through JS_FlowCompileDrop and re-compiles when its recipe replays the document.
+     THE SOURCE AND THE FILENAME ARE BORROWED FOR THE WHOLE COMPILE and not merely for one call — the parse
+   reads them across every stint — so a host that offers `pcompile` is promising those bytes outlive it. */
+JS_EXTERN int JS_FlowNewStep(JSContext *ctx, const char *src, size_t len, const char *filename, int eval_flags,
+                             JSValue **pframe, void **pcompile);
+/* Release a compile the host is never going to finish — the flow it belonged to is being freed with its
+   program still half-parsed. It is a no-op on a NULL slot, so a teardown may call it unconditionally. */
+JS_EXTERN void JS_FlowCompileDrop(JSContext *ctx, void **pcompile);
 /* A FLOW WHOSE WHOLE PROGRAM IS ONE CALL — `func(argv…)` with `this_val` as the receiver. The third way to make
    a flow, beside a SOURCE and a CLONE, and the one ORPHAN-INVOKE needs: a function nothing has called is
    reachable only by calling it, and a host that JS_Calls it from C runs it in an activation with no flow base

@@ -51704,10 +51704,114 @@ static JSValue async_func_resume(JSContext *ctx, JSAsyncFunctionState *s)
 }
 
 
+/* A COMPILE IN FLIGHT, FORWARD-DECLARED. The state and everything that operates on it live with the eval
+   entry — a suspended compile is a fact about a PARSE and not about the flow API — and what the flow API
+   needs of it is an opaque pointer and three verbs. */
+typedef struct JSEvalCompile JSEvalCompile;
+static JSValue js_eval_compile_continue(JSContext *ctx, JSEvalCompile **slot);
+static void js_eval_compile_drop(JSContext *ctx, JSEvalCompile **slot);
+/* WHERE A SUSPENDED COMPILE IS HANDED BACK TO, AND THE WHOLE OF WHAT CROSSES. It is a pointer to the CALLER's
+   own slot, set for the duration of one call by the one entry that can hold a parked compile, which is why it
+   changes no signature between here and the eval indirection: ctx->eval_internal is an embedder ABI, and
+   threading an out-parameter through it would make every embedder state a capability it does not have.
+   Thread-local for g_flow_base_gen's reason exactly — the real engine is one instance per document and
+   run-test262 drives many tests on parallel OS threads.
+   IT IS TAKEN AND CLEARED AT THE EVAL ENTRY so that a NESTED compile (a module loader, an eval reached while
+   this one runs) cannot suspend into somebody else's slot: the capability belongs to one compile and not to a
+   thread. */
+static _Thread_local JSEvalCompile **g_eval_compile_slot = NULL;
+
 /* APIClient forced-execution FLOW API: a flow is a preemptible activation. Its program runs as an async
    function frame (heap-resident, suspendable), so the scheduler can preempt it mid-execution (at a loop
    back-edge, via the preempt hook) and resume it later — the substrate for value-ordered interleaving. */
+static JSValue JS_FlowCompileSource(JSContext *ctx, const char *src, size_t len,
+                                    const char *filename, int eval_flags);
+/* START OR CONTINUE A FLOW'S COMPILE. Answers 1 (the flow is built, *pframe set), 0 (the compile HANDED THE
+   THREAD BACK — *pcompile holds it, call again with the same arguments) or -1 (the compile failed, the
+   exception is pending).
+   THIS IS THE ONE ENTRY AND JS_FlowNew IS A WRAPPER OVER IT, not a second implementation to fall back to: a
+   caller that passes no `pcompile` is a host with no frontier to be fair between, and it gets the same parse
+   through the same driver with the seam unarmed — which is JSFlowControlHooks.budget's own arrangement ("a
+   NULL budget is a host that declines this edge") and is js_parse_descent's relationship to
+   js_parse_descent_at one level down.
+   WHY THE COMPILE NEEDED A SEAM AT ALL, since it is the span this engine had no way to rest in: quickjs.h
+   declares four raise kinds and the first three come from the interpreter's dispatch, so a parse raised
+   nothing and polled nothing for a length the PAGE chose — solver/rest_unit.h's bound (1) names exactly that
+   quantity as the one that must never appear in a step's cost. The parse's own dispatch is the raise source
+   now (js_parse_want_yield), and the park is the descent's frame stack staying exactly where it is: chunks
+   are allocated once and never moved, so a resume is a continuation and not a reconstruction.
+   IT IS AN IN-RAM PARK AND THAT IS THE WHOLE OF IT, WHICH IS A DESIGN STATEMENT AND NOT A GAP. The state
+   cannot be serialised — the frame stack is a graph of raw pointers into chunk allocations, plus a
+   JSFunctionDef chain — which is exactly the live-graph serialization the cold tier forbids. It does not need
+   to be: a compile is RE-DERIVABLE from the row's own bytes, so a flow paged out mid-parse loses its parse and
+   the recipe that replays the document re-compiles it, which is §the-re-derivable-category and not a
+   truncation. The host therefore DROPS a suspended compile when it releases the flow (JS_FlowCompileDrop)
+   rather than refusing the park. What would make it serialisable — indices into a flat arena instead of
+   pointers, and the top_break list keyed by frame index — is a change to the frame stack's REPRESENTATION,
+   buys only the ability to resume a half-parsed program in a later session, and is not owed by this seam. */
+int JS_FlowNewStep(JSContext *ctx, const char *src, size_t len, const char *filename, int eval_flags,
+                   JSValue **pframe, void **pcompile) {
+    JSEvalCompile *carrier = NULL;
+    JSValue fn;
+    JSAsyncFunctionState *s;
+
+    DCHECK(pframe != NULL, "a flow compile was started with nowhere to put the flow it builds");
+    *pframe = NULL;
+    if (pcompile != NULL && *pcompile != NULL) {
+        carrier = (JSEvalCompile *)*pcompile;
+        *pcompile = NULL;
+        fn = js_eval_compile_continue(ctx, &carrier);
+    } else {
+        JSEvalCompile **outer = g_eval_compile_slot;
+        /* THE OFFER, MADE FOR THE DURATION OF ONE CALL. It is what js_parse_want_yield reads as pd_can_yield
+           and it is the whole of what crosses: no host header, no new hook, an address on this thread's stack
+           that the compile hands itself back through. */
+        g_eval_compile_slot = (pcompile != NULL) ? &carrier : NULL;
+        fn = JS_FlowCompileSource(ctx, src, len, filename, eval_flags);
+        g_eval_compile_slot = outer;
+    }
+    if (JS_VALUE_GET_TAG(fn) == JS_TAG_UNINITIALIZED) {
+        DCHECK(carrier != NULL && pcompile != NULL,
+               "a compile answered SUSPENDED with nothing parked — the marker and the carrier are written by "
+               "one function and read by this one, so they cannot disagree unless a third site produced it");
+        *pcompile = carrier;
+        return 0;
+    }
+    DCHECK(carrier == NULL, "a compile that finished left a parked parse behind it");
+    if (JS_IsException(fn)) return -1;   /* compile error: the exception is already pending */
+    DCHECK(tramp_body_is_plain(fn),
+           "JS_FlowNew compiled a global program and got back something that is not a trampolinable bytecode "
+           "function — async_func_init is about to make a preemptible frame out of it, so a closure that is "
+           "not a plain body would be parked and rebuilt as a shape the resume path cannot restore");
+    s = js_mallocz(ctx, sizeof(*s));
+    if (!s) { JS_FreeValue(ctx, fn); return -1; }
+    if (async_func_init(ctx, s, fn, ctx->global_obj, 0, NULL)) { js_free(ctx, s); JS_FreeValue(ctx, fn); return -1; }
+    JS_FreeValue(ctx, fn);
+    *pframe = (JSValue *)s;   /* opaque handle */
+    return 1;
+}
+
+/* THROW AWAY A COMPILE NOBODY WILL FINISH — the flow that started it is being freed with its program still
+   half-parsed. It is the one obligation the seam creates for the host, and it is stated as an entry rather
+   than left to a free() because what has to be released is the descent's own: every frame's atoms, the chunk
+   array, the token, the JSFunctionDef chain and any module def. */
+void JS_FlowCompileDrop(JSContext *ctx, void **pcompile) {
+    JSEvalCompile *ec;
+    if (pcompile == NULL || *pcompile == NULL) return;
+    ec = (JSEvalCompile *)*pcompile;
+    *pcompile = NULL;
+    js_eval_compile_drop(ctx, &ec);
+}
+
 JSValue *JS_FlowNew(JSContext *ctx, const char *src, size_t len, const char *filename, int eval_flags) {
+    JSValue *frame = NULL;
+    /* NO CARRIER: a host with no frontier declines the compile seam and gets the parse it always got. */
+    return JS_FlowNewStep(ctx, src, len, filename, eval_flags, &frame, NULL) > 0 ? frame : NULL;
+}
+
+/* The compile itself, factored out so the start arm above reads as one line and the prose below stays with
+   the flags it is about. */
+static JSValue JS_FlowCompileSource(JSContext *ctx, const char *src, size_t len, const char *filename, int eval_flags) {
     /* Compile as a GLOBAL program (NOT an async-function wrapper): boot is a classic script, so top-level
        `var`/function must create GLOBAL bindings (window.d = …, the moat surface) — an async wrapper would
        scope them to the function and break that. The compiled global program runs through the same async-
@@ -51733,19 +51837,9 @@ JSValue *JS_FlowNew(JSContext *ctx, const char *src, size_t len, const char *fil
        program the @S seam announces NOTHING for, so this call is the standing proof that asking for a
        trampolinable closure is not a claim about provenance — the confusion that made a `<script>` element's
        program impossible to compile at all. */
-    JSValue fn = JS_Eval(ctx, src, len, filename ? filename : "<flow>",
-                         JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_TRAMP_CLOSURE |
-                         (eval_flags & (JS_EVAL_FLAG_STRICT | JS_EVAL_FLAG_INLINE_SCRIPT)));
-    if (JS_IsException(fn)) return NULL;   /* compile error: the exception is already pending */
-    DCHECK(tramp_body_is_plain(fn),
-           "JS_FlowNew compiled a global program and got back something that is not a trampolinable bytecode "
-           "function — async_func_init is about to make a preemptible frame out of it, so a closure that is "
-           "not a plain body would be parked and rebuilt as a shape the resume path cannot restore");
-    JSAsyncFunctionState *s = js_mallocz(ctx, sizeof(*s));
-    if (!s) { JS_FreeValue(ctx, fn); return NULL; }
-    if (async_func_init(ctx, s, fn, ctx->global_obj, 0, NULL)) { js_free(ctx, s); JS_FreeValue(ctx, fn); return NULL; }
-    JS_FreeValue(ctx, fn);
-    return (JSValue *)s;   /* opaque handle */
+    return JS_Eval(ctx, src, len, filename ? filename : "<flow>",
+                   JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_TRAMP_CLOSURE |
+                   (eval_flags & (JS_EVAL_FLAG_STRICT | JS_EVAL_FLAG_INLINE_SCRIPT)));
 }
 /* Resume the flow until it PREEMPTS (returns 1) or COMPLETES/throws (returns 0). An AWAIT does NOT return to
    the caller as "suspended": its result is DELIVERED (the continuation resumes WITH the settled value, or
@@ -55799,7 +55893,39 @@ typedef struct JSParseState {
        pd_suspends counts them so the number is reported rather than assumed. */
     bool pd_suspended;
     uint64_t pd_suspends;
+    /* MAY A SUSPENSION BE HANDED BACK TO THE CALLER — stated by the CALLER, because it is a fact about the
+       caller and about nothing the parse can see. js_parse_drive already stops at every dispatch and
+       js_parse_drive_until turns the crank; the only open question is whether there is anybody up there
+       holding a place to come back to. A caller that owns a JSEvalCompile says true and gets the seam; every
+       other entry says false and gets exactly the parse it got before.
+       IT IS NOT A MODE SWITCH OVER THE PARSE, which is the one thing that could be misread from it. One
+       driver, one suspension mechanism, one resume path, one park policy; what differs is whose loop turns
+       the crank. That is the arrangement JSFlowControlHooks.budget already names — "a NULL budget is a host
+       that declines this edge" — and not a second implementation to fall back to. */
+    bool pd_can_yield;
+    /* HOW MANY PRODUCTION STEPS UNTIL THE COOPERATIVE BUDGET IS NEXT ASKED. The parse is the one span in this
+       engine with no raise source at all: quickjs.h declares four kinds and the first three are raised from
+       the INTERPRETER's dispatch, which a parse never reaches, so a parse raised nothing and polled nothing
+       for its whole length however many bytes the page chose. The parse's own dispatch is the raise source,
+       exactly as g_flow_budget_countdown makes the interpreter's dispatch one — same hook, same period, same
+       park decision. A COUNTDOWN AND NOT A BUDGET (§NO BOUNDS): its exhaustion decides when the host is
+       ASKED and is no part of the answer, and no value of it makes any parse cover less ground — delete it
+       and the budget is asked at every production, which can only hand the thread back SOONER. */
+    int32_t pd_budget_ctr;
+    /* js_parse_program's CROSS-SUSPENSION STATE. `using_be` was a C local of that function, and it is the one
+       BlockEnv in this parser that did not live on the descent's non-moving frame stack (JSParseFrame.st_be /
+       st_be2): push_break_entry links its ADDRESS into JSFunctionDef.top_break and leaves it there for the
+       whole source-element loop, which is the span that suspends. A js_parse_program that returned would have
+       left fd->top_break naming a dead C frame — a use-after-free in break/continue resolution rather than a
+       parse error, which is the failure the pd_chunks banner describes one level down. It lives here for the
+       reason the frame stack does: the PARSE owns it, never an activation. */
+    BlockEnv pgm_using_be;
+    bool pgm_has_using_be;
+    /* …AND WHICH DESCENT A RE-ENTRY OF js_parse_program CONTINUES. 20.2.1.1.1's source takes a different one
+       from a Script's, so "carry on where you were" is two continuations and a bool cannot say which. */
+    uint8_t pgm_resume;
 } JSParseState;
+enum { PGM_FRESH = 0, PGM_IN_SRCELEM, PGM_IN_FNCTOR };
 
 /* ---- JSON.parse's data types. They sit HERE, below JSParseState, because the step machine at the end of
    this block embeds a JSParseState and a JSONParse BY VALUE: a JSON.parse that parks mid-parse owns its
@@ -59927,6 +60053,30 @@ static void pd_release(JSContext *ctx, JSParseState *s)
     js_free(ctx, s->pd_chunks);
     s->pd_chunks = NULL;
     s->pd_nchunks = 0;
+}
+
+/* THROW AWAY A PARSE THAT HANDED THE THREAD BACK AND IS NEVER GOING TO BE ASKED FOR THE REST OF IT — a flow
+   dropped while its program was still compiling. It is the driver's own `unwind:` arm, which settles the atom
+   of every frame it is abandoning and then releases the chunks, lifted to where a CARRIER can reach it: the
+   driver's copy runs only on an OOM inside a live activation, and a carrier that is being torn down has no
+   activation to reach it through. The two are the same three lines over the same layout and neither is a
+   fallback for the other — they are one operation at two entries, the way pd_release already is.
+   THERE IS NO OUTER ACTIVATION TO SPARE, which is why this drains to 0 rather than to pd_base: the driver has
+   exactly one activation (the DCHECK at its entry is what keeps that true), so every frame on this stack
+   belongs to the parse being abandoned. */
+static void js_parse_descent_abandon(JSContext *ctx, JSParseState *s)
+{
+    while (s->pd_sp > 0) {
+        s->pd_sp--;
+        JS_FreeAtom(ctx, PD_FRAME(s->pd_sp)->atom);
+        JS_FreeAtom(ctx, PD_FRAME(s->pd_sp)->atom2);
+        JS_FreeAtom(ctx, PD_FRAME(s->pd_sp)->atom3);
+        JS_FreeAtom(ctx, PD_FRAME(s->pd_sp)->atom4);
+    }
+    JS_FreeAtom(ctx, s->pd_name);
+    s->pd_name = JS_ATOM_NULL;
+    pd_release(ctx, s);
+    s->pd_suspended = false;
 }
 
 /* THE DISPATCH LOOP, re-enterable. A parse SUSPENDS by returning from here with pd_suspended set and RESUMES
@@ -65856,20 +66006,88 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
 #undef PD_CHUNK_BITS
 }
 
+/* DOES THE PARSE GIVE THE THREAD BACK AT THIS PRODUCTION BOUNDARY — the same question the interpreter's
+   dispatch asks at an opcode boundary, asked from the one other span in this engine whose length the PAGE
+   chooses. lre_want_yield is the precedent and the shape is identical: a span that is not the interpreter
+   consults the scheduler's own policy rather than acquiring one of its own.
+   TWO HALVES, AND THEY ARE THE INTERPRETER'S TWO HALVES. The RAISE half is the budget hook behind a countdown,
+   which is FLOW_BUDGET_TICK's arrangement re-derived here rather than called: flow_budget_poll's own gate is
+   `g_flow_base_gen != NULL`, and a COMPILE runs before its flow exists (JS_FlowNew compiles and only then
+   async_func_init's the frame), so that gate is false for exactly this span. The ANSWER half is the yield
+   request BYTE and `preempt` — the same byte, so a HOST request already standing from the quantum's CPU-time
+   edge parks the parse too, and the same policy, so this engine still makes every park decision in one place.
+   NOTHING HERE BOUNDS ANYTHING (§NO BOUNDS). A `true` hands the parse to a caller that asked to hold it and
+   the parse resumes from the exact production it stopped at; no value of the countdown, the budget or the
+   policy makes any parse cover less ground, which is the test g_flow_work_retired's declaration states. */
+static bool js_parse_want_yield(JSParseState *s)
+{
+    int ykind;
+    if (!s->pd_can_yield)
+        return false;
+    if (g_flow_control.budget != NULL && g_flow_control.budget_period > 0) {
+        if (--s->pd_budget_ctr <= 0) {
+            s->pd_budget_ctr = (int32_t)g_flow_control.budget_period;
+            if (g_flow_control.budget())
+                FLOW_YIELD_REQUEST(JS_PREEMPT_HOST);
+        }
+    }
+    if (likely(!FLOW_YIELD_READ()))
+        return false;
+    ykind = (int)FLOW_YIELD_READ() - 1;
+    /* ANSWERED HERE, WHICH IS WHY IT IS CLEARED HERE — the interpreter's own poll does exactly this. A request
+       left standing after a policy said "no" would be re-asked at every production for the rest of the parse,
+       and a request answered `yes` is consumed by the suspension it caused. */
+    FLOW_YIELD_SET(0);
+    return g_flow_control.preempt != NULL && g_flow_control.preempt(ykind);
+}
+
+/* TURN THE CRANK UNTIL THE PARSE IS DONE OR THE SCHEDULER WANTS THE THREAD. Returning with `pd_suspended`
+   STILL SET is the whole seam, and the reason it is a CONTINUATION rather than a reconstruction is the frame
+   stack's own design: the descent's chunks are allocated once and never moved, so the frames, the
+   JSFunctionDef chain and every top_break linkage stay at the addresses they already hold across the return.
+   Nothing is serialised, nothing is relocated and nothing is re-derived.
+   THE RETURN VALUE IS MEANINGLESS ON THAT EXIT: a production legitimately returns -1, 0, 1 and a prop_type,
+   so there is no status to smuggle a fourth answer into — which is the same argument pd_suspended's own
+   declaration makes. Every caller reads pd_suspended before it reads the status. */
+static __exception int js_parse_drive_until(JSParseState *s, int r)
+{
+    while (s->pd_suspended) {
+        s->pd_suspended = false;
+        r = js_parse_drive(s, 0, 0, 0, 0, NULL, 0, 0, true);
+        /* THE POLL IS AFTER THE DRIVE AND NOT BEFORE IT, WHICH IS THE WHOLE OF WHY THIS TERMINATES. It is the
+           same rule js_parse_drive states at its own suspension point one level down — "a resume must consume
+           a dispatch before it may suspend again" — and it fails the same way if it is broken: a stint that
+           asked first would resume, find the policy still wanting the thread, and return having advanced NOT
+           ONE production, so the scheduler would hand the parse back and forth for ever making no progress.
+           That is a livelock and not a slow parse. Asking after the drive makes every stint worth at least one
+           production, which is what turns "the parse gives the thread back" into a statement with a floor
+           under it. It is not a BOUND in the other direction either (§NO BOUNDS): nothing here caps how far a
+           stint may go, and a policy that never wants the thread parses the whole program in one. */
+        if (s->pd_suspended && js_parse_want_yield(s))
+            return 0;
+    }
+    return r;
+}
+
 /* THE SEAM. js_parse_drive stops mid-parse and this continues it — the arrangement async_func_resume_run has
-   for a forced back-edge preempt, which self-resumes so a preempt is never mistaken for a yield. Nothing above
-   the parser can carry a suspended parse yet, so this resumes immediately; when the eval path can, the
-   scheduler takes this loop's place and the seam does not change. */
+   for a forced back-edge preempt, which self-resumes so a preempt is never mistaken for a yield. */
 static __exception int js_parse_descent_at(JSParseState *s, int entry, int level,
                                            int parse_flags, int op,
                                            const uint8_t *entry_ptr, int entry_line, int entry_col)
 {
-    int r = js_parse_drive(s, entry, level, parse_flags, op, entry_ptr, entry_line, entry_col, false);
-    while (s->pd_suspended) {
-        s->pd_suspended = false;
-        r = js_parse_drive(s, 0, 0, 0, 0, NULL, 0, 0, true);
-    }
-    return r;
+    return js_parse_drive_until(s, js_parse_drive(s, entry, level, parse_flags, op,
+                                                  entry_ptr, entry_line, entry_col, false));
+}
+
+/* …AND THE RE-ENTRY, which takes no entry production because there is none left to take: the frame stack and
+   pd_base/pd_ret/pd_name already name where the parse is, which is what their own declaration states. */
+static __exception int js_parse_descent_continue(JSParseState *s)
+{
+    DCHECK(s->pd_suspended,
+           "a parse was asked to continue with nothing suspended — the resume path is reached only from a "
+           "carrier holding a parse that handed the thread back, so a clear flag here means the carrier and "
+           "the parse disagree about whether a compile is in flight");
+    return js_parse_drive_until(s, 0);
 }
 
 /* The entry that carries no source position. The other caller of this driver enters at PDS_SRCELEM, which
@@ -75294,10 +75512,21 @@ static JSFunctionDef *js_parse_function_class_fields_init(JSParseState *s)
    expression this could have been spelled as — an array element, an object property value, a unary operand —
    is reached from a Script whose ExpressionStatement is an Expression, and the comma operator re-enters that
    level from inside any of them. */
-static __exception int js_parse_fn_ctor_source(JSParseState *s)
+static __exception int js_parse_fn_ctor_source(JSParseState *s, bool resuming)
 {
     JSFunctionDef *fd = s->cur_func;
     int idx;
+
+    /* THE RE-ENTRY. There is exactly ONE descent in this entry, so "continue where you were" needs no cursor
+       of its own — pgm_resume already said which of the two program arms is in flight and this is that arm. */
+    if (resuming) {
+        if (js_parse_descent_continue(s))
+            return -1;
+        if (s->pd_suspended)
+            return 0;
+        fd = s->cur_func;
+        goto descent_done;
+    }
 
     /* THE WRAPPER IS A PLAIN SCRIPT-SHAPED PROGRAM WHATEVER KIND IT CREATES. 20.2.1.1.1's async-ness lives in
        the FUNCTION — step 4's prefix and exprGrammar — and never in the text that evaluates to it, so the two
@@ -75336,6 +75565,11 @@ static __exception int js_parse_fn_ctor_source(JSParseState *s)
     if (js_parse_descent_at(s, PDS_FDECL, JS_PARSE_FUNC_EXPR, PF_IN_ACCEPTED, JS_FUNC_NORMAL,
                             s->token.ptr, s->token.line_num, s->token.col_num))
         return -1;
+    /* READ BEFORE THE STATUS, ALWAYS: the seam's exit value is 0 and 0 is also `this production succeeded`,
+       so the flag is the only thing that separates a finished descent from a parked one. */
+    if (s->pd_suspended)
+        return 0;
+ descent_done:
     if (js_parse_expect(s, ')'))
         return -1;
     if (s->token.val != TOK_EOF)
@@ -75352,20 +75586,41 @@ static __exception int js_parse_fn_ctor_source(JSParseState *s)
     return 0;
 }
 
-static __exception int js_parse_program(JSParseState *s)
+/* A PROGRAM PARSE, RE-ENTERABLE. It returns 0 with `pd_suspended` STANDING when the scheduler took the thread
+   part way through, and the caller continues it by calling again with resuming=true. Everything that has to
+   survive that return is on the PARSE STATE and not in these locals: the descent's frame stack and its
+   pd_base/pd_ret/pd_name (which already were), and this function's own `using_be`/`has_using_be`, which used
+   to be C locals whose ADDRESS was linked into fd->top_break for the whole loop.
+   `fd` IS RE-DERIVED AND NOT CARRIED, which is the one local that looks like it should be: s->cur_func is the
+   nested function def while a body is being descended into and is back to this program's own the moment the
+   descent returns, which is the only point either the loop or the tail reads it. */
+static __exception int js_parse_program(JSParseState *s, bool resuming)
 {
-    JSFunctionDef *fd = s->cur_func;
-    int idx;
-    BlockEnv using_be;
-    int has_using_be = 0;
+    JSFunctionDef *fd;
+    int idx, err;
 
+    if (resuming) {
+        DCHECK(s->pd_suspended, "a program parse was resumed with nothing suspended");
+        if (s->pgm_resume == PGM_IN_FNCTOR)
+            return js_parse_fn_ctor_source(s, true);
+        DCHECK(s->pgm_resume == PGM_IN_SRCELEM,
+               "a program parse was resumed at no descent — pgm_resume is written before each of the two "
+               "descents this function can be standing in, so PGM_FRESH here means a suspension was taken "
+               "somewhere neither of them covers");
+        goto srcelem_loop;
+    }
+
+    fd = s->cur_func;
     if (next_token(s))
         return -1;
 
     /* 20.2.1.1.1's source is not a Script and must not be parsed as one. The flag is cleared by PDS_FDECL
        when it reaches the function expression, so it is read HERE while it still stands. */
-    if (s->fn_ctor_toplevel)
-        return js_parse_fn_ctor_source(s);
+    if (s->fn_ctor_toplevel) {
+        s->pgm_resume = PGM_IN_FNCTOR;
+        return js_parse_fn_ctor_source(s, false);
+    }
+    s->pgm_resume = PGM_IN_SRCELEM;
 
     if (js_parse_directives(s))
         return -1;
@@ -75381,19 +75636,38 @@ static __exception int js_parse_program(JSParseState *s)
             return -1;
     }
 
-    while (s->token.val != TOK_EOF) {
-        if (js_parse_descent(s, PDS_SRCELEM, 0, 0, 0))
+ srcelem_loop:
+    /* ONE LOOP FOR BOTH ENTRIES. A fresh iteration starts a source element and a resumed one CONTINUES the
+       descent that was in flight; after either, control is at the same place with the same invariants, which
+       is what lets the using-check below be written once. */
+    for (;;) {
+        if (resuming) {
+            resuming = false;
+            err = js_parse_descent_continue(s);
+        } else {
+            if (s->token.val == TOK_EOF)
+                break;
+            err = js_parse_descent(s, PDS_SRCELEM, 0, 0, 0);
+        }
+        /* THE FLAG BEFORE THE STATUS — see js_parse_drive_until. */
+        if (s->pd_suspended)
+            return 0;
+        if (err)
             return -1;
+        fd = s->cur_func;
         /* Check if a 'using' was encountered at the body scope level */
-        if (!has_using_be && fd->scopes[fd->body_scope].has_using) {
-            has_using_be = 1;
-            push_break_entry(fd, &using_be, JS_ATOM_NULL, -1, -1, 1);
-            using_be.has_using = true;
-            using_be.using_scope_level = fd->body_scope;
+        if (!s->pgm_has_using_be && fd->scopes[fd->body_scope].has_using) {
+            s->pgm_has_using_be = true;
+            push_break_entry(fd, &s->pgm_using_be, JS_ATOM_NULL, -1, -1, 1);
+            s->pgm_using_be.has_using = true;
+            s->pgm_using_be.using_scope_level = fd->body_scope;
         }
     }
+    /* THE TAIL'S OWN READ, because a parse that reached EOF on a RESUMED iteration never ran the prologue
+       that set the local. It is the same re-derivation the loop body makes and at the same point. */
+    fd = s->cur_func;
 
-    if (has_using_be) {
+    if (s->pgm_has_using_be) {
         int label_catch = fd->scopes[fd->body_scope].using_label_catch;
         int label_end = fd->scopes[fd->body_scope].using_label_end;
 
@@ -75532,6 +75806,87 @@ JSValue JS_EvalFunction(JSContext *ctx, JSValue fun_obj)
 
 #ifndef QJS_DISABLE_PARSER
 
+/* A COMPILE'S STATE, OWNED RATHER THAN ON __JS_EvalInternal's C STACK. It is exactly JSJsonReviver's
+   arrangement for JSON.parse — the JSParseState BY VALUE, so a parse that parks owns its tokenizer and its
+   frame stack with no second allocation to lose — and it is here for the same reason: an activation that
+   hands the thread back cannot keep the thing it will need on the frame it is returning from.
+   IT HOLDS EXACTLY WHAT IS LIVE ACROSS THE PARSE and nothing else. `b` and `is_strict_mode` are consumed by
+   the prologue, `eval_type` survives on fd, and what the tail reads is this list.
+   THE SOURCE AND THE FILENAME ARE STILL BORROWED, which is the one contract this widens: they were borrowed
+   for the duration of a CALL and are now borrowed for the duration of a COMPILE, so a caller that offers to
+   carry a suspension is promising those bytes outlive it. The scheduler's own caller satisfies it by
+   construction — a program's text is a refcounted row of the flow's sequence and its name is its document's
+   or its own address, both of which outlive the step that started the compile. */
+struct JSEvalCompile {
+    JSParseState s;
+    JSFunctionDef *fd;
+    JSModuleDef *m;
+    JSVarRef **var_refs;
+    JSStackFrame *sf;
+    JSValueConst this_obj;
+    int flags;
+};
+
+/* The failure tail both halves share. It is one function rather than a label in each because the two halves
+   would otherwise be two spellings of one cleanup, which is the shape that drifts. */
+static JSValue js_eval_compile_fail(JSContext *ctx, JSEvalCompile *ec)
+{
+    /* XXX: should free all the unresolved dependencies */
+    if (ec->m)
+        js_free_module_def(ctx, ec->m);
+    js_free(ctx, ec);
+    return JS_EXCEPTION;
+}
+
+static JSValue js_eval_compile_finish(JSContext *ctx, JSEvalCompile *ec, int err);
+
+/* THE ANSWER AFTER ONE STINT OF PARSING. JS_UNINITIALIZED is the suspended marker and is not a value any eval
+   can produce, so it cannot be confused with a result the way a NULL or an undefined could; the carrier reads
+   its own slot rather than the marker, and the marker is what stops every intermediate frame from treating a
+   parked compile as a completed one. */
+static JSValue js_eval_compile_step(JSContext *ctx, JSEvalCompile *ec, int err, JSEvalCompile **slot)
+{
+    if (ec->s.pd_suspended) {
+        DCHECK(slot != NULL,
+               "a parse handed the thread back with no carrier to hand it to — pd_can_yield is set from the "
+               "slot and nowhere else, so this is a suspension taken by a parse that was told it could not");
+        DCHECK(*slot == NULL, "a carrier slot already held a suspended compile");
+        *slot = ec;
+        return JS_UNINITIALIZED;
+    }
+    return js_eval_compile_finish(ctx, ec, err);
+}
+
+/* Continue a compile the scheduler took the thread from. */
+static JSValue js_eval_compile_continue(JSContext *ctx, JSEvalCompile **slot)
+{
+    JSEvalCompile *ec = *slot;
+    JSEvalCompile **outer = g_eval_compile_slot;
+    int err;
+    DCHECK(ec != NULL, "a compile was continued with nothing parked");
+    *slot = NULL;
+    g_eval_compile_slot = NULL;
+    err = js_parse_program(&ec->s, true);
+    g_eval_compile_slot = outer;
+    return js_eval_compile_step(ctx, ec, err, slot);
+}
+
+/* Throw away a compile nobody is going to finish — the flow it belonged to was dropped mid-parse. */
+static void js_eval_compile_drop(JSContext *ctx, JSEvalCompile **slot)
+{
+    JSEvalCompile *ec = *slot;
+    if (!ec)
+        return;
+    *slot = NULL;
+    js_parse_descent_abandon(ctx, &ec->s);
+    free_token(&ec->s, &ec->s.token);
+    if (ec->fd)
+        js_free_function_def(ctx, ec->fd);
+    if (ec->m)
+        js_free_module_def(ctx, ec->m);
+    js_free(ctx, ec);
+}
+
 /* 'input' must be zero terminated i.e. input[input_len] = '\0'. */
 /* `export_name` and `input` may be pure ASCII or UTF-8 encoded */
 static JSValue __JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
@@ -75539,9 +75894,10 @@ static JSValue __JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
                                  const char *filename, int line, int flags, int scope_idx,
                                  JSStackFrame *caller_sf)
 {
-    JSParseState s1, *s = &s1;
+    JSEvalCompile *ec;
+    JSEvalCompile **slot = g_eval_compile_slot;
+    JSParseState *s;
     int err, eval_type;
-    JSValue fun_obj, ret_val;
     JSStackFrame *sf;
     JSVarRef **var_refs;
     JSFunctionBytecode *b;
@@ -75549,7 +75905,20 @@ static JSValue __JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
     JSModuleDef *m;
     bool is_strict_mode;
 
+    /* A NESTED COMPILE MAY NOT SUSPEND INTO THIS ONE'S CARRIER — the capability belongs to the compile the
+       carrier started, and a loader or an eval reached while it runs is a different parse with a different
+       state. Taken and cleared in one place so there is no arm that forgets. */
+    g_eval_compile_slot = NULL;
+    ec = js_mallocz(ctx, sizeof(*ec));
+    if (!ec) {
+        g_eval_compile_slot = slot;
+        return JS_EXCEPTION;
+    }
+    s = &ec->s;
     js_parse_init(ctx, s, input, input_len, filename, line);
+    /* THE CALLER'S OWN STATEMENT THAT IT CAN HOLD A PARKED PARSE, and the only thing that decides whether the
+       seam in js_parse_want_yield is armed at all. */
+    s->pd_can_yield = (slot != NULL);
     skip_shebang(&s->buf_ptr, s->buf_end);
 
     eval_type = flags & JS_EVAL_TYPE_MASK;
@@ -75584,10 +75953,10 @@ static JSValue __JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
         if (eval_type == JS_EVAL_TYPE_MODULE) {
             JSAtom module_name = JS_NewAtom(ctx, filename);
             if (module_name == JS_ATOM_NULL)
-                return JS_EXCEPTION;
+                goto fail1;
             m = js_new_module_def(ctx, module_name);
             if (!m)
-                return JS_EXCEPTION;
+                goto fail1;
             is_strict_mode = true;
         }
     }
@@ -75650,12 +76019,43 @@ static JSValue __JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
     push_scope(s); /* body scope */
     fd->body_scope = fd->scope_level;
 
-    err = js_parse_program(s);
+    /* EVERYTHING THE TAIL WILL READ, HANDED OVER BEFORE THE PARSE CAN RETURN. Below this line the parse may
+       give the thread back, and these locals are exactly what would be lost when it does. */
+    ec->fd = fd;
+    ec->m = m;
+    ec->var_refs = var_refs;
+    ec->sf = sf;
+    ec->this_obj = this_obj;
+    ec->flags = flags;
+
+    err = js_parse_program(s, false);
+    g_eval_compile_slot = slot;
+    return js_eval_compile_step(ctx, ec, err, slot);
+
+ fail:
+    free_token(s, &s->token);
+    js_free_function_def(ctx, fd);
+ fail1:
+    g_eval_compile_slot = slot;
+    ec->m = m;
+    return js_eval_compile_fail(ctx, ec);
+}
+
+/* THE TAIL, WHICH RUNS WHENEVER THE PARSE FINALLY FINISHES — on the first stint or on the tenth. Nothing here
+   reads a C local of the activation that started the compile, because there may not have been one for a long
+   time; everything is on the state the parse carried. */
+static JSValue js_eval_compile_finish(JSContext *ctx, JSEvalCompile *ec, int err)
+{
+    JSParseState *s = &ec->s;
+    JSFunctionDef *fd = ec->fd;
+    JSModuleDef *m = ec->m;
+    JSValue fun_obj, ret_val;
+
     if (err) {
-    fail:
         free_token(s, &s->token);
         js_free_function_def(ctx, fd);
-        goto fail1;
+        ec->fd = NULL;
+        return js_eval_compile_fail(ctx, ec);
     }
 
     if (m != NULL) {
@@ -75665,8 +76065,9 @@ static JSValue __JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
 
     /* create the function object and all the enclosed functions */
     fun_obj = js_create_function(ctx, fd);
+    ec->fd = NULL;   /* consumed by js_create_function on BOTH of its exits */
     if (JS_IsException(fun_obj))
-        goto fail1;
+        return js_eval_compile_fail(ctx, ec);
     /* 16.2.1.7.1 ParseModule ENDS HERE. It produces a Source Text Module Record with [[RequestedModules]] filled
        in from the parse and [[LoadedModules]] EMPTY — it loads nothing, because loading is 16.2.1.6.1.1 and it
        is a later phase that returns a promise. A js_resolve_module call stood here and asked the host for every
@@ -75675,23 +76076,23 @@ static JSValue __JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
     if (m) {
         m->func_obj = fun_obj;
         fun_obj = JS_NewModuleValue(ctx, m);
+        ec->m = NULL;   /* the module VALUE owns it now — fail below must not free it twice */
     }
-    if (flags & JS_EVAL_FLAG_COMPILE_ONLY) {
+    if (ec->flags & JS_EVAL_FLAG_COMPILE_ONLY) {
         ret_val = fun_obj;
-    } else if ((flags & JS_EVAL_FLAG_TRAMP_CLOSURE) && m == NULL
+    } else if ((ec->flags & JS_EVAL_FLAG_TRAMP_CLOSURE) && m == NULL
                && JS_VALUE_GET_TAG(fun_obj) == JS_TAG_FUNCTION_BYTECODE) {
         /* Hand the CLOSURE back so the caller can trampoline the body on its own chain (a loop inside the eval then
            parks for the scheduler like any other flow). Module eval keeps the promise-returning path. */
-        ret_val = js_closure(ctx, fun_obj, var_refs, sf);
+        ret_val = js_closure(ctx, fun_obj, ec->var_refs, ec->sf);
     } else {
-        ret_val = JS_EvalFunctionInternal(ctx, fun_obj, this_obj, var_refs, sf);
+        ret_val = JS_EvalFunctionInternal(ctx, fun_obj, ec->this_obj, ec->var_refs, ec->sf);
     }
+    DCHECK(JS_VALUE_GET_TAG(ret_val) != JS_TAG_UNINITIALIZED,
+           "a finished compile answered with the marker a SUSPENDED one uses — the two answers would then be "
+           "indistinguishable to every caller, which is the one thing the marker exists to prevent");
+    js_free(ctx, ec);
     return ret_val;
- fail1:
-    /* XXX: should free all the unresolved dependencies */
-    if (m)
-        js_free_module_def(ctx, m);
-    return JS_EXCEPTION;
 }
 
 #endif // QJS_DISABLE_PARSER

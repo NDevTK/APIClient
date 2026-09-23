@@ -621,6 +621,19 @@ typedef struct Flow {
      * it — JS_FlowIsProgram / JS_FlowIsCall, two predicates over the one `base_kind` field — never inferred
      * from this slot being occupied, which is what `!JS_FlowIsCall` and `f->frame ?` both did. */
     void *frame;
+    /* THIS FLOW'S PROGRAM STILL BEING PARSED, NULL WHEN THERE IS NONE (quickjs.h's JS_FlowNewStep). The
+     * compile of the row at `script_i` is the one span in the engine that is O(a length the PAGE chose) and
+     * used to have no suspend point in it at all; it has one now, and this is where a parse that gave the
+     * thread back is kept until the flow is next given it. It is NOT a second frame: while it stands the
+     * row's program has not STARTED, `frame` is NULL, and the cursor has not moved.
+     * IT IS RE-DERIVABLE AND THEREFORE NOT COLD-TIER STATE (§the re-derivable category). The suspended parse
+     * is a graph of raw pointers into the descent's frame chunks and a JSFunctionDef chain, which is exactly
+     * the live-graph serialization the cold tier forbids — and it does not need to be written, because a
+     * recipe replays the DOCUMENT and the document re-compiles. So a park DROPS it and loses nothing, which
+     * is why flow_release frees it rather than refusing to let a mid-compile flow be paged.
+     * A FORK NEVER CARRIES ONE: a concolic branch is taken by RUNNING bytecode, and a flow whose program is
+     * still being parsed is running none — asserted where a sibling is built. */
+    void *compile;
     /* IS THAT FRAME THE ROW'S PROGRAM, OR THE REPORT THE ROW'S PROGRAM OWES?
      *
      * HTML §8.1.4.4 "Calling scripts", run a classic script step 8's third bullet reports an abrupt completion

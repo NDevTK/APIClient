@@ -2396,6 +2396,13 @@ void flow_release(JSContext *ctx, Flow *f) {
        are no halves to disagree, and what it was really guarding — that every member carries a resume, a
        disposer and a realm — is asserted over the whole ring, at the two lines that can walk it
        (JS_PutParkedFlows and JS_FreeParkedFlows). */
+    /* AND A PROGRAM THIS FLOW WAS STILL PARSING, which is the sixth thing on the list above and the one that
+       is NOT behind `paged`. Every other work item there is unrecoverable if it is dropped unwritten; a
+       suspended COMPILE is re-derivable from the row's own bytes, so a recipe that replays the document
+       replays the parse and the memory is this flow's to give back either way. It is released through the
+       engine's own entry rather than freed, because what it holds is the descent's: every frame's atoms, the
+       chunk array, the token and the JSFunctionDef chain. A no-op on a NULL slot. */
+    JS_FlowCompileDrop(ctx, &f->compile);
     JS_FreeParkedFlows(f->parked);
     f->parked = NULL;
     /* `frame` is the JS_FlowNew handle holding this flow's whole heap-frame chain — every activation, closure

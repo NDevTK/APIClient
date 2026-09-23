@@ -5710,6 +5710,16 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        field above and below carries: an arm is its parent's timeline continued, so it has run what its parent
        had run. */
     sib->last_compiled = parent->last_compiled;
+    /* AND NOT A PARSE IN FLIGHT, which is a statement about when a fork can happen rather than a field being
+       skipped. A concolic branch is taken by RUNNING bytecode; a flow whose program is still being PARSED is
+       running none, so there is no reachable state in which a parent holds one here. Asserted rather than
+       zeroed, because the sibling's constructor zeros it and a parent holding one would mean a fork was taken
+       from inside the compiler. */
+    DCHECK(parent->compile == NULL,
+           "a flow was forked while its program was still being PARSED — a branch is taken by running "
+           "bytecode and a compiling flow is running none, so either the fork came from inside the parser or "
+           "the compile handle outlived the program it belongs to");
+    DCHECK(sib->compile == NULL, "a freshly built sibling already held a suspended compile");
     /* AND WHERE THE PROGRAM IT IS STANDING IN HAS ALREADY INTERPOSED (flow.h). The arm inherits the parent's
        `dyn` rows, so it inherits the interpositions among them; without this pair it would compute its next
        IMMEDIATE slot as if the program had made none and shift them apart. Two lines because the pair only
@@ -10915,9 +10925,19 @@ static int flow_step(JSContext *ctx, Flow *f) {
                it already started means the resume path lost the frame and the flow is re-executing a program —
                re-running side effects it already performed, against a delta that already holds them. That is
                the one thing this scheduler must never do, and nothing was checking it. */
-            DCHECK(f->script_i > f->last_compiled,
+            /* A COMPILE THAT HANDED THE THREAD BACK IS AT THIS INDEX AND HAS STARTED NOTHING, which is the
+               one way this line is reached twice for one row WITHOUT a replay: the parse is suspended at an
+               exact production, no bytecode has run, no side effect has been performed, and the next stint
+               continues it rather than re-running it. The assert keeps its whole force for every other
+               reading — `compile` is NULL the moment a program starts — and the pair is asserted together
+               below so a parked parse cannot be resumed against a row the flow has moved off. */
+            DCHECK(f->script_i > f->last_compiled || f->compile != NULL,
                    "a flow compiled a program it had already started — the suspended frame was lost and the "
                    "flow is REPLAYING it, re-running side effects against a delta that already holds them");
+            DCHECK(f->compile == NULL || f->script_i == f->last_compiled,
+                   "a flow is holding a parse that was suspended for a DIFFERENT row than the one its cursor "
+                   "now names — the parse would be resumed into a program the flow has already left, so the "
+                   "bytes it is half-way through and the bytes the row holds are two different programs");
             f->last_compiled = f->script_i;
             /* THE DEEPEST PROGRAM THIS DOCUMENT HAS EVER REACHED, recorded where a program is STARTED and by
                whichever flow starts it — a coverage fact about the document, not about the flow holding the
@@ -11027,11 +11047,39 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    compile and an execution together — which is the conflation these rows exist to end.
                    A FAILED COMPILE IS COUNTED, because it PARSED the bytes and spent the time; the row is
                    about what the span cost, never about what it produced. Nothing branches on either. */
+                /* …AND THE COMPILE CAN NOW GIVE THE THREAD BACK PART WAY THROUGH, which is what the third
+                   answer is. JS_FlowNewStep polls the SAME budget hook and the SAME preempt policy the
+                   interpreter's dispatch does, from the parse's own production dispatch, and hands the parse
+                   back through `f->compile`; the next stint continues it at the exact production. The row's
+                   program has NOT started, so nothing below this runs and the cursor does not move.
+                   WHY THE BRACKET STAYS AND WHAT IT NOW MEANS. It used to time a whole compile and the
+                   overrun row counted spans that could not have rested however the scheduler was ordered.
+                   It times one STINT now, and that is a sharper reading rather than a weaker one: a stint
+                   that meets the slice is a stint the seam DID NOT FIRE IN, so the row stops being a
+                   measurement of the page's source length and becomes a measurement of this seam. */
                 int64_t t_comp0 = quantum_thread_us();
-                f->frame = JS_FlowNew(prog_ctx, body, body_n, prog_name, src_flags);   /* classic non-strict global */
-                g_classic_compiles++;
+                JSValue *newframe = NULL;
+                int cr = JS_FlowNewStep(prog_ctx, body, body_n, prog_name, src_flags, &newframe, &f->compile);
                 if (quantum_thread_us() - t_comp0 >= (int64_t)ENGINE_QUANTUM_MS * 1000)
                     g_classic_compile_over++;
+                if (cr == 0) {
+                    /* PARKED MID-PARSE. No ENGINE_LEAVE_ROW and no cursor move: this row is still the row the
+                       flow is at, and the ladder re-enters here when the flow is next picked. */
+                    DCHECK(f->compile != NULL && newframe == NULL,
+                           "a compile answered SUSPENDED and left neither a parked parse nor a frame — the "
+                           "flow would stand at a row whose program is neither running nor being parsed");
+                    g_step_unit = STEP_UNIT_COMPILE_YIELDED;
+                    return 0;
+                }
+                DCHECK(f->compile == NULL,
+                       "a compile that finished left a parked parse behind it — the next step would resume a "
+                       "parse for a program that has already started");
+                f->frame = newframe;
+                /* A FAILED COMPILE IS STILL A COMPILE and a SUSPENDED one is not — see g_classic_compiles: the
+                   row is about what the span cost, and a stint that handed the thread back has not finished
+                   spending it. Counting a stint would make the denominator the number of times the scheduler
+                   looked at a parse rather than the number of programs parsed. */
+                g_classic_compiles++;
                 started = (f->frame != NULL);
                 /* §4.12.1.1's CLASSIC arm, steps 1-2, and the reason they are HERE and not around a call: the
                    arm's third step ("run the classic script") is the JS_FlowNew above plus every JS_FlowResume
@@ -12077,6 +12125,16 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
        whole execution graph, and the runtime's leak walk reports it as thousands of anonymous Functions with no
        hint of the owner. Asserted rather than freed defensively: if a flow can reach here with one, the finish
        path ran while it was still suspended and freeing it silently would hide that. */
+    /* …AND NO PROGRAM STILL BEING PARSED, which is the same claim one phase earlier and is not implied by the
+       one below it: a flow holding a suspended compile has NO frame, so the assert beneath this would pass
+       while the flow walked off with a half-parsed program, its descent chunks and its JSFunctionDef chain.
+       It is unreachable by design — the compile arm returns from the step the moment a parse parks, so a flow
+       standing there has a row left to run and cannot be finishing — which is exactly what makes it worth
+       asserting rather than freeing: reaching it means a completion arm ran while a parse was in flight. */
+    DCHECK(f->compile == NULL,
+           "a flow finished with a program still being PARSED — the row it is standing at never started, so "
+           "either a completion arm ran for a row the flow had not reached or the compile handle outlived the "
+           "program it belongs to");
     DCHECK(f->frame == NULL, "a flow finished with a live preemptible frame — its whole activation chain, and "
                              "everything those frames close over, is retained by a handle nothing will free");
     DCHECK(flow_deliver_pending(f) == 0,
