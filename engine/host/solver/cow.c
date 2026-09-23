@@ -1352,16 +1352,34 @@ void cow_capture_host_record_at(JSValueConst owner, void *p, const CowRecord *re
        from a single site, `browser/core/css/css_rule.c`'s `rule_of`, of which 8,893 captured — a ratio of
        1465 asks per capture. That layout names 21 owned values, so the loop below is 21 outer checks plus
        21*20/2 = 210 nested ones, ~273 per ask: 3.55 BILLION assertion evaluations in one step, ~13.5ns
-       each, which is the whole of those 48 seconds. The engine yielded 5 times in 300 CPU-seconds and
-       dispatched 0 of 17 ready jobs, because a step that does not return cannot pump the scheduler.
+       each. THAT LAST INFERENCE WAS WRONG AND THE INTERVENTION REFUTED IT — recorded here rather than
+       quietly corrected, because the arithmetic fits to within 10% and the next reader will re-derive it.
+       MEASURED AFTER this change, same page, same driver, artifact verified by content to carry it
+       (`site->checked` twice in the snapshot's own source, with a pre-existing string as a positive control
+       and an invented one at 0): 3.994 -> 3.922 us per ask. ONE POINT EIGHT PER CENT. Steps held at 78 and
+       unitsDone at 71 on both sides, so nothing about the run's shape moved either. A number that a cost
+       model predicts to within 10% and that does not move when the modelled cost is removed was never that
+       cost; the fit was a coincidence, and two readers reached it independently from the same multiplication.
+       WHAT IS ACTUALLY THERE, and it is a bigger defect than the one this comment was written about: an ask
+       costs ~3.95 us. This function's body past the guard is a call, a few asserts, a generation compare and
+       a hash probe — call it 50-100 instructions. ~3.95 us is on the order of TEN THOUSAND. So the cost is
+       in the ask path and is NOT the layout loop, and the candidates are the three things the loop was
+       hiding: `cow_state_ask`, `JS_ObjFlowGen`, and `cow_hash_find` on a delta whose entry count grows
+       ~8,900 per step. A hash probe that degrades toward a scan over a growing delta is the reading that
+       fits both the magnitude and the growth, and it is UNMEASURED — no row attributes time inside this
+       function, which is why an arithmetic fit was all anyone had.
+       HOW ITS ABSENCE WOULD SHOW: `sliceUs / cowStateAsks.hostRec` sitting in the microseconds on any page
+       whose CSSOM is read in a loop, while `cowStateMade.hostRec` stays three orders of magnitude below the
+       ask count — which is what both sides of this measurement look like today.
        THE LAYOUT IS A COMPILE-TIME CONSTANT AND THE SITE IS A MACRO EXPANSION, so `rec` is the same static
        every time a given site runs and re-deciding it per ask asks a question whose answer cannot have
        changed. NOTHING IS DELETED: every assertion still fires, and it fires at the FIRST ask at each site
        rather than the first capture, which is earlier than the old code reached a bad layout in the one
        case that matters (a site whose every ask dedups away still validates its layout).
-       HOW ITS ABSENCE WOULD SHOW, if a later diff makes this per-ask again: `sliceUs` and `stepUs` rising
-       into the tens of seconds for a single `stepUnitRuns.start-a-classic-program`, with
-       `cowHostRecAsksBySite` in the millions for one row and `cowStateMade.hostRec` in the thousands. */
+       WHY THIS CHANGE STAYS ANYWAY, having been refuted as a FIX: it deletes no assertion, moves every one
+       of them EARLIER (first ask at a site rather than first capture), and makes an invariant about a
+       compile-time constant cost O(1) instead of quadratic in the layout's length. It is correct and it is
+       not the cost; those are different claims and only the second was wrong. */
     if (rec != site->checked) {
     for (int vi = 0; vi < rec->n_val; vi++) {
         DCHECKF((size_t)rec->val_off[vi] + sizeof(JSValue) <= rec->size,
