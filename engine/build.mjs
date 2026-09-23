@@ -5042,6 +5042,26 @@ function vehicleAgreement(nat, veh) {
    not reach it. Anchored at line start because a stage that QUOTES another gate's verdict is not that gate. */
 const CENSUS_WITNESS = /^\[[a-z][a-z-]*\] FAILED — (\d+) (?:FINDING )?category\(ies\)/m;
 
+/* AND A HOLE IN THE SMOKE'S OWN TABLE, RECOGNISED THE SAME WAY AND FOR THE SAME REASON. A stage that exits
+   non-zero with no assertion is this file's DEFECT arm, and that arm is right about a program disagreeing
+   with itself and wrong about a program that answered every statement it COULD ASK and holds one this host
+   cannot put. Those are the two categories §Testing separates by name — "a gate states its FINDINGS and its
+   BLIND SPOTS as separate verdicts, because an instrument that cannot see something has not found anything"
+   — and summing them is the several-states-behind-one-answer shape surviving in the one line a reader stops
+   at. MEASURED: three builds at three revisions reported `1 DEFECT` over `park-remoteop`, whose own `why`
+   calls itself a NAMED RESIDUAL and whose 0 is forced by this host having one instance; the figures repeated
+   byte-identically, which is how a chronic red becomes furniture and why nobody had read the body.
+   THE CLASSIFICATION IS THE CHILD'S, exactly as a source census's is: only the fixture knows which of its
+   rows this host could put, and a list HERE of rows this file is willing to excuse would be the hand-kept
+   list whose entries nothing checks. It fails LOUD — a fixture that changes this sentence stops matching and
+   its stage falls back to DEFECT — so drift makes the build noisier and can never make a red stage read as a
+   smaller one, which is the direction §Testing requires of a falling number.
+   IT CARRIES THE LIST AND NOT A COUNT (§AND-WHERE-A-SENTENCE-CARRIES-BOTH-A-COUNT-AND-THE-LIST-IT-COUNTS):
+   the names are what a reader acts on and are what this file checks against the table, and a digit beside
+   them would be a second thing to keep in step with them.
+   SINGLE-LINE BY CONSTRUCTION and anchored at line start, on CENSUS_WITNESS's own two arguments. */
+const NOT_ASKED_WITNESS = /^\[[a-z][a-z-]*\] NOT ASKED — this host cannot put: ([^—\n]+?) — /m;
+
 function runOutcome(label, t, hint) {
   /* APPENDED TO EVERY VERDICT THIS FUNCTION PRODUCES, which is why it is computed once here and folded into
      `bad` rather than added at each arm — an arm added later would otherwise be the one that drops it, and
@@ -5183,6 +5203,39 @@ function runOutcome(label, t, hint) {
        it did not have to — every one of them was `BUILD FAILED` and the line said no more than that.
        THE WITNESS IS THE SCAN'S OWN SENTENCE, so the classification is the scan's rather than this file's, and
        its absence lands the stage in DEFECT — the loud direction, which is what makes a prose witness safe. */
+    /* THE HOLE BEFORE THE FINDING, because a stage that answered every statement it could ASK has made no
+       finding at all and the arm below would call it one. The two witnesses cannot both match — one sentence
+       says FAILED and the other says NOT ASKED — so the order is a statement about which question is asked
+       first and not a precedence.
+       AND THE WITNESS IS CHECKED AGAINST THE TABLE RATHER THAN BELIEVED, which is the one thing this file can
+       verify without keeping a second copy of the fixture's own classification: every row the sentence names
+       must be a row the LAST @H table still reads 0. A name that is 1 there means the child declared a
+       statement unaskable and answered it in the same run — its own DCHECKF fires on that in a dev build, and
+       this is the release-build half of the same check, for the same reason `probeWork`'s identity is
+       re-derived here. A disagreement falls THROUGH to DEFECT: the loud direction, which is what makes a
+       prose witness safe at all, and it is the direction a reader must be sent in when two of a child's own
+       outputs disagree about what it measured. */
+    const unasked = t.captured.match(NOT_ASKED_WITNESS);
+    if (unasked) {
+      const named = unasked[1].trim().split(/\s+/).filter(Boolean);
+      const stray = stand ? named.filter((k) => !stand.unanswered.includes(k)) : named;
+      if (stand && named.length && !stray.length)
+        return bad("NOT ASKED — this host cannot put: " + named.join(" ") + " — " + standingText(stand),
+          t.status || 1, STAGE_KIND.NOT_ASKED,
+          `ANSWERED EVERY STATEMENT IT COULD ASK and exited rc=${t.status} holding ${named.length} it could ` +
+          `NOT PUT — a HOLE IN THE REPORT and not a verdict on the revision. The rows listed below therefore ` +
+          `have a THIRD reading beside the two that sentence names: ${named.join(" ")} ` +
+          `${named.length === 1 ? "is" : "are"} 0 because this host cannot construct the state the row is ` +
+          `about, which is what the fixture's own \`@HUNASKED\` line says at every sample of this run and ` +
+          `what each named row's \`why\` in the @H stream above explains. Nothing here is work on the ` +
+          `revision; the work is whatever would let this host put the question, and the row says what that ` +
+          `is.\n[build]   ${unasked[0]}`);
+      console.error(`[build] ${label} printed a NOT ASKED witness naming ` +
+                    `${stray.length ? "row(s) its own last @H table does not read 0: " + stray.join(" ")
+                                    : "no rows, or printed no @H table to check it against"} — the two ` +
+                    `outputs of one child disagree about what it measured, so this stage falls through to ` +
+                    `DEFECT rather than being excused by a sentence nothing corroborates.`);
+    }
     const census = t.captured.match(CENSUS_WITNESS);
     return bad("FAILED rc=" + t.status + (stand ? " — " + standingText(stand) : "") +
                  (census ? ` — ${census[1]} finding category(ies), each with its own count and denominator in ` +

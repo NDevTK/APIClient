@@ -11053,7 +11053,32 @@ static char *tf_park_load(const char *path) {
    NULL for every row that is its own statement (the omitted trailing initialiser), because those already name
    themselves — `iframe-nav` is `/api/iframenav` carrying `ifnav` and nothing else, so its 0 is already a
    localisation. */
-typedef struct { const char *name; int ok; const char *key; unsigned char sess; const char *why; } Probe;
+/* AND WHETHER THIS HOST COULD PUT THE ROW'S QUESTION AT ALL, WHICH IS THE THIRD STATE A CONJUNCTION HAS NO
+   ROOM FOR. `ok` answers ANSWERED / NOT ANSWERED and probes_report folds every row into one `&&`, so a
+   statement this host CANNOT ASK is summed with the statements it asked and got wrong — and the run's exit
+   code then says DEFECT about a residual the engine handles correctly. That is CLAUDE.md's
+   §AN-INVARIANT-OVER-A-GATED-OPERATION arriving at the one line a reader stops on: an instrument that reads
+   the OUTCOME of an operation whose gate legitimately declines fires on every correct refusal, and "a gate
+   states its FINDINGS and its BLIND SPOTS as separate verdicts, because an instrument that cannot see
+   something has not found anything".
+   MEASURED, AND IT IS WHY THIS FIELD EXISTS: `park-remoteop` read 0 in three builds at three revisions,
+   byte-identically — 16/17, the table composed at 85 units of engine work — and every one of those builds
+   reported `1 DEFECT` over a row whose own `why` calls itself a NAMED RESIDUAL. Nothing in any of the three
+   revisions was wrong, and a chronic red is furniture, so nobody read the body for long enough that the
+   figures repeating exactly was itself the discovery.
+   IT IS THE NEGATIVE SO THE OMITTED TRAILING INITIALISER IS THE COMMON CASE, exactly as `why` is NULL for
+   every row that names itself. Every other row in the table is askable, so a POSITIVE field would have to be
+   written on all of them and the one a lane forgot would silently leave the conjunction — a row excused by a
+   default rather than by an argument, which is the defect this field is for.
+   AND IT IS AN EXPRESSION AND NEVER A CONSTANT, which is the whole of what keeps this from being a row marked
+   "expected to fail". A hand-kept bit is a second copy of a fact the engine already states and it goes stale
+   in the one direction nobody checks: the day the capability lands, the bit still excuses the row and the
+   gate never re-arms. So the field is computed from the ENGINE'S OWN LIFETIME COUNTERS at every sample — the
+   row is unaskable exactly while the thing that would make it a statement has never happened, and the day it
+   happens the row is a findings row again with no diff anywhere. A row whose `unaskable` is a literal is the
+   shape to refuse in review. */
+typedef struct { const char *name; int ok; const char *key; unsigned char sess; const char *why;
+                 int unaskable; } Probe;
 enum { SESS_EXPLORE = 0, SESS_PARK = 1, SESS_RESUME = 2 };
 
 /* THE FOLD, WITH THE NAME KEPT. `ok` is the assertion, `what` is what it is about, and the FIRST failure is the
@@ -15868,8 +15893,39 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         "arm stands above every resting arm. Read this row's banner for the two ordered subproblems, and "
         "never engine_retract_span. THIS ROW IS NOT ABOUT THE RESIDUE KINDS: it reads engine_retract_census, so what "
         "park.recipes carries, and whether a resume rebuilt it, says nothing about it in either direction. "
-        "The rungs printed beside this one are where what the park DID exercise is stated.";
+        "The rungs printed beside this one are where what the park DID exercise is stated. THIS ROW IS "
+        "DECLARED UNASKABLE while the cross-agent-operation arm of `stepUnitRuns` stands at 0, so it is "
+        "reported as a HOLE and never as a finding; the day a flow converts a queued operation to a program "
+        "row it is a finding again, with no edit at that declaration.";
     cold_park_remoteop      = g_sess == SESS_PARK && retract_started > 0;
+    /* AND WHETHER THIS RUN COULD PUT THE QUESTION AT ALL, READ OFF THE ENGINE RATHER THAN DECLARED BESIDE THE
+       ROW. `g_retract_started` is raised in exactly ONE loop — engine_retract_span's `dyn_token` strip — and a
+       row carries a token only through engine_queue_into, whose one call site passing a non-NULL token is
+       flow_perform, which flow_step reaches through its STEP_UNIT_CROSS_AGENT_OP arm and nowhere else (a fork
+       copies a token its parent already held, so it needs a parent that ran that arm). So
+       `arms[STEP_UNIT_CROSS_AGENT_OP] == 0` is NECESSARY for this row's 0: no flow was ever stepped while
+       holding a queued operation, so no row anywhere ever carried a token, so the strip had nothing to find.
+       The row is then not a finding — it is a question this host could not put, which is what the banner above
+       has said in prose since it was written and what nothing in the report could see.
+       IT IS NOT SUFFICIENT AND MUST NOT BE, WHICH IS WHAT MAKES THIS A PRECONDITION AND NOT AN EXCUSE. Above
+       0 the row is a STATEMENT again — a token reached a program row at some point, and whether one SURVIVED
+       to the park is exactly what the row measures — so the day either of the banner's two ordered
+       subproblems lands, this reads non-zero and a 0 here is a DEFECT once more with no diff at this line.
+       That is the banner's own RETIREMENT condition, armed rather than described.
+       IT IS THE ASK AND NOT THE OUTCOME, which is the distinction CLAUDE.md draws where an instrument sits
+       over a gate that may legitimately decline: `engine_operations_started()` reads the same fact the ROW
+       reads (is a token on a row NOW) and would answer 0 for both meanings at once, while this counts the
+       step that PRODUCES one. The banner one function down already rejects that spelling as a conjunct for
+       the same reason — a sampled value that is never true latches nothing.
+       A LIFETIME COUNTER, so "ever" is what it answers: solver/engine.h's EngineStepUnitRuns is a lifetime
+       histogram and engine.c refuses to reset it at a session boundary, which is the one property that makes
+       a reading taken at the park a statement about the whole run rather than about this instant. */
+    EngineStepUnitRuns remoteop_steps;
+    int cold_park_remoteop_unaskable;
+
+    engine_step_unit_runs(&remoteop_steps);
+    cold_park_remoteop_unaskable =
+        g_sess == SESS_PARK && remoteop_steps.arms[STEP_UNIT_CROSS_AGENT_OP] == 0;
     /* AND THE REPLAY REACHED ITS SINK AGAIN — the strongest thing a resumed residue can be asked to say, and a
        correction of what this row used to ask. It read BOTH ARMS of the branch out of the @H surface, and that
        is a statement about a program this session does not run: the moment fixture_want_park picks is the moment
@@ -17059,7 +17115,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "park-remoteop-asked", cold_park_remoteop_asked, "cfg.admin", SESS_PARK, remoteop_asked_why },
         { "park-remoteop-many", cold_park_remoteop_many, "cfg.admin", SESS_PARK, remoteop_many_why },
         { "park-remoteop-once", cold_park_remoteop_once, "cfg.admin", SESS_PARK, remoteop_once_why },
-        { "park-remoteop", cold_park_remoteop, "cfg.admin", SESS_PARK, remoteop_why },
+        { "park-remoteop", cold_park_remoteop, "cfg.admin", SESS_PARK, remoteop_why,
+          cold_park_remoteop_unaskable },
         /* §State-isolation OVER THE EDGE THE DELTA CANNOT SEE — ONE CLAIM AND TWO ANSWERS, for the reason
            `park-world`/`resumed-world` are two: the sessions run the SAME document and either may be the one
            that reaches the statement, so a row in only one of them would report nothing on the runs where
@@ -17120,7 +17177,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
    exactly one. A reader who believes it goes looking for a tier that is working, which is strictly worse than
    no sentence at all — the same shape as an `aborted` column standing for three unrelated diagnoses.
    A CAUSE IS NOT DERIVABLE FROM A CONJUNCTION AND A NAME IS, so the name is what leaves this function. */
-static int probes_report(const char *js, bool final, char *unanswered, size_t cap) {
+static int probes_report(const char *js, bool final, char *unanswered, size_t cap,
+                         char *unasked, size_t ucap) {
     Probe rows[PROBE_MAX];
     int n = probes_eval(js, rows, PROBE_MAX), ok = 1, i;
     size_t at = 0;
@@ -17133,7 +17191,16 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
           "the probe report was given nowhere to state which rows are 0 — its caller's verdict sentence is "
           "composed of exactly those names, so with no room for them the caller is back to restating a cause "
           "the table never established");
+    /* AND THE SAME FOR THE OTHER HALF OF THE PARTITION, ON THE SAME RULE AND NOT AS AN OPTIONAL EXTRA. An
+       out-param a caller may omit is a field the next caller defaults, and the field a caller defaults here
+       is the one that says a hole is a hole — so the buffer is required and its absence aborts, exactly as
+       the findings buffer's does. */
+    CHECK(unasked != NULL && ucap > 0,
+          "the probe report was given nowhere to state which rows this host CANNOT ASK — that list is the "
+          "whole of what separates a hole in the report from a finding about the revision, and with no room "
+          "for it every unaskable row is back to being summed into the verdict as a failure");
     unanswered[0] = 0;
+    unasked[0] = 0;
     /* THE STATEMENT BEHIND A FOLDED 0, ON ITS OWN LINE AND BEFORE THE VERDICT. Before, because this function's
        own rule is that the LAST line of a killed run is the verdict — the file already carries the measurement
        that 177 of 179 samples of a passing run were read backwards by a `tail`, and appending sentences after
@@ -17155,6 +17222,53 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
     work_at = engine_work_done();
     for (i = 0; i < n; i++)
         if (!rows[i].ok && rows[i].why) printf("@H   %s @%ld: %s\n", rows[i].name, work_at, rows[i].why);
+    /* AND THE ROWS THIS HOST COULD NOT PUT AT ALL, PARTITIONED FROM THE ROWS IT GOT WRONG — CLAUDE.md's "a
+       gate states its FINDINGS and its BLIND SPOTS as separate verdicts". The conjunction below is over the
+       rows this run could ASK; these are named here.
+       PRINTED ON EVERY SAMPLE, RED DAY AND CLEAN DAY ALIKE, which is the half a partition usually loses: a
+       line that appears only when everything else is green is a line nobody learns to look for, and the
+       fraction it qualifies is the one everybody quotes. It also makes the partition readable from a run that
+       is KILLED — the verdict sentence below never runs on one of those, and this is on the stream at the
+       cadence the rest of the census reports at.
+       BEFORE THE TABLE, NEVER AFTER IT, on this function's own rule: the LAST line of a killed run is the
+       verdict, and a sentence appended under it puts back the 177-of-179-samples-read-backwards defect the
+       paragraph above records. So the list is composed in its own pass rather than inside the table loop.
+       ITS OWN MARKER AND NOT AN `@H ` LINE. Two tools in this tree select on the `@H ` prefix and then read
+       every `name=<digits>` on the line, throwing on a value outside {0,1} — engine/rowsplit.mjs and
+       engine/smokerows.mjs — so prose under that prefix is prose those tools parse as a table. `@HWORK`
+       already establishes the separate-marker convention and this follows it.
+       THE LIST AND NOT A COUNT: the names are what a reader can act on, and a digit beside them is a second
+       thing that has to be kept in step with them. */
+    {
+        size_t uat = 0;
+
+        for (i = 0; i < n; i++) {
+            size_t nl;
+
+            if (!rows[i].unaskable) continue;
+            /* THE PRECONDITION IS TWO-SIDED OR IT IS AN EXCUSE, and this is the assert that makes it one. A
+               row declared unaskable states that the thing which would make it a statement never happened; if
+               it nevertheless reads 1 then it WAS answered, and the precondition is about a different fact
+               than the row is. That is the single failure this mechanism can have and it is silent in the
+               worst direction — every run it excuses is a run whose conjunction quietly lost a statement the
+               document really made. */
+            DCHECKF(!rows[i].ok,
+                    "the probe `%s` is declared UNASKABLE on this host and reads 1 — its precondition says "
+                    "the question could not be put and the row says it was answered, so the two are about "
+                    "different facts and this row has been taken out of the verdict while still being "
+                    "answered. Read the expression that computes the row's `unaskable` field against the one "
+                    "that computes its `ok`; one of them names the wrong counter", rows[i].name);
+            nl = strlen(rows[i].name);
+            CHECK(uat + (uat ? 1u : 0u) + nl + 1u <= ucap,
+                  "the names of the rows this host cannot ask do not fit the room its caller gave them — "
+                  "raise PROBE_UNANSWERED_MAX; a partition naming only the rows that fit would report a "
+                  "smaller hole than the run has, which is the direction a falling number may never move in");
+            if (uat) unasked[uat++] = ' ';
+            memcpy(unasked + uat, rows[i].name, nl + 1u);
+            uat += nl;
+        }
+        if (unasked[0]) printf("@HUNASKED @%ld: %s\n", work_at, unasked);
+    }
     /* HOW FAR THIS RUN HAD GOT WHEN THE TABLE BELOW WAS COMPOSED — the one fact that decides which of a 0
        row's TWO READINGS the WHOLE table has, and it was on no line of this stream.
        A row's 0 is "a statement this run answered wrongly" or "one it never reached", and those send a reader
@@ -17246,9 +17360,17 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
     }
     printf("@H ");
     for (i = 0; i < n; i++) {
-        ok = ok && rows[i].ok;
+        /* THE CONJUNCTION IS OVER WHAT THIS RUN COULD ASK, AND THE TABLE STILL PRINTS EVERY ROW. Those are two
+           different decisions and collapsing them is how a hole disappears: a row dropped from the LINE would
+           take the fraction from 16/17 to 16/16, so the report would read as complete and the hole would be
+           readable nowhere. The row keeps its 0, keeps its name in the stream and keeps its `why` above;
+           what it stops being is a term.
+           SO `=> OK` CAN NOW STAND OVER A 0 ROW, which is a real change to what that token means and is why
+           `@HUNASKED` prints directly above it on every sample that has one. The verdict says "every
+           statement this run could put was answered"; the line above says which it could not put. */
+        if (!rows[i].unaskable) ok = ok && rows[i].ok;
         printf("%s=%d ", rows[i].name, rows[i].ok);
-        if (!rows[i].ok) {
+        if (!rows[i].ok && !rows[i].unaskable) {
             size_t nl = strlen(rows[i].name);
 
             /* A VERDICT NAMING A PREFIX OF WHAT FAILED IS THE FOLDED ANSWER THIS TABLE EXISTS TO REFUSE, so a
@@ -17269,9 +17391,15 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
     /* THE TWO ANSWERS AGREE, asserted here because they are computed by two different walks of the same array
        and nothing else would notice them parting: `ok` is the conjunction and `unanswered` is the list of its
        false terms, so an empty list under a false `ok` is a verdict with nothing to name. */
+    /* THE TWO ANSWERS STILL AGREE AND BOTH SIDES NARROWED TOGETHER — `ok` is now the conjunction over the
+       ASKABLE rows and `unanswered` is the list of ITS false terms, so an unaskable 0 is absent from both and
+       the identity is the same identity. It is restated rather than dropped because the narrowing is exactly
+       the edit that could have parted them: a row excluded from one walk and not the other is a verdict with
+       nothing to name, or a name under a verdict that says nothing failed. */
     DCHECK(ok == (unanswered[0] == 0),
            "the run's verdict and the list of rows behind it disagree — either a 0 row left no name for the "
-           "sentence to carry, or a name was written for a row that is 1");
+           "sentence to carry, or a name was written for a row that is 1. Both walks skip the rows this host "
+           "cannot ask, so a disagreement is one of the two skips having been edited without the other");
     return ok;
 }
 
@@ -17311,8 +17439,14 @@ static int fixture_have_answers(void) {
        caller may omit is a field the next caller defaults, and the report's own agreement assert is what would
        stop being asked. */
     {
-        char unanswered[PROBE_UNANSWERED_MAX];
-        ok = probes_report(js, false, unanswered, sizeof unanswered);
+        char unanswered[PROBE_UNANSWERED_MAX], unasked[PROBE_UNANSWERED_MAX];
+        /* THE SECOND LIST IS PASSED AND NOT READ HERE, on the identical rule the first one is passed under:
+           this hook has no verdict to state, and an out-param a caller may omit is a field the next caller
+           defaults. What it changes for this hook is the ANSWER — `ok` is now "every statement this run could
+           ASK is 1", which is the completion moment this hook was always trying to express: a statement the
+           host cannot put is not one the run is waiting for. No row of the EXPLORE session is unaskable
+           today, so this hook's behaviour is unchanged until one is. */
+        ok = probes_report(js, false, unanswered, sizeof unanswered, unasked, sizeof unasked);
     }
     /* …AND THE @S SEARCHES THEMSELVES, BECAUSE THIS IS THE ONLY PLACE THEY CAN BE OBSERVED AT ALL. The probe
        row says whether a sink FIRED and nothing about how far the search that is trying to got — that is what
@@ -28779,13 +28913,33 @@ int main(int argc, char **argv) {
               "there is nothing to report and nothing to assert");
     printf("@RESULT %s\n", js);
     /* THE VERDICT, so a 0 row is FAIL: the run is over and the row will not be reached. */
-    char unanswered[PROBE_UNANSWERED_MAX];
-    int h_ok = probes_report(js, true, unanswered, sizeof unanswered);
+    char unanswered[PROBE_UNANSWERED_MAX], unasked[PROBE_UNANSWERED_MAX];
+    int h_ok = probes_report(js, true, unanswered, sizeof unanswered, unasked, sizeof unasked);
 
     /* THE PASS SENTENCE NAMES WHAT THIS INVOCATION MEASURED. A cold session runs none of the @H/@S rows, so
        reporting their verdict over it would be a claim about a program it did not run — the same defect the
        probe key exists to prevent, one table above. */
-    if (h_ok)
+    /* AND A HOLE IS NOT A PASS AND NOT A FAIL, WHICH IS THE THIRD ARM THIS VERDICT DID NOT HAVE. A run that
+       answered every statement it could ASK and holds one it could not PUT has said something true about the
+       revision and something true about ITSELF, and those are different sentences: the PASS line below claims
+       "every statement this document makes has been answered", which is false of such a run, and the FAIL
+       line names rows as unanswered findings, which is false of the same run in the other direction. The
+       verdict in between says which rows and why, and it is a WITNESS: engine/build.mjs classifies this stage
+       by the shape of this sentence, exactly as it classifies a source census by the shape of that gate's own
+       verdict line, so the classification belongs to the program that knows the fact.
+       IT STILL EXITS NON-ZERO. §Testing: "NOTHING HERE IS FORGIVEN AND NO CATEGORY EXITS 0" — a hole in the
+       report must never read like a stage that asked and liked the answer, and the whole reason this arm
+       exists is that the build should say `0 DEFECT, 1 NOT ASKED` rather than `1 DEFECT`, never that it
+       should say nothing.
+       ONE SIGNAL AND NOT TWO: the exit code stays 1 and the SENTENCE carries the classification. A distinct
+       code would be a second answer to one question, kept in step with this line by nothing, and build.mjs
+       reads the child's status only as the stage's own code. */
+    if (h_ok && unasked[0])
+        printf("[test-forced] NOT ASKED — this host cannot put: %s — every statement this run COULD put was "
+               "answered, so nothing here is a verdict on the revision; each named row carries its own `why` "
+               "in the @H stream above, and `@HUNASKED` names them at every sample including the ones where "
+               "other rows were still 0\n", unasked);
+    else if (h_ok)
         printf("%s\n", cold_doc
             ? (cold_park_path
                 ? "PASS: the frontier was written to this host's cold-tier store as recipes — @S candidate "
@@ -28978,5 +29132,8 @@ int main(int argc, char **argv) {
        here the frontier's deltas are released, the realm's record has been released (and cleared this tree's
        back pointer on its way out), and the runtime is gone. */
     dom_document_destroy(dom);
-    return h_ok ? 0 : 1;
+    /* A HOLE IS NON-ZERO LIKE EVERY OTHER NON-PASS — see the verdict sentence above for why, and note that
+       `h_ok` alone is no longer the whole answer: it is now the conjunction over the rows this run could ask,
+       so a run with an unaskable row reaches here with `h_ok` TRUE and has not passed. */
+    return (h_ok && !unasked[0]) ? 0 : 1;
 }
