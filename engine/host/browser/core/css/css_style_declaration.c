@@ -1245,12 +1245,183 @@ static bool cssd_sheet_view(JSContext *ctx, JSValueConst sheet, CssLayerOrder *o
     return ok;
 }
 
+/* ---- THE SHEET, PARSED ONCE PER CONTENT -----------------------------------------------------------------
+ *
+ * THE DEFECT IS NOT A SLOW PARSER, IT IS ONE TEXT PARSED ONCE PER ASK. The walk below rebuilds a sheet's
+ * serialization out of its rule objects and then hands that text to lexbor to get back the selector lists
+ * and declaration blocks those rules were parsed FROM — a round trip CSSOM §6.4's objects force, because a
+ * rule holds the SERIALIZATION lexbor produced for it and nothing else. The round trip runs per
+ * (element, property): css-cascade-5 §7.2 "Inheritance" climbs to the root and css-logical-1 §4
+ * "Flow-Relative Box Model Properties" makes two further climbs a PREREQUISITE of every box-model
+ * resolution, so one box-model read on a deep document re-parses every author sheet once per ancestor per
+ * property. core/css/css_cascade_pass.h removes the repeated (element, property) ASK and is silent about
+ * this, because its record is keyed on the question and this cost is paid on every MISS.
+ *
+ * IT IS KEYED ON THE BYTES, WHICH IS WHAT MAKES IT IMPOSSIBLE FOR ONE FLOW TO BE SERVED ANOTHER FLOW'S
+ * PARSE RATHER THAN MERELY UNLIKELY. The standing objection to holding a lexbor arena at all is stated at
+ * `cssd_parse_block` — one arena per parse, `so nothing outlives the read that asked for it, which is what
+ * keeps this free of state the flow machinery would have to swap` — and core/css/css_style_declaration.h
+ * states the same rule for rule OBJECTS, which are handed out as text because they `park to the IDB cold
+ * tier and fork per flow, and a rule named by a pointer into a freed arena can do neither`. Both are about
+ * (Those two runs are BACKTICKED and not quoted: they are THIS TREE'S OWN PROSE being shown, and the
+ * citation auditor anchors a quotation on the nearest preceding citation — which here is a CSS standard —
+ * so quoting them would report two verbatim sentences of this file as a fabricated spec quotation.)
+ * state named by an OBJECT, whose content differs per flow while its identity does not. This table is named
+ * by CONTENT: an entry is served only when the emission the caller just built is byte-identical to the
+ * emission the entry was parsed from, and `lxb_css_stylesheet_parse` is a function of that text and of
+ * nothing else — the parser's own arena is swapped in and out around each parse and its selector record is
+ * asserted unchanged after it. So a hit and a miss produce the same stylesheet, and there is no difference
+ * for a flow to observe. Two flows whose sheets differ emit different text, miss, and each parse their own;
+ * two flows alternating on one slot thrash it, which is correct and is exactly today's cost.
+ *
+ * ONE ENTRY PER SHEET POSITION IS WHAT KEEPS IT FROM BEING THE ACCUMULATION `cssd_parse_block` REFUSES. A
+ * parser-lifetime arena would hold every sheet this engine ever parsed; a slot holds ONE parse and destroys
+ * it the instant that slot's content changes, so the table's whole size is one parsed copy of the sheet set
+ * the document actually has — which is what a browser holds anyway (Blink's StyleSheetContents is the same
+ * fact, built once per content and shared). It is NOT flow state under CLAUDE.md's
+ * §PLATFORM-DATA-A-FLOW-QUEUES-IS-A-JS-VALUE: nothing here is captured into the COW delta, no rule and no
+ * sheet names it, every entry is DERIVED from an emission any flow can rebuild, and dropping the whole table
+ * at any instant changes no answer. It is the re-derivable tier of §Time-travel-resume rather than a cap or
+ * a floor.
+ *
+ * WHAT IT DOES NOT REMOVE, STATED BECAUSE A READER WILL EXPECT IT TO: the EMISSION. `css_rule_cascade_sheet`
+ * still walks every rule object of every sheet on every ask, because the emission is what produces the key
+ * — there is no cheaper fingerprint of a flow's rule objects than the text they serialize to. What goes is
+ * the arena create, the full CSS parse of that text, and the arena destroy.
+ *
+ * THE ROUND-TRIP ASSERTIONS ARE UNWEAKENED AND STILL RUN PER ASK, which is worth saying because a cached
+ * parse sounds like it would move them: they live in the rule-matching loop below, which walks the cached
+ * stylesheet against the FRESHLY EMITTED `view.n` and `view.layer` on every ask, so a parse that had somehow
+ * come from different bytes than the emission beside it fires them at the first ask rather than at the first
+ * parse.
+ *
+ * A SHEET WHOSE TEXT DOES NOT PARSE LEAVES ITS SLOT EMPTY and is re-parsed on every ask, exactly as it is
+ * today. Caching the failure would be a second thing to invalidate for no answer served.
+ *
+ * RETIREMENT: this table goes when a CSSOM §6.4 rule owns a parsed form that survives its own serialization
+ * — there is then no text to re-parse and no key to hold. */
+typedef struct {
+    char                 *text;  /* OWNED — the emission this parse is OF, and the whole of the key */
+    size_t                len;
+    lxb_css_memory_t     *mem;   /* OWNED — the arena the stylesheet, its rules and its selectors live in */
+    lxb_css_stylesheet_t *sst;   /* BORROWED from `mem`, which is the one owner */
+} CssdSheetParse;
+
+/* Indexed by the sheet's position in CSSOM §6.2's list — a POSITION and not an identity, so two documents in
+   one agent share slots and a mismatch there costs a re-parse and never a wrong answer. */
+static CssdSheetParse *g_sheet_parse;
+static uint32_t        g_sheet_parse_n;
+
+static void cssd_sheet_parse_drop(CssdSheetParse *e)
+{
+    if (e->mem != NULL) {
+        /* THE ARENA BEING FREED MUST NOT BE THE ONE THE PARSER IS CURRENTLY PARSING INTO. Every parse below
+           sets the parser's arena and takes it back on the same two lines, so this can only fire if a parse
+           acquired a slot's arena and left it installed — which is the dangling-parser-state defect
+           `cssd_selectors_intact` already exists for, arriving through the memory pointer instead. */
+        DCHECK(g_parser == NULL || lxb_css_parser_memory(g_parser) != e->mem,
+               "a cached sheet parse was dropped while the CSS parser was still pointing at its arena — the "
+               "next parse would allocate out of freed memory. Every parse in this file sets the parser's "
+               "arena and takes it back before it returns, so find the one that returned without doing so");
+        lxb_css_memory_destroy(e->mem, true);
+    }
+    free(e->text);
+    e->text = NULL;
+    e->len = 0;
+    e->mem = NULL;
+    e->sst = NULL;
+}
+
+static void cssd_sheet_parse_free(void)
+{
+    uint32_t i;
+
+    for (i = 0; i < g_sheet_parse_n; i++) cssd_sheet_parse_drop(&g_sheet_parse[i]);
+    free(g_sheet_parse);
+    g_sheet_parse = NULL;
+    g_sheet_parse_n = 0;
+}
+
+/* THE PARSE OF `text`, WHICH IS EITHER THE ONE SLOT `si` ALREADY HOLDS OF THESE EXACT BYTES OR A FRESH ONE
+   THAT REPLACES IT. NULL when the text did not parse, which is the same answer and the same cost the
+   uncached path gave. The returned stylesheet is BORROWED and is valid until this slot is next replaced —
+   which, because the author walk is asserted non-re-entrant at its call, cannot happen while a caller holds
+   one. */
+static lxb_css_stylesheet_t *cssd_sheet_parsed(uint32_t si, const char *text, size_t len)
+{
+    CssdSheetParse *e;
+    lxb_css_memory_t *mem;
+    lxb_css_stylesheet_t *sst;
+    char *copy;
+
+    DCHECK(text != NULL && len > 0,
+           "a sheet was handed to the parse table with no emission to be a parse OF — the walk tests for an "
+           "empty emission before it gets here, because a sheet that declares only `@layer` names emits no "
+           "text and has nothing to match against");
+    if (si >= g_sheet_parse_n) {
+        uint32_t want = si + 1;
+        CssdSheetParse *grown = realloc(g_sheet_parse, (size_t)want * sizeof *grown);
+
+        CHECK(grown != NULL, "cssom: the per-sheet parse table allocation failed");
+        memset(grown + g_sheet_parse_n, 0, (size_t)(want - g_sheet_parse_n) * sizeof *grown);
+        g_sheet_parse = grown;
+        g_sheet_parse_n = want;
+    }
+    e = &g_sheet_parse[si];
+    if (e->text != NULL && e->len == len && memcmp(e->text, text, len) == 0) {
+        /* THE KEY IS THIS TABLE'S OWN COPY AND NEVER THE CALLER'S POINTER, which is the one invariant a
+           later reader can quietly break to save a `memcpy`: the caller frees its emission at the end of
+           every sheet iteration, so a key borrowed from it would be read out of freed memory on the very
+           next ask and would then compare equal to whatever happened to be reallocated there. */
+        DCHECK(e->text != text,
+               "the per-sheet parse table is keyed on a pointer its caller owns rather than on a copy of "
+               "its own — the emission is freed at the end of each sheet iteration, so every later "
+               "comparison would read freed memory. Copy the bytes at the store");
+        DCHECK(e->sst != NULL,
+               "the per-sheet parse table holds an emission with no stylesheet parsed from it — the store "
+               "below is the only writer and it stores the two together, so a half-filled slot is a failure "
+               "arm that took the key with it");
+        return e->sst;
+    }
+    cssd_sheet_parse_drop(e);
+    mem = lxb_css_memory_create();
+    if (mem == NULL) return NULL;
+    if (lxb_css_memory_init(mem, 128) != LXB_STATUS_OK) {
+        lxb_css_memory_destroy(mem, true);
+        return NULL;
+    }
+    sst = lxb_css_stylesheet_create(mem);
+    /* The ARENA IS THE PARSER'S FOR THE DURATION OF THE PARSE AND THIS TABLE'S AFTERWARDS — set it, parse,
+       take it back, exactly as `cssd_parse_block` does. What differs is only who owns it when the parse
+       returns. */
+    lxb_css_parser_memory_set(g_parser, mem);
+    if (sst && lxb_css_stylesheet_parse(sst, g_parser, (const lxb_char_t *)text, len) != LXB_STATUS_OK)
+        sst = NULL;
+    lxb_css_parser_memory_set(g_parser, NULL);
+    cssd_selectors_intact();
+    if (sst == NULL) {
+        lxb_css_memory_destroy(mem, true);
+        return NULL;
+    }
+    copy = malloc(len + 1);
+    CHECK(copy != NULL, "cssom: the per-sheet parse key allocation failed");
+    memcpy(copy, text, len);
+    copy[len] = '\0';
+    e->text = copy;
+    e->len = len;
+    e->mem = mem;
+    e->sst = sst;
+    return sst;
+}
+
 /* @LOGICAL — THE ONE PARSER IS NOT RE-ENTRANT AND A NESTED RESOLUTION IS NOW REACHABLE. The AUTHOR-ORIGIN sheet walk below drives
-   `g_parser` — it sets the parser's arena, parses a sheet's text into that arena, and destroys the arena — and
-   css-logical-1 §4 "Flow-Relative Box Model Properties"'s pairing made the cascade ask for a computed
-   `writing-mode` in the middle of resolving some other property, which is a second resolution and therefore a
-   second walk. The bracket that asserts they do not nest is at the CALL, in `cssom_cascaded_value`, because
-   that is where the ordering which keeps them apart is written and this body has two exits. */
+   `g_parser` — it sets the parser's arena around each parse it has to make — and it owns the per-sheet parse
+   table above, whose slots it REPLACES when a sheet's emission has changed, destroying the arena the
+   previous parse lived in. css-logical-1 §4 "Flow-Relative Box Model Properties"'s pairing made the cascade
+   ask for a computed `writing-mode` in the middle of resolving some other property, which is a second
+   resolution and therefore a second walk. The bracket that asserts they do not nest is at the CALL, in
+   `cssom_cascaded_value`, because that is where the ordering which keeps them apart is written and this body
+   has two exits. */
 static bool g_collecting_sheets = false;
 
 /* EVERY AUTHOR-ORIGIN DECLARATION OF `name` ON `el`, added to `cascade` — not the one that wins. css-cascade-5
@@ -1286,8 +1457,7 @@ static void cssd_author_collect(lxb_dom_element_t *el, const char *name, const c
     for (si = 0; si < ns; si++) {
         JSValue sheet = JS_GetPropertyUint32(ctx, sheets, si);
         CssRuleCascadeSheet view = { NULL, NULL, 0 };
-        lxb_css_memory_t *smem;
-        lxb_css_stylesheet_t *sst = NULL;
+        lxb_css_stylesheet_t *sst;
 
         DCHECK(css_style_sheet_is(sheet),
                "CSSOM §6.2's list holds something that is not a CSS style sheet — its add is the one thing "
@@ -1324,16 +1494,11 @@ static void cssd_author_collect(lxb_dom_element_t *el, const char *name, const c
            order for the sheets after it — so the emptiness is tested on the emission and the walk that just
            happened has already done the part that matters. */
         if (!view.text) { css_rule_cascade_sheet_free(&view); continue; }
-        smem = lxb_css_memory_create();
-        if (smem && lxb_css_memory_init(smem, 128) == LXB_STATUS_OK) {
-            sst = lxb_css_stylesheet_create(smem);
-            lxb_css_parser_memory_set(g_parser, smem);
-            if (sst && lxb_css_stylesheet_parse(sst, g_parser, (const lxb_char_t *)view.text,
-                                                strlen(view.text)) != LXB_STATUS_OK)
-                sst = NULL;
-            lxb_css_parser_memory_set(g_parser, NULL);
-            cssd_selectors_intact();
-        }
+        /* THE SELECTOR LISTS AND DECLARATION BLOCKS THIS EMISSION PARSES BACK TO, WHICH IS A PARSE ONLY
+           WHEN THIS SHEET'S EMISSION HAS CHANGED SINCE THE LAST ASK. See the parse table above for why a
+           served parse cannot be another flow's: the key is the emission's own BYTES, so a hit is a parse of
+           exactly what a miss would have parsed. */
+        sst = cssd_sheet_parsed(si, view.text, strlen(view.text));
         if (sst && sst->root && sst->root->type == LXB_CSS_RULE_LIST) {
             lxb_css_rule_t *r;
             uint32_t back = 0;
@@ -1401,13 +1566,14 @@ static void cssd_author_collect(lxb_dom_element_t *el, const char *name, const c
                    "for it, so re-parsing it must yield exactly what it came from — find which rule's text "
                    "does not, and fix the serializer that wrote it rather than tolerating the drift");
         }
-        /* THE ARENA IS THE ONE OWNER, and it is freed outright. `lxb_css_stylesheet_create` REF-INCREMENTS the
-           memory it is handed (to 2, since `lxb_css_memory_init` starts it at 1) and `lxb_css_stylesheet_destroy`
-           only ref-DECREMENTS (back to 1), so that destroy frees nothing at all — one leaked arena per sheet per
-           read, which the ancestor walks then multiply by the depth of the chain. The stylesheet, its rules and
-           its selectors are all allocated FROM this arena, so destroying the arena is what releases them;
-           nothing here outlives it (every value this function keeps is copied out). */
-        if (smem) lxb_css_memory_destroy(smem, true);
+        /* THE ARENA IS THE ONE OWNER AND IT IS THE PARSE TABLE'S, NOT THIS LOOP'S. The reason it is freed
+           OUTRIGHT rather than through lexbor's own destroy is unchanged and is why that call appears
+           nowhere here: `lxb_css_stylesheet_create` REF-INCREMENTS the memory it is handed (to 2, since
+           `lxb_css_memory_init` starts it at 1) and `lxb_css_stylesheet_destroy` only ref-DECREMENTS (back
+           to 1), so that destroy frees nothing at all. The stylesheet, its rules and its selectors are all
+           allocated FROM the arena, so destroying the arena is what releases them — which the table does
+           when it replaces a slot and at `cssom_free`. Nothing this loop keeps points into it: every value
+           it takes out of a matched rule is copied. */
         /* css-cascade-5 §6.1's Order of Appearance across SHEETS: "declarations from style sheets independently linked by the
            originating document are treated as if they were concatenated in linking order", so the next sheet's
            first rule follows this sheet's last one rather than restarting. */
@@ -3029,9 +3195,10 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
        into — a use-after-free whose symptom is nowhere near the edit, which is why the resource asserts it
        rather than a comment describing the ordering. */
     DCHECK(!g_collecting_sheets,
-           "the AUTHOR-ORIGIN sheet walk was re-entered. It owns `g_parser` and the lexbor arena it parses "
-           "each sheet into, and the inner walk destroys that arena when it finishes — so the outer walk "
-           "would go on reading a stylesheet, its rules and its selectors out of freed memory. The only "
+           "the AUTHOR-ORIGIN sheet walk was re-entered. It owns `g_parser` and the per-sheet parse table "
+           "the arenas live in, and an inner walk whose sheet emits DIFFERENT text for a slot the outer "
+           "walk is reading REPLACES that slot and destroys its arena — so the outer walk would go on "
+           "reading a stylesheet, its rules and its selectors out of freed memory. The only "
            "nested resolution on this path is css-logical-1 §4's PREREQUISITE — the computed `writing-mode` "
            "and `direction` the pairing above is derived from — and it is ordered ahead of this call for "
            "exactly this reason; a second nested read added below it is what this crash names");
@@ -5743,6 +5910,10 @@ void cssom_free(JSRuntime *rt)
     JS_FreeValueRT(rt, g_decl_key);   /* the prototypes are the REALMS' — released with their contexts */
     JS_FreeValueRT(rt, g_inline_key);
     g_decl_key = g_inline_key = JS_UNDEFINED;
+    /* THE PARSE TABLE GOES BEFORE THE PARSER, because dropping a slot asserts that the parser is not
+       pointing at the arena it is about to free — a check that reads `g_parser` and would read it out of
+       freed memory if the parser had gone first. */
+    cssd_sheet_parse_free();
     /* The selector state is released BY NAME: `lxb_css_parser_destroy` frees the parser's stack, rules, string
        buffer, log and tokenizer and does NOT touch `selectors`, so the record installed in cssom_init is this
        component's to free — and freeing it after the parser would read a pointer out of freed memory. */

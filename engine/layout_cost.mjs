@@ -158,7 +158,8 @@ const PROBES = ['bf_layout', 'bf_box', 'block_flow_child_top', 'block_flow_auto_
                 'used_value_border_edge_px', 'used_value_px', 'uv_sized', 'layout_question_repeat',
                 'cssom_cascaded_value', 'css_computed_value', 'css_cv_specified',
                 'css_logical_partner_of', 'cssd_ua_value', 'css_presentational_hint',
-                'lxb_css_stylesheet_parse', 'cascade_emit', 'style_sheet_list_add',
+                'lxb_css_stylesheet_parse', 'cascade_emit', 'cssd_sheet_parsed',
+                'style_sheet_list_add',
                 'uv_px_ask', 'uv_pass_size', 'uv_block_auto_width',
                 'used_value_containing_block_width', 'uv_cb', 'uv_icb',
                 'uv_surround', 'uv_margin', 'uv_edge_px',
@@ -184,6 +185,14 @@ const deep = (n) => '<!DOCTYPE html><html><head><title>t</title></head><body>' +
    (element, property) resolution rather than once per render. `lxb_css_stylesheet_parse` is the re-parse of
    that text and is gated on the flatten having produced any, so the two are NOT one number and a zero in the
    second with a nonzero first is a real state: rules built, sheet in the list, nothing emitted.
+   AND READ `lxb_css_stylesheet_parse` AGAINST `cssd_sheet_parsed`, WHICH IS THE PAIR AND NOT TWO ROWS. The
+   second is every ASK the author walk makes of core/css/css_style_declaration.c's per-sheet parse table —
+   hits and misses together — and the first is what a miss costs, so their DIFFERENCE is what the table
+   served and a run where they are EQUAL is a table serving nothing. The emission row is the control for
+   both: `cascade_emit` is unchanged by that table BY CONSTRUCTION, because the emission is what produces the
+   key, so a diff that moves it moved something else. `lxb_css_stylesheet_parse` is not exclusive to that
+   path — `cssom_parse_rules` calls it too, for CSS Syntax's "parse a stylesheet's contents" — so on the `styled`
+   shape its floor is the sheets the document builds rather than zero.
    A PROBE IS ON THIS LIST ONLY IF IT READS THE SAME NUMBER TWICE, which is a rule about the READER below and
    not about the symbol. `css_rule_list_new` was on it and is not: over one fixture on one binary it answered
    15997 under one probe set and 0 under another, and a call count cannot legitimately differ between two

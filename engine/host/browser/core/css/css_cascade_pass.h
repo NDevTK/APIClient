@@ -84,6 +84,33 @@
  * inside a pass because the pass is inside ONE render, and a second render is a second pass over an
  * empty table; the MediaList a page can rewrite is a different question and is one of the writes above.
  *
+ * NAMED RESIDUAL — THIS RECORD HAS ONE OPENER AND IT IS A PAINT, SO THE SHIPPED PRODUCT NEVER OPENS IT.
+ * WHAT IS NOT COVERED, AS A PROPERTY AND NOT A LIST: `css_cascade_pass_open` is called from exactly one
+ * place, core/paint/document_paint.c's CSS 2.1 §E.2 "Painting order" walk, and `engine/host/qjs_abi.h`'s own
+ * residual records that no party outside this process CALLS the paint ABI — the extension's step loop asks
+ * no paint entry on its yield arm, and the fixtures and the Node render drivers are the only callers there
+ * are. So on the one path the product actually runs, EVERY ask this record answers is a miss and the whole
+ * of the multiplier described above is paid: the record is exercised at the cadence of a fixture and never
+ * at the cadence of the product, which CLAUDE.md's §Testing rates the same as a translation unit that is in
+ * the program and in nobody's build.
+ * WHAT THE NEXT DIFF BUILDS: nothing here. The span is correct and the three assertions that hold it are
+ * correct; what is absent is a CALLER, and it is the same absent caller qjs_abi.h's residual names — so this
+ * record's reach is bought by the trusted zone's yield arm asking for a paint, and by nothing in this
+ * component. A SECOND opener added for the non-paint population would be a second span with a second
+ * lifetime over one table, which the RE-ENTRY paragraph above forbids for its own reasons.
+ * HOW ITS ABSENCE WOULD SHOW, AS AN OBSERVATION AND NOT AS AN INSTANCE: `node engine/layout_cost.mjs
+ * <native binary>` on the `styled` shape reports `cascade_emit` EQUAL to `cssom_cascaded_value`, which that
+ * file's own banner states is the sheet being flattened once per (element, property) resolution rather than
+ * once per render — and it reports that under a driver that DOES paint, so a reader who sees it there is
+ * seeing the residue this record cannot remove rather than its absence. The absence itself is observed one
+ * level out, in a run of the shipped extension: no paint entry is asked, so no pass is opened, so every ask
+ * is a miss.
+ * THE ACT THAT RETIRES IT AND WHO MAY PERFORM IT, because a passive condition reads as merely pending: a
+ * trusted-zone diff landing the yield arm's paint read, TOGETHER with a build and an install, which a lane
+ * in this project may not perform. RETIREMENT: this record goes with qjs_abi.h's — when the extension's own
+ * step loop asks a paint entry, this record's span exists on the shipped path and there is nothing left to
+ * say.
+ *
  * NAMED RESIDUAL — THE RECORD HOLDS ONE OF THE FOUR SHAPES A COMPUTED VALUE COMES IN, AND THE CLIMB ITSELF
  * IS UNTOUCHED. WHAT IS NOT COVERED: this is the CASCADED value, so css-cascade-5 §7's defaulting still runs
  * per ask and §7.2's inheritance still walks to the root once per descendant — each of those frames is now a
