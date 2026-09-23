@@ -379,6 +379,23 @@ struct JSFetchState {
        §5.4 step 6's `url` read — and a parked stage is re-entered at its first line, so the capture below is
        gated on a flag rather than on what a slot happens to hold. */
     uint8_t   captured;
+    /* WHETHER THIS STATE REACHED §5.6 STEP 12 AND OFFERED THE @H SURFACE AN ADDRESS, and WHERE IT WAS STANDING
+       — the two facts the teardown census below needs and cannot ask anyone for. `release` is handed the body
+       state alone, so `hdr->stage` is not in its hand at all and the stage has to be MIRRORED here; the mirror
+       is written by the wrapper around this machine's body, AFTER the body has run, because the stages fall
+       through (a single entry at FETCH_URL can leave standing at FETCH_CALL) and a mirror taken on the way IN
+       would name the stage a state was ENTERED at rather than the one it died at.
+       BOTH ARE PLAIN BYTES AND NEITHER IS DECLARED TO `visit`, which is correct and is the one thing to check
+       when adding a field here: a deep fork BYTE-COPIES this struct, so a scalar is carried to both arms with
+       no ownership to split — and carrying them is what makes a forked arm's own teardown file itself under
+       the stage IT was standing at rather than under its parent's. */
+    uint8_t   offered;
+    /* THE MIRROR IS THE SAME WIDTH AS THE THING IT MIRRORS. JSStepHdr::stage is a `uint16_t`, and a narrower
+       copy of it would not be a smaller number, it would be a DIFFERENT stage: stage 258 truncates to 2, which
+       this machine's table names, so the teardown would file a state under an arm it never stood at and the
+       partition would still sum. There is nothing to save here and a wrong row is the one failure this census
+       cannot report. */
+    uint16_t  stage_at;
     HeadersFill fill;   /* the fill's cursor: it parks per key, so it cannot be a loop here */
     HeaderList  hdrs;   /* what the request carries, which is half of what makes the endpoint usable */
 };
@@ -401,6 +418,13 @@ static void js_fetch_visit(JSContext *ctx, void *st, JSStepVisit *v)
 static void js_fetch_release(JSContext *ctx, void *st)
 {
     JSFetchState *s = st;
+    /* AND THE OUTCOME HALF OF THE EDGE CENSUS, HERE BECAUSE HERE IS WHERE EVERY STATE ENDS — originals and
+       deep-fork copies alike, whether the member completed or was abandoned parked, since idl_args.c's
+       teardown discharges this release on both edges. `captured` is the gate and not a guard past a broken
+       invariant: a state torn down before its first stage ran never entered §5.4 at all, so it belongs to the
+       ARGUMENT CONVERSION's population and not to this one, which solver/endpoint.h names as this census's
+       own residual rather than folding in as a seventh arm. */
+    if (s->captured) endpoint_fetch_edge_freed(s->stage_at, s->offered);
     body_state_free(JS_GetRuntime(ctx), &s->body);
     header_list_free(&s->hdrs);
     request_record_free(JS_GetRuntime(ctx), &s->rec);
@@ -1191,8 +1215,8 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
 enum { FETCH_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_fetch_steps[] = { FETCH_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
-                         JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                           JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     JSFetchState *s = st;
     JSValueConst input = argc > 0 ? argv[0] : JS_UNDEFINED;
@@ -1214,6 +1238,12 @@ static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
            blob URL entry that its `url` string cannot express. */
         if (!s->captured) {
             s->captured = 1;
+            /* THE CONSTRUCTION BEGAN — the ASK this edge owes the @H surface, raised at the one place that
+               runs exactly once per page-level `fetch()` call that reached this body. solver/endpoint.h states
+               why it may not be paired with the teardown rows by a containment: a deep-fork copy inherits the
+               flag above and does NOT come through here, so one call whose `input` ToString forks composes two
+               requests against one of these. */
+            endpoint_fetch_edge_began();
             s->input = JS_DupValue(ctx, input);
             s->url = s->body_mime = JS_UNDEFINED;
             request_record_init(&s->rec);
@@ -1537,6 +1567,17 @@ static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
             eb.kind = body_kind == BODY_SHAPE ? EPB_SHAPE : (nespan > 0 ? EPB_EXAMPLE : EPB_SENT);
             ebp = &eb;
         }
+        /* AND THE SECOND HALF OF THE ASK, ON THE LINE BEFORE THE DOOR. It counts OFFERS and never records —
+           the surface's own gate may still suppress this one, and telling those two apart is what the census
+           this pair feeds exists for. Asserted rather than assumed to happen once: a second offer from one
+           state would double this edge's share of the surface's asks, and it would do it silently, because
+           the door below would record the same address twice and merge it. */
+        DCHECK(!s->offered,
+               "a fetch state reached §5.6 step 12 twice — this stage does not park, so a second arrival is a "
+               "re-entry the machine's own stage assert did not refuse, and the edge census would count one "
+               "construction as two offers while the surface merged the second address into the first");
+        s->offered = 1;
+        endpoint_fetch_edge_offered();
         endpoint_record(ctx, s->rec.method, s->url, eh, s->hdrs.n, ebp, prov);
         if (ext_mime) JS_FreeCString(ctx, ext_mime);
         free(body_ct);
@@ -1566,6 +1607,31 @@ static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
     *presult = fetch_park(ctx, s->url, &s->rec, s->input, &s->hdrs, body_bytes, body_bytes_len);
     if (JS_IsException(*presult)) { *presult = JS_UNDEFINED; return -1; }
     return 0;
+}
+
+/* THE STAGE THIS STATE IS STANDING AT, MIRRORED ONTO THE STATE SO THE TEARDOWN CAN READ IT. `release` is
+ * handed the body state and nothing else — idl_args.c calls it with `idl_body_state(m, st)` — so `hdr->stage`
+ * is not in its hand, and the edge census's whole content is WHICH STAGE a construction died at.
+ *
+ * IT IS A WRAPPER AND NOT A LINE AT THE TOP OF THE BODY, AND THE DIFFERENCE IS THE WHOLE POINT. This machine's
+ * stages FALL THROUGH: one entry at FETCH_URL can run §5.4's construction end to end and leave standing at
+ * FETCH_CALL, so a mirror taken on the way IN records the stage a state was ENTERED at, which for every state
+ * that dies after its first entry is the wrong answer — and wrong in the direction that piles the whole
+ * population onto the first row. Taken on the way OUT it is right on both edges a state can leave by: the body
+ * sets `hdr->stage` to the stage it will resume at before returning a park, and a body that THREW leaves it at
+ * the stage the throw came from.
+ *
+ * IT IS ALSO WHY THERE IS NO MIRROR AT THE FIVE `hdr->stage =` ASSIGNMENTS INSIDE. Writing it at each of them
+ * is the same fact in five places, with an obligation at every stage a later diff adds and nothing to catch
+ * the one that is missed — which is the second-list shape idl_args.h's own `visit` contract exists to end, one
+ * field over. There is one write, it cannot be forgotten, and it costs one call per step. */
+static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                         JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    int r = js_fetch_step_1(ctx, hdr, st, argc, argv, cb_result, presult, out_cb, out_argc);
+
+    ((JSFetchState *)st)->stage_at = hdr->stage;
+    return r;
 }
 
 /* WHY THIS MACHINE'S STATE MUST NOT BE FORKED ONCE IT HOLDS §5.4's RECORD — see IdlStepDecl.unforkable.
@@ -1659,6 +1725,14 @@ void fetch_init(JSContext *ctx)
        atom id, so §5.4 step 6's read of a Request input's `url` would have answered `<null>` with nothing
        anywhere to say so. See core/agent_state.h. */
     DCHECK(g_fetch_stepid < 0, "fetch_init ran twice — §5's machines are declared once per AGENT");
+    /* THIS MACHINE'S STAGE TABLE, HANDED TO THE @H SURFACE'S EDGE CENSUS. It is `js_fetch_steps[]` itself and
+       never a copy — a table of literals with static storage, so the surface may key rows on it for the life
+       of the session and a stage added to FETCH_STAGES adds a row there with no edit at all.
+       `IDL_STEP_FIRST` IS PASSED RATHER THAN ASSUMED BY THE READER, because a member's stages are numbered
+       from it and which constant that is belongs to idl_args.h: the census keys `steps[stage - first]`, so the
+       base is the machine's to state and a copy of the number on the other side would be wrong the day the
+       prologue grows a stage. */
+    endpoint_fetch_edge_declare(js_fetch_steps, IDL_STEP_FIRST);
     g_fetch_rt = rt;
     /* The reply's delivery, declared once for the runtime — every parked fetch mints a CLOSURE over this
        one definition rather than a definition per request. */

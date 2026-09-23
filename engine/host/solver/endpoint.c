@@ -231,11 +231,50 @@ static long g_ask_merged_pre_program;
    is compiled out of release with the assert that reads it. */
 static int g_boundary_spent;
 
+/* THE HOST EDGE'S OWN ENTRY — endpoint.h states the contract in full. These five live HERE and not in
+   core/fetch/fetch.c for two reasons, and the second is the one that could not be got any other way.
+   THEIR SCOPE HAS TO BE THIS FILE'S. They are read against the ask rows above, and the whole of what
+   `g_boundary_spent` exists to catch is a counter graded against a boundary whose scope is not its own. Reset
+   beside `g_asks` in endpoint_init and endpoint_free, the disagreement is not asserted away, it is
+   unreachable.
+   AND ONE OF THE THREE IDENTITIES SPANS THE TWO. `offered <= asks` is the relation that makes the fetch
+   edge's share of this surface's ask population readable, and it is checkable only where both terms are in
+   one hand — which is here and nowhere else. The alternative was the edge holding its own counters and this
+   file reading them back, which is the same number in two places with a call between them.
+   THE LABELS ARE THE MACHINE'S AND ARE HANDED OVER RATHER THAN COPIED. `g_fetch_steps` is core/fetch's own
+   `js_fetch_steps[]` — a static table of string literals, so it outlives every document and this file may key
+   on it — and `g_fetch_stage_n` is derived from its NULL terminator. A stage added to that X-list adds a row
+   here with no edit at all; a second list spelled here would be the drifting copy §AN-AUDITOR-DERIVES-THE-RULE
+   forbids, and it would drift silently, because a missing row reads as a stage nothing died at.
+   EVERY ONE IS A LIFETIME COUNT AND NONE IS A GAUGE — they may be differenced and accumulated, they cannot
+   decrease, and a sample below its predecessor is this file and not the run. A REPORT AND NEVER A BOUND. */
+static const char *const *g_fetch_steps;   /* the edge's own stage labels, borrowed from its X-list */
+static long *g_fetch_died;                 /* one per stage, sized at the declare from the table above */
+static int   g_fetch_stage_n;              /* how many, from that table's NULL terminator */
+static int   g_fetch_stage_first;          /* the stage number `g_fetch_steps[0]` is — IDL_STEP_FIRST today */
+static long  g_fetch_began;                /* ASK: constructions that began (the machine's one-time capture) */
+static long  g_fetch_offered;              /* ASK: …of those, the ones that reached the door below */
+static long  g_fetch_freed;                /* OUTCOME: states torn down after a construction began */
+static long  g_fetch_freed_offered;        /* OUTCOME: …of those, the ones that had reached the door */
+
 void endpoint_init(void) {
     g_eps = NULL; g_eps_n = 0; g_eps_cap = 0; g_suppress = 0;
     g_asks = g_asks_pre_program = g_ask_suppressed = g_ask_merged = g_ask_minted = 0;
     g_ask_merged_pre_program = 0;
     g_boundary_spent = 0;
+    /* THE EDGE'S ROWS BESIDE THE ASK ROWS THEY ARE READ AGAINST, which is the whole argument for their living
+       in this file.
+       THE PARTITION ARRAY IS NOT ZEROED HERE, IT IS ASSERTED ABSENT — which is a different statement and the
+       stronger one. endpoint_free gives the array back and lets the table go, so a session opening with one
+       in hand has not had its predecessor torn down, and every stage row it is about to raise would be filed
+       under a table whose lifetime this file no longer owns. Zeroing it instead would make that state produce
+       a plausible census, which is the one outcome worse than a crash. */
+    DCHECK(g_fetch_died == NULL && g_fetch_steps == NULL,
+           "a session opened with the previous session's fetch edge table still in hand — endpoint_free is "
+           "what gives the per-stage array back and lets the machine's label table go, so this is a host that "
+           "opened a second session without tearing the first down, and every row this census is about to "
+           "raise would be filed against an allocation the last session owned");
+    g_fetch_began = g_fetch_offered = g_fetch_freed = g_fetch_freed_offered = 0;
 }
 void endpoint_suppress(int on) { g_suppress = on ? 1 : 0; }
 
@@ -1975,6 +2014,190 @@ void endpoint_ask_census(long *asks, long *pre_program, long *suppressed, long *
     *merged_pre_program = g_ask_merged_pre_program;
 }
 
+/* THE EDGE HANDS OVER ITS OWN STAGE TABLE, ONCE PER SESSION, AT ITS DECLARATION. It is `js_fetch_steps[]`
+   itself and not a copy: a table of string literals with static storage, so it outlives every document this
+   session opens and the array sized from it is the only thing that has to be given back.
+   `first_stage` IS THE EDGE'S TO STATE AND IS NEVER ASSUMED. IDL_STEP_FIRST is idl_args.h's, a member's own
+   stages are numbered from it, and this file has no business knowing that — so the stage a row is keyed by is
+   `steps[stage - first]` with the base the machine itself supplied. A hard-coded 2 here would be a second
+   copy of a constant one header owns, and it would be wrong the day a member's prologue grows a stage. */
+void endpoint_fetch_edge_declare(const char *const *steps, int first_stage) {
+    int n = 0;
+
+    DCHECK(steps != NULL && steps[0] != NULL,
+           "the fetch edge declared no stage table at all — the census keyed on it would have a row for every "
+           "state it counts and no name to put on one, and a histogram whose buckets cannot be named is a bare "
+           "count wearing a partition's shape");
+    while (steps[n]) n++;
+    /* RE-DECLARED WITH THE SAME TABLE IS THE ORDINARY CASE AND COSTS NOTHING — one session per instance, and
+       a host that opens two runs this twice. A DIFFERENT table is a second machine reaching this census, which
+       it may not: the rows are keyed by ONE machine's stages and two machines' stages summed into one
+       histogram would be the averaged population §a-coverage-figure-states-what-it-is-a-fraction-of names. */
+    if (g_fetch_steps) {
+        DCHECK(g_fetch_steps == steps && g_fetch_stage_first == first_stage && g_fetch_stage_n == n,
+               "a SECOND machine declared itself to the fetch edge census, or the same machine declared a "
+               "different table — these rows are keyed by ONE machine's stages, so a second one's arms summed "
+               "into them would publish a histogram of two populations under one edge's name");
+        return;
+    }
+    g_fetch_died = (long *)calloc((size_t)n, sizeof *g_fetch_died);
+    /* ALLOCATION, SO A `CHECK` — §Offensive-programming names OOM as the universal invariant that is fatal in
+       release too, and the alternative here is a census whose partition arm is a NULL every teardown writes
+       through. */
+    CHECK(g_fetch_died != NULL, "the fetch edge census could not allocate its per-stage partition");
+    g_fetch_steps = steps;
+    g_fetch_stage_n = n;
+    g_fetch_stage_first = first_stage;
+}
+
+/* THE CONSTRUCTION BEGAN — raised at the machine's ONE-TIME CAPTURE, which is the first line of its first
+   stage. A deep-fork copy inherits that flag and does NOT come through here, which is the whole reason
+   endpoint.h forbids pairing this row with either of the teardown rows by a containment. */
+void endpoint_fetch_edge_began(void) { g_fetch_began++; }
+
+/* …AND IT REACHED THE DOOR. Raised on the line before the edge's own endpoint_record call, so this counts
+   OFFERS and never records: the gate below may still suppress one, and that is the ask/outcome split this
+   whole census is an instance of. */
+void endpoint_fetch_edge_offered(void) { g_fetch_offered++; }
+
+/* …AND THE STATE IS GONE. `stage` is where it was standing, `offered` whether it had reached the door. The two
+   arms are the partition, and they are two arms of ONE teardown so that a third way out cannot be added
+   without landing in neither — which is what the identity at the accessor fires on. */
+void endpoint_fetch_edge_freed(int stage, int offered) {
+    int i = stage - g_fetch_stage_first;
+
+    DCHECK(g_fetch_steps != NULL,
+           "a fetch state was torn down before its machine declared its stages — the census cannot name the "
+           "arm this teardown belongs to, and a partition with an unnameable arm is a total with a hole in it");
+    /* A `CHECK` FOR THE REASON absent.c's vocabulary bound is one: the line below INDEXES the array with this
+       value in EVERY build, and a guard compiled out of the build where the write still happens is not a
+       guard. There is no arm here that could be right either — a state standing at a stage its own machine
+       does not name is a fact about the driver, not a row to file. */
+    CHECKF(i >= 0 && i < g_fetch_stage_n,
+           "a fetch state was torn down standing at stage %d, which its machine's own table does not name "
+           "(it declares %d stages based at %d) — the stage a machine holds is asserted against its "
+           "declaration by the step driver, so a value outside it here is this census reading a stage the "
+           "driver never wrote or a machine numbering its stages from something other than what it declared",
+           stage, g_fetch_stage_n, g_fetch_stage_first);
+    g_fetch_freed++;
+    if (offered) g_fetch_freed_offered++;
+    else g_fetch_died[i]++;
+}
+
+/* THE CENSUS, AS ROWS OF `_cold` RATHER THAN A CENSUS OF ITS OWN — endpoint.h states what every row is, which
+   identities close over them, and, first, that the stage arms are a PARTITION and not a ladder: a zero in one
+   stage says nothing whatever about its neighbours. */
+/* ONE NUMBER, AS JSON'S OWN SPELLING OF IT. core/json_buf.h writes a VALUE a caller already formatted, and
+   solver/solve.c formats its own the same way — a fixed buffer is not the hand-counted composition
+   solver/compose.h exists to end, because the width of a `%ld` is a property of the TYPE and not of a format
+   string somebody will add a field to. The return is checked rather than assumed: a truncation here would
+   publish a number missing its leading digits, which is a wrong measurement and not a malformed document. */
+static void edge_num(JsonBuf *b, long v) {
+    char t[32];
+    int n = snprintf(t, sizeof t, "%ld", v);
+
+    DCHECK(n > 0 && (size_t)n < sizeof t,
+           "a census number did not fit its own conversion buffer — the width of a long's decimal form is a "
+           "property of the type, so this is a host whose long is wider than this buffer was written for and "
+           "the number about to be published has lost its leading digits");
+    json_buf_raw(b, t);
+}
+
+char *endpoint_fetch_edge_rows(void) {
+    JsonBuf b = { 0 };
+    long sum = 0;
+    int i;
+
+    if (!g_fetch_steps) {
+        /* NO ROWS AT ALL, WHICH IS A DIFFERENT DOCUMENT FROM FIVE ZEROES AND IS THE HONEST ONE. A host that
+           installs no fetch runs no fetch machine, so there is no population — and §Testing's rule is that an
+           absent count and a zero count are different facts that must never be averaged. Five zeroes here
+           would be exactly that average, published on the census whose whole subject is what a zero means.
+           The EMPTY STRING and not `{}`: these are ROWS of the census above, spliced between its own, so the
+           absent form has to be the absence of the rows and of the comma in front of them. */
+        json_buf_raw(&b, "");
+        return json_buf_take(&b);
+    }
+    for (i = 0; i < g_fetch_stage_n; i++) sum += g_fetch_died[i];
+    /* THE PARTITION, ASSERTED WHERE EVERY TERM IS IN ONE HAND. The two sides are raised in the two arms of one
+       teardown, so they part company exactly when a third way out of that function is added without
+       classifying the state it lets go — which is how a state that dies in a new way goes missing from a
+       histogram that still sums to something plausible. */
+    DCHECKF(sum + g_fetch_freed_offered == g_fetch_freed,
+            "the fetch edge's torn-down states do not sum over what happened to them (%ld by the stage rows "
+            "plus %ld that had offered an address, %ld freed) — the rows are the two arms of ONE teardown, so "
+            "a total that moves without an arm moving is a third arm added above them, and what a reader "
+            "loses is the stage a construction died at, which is the whole content of this census",
+            sum, g_fetch_freed_offered, g_fetch_freed);
+    /* AND THE FIRST CONTAINMENT. The two sides are raised at DIFFERENT events — one at the teardown, one on
+       the line before the door — so the slack is a POPULATION and not a tolerance: it is the constructions
+       that offered an address and are STILL LIVE, parked on the reply they asked for, which on a page mid-run
+       is most of them. An EQUALITY here would be that misreading frozen into an assert and would fire on the
+       first document that parks. */
+    DCHECKF(g_fetch_freed_offered <= g_fetch_offered,
+            "the fetch edge counted more torn-down states that had offered an address (%ld) than offers it "
+            "made at all (%ld) — the offer is raised once, on the line before the door, and the teardown row "
+            "once per state, so a larger teardown row is a state marked as having offered by something other "
+            "than the offer itself, and the difference a reader takes for the constructions still parked on "
+            "their replies would be negative",
+            g_fetch_freed_offered, g_fetch_offered);
+    /* AND THE SECOND, WHICH IS THE ONE THAT TIES THIS CENSUS TO THE ROWS IT SITS BESIDE AND IS ASSERTABLE ONLY
+       HERE. Every offer is followed by an endpoint_record call that raises `g_asks` before any gate, so the
+       fetch edge's offers are contained in this surface's asks and the slack is every OTHER door: core/xhr's,
+       the markup inventory's, the reply decoder's. That difference is the fetch edge's SHARE of the ask
+       population, which is what a reader of `epAsks` actually wants and what no figure stated before. The two
+       are raised in two files at two events, so they part company when an offer is raised without the record
+       call under it, which is the one way this row could come to overstate the edge. */
+    DCHECKF(g_fetch_offered <= g_asks,
+            "the fetch edge offered this surface more addresses (%ld) than the surface counted asks at its "
+            "door (%ld) — the offer is raised on the line before endpoint_record and that door raises the ask "
+            "total before its own gate, so a larger offer count is an offer raised with no record call under "
+            "it, and a reader taking the rest of the asks as the OTHER doors' share would read a negative "
+            "count as a large one",
+            g_fetch_offered, g_asks);
+    /* THE NAMES ARE LITERALS AT THE json_buf_key CALL AND CANNOT BE ANYTHING ELSE — the macro concatenates
+       them with the quotes and the colon, so a `const char *` in that position is a syntax error and every
+       field name this seam emits is readable off this source.
+       THEY ARE TERSE AND camelCase BECAUSE THEY ARE ROWS OF `_cold`, whose own rows are, and not prose like
+       solver/absent.c's: a reader compares WITHIN a census, and these exist to be compared with `epAsks` and
+       `epPreProgram` three rows down. WHAT THEY CARRY THAT THOSE DO NOT is each row's KIND, spelled into the
+       name — `Ask` or `Out` for which side of §AN-INVARIANT-OVER-A-GATED-OPERATION it counts, `Life` for a
+       lifetime count rather than a gauge. §Testing records this tree being misled by that second distinction
+       twice, and a comment stating it is read by nobody holding the number. */
+    json_buf_raw(&b, ",");
+    json_buf_key(&b, "epFetchAskBeganLife");        edge_num(&b, g_fetch_began);
+    json_buf_raw(&b, ",");
+    json_buf_key(&b, "epFetchAskOfferedLife");      edge_num(&b, g_fetch_offered);
+    json_buf_raw(&b, ",");
+    json_buf_key(&b, "epFetchOutFreedLife");        edge_num(&b, g_fetch_freed);
+    json_buf_raw(&b, ",");
+    json_buf_key(&b, "epFetchOutFreedOfferedLife"); edge_num(&b, g_fetch_freed_offered);
+    json_buf_raw(&b, ",");
+    json_buf_key(&b, "epFetchOutDiedAtLife");
+    json_buf_raw(&b, "{");
+    for (i = 0; i < g_fetch_stage_n; i++) {
+        /* EVERY STAGE IS EMITTED INCLUDING THE ZEROES, which is absent.c's rule for its histograms and is
+           load-bearing twice over. It is what makes a stage reading 0 the positive statement that no
+           construction died there, where a row listing only its non-zero arms is a table whose shape a reader
+           has to know before they can tell an arm that never fired from an arm that does not exist — and
+           extension/bridge.js REFUSES an empty histogram on this census by name, so a table that listed only
+           its non-zero arms would abort the trusted zone for every document whose constructions all survived.
+           THE KEY IS COMPUTED AND IS NOT A FIELD NAME — the same construct and the same argument as the header
+           row further down this file: json_buf_key takes a literal and the compiler enforces it, which is what
+           makes every FIELD name in this seam auditable; a STAGE LABEL is another component's declaration and
+           no producer here could declare it, so it goes through the VALUE entry. That entry also ESCAPES,
+           which this key needs and absent.c's row keys do not: two of these labels quote the standard's own
+           `"no-cors"` and `init["body"]`, so a raw write would end the JSON string early and the document
+           embedding this census would not parse. */
+        if (i) json_buf_raw(&b, ",");
+        json_buf_str(&b, g_fetch_steps[i]);
+        json_buf_raw(&b, ":");
+        edge_num(&b, g_fetch_died[i]);
+    }
+    json_buf_raw(&b, "}");
+    return json_buf_take(&b);
+}
+
 /* Serialize the @H surface DIRECTLY to a JSON string in C (caller frees) — no JS-object round-trip. The
    writer is core/json_buf.h's: this file and solve.c each carried a private copy of it, which is one copy too
    many of a thing that has exactly one correct behaviour. */
@@ -2259,4 +2482,14 @@ void endpoint_free(void) {
        This line puts this file's program-state boundary back to the start of time and the engine's stays
        where it is; the latch is the difference, and the door asserts on it at the first ask. */
     g_boundary_spent = engine_any_program_started();
+    /* …AND THE HOST EDGE'S ROWS, ON THE SAME LINE AND FOR THE SAME SENTENCE. They are read against the ask
+       rows above, so a scope they did not share with them would be the defect the latch one line up exists to
+       catch, arriving through a counter instead of through a boundary.
+       THE ARRAY IS GIVEN BACK AND THE TABLE IS LET GO, in that order and both of them, because the next
+       session's edge declares itself again at its own init: keeping the array would be a session's allocation
+       outliving the session, and keeping the pointer while freeing the array would leave the next declare
+       taking the early return above and every teardown indexing a freed block. */
+    g_fetch_began = g_fetch_offered = g_fetch_freed = g_fetch_freed_offered = 0;
+    free(g_fetch_died); g_fetch_died = NULL;
+    g_fetch_steps = NULL; g_fetch_stage_n = 0; g_fetch_stage_first = 0;
 }

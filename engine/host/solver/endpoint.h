@@ -419,18 +419,27 @@ void    endpoint_surface_census(long *minted, long *assets, long *emitted, long 
    THE COST OF THE WRONG READING IS THE ARM NAMED `NEVER REACHED` BELOW, which inherits it: `asks ==
    preProgram` says no post-program request was fully COMPOSED, and a reader who takes it for `no arm arrived
    at a network call site` looks for the defect upstream of every host edge when it may be inside one.
-   NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: the host edge's OWN entry, so a run reading
-   `asks == preProgram` cannot say whether the page called a request-composing API at all. WHAT THE NEXT DIFF
-   BUILDS: a count raised at each script-API edge's one-time capture — core/fetch/fetch.c's `!s->captured` arm
-   and core/xhr/xml_http_request.c's `send()` — published beside these rows. IT MUST NOT BE PAIRED WITH THESE
-   BY A CONTAINMENT, and that is the trap rather than a detail: a step state is BYTE-COPIED at a deep fork and
-   the copy inherits the capture flag, so one `fetch()` whose `input` ToString forks composes TWO requests
-   against ONE capture and `composed <= called` is FALSE — an assert on it would fire on a legitimate state,
-   which is the concession shape §Offensive-programming refuses. The sound pairing is per STATE rather than
-   per call: raise at the capture AND at the state's teardown-without-composing, partitioned by the stage the
-   state died at, which the machine's own `js_fetch_steps[]` already names. HOW ITS ABSENCE WOULD SHOW: a
-   document whose `asks` equals its `preProgram`, reported as a page whose code never reached a network call
-   site, on a run where the code called one and the call died in a construction stage.
+   ITS RESIDUAL IS RETIRED IN HALF AND THE ARGUMENT IS KEPT, WHICH IS WHAT A REPLACEMENT OWES. It named the
+   host edge's OWN entry as not covered, and named the next diff as a count raised at each script-API edge's
+   one-time capture — core/fetch/fetch.c's `!s->captured` arm and core/xhr/xml_http_request.c's `send()`. The
+   FETCH half is built and is the `epFetch*` block at the foot of this header; the XHR half is not, and what
+   is written below is the residual for that half alone.
+   THE TRAP THE RETIRED CLAUSE NAMED WAS EXACT AND IS WHY THE BUILT ROWS HAVE THE SHAPE THEY DO, so it is
+   restated rather than dropped: a step state is BYTE-COPIED at a deep fork and the copy inherits the capture
+   flag, so one `fetch()` whose `input` ToString forks composes TWO requests against ONE capture and
+   `composed <= called` is FALSE — an assert on it would fire on a legitimate state, which is the concession
+   shape §Offensive-programming refuses. The sound pairing it named, per STATE rather than per call, is what
+   landed: a raise at the capture, a raise at the teardown, and the teardowns that offered nothing partitioned
+   by the stage each stood at.
+   NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: `XMLHttpRequest`. Its own machine records at
+   `XR_FETCH`, the FIRST stage it has, so the gap between a page's `send()` and this door is structurally
+   smaller there than at `fetch` — which is a reason to expect a smaller number and never a reason to publish
+   none, since the two edges are different populations and one row over both would hide which was which.
+   WHAT THE NEXT DIFF BUILDS: the same three calls in core/xhr/xml_http_request.c, keyed on that machine's own
+   step labels and published as `epXhr*` rows beside the `epFetch*` ones — NOT summed with them, and NOT
+   through the same per-stage array, which holds ONE machine's stages and whose declaration asserts exactly
+   that. HOW ITS ABSENCE WOULD SHOW: a document whose `epFetchAskBeganLife` is zero and whose `epAsks` is not,
+   read as a page that reached no network call site when what it reached was the other door.
    WHAT IT SEPARATES, WHICH IS THE PRODUCT'S OWN QUESTION AND WAS UNMEASURABLE. `emitted - preProgram` is
    documented above as a CEILING on what forced execution contributed, and a ZERO there has at least two
    readings that take opposite work:
@@ -468,5 +477,86 @@ void    endpoint_surface_census(long *minted, long *assets, long *emitted, long 
    merged only into post-program records), and its NONZERO is one statement. */
 void    endpoint_ask_census(long *asks, long *pre_program, long *suppressed, long *merged, long *minted,
                             long *merged_pre_program);
+
+/* THE HOST EDGE'S OWN ENTRY, WHICH IS THE POPULATION THE CENSUS ABOVE CANNOT SEE. Its residual names this
+   diff by name: the five rows above are counted at endpoint_record's door, so a `fetch()` the page called and
+   the engine threw out of — or parked inside and never resumed — is a network call site REACHED and is in
+   none of them. These rows are the door's UPSTREAM: they count the STATES of core/fetch/fetch.c's §5.4/§5.6
+   machine, at its one-time capture and at its teardown, so a run reading `asks == preProgram` can say whether
+   the page called a request-composing API at all and, when it did, WHERE the construction died.
+   IT IS A PARTITION AND NOT A LADDER, AND THAT IS THE FIRST THING TO READ. The stage rows below are the arms
+   of ONE outcome — the stage a torn-down state was standing at — and no arm implies another: a zero in one
+   stage says NOTHING about its neighbours, so `the lowest 0 is the localisation` is not a reading this
+   histogram supports and never will be. What the rows DO support is a partition (they sum to the states that
+   were freed) and two containments, and those three are the whole of what a reader may do arithmetic with.
+   THE ROWS, AND EACH SAYS ITS KIND IN ITS OWN NAME rather than in a comment no consumer reads — `Ask` or
+   `Out` for which side of §AN-INVARIANT-OVER-A-GATED-OPERATION it counts, `Life` for a LIFETIME COUNT and
+   never a gauge. They are terse and camelCase because they are rows of `_cold`, whose own rows are:
+     `epFetchAskBeganLife` — the constructions that BEGAN. Raised at the machine's one-time capture, which is
+       Fetch §5.4's first stage, so it is one per page-level `fetch()` call that reached the member body at
+       all. A call whose ARGUMENT CONVERSION threw is upstream of it and is in no row here; that population is
+       core/idl_args.c's and is named in this block's residual.
+     `epFetchAskOfferedLife` — the constructions that reached §5.6 step 12 and offered an address. Raised
+       on the line before the edge's own call to endpoint_record.
+     `epFetchOutFreedLife` — the states TORN DOWN after §5.4 began, DEEP-FORK COPIES INCLUDED.
+     `epFetchOutFreedOfferedLife` — of those, the ones that had offered an address.
+     `epFetchOutDiedAtLife` — ONE ARM PER STAGE: of the freed states that offered NONE, the stage each was
+       standing at, keyed by the machine's OWN label for it. The labels are `js_fetch_steps[]`, handed over
+       at the declaration rather than copied here, so a stage added to that X-list adds a row and a stage
+       renamed renames one: there is no second list to drift (§AN-AUDITOR-DERIVES-THE-RULE).
+   THE THREE IDENTITIES, EVERY ONE ASSERTED AT THE ACCESSOR WHERE ALL ITS TERMS ARE IN ONE HAND:
+     PARTITION — the stage rows plus the freed-and-offered row equal the freed row. The two sides are raised
+       in two arms of one teardown, so this fires on a third arm added without classifying it, which is
+       precisely how a state that dies in a new way would go missing.
+     CONTAINMENT — freed-and-offered <= offered. The two are raised at DIFFERENT events, one at the teardown
+       and one at the edge's record call, so the slack is a real population and not a tolerance: it is the
+       states that offered an address and are STILL LIVE at the read, parked on the reply they asked for,
+       which on a page mid-run is most of them.
+     CONTAINMENT — offered <= the ask total above. Different events again, in different files, and the slack
+       is every OTHER door into this surface: core/xhr's, the markup inventory's, the reply decoder's. It is
+       what makes the fetch edge's SHARE of the @H ask population readable, and it is the only relation that
+       ties this census to the razor it was built to explain.
+   WHAT MAY NOT BE ASSERTED, AND THE REASON IS THE TRAP THE RESIDUAL ABOVE NAMED. `freed <= began` is FALSE
+   and `offered <= began` is FALSE, both for one mechanism: a step state is BYTE-COPIED at a deep fork and the
+   copy inherits the capture flag, so ONE `fetch()` whose `input` ToString forks composes TWO requests against
+   ONE capture. The fork is not exotic — core/fetch/fetch.c's own `unforkable` banner names the two stages
+   that permit it and both run the page's code — and it is exactly the population this tool exists for, since
+   a forked address is an address built out of unknown external input. `began - freed` is likewise not a live
+   count: it is that difference MINUS the copies, and a census taken while states are parked is taken with
+   most of them live. So the begun row and the freed row are read as two facts and never subtracted.
+   SCOPE IS THE FETCH EDGE AND THE ROWS SAY SO IN THEIR NAMES. core/xhr/xml_http_request.c records at
+   `XR_FETCH`, the FIRST stage of its own machine, so the gap these rows measure is structurally small there
+   and a row that averaged the two would hide which edge it was about (§a-coverage-figure-states-what-it-is-a-
+   fraction-of). Their SCOPE IN TIME is the SURFACE's: they are reset in endpoint_init and endpoint_free
+   beside every other counter in this file, which is what makes them comparable with the ask rows above at all
+   — the scope defect `g_boundary_spent` exists to catch is the one this placement makes unreachable.
+   A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing branches on one, no construction is refused because of
+   one, and no arm is narrowed by one.
+   NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: a `fetch()` whose ARGUMENT CONVERSION threw or
+   parked, which never reaches the member body and so raises nothing here — Web IDL §3.2's conversion of the
+   `RequestInfo` union and the `RequestInit` dictionary runs the page's getters, so this is a real arm and not
+   a corner. WHAT THE NEXT DIFF BUILDS: the same pair one frame out, raised by idl_args.c for EVERY declared
+   member at its prologue's entry and at its teardown, which answers it for every host edge at once instead of
+   per component. HOW ITS ABSENCE WOULD SHOW: a document whose page calls `fetch()` and whose begun row reads
+   zero, with nothing in this census distinguishing that from a page that called none.
+   RETIREMENT: this record goes when a construction that never reached the member body raises a row here. */
+void    endpoint_fetch_edge_declare(const char *const *steps, int first_stage);
+void    endpoint_fetch_edge_began(void);
+void    endpoint_fetch_edge_offered(void);
+void    endpoint_fetch_edge_freed(int stage, int offered);
+/* The rows on the heap (caller frees; NULL only on allocation failure, which every composer on the result seam
+   treats as "this census is absent" rather than as a reason to fail a run).
+   ROWS AND NOT A CENSUS OF ITS OWN, WHICH IS WHERE THEY ARE READ AND IS THE WHOLE ARGUMENT FOR THE SHAPE. They
+   are spliced into `_cold`, between the `ep*` rows they explain, each with a LEADING comma, because a reader
+   compares WITHIN a census — extension/bridge.js and extension/popup.js both say so in those words, and both
+   render a row added to `_cold` with nothing edited in either. A sixth NESTED census beside `_absent` would
+   have needed a name in bridge.js's relay list and a row in popup.js's, and those are TRUSTED-ZONE JavaScript
+   which is live on WRITE while this half is live only after a build — so it would have aborted every document
+   until an artifact carrying these rows was installed, which is the asymmetry §A-CROSS-BOUNDARY-DIFF names and
+   which bridge.js's own census loop records having already paid once.
+   THE EMPTY STRING IS THE ABSENT FORM AND IS NOT FIVE ZEROES. A host that installs no fetch runs no fetch
+   machine and there is no population; §Testing's rule is that an absent count and a zero count are different
+   facts and must never be averaged, so the rows and the comma in front of them go together. */
+char   *endpoint_fetch_edge_rows(void);
 
 #endif

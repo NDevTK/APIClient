@@ -2086,6 +2086,13 @@ char *result_cold_json(void) {
     /* what the emitted @H array is a fraction of, and what of it predates any program — endpoint.h */
     long ep_minted, ep_assets, ep_emitted, ep_pre_program;
     long ep_asks, ep_ask_pre, ep_ask_sup, ep_ask_merged, ep_ask_minted, ep_ask_merged_pre;
+    /* AND WHAT STANDS IN FRONT OF THE ONE DOOR THOSE SIX ARE COUNTED AT — solver/endpoint.h states the
+       contract, the three identities and, first, that the stage arms are a PARTITION and not a ladder. It is
+       ROWS and not a census of its own so that it lands BESIDE `epAsks`, which is what it exists to be read
+       against: every consumer of `_cold` renders a row added to it with nothing edited, and a sixth nested
+       census would have needed a name in extension/bridge.js and extension/popup.js, both of which are
+       trusted-zone JavaScript that is live on WRITE while this half is live only after a build. */
+    char *edge;
 
     cold_census(&c);
     engine_step_unit_runs(&r);
@@ -2373,9 +2380,11 @@ char *result_cold_json(void) {
        treats it as one; splicing a hole into the document instead would publish a @COLD line whose readers —
        which assert the shape rather than defaulting it — would report a broken relay for what is an
        allocation failure, and §Testing's absent-is-not-zero rule is the same sentence one layer up. */
-    if (!cursors || !ahead) {
+    edge = endpoint_fetch_edge_rows();
+    if (!cursors || !ahead || !edge) {
         free(cursors);
         free(ahead);
+        free(edge);
         cold_census_release(&c);
         return NULL;
     }
@@ -2717,7 +2726,21 @@ char *result_cold_json(void) {
                     whole line exists for: running code composed an address the document's own markup had
                     already named, which is a run that reached a network call site and learned nothing — and
                     which leaves every other figure here byte-identical to a run that reached none. */
-                 "\"epAskMerged\":%ld,\"epAskMinted\":%ld,\"epAskMergedPreProgram\":%ld}",
+                 "\"epAskMerged\":%ld,\"epAskMinted\":%ld,\"epAskMergedPreProgram\":%ld"
+                 /* …AND THE HOST EDGE'S OWN ENTRY, WHICH THE SIX ROWS ABOVE STRUCTURALLY CANNOT SEE. They are
+                    counted at endpoint_record's door, so a `fetch()` the page CALLED and the engine threw out
+                    of — or parked inside and never resumed — is a network call site reached and is in none of
+                    them: core/fetch's machine records at `FETCH_CALL`, its SIXTH stage, with five stages of
+                    spec TypeErrors and two page-code park points in front. These rows are that door's
+                    upstream, counted on the machine's own states at its capture and at its teardown and
+                    partitioned by the stage each torn-down construction was standing at, so `epAsks ==
+                    epAskPreProgram` stops being a total that cannot say whether the page called a
+                    request-composing API at all.
+                    A BARE `%s` AND NOT A NAMED ROW, because the rows carry their own names and their own
+                    leading comma: the ABSENT form is the EMPTY STRING — a host that installs no fetch runs no
+                    fetch machine and has no population, which §Testing's absent-is-not-zero rule says may not
+                    be published as five zeroes. solver/endpoint.h holds the contract. */
+                 "%s}",
                  c.flows, c.framed, c.blocked, flow_host_owed_count(),
                  e.finished, e.finished_flows, e.finished_cands,
                  e.deepest, e.completed, e.deepest_left,
@@ -2764,9 +2787,11 @@ char *result_cold_json(void) {
                  c.out_of_programs_unrun, c.out_of_programs_framed, c.out_of_programs_at_the_ladder,
                  ladder, hist, cursors, ahead,
                  ep_minted, ep_assets, ep_emitted, ep_pre_program,
-                 ep_asks, ep_ask_pre, ep_ask_sup, ep_ask_merged, ep_ask_minted, ep_ask_merged_pre);
+                 ep_asks, ep_ask_pre, ep_ask_sup, ep_ask_merged, ep_ask_minted, ep_ask_merged_pre,
+                 edge);
     free(cursors);
     free(ahead);
+    free(edge);
     cold_census_release(&c);
     return out;
 }
