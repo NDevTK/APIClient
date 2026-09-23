@@ -1522,6 +1522,52 @@ function renderEngineRuns() {
     const resumedTxt = m.resumed === null
       ? "resume state not known (this run never seeded a frontier)"
       : `${esc(String(m.resumed))} resumed`;
+    /* AND WHAT THE COLD TIER ANSWERED, WHICH `resumed` ALONE CANNOT SAY. `0 resumed` is true of a first
+       visit, of a page whose bundle was redeployed between two visits, and of a store that holds this
+       document's residue and would not hand it over — three facts that take opposite work (nothing to do,
+       nothing to do, and a defect in this zone), rendered by this view as one sentence. bridge.js reads its
+       frontier key and the keys its address holds in ONE transaction and states which of six it met; this is
+       where a person meets that word, and without this arm the word would be a field written by one zone and
+       read by nobody.
+       THE COUNT AND THE BUNDLE ID ARE RENDERED WITH IT AND NOT BESIDE IT. `other-bundle` without the number
+       of entries parked at this address is a claim with its evidence removed, and the bundle id is the half
+       of the frontier key this row does not already carry as its url — which is the one thing that makes two
+       runs of one address comparable, since a redeploy IS the two runs naming different ids. */
+    DCHECK(m.coldLookup === null || (typeof m.coldLookup === "string" && m.coldLookup !== ""),
+           "an engine run record reached the popup with a cold-tier lookup that is neither a word nor the " +
+           "stated 'never read' (`" + String(m.coldLookup) + "`) — bridge.js writes one or the other on BOTH " +
+           "record shapes, so anything else is that relay broken and a miss goes back to being a silence");
+    DCHECK(m.coldOther === null ||
+           (typeof m.coldOther === "number" && Number.isInteger(m.coldOther) && m.coldOther >= 0),
+           "an engine run record reached the popup with a sibling-entry count that is neither a count nor " +
+           "the stated absence of one (`" + String(m.coldOther) + "`) — it is the evidence under the word " +
+           "beside it, and a `|| 0` here would render an arm that counted nothing as an address with nothing");
+    const _bid = m.bundleId === null ? "" : ` (bundle ${esc(String(m.bundleId))})`;
+    const _oth = m.coldOther === null ? "" : `${esc(String(m.coldOther))}`;
+    /* ONE `switch` AND NOT A SECOND COPY OF THE WORD LIST. bridge.js owns the closed set; a list here would be
+       a second spelling of it that drifts, so the renderer IS the membership check and a word this view does
+       not speak aborts naming the producer instead of falling through to whichever arm is last. */
+    let coldTxt;
+    switch (m.coldLookup) {
+      case null:           coldTxt = "cold tier never read (this run did not reach its frontier lookup)"; break;
+      case "not-asked":    coldTxt = "cold tier not asked (this document parks no residue)"; break;
+      case "unreadable":   coldTxt = "cold tier UNREADABLE — this profile's storage refused the read, which is "
+                                   + "a different fact from a page that has never been visited"; break;
+      case "unvisited":    coldTxt = `cold tier holds nothing for this address${_bid} — first visit`; break;
+      case "other-bundle": coldTxt = `cold tier MISS${_bid} — ${_oth} entr${m.coldOther === 1 ? "y" : "ies"} `
+                                   + `parked at this address under OTHER bundle ids, so the bundle changed and `
+                                   + `the key is correct to miss`; break;
+      case "unread":       coldTxt = `cold tier DEFECT${_bid} — the store enumerates this run's own key for `
+                                   + `this address and answered a read of it with nothing`; break;
+      case "hit":          coldTxt = `cold tier HIT${_bid}`
+                                   + (m.coldOther ? ` — ${_oth} further entr${m.coldOther === 1 ? "y" : "ies"} `
+                                                  + `parked at this address under other bundle ids` : ""); break;
+      default:
+        DFAIL("an engine run record reached the popup with a cold-tier lookup this view does not speak (`" +
+              String(m.coldLookup) + "`) — bridge.js's COLD_LOOKUP is the closed set and this switch is this " +
+              "realm's only reading of it, so an unrendered word is that set having grown without its reader");
+        coldTxt = "cold tier: " + esc(String(m.coldLookup));
+    }
     /* WHICH OF THE THREE THIS ROW IS, ASSERTED AND NEVER INFERRED. It was inferred — from a `crashed` boolean,
        which could say one of three things and so said the other two identically — and a mid-run snapshot
        therefore rendered as a completed analysis with a full set of totals. A record whose state this view
@@ -1550,7 +1596,7 @@ function renderEngineRuns() {
          was seeded at all, which is itself the answer to when it died). */
       return `<div class="deep-row"><span class="deep-label">${where} — <strong>the engine crashed</strong>`
            + `; this run reported no result document, so it has no counters at all (not zeroes)`
-           + `; ${resumedTxt}`
+           + `; ${resumedTxt}; ${coldTxt}`
            + ` — ${esc(m.err)}</span></div>`;
     }
     const live = m.run === "partial";
@@ -1837,8 +1883,8 @@ function renderEngineRuns() {
     // The numbers on a snapshot are real observations of a page that is STILL being analysed, so they are
     // shown — and they are labelled as a running total, which is the one thing a completed run's row is not.
     const head = live
-      ? `<strong>still running</strong> — snapshot, not a total; ${resumedTxt} · so far: `
-      : `run complete · ${resumedTxt} · `;
+      ? `<strong>still running</strong> — snapshot, not a total; ${resumedTxt}; ${coldTxt} · so far: `
+      : `run complete · ${resumedTxt}; ${coldTxt} · `;
     /* THE ORPHAN SENTENCE SITS DIRECTLY UNDER THE LEARNED/COST ROW AND ABOVE THE SCHEDULER'S OWN READINGS,
        because that is what it is about: the row above says what this run LEARNED, this says whether it ever
        reached the one surface no live traffic can produce, and everything below it is the frontier's internal

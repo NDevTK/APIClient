@@ -745,6 +745,20 @@ async function oneRun(browser, pg, url, budgetMs) {
       if (r.run === "crashed") o.err = r.err;
       return o;
     }),
+    /* WHAT THE COLD TIER ANSWERED, AND IT IS ITS OWN ARRAY FOR THE REASON THE CENSUS BELOW IT IS: `counters`
+       holds totals over a run, and this holds a statement about ONE read that happened before the run began.
+       `park` is already in COUNTERS and is a numerator with no denominator without this — a drive that reads
+       `park: 2` on two visits and `resumed: 0` on both has observed the cross-session round trip failing, and
+       until this row existed it could not say WHICH of three things it had observed: a store that was never
+       written, a store whose entry is under the bundle id the previous visit saw (the page redeployed, and the
+       miss is the key working), or a store holding this very key and refusing to answer it. bridge.js decides
+       that in ONE transaction at the lookup; this is the field a driver reads it out of.
+       `bundleId` IS WHAT MAKES TWO RUNS COMPARABLE. It is the half of the frontier key that is not already on
+       the row as `url`, so two drives of one address reporting two different ids ARE the redeploy — which is
+       the reading no column here could previously state and the one a reader has to rule out first. */
+    cold: mine.map((r) => ({ lookup: ("coldLookup" in r) ? r.coldLookup : undefined,
+                             other: ("coldOther" in r) ? r.coldOther : undefined,
+                             bundleId: ("bundleId" in r) ? r.bundleId : undefined })),
     /* A SEPARATE ARRAY AND NOT MORE KEYS ON THE ROW ABOVE, aligned with it index for index. Every member of
        `counters` is a TOTAL over the run; every member of this is a census, and two of its four are gauges. A
        reader compares WITHIN a kind and never across, and one object holding both invites exactly the
@@ -831,6 +845,17 @@ async function main() {
         runsThatWereSamples: rs.filter((r) => !/NOT a sample of this site/.test(r.verdict)).length +
                              "/" + rs.length,
         verdicts: rs.map((r) => r.verdict + ":" + (r.outcomes.join("+") || "no-row")),
+        /* NOT A SPREAD, BECAUSE IT IS NOT A NUMBER AND BECAUSE THE SEQUENCE IS THE ANSWER. A range over words
+           says nothing; what a reader of repeated drives needs is run 1's word beside run 2's, since the
+           cross-session round trip is a claim about the SECOND visit and the pair is the whole observation:
+           `unvisited` then `hit` is the frontier working, `unvisited` then `other-bundle` with two different
+           bundle ids is a redeploy between the visits, and anything then `unread` is this zone's own store
+           refusing a key it enumerates. `undefined` is a run whose record predates this field, which is a
+           different fact from a run that never reached its lookup (`null`) and is not collapsed into it. */
+        cold: rs.map((r) => (r.cold || []).map((c) => String(c.lookup) +
+                            (c.bundleId === undefined || c.bundleId === null ? "" : "@" + c.bundleId) +
+                            (c.other === undefined || c.other === null ? "" : "+" + c.other)).join("|") ||
+                            "no-row"),
         endpoints: spread(rs, first("endpoints")),
         sinks: spread(rs, first("sinks")),
         candidates: spread(rs, first("candidates")),

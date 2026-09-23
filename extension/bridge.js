@@ -460,6 +460,52 @@ function engineResumed(eng) {
          "number of parked flows that came back");
   return eng._resumed;
 }
+/* THE ONE READER OF THE COLD-TIER LOOKUP, FOR `engineResumed`'S REASON AND ON `engineResumed`'S SHAPE. A
+   record with no engine at all reports the stated absence; an engine that reached its frontier read reports
+   what that read met; an engine whose boot died before it carries the nulls its reservation declared, and
+   those travel unchanged rather than being rendered as a miss by whichever consumer met them first.
+   THE THREE ARE RETURNED TOGETHER BECAUSE THEY ARE READ TOGETHER OR MIS-READ. `other-bundle` with no count is
+   a claim with its evidence removed, and a count with no word is a number nobody can act on; and the bundle id
+   is the half of the frontier key that is not already on the row as `url`, which is what makes two drives of
+   one address COMPARABLE — reading (b) is the two runs reporting different bundle ids, and nothing else this
+   zone emits can state it. */
+function engineColdLookup(eng) {
+  if (eng === null) return { lookup: null, other: null, bundle: null };
+  DCHECK(eng && typeof eng === "object",
+         "an analysis was composed against an engine record that is neither an instance nor the stated " +
+         "absence while its cold-tier lookup was being read — `null` is how this seam's callers say 'no " +
+         "instance ran', and any other falsy value is a caller that stopped passing one");
+  DCHECK(eng._coldLookup === null || COLD_LOOKUP.indexOf(eng._coldLookup) >= 0,
+         "an engine record carries a cold-tier lookup this seam does not speak (`" + String(eng._coldLookup) +
+         "`) — engineReserve declares it null and engineRoot writes one of a closed set of words once, so " +
+         "anything else is a second writer, and the reader is shown a reason for a miss that nothing decided");
+  /* THE TWO NULLS ARE WRITTEN ON ONE LINE AND MUST STAY ONE FACT. An instance that never reached its frontier
+     read has neither a word nor a key; one that did has both. They come apart only if a second writer touched
+     one of them, and the symptom would be a row naming a bundle id for a lookup that never happened. */
+  DCHECK((eng._bundleId === null) === (eng._coldLookup === null),
+         "an engine record states a bundle id (`" + String(eng._bundleId) + "`) and a cold-tier lookup (`" +
+         String(eng._coldLookup) + "`) that disagree about whether the frontier was ever read — engineRoot " +
+         "writes both on one line at the one moment either exists");
+  DCHECK(eng._bundleId === null || (typeof eng._bundleId === "string" && eng._bundleId !== ""),
+         "an engine record carries a bundle id that is neither a base-36 identifier nor the stated absence " +
+         "(`" + String(eng._bundleId) + "`) — it is half the frontier key, and the half a reader needs to " +
+         "tell a redeployed bundle from a cold tier that lost an entry");
+  /* AND THE COUNT IS A COUNT EXACTLY WHERE SOMETHING COUNTED. `not-asked` and `unreadable` are the two arms
+     that looked at no keys, so a zero there would be the positive claim that this address holds no other
+     entries — which is the reading `unvisited` is FOR, and the one those two arms are not entitled to make. */
+  const counted = eng._coldLookup !== null && eng._coldLookup !== "not-asked" && eng._coldLookup !== "unreadable";
+  DCHECK(counted === (eng._coldOther !== null),
+         "an engine record reports a cold-tier lookup of `" + String(eng._coldLookup) + "` with a sibling " +
+         "count of `" + String(eng._coldOther) + "` — the two arms that read no keys state the absence of a " +
+         "count and every other arm states one, and a zero from an arm that never looked is the claim this " +
+         "address has nothing else parked at it");
+  DCHECK(eng._coldOther === null ||
+         (typeof eng._coldOther === "number" && Number.isInteger(eng._coldOther) && eng._coldOther >= 0),
+         "an engine record carries a sibling-entry count that is neither a count nor the stated absence of " +
+         "one (`" + String(eng._coldOther) + "`) — it is how many entries this document's address holds under " +
+         "OTHER bundle ids, which is the evidence under the word beside it");
+  return { lookup: eng._coldLookup, other: eng._coldOther, bundle: eng._bundleId };
+}
 function linesToAnalysis(lines, msg, outcome, eng) {
   DCHECK(RUN_OUTCOMES.indexOf(outcome) >= 0,
          "a run outcome this seam does not speak: `" + outcome + "` — every consumer of an analysis branches " +
@@ -499,6 +545,11 @@ function linesToAnalysis(lines, msg, outcome, eng) {
      therefore not invent, since `crashRecord`'s synthetic lines are byte-identical whether the boot died
      before `begin` or after it. */
   const resumed = engineResumed(eng);
+  /* AND WHAT THE COLD TIER ANSWERED, ON BOTH RECORD SHAPES FOR THE SAME REASON `resumed` IS ON BOTH: it is a
+     fact about how the session BEGAN, so a run that crashed afterwards is exactly the run whose reader most
+     needs it — the cold-tier rebuild is the suspect they are trying to rule in or out, and `resumed: 0` alone
+     cannot tell a first visit from a redeployed bundle from a residue the store would not hand over. */
+  const cold = engineColdLookup(eng);
   /* THE CAUSE OF A CRASH, READ OFF THE SAME LINES EVERY OTHER FACT ABOUT THE RUN IS READ FROM. Both producers
      of a crashed record put an `@E {"phase":"engine-crash",…,"err":…}` line in `lines` before calling here —
      engineCrash for a live instance (with the ROOT @WHY appended) and crashRecord for a boot that never got
@@ -685,7 +736,9 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            and a row is SERIALIZED out of this realm by whoever reads it. */
         egressAsked: eng._egress.asked, egressDeclined: Object.assign({}, eng._egress.declined),
         endpoints: result.fetchCallSites.length, sinks: result.securitySinks.length,
-        park: result._park.length, resumed: resumed, url: (msg && msg.sourceUrl) || "" }
+        park: result._park.length, resumed: resumed,
+        coldLookup: cold.lookup, coldOther: cold.other, bundleId: cold.bundle,
+        url: (msg && msg.sourceUrl) || "" }
     /* A CRASHED RUN REPORTS NO COUNTERS, and the honest report of that is the ABSENCE, not seven zeroes.
        Zeroes here read as "the engine ran and did nothing" — indistinguishable in the log from a real run that
        explored nothing, which is a finding. `run` is the field that keeps the two apart, and the counters
@@ -707,7 +760,9 @@ function linesToAnalysis(lines, msg, outcome, eng) {
        banner has carried the ROOT @WHY since engineCrash was written; this is the same string, on the row.
        A crash whose cause lives only in a console the renderer does not tee is a crash that names no
        capability, which is the whole value a live site has. */
-    : { run: outcome, resumed: resumed, url: (msg && msg.sourceUrl) || "", err: crashErr };
+    : { run: outcome, resumed: resumed,
+        coldLookup: cold.lookup, coldOther: cold.other, bundleId: cold.bundle,
+        url: (msg && msg.sourceUrl) || "", err: crashErr };
   /* AND THE CAUSE IS ASSERTED, NOT HOPED FOR. There are exactly two producers of a crashed record and each
      one writes the `engine-crash` line into `lines` before it calls here, so an empty `err` on this arm is
      that composition having changed under this seam — a third crash path, or a producer that stopped writing
@@ -1460,6 +1515,117 @@ async function frontierGet(key) {
     const db = await idbOpen();
     return await new Promise((res, rej) => { const t = db.transaction("frontier").objectStore("frontier").get(key); t.onsuccess = () => res(t.result || null); t.onerror = () => rej(t.error); });
   } catch (e) { RETHROW_FATAL(e); frontierFail("read", e); return null; }
+}
+/* THE COLD TIER'S LOOKUP, WHICH ANSWERS `WHY NOT` AND NOT ONLY `WHAT`. `frontierGet` answers a key with a
+   record or with null, and that null has THREE readings that take OPPOSITE work: nothing has ever been parked
+   for this document; something IS parked for this ADDRESS under a different bundle id, so the key refusing to
+   answer is the key WORKING; or this exact key is in the store and the read did not return it, which is the
+   only one of the three that is a defect. They rendered as one silence, so a live drive that read `resumed: 0`
+   could not say which it had met — and a reader hunting the third had to rule the first two out by hand, with
+   nothing published to rule them out WITH: the frontier key was composed here and emitted nowhere.
+   THE STORE'S OWN PRIMARY KEY IS THE INDEX THIS QUESTION NEEDS, AND IT IS ONE BECAUSE OF THE ORDER THE KEY IS
+   COMPOSED IN. engineRoot composes `address + "|" + bundle`, so every entry for one document is a CONTIGUOUS
+   RUN of this store's key ordering and a bounded `getAllKeys` walks the matches and nothing else. Composed the
+   other way round — bundle first — the identical question would need `getAll` over every record this profile
+   has ever parked, which is the deserialize-the-whole-store cost the ranking view exists to stop paying, taken
+   on every page load. So this adds no index, no schema version and no second door; it asks the store the
+   question its key was already shaped to answer.
+   IT ASKS FOR KEYS AND NOT RECORDS. What is wanted is which bundle ids this address has entries under, and a
+   key carries the whole of that answer, so not one parked document's bytes are deserialized to produce it.
+   BOTH READS RIDE ONE TRANSACTION, WHICH IS WHAT MAKES THE THIRD READING AN INVARIANT RATHER THAN A RACE. An
+   IndexedDB read transaction is a consistent snapshot against this zone's writes, so "the get said absent and
+   the key scan said present" cannot be two tabs of one document interleaving between two asks — it is one
+   store contradicting itself inside one snapshot, which is a DCHECK this codebase is entitled to make because
+   both halves are its own records under its own keys. Asked as two transactions the same assert would fire on
+   a legitimate interleaving, which is the shape CLAUDE.md calls an assert whose own message concedes the case
+   beneath it is sound.
+   A `keys` OF NULL IS THE EDGE HAVING FAILED AND IS NOT AN EMPTY STORE — the same distinction frontierFail
+   exists for one function up, carried OUT of this door as a value instead of collapsed inside it. */
+function frontierAddressRange(sourceUrl) {
+  return IDBKeyRange.bound(sourceUrl + "|", sourceUrl + "|￿");
+}
+/* THE ADDRESS HALF OF A STORED KEY. The bundle id is `(uint32).toString(36)`, so it is alphanumeric and cannot
+   contain the separator — the LAST `|` is therefore the one the key was composed at, whatever the address
+   itself holds. That is what keeps the range above EXACT rather than merely selective: a stored address that
+   itself ends in `|<something>` sorts inside the range and is rejected here, by the key alone, with no record
+   read and no guess about which `|` was the joint. */
+function frontierKeyAddress(key) {
+  const k = String(key);
+  const i = k.lastIndexOf("|");
+  return i < 0 ? null : k.slice(0, i);
+}
+async function frontierLookup(key, sourceUrl) {
+  try {
+    const db = await idbOpen();
+    return await new Promise((res, rej) => {
+      const tx = db.transaction("frontier");
+      const s = tx.objectStore("frontier");
+      const g = s.get(key);
+      const a = s.getAllKeys(frontierAddressRange(sourceUrl));
+      let entry = null; let keys = [];
+      g.onsuccess = () => { entry = g.result || null; };
+      a.onsuccess = () => { keys = a.result || []; };
+      /* SETTLED ON THE TRANSACTION AND NOT ON THE SECOND REQUEST, because the pair is the answer: a promise
+         that resolved on `a.onsuccess` would hand back an `entry` whose own request had not necessarily been
+         delivered, and the whole point of one transaction is that the two halves describe one snapshot. */
+      tx.oncomplete = () => res({ entry: entry, keys: keys.filter((k) => frontierKeyAddress(k) === sourceUrl) });
+      tx.onerror = () => rej(tx.error || g.error || a.error);
+      tx.onabort = () => rej(tx.error || g.error || a.error);
+    });
+  } catch (e) { RETHROW_FATAL(e); frontierFail("read", e); return { entry: null, keys: null }; }
+}
+/* WHAT THE LOOKUP MET, AS ONE WORD FROM A CLOSED SET. Every arm is a POSITIVE statement and none of them is
+   the absence of one, which is the whole difference between this and the null it replaces:
+     `not-asked`     — this document does not persist a residue, so nothing was asked of the store. It is not
+                       a miss; a run that never asked and a run that asked and found nothing take different
+                       work and used to be one silence.
+     `unreadable`    — the store's own read edge failed. frontierFail has already aborted in dev; in release
+                       this is the word that keeps "your profile's IndexedDB refused" from rendering as "this
+                       page has never been visited", which is the defect that edge's header is about.
+     `unvisited`     — the store holds NO entry for this address under ANY bundle id. Reading (a): first visit.
+     `other-bundle`  — the store holds entries for this address, none of them under THIS bundle id. Reading
+                       (b): the miss is the key doing its job. It names the OBSERVATION and not the mechanism
+                       — a rolling deploy is the usual cause and is an inference, while "a different bundle id
+                       is parked at this address" is what was read.
+     `unread`        — the store holds THIS key and the get did not answer it. Reading (c), and the only one
+                       of the six that is a defect in this codebase.
+     `hit`           — the key answered, and the session resumes from it.
+   `others` IS THE EVIDENCE UNDER THE WORD AND IS NOT ENTAILED BY IT. `other-bundle` implies a positive count,
+   and a positive count does NOT imply `other-bundle` — a HIT can have older deploys' residues parked beside it
+   — so the two are one fact and its witness rather than one fact printed twice, which is the evidence-inflation
+   shape a derived row has. It is `null` on the two arms where nothing was counted, because zero there would be
+   the positive claim that this address has no other entries, which neither arm looked for. */
+const COLD_LOOKUP = ["hit", "unvisited", "other-bundle", "unread", "not-asked", "unreadable"];
+function coldLookupOf(fkey, look) {
+  if (look === null) return { state: "not-asked", others: null };
+  if (look.keys === null) return { state: "unreadable", others: null };
+  const held = look.keys.indexOf(fkey) >= 0;
+  const others = look.keys.length - (held ? 1 : 0);
+  /* THE HALF OF THE SNAPSHOT THAT CANNOT DISAGREE WITH THE OTHER HALF, IN THE DIRECTION THAT SAYS THE SCAN IS
+     WRONG. A record came back for this key, so a key scan over that record's own address must name it — and if
+     it does not, the range or the separator split this key somewhere other than where engineRoot joined it,
+     which would make `others` a count over the WRONG address on every run that took the other arm. */
+  DCHECK(!look.entry || held,
+         "the cold tier answered the frontier key `" + fkey + "` with a record while a key scan of that " +
+         "document's own address did not name it — the two halves are one read transaction, so this is the " +
+         "address range or the separator split disagreeing with the key engineRoot composed, and the " +
+         "sibling-entry count every other arm reports would be a count over a different address");
+  if (look.entry) return { state: "hit", others: others };
+  if (held) {
+    /* READING (c), AND THE ONLY ONE THAT IS OURS. Both halves of this comparison are records this zone wrote
+       under keys this zone composed, read back inside ONE snapshot, so a key the store enumerates and will not
+       hand over is this codebase's own store contradicting itself — never a page, never a peer, never a race.
+       THE RELEASE ARM RETURNS THE WORD RATHER THAN A SILENCE, and what it leaves behind is the state a miss
+       already leaves: `prior` is null, `begin` is handed no recipes and the engine seeds a boot flow. That is
+       a DEFINED wrong answer whose next consumer already handles it, and the word is how a release run says
+       which of the six it was. */
+    DFAIL("the cross-session frontier enumerates the key `" + fkey + "` for this document's address and " +
+          "answered a read of that same key, in the same transaction, with nothing — this zone is the store's " +
+          "only writer and both halves are one snapshot, so a parked residue is being kept out of the session " +
+          "it belongs to and every visit to this document will re-explore from a boot flow for ever");
+    return { state: "unread", others: others };
+  }
+  return { state: others > 0 ? "other-bundle" : "unvisited", others: others };
 }
 /* THE ONE WRITE, WHICH ANSWERS WITH ITS FAILURE INSTEAD OF THROWING IT. Its caller must tell a full store
    from a broken one, and an exception carries both to the same place. A QUOTA REFUSAL IS NOT AN ERROR IN THIS
@@ -2735,8 +2901,16 @@ function engineReserve(cluster, docId, msg, cold, referenced) {
      answerable from the instant the record exists rather than from the instant the frame answers. It is
      STATED here rather than defaulted for engineCreate's reason, and `engineRoot` is the one reader that
      turns it into the ABI call. */
+  /* AND THE COLD-TIER LOOKUP'S THREE FIELDS, DECLARED NULL FOR `_resumed`'S REASON AND NOT AS A MISS. Which
+     of the six things engineRoot's one frontier read met — and how many entries this document's address holds
+     under OTHER bundle ids, and which bundle id this session keyed on — are facts decided at that read and at
+     no other moment, so until it returns there is no answer and only an absence. A boot that dies before it
+     carries these nulls unchanged, which is itself the answer to WHEN it died; a zero in `_coldOther` would be
+     the positive claim that the store holds nothing else for this address, which a session that never asked
+     did not look for. */
   const eng = { state: "booting", cluster, docId, topDocId: docId, joinedDocIds: [], msg,
                 groupId: msg && msg.groupId, _resumed: null, referenced,
+                _coldLookup: null, _coldOther: null, _bundleId: null,
                 origin: (msg && msg.origin) || "", _cold: cold, _resolvers: [], _remoteAsked: new Set(),
                 _epoch: self.frontierEpoch(), r: null, _readyP: null,
                 /* WHAT THIS ZONE'S EGRESS POLICY WAS ASKED FOR AND WHAT IT REFUSED, PER RULE — declared in the
@@ -3019,7 +3193,23 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          "this zone could not serialize an origin from a document address the engine's own url.c accepted — " +
          "the frontier key would name a document by a string the two parsers do not agree is one");
   const fkey = msg.sourceUrl + "|" + _bid;
-  const prior = persist ? await frontierGet(fkey) : null;
+  /* ONE READ, AND IT ANSWERS `WHY NOT` BESIDE `WHAT`. This was `frontierGet(fkey)`, whose null is three facts
+     that take opposite work — never parked, parked under another bundle id, or parked under THIS key and not
+     handed back — and a live drive could separate none of them: it read `resumed: 0` and the key the answer
+     turns on was composed on the line above and published nowhere. frontierLookup asks the same key AND, in
+     the same transaction, which keys this store holds for this document's ADDRESS, which is a bounded walk of
+     the store's own primary-key ordering rather than a scan (the key is `address + "|" + bundle`, so one
+     document's entries are contiguous). The three fields below are what a reader of a run meets instead of the
+     silence, and they are written HERE — at the one moment the answer exists — for the reason `_resumed` is. */
+  const _look = persist ? await frontierLookup(fkey, msg.sourceUrl) : null;
+  const _cl = coldLookupOf(fkey, _look);
+  eng._coldLookup = _cl.state; eng._coldOther = _cl.others; eng._bundleId = _bid;
+  /* THE WORD AND THE RESIDUE COME OUT OF ONE READ AND ARE NOT ASSERTED AGAINST EACH OTHER, WHICH IS A CHOICE
+     AND NOT AN OMISSION. `hit` is `_look.entry` being a record and `prior` IS `_look.entry`, so the two sides
+     of that comparison cannot disagree under any value this program can hold — it would read as a check and
+     be a non-check, certifying a pair nothing examined. The read that CAN disagree is inside `coldLookupOf`,
+     where the get's answer meets the key scan's, and that is where the assert stands. */
+  const prior = _look ? _look.entry : null;
   /* THE RESIDUE THIS SESSION IS ABOUT TO REPLAY BELONGS TO THIS DOCUMENT. The engine seeds its frontier from
      these recipes INSTEAD of a boot flow, so a residue from another document is not a degraded resume — it is
      a frontier of flows standing on a path this program never took, with this document's own first flow
