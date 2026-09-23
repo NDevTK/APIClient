@@ -457,16 +457,30 @@ static int ut_name_to_timestamp(JSContext *ctx, const char *name, double *out)
  * is the opposite of that — every `performance.mark()` appends to it — so a replayed rank would name a
  * DIFFERENT mark at a second `measure()`, with every arm in range and every assert satisfied. */
 
-/* THE SHARED NAME-EQUALITY PREDICATE, AND ITS SPELLING IS FROZEN.
-   "Is this operand the name X" is ONE FACT, and §3.1, §2.1.2 and §2.1.4 all ask it of the same kind of
-   operand — so they share one key, exactly as core/idl_index_arg.h's predicate is shared by eleven members
-   because `index == 3` is one fact. Sharing is not a convenience: two keys over one operand would let a
-   world answer YES under one and NO under the other, which is a world no input produces.
-   THE STRING NAMES §3.1 BECAUSE THAT IS WHERE THE QUESTION WAS FIRST ASKED AND THE BYTES MAY NOT MOVE. A
-   constraint key is what a parked flow's recorded answers are filed under, out of the IndexedDB cold tier
-   and into the next session, so re-spelling it does not rename a question — it ORPHANS every answer already
-   recorded against it. The macro's NAME is this file's and may change; the literal may not. */
-#define UT_NAME_PREDICATE "USER TIMING §3.1 convert a mark to a timestamp (name ="
+/* THE SHARED NAME-EQUALITY PREDICATE. IT CARRIES A STABLE TOKEN AND NO CITATION, AND THAT IS THE RULE RATHER
+   THAN A STYLE — THE ONE PLACE IN THIS COMPONENT WHERE A SPEC NUMBER MAY NOT APPEAR.
+
+   WHY IT IS SHARED. "Is this operand the name X" is ONE FACT, and the three algorithms below all ask it of
+   the same kind of operand, so they share one key — exactly as core/idl_index_arg.h's predicate is shared by
+   eleven members because `index == 3` is one fact. Sharing is not a convenience: two keys over one operand
+   would let a world answer YES under one and NO under the other, which is a world no input produces.
+
+   WHY IT CARRIES NO SECTION NUMBER, WHICH IS THE PART THE NEXT AUTHOR WILL WANT TO UNDO. A reader who
+   re-derives "a constraint key should say which algorithm asked" will put a citation back, and the argument
+   against it is the key's own freezing property: a constraint key is what a parked flow's recorded answers
+   are filed under, out of the IndexedDB cold tier and into the next session, so re-spelling it does not
+   rename a question — it ORPHANS every answer already recorded against it. An identity may never change and
+   a spec number RENUMBERS, so a number in here is not a risk taken but a defect scheduled, and when it
+   arrives no edit at this site can repair it. CLAUDE.md states it absolutely: AN IDENTITY STRING CARRIES A
+   STABLE TOKEN AND NEVER A CITATION, and the human-readable citation is a SECOND field beside it.
+   THIS KEY WAS WRITTEN WITH A CITATION IN IT ONCE, and it was already false at two of its three askers on
+   the day it landed — it named one section while two of the three questions belonged to others. That is
+   recorded rather than quietly fixed, because the cost was filed at the time as an acceptable one and the
+   next author will weigh it the same way unless they meet this sentence.
+
+   THE CITATIONS LIVE AT THE THREE ASK SITES, as prose, where they can be corrected when an edition moves.
+   The composed key is `"performance entry buffer (name = <the entry's own name>)"`. */
+#define UT_NAME_PREDICATE "performance entry buffer (name ="
 #define UT_MEASURE_ALGORITHM "USER TIMING §2.1.3 measure()"
 
 typedef struct {
@@ -655,6 +669,9 @@ static int ut_mark_to_timestamp(JSContext *ctx, JSStepHdr *hdr, JSMeasureState *
         ex = concolic_example(ctx, s->operand);
         real = JS_IsUndefined(ex) ? JS_OUTCOME_REAL_UNSTATED : (JS_IsStrictEqual(ctx, ex, e->name) ? 1 : 0);
         JS_FreeValue(ctx, ex);
+        /* THE CITATION FOR THIS ASK, AS PROSE BESIDE THE KEY RATHER THAN INSIDE IT: this link is USER TIMING
+           §3.1 "Convert a mark to a timestamp" step 2's search. The key names the FACT because it freezes; this
+           sentence names the SECTION because it does not. */
         rc = idl_name_chain_ask_supplied(ctx, hdr, &s->key, s->operand, UT_NAME_PREDICATE, member, real,
                                          UT_MEASURE_ALGORITHM, &yes);
         JS_FreeCString(ctx, member);
@@ -691,6 +708,10 @@ static bool ut_is_options(JSValueConst v)
  *     duration from the example would publish a number the run never observed.
  *   WHAT THE NEXT DIFF BUILDS. `end time` as a JSValue on PerfEntry, beside `start_time`, so a duration can
  *     carry an unknown and §3's getter can subtract two values rather than two doubles.
+ *   AND IT BLOCKS NOTHING IN THIS COMPONENT, which is worth stating because a residual naming a base-record
+ *     change reads as a prerequisite. Nothing else here reads `end time`: PERFORMANCE TIMELINE §4.2 step 7.5
+ *     APPENDS entries, §5.3 step 3.3.7 SUMS dropped counts, and §2.1.2/§2.1.4 compare NAMES. So this is an
+ *     improvement to `duration` and never an ordering constraint on anything above it.
  *   HOW ITS ABSENCE WOULD SHOW. A page whose marks take their startTime from injected state reaches a
  *     TypeError at `measure()` where a browser returns a PerformanceMeasure, and a dev build aborts naming
  *     this residual rather than the getter. */
@@ -1158,6 +1179,9 @@ static int ut_clear_step(JSContext *ctx, JSStepHdr *hdr, JSClearState *s, int ar
         ex = concolic_example(ctx, name);
         real = JS_IsUndefined(ex) ? JS_OUTCOME_REAL_UNSTATED : (JS_IsStrictEqual(ctx, ex, e->name) ? 1 : 0);
         JS_FreeValue(ctx, ex);
+        /* THE CITATION FOR THIS ASK, AS PROSE BESIDE THE KEY: this link is USER TIMING §2.1.2 "clearMarks()
+           method" step 2 or §2.1.4 "clearMeasures() method" step 2, whichever door was taken — `algorithm`
+           carries which, and it is the ADDRESS a should-never-happen reports rather than part of the key. */
         rc = idl_name_chain_ask_supplied(ctx, hdr, &s->key, name, UT_NAME_PREDICATE, member, real,
                                          algorithm, &yes);
         JS_FreeCString(ctx, member);
@@ -1341,7 +1365,10 @@ void user_timing_init(JSContext *ctx)
          HOW ITS ABSENCE WOULD SHOW. `performance.measure('m', {start: injected, end: 5})` explores one world
            where a browser's union resolution and this engine's fork would give two, and the fork census
            records no arm asked at this position for a document whose measure options come from injected
-           state. */
+           state.
+         AND IT BLOCKS NOTHING ELSE IN THIS COMPONENT. §2.1.2 and §2.1.4 take a plain `optional DOMString`, and
+           PERFORMANCE TIMELINE §4.2 step 7.5 and §5.3 step 3.3.7 take no union at all — so the missing row is
+           an improvement to THIS member's two dictionary members and never an ordering constraint. */
     static const IdlDictMember MEASURE_OPTIONS[] = {
         { "detail",   IDL_ANY,    false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL },
         { "duration", IDL_DOUBLE, false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL },

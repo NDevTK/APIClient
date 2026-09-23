@@ -77,6 +77,11 @@
  * in USER TIMING ever reads the measure buffer back. clearMarks() had a reader the moment the buffer did
  * (§3.1 resolves against it), and clearMeasures() had none until that step landed, which is why they went in
  * that order rather than together with the buffer.
+ * THE GENERAL FORM IS WORTH MORE THAN THE PAIR, AND IT IS NOT "DEPENDENCY ORDER": what decides which of
+ * several ready members goes first is WHICH OF THEM HAS AN OBSERVABLE READER IN THIS BUILD, and two members
+ * of one section can differ on that while depending on exactly the same thing. Both clears depended on the
+ * buffer and only one of them could be SEEN once it had it. A member landed ahead of its reader is a
+ * mutation nothing can observe, which is CLAUDE.md's write-with-no-reader with the write being a removal.
  * AN UNKNOWN NAME MAKES THE REMOVAL A FORK, and the walk therefore runs over an UNMUTATED buffer with the
  * removal in a second pass — a walk that removed as it went would shorten an array a parked sibling is
  * still holding a cursor into. The YES arm PINS locally, so the rest of the removal asks nothing. Both are
