@@ -1047,6 +1047,31 @@ const cTopLevel = new Set();    // field name written at some emission's own top
 const shapes = new Map();   // "file:offset" -> Set(name)
 const shapeOf = (id) => { let s = shapes.get(id); if (!s) shapes.set(id, (s = new Set())); return s; };
 
+/* AND A SHAPE IS ONE RECORD ONLY WHERE THE BODY COMPOSES ONE OBJECT. The paragraph above is right that the
+   CALL is not the record and wrong that the BODY is, wherever the body NESTS: a composer writing an array of
+   objects each holding an array of objects merges every level into ONE Set, and that union is a shape NO
+   EMITTED OBJECT EVER HAS. The anchor's "two of its fields" test then clears on names that never co-occur,
+   and the receiver it lands on is whatever happens to share two of them — which is the AST-node-read-as-an-
+   endpoint-record the paragraph above names as the hazard it exists to prevent, arriving through the shape
+   instead of through the count. MEASURED on `endpoint_json_array`, the very body that paragraph offers as its
+   worked example: SIX object opens, 24 key calls, 23 distinct names, and `method` emitted TWICE — at the
+   endpoint's own level and inside a predicate — which a Set cannot hold twice and therefore discards without
+   a word. Its union carries `params` (the endpoint), `arguments` (a predicate) and `value` + `type` (a
+   looselyEquals), three different depths; a Babel AST node reads all four, so `n` in a `walk(ast, (n) => …)`
+   callback anchored to it and each of the eight AST properties it reads became a name "the record does not
+   emit". The parenthesis in that paragraph makes the same error in miniature: `method`/`url`/`params` are the
+   endpoint's, `name`/`location`/`validValues` are a PARAM's, and it lists the six as one record.
+   RECORDED AT SHAPE CONSTRUCTION AND NEVER ASKED OF THE BODY AT REPORT TIME, which is what makes it retire
+   itself: the root fix is a shape keyed by nesting depth as well as by body, one object kind per shape, and a
+   depth-keyed shape is not a union BY CONSTRUCTION, so this set empties without anybody deleting a test. */
+const shapeUnion = new Set();   // shape id whose body composes MORE THAN ONE object
+const cObjOpens = new Map();    // shape id -> object opens counted so far
+const noteObjectOpens = (id, n) => {
+  const t = (cObjOpens.get(id) || 0) + n;
+  cObjOpens.set(id, t);
+  if (t > 1) shapeUnion.add(id);
+};
+
 /* A BODY THAT EMITS KEYS INTO A BUFFER IT DID NOT DECLARE IS A FRAGMENT OF ITS CALLERS' RECORD, NOT A RECORD.
    "One C function's emissions are one record" is true of a body that OWNS the buffer, and json_buf.h states
    which one that is in its own first sentence — "Zero-initialise one (`JsonBuf b = { 0 };`)". A body holding no
@@ -1463,11 +1488,17 @@ function scanC(file, src) {
        namespace and cannot move any count above it. */
     if (isWrite) {
       const seen = new Set(ks);
-      for (const { name, parent } of nestingIn(text)) {
+      const nest = nestingIn(text);
+      for (const { name, parent } of nest) {
         if (!seen.has(name)) continue;
         if (parent === null) cTopLevel.add(name);
         else if (!cNestedIn.has(name)) cNestedIn.set(name, parent);
       }
+      /* THE UNION, FOR A COMPOSER THAT WRITES ITS OBJECT IN ONE LITERAL. `nestingIn` has already answered the
+         question for this shape — a key carrying a PARENT is a key of an inner object — so a body holding one
+         composes more than one record kind, exactly as a second `json_buf_raw(&b, "{")` does one entry down.
+         Read off the same array the loop above consumes, so the two cannot disagree about what nests. */
+      if (nest.some((x) => seen.has(x.name) && x.parent !== null)) shapeUnion.add(bodyOf(off));
     }
     return ks.length;
   };
@@ -1571,6 +1602,12 @@ function scanC(file, src) {
     const a = c.args[1];
     const lit = cLiteral(code, struct, a[0], a[1]);
     if (lit === null) continue;
+    /* THE RAW ENTRY WRITES STRUCTURE — which is this entry's whole contract one paragraph up — so an opening
+       brace in it is an OBJECT this body composes, and the second one proves the body composes more than one.
+       Counted here rather than inferred from the key list because a nested object's keys are indistinguishable
+       from the outer object's once both are in one Set, which is precisely the fact being recovered. */
+    const opens = (lit.match(/\{/g) || []).length;
+    if (opens) noteObjectOpens(bodyOf(a[0]), opens);
     const ks = keysIn(lit);
     if (ks.length) rawKeys.push({ file, line: lineOf(src, a[0]), keys: ks, text: lit.slice(0, 60) });
   }
@@ -4391,6 +4428,17 @@ const corpusDecided = [];     // {file,line,recv,names,cShape,cN,jsShape,jsN}
    emission's own key list, and the defect is identical — a field read off a record that does not have it,
    excused until now by an unrelated party that happens to spell a field the same way. */
 const offRecord = [];         // {file,line,recv,shape,name,writes}
+/* AND THE HALF OF OFF-RECORD THAT IS THIS SCAN'S OWN BLIND SPOT WEARING AN ACCUSATION'S GRAMMAR. OFF-RECORD's
+   own sentence names two stories and says it cannot tell them apart — "a producer that renamed a field out
+   from under a live consumer, OR a receiver whose identity this file got wrong" — and a verdict that COUNTS
+   the band sums them, which is the one thing a finding count may not do. Where the anchored shape is a UNION
+   (see `shapeUnion`) the second story is not merely possible, it is the one the shape MANUFACTURES: the
+   anchor cleared on names no emitted object carries together, so the record the write question was asked of
+   is a record that does not exist and its silence about a name is evidence of nothing. Banded and PRINTED
+   with its places, never dropped — a subject can be both unreadable here and a genuine rename, and the honest
+   statement about that pair is that this instrument cannot separate them, which is what keeps the finding
+   count an honest floor. RETIRES WITH `shapeUnion`: depth-keyed shapes are not unions, so this band empties. */
+const unionAnchored = [];     // {file,line,recv,shape,name,writes} — OFF-RECORD against a shape that is a union
 /* A NAME THE CONSUMER ITSELF PUT ON THE RECORD, which is the one write OFF-RECORD's own sentence excludes and
    its test did not. That category says these reads were "excused by whichever UNRELATED party in the corpus
    happened to spell the field the same way", and a member assignment onto a receiver of THIS record in THIS
@@ -5147,7 +5195,8 @@ for (const s of jsScans) {
                                                                                 : "no producer anywhere" });
         if (syn) consumerSynth.push({ ...site, name: r.name, at: syn });
         else if (fields.get(r.name)?.writes.length)
-          offRecord.push({ ...site, name: r.name, writes: fields.get(r.name).writes.slice(0, 4) });
+          (shapeUnion.has(best) ? unionAnchored : offRecord)
+            .push({ ...site, name: r.name, writes: fields.get(r.name).writes.slice(0, 4) });
         else rec(fields, r.name).reads.push(site);
         continue;
       }
@@ -5930,6 +5979,36 @@ if (offRecord.length) {
   }
 }
 
+/* THE SAME ROWS, AGAINST A SHAPE THAT IS A UNION — printed beside the category they were taken out of, so the
+   subtraction is on one screen and never a number that quietly got smaller. Unlike the band above this is not
+   a decision about the SITE: it is this scan stating that the record it judged the site against is a merge of
+   several nesting levels, so `the anchored record does not emit this name` is a fact about a record no emitted
+   object ever is. Every row keeps its places, because a rename out from under a live consumer would land here
+   too and the count above it is a floor until the shapes are depth-keyed. */
+if (unionAnchored.length) {
+  const byRecv = new Map();
+  for (const o of unionAnchored) {
+    const k = `${o.file}\u0000${o.recv}\u0000${o.shape}`;
+    if (!byRecv.has(k)) byRecv.set(k, []);
+    byRecv.get(k).push(o);
+  }
+  log(`── OFF-RECORD AGAINST A UNION SHAPE — ${unionAnchored.length} read(s) from ${byRecv.size} receiver(s) ` +
+      `whose anchored body composes MORE THAN ONE object, so its shape is the union of every nesting level and ` +
+      `the anchor cleared on names no emitted object carries together. UNAUDITED, never a finding: the record ` +
+      `the write question was asked of is not a record ──`);
+  for (const [, os] of byRecv) {
+    log(`  ${os[0].file}  \`${os[0].recv}\` anchors to ${os[0].shape}, which composes ` +
+        `${cObjOpens.get(os[0].shape) || "several"} object(s)`);
+    const seen = new Set();
+    for (const x of os) {
+      if (seen.has(x.name)) continue;
+      seen.add(x.name);
+      log(`      .${x.name.padEnd(20)} read at ${os.filter((y) => y.name === x.name).map((y) => y.line).join(", ")}` +
+          `; not emitted there; written at ${x.writes.map(place).join(", ")}`);
+    }
+  }
+}
+
 /* PRINTED IN FULL AND NOT A DEFECT, beside the category it was taken out of, so the two are one screen and the
    subtraction is visible rather than a number that got smaller. A row here is a claim that the consumer put the
    name on the record itself; the assignment is named, so a reader who thinks the receiver is a different record
@@ -6125,8 +6204,14 @@ const blind = [
      in the subject, and summing the two is how a verdict becomes furniture. */
   ["record field names a consumer NAMES, or nests under one, in a construct this scan cannot read as a read " +
    "— unclassified, so unaudited", unclassified.length],
+  /* A READ JUDGED AGAINST A UNION OF NESTING LEVELS IS A READ JUDGED AGAINST NO RECORD, so it states a
+     blindness of this scan and not a defect of the subject. It sits here rather than in the findings for the
+     reason the block above gives in its own words: an instrument that cannot read a construct has not found
+     anything, and summing the two is how a verdict becomes furniture. */
+  ["reads OFF a record whose shape is a UNION of several nesting levels — the anchor is this scan's own, so " +
+   "unaudited", unionAnchored.length],
 ].filter(([, n]) => n);
-const blindN = ambiguous.length + refusals.length + unclassified.length;
+const blindN = ambiguous.length + refusals.length + unclassified.length + unionAnchored.length;
 for (const [k, n] of blind) log(`  ${String(n).padStart(5)}  ${k}`);
 log(`  ── UNAUDITED: ${blindN} construct(s) this scan cannot read. Zero is the armed state — each is a place a ` +
     `field name could be hiding, and a scan that guessed past one would report a plausible answer. This is a ` +
