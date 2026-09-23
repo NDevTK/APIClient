@@ -120,11 +120,25 @@ QJS_EXPORT void qjs_emit_partial(void);
    before it computes values that exist whether or not anything is drawn, and this one draws. Steps 1 to 21
    and 23 are the whole of what a page can OBSERVE: the animation frame callbacks, the resize and scroll
    steps, the media query evaluation, the ResizeObserver delivery, the focus fixup, the intersection
-   observations, the top layer drain. They run on the SHIPPED path today — core/platform.c installs
+   observations, the top layer drain. THE MACHINERY FOR THEM IS WIRED ON THE SHIPPED PATH, AND WHETHER IT
+   RUNS IS A SEPARATE QUESTION THIS ENTRY DOES NOT ANSWER — a correction to the sentence that stood here,
+   recorded rather than made silently because the over-claim it contained would have been refuted by one
+   census row and would have taken the argument down with it. WIRED is verified: core/platform.c installs
    rendering_init on its unconditional agent table, that entry registers `engine_set_rendering_hook`, and
-   solver/engine.c asks the hook as a rung of every flow's own step, under a comment naming exactly that
-   list. So NO PAGE CODE IS WAITING ON THIS ENTRY, and a paint could not reach any of it if it were called:
-   core/paint/document_paint.c sizes a surface, walks CSS 2.1 §E.2 "Painting order" and rasterizes.
+   solver/engine.c asks the hook under a comment naming exactly that list. What the sentence got wrong is
+   `as a rung of every flow's own step` — the rung sits INSIDE `if (!f->frame)`, so only a member with no
+   live frame ever descends to it, and engine.c's own note on that ladder says the whole of it is
+   unreachable for the population its live/framed census names. A relayed native drive read
+   `renderingOpportunityAsks 6` against `renderingOpportunities 0`; that row is UNSCORED IN BOTH DIRECTIONS
+   and is deliberately not re-derived here, because a lifetime zero in it is equally an ABI nobody asks and
+   an arm nobody reaches, and those take opposite work.
+   AND THE CORRECTION CUTS TOWARD THE SAME ANSWER RATHER THAN AWAY FROM IT, WHICH IS WHY IT IS WORTH ITS
+   LINES. If those steps under-run, then page code behind the animation frames and the two observers is being
+   lost — and a paint RECOVERS NONE OF IT, because a paint performs step 22 and no other:
+   core/paint/document_paint.c sizes a surface, walks CSS 2.1 §E.2 "Painting order" and rasterizes. So the
+   reach defect, if it is one, is at the frame gate one component away and is already named at its own site,
+   and a cross-boundary landing spent on THIS ABI would have bought an output nobody presents while leaving
+   that gate exactly where it was. NO PAGE CODE IS WAITING ON THIS ENTRY under either reading.
    THE MOMENT WAS WRONG TOO, AND IT IS THE MOMENT THIS ABI ALREADY REPLACED. A yield hands the thread back
    mid-flow with whatever member was standing, which is the by-luck reach main.c's own retired residual names
    and which `qjs_request_paint_every_world` below was built to end: a host that wants pictures MARKS the

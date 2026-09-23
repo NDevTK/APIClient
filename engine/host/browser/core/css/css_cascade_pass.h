@@ -103,8 +103,13 @@
  * THE FIRST HALF NAMED A DIFF THAT SHOULD NOT BE MADE, AND qjs_abi.h's OWN RESIDUAL NOW RECORDS WHY AT
  * LENGTH. A paint is update-the-rendering's step 22, which core/rendering/rendering.c's note at that step
  * calls the only one of that algorithm's twenty-three steps with no headless equivalent; every step a page
- * can OBSERVE is one of the other twenty-two, and they run on the shipped path today from the scheduler's
- * own rendering rung. So the yield arm is not a caller this record was waiting for. It is a render nobody
+ * can OBSERVE is one of the other twenty-two, and the machinery for them is WIRED on the shipped path from
+ * the scheduler's own rendering rung. WIRED is a correction to a sentence here that said they RUN: that rung
+ * sits inside solver/engine.c's `if (!f->frame)`, and that file's own note says the ladder below it is
+ * unreachable for the population its live/framed census names, so whether those steps run is open and is not
+ * a question this record or a paint answers. Either way the yield arm is not a caller this record was
+ * waiting for, and the correction cuts toward the same answer: if those steps under-run, a paint recovers
+ * none of them, because a paint is step 22 and no other. It is a render nobody
  * presents, which would open this span as a side effect of an output the product does not produce — and a
  * record whose reach is bought that way is reached for a reason that can be withdrawn at any time.
  * THE SECOND HALF CONFLATED TWO OPENERS WITH TWO LIFETIMES, AND ONLY THE SECOND IS WHAT RE-ENTRY FORBIDS.
