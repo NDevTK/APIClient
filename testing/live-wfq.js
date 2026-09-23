@@ -172,6 +172,43 @@ const COST = ["scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeig
               "scanOtherRuns", "scanOtherWeights", "scanCensusRuns", "scanCensusWeights",
               "preemptAsksLifetime"];
 
+/* …AND WHETHER THE ONE ASSERTION THE DISPATCH WALK MAKES WAS EVER ACTUALLY ASKED, which is the other half of
+   the same question and had it WORSE: `keyStaleGenLifetime`, `keyFirstSeenLifetime` and `keyRunningLifetime`
+   occur in exactly ONE file in this tree — result.c, which emits them — and `keyArmedLifetime` in that file
+   and the one that raises it. No driver anywhere, fixture or live, read any of the four.
+
+   WHY THAT IS THE EXPENSIVE ONE TO HAVE UNREAD. result.c: flow_pick's member-key invariant "is a predicted
+   ABSENCE, and a run in which it never fires is satisfied identically by an invariant that HOLDS and by a
+   walk that COMPARED NOTHING.  Its condition exempts a member on three arms before it compares anything".
+   `keyArmedLifetime` is the SCORE — how many comparisons were actually made — and the other three are the
+   exemptions that say where the rest went; result.c states they PARTITION the classifications together.  So
+   an engine-side claim of the form "this invariant held on a real page" is UNSCORED without them, and every
+   index, heap or cached maximum proposed over this frontier is derived from that invariant.
+
+   ALL FOUR ARE LIFETIME COUNTS and may be differenced.  They are raised under `#if APICLIENT_DEV`, so they
+   read 0 in a release build for a reason that is not about the engine — MEASURED that the artifact this
+   driver samples is a DEV build, by the presence of that walk's own abort text in the shipped wasm with an
+   invented string as the control, so a zero here is a statement about the run and not about the build.  A
+   reader meeting four zeros should re-take that control before concluding anything. */
+const KEYCHK = ["keyArmedLifetime", "keyStaleGenLifetime", "keyFirstSeenLifetime", "keyRunningLifetime"];
+
+/* THE SAME TWO-WAY CHECK AGAIN, AGAINST THE SAME COMPOSER AND FOR THE SAME REASON. */
+function keyScope() {
+  const keys = wfqComposerKeys();
+  for (const k of KEYCHK)
+    if (!keys.has(k))
+      throw new Error("[live-wfq] result_wfq_json no longer publishes `" + k + "` — this driver names it " +
+                      "from result.c's own composer, so a row that has gone is one the producer renamed " +
+                      "or dropped rather than one this file invented.");
+  const published = [...keys].filter((k) => /^key[A-Z]/.test(k));
+  const unread = published.filter((k) => !KEYCHK.includes(k));
+  if (unread.length)
+    throw new Error("[live-wfq] result_wfq_json publishes key-check row(s) no reader here names: " +
+                    unread.join(", ") + ". result.c says the four PARTITION the classifications, so a fifth " +
+                    "arm that nothing names is an exemption absorbing comparisons with no row to say so.");
+  return KEYCHK;
+}
+
 /* AND THE SAME TWO-WAY CHECK THE BRANCH SCOPE GETS, for the same reason and against the same composer.
    A row named here that result.c has renamed throws naming the row; a cost-scope row result.c ADDS that
    this file does not name throws too — because a published row with no reader is exactly what this whole
@@ -305,6 +342,7 @@ async function main() {
      window of samples has been spent on a census this driver cannot describe. */
   const BR = branchScope();
   const COSTROWS = costScope();
+  const KEYROWS = keyScope();
   console.log("# artifact " + JSON.stringify(artifactStamp()));
   console.log("# windowMs=" + WINDOW + " everyMs=" + EVERY +
               " — COUNTERS (may be differenced): " + COUNTERS.join(",") +
@@ -321,6 +359,12 @@ async function main() {
               "number of members and one that weighs the frontier are different costs and only the second " +
               "grows with it. `scanNextWeights / steps` and `scanRivalRuns / forks` need @COLD's `steps` " +
               "and `forks` and are NOT composed here.");
+  console.log("# key-check scope, derived from result_wfq_json (" + KEYROWS.length + " rows) — ALL LIFETIME " +
+              "COUNTS: " + KEYROWS.join(",") + " | the SCORE of flow_pick's member-key invariant, which is a " +
+              "PREDICTED ABSENCE: a run in which it never fires is satisfied identically by an invariant that " +
+              "holds and by a walk that compared nothing. `keyArmedLifetime` is the comparisons actually " +
+              "made; the other three are the exemptions that absorbed the rest. Raised under APICLIENT_DEV, " +
+              "so four zeros are a question about the BUILD before they are a question about the run.");
 
   const { browser, extId } = await connect();
   try {
@@ -382,6 +426,11 @@ async function main() {
           out.censusWeighShare   = share(w.scanCensusWeights, w.scanNextWeights);
           out.rivalMissRate      = share(w.scanRivalRuns, w.preemptAsksLifetime);
         }
+        /* THE SCORE OF THE WALK'S OWN PREDICTED ABSENCE, printed RAW and with no quotient composed from it.
+           result.c prescribes reading `keyArmedLifetime` as the score and the other three as why, and states
+           no fraction over them; the four are emitted together and are read together or not at all. */
+        if (!("keyArmedLifetime" in w)) { out.keyAbsent = true; }
+        else for (const k of KEYCHK) out[k] = (k in w) ? w[k] : null;
         /* AN EMPTY FRONTIER PUBLISHES `{"members":0}` AND NO BRANCH ROW AT ALL, which is not the same fact
            as a branch scope reading zero — result.c composes that short form on its own path. Absent is
            said once, as a flag; filling twenty-three nulls would render an unasked question exactly like a
