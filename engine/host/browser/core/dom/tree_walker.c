@@ -667,9 +667,9 @@ void tree_walker_install_proto(JSContext *ctx)
     /* EACH STATES ITS RECEIVER INTERFACE, out of the same walker_is every pool entry above declares.
        Web IDL §3.7.6 "Attributes"' create an attribute getter: "If jsValue does not implement target,
        then:", whose second arm is "Otherwise, throw a TypeError." None of §6.2's four carries
-       [LegacyLenientThis], which is the only other arm that sentence has. `currentNode` states it on the
-       SAME line as its setter id, which is what makes the pair one fact: both halves of that attribute now
-       brand off walker_is. */
+       [LegacyLenientThis], which is the only other arm that sentence has. `currentNode` states walker_is in
+       the SAME CALL that names its setter id, which is what makes the pair one fact: both halves of that
+       attribute now brand off one predicate. */
     idl_install_accessor_this(ctx, proto, "root", js_walker_get, 0, -1, walker_is, "TreeWalker");
     idl_install_accessor_this(ctx, proto, "whatToShow", js_walker_get, 1, -1, walker_is, "TreeWalker");
     idl_install_accessor_this(ctx, proto, "filter", js_walker_get, 2, -1, walker_is, "TreeWalker");
