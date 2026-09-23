@@ -1457,12 +1457,24 @@ void user_timing_init(JSContext *ctx)
 
 void user_timing_free(void)
 {
-    /* The prototypes and the interface objects are the REALMS' and go with their contexts; a mark's record is
-       released by §3's finalizer. What the agent holds is one class id and two declarations, in a runtime that
-       is going away with them. The id goes back to 0 because it is also this file's init latch — see
-       core/agent_state.h — and carrying it would make a second agent's user_timing_init return before
-       re-registering the slot, leaving every realm of that agent without a PerformanceMark.prototype. */
-    g_mark_proto_slot = 0;
-    g_ctor_stepid = -1;
-    g_id_mark = -1;
+    /* THIS COMPONENT OWNS NO AGENT-LIFETIME REFERENCE AT ALL — no interned name, no JSValue, no allocation.
+       The prototypes and the interface objects are the REALMS' and go with their contexts; a mark's or a
+       measure's record is released by §3's finalizer. So there is nothing here to free, and the whole release
+       is the line below.
+       IT WAS A HAND-WRITTEN LIST OF THREE ASSIGNMENTS AND THE LIST IS WHAT WENT WRONG, which is why the
+       argument for it is rewritten here rather than deleted with it. §2.1.3's measure() machine, §2.1.2's and
+       §2.1.4's clear machines and §2.3's prototype slot were declared in user_timing_init by diffs that never
+       opened this function, so four of this row's seven slots were still set when core/platform.c's release
+       column ended and agent_state_check_released aborted. core/agent_state.h names that exact diff shape as
+       the failure the undo removes: the reset is DERIVED from the declarations, so a component that declares
+       an eighth slot owes this function nothing new, and a declaration without an inverse is no longer a state
+       a diff can reach.
+       THE CLASS ID STILL GOES BACK TO 0 AND THE REASON IS STILL THIS COMPONENT'S, so it is stated here and not
+       left to the header: §2.2's prototype slot doubles as this file's init latch, so carrying it would make a
+       second agent's user_timing_init return before re-registering the slot and leave every realm of that
+       agent without a PerformanceMark.prototype. The undo writes 0 for a class kind, which is that policy.
+       LAST, AND THAT ORDER IS THE CONTRACT (core/agent_state.h): a release frees, asserts, then undoes.
+       RETIREMENT: this record goes when no release in this tree resets an agent-state slot by hand, because
+       the shape it teaches is then unreachable rather than described. */
+    agent_state_undo("user_timing");
 }

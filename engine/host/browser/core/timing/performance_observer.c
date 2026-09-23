@@ -68,7 +68,12 @@ static const char *g_entry_types[PO_MAX_ENTRY_TYPES];
    off the tuple, and it is a row of the TIMING ENTRY TYPES REGISTRY rather than a number this file may pick —
    so it arrives with the declaration for the same reason the name does, and a producer that cannot state its
    own row cannot declare its type. It is a `double` because the registry writes `Infinite` for several rows
-   and §5.6's test is an ordinary numeric comparison against it. */
+   and §5.6's test is an ordinary numeric comparison against it.
+   NOTHING PUTS THIS ARRAY BACK AT TEARDOWN AND NOTHING NEEDS TO, WHICH IS A CLAIM AND IS STATED HERE BECAUSE
+   IT IS NOT VISIBLE FROM THE RELEASE: it is indexed only below g_n_entry_types, that count is declared to
+   core/agent_state.h and reset with the rest, and a stale double past the count is unreachable — exactly the
+   standing that the names array beside it has had since it was written. It holds no reference of any kind, so
+   there is nothing here a dropped release could leak. */
 static double      g_entry_type_max[PO_MAX_ENTRY_TYPES];
 static int         g_n_entry_types;
 
@@ -1084,11 +1089,25 @@ void performance_observer_init(JSContext *ctx)
                    "the per-realm slot §2's list of registered performance observer objects is held in");
     agent_state_id("performance_observer", &g_notify_slot, "the per-realm slot §5.3's callee is held in");
     agent_state_id("performance_observer", &g_types_slot, "the per-realm slot §4.5's frozen array is held in");
+    /* THE SLOT §2's PERFORMANCE ENTRY BUFFER MAP IS HELD IN. It was assigned in this function and declared
+       NOWHERE for as long as the map existed, which is the silent half of this registry rather than the loud
+       one: an undeclared slot is invisible to agent_state_check_released, so no release could ever have been
+       caught forgetting it — the failure the first paragraph of core/agent_state.h records for fetch_free,
+       where a carried handle answers with a number naming a table that is gone and nothing crashes anywhere. */
+    agent_state_id("performance_observer", &g_buf_slot,
+                   "the per-realm slot §2's performance entry buffer map is held in");
     agent_state_id("performance_observer", &g_notify_stepid, "§5.3's task machine");
     agent_state_id("performance_observer", &g_id_ctor, "§4's constructor declaration");
     agent_state_id("performance_observer", &g_id_observe, "§4.2's observe declaration");
     agent_state_id("performance_observer", &g_id_take, "§4.3's takeRecords declaration");
     agent_state_id("performance_observer", &g_id_disconnect, "§4.4's disconnect declaration");
+    /* §4.5's SET, WHICH IS AGENT STATE AND NOT REALM STATE: a new agent's producers declare their types again
+       from their own `_init`s. What is declared is the LENGTH and not the two arrays it indexes — nothing past
+       it is reachable, so putting the count back is what makes both of them pre-init — and it is declared as a
+       FLAG because this header's kind IS the pre-init value and a count's is 0, which is the same reading
+       core/dom/node.c's wrapper and hook-list lengths are declared under. */
+    agent_state_flag("performance_observer", &g_n_entry_types,
+                     "§4.5's set of the entry types this build can mint, its length");
 }
 
 /* PERFORMANCE TIMELINE §4 The PerformanceObserver interface, FOR ONE REALM — its per-global state, its
@@ -1213,17 +1232,18 @@ void performance_observer_free(JSRuntime *rt)
     DCHECK(g_ready, "§4 was released in an agent that never declared it");
     performance_observer_entry_list_free(rt);
     JS_FreeValueRT(rt, g_state_key);
-    g_state_key = JS_UNDEFINED;
     JS_FreeAtomRT(rt, g_atom_state);
     JS_FreeAtomRT(rt, g_atom_queued);
-    g_atom_state = g_atom_queued = JS_ATOM_NULL;
-    /* The per-realm list, callee and frozen array are the REALMS' and go with their contexts; what is agent
-       state about them is the SLOT NUMBER. The entry-type DECLARATIONS are the agent's too: a new agent's
-       producers declare them again from their own `_init`s. */
-    g_reg_slot = g_notify_slot = g_types_slot = -1;
-    g_notify_stepid = -1;
-    g_id_ctor = g_id_observe = g_id_take = g_id_disconnect = -1;
-    g_n_entry_types = 0;
-    g_class = 0;
-    g_ready = 0;
+    /* WHAT THIS FUNCTION OWNS IS THE THREE REFERENCES ABOVE; EVERY HANDLE IS GIVEN BACK BY THE LINE BELOW,
+       from the one list that already names them. The per-realm list, callee, frozen array and buffer map are
+       the REALMS' and go with their contexts — what is agent state about them is the SLOT NUMBER — and the
+       entry-type set is the agent's, so its length goes back with the rest.
+       THE HAND-WRITTEN LIST THAT STOOD HERE IS RETIRED RATHER THAN CORRECTED, and the reason is the diff that
+       retired it: it reset thirteen of this row's slots and the fourteenth, §2's buffer map, was added to the
+       `_init` by a landing that never opened this function. That is the same clerical error in the same shape
+       core/agent_state.h records the undo as existing to remove, and correcting the list would have left the
+       next landing free to make it again.
+       LAST, AND THAT ORDER IS THE CONTRACT (core/agent_state.h): the frees above and the DCHECK at the top are
+       reading slots this nulls, so a release that undid first would be answering its own checks. */
+    agent_state_undo("performance_observer");
 }
