@@ -272,6 +272,22 @@ async function fetchDiscoveryForService(
      absent result and a zero result may never be averaged. `Object.create(null)` so the `in` test below is
      exact rather than answering true for `toString`, which is bridge.js's own egress counter's reason. */
   const declined = Object.create(null);
+  /* AND THE SAME FACT AS A COUNT OF CANDIDATES RATHER THAN OF REASONS, BECAUSE THE RE-ASK GATE'S QUESTION IS
+     `WAS ANYTHING PUT TO THE WIRE` AND `declined` CANNOT ANSWER IT. The reason map above is the PERSON's
+     account — which rows of their own control held this sweep — and it is keyed on tokens, so a reader
+     wanting to know whether this sweep asked anything at all would have to sum it and compare against a
+     candidate total nothing records. These two are that total, split at the one line that knows which half a
+     candidate fell in, and they are what lib/response-decode.js's gate reads.
+     WHY THE COUNT AND NOT `triedKeys`, WHICH IS THE REPAIR THIS RECORD MOST INVITES. `triedKeys` is keyed on
+     the API KEY, and a decline is not a fact about a key: `buildDiscoveryUrls` composes candidates at up to
+     TWO hosts (the clients6/googleapis normalization) and the egress table is per-ORIGIN, and the keyless
+     candidates are composed for every key including none at all. Measured in a vm against this file: a
+     service `collectKeysForService` returns NO key for — which is most of them — ends a wholly-declined
+     sweep with `_triedKeys` EMPTY and the gate's key loop iterating over an empty list, so the key axis
+     answers `not a new question` at every setting of the widening table, for ever. A per-key repair cannot
+     reach that population; a count of what was asked reaches all of it. */
+  let candidatesAsked = 0;
+  let candidatesDeclined = 0;
 
   // Build a deduplicated candidate list across all keys
   // Try each key separately to track which one works
@@ -310,6 +326,19 @@ async function fetchDiscoveryForService(
         if (resp.refusal && resp.refusal.kind === "decline") {
           if (!(resp.refusal.reason in declined)) declined[resp.refusal.reason] = 0;
           declined[resp.refusal.reason]++;
+          candidatesDeclined++;
+        } else {
+          /* THE `else` IS THE POSITIVE STATEMENT AND NOT THE LEFTOVER ARM. A candidate reaches here having
+             been PUT TO THE TRANSPORT — a 404, a 500, a non-document body and a `network` refusal are all
+             answers about the ORIGIN, which is why the grade and not the status decides this the same way it
+             decides the line above. The relay arm (lib/schema.js `pageContextGet`) states no `refusal` at
+             all, so every candidate a USER-initiated sweep walks counts here: that is this file's own rule
+             at `_chokepointGetFn` — the relay is a different transport with a different authorization and
+             its refusals are not this egress policy's and may not be counted as though they were.
+             NEITHER COUNTER IS RAISED WHEN `getFn` THROWS, which is deliberate and is what the gate's second
+             conjunct is for: a transport that threw asked nothing AND declined nothing, and that is a broken
+             edge rather than a request this zone chose not to make. */
+          candidatesAsked++;
         }
         if (resp.error || !resp.ok) continue;
 
@@ -435,23 +464,46 @@ async function fetchDiscoveryForService(
      account of a request this tool declined to make, shown to nobody. This sweep had not even that — its
      refusals were flattened into `continue` and the run ended at a `not_found` record indistinguishable
      from a service that really publishes nothing.
-     ONE LINE PER SWEEP AND NOT ONE PER CANDIDATE, so the volume is bounded by services and not by the
-     candidate list, and the TOKENS travel whole rather than being parsed: safe-fetch.js composed
-     `blocked-signal:<name>=<value>` out of the signal it walked, so the token IS the structured fact and a
-     consumer that split it would be writing a second copy of that policy.
-     NAMED RESIDUAL. WHAT IS NOT COVERED: the RECORD. A sweep whose every candidate was declined still
-     writes `status: "not_found"` below with `_triedKeys` naming every key — and lib/response-decode.js
-     reads exactly that Set to decide whether a later ask is a DIFFERENT question, so a key whose candidates
-     were never sent reads as a key that was tried and found nothing, and the service is not re-swept when
-     the person widens the origin. That is the opposite of what a `decline` promises: safe-fetch.js says the
-     flow "stays PARKED and fires the day the origin is widened", and this path instead records a terminal
-     negative that widening does not reopen. WHAT THE NEXT DIFF BUILDS: a third status beside `pending` and
-     `not_found` — a DECLINED record carrying these tokens, with lib/response-decode.js's re-ask gate
-     reading it as an ask that never happened rather than as one that came up empty. It is two files because
-     the record and its only reader are in two files, and landing the producer alone would be a field with
-     no reader. HOW ITS ABSENCE WOULD SHOW, as an OBSERVATION and never as an instance: an origin widened
-     from the popup after a first sweep, on which no discovery document is ever fetched for a service the
-     first sweep touched, while a service first seen AFTER the widening fetches one from the same host. */
+     ONE LINE PER CANDIDATE WOULD BE THE WRONG UNIT AND THE TOKENS TRAVEL WHOLE RATHER THAN BEING PARSED:
+     safe-fetch.js composed `blocked-signal:<name>=<value>` out of the signal it walked, so the token IS the
+     structured fact and a consumer that split it would be writing a second copy of that policy.
+     THIS SENTENCE READ `ONE LINE PER SWEEP AND NOT ONE PER CANDIDATE, so the volume is bounded by services
+     and not by the candidate list`, AND THE DIFF THAT CLOSED THE RESIDUAL BELOW MADE THE SECOND HALF FALSE.
+     It is rewritten rather than deleted because the reasoning is sound and a reader will re-derive it: the
+     line is per SWEEP, and a sweep used to happen once per service because the `not_found` record it ended
+     at read as a terminal negative. Now a wholly-declined sweep records that it asked NOTHING and the gate
+     re-opens it, so the volume is bounded by CAPTURED RESPONSES for that service — one sweep at a time,
+     because the gate sets `status:"pending"` synchronously before it calls, and ZERO egress, because every
+     candidate is declined again. That is the §NO BOUNDS answer and not a regression to damp with a counter:
+     a sweep that emitted nothing is not done, and §Attacker-sources' one-per-endpoint rule is about spending
+     somebody else's server, which a sweep that sends nothing does not do. What it costs is LOG VOLUME, and
+     the answer to that is residual (2) below and not a seen-set here.
+     THE RESIDUAL THAT STOOD HERE IS DISCHARGED AND ITS NEXT-DIFF CLAUSE WAS WRONG, WHICH IS RECORDED
+     BECAUSE THE NEXT READER WILL RE-DERIVE THE SAME WRONG SHAPE. It said to build "a third status beside
+     `pending` and `not_found` — a DECLINED record". A status is a property of the WHOLE record and a decline
+     is per CANDIDATE, so a third status conflates the two populations §THE-THIRD-MEMBER-OF-THAT-FAMILY
+     names: `buildDiscoveryUrls` composes candidates at up to TWO hosts and the egress table is per-ORIGIN,
+     so a sweep can legitimately have some candidates answered and others declined, and a whole-record
+     `declined` would have made the gate re-ask a sweep whose asked candidates were already sent — repeated
+     EGRESS, which is exactly the blind sweep the gate exists to prevent. What landed instead is the COUNT of
+     each half (`_candidatesAsked` / `_candidatesDeclined` below), which states both facts and lets the gate
+     ask the one question widening can answer: was anything put to the wire at all.
+     NAMED RESIDUAL (2). WHAT IS NOT COVERED: a PARTIALLY declined sweep. Where some candidates were asked
+     and others declined, this record's `_candidatesAsked` is nonzero, so the gate reads it as a question
+     that WAS put and the declined half is not re-opened by a later widening — the same defect as the one
+     above, narrowed to the population where re-asking the whole sweep would re-send what was already sent.
+     Closing it needs the re-ask keyed on the POLICY having moved rather than on this record alone, which is
+     what safe-fetch.js's `decline` actually promises ("the flow stays PARKED and fires the day the origin is
+     widened"): an EVENT. WHAT THE NEXT DIFF BUILDS: the re-ask driven from bridge.js's egress-command
+     handler, which already computes `changed` when the table moves, rather than polled from the response
+     gate — GREPPED at f7afb0a4 and it is there, in the `msg.grant`/`msg.revoke`/`msg.permit` arms. It is
+     NOT `safeFetchPermitted(origin)` read at the gate, which is the repair this paragraph most invites and
+     which would be a fatal: that function and `safeFetchEgressTable` both `CHECK(_EXPLORED_STATED)`, which
+     is fatal in RELEASE, and the table is stated through a PROMISE (`safeFetchEgressStating`, bridge.js)
+     that a synchronous gate can run ahead of. HOW ITS ABSENCE WOULD SHOW, as an OBSERVATION and never as an
+     instance: a service whose sweep spans two hosts, one of them widened, never fetches a document from the
+     second host after that origin is widened too, while its console line goes on naming the same declined
+     token. */
   {
     const _tok = Object.keys(declined);
     if (_tok.length !== 0)
@@ -487,9 +539,39 @@ async function fetchDiscoveryForService(
        FACT (this key set found nothing) and WHICH KEYS produced it, which is what makes a later attempt with
        a newly-learned key a different question rather than the same one. */
     var _prevDiscoveryNF = tab.discoveryDocs.get(service);
+    /* AND WHETHER THIS SWEEP PUT ANY QUESTION AT ALL, ASSERTED HERE BECAUSE BOTH HALVES ARE IN ONE HAND AND
+       NOWHERE ELSE. The pair is what lib/response-decode.js's re-ask gate reads, and the one state that must
+       not be reachable is both of them zero WITH candidates having been walked — a sweep that walked
+       addresses and fell in neither half is `getFn` throwing past the record DCHECK above, which would read
+       at the gate as "this zone declined nothing" and close the question for a service nothing was asked
+       about. A DCHECK and not a CHECK: every operand is a number THIS file counted, so this asserts this
+       codebase's own logic and nothing a server stated. */
+    DCHECK(candidatesAsked + candidatesDeclined > 0,
+           "a discovery sweep for service " + JSON.stringify(service) + " walked its candidate list and " +
+           "neither asked nor declined a single address — `buildDiscoveryUrls` composes at least nine " +
+           "generic paths for any hostname, so a zero on both halves is every candidate throwing past the " +
+           "reply-record DCHECK in the loop, and the not_found record about to be written would tell the " +
+           "re-ask gate that this zone asked and found nothing when it asked nothing at all");
     tab.discoveryDocs.set(service, {
       status: "not_found",
       _triedKeys: triedKeys,
+      /* WHAT THIS SWEEP ACTUALLY PUT TO THE WIRE, AND WHAT THE EGRESS POLICY DECLINED TO SEND — the two
+         halves of the candidate walk, stated as counts because the question the gate asks is `was anything
+         asked` and not `which key`. `_triedKeys` beside them is a DIFFERENT fact and neither replaces the
+         other: the key set says which QUESTIONS this sweep would have put, and these say whether any of them
+         left. A sweep at an origin nobody has widened reads `0` and `N` here, and that is not the same
+         record as a service that answered 404 to every address — those two take opposite work (widen the
+         origin, or accept that the service publishes no document) and
+         CLAUDE.md §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES is exact that an absent result and a zero result
+         may never be averaged. THEY ARE NOT PERSISTED AND NO `_STORE_SHAPE` BUMP IS OWED:
+         lib/persistence.js's projection writes status/url/apiKey/fetchedAt/doc/grouping/isVirtual/
+         pageUrls/frameOrigins and none of these, and the gate reads `tab.discoveryDocs` — a map only
+         lib/learn.js, lib/response-decode.js and this file write, never the restore door, which writes
+         `globalStore.discoveryDocs`. So a record from an
+         older store can never reach the gate and read `undefined` here, which is the defect one level down
+         and is the one this diff is fixing one level up. */
+      _candidatesAsked: candidatesAsked,
+      _candidatesDeclined: candidatesDeclined,
       /* THE SEED SURVIVES THE FAILURE. This record dropped it, and it is the one field that makes the next
          attempt possible: `finalSeedUrl = seedUrl || currentStatus?.seedUrl` above, and the popup's
          FETCH_DISCOVERY passes no seed at all — so a service that came up not_found could never be probed

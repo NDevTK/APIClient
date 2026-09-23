@@ -731,13 +731,39 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
      addresses with the same keys — on EVERY captured response for the service, for as long as the page ran.
      That is not the one-per-endpoint rule, it is the blind sweep it forbids, and it was hidden by a field whose
      comment described a comparison no code performed.
-     THE ASK IS DIFFERENT ALONG EXACTLY TWO AXES, so both are asked and neither is invented. (1) A KEY the
-     failed sweep never carried: a candidate URL bearing it has never been fetched. (2) A PROBEABLE SEED the
+     THIS SENTENCE READ `THE ASK IS DIFFERENT ALONG EXACTLY TWO AXES` AND THE COUNT WAS WRONG BY THE ONE
+     THAT MATTERS MOST, so it is rewritten rather than deleted — both of its axes are right and a reader who
+     re-derives the pair will re-derive exactly them, because they are the axes a sweep that ASKED SOMETHING
+     has. (0) THE SWEEP PUT NO QUESTION AT ALL. `_triedKeys` names the keys the sweep CARRIED, and
+     lib/discovery-probe.js adds a key to it BEFORE composing that key's candidates — so a sweep the egress
+     policy declined in full records every key as tried, and this gate reads a key nothing was ever asked
+     about as a key that was asked and found nothing. That is the exact opposite of what a `decline` means:
+     lib/safe-fetch.js grades it "THIS TOOL declined, and no browser is refusing anything … The flow stays
+     parked and fires the day the origin is widened", and the record it landed on was a terminal negative
+     that widening did not reopen. EXERCISED in a vm against the real sweep and this gate's own logic, with
+     every candidate declined: the record reads `status:"not_found"` and `_triedKeys:["KEY_A"]`, this gate
+     answers `not a new question` both before and after a widening, and the control — a sweep whose
+     candidates were genuinely asked and answered 404 — produces a record IDENTICAL on every field this gate
+     reads. A per-key repair could not have reached it either: `collectKeysForService` returns `[]` for a
+     service no key has been seen with, so the loop below iterates nothing and the key axis is structurally
+     silent for that whole population at every setting of the widening table.
+     SO THE FIRST QUESTION IS THE COUNT AND NOT THE KEY SET. `_candidatesAsked === 0` says this zone put
+     nothing to the wire; `_candidatesDeclined > 0` says the reason was this egress policy rather than a
+     transport that threw, and neither conjunct is decoration — a sweep that walked its candidates and threw
+     on every one of them raises neither counter, asked nothing AND declined nothing, and re-asking it would
+     be spinning on a broken edge rather than re-opening a question a person can answer.
+     (1) A KEY the failed sweep never carried: a candidate URL bearing it has never been fetched.
+     (2) A PROBEABLE SEED the
      record did not have: `fetchDiscoveryForService`'s tail falls back to the req2proto error probe, which the
      recorded seed did not qualify for (lib/discovery-probe.js writes a not_found record only on that branch),
      so this exchange offering one is new work rather than a repeat. The verb test is `_seedIsProbeable`'s and
      is not restated here; a null `seedMethod` is a record with no probeable seed, which is why it is asked
-     before that call rather than passed into its DCHECK. */
+     before that call rather than passed into its DCHECK.
+     WHAT THIS DOES NOT PERMIT, SAID HERE BECAUSE THE GATE IS ONE HOP FROM AN EGRESS DECISION AND READS AS
+     ONE: nothing. Re-opening a question the policy declined is not a retry and not a widening — every
+     candidate of the re-asked sweep goes through the same chokepoint and is declined again until a person
+     widens the origin, which is why the loop this creates costs local work and ZERO egress. The thing it
+     changes is that the record stops CLAIMING an answer nobody asked for. */
   if (!_isBoringFetch) {
     const keysForService = collectKeysForService(tab, service, url.hostname);
     if (apiKey && !keysForService.includes(apiKey)) keysForService.push(apiKey);
@@ -745,9 +771,19 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     if (!_askIsNew && preLearnDiscovery.status === "not_found") {
       DCHECK(preLearnDiscovery._triedKeys instanceof Set,
              "a not_found discovery record carries no _triedKeys Set — lib/discovery-probe.js writes one on " +
-             "every not_found record it stores, and it is the whole of what makes a second ask a different " +
-             "question, so its absence would make every captured response re-fire the identical sweep");
-      for (const _k of keysForService) if (!preLearnDiscovery._triedKeys.has(_k)) { _askIsNew = true; break; }
+             "every not_found record it stores, and it is the whole of what makes a second ask with a " +
+             "newly-learned key a different question");
+      DCHECK(typeof preLearnDiscovery._candidatesAsked === "number" &&
+             typeof preLearnDiscovery._candidatesDeclined === "number",
+             "a not_found discovery record does not say how many of its candidates were ASKED and how many " +
+             "this zone's egress policy DECLINED — lib/discovery-probe.js states both on every not_found " +
+             "record it stores, and without them a sweep that put no question at all is indistinguishable " +
+             "from one a server answered 404 to, so a service the policy refused in full would be closed " +
+             "for ever and the widening that is supposed to reopen it would reopen nothing");
+      if (preLearnDiscovery._candidatesAsked === 0 && preLearnDiscovery._candidatesDeclined > 0)
+        _askIsNew = true;
+      if (!_askIsNew)
+        for (const _k of keysForService) if (!preLearnDiscovery._triedKeys.has(_k)) { _askIsNew = true; break; }
       if (!_askIsNew && _seedIsProbeable(msg.url, msg.method) &&
           !(preLearnDiscovery.seedMethod && _seedIsProbeable(preLearnDiscovery.seedUrl, preLearnDiscovery.seedMethod)))
         _askIsNew = true;

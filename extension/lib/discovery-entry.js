@@ -40,11 +40,12 @@
    (lib/serialize.js) and that serialization DROPS an `undefined` property, so an `undefined` absent value
    would arrive absent on one side of the boundary and present on the other.
 
-   NAMED RESIDUAL — WHAT THIS FILE DOES NOT COVER YET. A discovery-doc entry carries a dozen more names
+   NAMED RESIDUAL — WHAT THIS FILE DOES NOT COVER YET. A discovery-doc entry carries fourteen more names
    (`status`, `url`, `apiKey`, `fetchedAt`, `doc`, `isVirtual`, `publishedJson`, `seedUrl`, `seedMethod`,
-   `_triedKeys`, `pageUrls`, `frameOrigins`), and this file declares NONE of them: it is the `grouping`
-   contract, not the entry's constructor. That is narrower than lib/endpoint-record.js is for an endpoint, and
-   deliberately so — those names have four genuinely different record shapes (pending / not_found / fetched /
+   `_triedKeys`, `_candidatesAsked`, `_candidatesDeclined`, `pageUrls`, `frameOrigins`), and this file
+   declares NONE of them: it is the `grouping` contract, not the entry's constructor. That is narrower than
+   lib/endpoint-record.js is for an endpoint, and deliberately so — those names have four genuinely
+   different record shapes (pending / not_found / fetched /
    virtual) and closing them is a separate reading of each producer. THE NEXT DIFF builds `makeDiscoveryEntry`
    here, with a shape per producer, and every `discoveryDocs.set` in the extension goes through it. ITS ABSENCE
    SHOWS as exactly the defect above one field over: `isVirtual` is read `!!v.isVirtual` at three consumers and
