@@ -31,6 +31,7 @@ const path = require("path");
 const fs = require("fs");
 const puppeteer = require("puppeteer");
 const { artifactStamp } = require("./artifact_stamp.js");
+const { absentPair } = require("./absent_census.js");
 
 const LOCK_FILE = process.env.HARNESS_LOCK
   ? path.resolve(process.env.HARNESS_LOCK) : path.join(__dirname, "harness.lock");
@@ -397,6 +398,13 @@ const WFQ_JOB_SPLIT = ["jobsReady", "jobsFramed", "jobsOwed", "jobWGap", "jobsRe
    composes `{members: 0}` with NO term rows at all: on an empty frontier the row is absent from the document
    and `null` is the honest answer, never 0. */
 const WFQ_LIFETIME = ["unframedPicksLifetime"];
+/* THE OWED-GLOBALS PAIR, NAMED HERE SO THE KIND LINE CANNOT DRIFT FROM THE ROWS. Both are LIFETIME
+   counts over the agent's life — solver/absent.c raises them per read and zeroes them only when the
+   agent goes — so they are differenceable, unlike the gauges beside them. The names are this list and
+   the reading is testing/absent_census.js's; a row added to one and not the other would print a kind
+   statement that does not cover it, which is the §a-quantity-whose-kind-you-cannot-name defect wearing
+   a header. */
+const ABSENT_ROWS = ["absentAsked", "absentOwed"];
 const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered",
   /* AND THE OTHER THREE ENDS OF THE REPLY DOOR, WITHOUT WHICH `replyAsked - replyAnswered` IS A NUMBER WITH
      THREE READINGS THAT TAKE OPPOSITE WORK. A record ends answered, REFUSED by this tool's own egress policy,
@@ -635,6 +643,33 @@ function census(r) {
   o.wfqMembers = w && typeof w.members === "number" ? w.members : null;
   for (const k of WFQ_JOB_SPLIT) o[k] = live && typeof w[k] === "number" ? w[k] : null;
   for (const k of WFQ_LIFETIME) o[k] = live && typeof w[k] === "number" ? w[k] : null;
+  /* AND WHAT THE PAGE ASKED FOR AND DID NOT GET, WHICH IS THE ONE ABSENCE NOTHING ELSE ON THIS ROW CAN
+     STATE. Every other column here is the engine reporting what it DID; this is solver/absent.c reporting
+     what a document READ that a STANDARD owns and this realm does not answer. CLAUDE.md §NO-STUBS: a page
+     writes `if (window.X)`, this engine does not have `X`, the read is CORRECTLY decided false — a real
+     browser without it answers false too — the fallback branch runs, and every endpoint and sink behind the
+     true branch goes unreachable with NOTHING THROWING. That is the one absence this project's forcing
+     function cannot surface, so it is discoverable only by comparison and needs an instrument rather than a
+     crash. The engine has been counting it and bridge.js has been relaying it onto every run record this
+     driver reads; this driver never asked, which is the same broken contract as a field written with no
+     reader and is the defect the census itself exists to make visible one rung out.
+     BOTH NUMBERS OR NEITHER, because the FRACTION is the whole point: `absentOwed: 0` against
+     `absentAsked > 0` is the positive statement that this engine answered every name the standards were
+     asked for, and `absentOwed: 0` against `absentAsked: 0` is a census that was never reached. Opposite
+     findings, one digit — so the pair comes back together from one reader or not at all.
+     THE REFUSAL IS ITS OWN FIELD AND IS NOT A ZERO. `null` here is this driver's absent-versus-zero rule and
+     means the run did not state the census; `absentRefused` means it DID and this driver cannot resolve it,
+     which is a fact about the pair (the artifact's composer is not the tree's) and not a reading of the
+     page. Collapsing the two would report a clean engine for as long as the drift stood. The message is a
+     STRING deliberately: `spread` takes numbers only, so a refusal folded into the pair would be filtered
+     out and print as `-`, which is the silence this row exists to end.
+     NOT IN THE SPREAD SUMMARY, LIKE EVERY OTHER CENSUS ROW HERE — the summary reads `counters`, which holds
+     run TOTALS read flat off the record, and this rides `frontier` with the other four censuses. It is
+     printed per run in that row's own JSON, which is where a reader of repeated drives compares them. */
+  const ab = absentPair(("absent" in r) ? r.absent : null);
+  o.absentAsked = ab.err ? null : ab.asked;
+  o.absentOwed = ab.err ? null : ab.owed;
+  if (ab.err) o.absentRefused = ab.err;
   return o;
 }
 
@@ -801,7 +836,8 @@ async function main() {
   /* THE KIND OF EVERY CENSUS ROW, STATED WHERE THE ROWS ARE FILED UNDER IT — §Testing: a quantity whose kind
      you cannot name FROM ITS OUTPUT is one you are not entitled to do arithmetic on, and the names do not say. */
   console.log("# frontier.* — LIFETIME (may be differenced): " +
-              CENSUS_LIFETIME.concat(COLD_COUNTERS).concat(WFQ_LIFETIME).join(",") + ", and every `forkAt` row" +
+              CENSUS_LIFETIME.concat(COLD_COUNTERS).concat(WFQ_LIFETIME).concat(ABSENT_ROWS).join(",") +
+              ", and every `forkAt` row" +
               " | UNITS: replayHits+replayLeftArms are ARMS (decision-vector slots), replayLeft is EVENTS" +
               " | GAUGES (may FALL; never difference): " +
               CENSUS_GAUGE.concat(WFQ_JOB_SPLIT).concat(["wfqMembers"]).join(","));

@@ -25,6 +25,7 @@ import puppeteer from 'puppeteer';
 import { writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { loadavg, cpus } from 'node:os';
+import { absentPair } from '../absent_census.js';
 
 const id = process.argv[2], url = process.argv[3], pass = process.argv[4] || '';
 const DWELL = Number(process.env.DWELL || 40000);
@@ -849,29 +850,21 @@ const row = {
      that this engine answered every name the standards were asked for, and `absentOwed: 0` against
      `absentAsked: 0` is a census that was never reached. Opposite findings, one digit.
      A MISSING KEY IS FATAL RATHER THAN NULL. `null` means the question was not asked — no counted run, or an
-     artifact too old to publish the census. A census that IS present and does not carry these rows is a
-     RENAMED KEY in absent.c, and defaulting that to 0 would report a clean engine for as long as the drift
-     stood. The keys are matched by a distinctive SUBSTRING and the match is asserted to be exactly one, so a
-     rename is loud and a punctuation edit is survivable; a hand-copied full key would go quietly to null.
-     RETIREMENT: this record goes when this file derives its census key names from absent_json()'s own
-     composer rather than matching copies of them. */
+     artifact too old to publish the census. A census that IS present and whose members are not the ones this
+     tree's composer declares is a DIFFERENT COMPOSER, and defaulting that to 0 would report a clean engine
+     for as long as the drift stood.
+     THE KEYS ARE DERIVED AND THE READER IS SHARED — `testing/absent_census.js`, which parses `absent_json`'s
+     own member declarations and holds the reason at its own site. This file used to match two distinctive
+     SUBSTRINGS of the members' prose and left a residual asking for exactly that derivation; what retired it
+     was a SECOND driver needing the same two numbers, since copying the extractor would have been the second
+     copy §AN-AUDITOR-DERIVES-THE-RULE forbids and this directory has paid for that twice already. What the
+     driver now holds is a C IDENTIFIER rather than a fragment of a sentence a person reads, so `absent.c` is
+     free to reword its members and every consumer follows unedited. */
   ...(() => {
-    const pick = (a, needle) => {
-      const hits = Object.keys(a).filter((k) => k.includes(needle));
-      if (hits.length !== 1) return { err: hits.length + ' keys of the `absent` census contain ' +
-        JSON.stringify(needle) + ' — solver/absent.c renamed or duplicated a composer row and this file ' +
-        'matches a copy of it; re-derive from absent_json() rather than defaulting to 0' };
-      if (typeof a[hits[0]] !== 'number') return { err: 'the `absent` census states ' +
-        JSON.stringify(hits[0]) + ' as a non-number' };
-      return { v: a[hits[0]] };
-    };
     if (!counted.length) return { absentAsked: null, absentOwed: null };
-    const a = counted[counted.length - 1].absent;
-    if (a === undefined || a === null) return { absentAsked: null, absentOwed: null };
-    const asked = pick(a, 'reads of the global object');
-    const owed = pick(a, 'a standard owns it');
-    if (asked.err || owed.err) return { absentFatal: asked.err || owed.err };
-    return { absentAsked: asked.v, absentOwed: owed.v };
+    const r = absentPair(counted[counted.length - 1].absent);
+    if (r.err) return { absentFatal: r.err };
+    return { absentAsked: r.asked, absentOwed: r.owed };
   })(),
   /* THE ORPHAN SURFACE, WHICH IS THE HEADLINE ONE AND HAD NO COLUMN. §What-the-tool-produces is "what the
      bundle CAN do but didn't", and until the engine's own pair crossed the result document, whether a session

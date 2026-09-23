@@ -803,11 +803,17 @@ char *absent_json(void)
     /* AND THE OTHER OPERATOR THAT ANSWERS WITHOUT READING, WHICH IS A THIRD MEMBER AND NOT A SECOND TOTAL.
        `"X" in window` is ECMAScript §13.10.1's HasProperty and never a [[Get]], exactly as `typeof X` is
        §13.5.3.1 step 2.a — but a bundle writes ONE of the two and the false arms it takes are different code,
-       so a member that added them would answer a question nobody asks. The NAME is spelled so that no reader
-       of this census can newly match it: testing/corpus/site.mjs picks two members by the distinctive
-       substrings "reads of the global object" and "a standard owns it" and asserts each matches EXACTLY ONE
-       key, so a row sharing either would turn that row's reading into a hard error rather than a wrong number
-       (CLAUDE.md §AND-THE-MIRROR-OF-THAT-IS-A-NEW-KEY). Neither substring is in this one. */
+       so a member that added them would answer a question nobody asks.
+       THE NAME USED TO BE SPELLED SO THAT NO READER OF THIS CENSUS COULD NEWLY MATCH IT, and that constraint
+       is RETIRED rather than merely satisfied — recorded because a reader who re-derives it will re-impose it
+       on the next member for nothing. testing/corpus/site.mjs picked two members by distinctive SUBSTRINGS of
+       their prose and asserted each matched exactly one key, so a member sharing either turned that reading
+       into a hard error (CLAUDE.md §AND-THE-MIRROR-OF-THAT-IS-A-NEW-KEY). It no longer matches prose at all:
+       testing/absent_census.js parses the declarations below and resolves a member by its C IDENTIFIER, which
+       is the stable token, and compares the member SET it derives against the one a census actually carries.
+       So a new member here may say anything, and what this file owes its readers is instead the rule two
+       paragraphs down — a member OPENS ON `_` and a row cannot, which is what tells the two apart with no
+       list of names at either end. */
     static const char KEY_IN[]    = "_of those, answered by the in operator with no [[Get]] performed";
     /* ONE PER VOCABULARY AND INDEXED BY THE ENUM, which is what the header's `ABSENT_VOCAB_N` promise buys: a
        third standard adds a row to this array and to `g_owed_by_vocab`, and nothing else here changes. */

@@ -76,12 +76,19 @@ const passes = files.map((f) => {
              : measured.some((r) => 'policyEnvelope' in r) ? 'carried' : 'predates',
            /* AND A FOURTH, FOR THE ABSENT-GLOBAL CENSUS, asked separately for the reason the three above
               are. IT HAS A STATE THE OTHERS DO NOT, and folding it in would be the defect the field exists
-              to report: site.mjs matches absent.c's member names by a distinctive SUBSTRING and writes
-              `absentFatal` when a substring stops matching exactly one key, so a row carrying that is a
-              RENAME in the engine's composer and not an old instrument. `'absentAsked' in r` is false for
-              both, so a probe that asked only that would print `predates` over a live drift and the column
-              would go quietly dark while a shout said the pass was simply old. The two are separated here
-              and the fatal one is shouted below with the message the row carries. */
+              to report: site.mjs derives absent.c's member names through testing/absent_census.js and writes
+              `absentFatal` when the member SET that composer declares is not the set the census on the record
+              carries, so a row carrying that is the ARTIFACT AND THE TREE DISAGREEING ABOUT THE CENSUS and
+              not an old instrument. `'absentAsked' in r` is false for both, so a probe that asked only that
+              would print `predates` over a live drift and the column would go quietly dark while a shout said
+              the pass was simply old. The two are separated here and the fatal one is shouted below with the
+              message the row carries.
+              THIS USED TO SAY A DISTINCTIVE SUBSTRING MATCHING OTHER THAN EXACTLY ONE KEY, which is the
+              mechanism site.mjs had before it derived, and it is rewritten rather than deleted because the
+              CONCLUSION is unchanged and a reader who re-derives the old mechanism re-introduces the old
+              reading with it. What moved is what the state MEANS: under a substring match a reword in the
+              composer was fatal even against a freshly built artifact, and under derivation it is not — both
+              sides move together — so the only thing left that can fire this is the pair being out of step. */
            absent: measured.length === 0 ? 'nothing-measured'
              : measured.some((r) => 'absentFatal' in r) ? 'fatal'
              : measured.some((r) => 'absentAsked' in r) ? 'carried' : 'predates' };
@@ -667,13 +674,14 @@ if (pPredates.length)
     'was ever answered, which is a third fact again. ***');
 
 /* AND THE FOURTH, FOR THE ABSENT-GLOBAL PAIR, WITH A SECOND LINE THE OTHER THREE DO NOT NEED. The predates
-   shout is the same argument as theirs. The FATAL one is not a variant of it: `absentFatal` means site.mjs
-   found a distinctive substring matching other than exactly one key of the engine's census, which is
-   solver/absent.c having renamed or duplicated a composer row — so the column is dark because the SEAM
-   moved, not because the pass is old, and the two prescribe opposite work (re-derive site.mjs's key match
-   against absent_json's composer, against wait for a newer pass). It is shouted with the row's own message
-   because that message names which substring and how many keys it matched, which is the whole of what the
-   next reader needs and is not recoverable from a `-`. */
+   shout is the same argument as theirs. The FATAL one is not a variant of it: `absentFatal` means the member
+   set solver/absent.c's composer declares in THIS TREE is not the set the census on that row carries, which
+   is the artifact that answered and the source that was read being two different composers — so the column
+   is dark because the PAIR moved, not because the pass is old, and the two prescribe opposite work (rebuild
+   and reinstall the artifact, or read the row at the revision it was stamped at, against wait for a newer
+   pass). It is shouted with the row's own message because that message names both member counts and the
+   members each side has that the other does not, which is the whole of what the next reader needs and is not
+   recoverable from a `-`. */
 const aPredates = passes.filter((p) => p.absent === 'predates').map((p) => p.label);
 const aCarried = passes.filter((p) => p.absent === 'carried').map((p) => p.label);
 const aFatal = passes.filter((p) => p.absent === 'fatal').map((p) => p.label);
@@ -684,9 +692,10 @@ if (aPredates.length)
     'no absent global and NOT an engine that answered every name one was asked for. ***');
 if (aFatal.length)
   console.log('\n*** THE `miss>owed` COLUMN IS DARK ON ' + aFatal.join(', ') + ' BECAUSE THE ENGINE\'S ' +
-    'CENSUS KEYS MOVED, NOT BECAUSE THE PASS IS OLD — site.mjs matched a distinctive substring against ' +
-    'other than exactly one key of solver/absent.c\'s composer. This is a seam to repair rather than a ' +
-    'measurement to wait for. ***\n' +
+    'CENSUS KEYS MOVED, NOT BECAUSE THE PASS IS OLD — the members solver/absent.c declares in this tree ' +
+    'are not the members the census on that row carries, so the artifact that answered and the source ' +
+    'that was read are two different composers. This is a pair to bring back into step (rebuild and ' +
+    'reinstall, or read the row at its stamped revision) rather than a measurement to wait for. ***\n' +
     passes.filter((p) => p.absent === 'fatal')
       .map((p) => '    ' + p.label + ': ' +
         (p.rows.filter((r) => r.absentFatal).map((r) => r.id + ' — ' + r.absentFatal)[0] || '(no message)'))
