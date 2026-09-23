@@ -389,18 +389,24 @@ const char *absent_standard_name(const char *name, AbsentVocab *vocab)
  *   app state   — everything else: no vocabulary claimed the name.
  * `owed + index + appState == globalReads` is asserted in the composer, where all four are in one hand.
  * THE THIRD ARM IS NAMED FOR THE DECISION AND NOT FOR THE MINT, which it used to be and which stopped being
- * true the day a second entry reached this partition — and there are now THREE, which is the same argument
- * holding rather than a new one: a `typeof` read and an `in` read are each classified by the same three arms
- * and each mints nothing, so a counter called "mints" would have been a verb its own accessor no longer
- * performs (CLAUDE.md §READ-THE-ACCESSOR). What a reader who wants the mints does instead is subtract BOTH,
- * which is what the two operator members are for and why each is a SEPARATE CUT of the same denominator
- * rather than a fourth and fifth arm:
+ * true the day a second entry reached this partition, and is MORE true with every entry since: a read that
+ * performs no [[Get]] is classified by these same three arms and mints nothing, so a counter called "mints"
+ * would have been a verb its own accessor no longer performs (CLAUDE.md §READ-THE-ACCESSOR). What a reader
+ * who wants the mints does instead is subtract EVERY no-[[Get]] member,
+ * which is what those members are for and why each is a SEPARATE CUT of the same denominator
+ * rather than another arm. HOW MANY OF THEM THERE ARE IS NOT STATED IN THIS PROSE and that is the rule rather
+ * than an omission: it is `AbsentEntry`'s to carry, and every sentence that restated it was one more place to
+ * be wrong the day a member landed. The `TWO` and `THREE` this paragraph and its neighbours used to spell all
+ * went wrong in one hour when `Reflect.has` arrived, and none of them was load-bearing for anything:
  *   typeof      — of those reads, the ones the typeof operator answered, which performed no [[Get]] and left
  *                 nothing behind. `typeof <= globalReads` is asserted beside the identity.
  *   in          — of those reads, the ones the `in` operator answered, likewise. `in <= globalReads` is
  *                 asserted beside it, as its OWN containment rather than as a sum with the one above.
- * A fourth ARM would have broken the partition; a CUT states a fact the partition cannot. They are two
- * members and not one "answered without a [[Get]]" total because a bundle writes ONE of the two spellings,
+ *   Reflect.has — of those reads, the ones §28.1.8 "Reflect.has ( target, key )" answered. It is the
+ *                 SAME §7.3.11 the `in` operator ends at, reached by a CALL rather than by an operator, and
+ *                 it is its own cut for the reason the pair above are two: a bundle writes one spelling.
+ * A fourth ARM would have broken the partition; a CUT states a fact the partition cannot. They are separate
+ * members and not one "answered without a [[Get]]" total because a bundle writes ONE of the spellings,
  * so the split is the whole content: which of them a document used is a fact about what that document's
  * false arms cost, and a sum of them is a number about nothing anybody asked.
  *
@@ -422,11 +428,11 @@ const char *absent_standard_name(const char *name, AbsentVocab *vocab)
  * not §7.3.2 Get — so no [[Get]] is performed there either and a value handed back would answer a question
  * the standard does not ask. So the engine RECORDS on its way past each arm
  * (JSConcolicHooks.absent_unresolved -> absent_unresolved_note below) and decides nothing, and a name read
- * all three ways raises ONE row. The population these numbers are a fraction of is therefore "reads of a
- * global name this file was told about", by ANY of the three entries, and the two `_of those, answered by
- * the … operator` members split them — because the mint happens on only one of the three, so a reader who
- * wants the count of unknowns minted on the global subtracts both and cannot get it from the app-state arm
- * alone.
+ * every way raises ONE row. The population these numbers are a fraction of is therefore "reads of a
+ * global name this file was told about", by ANY entry, and the `_of those, answered by …` members split
+ * them — because the mint happens on the READ entry alone, so a reader who
+ * wants the count of unknowns minted on the global subtracts every one of them and cannot get it from the
+ * app-state arm alone.
  *
  * THE `in` SPELLING IS BUILT AND THE RESIDUAL THAT DEFERRED IT IS RETIRED — AND WHAT IS KEPT IS THE PART OF
  * ITS NEXT-DIFF CLAUSE THAT WAS WRONG, because that clause was landed as an instruction and a later reader
@@ -452,32 +458,68 @@ const char *absent_standard_name(const char *name, AbsentVocab *vocab)
  * where the code SITS rather than reading what it DOES — thirty lines apart, in the function the clause named.
  * The spec half of the same residual was correct throughout.
  *
- * NAMED RESIDUAL — NOT COVERED: a [[HasProperty]] on the global reached through a CALL rather than through an
- * OPERATOR. `Reflect.has(window, "X")` and `Object.prototype.hasOwnProperty.call(window, "X")` ask the same
- * question about the same name and answer it with no [[Get]], exactly as `in` does — Reflect's is literally
- * the same `GP_HAS` request, declared at `js_reflect_has_def` — but they are METHODS, so their answer is
- * delivered into a step machine rather than onto the operand stack and they reach no operator placement. The
- * key rule is the same one: a call may hand either of them a symbol, so that arm would filter as this one
- * does. (`hasOwnProperty` is the narrower question — §7.3.12 HasOwnProperty, not §7.3.11 — and the global's
- * own chain makes the two answers differ for a name inherited from Object.prototype, which is a fact about
- * which of them a page may be asking and not a reason to record only one.)
- * WHAT THE NEXT DIFF BUILDS: the same three gates this arm carries — base is the global object, answer is
- * false, key is nameable — at the point `js_reflect_prop_step`'s GP_HAS answer is delivered, reaching
- * absent_unresolved_note with a third member of JSConcolicAbsentOp. The enum's switch here has no `default`,
- * so adding that member is a compile diagnostic at this function rather than a cut that silently stays zero.
+ * THE `Reflect.has` HALF OF THE CALL RESIDUAL IS BUILT AND THE OTHER HALF IS NOT, AND WHAT IS KEPT IS THE
+ * REASON THEY CANNOT SHARE A DIFF — because the retired clause GROUPED them, and a reader who re-derives it
+ * from "both are calls that answer with no [[Get]]" will group them again. That clause said: the same three
+ * gates this arm carries — base is the global object, answer is false, key is nameable — at the point
+ * `js_reflect_prop_step`'s GP_HAS answer is delivered, reaching absent_unresolved_note with a third member of
+ * JSConcolicAbsentOp. For `Reflect.has` every word of it was EXACT, including the compile-diagnostic property
+ * of the `default`-less switch below, and the diff is made of it. For `hasOwnProperty` the same three gates
+ * are UNSOUND, and building to the clause would have published a false finding rather than leaving a gap.
+ * WHY THE GATES DO NOT TRANSFER, WHICH IS A FACT ABOUT THE CENSUS AND NOT ABOUT THE ROUTE. Every entry this
+ * file has establishes CHAIN-absence before it records: the read hook is asked only after a [[Get]] missed the
+ * whole prototype chain, `typeof` is an unresolvable Reference, and `in` and `Reflect.has` are §7.3.11
+ * HasProperty ( obj, propertyKey ), which walks it. That is what the owed arm MEANS by a name this realm does
+ * not answer. §7.3.12 HasOwnProperty establishes OWN-absence and nothing more — and Web IDL puts an
+ * interface's members on its prototype, which core/frame/window.c builds as
+ * `window -> Window.prototype -> WindowProperties -> EventTarget.prototype`, so a name this engine ANSWERS
+ * PERFECTLY WELL is own-absent on the global whenever it is inherited. DOM §2.7 Interface EventTarget is not
+ * declared [Global] and core/events/event_target.c states that its three operations are own properties of no
+ * global and always will be; `addEventListener` is in browser/platform_names.h. So `false` from an own-only
+ * query on that name is not a miss, and a gate that took it for one would file a component this engine HAS
+ * under the census of components it OWES — the one direction browser/platform_names.h's own header calls a
+ * wrong answer rather than a missing one.
+ * NAMED RESIDUAL — NOT COVERED: an OWN-ONLY query on the global — `Object.hasOwn(globalThis, "X")`,
+ * `Object.prototype.hasOwnProperty.call(window, "X")` (one step machine, `js_hasown_step`, the arg choosing
+ * which of the two ORDERS §20.1.2.14 and §20.1.3.2 state), and `Object.getOwnPropertyDescriptor(window, "X")`
+ * beside them. Each answers `false`/`undefined` with no [[Get]], each is a feature detect a bundle really
+ * writes, and none of them reaches this census.
+ * WHAT THE NEXT DIFF BUILDS: a fact that establishes CHAIN-absence at that site, stated by the engine
+ * alongside the own-absence the operation already computed — because the gate is what is missing and the
+ * route is not. The route is the easy half and is the same shape the `Reflect.has` arm just took: the machine
+ * holds its target, its key and its answer in one hand at its final stage. What it does NOT hold is the only
+ * thing this census needs, so a diff that adds the route and reuses these three gates is the wrong diff, and
+ * it is the one the retired clause above would have produced. A new member of JSConcolicAbsentOp whose host
+ * entry does NOT enter the owed arm is a second shape worth pricing against it — an own-only detect that is
+ * counted and openly not classified is a smaller claim than a wrong one.
  * HOW ITS ABSENCE SHOWS: for one document and one absent name, the census moves when the detection is spelled
- * with an operator and does not move when it is spelled with a call — so a reader comparing two documents'
- * owed counts is comparing how each bundle's authors happened to write a feature test, and the call spelling
- * is the one that reads as a document that asked for nothing. It is NOT shown by the corpus being empty of
- * the shape today: that is one run of an instrument over one set of mirrors, and it is the population this
- * census exists to measure at RUNTIME rather than to predict from a grep.
+ * `"X" in window` or `Reflect.has(window, "X")` and does not move when it is spelled `Object.hasOwn(window,
+ * "X")` — so a reader comparing two documents' owed counts is comparing how each bundle's authors happened to
+ * write a feature test, and the own-only spelling is the one that reads as a document that asked for nothing.
+ * It is NOT shown by the corpus being empty of the shape: that is one run of an instrument over one set of
+ * mirrors, and it is the population this census exists to measure at RUNTIME rather than to predict from a
+ * grep.
  *
  * THE DERIVATION FOR HOW MUCH EACH SPELLING IS WORTH IS A COMMAND AND NEVER A NUMBER HERE, and each of these
  * is a FLOOR: it counts one spelling of one shape over the mirrors this tree happens to hold, so a minified
  * alias for the receiver, a computed key and a quote style it does not list are all invisible to it. The
  * instrument that answers without a spelling in it is this census itself.
- *   `grep -rohE '"undefined"!=typeof [A-Za-z_$][A-Za-z0-9_$]*' --include='*.js' testing/corpus | wc -l`
- *   `grep -rohE '["'"'"'][A-Za-z_$][A-Za-z0-9_$]*["'"'"'] *in *(window|self|globalThis)\b' --include='*.js' testing/corpus | wc -l`
+ * THE PATH THESE COMMANDS NAMED WAS `testing/corpus` AND IT IS THE WRONG TREE, which is recorded rather than
+ * quietly repaired because the failure is the one CLAUDE.md rates worst for a probe: run against that path
+ * they answer ZERO with the question unarmed, and a zero here reads as "no bundle writes this shape" — which
+ * is the conclusion that argues for not building the arm. `testing/corpus` holds this project's OWN control
+ * fixtures; the mirrored bundles are `engine/.work/sitecorpus/mirror`, .gitignored and fetched at run time
+ * (`node testing/corpus/fetch.mjs`), which is the one input engine/absentrank.mjs reads. A reader who gets 0
+ * from every line below has an empty or absent corpus, not an empty population, and the first two are the
+ * POSITIVE CONTROL that says which: they are the dominant spellings and a corpus that answers 0 for them is
+ * answering about itself.
+ *   `C=engine/.work/sitecorpus; J="--include=*.js"`
+ *   `grep -rohE '"undefined"!=typeof [A-Za-z_$][A-Za-z0-9_$]*' $J $C | wc -l`
+ *   `grep -rohE '["'"'"'][A-Za-z_$][A-Za-z0-9_$]*["'"'"'] *in *(window|self|globalThis)\b' $J $C | wc -l`
+ *   `grep -rohE 'Reflect\.has\( *(window|self|globalThis)\b' $J $C | wc -l`
+ *   `grep -rohE 'Object\.hasOwn\( *(window|self|globalThis)\b' $J $C | wc -l`
+ *   `grep -rohE 'hasOwnProperty\.call\( *(window|self|globalThis)\b' $J $C | wc -l`
+ *   `grep -rohE '(window|self|globalThis)\.hasOwnProperty\(' $J $C | wc -l`
  *
  * NAMED RESIDUAL — NOT COVERED: whether a recorded read was the SILENT one. `js_absent_ask` has exactly two
  * callers — derive them rather than taking a line number, which has already gone stale here once:
@@ -493,15 +535,15 @@ const char *absent_standard_name(const char *name, AbsentVocab *vocab)
  * THIRD outcome and is separated by its own member AND by its own bucket on the row, which the other two are
  * not: they are the two callers of ONE entry and land together in `read`. The outcome differs entirely AFTER
  * this hook returns, so a row whose `read` bucket stands at twelve cannot be read as twelve silent
- * degradations — and the bucket is the unit of that ambiguity now rather than the row, since the `typeof` and
- * `in` buckets beside it are each one outcome and carry none of it.
+ * degradations — and the bucket is the unit of that ambiguity now rather than the row, since every OTHER
+ * bucket beside it is one outcome and carries none of it.
  * WHAT THE NEXT DIFF BUILDS: the ask carrying which of its two callers asked, so the row splits into the arm
  * that degraded and the arm that threw — again an engine/qjs change.
  * HOW ITS ABSENCE SHOWS: a page that only ever writes `new EventSource(…)` is FULLY diagnosed by its own
  * ReferenceError in `pageErrors` and still appears here, so a reader cross-references the two surfaces by
  * hand; a name in this census with no matching `pageErrors` entry is the silent case and a name in both is
  * ambiguous. */
-/* WHICH OF THIS FILE'S THREE ENTRIES RAISED A READ. IT IS A HOST FACT AND NOT THE ENGINE'S
+/* WHICH OF THIS FILE'S ENTRIES RAISED A READ. IT IS A HOST FACT AND NOT THE ENGINE'S
    `JSConcolicAbsentOp`, and taking the engine's enum for it is the wrong diff a reader reaches for FIRST —
    recorded here because it is one member short of the population and the shortfall lands in the direction
    that inverts the finding. quickjs.h defines JSConcolicAbsentOp as "WHICH OPERATOR ASKED A GLOBAL NAME AND
@@ -514,16 +556,19 @@ const char *absent_standard_name(const char *name, AbsentVocab *vocab)
    `in` guard degrades to the false arm a browser without the feature also takes, and a read nothing guarded
    ends the flow at a ReferenceError, so filing the second under the first reports the cheapest band for the
    most expensive one.
-   SO THE ENGINE'S TWO MAP INTO THIS THREE AND NEVER THE OTHER WAY ROUND: the engine states which no-[[Get]]
-   operator asked because it is the only party that knows, and this file states which of ITS entries was
-   standing there because the engine does not know this file has three. `ABSENT_ENTRY_N` is the COUNT and is
+   SO THE ENGINE'S MEMBERS MAP INTO THIS FILE'S ENTRIES AND NEVER THE OTHER WAY ROUND: the engine states
+   which no-[[Get]] operation asked because it is the only party that knows, and this file states which of ITS
+   entries was standing there because the engine does not know what they are. The two populations are not the
+   same size and the difference is the READ entry, which no member of JSConcolicAbsentOp can name — so the map
+   is one-way by construction and not by convention. `ABSENT_ENTRY_N` is the COUNT and is
    never an entry — it is the poison an unset local carries into owed_note's own assert, exactly as
    `ABSENT_VOCAB_N` is, so an arm that classifies nothing aborts at the record with the name in hand rather
    than filing one spelling under another's.
    RETIREMENT: this argument goes when JSConcolicAbsentOp can name a [[Get]], which would mean the engine's
    `.absent` and `.absent_unresolved` hooks had become one — at which point the two enums are one enum and
    nothing here is re-derivable. */
-typedef enum { ABSENT_ENTRY_READ, ABSENT_ENTRY_TYPEOF, ABSENT_ENTRY_IN, ABSENT_ENTRY_N } AbsentEntry;
+typedef enum { ABSENT_ENTRY_READ, ABSENT_ENTRY_TYPEOF, ABSENT_ENTRY_IN, ABSENT_ENTRY_HAS_CALL,
+               ABSENT_ENTRY_N } AbsentEntry;
 
 /* AND THE SPLIT IS AN ARRAY OF COUNTS RATHER THAN ONE MEMBER NAMING AN ENTRY, which is the second half of the
    same argument and is independent of it. A row is keyed by NAME and accumulates for the life of the run, so
@@ -543,14 +588,15 @@ static long g_owed_reads, g_index_refused, g_appstate_reads;
 /* AND THE POPULATION THEY PARTITION, RAISED SEPARATELY AT THE TOP OF THAT ARM. It is not the sum of the three
    — see the raise for why deriving it would make the composer's identity a restatement instead of a check. */
 static long g_global_reads;
-/* AND TWO CUTS OF THAT SAME POPULATION, NEITHER OF WHICH IS AN ARM OR MAY BE ONE. The three arms answer
-   "what was the name"; these answer "which operator asked", and the two questions are independent — a
-   `typeof` or an `in` read lands in whichever of the three arms its NAME decides, exactly as a property read
-   does. Kept as cuts rather than folded into the arms because the mint happens on exactly ONE of the three
-   entries, so `app state − typeof − in` is the only expression from which a reader can recover how many
-   unknowns were actually minted on the global. Containment is asserted per cut in the composer, where each
-   and its denominator are in one hand (CLAUDE.md §a-count-offered-as-a-share).
-   THEY ARE TWO MEMBERS AND NOT ONE `answered without a [[Get]]` TOTAL, and that is the whole reason the
+/* AND THE CUTS OF THAT SAME POPULATION, NONE OF WHICH IS AN ARM OR MAY BE ONE. The three arms answer
+   "what was the name"; these answer "which operation asked", and the two questions are independent — a
+   `typeof`, an `in` or a `Reflect.has` read lands in whichever of the three arms its NAME decides, exactly as
+   a property read does. Kept as cuts rather than folded into the arms because the mint happens on exactly ONE
+   entry, so `app state` MINUS EVERY CUT is the only expression from which a reader can recover how many
+   unknowns were actually minted on the global — an expression that gains a term with every cut, which is why
+   the cuts are emitted as their own members rather than summed into one. Containment is asserted per cut in
+   the composer, where each and its denominator are in one hand (CLAUDE.md §a-count-offered-as-a-share).
+   THEY ARE SEPARATE MEMBERS AND NOT ONE `answered without a [[Get]]` TOTAL, and that is the whole reason the
    engine's hook carries an operator at all. A reader who finds a name in this census and wants to know why
    the page did not throw has to know which operator asked: `typeof X` and `"X" in window` take DIFFERENT
    false arms in a bundle and a page that writes one does not write the other, so a single total would be a
@@ -561,6 +607,13 @@ static long g_unresolved_reads;
    `RelationalExpression : RelationalExpression in ShiftExpression`. It is a cut for g_unresolved_reads'
    reason exactly and it is a SEPARATE cut for the reason stated there. */
 static long g_in_reads;
+/* AND THE THIRD — `Reflect.has(window, "X")`, ECMAScript §28.1.8 "Reflect.has ( target, key )" step 3's
+   "Return ? target.[[HasProperty]](propertyKey)". It asks the SAME §7.3.11 "HasProperty ( obj, propertyKey )"
+   the `in` operator ends at, so the QUESTION is identical and only the route differs — an operator's
+   placement against a step machine's request, which the engine states as its own member because those two
+   routes cannot see each other. It is a SEPARATE cut for g_unresolved_reads' reason exactly: a bundle writes
+   one spelling, and which one it wrote is the fact this member exists to state. */
+static long g_has_call_reads;
 /* AND THE SAME OWED READS SPLIT BY WHICH STANDARD OWES THEM, which is the fact absent_standard_name exists to
    carry: an unbuilt Web IDL interface is a browser component to write and an uninstalled ECMAScript §19 name
    is a language intrinsic this build did not link, and those are two different pieces of work. */
@@ -638,26 +691,26 @@ static void owed_note(const char *name, AbsentVocab vocab, AbsentEntry entry)
     g_owed_n++;
 }
 
-/* WHAT A MISS ON THE GLOBAL WAS, IN ONE FUNCTION, BECAUSE THREE ENTRIES ASK IT AND ONLY ONE OF THEM PERFORMS
+/* WHAT A MISS ON THE GLOBAL WAS, IN ONE FUNCTION, BECAUSE EVERY ENTRY ASKS IT AND ONLY ONE OF THEM PERFORMS
    A [[Get]]. The read hook asks so it can decide what to answer; absent_unresolved_note asks so it can record
-   a `typeof` or an `in` the engine has already answered. The classification is IDENTICAL for both — it is a question about
-   the NAME and about nothing else — and a second copy of it would be two answers to one question, which is
-   the shape this file's own header says drifts. So the arms are here, each still raised where it is decided,
-   and the denominator is raised here too: derived as the sum of the arms it could not disagree with them
-   under any state of this function, and an assert whose two sides cannot disagree is not a weak check but a
-   NON-check that certifies whatever it never examined. Raised at the top, it fires the day an arm is added
-   that leaves this function without classifying its read.
+   a no-[[Get]] operation the engine has already answered. The classification is IDENTICAL for both — it is a
+   question about the NAME and about nothing else — and a second copy of it would be two answers to one
+   question, which is the shape this file's own header says drifts. So the arms are here, each still raised
+   where it is decided, and the denominator is raised here too: derived as the sum of the arms it could not
+   disagree with them under any state of this function, and an assert whose two sides cannot disagree is not a
+   weak check but a NON-check that certifies whatever it never examined. Raised at the top, it fires the day
+   an arm is added that leaves this function without classifying its read.
    IT COUNTS WHAT THIS FILE WAS TOLD ABOUT and not "every global miss": every entry gates on the key rule
    first, so a symbol never arrives and is in neither the numerator nor this. WHY it holds differs per entry
    and that difference is not cosmetic — js_absent_ask FILTERS, the typeof arm has the identifier grammar and
-   ASSERTS, and the `in` arm FILTERS because §13.10.1's key is the page's own `? ToPropertyKey(leftValue)`.
+   ASSERTS, and every OTHER no-[[Get]] arm FILTERS because its key is the page's own ToPropertyKey result.
    One rule, three reasons; a reader who takes the reason for the rule will put an assert on a page's bytes.
    Returns 1 when the read is LEFT ALONE — a standard owes the name, or it is an integer key on the global —
    and 0 when no vocabulary claimed it, which is the arm the read hook mints an unknown on and the two
    operator entries simply record. `key` is the atom already spelled by ns_key_str.
    `entry` IS WHICH OF THE THREE ASKED AND IS THE CALLER'S TO STATE, for the reason the engine's own operator
    enum is the engine's to state: this function cannot infer it, because the classification it performs is a
-   question about the NAME and the name is identical at all three entries. It is carried rather than derived
+   question about the NAME and the name is identical at every entry. It is carried rather than derived
    and it reaches the ROW, which is what separates "this document guarded the name" from "this document read
    it" per NAME instead of only in the two whole-run cuts above. */
 static int global_miss_note(const char *key, JSAtom name, AbsentEntry entry)
@@ -795,7 +848,7 @@ char *absent_json(void)
     static const char KEY_OWED[]  = "_of those, reads of a name below — a standard owns it and this realm has none";
     static const char KEY_INDEX[] = "_of those, refused as an integer key on the global";
     static const char KEY_APP[]   = "_of those, no standard owns the name — server-injected app state";
-    /* THE FIRST OF TWO CUTS OF THE SAME DENOMINATOR, NEITHER OF WHICH IS ONE OF THE ARMS ABOVE — see
+    /* THE FIRST OF THE CUTS OF THE SAME DENOMINATOR, NONE OF WHICH IS ONE OF THE ARMS ABOVE — see
        g_unresolved_reads. Together they are what a reader subtracts to get the unknowns actually MINTED on
        the global, which the app-state arm alone stopped being able to say the day a second entry reached
        this partition and has been less able to say with every entry since. */
@@ -815,6 +868,13 @@ char *absent_json(void)
        paragraphs down — a member OPENS ON `_` and a row cannot, which is what tells the two apart with no
        list of names at either end. */
     static const char KEY_IN[]    = "_of those, answered by the in operator with no [[Get]] performed";
+    /* AND THE SAME §7.3.11 REACHED BY A CALL, WHICH IS A FOURTH MEMBER FOR THE THIRD ONE'S REASON AND NOT
+       BECAUSE THE ALGORITHM DIFFERS. `Reflect.has(window, "X")` and `"X" in window` end at the identical
+       HasProperty, so what this member states is not a different QUESTION but a different SPELLING — and the
+       spelling is the whole content, because a bundle writes one of them and the false arm each one takes is
+       different code. The engine keeps them apart because it must: an operator is recorded at its placement
+       and a builtin at its machine's own stage, and neither route can see the other. */
+    static const char KEY_HASCALL[] = "_of those, answered by Reflect.has with no [[Get]] performed";
     /* ONE PER VOCABULARY AND INDEXED BY THE ENUM, which is what the header's `ABSENT_VOCAB_N` promise buys: a
        third standard adds a row to this array and to `g_owed_by_vocab`, and nothing else here changes. */
     static const char *const KEY_VOCAB[ABSENT_VOCAB_N] = {
@@ -831,7 +891,7 @@ char *absent_json(void)
        vocabulary added without a key compiles and writes `(null)` into the census. An unsized array plus this
        assertion makes that state unreachable rather than merely asserted — CLAUDE.md §Fix-the-ROOT — and it
        costs one line, so the sized form below is the one to change next rather than the pattern to copy. */
-    static const char *const KEY_ENTRY[] = { "read", "typeof", "in" };
+    static const char *const KEY_ENTRY[] = { "read", "typeof", "in", "Reflect.has" };
     size_t cap = 0, len = 0;
     long sum = 0, rowsby[ABSENT_VOCAB_N], rowsbyentry[ABSENT_ENTRY_N];
     int pass, i, v, e;
@@ -924,7 +984,19 @@ char *absent_json(void)
             "exactly ONE, and it is the placement, because the [[HasProperty]] miss underneath it is the same "
             "request every unresolved identifier issues",
             g_in_reads, g_global_reads);
-    /* AND THE SAME TWO CUTS AGAIN, THIS TIME AGAINST THE PER-NAME SPLIT THAT IS A CUT OF THEM — which is what
+    /* AND THE SAME FOR THE CALL-SPELLED CUT, AS ITS OWN ASSERT FOR THE REASON THE `in` ONE IS ITS OWN. The
+       route is what makes this a third counter rather than a second recording of the `in` one: the engine
+       raises it from js_reflect_prop_step's GP_HAS arm, which is a STEP MACHINE's request and is structurally
+       invisible to do_opkeyed_place — so the two cuts cannot double-count each other and a larger cut here is
+       a recording that reached this file without being classified. */
+    DCHECKF(g_has_call_reads <= g_global_reads,
+            "the Reflect.has cut of the owed-name census (%ld) is larger than the population it is a cut of "
+            "(%ld) — every read this file is told about is classified by global_miss_note, which raises the "
+            "denominator, so a larger cut is a recording that skipped the classification. There is exactly "
+            "ONE call site for this arm and it is the machine's own REFLPROP_OP stage, gated on GP_HAS, "
+            "because that is the only point at which the operation, its target and its answer are in one hand",
+            g_has_call_reads, g_global_reads);
+    /* AND THE SAME CUTS AGAIN, THIS TIME AGAINST THE PER-NAME SPLIT THAT IS A CUT OF THEM — which is what
        gives `OwedRow.by_entry` a reader beside the row it is emitted on, exactly as the sum above the
        identities gives `OwedRow.vocab` one. The two sides are raised at DIFFERENT events: the cut once per
        operator entry BEFORE the classification, this sum once per OWED read inside it, so they part company
@@ -948,6 +1020,12 @@ char *absent_json(void)
             "pair's own reason: a summed statement closes over one bucket running ahead while the other runs "
             "behind, and which operator a document actually writes is the fact this split exists to state",
             rowsbyentry[ABSENT_ENTRY_IN], g_in_reads);
+    DCHECKF(rowsbyentry[ABSENT_ENTRY_HAS_CALL] <= g_has_call_reads,
+            "the owed-name census's per-name Reflect.has buckets (%ld) outnumber the Reflect.has reads the "
+            "engine told this file about (%ld) — stated as its own assert rather than summed with the pair "
+            "above for that pair's own reason, and the residue here is the same population: a call-spelled "
+            "detect on a name no standard owns, which `Reflect.has(window, \"__NEXT_DATA__\")` is",
+            rowsbyentry[ABSENT_ENTRY_HAS_CALL], g_has_call_reads);
     for (v = 0; v < ABSENT_VOCAB_N; v++)
         DCHECKF(rowsby[v] == g_owed_by_vocab[v],
                 "the per-standard split of the owed reads disagrees with the rows it is a split OF (standard "
@@ -967,6 +1045,7 @@ char *absent_json(void)
         len = absent_emitf(out, cap, len, ",\"%s\":%ld", KEY_APP, g_appstate_reads);
         len = absent_emitf(out, cap, len, ",\"%s\":%ld", KEY_TYPEOF, g_unresolved_reads);
         len = absent_emitf(out, cap, len, ",\"%s\":%ld", KEY_IN, g_in_reads);
+        len = absent_emitf(out, cap, len, ",\"%s\":%ld", KEY_HASCALL, g_has_call_reads);
         for (v = 0; v < ABSENT_VOCAB_N; v++)
             len = absent_emitf(out, cap, len, ",\"%s\":%ld", KEY_VOCAB[v], g_owed_by_vocab[v]);
         for (i = 0; i < g_owed_n; i++) {
@@ -1074,7 +1153,12 @@ void absent_free(void)
     g_owed = NULL;
     g_owed_n = g_owed_cap = 0;
     g_owed_reads = g_index_refused = g_appstate_reads = g_global_reads = 0;
-    g_unresolved_reads = g_in_reads = 0;
+    /* EVERY CUT, AND A FORGOTTEN ONE IS LOUD RATHER THAN SILENT — which is why this stays a written list and
+       is not a hazard to record. The denominator above is zeroed here; a cut that was not would exceed it on
+       the very first census of the NEXT agent, and the composer's per-cut containment DCHECKF fires with both
+       numbers in hand. So the forcing function for this line is the assert that already exists, and a cut
+       added without a reset is a dev abort at the next agent rather than a number that keeps climbing. */
+    g_unresolved_reads = g_in_reads = g_has_call_reads = 0;
     for (i = 0; i < ABSENT_VOCAB_N; i++)
         g_owed_by_vocab[i] = 0;
 }
@@ -1354,6 +1438,8 @@ void absent_unresolved_note(JSContext *ctx, JSAtom name, JSConcolicAbsentOp op)
     switch (op) {
     case JS_CONCOLIC_ABSENT_TYPEOF: g_unresolved_reads++; entry = ABSENT_ENTRY_TYPEOF; break;
     case JS_CONCOLIC_ABSENT_IN:     g_in_reads++;         entry = ABSENT_ENTRY_IN;     break;
+    case JS_CONCOLIC_ABSENT_HAS_CALL:
+        g_has_call_reads++; entry = ABSENT_ENTRY_HAS_CALL; break;
     }
     /* THE ANSWER IS DISCARDED AND THAT IS THE WHOLE DIFFERENCE FROM THE READ HOOK: the arms decide what the
        READ hook returns, and this entry has already been answered by the operator. Every arm's counter and

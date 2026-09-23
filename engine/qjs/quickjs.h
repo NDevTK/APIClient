@@ -2485,13 +2485,19 @@ typedef enum JSConcolicEqOp {
 
 /* WHICH OPERATOR ASKED A GLOBAL NAME AND ANSWERED WITHOUT PERFORMING A [[Get]] — the third of these enums and
    it exists for the first one's reason exactly: the CALLER states which operation it is performing, because it
-   is the only party that knows, and the hook never infers it from the operands. Two operators settle a name
-   they cannot resolve at the opcode and neither reads it, so both are RECORDINGS and the hook returns void for
-   both; what a host does with them differs, because a census that cannot say which operator asked has a number
-   about which SPELLING the bundle happened to use.
+   is the only party that knows, and the hook never infers it from the operands. Each member settles a name it
+   cannot resolve WITHOUT READING IT, so every one of them is a RECORDING and the hook returns void for all of
+   them; what a host does with them differs, because a census that cannot say which operation asked has a
+   number about which SPELLING the bundle happened to use.
+   THIS SAID `TWO OPERATORS ... AT THE OPCODE` AND IS REWRITTEN RATHER THAN DELETED, because the clause that
+   went wrong is the one a reader re-derives from the two members that were here. `Reflect.has(window, "X")` is
+   the same question answered by a CALL — a step machine's request, not an operator's placement — so the enum's
+   subject is an OPERATION and never an opcode, and a member reached from a builtin is not an exception to a
+   rule about operators but the rule stated at the width it always had.
    IT IS A FACT AND NOT A QUESTION, which is why it is an enum rather than an `is_in` flag on the request. A bit
    meaning "was it the one I happen to care about" is a question frozen into storage, and the day a third
-   operator arrives it is a second bit beside the first that can disagree with it. */
+   operation arrives it is a second bit beside the first that can disagree with it — which is exactly what the
+   third member below would have been. */
 typedef enum JSConcolicAbsentOp {
     /* ECMAScript §13.5.3 "The typeof Operator"'s §13.5.3.1 "Runtime Semantics: Evaluation" step 2.a, "If
        IsUnresolvableReference(value) is true, return "undefined"." — which settles the operator BEFORE step
@@ -2505,6 +2511,19 @@ typedef enum JSConcolicAbsentOp {
        `typeof` arm asserts its own. The two are not one rule with two spellings — one is a fact about the
        grammar and the other is a fact about a value a page computed. */
     JS_CONCOLIC_ABSENT_IN,
+    /* THE SAME §7.3.11 "HasProperty ( obj, propertyKey )" REACHED BY A CALL RATHER THAN BY AN OPERATOR —
+       `Reflect.has(window, "X")`, whose §28.1.8 "Reflect.has ( target, key )" step 3 is "Return ?
+       target.[[HasProperty]](propertyKey)" and contains no [[Get]] either. It is a SEPARATE member and not a
+       second spelling of the one above because the two reach this hook by routes that cannot be shared: `in`
+       is a bytecode operator and is recorded at its placement, and this is a step machine's request, which
+       the placement is structurally unable to see (their requests carry different outer kinds). A bundle
+       writes one of the two, so a census that summed them would answer a question about which the authors
+       happened to prefer.
+       THE KEY IS THE PAGE'S, exactly as `in`'s is: §28.1.8 step 2 is "Let propertyKey be ?
+       ToPropertyKey(key).", so `Reflect.has(window, Symbol.iterator)` is a line any bundle may write and the
+       engine FILTERS this arm's key rather than asserting it. Only JS_CONCOLIC_ABSENT_TYPEOF's key is the
+       grammar's. */
+    JS_CONCOLIC_ABSENT_HAS_CALL,
 } JSConcolicAbsentOp;
 
 typedef struct JSConcolicHooks {
@@ -2512,30 +2531,36 @@ typedef struct JSConcolicHooks {
     int (*cmp)(JSContext *ctx, JSValue *sp, int is_neq, JSConcolicEqOp op);
     int (*is)(JSValueConst v);
     JSValue (*absent)(JSContext *ctx, JSValueConst obj, JSAtom name);
-    /* THE SAME MISS ON THE GLOBAL, REACHED BY AN OPERATOR THAT PERFORMS NO [[Get]] AT ALL. RECORDING ONLY, AND
-       THE VOID RETURN IS THE CONTRACT rather than a convenience — for BOTH members of JSConcolicAbsentOp, and
-       for one reason in two spellings: neither operator's algorithm contains a read, so a value handed back
+    /* THE SAME MISS ON THE GLOBAL, REACHED BY AN OPERATION THAT PERFORMS NO [[Get]] AT ALL. RECORDING ONLY,
+       AND THE VOID RETURN IS THE CONTRACT rather than a convenience — for EVERY member of JSConcolicAbsentOp,
+       and for one reason in three spellings: no member's algorithm contains a read, so a value handed back
        here would make a step run that the standard does not have. `typeof X` answers at §13.5.3.1 step 2.a,
        BEFORE step 2.b's GetValue, so a value would make it say "object" where every browser says "undefined";
        `"X" in window` ends at §13.10.1's "Return ? HasProperty(rightValue, ? ToPropertyKey(leftValue))", which
-       is §7.3.11 and never §7.3.2 Get, so a value would be an answer to a question nobody asked. `.absent` may
+       is §7.3.11 and never §7.3.2 Get; `Reflect.has(window, "X")` ends at §28.1.8 step 3's "Return ?
+       target.[[HasProperty]](propertyKey)", which is the same §7.3.11 one call further out. `.absent` may
        decide a read; this may only watch one.
        WHY IT EXISTS AT ALL, since the decision is unchanged: the suppression `.absent` performs for a name a
        standard owns is CORRECT and SILENT, and these are the spellings that never reach it. A bundle whose
-       whole feature detection is written `typeof X !== "undefined"` or `"X" in window` — between them the
-       dominant shape in transpiled and in hand-written code — takes the false arm on every guard while the
-       host's census of unanswered names reads clean, so what is lost is not the line but every endpoint and
-       every sink behind the guard. The host counts it; nothing forks and nothing is minted.
-       THE KEY RULE IS NOT ONE RULE, WHICH IS THE ONE THING A CALLER MAY NOT GENERALISE ACROSS THE TWO MEMBERS.
-       For `typeof`, `name` is the identifier's atom and §12.7 Names and Keywords makes it a string atom, so
-       JS_AtomIsPublishedName holds BY CONSTRUCTION and the engine asserts it. For `in` the key is
-       `ToPropertyKey(leftValue)` — the page's own @@toPrimitive over the page's own left operand — so the same
-       predicate is a statement about a value a PAGE computed, and the engine FILTERS on it before speaking to
-       this hook. Asserting there would hand any page an abort switch for one line of `Symbol.iterator in
-       window`, which CLAUDE.md §WHOSE-BYTES-STATE-THE-VALUE forbids outright. A host may therefore rely on the
-       atom being nameable, and may not rely on the reason being the same one at both arms.
-       Installed with `.absent` or not at all: a host that takes one spelling of one miss and not the other has
-       a census whose zero is a fact about which opcode the page happened to use. */
+       whole feature detection is written `typeof X !== "undefined"`, `"X" in window` or `Reflect.has(window,
+       "X")` — between them the dominant shape in transpiled and in hand-written code — takes the false arm on
+       every guard while the host's census of unanswered names reads clean, so what is lost is not the line but
+       every endpoint and every sink behind the guard. The host counts it; nothing forks and nothing is minted.
+       THE KEY RULE IS NOT ONE RULE, WHICH IS THE ONE THING A CALLER MAY NOT GENERALISE ACROSS THE MEMBERS, AND
+       IT IS KEYED ON THE ONE MEMBER THAT HAS THE PROPERTY RATHER THAN ON THE ONES THAT DO NOT. For `typeof`,
+       `name` is the identifier's atom and §12.7 Names and Keywords makes it a string atom, so
+       JS_AtomIsPublishedName holds BY CONSTRUCTION and the engine asserts it. EVERY OTHER MEMBER TAKES A KEY
+       THE PAGE COMPUTED — `in` is `ToPropertyKey(leftValue)` and `Reflect.has` is §28.1.8 step 2's
+       `ToPropertyKey(key)` — so the same predicate is a statement about a value a PAGE computed and
+       the engine FILTERS on it before speaking to this hook. Asserting there would hand any page an abort
+       switch for one line of `Symbol.iterator in window`, which CLAUDE.md §WHOSE-BYTES-STATE-THE-VALUE forbids
+       outright. THE POLARITY IS THE LOAD-BEARING HALF: a member added to this enum joins the FILTER, which is
+       the arm that records less and asserts nothing, rather than the assert, which is the arm that would be a
+       page-held abort switch — so the safe arm is the default and the unsafe one is the one a member has to be
+       named into. A host may therefore rely on the atom being nameable, and may not rely on the reason being
+       the same one at every arm.
+       Installed with `.absent` or not at all: a host that takes one spelling of one miss and not the others has
+       a census whose zero is a fact about which spelling the page happened to use. */
     void (*absent_unresolved)(JSContext *ctx, JSAtom name, JSConcolicAbsentOp op);
     /* THE HIT ON A PUBLISHED RECORD — see the paragraph above. `holder` is the record the own data slot was
        found on and `value` is what it holds, BORROWED. */

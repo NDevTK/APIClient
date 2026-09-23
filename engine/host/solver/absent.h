@@ -8,17 +8,23 @@
    record (the engine has already established it is one of the two). */
 JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name);
 
-/* Install as JSConcolicHooks.absent_unresolved — THE SAME QUESTION REACHED BY AN OPERATOR THAT PERFORMS NO
-   [[Get]], of which there are TWO and `op` says which. `typeof X` on a name nothing binds is answered at the
+/* Install as JSConcolicHooks.absent_unresolved — THE SAME QUESTION REACHED BY AN OPERATION THAT PERFORMS NO
+   [[Get]], of which `op` says which. `typeof X` on a name nothing binds is answered at the
    opcode by ECMAScript §13.5.3 The typeof Operator's §13.5.3.1 Runtime Semantics: Evaluation step 2.a;
    `"X" in window` is answered by §13.10.1 Runtime Semantics: Evaluation's `RelationalExpression :
    RelationalExpression in ShiftExpression`, whose last step is "Return ? HasProperty(rightValue, ?
-   ToPropertyKey(leftValue))" — §7.3.11 HasProperty ( obj, propertyKey ), which contains no [[Get]] either. So
-   the read hook above is asked by NEITHER, and the census would read clean on a bundle whose whole feature
+   ToPropertyKey(leftValue))" — §7.3.11 HasProperty ( obj, propertyKey ), which contains no [[Get]] either; and
+   `Reflect.has(window, "X")` is §28.1.8 "Reflect.has ( target, key )" step 3's "Return ?
+   target.[[HasProperty]](propertyKey)", the same §7.3.11 reached by a CALL rather than by an operator. So
+   the read hook above is asked by NONE of them, and the census would read clean on a bundle whose whole feature
    detection is written in one of them. This RECORDS the read into the same population and the same row and
-   decides nothing — the void return is the contract for both, since answering the first would make step 2.b's
-   GetValue run and answering the second would be a value nobody asked for. See absent.c for why the two share
-   the classification and the row rather than keeping a census each, and why they are still two CUTS.
+   decides nothing — the void return is the contract for every member, since answering the first would make
+   step 2.b's GetValue run and answering either of the others would be a value nobody asked for. See absent.c
+   for why they share the classification and the row rather than keeping a census each, and why they are still
+   separate CUTS.
+   THE COUNT USED TO BE STATED HERE AS `TWO` AND IS NOT STATED AT ALL NOW, which is a rule and not a tidy-up:
+   a count of an enum's members is a fact the enum already carries and a sentence that restates it is one more
+   place to be wrong the day a member lands. The population is `JSConcolicAbsentOp`, and it is read there.
    `op` IS THE CALLER'S TO STATE AND IS NEVER INFERRED from the name — it is the same rule JSConcolicAddOp and
    JSConcolicEqOp already carry into this engine, and for the same reason: the party performing the operation
    is the only one that knows which it performed. */

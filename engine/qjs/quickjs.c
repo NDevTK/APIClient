@@ -13836,7 +13836,7 @@ static JSValue js_absent_ask(JSContext *ctx, JSValueConst obj, JSAtom prop)
     return g_concolic.absent(ctx, obj, prop);
 }
 
-/* THE SAME MISS, REACHED BY AN OPERATOR THAT PERFORMS NO [[Get]] — and therefore a RECORDING and never an ask.
+/* THE SAME MISS, REACHED BY AN OPERATION THAT PERFORMS NO [[Get]] — and therefore a RECORDING and never an ask.
    ECMAScript §13.5.3 The typeof Operator's §13.5.3.1 Runtime Semantics: Evaluation step 2.a is "If
    IsUnresolvableReference(value) is true, return "undefined".", which settles the operator BEFORE step 2.b's
    `Set value to ? GetValue(value)` — so there is no read to answer, and a host that answered one would make
@@ -13858,31 +13858,40 @@ static void js_absent_note_unresolved(JSContext *ctx, JSAtom prop, JSConcolicAbs
 {
     if (likely(g_concolic.absent_unresolved == NULL))
         return;
-    /* THE KEY RULE IS PER OPERATOR AND THE TWO ARMS ARE NOT ONE RULE WITH TWO SPELLINGS. What is shared — the
+    /* THE KEY RULE IS PER OPERATION AND THE TWO ARMS ARE NOT ONE RULE WITH TWO SPELLINGS. What is shared — the
        hook being installed, and the census this speaks to — stays in ONE function for the reason the paragraph
        above gives; what is NOT shared is who chose the key, and that is the difference between an assert and a
        filter rather than a matter of strictness. CLAUDE.md §WHOSE-BYTES-STATE-THE-VALUE: a DCHECK may only ever
-       stand on a value this codebase computed, and exactly one of these two keys is one. */
-    if (op == JS_CONCOLIC_ABSENT_IN) {
-        /* §13.10.1's key is `? ToPropertyKey(leftValue)`, which runs the PAGE's own @@toPrimitive over the
-           PAGE's own left operand, so it is input and not an invariant: `Symbol.iterator in window` is a line
-           any bundle may write and a symbol here is that line arriving, never a routing defect. Filtered, it
-           leaves the census counting what it can NAME — which is what its own denominator says it counts —
-           and the operator's answer is untouched either way. Asserted, it would be a page-held abort switch
-           for the whole engine, reached from a feature detect. */
-        if (!JS_AtomIsPublishedName(ctx->rt, prop))
-            return;
-    } else {
+       stand on a value this codebase computed, and exactly ONE member's key is one however many members the
+       enum grows — which is why the arms are keyed on that member and not on the others. */
+    if (op == JS_CONCOLIC_ABSENT_TYPEOF) {
         DCHECK(JS_AtomIsPublishedName(ctx->rt, prop),
                "a `typeof` on an unresolvable name reached the injected-state channel with a key the channel "
                "cannot NAME — this arm is entered only from OP_get_var_undef, whose atom is an identifier's and "
                "therefore a string atom by the grammar, so a symbol or an index here is an opcode routed to the "
                "typeof arm that is not a typeof");
+    } else {
+        /* AND EVERY OTHER MEMBER'S KEY IS THE PAGE'S, so the same predicate is a FILTER here. §13.10.1's is
+           `? ToPropertyKey(leftValue)` and §28.1.8 "Reflect.has ( target, key )"'s step 2 is
+           `? ToPropertyKey(key)`; both run the PAGE's own @@toPrimitive over the PAGE's own operand,
+           so a symbol is input and not an invariant: `Symbol.iterator in window` is a line any bundle may
+           write and a symbol here is that line arriving, never a routing defect. Filtered, it leaves the
+           census counting what it can NAME — which is what its own denominator says it counts — and the
+           operation's answer is untouched either way. Asserted, it would be a page-held abort switch for the
+           whole engine, reached from a feature detect.
+           THE ARMS USED TO BE WRITTEN THE OTHER WAY ROUND — `in` named, everything else asserting — and that
+           is REWRITTEN rather than deleted because the polarity is the load-bearing half and the retired form
+           is the one a reader re-derives from a two-member enum. Keyed on the arm that FILTERS, a member added
+           to JSConcolicAbsentOp inherits the ASSERT, which is the page-held abort switch; keyed on the arm
+           that ASSERTS, it inherits the FILTER, which records less and crashes nothing. The property being
+           asserted is "the key came from the grammar", and exactly ONE member has it. */
+        if (!JS_AtomIsPublishedName(ctx->rt, prop))
+            return;
     }
     g_concolic.absent_unresolved(ctx, prop, op);
 }
 
-/* THE THIRD SPELLING OF ONE FEATURE DETECT, AND THE ONE THAT REACHES NEITHER OF THE OTHER TWO ARMS.
+/* THE [[HasProperty]] SPELLINGS OF ONE FEATURE DETECT, AND THE ONES THAT REACH NEITHER OF THE OTHER TWO ARMS.
    `window.EventSource` is a [[Get]] that misses the whole chain and asks js_absent_ask; `typeof EventSource`
    is an unresolvable Reference the arm above records. `"EventSource" in window` is ECMAScript §13.10.1
    "Runtime Semantics: Evaluation"'s `RelationalExpression : RelationalExpression in ShiftExpression`, whose
@@ -13899,8 +13908,23 @@ static void js_absent_note_unresolved(JSContext *ctx, JSAtom prop, JSConcolicAbs
    and a bytecode operator is CONT_OP_KEYED, so `do_opkeyed_place` is a place identifier resolution cannot
    reach. What the placement could NOT say by itself is WHICH operator, since `delete` arrives there with the
    same pop, the same push and, in sloppy code, the same throw_on_false — which is what JSOpKeyed's `op` is.
-   `base` and `answer` are the operator's own operand and its own result, both BORROWED. */
-static void js_absent_note_in(JSContext *ctx, JSValueConst base, JSAtom prop, JSValueConst answer)
+   `base` and `answer` are the operation's own operand and its own result, both BORROWED.
+   AND `op` IS THE CALLER'S TO STATE, WHICH IS WHAT LETS A SECOND SPELLING SHARE THIS FUNCTION RATHER THAN GET
+   A SECOND COPY OF ITS TWO GATES. `Reflect.has(window, "X")` is §28.1.8 "Reflect.has ( target, key )"
+   step 3's "Return ? target.[[HasProperty]](propertyKey)" — the SAME §7.3.11 the `in` operator ends at, one
+   call further out — so the question, the gates and the row are identical and only the ROUTE differs: `in` is a
+   bytecode operator recorded at its placement, and `Reflect.has` is a step machine's request, which that
+   placement structurally cannot see (CONT_OP_KEYED against CONT_STEP). Two routes, one recorder, and the
+   operation named by the party that performed it — the rule JSConcolicAddOp and JSConcolicEqOp already carry,
+   for the reason CLAUDE.md §A-FIX-OF-THE-FORM-"X-IS-NOT-HOW-TO-ASK-Q" gives: where a codebase has a canonical
+   spelling of a question, a second site ROUTES to it rather than writing a second correct answer.
+   WHAT THIS FUNCTION MAY NOT SERVE IS §7.3.12 HasOwnProperty, and that is a fact about the GATES rather than
+   about the route — see the residual in engine/host/solver/absent.c. Its "answer is false" gate establishes
+   CHAIN-absence for every member that reaches here, which is what the census's owed arm means by a name this
+   realm does not answer; own-absence establishes no such thing, because this engine puts Window's inherited
+   members on a prototype exactly as Web IDL requires. */
+static void js_absent_note_has(JSContext *ctx, JSValueConst base, JSAtom prop, JSValueConst answer,
+                               JSConcolicAbsentOp op)
 {
     /* THE NAME IS BOUND: not a miss, and nothing to say about it. Read through JS_ToBool rather than off the
        tag because §10.5.7 step 8 hands a Proxy's `has` trap result through ToBoolean, so a trap anywhere on a
@@ -13915,7 +13939,7 @@ static void js_absent_note_in(JSContext *ctx, JSValueConst base, JSAtom prop, JS
     if (JS_VALUE_GET_TAG(base) != JS_TAG_OBJECT ||
         JS_VALUE_GET_PTR(base) != JS_VALUE_GET_PTR(ctx->global_obj))
         return;
-    js_absent_note_unresolved(ctx, prop, JS_CONCOLIC_ABSENT_IN);
+    js_absent_note_unresolved(ctx, prop, op);
 }
 
 /* THE INTERFACE'S OWN NAME, FOR AN ASSERT THAT WOULD OTHERWISE NAME A HUNDRED COMPONENTS AT ONCE.
@@ -39217,7 +39241,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                            "`key obj` — OP_in declares pop 2 and the base it was written with is read off "
                            "sp[-1] here, so a different shape means the answer would be judged against "
                            "whatever else is under it rather than against the operator's own receiver");
-                    js_absent_note_in(ctx, sp[-1], ok->atom, ret_val);
+                    js_absent_note_has(ctx, sp[-1], ok->atom, ret_val, JS_CONCOLIC_ABSENT_IN);
                 }
                 JS_FreeAtom(ctx, ok->atom); js_free_rt(rt, ok);
                 cont_st = NULL;
@@ -107300,7 +107324,26 @@ static int js_reflect_prop_step(JSContext *ctx, void *st, JSValue cb_result, JSV
     }
     DCHECK(s->hdr.stage == REFLPROP_OP, "Reflect property operation: unknown stage");
     s->result = cb_result;
-    return JS_IsException(s->result) ? -1 : 0;
+    if (JS_IsException(s->result))
+        return -1;
+    /* `Reflect.has(window, "X")` ON A NAME NOTHING BINDS — a feature detect spelled as a CALL, recorded here
+       because this is the only point at which the operation, its target and its answer are all in one hand.
+       §28.1.8 "Reflect.has ( target, key )" step 3 is "Return ? target.[[HasProperty]](propertyKey)", the
+       same §7.3.11 "HasProperty ( obj, propertyKey )" the `in` operator ends at and equally not a [[Get]], so
+       the host RECORDS and this machine's answer is untouched either way. The gates are js_absent_note_has's
+       and are not restated here: they are the same two facts for the same reason, and the one thing this site
+       knows that it does not is WHICH of the four operations this machine is running.
+       IT IS GATED ON GP_HAS AND THAT IS NOT A DETAIL OF THIS CALL — `js_reflect_prop_step` is FOUR algorithms
+       sharing one machine (get, set, has, deleteProperty, selected by `js_reflect_*_def`'s own `gp_op`), so a
+       site here with no arm test would hand the recorder `Reflect.get(window, "X")`'s `undefined` and
+       `Reflect.deleteProperty`'s `true` as though they were HasProperty answers. `Reflect.get` is a [[Get]]
+       and is already answered by the read hook, so it would also be counted twice.
+       THE ANSWER IS READ BEFORE THE TEARDOWN AND THE OPERANDS ARE STILL THE MACHINE'S: `s->obj` is the target
+       held across the request since REFLPROP_RECV and `s->atom` is ToPropertyKey's own result, both owned by
+       this state and freed by its visit/fini rather than here. */
+    if (op == GP_HAS)
+        js_absent_note_has(ctx, s->obj, s->atom, s->result, JS_CONCOLIC_ABSENT_HAS_CALL);
+    return 0;
 }
 
 /* WHAT THIS MACHINE OWNS (JSTrampStepDef.visit). The key's ToPropertyKey is the page's code, and the atom it

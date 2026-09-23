@@ -36,9 +36,14 @@
  * diff — C, trusted zone and drivers — where this is a JS-only one.
  *
  * MEMBERS OPEN ON `_` AND ROWS CANNOT. That is `absent.c`'s own namespace rule, asserted there with a DCHECK
- * over the generated tables, and it is what lets this file tell the six-plus-three MEMBER keys from
- * `KEY_ENTRY`'s bucket names with no list of names here. A consumer sums the ROWS to get the reads and reads
- * the MEMBERS as the population they are drawn from.
+ * over the generated tables, and it is what lets this file tell the MEMBER keys from `KEY_ENTRY`'s bucket
+ * names with no list of names here. A consumer sums the ROWS to get the reads and reads the MEMBERS as the
+ * population they are drawn from.
+ * AND WITH NO COUNT OF EITHER, WHICH IS WHAT MAKES THAT SENTENCE SURVIVE A MEMBER LANDING. It used to say
+ * `six-plus-three`, and it went wrong the hour solver/absent.c gained the `Reflect.has` cut — a count of a
+ * population is `AbsentEntry`'s and `absent_json`'s to carry, and a restatement of it here is one more place
+ * to be wrong rather than one more thing a reader can check. The code below already has no count in it; this
+ * was the prose disagreeing with its own file.
  *
  * THE POPULATION IS ASSERTED TO AGREE BEFORE A NUMBER IS TAKEN, AND THE ARTIFACT IS ASKED RATHER THAN A
  * REVISION. CLAUDE.md §AND-A-STAMP-ANSWERS-WHICH-ARTIFACT-ANSWERED: an instrument that derives its question
