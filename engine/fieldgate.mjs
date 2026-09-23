@@ -676,6 +676,135 @@ function boolConsumer(struct, code, start) {
   return w && w[1] === "instanceof" ? w[1] : null;
 }
 
+/* ---- what receives the DISJUNCTION, once nothing to its left has consumed the read --------------------------- */
+
+/* §boolConsumer ASKS WHETHER A BOOLEAN-PRODUCING OPERATOR ALREADY STANDS TO THE LEFT, AND THAT IS THE NARROW
+ * HALF OF THE QUESTION IT IS ANSWERING. Its own banner states the principle in full — "nothing is substituted
+ * for the field, because a boolean is not a value anyone mistook for one; the absence DECIDES a branch instead
+ * of hiding inside a datum" — and §the COERCION states the same axis from the other side and rules an entire
+ * abstract operation out on it: ToBoolean is DELIBERATELY OUT, because "the absence DECIDES A BRANCH rather
+ * than hiding inside one. Reporting it would report every `if (o.f)` in the corpus, which is reporting the
+ * language."
+ *
+ * `if (o.f || g)` IS `if (o.f)` WITH A DISJUNCT, AND THE FILE REPORTED IT. That is the one shape where the
+ * principle is stated twice and implemented for neither: the `||` is real, so the DEFAULTED test fires; the
+ * left operand is bare, so §boolConsumer declines; and the disjunction's own value goes straight into a
+ * ToBoolean, so no consumer anywhere receives a substituted datum. What the accusation then asks for is a
+ * DCHECK protecting nobody, on a line whose absence behaviour is the one §the COERCION already refuses to
+ * report. A file may not be its own auditor, and this one argued the rule four lines above the test that
+ * breaks it.
+ *
+ * SO THE QUESTION IS ASKED OUTWARD, NOT LEFTWARD, AND IT IS THE SAME KIND OF WALK — over CONSTRUCTS, one
+ * enclosing region at a time, each step a fact about brackets and one significant token. The read's value
+ * reaches only a ToBoolean when every step out of it is a LOGICAL JOIN or a GROUPING PARENTHESIS and the
+ * region it finally fills is a controlling expression.
+ *
+ * WHAT MAY BE STEPPED THROUGH IS EXACTLY WHAT PROPAGATES THE CONSUMER'S CONTEXT. `||`, `&&` and `??` hand
+ * their own consumer's demand to both operands, and a grouping parenthesis changes nothing at all. Every
+ * other operator is a DATUM consumer and stops the walk, which is why `(a.b + c.d) || e` is untouched by this
+ * — §boolConsumer's banner names that line as one that belongs in, and the `+` is not a join, so the operand
+ * containing the read is not the read and the walk refuses at its first step. An `[`, a `{` or a call's
+ * argument list stops it for the same reason: an array element, an object member and an argument are all
+ * places a value is KEPT.
+ *
+ * THE CONTROLLING EXPRESSIONS READ HERE ARE `if` AND `while`, WHICH IS NARROWER THAN ToBoolean'S OWN
+ * POPULATION AND SAYS SO. `do … while (c)` needs no arm of its own — the significant word in front of that
+ * parenthesis IS `while`. `switch` is deliberately absent and is NOT an omission: it matches its clauses
+ * with IsStrictlyEqual — §14.12.3 "CaseClauseIsSelected ( caseClauseNode, input )" ends "Return
+ * IsStrictlyEqual(input, clauseSelector)" — so a substituted `d` there is COMPARED and is the plausible datum
+ * this gate
+ * reports; admitting it would retire a real accusation. And a `return (…)`, a `typeof (…)` or an argument
+ * list is refused rather than under-credited, because those KEEP the value — that refusal is the answer, not
+ * a gap.
+ *
+ * NAMED RESIDUAL — WHAT IS NOT COVERED IS A PROPERTY AND NOT A LIST OF LINES: a ToBoolean position that no
+ * `if`/`while` head encloses. Two constructs have it — a `for` statement's second clause, and a conditional
+ * expression's test standing outside any such head. A ternary test INSIDE one is already covered, because the
+ * test is a whole logical operand of the head's own region and the walk never has to read the `?` at all,
+ * which is why the clause above names the enclosure and not the construct. WHAT THE NEXT DIFF BUILDS: the
+ * `for` clause, by splitting that header on its top-level `;` and asking the operand question of the second
+ * piece — the only one of the two whose region is already delimited by a parenthesis this walk finds. HOW ITS
+ * ABSENCE SHOWS: a row standing in DEFAULTED whose `||` a reader can see is the whole test of a loop header
+ * or of a `?`, met as an accusation asking for a DCHECK on a line that stores nothing. */
+
+/* A top-level logical join — ECMAScript §13.13 "Binary Logical Operators" — by its operators and never by a
+   character class: `?.` is not `??`, and `||=`/`&&=`/`??=` belong to §13.15 "Assignment Operators", whose
+   left side is a WRITE rather than a read. */
+function logicalJoinAt(struct, i) {
+  const two = struct[i] + struct[i + 1];
+  if (two !== "||" && two !== "&&" && two !== "??") return 0;
+  return struct[i + 2] === "=" ? 0 : 2;
+}
+
+/* Is [a,b) a WHOLE top-level operand of the logical chain filling [lo,hi)? A leading `!` is skipped rather
+   than refused: ECMAScript §13.5.7 "Logical NOT Operator ( ! )" answers a Boolean, so a `!` in front of the
+   operand keeps every promise this walk is making. Compared by OFFSET and never by text — the two spans come
+   from one string and an equality over their bytes would re-answer a question the offsets already settle. */
+function wholeLogicalOperand(struct, lo, hi, a, b) {
+  const cuts = [lo];
+  let depth = 0;
+  for (let i = lo; i < hi; i++) {
+    const c = struct[i];
+    if (PAIRS[c]) { depth++; continue; }
+    if (c === ")" || c === "]" || c === "}") { depth--; continue; }
+    if (depth) continue;
+    const w = logicalJoinAt(struct, i);
+    if (w) { cuts.push(i); cuts.push(i + w); i += w - 1; }
+  }
+  cuts.push(hi);
+  for (let k = 0; k < cuts.length; k += 2) {
+    const [p0, p1] = spansOf(struct, cuts[k], cuts[k + 1]);
+    if (a < p0 || b > p1) continue;
+    let s = p0;
+    while (s < p1 && (struct[s] === "!" || /\s/.test(struct[s]))) s++;
+    return s === a && p1 === b;
+  }
+  return false;
+}
+
+/* The significant word ending immediately before `open`, or "" — read off `code` for §boolConsumer's reason:
+   a keyword is TEXT, and the masker leaves every character of it intact. A word reached through a `.` is a
+   MEMBER NAME and not a keyword — `if` and `while` are reserved words, so no binding can be spelled either,
+   but `o.if(x)` is a legal member call and would otherwise answer one. */
+function keywordBefore(struct, code, open) {
+  let i = open;
+  while (i > 0 && /\s/.test(struct[i - 1])) i--;
+  const w = /([A-Za-z_$][\w$]*)$/.exec(code.slice(Math.max(0, i - 24), i));
+  if (!w) return "";
+  const before = struct[i - w[1].length - 1] || " ";
+  return before === "." || before === "?" ? "" : w[1];
+}
+
+/* THE TITLE IS QUOTED BECAUSE AN UNQUOTED ONE IS PROSE AND NOTHING COMPARES IT — both were read out of
+   tc39.es rather than recalled, which is the only way a number here is worth the characters it costs. */
+const CONTROLLING = new Map([
+  ["if", `ECMAScript §14.6 "The if Statement"`],
+  ["while", `ECMAScript §14.7.3 "The while Statement"`],
+]);
+
+function condConsumer(struct, code, from, to) {
+  let a = from, b = to;
+  for (let step = 0; step < 16; step++) {
+    /* -1 answers BOTH "nothing encloses this" and "an `[` or a `{` does", and those are one answer here: a
+       statement's value escapes and a bracketed one is kept. */
+    const open = enclosingCallParen(struct, a);
+    if (open < 0) return null;
+    const close = matchAt(struct, open);
+    if (close < 0) return null;
+    if (!wholeLogicalOperand(struct, open + 1, close - 1, a, b)) return null;
+    const kw = keywordBefore(struct, code, open);
+    if (CONTROLLING.has(kw)) return kw;
+    let p = open;
+    while (p > 0 && /\s/.test(struct[p - 1])) p--;
+    /* A `(` whose left neighbour ends an expression is a CALL or a computed call, and an argument is kept.
+       A reserved word other than the two above lands here too (`return (…)`, `typeof (…)`), which refuses it
+       — the same verdict a `return` is owed and the under-crediting one for `typeof`. */
+    if (p > 0 && /[\w$)\]]/.test(struct[p - 1])) return null;
+    a = open; b = close;
+  }
+  return null;
+}
+
 
 /* ---- §the COERCION: the absence that arrives as a value with no default standing beside it ----------------- */
 
@@ -1109,6 +1238,13 @@ const coerced = [];     // {file,line,name,recv,shape,to,how,sec,where}
    can see is the concealment this file exists to report, performed on its own output. Every row names the
    operator that decided it, so every row is somewhere a reader can disagree. */
 const decidedOperand = [];  // {file,line,name,recv,form,by}
+/* A read a `||`/`??` follows whose DISJUNCTION reaches nothing but a ToBoolean — see §condConsumer. Its own
+   band rather than a twelfth row of the one above, because the two share a VERDICT and not a WITNESS: there a
+   boolean-producing operator stands to the LEFT of the read and the row can name it, here nothing stands there
+   at all and what decided the row is the controlling expression the whole disjunction fills. One band carrying
+   both would print a `by the operator that consumed it` line that is false of half its rows, which is the
+   under-claim this file reports in other people's instruments. */
+const decidedBranch = [];   // {file,line,name,recv,form,by}
 
 /* A JSON key POSITION, which is the construct — `"name"` followed by a colon. A bare `"name"` in an emission
    is a VALUE and declares nothing, which is the whole difference between reading a structure and scanning for
@@ -3005,19 +3141,22 @@ function scanJS(file, src) {
        only ever have been ambiguous. */
     const meth = awaitedMethod(recv);
     if (meth) { mojoReplyReads.push({ file, line: lineOf(src, m.index), method: meth, name: m[2] }); continue; }
-    let form = null, consumed = null;
+    let form = null, consumed = null, branched = null;
     if (optional) form = "?.";
     else if (/^\?\./.test(nxt)) form = "?. on the value";
     else if (/^(\|\||\?\?)/.test(nxt)) {
       const op = nxt.slice(0, 2);
-      consumed = at0.start === undefined ? null : boolConsumer(struct, code, at0.start);
-      if (!consumed) form = `${op} default`;
-      else consumed = { form: `${op} default`, by: consumed };
+      const by = at0.start === undefined ? null : boolConsumer(struct, code, at0.start);
+      const br = by || at0.start === undefined ? null
+        : condConsumer(struct, code, at0.start, nameAt + m[2].length);
+      if (by) consumed = { form: `${op} default`, by };
+      else if (br) branched = { form: `${op} default`, by: br };
+      else form = `${op} default`;
     }
     else if (inSpan(swallow, m.index)) form = "inside a swallowing try/catch";
-    const co = form || consumed || at0.start === undefined ? null
+    const co = form || consumed || branched || at0.start === undefined ? null
       : coercionOf(struct, code, at0.start, nameAt + m[2].length, subst, declaredHere);
-    localReads.push({ name: m[2], recv, key: keyOf(recv, m.index), off: nameAt, form, consumed,
+    localReads.push({ name: m[2], recv, key: keyOf(recv, m.index), off: nameAt, form, consumed, branched,
                       coerced: co, coercedAt: co ? readPlace(assertSpans, emitSpans, m.index) : null });
     if (isRMW) localWrites.push({ name: m[2], off: nameAt });
   }
@@ -3039,18 +3178,21 @@ function scanJS(file, src) {
       memberAssigns.push({ key: keyOf(recv, at), name, off: at });
       continue;
     }
-    let form = null, consumed = null;
+    let form = null, consumed = null, branched = null;
     if (m[1]) form = "?.[]";
     else if (/^(\|\||\?\?)/.test(nxt)) {
       const op = nxt.slice(0, 2);
-      consumed = at1.start === undefined ? null : boolConsumer(struct, code, at1.start);
-      if (!consumed) form = `${op} default`;
-      else consumed = { form: `${op} default`, by: consumed };
+      const by = at1.start === undefined ? null : boolConsumer(struct, code, at1.start);
+      const br = by || at1.start === undefined ? null
+        : condConsumer(struct, code, at1.start, at + m[0].length);
+      if (by) consumed = { form: `${op} default`, by };
+      else if (br) branched = { form: `${op} default`, by: br };
+      else form = `${op} default`;
     }
     else if (inSpan(swallow, at)) form = "inside a swallowing try/catch";
-    const co2 = form || consumed || at1.start === undefined ? null
+    const co2 = form || consumed || branched || at1.start === undefined ? null
       : coercionOf(struct, code, at1.start, at + m[0].length, subst, declaredHere);
-    localReads.push({ name, recv, key: keyOf(recv, at), off: at, form, consumed,
+    localReads.push({ name, recv, key: keyOf(recv, at), off: at, form, consumed, branched,
                       coerced: co2, coercedAt: co2 ? readPlace(assertSpans, emitSpans, at) : null });
   }
 
@@ -3078,23 +3220,26 @@ function scanJS(file, src) {
        is JSON text and JSON carries no functions, so `o[m]()` is a dispatch and never a field of a record. */
     if (nxt[0] === "(") continue;
     const isWrite = /^=[^=>]/.test(nxt) || /^=$/.test(nxt);
-    let form = null, consumed = null;
+    let form = null, consumed = null, branched = null;
     if (!isWrite) {
       if (m[1]) form = "?.[]";
       else if (/^(\|\||\?\?)/.test(nxt)) {
         const op = nxt.slice(0, 2);
-        consumed = at2.start === undefined ? null : boolConsumer(struct, code, at2.start);
-        if (!consumed) form = `${op} default`;
-        else consumed = { form: `${op} default`, by: consumed };
+        const by = at2.start === undefined ? null : boolConsumer(struct, code, at2.start);
+        const br = by || at2.start === undefined ? null
+          : condConsumer(struct, code, at2.start, at + m[0].length);
+        if (by) consumed = { form: `${op} default`, by };
+        else if (br) branched = { form: `${op} default`, by: br };
+        else form = `${op} default`;
       } else if (inSpan(swallow, at)) form = "inside a swallowing try/catch";
     }
     for (const nm of ans.names) {
       if (!/^[A-Za-z_$][\w$]*$/.test(nm)) continue;
       if (isWrite) { localWrites.push({ name: nm, off: at }); memberAssigns.push({ key: keyOf(recv, at), name: nm, off: at }); }
       else {
-        const co3 = form || consumed || at2.start === undefined ? null
+        const co3 = form || consumed || branched || at2.start === undefined ? null
           : coercionOf(struct, code, at2.start, at + m[0].length, subst, declaredHere);
-        localReads.push({ name: nm, recv, key: keyOf(recv, at), off: at, form, consumed,
+        localReads.push({ name: nm, recv, key: keyOf(recv, at), off: at, form, consumed, branched,
                           coerced: co3, coercedAt: co3 ? readPlace(assertSpans, emitSpans, at) : null });
       }
     }
@@ -5223,12 +5368,13 @@ for (const s of jsScans) {
             const site = { ...s.site(r.off), recv, shape: jBest };
             if (r.form) defaulted.push({ ...site, name: r.name, form: r.form });
             else if (r.consumed) decidedOperand.push({ ...site, name: r.name, ...r.consumed });
+            else if (r.branched) decidedBranch.push({ ...site, name: r.name, ...r.branched });
             else if (r.coerced) coerced.push({ ...site, name: r.name, ...r.coerced, where: r.coercedAt, disp: "a record this corpus constructs" });
           }
         }
         else {
           for (const r of rs)
-            if (r.coerced && !r.form && !r.consumed)
+            if (r.coerced && !r.form && !r.consumed && !r.branched)
               coerced.push({ ...s.site(r.off), recv, name: r.name, ...r.coerced, where: r.coercedAt, disp: "AMBIGUOUS — two records explain it equally" });
           ambiguous.push({ ...s.site(rs[0].off), recv, reason: TWO_RECORDS,
                               why: `reads ${bestN} field(s) of the emission at ${best} and the same ${jN} of the ` +
@@ -5322,7 +5468,7 @@ for (const s of jsScans) {
           }
           return null;
         })() : null;
-        if (r.coerced && !r.form && !r.consumed)
+        if (r.coerced && !r.form && !r.consumed && !r.branched)
           coerced.push({ ...site, name: r.name, ...r.coerced, where: r.coercedAt,
                          disp: syn ? "the emission it anchors to, onto which this consumer wrote this name itself"
                                    : fields.get(r.name)?.writes.length ? "the emission it anchors to, which does NOT carry this name"
@@ -5337,6 +5483,7 @@ for (const s of jsScans) {
       rec(fields, r.name).reads.push(site);
       if (r.form) defaulted.push({ ...site, name: r.name, form: r.form });
       else if (r.consumed) decidedOperand.push({ ...site, name: r.name, ...r.consumed });
+      else if (r.branched) decidedBranch.push({ ...site, name: r.name, ...r.branched });
       else if (r.coerced) coerced.push({ ...site, name: r.name, ...r.coerced, where: r.coercedAt, disp: "the emission it anchors to, which carries this name" });
     }
   }
@@ -5975,6 +6122,21 @@ if (decidedOperand.length) {
   for (const d of decidedOperand.slice(0, 20))
     log(`    ${place(d)}  ${d.recv}.${d.name}  (${d.form} — consumed by \`${d.by}\` first)`);
   if (decidedOperand.length > 20) log(`    … and ${decidedOperand.length - 20} more`);
+}
+
+if (decidedBranch.length) {
+  const byKw = new Map();
+  for (const d of decidedBranch) byKw.set(d.by, (byKw.get(d.by) || 0) + 1);
+  log(`── DECIDED BY THE BRANCH — ${decidedBranch.length} read(s) whose \`||\`/\`??\` is the WHOLE controlling ` +
+      `expression of an \`if\`/\`while\`, reached through logical joins and grouping parentheses only. Nothing ` +
+      `receives the disjunction as a value, so the absence DECIDES a branch instead of hiding inside a datum — ` +
+      `which is the axis §the COERCION already rules ToBoolean out on, and \`if (o.f || g)\` is \`if (o.f)\` with ` +
+      `a disjunct. Decided, not passed ──`);
+  log(`  by the statement that consumed it: ${[...byKw].sort((a, b) => b[1] - a[1])
+        .map(([k, n]) => `${k}×${n} (${CONTROLLING.get(k)})`).join(", ")}`);
+  for (const d of decidedBranch.slice(0, 20))
+    log(`    ${place(d)}  ${d.recv}.${d.name}  (${d.form} — the whole condition of \`${d.by} (…)\`)`);
+  if (decidedBranch.length > 20) log(`    … and ${decidedBranch.length - 20} more`);
 }
 
 if (wholeDefaulted.length) {
