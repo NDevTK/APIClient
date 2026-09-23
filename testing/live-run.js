@@ -600,7 +600,52 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      it. A NONZERO here beside `epBeyondMarkup: 0` is the whole finding in two numbers: the page's own code
      ran, composed addresses, and composed the `<head>`'s. It is a LIFETIME count like its neighbours and it
      is CONTAINED in `epAskMerged`, so it is never added to the three arms beside it. */
-  "epAskMergedPreProgram"];
+  "epAskMergedPreProgram",
+  /* AND THE HOST EDGE'S OWN ENTRY, WHICH EVERY ROW ABOVE STRUCTURALLY CANNOT SEE AND WHICH THIS DRIVER — THE
+     ONE THAT READS THE RAZOR — WAS THE CONSUMER THAT NEVER ASKED. The eleven `ep*` rows above are counted at
+     endpoint_record's door, so a `fetch()` the page CALLED and the engine threw out of, or parked inside and
+     never resumed, is a network call site REACHED and is in none of them. solver/endpoint.h states what these
+     five separate and it is the product's own question: `epFetchAskBeganLife == 0` beside a nonzero `epAsks`
+     says the page never called this door and the defect is upstream of every host edge; a nonzero one with
+     mass in the stage histogram says the page called and the CONSTRUCTION died, at a named stage. Before
+     these rows those two produced byte-identical documents, and `epAsks == epAskPreProgram` — which is what a
+     real page reads — is exactly the reading that cannot tell them apart.
+     KIND IS SPELLED INTO EVERY NAME BY THE PRODUCER AND IS NOT THIS FILE'S CLAIM: `Life` is a LIFETIME COUNT
+     and never a gauge, `Ask` or `Out` is which side of the gate it counts. So they are filed here with the
+     lifetime rows, they may be differenced across two samples of ONE instance, and a sample below its
+     predecessor is this instrument rather than the run.
+     THE UNIT IS STATES OF core/fetch's REQUEST-CONSTRUCTION MACHINE AND IS NOT CALLS — which stages of Fetch
+     those are is solver/endpoint.h's to state and is deliberately NOT restated here, because a bare section
+     number in this file names no standard and would be resolved by its FILE VOTE, and this file's numeric
+     citations are HTML's. A state is BYTE-COPIED at a deep
+     fork and the copy inherits the capture flag, so one `fetch()` whose `input` ToString forks composes TWO
+     requests against ONE capture — which is not exotic, it is this tool's own subject. That is why
+     `epFetchAskBeganLife` is READ AS A FACT AND NEVER SUBTRACTED FROM: `began - freed` and `began - offered`
+     are both quantities the engine refuses to assert and this driver refuses to print.
+     `epFetchOutDiedAtLife` IS A PARTITION AND NOT A LADDER, which is the one thing a reader of a stage table
+     gets wrong. Its arms are the stage a torn-down construction that offered NOTHING was standing at, keyed
+     by the machine's own `js_fetch_steps[]` labels, and NO ARM IMPLIES ANOTHER — so `the lowest 0 is the
+     localisation` is not a reading it supports. A zero in one stage is the positive statement that no
+     construction died there, because the engine emits every stage including the zeroes.
+     THE THREE IDENTITIES ARE CHECKABLE FROM THIS DRIVER'S OWN OUTPUT, which is the whole reason all five are
+     carried rather than the two a headline would want: the stage arms plus `epFetchOutFreedOfferedLife` equal
+     `epFetchOutFreedLife` (a PARTITION over one teardown); `epFetchOutFreedOfferedLife <= epFetchAskOfferedLife`,
+     whose slack is the constructions still parked on their replies and on a page mid-run is most of them; and
+     `epFetchAskOfferedLife <= epAsks` three rows up, whose slack is every OTHER door into the surface — which
+     is what makes the fetch edge's SHARE of the ask population readable and is the only relation that ties
+     this census to the razor it was built to explain.
+     AN ARTIFACT OLDER THAN THESE ROWS PRINTS `-` FOR ALL FIVE, which is this driver's absent-versus-zero rule
+     and is the honest answer: the run did not state them. The engine's absent form is the rows being ABSENT
+     from `_cold` rather than five zeroes — a host that installs no fetch runs no fetch machine and has no
+     population — so `k in c` is false and this list yields `null`, with no arm anywhere that could turn that
+     into a 0. MEASURED at the revision this was written, with `epAsks` and `epEmitted` as the armed controls
+     answering 1 each and an invented name answering 0: all five read 0 occurrences in the installed
+     `extension/lib/qjs/qjs.wasm`, whose stamp is 54 commits behind and is NOT a descendant of the commit that
+     landed them — so the first reader of this list sees five `-` and that is the rows working, not the run.
+     RETIREMENT: that measurement goes when this driver prints the artifact's own distance from the rows it
+     asks for, because the absence is then derivable from the output rather than stated here. */
+  "epFetchAskBeganLife", "epFetchAskOfferedLife",
+  "epFetchOutFreedLife", "epFetchOutFreedOfferedLife", "epFetchOutDiedAtLife"];
 
 /* WHERE THE FRONTIER STOOD, WHAT ITS STEPS DID, AND WHAT GREW IT — read off the row bridge.js wrote, never
    recomputed. `forkAt` is taken WHOLE and is not truncated to its heaviest rows: it is already a Space-Saving
@@ -848,6 +893,13 @@ async function main() {
               CENSUS_LIFETIME.concat(COLD_COUNTERS).concat(WFQ_LIFETIME).concat(ABSENT_ROWS).join(",") +
               ", and every `forkAt` row" +
               " | UNITS: replayHits+replayLeftArms are ARMS (decision-vector slots), replayLeft is EVENTS" +
+              /* SAID WHERE THE NUMBER IS READ AND NOT ONLY WHERE THE ROW IS FILED, on the clause above's own
+                 precedent: a unit and a shape are facts a reader HOLDING the figure needs, and this table is
+                 the one whose arms a reader will otherwise walk looking for a lowest zero. */
+              " | epFetch* count STATES of core/fetch's machine, never calls — a deep fork byte-copies one, so" +
+              " epFetchAskBeganLife is read as a fact and NEVER subtracted from; epFetchOutDiedAtLife is a" +
+              " PARTITION over that machine's own stage labels and NOT a ladder (a 0 in one stage says nothing" +
+              " about its neighbours, and every stage is emitted including the zeroes)" +
               " | GAUGES (may FALL; never difference): " +
               CENSUS_GAUGE.concat(WFQ_JOB_SPLIT).concat(["wfqMembers"]).join(","));
 
