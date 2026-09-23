@@ -17572,10 +17572,14 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
        BEFORE THE TABLE, NEVER AFTER IT, on this function's own rule: the LAST line of a killed run is the
        verdict, and a sentence appended under it puts back the 177-of-179-samples-read-backwards defect the
        paragraph above records. So the list is composed in its own pass rather than inside the table loop.
-       ITS OWN MARKER AND NOT AN `@H ` LINE. Two tools in this tree select on the `@H ` prefix and then read
-       every `name=<digits>` on the line, throwing on a value outside {0,1} — engine/rowsplit.mjs and
-       engine/smokerows.mjs — so prose under that prefix is prose those tools parse as a table. `@HWORK`
-       already establishes the separate-marker convention and this follows it.
+       ITS OWN MARKER AND NOT AN `@H ` LINE, AND THE REASON IS NOW THE OPPOSITE OF A HAZARD REPORT. Readers of
+       this stream select the table by the VERDICT this function writes after it — engine/probe_rows.mjs owns
+       that predicate and every reader imports it — so prose under the prefix is no longer parsed as a table.
+       That is the argument for KEEPING this marker rather than folding it back: the per-folded-0 narration
+       this function writes IS prose under `@H `, two readers that selected on the prefix alone counted its
+       pairs as rows, and a separate marker makes the separation structural instead of resting on every
+       reader getting one predicate right.
+       `@HWORK` already establishes the convention and this follows it.
        THE LIST AND NOT A COUNT: the names are what a reader can act on, and a digit beside them is a second
        thing that has to be kept in step with them. */
     {
@@ -17618,10 +17622,12 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
        field itself. The number a brief may carry away is the number of DISTINCT PRECONDITIONS, so that number
        is made the number of LINES rather than something a reader has to derive by grouping a list — a reader
        who has to do the grouping is the reader who did not.
-       ITS OWN MARKER AND NOT AN `@H ` LINE, for the reason `@HUNASKED` has one and stated again because the
-       hazard is a silent throw two components over: engine/rowsplit.mjs and engine/smokerows.mjs select on
-       the `@H ` prefix and then read every `name=<digits>` on the line, refusing any value outside {0,1}, so
-       prose under that prefix is prose those tools parse as a table. `@HWORK` established the convention.
+       ITS OWN MARKER AND NOT AN `@H ` LINE, for the reason `@HUNASKED` has one and stated again because that
+       cost was paid rather than avoided: engine/rowsplit.mjs and engine/smokerows.mjs selected on the `@H `
+       prefix alone and read every `name=<digits>` on the line, so this function's own narration was counted
+       as rows. They select by the VERDICT now, through engine/probe_rows.mjs, and a separate marker is what
+       keeps that from being the only thing standing between a sentence and a table. `@HWORK` established the
+       convention.
        BEFORE THE TABLE, NEVER AFTER IT, on this function's own rule: the LAST line of a killed run is its
        verdict, and this file already carries the measurement of what appending sentences under it costs.
        PRINTED ON EVERY SAMPLE THAT HAS ONE, RED DAY AND CLEAN DAY ALIKE, exactly as the unaskable list is: a

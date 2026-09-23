@@ -26,6 +26,7 @@
  * and a build that failed on it would be failing on how a scheduler spent a budget.
  */
 import fs from "node:fs";
+import { probeBest } from "./probe_rows.mjs";
 
 const argv = process.argv.slice(2);
 const opt = (name) => {
@@ -66,28 +67,25 @@ for (const p of paths) {
     for (const m of text.matchAll(ELSEWHERE)) if (m[1] !== "@HWORK") otherMarkers.add(m[1]);
     continue;
   }
-  const tables = text.split("\n").filter((l) => l.startsWith("@H "));
-  if (!tables.length) { noTable++; continue; }
-  /* BEST-OVER-THE-RUN, because an `@H` row is a statement answered or not and a later table cannot un-answer
-     one. Anything other than {0,1} means a counter now shares the table and this tool would read any non-zero
-     as answered — that is a defect at the emitter, not something to normalise here. */
-  const best = {};
-  for (const line of tables)
-    for (const m of line.matchAll(/([a-z][a-z0-9-]*)=(\d+)/g)) {
-      const v = Number(m[2]);
-      if (v !== 0 && v !== 1)
-        throw new Error(`${p}: row \`${m[1]}\` has value ${v} — @H rows are statements answered or not, so a ` +
-                        `value outside {0,1} means a counter shares the table. Separate them at the emitter.`);
-      best[m[1]] = Math.max(best[m[1]] ?? 0, v);
-    }
+  /* WHICH LINES ARE TABLES IS engine/probe_rows.mjs's QUESTION AND NOT THIS FILE'S. It used to be answered
+     here by the `@H ` prefix alone, and that prefix is shared by the TABLE and by one narration sentence per
+     folded 0 — a `why` carries whatever `k=0` pairs its author needed to make the sentence say something, so
+     the sentences were read as rows. A subject row named in a narration would have been counted out of prose
+     and a control row could have been ANSWERED by one, which is the one failure a control exists to rule out.
+     BEST-OVER-THE-RUN, because an `@H` row is a statement answered or not and a later table cannot un-answer
+     one. The row-value invariant that used to stand here — a value outside {0,1} is a counter sharing the
+     table, and folding its magnitude into a boolean would read it as answered — moved to that module with the
+     selection, because it is a fact about the stream rather than about this reader. */
+  const { tables, best } = probeBest(text, p);
+  if (!tables) { noTable++; continue; }
   const b = Math.max(...seen) > 0 ? buckets.with : buckets.without;
   b.n++;
-  for (const r of [...rows, ...control]) if (best[r] === 1) b.ans[r]++;
+  for (const r of [...rows, ...control]) if (best.get(r) === true) b.ans[r]++;
 }
 
 /* NO @HWORK LINE ANYWHERE CARRIES IT AND ANOTHER MARKER DOES — so the question was addressed to the wrong
-   stream and there is nothing here to read. Refused rather than reported, for the reason the row-value check
-   above is a throw: this tool promises exit 0 on a READING, and a mis-addressed question is not one. It is
+   stream and there is nothing here to read. Refused rather than reported, for the reason probe_rows.mjs's
+   row-value check is a throw: this tool promises exit 0 on a READING, and a mis-addressed question is not one. It is
    narrow on purpose — a key that some logs DO carry on @HWORK is the caller's namespace working, and the
    logs without it are then genuinely older, which is the other reading and is left standing. */
 if (buckets.with.n + buckets.without.n === 0 && otherMarkers.size)

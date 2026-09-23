@@ -21,6 +21,7 @@ import { cpus } from "node:os";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { stampArtifact, gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
+import { probeTables } from "./probe_rows.mjs";
 import { lexborSourceId, lexborNativeArchive } from "./lexbor_source.mjs";
 import { childCpuSeconds, childCpuDelta, cpuText } from "./gate_cpu.mjs";
 
@@ -655,27 +656,26 @@ function forkReading(t) {
           `retains; a bigger table is not it`));
 }
 function probeFlips(out) {
-  const rows = [];
-  /* THE TABLE, AND NEVER PROSE ABOUT THE TABLE. test_forced.c's `probes_report` prints TWO shapes under this
-     one marker: `@H   <row> @<workDone>: <why>` for each folded 0 — the progress total being what
-     says whether that 0 was answered wrongly or never reached — and then `@H ` + the whole table + `=> OK|FAIL|
-     INCOMPLETE`. A `why` is a SENTENCE, so it carries whatever `k=0` pairs its author needed to make the
-     sentence say something — `(engine_orphan_census: asked=0, driven=0)`, `forked=0` — and a bare
-     `(\S+)=([01])` reads those as tables. Measured on one smoke log: NINE rows where the run printed ONE,
-     eight of them prose.
-     A WRONG COUNT IS THE SMALLEST OF THE THREE THINGS THAT COSTS. `ever` is a union over every row, so the
-     first `why` that ever spells `k=1` invents a statement the fixture does not make; and `answered`,
-     `asked` and `unanswered` are read off the LAST row, so a run killed between a why line and the table it
-     precedes reports `0/2 … asked driven` — a fabricated fraction, in the arms whose whole subject is
-     killed runs.
-     THE DISCRIMINATOR IS THE PRODUCER'S OWN TERMINATOR: the table is the line that ENDS in the verdict
-     `probes_report` writes after it, and prose never carries one. */
-  for (const m of out.matchAll(/^@H ((?:\S+=[01] )+)=> (?:OK|FAIL|INCOMPLETE)$/gm)) {
-    const r = {};
-    for (const [, k, v] of m[1].matchAll(/(\S+)=([01])\b/g)) r[k] = v === "1";
-    if (Object.keys(r).length) rows.push(r);
-  }
-  return rows;
+  /* THE TABLE, AND NEVER PROSE ABOUT THE TABLE — SELECTED IN engine/probe_rows.mjs, WHICH IS WHERE THAT
+     ARGUMENT NOW LIVES. test_forced.c's `probes_report` prints TWO shapes under the one `@H ` marker, a
+     narration sentence per folded 0 and the table itself, and a `why` carries whatever pairs its author
+     needed to make the sentence say something. The discriminator is the producer's own terminator: the table
+     is the line that ENDS in the verdict, and a narration never carries one.
+     IT MOVED BECAUSE THIS FILE COULD NOT BE ROUTED TO. The predicate was correct here and the two log readers
+     beside it — engine/rowsplit.mjs and engine/smokerows.mjs — each wrote their own and got it wrong, because
+     this file has no exports and does the build at import, so there was nothing for them to call. Two right
+     answers to one question is the shape that drifts; here the other two were not even right.
+     WHAT STAYS HERE IS WHAT THIS READER DOES WITH THEM, which is why the prose reading cost more than a
+     count: `ever` is a union over every row, so the first `why` that ever spells `k=1` invents a statement
+     the fixture does not make; and `answered`, `asked` and `unanswered` are read off the LAST row, so a run
+     killed between a narration and the table it precedes reported a fabricated fraction, in the arms whose
+     whole subject is killed runs.
+     AND A TABLE THIS READER CANNOT PARSE NOW THROWS WHERE IT USED TO BE DROPPED. A line that is pairs-shaped
+     all the way to the verdict and still does not match is a counter sharing the table; the pattern here
+     simply did not match it, so this file silently read one table fewer and every fraction above was taken
+     off a stream it had quietly measured a subset of. That check is in probe_rows.mjs with the selection,
+     which makes it every reader's rather than one reader's. */
+  return probeTables(out, "the run's own output");
 }
 /* WHERE THE RUN GOT TO, IN THE FIXTURE'S OWN UNITS — AND THE ONE NUMBER THE VERDICT USED TO THROW AWAY.
    `hungCause` has always computed this (its `zero` list) and the verdict line has always cut it off:
@@ -5465,9 +5465,17 @@ function skipped(label, why) {
    disagreed on a struct's size, and the segfault was in `strcmp` inside a DFAIL's own order check. A build
    reads its inputs over minutes from a checkout several agents are editing, so "which revision is this" is not
    a formality here — it is the difference between a verdict and an artifact of when the reads happened. */
+/* AND THE `@H` READER IS IN THIS CONE BY INHERITANCE RATHER THAN BY A NEW DECISION. Which lines of the
+   smoke stream are TABLES was a function of this file, so it was covered here; it is engine/probe_rows.mjs
+   now, because the two log readers beside it could not call into a file that does the build at import. It
+   still decides the fraction this build reports, and a diff to it that this list did not name would move a
+   number while the revision line said the tree had not changed. It is NOT added to the ARTIFACT stamp's
+   cone, which is what the link actually compiled and which this reader compiles nothing into. RETIREMENT:
+   this record goes when a gate's cone is derived from its own module graph, so a helper cannot be left out
+   of it by being forgotten. */
 let REV_AT_START = null;
 const revAtStart = () => (REV_AT_START ||= gateRevision(
-  ["engine/host", "engine/qjs", "engine/build.mjs", "engine/gate_revision.mjs"]));
+  ["engine/host", "engine/qjs", "engine/build.mjs", "engine/gate_revision.mjs", "engine/probe_rows.mjs"]));
 
 /* `findings` IS A REQUIRED ARGUMENT AND AN EMPTY ARRAY IS A POSITIVE STATEMENT. It carries the lines that are
    NOT stages - the vehicle-agreement sentence is the only one today - and it is required rather than

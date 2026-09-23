@@ -14,7 +14,7 @@
  * THE ROW NAMES ARE DERIVED FROM THE LOG, NEVER LISTED HERE. A hand-kept list is the second copy of a fact the
  * fixture owns, and this project has been bitten by that shape repeatedly — an auditor's table drifting from
  * the artifact it audits. The fixture gains and loses rows as lanes add probes; this tool learns them from the
- * `@H` lines it is reading and reports what it found.
+ * `@H` TABLES it is reading — engine/probe_rows.mjs decides which lines those are — and reports what it found.
  *
  * THERE IS NO EXPECTED TOTAL AND NO EXPECTED COUNT, DELIBERATELY. Both rot, and CLAUDE.md rates a count of what
  * is MISSING as the worst status of all: it shrinks as people do the work, and its only reader is the person
@@ -39,6 +39,7 @@
  * ─────────────────────────────────────────────────────────────────────────────────────────────────────────── */
 
 import { readFileSync } from "node:fs";
+import { probeBest } from "./probe_rows.mjs";
 
 const paths = process.argv.slice(2);
 if (paths.length === 0) {
@@ -55,39 +56,30 @@ if (paths.length === 0) {
 const runs = [];
 for (const path of paths) {
     const text = readFileSync(path, "utf8");
-    /* A row is `name=<digits>` on an `@H` line. Anchored at line start so an `@H` quoted inside a message is
-       not read as a table. */
-    const tables = text.split("\n").filter((l) => l.startsWith("@H "));
-    if (tables.length === 0) {
+    /* THE TABLE IS SELECTED BY THE PRODUCER'S VERDICT, IN engine/probe_rows.mjs, AND NOT HERE. This file used
+       to take every `name=<digits>` off any line beginning `@H `, and `@H ` is a prefix TWO SHAPES SHARE: the
+       table, and one narration sentence per folded 0. A `why` carries whatever `k=0` pairs its author needed,
+       so the sentences were read as rows. That was not a hazard waiting to happen — measured over twelve
+       frozen-snapshot smoke logs, this tool reported 269 distinct row names against the 267 the tables
+       declare, and the two it invented (`asked` and `driven`, out of one census narration) landed in the
+       NEVER ANSWERED IN ANY RUN band, which is the strongest thing it says.
+       THE ROW-VALUE INVARIANT MOVED WITH IT rather than being kept here: a value outside {0,1} is a counter
+       sharing the table, this tool would fold its magnitude into a boolean, and the throw that says so now
+       fires for every reader of the stream instead of for this one. A second copy of that check here would
+       be a second answer to a question one module already answers. */
+    const { tables, best } = probeBest(text, path);
+    if (tables === 0) {
         console.log(`SKIPPED ${path}: no @H table lines — a build that died before the smoke stage writes one`);
         console.log("  (this is REPORTED rather than thrown, because a run that produced no table is a fact");
         console.log("   about that run; a single log with no tables still throws below, since asking one");
         console.log("   question of one empty log is a mis-addressed question rather than a datum.)");
-        runs.push({ path, best: new Map(), lines: 0, empty: true });
+        runs.push({ path, best: new Map(), tables: 0, empty: true });
         continue;
     }
-    const best = new Map();
-    for (const line of tables)
-        for (const m of line.matchAll(/([a-z][a-z0-9-]*)=(\d+)/g)) {
-            const k = m[1], v = Number(m[2]);
-            /* EVERY ROW IS A STATEMENT AND A STATEMENT IS ANSWERED OR IT IS NOT, so a value outside {0,1} is
-               a COUNTER that has leaked onto an @H line — and this tool would silently read any non-zero as
-               "answered", turning a magnitude into a boolean and reporting a row as reached because a
-               counter happened to be positive. The assumption was implicit until it was checked, and it
-               checked out (249 row names over 70 logs, no value but 0 or 1), which is exactly when to make
-               it explicit: an invariant confirmed once and left unasserted is one the next emitter breaks.
-               It throws rather than clamping, because the honest answer to a row this tool cannot classify
-               is not a smaller number. */
-            if (v !== 0 && v !== 1)
-                throw new Error(`${path}: row \`${k}\` has value ${v} — @H rows are statements answered or ` +
-                                `not, so a value outside {0,1} means a counter now shares the table and this ` +
-                                `tool would read any non-zero as answered. Separate them at the emitter.`);
-            best.set(k, Math.max(best.get(k) ?? 0, v));
-        }
     if (best.size === 0)
-        throw new Error(`${path}: @H lines carry no name=value pairs — the row spelling changed and this tool ` +
+        throw new Error(`${path}: @H tables carry no name=value pairs — the row spelling changed and this tool ` +
                         `would otherwise measure a subset without saying so, which is the failure it exists to avoid`);
-    runs.push({ path, best, lines: tables.length, empty: false });
+    runs.push({ path, best, tables, empty: false });
 }
 
 const live = runs.filter((r) => !r.empty);
@@ -100,7 +92,7 @@ if (live.length === 0)
 const names = new Set();
 for (const r of live) for (const k of r.best.keys()) names.add(k);
 
-const vector = (k) => live.map((r) => ((r.best.get(k) ?? 0) > 0 ? "1" : "."));
+const vector = (k) => live.map((r) => (r.best.get(k) === true ? "1" : "."));
 const everAnswered = (k) => vector(k).includes("1");
 
 const answered = [...names].filter(everAnswered).sort();
@@ -116,7 +108,7 @@ for (const k of names) {
 
 console.log(`smoke rows across ${live.length} log(s) with tables` +
             (runs.length > live.length ? `, ${runs.length - live.length} skipped as tableless` : ""));
-for (const r of live) console.log(`  ${r.lines.toString().padStart(5)} @H line(s)  ${r.path}`);
+for (const r of live) console.log(`  ${r.tables.toString().padStart(5)} @H table(s)  ${r.path}`);
 console.log("");
 console.log(`  ${names.size} distinct row name(s), derived from the logs and not listed in this file`);
 console.log(`  ${answered.length} answered in at least one run, ${never.length} never answered in ANY run`);
