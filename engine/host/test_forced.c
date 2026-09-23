@@ -574,10 +574,26 @@ static int fixture_provide(JSContext *ctx) {
        count is forced arithmetic rather than a reading — two call sites over a loop that ran twice is
        hook/payment/hook, the third slice never happening because the second returned DONE — and the census
        taken at the end of the first iteration carries `previewAsks 2`, which is that sequence exactly.
-       `fixture_ask_remote_op` STAYS, because it is the opposite question: an OPERATION must still be held when
-       the park is taken, so it is asked AT the moment and not before it. The two halves of what a peer does are
-       asked at opposite ends of the run, which is why they were two functions before this line moved. */
-    if (fixture_cold_moment()) fixture_ask_remote_op(ctx);
+       AND `fixture_ask_remote_op` HAS NOW LEFT THIS LINE TOO, WHICH RETIRES THE ARGUMENT THAT KEPT IT HERE.
+       That argument said the operation is the OPPOSITE question — it must still be HELD when the park is
+       taken, so it is asked AT the moment and not before it — and every word of it is still true. What it
+       did not say is that the ask and the park REQUEST are an ORDERED PAIR: the question has to be attached,
+       then a slice has to run so a member can convert it to a program row, and only then may the park be
+       requested. Split across this payment and the park hook, that order was a property of two statics and
+       two DCHECKs — two things that must happen in one order, written in two functions, either of which
+       could be spelled first. It is one function's control flow now (see fixture_want_park), so the wrong
+       order is unspellable rather than merely asserted, and one of those two DCHECKs went with the move
+       because its condition had become one this file can no longer construct.
+       THE LATCH MOVES WITH IT AND THAT IS THE POINT RATHER THAN A SIDE EFFECT. The paragraph above the park
+       hook argued that the conjunction can only ever be taken at a PAYMENT, because it reads state only a
+       STEP changes and the payment is the first consultation after one. That was a statement about a host
+       with TWO consultation sites; with this one gone the hook is the only site, so it latches there — one
+       consultation later, over a frontier NO step has touched in between, which is why the three rungs that
+       rest on the ask reaching a forked frontier read exactly what they read before.
+       WHAT THAT COSTS IS THE `previewAsks` ARITHMETIC ABOVE, AND IT IS STATED RATHER THAN LEFT TO ROT: the
+       figure quoted in this paragraph is a reading of a host with two call sites over a loop that ran twice.
+       One site per iteration is the shape now, so the count is the number of hook calls and nothing else —
+       which is a simpler thing to read and a different number from the one measured here. */
     return filled + hostreq_answer_all(ctx);
 }
 
@@ -17829,7 +17845,7 @@ static int fixture_have_answers(void) {
  * rungs `park-remoteop-asked`, `park-remoteop-many` and `park-remoteop-once`, split apart because a single
  * folded row could not say which of those three a 0 was about. The last of them is the one a per-flow hand-back
  * would fail. The `dyn_token` half is named where its row is. */
-static int g_cold_moment, g_op_asked, g_post_routed, g_op_window;
+static int g_cold_moment, g_op_asked, g_post_routed;
 
 static int fixture_cold_moment(void) {
     ColdPreview would;
@@ -18060,65 +18076,31 @@ static int fixture_want_park(void) {
        this host consults, and the payment's own paragraph quotes that figure as a MEASUREMENT. One call, and
        the assert below reads the flag the ask sets rather than asking the tier a second time. */
     if (!fixture_cold_moment()) return 0;
-    /* AND THE PEER'S QUESTION WAS ASKED BEFORE THE PARK IS REQUESTED — the precondition the three
-       `park-remoteop` rungs rest on, asserted at the seam that decides it instead of being inferred from
-       three rows reading 0 in a log. Returning non-zero HERE is engine_request_park (run_scheduler's loop
-       asks this and calls it on the spot), and engine_sched_slice honours that request before its first pick,
-       so the frontier the park walks is the frontier standing at this line — and a frontier no peer question
-       has been attached to yet is one engine_retract_span's arrival-slot half finds nothing in.
-       IT HOLDS TODAY BY A PROPERTY NOTHING ELSE STATES, WHICH IS THE WHOLE REASON IT IS WRITTEN DOWN. The
-       conjunction fixture_cold_moment latches is a function of state only a STEP changes; run_scheduler's
-       loop is hook, step, payment, so the payment is the FIRST consultation after any step and this hook is
-       the second. The latch is therefore always taken at the payment, and fixture_provide asks the operation
-       on the very line that latches it. A moment that latched HERE instead would request the park in the same
-       iteration, the payment for that slice would never run, fixture_ask_remote_op would never be called, and
-       `park-remoteop-asked`, `-many` and `-once` would all read 0 — with rung 1's own `why` sending the reader
-       to fixture_ask_remote_op, which would be correct about the file and silent about the cause.
-       THE STATE IT FORBIDS IS CONSTRUCTIBLE AND IS EXACTLY WHAT THE NEXT DIFF MOVES, so this is a guard and
-       not a tautology: this row's banner names a WINDOW between the ask and the park as the second of its two
-       remaining subproblems, every spelling of that window edits this consultation order, and a spelling that
-       requests the park ahead of the ask is the one failure it can have. Nothing else this host carries would
-       report it — the three rungs would simply stop passing.
-       RETIREMENT: this goes when the ask and the park request are one ordered pair that cannot be spelled
-       apart, because the order is then true by construction rather than by this line. */
-    DCHECK(g_op_asked,
-           "the cold park is being requested and no cross-agent operation has been asked of this frontier — "
-           "the moment latched at this park hook rather than at the payment, so fixture_ask_remote_op never "
-           "ran, and the park is about to walk a frontier holding no peer question at all. "
-           "`park-remoteop-asked`, `-many` and `-once` will read 0 for a reason that is THIS CONSULTATION "
-           "ORDER and not the arrival-slot walk those rungs are about: read run_scheduler's loop (hook, step, "
-           "payment) and fixture_provide's tail, never engine_retract_span");
-    /* AND ONE SLICE OF PICKS RUNS BETWEEN THE ASK AND THE PARK, WHICH IS THE SECOND HALF OF THE ROW AND
-       THE REASON THE FIRST HALF IS NOT LANDABLE WITHOUT IT. engine_perform ATTACHES a question; only a
-       STEP converts it to a program row, and engine_sched_slice honours a requested park BEFORE its first
-       pick — so with the moment latched at the payment that asked, the park walked a frontier on which
-       flow_perform had never run and `park-remoteop` could not be a finding in either direction.
-       ONE CONSULTATION AND NOT A COUNT OF WORK. What is needed is that the scheduler gets ONE slice, and
-       a slice is exactly what lies between two consultations of this hook — so declining once is the
-       whole mechanism and there is no quantity to tune. It is NOT a bound: it decides WHEN the residue
-       leaves memory and never how much of it survives, which is the line §NO BOUNDS draws between paging
-       and a cap, and it is the same kind of choice the conjunction above already is. The moment is
-       LATCHED, so waiting cannot lose the park: fixture_cold_moment returns the latched value for ever
-       once it is set.
-       WHAT THE EXTRA SLICE COSTS IS STATED RATHER THAN HIDDEN: `refuses` is transient and is read at the
-       LATCH, so a park taken one slice later can meet a member cold_park_flow refuses. That exposure is
-       not new — the latch and the park were already one consultation apart — and it is widened by one
-       slice here. If it ever fires it fires BY NAME, at cold_park_flow, which is a statement about a
-       member and not a silent 0.
-       AND THE ASSERT BELOW IS THE CONJUNCT THIS FUNCTION ONCE DELETED, WHICH THIS DIFF RETIRES THE
-       DELETION OF. The banner above this function records that `engine_operations_started() > 0` was
-       removed because "a started operation lives strictly inside one slice, and this hook is only ever
-       asked between two", and because a latch that HAD caught one would park after the operation
-       completed with no token left to strip. Both were exactly right about a document with no
-       unreachable row in it. HTML_COLD now has one, so a token SURVIVES a slice and this question is
-       answerable here — and it is an ASSERT rather than a conjunct for the reason that deletion still
-       holds: a conjunct that is never true never parks, which is furniture, while an assert that is
-       never true CRASHES and names the half that did not engage.
-       IT IS THE ASK AND THE OUTCOME AT ONCE BECAUSE NOTHING RUNS BETWEEN THEM. Returning non-zero here
-       is engine_request_park and the park is honoured before the next pick, so the count this reads is
-       the same count engine_retract_span is about to strip — which is what makes it a precondition of
-       the row rather than a second spelling of it. */
-    if (!g_op_window) { g_op_window = 1; return 0; }
+    /* AND THE PEER'S QUESTION AND THE PARK REQUEST ARE ONE ORDERED PAIR, SPELLED AS THIS FUNCTION'S OWN
+       CONTROL FLOW. They must happen in one order — the question ATTACHED, then a slice run so a member can
+       convert it to a program row, then the park requested — and until this diff that order was held by two
+       statics and two DCHECKs across two functions, either of which could be written first.
+       IT IS STRUCTURAL NOW AND THE ARGUMENT IS SHORT: `g_op_asked` is set by fixture_ask_remote_op and by
+       nothing else, and the ONE call site is the line below, which RETURNS. So `return 1` is reachable only
+       on a LATER consultation than the ask, a consultation is what a slice lies between, and there is no
+       spelling of this function that requests the park without a slice having run since the question was
+       attached. That is the state made impossible rather than merely asserted.
+       AND THE ASSERT THAT GUARDED IT IS DELETED WITH IT, WHICH IS THE POINT AND NOT A TIDY-UP. It read
+       `DCHECK(g_op_asked, …)` — the cold park is being requested and no cross-agent operation has been asked
+       of this frontier — and its condition is one this file can no longer construct, so it had become an
+       assert whose two sides cannot disagree: a NON-check wearing the syntax of a check, certifying an order
+       it no longer examines. Its reasoning is kept here because a reader who re-derives it will re-add it.
+       IT NAMED A MOMENT LATCHING AT THIS HOOK AS THE FAILURE, and that is exactly what happens now and is no
+       longer a failure. The paragraph above this function argued the conjunction can only be taken at a
+       PAYMENT, so a latch HERE would request the park in the SAME iteration and the payment that asked would
+       never run. The premise was a host with TWO consultation sites; the payment no longer consults, so this
+       is the only one and it latches here — and the latch does not request the park, it ASKS and returns 0.
+       The iteration the old argument feared is the iteration this function now spends opening the window.
+       THE FRONTIER IS THE SAME ONE THE ASK USED TO SEE, which is what keeps the three rungs reading 1: the
+       payment that used to latch and this hook are one consultation apart with NO step between them, so the
+       set of live timelines engine_perform attaches to is identical. The ask moved in the LOOP and not in
+       the FRONTIER. */
+    if (!g_op_asked) { fixture_ask_remote_op(g_probe_ctx); return 0; }
     DCHECK(engine_operations_started() > 0,
            "a slice of picks ran between the peer's question and this park and NO member converted it to "
            "a program row — so engine_retract_span will find no `dyn_token` to strip and `park-remoteop` "
@@ -29105,6 +29087,36 @@ int main(int argc, char **argv) {
        also has a FILE to put it in is a different question — the exploring sessions park too now, and their
        residue rides the result document's `_park` array exactly as the extension's does. A census printed only
        for the invocation that named a path would have gone silent for them. */
+    /* AND THIS HOST ASKED TO PARK AND THE ENGINE MUST REPORT ONE, ASSERTED BEFORE THE ARM THAT READS THE
+       RESIDUE RATHER THAN LEFT TO THAT ARM BEING SKIPPED. wpt_runner.c makes the identical check for the
+       identical reason, and the sentence it uses is the one to copy: "every member was written out as a
+       recipe" is exactly the sort of statement that reads as true because it was INTENDED.
+       WHAT IT CATCHES IS A PARK THE HOST LOST RATHER THAN NEVER WANTED, which is why the left side is the
+       MOMENT and not a constant. fixture_cold_moment_met is the read-only entry — it consults nothing, so
+       this costs no census ask — and a true reading is this host having DECIDED to park. The engine then has
+       two exits that write a frontier (a requested park, and a frontier every member of which is parked on a
+       refusal) and one that writes NOTHING: a frontier that DRAINED, where cold_park deletes the origin's
+       entry because a residue that was resumed and consumed is honestly gone. That last one is correct for a
+       document nobody asked to park and is a LOSS for one somebody did.
+       THE WINDOW IS WHAT MAKES IT REACHABLE, AND THAT IS THE WHOLE REASON THIS LINE EXISTS. The park hook
+       above deliberately declines ONE consultation after the ask so a slice of picks can run, and this
+       document is built to DRAIN — its own banner calls it "deliberately SMALL in every other respect: one
+       fork and a six-iteration loop, so the document drains in a second session". So the slice the window
+       opens is a slice the frontier may finish in, and if it does the session ends at DONE before the hook
+       is consulted again: the park is never requested, the residue is deleted, and the NEXT session reports
+       that there was nothing to resume from. Nothing in this fixture said which of those two had happened.
+       IT IS AN ASSERT AND NOT A ROW BECAUSE THE ROWS CANNOT SEE IT: every park row reads a census the park
+       WRITES, so a park that never happened reads 0 in all of them at once and each one's `why` explains a
+       different mechanism. Sixteen zeros with sixteen wrong explanations is the several-states-behind-one-
+       answer shape, and the state they are all about is this one. */
+    DCHECK(!fixture_cold_moment_met() || engine_frontier_paged(),
+           "this host latched its park moment and the engine reports no frontier written — so the session "
+           "ended without parking and the residue for the next one was DELETED rather than stored. The "
+           "park hook declines one consultation after the peer's question so a slice can run, and this "
+           "document is small enough to DRAIN in that slice: at DONE there is no second consultation, so "
+           "the park is never requested at all. Read fixture_want_park's window, and the drained-frontier "
+           "exit that deletes the origin's entry — never the park rows, which read 0 together here for "
+           "this one reason and whose `why` strings each name a different mechanism");
     if (engine_frontier_paged()) {
         const char *recipes = cold_park_recipes();
         cold_parked(&g_cp);
