@@ -130,9 +130,14 @@ const AST_PARAM_KEYS = Object.freeze([
    have carried a domain — a coverage fraction reading HIGHER than the truth. */
 function _mergeValueClass(target, p) {
   if (!("valueClass" in p)) return;
-  DCHECK(p.valueClass === "unknown" || p.valueClass === "concrete",
-         "an @H param carries `valueClass: " + JSON.stringify(p.valueClass) + "`, which is neither of the " +
-         "two words solver/endpoint.c writes — the key is emitted on EVERY param from one ternary over one " +
+  /* THE VOCABULARY IS lib/field-def.js's `VALUE_CLASSES` AND IS NOT RESTATED HERE. It was the two literals,
+     written out at this assert and again at lib/merge.js's fold — and the key now travels to the Send panel,
+     which is a third zone that has to refuse a third spelling, so a fourth private copy was exactly the
+     restatement CLAUDE.md §AN-AUDITOR-DERIVES-THE-RULE names. The list lives beside the record whose field it
+     types, for `PARAM_LOCATIONS`' reason, and this is the assert that checks arrival against it. */
+  DCHECK(VALUE_CLASSES.indexOf(p.valueClass) >= 0,
+         "an @H param carries `valueClass: " + JSON.stringify(p.valueClass) + "`, which is none of " +
+         VALUE_CLASSES.join("/") + " — the key is emitted on EVERY param from one ternary over one " +
          "flag, so a third spelling is the two halves of this record having parted, and a consumer that " +
          "matched neither word would read it as the absent third state and silently un-learn the fact");
   DCHECK(!(p.location === "path" && p.valueClass === "concrete"),
@@ -1054,22 +1059,22 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
       /* AT THIS SIGHTING'S GRADE, for the reason the query params carry it: a body field the page POSTs is
          learned on the same path the address was, so it is worth exactly what that path is worth. */
       _mergeAstValues(schema.properties[bp.name], bp.validValues, callSite.provenance);
-      /* `valueClass` IS DELIBERATELY NOT MERGED HERE, AND THE ASYMMETRY WITH THE FOUR BELOW IS THE POINT
-         RATHER THAN AN OMISSION. It is the key that says which of two sentences their silence is — endpoint.c
-         reads all four domains through the param's HOLE KEY, so a field whose value the code COMPUTED had all
-         four skipped at the mint — and by every argument the four comments below give, this half of the
-         record wants it. WHAT STOPS IT IS THAT IT WOULD HAVE NO READER. The four leave these properties by
-         ONE road: lib/discovery.js's `_buildDiscoveryFieldShell` lifts each of them by name onto a FieldDef,
-         and a name not in `FIELD_DEF_ABSENT` cannot travel it — `makeFieldDef` crashes on an undeclared key
-         precisely so a producer cannot emit into a reader that does not exist. Writing it here would be that
-         defect one name over: stored on every body field, read by nothing, and indistinguishable from a fact
-         the popup renders.
-         WHAT THE NEXT DIFF BUILDS: `_astValueClass` declared in extension/lib/field-def.js, lifted by
-         `_buildDiscoveryFieldShell` beside the four, this merge, and the schema-property walk
-         testing/corpus/site.mjs's `domains` column names as its own residual — one landing, because each of
-         those alone is a write nothing reads. HOW ITS ABSENCE WOULD SHOW: a body field the engine minted from
-         a literal and one it minted from a hole no gate narrowed render in the Send panel with the same
-         constraint badges, so a reviewer reads "this tool narrowed nothing here" off both. */
+      /* …AND THE KEY THAT SAYS WHICH OF TWO SENTENCES THOSE FOUR SILENCES ARE, WHICH USED TO BE DELIBERATELY
+         ABSENT HERE AND IS THE ONE THING ON THIS HALF OF THE RECORD THAT NOTHING COULD READ. The refusal was
+         correct and its reason is kept because a reader who re-derives it will re-apply it: the four leave
+         these properties by ONE road — lib/discovery.js's `_buildDiscoveryFieldShell` lifts each by name onto
+         a FieldDef, and a name not in `FIELD_DEF_ABSENT` cannot travel it, because `makeFieldDef` crashes on
+         an undeclared key precisely so a producer cannot emit into a reader that does not exist. Writing it
+         here while that was true would have been a fact stored on every body field and read by nothing.
+         IT IS RETIRED BY A LANDING AND NOT BY A CHANGE OF MIND, and the landing is the whole of what the
+         retired clause named: `_astValueClass` is declared in lib/field-def.js beside the four domains,
+         `_buildDiscoveryFieldShell` lifts it, lib/send.js projects it on the query/path half, and
+         lib/popup-form.js RENDERS it — so this merge now has the reader it was waiting for. Each of those
+         alone would still be a write nothing reads, which is why they are one diff.
+         WHAT IT BUYS IS WHAT THE OLD CLAUSE SAID ITS ABSENCE COST: a body field the engine minted from a
+         literal and one it minted from a hole no gate narrowed used to render with the same constraint
+         badges, so a reviewer read "this tool narrowed nothing here" off both. */
+      _mergeValueClass(schema.properties[bp.name], bp);
       /* A BODY FIELD'S DOMAIN IS THE SAME FACT AS A QUERY PARAM'S. endpoint.c reads the request body in the
          body's own format and mints a param per field, so a gate over a value the page then POSTs is observed
          exactly as one over a value it appends to the query is. Leaving it out here would make the report's

@@ -325,6 +325,12 @@ function _buildDiscoveryFieldShell(name, prop, requiredList) {
        producer speaking about three of the four facts makes the panel's silence about the fourth mean two
        different things depending on which producer built the record. */
     _looselyEquals: fdDocList(prop._looselyEquals),
+    /* …AND THE KEY THAT SAYS WHICH OF TWO SENTENCES THE FOUR ABOVE ARE SILENT WITH. It is not a fifth
+       domain: endpoint.c reads all four through the param's HOLE KEY, so a request-body field whose value
+       the page COMPUTED had all four skipped at the mint, and without this key it reaches the panel
+       indistinguishable from a field a hole stands in that no gate narrowed. Refused rather than asserted
+       for the reason the four above are — this property may be a third party's document. */
+    _astValueClass: fdDocValueClass(prop._astValueClass),
   }, "lib/discovery.js _buildDiscoveryFieldShell, property `" + name + "`");
 }
 

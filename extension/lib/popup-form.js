@@ -264,6 +264,17 @@ function buildFormFields(schema, initialData = null) {
                sibling path's `_excludedValues` carries the same gate's other arm. `undefined` and `null` are
                one statement here for the reason they are one on the three lines above. */
             _looselyEquals: param._looselyEquals === undefined ? null : param._looselyEquals,
+            /* …AND WHICH OF TWO SENTENCES THOSE FOUR SILENCES ARE, WHICH IS NOT A FIFTH ONE OF THEM AND IS
+               THE KEY THAT MAKES THE OTHER FOUR READABLE. solver/endpoint.c reads all four domains through
+               the param's HOLE KEY, so a parameter whose value the code COMPUTED had all four skipped at the
+               mint: their absence then means "a literal with nothing to look up" and not "no gate of that
+               kind survived every observed path". Those two take opposite work and, without this, render
+               here with identical bytes — no badge either way — which is §@H's wrong report rather than a
+               thin one. `undefined` and `null` are one statement for the reason they are one on the four
+               lines above, and here that statement is a THIRD state rather than a fifth silence: an engine
+               that predates the key, or a producer that observed no @H parameter at all, says neither word
+               and the label below stays silent for it. */
+            _astValueClass: param._astValueClass === undefined ? null : param._astValueClass,
           }, "lib/popup-form.js URL parameter `" + name + "`"),
           "param",
           0,
@@ -629,7 +640,11 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
      is not rendered at all, because "nothing was proved" and "proved to be nothing in particular" are the
      same statement about what the reviewer may assume. Without it a param this run proved is neither
      "admin" nor "prod" looked exactly like a param nothing ever tested. */
-  if (Array.isArray(fieldDef._excludedValues) && fieldDef._excludedValues.length > 0) {
+  /* HELD IN A NAME LIKE THE THREE GATES BELOW IT, for the reason they are: the badge four paragraphs down
+     fires only where NONE of the four spoke, and a condition that re-asked this one inline would be a second
+     spelling of "did the exclusion badge render" — one of which is free to drift from the other. */
+  const _ex = Array.isArray(fieldDef._excludedValues) && fieldDef._excludedValues.length > 0;
+  if (_ex) {
     labelHtml += ` <span class="field-stat badge-excluded" title="values the forced execution proved this parameter is NOT, on every observed path to this request — a constraint the code stated, never a value it computed">${fieldDef._excludedValues.map((v) => "\u2260 " + esc(String(v))).join(", ")}</span>`;
   }
   /* …AND THE ORDERING GATE'S HALF OF THE SAME RULE. `_range` above is a statistic over observed traffic; this
@@ -662,6 +677,30 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
   const _lq = looselyEqualsPhrase(fieldDef._looselyEquals);
   if (_lq) {
     labelHtml += ` <span class="field-stat badge-predicates" title="the loose equalities (==) the bundle's own code held of this parameter on every observed path to this request. ECMAScript §7.2.13 IsLooselyEqual coerces, so this narrows the value without determining it — read it as JavaScript. A constraint the code stated, never a value it computed">${esc(_lq)}</span>`;
+  }
+  /* …AND WHICH OF TWO SENTENCES THE FOUR BADGES ABOVE ARE SILENT WITH, WHICH IS THE ONLY THING ON THIS ROW
+     THAT IS NOT A CLAIM ABOUT THE VALUE. `≠ admin`, `> 5`, `startsWith("/api")` and `== 0` each say what the
+     code proved the value IS or IS NOT; this says whether there was ever anything to prove. solver/endpoint.c
+     reads all four domains through the param's HOLE KEY, so a parameter minted from a literal had all four
+     SKIPPED at the mint — and until this key reached the panel, "the code computed this value, there was no
+     domain to look up" and "a runtime unknown stands here and no gate this run observed narrowed it" arrived
+     as the same four absences and rendered as the same bare row. §@H calls that a WRONG report rather than a
+     thin one, because the reviewer reads the silence as the positive statement "anything goes".
+     IT FIRES ONLY WHERE THE SILENCE IS WHAT IT IS ABOUT: where any of the four SPOKE, the question does not
+     arise and a second badge would be noise beside an answer. One condition and not two rules, because the
+     two words need the same gate rather than different ones — endpoint.c gates all four domain reads on the
+     hole key, so an engine-learned `concrete` parameter carries none of them and this branch is the ordinary
+     one for it, while an `unknown` one reaches it exactly when nothing narrowed the hole.
+     ITS THIRD STATE IS A SILENCE AND STAYS ONE. `null` is an engine that predates the key, a parameter a form
+     scan or a live request created, or a document that declared one — none of which said either word, and
+     answering for them would be this row inventing the very fact it exists to carry.
+     MUTED AND NOT IN THE CONSTRAINT COLOUR, for `.badge-untraversed`'s reason: a reviewer must not read it in
+     the same voice as `≠ admin`. It is this panel saying what the absence of those badges MEANS, never
+     something the code proved about a value. */
+  if (fieldDef._astValueClass !== null && !_ex && !_bp && !_pp && !_lq) {
+    labelHtml += fieldDef._astValueClass === "unknown"
+      ? ` <span class="field-stat badge-valueclass" title="a value the code did NOT compute stands here, and no equality, ordering, call or loose-equality gate this run observed narrowed it on every path to the request — so the absence of a constraint badge is a domain nothing has proved, not a literal with nothing to prove. This is a parameter the reviewer must supply and the tool has not yet narrowed">unknown, unnarrowed</span>`
+      : ` <span class="field-stat badge-valueclass" title="every observed path to this request minted this parameter from a value the code COMPUTED, so there was never a runtime unknown here for a gate to narrow — the absence of a constraint badge is that, and not a gate this run failed to observe">literal</span>`;
   }
   // A PREFILLED BOX ALWAYS CARRIES ITS PROVENANCE. The badge is driven by the SAME resolvePrefill() the input
   // reads, so the box can never show a value the label does not attribute — which is what happened for a

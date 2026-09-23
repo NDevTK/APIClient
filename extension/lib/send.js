@@ -303,6 +303,18 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
                leaves a parameter gated only by `x == 0` rendering exactly like one nothing had ever tested.
                Written like `_excludedValues` for the reason stated there. */
             _looselyEquals: fdDocList(pd._looselyEquals),
+            /* …AND THE KEY THAT SAYS WHICH OF TWO SENTENCES THOSE FOUR SILENCES ARE, WHICH IS NOT A FIFTH
+               ONE OF THEM. solver/endpoint.c reads all four domains through the param's HOLE KEY, so a
+               parameter whose value the code COMPUTED had all four skipped at the mint and their absence
+               stops meaning "no gate of that kind survived every observed path" — it means "a literal, with
+               nothing to look a domain up on". The two take OPPOSITE work (the first wants more gates
+               observed, the second wants nothing however good the engine gets) and without this key they
+               reach the panel with identical bytes, which is §@H's wrong report rather than a thin one.
+               READ THROUGH A REFUSAL AND NOT AN ASSERT, for the reason every line above it is: this record
+               may be a Google discovery document the target's server served or an OpenAPI file the
+               researcher was handed, and a document naming a third spelling is refused into the record's
+               stated absence rather than crashing the trusted zone. */
+            _astValueClass: fdDocValueClass(pd._astValueClass),
             /* NO `_sourceMapName` AND NO `_astValueSource`. The first promised a declared name recovered
                from the page's source map (minified `e` shown as `owner`); nothing in engine/host has ever
                emitted one and lib/learn.js's copy of it read a field the engine's param record does not

@@ -1352,6 +1352,12 @@ details summary:hover {
    because `startsWith("/api")` is the same KIND of fact as `≠ admin` and `> 5` and a reviewer must read all
    three in one voice: something the code stated, never something it computed. */
 .badge-predicates { color: #ffa198; background: rgba(255,161,152,0.1); }
+/* WHICH OF TWO SENTENCES THE THREE CONSTRAINT BADGES ABOVE ARE SILENT WITH — in the MUTED colour of
+   `.badge-optional`/`.badge-untraversed` and deliberately NOT the constraint colour those three share,
+   because it is not a claim about the value at all. `≠ admin`, `> 5` and `startsWith("/api")` are things the
+   bundle's own code PROVED; this is the panel saying whether there was ever anything to prove here, which a
+   reviewer must not read in the same voice or they will take "literal" for a narrowed domain. */
+.badge-valueclass { color: #8b949e; background: rgba(139,148,158,0.1); }
 .badge-prefill { color: #7ee787; background: rgba(126,231,135,0.1); }
 .badge-format { color: #f0883e; background: rgba(240,136,62,0.1); }
 /* A ROW THAT HOLDS NO INPUT — the muted colour of `.badge-optional` and NOT the constraint colour above,

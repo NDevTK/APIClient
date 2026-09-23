@@ -104,6 +104,31 @@ function fdDocLocation(v) {
   return (typeof v === "string" && PARAM_LOCATIONS.indexOf(v) >= 0) ? v : null;
 }
 
+/* WHETHER A PARAMETER'S VALUE EVER NAMED A HOLE — ONE VOCABULARY, for `PARAM_LOCATIONS`' reason one function
+   up. The two words are engine/host/solver/endpoint.c's own (`concolic_hole_key` answers NULL where a shape
+   names no hole, so `concrete` is the name of exactly that case and `unknown` is §Solver-half's word for the
+   other) and they are EXHAUSTIVE over the ways a value reaches the @H surface — which is why the record's
+   third state is an ABSENT key and never a third word.
+   IT IS DECLARED HERE AND NOT RESTATED AT EACH READER. lib/learn.js asserts the pair on arrival from the
+   engine and this list is what it asserts against; lib/merge.js's cross-document fold is deliberately NOT
+   routed through it, because that fold is an asymmetric union ("unknown" is sticky, "concrete" fills only an
+   unstated slot) rather than a membership test, and rewriting it as one would be a second spelling of a rule
+   whose whole content is the asymmetry. */
+const VALUE_CLASSES = Object.freeze([
+  "unknown",   // some observed path minted this parameter from a value the code did NOT compute
+  "concrete",  // every observed path minted it from a literal — there was never a hole to look a domain up on
+]);
+
+/* A THIRD-PARTY DOCUMENT'S VALUE CLASS, or nothing — a REFUSAL and not a default, for `fdDocLocation`'s
+   reason. This key is written by THIS zone (lib/learn.js off the engine's `valueClass`), but it travels on a
+   method parameter and a request-body property, and either can come from a Google discovery document the
+   target's server served or an OpenAPI file the researcher was handed — every name in this record is a name
+   a JSON object can carry. Answering a third spelling with either word would state which of two sentences the
+   four domain silences are, out of a document that said neither. */
+function fdDocValueClass(v) {
+  return (typeof v === "string" && VALUE_CLASSES.indexOf(v) >= 0) ? v : null;
+}
+
 /* CAN THIS RECORD STATE `v` AS THE FIELD'S EXAMPLE — asked by every mint of the example pair, because
    `_exampleValue: null` is this record's spelling of "NOTHING was computed" and a producer that writes `null`
    as a VALUE has therefore written the absence, together with a `_exampleValueSource` naming where that
@@ -189,6 +214,18 @@ const FIELD_DEF_ABSENT = Object.freeze({
                             // §7.1.19 ToString flattens `undefined`, `null`, `0` and `false` onto text a
                             // String operand can also spell. null = nothing proved, `[]` = a claim a later
                             // path disproved — the same two facts `_excludedValues` keeps apart.
+  _astValueClass: null,     // WHICH OF TWO SENTENCES THE FOUR SILENCES ABOVE ARE — "unknown" where some
+                            // observed path minted this field from a value the code did NOT compute,
+                            // "concrete" where every one of them minted it from a literal. It is not a fifth
+                            // domain: solver/endpoint.c reads all four domains through the param's HOLE KEY,
+                            // so a field whose value the code computed had all four SKIPPED at the mint and
+                            // their absence stops meaning "that kind of gate proved nothing". Without this
+                            // key a hole no gate narrowed and a literal with nothing to look up render with
+                            // identical bytes, which §@H calls a WRONG report rather than a thin one.
+                            // null = UNSTATED, which is a third state and not a fold onto either word: this
+                            // zone is deployed on WRITE while the engine is live only after a build, and the
+                            // cumulative store outlives both, so a parameter learned by an engine that
+                            // predates the key is the ordinary case and says nothing.
   _astValidValues: null,    // values the bundle was observed setting this field to ON A PATH THAT STOOD ON NO
                             // FORCED ARM — the pool a consumer may OFFER from; null = none observed.
   _astForcedValues: null,   // values EVERY sighting of which stood on a forced arm — a real observation this
@@ -307,6 +344,18 @@ function makeFieldDef(parts, where) {
          ") — membership of one pool or the other IS this record's spelling of the per-value grade fold, so " +
          "a value in both is a producer that appended where it had to promote, and the panel would offer the " +
          "value as one the app computes and label it as one no client sends");
+  /* AND WHICH OF TWO SENTENCES THE FOUR DOMAIN ABSENCES ABOVE ARE — asserted as a MEMBERSHIP, because a
+     third spelling would render as neither word and the panel would fall back to the silence this key exists
+     to end. `null` is the third state and is legal: an engine that predates the key, or a producer that
+     observed no @H parameter at all (a form scan, a live request, an imported spec), states nothing here.
+     A DOCUMENT'S value came through `fdDocValueClass`, so anything else arriving is one of OUR producers
+     having bypassed that boundary. */
+  DCHECK(fd._astValueClass === null || VALUE_CLASSES.indexOf(fd._astValueClass) >= 0,
+         "a FieldDef's `_astValueClass` is " + JSON.stringify(fd._astValueClass) + ", which is neither of " +
+         VALUE_CLASSES.join("/") + " nor the stated absence (" + where + ") — solver/endpoint.c writes one of " +
+         "the two on EVERY @H param and lib/learn.js asserts the pair on arrival, so a third form here is a " +
+         "projection of ours inventing one, and the panel would report a hole no gate narrowed and a literal " +
+         "with nothing to look up as the same parameter");
   DCHECK(_fdNullOr(fd._defaultConfidence, "number") && _fdNullOr(fd._requiredConfidence, "number"),
          "a FieldDef's confidence is neither a number nor null (" + where + ") — the panel renders it as a " +
          "percentage, and a non-number renders as NaN%");
