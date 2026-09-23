@@ -4187,11 +4187,24 @@ static const char *HTML =
        shows: a reader holding a non-zero `deliver-one-reply` beside six zeroed reply-consuming rows and
        no way to tell a delivery that could have answered them from one that never could.
        AND TWO OF THOSE FOUR ARE EXCLUDED BY THIS DOCUMENT'S OWN SOURCE, WHICH NARROWS THE RESIDUAL WITHOUT
-       BUILDING ANYTHING. Every one of the thirteen static programs above is INLINE — the fixture ships no
-       `<script src>` at all — so this document's own script slots cannot produce a reply record, and it
-       holds no dynamic `import()`, so that kind cannot arise either. What is left is FLOW_PENDING_RESOLVE
+       BUILDING ANYTHING. Every one of the thirteen static programs above is INLINE, so THIS document's own
+       script slots cannot produce a reply record, and it holds no dynamic `import()`, so that kind cannot
+       arise either.
+       What is left is FLOW_PENDING_RESOLVE
        (a `fetch()`, of which the document holds 348 call sites) and FLOW_PENDING_SCRIPT (an INJECTED
        `<script src>`, of which it holds five: four `loadScript` and one `.src` assignment).
+       THE NARROWING IS THIS DOCUMENT'S AND NOT THE FIXTURE'S, WHICH IS A CORRECTION AND NOT A HEDGE. The
+       clause here read "the fixture ships no `<script src>` at all" — true of every document in this file
+       when it was written, and false of one since: HTML_COLD ends in a parser-inserted external script,
+       appended for `park-remoteop`'s first half, so the two COLD sessions DO reach the document-script
+       kind and this file now holds all four of the sharing kinds rather than two.
+       A RESIDUAL NARROWED BY A SURVEY OF THE FIXTURE GOES STALE THE FIRST TIME ANY DOCUMENT GAINS THE
+       SHAPE IT SURVEYED FOR, and one narrowed by THIS document's own thirteen inline programs cannot —
+       which is the only reason the sentence above survives the change rather than going with it. The two
+       readings were indistinguishable while every document agreed; the diff that ended that agreement is
+       what told them apart, and it was found by grepping for the ARGUMENT retired rather than for the
+       symbol changed. The census pair is per RUN, so a reader comparing a cold session's against this
+       document's must read which document the session drove.
        THAT IS A NARROWING AND NOT AN ANSWER, and the per-flow register is why: a fork COPIES its parent's
        undelivered backlog, so ONE injected-chunk record is named by every member that inherits it and can
        be delivered once per member. A hundred deliveries therefore do not imply a hundred records and no
