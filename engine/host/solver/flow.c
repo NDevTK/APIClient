@@ -4629,12 +4629,34 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        (the definition above says so), and the cooperative quantum is the slice a dispatch holds — so that is N
        heap updates per dispatch, which is this loop plus a logarithm. It is the same straddle solver/engine.c's
        rival cache records having been aborted by, read as a cost instead of as a staleness.
-       WHAT RETIRES THIS: an aging term whose PER-MEMBER quantity does not move between generation bumps.
-       Flooring the two halves apart is one shape of that and `flow_family_notch` is already exactly the half
-       that would then be a common offset within a family — but it is a WEIGHT CHANGE and worth a whole notch of
-       an order this file has measured spanning four hundredths of a point, so it is argued at
-       flow_silence_notch or nowhere, never as an indexing decision. Until then a heap here is not a cheaper
-       spelling of this loop, and a reader who builds one will have moved the cost rather than removed it. */
+       WHAT RETIRES THIS, AND THIS CLAUSE USED TO DEMAND A WEIGHT CHANGE FOR IT — REWRITTEN RATHER THAN
+       DELETED, BECAUSE THE DEMAND IS THE READING A READER RE-DERIVES AND IT IS THE ONE THAT FORECLOSES THE
+       REPAIR. It read: an aging term whose PER-MEMBER quantity does not move between generation bumps;
+       flooring the two halves apart is one shape of that and `flow_family_notch` is already the half that
+       would be a common offset within a family — but it is a WEIGHT CHANGE and worth a whole notch of an order
+       this file has measured spanning four hundredths of a point, so it is argued at flow_silence_notch or
+       nowhere, never as an indexing decision. `flow_silence_phase` RETIRED THAT and says so at its own site:
+       the notch is exactly `k + K + (p + R >= S)`, so the per-member quantity that moves with no bump is ONE
+       BIT against a threshold the FAMILY owns and sweeps — a RESIDUE indexed by `p`, not a re-keying — and
+       that pair states in its own words that flow_weight is untouched by it. Two blocks of this file disagreed
+       about whether an index costs a weight change, and a reader reaching THIS one last concluded it does.
+       AND NEITHER BLOCK NAMES THE SUMMAND THAT DECIDES THE UPDATE COST, WHICH IS WHY THE TEST ABOVE IS THE
+       WRONG TEST RATHER THAN A FALSE ONE. "Moves only on an event that raises the frontier generation" is TRUE
+       of every term and it is a CACHE's test: a bump costs a cache O(1), because it DROPS the answer. An index
+       is MAINTAINED across the bump, so what it pays is how many KEYS that event moved, and the summands are
+       not alike in that. `acct_family_val` and the family notch are per-ACCOUNT, `flow_optimism`,
+       `flow_distance` and the own notch are per-MEMBER — each an offset or an O(1) update.
+       `flow_branch_bonus` is neither: it is `1.0 / sub_born` read through `f->acct->branch`, the
+       `br->sub_born++` at the fork below raises it for the bucket the arm JOINS, and every live member of that
+       bucket changes weight in that one statement. solver/engine.c's `g_rival_branch_born` says exactly this
+       — "one sibling forking re-ranks every member of the arm simultaneously" — and nothing connected the two
+       sites. So an index that bakes this term into a per-member key pays O(live members of the bucket) PER
+       FORK, which on a forking page is the cost moved rather than removed: the very thing this clause warns
+       against, reached by obeying it. It is carried as a per-BUCKET OFFSET read at query time or the index is
+       not sub-linear, and `br_fan_max`/`br_fan_sum` on the census are what price that choice before anybody
+       builds one. Until then a heap here is not a cheaper spelling of this loop.
+       RETIREMENT: this record goes when the ask no longer walks the frontier, or when no per-bucket quantity
+       can be summed into flow_weight at all. */
     int seed_live = 0;
     for (int i = 0; i < g_flows_n; i++) {
         double w;
