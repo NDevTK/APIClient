@@ -1,5 +1,21 @@
-/* USER TIMING §2 — §2.1.1 mark(), §2.2 The PerformanceMark Interface, §2.2.1 The PerformanceMark Constructor.
-   See user_timing.h for what is built, what is a named residual, and why. */
+/* USER TIMING §2 and §3 — §2.1.1 mark(), §2.1.3 measure(), §2.2 The PerformanceMark Interface, §2.2.1 The
+   PerformanceMark Constructor, §2.3 The PerformanceMeasure Interface, and §3.1/§3.2's two conversions.
+   See user_timing.h for what is built, what is a named residual, and why.
+
+   EVERY QUOTATION IN THIS FILE WAS PASTED FROM THE FETCHED EDITOR'S DRAFT, AND NOTHING IN THIS TREE CAN CHECK
+   THAT. engine/citegen.mjs compares a quotation against the cited section's committed text, and the committed
+   index for this standard carries section TITLES ONLY — so its title channel judges every citation here and
+   its quotation channel judges none of them. That is a property of the corpus rather than of the tool, it is
+   checkable in one command, and it is written here because a reader would otherwise read this file's
+   quotations as verified by the same instrument that verifies its numbers:
+     node -e 'const s=require("./engine/specindex/usertiming.json").sections;
+              console.log(Object.values(s).filter(v=>v.page&&v.page.length).length)'
+   An answer of 0 means what it says now; a positive answer means the quotation channel has become the check
+   and this paragraph is spent. The standing obligation the absence leaves is the one CLAUDE.md already puts
+   on every citation — paste from a fetch of the base the specindex row records, never from memory — and the
+   stamps were equal when these landed (User Timing and Navigation Timing 1 September 2026, Performance
+   Timeline 24 March 2026), which is what makes the paste safe rather than merely current.
+   RETIREMENT: this paragraph goes when that command answers non-zero. */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
