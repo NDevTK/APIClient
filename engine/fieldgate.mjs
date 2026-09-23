@@ -277,17 +277,34 @@ function corpus() {
      an instrument A/B belongs in exactly such a clone — in place relative to its own corpus, and unreachable
      from the tree every peer is editing. The deferral was real, its reason was not, and a reason that names
      the wrong prohibition defers forever because nobody can ever satisfy it.
-     RETIREMENT — CARRIED FORWARD RATHER THAN DISCHARGED, BECAUSE THE SPELLING AXIS CLOSED AND A SECOND ONE
-     OPENED UNDER IT. The 8 rows that survive are not this corpus's to answer for and are not defects either:
-     every one is an entry a driver reaches through a LOCAL HELPER, `u(name)` and `str(name)`, so the literal
-     the matcher below requires as the first argument of a ccall is at the helper's call site and never at the
-     ccall. That is a count of a SPELLING wearing a total's clothes, one level in from the one just repaired.
-     WHAT IS NOT COVERED: an entry named by anything but a string literal in the ccall itself. WHAT THE NEXT
-     DIFF BUILDS: the ccall matcher resolving a first argument that is a parameter of a single-expression local
-     helper back to that helper's own call sites, which is the same resolution `originOfExpr` already performs
-     for a returned value. HOW ITS ABSENCE WOULD SHOW — AN OBSERVATION AND NOT AN INSTANCE: an entry appears in
-     the disagree category as one only this process's C calls, and grepping the drivers for its name finds it
-     as the argument of a one-line wrapper rather than of a ccall. */
+     THE HELPER AXIS IS CLOSED AND THE RESIDUAL THAT NAMED IT IS DISCHARGED. It said the 8 surviving rows were
+     every one an entry a driver reaches through a LOCAL HELPER — `u(name)` and `str(name)` — so the literal the
+     matcher required as a ccall's first argument sat at the helper's call site and never at the ccall, a count
+     of a SPELLING wearing a total's clothes. Both of its checkable clauses were EXACT: all 8 resolved to a
+     helper, and grepping the drivers for each name found it as a wrapper's argument.
+     ITS NEXT-DIFF CLAUSE NAMED THE WRONG MECHANISM, WHICH IS RECORDED RATHER THAN QUIETLY CORRECTED because a
+     reader who re-derives it will reach for the same one. It said the resolution was `originOfExpr`'s, and
+     `originOfExpr` follows a RETURNED VALUE; what this needed was §localParamSlot, which already reads a
+     parameter's value off every argument passed to a local helper and already carries the discipline — the
+     declaration's own parameter list is not a call of it, `o.f(…)` is some other object's member, one call with
+     too few arguments leaves the question undecided. The clause was a guess at what fills a gap, made by an
+     author who knew exactly what was missing, and CLAUDE.md rates that half of a residual as a HYPOTHESIS: the
+     spec-shaped half was evidence and this half yielded. What the gap actually was is one level further in and
+     was already written down at that rule as its own NOT-COVERED clause — a helper bound by `const f = (…) =>
+     …` carries no name this walk could read, and every one of these drivers uses exactly that spelling.
+     MEASURED as a before/after with this instrument IN PLACE in a frozen snapshot, and with Fix A neutered as
+     an armed control: entries reached directly by a driver 23 -> 33, entries reached ONLY by this process's own
+     C 7 -> 0, ABI disagree rows 8 -> 0. The control returns all three to 23 / 7 / 8, so the resolution is what
+     moved them. AGAINST THAT, ZERO fresh rows in EVERY other channel — ambiguous 80, refused 10, unclassified
+     20, unaudited 110, write-with-no-reader 10, defaulted 16, converted 1, all unmoved — and the JUDGED
+     population identical at both ends (399: 323 spelled, 266 derived, 210 both, 20 unreadable, 0 neither), so
+     the fall is a repair and not a blinding. The corpus was identical at both ends too: 907/56/52/29 files and
+     2405 field names.
+     WHAT REPLACES IT IS A BOUND AND NOT A RESIDUAL, because the remaining gap is not closable by any diff. An
+     entry can be named by an expression no static walk can evaluate — the renderer's own table dispatcher reads
+     its name out of a binding record, and that is the architecture rather than an omission. So the two figures
+     are published as a FLOOR and a CEILING with the unread calls listed beside them on EVERY run, and both
+     negative rows carry the cone and that list, since a row travels where a header does not. */
   cone.push(":(glob)testing/*.js", ":(glob)testing/*.mjs", ":(glob)testing/*.cjs");
   /* THREE PATHSPECS AND NOT ONE BRACE, BECAUSE A BRACE MATCHES NOTHING AND SAYS NOTHING. git's pathspec globs
      are wildmatch, which has no brace expansion, so `:(glob)testing/*.{js,mjs}` is a pathspec that matches
@@ -2097,6 +2114,40 @@ const NOT_A_FUNCTION_HEAD = new Set(["if", "for", "while", "switch", "catch", "w
 
 function functionScopes(struct, code) {
   const spans = [];
+  /* THE NAME A BOUND FUNCTION LITERAL IS CALLED BY, which is one token to the left of the literal and not in
+     it. `function f(…)` carries its name where the two walks below already read one; `const f = (…) => …` and
+     `const f = function (…) …` put it in a DECLARATOR, so a walk that stops at the literal answers null for
+     both — which is what §localParamSlot's named residual said was not covered, and what left every helper
+     bound that way unable to type its own parameters from its call sites.
+     A DECLARATOR AND NEVER AN ASSIGNMENT, which is the whole of what makes the name safe to search for.
+     `o.f = (…) => …` and `{ f: (…) => … }` reach the same shape and are called as `o.f(…)`, so crediting
+     either would collect a DIFFERENT function's arguments under this one's name — the aliasing §fnName above
+     refuses for method shorthand, refused here for the same reason rather than for a new one. A `const`,
+     `let` or `var` immediately in front is the one spelling under which the declared name IS the name a call
+     site spells, so that keyword is required and a second declarator in a list (`const a = 1, f = …`) is
+     left undecided rather than guessed at. */
+  const declaratorName = (headOff) => {
+    let k = headOff - 1;
+    const ws = () => { while (k >= 0 && /\s/.test(struct[k])) k--; };
+    const wordAt = () => { const e = k + 1; let q = k; while (q >= 0 && /[\w$]/.test(struct[q])) q--; return { text: code.slice(q + 1, e), at: q }; };
+    ws();
+    if (struct[k] === "(") { k--; ws(); }          /* the parameter list's own paren is part of the literal */
+    /* past `function`, `*` and `async`; a step not taken leaves the walk where it was and the `=` test fails */
+    for (let guard = 0; guard < 3; guard++) {
+      if (struct[k] === "*") { k--; ws(); continue; }
+      const w = wordAt();
+      if (w.text !== "function" && w.text !== "async") break;
+      k = w.at; ws();
+    }
+    if (struct[k] !== "=" || struct[k + 1] === "=") return null;
+    if (struct[k - 1] === "=" || struct[k - 1] === "!" || struct[k - 1] === "<" || struct[k - 1] === ">") return null;
+    k--; ws();
+    const nm = wordAt();
+    if (!/^[A-Za-z_$][\w$]*$/.test(nm.text)) return null;
+    k = nm.at; ws();
+    const kw = wordAt();
+    return (kw.text === "const" || kw.text === "let" || kw.text === "var") ? nm.text : null;
+  };
   /* the parameter span of the `(…)` whose `)` sits at `p`, or null */
   const paramsBefore = (p) => {
     let d = 0;
@@ -2137,6 +2188,7 @@ function functionScopes(struct, code) {
     } else continue;
     const close = matchAt(struct, i);
     if (close < 0) continue;
+    if (!fnName && params) fnName = declaratorName(params[0]);
     spans.push({ open: i, close, params, binds: new Set(), head: params ? params[0] : i, fnName });
   }
   /* AN EXPRESSION-BODIED ARROW IS A FUNCTION BODY TOO, and reading only the braced form made this walk answer
@@ -2163,7 +2215,7 @@ function functionScopes(struct, code) {
       else if (ch === ")" || ch === "]" || ch === "}") { if (!d) break; d--; }
       else if ((ch === "," || ch === ";") && !d) break;
     }
-    spans.push({ open: i, close: e2, params, binds: new Set(), head: params[0] });
+    spans.push({ open: i, close: e2, params, binds: new Set(), head: params[0], fnName: declaratorName(params[0]) });
   }
   spans.sort((a, b) => a.open - b.open);
 
@@ -2484,12 +2536,26 @@ function functionScopes(struct, code) {
    * argument or one call with too few arguments leaves the parameter undecided, which is AMBIGUOUS: the same
    * under-crediting direction the cross-file rethrow rule chooses.
    *
-   * NOT COVERED: a function bound by `const f = (…) => …` or `const f = function (…) …`. Only the
-   * `function NAME(` spelling carries its name where this walk already reads one; the bound spellings put the
-   * name in a DECLARATOR whose declaration text is the literal, so the next diff joins `inits` — which holds
-   * every write's text for a binding — to the span that literal opens and hands `fnName` over from there. ITS ABSENCE SHOWS as a receiver in AMBIGUOUS whose
-   * reads are all members of one interface and whose enclosing function is arrow-bound — the same row this
-   * rule removes for `function`-declared helpers, still standing beside them. */
+   * THE BOUND SPELLINGS ARE COVERED NOW — §declaratorName — AND ITS RESIDUAL IS KEPT FOR THE MECHANISM IT GOT
+   * WRONG. It said the next diff would join `inits`, which holds every write's text for a binding, to the span
+   * the literal opens. That is a dataflow where the fact is LEXICAL: the name sits one token to the left of the
+   * literal, so the walk reads it there directly and `inits` is not consulted at all. The clause was right that
+   * the name lives in a DECLARATOR and wrong about how to reach it, which is the ordinary way a next-diff
+   * clause fails — it describes a thing its author could picture without opening the file it lives in.
+   * WHAT THE CLOSURE IS WORTH, MEASURED RATHER THAN ASSUMED, AND IT IS NOT WHAT THE ABSENCE CLAUSE PREDICTED:
+   * the AMBIGUOUS band did not move by a single row. That clause said its absence would show as a receiver in
+   * AMBIGUOUS whose enclosing function is arrow-bound, and on this corpus there is no such receiver — the
+   * spelling is used for ABI forwarding helpers, whose parameter is an ENTRY NAME rather than a record. So the
+   * gap was real, the repair is load-bearing (the ABI resolution collapses without it, under an armed control),
+   * and the population the residual expected to find behind it is empty here. A residual's absence clause is a
+   * statement about what a reader would OBSERVE, and this one was checkable and wrong; it is written down
+   * because the next person to widen a typing rule will predict its yield the same way.
+   * STILL NOT COVERED: a function literal bound by a plain assignment (`f = (…) => …`) or held on an object
+   * (`o.f = …`, `{ f: … }`). That is a REFUSAL and not an omission — the declared name is the name a call site
+   * spells only under `const`/`let`/`var`, and crediting a member binding would collect some other object's
+   * arguments under this one's name, which is the aliasing §fnName already refuses for method shorthand.
+   * HOW ITS ABSENCE SHOWS: an ABI call whose first argument is a bare parameter appears in the unread band with
+   * its helper bound by something other than a declarator. */
   const localParamSlot = (name, off) => {
     for (let s = innermost(off); s; s = innermost(s.open)) {
       if (!s.binds.has(name)) continue;
@@ -3596,6 +3662,7 @@ const abiBindings = new Map();  // method -> {fn, ret, out, file, line}
 const mojomMethods = new Map(); // "<iface>#Step" -> {file, line, iface, reply:[names], unresolved:[…]}
 const servedInterfaces = [];    // {iface, file, line} — the interface a binding table's own document names
 const abiCcalls = new Map();    // qjs_x -> [{file,line}]        a driver reaching the entry directly
+const abiCcallUnread = [];      // {file,line,text}              an ABI call whose entry name this cannot read
 const abiInProcCallers = new Map(); // qjs_x -> [{file,line}]    this process's OWN C reaching it — a fixture
 const mojoReplyReads = [];      // {file,line,method,name}       `(await x.m()).f` — the CALLER'S read of a reply
 
@@ -3800,13 +3867,53 @@ function collectAbiJS(file, src, code, struct) {
     }
   }
 
-  /* Every driver that reaches an entry directly, which is a caller the mojo boundary never sees. */
+  /* Every driver that reaches an entry directly, which is a caller the mojo boundary never sees.
+     AND ONE REACHED THROUGH A FORWARDING HELPER, WHICH IS THE SAME CALLER SPELLED SO THIS COULD NOT SEE IT.
+     A driver that writes `const u = (f) => M.ccall(f, 'number', [], [])` and then `u('qjs_paint_width')` names
+     the entry at the HELPER'S call site and never at the ccall, so a matcher keyed on the ccall's own first
+     argument answers zero for every entry reached that way — at every revision, forever, because the helper is
+     the architecture rather than an accident. CLAUDE.md's §AND-THE-SYMBOL-CAN-BE-THE-WRONG-QUESTION-ENTIRELY is
+     the general form and names the conclusion it invites: zero callers reads as `there is no caller`, which for
+     the rows below is an ACCUSATION against a driver that is standing right there.
+     THE RESOLUTION IS §localParamSlot'S AND NOT A SECOND COPY OF IT. That rule already reads a parameter's
+     value off every argument passed to a LOCAL helper, with the discipline this needs already in it — the
+     declaration's own parameter list is not a call of it, `o.f(…)` is some other object's member, and one call
+     with too few arguments leaves the whole question undecided rather than answered from the sites that happen
+     to resolve. What it could not do was NAME a helper bound by `const f = (…) => …`, which is the spelling
+     every one of these drivers uses; §declaratorName is that gap closed at the root, and this call is the
+     consumer that makes the closure observable.
+     WHAT STAYS UNREAD IS BANDED AND NOT DROPPED, because a static sweep over source text is a count of a
+     SPELLING and the rows below are NEGATIVE — they say nobody calls an entry, which is false of every caller
+     this cannot lex. So every call whose entry name does not resolve is recorded with its place, and the rows
+     carry that count as a FLOOR. The renderer's own table dispatcher is one of them and is right to be: it
+     reads its name out of a binding record, so `abiBindings` answers for it one channel over, and a reader who
+     can see it listed can see that for themselves rather than taking this file's word that it was excluded on
+     purpose. */
+  const { localParamSlot, callArgsOf } = functionScopes(struct, code);
+  const credit = (name, at) => {
+    if (!abiCcalls.has(name)) abiCcalls.set(name, []);
+    abiCcalls.get(name).push({ file, line: line(at) });
+  };
+  const ENTRY = /^(["'])(qjs_\w+)\1$/;
   for (const cs of callSites(struct, "ccall")) {
-    if (!cs.args) continue;
-    const s = /^(["'])(qjs_\w+)\1$/.exec(code.slice(cs.args[0][0], cs.args[0][1]).trim());
-    if (!s) continue;
-    if (!abiCcalls.has(s[2])) abiCcalls.set(s[2], []);
-    abiCcalls.get(s[2]).push({ file, line: line(cs.at) });
+    if (!cs.args) { abiCcallUnread.push({ file, line: line(cs.at), text: "an unbalanced ABI call" }); continue; }
+    const raw = code.slice(cs.args[0][0], cs.args[0][1]).trim();
+    const lit = ENTRY.exec(raw);
+    if (lit) { credit(lit[2], cs.at); continue; }
+    /* Only a BARE NAME can be a forwarded parameter; `e.fn` and a template are neither and are unread here. */
+    const slot = /^[A-Za-z_$][\w$]*$/.test(raw) ? localParamSlot(raw, cs.at) : null;
+    const args = slot ? callArgsOf(slot.fnName, slot.param, slot.declParen) : null;
+    if (!args || !args.length) {
+      abiCcallUnread.push({ file, line: line(cs.at), text: raw.replace(/\s+/g, " ").slice(0, 60) });
+      continue;
+    }
+    for (const a of args) {
+      const m2 = ENTRY.exec(a.text);
+      /* THE PLACE IS THE DRIVER'S LINE AND NOT THE HELPER'S, because the driver's line is what a reader opens
+         to see the entry named — the helper's line names a parameter and says nothing about which entry. */
+      if (m2) credit(m2[2], a.at);
+      else abiCcallUnread.push({ file, line: line(a.at), text: a.text.slice(0, 60) });
+    }
   }
 }
 
@@ -5141,6 +5248,19 @@ let abiInProcOnly = 0;   // exported entries whose ONLY caller is this process's
        with no caller anywhere may be a superseded system to delete. A reader handed one sentence for both
        cannot tell which, and the harsher one reads as authoritative — the shape `qjs_result` had is quoted
        BELOW rather than above because it is a claim about the second state only. */
+    /* WHAT THESE TWO ROWS ARE NEGATIVE OVER, CARRIED ON THE ROW ITSELF. Both say a caller does not exist,
+       which is a claim quantified over the corpus this walked and over the spellings this can lex — and a row
+       travels where a header does not, so a reader handed one of these in a brief has an accusation with the
+       qualifier stripped off it. The cone is the same list `gateRevision` is asked about, so it cannot drift
+       from the walk; the unread count is the population of calls whose entry this could not name, and an entry
+       called ONLY from one of those reads EXACTLY like these rows. */
+    const floor = `THIS IS A FLOOR AND NOT A CENSUS: the corpus walked is ${cone.join(", ")}` +
+      (abiCcallUnread.length
+        ? `, and ${abiCcallUnread.length} ABI call(s) in it name their entry in a way this cannot read ` +
+          `(${abiCcallUnread.slice(0, 4).map((u) => `${relative(ROOT, u.file)}:${u.line}`).join(", ")}` +
+          `${abiCcallUnread.length > 4 ? ", …" : ""}), so a caller standing at one of those is a caller this ` +
+          `row cannot see — READ THEM BEFORE ACTING ON THIS`
+        : ", and every ABI call in it named its entry in a form this could read");
     const inproc = abiInProcCallers.get(fn);
     if (inproc && inproc.length) {
       const where = inproc.slice(0, 3).map((x) => `${x.file}:${x.line}`).join(", ");
@@ -5150,14 +5270,14 @@ let abiInProcOnly = 0;   // exported entries whose ONLY caller is this process's
                               `only caller is in this process (${where}${inproc.length > 3 ? ", …" : ""}), so ` +
                               `it is exercised at the cadence that caller is run and never at the product's. ` +
                               `§Testing rates that the same as a translation unit that is in the program and ` +
-                              `in nobody's build. THE REMEDY IS A CONSUMER, NEVER A DELETION` });
+                              `in nobody's build. THE REMEDY IS A CONSUMER, NEVER A DELETION. ${floor}` });
       abiInProcOnly++;
       continue;
     }
     abiDefects.push({ kind: "an EXPORTED entry nothing calls", name: fn, place: `${e.file}:${e.line}`,
                       text: "defined and exported, and no binding names it, no driver ccalls it and no caller " +
                             "exists in this process either — the shape `qjs_result` had while the zone that " +
-                            "should have read the result document defaulted it away instead" });
+                            `should have read the result document defaulted it away instead. ${floor}` });
   }
   for (const [method, b] of abiBindings) {
     if (!abiEntries.has(b.fn))
@@ -5854,6 +5974,16 @@ log(`── qjs_* ABI ── ${abiEntries.size} QJS_EXPORT entr(ies), ${abiExpor
     `${abiBindings.size} bound to a mojo method, ${mojomMethods.size} method(s) the typed boundary declares, ` +
     `${abiCcalls.size} reached directly by a driver, ` +
     `${abiInProcOnly} reached ONLY by this process's own C` +
+    /* THE FLOOR, PRINTED WHERE THE TOTAL IS, because a reader takes an unqualified pair for a partition. A
+       driver reaches an entry by NAMING it, and a name this cannot lex is a caller this cannot count — so the
+       two figures above are a LOWER and an UPPER bound rather than two halves of anything, and the sentence
+       that says so has to travel with them. */
+    /* AND WHERE THEY ARE, ON THE CLEAN DAY TOO. A count with no places is a hazard a reader cannot act on:
+       the rows below carry these same sites, and the rows are EMPTY exactly when nothing is accused — so a
+       bound stated only there is invisible in precisely the run whose apparent completeness it qualifies. */
+    (abiCcallUnread.length ? `, and ${abiCcallUnread.length} ABI call(s) whose entry name this cannot read ` +
+      `(${abiCcallUnread.map((u) => `${relative(ROOT, u.file)}:${u.line} \`${u.text}\``).join("; ")}) — ` +
+      `so \`reached directly\` is a FLOOR and \`reached ONLY by this process\` a CEILING` : "") +
     (abiServed ? `; the table is implemented against ${abiServed}, so both directions were asked`
                : " — NO SERVED INTERFACE IS NAMED by a document carrying bindings, so the declared-versus-bound " +
                  "direction was NOT asked and its silence is not an answer") +
