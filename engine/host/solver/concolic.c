@@ -502,9 +502,9 @@ static char *literal_tok(JSContext *ctx, JSValueConst v, ConcolicLit *pkind)
    uniqueness-in-a-heap, since `js_malloc`/`js_free_rt` REUSE addresses and no park carries one.
    NULL WHERE THE VALUE NAMES NO INTRINSIC, which is the answer every Object and Symbol gave unconditionally
    before this and is still the answer for a PAGE-created one. Such a value is named by its creation site plus
-   the creating flow's count of prior mints there — a fact about the executed prefix — which creation_name
-   below composes for a page-created CLOSURE and for nothing else yet; see the named residual at
-   literal_ident. */
+   the creating flow's count of prior mints — a fact about the executed prefix — which creation_name below
+   composes for a page-created CLOSURE and for a page-created REGEXP; see the named residual at literal_ident
+   for the classes that still have no site composer. */
 static char *intrinsic_name(JSContext *ctx, JSValueConst v)
 {
     char buf[JS_INTRINSIC_NAME_MAX];
@@ -563,7 +563,7 @@ static char *registry_key(JSContext *ctx, JSValueConst v)
     return r;
 }
 
-/* A PAGE-CREATED CLOSURE'S CREATION NAME, OWNED BY THE CALLER — the FOURTH name source, spelled here for the
+/* A PAGE-CREATED VALUE'S CREATION NAME, OWNED BY THE CALLER — the FOURTH name source, spelled here for the
    reason intrinsic_name and registry_key are spelled here: the name is spent TWICE, once as an operand's
    IDENTITY and once as its DISPLAY SHAPE, and a second speller cannot be right about one and wrong about the
    other.
@@ -573,11 +573,17 @@ static char *registry_key(JSContext *ctx, JSValueConst v)
    refuses a bare site for, in the words "three iterations of one loop would name one object, so iteration 1's
    constraint would refine 2 and 3 and ARMS WOULD BE LOST". The count comes from the running flow, is minted
    at the value's CREATION (JSConcolicHooks.mint_ordinal, installed below), and rides the object from there.
-   NULL WHERE THE ENGINE HAS NO CREATION NAME, which is every value that is not a page-created closure and
-   every closure in a session that mints no ordinals — the same "no name" answer the two above it give, and
-   the answer this arm gave unconditionally before this function existed. The refusal is the ENGINE'S and not
-   this file's, deliberately: JS_CreationName answers ABSENT for a C function, a bound function and a Proxy,
-   which `JS_IsFunction` cannot tell apart and which a namer written here would have DCHECKed on —
+   IT IS ONE QUESTION OVER SEVERAL CLASSES AND THIS FILE ASKS IT ONCE, which is why there is no second speller
+   beside this one for a RegExp. The SITE composer is per class and lives in the engine (a closure's body
+   locator, a RegExp's own source text and flag word), the CLASS NAMESPACE rides the returned name — `fn@` and
+   `re@` — and a file that had to ask "which class is this" would be keeping a list of classes in the one place
+   that cannot tell a bound function from a Proxy. That is the same argument JS_CreationName makes for existing
+   beside JS_OrphanHash at all, one level up.
+   NULL WHERE THE ENGINE HAS NO CREATION NAME, which is every value of a class with no site composer and every
+   value in a session that mints no ordinals — the same "no name" answer the two above it give, and the answer
+   this arm gave unconditionally before this function existed. The refusal is the ENGINE'S and not this file's,
+   deliberately: JS_CreationName answers ABSENT for a C function, a bound function and a Proxy, which
+   `JS_IsFunction` cannot tell apart and which a namer written here would have DCHECKed on —
    `arr.some(f.bind(this))` is ordinary input and an assert over it is a page-held abort switch. */
 static char *creation_name(JSContext *ctx, JSValueConst v)
 {
@@ -589,7 +595,8 @@ static char *creation_name(JSContext *ctx, JSValueConst v)
     DCHECK(n < (int)sizeof buf,
            "a creation name did not fit the buffer quickjs.h's own bound sizes for it — the two are tied by "
            "an assert at the composition there, so this fires only if that bound was widened past this "
-           "buffer, and a TRUNCATED name is two closures under one constraint key and one property atom");
+           "buffer, and a TRUNCATED name is two page-created values under one constraint key and one "
+           "property atom");
     r = strdup(buf);
     CHECK(r, "concolic: OOM copying a creation name");
     return r;
@@ -632,19 +639,40 @@ static char *literal_ident(JSContext *ctx, JSValueConst v)
            That is exactly the property a creation SITE lacks, which is why this arm could land while the
            residual below still stands. The two registries are disjoint by atom_type, so a value cannot be
            named twice and the order of these two arms decides nothing.
-           NAMED RESIDUAL — AN ORDINARY PAGE-CREATED OBJECT, A PAGE-MINTED `Symbol("x")` AND A RegExp ARE
-           STILL UNNAMED, so `var o = {}; o[k]` keeps both arms and its bare site row. THE MECHANISM IS BUILT
-           AND ITS REACH IS ONE CLASS, which is the correction this paragraph carries rather than a plan: the
+           NAMED RESIDUAL — AN ORDINARY PAGE-CREATED OBJECT AND A PAGE-MINTED `Symbol("x")` ARE STILL
+           UNNAMED, so `var o = {}; o[k]` keeps both arms and its bare site row. THE MECHANISM IS BUILT AND
+           ITS REACH IS TWO CLASSES, which is the correction this paragraph carries rather than a plan: the
            (site, ordinal) pair is composed by quickjs's JS_CreationName, the ordinal is minted at CREATION out
-           of the running flow's own counter (JSConcolicHooks.mint_ordinal, this file's
-           concolic_mint_ordinal_hook, riding the PinBlob like every other per-flow fact), and the SITE is
-           JS_OrphanHash's body locator — which every value that is not a bytecode function lacks. What the
-           next diff builds is therefore a SITE for the other classes and not a second mechanism: an ordinary
-           object is created at a place JS_RunningSiteHash already names, and a RegExp's site is its source and
-           its flags (§22.2.8.1 "lastIndex" is why those alone are 1:N and why it takes the SAME ordinal
-           beside them). ITS ABSENCE SHOWS as a `?` — derived_operand_shape's answer for an operand with no
-           name — at ANY operand position of a rendered shape, with a `~` site row climbing across a session
-           while `replayHits` stays flat.
+           of the running flow's own counter (js_mint_creation_ord, driven by JSConcolicHooks.mint_ordinal,
+           this file's concolic_mint_ordinal_hook, riding the PinBlob like every other per-flow fact), and the
+           SITE composer is PER CLASS — JS_OrphanHash's body locator for a CLOSURE, the pattern's own code
+           units and flag word for a REGEXP.
+           WHAT IS NOT COVERED: a value of a class the engine has no site composer for. `{}`, `[]`, `new Map`,
+           `Object.create(null)` and `Symbol("x")` are every one of them unnamed, so a branch over one records
+           no constraint, claims no replay slot, and re-forks every time a flow reaches it.
+           WHAT THE NEXT DIFF BUILDS: a SITE composer for the ORDINARY-OBJECT class and a mint beside it, in
+           JS_CreationName and in JS_NewObjectFromShape's `case JS_CLASS_OBJECT:` arm. TWO THINGS A READER
+           RE-DERIVES RATHER THAN TAKING FROM THIS SENTENCE, because both were established by READING and
+           neither by running. (i) WHERE THE SITE COMES FROM: quickjs's JS_RunningSiteHash, which folds a body
+           locator with the BYTE OFFSET of the opcode the nearest BYTECODE frame is standing at. For an object
+           LITERAL that frame is the one executing the creating opcode, so the answer is 1:1 with the creating
+           expression; for an object built inside a C builtin on the page's behalf — every record `JSON.parse`
+           returns — the nearest bytecode frame is the CALL, so ONE site names as many objects as that call
+           made and the ordinal is doing all of the work. Neither case loses an arm; the second loses the
+           LOCALITY a site exists for, and a reader who expected 1:1 will otherwise read a census row as a
+           defect. (ii) WHERE IT IS STORED: `case JS_CLASS_OBJECT: break;` is the whole of that class's arm in
+           JS_NewObjectFromShape and no member of `JSObject::u` belongs to it, so a site and an ordinal fit in
+           space a plain object already has — which is NOT true of the REGEXP half that just landed, where the
+           union member was already at the union's width on a 32-bit build, and is the one respect in which the
+           cheaper-looking class is the cheaper one.
+           AND WHAT IT COSTS DECIDES THE SHAPE RATHER THAN BEING A DETAIL: JS_RunningSiteHash WALKS THE STACK,
+           and JS_NewObjectFromShape is this engine's hottest allocation. The site must be read AT CREATION —
+           at the ask the stack is somewhere else entirely — so there is no lazy form of it, and a diff that
+           takes one is choosing to name fewer classes rather than to name this one cheaply.
+           HOW ITS ABSENCE WOULD SHOW: a rendered shape carrying `?` at an operand position, with a `~` site
+           row climbing across a session while `replayHits` stays flat; at the sharpest,
+           concolic_exotic_own_names' `c->ident == NULL` arm aborting on a record whose shape is otherwise
+           fully spelled.
            THAT CLAUSE USED TO SAY `a site row whose SUBJECT renders ?`, AND NAMING ONE POSITION UNDERSTATED
            THE POPULATION IN THE DIRECTION THAT HIDES THE WORST OF IT — recorded here rather than quietly
            widened, because a reader who re-derives the clause from `o[k]` will re-derive the subject. An
@@ -656,37 +684,37 @@ static char *literal_ident(JSContext *ctx, JSValueConst v)
            concolic_exotic_own_names' `c->ident == NULL` arm, which aborts on a record whose shape is fully
            spelled except for a `?` in one argument position, and that abort is a live wall on a real bundle
            rather than a number climbing.
-           AND THE KIND OF THE UNNAMEABLE ARGUMENT DOES NOT SPLIT THIS RESIDUAL IN TWO, WHICH IS THE
-           CORRECTION THIS PARAGRAPH CARRIES — measured over the bare site rows of a real minified bundle,
-           where every one of them is a CALL whose RECEIVER is named and whose argument is a page-created
-           FUNCTION or a REGEXP (`.some(?)`, `.match(?)`, a hook registration taking a callback). A FUNCTION
-           needs the ordinal: quickjs composes a body locator at JS_OrphanHash and says in its own words that
-           it names the BYTECODE and NOT the closure, so a factory called three times is one locator and three
-           functions — the 1:N this ordinal exists for, in the population that is actually blocking.
-           THIS USED TO READ `A REGEXP MAY NOT NEED IT AT ALL, and that is the next ordinal-free half`, AND IS
-           REWRITTEN RATHER THAN DELETED BECAUSE ITS REASONING IS WHAT A READER RE-DERIVES: a RegExp's source
-           and its flags ARE text the page wrote, so they are reproducible by the replay a resumed flow
-           performs, exactly as a registry key is. What that argument reaches is the MATCH, and a name denotes
-           the OBJECT — ident_of_operand is asked of EVERY argument of every call on an unknown, never only of
-           a receiver's regexp methods. ECMAScript §22.2.7.2 "RegExpBuiltinExec ( regexp, string )" is why the
-           ordinal-free reading looked reachable: "If global is false and sticky is false, set lastIndex to 0",
-           so two such RegExps of one source and one flag set really do match alike. ECMAScript §22.2.8.1
-           "lastIndex" refutes it unconditionally — "This property shall have the attributes { [[Writable]]:
-           true, [[Enumerable]]: false, [[Configurable]]: false }" — so `r.lastIndex = 5` is observable on one
-           of a pair and not on the other whatever its flags are, and a RegExp is an ordinary object besides,
-           on which a page may set own properties and for which `r1 === r2` is false. Source-and-flags alone is
-           1:N and LOSES ARMS exactly as a bare site does. SO THERE IS ONE HALF AND NOT TWO: a RegExp's SITE
-           composer is its source and its flags where a function's is JS_OrphanHash, and both take the SAME
-           ordinal beside them.
-           AND THE FUNCTION HALF'S FIRST HOP WAS IN QUICKJS AND NOT IN THIS FILE, WHICH IS WHY IT LANDED
-           THERE. literal_ident is handed every operand of every call on an unknown, and operand_kind sends
-           EVERY object to this arm — a bound function, a Proxy and a C function among them. JS_OrphanHash
-           DCHECKs on a value with no bytecode body, and quickjs.h exports nothing narrower than JS_IsFunction,
-           which is true of all three; so a namer written here would abort on `arr.some(f.bind(this))`, a
-           page-held abort switch on ordinary input. JS_CreationName is that question answered ABSENT rather
-           than asserted — it reads the class table, which tells the three apart where JS_IsFunction cannot —
-           and this file's contract that an operand it cannot name answers NULL is unchanged.
-           RETIREMENT: this note goes with the residual it belongs to.
+           AND THE MEASUREMENT THAT CHOSE THE ORDER IS KEPT BECAUSE IT PRICED A DECISION AND NOT BECAUSE IT
+           DESCRIBES A POPULATION: over the bare site rows of a real minified bundle, every one of them was a
+           CALL whose RECEIVER is named and whose argument is a page-created FUNCTION or a REGEXP (`.some(?)`,
+           `.match(?)`, a hook registration taking a callback). Those two classes landed in that order for that
+           reason, and the ordinary-object half above is argued from `G = G || {}` rather than from that row
+           set — which is a weaker kind of evidence and is said here so the next reader does not quote the
+           measurement as covering it.
+           THE REGEXP HALF IS BUILT, AND WHAT ITS CLAUSE ASSERTED WAS RE-DERIVED BEFORE IT WAS — recorded
+           rather than deleted, because the reading that made a RegExp look ordinal-free is the reading a
+           reader re-derives. The clause said a RegExp's source and flags are text the page wrote and so are
+           reproducible by the replay a resumed flow performs; that is TRUE and is exactly why they are the
+           site. It said §22.2.7.2 "RegExpBuiltinExec ( regexp, string )" makes them possibly the WHOLE name,
+           since "If global is false and sticky is false, set lastIndex to 0" means two such RegExps of one
+           source and one flag set really do match alike. FETCHED AND CONFIRMED VERBATIM AGAINST THE LIVE
+           DRAFT: §22.2.8.1's title is "lastIndex" and its text is "This property shall have the attributes
+           { [[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: false }" — so `r.lastIndex = 5` is
+           observable on one of a pair and not on the other whatever their flags are, and a RegExp is an
+           ordinary object besides. Source-and-flags alone is 1:N and LOSES ARMS exactly as a bare site does,
+           so it takes the SAME ordinal a closure does.
+           AND THE FOLD IS NOT orphan_hash_body's, WHICH THE CLAUSE DID NOT SAY AND WHICH A READER WOULD HAVE
+           COPIED: that function folds a NARROW atom byte by byte and a WIDE one code unit by code unit, which
+           is sound for an INTERNED filename and wrong for a page-built String, because js_sub_string keeps its
+           parent's storage width — so `new RegExp("abc")` and `new RegExp(s.slice(2))` over the same three
+           characters can differ in width with nothing about the pattern differing at all. regexp_site_hash
+           folds every code unit through orphan_hash_u32 whatever the width is, and states that difference at
+           its own site.
+           AND ONE OBJECT MAY WEAR TWO NAMES OVER ITS LIFE, WHICH IS A LOST REFINEMENT AND NOT A LOST ARM:
+           RegExp.prototype.compile REWRITES an existing object's pattern, so its site changes under it while
+           its ordinal stands. No second object can ever take the first name — the ordinal is spent — so the
+           constraint recorded before the rewrite simply stops refining, which is the state every unnamed
+           operand is already in. A replay reproduces both names at the same points of the same prefix.
            `{}` IS NOT THAT SPELLING AND NAMING IT AS ONE SENDS A READER TO GREP FOR THE WRONG THING: `{}` is
            what a CONCOLIC handed no shape renders as, and it was also this site's own spelling for an object
            operand until derived_operand_shape was routed here — so a census row `~{}[…]` quoted from an older
@@ -736,15 +764,22 @@ static char *literal_ident(JSContext *ctx, JSValueConst v)
             free(nm);
             return r;
         }
-        /* …AND SO IS A CLOSURE THE PAGE CREATED, which is the first arm here whose name is not 1:1 with
-           anything a program states and therefore the first that carries a COUNT. Its site is the body
-           locator quickjs already composes and its ordinal is the creating flow's own count of prior mints,
-           taken at the CREATION rather than at this ask — see creation_name above and JS_CreationName for why
-           the instant matters: a value is flow-private when it is made, so the ordinal it carries can only be
-           the running flow's, where an ask-time mint would let two arms of one fork stamp a SHARED value out
-           of two counters and put two values under one name.
+        /* …AND SO IS A VALUE THE PAGE CREATED, which is the first arm here whose name is not 1:1 with
+           anything a program states and therefore the first that carries a COUNT. Its ordinal is the creating
+           flow's own count of prior mints, taken at the CREATION rather than at this ask — see creation_name
+           above and JS_CreationName for why the instant matters: a value is flow-private when it is made, so
+           the ordinal it carries can only be the running flow's, where an ask-time mint would let two arms of
+           one fork stamp a SHARED value out of two counters and put two values under one name.
            THE TAG IS ITS OWN for the reason `i` is not `k` and `Symbol.for` is not `i`: these are four name
            sources and a shared tag would let two of them compose one constraint key.
+           AND `fn` IS THE SOURCE'S SPELLING RATHER THAN THE CLASS'S, WHICH IS A THING TO READ AND NOT TO
+           REPAIR. This one arm answers for every class JS_CreationName has a site composer for — a closure and
+           a RegExp today — and the CLASS rides the returned name (`fn@…#n`, `re@…#n`), which are disjoint by
+           construction, so no two classes can compose one key under this tag. The tag itself is NOT renamed to
+           something class-neutral, and the reason is checkable: decide.c's decision vector stores the asked
+           question as a CONTENT HASH of this exact string, and its own header says the park document carries
+           that column across the cold tier — so renaming the tag would leave every parked flow's recorded arm
+           keyed on a question no resumed flow ever asks again, at every branch over a page-created value.
            NO PIN FOLLOWS FROM IT, exactly as none follows from an intrinsic — literal_tok still answers NULL
            for an object, so concolic_cmp_hook mints no token and §7.2.14 IsStrictlyEqual step 1's SameType is
            false for every string this solver could substitute. The predicate is named; the value is not
@@ -851,12 +886,14 @@ static char *derived_operand_shape(JSContext *ctx, JSValueConst v)
             free(quoted); free(q);
             return r;
         }
-        /* AND A PAGE-CREATED CLOSURE RENDERS AS THE CREATION NAME literal_ident COMPOSED ITS IDENTITY FROM —
+        /* AND A PAGE-CREATED VALUE RENDERS AS THE CREATION NAME literal_ident COMPOSED ITS IDENTITY FROM —
            this pair's invariant restated for the fourth kind of operand, and the reason both arms are in one
-           diff. Moving the identity without the shape would put two closures under ONE shape and two
+           diff. Moving the identity without the shape would put two such values under ONE shape and two
            identities, which is the coarser-shape state keyname_record's assert exists to catch. The spelling
-           carries its own `fn@` namespace, so it cannot be read as an intrinsic's `%…%`, a registered
-           symbol's `Symbol.for(…)`, a quoted String or a Number. */
+           carries its own per-class namespace (`fn@` for a closure, `re@` for a RegExp), so it cannot be read
+           as an intrinsic's `%…%`, a registered symbol's `Symbol.for(…)`, a quoted String or a Number — and
+           a class ADDED to JS_CreationName moves both halves of this pair at once, because both halves ask
+           that one function rather than a list kept here. */
         {
             char *cn = creation_name(ctx, v);
             if (cn) { r = shapef("%s", cn); free(cn); return r; }
@@ -3775,6 +3812,13 @@ static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst
                and [[OriginalFlags]] off the internal slots, for operand_kind and literal_tok to spell a kind
                by. It does NOT exist today - quickjs.h exports JS_IsRegExp and no accessor for either slot -
                and it belongs there rather than here because those slots are JSRegExp's private fields.
+               AND regexp_site_hash IS NOT THAT ENTRY POINT, WHICH IS SAID HERE BECAUSE IT READS THE SAME TWO
+               SLOTS AND A READER WHO FINDS IT WILL THINK THE CLAUSE ABOVE HAS GONE STALE. It folds them into a
+               64-BIT SITE for a creation name, and a hash cannot serve this residual for the reason
+               JS_IntrinsicName is text: the spelling a domain files is READ BY A PERSON and is compared
+               against the bytes a page wrote, so `/^\/api\//i` and a hex digest are not two renderings of one
+               answer. What it does settle is the placement half - the slots really are reachable only from
+               inside quickjs, and that is where this next diff goes too.
                IT MAY NOT BE REACHED THROUGH A PROPERTY GET, which is the trap this clause exists to close:
                ECMAScript §22.2.6.17 "RegExp.prototype.toString ( )" composes the literal out of Get of
                `source` and Get of `flags`, and §22.2.6.4 "get RegExp.prototype.flags" is itself a series of

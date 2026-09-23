@@ -2671,7 +2671,8 @@ typedef struct JSConcolicHooks {
     /* THE RUNNING FLOW'S OWN COUNT OF PRIOR CREATION-NAME MINTS, asked ONCE per page-created value the engine
        can name and never again — the half of a creation name this engine cannot compose for itself.
        WHY IT IS A HOOK AT ALL. A creation name is (SITE, ORDINAL): the site is a program fact the engine owns
-       (JS_OrphanHash's body locator), and the ordinal is a fact about THE EXECUTED PREFIX OF ONE FLOW, which
+       and composes per class (a closure's body locator, a RegExp's own source text and flags — see
+       JS_CreationName), and the ordinal is a fact about THE EXECUTED PREFIX OF ONE FLOW, which
        only the host has — it must be inherited by a fork exactly as every other prefix quantity is, parked
        with a suspended flow, and restored at zero for a flow the cold tier resumes, because such a flow
        REPLAYS the document from the baseline and re-mints the same sequence. Nothing in this engine knows
@@ -2688,9 +2689,9 @@ typedef struct JSConcolicHooks {
        costs forks; a wrong identity costs the arm").
        NULL IS A HOST DECLINING THIS EDGE, which is JSFlowControlHooks.budget's own arrangement: the engine
        then mints nothing, JS_CreationName answers absent for every value, and the behaviour is byte-identical
-       to a build that never had this member — one predictable branch on a thread-local pointer at the one
-       closure path, and no per-object cost anywhere, because the ordinal a value carries is a field it has
-       either way. */
+       to a build that never had this member — one predictable branch on a thread-local pointer at each of the
+       engine's creation paths, and no per-object cost anywhere, because the ordinal a value carries is a field
+       it has either way. */
     uint32_t (*mint_ordinal)(JSContext *ctx);
 } JSConcolicHooks;
 JS_EXTERN void JS_SetConcolicHooks(const JSConcolicHooks *hooks);
@@ -2914,11 +2915,26 @@ JS_EXTERN JSValue  JS_SymbolRegistryKey(JSContext *ctx, JSValueConst v);
 /* A PAGE-CREATED VALUE'S CREATION NAME — the FOURTH name source, and the first one that is 1:N with its own
    site and therefore needs an ordinal beside it.
  *
- * WHAT IT NAMES TODAY is a value with a BYTECODE BODY: a closure the page's own code created. Its SITE is
- * JS_OrphanHash's body locator — (script, line, column, body text), already composed and already this
- * engine's one spelling of "which body" — and that alone is NOT a name, because a body is 1:1 with its
- * position while a CLOSURE is not: a factory called three times is one locator and three functions, and a
- * name shared by three closures would have one call's constraint refine another's branch.
+ * IT IS ONE NAME SOURCE OVER SEVERAL CLASSES, AND THE SITE IS THE PART THAT DIFFERS. Every class it names is
+ * named (SITE, ORDINAL) out of one ordinal mechanism; what a value is 1:N with is decided by what CREATED it,
+ * so the site composer is per class and the class namespace rides the name — `fn@` for a closure, `re@` for a
+ * RegExp — which is what keeps two classes clear of one constraint key under one caller-side tag. The class
+ * question is THIS function's: a caller that had to ask it would be keeping a list of classes in a file that
+ * cannot tell a bound function from a Proxy, which is the whole reason this exists beside JS_OrphanHash.
+ *
+ * A CLOSURE the page's own code created. Its SITE is JS_OrphanHash's body locator — (script, line, column,
+ * body text), already composed and already this engine's one spelling of "which body" — and that alone is NOT
+ * a name, because a body is 1:1 with its position while a CLOSURE is not: a factory called three times is one
+ * locator and three functions, and a name shared by three closures would have one call's constraint refine
+ * another's branch.
+ *
+ * A REGEXP the page created. Its SITE is the TEXT THE PAGE WROTE — the pattern's code units and the flag word
+ * — which is reproducible by the replay a resumed flow performs for the reason a registered symbol's key is.
+ * That alone is not a name either, and §22.2.8.1 "lastIndex" is why: the property it defines on every instance
+ * "shall have the attributes { [[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: false }", so
+ * `r.lastIndex = 5` is observable on one of a pair of identically-spelled RegExps and not on the other
+ * whatever their flags are — and a RegExp is an ordinary object besides, on which a page may set own
+ * properties and for which `r1 === r2` is false. Source-and-flags names a SET.
  *
  * SO THE ORDINAL IS THE OTHER HALF AND IT COMES FROM THE HOST (JSConcolicHooks.mint_ordinal), minted ONCE, AT
  * CREATION, and carried on the object for the rest of its life. AT CREATION is not an implementation detail —
@@ -2947,9 +2963,11 @@ JS_EXTERN JSValue  JS_SymbolRegistryKey(JSContext *ctx, JSValueConst v);
  * identity separates. `buf`/`buf_size` are the caller's and the return is snprintf's — the length that WOULD
  * have been written, so a caller checks it against its own buffer rather than trusting a silent truncation. */
 JS_EXTERN int      JS_CreationName(JSContext *ctx, JSValueConst v, char *buf, size_t buf_size);
-/* `fn@` + 16 hex digits of locator + `#` + a 32-bit decimal ordinal + NUL = 31; rounded up, and asserted
-   against the one composition at the site, so a caller sized by it cannot truncate. A TRUNCATED creation name
-   is two closures under one constraint key, which is the exact collision the ordinal exists to prevent. */
+/* A 3-character class tag (`fn@`, `re@`) + 16 hex digits of site + `#` + a 32-bit decimal ordinal + NUL = 31;
+   rounded up, and asserted at the one join every composition passes through, so a caller sized by it cannot
+   truncate and a class added with a longer tag fires rather than sharing a prefix with its neighbour. A
+   TRUNCATED creation name is two values under one constraint key, which is the exact collision the ordinal
+   exists to prevent. */
 #define JS_CREATION_NAME_MAX 40
 /* MODULE sources: a graph to link and evaluate, not a program to wrap. Returns the evaluation PROMISE. */
 JS_EXTERN JSValue  JS_FlowEvalModule(JSContext *ctx, const char *src, size_t len, const char *filename, int eval_flags);   /* eval_flags: JS_EVAL_FLAG_STRICT threaded through; opaque flow handle (NULL on error) */

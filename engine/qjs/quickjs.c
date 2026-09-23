@@ -1387,6 +1387,23 @@ typedef struct JSRegExp {
        this object — a subclass instance must not be able to write the intrinsic's static slots, which is the
        whole point of the flag: `RegExp.$1` is shared mutable state reachable from any script on the page. */
     bool legacy_features_enabled;
+    /* APIClient forced-exec: THE CREATING FLOW'S OWN COUNT OF PRIOR MINTS, which is the half of this
+       RegExp's name neither its source nor its flags can carry — see JS_CreationName. A RegExp's SITE is the
+       text the page wrote (its pattern and its flag set), which is reproducible by the replay a resumed flow
+       performs and is NOT 1:1 with the object: §22.2.8.1 "lastIndex" gives every instance a property whose
+       attributes are "{ [[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: false }", so `r.lastIndex
+       = 5` is observable on one of a pair and not on the other whatever their flags are, and a RegExp is an
+       ordinary object besides. Source and flags alone name a SET, and one member's constraint would refine
+       another member's branch — an arm LOST rather than duplicated.
+       0 IS "UNSTAMPED" AND IS NOT AN ORDINAL, exactly as it is for `func.creation_ord`: the two fields carry
+       one counter under one contract, minted through js_mint_creation_ord, and a build whose host installs no
+       mint hook writes 0 here and is byte-identical to one without this field.
+       IT IS FOUR BYTES THE 64-BIT LAYOUT ALREADY HAD — the `bool` above leaves padding before `realm` there —
+       AND FOUR BYTES THIS UNION DID NOT HAVE ON A 32-BIT BUILD, where `regexp` and `func` were tied at the
+       union's width. That is INFERRED FROM THE DECLARED ORDER and not measured; `_Static_assert` on
+       `sizeof(JSObject)` is what would measure it, and the stale byte-size comments at the end of JSObject are
+       why no number here is quoted as one. */
+    uint32_t creation_ord;
     /* [[Realm]], which RegExpAlloc gives every instance in the same proposal. It exists for exactly one
        comparison — RegExp.prototype.compile refuses a receiver from another realm — and that refusal is the
        same safety argument as the flag: compile REWRITES an existing object's pattern, so a page that could
@@ -3649,6 +3666,34 @@ void JS_SetJobRemoveHook(JSJobRemoveHook h) { g_job_remove_hook = h; }
    thousand lines below assert against unknown external input reaching them and a declaration that sits after
    its first assertion is a rule nobody can state. */
 static _Thread_local JSConcolicHooks g_concolic;
+
+/* THE ORDINAL HALF OF A PAGE-CREATED VALUE'S NAME, ASKED IN ONE PLACE — the canonical spelling of a question
+   that now has TWO carriers (`func.creation_ord` for a closure, `regexp.creation_ord` for a RegExp) and one
+   contract. Two right answers to one question is the shape that drifts, and the thing that would drift here is
+   the ASSERT rather than the hook call: a second site that minted without it would silently unname every value
+   it made from the moment a host's counter reached 0.
+   THE ABORT NAMES NO CALL SITE AND IS RIGHT NOT TO, which is the one place this differs from
+   §AN-ASSERT-THAT-NAMES-A-REMEDY-BUT-NOT-A-SITE's rule. The failure it reports is the HOST'S HOOK answering 0,
+   which is one fact about one hook and is identical at every caller — the remedy has no per-site object, so a
+   stamped call site would be decoration on it rather than the address a reader needs.
+   IT IS MINTED AT CREATION AND NOT AT THE FIRST ASK, for the reason js_closure2 states: the value is
+   FLOW-PRIVATE at this instant, so the ordinal it takes is the running flow's and no sibling can be holding it
+   yet. Minting at the ask would let two arms of one fork stamp a SHARED value out of two counters.
+   AN ORDINAL SPENT ON A VALUE THAT NEVER FINISHES BEING BUILT IS NOT A LEAK OF ONE. A RegExp mints at its
+   ALLOCATION and its constructor can still throw on a bad pattern, so the counter advances for an object no
+   page ever sees — and that is reproducible by the replay a resumed flow performs, because the replay throws at
+   the same point of the same prefix. What an identity needs is reproducibility and not density. */
+static uint32_t js_mint_creation_ord(JSContext *ctx)
+{
+    uint32_t ord = g_concolic.mint_ordinal ? g_concolic.mint_ordinal(ctx) : 0;
+
+    DCHECK(g_concolic.mint_ordinal == NULL || ord != 0,
+           "the host's creation-ordinal hook answered 0, which this engine reads as 'this value has no "
+           "creation name' — so a flow whose counter reached it would silently unname every value it made "
+           "from there on, and a counter that WRAPPED to it would start handing out ordinals it has already "
+           "spent, which puts two values under one constraint key and loses an arm rather than a fork");
+    return ord;
+}
 
 /* A C CALL CYCLE'S DEPTH, ASSERTED WHERE IT IS RELIED ON.
  *
@@ -9143,6 +9188,18 @@ static JSValue JS_NewObjectFromShape(JSContext *ctx, JSShape *sh, JSClassID clas
         p->u.regexp.pattern = NULL;
         p->u.regexp.bytecode = NULL;
         p->u.regexp.legacy_features_enabled = false;
+        /* AND THE ORDINAL HALF OF THIS OBJECT'S NAME IS MINTED HERE, FOR THE REASON [[Realm]] BELOW IS SET
+           HERE, AND IT IS A PROPERTY RATHER THAN A LIST OF ROUTES: this arm is the ALLOCATION of the class, so
+           every RegExp this runtime builds passes it whatever spelling made it — a literal, `new RegExp`, a
+           subclass reaching js_create_from_ctor, an internal splitter, a bytecode reader — and a route added
+           later cannot forget it, which a mint placed on any of those routes could.
+           THE INITIALISATION SITES CANNOT CARRY IT, which is the other half of that: RegExp.prototype.compile
+           is one of them and it REWRITES an existing object's pattern, so minting there would hand one object
+           a second ordinal and orphan every constraint recorded under its first name.
+           A NAME IS ITS SITE PLUS THIS, and the site is read at the ASK rather than stamped here (see
+           JS_CreationName): the pattern and the bytecode are attached by the caller a few lines later, and a
+           half-built RegExp answers ABSENT until they are. */
+        p->u.regexp.creation_ord = js_mint_creation_ord(ctx);
         /* [[Realm]] IS CREATED BY THE ALLOCATION, which is what RegExpAlloc says — the slot is in the list
            OrdinaryCreateFromConstructor is given. Setting it at the two INITIALISATION sites instead left the
            second one (a literal, and @@split's internal splitter) without a realm, so every plain `/x/` was
@@ -23861,19 +23918,12 @@ static JSValue js_closure2(JSContext *ctx, JSValue func_obj,
     /* AND THE OTHER HALF OF THIS CLOSURE'S NAME IS MINTED HERE, FOR THE SAME REASON THAT LINE IS HERE: this is
        the one place every closure in this runtime is built, so an ordinal minted here is minted once per
        function object and never twice, which is the whole of what makes it an identity rather than a counter.
-       IT IS MINTED AT CREATION AND NOT AT THE FIRST ASK. The value is FLOW-PRIVATE at this instant — the same
-       fact `flow_gen` records one struct over — so the ordinal it takes is the running flow's and no sibling
-       can be holding this object yet. Minting at the ask would let two arms of one fork stamp a SHARED value
-       out of two different counters, after which the arm that lost would go on minting a name the other had
-       already spent, and two values would carry one name. See JS_CreationName for the rest of the argument.
-       A HOST THAT INSTALLS NO HOOK WRITES 0, which JS_CreationName reads as "no name" — one predictable
-       branch on a thread-local pointer, and nothing else about this path changes. */
-    p->u.func.creation_ord = g_concolic.mint_ordinal ? g_concolic.mint_ordinal(ctx) : 0;
-    DCHECK(g_concolic.mint_ordinal == NULL || p->u.func.creation_ord != 0,
-           "the host's creation-ordinal hook answered 0, which this engine reads as 'this value has no "
-           "creation name' — so a flow whose counter reached it would silently unname every closure it made "
-           "from there on, and a counter that WRAPPED to it would start handing out ordinals it has already "
-           "spent, which puts two closures under one constraint key and loses an arm rather than a fork");
+       THE REST OF THE ARGUMENT — why at creation and not at the first ask, why a host that installs no hook
+       writes 0, and the assert that catches a hook answering it — IS AT js_mint_creation_ord AND NOT REPEATED
+       HERE. That function is the canonical spelling of this question and there are now two carriers of it, so
+       a second copy of the contract beside one of them is the shape that drifts; what this comment owes is the
+       reason the mint belongs at THIS line, which is the sentence above it. */
+    p->u.func.creation_ord = js_mint_creation_ord(ctx);
     if (b->closure_var_count) {
         var_refs = js_mallocz(ctx, sizeof(var_refs[0]) * b->closure_var_count);
         if (!var_refs)
@@ -112261,12 +112311,56 @@ int JS_IntrinsicName(JSContext *ctx, JSValueConst v, char *buf, size_t buf_size)
     return snprintf(buf, buf_size, want_proto ? "%%%s.prototype%%" : "%%%s%%", name);
 }
 
+/* ── A REGEXP'S SITE ──────────────────────────────────────────────────────────────────────────────────────────
+ *
+ * THE SECOND SITE COMPOSER, BESIDE orphan_hash_body, AND A THIRD FOLD OF THE SAME BYTES IS WHAT THIS AVOIDS.
+ * A creation name is (SITE, ORDINAL); the ordinal is one mechanism for every class (js_mint_creation_ord) and
+ * the SITE is per class, because what a value is 1:N with differs by what created it. A closure's site is the
+ * BODY it was instantiated from; a RegExp's is the TEXT THE PAGE WROTE — its pattern and its flag set — which
+ * is reproducible by the replay a resumed flow performs for the reason a registered symbol's key is: the
+ * page's own bytes produce it again. It is NOT the address, which js_malloc REUSES and which no park carries,
+ * and NOT the compiled bytecode's pointer, which is the same objection one field over.
+ *
+ * EVERY CODE UNIT GOES THROUGH orphan_hash_u32 WHATEVER THE STRING'S STORAGE WIDTH IS, and that is a
+ * DIFFERENCE from orphan_hash_body above rather than an oversight. That function folds a narrow atom byte by
+ * byte and a wide one unit by unit, which is sound for an ATOM because interning gives one filename one
+ * representation. A RegExp's pattern is an ordinary page-built String and js_sub_string KEEPS ITS PARENT'S
+ * WIDTH, so `new RegExp("abc")` and `new RegExp(s.slice(2))` over the same three characters can differ in
+ * storage width with nothing about the pattern differing at all — and a width-sensitive fold would hand one
+ * pattern two sites. That costs no ARM (the ordinal already separates every value one flow mints) and it costs
+ * the LOCALITY a site exists for, which is the whole of what makes a site worth composing.
+ *
+ * THE FLAGS ARE FOLDED BESIDE THE PATTERN AND NOT INSTEAD OF IT, because §22.2.7.2 "RegExpBuiltinExec (
+ * regexp, string )" makes `global` and `sticky` decide whether lastIndex is read at all — so two RegExps of
+ * one source and two flag sets are two behaviours, and a site that named them alike would put two populations
+ * under one label. The flag word is lre_get_flags', read off the bytecode string, which JS_ReadRegExp and the
+ * compiler both keep NARROW. */
+static uint64_t regexp_site_hash(JSRegExp *re)
+{
+    JSString *pat = re->pattern;
+    uint64_t h = 0xcbf29ce484222325ULL;
+    uint32_t i;
+
+    h = orphan_hash_u32(h, pat->len);
+    for (i = 0; i < pat->len; i++)
+        h = orphan_hash_u32(h, pat->is_wide_char ? str16(pat)[i] : str8(pat)[i]);
+    h = orphan_hash_u32(h, (uint32_t)lre_get_flags(str8(re->bytecode)));
+    return h;
+}
+
 /* ── A PAGE-CREATED VALUE'S CREATION NAME ─────────────────────────────────────────────────────────────────────
  *
  * THE FOURTH NAME SOURCE. The three above it need no ordinal and each says so in its own words: a BODY is 1:1
  * with its position (JS_OrphanHash), an INTRINSIC is a singleton of its realm (JS_IntrinsicName), a REGISTERED
  * SYMBOL is 1:1 with its key by §20.4.2.4's own construction (JS_SymbolRegistryKey). A page-created value is
  * the first that is 1:N with everything about it a program can state, so it is the first that needs a count.
+ *
+ * IT IS ONE NAME SOURCE OVER SEVERAL CLASSES, AND THE CLASS QUESTION IS THIS FUNCTION'S AND NOT ITS CALLER'S.
+ * A caller that had to ask "is it a closure?" and then "is it a RegExp?" would be keeping a list of classes in
+ * a file that cannot tell a bound function from a Proxy — the exact reason this function exists rather than
+ * JS_OrphanHash. So there is ONE entry, it answers -1 for everything it has no site composer for, and the
+ * CLASS NAMESPACE RIDES THE NAME: `fn@` for a closure, `re@` for a RegExp. Two names can never collide across
+ * classes, which is what lets the solver spend this answer under one tag.
  *
  * WHY -1 IS AN ANSWER AND NOT A FAILURE, AND WHY THIS FUNCTION EXISTS AT ALL BESIDE JS_OrphanHash. That
  * function composes the same locator and is handed only what JS_OrphanTakeOne chose, so it DCHECKs on a value
@@ -112282,10 +112376,12 @@ int JS_IntrinsicName(JSContext *ctx, JSValueConst v, char *buf, size_t buf_size)
  * states — reproducibility by the replay — rather than uniqueness-in-a-heap, which an address would have and
  * which no park carries.
  *
- * THE SPELLING IS ITS OWN NAMESPACE AND CANNOT BE MISTAKEN FOR THE OTHER THREE. It opens `fn@`, where an
- * intrinsic opens `%`, a registered symbol opens `Symbol.for(`, a String operand opens a quote and a Number
- * opens a digit — so the display shapes this name is also spent as stay 1:1 with the identities beside them,
- * which is the invariant concolic.c states at derived_operand_shape and asserts at keyname_record.
+ * THE SPELLING IS ITS OWN NAMESPACE AND CANNOT BE MISTAKEN FOR THE OTHER THREE, NOR ONE CLASS FOR ANOTHER. It
+ * opens with a 3-character class tag (`fn@`, `re@`), where an intrinsic opens `%`, a registered symbol opens
+ * `Symbol.for(`, a String operand opens a quote and a Number opens a digit — so the display shapes this name is
+ * also spent as stay 1:1 with the identities beside them, which is the invariant concolic.c states at
+ * derived_operand_shape and asserts at keyname_record. A class added below takes a tag no other class has, and
+ * no consumer anywhere reads the tag back: it separates names and is never parsed.
  *
  * ALLOCATION-FREE and side-effect-free, like the three above: no property is read, so no accessor and no Proxy
  * trap runs, which is what lets a caller with no flow base under it ask the question at all. */
@@ -112299,6 +112395,22 @@ int JS_CreationName(JSContext *ctx, JSValueConst v, char *buf, size_t buf_size)
            "boolean, so a caller with no buffer is asking a question it cannot receive the answer to");
     if (JS_VALUE_GET_TAG(v) != JS_TAG_OBJECT) return -1;
     p = JS_VALUE_GET_OBJ(v);
+    /* A REGEXP, WHOSE SITE IS THE TEXT THE PAGE WROTE — asked FIRST because the two class questions are
+       disjoint and the order therefore decides nothing, and read in this order only so the bytecode-body
+       question below keeps the shape it had.
+       A HALF-BUILT REGEXP ANSWERS ABSENT AND IS NOT ASSERTED ON. js_regexp_constructor_internal attaches the
+       pattern and the bytecode a few lines after the allocation that minted the ordinal, and this function is
+       handed every operand of every comparison a page makes — the same reason the whole of it answers rather
+       than asserts. js_get_regexp's DCHECK is the OTHER question ("this must not ESCAPE its constructor") and
+       is owed by the consumers that read the compiled bytecode, which this is not. */
+    if (p->class_id == JS_CLASS_REGEXP) {
+        if (!p->u.regexp.pattern || !p->u.regexp.bytecode) return -1;
+        if (p->u.regexp.creation_ord == 0) return -1;
+        n = snprintf(buf, buf_size, "re@%016llx#%u",
+                     (unsigned long long)regexp_site_hash(&p->u.regexp),
+                     (unsigned)p->u.regexp.creation_ord);
+        goto sized;
+    }
     /* THE BYTECODE-BODY QUESTION, ANSWERED AND NOT ASSERTED — see the banner. The three refusals it makes are
        the three a namer written outside this file could not make: a C function has no `u.func` at all, a bound
        function's target is a value of its own, and a Proxy's body is whatever its handler decides. */
@@ -112311,14 +112423,17 @@ int JS_CreationName(JSContext *ctx, JSValueConst v, char *buf, size_t buf_size)
     n = snprintf(buf, buf_size, "fn@%016llx#%u",
                  (unsigned long long)orphan_hash_body(ctx->rt, p->u.func.function_bytecode),
                  (unsigned)p->u.func.creation_ord);
-    /* THE BOUND IS ASSERTED AT THE ONE COMPOSITION RATHER THAN ARGUED IN THE HEADER, because a TRUNCATED name
-       is two closures under one constraint key — the exact collision this function exists to prevent — and a
-       caller that sized its buffer by JS_CREATION_NAME_MAX would have no way to see it. `fn@` is 3, the
-       locator is 16 hex digits, `#` is 1 and a 32-bit decimal is at most 10, so 31 including the NUL. */
+sized:
+    /* THE BOUND IS ASSERTED AT THE ONE JOIN OF EVERY COMPOSITION RATHER THAN ARGUED IN THE HEADER, because a
+       TRUNCATED name is two values under one constraint key — the exact collision this function exists to
+       prevent — and a caller that sized its buffer by JS_CREATION_NAME_MAX would have no way to see it. Every
+       spelling is the same width by construction: a 3-character class tag, 16 hex digits of site, `#`, and a
+       32-bit decimal of at most 10, so 31 including the NUL. A class added above with a LONGER tag fires this
+       rather than silently sharing a prefix with its neighbour. */
     DCHECK(n > 0 && n < JS_CREATION_NAME_MAX,
            "a creation name did not fit the bound quickjs.h publishes for it — the two are one composition "
-           "and one constant, so this fires only if the spelling above was widened without the bound, and a "
-           "caller sized by that bound would truncate two closures onto one name");
+           "and one constant, so this fires only if a spelling above was widened without the bound, and a "
+           "caller sized by that bound would truncate two values onto one name");
     return n;
 }
 
