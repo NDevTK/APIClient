@@ -5403,7 +5403,43 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        this check exists to detect, which would make it agree by construction with whatever it was pointed at.
        THE EXTRA WEIGHING IS INSIDE THE DCHECK AND RAISES NO SCAN COUNTER, for flow_index_surrogate's reason;
        it is O(1) per scan rather than per member, so it is in a different class from the per-member stamp
-       above and needs no separate argument about cost. */
+       above and needs no separate argument about cost.
+       THE MESSAGE CARRIES THE OPERANDS OF BOTH MEMBERS, WHICH IS WHAT SEPARATES THE TWO FIRE MODES THIS
+       CHECK HAS — and it carried four bare weights until a fire had to be diagnosed by SIMULATING the two
+       expressions outside the engine, which is the §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES shape: the run held
+       every operand and published none of them. The two modes take DIFFERENT work and are distinguishable
+       from one line:
+         `sur_w == bw`  is a TIE. The surrogate LOST the distinction the comparator makes, and the fold's own
+                        tie-break — strict `>` in the loop, so first-in-registry-order wins, and `>=` at the
+                        seed, so the incumbent wins — then named the lower member. The surrogate asserted no
+                        WRONG order here; it asserted NO order, where the comparator has one. A candidate
+                        set taken from this key must therefore carry a MARGIN and re-compare its survivors
+                        through flow_weight, which is a design that needs no edit to flow_weight at all —
+                        and an index that took the single top key instead would get exactly this wrong.
+         `sur_w >  bw`  is a STRICT disagreement, and only there is a re-composition of flow_weight the thing
+                        that is being argued about.
+       AND `WORSE` IS THE COMPARATOR'S WORD AND NOT THE ARITHMETIC'S, WHICH THE SENTENCE ABOVE INVITES A
+       READER TO FORGET. Both spellings approximate ONE real number — `N = k + K + carry` is an exact integer
+       identity, so in exact arithmetic the surrogate IS flow_weight — and BOTH round. A weight is a small
+       difference of large quantities (a reward ledger against an aging term that grows all run), so the
+       result is ILL-CONDITIONED in both spellings: measured against the exact rational over 120000 members
+       with the family notch swept to a 900 s run's worth of quanta, flow_weight's own value sits a MEAN
+       4.4e-14 from the real number it encodes — about fifty ulps of the weight — and the surrogate sits
+       2.8e-14 from it, closer on 36.9% of members against flow_weight's 13.9%. So a fire says the two
+       spellings disagree; it does NOT say the surrogate named the lesser member. Over 3818 constructed
+       STRICT disagreements the exact value put the surrogate's pick genuinely above the comparator's on
+       65.5% of them and the comparator's above the surrogate's on 34.5%, so NEITHER spelling is the
+       reference and a fire may not be read as one of them being at fault.
+       WHAT THAT LEAVES THE EQUALITY WORTH, BECAUSE IT IS STILL WORTH ASSERTING: not accuracy — the worst
+       divergence measured is 4.5e-13, which is 4.2 machine epsilons of the largest operand and 2.6e10 times
+       SMALLER than FLOW_AGE_QUANTUM, the smallest step this order can express — but TIE IDENTITY. This
+       frontier is measured 73-93% tied at the top, so which members share the maximum is most of what the
+       order decides, and a spelling that ties where the comparator splits (or splits where it ties) changes
+       the population the incumbent has to stay level with. That is the quantity a re-composition moves, and
+       it is why this is a decision rather than a diff.
+       RETIREMENT: this record goes when a fire here is diagnosable from the line it prints — which is what
+       the operands below are for — and the choice between a margin-carrying candidate set and a re-composed
+       flow_weight has been made by the project owner rather than named here. */
     if (best && sur_best) {
         g_index_checks.index_asked++;
         if (sur_best != best) g_index_checks.index_differed++;
@@ -5411,12 +5447,31 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
                 "an index over the member key would have returned a member this comparator calls WORSE — the "
                 "surrogate is `acct_family_val + flow_member_key - (family notch + carry) * FLOW_AGE_QUANTUM`, "
                 "which is flow_weight RE-ASSOCIATED, and a fire here is that re-association reaching the "
-                "ANSWER rather than the last bit. It is the proof that no candidate set may be taken from "
-                "this key until flow_weight is composed so its member half is a SUBEXPRESSION of it — which "
-                "is an ORDER change in the last bit and a decision rather than a diff, so this abort is a "
-                "finding to report and not a line to soften. The surrogate chose a member weighing %.17g "
-                "where the scan's maximum is %.17g, over %d member(s), with the surrogate reading %.17g",
-                flow_weight(sur_best), bw, g_flows_n, sur_w);
+                "ANSWER rather than the last bit. READ `sur_w` AGAINST `bw` FIRST: equal is a surrogate TIE "
+                "the fold's tie-break resolved downward and is answerable by a candidate set that carries a "
+                "MARGIN and re-compares its survivors through flow_weight, with flow_weight untouched; "
+                "strictly greater is a real disagreement and is the case that argues for composing "
+                "flow_weight so its member half is a SUBEXPRESSION of it. Either way this is an ORDER "
+                "question and a decision rather than a diff, so this abort is a finding to report and not a "
+                "line to soften — and `WORSE` here means lower BY THIS COMPARATOR, never further from the "
+                "real number both spellings round. The surrogate chose a member weighing %.17g "
+                "where the scan's maximum is %.17g, over %d member(s), with the surrogate reading "
+                "%.17g. ITS OPERANDS, in the order flow_weight sums them, and then the maximum's: "
+                "sur_best val=%.17g own_notch=%lld fam_notch=%lld carry=%d silence_notch=%lld "
+                "optimism=%.17g distance=%.17g branch=%.17g | best val=%.17g own_notch=%lld "
+                "fam_notch=%lld carry=%d silence_notch=%lld optimism=%.17g distance=%.17g "
+                "branch=%.17g — the notches are EXACT integers, so a divergence is in how the price "
+                "FLOW_AGE_QUANTUM was applied to them and where the reward was folded in, never in "
+                "the quantities themselves",
+                flow_weight(sur_best), bw, g_flows_n, sur_w,
+                acct_family_val(sur_best), (long long)flow_service_notch(sur_best),
+                (long long)flow_family_notch(sur_best), flow_silence_carry(sur_best),
+                (long long)flow_silence_notch(sur_best), flow_optimism(sur_best),
+                flow_distance(sur_best), flow_branch_bonus(sur_best),
+                acct_family_val(best), (long long)flow_service_notch(best),
+                (long long)flow_family_notch(best), flow_silence_carry(best),
+                (long long)flow_silence_notch(best), flow_optimism(best),
+                flow_distance(best), flow_branch_bonus(best));
     }
 #endif
     /* §scheduler'S SENTENCE, ASSERTED WHERE THE CHOICE IS MADE — "CPU-AGING so a monopolizer that burns CPU
