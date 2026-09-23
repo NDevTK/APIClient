@@ -1740,10 +1740,26 @@ for (const n of strayUnproven) {
               `written beside the mint. The PRESENCE-axis idl_install_covers_column cannot decide this and ` +
               `never could: it answers the same for an interface object that constructs and one that throws.`);
 }
+/* AND THE DECLARING-ROW TOTAL BESIDE THEM, BECAUSE THE TWO FIGURES ALREADY HERE BRACKET THE IMPLEMENTATION
+   QUEUE AND NEITHER OF THEM IS IT. `distinct.size` is a collapse BY NAME across interfaces, so one spec name
+   declared independently by several — a mixin included in ten, or two standards reusing a word for unrelated
+   purposes — is ONE item here and several pieces of work; `totalMissing` charges every inherited gap once per
+   inheriting interface, so it measures inheritance DEPTH and one member built on a base clears dozens of it.
+   Both are honest answers to different questions and a reader with only these two takes whichever is in front
+   of them for the queue. The figure between them is the one the queue actually is: the per-interface OWN
+   numerators summed, which counts a member once for each interface that DECLARES it and never for one that
+   merely inherits it. It is the SAME `own` the ranked table prints, summed rather than re-derived, so the
+   headline and the rows cannot come to disagree about it.
+   ITS ORDER AMONG THE THREE IS NOT ASSERTED. A member is counted here only where the interface DECLARING it is
+   itself audited, so a declarer outside the audited set leaves a gap that `distinct` and `totalMissing` both
+   carry and this one does not — which makes "between the other two" an observation a run may make and never an
+   invariant of the arithmetic. Printing all three is what lets a reader see which it got. */
+const declaringTotal = gapRows.reduce((n, r) => n + r.own, 0);
 if (totalMissing)
-  console.log(`[idl-audit] ${distinct.size} distinct spec members this engine does not install (${totalMissing} ` +
-              `across all interfaces, since an inherited gap is absent on each) — see the ABSENT category in ` +
-              `the verdict for the two outcomes that population holds; never a stub either way.`);
+  console.log(`[idl-audit] ${distinct.size} distinct spec members this engine does not install ` +
+              `(${declaringTotal} counting each interface that DECLARES one, and ${totalMissing} across all ` +
+              `interfaces, since an inherited gap is absent on each) — see the ABSENT category in the ` +
+              `verdict for the two outcomes that population holds; never a stub either way.`);
 /* THE INTERFACES THAT NEVER REACHED THE AUDIT, reported in the same breath as the members that did, because a
    surface the run silently declined to look at is indistinguishable in the total from one it looked at and
    found complete. The three lists are the three answers, and only the first is an acceptable steady state. */
