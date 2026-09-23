@@ -1681,9 +1681,9 @@ void element_view_init(JSContext *ctx)
     g_id_set_scroll_top  = idl_setter_id(ctx, IDL_UNRESTRICTED_DOUBLE, false, js_ev_set, EV_SCROLL_TOP);
     /* §3.7.6's SETTER asks the receiver BEFORE it converts the value — Web IDL §3.7.6 "Attributes": "If
        validThis is false and attribute was not specified with the [LegacyLenientThis] extended attribute,
-       then throw a TypeError", which stands above "Let idlValue be the result of converting V to an IDL value
-       of attribute's type". A test in js_ev_set ran after that conversion, so
-       `Element.prototype.scrollTop` set through a foreign receiver with `{valueOf(){…}}` ran the page's
+       then throw a TypeError.", which stands above Web IDL §3.7.6 "Attributes": "Let idlValue be determined
+       as follows:" and the per-type table that IS the conversion. A test in js_ev_set ran after that table,
+       so `Element.prototype.scrollTop` set through a foreign receiver with `{valueOf(){…}}` ran the page's
        `valueOf` first. Stated here, it does not. */
     idl_this_iface(element_is, "Element");
     g_id_set_scroll_left = idl_setter_id(ctx, IDL_UNRESTRICTED_DOUBLE, false, js_ev_set, EV_SCROLL_LEFT);

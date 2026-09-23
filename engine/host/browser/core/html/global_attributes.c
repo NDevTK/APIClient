@@ -89,8 +89,9 @@ static bool local_name_is(lxb_dom_element_t *el, const char *name)
 
    THE ORDER IS WHAT THE MOVE BUYS. §3.7.6's setter asks the receiver — Web IDL §3.7.6 "Attributes": "If
    validThis is false and attribute was not specified with the [LegacyLenientThis] extended attribute, then
-   throw a TypeError." — BEFORE "Let idlValue be the result of converting V to an IDL value of attribute's
-   type". A test in a setter body ran after that conversion, so `HTMLElement.prototype.autocapitalize`'s
+   throw a TypeError." — BEFORE the conversion, which the same algorithm opens with Web IDL §3.7.6
+   "Attributes": "Let idlValue be determined as follows:" and then states as a table keyed on the attribute's
+   type. A test in a setter body ran after that table, so `HTMLElement.prototype.autocapitalize`'s
    setter applied to a foreign receiver with `{toString(){ window.ran = true; return "x"; }}` left
    `window.ran` true and threw afterwards, where a browser throws with `window.ran` still undefined.
 
