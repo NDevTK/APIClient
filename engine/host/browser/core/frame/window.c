@@ -1049,7 +1049,17 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     /* §7.1.2's `originAgentCluster` and §8.2's `crossOriginIsolated` — two answers about THIS AGENT'S
        CLUSTER, installed by the component that computes it (core/frame/agent_cluster.c) rather than written out
        here as two booleans, because §7.1.1.2's `document.domain` setter and HR-TIME §4's clock resolution read
-       the same §7.1.4 mode, and one fact answered from four places is four places for it to drift. */
+       the same HTML §7.3.2.3 "Groupings of browsing contexts" cross-origin isolation mode, and one fact
+       answered from four places is four places for it to drift.
+
+       THAT NUMBER USED TO BE §7.1.4, WHICH IS "Cross-origin embedder policies". COEP is an INPUT the mode
+       is computed from and not the mode itself: §7.3.2.3 puts a cross-origin isolation mode on the BROWSING
+       CONTEXT GROUP and gives it three values, which is the fact core/frame/agent_cluster.c reads and the
+       reason its two members cannot be one boolean. NOTHING MECHANICAL REPORTED IT and nothing could: the
+       number RESOLVES, and engine/citegen.mjs states in its own words that a citation carrying a number
+       ALONE is outside the term, title and quotation checks BY CONSTRUCTION. Reading the corpus's title
+       back against the sentence is the whole of what catches this shape, which is why the title is now
+       written down here — a stated title is a claim the next run can falsify. */
     agent_cluster_install(ctx, g);
 
     idl_install_accessor(ctx, g, "name", js_win_get_name, 0, g_id_name_set);

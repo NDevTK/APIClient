@@ -1,7 +1,7 @@
 /* HTML §7.1.2 ORIGIN-KEYED AGENT CLUSTERS, and §8.1.2.2's allocation rule that decides one.
  *
  * ONE FACT, ONE PLACE. Four algorithms ask about this agent's cluster — `window.originAgentCluster` (§7.1.2),
- * `window.crossOriginIsolated` (§8.1.7.1), §7.1.1.2's `document.domain` setter step 5, which RETURNS WITHOUT
+ * `window.crossOriginIsolated` (§8.2), §7.1.1.2's `document.domain` setter step 5, which RETURNS WITHOUT
  * SETTING when the cluster is origin-keyed, and HR-TIME §4's coarsen time, whose CLOCK RESOLUTION is 5
  * microseconds instead of 100 for an environment with the cross-origin isolated capability. A constant written
  * into each of them is the defect CLAUDE.md names: one fact answered from four places, drifting the day one of
@@ -72,7 +72,7 @@ bool agent_cluster_is_origin_keyed(void);
 /* HTML §7.2.2.6 "Script settings for Window objects"' environment settings object field CROSS-ORIGIN ISOLATED
  * CAPABILITY, for the environment `ctx` IS: "Return true if both of the following hold, and false otherwise:
  * realm's agent cluster's cross-origin-isolation mode is `concrete`, and window's associated Document is
- * allowed to use the "cross-origin-isolated" feature". §8.1.7.1's
+ * allowed to use the "cross-origin-isolated" feature". HTML §8.2 "The WindowOrWorkerGlobalScope mixin"'s
  * `crossOriginIsolated` getter returns exactly this field, and HR-TIME §4's coarsen time decides its resolution
  * from it (core/timing/hr_time.h).
  *
@@ -88,7 +88,7 @@ bool agent_cluster_is_origin_keyed(void);
  * life of the realm, so no two timestamps of one environment can disagree about which grid they are on. */
 bool agent_cluster_cross_origin_isolated(JSContext *ctx);
 
-/* §7.1.2's `originAgentCluster` and §8.1.7.1's `crossOriginIsolated` — the two Window members stated over this
+/* §7.1.2's `originAgentCluster` and §8.2's `crossOriginIsolated` — the two Window members stated over this
    cluster, installed by the component that owns it rather than by the Window they hang off, for the reason
    core/frame/navigation.c's row gives. */
 void agent_cluster_install(JSContext *ctx, JSValueConst global);

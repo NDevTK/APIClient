@@ -23,16 +23,23 @@
 
 /* §8.1.2.2's AGENT CLUSTER, for the ONE cluster this instance is. SECURITY.md keys a WASM instance on
    `(browsing context group, origin)`, which is exactly an agent cluster key, so there is one of these per
-   agent and a module static is the right shape rather than the per-realm answer CLAUDE.md's §3.7 rule asks
-   for: `originAgentCluster` returns "the SURROUNDING AGENT's agent cluster's is origin-keyed", and every realm
-   of this instance is in the same agent. */
+   agent and a module static is the right shape rather than the per-realm answer CLAUDE.md's rule over Web
+   IDL §3.7 "Interfaces" asks for: HTML §7.1.2's `originAgentCluster` returns "the SURROUNDING
+   AGENT's agent cluster's is origin-keyed", and every realm of this instance is in the same agent.
+
+   BOTH HALVES OF THAT SENTENCE USED TO BE UNRESOLVABLE. The rule's number stood bare, so a file vote sent
+   it to HTML, which numbers no §3.7 at all; and the quotation after it took that same number as its
+   nearest-preceding anchor when its source is §7.1.2 two sections away. A quotation follows the standard
+   it belongs to or repeats that standard's name in front of itself — otherwise the anchor is whatever
+   citation happens to stand nearest, which is a fact about line order and not about the sentence. */
 static bool g_agent_obtained;
 static bool g_is_origin_keyed;
 
 void agent_cluster_obtain_window_agent(const Origin *origin, bool requests_oac)
 {
-    /* §8.1.2.2's "obtain a similar-origin window agent, given an origin, a browsing context group and a
-       boolean requestsOAC", to the depth that decides the one observable it produces:
+    /* HTML §8.1.2.2 "Integration with the JavaScript agent cluster formalism"'s "To obtain a
+       similar-origin window agent, given an origin origin, a browsing context group group, and a boolean
+       requestsOAC, run these steps", to the depth that decides the one observable it produces:
 
          1. Let site be the result of obtaining a site with origin.
          2. Let key be site.
@@ -53,8 +60,9 @@ void agent_cluster_obtain_window_agent(const Origin *origin, bool requests_oac)
        the `qjs_join` SECURITY.md names, a same-origin frame this engine did not model, a navigation replacing
        the root — must NOT recompute this: §8.1.2.2's historical agent cluster key map exists precisely so that
        a later same-origin Document in the same group gets the FIRST one's key even when it sends a different
-       `Origin-Agent-Cluster` header, which is what §7.1.2 means by "the getter can return false, even if the
-       header is set". The answer below IS this cluster's map entry; whoever builds that join reads it. */
+       `Origin-Agent-Cluster` header, which is what §7.1.2 means by "the originAgentCluster getter can
+       return false, even if the header is set". The answer below IS this cluster's map entry; whoever
+       builds that join reads it. */
     DCHECK(!g_agent_obtained,
            "a similar-origin window agent was obtained twice in one instance — one WASM instance is one "
            "`(browsing context group, origin)` agent cluster, so this runs once, and a second document of the "
@@ -105,10 +113,21 @@ bool agent_cluster_cross_origin_isolated(JSContext *ctx)
     return document_allowed_to_use(ctx, PP_FEATURE_CROSS_ORIGIN_ISOLATED);
 }
 
-/* §7.1.2: "The originAgentCluster getter steps are to return the surrounding agent's agent cluster's is
-   origin-keyed." §8.1.7.1: "The crossOriginIsolated getter steps are to return this's relevant settings
-   object's cross-origin isolated capability" — the §7.2.2.6 field above, which is stated OVER this cluster's
-   mode and is why the two members are one component and not two booleans that could disagree. */
+/* HTML §7.1.2 "Origin-keyed agent clusters": "The originAgentCluster getter steps are to return the
+   surrounding agent's agent cluster's is origin-keyed." HTML §8.2 "The WindowOrWorkerGlobalScope
+   mixin": "The crossOriginIsolated getter steps are to return this's relevant settings object's
+   cross-origin isolated capability" — the §7.2.2.6 field above, which is stated OVER this cluster's
+   mode and is why the two members are one component and not two booleans that could disagree.
+
+   THE NUMBER OVER THAT SECOND QUOTATION USED TO BE §8.1.7.1, WHICH IS "Definitions" UNDER §8.1.7 "Event
+   loops" — A REAL SENTENCE UNDER A SECTION THAT DOES NOT GOVERN IT, never a fabrication, and the axis a
+   quotation check is blind to. It was blind here for a SECOND reason worth more than the first: the
+   citation NAMED NO STANDARD, so a file vote placed it and engine/citegen.mjs compared the quotation
+   against nothing at all. Naming HTML is what makes the number falsifiable — under the old number the
+   same edit would have been reported as a quotation this section does not hold. §7.2.2.6's field and
+   §7.1.2's getter were checked in the same pass and are RIGHT; the member is declared on the
+   `WindowOrWorkerGlobalScope` mixin in the harvested IDL engine/idlgen.mjs reads, which is what §8.2
+   is titled for. */
 enum { AC_ORIGIN_KEYED, AC_CROSS_ORIGIN_ISOLATED };
 
 static JSValue js_agent_cluster(JSContext *ctx, JSValueConst this_val, int magic)
