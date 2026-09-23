@@ -1652,13 +1652,35 @@ SandboxFlags window_proxy_creation_sandbox_flags(JSValueConst proxy)
     DCHECK(p != NULL, "the creation sandboxing flags of something that is not a WindowProxy were asked for");
     /* A REMOTE PROXY HAS NONE TO GIVE, and answering the empty set would be worse than crashing: an empty set
        is a real answer meaning "not sandboxed", so a cross-origin `<iframe sandbox>` would report itself
-       unsandboxed to whichever algorithm asked. §7.1.5's set belongs to the Document, the peer instance is
-       what creates that Document, and this is a question to route there rather than to guess. */
+       unsandboxed to whichever algorithm asked.
+       THIS ASSERT USED TO SAY THE `navigable.create` NOTICE DOES NOT CARRY THE SET AND TOLD ITS READER TO ADD
+       IT BESIDE THE POLICY. That was FALSE, and it is rewritten rather than deleted because a next-diff clause
+       is read once, by somebody who has already decided to build the thing it names — so a reader re-deriving
+       it from this accessor alone would add the field a second time. navigable.c writes §7.1.5's serialized
+       set as the create notice's FOURTEENTH field, one before the provenance token and two before the policy
+       remainder; both hosts take it off that field (wpt_runner.c hands it to the re-executed child as its last
+       argv, qjs_abi.h declares it on both rooting entries) and route.mjs counts it among the seventeen it
+       enumerates by name. MEASURED at origin/main with an armed control: `git grep -l creation_sandbox_flags
+       -- engine` answers 9 files and an invented sibling spelling answers 0.
+       WHAT IS ACTUALLY MISSING IS ON THIS SIDE OF THE SEAM, AND IT SPLITS BY WHERE THE PROXY CAME FROM. A
+       remote proxy this instance CREATED is minted on navigable.c's create arm, which ran §7.1.5 four
+       statements earlier — both of that algorithm's inputs are the `<iframe sandbox>` element and this
+       document's own active set, neither of which crosses — and the value it authored is dropped because
+       window_proxy_new_remote takes no such argument. A remote proxy DECODED from a peer's navigable identity
+       (core/frame/remote_object.c) or minted for a message's source (core/frame/window_message.c) was never
+       computed here at all, and only THAT population is a route.
+       AND THIS ARM IS A GUARD RATHER THAN A QUEUE ITEM: every reader of this entry is already refused upstream
+       by its own `window_proxy_is_remote` assert carrying its own remedy (navigable.c's navigate and reload),
+       and the third runs inside the load step of a navigable this agent holds. A reader counting this crash as
+       work is counting a proof.
+       RETIREMENT: this record goes when window_proxy_new_remote takes §7.1.5's set, because the retired clause
+       can no longer be re-derived from an accessor with nowhere to read one from. */
     DCHECK(!window_proxy_is_remote(proxy),
            "the CREATION SANDBOXING FLAGS of a navigable whose Documents a PEER instance creates were asked "
-           "for — §7.1.5's flag set is handed to a Document at its creation, this instance creates none for a "
-           "remote navigable, and the notice that provisions the peer does not carry the set yet: add it "
-           "beside the policy the `navigable.create` notice already sends (core/frame/navigable.c)");
+           "for — §7.1.5's flag set is handed to a Document at its creation and this instance creates none for "
+           "a remote navigable. The PEER HAS THE SET: it crosses on the `navigable.create` notice. What is "
+           "absent is this instance's own record of it, and which diff that is depends on where this proxy "
+           "came from — see the paragraph above this assert, not the one this message used to carry");
     return p->creation_sandbox_flags;
 }
 
