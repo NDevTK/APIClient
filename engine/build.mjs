@@ -2705,6 +2705,30 @@ function stepCostReading(a, b, q) {
       : ` — of which ${(100 * b.sliceUs / b.stepUs).toFixed(0)}% is the STEP (${b.sliceUs}) and ` +
         `${(100 * b.schedUs / b.stepUs).toFixed(0)}% is everything else in the turn (${b.schedUs}: the pick, ` +
         `the two delta swaps, and the previous turn's tail, which the telescoping charge puts on this bill)`;
+  /* AND WHETHER THE LOOP WAS ENTERED AT ALL, WHICH EVERY NUMBER ABOVE IS SILENT ABOUT BY CONSTRUCTION. The
+     mean, the phase split and the overrun fraction are all counts over the turns the loop TOOK; none of them
+     can fall because the loop was barely run, so a cheap-looking dispatch loop and a dispatch loop that
+     received almost none of the engine's thread render identically. `instanceUs` is the span those turns sit
+     inside, in the SAME measure (solver/engine.h's `instance_us`), so this is the one quotient here whose
+     denominator is not drawn from the turn population itself.
+     IT IS NOT A VERDICT AND NOTHING BRANCHES ON IT. A low share is not a defect — the host legitimately holds
+     the thread between slices for the provider, the census and the parse — it is the row that says the next
+     question is about the HOST and not about the ordering, which is the distinction solver/flow.c names as a
+     throughput problem being dispatched as an ordering one.
+     AND THE REMAINDER IS ONE NUMBER OVER TWO POPULATIONS, which is stated here rather than left to be read as
+     one: solver/engine.h's `instance_us` carries the named residual, and until its second half exists a small
+     share cannot say whether the engine was given the thread and spent it outside a turn's bracket or was
+     never given it. */
+  const reach =
+    b.instanceUs === 0
+      ? `. The instance has measured no span to be a share of, which is what a census composed before the ` +
+        `dispatch loop's first slice reads and is not a loop that ran for free`
+      : `. Those turns sit inside ${b.instanceUs} unit(s) of the same measure since this instance's first ` +
+        `slice, so ${(100 * b.stepUs / b.instanceUs).toFixed(1)}% of the engine's own thread reached a ` +
+        `dispatch turn at all — the one fraction here whose denominator is not drawn from the turns ` +
+        `themselves, and therefore the only one that can fall because the loop was barely entered. The ` +
+        `remainder is the host's thread between slices AND the loop's own time outside a turn's bracket, ` +
+        `summed; see solver/engine.h's \`instance_us\` for why those are not yet two rows`;
   /* AND THE PARTITION THAT MAKES THE VERDICT BELOW A READING RATHER THAN A MEAN — `stepUs`/`steps` is a
      lifetime average, and this loop's turns are not one population. Read as a SERIES rather than as a
      terminal value, the MARGINAL cost between consecutive censuses of ONE run spans four orders of magnitude
@@ -2733,14 +2757,14 @@ function stepCostReading(a, b, q) {
      denomination the run never claimed. */
   if (q === null)
     return `dispatch turns cost ${per.toFixed(0)} unit(s) of the scheduler's own measure each over the whole ` +
-           `run (${b.stepUs} over ${b.steps} turns)${ivl}${phase} — this stage printed no @QUANTUM line, so ` +
+           `run (${b.stepUs} over ${b.steps} turns)${ivl}${phase}${reach} — this stage printed no @QUANTUM line, so ` +
            `there is no slice to read that against and the number is a rate with no yardstick rather than a ` +
            `verdict —${over}, which the ENGINE decided against its own budget and this reader therefore ` +
            `still has even with no denomination to quote`;
   const sliceUs = q.sliceMs * 1000;
   const frac = per / sliceUs;
   return `dispatch turns cost ${per.toFixed(0)} ${q.measure} microsecond(s) each over the whole run ` +
-         `(${b.stepUs} over ${b.steps} turns)${ivl}${phase}. That is ${frac.toFixed(2)} of the ` +
+         `(${b.stepUs} over ${b.steps} turns)${ivl}${phase}${reach}. That is ${frac.toFixed(2)} of the ` +
          `${q.sliceMs} ms ` +
          `cooperative slice, both sides in the same measure, so this quotient is what the run-to-run spread ` +
          `cannot reach.${over}. ` +

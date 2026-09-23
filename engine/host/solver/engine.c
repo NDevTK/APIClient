@@ -9309,6 +9309,23 @@ static int64_t g_step_us;
    A REPORT AND NEVER A BOUND (§NO BOUNDS), for `g_step_us`' reason and with the same hazard — a per-phase time
    total is exactly what a watchdog on a long step would be built from. */
 static int64_t g_slice_us, g_sched_us;
+/* …AND WHAT ALL THREE OF THOSE ARE A SHARE OF — see solver/engine.h's `instance_us`. `g_instance_us0` is the
+   first reading of the slice's own measure this instance ever took, so `quantum_thread_us() - g_instance_us0`
+   is the thread measure that has passed since the dispatch loop first ran and the three arms above are the
+   part of it that went into turns.
+   A SEPARATE FLAG AND NOT A SENTINEL VALUE, because there is no reading a clock cannot legitimately return:
+   `quantum_thread_us()` is a thread measure, so 0 is what it answers at the start of a thread and reserving
+   it would make "the loop has not run" and "the loop ran for no measurable time" one state. That is the
+   several-states-behind-one-answer shape, and it would land on the one row a reader consults to decide
+   whether the engine was given the thread at all.
+   SET AT ONE SITE FROM A READING THAT WAS ALREADY BEING TAKEN — engine_sched_slice's own entry — so this
+   costs no clock read and cannot be taken late by a caller that forgot. Every charge the arms above
+   accumulate is a sub-interval after it, which is what makes the containment below an identity rather than
+   an expectation.
+   NOT RESET AT A SESSION BOUNDARY, for `g_step_us`' reason exactly: neither is on the session's ledger, and
+   a park that resumes into the same instance resumes into the same thread and the same span. */
+static int64_t g_instance_us0;
+static int     g_instance_us0_set;
 /* THE PARTITION OF THE ABOVE — see solver/engine.h's `slice_overruns` for why a mean of the two arms cannot
    answer the question their own banner asks. Counted from the SAME two readings the slice arm is accumulated
    from, so a turn cannot be charged to one and counted by the other. */
@@ -11515,6 +11532,32 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
     out->slice_us = g_slice_us;
     out->sched_us = g_sched_us;
     out->slice_overruns = g_slice_over;
+    /* …AND THE SPAN THOSE FOUR ARE A SHARE OF, READ HERE AND NOWHERE ELSE — for the reason the three rows
+       above are taken in one call: a denominator read one accessor later than its numerator is a quotient
+       composed out of two instants, and this one is the quotient the row exists for. The clock is read HERE
+       rather than accumulated, because the quantity is a SPAN and not a sum of charges; `g_instance_us0` is
+       its opening and this is its close.
+       ZERO BEFORE THE FIRST SLICE, WHICH IS A REAL ANSWER AND NOT A HOLE. A census composed before the
+       dispatch loop has ever run has no span to report and `steps` is 0 beside it, so the pair says "no turn
+       has been taken" in both rows rather than printing a share of nothing.
+       ONE CLOCK READ PER CENSUS AND NOT PER TURN, stated for `g_slice_us`' reason: `quantum_thread_us`
+       crosses into the embedder on the host that ships, so frequency is the whole of the price — and this
+       accessor is called once where the @COLD line is composed, which is the rarest read of that clock in
+       this file. */
+    out->instance_us = g_instance_us0_set ? quantum_thread_us() - g_instance_us0 : 0;
+    /* AND THE CONTAINMENT, WHICH IS AN IDENTITY RATHER THAN AN EXPECTATION. `g_instance_us0` is opened at
+       engine_sched_slice's entry from the same reading the first turn's `t0` is carried from, and every
+       charge `g_step_us` accumulates is a sub-interval closed before this line reads the clock again — so a
+       total that exceeds its own span is the baseline having been taken after a turn was charged, a second
+       writer of it, or a measure that has stopped being monotone. Any of the three makes `stepUs/instanceUs`
+       — the share of the engine's thread that reached a dispatch turn — read ABOVE 1, which is the one
+       direction that would be taken for a busy scheduler rather than for a broken reading. */
+    DCHECKF(out->step_us <= out->instance_us,
+            "solver/engine.c: the dispatch loop's total %lld exceeds the %lld the instance has measured since "
+            "its first slice — every turn's charge is a sub-interval of that span, so this is a baseline taken "
+            "after a turn was charged or a measure that is no longer monotone, and `stepUs/instanceUs` is "
+            "about to be published as a share above 1",
+            (long long)out->step_us, (long long)out->instance_us);
     /* …AND THE COMPILE PHASE, TAKEN IN THE SAME READING AS THE OVERRUN TOTAL IT IS CONTAINED IN — for
        `step_us`' reason below: the pair is read against rows the dispatch loop moves, so a copy taken one
        call later than `out->slice_overruns` would be a subset reported against a population of another
@@ -12593,6 +12636,12 @@ static int engine_sched_slice(void) {
        decision that a notch of quantisation already absorbs. Charging nothing at all — which is what a
        release build did — is the error that matters here, not which of two flows pays for a swap. */
     int64_t now = quantum_thread_us();
+    /* …AND THE SPAN EVERY COST THIS LOOP REPORTS IS A SHARE OF, OPENED FROM THE READING ABOVE RATHER THAN
+       FROM ONE OF ITS OWN. See `g_instance_us0`: the row it feeds is the denominator `stepUs` has never had,
+       and taking it here means it is opened BEFORE the first turn is charged, which is the whole of why the
+       containment asserted at engine_step_unit_runs is an identity. A second clock read would be a different
+       quantity wearing this one's name, which is the same objection `t_slice0` states one screen down. */
+    if (!g_instance_us0_set) { g_instance_us0 = now; g_instance_us0_set = 1; }
     /* THE SESSION THE HOST STEPPED IS STILL OPEN — and the way this fires is a CALLER THAT TRANSFORMED THE
        PREVIOUS ANSWER. Two exits close the session and both answer ENGINE_STEP_DONE: the frontier draining, and
        the PARK that writes the residue to the cold tier. A wrapper that folded DONE into YIELD would send the

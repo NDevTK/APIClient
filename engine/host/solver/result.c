@@ -2353,6 +2353,20 @@ char *result_cold_json(void) {
                     cast the @WFQ census's notch rows already take, so this line has one idiom for 64-bit
                     quantities rather than two. */
                  "\"steps\":%ld,\"stepUs\":%lld,"
+                 /* AND WHAT THAT TOTAL IS A SHARE OF, WHICH IT HAS NEVER HAD — the thread measure this
+                    instance has consumed since its dispatch loop first ran. `stepUs` and the two phase rows
+                    below it are counts over the turns the loop TOOK and are silent about the turns it did
+                    not, so a small `stepUs/steps` is equally a loop whose turns are cheap and a loop that was
+                    barely entered — and the second is not a statement about the scheduler at all. The only
+                    way to reach it was to compare `stepUs` against the budget the DRIVER was launched under,
+                    which is a fact about the host that appears nowhere in the artifact, so no reader of a log
+                    could re-derive it and a reader who had it was mixing an rlimit's PROCESS cpu with this
+                    row's THREAD measure. Both sides of this quotient are one clock — `quantum_thread_us()`,
+                    which the @QUANTUM line already names — so it survives a host that can only measure wall
+                    time, which a ratio against an rlimit does not. The containment `stepUs <= instanceUs` is
+                    asserted at engine_step_unit_runs, where both are in one hand; see solver/engine.h's
+                    `instance_us` for the named residual that says what the REMAINDER still cannot separate. */
+                 "\"instanceUs\":%lld,"
                  /* THE TWO PHASES `stepUs` IS THE SUM OF, WITHOUT WHICH A SLICE-BOUND TURN CANNOT SAY WHICH
                     HALF SPENT THE TIME — a step overrunning the slice is the quantum with no asynchronous
                     source to expire it, and a pick-and-swap that dominates is the ordering and the delta
@@ -2435,6 +2449,7 @@ char *result_cold_json(void) {
                  c.dyn_count, c.dyn_bytes / 1024,
                  (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes + c.dyn_bytes) / 1024,
                  r.steps, (long long)r.step_us,
+                 (long long)r.instance_us,
                  (long long)r.slice_us, (long long)r.sched_us, (long long)r.slice_overruns, runs, over,
                  r.classic_compiles, r.classic_compile_overruns,
                  r.unit_mid_program, r.unit_parked, r.unit_checkpoint_owed,

@@ -1524,6 +1524,43 @@ typedef struct {
      * and INVERTS rather than going absent. */
     int64_t slice_us;
     int64_t sched_us;
+    /* AND THE DENOMINATOR ALL THREE OF THE ROWS ABOVE HAVE NEVER HAD — the thread measure this instance
+     * has consumed since its dispatch loop first ran, so `step_us / instance_us` is the share of the
+     * engine's own thread that went into dispatch TURNS at all.
+     * WHAT IT SEPARATES, AND IT IS TWO READINGS THAT TAKE OPPOSITE WORK. `step_us` and its two phases are
+     * counts over the turns the loop took and say NOTHING about the turns it did not: a low `step_us / steps`
+     * is equally a loop whose turns are cheap and a loop that was barely entered, and the second is not a
+     * statement about the scheduler at all. Until this row existed the only way to reach it was to compare
+     * `step_us` against a budget the census cannot see — a reader of a run had to know the rlimit its driver
+     * was launched under, which is a fact about the HOST in a document about the engine, and a figure nobody
+     * else can re-derive from the artifact.
+     * BOTH SIDES ARE THE SAME CLOCK, WHICH IS THE ONLY PROPERTY THAT MAKES THE QUOTIENT MEAN ANYTHING. It is
+     * `quantum_thread_us()` — CPU where the host has a CPU clock and wall where it does not — exactly as
+     * `step_us` is, and `quantum_measure()` already names which on the @QUANTUM line. A ratio of two readings
+     * of one clock survives a host that can only measure wall time; a ratio against an rlimit does not,
+     * because an rlimit is PROCESS CPU and this is THREAD measure, and on a host with more than one thread
+     * those are different quantities.
+     * TAKEN IN THE SAME READING AS `steps` AND `step_us`, for the reason this struct exists: between two
+     * accessor calls the loop can step, and a total read one call later than its denominator is the two-
+     * instants collapse §Testing names. The containment `step_us <= instance_us` is asserted where both are
+     * in one hand — every turn's charge is a sub-interval of the span this measures, so a violation is the
+     * baseline having been taken after a turn, or the clock having stopped being monotone.
+     * NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: `instance_us - step_us` is ONE number over
+     * TWO populations that take opposite work — the thread the HOST held between slices (the provider, the
+     * census, the bridge, the parse) and the thread the engine held INSIDE the dispatch loop but outside a
+     * turn's own bracket (the loop's entry and exit, and anything between its last turn and its return). The
+     * first is a finding about the driver and the second about this scheduler, and this row sums them. WHAT
+     * THE NEXT DIFF BUILDS: a second accumulator raised from the readings `engine_sched_slice` already takes
+     * at its entry and at each of its returns, so the time inside the loop is its own row and the remainder
+     * is the host's by subtraction of two published halves rather than of one. HOW ITS ABSENCE WOULD SHOW: a
+     * run whose `step_us / instance_us` is small has, today, no row that says whether the engine was given
+     * the thread and spent it somewhere else or was never given it, and a reader is free to conclude either.
+     * A REPORT AND NEVER A BOUND (§NO BOUNDS), for `step_us`' reason and with the same hazard — a measured
+     * share of a thread is exactly what a throttle would be built from, and nothing reads this to decide
+     * anything.
+     * `int64_t` FOR `step_us`' REASON EXACTLY: a `long` of microseconds saturates in 35.8 minutes on wasm32
+     * and INVERTS rather than going absent, and this one measures a span STRICTLY LONGER than that row. */
+    int64_t instance_us;
     /* …AND THE PARTITION THE SPLIT ABOVE TURNED OUT TO NEED, WHICH IS THE READING AND NOT A SECOND OPINION.
      * `slice_us`' banner promises that `step_us / steps` against the slice answers whether the loop is
      * slice-bound. It does not, because that quotient is a LIFETIME MEAN over a turn population that is not
