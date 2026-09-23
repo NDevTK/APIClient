@@ -2386,6 +2386,43 @@ char *result_cold_json(void) {
                     returns both, which is worth knowing before either number is quoted as the other. */
                  "\"progStarts\":%ld,\"progStartsCand\":%ld,\"progStartsOther\":%ld,"
                  "\"progQueuedCand\":%ld,"
+                 /* THE TWO COLD-TIER ROWS, WHICH ARE BOTH OUTCOME CENSUSES OVER GATES WITH LEGITIMATE
+                    DECLINING ARMS AND HAD NO BANNER AT ALL — the only rows on this line that carried none,
+                    while being the pair a reader reaches for to ask whether the ONE CONTINUOUS FRONTIER
+                    §scheduler describes is accumulating.
+                    `sold` IS GATED ON THE ALLOCATOR'S REFUSAL, so a zero is THE RAM FLOOR WAS NEVER MET and
+                    not THE PAGER FAILED. Its ask side is already on this line — `pagedAsks` with
+                    `pagedFloor` and `pagedUnarmed` beside it — and the pair is read together or neither is
+                    read, which is the same contract `epAssets` carries against its own ask and `progStarts`
+                    against `progQueuedCand` two rows up.
+                    `resumed` IS GATED ONE ZONE OUT, ON A KEY MATCH THIS FILE CANNOT SEE. The trusted zone
+                    keys a residue by the document's ADDRESS plus its BUNDLE ID, so a zero here has THREE
+                    readings and they take opposite work: no residue was ever written; residue was written
+                    and the key MISSED, which a changed bundle is supposed to cause and which is the design
+                    working; or the key matched and the rebuild produced nothing, which is the only one that
+                    is a defect. NO ROW ANYWHERE PUBLISHES THAT KEY — the engine's run record carries `park`
+                    and `resumed` and not the key either was taken against — so the three cannot be separated
+                    from any document this engine composes. That is a next diff in the trusted zone and not
+                    in this file, and it is named here because this is where a reader meets the zero.
+                    THE CAPABILITY ITSELF IS MEASURED AND WORKS, WHICH IS WORTH STATING BECAUSE THREE ROWS
+                    READING ZERO ON EVERY LIVE RUN INVITE THE OPPOSITE CONCLUSION. Written as the derivation
+                    rather than as figures, because the figures rot and the command does not — serve
+                    testing/fixtures over a static port and drive ONE document TWICE, the second time through
+                    the harness command named for this question:
+                      node testing/harness.js restart      <port>
+                      node testing/live-run.js 1 'http://127.0.0.1:<p>/wjp_absent.html?__forcepark=1'
+                      node testing/harness.js restart-keep <port>     # PRESERVES IndexedDB
+                      node testing/live-run.js 1 'http://127.0.0.1:<p>/wjp_absent.html?__forcepark=1'
+                    The second run must report `resumed` above zero AND `park` at zero — the second is the
+                    independent half, because the trusted zone arms that forced park only when it found no
+                    prior recipes, so a run that does NOT re-park has said it found some. A tracked fixture
+                    is the subject rather than a live page DELIBERATELY: the key carries the bundle id, so a
+                    third party's rolling deploy makes a miss CORRECT and the experiment unable to
+                    distinguish the readings above.
+                    AND THE PARK THAT EXPERIMENT EXERCISES IS NOT THE ONE A VISIT TAKES. `?__forcepark=1` is
+                    a trusted-zone test hook; the production route is the Level-1 pool's eviction under RAM
+                    pressure, which is why an ordinary visit reports these rows at zero. That is the gate
+                    declining, not the mechanism failing, and the two are what `pagedAsks` separates. */
                  "\"sold\":%ld,\"soldFlows\":%ld,\"soldCands\":%ld,\"forks\":%ld,"
                  "\"resumed\":%d,\"resumedSegs\":%ld,\"resumedFlows\":%ld,\"resumedCands\":%ld,"
                  "\"resumedWorlds\":%ld,"
