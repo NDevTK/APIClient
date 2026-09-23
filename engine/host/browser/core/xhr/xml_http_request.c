@@ -1975,6 +1975,13 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
     /* The CONCOLIC where open() was given one, so the surface reports the shape AND the example it carries;
        the serialization otherwise, which for a plain address is the same string XHR §3.5.1 The open() method
        step 5 parsed. */
+    /* AND THE OFFER, ON THE LINE BEFORE THE DOOR. It counts OFFERS and never records — the surface's own gate
+       may still suppress this one, and telling those two apart is what the ask/outcome split it feeds exists
+       for. It is raised HERE, inside the LIFECYCLE machine, and not on any `send()` state: the asynchronous
+       arm's send state is torn down before this task runs, so "did this construction offer an address" is a
+       question no send state can answer about itself. solver/endpoint.h states why that makes it a row of its
+       own rather than the partition the other three rows are over. */
+    endpoint_xhr_edge_offered();
     endpoint_record(ctx, method, JS_IsNull(d->url_src) ? d->url : d->url_src, eh, (int)n, ebp,
                     engine_prov_of_running_path(), EPD_XHR);
     if (body) JS_FreeCString(ctx, body);
@@ -2522,6 +2529,24 @@ typedef struct {
     JSValue body;       /* the converted body, held across the extraction (owned) */
     JSValue fn;         /* the lifecycle machine a SYNCHRONOUS send calls (owned) */
     double  body_len;
+    /* WHETHER THIS STATE ENTERED §3.5.6 AT ALL, AND WHETHER ITS CONSTRUCTION COMPLETED — the two facts the @H
+       edge census below needs and cannot ask anyone for. `began` is a FLAG and not a test on a slot for
+       core/fetch's reason exactly: SEND_CHECKS can PARK (§3.5.6 step 3's declared fork over a concolic
+       method) and a parked stage is re-entered at its first line, so a raise on entry would count one call
+       many times. `placed` is the same for the SYNCHRONOUS arm, which parks inside its own call to the
+       lifecycle machine and re-enters SEND_RUN.
+       BOTH ARE PLAIN BYTES AND NEITHER IS DECLARED TO `visit`, which is correct and is the one thing to check
+       when adding a field here: a deep fork BYTE-COPIES this struct, so a scalar is carried to both arms with
+       no ownership to split — and carrying them is what makes a forked arm's own teardown file itself under
+       the stage IT was standing at rather than under its parent's. */
+    uint8_t began;
+    uint8_t placed;
+    /* THE MIRROR IS THE SAME WIDTH AS THE THING IT MIRRORS. JSStepHdr::stage is a `uint16_t`, and a narrower
+       copy of it would not be a smaller number, it would be a DIFFERENT stage: stage 258 truncates to 2,
+       which this machine's table names, so the teardown would file a state under an arm it never stood at and
+       the partition would still sum. `release` is handed the body state alone, so `hdr->stage` is not in its
+       hand and the stage has to be mirrored here. */
+    uint16_t stage_at;
 } JSXhrSendState;
 
 static void js_xhr_send_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -2585,8 +2610,8 @@ static int xhr_send_method_real(JSContext *ctx, JSValueConst mv)
     return real;
 }
 
-static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
-                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+static int js_xhr_send_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                              JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     JSXhrSendState *s = st;
     XhrData *d = xhr_of(hdr->this_val);
@@ -2604,6 +2629,17 @@ static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         in = JS_UNDEFINED;
         s->ev = s->body = s->fn = JS_UNDEFINED;
         s->cb[0] = s->cb[1] = s->cb[2] = s->cb[3] = JS_UNDEFINED;
+        /* THE CONSTRUCTION BEGAN — the ASK this edge owes the @H surface, raised at the one place that runs
+           exactly once per page-level `send()` call that reached this body, and BEFORE the three throws
+           below, because a call the page made and the engine threw out of is a network call site REACHED and
+           is the whole population these rows exist to make visible. Gated on a flag: this stage PARKS on
+           §3.5.6 step 3's fork and a parked stage is re-entered at its first line. solver/endpoint.h states
+           why it may not be paired with the teardown rows by a containment — a deep-fork copy inherits the
+           flag and does NOT come through here. */
+        if (!s->began) {
+            s->began = 1;
+            endpoint_xhr_edge_began();
+        }
         if (!d) return JS_ThrowTypeError(ctx, "not an XMLHttpRequest"), -1;
         if (d->state != XHR_OPENED)
             return JS_ThrowDOMException(ctx, "InvalidStateError", "send() before open()"), -1;
@@ -2763,6 +2799,17 @@ static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
            item on the one frontier, which is why it reaches a TASK queue at all. */
         JS_EnqueueCallTask(ctx, fn, 0, NULL, TASK_SOURCE_NOT_A_TASK);
         JS_FreeValue(ctx, fn);
+        /* AND THE CONSTRUCTION COMPLETED — §3.5.6 step 12's fetch is placed and this state is done with it.
+           It is a PLACEMENT and not an offer: the address reaches the @H surface from the machine enqueued
+           above, which this state will be torn down before. Asserted rather than assumed to happen once,
+           because a second placement from one send would double this edge's share of the completions while
+           the partition below still summed. */
+        DCHECK(!s->placed,
+               "an XMLHttpRequest send state placed §3.5.6's fetch twice — this arm returns to the page, so a "
+               "second arrival is a re-entry the machine's own stage assert did not refuse, and the edge "
+               "census would count one construction as two completions");
+        s->placed = 1;
+        endpoint_xhr_edge_placed();
         *presult = JS_UNDEFINED;
         return 0;
     }
@@ -2773,6 +2820,11 @@ static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     if (JS_IsUndefined(s->fn)) {
         s->fn = xhr_run_closure(ctx, hdr->this_val, XHR_MODE_FETCH, XHR_ERR_NONE);
         if (JS_IsException(s->fn)) { s->fn = JS_UNDEFINED; JS_FreeValue(ctx, in); return -1; }
+        /* THE SAME COMPLETION FOR §3.5.6 STEP 13, INSIDE THIS `if` AND NOT BELOW IT. The synchronous arm PARKS
+           in the call beneath and re-enters SEND_RUN, and this block is the one that runs once — so the flag
+           and the raise sit where the closure is minted rather than where the call is made. */
+        s->placed = 1;
+        endpoint_xhr_edge_placed();
     }
     {
         JSValue out;
@@ -2786,8 +2838,53 @@ static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     return 0;
 }
 
+/* THE STAGE THIS STATE IS STANDING AT, MIRRORED ONTO THE STATE SO THE TEARDOWN CAN READ IT — the same
+ * wrapper core/fetch/fetch.c carries and for the same three reasons. `release` is handed the body state and
+ * nothing else, so `hdr->stage` is not in its hand, and WHICH STAGE a construction died at is this census's
+ * whole content.
+ *
+ * IT IS A WRAPPER AND NOT A LINE AT THE TOP OF THE BODY. This machine's stages FALL THROUGH: one entry at
+ * SEND_CHECKS can run §3.5.6 steps 1-11 end to end and leave standing at SEND_RUN, so a mirror taken on the
+ * way IN records the stage a state was ENTERED at, which for every state that dies after its first entry is
+ * the wrong answer — and wrong in the direction that piles the whole population onto the first row. Taken on
+ * the way OUT it is right on both edges a state can leave by: the body sets `hdr->stage` to the stage it will
+ * resume at before returning a park, and a body that THREW leaves it at the stage the throw came from.
+ *
+ * IT IS ALSO WHY THERE IS NO MIRROR AT THE `STEP_GOTO`s INSIDE. Writing it at each of them is the same fact
+ * in six places, with an obligation at every stage a later diff adds and nothing to catch the one that is
+ * missed — the second-list shape core/idl_args.h's own `visit` contract exists to end, one field over. */
+static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    int r = js_xhr_send_step_1(ctx, hdr, st, argc, argv, cb_result, presult, out_cb, out_argc);
+
+    ((JSXhrSendState *)st)->stage_at = hdr->stage;
+    return r;
+}
+
+/* THE OUTCOME HALF OF THE EDGE CENSUS, HERE BECAUSE HERE IS WHERE EVERY SEND STATE ENDS — originals and
+ * deep-fork copies alike, whether the member completed or was abandoned parked, since core/idl_args.c's
+ * teardown discharges this release on both edges.
+ *
+ * IT RELEASES NOTHING AND THAT IS NOT A GAP. `release` is core/idl_args.h's entry for what the DECLARATION
+ * CANNOT NAME — a foreign C allocation, a lexbor handle — and this machine has none: every slot it owns is a
+ * JSValue `js_xhr_send_visit` names, which the driver re-takes at a fork and gives back at the teardown, and
+ * idl_args_result's own assert folds the visit into a number to check that a release did not touch them. So
+ * this entry exists for the census alone, and touching a declared slot from here is what that assert fires on.
+ *
+ * `began` IS THE GATE AND NOT A GUARD PAST A BROKEN INVARIANT: a state torn down before SEND_CHECKS ran never
+ * entered §3.5.6 at all, so it belongs to the ARGUMENT CONVERSION's population and not to this one, which
+ * solver/endpoint.h names as this census's own residual rather than folding in as an extra arm. */
+static void js_xhr_send_release(JSContext *ctx, void *st)
+{
+    JSXhrSendState *s = st;
+
+    (void)ctx;
+    if (s->began) endpoint_xhr_edge_freed(s->stage_at, s->placed);
+}
+
 static const IdlStepDecl XHR_SEND_DECL = {
-    js_xhr_send_step, sizeof(JSXhrSendState), js_xhr_send_visit, NULL,
+    js_xhr_send_step, sizeof(JSXhrSendState), js_xhr_send_visit, js_xhr_send_release,
     "XHR §3.5.6 send(body)", SEND_STEPS
 };
 
@@ -2996,6 +3093,15 @@ void xhr_init(JSContext *ctx)
     g_response_getter_id = idl_getter_id_step(ctx, &XHR_RESPONSE_DECL, 0);
     g_response_xml_getter_id = idl_getter_id_step(ctx, &XHR_RESPONSE_XML_DECL, 0);
     g_run_stepid = JS_RegisterStepDef(rt, &js_xhr_run_def);
+    /* THIS COMPONENT'S CONSTRUCTION MACHINE, HANDED TO THE @H SURFACE'S EDGE CENSUS. It is `SEND_STEPS` and
+       NOT `js_xhr_run_steps`: solver/endpoint.h holds the refutation of the clause that named the other one,
+       and the short of it is that `send()` is where an XMLHttpRequest request is CONSTRUCTED and where it can
+       throw or park without ever reaching a door, while the lifecycle machine's stages are all downstream of
+       the record. The table is `SEND_STEPS` itself and never a copy — literals with static storage, so the
+       surface may key rows on it for the life of the session and a stage added to SEND_STAGES adds a row
+       there with no edit at all. `IDL_STEP_FIRST` is PASSED rather than assumed by the reader, because a
+       member's stages are numbered from it and which constant that is belongs to core/idl_args.h. */
+    endpoint_xhr_edge_declare(SEND_STEPS, IDL_STEP_FIRST);
     /* §5 is part of THIS standard and every event this component fires is one of its instances, so it is
        declared from here rather than by each host separately — the same rule fetch_init follows for §5's
        Headers and §6's Response. */

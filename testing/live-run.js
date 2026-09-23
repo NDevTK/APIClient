@@ -685,11 +685,14 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      (`epXhrAskOfferedLife`). They are two different populations and the producer asserts NO relation between
      them — a placed send whose task never runs offers nothing, and abort() and the request error steps mint
      lifecycle machines that record nothing.
-     THE IDENTITIES CHECKABLE FROM THIS DRIVER'S OWN OUTPUT: the stage arms plus `epXhrOutFreedPlacedLife`
-     equal `epXhrOutFreedLife` (a PARTITION over one teardown); `epXhrOutFreedPlacedLife <=
-     epXhrAskPlacedLife`, whose slack is the SYNCHRONOUS sends still parked inside §3.5.6's pause; and
+     THE IDENTITIES CHECKABLE FROM THIS DRIVER'S OWN OUTPUT ARE TWO AND NOT THREE: the stage arms plus
+     `epXhrOutFreedPlacedLife` equal `epXhrOutFreedLife` (a PARTITION over one teardown), and
      `epXhrAskOfferedLife <= epAsks`, whose slack is every OTHER door — which is what makes this edge's SHARE
-     of the ask population readable beside the fetch edge's.
+     of the ask population readable beside the fetch edge's. THE FETCH EDGE'S MIDDLE RELATION HAS NO ANALOGUE
+     HERE and the producer says why: `send()`'s machine declares no fork refusal, so a deep fork of a state
+     that has already placed its fetch files twice against one placement — which core/fetch survives only
+     because it REFUSES that fork. So `epXhrOutFreedPlacedLife` and `epXhrAskPlacedLife` are two facts and a
+     reader may not subtract them, exactly as `epXhrAskBeganLife` may not be subtracted from.
      KIND IS SPELLED INTO EVERY NAME BY THE PRODUCER AND IS NOT THIS FILE'S CLAIM — `Life` is a LIFETIME
      COUNT, `Ask` or `Out` is which side of the gate it counts — so they are filed here with the lifetime
      rows. `epXhrOutDiedAtLife` IS A PARTITION AND NOT A LADDER, exactly as its fetch sibling is.

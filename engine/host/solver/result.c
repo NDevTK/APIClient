@@ -2143,6 +2143,7 @@ char *result_cold_json(void) {
        census would have needed a name in extension/bridge.js and extension/popup.js, both of which are
        trusted-zone JavaScript that is live on WRITE while this half is live only after a build. */
     char *edge;
+    char *xedge;
     /* …AND THE SAME SURFACE PARTITIONED BY THE MECHANISM THAT COMPOSED EACH ADDRESS — solver/endpoint.h
        states the contract and asserts the partition where both sides are in one hand. */
     char *doors;
@@ -2434,11 +2435,13 @@ char *result_cold_json(void) {
        which assert the shape rather than defaulting it — would report a broken relay for what is an
        allocation failure, and §Testing's absent-is-not-zero rule is the same sentence one layer up. */
     edge = endpoint_fetch_edge_rows();
+    xedge = endpoint_xhr_edge_rows();
     doors = endpoint_door_hist_json();
-    if (!cursors || !ahead || !edge || !doors) {
+    if (!cursors || !ahead || !edge || !xedge || !doors) {
         free(cursors);
         free(ahead);
         free(edge);
+        free(xedge);
         free(doors);
         cold_census_release(&c);
         return NULL;
@@ -2812,7 +2815,17 @@ char *result_cold_json(void) {
                     leading comma: the ABSENT form is the EMPTY STRING — a host that installs no fetch runs no
                     fetch machine and has no population, which §Testing's absent-is-not-zero rule says may not
                     be published as five zeroes. solver/endpoint.h holds the contract. */
-                 "%s}",
+                 /* …AND THE OTHER HOST EDGE'S, BESIDE IT AND NEVER SUMMED WITH IT. core/xhr constructs its
+                    request in `send()` — its OWN declared member, seven stages with four page-code park
+                    points — and records from the LIFECYCLE machine that member mints, so the two edges count
+                    states of two machines whose stages are their own and one number over both would be the
+                    averaged population §a-coverage-figure-states-what-it-is-a-fraction-of names. A SECOND
+                    bare `%s` for the same reason as the first: the rows carry their own names and their own
+                    leading comma, and the ABSENT form is the EMPTY STRING, because a host that installs no
+                    XMLHttpRequest runs no send machine and has no population. solver/endpoint.h holds the
+                    contract and the refutation of the clause that had this census built over the wrong
+                    machine. */
+                 "%s%s}",
                  c.flows, c.framed, c.blocked, flow_host_owed_count(),
                  e.finished, e.finished_flows, e.finished_cands,
                  e.deepest, e.completed, e.deepest_left,
@@ -2860,10 +2873,11 @@ char *result_cold_json(void) {
                  ladder, hist, cursors, ahead,
                  ep_minted, ep_assets, ep_emitted, ep_pre_program, doors,
                  ep_asks, ep_ask_pre, ep_ask_sup, ep_ask_merged, ep_ask_minted, ep_ask_merged_pre,
-                 edge);
+                 edge, xedge);
     free(cursors);
     free(ahead);
     free(edge);
+    free(xedge);
     free(doors);
     cold_census_release(&c);
     return out;

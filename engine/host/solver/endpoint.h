@@ -521,15 +521,39 @@ void    endpoint_surface_census(long *minted, long *assets, long *emitted, long 
    shape §Offensive-programming refuses. The sound pairing it named, per STATE rather than per call, is what
    landed: a raise at the capture, a raise at the teardown, and the teardowns that offered nothing partitioned
    by the stage each stood at.
-   NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: `XMLHttpRequest`. Its own machine records at
-   `XR_FETCH`, the FIRST stage it has, so the gap between a page's `send()` and this door is structurally
-   smaller there than at `fetch` — which is a reason to expect a smaller number and never a reason to publish
-   none, since the two edges are different populations and one row over both would hide which was which.
-   WHAT THE NEXT DIFF BUILDS: the same three calls in core/xhr/xml_http_request.c, keyed on that machine's own
-   step labels and published as `epXhr*` rows beside the `epFetch*` ones — NOT summed with them, and NOT
-   through the same per-stage array, which holds ONE machine's stages and whose declaration asserts exactly
-   that. HOW ITS ABSENCE WOULD SHOW: a document whose `epFetchAskBeganLife` is zero and whose `epAsks` is not,
-   read as a page that reached no network call site when what it reached was the other door.
+   ITS XHR RESIDUAL IS RETIRED BY THE `epXhr*` BLOCK AT THE FOOT OF THIS HEADER, AND ITS NEXT-DIFF CLAUSE
+   NAMED THE WRONG MACHINE — recorded HERE, where the clause was written, because a remedy clause is read once
+   by somebody who has already decided to do the work and a wrong one is therefore not caught but EXECUTED.
+   It read: `XMLHttpRequest`. Its own machine records at `XR_FETCH`, the FIRST stage it has, so the gap
+   between a page's `send()` and this door is structurally smaller there than at `fetch` … WHAT THE NEXT DIFF
+   BUILDS: the same three calls in core/xhr/xml_http_request.c, keyed on THAT MACHINE's own step labels.
+   THE PREMISE IS TRUE AND THE CONCLUSION IS ABOUT A DIFFERENT MACHINE. `js_xhr_run_steps[0]` IS `XR_FETCH` —
+   that X-list takes no IDL_STEP_STAGE_BASE, so the lifecycle machine owns all of its stages and numbers them
+   from zero — and the lifecycle machine is not the one a page's `send()` enters. `send()` is its OWN declared
+   member (XHR_SEND_DECL over SEND_STAGES, based at IDL_STEP_FIRST) with SEVEN stages, and it MINTS the
+   lifecycle machine at the last of them. Between the page's call and this door stand SEND_CHECKS (a TypeError
+   and two InvalidStateErrors, and a DECLARED FORK on a concolic method, which PARKS), SEND_BODY_STR (the
+   page's own `toString`, which PARKS), SEND_BODY (an extraction that can fail), SEND_FLAGS, SEND_LOADSTART
+   and SEND_UPLOAD_LOADSTART (the page's own listeners, both of which PARK, each carrying §3.5.6 step 12.6's
+   early return for a listener that aborted or reopened), and then SEND_RUN's task hop. SEVEN stages and FOUR
+   page-code park points against core/fetch's SIX and its record at the sixth — so the gap is LARGER, not
+   smaller, and larger again if `open()` is counted, which is where the method and the URL are parsed at all.
+   THE ERROR IS WORTH MORE THAN THE CLAUSE: the author reasoned from WHERE THE `endpoint_record` CALL SITS
+   rather than from WHAT THE CONSTRUCTION COSTS, and the two machines share a FILE — which is the strongest
+   thing there is for making one look like the other.
+   WHAT BUILDING THE CLAUSE WOULD HAVE COST, which is why this is a refutation and not a wording repair.
+   `XR_FETCH` runs `xhr_record_endpoint` UNCONDITIONALLY at its top and does not park before it, so on the
+   lifecycle machine a `began` row and an `offered` row could not differ except for a closure enqueued and
+   never stepped and for the XHR_MODE_ERROR machines abort() and the request error steps mint — two rows that
+   cannot disagree, which is a non-check wearing a census's shape — and the stage histogram would be over
+   twenty stages that are all DOWNSTREAM of the record, answering where the RESPONSE LIFECYCLE died and never
+   where the CONSTRUCTION did. It would have been structurally blind to the whole population the paragraph
+   above names as this census's reason for existing: a call the page MADE that the engine threw out of, or
+   parked inside and never resumed.
+   WHAT LANDED INSTEAD is that census over `send()`'s OWN machine — which is where an XHR request is
+   constructed and where it can die — plus ONE row raised at the lifecycle machine's door, so the edge's share
+   of `epAsks` is still readable. The clause's other two demands were right and are obeyed: the rows are NOT
+   summed with the `epFetch*` ones and they do NOT go through the same per-stage array.
    WHAT IT SEPARATES, WHICH IS THE PRODUCT'S OWN QUESTION AND WAS UNMEASURABLE. `emitted - preProgram` is
    documented above as a CEILING on what forced execution contributed, and a ZERO there has at least two
    readings that take opposite work:
@@ -614,10 +638,15 @@ void    endpoint_ask_census(long *asks, long *pre_program, long *suppressed, lon
    a forked address is an address built out of unknown external input. `began - freed` is likewise not a live
    count: it is that difference MINUS the copies, and a census taken while states are parked is taken with
    most of them live. So the begun row and the freed row are read as two facts and never subtracted.
-   SCOPE IS THE FETCH EDGE AND THE ROWS SAY SO IN THEIR NAMES. core/xhr/xml_http_request.c records at
-   `XR_FETCH`, the FIRST stage of its own machine, so the gap these rows measure is structurally small there
-   and a row that averaged the two would hide which edge it was about (§a-coverage-figure-states-what-it-is-a-
-   fraction-of). Their SCOPE IN TIME is the SURFACE's: they are reset in endpoint_init and endpoint_free
+   SCOPE IS THE FETCH EDGE AND THE ROWS SAY SO IN THEIR NAMES, and a row that averaged the two edges would
+   hide which one it was about (§a-coverage-figure-states-what-it-is-a-fraction-of). THIS SENTENCE USED TO
+   CARRY A REASON THAT WAS FALSE AND IS REWRITTEN RATHER THAN DELETED, because it is the reason a reader
+   re-derives: it said core/xhr's edge records at `XR_FETCH`, the FIRST stage of its own machine, SO the gap
+   these rows measure is structurally small there. The premise is about the LIFECYCLE machine and the
+   conclusion is about `send()`, which is a SEPARATE declared member with seven stages and four page-code
+   park points in front of that mint — a LARGER gap than this machine's six. The refutation is recorded in
+   full at the ask census above, where the clause it defeated was written; what the two edges are is stated
+   at `endpoint_xhr_edge_declare` below. Their SCOPE IN TIME is the SURFACE's: they are reset in endpoint_init and endpoint_free
    beside every other counter in this file, which is what makes them comparable with the ask rows above at all
    — the scope defect `g_boundary_spent` exists to catch is the one this placement makes unreachable.
    A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing branches on one, no construction is refused because of
@@ -648,5 +677,89 @@ void    endpoint_fetch_edge_freed(int stage, int offered);
    machine and there is no population; §Testing's rule is that an absent count and a zero count are different
    facts and must never be averaged, so the rows and the comma in front of them go together. */
 char   *endpoint_fetch_edge_rows(void);
+
+/* THE XHR EDGE'S OWN ENTRY — THE SAME CENSUS OVER A DIFFERENT SHAPE OF EDGE, AND THE DIFFERENCE IS WHY IT IS
+   SIX ROWS AND NOT FIVE. core/fetch's machine CONSTRUCTS the request and OFFERS it at the last of its own
+   stages, so one state holds both facts and the teardown can say which of them it had reached.
+   XMLHttpRequest splits that across TWO machines: `send()` (XHR_SEND_DECL over SEND_STAGES) constructs, and
+   the LIFECYCLE machine it mints at §3.5.6 step 12 or 13 (js_xhr_run_steps, XR_FETCH) is what records. The
+   send state is torn down BEFORE the asynchronous arm's task has run, so "did this state offer an address"
+   is a question it cannot answer about itself, and a census built over the partition the fetch edge uses
+   would have to invent it.
+   SO THE PARTITION IS OVER THE PLACEMENT AND NOT OVER THE OFFER, and the `Placed` in the row names says so:
+   a send state either reached §3.5.6 step 12/13 and handed the constructed request to the lifecycle machine,
+   or it DIED, and where it died is the whole content of the census. That is the same question the fetch
+   edge's stage histogram answers — where did a request the page asked for stop being built — asked of the
+   machine where an XHR request is actually built.
+   THE ROWS:
+     `epXhrAskBeganLife`       — the `send()` calls that reached the member body. Raised at SEND_CHECKS's
+       one-time capture, which is gated on a FLAG and not on a slot for core/fetch's reason exactly: that
+       stage PARKS on §3.5.6 step 3's declared fork over a concolic method, and a parked stage is re-entered
+       at its first line. A call whose ARGUMENT CONVERSION threw or parked is upstream of it and is in no row
+       here — the same population core/fetch's own residual names, and it is named again below.
+     `epXhrAskPlacedLife`      — …of those, the ones that reached §3.5.6 step 12/13 and PLACED the fetch.
+     `epXhrAskOfferedLife`     — the addresses this edge OFFERED the @H surface, raised on the line before
+       `xhr_record_endpoint`'s own endpoint_record call, which is INSIDE the lifecycle machine and therefore
+       is NOT a fact about any send state. It is here because it is the only row that ties this census to
+       `epAsks`, and the containment below is what makes the XHR edge's share of the ask population readable.
+     `epXhrOutFreedLife`       — the send states TORN DOWN after a construction began, DEEP-FORK COPIES
+       INCLUDED.
+     `epXhrOutFreedPlacedLife` — of those, the ones that had placed the fetch.
+     `epXhrOutDiedAtLife`      — ONE ARM PER STAGE: of the freed states that placed NOTHING, the stage each
+       was standing at, keyed by `SEND_STEPS` itself, handed over at the declaration rather than copied here.
+   THE IDENTITIES, EVERY ONE ASSERTED WHERE ALL ITS TERMS ARE IN ONE HAND:
+     PARTITION — the stage rows plus the freed-and-placed row equal the freed row. Two arms of ONE teardown,
+       and the one relation here that survives a deep fork: a copy gets its own teardown and files in one arm
+       of it like any other state.
+     CONTAINMENT — offered <= the ask total. Different events in different files, and the slack is every
+       OTHER door into this surface, core/fetch's included. This is the only row that ties the edge to the
+       razor, which is why it is carried even though it belongs to no partition here.
+   AND THERE IS NO `freed-and-placed <= placed`, WHICH core/fetch's SIBLING BLOCK DOES HAVE — a difference
+   between the two machines and not an omission. A step state is BYTE-COPIED at a deep fork and the copy
+   inherits `placed`, so two copies file against one placement; core/fetch survives that only because
+   `js_fetch_unforkable` REFUSES the fork once the state holds §5.4's record, and XHR_SEND_DECL declares no
+   such guard. It is not a corner: §3.5.6's SYNCHRONOUS arm sets the flag and then PARKS inside its own call
+   to the lifecycle machine, which fires `readystatechange` and `progress` at the page's own listeners — page
+   code, at a depth where the send frame is live and forkable. An assert would fire on a legitimate state,
+   which is the concession shape §Offensive-programming refuses, so the two rows are read as two facts and
+   never subtracted.
+   WHAT IS DELIBERATELY NOT ASSERTED, AND THE REASON IS THE SPLIT ABOVE. There is no relation between
+   `epXhrAskPlacedLife` and `epXhrAskOfferedLife`. They are raised in two machines whose states are not
+   paired: a placed send mints a lifecycle machine the asynchronous arm ENQUEUES, and a task that is never
+   run offers nothing, while abort() and the request error steps mint lifecycle machines of their own that
+   record nothing. An inequality between them would be a claim about which sites mint that machine, which is
+   not a fact this file can check, and it would fire on a legitimate state — which is the concession shape
+   §Offensive-programming refuses.
+   WHAT MAY NOT BE ASSERTED IS ALSO core/fetch's, and for the same mechanism as the paragraph above:
+   `freed <= began` and `placed <= began` are both FALSE,
+   because a step state is BYTE-COPIED at a deep fork and the copy inherits the capture flag. §3.5.6 step 3's
+   fork over a concolic method and step 4's `toString` are two stages of `send()` that run the page's code, so
+   this is not a corner — it is the population this tool exists for. The begun row and the freed row are read
+   as two facts and never subtracted.
+   SCOPE IN TIME IS THE SURFACE'S, exactly as core/fetch's is: reset in endpoint_init and endpoint_free beside
+   every other counter in this file, which is what makes them comparable with the ask rows at all.
+   A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing branches on one, no construction is refused because of
+   one, and no arm is narrowed by one.
+   NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: an `xhr.send()` whose ARGUMENT CONVERSION threw
+   or parked, and an `open()` that never completed — neither reaches SEND_CHECKS, so neither raises a row
+   here, and `open()` is where §3.5.1 parses the method and the URL this record is made of. WHAT THE NEXT DIFF
+   BUILDS: the began/freed pair one frame out, raised by core/idl_args.c for EVERY declared member at its
+   prologue's entry and at its teardown, which answers it for every host edge at once instead of per
+   component — the same diff core/fetch's own residual names, so the two retire together. HOW ITS ABSENCE
+   WOULD SHOW: a document whose page calls `xhr.send()` and whose begun row reads zero, with nothing in this
+   census distinguishing that from a page that called none.
+   RETIREMENT: this record goes when a `send()` that never reached the member body raises a row here. */
+void    endpoint_xhr_edge_declare(const char *const *steps, int first_stage);
+void    endpoint_xhr_edge_began(void);
+void    endpoint_xhr_edge_placed(void);
+void    endpoint_xhr_edge_offered(void);
+void    endpoint_xhr_edge_freed(int stage, int placed);
+/* The rows on the heap (caller frees; NULL only on allocation failure), spliced into `_cold` beside the fetch
+   edge's with their own LEADING comma, and NEVER summed with them: they count states of a DIFFERENT machine
+   whose stages are its own, so one number over both would be the averaged population §a-coverage-figure-
+   states-what-it-is-a-fraction-of names. THE EMPTY STRING IS THE ABSENT FORM — a host that installs no
+   XMLHttpRequest runs no send machine and has no population, and an absent count and a zero count are
+   different facts. */
+char   *endpoint_xhr_edge_rows(void);
 
 #endif
