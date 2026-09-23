@@ -192,8 +192,29 @@ typedef struct {
 /* DECLARE one interface's asynchronous iteration: the iterator class, the `next`/`return` machines and the
    three methods. Once per AGENT, from the component's `_init`, and BEFORE any realm is built — the pool is
    sealed by the first install, because a declaration arriving afterwards would be a class no existing realm has
-   a prototype for. Returns a handle. */
-int idl_async_iter_declare(JSContext *ctx, const IdlAsyncIterOps *ops);
+   a prototype for. Returns a handle.
+   `component` IS core/platform.c's ROW NAME — the row whose release gives this declaration's class id back.
+   THIS FILE DECLARES THAT SLOT AND CANNOT KNOW THE ROW, WHICH IS WHY THE ROW TRAVELS: the iterator's class id
+   lives in this file's own table, so no caller can address it and no caller's declaration could name it; and
+   this file has no release column position, so the row is the caller's fact. That makes it a SUB-COMPONENT
+   declaration in core/agent_state.h's sense — a component names the row whose release reaches it, never its
+   own file — so the reset is the owning row's `agent_state_undo` and what this file owes is the CLAIM below.
+   IT IS A PARAMETER AND NOT A MEMBER OF THE OPS STRUCT, and the reason is not taste: a member left out of a
+   designated initializer is silently NULL, which is core/agent_state.h's own objection to a defaulted site (a
+   caller with nothing to say looks like one that was never converted), where a parameter refuses at compile
+   time. Every other fact in that struct is the WEB IDL DECLARATION'S; a release-column row is this engine's.
+   RETIREMENT: this argument goes when the mint and the declaration are one call — core/agent_state.h's own
+   closing note names that root — because the row is then unspellable anywhere but at the mint. */
+int idl_async_iter_declare(JSContext *ctx, const char *component, const IdlAsyncIterOps *ops);
+
+/* THE OWNING ROW'S RELEASE REACHED THIS DECLARATION — called from that row's `_free`, before its
+   `agent_state_undo`, exactly as core/streams/pipe.c's release is called from core/streams/readable_stream.c's.
+   IT WRITES NO SLOT: the class id is given back by the undo at the row's last line, which is what lets a
+   sub-component speak in the middle of an owner's cascade at all (core/agent_state.h).
+   IT CANNOT BE A CALL THE OWNER MAKES DIRECTLY. `agent_state_reached` is a macro expanded AT THE CALL, so a
+   claim made in the owner's file stamps that file and leaves a slot declared in THIS one unmarked — which is
+   precisely the state the undo refuses, in a message naming a release that never ran. */
+void idl_async_iter_release(int handle);
 
 /* INSTALL, on ONE realm: §3.7.10.2's asynchronous iterator prototype object for this interface (whose
    [[Prototype]] is %AsyncIteratorPrototype%, which is where `@@asyncIterator` returning `this` and the

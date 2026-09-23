@@ -11,6 +11,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/idl_async_iter.h"
 #include "solver/cow.h"
@@ -44,6 +45,10 @@ enum {
 
 typedef struct {
     const IdlAsyncIterOps *ops;
+    /* core/platform.c's ROW NAME, handed over by the declaring component — see idl_async_iter.h. It is kept
+       rather than re-derived because the RELEASE needs it and the release is given only a handle: the slot
+       below is declared under this name, so the claim that the cascade reached it must carry the same one. */
+    const char *component;
     JSClassID class_id;                 /* the iterator object's class, and its per-realm prototype slot */
     int       stepid[AIT_OP_N];
     int       id_keys, id_values, id_entries;
@@ -740,7 +745,7 @@ static const char **ait_join_steps(const char *const *base, const char *const *o
     return all;
 }
 
-int idl_async_iter_declare(JSContext *ctx, const IdlAsyncIterOps *ops)
+int idl_async_iter_declare(JSContext *ctx, const char *component, const IdlAsyncIterOps *ops)
 {
     JSRuntime *rt = JS_GetRuntime(ctx);
     int handle = g_async_n, i;
@@ -767,8 +772,13 @@ int idl_async_iter_declare(JSContext *ctx, const IdlAsyncIterOps *ops)
            "an async_iterable<> declared stages for §2.5.10's initialization steps and no such steps — the "
            "stages would be rest points in an algorithm that never runs");
 
+    DCHECK(component != NULL && *component,
+           "an async_iterable<> was declared without naming the core/platform.c row whose release gives its "
+           "iterator class back — the slot lives in this file's table and no caller can address it, so a row "
+           "nobody named is a class id core/platform.c's declare column mints and nothing declares");
     f = &g_async[handle];
     f->ops = ops;
+    f->component = component;
     /* THE COMPONENT'S STAGES, JOINED ONTO THE TWO MACHINES THAT HOST ITS ALGORITHMS, before either definition
        is registered — so the runtime's own declaration check (js_step_def_check, which refuses a definition
        whose labels argue from the page) sees the joined list rather than this file's half of it. */
@@ -792,6 +802,14 @@ int idl_async_iter_declare(JSContext *ctx, const IdlAsyncIterOps *ops)
     JS_NewClassID(rt, &f->class_id);
     CHECK(JS_NewClass(rt, f->class_id, &def) == 0,
           "an async_iterable<>'s iterator class could not be declared");
+    /* DECLARED UNDER THE CALLER'S ROW, on the line that mints it. core/platform.c brackets its declare column
+       with `minted == declared`, and this mint is INSIDE that window: it was counted by the allocator and by
+       nothing else, which is a class id no release could ever be caught forgetting, at any revision. The
+       `what` is one sentence for every caller because the STATE is Web IDL's and identical at each — which
+       interface it belongs to is the component name beside it, and is the class name the runtime holds. */
+    agent_state_class(component, &f->class_id,
+                      "§3.7.10.1's default asynchronous iterator object class, minted by this interface's "
+                      "async_iterable<> declaration and held in core/idl_async_iter.c's own table");
 
     for (i = 0; i < AIT_OP_N; i++) {
         JSTrampStepDef *d = &g_defs[handle][i];
@@ -941,6 +959,15 @@ void idl_async_iter_install_pair(JSContext *ctx, JSValueConst proto, int handle)
     async_iter_symbol(ctx, proto, "entries");
     idl_install_method(ctx, proto, "keys", f->id_keys);
     idl_install_method(ctx, proto, "values", f->id_values);
+}
+
+/* See core/idl_async_iter.h. The claim and nothing else — the class id is put back by the owning row's undo,
+   which is the whole reason this may be called mid-cascade. */
+void idl_async_iter_release(int handle)
+{
+    DCHECK(handle >= 0 && handle < g_async_n,
+           "an async_iterable<> declaration was released under a handle nothing declared");
+    agent_state_reached(g_async[handle].component);
 }
 
 /* See core/idl_async_iter.h. The joined arrays are this file's; the STRINGS in them are statics belonging to

@@ -4908,10 +4908,12 @@ void readable_stream_init(JSContext *ctx)
         CHECK(g_rsi_stepids[i] >= 0, "streams: no step id for a §4.2.5 read request");
         agent_state_id("readable_stream", &g_rsi_stepids[i], "one of §4.2.5's read-request reaction machines");
     }
-    g_rs_iter_handle = idl_async_iter_declare(ctx, &RS_ITER_OPS);
+    g_rs_iter_handle = idl_async_iter_declare(ctx, "readable_stream", &RS_ITER_OPS);
     agent_state_id("readable_stream", &g_rs_iter_handle,
-                   "§4.2.1's async_iterable declaration handle — a handle into the IDL pool, which gives its "
-                   "storage back with the runtime, so what this component owns is the number");
+                   "§4.2.1's async_iterable declaration handle — a handle into the IDL pool, whose joined stage "
+                   "arrays go back with the runtime. THE NUMBER IS NOT ALL THIS ROW OWNS THERE: the pool's "
+                   "table also holds §3.7.10.1's iterator CLASS ID, which is agent state and is declared under "
+                   "this row's name from core/idl_async_iter.c, because no caller can address that slot");
 
     /* §4.2's tee. Its branches' pull and cancel are step closures, so they need the controller's members as
        function objects for the same reason §4.4 needs the reader's. */
@@ -5178,6 +5180,10 @@ void readable_stream_free(void)
        component owns no reference and there is nothing to free here either. */
     pipe_free();
     readable_byte_stream_free();
+    /* THE THIRD SUB-COMPONENT, and the one whose state is not in a file of its own: §4.2.1's iterator class is
+       a slot of THIS row declared from core/idl_async_iter.c, whose table holds it and which has no release
+       column position to give it back from. It reads g_rs_iter_handle, so it runs before the undo resets it. */
+    idl_async_iter_release(g_rs_iter_handle);
     /* EVERY HANDLE THIS ROW DECLARED, GIVEN BACK FROM THE ONE LIST THAT ALREADY NAMES THEM. Fourteen reset
        lines stood here, and between them they left SIX CLASS IDS, TWELVE REALM SLOTS, three declaration ids and
        the tee's two ids SET — a hand-maintained second copy of the declaration list, kept in step with an init

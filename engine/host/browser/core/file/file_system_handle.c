@@ -967,7 +967,7 @@ void fs_handle_init(JSContext *ctx)
     idl_returns_promise();   /* §2.4.4 The removeEntry() method: `Promise<undefined>` */
     /* §2.4.1's asynchronous iteration, declared with the members it sits beside because the class, the three
        method ids and the two step machines are the AGENT's, exactly as every id above is. */
-    g_dir_iter_handle = idl_async_iter_declare(ctx, &FS_DIR_ITER_OPS);
+    g_dir_iter_handle = idl_async_iter_declare(ctx, "file_system_handle", &FS_DIR_ITER_OPS);
     agent_state_class("file_system_handle", &g_handle_class, "§2.2's opaque and brand, and the declaration latch");
     agent_state_class("file_system_handle", &g_file_handle_class, "§2.3's per-realm prototype slot");
     agent_state_class("file_system_handle", &g_dir_handle_class, "§2.4's per-realm prototype slot");
@@ -978,12 +978,21 @@ void fs_handle_init(JSContext *ctx)
 void fs_handle_free(void)
 {
     /* The prototypes and the interface objects are the REALMS' — each is released with its context; a handle's
-       locator is released by the finalizer. What the agent holds is three class ids in a runtime that is going
-       away with them.
-       THE FINALIZER RUNS AFTER THIS, which is why it reads none of the three: a handle a page still held is
+       locator is released by the finalizer. What the agent holds is class ids in a runtime that is going away
+       with them — the three this file mints and §2.4.1's iterator class, which core/idl_async_iter.c's table
+       holds under THIS row's name.
+       THE FINALIZER RUNS AFTER THIS, which is why it reads none of them: a handle a page still held is
        finalized in a collection this release has already happened before. See core/agent_state.h. */
+    /* §2.4.1'S DECLARATION FIRST — this row's cascade reaching the sub-component that holds it. The iterator
+       class is a slot of THIS row declared from core/idl_async_iter.c, so the undo below refuses to put it
+       back until that file has said the release reached it; and this reads g_dir_iter_handle, which the undo
+       is about to reset. */
+    idl_async_iter_release(g_dir_iter_handle);
+    /* THE SEVEN METHOD IDS ARE NOT DECLARED AGENT STATE, so they are still given back by hand. Every slot that
+       IS declared — the three class ids and the iteration handle — comes back from the ONE list that already
+       names them, so a declaration added to the init above owes this function nothing. The four reset lines
+       that stood here were a second copy of that list kept in step by whoever remembered. */
     g_id_is_same_entry = g_id_get_file = g_id_create_writable = -1;
     g_id_get_file_handle = g_id_get_directory_handle = g_id_remove_entry = g_id_resolve = -1;
-    g_dir_iter_handle = -1;
-    g_handle_class = g_file_handle_class = g_dir_handle_class = 0;
+    agent_state_undo("file_system_handle");
 }
