@@ -255,6 +255,12 @@ typedef enum {
    `ep_loc_name` indexed out of range one field over. */
 const char *endpoint_door_token(int door);
 
+/* THE EMITTED SURFACE PARTITIONED BY DOOR, as a malloc'd JSON OBJECT (caller frees) — one row per member of
+   `ENDPOINT_DOORS`, zeroes included, summing to the `emitted` figure endpoint_surface_census reports. It is
+   what makes CLAUDE.md §What-the-tool-produces' razor a PARTITION rather than a subtraction of two totals;
+   the identity that says so is asserted at the composer, where both sides are in one hand. */
+char   *endpoint_door_hist_json(void);
+
 /* Record one learned endpoint (deduped by method+url). `url` may be concolic (shape) or concrete. Headers are
    MERGED into a same-identity endpoint: a header seen with a concrete value supersedes the same header seen
    only as a shape, which is the rule the param values already follow. `body` is NULL where the request has

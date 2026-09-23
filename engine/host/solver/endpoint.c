@@ -2146,6 +2146,73 @@ static void edge_num(JsonBuf *b, long v) {
     json_buf_raw(b, t);
 }
 
+/* THE EMITTED SURFACE PARTITIONED BY THE MECHANISM THAT COMPOSED EACH ADDRESS — see endpoint.h for what a
+   door is and why neither `prov` nor the program-state flag can stand in for one. This is the row that lets a
+   reader answer CLAUDE.md §What-the-tool-produces' own question without the subtraction it names as the
+   product's razor: `epEmitted - epPreProgram` bounds forced execution's contribution from above and names
+   none of it, and these rows say which mechanism each emitted address came through.
+   EVERY DOOR IS EMITTED INCLUDING THE ZEROES, which is this file's rule for `epFetchOutDiedAtLife` and is
+   load-bearing for the same two reasons. A table listing only its non-zero rows is one whose shape a reader
+   has to know before they can tell a mechanism that never ran from a mechanism that does not exist — and
+   extension/bridge.js REFUSES an empty histogram on this census by name, so a document whose every address
+   came through one door would abort the trusted zone.
+   THE KEYS ARE COMPUTED AND ARE NOT FIELD NAMES, the same construct and the same argument as the stage table
+   above: `json_buf_key` takes a literal and the compiler enforces it, which is what makes every FIELD name in
+   this seam auditable, while a DOOR TOKEN comes off `ENDPOINT_DOORS` and so goes through the VALUE entry.
+   THE COMMA IS A LATCH AND NOT THE LOOP INDEX for `endpoint_json_array`'s reason exactly — the loop starts one
+   past `EPD_UNSTATED` and an index-keyed comma would have to encode that offset, which is a second place for
+   the list's first member to be named.
+   THE IDENTITY IS ASSERTED HERE BECAUSE HERE IS WHERE BOTH SIDES ARE IN ONE HAND, and it is a cross-check
+   between two producers rather than two readings of one walk: this loop and `endpoint_surface_census`'s are
+   two walks over `g_eps` spelled with the SAME `is_asset` skip `endpoint_json_array` performs, so what it
+   fires on is one of those three skips changing without the others — after which the histogram and the total
+   it is published beside are fractions of two different populations, and a reader partitioning the surface by
+   door would be partitioning a number that is not its size. extension/bridge.js and engine/build.mjs each
+   re-check the same sum against the EMITTED DOCUMENT, which is the genuinely independent half: they read what
+   was published rather than the array it was published from. */
+char *endpoint_door_hist_json(void) {
+    JsonBuf b = { 0 };
+    long n[EPD_COUNT];
+    long minted, assets, emitted, pre_program, sum = 0;
+    int wrote_one = 0, d, i;
+
+    memset(n, 0, sizeof n);
+    for (i = 0; i < g_eps_n; i++) {
+        if (g_eps[i].is_asset) continue;
+        /* THE RANGE IS RE-ASSERTED AT THE READ AND NOT ONLY AT THE MINT, because the subscript is on the next
+           line and `endpoint_record`'s own check is compiled out of release: an out-of-range door would index
+           outside this array and raise whatever the stack holds beside it, which is the `ep_loc_name` hazard
+           with a WRITE instead of a read. In release the emit's `endpoint_door_token` still refuses the
+           record, so nothing publishes a fabricated door either way; what this adds is that nothing corrupts
+           the frame on the way there. */
+        DCHECKF(g_eps[i].door > EPD_UNSTATED && g_eps[i].door < EPD_COUNT,
+                "an @H record reached the door census carrying the door %d, which is none of endpoint.h's "
+                "ENDPOINT_DOORS — the mint refuses an unstated one, so this is a record that reached this "
+                "surface in a build where that assert was compiled out, and the count about to be raised is "
+                "at an index outside the table this census is a partition of", g_eps[i].door);
+        n[g_eps[i].door]++;
+    }
+    endpoint_surface_census(&minted, &assets, &emitted, &pre_program);
+
+    json_buf_raw(&b, "{");
+    for (d = EPD_UNSTATED + 1; d < EPD_COUNT; d++) {
+        if (wrote_one) json_buf_raw(&b, ",");
+        wrote_one = 1;
+        json_buf_str(&b, endpoint_door_token(d));
+        json_buf_raw(&b, ":");
+        edge_num(&b, n[d]);
+        sum += n[d];
+    }
+    json_buf_raw(&b, "}");
+    DCHECKF(sum == emitted,
+            "the @H surface's per-door counts sum to %ld against the %ld rows it emits — the doors are a "
+            "PARTITION of the emitted surface and the two are one array walked twice with the same asset "
+            "skip, so a difference is one of those walks having stopped describing the population the other "
+            "counts, and a reader taking a door's share of the surface would be taking a fraction of a "
+            "number that is not its size", sum, emitted);
+    return json_buf_take(&b);
+}
+
 char *endpoint_fetch_edge_rows(void) {
     JsonBuf b = { 0 };
     long sum = 0;

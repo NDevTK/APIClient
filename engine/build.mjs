@@ -262,7 +262,7 @@ let g_coldFields = null;
 const coldFields = () => (g_coldFields ??= censusRowSet(
   "solver/result.c", "char *result_cold_json(void)", "\n}\n",
   ["stepUnits", "stepUnitRuns", "stepUnitOverruns", "outOfProgramsAtTheLadderUnits", "programCursors",
-   "programsAhead"],
+   "programsAhead", "epDoors"],
   "the @COLD reader states which rows it requires of the frontier census, and it takes that set from the " +
   "composer rather than from a list beside it"));
 /* THE POPULATION SPLITS ARE PARTITIONS AND THE PARTITION IS THE CONTRACT, checked here for the reason
@@ -2505,6 +2505,29 @@ function censusHistRows(b, name, totalName, extent) {
 
 const STEP_UNIT_EXTENT = "solver/step_unit.h's list";
 
+/* WHICH MECHANISM COMPOSED EACH ADDRESS ON THE LEARNED SURFACE, which is the row CLAUDE.md
+   §What-the-tool-produces' razor was standing in for. That razor is `epEmitted - epPreProgram` and it is a
+   SUBTRACTION OF TWO TOTALS: it bounds what forced execution contributed to a document's API surface and
+   names none of it, so a run that learned ten gated API calls and one that learned ten `<link rel=preload>`
+   elements of one `<head>` are the same two numbers. These rows are the partition, and `censusHistRows`
+   checks the sum against `epEmitted` — the engine asserts the same identity at solver/endpoint.c's composer
+   where the record array and the emitted count are in one hand, so a disagreement visible HERE and not there
+   is a door lost between the census and this document.
+   AN EMPTY SURFACE IS A SENTENCE AND NOT AN EMPTY LIST, for `stepUnitReading`'s reason exactly: a document
+   that learned no address at all is a real and common outcome — most pages are not app pages — and rendering
+   nothing for it reads as a histogram that failed rather than as a surface taken with nothing on it.
+   THE DOORS THAT READ 0 ARE COUNTED AND NOT LISTED, which is the split `stepUnitReading` makes and for its
+   reason: twelve mechanisms is more than a line can carry, the ones that ran are the reading, and the count of
+   the rest is what says the table was whole rather than filtered. */
+function endpointDoorReading(b) {
+  const rows = censusHistRows(b, "epDoors", "epEmitted", "endpoint.h's ENDPOINT_DOORS list");
+  const used = rows.filter((r) => r[1] > 0).sort((x, y) => y[1] - x[1]);
+  return used.length === 0
+    ? `@H doors: the surface emitted no endpoint, so all ${rows.length} doors read 0`
+    : `@H doors: ` + used.map((r) => `${r[1]} ${r[0]}`).join(", ") +
+      (used.length < rows.length ? `, ${rows.length - used.length} door(s) at 0` : "");
+}
+
 function stepUnitReading(b) {
   const rows = censusHistRows(b, "stepUnits", "live", STEP_UNIT_EXTENT);
   const live = rows.filter((r) => r[1] > 0).sort((x, y) => y[1] - x[1]);
@@ -4257,7 +4280,16 @@ function hungCauseCensus(out) {
                   row on this line. It is the row `finished` is a DISTANCE TO — flow_step's retirement arm
                   sits below the block that starts the next row, so its precondition is this histogram's
                   bucket 0 and nothing else. */
-               "; " + programsAheadReading(b);
+               "; " + programsAheadReading(b) +
+               /* AND THE SIXTH IS NOT ABOUT THE FRONTIER AT ALL — it is about what the run LEARNED, spliced
+                  here because this is the span every arm agrees on and because the five above say how far the
+                  search got while saying nothing about what it came back with. `endpointDoorReading` is the
+                  only row on this line that answers CLAUDE.md §What-the-tool-produces' own question: a
+                  surface whose every door is `link-element` and `document-script` is a `<head>` counted back,
+                  and one carrying `fetch`, `xhr` or `module-import` rows is forced execution having reached a
+                  network call site. Those two render as the SAME `endpoints: N` and as the same
+                  `epEmitted`. */
+               "; " + endpointDoorReading(b);
   /* AND WHICH OF THE STILL-0 ROWS WERE EVER ANYTHING ELSE, which is the distinction `flipped.length === 0`
      cannot draw and which decides what "still advancing" is worth. Measured across six builds: the rows that
      reached 1 in the last window were, every time, the ten members of ONE family (the @S search rows), while

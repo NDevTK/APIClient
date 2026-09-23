@@ -2143,6 +2143,9 @@ char *result_cold_json(void) {
        census would have needed a name in extension/bridge.js and extension/popup.js, both of which are
        trusted-zone JavaScript that is live on WRITE while this half is live only after a build. */
     char *edge;
+    /* …AND THE SAME SURFACE PARTITIONED BY THE MECHANISM THAT COMPOSED EACH ADDRESS — solver/endpoint.h
+       states the contract and asserts the partition where both sides are in one hand. */
+    char *doors;
 
     cold_census(&c);
     engine_step_unit_runs(&r);
@@ -2431,10 +2434,12 @@ char *result_cold_json(void) {
        which assert the shape rather than defaulting it — would report a broken relay for what is an
        allocation failure, and §Testing's absent-is-not-zero rule is the same sentence one layer up. */
     edge = endpoint_fetch_edge_rows();
-    if (!cursors || !ahead || !edge) {
+    doors = endpoint_door_hist_json();
+    if (!cursors || !ahead || !edge || !doors) {
         free(cursors);
         free(ahead);
         free(edge);
+        free(doors);
         cold_census_release(&c);
         return NULL;
     }
@@ -2768,6 +2773,23 @@ char *result_cold_json(void) {
                     what a figure fixed before the search starts looks like. endpoint.h holds the contract,
                     the ceiling reading and the residual for a resumed timeline. */
                  "\"epMinted\":%ld,\"epAssets\":%ld,\"epEmitted\":%ld,\"epPreProgram\":%ld,"
+                 /* …AND WHICH MECHANISM COMPOSED EACH OF THOSE EMITTED ADDRESSES, which is the row the four
+                    above cannot compose and the one the razor's own retirement clause asks for. `epEmitted -
+                    epPreProgram` is a SUBTRACTION OF TWO TOTALS: it bounds what forced execution contributed
+                    and names none of it, and a reader holding only that cannot tell a run that learned ten
+                    gated API calls from one that learned ten `<link rel=preload>` elements of one `<head>`.
+                    These rows are a PARTITION OF `epEmitted` and are asserted to be at the composer
+                    (solver/endpoint.c), re-checked here against the published document by
+                    engine/build.mjs's `censusHistRows` and by extension/bridge.js's histogram contract — the
+                    engine-side identity reads the record array and those read what was EMITTED, so the two
+                    halves can disagree and that is the test.
+                    IT IS NOT A SECOND SPELLING OF `epPreProgram` AND THE TWO ARE READ TOGETHER. The door is
+                    WHICH MECHANISM and that flag is WHEN, and neither implies the other: a `<link>` a router
+                    created and one the markup declared reach this surface through the same door, and a
+                    `<head>` whose first `<script src>` runs before the parser reaches the `<link>` below it
+                    mints that link POST-program. Each emitted ROW carries both, so the pair is answerable per
+                    address and these totals are the check on that rather than the only statement of it. */
+                 "\"epDoors\":%s,"
                  "\"epAsks\":%ld,\"epAskPreProgram\":%ld,\"epAskSuppressed\":%ld,"
                  /* AND THE ONE CUT INSIDE THE MERGED ARM — endpoint.h states what it is and what its four-state
                     zero can mean. It is NOT summed with the three arms beside it: they partition the door's
@@ -2836,12 +2858,13 @@ char *result_cold_json(void) {
                  c.out_of_programs,
                  c.out_of_programs_unrun, c.out_of_programs_framed, c.out_of_programs_at_the_ladder,
                  ladder, hist, cursors, ahead,
-                 ep_minted, ep_assets, ep_emitted, ep_pre_program,
+                 ep_minted, ep_assets, ep_emitted, ep_pre_program, doors,
                  ep_asks, ep_ask_pre, ep_ask_sup, ep_ask_merged, ep_ask_minted, ep_ask_merged_pre,
                  edge);
     free(cursors);
     free(ahead);
     free(edge);
+    free(doors);
     cold_census_release(&c);
     return out;
 }
