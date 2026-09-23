@@ -368,7 +368,38 @@ const CENSUS_LIFETIME = ["stepUnitRuns", "stepUnitOverruns"];
    Its three siblings are lifetime counts and sit in COLD_COUNTERS below. They only mean anything read
    together — the identity is `replyAsked == replyAnswered + replyDeclined + replyDropped + replyOutstanding`,
    which solver/result.c asserts at the instant all five are in one hand and which holds on NO pair of lines. */
-const CENSUS_GAUGE = ["stepUnits", "programCursors", "replyOutstanding"];
+/* AND THE LIVE HALF OF THE BUNDLE'S OWN DEBT, WHICH IS THE ROW THAT SEPARATES THE TWO READINGS OF A RUN THAT
+   LEARNED NOTHING. solver/result.c states the pair in its own words: `17` beside `0` is a bundle that arrived
+   WHOLE, so a run that never reached its later programs is the ORDER failing; `17` beside `17` is a bundle
+   whose bytes never came, which is the fetch path and the reply door. Those take opposite work and NOTHING
+   ELSE ON THIS ROW SEPARATED THEM — this driver carried neither half, so the question had to be asked of
+   `self._engineLog` by hand.
+   IT IS A GAUGE AND ITS PARTNER BELOW IS NOT, which is the whole reason they are filed apart: this is summed
+   per MEMBER at the instant the census was composed, so a fork copies its parent's rows into the count and a
+   sold member takes its rows out of it — it may FALL, and no inequality against the seed's arm holds in
+   either direction. */
+const CENSUS_GAUGE = ["stepUnits", "programCursors", "replyOutstanding", "rowsAwaitingBytes"];
+/* …AND THE CONSTANT IT IS READ AGAINST, WHICH IS NEITHER OF THE TWO KINDS EVERY OTHER LIST HERE STATES.
+   solver/engine.c writes both arms at the ONE line `rootPrograms` is written and never again, because the pair
+   is a DENOMINATOR — a fact about what the DOCUMENT owed the reply door when its rows were laid down — so it
+   is not a GAUGE, which states what is true now, and not a LIFETIME COUNT, which may be differenced across
+   samples. A constant that decreases is a broken seed rather than progress.
+   IT HAS ITS OWN LIST BECAUSE FILING IT UNDER EITHER EXISTING KIND WOULD PRINT A FALSE KIND STATEMENT, and
+   the header line is where a reader learns what they may do with a number. Putting these in COLD_COUNTERS
+   would say LIFETIME, may be differenced — of a constant — which is the §a-quantity-whose-kind-you-cannot-name
+   defect committed by the very line that exists to prevent it.
+   MEASURED, WHICH IS WHY THEY ARE HERE AND NOT ARGUED. The misreading engine.c names — `…Awaited 17` read as
+   "seventeen are STILL owed" — was relayed as a live finding about a real page (`25 of 33 program rows were
+   <script src> whose bytes never arrived`) and sent a lane to the reply seam. One fresh-browser run of
+   gitlab.com/explore at artifact d17472ff read `rootProgramsAwaitedAtSeed 28` beside `rowsAwaitingBytes 0`,
+   with `replyAsked 45 == replyAnswered 45` and `replyOutstanding 0`: the bundle arrived whole and the
+   frontier stood at cursor 7 of `rootPrograms 35`. Both halves were on the engine's census the whole time and
+   neither was on this driver's row.
+   RETIREMENT: this list goes when result.c states each @COLD row's KIND beside it and the three lists here are
+   derived from that, which is the same condition the note above CENSUS_LIFETIME already carries — a third
+   hand-kept list is a third copy of a fact only the producer's header states, and adding one is what makes
+   that condition worth more rather than less. */
+const CENSUS_CONSTANT = ["rootProgramsHeldAtSeed", "rootProgramsAwaitedAtSeed"];
 /* AND WHAT THE JOB BACKLOG IS WAITING ON — solver/flow.h's split, off `wfq` rather than `cold`. This
    driver already carries `jobsQueued`/`jobsRun`/`unitsDone` in COUNTERS and those cannot name a component:
    a queued job waits on the HOST (`jobsOwed`), on its member finishing its own program (`jobsFramed`, HTML
@@ -713,6 +744,7 @@ function census(r) {
   const c = ("cold" in r) ? r.cold : null;
   for (const k of CENSUS_LIFETIME) o[k] = c && (k in c) ? c[k] : null;
   for (const k of CENSUS_GAUGE) o[k] = c && (k in c) ? c[k] : null;
+  for (const k of CENSUS_CONSTANT) o[k] = c && (k in c) ? c[k] : null;
   for (const k of COLD_COUNTERS) o[k] = c && (k in c) ? c[k] : null;
   /* AND THE RAZOR IS COMPUTED HERE RATHER THAN LEFT TO THE READER, BECAUSE A SUBTRACTION A READER MUST
      PERFORM IS ONE NOBODY PERFORMS. Both halves are already rows above; this is the difference §What-the-tool-
@@ -995,7 +1027,13 @@ async function main() {
               " two machines' states, and epXhr*'s are `send()`'s while its OFFER is raised one machine on" +
               " (epXhrAskPlacedLife and epXhrAskOfferedLife are two populations with no relation asserted)" +
               " | GAUGES (may FALL; never difference): " +
-              CENSUS_GAUGE.concat(WFQ_JOB_SPLIT).concat(["wfqMembers"]).join(","));
+              CENSUS_GAUGE.concat(WFQ_JOB_SPLIT).concat(["wfqMembers"]).join(",") +
+              /* A THIRD KIND, STATED BECAUSE A ROW THAT IS NEITHER OF THE TWO ABOVE WOULD OTHERWISE BE READ AS
+                 WHICHEVER LIST A READER'S EYE LANDED ON. These are written once at the seed and never again,
+                 so they may be neither differenced nor read as a level — and `rowsAwaitingBytes` in the gauge
+                 list is the live half they are read against. */
+              " | CONSTANTS (written at seed, never again; neither differenced nor read as a level): " +
+              CENSUS_CONSTANT.join(","));
 
   const { browser, extId } = await connect();
   try {
