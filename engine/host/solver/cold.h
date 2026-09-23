@@ -121,6 +121,45 @@ typedef struct {
        well as at the walk — this is an instrument, and the verdict it informs is a person's. */
     long *program_cursors;
     int   program_cursor_n;
+    /* …AND HOW MANY ROWS EACH MEMBER STILL HAS AHEAD OF IT — `dyn_n - script_i`, one count per DISTANCE,
+       over the whole frontier and taken on the same walk. Emitted as `programsAhead`.
+
+       IT IS THE DISTANCE `finished` IS A DISTANCE TO, AND NOTHING PUBLISHED IS DERIVABLE INTO IT. A member
+       retires through the terminal arm of flow_step's ladder, and that whole ladder sits below the block that
+       starts the next row — so the precondition for ANY of it is `script_i == dyn_n`, which is `out_of_programs`
+       below and is this histogram's BUCKET 0. Every other row on this line answers about `script_i` alone:
+       `program_cursors` is its distribution, `deepest`/`deepestLeft`/`completed` are GLOBAL MAXIMA over it, and
+       `root_programs` is a count of the ROOT DOCUMENT's own rows which a flow's sequence runs PAST. `dyn_n` is
+       PER-FLOW and appears in none of them, so two frontiers standing at one cursor with one row left and with
+       forty rows left render as the same bytes — which is the pair `program_cursors`' own banner in
+       engine/build.mjs already names ("a top bucket of 8 on a 24-row document says the 156 members standing
+       there have nothing left to run, when in fact sixteen rows remain and every one of them is a chunk") and
+       works around by reading two global scalars beside it.
+       THE TWO READINGS TAKE OPPOSITE WORK, WHICH IS WHY ONE NUMBER FOR BOTH IS NOT A COARSE ANSWER BUT NO
+       ANSWER. A mass whose distance is FLAT across censuses is a frontier held behind rows it cannot pass —
+       bytes that did not come back, a frame that does not end — and the work is at the reply door or at the
+       program. A mass whose distance is RISING is a document queueing rows faster than the frontier consumes
+       them, and no budget finishes it. A mass whose distance is FALLING is a frontier converging on its first
+       retirement, and the work is to spend more budget. `out_of_programs` reports only the instant the third
+       of those arrives, so at 0 it is silent about which of the three a run is in.
+       IT IS OBSERVED STRICTLY BEFORE THE THING IT IS A DISTANCE TO, which is §@S(i)'s requirement of a fitness
+       rung and is the property `out_of_programs` structurally cannot have: that row is the OUTCOME restated, so
+       a member eight hundred rows into its sequence and one that has not started reads exactly 0 in it.
+       ITS BUCKET 0 IS `out_of_programs`, ASSERTED where both are in one hand (solver/result.c). That identity is
+       not decoration: it is what stops the new row and the old one drifting into two measurements of one
+       population, and it is the same discipline every other pair on this line keeps.
+       A PARTITION, exactly as `program_cursors` is: every live member has exactly one distance, so these counts
+       SUM to `flows`. ITS EXTENT IS THE POPULATION'S OWN — [0, the greatest distance any LIVE member stands at],
+       DENSE, every index emitted including the zeroes, because THE ZEROES ARE THE SIGNAL here for the reason
+       they are one row up. The row set is never EMPTY either: solver/cold.c gives an empty frontier distance 0,
+       which is the distance a member with no rows has, so `{"0":0}` is a true count and `{}` never reaches a
+       reader that refuses one.
+       A REPORT AND NEVER A BOUND (§NO BOUNDS), for `program_cursors`' reason exactly and more sharply, because
+       a REMAINING-WORK distribution is the single most inviting shape there is for a no-progress detector: a
+       bucket that stops falling is precisely what a fixpoint would be built on. Nothing in the engine reads it,
+       no arm of any verdict branches on it, and the verdict it informs is a person's. */
+    long *programs_ahead;
+    int   programs_ahead_n;
     /* …AND HOW MANY OF THE STANDING MEMBERS HAVE NO ROW LEFT TO RUN — `script_i == dyn_n`, counted on the same
        walk. Emitted as `outOfPrograms`.
 
@@ -401,9 +440,12 @@ typedef struct {
 /* Walk the frontier and fill `out`. Pure measurement of the components it reads: it takes no reference on
    anything it measures, mutates none of them, and is safe to call between scheduler steps (which is where the
    progress stream calls it).
-   IT IS NOT ALLOCATION-FREE, AND THAT IS THE ONE THING A CALLER OWES IT. `program_cursors`' extent is the
-   frontier's own rather than a list's, so it cannot be a fixed array on the record and the record therefore
-   OWNS a buffer. `cold_census_release` is the other half of that and every census owes it exactly one call. */
+   IT IS NOT ALLOCATION-FREE, AND THAT IS THE ONE THING A CALLER OWES IT. `program_cursors`' and
+   `programs_ahead`'s extents are the frontier's own rather than a list's, so neither can be a fixed array on
+   the record and the record therefore OWNS two buffers. `cold_census_release` is the other half of that and
+   every census owes it exactly one call. A THIRD population-sized histogram added here is an obligation at
+   BOTH — the walk's grow and that release — and the record's own `memset` at the top of the walk is what makes
+   forgetting the second of them a LEAK rather than a double free. */
 void cold_census(ColdCensus *out);
 
 /* Release what a census OWNS, leaving the record readable as one whose walk found nothing. IDEMPOTENT, so a

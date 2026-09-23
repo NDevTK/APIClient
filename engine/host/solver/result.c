@@ -1662,11 +1662,15 @@ char *result_swap_json(void) {
      `live`, `framed`, `blocked`, `stackEmpty`, `canDeliver`, `pend`, `pendReady`, `outOfPrograms` and the
      three rows that partition it (`outOfProgramsUnrun`, `outOfProgramsFramed`, `outOfProgramsAtTheLadder`,
      which are gauges for the same reason and sum to it at every census, empty frontier included), every
-     `*Entries`/`*KiB` row, `dynBodies`, `pinSegs`/`decSegs` and their entry counts, and the three histograms
-     `stepUnits`, `outOfProgramsAtTheLadderUnits` and `programCursors` — the second of which partitions
-     `outOfProgramsAtTheLadder` rather than the frontier, so it is the one histogram here whose sum is a row
-     on this line and not `live`. `owed` is `flow_host_owed_count()`, a second walk of the same frontier
-     and a gauge for the same reason, and `rowsAwaitingBytes` is `engine_rows_awaiting_bytes()`, a third walk
+     `*Entries`/`*KiB` row, `dynBodies`, `pinSegs`/`decSegs` and their entry counts, and the four histograms
+     `stepUnits`, `outOfProgramsAtTheLadderUnits`, `programCursors` and `programsAhead` — the second of
+     which partitions `outOfProgramsAtTheLadder` rather than the frontier, so it is the one histogram here
+     whose sum is a row on this line and not `live`. `programsAhead` is a gauge for the reason the other
+     three are and carries the one identity this census has between a histogram and a SCALAR: its zero
+     bucket IS `outOfPrograms`, asserted at the composition below, so the two may be read against each
+     other at ONE census and neither may be differenced against the other across two.
+     `owed` is `flow_host_owed_count()`, a second walk of the same frontier and a gauge for the same
+     reason, and `rowsAwaitingBytes` is `engine_rows_awaiting_bytes()`, a third walk
      and a gauge for the same reason again — which is why it is a free function rather than a field of the
      record below, since this grouping is by ACCESSOR and a gauge inside that record would make it wrong. `perFlowKiB` and `sharedKiB` are SUMS OF GAUGES taken in that one walk.
      From `engine_frontier_census` — LIFETIME COUNTS over this session, the only rows here a reader may
@@ -1976,21 +1980,31 @@ static long cold_hist_json(char *buf, size_t cap, const long *counts, const char
    THE TWO PASSES READ ONE ARRAY, so they can disagree only if a count changed between them, and the assert
    under the write is composef's for composef's reason: a truncation here does not lose a digit, it loses the
    CLOSING BRACE, and the host is handed a document that will not parse and reports nothing for the page. */
-static char *cursor_hist_json(const long *counts, int n)
+/* THE COMPOSER FOR A HISTOGRAM WHOSE ROW SET IS THE POPULATION'S OWN, and it takes the histogram's NAME
+   because there are two of them now and its three asserts each name a site to open. A shared helper stamps
+   its own file and line for every caller, so a message that says "the program-cursor histogram" is a crash a
+   reader of the OTHER caller cannot act on — CLAUDE.md's assert-that-names-a-remedy-but-not-a-site, arriving
+   through a second call rather than through a thousand. The name travels with the operation; it is not
+   derived here, and a caller that passes the wrong one is passing a wrong string rather than being silently
+   attributed to its sibling. */
+static char *cursor_hist_json(const long *counts, int n, const char *what)
 {
     int k, need = 2, hi;   /* the two braces, then each row as it measures */
     char *out;
 
-    DCHECK(counts != NULL && n > 0,
-           "the program-cursor histogram was composed from nothing, or over an empty row set — solver/cold.c "
-           "gives it program 0 even on an empty frontier precisely so that `{}` never reaches a reader that "
-           "refuses one, so an extent of zero here is that walk having been skipped rather than a frontier "
-           "with nobody standing in it");
+    DCHECK(what != NULL, "a population-sized histogram was composed with no name — the asserts below are the "
+                         "only thing that says WHICH of this composer's histograms a crash is about, and this "
+                         "helper stamps one file and line for every caller");
+    DCHECKF(counts != NULL && n > 0,
+            "the %s histogram was composed from nothing, or over an empty row set — solver/cold.c gives it "
+            "row 0 even on an empty frontier precisely so that `{}` never reaches a reader that refuses one, "
+            "so an extent of zero here is that walk having been skipped rather than a frontier with nobody "
+            "standing in it", what);
     for (k = 0; k < n; k++) {
         int w = snprintf(NULL, 0, "%s\"%d\":%ld", k ? "," : "", k, counts[k]);
-        CHECK(w > 0, "a program-cursor row could not be MEASURED — snprintf reported an encoding error, so "
-                     "there is no length to allocate against, and any size chosen instead would be the "
-                     "hand-counted guess solver/compose.h replaced");
+        CHECKF(w > 0, "a %s row could not be MEASURED — snprintf reported an encoding error, so there is no "
+                      "length to allocate against, and any size chosen instead would be the hand-counted "
+                      "guess solver/compose.h replaced", what);
         need += w;
     }
     out = malloc((size_t)need + 1);
@@ -2001,10 +2015,10 @@ static char *cursor_hist_json(const long *counts, int n)
         hi += snprintf(out + hi, (size_t)(need + 1 - hi), "%s\"%d\":%ld", k ? "," : "", k, counts[k]);
     out[hi++] = '}';
     out[hi] = 0;
-    DCHECK(hi == need,
-           "the program-cursor histogram was WRITTEN to a different length than it was MEASURED for — the two "
-           "passes read one array of counts, so they can only disagree if a count changed between them, and "
-           "the row about to be spliced into the census is truncated at its closing brace");
+    DCHECKF(hi == need,
+            "the %s histogram was WRITTEN to a different length than it was MEASURED for — the two passes "
+            "read one array of counts, so they can only disagree if a count changed between them, and the "
+            "row about to be spliced into the census is truncated at its closing brace", what);
     return out;
 }
 
@@ -2049,9 +2063,11 @@ char *result_cold_json(void) {
     /* AND THE FOURTH EXPANSION OF THE SAME LIST — solver/step_unit.h's arms again, restricted to the turns
        that overran the cooperative slice. Same derivation, same width, for the same reason. */
     char over[STEP_UNITS_JSON_MAX];
-    /* AND THE FOURTH HISTOGRAM, ON THE HEAP FOR THE ONE REASON THE THREE ABOVE ARE ON THE STACK: its extent
-       is the FRONTIER's and not a list's, so there is no width to derive. See cursor_hist_json. */
+    /* AND THE TWO HISTOGRAMS ON THE HEAP, FOR THE ONE REASON THE FIXED ONES ABOVE ARE ON THE STACK: their
+       extents are the FRONTIER's and not a list's, so there is no width to derive. See cursor_hist_json,
+       which composes both and is handed each one's NAME because its asserts have to say which. */
     char *cursors;
+    char *ahead;
     char *out;
     ColdResumed resumed;
     /* AND HOW OFTEN THE HOST ASKED THIS TIER WHAT A PARK WOULD WRITE — the ASK beside that OUTCOME, taken
@@ -2073,7 +2089,8 @@ char *result_cold_json(void) {
 
     cold_census(&c);
     engine_step_unit_runs(&r);
-    cursors = cursor_hist_json(c.program_cursors, c.program_cursor_n);
+    cursors = cursor_hist_json(c.program_cursors, c.program_cursor_n, "program-cursor");
+    ahead   = cursor_hist_json(c.programs_ahead, c.programs_ahead_n, "remaining-rows");
     {
         /* THE SUMS ARE TAKEN OUTSIDE THE ASSERTS AND NOT INSIDE THEM, because the composition is the WORK and a
            DCHECK's condition is compiled out in release: a `DCHECK(cold_hist_json(...) == x)` would leave both
@@ -2086,8 +2103,10 @@ char *result_cold_json(void) {
                                        "outOfProgramsAtTheLadderUnits");
         long overran  = cold_hist_json(over, sizeof over, r.over_arms, "stepUnitOverruns");
         long atcursor = 0;
+        long atahead = 0;
         int k;
         for (k = 0; k < c.program_cursor_n; k++) atcursor += c.program_cursors[k];
+        for (k = 0; k < c.programs_ahead_n; k++) atahead += c.programs_ahead[k];
         /* THE PARTITION IS THE POINT, SO IT IS ASSERTED. Every live member carries exactly one arm, so these
            counts SUM to the frontier — an inequality is the walk having missed a member or a member having
            been counted twice, and either makes every reading composed from this row a statement about a
@@ -2128,6 +2147,33 @@ char *result_cold_json(void) {
                "flow stands at exactly one cursor, so a total that is not `flows` means the census walk and "
                "the histogram disagree about who is standing, and this is the one row a reader consults to "
                "decide whether the mass advanced or a few members ran deep ahead of it");
+        /* AND THE REMAINING-ROWS HISTOGRAM'S PARTITION, which is `atcursor`'s identity over the OTHER half of
+           the same two fields. Every live member has exactly one distance to the end of its own sequence, so
+           these counts sum to the frontier too, and a walk that missed members reports their distance as
+           absent — which on THIS row reads as a frontier closer to retiring than it is, since the members a
+           short walk loses are the ones it never asked. */
+        DCHECK(atahead == c.flows,
+               "the remaining-rows histogram does not account for every member of the frontier — each live "
+               "flow has exactly one distance to the end of its own program sequence, so a total that is not "
+               "`flows` means the census walk and the histogram disagree about who is standing, and every "
+               "reading of whether the frontier is converging on a retirement is then composed from a "
+               "population nobody enumerated");
+        /* AND THE ONE CROSS-ROW IDENTITY THIS CENSUS HAS BETWEEN A HISTOGRAM AND A SCALAR, asserted here
+           because here is where both are in one hand. `out_of_programs` selects `script_i == dyn_n` and this
+           histogram buckets `dyn_n - script_i`, so BUCKET 0 IS THAT ROW — the same members counted by two
+           walks of one pass over two fields. It is asserted rather than assumed for the reason every other
+           partition on this line is: two numbers that are supposed to be one population are two numbers that
+           can drift, and drifted they are worse than the one they replaced, because each still looks like a
+           measurement. It is also what stops the new row being read as a second spelling of the old one — the
+           old one is this row's bucket 0 and nothing else, and the reading it could never make is everything
+           in the buckets ABOVE it. */
+        DCHECKF(c.programs_ahead[0] == c.out_of_programs,
+                "the remaining-rows histogram's ZERO bucket (%ld) and `outOfPrograms` (%ld) disagree — they "
+                "are the same predicate written two ways over the same two fields on the same pass "
+                "(`dyn_n - script_i == 0` and `script_i == dyn_n`), so a difference is one of the two walks "
+                "having been given a member the other was not, and the census is about a frontier that is not "
+                "the one standing",
+                c.programs_ahead[0], c.out_of_programs);
         /* AND THE ORPHAN LADDER'S OWN PARTITION, WHICH IS `standing`'s IDENTITY OVER A SUBSET RATHER THAN
            OVER THE FRONTIER — the one difference that matters here, because a histogram of a SUBSET is the
            shape that silently becomes a SELECTION. `step_units` sums to `flows` and cannot be short without
@@ -2327,7 +2373,9 @@ char *result_cold_json(void) {
        treats it as one; splicing a hole into the document instead would publish a @COLD line whose readers —
        which assert the shape rather than defaulting it — would report a broken relay for what is an
        allocation failure, and §Testing's absent-is-not-zero rule is the same sentence one layer up. */
-    if (!cursors) {
+    if (!cursors || !ahead) {
+        free(cursors);
+        free(ahead);
         cold_census_release(&c);
         return NULL;
     }
@@ -2614,6 +2662,13 @@ char *result_cold_json(void) {
                  "\"outOfProgramsAtTheLadder\":%ld,"
                  "\"outOfProgramsAtTheLadderUnits\":%s,"
                  "\"stepUnits\":%s,\"programCursors\":%s,"
+                 /* AND HOW FAR EACH STANDING MEMBER IS FROM HAVING NOTHING LEFT TO RUN — solver/cold.h states
+                    why this is not derivable from the row beside it and why `outOfPrograms` above is exactly
+                    its BUCKET 0. The pair is a POSITION and a DISTANCE: the cursor histogram says where the
+                    mass got to, and this says how much is in front of it, and a frontier one row from its
+                    first retirement and one forty rows from it render as the same bytes in every other row on
+                    this line. */
+                 "\"programsAhead\":%s,"
                  /* THE @H SURFACE'S OWN DENOMINATOR — endpoint.h states why its length is three states. A run
                     whose `epEmitted` is small with `epAssets` large learned little because the bundle's
                     addresses were FILES. Those are different diffs and until these rows existed the array's
@@ -2707,10 +2762,11 @@ char *result_cold_json(void) {
                  r.unframed_steps,
                  c.out_of_programs,
                  c.out_of_programs_unrun, c.out_of_programs_framed, c.out_of_programs_at_the_ladder,
-                 ladder, hist, cursors,
+                 ladder, hist, cursors, ahead,
                  ep_minted, ep_assets, ep_emitted, ep_pre_program,
                  ep_asks, ep_ask_pre, ep_ask_sup, ep_ask_merged, ep_ask_minted, ep_ask_merged_pre);
     free(cursors);
+    free(ahead);
     cold_census_release(&c);
     return out;
 }

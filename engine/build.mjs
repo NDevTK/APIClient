@@ -244,10 +244,15 @@ const loadNow = () => {
    `coldPartition` states the two population splits). A second copy of either, kept in the file whose whole
    subject is what a second copy costs, is the thing being deleted here.
    THE OBJECT ROWS ARE NOT NUMBERS AND ARE NOT IN THIS SET — `stepUnits`, `stepUnitRuns`,
-   `outOfProgramsAtTheLadderUnits` and `programCursors` are spliced with `%s` and are validated as PARTITIONS
-   by `censusHistRows`, a contract a numeric-presence loop cannot state and would refuse outright. Three of the
-   four are partitions of the FRONTIER or of the run; the third is a partition of ONE ROW on the same line,
-   which `censusHistRows` already expresses because its total is a parameter rather than `live`. The split is taken from the CONVERSION in the format string
+   `stepUnitOverruns`, `outOfProgramsAtTheLadderUnits`, `programCursors` and `programsAhead` are spliced with
+   `%s` and are validated as PARTITIONS by `censusHistRows`, a contract a numeric-presence loop cannot state
+   and would refuse outright. Most are partitions of the FRONTIER or of the run; the ladder one is a partition
+   of ONE ROW on the same line, which `censusHistRows` already expresses because its total is a parameter
+   rather than `live`. THE COUNT IS NOT WRITTEN HERE ANY MORE AND THAT IS THE POINT: this sentence read
+   "three of the four" while the array beside it already held FIVE, which is CLAUDE.md's
+   count-disagreeing-with-its-own-list with the list one line below the number — and the number is the half a
+   reader quotes onward. The array is the enumeration, and `censusRowSet` is what refuses the day a further
+   object arrives with no reader. The split is taken from the CONVERSION in the format string
    and never from an exclusion list beside it, and `censusRowSet` is what refuses the day a fourth object
    arrives with no reader.
    MEMOIZED BECAUSE IT IS A FILE READ AND THE ANSWER CANNOT CHANGE UNDER ONE BUILD — and never evaluated at
@@ -256,7 +261,8 @@ const loadNow = () => {
 let g_coldFields = null;
 const coldFields = () => (g_coldFields ??= censusRowSet(
   "solver/result.c", "char *result_cold_json(void)", "\n}\n",
-  ["stepUnits", "stepUnitRuns", "stepUnitOverruns", "outOfProgramsAtTheLadderUnits", "programCursors"],
+  ["stepUnits", "stepUnitRuns", "stepUnitOverruns", "outOfProgramsAtTheLadderUnits", "programCursors",
+   "programsAhead"],
   "the @COLD reader states which rows it requires of the frontier census, and it takes that set from the " +
   "composer rather than from a list beside it"));
 /* THE POPULATION SPLITS ARE PARTITIONS AND THE PARTITION IS THE CONTRACT, checked here for the reason
@@ -2853,6 +2859,67 @@ function stepCostReading(a, b, q) {
    would be the no-progress count this project forbids. What it throws on is the census being internally
    untrue — a row set that does not partition `live` — which is a statement about the document and not about
    the run. */
+/* HOW FAR THE STANDING MEMBERS ARE FROM HAVING NOTHING LEFT TO RUN — solver/cold.h's `programs_ahead`, which
+   is `dyn_n - script_i` bucketed over the frontier. It is the reading `programCursorReading` below reaches for
+   and cannot have: that one is over `script_i` ALONE, and its own banner records what that costs ("a top
+   bucket of 8 on a 24-row document says the 156 members standing there have nothing left to run, when in fact
+   sixteen rows remain and every one of them is a chunk"). `dyn_n` is PER-FLOW and appeared in no row at all,
+   so the workaround was to read two GLOBAL scalars — `rootPrograms` and `deepestLeft` — beside a per-member
+   histogram, and neither of them is a distance.
+   THE THREE STATES IT SEPARATES ARE WHAT MAKE IT WORTH A ROW, and `outOfPrograms` at 0 is silent about all
+   three: a mass whose distance is FLAT across censuses is a frontier held behind rows it cannot pass, a mass
+   whose distance is RISING is a document queueing rows faster than the frontier consumes them, and a mass
+   whose distance is FALLING is a frontier converging on its first retirement. Those take opposite work — the
+   reply door, the document, and more budget — and until this row they were one zero.
+   IT IS READ AT ONE CENSUS AND NEVER DIFFERENCED, because it is a GAUGE like every other row `cold_census`
+   fills. What a reader compares across censuses is two READINGS of it, which is a different sentence from a
+   subtraction and is the one this composes.
+   NO SECOND PRESENCE CHECK ON `live`: `censusHistRows` below guarantees it as the total this partitions
+   against, and a second one here would be the second place a renamed row has to be renamed. */
+function programsAheadReading(b) {
+  const rows = censusHistRows(b, "programsAhead", "live",
+                              "the live members' own remaining-row counts (solver/cold.h), whose extent is " +
+                              "therefore the greatest distance any standing member is at rather than a fixed " +
+                              "list — and which is still never empty, because solver/cold.c gives an empty " +
+                              "frontier distance 0");
+  /* AND ITS ZERO BUCKET AGAINST `outOfPrograms`, which is the identity the engine asserts at the composition
+     where both are in one hand (solver/result.c). It is re-asked here for `censusHistRows`' own reason: that
+     one is exact where the two walks are, and this is the other side of the same contract at the boundary the
+     numbers CROSS, so a difference visible here and not there is a row lost between the census and this
+     document rather than a walk that disagreed with itself. */
+  const zero = rows.find((r) => r[0] === "0");
+  if (!zero || zero[1] !== b.outOfPrograms)
+    throw new Error("[build] the @COLD census's `programsAhead` bucket 0 is " +
+                    `${zero ? zero[1] : "absent"} against \`outOfPrograms\` ${b.outOfPrograms} — they are ` +
+                    "the same predicate written two ways over the same two fields (`dyn_n - script_i == 0` " +
+                    "and `script_i == dyn_n`), so a difference means one of the two walks was given a member " +
+                    "the other was not, and no reading composed from either is about the run that happened. " +
+                    "solver/result.c asserts the same identity where both halves are in one hand.");
+  const at = rows.filter((r) => r[1] > 0);
+  /* AN EMPTY FRONTIER IS A SENTENCE AND NOT AN EMPTY LIST, for `stepUnitReading`'s reason exactly: rendering
+     nothing there reads as a histogram that failed rather than as a census taken with nobody standing, and
+     those take opposite work. The row set is `{"0":0}` in that state by construction. */
+  if (at.length === 0)
+    return `rows ahead at the last census: no member was standing (live ${b.live}), so all ${rows.length} ` +
+           "of the histogram's rows read 0 — a census taken on an empty frontier, which is a measurement " +
+           "and not an absent row";
+  const top = at.reduce((x, r) => (r[1] > x[1] ? r : x), at[0]);
+  const owed = at.reduce((t, r) => t + Number(r[0]) * r[1], 0);
+  const furthest = at.reduce((x, r) => (Number(r[0]) > x ? Number(r[0]) : x), Number(at[0][0]));
+  /* THE MASS AND THE TOTAL, NAMED SEPARATELY AND THE TOTAL NAMED AS WHAT IT IS, because a mean over this
+     distribution is exactly the statistic a forked frontier destroys: every arm of one fork family carries
+     its parent's remaining rows, so the SUM multiplies by the frontier's size and says as much about how much
+     the page forked as about how far it is from retiring. The modal bucket is a fact about where the members
+     are; the sum is reported beside it with its own caveat rather than divided into an average nobody can act
+     on. */
+  return `rows ahead at the last census: ${at.length} of ${rows.length} distances occupied, most members ` +
+         `(${top[1]} of ${b.live}) with ${top[0]} row(s) still to run, the furthest at ${furthest}; ` +
+         `${zero[1]} member(s) have none left (= outOfPrograms, the only bucket from which a member can ` +
+         `reach flow_step's retirement arm at all), and the frontier owes ${owed} row-start(s) in total — a ` +
+         "SUM over a forked frontier, so it is a statement about this page's fork factor as much as about " +
+         "its distance";
+}
+
 function programCursorReading(b) {
   /* THE TWO ROWS THIS READER COMPARES ARE ASSERTED, NOT COERCED — and the coercion that stood in their place
      is the shape the record-field audit names: `Number(x)` turns an ABSENCE into a VALUE rather than into a
@@ -4182,7 +4249,15 @@ function hungCauseCensus(out) {
                   tree's to supply. */
                stepUnitReading(b) + "; " + stepUnitRunReading(b) + "; " + stepUnitOverrunReading(b) +
                "; " + ladderUnitReading(b) + "; " +
-               stepCostReading(a, b, quantumDenomination(out)) + "; " + programCursorReading(b);
+               stepCostReading(a, b, quantumDenomination(out)) + "; " + programCursorReading(b) +
+               /* AND THE FIFTH IS THE DISTANCE THE FOURTH IS A POSITION IN. `programCursorReading` says
+                  where the mass GOT TO and this says how much is in FRONT of it, and neither is derivable
+                  from the other because `dyn_n` is per-flow: a frontier one row from its first retirement
+                  and one forty rows from it stand at the same cursor and read identically in every other
+                  row on this line. It is the row `finished` is a DISTANCE TO — flow_step's retirement arm
+                  sits below the block that starts the next row, so its precondition is this histogram's
+                  bucket 0 and nothing else. */
+               "; " + programsAheadReading(b);
   /* AND WHICH OF THE STILL-0 ROWS WERE EVER ANYTHING ELSE, which is the distinction `flipped.length === 0`
      cannot draw and which decides what "still advancing" is worth. Measured across six builds: the rows that
      reached 1 in the last window were, every time, the ten members of ONE family (the @S search rows), while

@@ -127,6 +127,34 @@ void cold_census(ColdCensus *out)
         }
         out->program_cursors[f->script_i]++;
 
+        /* …AND HOW MANY ROWS THIS MEMBER STILL HAS AHEAD OF IT, on the same walk and from the same two fields.
+           See cold.h for why this is not derivable from the bucket above: that one is `script_i` alone and
+           `dyn_n` is per-flow, so the distance to the end of a member's own sequence appears in no other row.
+           NO RANGE GUARD OF ITS OWN, DELIBERATELY. The `DCHECK(f->script_i <= f->dyn_n)` above and the
+           `CHECK(f->script_i >= 0)` above it establish `0 <= dyn_n - script_i` for this member on this pass —
+           same two fields, same member, same iteration — so a guard here would be an assert whose two sides
+           cannot disagree, which is a non-check that reads as diligence. What the grow below still owes is the
+           UPPER end, exactly as the cursor's does, because the store is what indexes the buffer. */
+        {
+            int ahead = f->dyn_n - f->script_i;
+
+            if (ahead >= out->programs_ahead_n) {
+                int want = ahead + 1;
+                long *grown = realloc(out->programs_ahead, (size_t)want * sizeof *grown);
+                CHECK(grown != NULL,
+                      "the frontier's remaining-rows histogram could not be grown to the distance a member "
+                      "stands at — this census is the only thing that can say whether the frontier is HELD "
+                      "behind rows it cannot pass, queueing rows faster than it consumes them, or converging "
+                      "on its first retirement, and a histogram that stopped short would report every member "
+                      "past its end as having nothing left to run");
+                memset(grown + out->programs_ahead_n, 0,
+                       (size_t)(want - out->programs_ahead_n) * sizeof *grown);
+                out->programs_ahead = grown;
+                out->programs_ahead_n = want;
+            }
+            out->programs_ahead[ahead]++;
+        }
+
         /* THE DECISION VECTOR, in BOTH of the two places one flow's can be. A parked flow's lives in its
            suspend blob — which is where a COLD-RESUMED flow's rebuilt chain lives too, so a resumed flow is
            counted exactly like a forked one; the RUNNING flow's is live in decide.c and in no blob at all.
@@ -250,12 +278,35 @@ void cold_census(ColdCensus *out)
            "the frontier's program-cursor histogram left this walk with no rows — the block above gives an "
            "empty frontier program 0 precisely so that this cannot happen, so reaching here means the walk "
            "was entered on a record it did not clear");
+
+    /* AND THE REMAINING-ROWS HISTOGRAM'S ROW SET IS NEVER EMPTY EITHER, for the reason directly above and with
+       a different row standing in for the empty frontier's answer. Distance 0 is what a member with no rows
+       left has, so `{"0":0}` says "nobody is anywhere, and nobody is at the end" in the same shape a populated
+       frontier states its distances — and it is the bucket the identity below ties to `out_of_programs`, which
+       is 0 on an empty frontier, so the pair agrees there rather than having one half absent. */
+    if (out->programs_ahead_n == 0) {
+        out->programs_ahead = calloc(1, sizeof *out->programs_ahead);
+        CHECK(out->programs_ahead != NULL,
+              "the frontier's remaining-rows histogram could not be given its one row for an EMPTY frontier — "
+              "the row exists so that `{}` never reaches a reader that refuses one, so failing to allocate it "
+              "publishes a census whose consumers cannot tell a frontier with nobody in it from a composer "
+              "that stopped emitting");
+        out->programs_ahead_n = 1;
+    }
+    DCHECK(out->programs_ahead != NULL && out->programs_ahead_n > 0,
+           "the frontier's remaining-rows histogram left this walk with no rows — the block above gives an "
+           "empty frontier distance 0 precisely so that this cannot happen, so reaching here means the walk "
+           "was entered on a record it did not clear");
 }
 
-/* See cold.h. THE ONLY THING A CENSUS OWNS is the cursor histogram, whose extent is the frontier's and so
-   cannot be a fixed array on the record; everything else here is a scalar the walk fills in place. Written to
-   leave a READABLE record rather than a poisoned one — a released census reads as a walk that found nothing,
-   which is what a caller that releases early and then reads has actually got. */
+/* See cold.h. WHAT A CENSUS OWNS is the two population-sized histograms — the cursor one and the
+   remaining-rows one — whose extents are the frontier's and so cannot be fixed arrays on the record;
+   everything else here is a scalar the walk fills in place. THE SENTENCE SAID "THE ONLY THING" AND NAMED ONE,
+   which was true when written and is exactly the shape that goes wrong silently: a second buffer added to the
+   walk and not to this line leaks per census rather than failing, so the count is stated here and the
+   record's own field pairs are the list.
+   WRITTEN TO LEAVE A READABLE RECORD rather than a poisoned one — a released census reads as a walk that
+   found nothing, which is what a caller that releases early and then reads has actually got. */
 void cold_census_release(ColdCensus *out)
 {
     DCHECK(out != NULL, "a snapshot census was released through no record at all — there is nothing to free "
@@ -263,6 +314,9 @@ void cold_census_release(ColdCensus *out)
     free(out->program_cursors);
     out->program_cursors = NULL;
     out->program_cursor_n = 0;
+    free(out->programs_ahead);
+    out->programs_ahead = NULL;
+    out->programs_ahead_n = 0;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────────────────────────────────
