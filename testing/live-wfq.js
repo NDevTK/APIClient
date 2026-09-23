@@ -185,7 +185,17 @@ function branchScope() {
    wall-denominated. */
 const COST = ["scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeights",
               "scanOtherRuns", "scanOtherWeights", "scanCensusRuns", "scanCensusWeights",
-              "preemptAsksLifetime"];
+              "preemptAsksLifetime",
+              /* …AND WHICH HALF OF THE HOOK'S KEY MOVED WHEN IT MISSED. `scanRivalRuns` is close to half of
+                 all the frontier weighing this engine does and is keyed on a DISJUNCTION — the frontier
+                 generation OR the incumbent — so until these three the miss rate above had to be read with
+                 an assumption about which disjunct supplied it, and the two take opposite diffs. A `gen`
+                 miss is the order genuinely having changed; a `cur` miss is a walk for a frontier in which
+                 only the EXCLUDED member moved. `rivalMissBoth` is what prices either repair: where both
+                 halves moved in one interval, removing one invalidator buys NOTHING because the other would
+                 have forced the same walk. LIFETIME counts like the nine above, differenceable for the same
+                 reason, and a PARTITION of `scanRivalRuns` — which is checked below rather than assumed. */
+              "rivalMissGen", "rivalMissCur", "rivalMissBoth"];
 
 /* …AND WHETHER THE ONE ASSERTION THE DISPATCH WALK MAKES WAS EVER ACTUALLY ASKED, which is the other half of
    the same question and had it WORSE: `keyStaleGenLifetime`, `keyFirstSeenLifetime` and `keyRunningLifetime`
@@ -288,7 +298,13 @@ function costScope() {
                       "from result.c's own composer, so a row that has gone is one the producer renamed " +
                       "or dropped rather than one this file invented, and every reading below it would " +
                       "compare an absent field as undefined.");
-  const published = [...keys].filter((k) => /^(?:scan[A-Z]|preemptAsks)/.test(k));
+  /* THE SHAPES THIS SCOPE OWNS, AND THE THIRD ONE IS WHY THE FILTER IS NOT A CONVENTION. The two-way check
+     above can only see a published row it RECOGNISES as cost-scope, so a row added under a naming
+     convention this pattern does not match is not caught by it — it is absent from the guard, absent from
+     `COST`, computed on every census of every run and read by nobody, which is precisely the state the
+     guard exists to end arriving through the guard's own selector. `rivalMiss` is named here for that
+     reason: the partition is cost-scope by its subject and not by its spelling. */
+  const published = [...keys].filter((k) => /^(?:scan[A-Z]|preemptAsks|rivalMiss)/.test(k));
   const unread = published.filter((k) => !COST.includes(k));
   if (unread.length)
     throw new Error("[live-wfq] result_wfq_json publishes cost-scope row(s) no reader here names: " +
@@ -306,6 +322,15 @@ function costScope() {
 const COST_IDENTITIES = [
   ["scanRivalRuns<=preemptAsksLifetime", ["scanRivalRuns", "preemptAsksLifetime"],
    (w) => w.scanRivalRuns <= w.preemptAsksLifetime],
+  /* AND THE PARTITION'S OWN, WHICH IS AN EQUALITY WHERE THE ONE ABOVE IS A CONTAINMENT — result.c asserts it
+     at the census and that DCHECK is compiled OUT of the release build this driver samples, so it is checked
+     here for the same reason the branch identities are. It is the one thing that makes the three rows a
+     partition rather than three opinions: a sum BELOW `scanRivalRuns` is an arm moved off the line that
+     walks, a sum ABOVE it is a miss counted where no walk followed, and either way the reading the rows
+     exist for — which invalidator a rescan would have to lose to not happen — is no longer answerable. */
+  ["rivalMissGen+rivalMissCur+rivalMissBoth==scanRivalRuns",
+   ["rivalMissGen", "rivalMissCur", "rivalMissBoth", "scanRivalRuns"],
+   (w) => w.rivalMissGen + w.rivalMissCur + w.rivalMissBoth === w.scanRivalRuns],
 ];
 
 /* THE IDENTITIES result.c STATES AS CHECKABLE ON THIS DOCUMENT, checked rather than trusted — the same

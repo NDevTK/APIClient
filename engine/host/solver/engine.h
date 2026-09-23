@@ -482,6 +482,40 @@ long engine_work_done(void);
    IT DECIDES NOTHING, for the scan counters' reason exactly — no policy reads it. */
 uint64_t engine_preempt_asks(void);
 
+/* …AND WHICH OF THE TWO THINGS THE RESCAN KEYS ON HAD MOVED, WHICH IS THE ONE QUESTION THE COUNT ABOVE AND
+   `scanRivalRuns` TOGETHER STILL CANNOT ASK. The hook's cache is keyed on a DISJUNCTION — the frontier
+   generation OR the incumbent — and both rows publish only how often it MISSED, so every reading of that miss
+   rate has to assume which disjunct supplied it. The two take opposite diffs: a miss on the GENERATION is the
+   page branching and the rescan is the order genuinely having changed, while a miss on the INCUMBENT is a
+   rescan for a frontier nothing moved in — the rival is `best eligible other than cur`, so only the EXCLUDED
+   member changed, and a walk that folded its top two would answer it without one.
+   THE THIRD ROW IS THE ONE THAT DECIDES WHETHER EITHER DIFF IS WORTH ANYTHING, and it is why this is a
+   partition rather than a pair. Where both moved in one interval, removing one invalidator alone buys NOTHING:
+   the other would have forced the same walk. So `both` is not a rounding row — a large `cur` beside a large
+   `both` and a large `cur` beside a zero `both` recommend the same work at completely different prices, and no
+   arithmetic over two rows can separate them.
+   IT IS A PARTITION OF `scanRivalRuns` EXACTLY, and the raise is placed to make that structural rather than
+   hoped for: it sits inside the rescan branch, after the key is compared and before the walk, under the same
+   `cur != NULL` test that decides whether flow_rival_of is called at all — so a consultation that misses with
+   no incumbent buys no walk and is counted in neither. The identity `gen + cur + both == scanRivalRuns` is
+   asserted at the census, where all four are in one hand (solver/result.c).
+   ONE STRUCT AND ONE CALL, for solver/flow.h's FlowKeyChecks reason: a partition read through three calls is
+   three moments, and §Testing's rule is that a conservation identity holds WITHIN ONE SAMPLE and nowhere else.
+   LIFETIME COUNTS, never reset, raised in EVERY build — because `scanRivalRuns`, the total they are a
+   partition of, is raised unconditionally too, and a partition compiled out in release would print three zeros
+   beside a nonzero total and read as a hook that never missed rather than as a build that never classified.
+   IT DECIDES NOTHING, for the scan counters' reason exactly: no term of flow_weight reads any of the three, no
+   pick branches on them, nothing is bounded by them.
+   RETIREMENT: this goes when the rival is no longer a WALK — a fold that names the top two members answers an
+   incumbent change in O(1), so the `cur` arm stops costing a scan and there is nothing left for the partition
+   to be about. */
+typedef struct {
+    uint64_t gen;    /* the frontier GENERATION had moved and the incumbent had not */
+    uint64_t cur;    /* the INCUMBENT had changed and the generation had not */
+    uint64_t both;   /* both had moved in one interval — neither invalidator alone explains this walk */
+} EngineRivalMiss;
+EngineRivalMiss engine_rival_miss(void);
+
 /* THE SESSION — the same dispatch loop, stepped by its HOST instead of drained. The extension's host has other
    work between quanta (its message port, other documents' engines, streaming findings), and CLAUDE.md's
    cooperative-quantum yield says the scheduler RETURNS for exactly that and then resumes the byte-identical

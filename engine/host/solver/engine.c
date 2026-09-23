@@ -8565,6 +8565,11 @@ static int64_t engine_now_ms(void);   /* the WALL clock, for the gap census belo
    generation, so the rescan re-runs before a departed member could be read. That is asserted where the pointer
    is taken rather than where it is read, because membership is an O(flows) scan and the read is per-opcode. */
 static unsigned g_seen_gen = 0; static Flow *g_seen_cur = NULL; static Flow *g_rival = NULL;
+/* …AND WHICH HALF OF THAT KEY MOVED, EACH TIME IT DID — see solver/engine.h for the reading, the identity and
+   why the third row is not a rounding row. Raised in the rescan branch below, after the key is compared and
+   before the walk, so they are a partition of `scanRivalRuns` by construction rather than by two sites
+   agreeing. LIFETIME, never reset, raised in every build; nothing reads them but the census. */
+static uint64_t g_rival_miss_gen = 0, g_rival_miss_cur = 0, g_rival_miss_both = 0;
 /* …AND WHAT THAT RIVAL WAS WORTH IN EVERY TERM THE FRONTIER GENERATION IS SUPPOSED TO SPEAK FOR — recorded
    where the pointer is taken and read at every consultation until the generation next moves. It is the mirror
    of the `g_ranked_*` block below and asks the opposite question: that one holds the INCUMBENT, whose own
@@ -8668,6 +8673,13 @@ static int64_t g_last_ask = 0, g_max_gap = 0;
    this file. */
 uint64_t engine_preempt_asks(void) { return g_preempt_asked; }
 
+/* …AND THE PARTITION OF THIS HOOK'S MISSES — one call for solver/engine.h's reason. */
+EngineRivalMiss engine_rival_miss(void) {
+    EngineRivalMiss m;
+    m.gen = g_rival_miss_gen; m.cur = g_rival_miss_cur; m.both = g_rival_miss_both;
+    return m;
+}
+
 /* The solver's policy does not care WHICH kind of point it was offered — its two decisions are the WFQ ranking
    and the consumed slice, and both ask whether this flow should still hold the thread. */
 static int preempt_hook(int kind) {
@@ -8742,8 +8754,23 @@ static int preempt_hook(int kind) {
        assertion doing its job. The fix is at the origin: a mark change IS a ranking change and now raises the
        frontier generation (flow.c), so this rescan condition covers it and the eligible set the hook ranks
        against is the same one the pick used. */
-    if (flow_frontier_gen() != g_seen_gen || cur != g_seen_cur) {   /* (1) rescan for the rival only on change */
+    /* THE KEY IS A DISJUNCTION AND THE TWO HALVES ARE READ APART, because a count of MISSES cannot say which
+       of the two it is a count of and the two take opposite diffs — see solver/engine.h's EngineRivalMiss.
+       Captured BEFORE the assignments below, which overwrite exactly the two quantities the condition asked
+       about: read afterwards, both would be false at every miss and the partition would be a count of zero. */
+    const int rival_gen_moved = (flow_frontier_gen() != g_seen_gen);
+    const int rival_cur_moved = (cur != g_seen_cur);
+    if (rival_gen_moved || rival_cur_moved) {   /* (1) rescan for the rival only on change */
         g_seen_gen = flow_frontier_gen(); g_seen_cur = cur;
+        /* UNDER THE SAME `cur` TEST AS THE WALK ITSELF, which is what makes these a partition of
+           `scanRivalRuns` rather than of consultations: a miss with NO incumbent does not call flow_rival_of
+           at all, so it raises no scan run and must raise nothing here either. The identity is asserted at
+           the census (solver/result.c), where all four rows are in one hand. */
+        if (cur) {
+            if (rival_gen_moved && rival_cur_moved) g_rival_miss_both++;
+            else if (rival_gen_moved)               g_rival_miss_gen++;
+            else                                    g_rival_miss_cur++;
+        }
         g_rival = cur ? flow_rival_of(cur) : NULL;
         /* THE CACHED POINTER'S WHOLE SAFETY ARGUMENT, ASSERTED WHERE IT IS ESTABLISHED. It is read at every
            consultation until the generation moves, so it is live only because a member LEAVING the frontier is

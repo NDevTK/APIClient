@@ -75,19 +75,22 @@ static int64_t g_unframed_picks_total = 0;
    LIFETIME counters that say whether the ORDER is deciding anything at all, which no row in this file could
    ask and which the one row that looks as though it could is not.
    WHY `g_rank_changes` IS NOT THIS COUNT, AND WHY THAT IS WORSE THAN IT NOT EXISTING. frontier_rank_changed
-   is called from NINE sites and exactly TWO of them change the membership: the clock write
-   (frontier_vt_serve), three fitness observations (flow_observe_replay/_survival/_rung), three host-owed
-   transitions (flow_set_host_owed, flow_clear_host_owed, flow_clear_host_owed_all), the arrival (flow_new)
-   and the departure (flow_remove). So `rankChanges / picksLifetime` is a numerator raised at nine events over
-   a denominator raised at one — CLAUDE.md's count-offered-as-a-share-of-another, with the population it
+   is called from these sites and exactly TWO of them change the membership: the clock write
+   (frontier_vt_serve), three fitness observations (flow_observe_replay/_survival/_rung), the completed-unit
+   credit (flow_credit_visit), three host-owed transitions (flow_set_host_owed, flow_clear_host_owed,
+   flow_clear_host_owed_all), the arrival (flow_new) and the departure (flow_remove). THE LIST IS STATED AND
+   THE COUNT IS NOT: this enumeration read NINE while the tree held TEN — flow_credit_visit was the one it
+   missed — and a number beside a list it disagrees with is the half of the pair nobody adds up. So
+   `rankChanges / picksLifetime` is a numerator raised at every one of those events over a denominator raised
+   at one — CLAUDE.md's count-offered-as-a-share-of-another, with the population it
    mostly counts being the order working rather than a defect.
    AND IT READS AS IF IT WERE THE ARRIVAL COUNT ON EXACTLY THE DOCUMENT ANYBODY MEASURES. On a page that
-   emits nothing, fetches nothing and never moves the clock, seven of the nine sites never fire: measured at
+   emits nothing, fetches nothing and never moves the clock, most of those sites never fire: measured at
    artifact c23bfe6a on testing/fixtures/wjp_absent.html, `rankChanges` 34315 against `members` 34309 at the
    last census of a 180 s series — a difference of SIX, constant at every one of its twelve samples. So the wrong reading is CORRECT
-   to four figures on the run a reader is most likely to take it from, and is a mixture of nine populations on
-   every run that fetches or emits anything. A quantity that agrees with the one you want on the sample you
-   have is the shape that never gets checked.
+   to four figures on the run a reader is most likely to take it from, and is a mixture of every one of those
+   populations on any run that fetches or emits anything. A quantity that agrees with the one you want on the
+   sample you have is the shape that never gets checked.
    WHAT THE PAIR IS FOR, AND IT IS THE ONE QUESTION THAT DECIDES WHETHER A WEIGHT CHANGE CAN HELP AT ALL.
    `arrivals / picksLifetime` is HOW MANY MEMBERS ARE MINTED PER DISPATCH. Below 1 the frontier is draining
    and the ORDER decides who is served first, which is what every term of flow_weight is written to argue
@@ -166,9 +169,36 @@ static int64_t g_unframed_picks_total = 0;
    per step, which no single sample could have said. THE DENOMINATOR IS NAMED BECAUSE LEAVING IT UNNAMED COST
    A RELAY: `0.553` sitting beside a named quotient was passed on AS that quotient, which reads as half an
    evaluation per step — cheap — where the figure this paragraph is about is seventeen thousand of them.
-   `scanRivalRuns / forks` reads 1.985 and 1.992: the hook rescans about twice per fork, where flow.h's own
-   cadence note predicts about once, so something raises the frontier generation a second time per fork and
-   `flow_rank_changes` is the row that would name it.
+   `scanRivalRuns / forks` reads 1.985 and 1.992.
+   AND THE CLAUSE THAT STOOD HERE READ THAT AS A SECOND RAISE — "the hook rescans about twice per fork, where
+   flow.h's own cadence note predicts about once, so something raises the frontier generation a second time per
+   fork and `flow_rank_changes` is the row that would name it" — WHICH DOES NOT FOLLOW FROM THESE ROWS, AND IS
+   REWRITTEN RATHER THAN DELETED BECAUSE THE QUOTIENT IS REAL AND A READER WHO RE-DERIVES IT WILL RE-DRAW THE
+   SAME INFERENCE. Two things are wrong with it and only the second is about magnitudes.
+   A RAISE IS NOT A MISS. `scanRivalRuns` counts walks the preempt hook PERFORMED, and it performs one only
+   when it is CONSULTED and finds its key changed — which happens at an interpreter opcode. Raises made inside
+   ONE C call have no opcode between them, so N of them collapse into a SINGLE miss at the next poll;
+   engine.c's own hook says exactly this of the adjacent pair ("no interpreter opcode runs between them"). So
+   no number of extra raises per fork can produce a second rescan per fork — and the fork path raises exactly
+   once in any case: engine_sibling_assemble's flow_add_unseeded reaches flow_new, which is the only site on
+   that path, and flow_fork_inherit raises nothing at all.
+   THE KEY IS A DISJUNCTION AND ONLY ONE DISJUNCT WAS BEING READ. The rescan condition is
+   `flow_frontier_gen() != g_seen_gen || cur != g_seen_cur`, so the INCUMBENT SWITCH invalidates the cache as
+   readily as the generation does, at a cadence of one per dispatch rather than one per fork — and
+   `picksLifetime` is 34971 and 35603 on these same two runs, the same order as the forks. A quotient near 2.0
+   over forks is what a page whose dispatches and whose forks are of one order looks like when BOTH halves of
+   the key fire, and that reading needs no second raise anywhere.
+   WHICH OF THE TWO IT ACTUALLY IS, THESE ROWS CANNOT SAY, and neither can `flow_rank_changes`: that row
+   counts RAISES, which is the quantity just established not to be what the hook pays for, and it is raised at
+   every site the banner at `g_arrivals` lists. The partition that answers it is `rivalMissGen`, `rivalMissCur`
+   and `rivalMissBoth` (solver/engine.h), raised inside the rescan branch itself and asserted at the census to
+   sum to `scanRivalRuns`. So the quotient above is a measurement whose CAUSE is open, and the sentence it
+   replaces was a mechanism named without one — the move this file records going wrong three times one screen
+   up. The two arms take opposite diffs: a `gen` arm is the order genuinely having changed and the walk is what
+   a forking page owes, while a `cur` arm is a walk for a frontier in which only the EXCLUDED member moved,
+   which a fold naming the top two members would answer in O(1) — and `rivalMissBoth` is what says whether
+   either repair buys anything at all, since where both halves moved in one interval removing one changes
+   nothing.
    SUMMED, THE TWO RUNS EVALUATED 2.17 AND 2.22 BILLION MEMBER WEIGHTS TO PERFORM `unitsDone` 380 AND 522 —
    5.70 and 4.25 million weight evaluations per unit of work — a figure whose 34% spread is ENTIRELY its
    denominator's, which the sentence below names as the one column that moves, so it is quoted as the pair it

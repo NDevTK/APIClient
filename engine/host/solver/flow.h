@@ -1855,12 +1855,16 @@ typedef struct {
        one writer — flow.c's flow_new appends the only member a registry ever gains and flow_remove's
        swap-remove is the only decrement of the member count that is not the registry coming up.
        `rank_changes` IS NOT THIS COUNT AND MUST NOT BE READ AS THOUGH IT WERE, which is the reason these
-       exist. frontier_rank_changed has NINE callers and two of them change the membership; the other seven
-       are the clock write, three fitness observations and three host-owed transitions. On a page that emits
-       nothing, fetches nothing and never moves the clock those seven never fire, so `rank_changes` stood
-       exactly SIX above `members` at all twelve samples of the series above (34315 against 34309 at the last)
-       — correct to four figures on the run a reader is most likely to take it from, and a mixture of nine
-       populations on every run that fetches or emits anything. */
+       exist. Exactly TWO of frontier_rank_changed's callers change the membership; the others are the clock
+       write, three fitness observations, the completed-unit credit and three host-owed transitions. THE LIST
+       IS STATED AND THE COUNT IS NOT, because this sentence carried one and it was wrong: it read NINE
+       callers and SEVEN non-membership ones while the tree held ten and eight, flow_credit_visit being the
+       one both figures missed. On a page that emits nothing, fetches nothing and never moves the clock most
+       of those never fire, so `rank_changes` stood exactly SIX above `members` at all twelve samples of the
+       series above (34315 against 34309 at the last) — correct to four figures on the run a reader is most
+       likely to take it from, and a mixture of every one of those populations on any run that fetches or
+       emits anything. solver/flow.c's frontier_rank_changed carries the list; a reader who wants today's set
+       greps that call rather than counting from here. */
     int64_t arrivals;
     int64_t departures;
     /* HOW MANY FINDINGS WERE OFFERED TO THE ORDER, AND HOW THAT TOTAL SPLIT — the partition `val_top`,
@@ -3008,10 +3012,16 @@ void flow_wfq_census(WfqCensus *out);
  * WHY THE ENTRIES ARE COUNTED APART AND NOT SUMMED. They run at DIFFERENT CADENCES, which is the whole reading:
  *   `next-to-run` is the dispatch loop's, ONE per step by construction, so its weight total over `steps` is the
  *      average frontier a step pays for.
- *   `rival-of-incumbent` is the PREEMPT HOOK's, and its cadence is the frontier's GENERATION — every fork,
- *      arrival, departure and emission calls frontier_rank_changed, so the hook's cached rival goes stale and
- *      the next opcode rescans. A forking page therefore pays this one per fork rather than per step, which is
- *      a rate nothing about the dispatch loop would predict.
+ *   `rival-of-incumbent` is the PREEMPT HOOK's, and its cadence is set by TWO things rather than one — the
+ *      key it caches on is `flow_frontier_gen() != g_seen_gen || cur != g_seen_cur`. Every fork, arrival,
+ *      departure, emission, completed unit and host-owed transition calls frontier_rank_changed, so the
+ *      cached rival goes stale and the next opcode rescans; and an INCUMBENT SWITCH invalidates it just as
+ *      readily, because the rival is `best eligible OTHER than cur` and only the excluded member has to move.
+ *      So a forking page pays this per fork AND a dispatching one pays it per switch, and a quotient taken
+ *      over forks alone has been read as a second raise per fork when it is the other disjunct — see
+ *      solver/flow.c's measurement paragraph for that retraction, and `rivalMissGen`/`rivalMissCur`/
+ *      `rivalMissBoth` (solver/engine.h) for the partition that tells the two apart. A raise is NOT a miss:
+ *      raises with no interpreter opcode between them collapse into one.
  *   `best` and `eviction-tail` are the host's and the pager's, asked per report and at the RAM floor.
  *   `wfq-census-walk` is the REPORT's own, one per sample — the instrument measuring what the instrument costs.
  *      There are TWO samplers and a smoke's count is both of them: the result document's composer, which is the
@@ -3044,7 +3054,12 @@ void flow_wfq_census(WfqCensus *out);
 #define FLOW_SCANS(X)                                                                     \
     /* the dispatch loop's pick — one per step */                                         \
     X(NEXT,  "next-to-run")                                                               \
-    /* the preempt hook's rival rescan — one per frontier-generation change */            \
+    /* the preempt hook's rival rescan — one per MISS of a key that is a DISJUNCTION:          \
+       the frontier generation OR the incumbent. Not "one per generation change": the rival is  \
+       `best eligible OTHER than cur`, so a switch invalidates the cache with the frontier       \
+       standing still, and raises made inside one C call collapse into ONE miss at the next      \
+       poll. Which half a miss came from is `rivalMissGen`/`rivalMissCur`/`rivalMissBoth`        \
+       (solver/engine.h), a partition of this row asserted at the census. */                     \
     X(RIVAL, "rival-of-incumbent")                                                        \
     /* the host's best-weight read and the pager's tail, per report and at the RAM floor */\
     X(OTHER, "best-and-eviction-tail")                                                     \

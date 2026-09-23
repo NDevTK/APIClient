@@ -693,6 +693,9 @@ char *result_wfq_json(void) {
        walk for no reason. Nothing between this line and the composition steps anything. */
     FlowKeyChecks kc = flow_key_checks();
     FlowIndexChecks ic = flow_index_checks();
+    /* AND THE PARTITION OF THE PREEMPT HOOK'S CACHE MISSES, IN ONE READ, for the two reads above's reason —
+       solver/engine.h states why it is a struct and what the three rows separate. */
+    EngineRivalMiss rm = engine_rival_miss();
     /* THE ONE CLAIM ABOUT THE PARTITION THAT HOLDS IN BOTH BUILDS. Every bucket is raised on the statement
        after a scan's own `g_scan_weights[why]++`, so a classification without a weighing is impossible and the
        four can never sum above the weighings this instance performed. The EQUALITY is not asserted here and
@@ -771,6 +774,29 @@ char *result_wfq_json(void) {
            "rescan branch is inside that policy and runs after it raises its own count, and flow_rival_of has "
            "no other caller, so one of the two has acquired a writer that is not that hook; "
            "`scanRivalRuns / preemptAsksLifetime` is about to be published as a cache miss rate above 1");
+    /* …AND THE IDENTITY THAT MAKES THE THREE ROWS BELOW A PARTITION OF THAT SAME COUNT RATHER THAN THREE
+       OPINIONS ABOUT IT. The containment directly above says the rescans are a subset of the consultations;
+       this says the three arms account for EVERY rescan and for nothing else. It is an EQUALITY and not a
+       containment because the raise sits inside the rescan branch under the same `cur` test that decides
+       whether flow_rival_of runs, so the two counters are one event counted twice — which is what makes it
+       worth asserting rather than assuming: the reading these rows carry is "which invalidator would have to
+       go away for this walk not to have happened", and an arm that has drifted off the line that walks turns
+       that into three numbers a reader would still divide.
+       ASSERTED HERE AND NOT AT THE HOOK for the identities above's reason exactly: this is the one moment all
+       four are in one hand and nothing between the reads steps the engine. A break spans two FILES — the
+       partition is solver/engine.c's and the total is solver/flow.c's — so nothing inside either can see one.
+       IT HOLDS IN BOTH BUILDS, which the four arming buckets above deliberately do not: all four counters here
+       are raised unconditionally, so a release run that passed this vacuously would be a build in which the
+       partition was compiled out and the total was not, and that is the state this equality refuses. */
+    DCHECK(rm.gen + rm.cur + rm.both == (uint64_t)flow_scan_runs(FLOW_SCAN_RIVAL),
+           "the preempt hook's cache-miss partition does not sum to the rescans those misses bought — the "
+           "three arms are raised inside the rescan branch under the same `cur` test that decides whether "
+           "flow_rival_of is called, so they are that walk counted a second time. A sum BELOW the total is an "
+           "arm that has been moved off the line that walks, or a second caller of flow_rival_of; a sum ABOVE "
+           "it is a miss counted where no walk followed. Either way `rivalMissGen`, `rivalMissCur` and "
+           "`rivalMissBoth` are about to be published as a partition of a number they are not a partition of, "
+           "and the reading they exist for — which invalidator a rescan would have to lose to not happen — "
+           "is no longer a question these rows can answer");
     /* AN EMPTY FRONTIER SAYS SO AND SAYS NOTHING ELSE — result.h states why the term rows are absent rather
        than zero. This is the shape `qjs_result` composes, because a session answers DONE by draining or by
        parking and both leave no members standing. */
@@ -1166,6 +1192,24 @@ char *result_wfq_json(void) {
                         interval between them, and that is the only reading a wall-denominated quantum leaves
                         quotable at all. */
                      "\"preemptAsksLifetime\":%llu,"
+                     /* …AND WHICH HALF OF THAT HOOK'S KEY HAD MOVED WHEN IT MISSED, which the row above and
+                        `scanRivalRuns` together still cannot ask. The cache is keyed on a DISJUNCTION — the
+                        frontier GENERATION or the INCUMBENT — and both rows publish only the miss, so every
+                        reading of that rate has had to ASSUME which disjunct supplied it. Measured once and
+                        read as the generation alone: `scanRivalRuns / forks` near 2.0 was taken as evidence
+                        that something raises the generation a second time per fork, and that inference does
+                        not follow from these rows — a raise is not a miss, and raises made inside one C call
+                        with no interpreter opcode between them collapse into ONE miss at the next poll.
+                        READ AS A PARTITION AND NEVER AS THREE RATES. `rivalMissGen` is the order genuinely
+                        having changed and the walk is what a forking page owes; `rivalMissCur` is a rescan for
+                        a frontier in which nothing moved but the EXCLUDED member, which a walk that folded its
+                        top two would answer without one. `rivalMissBoth` is the row that prices either repair:
+                        where both moved in one interval, removing one invalidator buys NOTHING because the
+                        other would have forced the same walk, so a large `cur` beside a large `both` and a
+                        large `cur` beside a zero `both` recommend the same diff at completely different
+                        prices. LIFETIME counts, raised in every build, and their sum is asserted equal to
+                        `scanRivalRuns` at the DCHECK above — see solver/engine.h. */
+                     "\"rivalMissGen\":%llu,\"rivalMissCur\":%llu,\"rivalMissBoth\":%llu,"
                      /* …AND WHETHER THE ONE ASSERTION THE DISPATCH WALK MAKES WAS EVER ACTUALLY ASKED,
                         WHICH EVERY ROW ABOVE IS SILENT ABOUT BECAUSE EVERY ROW ABOVE COUNTS A WALK PERFORMED.
                         flow_pick's member-key invariant — solver/flow.h's FlowKeyChecks — is a predicted
@@ -1359,6 +1403,7 @@ char *result_wfq_json(void) {
                      flow_scan_runs(FLOW_SCAN_OTHER), flow_scan_weights(FLOW_SCAN_OTHER),
                      flow_scan_runs(FLOW_SCAN_CENSUS), flow_scan_weights(FLOW_SCAN_CENSUS),
                      (unsigned long long)engine_preempt_asks(),
+                     (unsigned long long)rm.gen, (unsigned long long)rm.cur, (unsigned long long)rm.both,
                      kc.armed, kc.stale_gen, kc.first_seen, kc.running,
                      ic.index_asked, ic.index_differed,
                      flow_starved_picks(), flow_starved_picks_idle(),
