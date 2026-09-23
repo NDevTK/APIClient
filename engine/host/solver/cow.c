@@ -1343,6 +1343,26 @@ void cow_capture_host_record_at(JSValueConst owner, void *p, const CowRecord *re
        FREE, so an offset that runs off the end of the record dups whatever is next in memory, an unaligned one
        reads a value that is not there, and a DUPLICATED offset dups one field twice and frees it twice — which
        is the failure a hand-written `*_VALS[]` produces when a field is added by copying the line above it. */
+    /* ASKED ONCE PER (SITE, LAYOUT), AND IT USED TO BE ASKED ONCE PER ASK — which is quadratic in the
+       layout's own length and ran BEFORE both early-outs below, so it was paid in full by every ask that
+       was about to return without capturing anything.
+       MEASURED on a real page (gitlab.com/explore, driven through the shipped wasm, which carries these
+       DCHECKs — verified by finding this function's own message strings in the artifact, with an invented
+       control at 0): ONE step of `start-a-classic-program` took 48.3 CPU-seconds and made 13,022,542 asks
+       from a single site, `browser/core/css/css_rule.c`'s `rule_of`, of which 8,893 captured — a ratio of
+       1465 asks per capture. That layout names 21 owned values, so the loop below is 21 outer checks plus
+       21*20/2 = 210 nested ones, ~273 per ask: 3.55 BILLION assertion evaluations in one step, ~13.5ns
+       each, which is the whole of those 48 seconds. The engine yielded 5 times in 300 CPU-seconds and
+       dispatched 0 of 17 ready jobs, because a step that does not return cannot pump the scheduler.
+       THE LAYOUT IS A COMPILE-TIME CONSTANT AND THE SITE IS A MACRO EXPANSION, so `rec` is the same static
+       every time a given site runs and re-deciding it per ask asks a question whose answer cannot have
+       changed. NOTHING IS DELETED: every assertion still fires, and it fires at the FIRST ask at each site
+       rather than the first capture, which is earlier than the old code reached a bad layout in the one
+       case that matters (a site whose every ask dedups away still validates its layout).
+       HOW ITS ABSENCE WOULD SHOW, if a later diff makes this per-ask again: `sliceUs` and `stepUs` rising
+       into the tens of seconds for a single `stepUnitRuns.start-a-classic-program`, with
+       `cowHostRecAsksBySite` in the millions for one row and `cowStateMade.hostRec` in the thousands. */
+    if (rec != site->checked) {
     for (int vi = 0; vi < rec->n_val; vi++) {
         DCHECKF((size_t)rec->val_off[vi] + sizeof(JSValue) <= rec->size,
                 "a component record's layout names an owned value PAST THE END of the record — entry %d, offset "
@@ -1359,6 +1379,9 @@ void cow_capture_host_record_at(JSValueConst owner, void *p, const CowRecord *re
                     "offset %u, captured at %s:%d. The capture dups it twice and the delta frees it twice, "
                     "which is a refcount underflow on a value the page still holds",
                     vj, vi, (unsigned)rec->val_off[vi], file, line);
+    }
+    site->checked = rec;   /* INSIDE the guard and AFTER the loop: a layout that aborts never records
+                              itself as validated, and a repeat ask stores nothing at all. */
     }
     if (JS_ObjFlowGen(owner) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
     /* one entry per record: the FIRST state is the baseline */

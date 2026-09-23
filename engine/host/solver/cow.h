@@ -288,6 +288,12 @@ struct CowHostRecSite {
     const char      *file;   /* the expansion's own `__FILE__`; NULL until its first ask files it below */
     int              line;
     CowHostRecSite  *next;
+    /* THE LAYOUT THIS SITE HAS ALREADY VALIDATED, so the layout's own assertions are asked once per
+       (site, layout) and not once per ASK. It is a pointer COMPARE and not a bit, so a site that somehow
+       reaches this function with a second layout validates that one too — the check stays complete, and
+       what it stops being is quadratic. NULL until the first ask, and `rec` is asserted non-NULL before
+       this is read, so the first ask at every site always validates. See cow_capture_host_record_at. */
+    const CowRecord *checked;
 };
 void      cow_capture_host_record_at(JSValueConst owner, void *p, const CowRecord *rec,
                                      const char *file, int line, CowHostRecSite *site);
