@@ -2668,6 +2668,30 @@ typedef struct JSConcolicHooks {
        has an enumeration that decided a member exists and then enumerated nothing, which is the empty-List
        fabrication the predicate exists to prevent, arriving one step later. */
     int (*own_key_mint)(JSContext *ctx, JSValueConst record, int n);
+    /* THE RUNNING FLOW'S OWN COUNT OF PRIOR CREATION-NAME MINTS, asked ONCE per page-created value the engine
+       can name and never again — the half of a creation name this engine cannot compose for itself.
+       WHY IT IS A HOOK AT ALL. A creation name is (SITE, ORDINAL): the site is a program fact the engine owns
+       (JS_OrphanHash's body locator), and the ordinal is a fact about THE EXECUTED PREFIX OF ONE FLOW, which
+       only the host has — it must be inherited by a fork exactly as every other prefix quantity is, parked
+       with a suspended flow, and restored at zero for a flow the cold tier resumes, because such a flow
+       REPLAYS the document from the baseline and re-mints the same sequence. Nothing in this engine knows
+       what a flow is.
+       WHY IT IS HERE AND NOT IN JSTimeTravelHooks. That table is "before this write mutates shared heap
+       state, capture it" — every member of it is a CAPTURE and its installer is the COW layer. This is not a
+       capture and nothing about it rewinds: it is the concolic layer's identity channel, beside `key_name`
+       and `example`, and its installer is the component that owns the constraint chain the counter rides.
+       WHAT IT MUST RETURN: a NONZERO value, distinct from every other value this hook has returned to the
+       same flow since that flow's prefix began. Zero is this engine's "no name was minted", so a hook that
+       returns it silently unnames the value; a REPEAT is worse and is the failure the whole mechanism exists
+       to prevent, because two objects under one name make one flow's constraint refine the other's branch and
+       the ARM IS LOST rather than duplicated (concolic.c states that trade at the field itself: "Absence
+       costs forks; a wrong identity costs the arm").
+       NULL IS A HOST DECLINING THIS EDGE, which is JSFlowControlHooks.budget's own arrangement: the engine
+       then mints nothing, JS_CreationName answers absent for every value, and the behaviour is byte-identical
+       to a build that never had this member — one predictable branch on a thread-local pointer at the one
+       closure path, and no per-object cost anywhere, because the ordinal a value carries is a field it has
+       either way. */
+    uint32_t (*mint_ordinal)(JSContext *ctx);
 } JSConcolicHooks;
 JS_EXTERN void JS_SetConcolicHooks(const JSConcolicHooks *hooks);
 
@@ -2886,6 +2910,47 @@ JS_EXTERN int      JS_IntrinsicName(JSContext *ctx, JSValueConst v, char *buf, s
    "Symbol.keyFor ( symbol )" returns, reached without running a builtin. `v` is BORROWED and may be any
    value. */
 JS_EXTERN JSValue  JS_SymbolRegistryKey(JSContext *ctx, JSValueConst v);
+
+/* A PAGE-CREATED VALUE'S CREATION NAME — the FOURTH name source, and the first one that is 1:N with its own
+   site and therefore needs an ordinal beside it.
+ *
+ * WHAT IT NAMES TODAY is a value with a BYTECODE BODY: a closure the page's own code created. Its SITE is
+ * JS_OrphanHash's body locator — (script, line, column, body text), already composed and already this
+ * engine's one spelling of "which body" — and that alone is NOT a name, because a body is 1:1 with its
+ * position while a CLOSURE is not: a factory called three times is one locator and three functions, and a
+ * name shared by three closures would have one call's constraint refine another's branch.
+ *
+ * SO THE ORDINAL IS THE OTHER HALF AND IT COMES FROM THE HOST (JSConcolicHooks.mint_ordinal), minted ONCE, AT
+ * CREATION, and carried on the object for the rest of its life. AT CREATION is not an implementation detail —
+ * it is what makes the name sound across a fork. A value is FLOW-PRIVATE at the instant it is created (that is
+ * the same fact JS_SetFlowGen's generation records), so the ordinal a value carries came from the counter of
+ * the one flow that could have been running, and two siblings that each mint ordinal k mint it for two values
+ * neither of which the other flow can see. A value created BEFORE a fork was stamped out of the common prefix,
+ * so both arms read one name for it. Naming at the ASK instead would break exactly that: two arms would stamp
+ * one shared value from two counters, and the loser would go on minting a name the winner had already spent.
+ *
+ * WHAT IT REFUSES is what JS_OrphanHash and JS_IntrinsicName refuse, unchanged — the live address, which
+ * js_malloc REUSES and which no park carries, and any index into a set allocation order decides. What is
+ * required is not uniqueness-in-a-heap but REPRODUCIBILITY BY THE REPLAY a resumed flow performs, and both
+ * halves have it: the locator is a fact about the bundle, and the ordinal is a fact about the executed prefix,
+ * which a replay reproduces by reproducing the prefix.
+ *
+ * IT ANSWERS ABSENT RATHER THAN ASSERTING, WHICH IS THE WHOLE DIFFERENCE BETWEEN IT AND JS_OrphanHash. That
+ * function is handed only values JS_OrphanTakeOne chose and DCHECKs on anything else; this one is handed every
+ * operand of every comparison a page makes, so a C function, a bound function and a Proxy reach it as ordinary
+ * input — `arr.some(f.bind(this))` is not a defect and an assert here would be a page-held abort switch on it.
+ * -1 is "this engine has no creation name for this value", the same answer JS_IntrinsicName's -1 is, and it is
+ * also the answer when no host installed mint_ordinal at all.
+ *
+ * IT IS TEXT AND NOT A HASH for JS_IntrinsicName's reason: the solver spends a name TWICE, once as an
+ * operand's IDENTITY and once as its DISPLAY SHAPE, and a shape must separate every pair of operands the
+ * identity separates. `buf`/`buf_size` are the caller's and the return is snprintf's — the length that WOULD
+ * have been written, so a caller checks it against its own buffer rather than trusting a silent truncation. */
+JS_EXTERN int      JS_CreationName(JSContext *ctx, JSValueConst v, char *buf, size_t buf_size);
+/* `fn@` + 16 hex digits of locator + `#` + a 32-bit decimal ordinal + NUL = 31; rounded up, and asserted
+   against the one composition at the site, so a caller sized by it cannot truncate. A TRUNCATED creation name
+   is two closures under one constraint key, which is the exact collision the ordinal exists to prevent. */
+#define JS_CREATION_NAME_MAX 40
 /* MODULE sources: a graph to link and evaluate, not a program to wrap. Returns the evaluation PROMISE. */
 JS_EXTERN JSValue  JS_FlowEvalModule(JSContext *ctx, const char *src, size_t len, const char *filename, int eval_flags);   /* eval_flags: JS_EVAL_FLAG_STRICT threaded through; opaque flow handle (NULL on error) */
 /* 1 = suspended (preempted), 0 = completed. *pres receives the program's COMPLETION VALUE (or JS_EXCEPTION) on

@@ -954,6 +954,13 @@ static void fork_key_count(const char *key, ForkRowKind kind)
  * concolic.c can spell an identity for a value derived from one, decide_key stops answering NULL for it, and
  * that fork moves out of this population into the predicate rows with a replay slot of its own.
  *
+ * THAT MECHANISM NOW EXISTS AND ITS REACH IS ONE CLASS, so what is left of this residual is a SITE and not a
+ * design. quickjs's JS_CreationName composes (site, ordinal) and concolic.c's creation_name spells it: the
+ * ordinal is minted AT CREATION from the running flow's own counter (JSConcolicHooks.mint_ordinal), which is
+ * the prefix quantity this paragraph asks for, and the site is JS_OrphanHash's body locator — so a page-created
+ * CLOSURE is named and every other page-created value still is not, because no other value has that site. The
+ * two remaining sites are named at concolic.c's literal_ident and neither is this file's to build.
+ *
  * AND THAT CLAUSE SAID "THE BUNDLE" ALONE, WHICH IS THE HALF THAT DOES NOT REACH THE MEASURED POPULATION.
  * `Array.prototype` is not created by the bundle; it is the realm's own class-proto slot, built at realm
  * creation beside every other intrinsic, so a namer composed only from a position in the page's script
@@ -2763,8 +2770,12 @@ int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n, int
            the thing that made the replay positional over this whole population.
            WHAT THE NEXT DIFF BUILDS: a spellable identity for an ordinary object —
            one composed from PROGRAM FACTS rather than from a heap address, so it means the same thing on the
-           flow that minted it and on the flow that resumes it from the cold tier; no such mechanism exists in
-           this tree, which is why the composition is absent rather than merely unused. HOW ITS ABSENCE WOULD
+           flow that minted it and on the flow that resumes it from the cold tier. THE MECHANISM EXISTS AND
+           REACHES ONE CLASS — quickjs's JS_CreationName pairs a site with the creating flow's own mint ordinal
+           and concolic.c's creation_name spells it — and its SITE is a bytecode body locator, which an
+           ordinary object does not have; so the composition is still absent HERE for want of a site rather
+           than for want of a design, which is a narrower claim than this sentence used to make and is the one
+           a reader should act on. HOW ITS ABSENCE WOULD
            SHOW: the `_forkAt` census's SITE rows carry the operand's display shape, so a document whose
            frontier grows at an unspellable outcome shows a large FORK_ROW_SITE row with no predicate row
            beside it — the row saying WHERE with no key saying WHAT. */

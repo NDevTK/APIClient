@@ -501,9 +501,10 @@ static char *literal_tok(JSContext *ctx, JSValueConst v, ConcolicLit *pkind)
    name reproducible by the replay a resumed flow performs — the actual requirement, rather than
    uniqueness-in-a-heap, since `js_malloc`/`js_free_rt` REUSE addresses and no park carries one.
    NULL WHERE THE VALUE NAMES NO INTRINSIC, which is the answer every Object and Symbol gave unconditionally
-   before this and is still the answer for a PAGE-created one — a page-created object is named by its creation
-   site plus the creating flow's count of prior creations there, which is a fact about the executed prefix and
-   is NOT built yet; see the named residual at literal_ident below. */
+   before this and is still the answer for a PAGE-created one. Such a value is named by its creation site plus
+   the creating flow's count of prior mints there — a fact about the executed prefix — which creation_name
+   below composes for a page-created CLOSURE and for nothing else yet; see the named residual at
+   literal_ident. */
 static char *intrinsic_name(JSContext *ctx, JSValueConst v)
 {
     char buf[JS_INTRINSIC_NAME_MAX];
@@ -562,6 +563,38 @@ static char *registry_key(JSContext *ctx, JSValueConst v)
     return r;
 }
 
+/* A PAGE-CREATED CLOSURE'S CREATION NAME, OWNED BY THE CALLER — the FOURTH name source, spelled here for the
+   reason intrinsic_name and registry_key are spelled here: the name is spent TWICE, once as an operand's
+   IDENTITY and once as its DISPLAY SHAPE, and a second speller cannot be right about one and wrong about the
+   other.
+   IT IS THE FIRST NAME SOURCE THAT NEEDS AN ORDINAL, and the ordinal is not this function's to compose. A
+   BODY is 1:1 with its position, so JS_OrphanHash names an uncalled function by position alone; a CLOSURE is
+   not, and a factory called three times is one locator and three functions — which is the 1:N §Solver-half
+   refuses a bare site for, in the words "three iterations of one loop would name one object, so iteration 1's
+   constraint would refine 2 and 3 and ARMS WOULD BE LOST". The count comes from the running flow, is minted
+   at the value's CREATION (JSConcolicHooks.mint_ordinal, installed below), and rides the object from there.
+   NULL WHERE THE ENGINE HAS NO CREATION NAME, which is every value that is not a page-created closure and
+   every closure in a session that mints no ordinals — the same "no name" answer the two above it give, and
+   the answer this arm gave unconditionally before this function existed. The refusal is the ENGINE'S and not
+   this file's, deliberately: JS_CreationName answers ABSENT for a C function, a bound function and a Proxy,
+   which `JS_IsFunction` cannot tell apart and which a namer written here would have DCHECKed on —
+   `arr.some(f.bind(this))` is ordinary input and an assert over it is a page-held abort switch. */
+static char *creation_name(JSContext *ctx, JSValueConst v)
+{
+    char buf[JS_CREATION_NAME_MAX];
+    int n = JS_CreationName(ctx, v, buf, sizeof buf);
+    char *r;
+
+    if (n < 0) return NULL;
+    DCHECK(n < (int)sizeof buf,
+           "a creation name did not fit the buffer quickjs.h's own bound sizes for it — the two are tied by "
+           "an assert at the composition there, so this fires only if that bound was widened past this "
+           "buffer, and a TRUNCATED name is two closures under one constraint key and one property atom");
+    r = strdup(buf);
+    CHECK(r, "concolic: OOM copying a creation name");
+    return r;
+}
+
 /* A CONCRETE OPERAND'S IDENTITY IS ITS VALUE, AND ITS TYPE IS PART OF THAT — `x === 5` and `x === "5"` are two
    predicates and their operands print the same.
    AN OBJECT OR A SYMBOL HAS NO IDENTITY IN THAT SENSE — its address does not survive the park a resumed flow
@@ -599,16 +632,19 @@ static char *literal_ident(JSContext *ctx, JSValueConst v)
            That is exactly the property a creation SITE lacks, which is why this arm could land while the
            residual below still stands. The two registries are disjoint by atom_type, so a value cannot be
            named twice and the order of these two arms decides nothing.
-           NAMED RESIDUAL — A PAGE-CREATED OBJECT, AND A `Symbol("x")` THE PAGE MINTED, ARE STILL UNNAMED, so
-           `var o = {}; o[k]` keeps both arms and its bare site row. What the next diff builds is the OTHER
-           name source: the value's creation site
-           (which quickjs already composes for a function body at JS_OrphanHash) PLUS THE CREATING FLOW'S OWN
-           COUNT OF PRIOR CREATIONS AT THAT SITE, because a site is 1:N with the objects made there and one
-           `{}` in a loop is one site and a thousand objects — a fact about the EXECUTED PREFIX, so a replay
-           reproduces it by reproducing the prefix and a fork carries it as it carries every other prefix
-           quantity. ITS ABSENCE SHOWS as a `?` — derived_operand_shape's answer for an operand with no name —
-           at ANY operand position of a rendered shape, with a `~` site row climbing across a session while
-           `replayHits` stays flat.
+           NAMED RESIDUAL — AN ORDINARY PAGE-CREATED OBJECT, A PAGE-MINTED `Symbol("x")` AND A RegExp ARE
+           STILL UNNAMED, so `var o = {}; o[k]` keeps both arms and its bare site row. THE MECHANISM IS BUILT
+           AND ITS REACH IS ONE CLASS, which is the correction this paragraph carries rather than a plan: the
+           (site, ordinal) pair is composed by quickjs's JS_CreationName, the ordinal is minted at CREATION out
+           of the running flow's own counter (JSConcolicHooks.mint_ordinal, this file's
+           concolic_mint_ordinal_hook, riding the PinBlob like every other per-flow fact), and the SITE is
+           JS_OrphanHash's body locator — which every value that is not a bytecode function lacks. What the
+           next diff builds is therefore a SITE for the other classes and not a second mechanism: an ordinary
+           object is created at a place JS_RunningSiteHash already names, and a RegExp's site is its source and
+           its flags (§22.2.8.1 "lastIndex" is why those alone are 1:N and why it takes the SAME ordinal
+           beside them). ITS ABSENCE SHOWS as a `?` — derived_operand_shape's answer for an operand with no
+           name — at ANY operand position of a rendered shape, with a `~` site row climbing across a session
+           while `replayHits` stays flat.
            THAT CLAUSE USED TO SAY `a site row whose SUBJECT renders ?`, AND NAMING ONE POSITION UNDERSTATED
            THE POPULATION IN THE DIRECTION THAT HIDES THE WORST OF IT — recorded here rather than quietly
            widened, because a reader who re-derives the clause from `o[k]` will re-derive the subject. An
@@ -642,14 +678,14 @@ static char *literal_ident(JSContext *ctx, JSValueConst v)
            1:N and LOSES ARMS exactly as a bare site does. SO THERE IS ONE HALF AND NOT TWO: a RegExp's SITE
            composer is its source and its flags where a function's is JS_OrphanHash, and both take the SAME
            ordinal beside them.
-           AND THE FUNCTION HALF'S FIRST HOP IS IN QUICKJS AND NOT IN THIS FILE. literal_ident is handed every
-           operand of every call on an unknown, and operand_kind sends EVERY object to this arm — a bound
-           function, a Proxy and a C function among them. JS_OrphanHash DCHECKs on a value with no bytecode
-           body, and quickjs.h exports nothing narrower than JS_IsFunction, which is true of all three; so a
-           namer written here would abort on `arr.some(f.bind(this))`, a page-held abort switch on ordinary
-           input. The first diff is therefore the quickjs-side question `does this value have a bytecode body`,
-           answered ABSENT rather than asserted, because this file's contract is that an operand it cannot name
-           answers NULL.
+           AND THE FUNCTION HALF'S FIRST HOP WAS IN QUICKJS AND NOT IN THIS FILE, WHICH IS WHY IT LANDED
+           THERE. literal_ident is handed every operand of every call on an unknown, and operand_kind sends
+           EVERY object to this arm — a bound function, a Proxy and a C function among them. JS_OrphanHash
+           DCHECKs on a value with no bytecode body, and quickjs.h exports nothing narrower than JS_IsFunction,
+           which is true of all three; so a namer written here would abort on `arr.some(f.bind(this))`, a
+           page-held abort switch on ordinary input. JS_CreationName is that question answered ABSENT rather
+           than asserted — it reads the class table, which tells the three apart where JS_IsFunction cannot —
+           and this file's contract that an operand it cannot name answers NULL is unchanged.
            RETIREMENT: this note goes with the residual it belongs to.
            `{}` IS NOT THAT SPELLING AND NAMING IT AS ONE SENDS A READER TO GREP FOR THE WRONG THING: `{}` is
            what a CONCOLIC handed no shape renders as, and it was also this site's own spelling for an object
@@ -694,9 +730,31 @@ static char *literal_ident(JSContext *ctx, JSValueConst v)
            registries and a shared tag would let %Symbol.iterator% and a page's `Symbol.for("Symbol.iterator")`
            compose one constraint key. */
         nm = registry_key(ctx, v);
+        if (nm) {
+            nf[0] = nm;
+            r = concolic_ident_compose("Symbol.for", nf, 1);
+            free(nm);
+            return r;
+        }
+        /* …AND SO IS A CLOSURE THE PAGE CREATED, which is the first arm here whose name is not 1:1 with
+           anything a program states and therefore the first that carries a COUNT. Its site is the body
+           locator quickjs already composes and its ordinal is the creating flow's own count of prior mints,
+           taken at the CREATION rather than at this ask — see creation_name above and JS_CreationName for why
+           the instant matters: a value is flow-private when it is made, so the ordinal it carries can only be
+           the running flow's, where an ask-time mint would let two arms of one fork stamp a SHARED value out
+           of two counters and put two values under one name.
+           THE TAG IS ITS OWN for the reason `i` is not `k` and `Symbol.for` is not `i`: these are four name
+           sources and a shared tag would let two of them compose one constraint key.
+           NO PIN FOLLOWS FROM IT, exactly as none follows from an intrinsic — literal_tok still answers NULL
+           for an object, so concolic_cmp_hook mints no token and §7.2.14 IsStrictlyEqual step 1's SameType is
+           false for every string this solver could substitute. The predicate is named; the value is not
+           determined, and that is the whole of what a name buys: concolic_branch_decided can refine the SAME
+           question asked again, so a REPEAT collapses while a BREADTH of distinct closures still owes the
+           worlds it owed before. */
+        nm = creation_name(ctx, v);
         if (!nm) return NULL;
         nf[0] = nm;
-        r = concolic_ident_compose("Symbol.for", nf, 1);
+        r = concolic_ident_compose("fn", nf, 1);
         free(nm);
         return r;
     }
@@ -792,6 +850,16 @@ static char *derived_operand_shape(JSContext *ctx, JSValueConst v)
             r = shapef("Symbol.for(%s)", quoted);
             free(quoted); free(q);
             return r;
+        }
+        /* AND A PAGE-CREATED CLOSURE RENDERS AS THE CREATION NAME literal_ident COMPOSED ITS IDENTITY FROM —
+           this pair's invariant restated for the fourth kind of operand, and the reason both arms are in one
+           diff. Moving the identity without the shape would put two closures under ONE shape and two
+           identities, which is the coarser-shape state keyname_record's assert exists to catch. The spelling
+           carries its own `fn@` namespace, so it cannot be read as an intrinsic's `%…%`, a registered
+           symbol's `Symbol.for(…)`, a quoted String or a Number. */
+        {
+            char *cn = creation_name(ctx, v);
+            if (cn) { r = shapef("%s", cn); free(cn); return r; }
         }
         return shapef("?");
     }
@@ -1622,6 +1690,25 @@ static void cons_seg_unref(ConsSeg *s) {
    `cand_surv`/`cand_rung`: an observation of a re-execution belongs to the session that made it. */
 static int g_cand_delivered;
 
+/* HOW MANY CREATION NAMES THIS FLOW HAS MINTED — the THIRD per-flow fact this component holds, and the ordinal
+   half of a page-created value's name (quickjs's JSConcolicHooks.mint_ordinal / JS_CreationName).
+   WHY IT IS PER FLOW AND NOT PER AGENT. It is a fact about the EXECUTED PREFIX: a replay reproduces it by
+   reproducing the prefix, which is the whole of what makes a creation name mean the same thing on the flow
+   that minted it and on the flow the cold tier resumes. An agent-lifetime counter would be a fact about which
+   other flows happened to be interleaved, so a resumed flow would compose a name the recorded one never used
+   and every replay would diverge at its first named object.
+   WHY IT IS GLOBAL ACROSS SITES RATHER THAN PER SITE, which is the one place this differs from the spelling
+   §Solver-half's residual gives ("the creating flow's own count of prior creations AT THAT SITE"). A single
+   monotone counter makes every (site, ordinal) pair this flow ever mints DISTINCT, which is strictly stronger
+   than per-site uniqueness and is what the identity actually needs; per-site counters need a map keyed by site
+   that must itself fork, park and resume, and the map buys only LOCALITY — a divergence then shifts the
+   ordinals of one site rather than of every later mint. That locality is real and it is the residual below.
+   ONE FLOW NEVER MINTS ONE ORDINAL TWICE, which is the property every consumer rests on, and two SIBLINGS
+   minting the same one is not a collision: a value is flow-private at its creation, so the two ordinals were
+   spent on two values neither flow can see the other of, and a value created BEFORE the fork was stamped out
+   of the common prefix and reads one name in both arms. */
+static uint32_t g_mint_ord;
+
 /* THIS IS THE PER-FLOW CONCOLIC STATE'S CLEAR AND NOT ONLY THE PINS' — which is a statement about its CALLERS
    rather than about its name. decide.c's decide_enter calls it to give a FRESH flow an empty concolic state,
    flow.c's teardown calls it when there is no flow left to own one, and concolic_pins_resume calls it before
@@ -1636,6 +1723,11 @@ void concolic_clear_pins(void) {
     free(g_pins_hash); g_pins_hash = NULL; g_pins_hash_cap = 0;
     cons_seg_unref(g_pins_base); g_pins_base = NULL;
     g_cand_delivered = 0;
+    /* AND THE MINT COUNTER, which is in this function for the reason the line above it is: a per-flow fact of
+       this component that is NOT reset here is a fact one flow reads off another — and here that is a flow
+       minting an ordinal a sibling has already spent, which puts two values under one name and loses an arm
+       rather than a fork. A FRESH flow has created nothing, so its count is 0. */
+    g_mint_ord = 0;
 }
 
 /* Per-flow constraint state is swappable so interleaved flows keep their OWN narrowing: suspend FREEZES the
@@ -1646,7 +1738,12 @@ void concolic_clear_pins(void) {
    here for the same reason `seg` does: it is the running flow's and nobody else's, so a switch that left it
    behind would hand the incoming flow the outgoing one's answer. The struct's NAME is the slot's name in
    flow.h (`pin_blob`), which is outside this file; the CONTENT is this component's. */
-typedef struct { ConsSeg *seg; int delivered; } PinBlob;
+/* AND THE MINT COUNTER RIDES HERE TOO, for `delivered`'s reason exactly — it is the running flow's and nobody
+   else's, so a switch that left it behind would hand the incoming flow the outgoing one's count and the two
+   would mint one ordinal twice. A FORK takes this blob as its whole starting knowledge, so the sibling
+   inherits the parent's count AT THE BRANCH and the two arms mint forward independently: that is what "a fork
+   carries it exactly as it carries every other prefix quantity" means, spelled as one field. */
+typedef struct { ConsSeg *seg; int delivered; uint32_t mint_ord; } PinBlob;
 void *concolic_pins_suspend(void) {
     PinBlob *b = reclaim_malloc(sizeof *b);
     CHECK(b, "concolic: the path constraint could not be parked — the frontier never drops a work item, and a "
@@ -1654,6 +1751,7 @@ void *concolic_pins_suspend(void) {
     /* TAKEN AND NOT MOVED — the live value stays where it is, because this function serves a FORK as well as a
        park: the sibling starts from what the parent had at the branch AND the parent goes on holding it. */
     b->delivered = g_cand_delivered;
+    b->mint_ord = g_mint_ord;   /* TAKEN AND NOT MOVED, for the reason above: this serves a FORK as well as a park */
     if (g_pins_n == 0) {
         /* NOTHING LEARNED SINCE THE LAST FREEZE, so there is nothing to freeze: the blob is one more reference
            on the chain the flow already stands on. Without this a park/resume pair with no writes between them
@@ -1694,6 +1792,7 @@ void concolic_pins_resume(void *blob) {
     /* AFTER THE CLEAR, WHICH IS WHERE THE ORDER IS LOAD-BEARING: the clear above is what resets every per-flow
        fact this component holds, so a restore written before it would be erased by it. */
     g_cand_delivered = b->delivered;
+    g_mint_ord = b->mint_ord;
 }
 /* A CONSTRAINT THAT HAS LEARNED NOTHING YET, for a flow that RESUMES without ever having run in this session —
    the cold tier's. Such a flow is not fresh (it stands on a recorded decision chain, so the scheduler resumes it
@@ -1710,6 +1809,11 @@ void *concolic_pins_blob_empty(void) {
        document from the baseline, so it re-reaches its own source read and the substitution happens again in
        THIS session. Carrying a 1 across would say the bytes are in a program this session never built. */
     b->delivered = 0;
+    /* AND IT HAS MINTED NOTHING, for the same reason and with a sharper consequence: such a flow REPLAYS the
+       document from the baseline, so it re-creates every value it named and re-mints every ordinal in the same
+       order. Carrying a count across would shift every name this flow composes off the ones it recorded, and
+       every replayed question would meet a key that answers nothing. */
+    b->mint_ord = 0;
     return b;
 }
 
@@ -1717,6 +1821,23 @@ void concolic_pins_blob_free(void *blob) {
     PinBlob *b = blob; if (!b) return;
     cons_seg_unref(b->seg);
     free(b);
+}
+
+/* THE ORDINAL HALF OF A CREATION NAME, ANSWERED AT THE ENGINE'S CREATION SEAM (JSConcolicHooks.mint_ordinal).
+   NONZERO IS THE CONTRACT AND IT IS WHY THIS PRE-INCREMENTS: quickjs reads 0 on a value as "this engine has no
+   creation name for it", so a hook that returned 0 would silently unname the first value of every flow. The
+   first mint is therefore 1.
+   IT IS THE ONLY WRITER OF THE COUNTER apart from the four per-flow points above, which is what makes "one
+   flow never mints one ordinal twice" a property of one line rather than of a convention. */
+static uint32_t concolic_mint_ordinal_hook(JSContext *ctx) {
+    (void)ctx;
+    DCHECK(g_mint_ord != UINT32_MAX,
+           "a flow's creation-ordinal counter reached its last value — the next mint would WRAP to 0, which "
+           "this engine reads as 'no name', and the one after it would start re-issuing ordinals this flow "
+           "has already spent, putting two values under one constraint key and losing an arm rather than a "
+           "fork. What this bounds is the number of closures ONE flow creates, so reaching it is a statement "
+           "about the width of this counter and never a reason to reset it");
+    return ++g_mint_ord;
 }
 /* THE PIN THIS FLOW HOLDS FOR `src`, AS THE VALUE IT IS — the two read sites ask for a JSValue and never for
    bytes, because a caller handed bytes has to decide what they mean and the two would eventually decide
@@ -4489,6 +4610,13 @@ static void keyname_record(const char *atom, const char *shape, const char *src,
  * is a fact about the executed prefix, so a replay reproduces it by reproducing the prefix and a fork carries
  * it as it carries every other prefix quantity — it is per-flow state and therefore belongs to the constraint
  * chain rather than to this agent-lifetime table, which is the one design question it has to answer.
+ * AND THE DESIGN QUESTION THAT CLAUSE NAMES HAS BEEN ANSWERED ELSEWHERE, WHICH IS WORTH THE LINE BECAUSE IT
+ * IS THE ONLY PART OF IT A READER WOULD OTHERWISE RE-DERIVE: a per-flow mint counter rides the PinBlob beside
+ * the pins and the delivery bit, is inherited by a fork at the branch, is restored to 0 for a flow the cold
+ * tier resumes (which replays the document and re-mints the same sequence), and is spent by
+ * concolic_mint_ordinal_hook. So the vehicle is the constraint chain's blob exactly as this clause predicted;
+ * what this function still needs is a counter keyed BY SITE rather than the single monotone one that serves
+ * the object namer, because a purchase's ordinal must be the count at THIS site for two sites to stay apart.
  * HOW ITS ABSENCE WOULD SHOW: a document that writes an unknown key inside a loop reports fewer own property
  * names than it wrote, with the keyname table holding ONE entry whose shape ends in a single site. */
 static const char *keyname_atom(JSContext *ctx, JSValueConst key, const char *sh)
@@ -5897,6 +6025,12 @@ static JSConcolicHooks g_hooks = {
     .key_value = concolic_key_value_hook,
     .builtin = concolic_builtin_hook,
     .example = concolic_example,
+    /* THE ORDINAL HALF OF A PAGE-CREATED VALUE'S NAME, WITHOUT WHICH THE ENGINE'S NAMER IS INERT. quickjs
+       stamps a closure with what this answers and JS_CreationName composes the name from it beside the body
+       locator; with the member NULL the engine stamps 0, JS_CreationName answers ABSENT for every value, and
+       literal_ident's fourth arm returns NULL exactly as it did before — which is a host declining this edge
+       rather than a capability half-built, and is byte-identical to a build without the seam. */
+    .mint_ordinal = concolic_mint_ordinal_hook,
     /* §10.1.11 "[[OwnPropertyKeys]] ( )" ASKED, WITHOUT WHICH THE ARM THAT ANSWERS IT IS INERT. The record
        class hands its enumeration to decide_value_arm and the engine's step_ownkeys_run asks this on the
        BRANCH seam; with the member NULL nothing is asked, decide_value_arm answers -1 for ever, and

@@ -1913,11 +1913,24 @@ struct JSObject {
         struct JSAsyncFunctionData *async_function_data; /* JS_CLASS_ASYNC_FUNCTION_RESOLVE, JS_CLASS_ASYNC_FUNCTION_REJECT */
         struct JSAsyncFromSyncIteratorData *async_from_sync_iterator_data; /* JS_CLASS_ASYNC_FROM_SYNC_ITERATOR */
         struct JSAsyncGeneratorData *async_generator_data; /* JS_CLASS_ASYNC_GENERATOR */
-        struct { /* JS_CLASS_BYTECODE_FUNCTION: 12/24 bytes */
+        struct { /* JS_CLASS_BYTECODE_FUNCTION: 16/28 bytes */
             /* also used by JS_CLASS_GENERATOR_FUNCTION, JS_CLASS_ASYNC_FUNCTION and JS_CLASS_ASYNC_GENERATOR_FUNCTION */
             struct JSFunctionBytecode *function_bytecode;
             JSVarRef **var_refs;
             JSObject *home_object; /* for 'super' access */
+            /* APIClient forced-exec: THE CREATING FLOW'S OWN COUNT OF PRIOR MINTS, which is the half of this
+               closure's name the bytecode body cannot carry — see JS_CreationName. The body locator is 1:1
+               with a POSITION and a closure is not, so a factory called three times is one locator and three
+               functions; without this they would share a constraint key and one call's narrowing would refine
+               another call's branch.
+               0 IS "UNSTAMPED" AND IS NOT AN ORDINAL, which is why the host's hook must answer nonzero: every
+               path that builds a function object writes this field, and the two that write 0 are saying this
+               value has no creation name rather than that it is the zeroth of anything. A build whose host
+               installs no mint hook writes 0 everywhere and is byte-identical to one without this field.
+               IT COSTS NOTHING ON THE SHIPPING TARGET. `cfunc` beside it is already 16 bytes on a 32-bit
+               build (two pointers and six bytes of tail), so this union is 16 there either way and `func` was
+               the smaller member; on a 64-bit build it is four bytes the union did not have. */
+            uint32_t creation_ord;
         } func;
         struct { /* JS_CLASS_C_FUNCTION: 12/20 bytes */
             JSContext *realm;
@@ -23845,6 +23858,22 @@ static JSValue js_closure2(JSContext *ctx, JSValue func_obj,
        took what it found may SKIP the walk until this number moves, which is what keeps the enumeration off
        the critical path of a frontier whose members each finish. One increment on the closure path. */
     ctx->rt->orphan_gen++;
+    /* AND THE OTHER HALF OF THIS CLOSURE'S NAME IS MINTED HERE, FOR THE SAME REASON THAT LINE IS HERE: this is
+       the one place every closure in this runtime is built, so an ordinal minted here is minted once per
+       function object and never twice, which is the whole of what makes it an identity rather than a counter.
+       IT IS MINTED AT CREATION AND NOT AT THE FIRST ASK. The value is FLOW-PRIVATE at this instant — the same
+       fact `flow_gen` records one struct over — so the ordinal it takes is the running flow's and no sibling
+       can be holding this object yet. Minting at the ask would let two arms of one fork stamp a SHARED value
+       out of two different counters, after which the arm that lost would go on minting a name the other had
+       already spent, and two values would carry one name. See JS_CreationName for the rest of the argument.
+       A HOST THAT INSTALLS NO HOOK WRITES 0, which JS_CreationName reads as "no name" — one predictable
+       branch on a thread-local pointer, and nothing else about this path changes. */
+    p->u.func.creation_ord = g_concolic.mint_ordinal ? g_concolic.mint_ordinal(ctx) : 0;
+    DCHECK(g_concolic.mint_ordinal == NULL || p->u.func.creation_ord != 0,
+           "the host's creation-ordinal hook answered 0, which this engine reads as 'this value has no "
+           "creation name' — so a flow whose counter reached it would silently unname every closure it made "
+           "from there on, and a counter that WRAPPED to it would start handing out ordinals it has already "
+           "spent, which puts two closures under one constraint key and loses an arm rather than a fork");
     if (b->closure_var_count) {
         var_refs = js_mallocz(ctx, sizeof(var_refs[0]) * b->closure_var_count);
         if (!var_refs)
@@ -67667,6 +67696,10 @@ static int js_create_module_bytecode_function(JSContext *ctx, JSModuleDef *m)
     JS_REF_COUNT(b)++;
     p->u.func.home_object = NULL;
     p->u.func.var_refs = NULL;
+    /* A MODULE'S OWN FUNCTION OBJECT IS NOT A CLOSURE THE PAGE CREATED, so it takes no creation ordinal: it is
+       built once per module by the loader rather than by a body the page ran, and JS_CreationName's 0 answers
+       ABSENT for it. Written rather than left alone because the allocation does not zero this field. */
+    p->u.func.creation_ord = 0;
     if (b->closure_var_count) {
         var_refs = js_mallocz(ctx, sizeof(var_refs[0]) * b->closure_var_count);
         if (!var_refs)
@@ -112226,6 +112259,67 @@ int JS_IntrinsicName(JSContext *ctx, JSValueConst v, char *buf, size_t buf_size)
             name, (int)i, want_proto ? "a prototype" : "a constructor");
     if (strchr(name, '.') || !strcmp(name, "globalThis")) return -1;
     return snprintf(buf, buf_size, want_proto ? "%%%s.prototype%%" : "%%%s%%", name);
+}
+
+/* ── A PAGE-CREATED VALUE'S CREATION NAME ─────────────────────────────────────────────────────────────────────
+ *
+ * THE FOURTH NAME SOURCE. The three above it need no ordinal and each says so in its own words: a BODY is 1:1
+ * with its position (JS_OrphanHash), an INTRINSIC is a singleton of its realm (JS_IntrinsicName), a REGISTERED
+ * SYMBOL is 1:1 with its key by §20.4.2.4's own construction (JS_SymbolRegistryKey). A page-created value is
+ * the first that is 1:N with everything about it a program can state, so it is the first that needs a count.
+ *
+ * WHY -1 IS AN ANSWER AND NOT A FAILURE, AND WHY THIS FUNCTION EXISTS AT ALL BESIDE JS_OrphanHash. That
+ * function composes the same locator and is handed only what JS_OrphanTakeOne chose, so it DCHECKs on a value
+ * with no bytecode body and is right to. This one is asked of EVERY operand of every comparison a page makes,
+ * where a C function, a bound function and a Proxy are ordinary input — `arr.some(f.bind(this))` is a line
+ * real bundles write, and an assert on it would hand any document an abort switch. `JS_IsFunction` cannot tell
+ * those apart; the class table can, and that is the whole content of the guard below.
+ *
+ * WHAT IT COMPOSES: the body locator, which is the SITE, and the ordinal the host minted at creation, which is
+ * WHICH OF THE VALUES MADE THERE. Neither is an address and neither is an index into a set anybody mutates:
+ * the locator is (script, line, column, body text) and the ordinal is a fact about the executed prefix of one
+ * flow, so a replay reproduces both by reproducing the prefix. That is the requirement §Time-travel-resume
+ * states — reproducibility by the replay — rather than uniqueness-in-a-heap, which an address would have and
+ * which no park carries.
+ *
+ * THE SPELLING IS ITS OWN NAMESPACE AND CANNOT BE MISTAKEN FOR THE OTHER THREE. It opens `fn@`, where an
+ * intrinsic opens `%`, a registered symbol opens `Symbol.for(`, a String operand opens a quote and a Number
+ * opens a digit — so the display shapes this name is also spent as stay 1:1 with the identities beside them,
+ * which is the invariant concolic.c states at derived_operand_shape and asserts at keyname_record.
+ *
+ * ALLOCATION-FREE and side-effect-free, like the three above: no property is read, so no accessor and no Proxy
+ * trap runs, which is what lets a caller with no flow base under it ask the question at all. */
+int JS_CreationName(JSContext *ctx, JSValueConst v, char *buf, size_t buf_size)
+{
+    JSObject *p;
+    int n;
+
+    DCHECK(buf != NULL && buf_size > 0,
+           "a creation name was asked for with nowhere to write it — the answer is the NAME and not a "
+           "boolean, so a caller with no buffer is asking a question it cannot receive the answer to");
+    if (JS_VALUE_GET_TAG(v) != JS_TAG_OBJECT) return -1;
+    p = JS_VALUE_GET_OBJ(v);
+    /* THE BYTECODE-BODY QUESTION, ANSWERED AND NOT ASSERTED — see the banner. The three refusals it makes are
+       the three a namer written outside this file could not make: a C function has no `u.func` at all, a bound
+       function's target is a value of its own, and a Proxy's body is whatever its handler decides. */
+    if (!js_class_has_bytecode(p->class_id) || !p->u.func.function_bytecode) return -1;
+    /* AND NO ORDINAL IS NO NAME. It is 0 for a function this engine built rather than the page (a module's own
+       function object), and for every function in a build whose host installed no mint hook. Composing a name
+       from the locator alone there would be the 1:N failure the ordinal exists for: a factory called three
+       times is one locator and three closures, and one constraint would refine the other two's branches. */
+    if (p->u.func.creation_ord == 0) return -1;
+    n = snprintf(buf, buf_size, "fn@%016llx#%u",
+                 (unsigned long long)orphan_hash_body(ctx->rt, p->u.func.function_bytecode),
+                 (unsigned)p->u.func.creation_ord);
+    /* THE BOUND IS ASSERTED AT THE ONE COMPOSITION RATHER THAN ARGUED IN THE HEADER, because a TRUNCATED name
+       is two closures under one constraint key — the exact collision this function exists to prevent — and a
+       caller that sized its buffer by JS_CREATION_NAME_MAX would have no way to see it. `fn@` is 3, the
+       locator is 16 hex digits, `#` is 1 and a 32-bit decimal is at most 10, so 31 including the NUL. */
+    DCHECK(n > 0 && n < JS_CREATION_NAME_MAX,
+           "a creation name did not fit the bound quickjs.h publishes for it — the two are one composition "
+           "and one constant, so this fires only if the spelling above was widened without the bound, and a "
+           "caller sized by that bound would truncate two closures onto one name");
+    return n;
 }
 
 /* ── A REGISTERED SYMBOL'S KEY ────────────────────────────────────────────────────────────────────────────────
