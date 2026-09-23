@@ -722,7 +722,25 @@ static bool ut_is_options(JSValueConst v)
  *     Minting anyway would fire that assert one read later, in a file that did not cause it; computing the
  *     duration from the example would publish a number the run never observed.
  *   WHAT THE NEXT DIFF BUILDS. `end time` as a JSValue on PerfEntry, beside `start_time`, so a duration can
- *     carry an unknown and §3's getter can subtract two values rather than two doubles.
+ *     carry an unknown and §3's getter can subtract two values rather than two doubles. THE ASYMMETRY IS
+ *     THE DEFECT: §3 calls both a DOMHighResTimeStamp and this record holds one as a value precisely
+ *     because it can be unknown external input, while the other is a C double for no stated reason.
+ *     AND THAT DIFF HAS TWO PROPERTIES A LANE WILL GET WRONG BY REASONING RATHER THAN BY READING.
+ *     FIRST, §3'S GETTER MUST THEN FORK AND IT CAN. Its steps open "return 0 if this's end time is 0",
+ *     which over an unknown is undecidable, so the getter becomes a question — and an attribute getter
+ *     is a plain C body with no machine state for a sibling to be snapshotted at, which solver/decide.h
+ *     says crashes at the seam. THE FORM EXISTS: core/idl_args.h declares idl_install_accessor_step,
+ *     taking a getter STEP ID rather than an IdlGetter, and components across this tree already use it.
+ *     That is recorded because the obvious reading of the accessor installs beside this one is that no
+ *     such form exists and the fix needs a primitive built first — it does not, and a lane that concludes
+ *     otherwise will either defer the diff or propose a second copy of a form that is already there.
+ *     SECOND, THE COW RECORD IS WHERE IT WOULD GO WRONG SILENTLY. `end_time` becoming an owned JSValue
+ *     creates an obligation at EVERY derived interface's value list, which today names the base's three
+ *     owned fields by offset BY HAND — and a list that misses the fourth leaves it un-dup'd in a delta
+ *     that restores it, which is a use-after-free no gate here would report. The diff therefore carries
+ *     an assert at performance_entry_new that a derived record's value list CONTAINS the base's own
+ *     offsets, so a missed field crashes at the mint rather than corrupting a flow; without that assert
+ *     the field change is the more dangerous half of the work rather than the mechanical one.
  *   AND IT BLOCKS NOTHING IN THIS COMPONENT, which is worth stating because a residual naming a base-record
  *     change reads as a prerequisite. Nothing else here reads `end time`: PERFORMANCE TIMELINE §4.2 step 7.5
  *     APPENDS entries, §5.3 step 3.3.7 SUMS dropped counts, and §2.1.2/§2.1.4 compare NAMES. So this is an
