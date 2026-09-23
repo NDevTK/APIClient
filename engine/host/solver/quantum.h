@@ -126,7 +126,7 @@
  *         real postMessage of a shared WebAssembly.Memory — a second agent, asynchrony, and a `Worker` a
  *         non-web host does not have. HTML §2.7.3 "StructuredSerializeInternal ( value , forStorage [ ,
  *         memory ] )" puts the gate on the SERIALIZING side: "If the current settings object's cross-origin
- *         isolated capability is false, then throw a \"DataCloneError\" DOMException", with the standard's
+ *         isolated capability is false, then throw a "DataCloneError" DOMException", with the standard's
  *         own note that "This check is only needed when serializing (and not when deserializing)" — and
  *         §2.7.10 "Structured cloning API" makes structuredClone's first step a serialization. So ONE
  *         `structuredClone` of a shared WebAssembly.Memory's buffer is the whole act, with no peer and no
