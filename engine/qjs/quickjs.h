@@ -1084,6 +1084,18 @@ JS_EXTERN int JS_RefuseOrThrowTypeError(JSContext *ctx, int flags, const char *m
 JS_EXTERN bool JS_IsRegisteredClass(JSRuntime *rt, JSClassID class_id);
 /* Returns the class name or JS_ATOM_NULL if `id` is not a registered class. Must be freed with JS_FreeAtom. */
 JS_EXTERN JSAtom JS_GetClassName(JSRuntime *rt, JSClassID class_id);
+/* HOW MANY CLASS IDS THIS RUNTIME HAS HANDED OUT, past the predefined ones — `rt->js_class_id_alloc` less
+   JS_CLASS_INIT_COUNT. That counter is incremented at ONE line, inside JS_NewClassID, so it is the one number
+   a mint cannot evade however the mint is spelled: a host that keeps its own census of the class ids it was
+   told about can bracket a window, difference this across it, and find a mint that skipped the census.
+   IT IS NOT JS_IsRegisteredClass, WHICH ANSWERS A DIFFERENT QUESTION. An id minted and never handed to
+   JS_NewClass is UNREGISTERED, so probing registration would miss precisely the case a census exists to
+   catch, and would also count the predefined classes, which nobody minted.
+   IT IS A LIFETIME COUNT AND NEVER A GAUGE: a class id cannot be given back, so this only ever rises and two
+   readings of it may be differenced. The bias is removed here rather than left to the caller because
+   `rt->js_class_id_alloc` is a biased counter and a caller that forgot the bias would report every runtime as
+   having minted the whole predefined table. */
+JS_EXTERN uint32_t JS_ClassIDsMinted(JSRuntime *rt);
 
 /* value handling */
 

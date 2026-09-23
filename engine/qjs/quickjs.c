@@ -6442,6 +6442,17 @@ JSClassID JS_NewClassID(JSRuntime *rt, JSClassID *pclass_id)
     return class_id;
 }
 
+/* The counter the line above increments, less the predefined classes it starts at — see quickjs.h for why a
+   host reads this rather than probing JS_IsRegisteredClass. */
+uint32_t JS_ClassIDsMinted(JSRuntime *rt)
+{
+    DCHECK(rt->js_class_id_alloc >= JS_CLASS_INIT_COUNT,
+           "a runtime's class-id allocator stands below the predefined class count — it is initialised to "
+           "JS_CLASS_INIT_COUNT and only ever incremented, so a value beneath that is a runtime whose "
+           "allocator was written by something other than JS_NewClassID");
+    return (uint32_t)(rt->js_class_id_alloc - JS_CLASS_INIT_COUNT);
+}
+
 JSClassID JS_GetClassID(JSValueConst v)
 {
   JSObject *p;

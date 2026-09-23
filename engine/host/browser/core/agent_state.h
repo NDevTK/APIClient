@@ -167,19 +167,23 @@ void agent_state_ptr_at(const char *component, const void *slot, const char *wha
                         const char *file, int line);
 /* A PER-REALM VALUE SLOT — core/realm.h's realm_value_declare handed this out, and it is A CLASS ID.
  *
- * WHY IT IS NOT AN id, WHICH IS WHAT IT WAS. `int` is the C type of three unrelated quantities in this
- * engine — a step id from JS_RegisterStepDef, a method id from core/idl_args' idl_method_id (which IS a step
- * id: that function's last line returns one), and a per-realm value slot — and while all three went through
- * agent_state_id the registry could not tell them apart. That is not untidiness. A slot and a class id are
- * THE SAME OBJECT: realm_value_declare's body is JS_NewClassID plus JS_NewClass over a local that starts at
- * 0, so it always mints, and what it returns is `rt->js_class_id_alloc` at the moment of the call. So the
- * registry holds, between SLOT_CLASS and this kind, every class id anybody told it about — and
- * `js_class_id_alloc` less JS_CLASS_INIT_COUNT is exactly how many this agent minted. Those two numbers are
- * a CONSERVATION IDENTITY over ONE allocator, which no spelling of a mint can evade, and it is what turns an
- * undeclared class id from something a text sweep COUNTS into something that cannot be constructed. It could not be
- * written while a realm slot and a step id were one kind, because the left-hand side was not derivable.
- * RETIREMENT: this paragraph goes when the identity below is asserted, because the reason for the kind is
- * then re-derivable from the assert instead of from here.
+ * WHY IT IS NOT AN id, WHICH IS WHAT IT WAS — AND THE HALF OF THAT ARGUMENT THAT IS NOW RE-DERIVABLE IS
+ * GONE RATHER THAN RESTATED, which is this paragraph's own retirement condition being met by the assert in
+ * core/platform.c. What it said and no longer needs to: that the registry would then hold, between
+ * SLOT_CLASS and this kind, every class id anybody told it about, that `js_class_id_alloc` less
+ * JS_CLASS_INIT_COUNT is how many were minted, and that the two are a CONSERVATION IDENTITY no spelling of a
+ * mint can evade. Every word of that is still true and it is now WRITTEN DOWN AS CODE — agent_state.h's
+ * agent_state_class_id_count and quickjs.h's JS_ClassIDsMinted, compared where the declare column ends — so a
+ * reader re-derives it from the assert instead of from a paragraph that can go wrong about it.
+ * WHAT IS KEPT IS THE HALF THE ASSERT CANNOT STATE, because the assert is about a SUM over two kinds and this
+ * is about which kind a slot gets. `int` is the C type of three unrelated quantities in this engine — a step
+ * id from JS_RegisterStepDef, a method id from core/idl_args' idl_method_id (which IS a step id: that
+ * function's last line returns one), and a per-realm value slot — and while all three went through
+ * agent_state_id the registry could not tell them apart. That is not untidiness: a slot and a class id are
+ * THE SAME OBJECT, since realm_value_declare's body is JS_NewClassID plus JS_NewClass over a local that
+ * starts at 0, so it always mints. A realm slot left as an id is therefore a class id sitting in the ONE band
+ * the identity does not count, and the identity comes out short by one with nothing to say why — which is
+ * the reading the assert gives back if anybody merges the kinds again, in the accusing direction.
  *
  * THE PRE-INIT IS `JS_INVALID_CLASS_ID`, AND THE ARGUMENT THAT IT SHOULD BE `-1` IS RETIRED BY THE TYPE
  * RATHER THAN OVERRULED. It was a real argument and it was measured: while a realm slot was a bare `int`,
@@ -225,24 +229,30 @@ void agent_state_ptr_at(const char *component, const void *slot, const char *wha
  *   HOW ITS ABSENCE WOULD SHOW: a component's slots split across the two bands in
  *     `node engine/agentstate.mjs --rev <rev>` with every dev build of that revision silent.
  *
- * NAMED RESIDUAL — THE IDENTITY IS NOT ASSERTED, ONLY MADE DERIVABLE.
- *   NOT COVERED: a class id minted and never declared is COUNTED and not IMPOSSIBLE. This kind gives the
- *     registry the left-hand side of the conservation identity — the class ids it was told about, being its
- *     SLOT_CLASS rows plus its SLOT_REALM ones — and nothing here compares that against the allocator that
- *     handed them out, so nothing refuses a mint that skipped this registry.
- *   THE NEXT DIFF BUILDS: three things must exist afterward. (1) A way for the host to read how many class
- *     ids a runtime has handed out. `rt->js_class_id_alloc` is private to engine/qjs/quickjs.c and there is
- *     no public entry for it — `git grep -nE "JS_(GetClass(Count|IdAlloc)|ClassCount)" -- engine/qjs`
- *     answers 0 at 8de85780, and `js_class_id_alloc` occurs at three lines of quickjs.c and none of
- *     quickjs.h; grep both again before building, because that is a claim about a tree that moves. (2) A
- *     count over this registry of the two class-id kinds. (3) An equality between them, asserted where the
- *     declare column ends. It will not hold on the day it is written and that is the forcing function rather
- *     than a reason to defer it: what it names is every mint that never came through here, and closing those
- *     is a mint that DECLARES — one door taking the slot's address and the component's row, which is the root
- *     the identity exists to force.
- *   HOW ITS ABSENCE WOULD SHOW: `node engine/agentstate.mjs --rev <rev>` reports a nonzero UNDECLARED band
- *     in either channel while every dev build of that revision is silent. A gap a text sweep can see and no
- *     run of the engine can is the whole of what is missing; when the identity stands, the run sees it first.
+ * THE NAMED RESIDUAL THAT STOOD HERE IS RETIRED — ITS THREE THINGS ARE BUILT: quickjs.h's JS_ClassIDsMinted,
+ * agent_state_class_id_count below, and the comparison at the end of core/platform.c's declare column. Its
+ * NOT-COVERED clause was exact and is what that comparison now refuses: a class id minted and never declared
+ * was COUNTED and not IMPOSSIBLE. Its (1) was exact too and the greps it told the next reader to re-run were
+ * re-run and still answered nothing, so the entry had to be added rather than found.
+ * ONE CLAUSE WAS WRONG AND IS RECORDED RATHER THAN DELETED, because a next-diff clause is read once, by
+ * somebody who has already decided to build it, so a wrong one is not caught — it is executed. It framed the
+ * check as an EQUALITY between this registry and `the allocator that handed them out`, and an absolute
+ * identity of that shape is between a BROWSER registry and a PROCESS counter. This process has non-browser
+ * mints: solver/concolic.c's `concolic_init` mints one, and wpt_runner.c's `wpt_agent_init` reaches
+ * it BEFORE platform_agent_init in the same straight-line function. That mint cannot be closed by declaring — a declaration naming no row on
+ * core/platform.c's list aborts in that file's own registry walk — so the absolute form would have demanded
+ * a repair another check forbids, and stood permanently red for a reason no browser diff could ever drain,
+ * which is furniture rather than a forcing function. What was built instead is the identity over the WINDOW
+ * the declare column brackets: of everything that column minted, was all of it declared. That excuses no
+ * mint and skips no component; it states the interval in which both sides are defined.
+ * THE TELL THE WRONG CLAUSE CARRIED IS THE ONE TO COPY: it named a POPULATION (`the allocator`) where the
+ * code had to key on a PROPERTY (what this column minted), and a population's membership only a run can
+ * decide.
+ * ITS HOW-ITS-ABSENCE-WOULD-SHOW clause HELD, which is the split CLAUDE.md predicts — the clause about
+ * OBSERVABLE BEHAVIOUR survived and the clause naming a MECHANISM did not. Measured at the revision this was
+ * written at, `node engine/agentstate.mjs` reported a nonzero UNDECLARED band in BOTH channels while no dev
+ * build of that revision said anything. Re-derive rather than quoting a figure here; the command is the
+ * deliverable and the band shrinks as the work is done.
  */
 void agent_state_realm_slot_at(const char *component, const JSClassID *slot, const char *what,
                                const char *file, int line);              /* pre-init: JS_INVALID_CLASS_ID */
@@ -260,6 +270,23 @@ void agent_state_realm_slot_at(const char *component, const JSClassID *slot, con
    for a component that declared nothing and for a component whose slots were declared under a name that
    caller's list does not carry. Those are two different repairs, so they are two different questions. */
 int  agent_state_count(const char *component);
+
+/* HOW MANY CLASS IDS THIS REGISTRY WAS TOLD ABOUT — its SLOT_CLASS rows plus its SLOT_REALM ones, which are
+   the two kinds whose slot holds a JSClassID that JS_NewClassID minted (a realm slot is a class id: see
+   agent_state_realm_slot_at above for why it is its own kind and why that is what made this derivable).
+ *
+ * IT IS THE LEFT-HAND SIDE OF A CONSERVATION IDENTITY AND HAS NO OTHER READER. The right-hand side is
+ * quickjs.h's JS_ClassIDsMinted, and core/platform.c brackets the declare column with the pair: what the
+ * column minted must be what the column declared. A mint that skipped this registry is then not COUNTED by a
+ * text sweep, it is REFUSED by the run.
+ *
+ * IT IS A LIFETIME COUNT OVER ONE AGENT AND NEVER A GAUGE, which is the whole reason it may be differenced:
+ * a row is added by a declaration and is never removed — agent_state_undo resets SLOTS and leaves rows, and
+ * only agent_state_reset empties the registry, at the end of the agent. So two readings of this bracket a
+ * window exactly as two readings of the allocator do, and the difference of the two differences is the
+ * identity. A count of rows CURRENTLY SET would not be one: it falls as releases run, and differencing it
+ * across a window would be arithmetic over nothing. */
+int  agent_state_class_id_count(void);
 
 /* THE REGISTRY, READ THE OTHER WAY: the `i`th declaration in declaration order, false past the end. This is
    the ONLY way to ask "is every declaration's component a real one?", because that question is asked of the

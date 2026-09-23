@@ -104,10 +104,13 @@ void agent_state_id_at(const char *c, const int *slot, const char *what, const c
    IT IS NOT core/realm.c's JS_IsRegisteredClass, WHICH IS THE STRONGER QUESTION AND CANNOT BE ASKED HERE: a
    declaration carries no JSRuntime, and inventing a parameter to carry one would make every component's
    declaration depend on a runtime it does not otherwise need. What this entry can see is whether the slot has
-   been assigned, and that is exactly the state a row declared above its assignment is in. A row declared while its slot still holds the component's own
-   pre-init is a row that will be COUNTED against the allocator and contributed nothing TO it, so the identity
-   this kind exists to make possible would come out short by one and report a mint nobody made. That is the
-   accusing direction, and it is a state a diff reaches by putting the declaration one line too early.
+   been assigned, and that is exactly the state a row declared above its assignment is in. A row declared while
+   its slot still holds the component's own pre-init is a row that is COUNTED against the allocator and
+   contributed nothing TO it, so core/platform.c's identity comes out with MORE DECLARED THAN MINTED and
+   reports a mint nobody made. That identity is asserted now rather than merely made possible, so this assert
+   is what keeps the two directions distinguishable there: without it, a declaration one line too early and a
+   mint nobody declared cancel, and the sum says nothing. That is the accusing direction, and it is a state a
+   diff reaches by putting the declaration one line too early.
    THE NULL IS LEFT TO slot_declare, deliberately: it refuses a null address in its own words and with the
    right remedy, and short-circuiting to it here is what keeps ONE message for that state rather than two. */
 void agent_state_realm_slot_at(const char *c, const JSClassID *slot, const char *what, const char *f, int l)
@@ -135,6 +138,24 @@ int agent_state_count(const char *component)
     DCHECK(component != NULL, "the agent-state registry was asked about no component");
     for (i = 0; i < g_n; i++)
         if (strcmp(g_slots[i].component, component) == 0) n++;
+    return n;
+}
+
+/* THE TWO CLASS-ID KINDS, COUNTED TOGETHER — see agent_state.h for what the number is the left-hand side of.
+   THEY ARE COUNTED TOGETHER AND NOT SEPARATELY, and that is the property that makes the identity honest
+   rather than a preference about tidiness: agent_state.h records that these two entries have byte-identical
+   signatures, so the compiler cannot separate a class slot from a realm slot and a declaration routed to the
+   wrong one of the pair is silent. A sum over both is unchanged by that mis-routing, so the identity answers
+   about the one thing it is for — was every class id this window minted declared at all — rather than about
+   which door it came through. The other kinds hold no class id and are not counted: an id, a flag, an atom,
+   a JSValue and a pointer are each minted by something that is not this allocator, and adding one of them to
+   this total would report a mint nobody made. */
+int agent_state_class_id_count(void)
+{
+    int i, n = 0;
+
+    for (i = 0; i < g_n; i++)
+        if (g_slots[i].kind == SLOT_CLASS || g_slots[i].kind == SLOT_REALM) n++;
     return n;
 }
 

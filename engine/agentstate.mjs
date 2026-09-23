@@ -10,19 +10,23 @@
  * source text, so a mint written any way other than the two forms it names is invisible to it -- a helper
  * that wraps JS_NewClassID, an id assigned through a pointer, a slot handed out by a component's own factory.
  * CLAUDE.md rates a static derivation over text as a lower bound wearing a total's clothes, and the cure it
- * prescribes is to ask the RESULT rather than the source: the exact instrument is a runtime one, and it does
- * not exist yet. Naming it is part of this file's job, because a reader who takes these numbers for a total
- * will not build it.
- *   THE EXACT INSTRUMENT. A realm slot and a class id are THE SAME OBJECT -- realm_value_declare's body is
- *   JS_NewClassID plus JS_NewClass -- so every row here is a class id, and the runtime already counts them:
- *   `rt->js_class_id_alloc` less JS_CLASS_INIT_COUNT is exactly how many this agent minted. A check at the
- *   end of the declare column comparing that against what agent_state holds is a CONSERVATION IDENTITY over
- *   the one allocator, and it cannot be evaded by a spelling. What it needs that does not exist today is a
- *   way to tell a declared realm slot from a declared step or method id, since all three are SLOT_ID; the
- *   identity closes the moment a realm slot has a kind of its own.
- *   THE ROOT BEYOND THAT is a mint that DECLARES -- one door taking the slot's address and the component's
- *   row, so that an undeclared class id is unconstructible rather than merely reported. That is a signature
- *   change at every mint in the tree, which is why the count below is worth having first.
+ * prescribes is to ask the RESULT rather than the source.
+ *   THAT RUNTIME INSTRUMENT EXISTS NOW, AND THIS PARAGRAPH IS REWRITTEN RATHER THAN DELETED BECAUSE IT SAID
+ *   IT DID NOT. It read `the exact instrument is a runtime one, and it does not exist yet`, and then named
+ *   what it needed as `a way to tell a declared realm slot from a declared step or method id, since all
+ *   three are SLOT_ID`. Both halves are retired by landings rather than overruled: a realm slot is its own
+ *   kind (SLOT_REALM), and core/platform.c compares agent_state_class_id_count against quickjs.h's
+ *   JS_ClassIDsMinted over the window the declare column brackets. An absence written in the present tense is
+ *   the one direction CLAUDE.md rates worst, because its only reader is somebody deciding whether to BUILD
+ *   the thing -- so a stale one argues for a second copy of an instrument that is already there.
+ *   WHAT THE RUN SEES AND THIS SWEEP DOES NOT, which is why both are kept: the run's number is the
+ *   ALLOCATOR'S, so it counts a mint written in any spelling at all, including the three this file names as
+ *   invisible to it. What this sweep sees and the run does not is an ADDRESS -- the run has a count and a
+ *   window, and the file and line of an offending mint are here. Neither is the other's floor; they answer
+ *   different halves of one question, and the run is the one that cannot be evaded.
+ *   THE ROOT BEYOND BOTH is a mint that DECLARES -- one door taking the slot's address and the component's
+ *   row, so that an undeclared class id is unconstructible rather than reported by either. That is a
+ *   signature change at every mint in the tree, which is what the identity exists to force.
  *
  * WHAT THE THREE BANDS MEAN, AND WHY THEY ARE NOT ONE NUMBER. CLAUDE.md: N sites spelling one question wrong
  * are not N defects, and the discriminator is what stands UNDER each one.

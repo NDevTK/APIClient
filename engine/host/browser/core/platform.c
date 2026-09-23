@@ -1737,11 +1737,12 @@ static void platform_check_table(void)
  * all is a PROOF that every declaration in this agent names a row, and the row loop's two messages can say so
  * in their own words. Ambiguity is removed by making the ambiguous state unreachable before the ambiguous
  * sentence can be printed, never by adding an adjective to the sentence. */
-static void platform_check_agent_state(void)
+static void platform_check_agent_state(JSRuntime *rt, uint32_t minted_before, int declared_before)
 {
 #if APICLIENT_DEV
     const char *component, *what, *file;
     int i, line;
+    uint32_t minted, declared;
 
     /* AND THE DECLARING SITE IS PART OF THIS ABORT RATHER THAN DECORATION ON IT. This DFAILF is written at ONE
        line and 611 declarations can reach it, so what it stamps is this file for every one of them; the two
@@ -1786,6 +1787,78 @@ static void platform_check_agent_state(void)
                    "already reaches this one's, the declarations belong under THAT row's name, which is how "
                    "a sub-component is declared (core/agent_state.h)", PLATFORM[i].name, n);
     }
+    /* WHAT THIS COLUMN MINTED IS WHAT THIS COLUMN DECLARED — the conservation identity core/agent_state.h's
+     * realm-slot entry argued was derivable, asserted rather than left derivable.
+     *
+     * IT RUNS LAST AND THAT IS THE MECHANISM RATHER THAN A PREFERENCE. Both walks above name an exact repair
+     * at an exact line (a misspelled row, an unpaired release); this one names a NUMBER and a derivation. A
+     * misspelled declaration is still a declaration, so it counts here either way and this check cannot tell
+     * the two apart — running it first would abort before the two checks that can.
+     *
+     * IT IS A DIFFERENCE OVER A WINDOW AND NOT AN ABSOLUTE COUNT, and the residual it discharges asked for the
+     * absolute one. That framing was wrong about this tree and the correction is recorded rather than quietly
+     * applied, because a next-diff clause is read once, by somebody who has already decided to build it. An
+     * absolute `minted == declared` is an identity between the ALLOCATOR, which is the process's, and THIS
+     * REGISTRY, which is the browser's — and this process has non-browser mints: solver/concolic.c's
+     * `concolic_init` mints one, and wpt_runner.c's `wpt_agent_init` calls it BEFORE platform_agent_init in
+     * the same straight-line function. That mint cannot be
+     * closed by declaring, because a declaration naming no row on the list above aborts in the walk at the top
+     * of this function, so the absolute form would demand a repair another check in this same function
+     * forbids — a permanent red nothing can drain, which is furniture rather than a forcing function. The
+     * WINDOW states the subject exactly: of everything the declare column minted, was all of it declared. It
+     * excuses no mint and skips no component; it names the interval in which both sides are defined.
+     *
+     * BOTH SIDES ARE LIFETIME COUNTS OVER THAT WINDOW, which is what makes the difference arithmetic about
+     * anything at all. A class id cannot be given back, so JS_ClassIDsMinted only rises; a registry row is
+     * never removed by a release (agent_state_undo resets SLOTS), so agent_state_class_id_count only rises
+     * until agent_state_reset empties it with the agent. Neither is a gauge and neither is differenced across
+     * a boundary the other does not share.
+     *
+     * IT WILL NOT HOLD ON THE DAY IT IS WRITTEN AND THAT IS THE POINT. What it names is every class id this
+     * column minted through a static nobody declared, which a text sweep could COUNT and no run could refuse.
+     * The remedy is a declaration beside the mint, never a tolerance here: a `>=`, a skip list or a known-gap
+     * table would each be the legacy fallback §A-superseded-system-is-DELETED forbids, wearing an assert's
+     * clothes, and would hide the gap in exactly the direction that reads as progress. */
+    minted   = JS_ClassIDsMinted(rt) - minted_before;
+    declared = (uint32_t)(agent_state_class_id_count() - declared_before);
+    DCHECKF(minted == declared,
+            "the platform declare column MINTED %u class id(s) and DECLARED %u — every class id is handed out "
+            "at one line (JS_NewClassID's `rt->js_class_id_alloc++`), so the allocator's own count is a number "
+            "no spelling of a mint can evade, and core/agent_state.h's SLOT_CLASS and SLOT_REALM rows are "
+            "everything this browser was told about. MORE MINTED THAN DECLARED is a static holding a class id "
+            "that no `agent_state_class`/`agent_state_realm_slot` names: nothing gives it back at the release, "
+            "so the next agent in this process finds it SET, its component's `_init` reads it as a latch and "
+            "returns before re-registering, and every object that component mints is branded with an id the "
+            "live runtime never handed out. MORE DECLARED THAN MINTED is the other direction and is not the "
+            "same repair: a row declared ABOVE the line that assigns its slot, counted against an allocator it "
+            "never asked. Derive the sites rather than reading a number here: `node engine/agentstate.mjs`",
+            minted, declared);
+    /* NAMED RESIDUAL — THE IDENTITY NAMES A COUNT AND NOT AN ID.
+     *   NOT COVERED: two properties, and the second is the sharper one. A reader meeting this abort has a
+     *     NUMBER and a command, not the class id that was minted undeclared — so the address comes from a
+     *     TEXT sweep whose own banner says a mint written in a spelling it does not search is invisible to
+     *     it, which is the instrument this check exists to stop being the only one. And a SUM is satisfiable
+     *     by cancellation: a mint nobody declared and a row declared above the line that assigns its slot
+     *     move the two sides the same way, so one of each reads as agreement. agent_state_realm_slot_at's own
+     *     assert is what keeps that second state rare for a realm slot and there is no such assert on a class
+     *     slot, which agent_state.h says in its own words.
+     *   THE NEXT DIFF BUILDS: a PER-ID accounting over the same window rather than a per-count one. It needs
+     *     the registry answered by a slot's VALUE and not by a total — `agent_state_class_id_declared(id)`,
+     *     reading each SLOT_CLASS and SLOT_REALM row's slot — and then every id in
+     *     [JS_CLASS_INIT_COUNT + minted_before, JS_CLASS_INIT_COUNT + minted_after) that no row holds is an
+     *     abort naming that id. The class's NAME makes it an address rather than a number, and both entries
+     *     it needs are already public: `JS_EXTERN JSAtom JS_GetClassName(JSRuntime *, JSClassID)` and
+     *     `JS_EXTERN bool JS_IsRegisteredClass(JSRuntime *, JSClassID)` in engine/qjs/quickjs.h, grepped at
+     *     the revision this was written at — grep them again before building, because that is a claim about a
+     *     tree that moves. JS_GetClassName hands back a DUP'd atom and answers JS_ATOM_NULL for an id nobody
+     *     registered, which is itself a finding rather than a formatting problem, and rendering it needs a
+     *     JSContext this function does not take today.
+     *   HOW ITS ABSENCE WOULD SHOW: the gap this abort reports and the queue `node engine/agentstate.mjs`
+     *     prints disagree, with the run's number the larger — and nothing anywhere says which mints the
+     *     difference is made of, because the only instrument that can name a site is the one that cannot see
+     *     them. */
+#else
+    (void)rt; (void)minted_before; (void)declared_before;
 #endif
 }
 
@@ -1804,6 +1877,13 @@ void platform_agent_init(JSContext *ctx, const char *origin, const char *top_lev
     };
     const PlatformAgent *agent = &a;
     int i;
+    /* THE TWO ENDS OF THE MINT WINDOW — read immediately before the declare loop and again in
+       platform_check_agent_state immediately after it, because the identity those two bracket is about THIS
+       COLUMN and not about this process: solver/concolic.c mints a class id at its own bring-up, which one
+       host reaches before this call, and quickjs's predefined classes were never minted by anybody. Read here
+       rather than inside the check so that the interval is visible at the loop it is about. */
+    uint32_t minted_before;
+    int declared_before;
 
     DCHECK(ctx != NULL, "the platform was declared into no realm");
     /* THE DECLARATION PASS BUILDS THE BROWSER'S BASELINE, so it runs at the BASELINE STAMP — and that is a
@@ -1899,10 +1979,12 @@ void platform_agent_init(JSContext *ctx, const char *origin, const char *top_lev
        cluster this agent is in. Every host reaches it here, which is what stops one host answering a question
        about a cluster that was never allocated. */
     agent_cluster_obtain_window_agent(origin_agent(), agent->requests_oac);
+    minted_before = JS_ClassIDsMinted(g_declared_in);
+    declared_before = agent_state_class_id_count();
     for (i = 0; i < PLATFORM_N; i++)
         if (PLATFORM[i].declare)
             PLATFORM[i].declare(ctx, agent);
-    platform_check_agent_state();
+    platform_check_agent_state(g_declared_in, minted_before, declared_before);
     /* THE AGENT'S FIRST REALM IS A REALM. Every per-realm intrinsic the components above declared is built
        here, through the same one call a child navigable's realm makes — so the first document cannot get a
        different set from the rest, which is the whole failure mode this file and core/realm.h exist to end. */
