@@ -1276,7 +1276,7 @@ static JSValue js_encoder_encode_into(JSContext *ctx, JSValueConst this_val, int
        "that is not a Uint8Array" about a value nothing is known about is a control-flow decision over unknown
        input. There is no identified buffer here to write into, so the pair returned below would report a write
        into a destination this engine never resolved.
-       THE HALF OF THIS THAT SAID "THERE IS NOWHERE IN A Uint8Array TO PUT AN UNKNOWN BYTE" IS RETIRED AND IS
+       THE HALF OF THIS THAT SAID `THERE IS NOWHERE IN A Uint8Array TO PUT AN UNKNOWN BYTE` IS RETIRED AND IS
        REWRITTEN RATHER THAN DELETED, because it is the intuitive belief and a reader who re-derives it will
        re-introduce it. It was true of the data block and was never true of the OBJECT: the engine now keeps a
        SPAN LIST beside the block on the live ArrayBuffer, so the block holds an EXAMPLE and the span beside it
@@ -1318,7 +1318,7 @@ static JSValue js_encoder_encode_into(JSContext *ctx, JSValueConst this_val, int
        write that did not happen: the page then reads real zeroes out of a buffer it believes holds the
        encoding of attacker-controlled input.
        THE CAPABILITY THIS NAMED IS BUILT, AND THE SENTENCE IT RESTED ON IS REWRITTEN RATHER THAN DELETED —
-       "a Uint8Array element is a number, so there is nowhere in one to put an unknown byte" was true of the
+       `a Uint8Array element is a number, so there is nowhere in one to put an unknown byte` was true of the
        DATA BLOCK and never of the buffer OBJECT. A span list now sits beside the block: the block carries an
        EXAMPLE and the span is the FACT, and 10.4.5.18 TypedArraySetElement records one through the ORDINARY
        element write, so a writer reaches it by writing normally rather than by calling anything.
