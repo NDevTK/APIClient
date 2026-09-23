@@ -281,6 +281,7 @@ int record_cursor_run(JSContext *ctx, JSStepHdr *h, RecordCursor *c, JSValueCons
 
 #include "core/idl_args.h"
 #include "core/realm.h"
+#include "solver/cow.h"
 
 enum { PAIR_KEYS = 0, PAIR_VALUES, PAIR_ENTRIES };
 
@@ -318,20 +319,36 @@ static int g_pair_n;
 static int g_pair_released;
 
 /* §3.7.9.1's iterator object: the TARGET and an INDEX, not a snapshot, so a list mutated between steps is seen.
-   `target` IS THIS RECORD'S ONE OWNED VALUE, AND THAT IS A THREE-CONSUMER STATEMENT RATHER THAN A NOTE ON A
-   FIELD: js_idl_pair_make DUPS it, idl_pair_iter_finalizer FREES it, and idl_pair_iter_gc_mark WALKS it.
-   solver/cow.h says the same of a CowRecord's `val_off` — it is there `the one statement of what a record OWNS`
-   and carries FOUR consumers, the fourth being a WRITE, which this record has none of: `target` is set once at
-   the mint, and cow.h's own paragraph says an initialization is not a write. So a second JSValue added here is
-   owed the other three, and the MARK is the one it is likeliest to be denied — the dup and the free are each
-   one line from the field's own use, while the mark is the only reading whose absence nothing in this
-   component reports. */
+   `target` IS THIS RECORD'S ONE OWNED VALUE, AND IDL_PAIR_ITER_VALS BELOW IS THE ONE STATEMENT OF THAT rather
+   than a note on a field — solver/cow.h's `val_off`, which it is, names THREE consumers here and this record
+   has all three: idl_pair_iter_finalizer FREES it, idl_pair_iter_gc_mark WALKS it, and idl_pair_iter_of's
+   capture DUPS it into the flow's delta. cow.h names a FOURTH, the WRITE, which this record has none of, and
+   that is VERIFIED at this record rather than inherited from that paragraph: `target` is assigned at exactly
+   one line, in js_idl_pair_make, and that line stands ahead of the same function's JS_SetOpaque — which is
+   precisely the INITIALIZATION cow.h's cow_record_set paragraph excludes, since before JS_SetOpaque the
+   collector cannot reach the record and there is no previous value to release. An assignment added anywhere
+   else is owed cow_record_set. So a second JSValue added here is owed all four, and the MARK is the one it is
+   likeliest to be denied — the dup and the free are each one line from the field's own use, while the mark is
+   the only reading whose absence nothing in this component reports. */
 typedef struct {
     JSValue target;   /* §3.7.9.1's "target" — the object this iterator iterates (OWNED) */
-    int index;        /* §3.7.9.1's "index" */
+    int index;        /* §3.7.9.1's "index" — PER-FLOW state; see the layout and idl_pair_iter_of below */
     int kind;         /* PAIR_KEYS / PAIR_VALUES / PAIR_ENTRIES */
     int iface;        /* the g_pair handle of the interface this iterator was minted for */
 } IdlPairIter;
+
+/* `val_off` IS A REFERENCE-COUNT CONTRACT AND NOT THE CAPTURE'S EXTENT, which is the one thing a reader of
+   this record has to get right, because the two answers differ here and the wrong one looks like a gap:
+   cow_state_save memcpy's `rec->size` BYTES and only then dups each named value, so `index` — the per-flow
+   cursor this record time-travels FOR — rides the byte copy and is fully covered by a layout naming `target`
+   alone. Reaching for cow_capture_host_state to "also" cover it would be the POD-LATCH primitive on a record
+   that holds a JSValue, whose memcpy makes a reference it does not count, and a second capture of this same
+   entry besides. RETIREMENT: this note goes when cow.h's own type states the captured extent separately from
+   the owned list, because the mistake is then unspellable rather than merely warned against. */
+#define IDL_PAIR_ITER_OFF(f) (uint16_t)offsetof(IdlPairIter, f)
+static const uint16_t IDL_PAIR_ITER_VALS[] = { IDL_PAIR_ITER_OFF(target) };
+static const CowRecord IDL_PAIR_ITER_REC = { sizeof(IdlPairIter), IDL_PAIR_ITER_VALS,
+                                             (int)(sizeof IDL_PAIR_ITER_VALS / sizeof *IDL_PAIR_ITER_VALS) };
 
 /* THE RECORD IS REACHED WITHOUT READING THIS FILE'S TABLE, and that is the whole of why this is not the loop
    it was. core/agent_state.h states the rule by name — a finalizer reads NO static its own release resets, and
@@ -391,12 +408,25 @@ static const IdlPairIface *idl_pair_iface_of(JSContext *ctx, JSValueConst v)
     return NULL;
 }
 
+/* THE RECORD'S ACCESSOR, AND THEREFORE ITS COW CAPTURE POINT.
+   CLAUDE.md §A-COMPONENT'S-OWN-C-RECORD-TIME-TRAVELS: `index` is PER-FLOW STATE behind a class opaque, so its
+   write is seen by no property hook and no engine hook; two arms of a fork sharing one iterator stepped ONE
+   cursor and each saw a proper subset of the pairs, which §State-isolation exists to make impossible and which
+   a page reaches in one line, since §3.7.9's iterator is held by the very object it iterates
+   (`h.it = h.entries()`).
+   THIS IS THE ONE DOOR A FLOW REACHES AN EXISTING RECORD THROUGH, which is what makes the accessor placement
+   complete rather than merely conventional: js_idl_pair_next is this function's only caller and holds the only
+   write to `index`, js_idl_pair_make never reads a record back (it allocates one and hands it over), and the
+   finalizer and the gc_mark reach theirs with JS_GetAnyOpaque deliberately — a capture there would dup values
+   on an object being torn down. So there is no write site left to miss.
+   core/idl_async_iter.c's ait_of is the same call at the same place in the same loop, for the same reason, and
+   solver/cow.h's iter_state entry records this exact split for the ENGINE'S OWN iterator records. */
 static IdlPairIter *idl_pair_iter_of(JSValueConst v)
 {
     int i;
     for (i = 0; i < g_pair_n; i++) {
         IdlPairIter *it = JS_GetOpaque(v, g_pair[i].class_id);
-        if (it) return it;
+        if (it) { cow_capture_host_record(v, it, &IDL_PAIR_ITER_REC); return it; }
     }
     return NULL;
 }
