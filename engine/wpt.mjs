@@ -1378,7 +1378,44 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       WPT_PATHS entry claims a SUBTREE, so it would silently absorb any directory upstream
                       adds under `reporting` later; the pair below claims the level that is on disk and
                       nothing more, which is what this row is actually buying. */
-                   "reporting/resources"];
+                   "reporting/resources",
+                   /* AND THE FIXTURE DIRECTORY THE TWO ROWS ABOVE DECLARE AND NOTHING COULD SEE THEM DECLARE.
+                      `content-security-policy/media-src` names `/media/A4.webm` and `/media/sound_5.oga` from
+                      four of its test documents, both EXIST at the pinned revision, and neither was in the
+                      checkout — because the collection-time fixture resolution above reads a `<script src>`
+                      element and a `// META: script=` line and NOTHING ELSE, which `docScriptFixtures` now
+                      says in its own words and measures rather than merely warning about.
+                      WHAT AN ABSENT ONE COSTS IS NOT A SMALLER NUMBER, IT IS AN INVERTED DIAGNOSIS.
+                      `media-src-7_1.html` is a POSITIVE test — `media-src 'self'` over a same-origin
+                      `/media/A4.webm`, which must LOAD — and its error path calls
+                      `assert_unreached("Media error handler should be triggered for non-allowed domain.")`.
+                      A 404 from an unchecked-out fixture therefore fires `onerror`, fails the test, and prints
+                      a message saying CSP blocked an address CSP allowed. That is a FALSE VERDICT about the
+                      component this row exists to judge, arriving through the gate rather than through the
+                      engine.
+                      IT IS NOT A PURCHASE FOR THOSE FOUR FILES. Re-derived over the checkout as it already
+                      stood, FIFTEEN distinct `/media/…` paths that exist at the pinned revision were named by
+                      files ALREADY collected, across `css`, `html`, `custom-elements`, `service-workers` and
+                      `xhr` — a declared-fixture gap live in five areas that no run has ever reported, because
+                      no channel looked at the construct that declares it.
+                      IT COSTS 40 BLOBS AND 14737680 BYTES, and it is the largest row here by bytes. It holds
+                      ZERO test files — every entry is `.webm`, `.mp4`, `.mp3`, `.oga`, `.wav`, `.vtt`,
+                      `.png`, `.jpg` or `META.yml` — so it adds nothing to the stray census, and it is TOP
+                      LEVEL and flat, so it drags no other directory's own level onto disk. Re-price and
+                      re-check both with
+                        git -C engine/.work/wpt ls-tree -r -l <rev> -- media | awk '{n++;b+=$4} END{print n,b}'
+                        git -C engine/.work/wpt ls-tree -r --name-only <rev> -- media | grep -cE '[.](html|js)$'
+                      THE WIDENING WAS PRICED IN FALSE ACCUSATIONS BEFORE IT LANDED, which is the half a
+                      coverage-gaining change usually leaves unmeasured. Over the whole checkout, every
+                      `/media/…` string that resolves to nothing at the pinned revision is either an
+                      EXTENSION-LESS STEM a test completes at run time (`/media/counting`, `/media/movie_300`,
+                      `/media/sound_5` — the `canPlayType` shape) or a run inside a COMMENT or a JS `import`
+                      specifier (`/media/Projects` in a NIST URL, `/media/capture` in a mojom path). The
+                      reader below sees a markup `src` attribute on a media element and none of those is one,
+                      so the measured price of this row is ZERO new accusations.
+                      NOTHING IS PREDICTED HERE ABOUT WHAT THESE FILES SCORE. Adding the fixture makes four
+                      media-src documents SCORABLE; whether they pass is a fact about a run nobody has made. */
+                   "media"];
 
 /* AND THE DIRECTORIES WHOSE OWN LEVEL CONE MODE HAS ALREADY PUT ON DISK. A cone-mode checkout materializes every
    file of every directory ON THE PATH to a listed one, so naming one helper's `resources` lands its standard's
@@ -2739,23 +2776,52 @@ function idlFixtures(file, kind) {
 function docScriptFixtures(file) {
   const raw = readCorpus(file);
   if (raw === null) return null;   /* readCorpus recorded WHY; the run loop reports it */
+  const stripped = markupOnly(raw);
   const paths = new Set(), unresolved = [];
-  for (const tag of markupOnly(raw).matchAll(/<(?:[A-Za-z][\w.-]*:)?script\b[^>]*>/gi)) {
-    const a = /\ssrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i.exec(tag[0]);
+  const media = new Set(), mediaUnresolved = [];
+  /* WPTSERVE'S RULE, WRITTEN ONCE AND ASKED BY BOTH LOOPS. It was inline in the script loop while the script
+     loop was the only loop; a second construct reading it is a second reading of one rule, and the two would
+     disagree about a `?pipe=` or a SERVER_REWRITES entry with nothing to say so. Returns the corpus-relative
+     path, or null having recorded WHY it could not be placed. */
+  const place = (raw_ref, unplaced) => {
+    const ref = SERVER_REWRITES[raw_ref] || raw_ref;
+    if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(ref) || ref.startsWith("//") || ref.includes("{{")) {
+      unplaced.push(raw_ref.length > 60 ? raw_ref.slice(0, 60) + "…" : raw_ref);
+      return null;
+    }
+    const bare = ref.split("?")[0].split("#")[0];
+    if (!bare) return null;                               /* `src="?query"` names the document itself */
+    return bare.startsWith("/") ? bare.slice(1)
+                                : relative(WPT, join(dirname(file), bare)).split(sep).join("/");
+  };
+  const ATTR = /\ssrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i;
+  for (const tag of stripped.matchAll(/<(?:[A-Za-z][\w.-]*:)?script\b[^>]*>/gi)) {
+    const a = ATTR.exec(tag[0]);
     if (!a) continue;                                     /* an INLINE script declares no fixture */
     const raw_ref = (a[1] ?? a[2] ?? a[3]).trim();
     if (!raw_ref) continue;
-    const ref = SERVER_REWRITES[raw_ref] || raw_ref;
-    if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(ref) || ref.startsWith("//") || ref.includes("{{")) {
-      unresolved.push(raw_ref.length > 60 ? raw_ref.slice(0, 60) + "…" : raw_ref);
-      continue;
-    }
-    const bare = ref.split("?")[0].split("#")[0];
-    if (!bare) continue;                                  /* `src="?query"` names the document itself */
-    paths.add(bare.startsWith("/") ? bare.slice(1)
-                                   : relative(WPT, join(dirname(file), bare)).split(sep).join("/"));
+    const p = place(raw_ref, unresolved);
+    if (p !== null) paths.add(p);
   }
-  return { paths: [...paths], unresolved };
+  /* THE MEDIA ELEMENTS, WHICH DECLARE A FIXTURE EXACTLY AS A `<script src>` DOES AND WERE READ BY NOTHING.
+     They are collected APART from the script paths and not folded in with them, because the two failures are
+     not the same failure and this gate has no business calling them one. A `<script src>` that does not load
+     takes the test's own HARNESS with it, so the numbers afterwards are not the test's — which is why the
+     block that consumes `paths` aborts the run. A `<video src>` that does not load takes the test's SUBJECT,
+     so the file still runs and still reports; its answer is wrong rather than absent, and for a NEGATIVE test
+     it can even be right by accident. Aborting on one would be this gate refusing a run over a fixture whose
+     absence the run itself can survive, and the accusing direction is the one that needs the most suspicion.
+     SO IT IS A BLIND SPOT WITH A SIZE RATHER THAN A FINDING — reported separately at the foot of the run,
+     counted, and never summed into a failure total. */
+  for (const tag of stripped.matchAll(/<(?:[A-Za-z][\w.-]*:)?(?:video|audio|source|track)\b[^>]*>/gi)) {
+    const a = ATTR.exec(tag[0]);
+    if (!a) continue;
+    const raw_ref = (a[1] ?? a[2] ?? a[3]).trim();
+    if (!raw_ref) continue;
+    const p = place(raw_ref, mediaUnresolved);
+    if (p !== null) media.add(p);
+  }
+  return { paths: [...paths], unresolved, media: [...media], mediaUnresolved };
 }
 /* A `.sub.js` META SCRIPT IS NOT ITS BYTES ON DISK. wptserve SUBSTITUTES `{{host}}`, `{{ports[http][0]}}`
    and friends when it serves one, and the whole point of common/get-host-info.sub.js is to hand a test the
@@ -2837,6 +2903,21 @@ let g_undecided = 0;
    that a test asked for and this checkout could not serve is the same fact as a missing META script, which
    already aborts its file. Its second arm is reported and never counted; see the census for why. */
 let g_refused = 0;
+/* AND THE DECLARED-FIXTURE BLIND SPOT, WHICH IS A SIZE AND NOT A VERDICT. `docScriptFixtures` resolves the
+   fixtures a document DECLARES, and until now it read one construct; the media elements declare one the same
+   way and were read by nothing, which is how four `content-security-policy/media-src` documents came to name
+   `/media/A4.webm` with no entry on any list to supply it.
+   IT DOES NOT GATE, AND THAT IS THE CLAIM RATHER THAN A HEDGE. The two arms of `g_refused` and the
+   `<script src>` abort are FINDINGS — a missing harness makes the numbers afterwards not the test's. A missing
+   media fixture makes the numbers WRONG rather than absent: the file still runs, still reports, and a NEGATIVE
+   test can even answer correctly without it. Summing the two would put a fact this gate cannot judge into a
+   count a reader takes as a defect total, which is the shape the census above is banded against.
+   IT PRINTS ON THE CLEAN DAY. A line that appears only when it is nonzero is a line nobody learns to look for,
+   so the block below prints its zero and says what the zero is a zero OF — the population being the media
+   `src` values, which is a FLOOR over the constructs that declare a fixture and not over every way a test can
+   reach a byte. A runtime `fetch()`, an `<iframe src>`, an `<img src>` and a `?pipe=` handler are outside
+   what any of this can look at, and that remains true after this. */
+const g_mediaBlind = { absent: new Map(), unresolved: 0, files: new Set() };
 
 /* WHY THE HARNESS ENDED THE WAY IT DID, OUT OF WHAT THE RUN ALREADY STREAMED.
  *
@@ -3050,6 +3131,17 @@ for (const { file: f, kind, variant } of runs) {
       failures.push(`  SRCDYN  ${rel}\n         ${docfix.unresolved.length} <script src> value(s) do not name a ` +
                     `path in this corpus (${docfix.unresolved.join(", ")}), so their reachability was NOT ` +
                     "checked — this is an absent measurement for this file, not a fixture that was found");
+    /* AND THE MEDIA FIXTURES THE SAME DOCUMENT DECLARES — COUNTED, NEVER THROWN. See `g_mediaBlind` for why
+       this arm reports where the one above fails, and `docScriptFixtures` for why the two buckets are
+       separate at the source rather than split here. */
+    if (docfix) {
+      for (const p of docfix.media)
+        if (!existsSync(join(WPT, p))) {
+          g_mediaBlind.absent.set(p, (g_mediaBlind.absent.get(p) || 0) + 1);
+          g_mediaBlind.files.add(rel);
+        }
+      g_mediaBlind.unresolved += docfix.mediaUnresolved.length;
+    }
     /* WHETHER THE TEST IS A DOCUMENT IS DECIDED HERE AND NOWHERE ELSE. The runner used to re-derive it from the
        file name — `.html`, and only `.html` — which is a second copy of the rule above and drifted from it the
        moment the first `.htm` was collected: the driver would have handed the runner a document and the runner
@@ -3725,6 +3817,31 @@ console.log("  ---- summary");
   }
 }
 
+/* THE DECLARED-FIXTURE BLIND SPOT, AS A SIZE AND ON EVERY RUN. See `g_mediaBlind`. It is printed BEFORE the
+   refused-fixture census below and apart from it, because that one is a FINDING with an exit status behind it
+   and this one is a statement about what was not looked at — and a reader who meets them in one block reads the
+   second as the first. */
+{
+  const n = [...g_mediaBlind.absent.values()].reduce((a, b) => a + b, 0);
+  if (!n && !g_mediaBlind.unresolved) {
+    console.log("  ---- declared media fixtures: every <video>/<audio>/<source>/<track> src a collected " +
+                "document names resolves to a file in this checkout");
+  } else {
+    console.log(`  ---- BLIND SPOT — ${n} declared media fixture reference(s) in ${g_mediaBlind.files.size} ` +
+                `document(s) name a path this checkout does not have, and ${g_mediaBlind.unresolved} more could ` +
+                "not be placed at all. This does NOT fail the gate: the file still runs and still reports, so " +
+                "its answer is WRONG rather than absent — which is exactly why it is counted here instead of " +
+                "being summed into a failure total. A positive media test whose fixture 404s fails with a " +
+                "message blaming the policy.");
+    for (const [p, c] of [...g_mediaBlind.absent.entries()].sort((a, b) => b[1] - a[1]))
+      console.log(`       ${String(c).padStart(4)}  /${p}`);
+  }
+  /* THE FLOOR, SAID WHERE THE NUMBER IS. A count a reader cannot price is read as a total. */
+  console.log("       (a FLOOR: this reads a <script src>, a // META: script= line and a media element's src, " +
+              "and nothing else — a fixture reached by a runtime fetch(), an <iframe src>, an <img src> or a " +
+              "?pipe= handler is outside every channel here)");
+}
+
 /* AND WHAT THE CORPUS SERVER REFUSED FOR A PATH THIS CHECKOUT DOES NOT HAVE — the fixture question asked of the
    RUN rather than of a list of ways to declare one. See `corpusFixtureLedger` for why the traffic is kept past
    the file that generated it; this is what it is kept FOR.
@@ -3903,6 +4020,10 @@ console.log(`  files ${files.length}   runs ${attempted}${attempted === runs.len
             /* ON THE QUOTED LINE, because this is the line that ends up in a report or another agent's context,
                and a fixture the checkout could not serve is a statement about what these numbers MEASURED. */
             `   refused-fixtures ${g_refused}` +
+            /* ON THE QUOTED LINE AND NOT IN THE EXIT STATUS, which is the whole distinction this column
+               exists to carry: a reader quoting this line gets the gate's FINDINGS and its BLIND SPOT side by
+               side, and can tell which of the two a number is. */
+            `   unserved-media ${[...g_mediaBlind.absent.values()].reduce((a, b) => a + b, 0)}` +
             (g_truncated ? `   *** TRUNCATED at ${g_truncated.rel}: ${runs.length - attempted} run(s) never ` +
                            "attempted — this is NOT a corpus measurement ***" : ""));
 console.log("===========================================================");

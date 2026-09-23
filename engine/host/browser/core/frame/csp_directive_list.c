@@ -300,6 +300,38 @@ const CspDirective *csp_policy_directive(const CspPolicy *policy, const char *na
     return NULL;
 }
 
+/* NAMED RESIDUAL — WHAT IS NOT COVERED: §6.8.1's STEP 1, which runs BEFORE the switch below and reads a field
+ * this function does not take — "If request's initiator is `prefetch` or `prerender`, return default-src."
+ * The switch is §6.8.1's step 2, and it is the whole of the answer for every request THIS engine makes, which
+ * is what keeps this a residual rather than a defect: Fetch §2.2.5's initiator is carried
+ * (core/fetch/fetch.h's FetchRequest), and the only two values any site in this tree ever states are the
+ * empty one and `imageset` — Mixed Content §4.1 step 1.5's, which is that field's one reader here.
+ * IT IS THE SMALLER HALF OF THE GAP, AND THE LARGER HALF IS NAMED SO THE NEXT READER DOES NOT BUILD THIS ONE
+ * ALONE. §6.7.2.1 "Does request violate policy?" has its own step 1 — "If request's initiator is `prefetch`,
+ * then return the result of executing §6.7.2.2 … on request, policy, and self-origin" — and §6.7.2.2 "Does
+ * resource hint request violate policy?" is the algorithm that actually decides a resource hint: it takes the
+ * policy's `default-src`, answers Does Not Violate when there is none, and otherwise admits the request if it
+ * matches the source list of ANY of thirteen named directives. That is the union §6.2.1 states in prose —
+ * "governed by the union of servers allowed in all of a policy's directives' source lists" — and it is why the
+ * destination switch below cannot approximate it: routing a prefetch to `connect-src` makes
+ * `default-src 'none'; img-src <host>` REFUSE a request the standard allows. Neither step is built; derive it
+ * rather than trusting this line. THE PATHSPEC EXCLUDES THIS FILE DELIBERATELY: the paragraph you are
+ * reading names the section, so a grep that counted it would answer nonzero by construction and read as
+ * the thing being present. The second line is the control — a section this tree really does implement.
+ * Neither pathspec spells a solidus followed by a star, which is not a style note: the first draft of these
+ * two lines wrote the subtree as a double wildcard and clang answered -Wcomment on both of them.
+ *     git grep -c '6[.]7[.]2[.]2' -- engine/host ':!*csp_directive_list.c' | wc -l   answers 0
+ *     git grep -c '6[.]7[.]2[.]1' -- engine/host ':!*csp_directive_list.c' | wc -l   answers 8
+ * WHAT THE NEXT DIFF BUILDS, AND IT IS NOT EITHER OF THOSE: HTML §4.6.8.19 Link type "prefetch"'s processing
+ * model, in core/html/html_link.c. `prefetch` is in that file's `rel` supported-token set and has no
+ * processing model, so NOTHING IN THIS ENGINE EVER CREATES A REQUEST WHOSE INITIATOR IS `prefetch` — and an
+ * initiator parameter threaded here before one exists is a field with no writer, which is the shape this
+ * codebase spends most of its time deleting. The request comes first; §6.7.2.2, §6.7.2.1's step 1 and this
+ * function's step 1 land WITH its first consumer, together, because each alone answers half a question.
+ * HOW ITS ABSENCE WOULD SHOW: a document that declares a resource hint and a policy naming a `default-src`
+ * alongside some other fetch directive is judged by the directive this switch picks from the hint's
+ * DESTINATION instead of by the union of the policy's lists — so a hint the standard permits is reported as
+ * refused, and the observation is a securitypolicyviolation event for a request a browser makes silently. */
 const char *csp_effective_directive_for_request(const char *destination)
 {
     /* §6.8.1's switch, in the standard's own row order. The rows are Fetch §2.2.5's destination literals; the
