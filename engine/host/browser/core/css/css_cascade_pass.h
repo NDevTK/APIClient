@@ -93,11 +93,41 @@
  * of the multiplier described above is paid: the record is exercised at the cadence of a fixture and never
  * at the cadence of the product, which CLAUDE.md's §Testing rates the same as a translation unit that is in
  * the program and in nobody's build.
- * WHAT THE NEXT DIFF BUILDS: nothing here. The span is correct and the three assertions that hold it are
- * correct; what is absent is a CALLER, and it is the same absent caller qjs_abi.h's residual names — so this
- * record's reach is bought by the trusted zone's yield arm asking for a paint, and by nothing in this
- * component. A SECOND opener added for the non-paint population would be a second span with a second
+ * WHAT THE NEXT DIFF BUILDS — THE CLAUSE THAT STOOD HERE WAS WRONG IN BOTH ITS HALVES AND IS REWRITTEN
+ * RATHER THAN DELETED, BECAUSE IT WAS DISPATCHED AS A BRIEF BEFORE ANYBODY RE-DERIVED IT AND A READER WILL
+ * COMPOSE IT AGAIN. In its own wording, unquoted because a run of this tree's prose is not a spec quotation
+ * and the citation auditor's channel cannot tell the two apart: nothing here, the span is correct and what
+ * is absent is a CALLER, so this record's reach is bought by the trusted zone's yield arm asking for a
+ * paint; and a SECOND opener added for the non-paint population would be a second span with a second
  * lifetime over one table, which the RE-ENTRY paragraph above forbids for its own reasons.
+ * THE FIRST HALF NAMED A DIFF THAT SHOULD NOT BE MADE, AND qjs_abi.h's OWN RESIDUAL NOW RECORDS WHY AT
+ * LENGTH. A paint is update-the-rendering's step 22, which core/rendering/rendering.c's note at that step
+ * calls the only one of that algorithm's twenty-three steps with no headless equivalent; every step a page
+ * can OBSERVE is one of the other twenty-two, and they run on the shipped path today from the scheduler's
+ * own rendering rung. So the yield arm is not a caller this record was waiting for. It is a render nobody
+ * presents, which would open this span as a side effect of an output the product does not produce — and a
+ * record whose reach is bought that way is reached for a reason that can be withdrawn at any time.
+ * THE SECOND HALF CONFLATED TWO OPENERS WITH TWO LIFETIMES, AND ONLY THE SECOND IS WHAT RE-ENTRY FORBIDS.
+ * That paragraph forbids a pass opening INSIDE a pass, because the inner close empties a table the outer
+ * walk is still reading. It says nothing about a DISJOINT second opener, and this component already expects
+ * many spans per run: it is EMPTY before a pass opens and EMPTY after it closes, and `passes` is a COUNT
+ * rather than a flag. So the sentence foreclosed the only answer actually available to this record by citing
+ * a rule that does not reach it, which is worse than leaving the question open.
+ * WHAT THE NEXT DIFF ACTUALLY BUILDS IS A MEASUREMENT AND NOT A SPAN, AND THE ORDER IS NOT A PREFERENCE.
+ * This record's three counters have exactly ONE reader — the identity DCHECK inside `css_cascade_pass_close`,
+ * which never runs on a path the product takes — so the cost claimed above is unmeasured on the only path
+ * that matters and cannot be measured from the product's own document at all. A census accessor beside
+ * core/layout/flow_placement.h's `flow_placement_census`, read by solver/result.c into a `_cascade` block
+ * beside its `_layout` one, is what turns the argument above into a number; it also ARMS that identity on
+ * the product's path, where a miscounting arm is today caught by nothing. Only with that number in hand is
+ * it worth asking whether a span belongs on an algorithm the product DOES run. The candidates are the ones
+ * that ask this record about many elements with no author code inside them, which is the property a span
+ * needs and not a list of sites: core/intersection_observer/'s per-target geometry, which rendering.c drives
+ * at update-the-rendering step 19 under a note recording that those steps run NO author callbacks, and
+ * core/resize_observer/'s gather at step 16, both of which reach this record through core/layout/used_value.h
+ * and core/css/css_computed_value.h. NEITHER IS PROPOSED HERE AS WORK: they are components this file does not
+ * call, their magnitude is unmeasured, and a span attached on an argument rather than on a number is the
+ * change CLAUDE.md refuses by name.
  * HOW ITS ABSENCE WOULD SHOW, AS AN OBSERVATION AND NOT AS AN INSTANCE: `node engine/layout_cost.mjs
  * <native binary>` on the `styled` shape reports `cascade_emit` EQUAL to `cssom_cascaded_value`, which that
  * file's own banner states is the sheet being flattened once per (element, property) resolution rather than
@@ -105,11 +135,14 @@
  * seeing the residue this record cannot remove rather than its absence. The absence itself is observed one
  * level out, in a run of the shipped extension: no paint entry is asked, so no pass is opened, so every ask
  * is a miss.
- * THE ACT THAT RETIRES IT AND WHO MAY PERFORM IT, because a passive condition reads as merely pending: a
- * trusted-zone diff landing the yield arm's paint read, TOGETHER with a build and an install, which a lane
- * in this project may not perform. RETIREMENT: this record goes with qjs_abi.h's — when the extension's own
- * step loop asks a paint entry, this record's span exists on the shipped path and there is nothing left to
- * say.
+ * THE ACT THAT RETIRES IT AND WHO MAY PERFORM IT, because a passive condition reads as merely pending: the
+ * census named above is an ENGINE-ONLY diff any lane may write, and only the one role that builds may make
+ * it live — which is a narrower act than the trusted-zone landing the old clause asked for, and it is owed
+ * to a reader rather than to a renderer.
+ * RETIREMENT — IT NO LONGER GOES WITH qjs_abi.h's, AND THE UNCOUPLING IS THE CORRECTION RATHER THAN A
+ * DETAIL: this record goes when `css_cascade_pass_open` has a caller on a path the shipped product runs,
+ * whatever that caller turns out to be. Tying the condition to a PAINT is what made every reader of it,
+ * including the one who wrote the clause above, conclude that the paint was the answer.
  *
  * NAMED RESIDUAL — THE RECORD HOLDS ONE OF THE FOUR SHAPES A COMPUTED VALUE COMES IN, AND THE CLIMB ITSELF
  * IS UNTOUCHED. WHAT IS NOT COVERED: this is the CASCADED value, so css-cascade-5 §7's defaulting still runs
@@ -150,7 +183,11 @@ void css_cascade_pass_close(void);
 bool css_cascade_pass_is_open(void);
 
 /* THE ASK, COUNTED WHETHER OR NOT A PASS IS OPEN — the recording point is the QUESTION and never the
-   outcome, so a run that opens no pass at all still reports how many cascaded values it was asked for.
+   outcome, so a run that opens no pass at all still COUNTS how many cascaded values it was asked for.
+   WHAT IT DOES NOT YET DO IS REPORT THEM, WHICH THIS SENTENCE USED TO CLAIM AND WHICH IS THE ONE THING A
+   READER WOULD HAVE ACTED ON: the three counters have exactly one reader, the identity DCHECK inside
+   `css_cascade_pass_close`, and that function never runs on a path the product takes. The census accessor
+   that closes it is named in the residual above.
    Answers TRUE and writes `*out` when this record holds the pair; the value is an OWNED copy the caller
    frees exactly as it frees the cascade's own answer, and NULL is one of the values it can be — css-cascade-5
    §4.2 "Cascaded Values"' "if the output of the cascade is an empty list, there is no cascaded value" is a

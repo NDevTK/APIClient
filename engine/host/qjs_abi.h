@@ -107,13 +107,43 @@ QJS_EXPORT void qjs_emit_partial(void);
    `qjs_request_paint_every_world` buys is spent only by a host that already renders. §Testing rates that the
    same as a translation unit that is in the program and in nobody's build, and the paint surface is thirteen
    entries in that state rather than one.
-   WHAT THE NEXT DIFF BUILDS: the YIELD arm of the step loop in the trusted zone — the branch on
-   ENGINE_STEP_YIELD, which is the moment the scheduler hands back a MARKED member standing with its COW and
-   DOM deltas applied — asks `qjs_paint`, reads the twelve entries beside it in the order `qjs_paint_bytes`
-   states, and hands the bytes and the world to the zone that may present them. test_forced.c's `abi_paint`
-   is that read already written, against this same ABI. It is a CROSS-BOUNDARY diff in CLAUDE.md's sense — the
-   zone's JavaScript is live on WRITE and this half is live only after a BUILD — so its two halves land
-   together or neither lands.
+   WHAT THE NEXT DIFF BUILDS — THE CLAUSE THAT STOOD HERE WAS WRONG, AND IT IS REWRITTEN RATHER THAN DELETED
+   BECAUSE IT WAS DISPATCHED AS A BRIEF BEFORE ANYBODY RE-DERIVED IT AND THE NEXT READER WILL COMPOSE IT
+   AGAIN. In its own wording, unquoted because a run of this tree's prose is not a spec quotation and the
+   citation auditor's channel cannot tell the two apart: the YIELD arm of the step loop in the trusted zone,
+   the branch on ENGINE_STEP_YIELD, asks `qjs_paint`, reads the twelve entries beside it and hands the bytes
+   and the world to the zone that may present them. The READ is right and test_forced.c's `abi_paint` is it
+   already written; everything that made it sound like WORK is not.
+   THE DECISIVE FACT IS THE STANDARD'S OWN PARTITION AND IT IS ONE STEP WIDE. HTML §8.1.7.3's update the
+   rendering has twenty-three steps, core/rendering/rendering.c writes them, and its own note at step 22 is
+   that this step is THE PAINT and the only one of the twenty-three with no headless equivalent — everything
+   before it computes values that exist whether or not anything is drawn, and this one draws. Steps 1 to 21
+   and 23 are the whole of what a page can OBSERVE: the animation frame callbacks, the resize and scroll
+   steps, the media query evaluation, the ResizeObserver delivery, the focus fixup, the intersection
+   observations, the top layer drain. They run on the SHIPPED path today — core/platform.c installs
+   rendering_init on its unconditional agent table, that entry registers `engine_set_rendering_hook`, and
+   solver/engine.c asks the hook as a rung of every flow's own step, under a comment naming exactly that
+   list. So NO PAGE CODE IS WAITING ON THIS ENTRY, and a paint could not reach any of it if it were called:
+   core/paint/document_paint.c sizes a surface, walks CSS 2.1 §E.2 "Painting order" and rasterizes.
+   THE MOMENT WAS WRONG TOO, AND IT IS THE MOMENT THIS ABI ALREADY REPLACED. A yield hands the thread back
+   mid-flow with whatever member was standing, which is the by-luck reach main.c's own retired residual names
+   and which `qjs_request_paint_every_world` below was built to end: a host that wants pictures MARKS the
+   timelines it wants and is handed each marked member at the CLOSING edge of its turn. An unconditional
+   render per yield is the mechanism that ask REPLACED, proposed back as the thing to build — and on a
+   forking frontier it is a render per yield per world, which §A-capability-materialized-per-flow rates a
+   ceiling rather than a cost.
+   AND THE COST ARGUMENT THAT CARRIED IT IS NOT ABOUT THIS ENTRY AT ALL. What a paint opens that nothing else
+   does is core/css/css_cascade_pass.h's and core/layout/flow_placement.h's spans, and both are pure MEMOS —
+   flow_placement.h says in its own words that it answers nothing outside a pass, so a page reading
+   `offsetTop` between two renders gets the same freshly-walked answer it always did. A pass changes what a
+   read COSTS and never what it ANSWERS, so no correctness is waiting on this entry either, and whether those
+   spans should exist on the shipped path is answered at those headers rather than by rendering for them.
+   WHAT IS ACTUALLY ABSENT IS A CONSUMER AND NOT A CADENCE, WHICH IS A PRODUCT QUESTION THIS ABI MAY NOT
+   ANSWER: whether a person is ever shown what one of this engine's forced arms looks like. The engine half
+   is built and so is the per-world ask; what is missing is whoever owns the popup deciding that an image of
+   the `if (__FLAGS.admin)` sibling is surface worth presenting. It is CROSS-BOUNDARY in CLAUDE.md's sense
+   when it comes — the zone's JavaScript is live on WRITE and this half only after a BUILD — so its two
+   halves land together or neither lands.
    HOW ITS ABSENCE WOULD SHOW — STATED AS AN OBSERVATION AND NOT AS AN INSTANCE: a run of the shipped
    extension over a document that forks emits its findings and no image of any world, and nothing in the
    result says a picture was ever available — so a reader asking what one of this engine's forced arms LOOKS
@@ -134,8 +164,11 @@ QJS_EXPORT void qjs_emit_partial(void);
    against `qjs_request_dump`; and such a driver is worth making and is not this record's subject, which the
    observation clause above states is the SHIPPED extension. A retirement that fires on a diff worth making is
    worse than one that never fires, because it will actually fire.
-   THE CONDITION IS THEREFORE THE OBSERVATION'S OWN: this record goes when the extension's own step loop asks
-   a paint entry on its ENGINE_STEP_YIELD arm. */
+   THE CONDITION IS THEREFORE A DECISION AND NOT A CADENCE, WHICH IS THE CORRECTION: this record goes when
+   the product has settled whether an image of a forced world is surface it presents — by a presenting
+   consumer existing, or by these thirteen entries being deleted as surface nobody wants. Both are landings.
+   What is neither, and what the old condition fired on, is a host rendering at a moment nobody asked for
+   into a register nobody drains. */
 
 /* AN IMAGE OF THE DOCUMENT — the ONLY pair of entries in this ABI that carries BYTES outward, and two
    entries rather than one because linear memory has no length. `qjs_paint` PERFORMS the render and answers
