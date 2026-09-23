@@ -173,10 +173,10 @@ void agent_state_ptr_at(const char *component, const void *slot, const char *wha
  * agent_state_id the registry could not tell them apart. That is not untidiness. A slot and a class id are
  * THE SAME OBJECT: realm_value_declare's body is JS_NewClassID plus JS_NewClass over a local that starts at
  * 0, so it always mints, and what it returns is `rt->js_class_id_alloc` at the moment of the call. So the
- * registry holds, between SLOT_CLASS and this kind, every class id anybody told it about — and `js_class_id_alloc`
- * less JS_CLASS_INIT_COUNT is exactly how many this agent minted. Those two numbers are a CONSERVATION
- * IDENTITY over ONE allocator, which no spelling of a mint can evade, and it is what turns an undeclared
- * class id from something a text sweep COUNTS into something that cannot be constructed. It could not be
+ * registry holds, between SLOT_CLASS and this kind, every class id anybody told it about — and
+ * `js_class_id_alloc` less JS_CLASS_INIT_COUNT is exactly how many this agent minted. Those two numbers are
+ * a CONSERVATION IDENTITY over ONE allocator, which no spelling of a mint can evade, and it is what turns an
+ * undeclared class id from something a text sweep COUNTS into something that cannot be constructed. It could not be
  * written while a realm slot and a step id were one kind, because the left-hand side was not derivable.
  * RETIREMENT: this paragraph goes when the identity below is asserted, because the reason for the kind is
  * then re-derivable from the assert instead of from here.
@@ -194,9 +194,9 @@ void agent_state_ptr_at(const char *component, const void *slot, const char *wha
  *     Those are two self-consistent conventions, which is the same mixture the class-id paragraph at the top
  *     of this file condemns — and the split is not even: every one of the 43 slots this registry was already
  *     told about is a `-1` slot, and 21 of those gate on the sign. A kind whose pre-init were `0` would put a
- *     `-1`-gated init back at a value
- *     its own latch reads as DECLARED, so the next agent would skip the mint and every realm_value_set in it
- *     would abort; and it would make agent_state_check_released fire on the 24 rows that hand-reset to `-1`,
+ *     `-1`-gated init back at a value its own latch reads as DECLARED, so the next agent would skip the mint
+ *     and every realm_value_set in it would abort; and it would make agent_state_check_released fire on the
+ *     24 rows that hand-reset to `-1`,
  *     which are correct today. So `-1` is not the cautious half of a tie here: it is what the declared
  *     population IS, and `0` is a sweep across those components rather than a property of this entry.
  *     Re-derive rather than believing the figures: `node engine/agentstate.mjs --rev <rev>` bands them.
@@ -208,7 +208,12 @@ void agent_state_ptr_at(const char *component, const void *slot, const char *wha
  *     ANSWER — and `-1` reads element 0xFFFFFFFF, which is not a wrong answer but a wild read. That is a
  *     reading of two functions and not a run; it is recorded here because it is the one argument for `0` that
  *     survives the measurements above, and because the sweep it argues for has to move the latches and the
- *     hand-resets in the same diff or it breaks the 41.
+ *     hand-resets in the same diff or it breaks the 43. THAT NUMBER READ `41` WHEN THIS PARAGRAPH LANDED AND
+ *     THE FOUR OTHERS IN IT READ THE CORRECTED FIGURES, which is the defect CLAUDE.md calls the cheapest
+ *     check in the file: a sentence carrying both a count and the list it counts, where the list is what a
+ *     reader can act on and the count is what they quote onward. It is recorded rather than quietly fixed
+ *     because the cause generalises — the figures were re-derived after a repair to the sweep that found
+ *     them, and a re-derivation updates the numbers you are LOOKING at rather than every one you wrote.
  * RETIREMENT: this paragraph goes when a realm slot's C type is JSClassID, because `-1` is then unspellable
  * and the question cannot be re-opened.
  *
