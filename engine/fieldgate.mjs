@@ -5877,13 +5877,48 @@ const heldBy = new Map();     // field name -> the holder that names it
   /* SPELLED OUT RATHER THAN THROUGH `place`, WHICH IS A `const` DECLARED BELOW THIS BLOCK. A reference
      to it here is a temporal-dead-zone throw that `node --check` passes on, which is the same trap
      `wfqFields` records in engine/build.mjs — a derivation that runs at its own line reaching a name
-     the file binds later. */
-  const siteOf = (n) => { const e = fields.get(n); return e && e.writes.length ? `${e.writes[0].file}:${e.writes[0].line}` : null; };
+     the file binds later. `shapes` is bound at the head of this file, and by this line it is the FOLDED
+     set: the fragment fold deletes its own ids hundreds of lines above, so no body that writes into a
+     buffer it was handed is still a key here. */
+  /* THE GROUPING KEY IS THE EMISSION AND NOT THE NAME'S OWN WRITE SITE — which is what the paragraph above
+     this block already says, and is what this block did not do. It keyed on `fields.get(n).writes[0]`, the
+     line of the ONE call that states that name, so "at least NAMESPACE_HOLD_MIN names OF ONE EMISSION" was
+     read as three names sharing a SOURCE LINE. A producer that writes one key per line has no such line, and
+     writing one key per line is not a style this corpus happens to have: it is what a buffer entry taking a
+     literal name looks like.
+     MEASURED over engine/host, which is the population `cEmitted` is drawn from: of the lines carrying a
+     `json_buf_key(` call, 80 carry ONE and 2 carry TWO and NONE carries three, so for every field name this
+     engine emits through that entry the threshold was unsatisfiable at every revision — and each such row
+     went to the accusation this band exists to hold instead. The channel that DID group is the format-string
+     one, where every name in one `printf` shares a single offset; so the band fired for `result_cold_json`'s
+     rows and could not fire for anything composed through a `JsonBuf`, with nothing in the output saying
+     which half a row was in.
+     THE CONSEQUENCE IS WHY THIS IS A DEFECT RATHER THAN A TIDY-UP, and it is the shape §AN-UNDER-CLAIM names:
+     solver/endpoint.c's fetch-edge census emits five rows at five consecutive `json_buf_key` lines,
+     `testing/live-run.js` holds all five as literals in ONE list and reads each of them with `c[k]`, and all
+     five were reported as names a producer emits and nothing reads. An accusation is acted on by building the
+     thing it says is missing, and the thing here was a SECOND reader beside a working one.
+     `shapes` IS THIS FILE'S OWN ANSWER TO "WHICH EMISSION" and is derived from the producer's own walk rather
+     than restated here — one key per composed object, nesting path included — so the key is the RECORD, and a
+     name that belongs to several records is held for each of them. That widens the band and can only widen
+     it: `heldBy` is consulted over rows that would otherwise be accused, so the judged total and the spelled,
+     derived and both counts are arithmetically untouched, and the direction of the change is rows leaving an
+     accusation for a named band.
+     RETIREMENT: this note goes when no answer in this file keys a question about a RECORD on a field's own
+     write site, because the confusion it records is then unspellable rather than merely not made. */
+  const shapesOfName = new Map();   // field name -> every emission (shape) id that states it
+  for (const [id, ns] of shapes) {
+    for (const n of ns) {
+      let a = shapesOfName.get(n);
+      if (!a) { a = []; shapesOfName.set(n, a); }
+      a.push(id);
+    }
+  }
   /* MATCHED ON `code`, where a comment is blank and a literal's own characters are intact — so a field name
      written in English prose is not a holder, and the bytes read are the bytes the program holds. */
   const HELD = /"([A-Za-z_$][\w$]*)"|'([A-Za-z_$][\w$]*)'/g;
   for (const s of jsScans) {
-    const held = new Map();   // emission place -> Set(name)
+    const held = new Map();   // emission (shape) id -> Set(name)
     let m;
     HELD.lastIndex = 0;
     while ((m = HELD.exec(s.code))) {
@@ -5895,10 +5930,12 @@ const heldBy = new Map();     // field name -> the holder that names it
       /* AND `o["n"]` IS A SPELLED READ, which `readAnywhere` has already answered for. Counting it here would
          put one construct in two bands and make the numbers below overlap with nothing saying so. */
       if (/\[\s*$/.test(s.code.slice(Math.max(0, m.index - 3), m.index))) continue;
-      const q = siteOf(n);
-      if (!q) continue;
-      if (!held.has(q)) held.set(q, new Set());
-      held.get(q).add(n);
+      const qs = shapesOfName.get(n);
+      if (!qs) continue;
+      for (const q of qs) {
+        if (!held.has(q)) held.set(q, new Set());
+        held.get(q).add(n);
+      }
     }
     for (const [q, ns] of held) {
       if (ns.size < NAMESPACE_HOLD_MIN) continue;
