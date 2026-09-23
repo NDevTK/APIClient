@@ -132,16 +132,21 @@ bool font_face_is(JSValueConst v);
  *           those two a promise nothing in this engine will ever settle, where today they get a TypeError
  *           that ends the flow with a name on it. Both settle paths are §2.1's own and are the two NAMED
  *           RESIDUALS in font_face.c; they land WITH §2.2, never after it.
- *         — THE `src` DESCRIPTOR HAS NO VALUE GRAMMAR HERE, and §2.2's fetch arm is stated over the parsed
- *           one: "Using the value of font face's [[Urls]] slot, attempt to load a font as defined in
- *           [CSS-FONTS-3], as if it was the value of a @font-face rule's src descriptor." What the slot holds
- *           is the RAW string, because core/css/ does not type this descriptor and the collector keeps an
- *           untyped one verbatim — which is (0) below, met at a second place and with a sharper consequence
- *           than the descriptors have, since a url list that was never parsed cannot be fetched at all:
- *               git grep -n 'css_shorthand_validates_longhand' engine/host/browser/core/css/css_shorthand.c
- *           And no CSS url is fetched anywhere in this engine yet — grep the subresource seam for its
- *           callers and both are elements rather than values:
+ *         — §2.2's FETCH ARM IS STATED OVER THE PARSED `src`: "Using the value of font face's [[Urls]] slot,
+ *           attempt to load a font as defined in [CSS-FONTS-3], as if it was the value of a @font-face rule's
+ *           src descriptor." THIS CLAUSE USED TO SAY THAT DESCRIPTOR HAS NO VALUE GRAMMAR HERE and that the
+ *           slot therefore holds the RAW string, "because core/css/ does not type this descriptor and the
+ *           collector keeps an untyped one verbatim". It is REWRITTEN RATHER THAN DELETED because the
+ *           reasoning was exactly right and a reader meeting an untyped descriptor will re-derive it:
+ *           core/css/css_font_src.h is css-fonts-4 §4.3's grammar, reached from the same
+ *           `CSSOM_BLOCK_FONT_FACE` seam every other descriptor goes through, so a `src` now arrives PARSED
+ *           and SERIALIZED and a value outside §4.3.1 is §2.1's "fail to parse correctly" like any other.
+ *           WHAT IS STILL TRUE AND IS THE PART (2) DEPENDS ON: the parsed LIST is internal to that component
+ *           — it exports the serialization and not the items — and no CSS url is fetched anywhere in this
+ *           engine, which the subresource seam's own callers say, both of them ELEMENTS rather than values:
  *               git grep -n 'engine_pending_resource_url' engine/host/browser/core/
+ *           So §2.2 needs the ITEMS entry css_font_src.h names as its first residual, and it needs a fetch;
+ *           it no longer needs a grammar.
  *         — AND THE BASE URL IS AN OPEN ISSUE IN THE STANDARD ITSELF rather than a gap here, so a builder
  *           who expects to find the answer by reading harder will not: §2.1 carries "Need to define the base
  *           url, so relative urls can resolve. Should it be the url of the document? Is that correct for

@@ -140,7 +140,12 @@ bool font_face_is(JSValueConst v)
  *     git grep -n 'css_shorthand_validates_longhand' engine/host/browser/core/css/
  *     git grep -c '"font-display"\|"ascent-override"' engine/host/browser/core/css/
  * A descriptor named ONLY by css_style_declaration.c's FONT_FACE_DESCRIPTORS[] table is one with no value
- * grammar behind it yet.
+ * grammar behind it yet — READ AS A DERIVATION AND NOT AS A LIST, because it has already been wrong once in
+ * the direction that matters. A DESCRIPTOR grammar is not reached through that predicate at all: it is routed
+ * at `cssd_decl_take`, per name, because a descriptor's value definition is a DIFFERENT production from the
+ * property of the same name and the predicate answers about properties. `font-family` and `src` are both
+ * typed that way and neither is in that predicate's list, so the third command is owed beside the two above:
+ *     git grep -n 'cssd_block_is_descriptor_body' engine/host/browser/core/css/css_style_declaration.c
  *
  * NAMED RESIDUAL — THE ERROR ARM SETS THE ATTRIBUTES AND THE STATUS AND REJECTS NOTHING.
  *   WHAT IS NOT COVERED: §2.1's "reject font face's [[FontStatusPromise]] with a DOMException named

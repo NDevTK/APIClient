@@ -102,6 +102,7 @@
 #include "core/css/css_computed_value.h"
 #include "core/css/css_defaulting.h"
 #include "core/css/css_font_family.h"
+#include "core/css/css_font_src.h"
 #include "core/css/css_keyframes.h"
 #include "core/css/css_logical.h"
 #include "core/css/css_pending_substitution.h"
@@ -946,6 +947,33 @@ static bool cssd_decl_take(const lxb_css_rule_declaration_t *d, const char *text
         value = raw ? (cssd_block_is_descriptor_body(context) ? css_font_family_descriptor_value(raw)
                                                               : css_font_family_value(raw))
                     : NULL;
+        free(raw);
+        if (!value) { free(name); return false; }
+        *pname = name;
+        *pvalue = value;
+        return true;
+    }
+    /* css-fonts-4 §4.3 "Font reference: the src descriptor", WHICH IS A DESCRIPTOR AND NOT A PROPERTY — so
+       unlike the `font-family` arm above, the CONTEXT decides whether this grammar is asked AT ALL rather
+       than which of two grammars it is. There is no `src` property in any specification, so outside an
+       `@font-face` body the name keeps the answer it has always had.
+       IT IS ASKED AHEAD OF LEXBOR BECAUSE LEXBOR HAS NO OPINION TO TAKE BACK. Its registry does not carry
+       `src`, so `lxb_css_declaration_create` falls to `LXB_CSS_PROPERTY__CUSTOM` — the same arm a `--x`
+       takes — and the declaration reached the block with its RAW TEXT stored verbatim and nothing anywhere
+       having judged it. Verbatim is a defensible answer for a descriptor nothing reads; it stops being one
+       the moment a consumer has to resolve urls out of it, which is what CSS Font Loading §2.2 "The load()
+       method" does with the `[[Urls]]` slot core/fonts/font_face.c fills, and it is why an `@font-face`
+       carrying `src: url(should be quoted.ttf)` read back as a declaration where a browser drops it.
+       THE SOURCE SLICE AND NOT `cssd_decl_value` IS WHAT IS ASKED, for the reason the `font-family` arm above
+       gives at length: the page's own spelling lives at offsets into the text and nowhere else, and a url is
+       exactly the value whose spelling the grammar is about.
+       `css_shorthand_validates_longhand` GOES ON ANSWERING FALSE FOR `src` AND THAT IS NOT A GAP — the value
+       has been through its grammar HERE, so `cssd_decls_collect_declaration` stores the answer verbatim and
+       a second entry in that component would be a second grammar over one descriptor. */
+    if (strcmp(name, "src") == 0 && cssd_block_is_descriptor_body(context)) {
+        char *raw = cssd_decl_source_value(d, text, len);
+
+        value = raw ? css_font_src_descriptor_value(raw) : NULL;
         free(raw);
         if (!value) { free(name); return false; }
         *pname = name;
