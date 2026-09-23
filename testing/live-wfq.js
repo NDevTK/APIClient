@@ -50,8 +50,23 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
    `arrivals / picksLifetime` (members minted per dispatch) into a RATE over the window this driver samples
    rather than an average over the session. `members` beside them is a gauge and is not the same question.
    Printed, never divided here, for the reason the header gives about `starvedPicks / picksLifetime`. */
-const COUNTERS = ["picksLifetime", "starvedPicks", "workDone", "rankChanges", "topForgiven",
-                  "arrivals", "departures"];
+/* `starvedPicksIdle` IS NAMED BESIDE `starvedPicks` BECAUSE THE SUPERSET ALONE IS THE HALF result.c SAYS NOT
+   TO READ, and this file printed only that half. In result.c's own words: "READ THIS AGAINST `picksLifetime`
+   AND NOT `starvedPicks` AGAINST IT.  The superset answers how often the tie-break decided a dispatch; only
+   this one answers how often it decided one WRONGLY, which is the question the two opposite repairs hang on."
+   The superset sums a framed member re-picked to FINISH its program — necessary work no ordering should
+   interrupt on a tie, and the ordinary shape of every quantum of every multi-quantum program on a forking
+   page, since an arm is born at its parent's exact weight — with a pass-over of a member that had nothing in
+   front of it, which is the defect.  A quotient of both is a reading of neither, so a driver carrying only
+   the superset hands a reader the number result.c withholds and withholds the one it prescribes.
+   IT HAD NO READER ANYWHERE: `starvedPicksIdle` occurs in the file that raises it and the file that emits it,
+   and nowhere else — not build.mjs, not solvergate, not here — so the discriminator between "the ordering is
+   passing over starved members" and "the frontier is finishing programs" has never been read on a real page.
+   A LIFETIME COUNTER raised at the same line and under the same condition as its superset, so
+   `starvedPicksIdle <= starvedPicks` is an identity of one evaluation; it is checked below rather than
+   trusted, for the reason every other identity on this stream is. */
+const COUNTERS = ["picksLifetime", "starvedPicks", "starvedPicksIdle", "workDone", "rankChanges",
+                  "topForgiven", "arrivals", "departures"];
 const GAUGES = ["members", "unrun", "neverPicked", "neverPickedGap", "neverPickedAtTop",
                 "picksLive", "picksMax", "families", "jobsReady", "jobsFramed", "jobsOwed",
                 /* …AND WHICH ARM OF flow_step CAN DISPATCH THE READY HALF, which `jobsReady` alone cannot
@@ -412,6 +427,15 @@ async function main() {
            other row on this line is a number about nothing. */
         out.switchDelta = (typeof w.picksLifetime === "number" && typeof s.switches === "number")
                             ? w.picksLifetime - s.switches : null;
+        /* result.c STATES THIS AS AN IDENTITY OF ONE EVALUATION — both counters are raised at the same line
+           under the same condition — so a violation means they have stopped counting the same event and the
+           subset is no longer a subset of anything.  Three-state like every other identity here: a list when
+           it breaks, null when it holds, and `unjudged` when an operand is not a number, because two absent
+           fields compare equal and a bare `<=` would pass on a census carrying neither. */
+        out.starvedIdent = (typeof w.starvedPicks === "number" && typeof w.starvedPicksIdle === "number")
+                             ? (w.starvedPicksIdle <= w.starvedPicks ? null : ["starvedPicksIdle<=starvedPicks"])
+                             : undefined;
+        if (out.starvedIdent === undefined) { delete out.starvedIdent; out.starvedUnjudged = true; }
         /* THE COST SCOPE, EMITTED BEFORE THE BRANCH BLOCK because that block returns early on an empty
            frontier and these rows are absent on exactly the same path — result.c composes `{"members":0}`
            with no term rows of any kind — so a reader meeting `costAbsent` is being told the short form
