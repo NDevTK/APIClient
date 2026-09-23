@@ -160,38 +160,98 @@ typedef struct {
     bool setlike;
 } IdlPairIterOps;
 
-/* DECLARE the iterator class, its prototype and the forEach machine for one interface. Returns a handle. */
-int  idl_pair_iter_declare(JSContext *ctx, const IdlPairIterOps *ops);
+/* DECLARE the iterator class, its prototype and the forEach machine for one interface. Returns a handle.
+   `component` IS core/platform.c's ROW NAME — the row whose release gives this interface's state back, which
+   for every caller here is the interface's own row and never this file's: the class id minted below is
+   declared to core/agent_state.h under it, and this file has no row of its own because core/platform.c calls
+   no entry here. It is a PARAMETER and not a member of IdlPairIterOps because every other fact in that struct
+   is the WEB IDL DECLARATION'S — the two operations, the interface's identifier, whether it is a `setlike<V>` —
+   and a platform row is this engine's; the two go stale for different reasons and are written by different
+   readings. What is NOT the reason, because it was measured and is false of this struct: that a member a
+   caller omits is silently NULL where a parameter is not. All four IdlPairIterOps initialisers are POSITIONAL
+   rather than designated, and C zero-fills an omitted trailing member of either form — `setlike` is omitted
+   by three of the four today and is silently false in each. So the struct offers no protection in either
+   style and the parameter's protection is its own: an argument a caller omits is a constraint violation. */
+int  idl_pair_iter_declare(JSContext *ctx, const char *component, const IdlPairIterOps *ops);
+/* GIVE THE DECLARATION BACK — called from the owning row's release, before that row's agent_state_undo.
+   It is THIS FILE'S claim that the cascade reached it, which is why it lives here and cannot be a line in the
+   caller: agent_state_reached matches a slot by the DECLARING FILE recorded at the declaration, so a claim
+   spelled in headers.c names headers.c's slots and never the one idl_pair_iter_declare made. It takes no
+   component, reading the row off the entry the declaration stored, so the release cannot name a row the
+   declaration did not.
+   IT RESETS NO SLOT, which is core/agent_state.h's contract and this engine's ONE policy for a class id: the
+   undo is the one reset, computed from the registry that already holds this slot's address and kind. That is
+   why the two rows here whose release HAND-RESET — `form_data` and `url_search_params` — are converted to end
+   in the undo by the same diff, rather than this entry growing a reset for them: a resetter here would be
+   correct for those two, redundant for the other two, and nothing would ever force its removal once they
+   converted. What it DOES put back is the handle table, which is this file's own bookkeeping and belongs to
+   no row — see the residual below for why it can be no row's declaration. */
+void idl_pair_iter_release(int handle);
 /* INSTALL keys/values/entries/forEach/@@iterator on the interface's prototype. §3.7.9 step 2.1 makes @@iterator
    the SAME function object as `entries` (one `F`, defined twice), which this does — and §3.7.12.2 makes it the
    `values` object for a `setlike<V>`. */
 void idl_pair_iter_install(JSContext *ctx, JSValueConst proto, int handle);
-/* NAMED RESIDUAL — THIS DECLARATION GIVES NOTHING BACK, AND THE ENTRY THAT WOULD IS NOT DECLARED HERE.
-   A line stood above the next declaration reading "Release the iterator prototype the declaration minted", with
-   no entry under it. It is rewritten rather than deleted because a reader meeting an install with no release
-   re-derives that sentence, and because the sentence bound to its neighbour BY ADJACENCY: the declaration it
-   sat over is the per-realm prototype install, which releases nothing, so a reader scanning declarations
-   resolved it to a function it was never about.
-     NOT COVERED: the class id idl_pair_iter_declare mints is AGENT-LIFETIME state that no core/platform.c row
-       names. core/agent_state.h is therefore never told about it, so agent_state_check_released cannot ask
-       whether it came back, and core/platform.c's `minted == declared` identity over the declare column counts
-       it on the MINTED side and on neither declared one. The handle table's own count is not put back either,
-       so a second agent's handles begin where the first agent's ended. Both are correct for the regime this
-       tree enforces — core/platform.c refuses a second live agent by name — and narrower than the regime the
-       sibling core/idl_async_iter.c already supports.
-     THE NEXT DIFF BUILDS: the sibling's shape, which is three entries and not one. (1) a `component` on
-       idl_pair_iter_declare, as a REQUIRED PARAMETER and not a member of IdlPairIterOps — every other fact in
-       that struct is the WEB IDL DECLARATION'S and a platform row is this engine's, and a parameter a caller
-       omits does not compile where a designated initializer a caller omits is silently NULL; (2)
-       `agent_state_class(component, &f->class_id, ...)` on the line that mints, so the mint is inside the
-       window that identity brackets; (3) an `idl_pair_iter_release(handle)` calling agent_state_reached, called
-       from each owning row's own `_free` BEFORE its agent_state_undo, plus a table reset for the handle count.
-       It is ONE landing and not four: (1) changes a signature four callers spell, so a partial one does not
-       build.
-     HOW ITS ABSENCE WOULD SHOW: core/platform.c's declare-column identity reports more class ids minted than
-       declared, by one per interface that reached idl_pair_iter_declare, and no release this agent runs can be
-       caught forgetting any of them — `node engine/agentstate.mjs --rev <rev>` cannot see them either, because
-       its class channel captures a bare identifier after the `&` and these are minted into a struct member. */
+/* THE NAMED RESIDUAL THAT STOOD HERE IS RETIRED — ITS THREE ENTRIES ARE BUILT, AS ONE LANDING because (1)
+ * changes a signature four callers spell. Its NOT-COVERED clause was EXACT and is what the declaration above
+ * now closes: the class id minted below was agent-lifetime state no core/platform.c row named, so
+ * agent_state_check_released could not ask whether it came back and that file's `minted == declared` identity
+ * counted it on the MINTED side and neither declared one.
+ * ITS (2) WAS EXACT AND IS THE ONE CLAUSE THAT WAS RE-DERIVED RATHER THAN ADOPTED, which is worth recording
+ * because the re-derivation found a REASON the clause did not carry: agent_state_class and not any other
+ * entry, because core/agent_state.h's agent_state_class_id_count sums SLOT_CLASS and SLOT_REALM and NOTHING
+ * ELSE, and that sum is the left-hand side of the conservation identity core/platform.c brackets the declare
+ * column with. A declaration through agent_state_zeroed — which this record IS, being a static aggregate with
+ * no initialiser, and which is the entry a reader reaches for on seeing a table of records — is banded
+ * SLOT_ZEROED, is counted by neither side, and would have left that identity short by one per interface with
+ * the slot nonetheless declared and reset. The right answer and the tempting one differ by a band no message
+ * anywhere would have named.
+ * TWO CLAUSES WERE WRONG AND ARE RECORDED RATHER THAN DELETED, because a next-diff clause is read ONCE, by
+ * somebody who has already decided to build it, so a wrong one is not caught — it is EXECUTED.
+ *   - (1)'s CONCLUSION held and its REASON did not. It said a component belongs on the parameter and not in
+ *     IdlPairIterOps because `a parameter a caller omits does not compile where a designated initializer a
+ *     caller omits is silently NULL`. NO IdlPairIterOps INITIALISER IN THIS TREE IS DESIGNATED: all four are
+ *     positional, and C zero-fills an omitted trailing member of a positional initialiser exactly as it does
+ *     a designated one — `setlike` is omitted by three of the four and silently false in each, which is the
+ *     clause's own hazard already live in the struct it was arguing about. So the struct half of the contrast
+ *     was false and the parameter half was true on its own, which is why the conclusion survived a premise
+ *     that did not. The tell it carried is the one to copy: it asserted a property of a CONSTRUCT this tree
+ *     spells (a designated initialiser) without reading the four sites that spell it.
+ *   - (3) SAID THE RELEASE IS `called from each owning row's own _free BEFORE its agent_state_undo`, AND TWO
+ *     OF THE FOUR OWNING ROWS HAD NO agent_state_undo AT ALL. `headers` ends in one and `element` reaches one
+ *     through element_free; `form_data` and `url_search_params` HAND-RESET their own class id and step id and
+ *     nothing else, so there was no undo for a release entry to stand before and — by core/agent_state.h's own
+ *     rule that agent_state_reached is owed ONLY WHERE THE UNDO IS — no claim owed there either, while the
+ *     slot this file declares under those rows would have been reset by nobody and fired the release check.
+ *     BUILDING THE CLAUSE LITERALLY WAS THEREFORE IMPOSSIBLE AND THE SHAPE IT NAMED WAS RIGHT: what landed is
+ *     the clause plus its missing precondition — those two releases converted to end in the undo, with the
+ *     latch, the constructor's id and the pair handle declared beside the class id they already declared, so
+ *     ONE policy holds at all four rows instead of this file growing a reset for the two that lacked one.
+ *     The tell is the one CLAUDE.md gives for a clause naming a MECHANISM: it described what the tree would do
+ *     and was a claim about what the tree DOES, and the two rows it was wrong about are the two its author had
+ *     no reason to open.
+ * ITS HOW-ITS-ABSENCE-WOULD-SHOW CLAUSE HELD ON BOTH HALVES, which is the split CLAUDE.md predicts — the
+ * clause about OBSERVABLE BEHAVIOUR survived and the clauses naming a MECHANISM and a POPULATION did not.
+ *
+ * NAMED RESIDUAL — THE HANDLE TABLE IS PUT BACK BY HAND AND IS DECLARED TO NOTHING.
+ *   NOT COVERED: of this file's agent-lifetime state only the CLASS ID is declared. `g_pair_n`, and each
+ *     entry's `ops`, `foreach_stepid` and three method ids, are not — so agent_state_check_released cannot ask
+ *     whether any of them came back, and the line in idl_pair_iter_release that puts the count back is exactly
+ *     the hand-kept inverse core/agent_state.h's undo exists to end. It is CORRECT rather than unfinished: the
+ *     count is reset when the last declared interface releases, and every other field is overwritten by the
+ *     next agent's declaration before any reader can reach it.
+ *     WHY IT IS NOT SIMPLY DECLARED, which is the first thing a reader will try: `g_pair_n` is ONE object
+ *     shared by FOUR rows. Declared under one of them it would be put back by whichever of the four happened
+ *     to release first and would be a lie about the other three; declared under all four it is four
+ *     declarations of one address, which the registry refuses by name.
+ *   THE NEXT DIFF BUILDS: a row of core/platform.c's own for this file — a declare entry that is a no-op and a
+ *     release entry that resets the table — so the count is declared under a row whose release really does
+ *     give it back, and idl_pair_iter_release stops carrying a reset at all. That is a question about whether
+ *     a file core/platform.c calls no entry in may have a row, which is core/platform.c's to answer and not
+ *     this file's, and it is why the row was not simply added here.
+ *   HOW ITS ABSENCE WOULD SHOW: a second agent in one process whose first iterable<> interface is handed a
+ *     handle other than 0 — observable as an install asserting `an iterable<> was installed with a handle
+ *     nothing declared`, or, once past the table's fixed size, as the declare's own full-table abort on an
+ *     agent that declared a handful of interfaces. */
 
 /* §3.7.9.2's iterator prototype objects for ONE realm, declared into core/realm.h's list by the first
    idl_pair_iter_declare — one install builds every declared interface's. */

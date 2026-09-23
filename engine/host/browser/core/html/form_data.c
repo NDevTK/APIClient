@@ -944,9 +944,16 @@ void form_data_init(JSContext *ctx)
     g_fd_id[FD_SET]    = idl_method_id(ctx, TWO_STR, 3, js_form_data_member, FD_SET);
     idl_optional_from(2);   /* XHR §4: `set(name, blobValue, optional filename)` — two are required */
 
-    g_fd_pair_handle = idl_pair_iter_declare(ctx, &FD_PAIR_OPS);
+    g_fd_pair_handle = idl_pair_iter_declare(ctx, "form_data", &FD_PAIR_OPS);
+    /* THE REST OF THIS ROW'S AGENT STATE, DECLARED BESIDE THE LINES THAT SET IT, so that the release below can
+       be the undo rather than a hand-written list. The two it used to reset by hand are here — the runtime
+       latch and the constructor's machine — and so is the handle above, whose class id core/idl_iter.c
+       declares under this row from its own file. */
+    agent_state_ptr("form_data", &g_fd_rt, "the runtime XHR §4's class and machines were declared in");
+    agent_state_id("form_data", &g_fd_pair_handle, "XHR §4's `iterable<USVString, FormDataEntryValue>` handle");
 
     g_fd_ctor_stepid = idl_method_id_step(ctx, CTOR_ARGS, 2, NULL, 0, &js_fd_ctor_decl, 0);
+    agent_state_id("form_data", &g_fd_ctor_stepid, "XHR §4's `constructor(optional HTMLFormElement form)` machine");
     idl_optional_from(0);   /* XHR §4: both constructor arguments are optional */
     realm_declare_intrinsic(form_data_install_realm);
 }
@@ -1014,13 +1021,18 @@ void form_data_free(void)
 {
     if (!g_fd_rt)
         return;
-    /* the prototypes are the REALMS' — released with their contexts */
-    g_fd_rt = NULL;
-    /* §4'S CLASS ID GOES BACK AT 0 — core/agent_state.h's ONE policy for a class id. form_data_is already
+    /* the prototypes are the REALMS' — released with their contexts, so this component owns no reference and
+       there is nothing to free here. Free, assert, then undo.
+       §4'S CLASS ID GOES BACK AT 0 — core/agent_state.h's ONE policy for a class id, and form_data_is already
        reads this slot defensively (`g_fd_class != 0 && …`), which the zeroing makes correct rather than
        breaks: a carried id would name a class in a runtime that is gone, and JS_NewClassID in this fork
        RETURNS a non-zero id it is handed rather than minting, so the next agent's FormData objects would all
-       be branded with a number the live runtime never gave out. */
-    g_fd_class = 0;
-    g_fd_ctor_stepid = -1;
+       be branded with a number the live runtime never gave out.
+       THREE HAND-WRITTEN LINES STOOD HERE and the undo replaces them, for the reason core/fetch/headers.c's
+       release already records: they were a list kept in step with an init eighty lines above by whoever
+       remembered, and a declaration added to that init now owes this function nothing. It is not a tidy-up —
+       core/idl_iter.c declares §4's ITERATOR class under this row from its own file, and no line here can
+       name that slot, so a hand-written release could not have given it back at all. */
+    idl_pair_iter_release(g_fd_pair_handle);
+    agent_state_undo("form_data");
 }

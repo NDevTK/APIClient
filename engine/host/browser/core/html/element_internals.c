@@ -1098,7 +1098,7 @@ void element_internals_declare(JSContext *ctx)
        are DECLARED by the mixin (one declaration per target kind), so nothing is declared here for them —
        this states the four algorithms that make this interface one of the two targets. */
     aria_mixin_declare_target(ARIA_TARGET_INTERNALS, &EI_ARIA_OPS);
-    g_set_pair_handle = idl_pair_iter_declare(ctx, &EI_SET_PAIR_OPS);
+    g_set_pair_handle = idl_pair_iter_declare(ctx, "element", &EI_SET_PAIR_OPS);
     realm_declare_intrinsic(element_internals_install_protos);
     g_ready = 1;
 }
@@ -1224,4 +1224,8 @@ void element_internals_free(JSRuntime *rt)
        kind, and a line here as well would be the second resetter it exists to stop being kept by hand.
        See core/agent_state.h's agent_state_reached. */
     agent_state_reached("element");
+    /* §4.13.7.5's CustomStateSet is a `setlike<DOMString>`, so core/idl_iter.c declares ITS iterator class
+       under this row too — a second declaring file, which makes its own claim from its own file. This one is
+       not it, for the reason the paragraph above gives about this one. */
+    idl_pair_iter_release(g_set_pair_handle);
 }

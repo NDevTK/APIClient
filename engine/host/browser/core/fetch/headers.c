@@ -1361,7 +1361,7 @@ void headers_init(JSContext *ctx)
 
     /* §5.1's `iterable<ByteString, ByteString>` — the shared default iterator object over the two operations
        above, so the six members it defines exist once for every such interface rather than once per. */
-    g_pair_handle = idl_pair_iter_declare(ctx, &HEADERS_PAIR_OPS);
+    g_pair_handle = idl_pair_iter_declare(ctx, "headers", &HEADERS_PAIR_OPS);
     realm_declare_intrinsic(headers_install_proto);
 
     /* EVERY STATIC ABOVE IS THIS AGENT'S, DECLARED BESIDE THE LINE THAT SETS IT (core/agent_state.h). This
@@ -1450,6 +1450,11 @@ void headers_free(void)
         return;
     /* the prototypes are the REALMS' — released with their contexts, so this component owns no reference and
        there is nothing to free here. Free, assert, then undo. */
+    /* §5.1'S ITERATOR CLASS IS DECLARED UNDER THIS ROW FROM core/idl_iter.c, so the undo below REFUSES to put
+       it back until that file has said the cascade reached it. The claim cannot be made here: it is matched by
+       the file the macro is expanded in, and this one declares no slot of core/idl_iter.c's. Before the undo,
+       which is also before this row's own `g_pair_handle` goes back to -1. */
+    idl_pair_iter_release(g_pair_handle);
     agent_state_undo("headers");
 }
 

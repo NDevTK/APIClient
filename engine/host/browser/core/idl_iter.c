@@ -9,6 +9,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/idl_iter.h"
+#include "core/agent_state.h"
 
 enum { IT_GET_ITERFN = 0, IT_CALL_ITERFN, IT_GET_NEXT, IT_CALL_NEXT, IT_GET_DONE, IT_GET_VALUE };
 
@@ -288,6 +289,15 @@ enum { PAIR_KEYS = 0, PAIR_VALUES, PAIR_ENTRIES };
 #define IDL_PAIR_ITER_MAX 8
 typedef struct {
     const IdlPairIterOps *ops;
+    /* core/platform.c's ROW that gives this interface's state back, kept so idl_pair_iter_release names the
+       same row the declaration did rather than one its caller spells a second time. */
+    const char *component;
+    /* THE DECLARATION'S `what`, HELD HERE BECAUSE core/agent_state.h STORES THE POINTER AND NEVER THE TEXT,
+       and it is read at the release column — long after any buffer the declaration had on its stack. It
+       names the STANDARD as well as the state, which is what that header asks of a SUB-COMPONENT: this file
+       has no row, so the report a reader meets is headed by somebody else's. It is NOT put back by the
+       release: the registry still points at it while agent_state_check_released runs. */
+    char      what[80];
     JSClassID class_id;
     int       foreach_stepid;
     /* §3.7.9's THREE OPERATIONS (its step 2.1-2.3 `entries`, `keys` and `values`), declared with the interface rather than minted at each install. A pool entry
@@ -298,6 +308,14 @@ typedef struct {
 
 static IdlPairIface g_pair[IDL_PAIR_ITER_MAX];
 static int g_pair_n;
+/* HOW MANY OF THE g_pair_n DECLARED INTERFACES HAVE GIVEN THEIR DECLARATION BACK. The table is reset by the
+   LAST of them and not by each — core/events/message_port.c's live-port table is released by the last port
+   for the same reason — because a release that reset the count would leave every handle a LATER release
+   still holds pointing past the end, and idl_pair_iter_release's own bounds check would then fire on a
+   correct teardown. It needs no declaration of its own: it returns to 0 in the same line that resets the
+   count, and a teardown that drops one row's release leaves that row's CLASS ID set for
+   agent_state_check_released to find, which is the forcing function this must not stand in front of. */
+static int g_pair_released;
 
 /* §3.7.9.1's iterator object: the TARGET and an INDEX, not a snapshot, so a list mutated between steps is seen. */
 typedef struct { JSValue target; int index; int kind; int iface; } IdlPairIter;
@@ -507,7 +525,7 @@ static int js_idl_pair_foreach_step(JSContext *ctx, void *st, JSValue cb_result,
     }
 }
 
-int idl_pair_iter_declare(JSContext *ctx, const IdlPairIterOps *ops)
+int idl_pair_iter_declare(JSContext *ctx, const char *component, const IdlPairIterOps *ops)
 {
     JSRuntime *rt = JS_GetRuntime(ctx);
     int handle = g_pair_n;
@@ -526,6 +544,7 @@ int idl_pair_iter_declare(JSContext *ctx, const IdlPairIterOps *ops)
            "because the platform's is");
     f = &g_pair[handle];
     f->ops = ops;
+    f->component = component;
     snprintf(name, sizeof name, "%s Iterator", ops->iface);
     memset(&def, 0, sizeof def);
     def.class_name = name;   /* JS_NewClass copies it */
@@ -553,9 +572,21 @@ int idl_pair_iter_declare(JSContext *ctx, const IdlPairIterOps *ops)
        silently branded. */
     CHECK(JS_NewClass(rt, f->class_id, &def) == 0,
           "an iterable<>'s iterator class could not be declared — if this is the second agent of one process, "
-          "the id is the FIRST agent's, because nothing gives this file's class ids back: they are minted here "
-          "and declared to no core/platform.c row, so no agent_state_undo resets them. The repair is the "
-          "declaration and not a retry (core/agent_state.h, and core/idl_async_iter.c for the shape)");
+          "the id is the FIRST agent's: the declaration below is what gives it back, so reaching this with a "
+          "carried id means that row's release ran without idl_pair_iter_release (core/agent_state.h, and "
+          "core/idl_async_iter.c for the shape)");
+    /* THE MINT IS DECLARED ON THE LINE THAT MAKES IT, and under the INTERFACE'S row rather than any of this
+       file's: core/platform.c calls no entry here, so this is a sub-component in core/agent_state.h's sense
+       and the name is the row whose release reaches it. `what` names the standard because the report a reader
+       meets is headed by that row, which does not lead here.
+       IT IS agent_state_class AND NOT agent_state_zeroed OVER THE RECORD, though this record is a static
+       aggregate with no initialiser and that entry was written for exactly such a table. Only SLOT_CLASS and
+       SLOT_REALM are summed by agent_state_class_id_count, and that sum is the left-hand side of the identity
+       core/platform.c brackets this column with against JS_ClassIDsMinted — so a zeroed declaration would be
+       reset and checked like any other and would still leave that identity short by one per interface, which
+       is the one reading it exists to get right. */
+    snprintf(f->what, sizeof f->what, "Web IDL §3.7.9.2's %s Iterator class", ops->iface);
+    agent_state_class(component, &f->class_id, f->what);
 
     f->foreach_stepid = JS_RegisterStepDef(rt, &foreach_def);
     CHECK(f->foreach_stepid >= 0, "no step id for an iterable<>'s forEach");
@@ -572,6 +603,38 @@ int idl_pair_iter_declare(JSContext *ctx, const IdlPairIterOps *ops)
     if (handle == 0)
         realm_declare_intrinsic(idl_pair_iter_install_protos);
     return handle;
+}
+
+/* THE DECLARATION GIVEN BACK — the claim that the owning row's cascade reached THIS file, plus the one piece
+ * of bookkeeping that is this file's own.
+ *
+ * IT MAKES THE CLAIM AND RESETS NO SLOT, which is core/agent_state.h's contract for agent_state_reached: the
+ * undo is the one reset, computed from the registry that already holds this slot's address and kind, and a
+ * reset here as well would be the second resetter that header exists to stop being kept by hand.
+ * core/html/element_internals.c's release says the same thing in its own words for the same reason.
+ *
+ * AND IT HAS TO LIVE HERE RATHER THAN IN THE FOUR CALLERS, which is not a convenience: agent_state_reached
+ * matches a slot by the DECLARING FILE recorded at the declaration, so the claim is about the file the macro
+ * is EXPANDED IN. Spelled in core/fetch/headers.c it would set `reached` on headers.c's own slots — which are
+ * exempt anyway, being declared in the file the undo stands in — and would leave the slot above untouched, so
+ * `headers`'s undo would refuse to put it back and name this file as the one that had not spoken. The four
+ * callers therefore call this, and this calls agent_state_reached.
+ *
+ * THE COUNT, AND WHY IT IS RESET BY THE LAST RELEASE. `g_pair_n` is one object shared by every declared
+ * interface, so no row may declare it (see idl_iter.h's residual) and no row's undo can put it back. Resetting
+ * it at each release would leave a handle a later release still holds pointing past the end and the bounds
+ * check below would fire on a correct teardown; resetting it at none leaves a second agent's first interface
+ * handed a handle the first agent's declarations already used. */
+void idl_pair_iter_release(int handle)
+{
+    DCHECK(handle >= 0 && handle < g_pair_n,
+           "an iterable<>'s declaration was given back with a handle nothing declared — a handle is valid "
+           "until the LAST declared interface releases, which resets the table, so this is either a second "
+           "release of one handle or a release after the table was already put back");
+    agent_state_reached(g_pair[handle].component);
+    g_pair_released++;
+    if (g_pair_released == g_pair_n)
+        g_pair_n = g_pair_released = 0;
 }
 
 /* §3.7.9.2's ITERATOR PROTOTYPE OBJECTS, FOR ONE REALM — one per declared iterable<>. */

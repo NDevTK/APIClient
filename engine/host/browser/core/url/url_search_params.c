@@ -685,9 +685,18 @@ void usp_init(JSContext *ctx)
     g_usp_id[USP_SORT]     = idl_method_id(ctx, TWO_STR, 0, js_usp_member, USP_SORT);
     g_usp_id[USP_TOSTRING] = idl_method_id(ctx, TWO_STR, 0, js_usp_member, USP_TOSTRING);
 
-    g_usp_pair_handle = idl_pair_iter_declare(ctx, &USP_PAIR_OPS);
+    g_usp_pair_handle = idl_pair_iter_declare(ctx, "url_search_params", &USP_PAIR_OPS);
+    /* THE REST OF THIS ROW'S AGENT STATE, DECLARED BESIDE THE LINES THAT SET IT, so that the release below can
+       be the undo rather than a hand-written list — the runtime latch, the constructor's machine, and the
+       handle above whose class id core/idl_iter.c declares under this row from its own file. */
+    agent_state_ptr("url_search_params", &g_usp_rt,
+                    "the runtime URL §6.2's class and machines were declared in");
+    agent_state_id("url_search_params", &g_usp_pair_handle,
+                   "URL §6.2's `iterable<USVString, USVString>` handle");
 
     g_usp_ctor_stepid = idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &js_usp_ctor_decl, 0);
+    agent_state_id("url_search_params", &g_usp_ctor_stepid,
+                   "URL §6.2's `constructor(optional URLSearchParamsInit init)` machine");
     idl_optional_from(0);   /* §6.2: `constructor(optional init = "")` */
     realm_declare_intrinsic(usp_install_realm);
 }
@@ -750,11 +759,15 @@ void usp_free(void)
 {
     if (!g_usp_rt)
         return;
-    /* the prototypes are the REALMS' — released with their contexts */
-    g_usp_rt = NULL;
-    /* §6.2'S CLASS ID GOES BACK AT 0 — core/agent_state.h's ONE policy. usp_list_of already reads this slot
+    /* the prototypes are the REALMS' — released with their contexts, so this component owns no reference and
+       there is nothing to free here. Free, assert, then undo.
+       §6.2'S CLASS ID GOES BACK AT 0 — core/agent_state.h's ONE policy. usp_list_of already reads this slot
        defensively (`g_usp_class ? … : NULL`), which is the shape a zeroed id makes correct rather than one
-       this line breaks: a carried id would name a class in a runtime that is gone. */
-    g_usp_class = 0;
-    g_usp_ctor_stepid = -1;
+       the undo breaks: a carried id would name a class in a runtime that is gone.
+       THREE HAND-WRITTEN LINES STOOD HERE and the undo replaces them, for the reason core/fetch/headers.c's
+       release already records. It is not a tidy-up — core/idl_iter.c declares §6.2's ITERATOR class under this
+       row from its own file, and no line here can name that slot, so a hand-written release could not have
+       given it back at all. */
+    idl_pair_iter_release(g_usp_pair_handle);
+    agent_state_undo("url_search_params");
 }
