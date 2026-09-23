@@ -307,7 +307,7 @@ static int g_pipe_to_stepid = -1, g_pipe_through_stepid = -1;
    was minted in (js_call_c_function reads `p->u.cfunc.realm`), so one held in a module static would answer
    every document's pipe from whichever realm happened to make it first; the per-realm store is where a value
    that is not a prototype belongs, and pipe_install is this component's per-realm hook. */
-static int g_spec_through_slot = -1;
+static JSClassID g_spec_through_slot = JS_INVALID_CLASS_ID;
 
 static void js_pipe_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
@@ -1214,7 +1214,7 @@ void pipe_install(JSContext *ctx, JSValueConst stream_proto)
     {
         JSValue fn = JS_NewCFunction2(ctx, NULL, "", 1, JS_CFUNC_step, g_op_stepid[OP_SPEC_THROUGH]);
         CHECK(!JS_IsException(fn), "piping: §9.5's piped-through operation could not be made");
-        DCHECK(g_spec_through_slot >= 0,
+        DCHECK(g_spec_through_slot != JS_INVALID_CLASS_ID,
                "§9.5's operation was installed into a realm before pipe_init declared its slot");
         realm_value_set(ctx, g_spec_through_slot, fn);
     }
@@ -1222,7 +1222,7 @@ void pipe_install(JSContext *ctx, JSValueConst stream_proto)
 
 JSValue pipe_through_op(JSContext *ctx)
 {
-    DCHECK(g_spec_through_slot >= 0,
+    DCHECK(g_spec_through_slot != JS_INVALID_CLASS_ID,
            "Streams §9.5's piped-through was asked for before this component declared its realm slot");
     return realm_value_get(ctx, g_spec_through_slot);   /* OWNED */
 }
@@ -1244,5 +1244,5 @@ void pipe_free(JSContext *ctx)
     /* The realm slot is a HANDLE into the same per-runtime pool, and the values it named went back with their
        contexts — so it is released here for the reason the atoms are, and a slot carried into the next runtime
        would read a value that runtime never set. */
-    g_spec_through_slot = -1;
+    g_spec_through_slot = JS_INVALID_CLASS_ID;
 }

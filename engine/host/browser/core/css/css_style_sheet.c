@@ -83,7 +83,7 @@ typedef struct CssStyleSheetData {
 } CssStyleSheetData;
 
 static JSClassID g_sheet_class;
-static int       g_stylesheet_proto_slot = -1;   /* StyleSheet.prototype, per realm */
+static JSClassID g_stylesheet_proto_slot = JS_INVALID_CLASS_ID;   /* StyleSheet.prototype, per realm */
 static int       g_id_set_disabled = -1, g_id_insert_rule = -1, g_id_delete_rule = -1;
 static int       g_id_replace_sync = -1;         /* §6.1.2's `undefined replaceSync(USVString text)` */
 /* CSSOM §6.1.2.1 Deprecated CSSStyleSheet members' two OPERATIONS. `rules` is not here because it is not a

@@ -377,7 +377,7 @@ static void obs_close_enter(JSContext *ctx, JSObsState *s, int has, JSValue reas
    algorithm must reach the same function object the page sees rather than mint a second one — and taking the
    reference HERE is what keeps a page that later replaces the property from redirecting the standard's own
    algorithms. Indexed by EM_NEXT/EM_ERROR/EM_COMPLETE/EM_TEARDOWN. */
-static int g_sub_fn_slot[EM_N];
+static JSClassID g_sub_fn_slot[EM_N];
 
 /* Run one of those members on this machine's subscriber, returning to `ret`. `value` is CONSUMED. */
 void obs_emit_enter(JSContext *ctx, JSObsState *s, int which, JSValue value, int ret)
@@ -420,7 +420,7 @@ static void obs_fail(JSContext *ctx, JSObsState *s)
    own function object over §2.2.1's machine rather than a jump into S_ATTACH, and that is the whole point: an
    operator subscribes to its source from INSIDE one of its own algorithms, so the two subscriptions' states
    would otherwise be one state. As a call, the inner one is an ordinary machine on the trampoline. */
-static int g_sub_native_slot;
+static JSClassID g_sub_native_slot;
 
 void obs_subscribe_enter(JSContext *ctx, JSObsState *s, JSValueConst observable, JSValueConst io,
                          JSValueConst signal, int ret)
@@ -446,7 +446,7 @@ void obs_subscribe_enter(JSContext *ctx, JSObsState *s, JSValueConst observable,
    this machine declares catches_abrupt, so an abrupt request result is an operand rather than an unwind. The
    function object is the realm's OWN reference to §2.2.1's convert machine, never `Observable.from` read off
    the constructor, which a page may replace. */
-static int g_from_fn_slot;
+static JSClassID g_from_fn_slot;
 
 void obs_convert_enter(JSContext *ctx, JSObsState *s, JSValueConst value, int ret)
 {

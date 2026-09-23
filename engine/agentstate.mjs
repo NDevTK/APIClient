@@ -134,7 +134,13 @@ for (const p of files) {
       let band;
       if (declared.has(id)) band = `${kind}: declared`;
       else {
-        const R = new RegExp(`\\b${id}(?:\\s*\\[[^\\]]*\\])?\\s*=\\s*(?:-1|0)\\b`);
+      /* THE PRE-INIT SPELLINGS THIS SWEEP CAN SEE, AND `JS_INVALID_CLASS_ID` IS ONE OF THEM. A realm slot's
+         C type is JSClassID, so its pre-declaration value is quickjs's own reserved 0 and components spell it
+         by that name rather than as a digit. Matching only `-1|0` would have moved every converted slot that
+         IS hand-reset into `NOT reset`, which is the louder band and the accusing direction -- a line somebody
+         wrote and keeps, reported as a line nobody wrote. It stays a list of SPELLINGS and not a value test
+         because this is a text sweep; that is the floor the header already states. */
+        const R = new RegExp(`\\b${id}(?:\\s*\\[[^\\]]*\\])?\\s*=\\s*(?:-1|0|JS_INVALID_CLASS_ID)\\b`);
         band = `${kind}: UNDECLARED, ${rel.some(([, b]) => R.test(b)) ? "hand-reset" : "NOT reset"}`;
       }
       tally.set(band, (tally.get(band) ?? 0) + 1);

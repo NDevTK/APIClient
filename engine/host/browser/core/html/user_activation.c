@@ -65,7 +65,7 @@
    leaves behind. */
 enum { UA_PH_STICKY = 0, UA_PH_RECENT };
 
-static int g_slot = -1;
+static JSClassID g_slot = JS_INVALID_CLASS_ID;
 
 /* THIS REALM'S §6.4.1 RECORD. Owned — the caller frees. */
 static JSValue ua_record(JSContext *ctx)
@@ -576,7 +576,7 @@ void user_activation_consume_history_action(JSContext *ctx)
  * creation of the Window object" — so the [SameObject] guarantee comes from the realm slot rather than from a
  * cache in navigator.c's getter, and no flow can make its own first read into every sibling's baseline. */
 static JSClassID g_ua_class;
-static int g_obj_slot = -1;
+static JSClassID g_obj_slot = JS_INVALID_CLASS_ID;
 
 /* THE RECORD — the Window §6.4.4's getters answer about, carried by the UserActivation rather than looked up
  * from the realm the getter was DEFINED in.
@@ -823,7 +823,7 @@ void user_activation_init(JSContext *ctx)
 {
     JSClassDef d = { "UserActivation", .finalizer = ua_finalizer, .gc_mark = ua_gc_mark };
 
-    DCHECK(g_slot < 0, "user_activation_init ran twice — the record's slot is declared once per AGENT");
+    DCHECK(g_slot == JS_INVALID_CLASS_ID, "user_activation_init ran twice — the record's slot is declared once per AGENT");
     g_slot = realm_value_declare(ctx, "HTML §6.4.1 the Window's user activation timestamps");
     /* THE CLASS IS BOTH THE PER-REALM PROTOTYPE SLOT AND THE BRAND: the one object per realm WEARS it, so
        §3.7.6 Attributes' check is a class-id comparison and a page cannot forge one. */
@@ -845,8 +845,8 @@ void user_activation_free(void)
        each is released with its context, and a UserActivation's own record goes with it through ua_finalizer.
        What the agent holds is the two slots, and a slot id is a class id in a runtime that is going away with
        it. */
-    g_slot = -1;
-    g_obj_slot = -1;
+    g_slot = JS_INVALID_CLASS_ID;
+    g_obj_slot = JS_INVALID_CLASS_ID;
     g_id_has_been_active = -1;
     g_id_is_active = -1;
 }

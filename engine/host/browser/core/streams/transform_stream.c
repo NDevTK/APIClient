@@ -307,7 +307,7 @@ static int g_ctor_stepid = -1;
 /* §9.3's four operations, held as the FUNCTION OBJECTS this component installed — see transform_stream.h. */
 /* §9.3's FOUR OPERATIONS AS FUNCTION OBJECTS, PER REALM — a function object carries the realm it was minted
    in, so one set held for the agent ran a child document's transform through the first document's realm. */
-static int g_ts_fn_slot[TS_OP_N];
+static JSClassID g_ts_fn_slot[TS_OP_N];
 
 static void js_ts_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {

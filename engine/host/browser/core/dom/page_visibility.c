@@ -40,7 +40,7 @@
  * what the stored state supplies is the EXAMPLE. Collapsing the read to the stored concrete would delete the
  * arm and everything it reaches, which is what CLAUDE.md means by never collapsing a modelable value to
  * bare-concrete. */
-static int g_vis_slot = -1;
+static JSClassID g_vis_slot = JS_INVALID_CLASS_ID;
 
 static const char *vis_state_of(JSContext *ctx)
 {
@@ -154,10 +154,11 @@ void page_visibility_init(JSContext *ctx)
 {
     /* DECLARED ONCE PER AGENT, like every other realm value. The initial state is §6.2's "set the initial
        visibility state", which for this user agent is "visible".
-       NOT `if (g_vis_slot < 0)`. There is one declaration site and document_init reaches it unconditionally, so
-       that test could never be true — what it COULD do is hand a second agent the slot id a dead runtime issued,
+       NOT `if (g_vis_slot == JS_INVALID_CLASS_ID)`. There is one declaration site and document_init reaches
+       it unconditionally, so that test could never be true — what it COULD do is hand a second agent the slot
+       id a dead runtime issued,
        which is the shape core/agent_state.h found five inits in and 8987603c deleted. */
-    DCHECK(g_vis_slot < 0, "page_visibility_init ran twice — §6.2's realm slot is declared once per AGENT");
+    DCHECK(g_vis_slot == JS_INVALID_CLASS_ID, "page_visibility_init ran twice — §6.2's realm slot is declared once per AGENT");
     g_vis_slot = realm_value_declare(ctx, "the document's §6.2 visibility state");
 }
 
@@ -166,8 +167,8 @@ void page_visibility_init(JSContext *ctx)
    would answer a second agent's first read out of an array a dead runtime sized. */
 void page_visibility_free(void)
 {
-    DCHECK(g_vis_slot >= 0, "§6.2's visibility state was released in an agent that never declared it");
-    g_vis_slot = -1;
+    DCHECK(g_vis_slot != JS_INVALID_CLASS_ID, "§6.2's visibility state was released in an agent that never declared it");
+    g_vis_slot = JS_INVALID_CLASS_ID;
 }
 
 void page_visibility_install(JSContext *ctx, JSValueConst proto)

@@ -13,7 +13,7 @@
 #include "core/permissions/permission_store.h"
 
 static JSClassID g_permissions_class;
-static int g_obj_slot = -1;
+static JSClassID g_obj_slot = JS_INVALID_CLASS_ID;
 static int g_id_query = -1;
 static JSAtom g_atom_name;
 static JSRuntime *g_rt;
@@ -448,7 +448,7 @@ void permissions_init(JSContext *ctx)
     JSRuntime *rt = JS_GetRuntime(ctx);
     static const IdlArgType PQ_ARGS[] = { IDL_ANY };
 
-    DCHECK(g_obj_slot < 0, "permissions_init ran twice — the class, the slot and the member's pool id are the "
+    DCHECK(g_obj_slot == JS_INVALID_CLASS_ID, "permissions_init ran twice — the class, the slot and the member's pool id are the "
                            "AGENT's");
     g_rt = rt;
     /* §3's MODEL AND §6.3's INTERFACE ARE THIS COMPONENT'S DEPENDENCIES, declared here rather than by each
@@ -474,12 +474,12 @@ void permissions_init(JSContext *ctx)
 
 void permissions_free(void)
 {
-    if (g_obj_slot < 0)
+    if (g_obj_slot == JS_INVALID_CLASS_ID)
         return;
     DCHECK(g_rt != NULL, "Permissions was declared without recording the runtime its atom belongs to");
     JS_FreeAtomRT(g_rt, g_atom_name);
     g_atom_name = JS_ATOM_NULL;
-    g_obj_slot = -1;
+    g_obj_slot = JS_INVALID_CLASS_ID;
     g_id_query = -1;
     permission_status_free();
     permission_store_free();

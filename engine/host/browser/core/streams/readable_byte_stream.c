@@ -76,7 +76,7 @@ static int g_byobreq_stepids[4] = { -1, -1, -1, -1 };
    objects — the same discipline readable_stream.c states for §4.6's three: a function object carries the realm
    it was minted in, so one set held for the agent would run a child document's every enqueue through the first
    document's realm. */
-static int g_byte_ctrl_fn_slot[RBC_N];
+static JSClassID g_byte_ctrl_fn_slot[RBC_N];
 static int g_byte_rxn_stepids[4] = { -1, -1, -1, -1 };
 static int g_byob_read_stepid = -1;
 

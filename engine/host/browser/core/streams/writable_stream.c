@@ -367,7 +367,7 @@ static bool ws_in_flight(WsData *d)
    rebinds a prototype member changes what IT calls and nothing that the platform performs on its behalf.
    PER REALM, because a function object carries the realm it was minted in: one set held for the agent ran a
    child document's pipe through the first document's realm. */
-static int g_op_fn_slot[WS_OP_N];
+static JSClassID g_op_fn_slot[WS_OP_N];
 
 JSValue writable_stream_op(JSContext *ctx, WritableStreamOp which)
 {

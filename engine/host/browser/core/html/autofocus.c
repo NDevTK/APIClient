@@ -45,7 +45,7 @@
 #include "core/html/autofocus.h"
 #include "core/html/focus.h"
 
-static int g_slot = -1;
+static JSClassID g_slot = JS_INVALID_CLASS_ID;
 static int g_id_flush = -1;
 static int g_ready;
 
@@ -658,6 +658,6 @@ void autofocus_free(void)
 {
     DCHECK(g_ready, "§6.6.7's autofocus machine was released in an agent that never declared it");
     g_ready = 0;
-    g_slot = -1;
+    g_slot = JS_INVALID_CLASS_ID;
     g_id_flush = -1;
 }

@@ -66,7 +66,7 @@
 #define CW_SUBJECT  "subject"
 #define CW_RUNNING  "isRunningCancelAction"
 
-static int g_slot = -1;
+static JSClassID g_slot = JS_INVALID_CLASS_ID;
 
 /* THIS REALM'S §6.10.2 CLOSE WATCHER MANAGER. Owned — the caller frees. */
 static JSValue cw_manager(JSContext *ctx)
@@ -982,7 +982,7 @@ static void close_watcher_install_realm(JSContext *ctx)
 
 void close_watcher_init(JSContext *ctx)
 {
-    DCHECK(g_slot < 0, "close_watcher_init ran twice — the manager's slot is declared once per AGENT, and a "
+    DCHECK(g_slot == JS_INVALID_CLASS_ID, "close_watcher_init ran twice — the manager's slot is declared once per AGENT, and a "
                        "second declaration would give every realm built after it a different slot from the "
                        "one every algorithm in this file reads");
     g_slot = realm_value_declare(ctx, "HTML §6.10.2 the Window's close watcher manager");
@@ -1002,5 +1002,5 @@ void close_watcher_free(JSRuntime *rt)
     close_watcher_interface_free(rt);
     /* The MANAGERS are the realms' — each is released with its context. What the agent holds is the slot id,
        and a slot id is a class id in a runtime that is going away with it. */
-    g_slot = -1;
+    g_slot = JS_INVALID_CLASS_ID;
 }

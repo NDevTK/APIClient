@@ -104,7 +104,7 @@
  * agent meant `frame.contentWindow.customElements.define('x-a', C)` defined `x-a` in the PARENT too. */
 static JSClassID g_registry_class;
 /* §4.13.4's Window `customElements` getter: "this's associated Document's custom element registry". */
-static int g_registry_slot = -1;
+static JSClassID g_registry_slot = JS_INVALID_CLASS_ID;
 /* The registry's own record, under a symbol this component minted and never published. */
 static JSValue g_reg_key = JS_UNDEFINED;
 static JSAtom  g_atom_reg = JS_ATOM_NULL;
@@ -123,7 +123,7 @@ static JSAtom g_atom_defining = JS_ATOM_NULL;  /* §4.13.4's `element definition
    question about a PER-REALM object — a module static holding one realm's HTMLElement would answer it wrong
    for every other document, which is the defect class §3.7 names. Set by the mint below, which is what
    html_element.c calls to build the interface object. */
-static int g_html_ctor_slot = -1;
+static JSClassID g_html_ctor_slot = JS_INVALID_CLASS_ID;
 
 /* DOM §4.4/§4.8/§4.9's NODE-ASSOCIATED custom element registry, on the node's WRAPPER under its own symbol —
    the same store the element's definition and its custom element state already use, and per-flow for the same
@@ -231,7 +231,7 @@ static JSValue ce_registry_new(JSContext *ctx, bool scoped)
    that names no registry resolves to. OWNED: the caller frees. */
 static JSValue ce_document_registry(JSContext *ctx)
 {
-    DCHECK(g_registry_slot > 0,
+    DCHECK(g_registry_slot != JS_INVALID_CLASS_ID,
            "the Document's custom element registry was reached before custom_elements_init declared its slot");
     return realm_value_get(ctx, g_registry_slot);
 }

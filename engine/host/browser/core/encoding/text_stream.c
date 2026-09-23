@@ -747,7 +747,7 @@ static const IdlStepDecl js_td_decl = {
 static int g_td_stepid = -1;
 /* THIS REALM'S copy of the operation — a function object carries the realm it was minted in, so one held in a
    module static would decode every document's body in whichever realm first asked. */
-static int g_td_slot = -1;
+static JSClassID g_td_slot = JS_INVALID_CLASS_ID;
 
 /* ---- install -------------------------------------------------------------------------------------------- */
 
@@ -861,7 +861,7 @@ void text_stream_install_realm(JSContext *ctx)
 
 JSValue text_stream_decode_op(JSContext *ctx)
 {
-    DCHECK(g_td_slot >= 0,
+    DCHECK(g_td_slot != JS_INVALID_CLASS_ID,
            "the UTF-8 text decode was asked for before this component declared its realm slot");
     return realm_value_get(ctx, g_td_slot);   /* OWNED */
 }
@@ -876,6 +876,6 @@ void text_stream_free(JSContext *ctx)
     g_td_stepid = -1;
     /* The realm's own copy went back with its context; what this component owns is the HANDLE, and one carried
        into the next runtime would name a slot that runtime never set. */
-    g_td_slot = -1;
+    g_td_slot = JS_INVALID_CLASS_ID;
     for (i = 0; i < ALG_N; i++) g_alg_stepid[i] = -1;
 }

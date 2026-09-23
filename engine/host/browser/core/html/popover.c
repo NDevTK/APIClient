@@ -164,7 +164,7 @@ static int g_toggle_task_stepid = -1;
 /* §6.12's HIDE A POPOVER: its step-def id, which is the RUNTIME's, and the per-realm slot holding the function
    object §6.12's own prose and §6.10.2's close action reach it through. See popover.h. */
 static int g_hide_stepid = -1;
-static int g_hide_fn_slot = -1;
+static JSClassID g_hide_fn_slot = JS_INVALID_CLASS_ID;
 
 /* The slot's value, or JS_UNDEFINED for "the initial value the standard names". OWNED. */
 static JSValue ps_get(JSContext *ctx, JSValueConst obj, int slot)
@@ -1684,7 +1684,7 @@ static const JSTrampStepDef js_popover_hide_def = {
 
 JSValue popover_hide_algorithm(JSContext *ctx)
 {
-    DCHECK(g_hide_fn_slot >= 0,
+    DCHECK(g_hide_fn_slot != JS_INVALID_CLASS_ID,
            "§6.12's hide a popover was asked for before popover_declare declared its per-realm slot");
     return realm_value_get(ctx, g_hide_fn_slot);   /* OWNED — realm_value_get asserts the realm ran its install */
 }
@@ -2486,5 +2486,8 @@ void popover_free(JSRuntime *rt)
     /* The hide a popover FUNCTION OBJECTS are the realms' — each is released with its context, which is what
        core/realm.h's per-realm store is for. What the agent holds is a step-def id and a slot id, and both are
        ids in a runtime that is going away with them. */
-    g_hide_stepid = g_hide_fn_slot = -1;
+    /* TWO STATEMENTS: the slot is a CLASS ID whose pre-declaration value is JS_INVALID_CLASS_ID, and the
+       step id's is `-1`; a chain would write one of them into the other. */
+    g_hide_stepid = -1;
+    g_hide_fn_slot = JS_INVALID_CLASS_ID;
 }

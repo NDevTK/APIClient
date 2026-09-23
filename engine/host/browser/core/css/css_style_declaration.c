@@ -131,7 +131,7 @@ static JSValue g_decl_key = JS_UNDEFINED, g_inline_key = JS_UNDEFINED;
    is the class, and CSSStyleDeclaration.prototype — the base nothing is an instance of — is a per-realm value
    slot beside it, which is the same shape CSSOM §6.1.1's StyleSheet and CSSOM §6.4.2's CSSRule take. */
 static JSClassID g_cssd_class;
-static int       g_declaration_proto_slot = -1;
+static JSClassID g_declaration_proto_slot = JS_INVALID_CLASS_ID;
 /* CSS Fonts 5 §9.1 The CSSFontFaceRule interface's CSSFontFaceDescriptors.prototype, the same way and for the
    same reason. THE LEVEL IS PART OF THIS CITATION: CSS Fonts 4 numbers the same-titled section §12.1 and declares
    the interface with SIX names fewer, so a bare "CSS Fonts §12.1" sends a reader to an edition that does not
@@ -140,13 +140,13 @@ static int       g_declaration_proto_slot = -1;
    prototype over the SAME class and the same record: an `@font-face` block's declarations are kept where
    CSSOM §6.4.3's are (the rule's own text, through core/css/css_rule.h), so what differs is only which member names
    the interface answers to. */
-static int       g_font_face_proto_slot = -1;
+static JSClassID g_font_face_proto_slot = JS_INVALID_CLASS_ID;
 /* CSSOM §6.4.7 The CSSPageRule Interface's CSSPageDescriptors.prototype, the same way and for the same
    reason — a FOURTH prototype over
    the one class and the one record. A `@page` rule's descriptors are kept where CSSOM §6.4.3's declarations are (the
    rule's own text, through core/css/css_rule.h), so what differs is only which member names the interface
    answers to and, through core/css/css_page.h, which declarations the block admits at all. */
-static int       g_page_proto_slot = -1;
+static JSClassID g_page_proto_slot = JS_INVALID_CLASS_ID;
 /* Declared once per AGENT (the IDL pool is sealed after agent init); installed per realm. §6.6.1's per-property
    attributes are GENERATED from Lexbor's property registry, so their setter ids are an array indexed the same
    way the registry is — one entry per property, declared once, installed into every realm, and SHARED by that

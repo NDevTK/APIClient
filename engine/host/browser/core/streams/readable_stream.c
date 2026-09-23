@@ -91,7 +91,7 @@ static int       g_release_stepids[2] = { -1, -1 };
 /* §4.5's PROTOTYPE, which is the one per-realm object of this component that is not a class proto: §4.4's and
    §4.5's readers are one CLASS (one record, one lock) and two interfaces, and quickjs's class-proto slot holds
    one object per class. */
-static int       g_byob_proto_slot = -1;
+static JSClassID g_byob_proto_slot = JS_INVALID_CLASS_ID;
 
 static JSValue readable_byob_reader_proto(JSContext *ctx)   /* OWNED */
 {
@@ -1872,8 +1872,8 @@ enum { RSF_READ = 0, RSF_RELEASE, RSF_CANCEL, RSF_GET_READER, RSF_TEE, RSF_TEE_C
           and they are separate slots because they live on a separate prototype. */
        RSF_BYOB_READ, RSF_BYOB_RELEASE,
        RSF_N };
-static int g_rs_fn_slot[RSF_N];
-static int g_ctrl_fn_slot[RS_CTRL_N];
+static JSClassID g_rs_fn_slot[RSF_N];
+static JSClassID g_ctrl_fn_slot[RS_CTRL_N];
 
 static JSValue rs_fn(JSContext *ctx, int which)        /* OWNED */
 {

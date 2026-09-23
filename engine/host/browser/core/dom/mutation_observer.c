@@ -68,7 +68,11 @@ static JSValue   g_pending = JS_UNDEFINED;     /* §4.3's "pending mutation obse
    held in one static would run every document's notification — and fire every document's `slotchange` — out of
    whichever realm happened to build it first (§3.7). The step DEFINITION is the agent's; the function OBJECT
    is the realm's, in core/realm.h's per-realm value store. */
-static int       g_notify_stepid = -1, g_notify_slot = -1;
+/* SEPARATE DECLARATIONS BECAUSE THEY ARE SEPARATE QUANTITIES: the per-realm value slot is a CLASS ID
+   (core/realm.h's declare entry) and the step id is not. They shared one `static int`, which is the
+   erasure that let one C type stand for both. */
+static int       g_notify_stepid = -1;
+static JSClassID g_notify_slot = JS_INVALID_CLASS_ID;
 static int       g_id_observe = -1, g_id_disconnect = -1, g_id_take = -1, g_id_ctor = -1;
 static bool      g_any_observer;
 static int       g_ready;
@@ -1120,7 +1124,10 @@ void mutation_observer_free(JSRuntime *rt)
     JS_FreeAtomRT(rt, g_atom_ro);
     JS_FreeAtomRT(rt, g_atom_queued);
     g_atom_mo = g_atom_ro = g_atom_queued = JS_ATOM_NULL;
-    g_notify_stepid = g_notify_slot = -1;
+    /* TWO STATEMENTS: a chain gives every target the ONE value on its right, and the slot's
+       pre-declaration value is JS_INVALID_CLASS_ID while the step id's is `-1`. */
+    g_notify_stepid = -1;
+    g_notify_slot = JS_INVALID_CLASS_ID;
     g_id_observe = g_id_disconnect = g_id_take = g_id_ctor = -1;
     g_any_observer = false;
     g_ready = 0;

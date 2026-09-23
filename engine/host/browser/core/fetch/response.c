@@ -42,12 +42,13 @@ static JSRuntime *g_response_rt;
    IT IS PER REALM because §3.7 says so and because the value is a function object, which carries the realm it
    was minted in: one module static handed every document the FIRST realm's serializer, and a serializer runs
    the page's `toJSON` — so the callback flows of a child document ran in the parent's realm. */
-static int g_json_stringify_slot = -1;
+static JSClassID g_json_stringify_slot = JS_INVALID_CLASS_ID;
 
 /* OWNED: the caller frees. */
 static JSValue response_json_stringify(JSContext *ctx)
 {
-    DCHECK(g_json_stringify_slot > 0, "Response.json ran before response_init declared its %JSON.stringify% slot");
+    DCHECK(g_json_stringify_slot != JS_INVALID_CLASS_ID,
+           "Response.json ran before response_init declared its %JSON.stringify% slot");
     return realm_value_get(ctx, g_json_stringify_slot);
 }
 

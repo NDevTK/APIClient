@@ -39,8 +39,8 @@ static JSClassID g_qs_class;
    the prototypes cannot live in the class slot and take a per-realm VALUE slot each instead — the same store,
    named for what it holds. The size functions are function objects, which carry the realm they were minted
    in: `new CountQueuingStrategy({highWaterMark:1}).size` handed every document the first realm's. */
-static int       g_qs_proto_slot[QS_N] = { -1, -1 };
-static int       g_size_fn_slot[QS_N] = { -1, -1 };
+static JSClassID g_qs_proto_slot[QS_N] = { JS_INVALID_CLASS_ID, JS_INVALID_CLASS_ID };
+static JSClassID g_size_fn_slot[QS_N] = { JS_INVALID_CLASS_ID, JS_INVALID_CLASS_ID };
 static int       g_qs_ctor_stepid[QS_N] = { -1, -1 };
 static int       g_byte_size_stepid = -1;
 static JSRuntime *g_qs_rt;
