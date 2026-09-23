@@ -11623,6 +11623,27 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        COPY and never back into `g_between_us`: an accessor that advanced its own accumulator would charge
        that span again at the next census, and two censuses of one run would then sum to more thread than the
        instance has had. */
+    /* AND THE ONE THING THAT MAKES THE OPEN TAIL THE HOST'S RATHER THAN A RUNNING SLICE'S, ASSERTED RATHER
+       THAN ASSUMED. `between_slices_us` closes its tail from the last slice's RETURN, so the span it charges
+       is host time only while no slice is open — and a caller that composed this census from INSIDE the
+       dispatch loop would charge the running slice's own elapsed time to the host's row, which is a wrong
+       ATTRIBUTION rather than a broken identity (the partition below still sums, because the two halves and
+       the span telescope whatever the tail belongs to, which is exactly why no arithmetic check can catch it).
+       IT IS TRUE BY CONSTRUCTION TODAY AND THAT IS THE REASON TO ASSERT IT, NOT A REASON NOT TO.
+       solver/quantum.h states the invariant this rests on — "the shipped ABI may never RETURN to the host
+       holding one", asserted at main.c's qjs_step — which is what makes every other ABI entry, `result`
+       included, host time by construction; and the two callers of engine_census_emit both stand after
+       engine_sched_step has returned. A future caller inside the loop would be silent without this line.
+       `quantum_slice_open()` AND NEVER A BRANCH ON IT: that function's own contract says it is for exactly
+       this kind of assertion and that a caller which BRANCHES on it is choosing between a scheduled path and
+       an unscheduled one, which is the fallback §C-stack bans. There is one path here and the other case
+       crashes. */
+    DCHECK(!quantum_slice_open(),
+           "the step census was composed from INSIDE an open slice — `betweenSlicesUs` closes its open tail "
+           "from the last slice's RETURN, so the running slice's own elapsed time is about to be charged to "
+           "the HOST's half of the partition. The sum still equals `instanceUs`, which is why nothing else "
+           "here can catch it, and the row would report thread the engine was holding as thread it was "
+           "waiting for — the exact reading the split exists to make");
     out->loop_us           = g_loop_us;
     out->between_slices_us = g_between_us + (g_slice_exit_set ? now - g_slice_exit_us : 0);
     out->slices            = g_slices;

@@ -1576,6 +1576,13 @@ typedef struct {
      * is the host's. THE TWO SUM TO `instance_us` EXACTLY and that is asserted where all three are in one
      * hand, so a reader adds two published rows rather than subtracting one from a total and hoping the
      * remainder is what they think it is.
+     * AND THAT THE OPEN TAIL IS THE HOST'S AT ALL IS A SEPARATE CLAIM AND IS SEPARATELY ASSERTED, because no
+     * arithmetic here can reach it: the tail is closed from the last slice's RETURN, so a census composed
+     * from INSIDE the dispatch loop would charge a running slice's own elapsed time to the host's half — and
+     * the sum would still equal `instance_us`, since the two halves telescope whatever the tail belongs to.
+     * engine_step_unit_runs asserts `!quantum_slice_open()` for that reason; solver/quantum.h's own invariant
+     * ("the shipped ABI may never RETURN to the host holding one") is what makes it true today, and the
+     * assert is what makes it stay true when a caller is added.
      * WHAT THEY SEPARATE, AND IT IS THE PAIR OF DIAGNOSES THE SHARE ABOVE SUMS. A run whose
      * `step_us / instance_us` is small is one of two things and they take OPPOSITE work. If `loop_us` is
      * small too, the engine was BARELY GIVEN THE THREAD: the remainder sits in `between_slices_us`, the
