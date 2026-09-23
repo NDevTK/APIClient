@@ -1177,8 +1177,51 @@ const ageQuantum = () =>
    `picksLifetime` is the follow-on reading and is printed so it can be taken rather than assumed.
    THE DENOMINATOR IS READ FIRST AND THAT IS NOT A CAVEAT. `unframedPicksLifetime: 0` on an instance that has
    dispatched NOTHING is the absent reading of a zero and is about neither — the pair CLAUDE.md prescribes for
-   every count offered as a share of another, and the one arm here that says so instead of judging. */
+   every count offered as a share of another, and the one arm here that says so instead of judging.
+   AND `picksLifetime` IS NOT THE WHOLE OF THAT DENOMINATOR, WHICH IS THE ARM THAT WAS MISSING AND THE ONE THE
+   FIRST READING OF THIS ROW LANDED IN. Both verdicts below are about the DISPATCH — whether it takes a member
+   whose stack is empty when it could have taken another — so each is a claim about a CHOICE, and a choice is
+   only a thing that happened where there was something to choose between. `arrivals - departures == members`
+   is asserted at flow_wfq_census, so members at any instant is at most `arrivals` at that instant and at most
+   `arrivals` at the end: an instance reporting ONE arrival has never held two members, every dispatch it ever
+   made went to the only member there was, and the share is then 100% or 0% BY CONSTRUCTION — decided by what
+   that one member's stack happened to be doing and by nothing about the order. Both verdicts are unavailable
+   there, and the non-zero one is the dangerous half, because it renders the word REFUTED off an arithmetic
+   identity.
+   IT IS AN IDENTITY AND NOT A THRESHOLD, which is the only form this arm may take: `arrivals <= 1` is the
+   exact condition under which the frontier never offered the pick an alternative, so there is no sample size
+   being judged and no run being called too short — §NO BOUNDS is untouched and nothing here decides that work
+   will not happen. A frontier that DID hold two members is judged by the two arms below whatever its totals.
+   MEASURED, AND IT IS WHY THIS ARM EXISTS RATHER THAN A CAUTION: the only emission of this row anywhere in
+   this session's archive reads `unframedPicksLifetime: 1` of `picksLifetime: 1` at `members: 1`, `arrivals:
+   1`, `departures: 0`, `workDone: 2` — a native smoke instance that minted one flow and stepped it once. The
+   arm below would have rendered "Those members ARE dispatched … 100.0% … REFUTED" from it, and solver/flow.c's
+   job-split residual is waiting on a reading of this row to separate two readings about a REAL-PAGE frontier
+   of hundreds of members. A degenerate instance cannot separate them and must not appear to.
+   RETIREMENT: this arm goes when the census publishes the dispatches this row is a subset of against the
+   population the pick actually chose from, so that "there was an alternative" is a row rather than a
+   derivation from `arrivals`. */
 function unframedPickSentence(w) {
+  /* THE OPERAND THIS ARM RESTS ON, CHECKED BEFORE IT IS READ — a consumer never defaults a producer's field
+     (CLAUDE.md), and `arrivals` is read nowhere else in this reader, so a producer that stopped emitting it
+     would make the new arm silently unreachable and every degenerate instance would reach the verdicts again.
+     The identity is the engine's own and is asserted at flow_wfq_census, where it is compiled out of a release
+     build that this reader still runs against. */
+  if (typeof w.arrivals !== "number" || typeof w.departures !== "number" ||
+      w.arrivals - w.departures !== w.members)
+    throw new Error(`[build] the @WFQ census reports arrivals ${w.arrivals} and departures ${w.departures} ` +
+                    `against members ${w.members} — solver/flow.c raises each on the one line a member joins ` +
+                    `or leaves the frontier and asserts the identity where all three are in one hand, so ` +
+                    `outside it one of them has a second writer and "this instance never held two members" ` +
+                    `is no longer derivable from the arrival count.`);
+  if (w.arrivals <= 1 && w.picksLifetime > 0)
+    return `. AND THIS INSTANCE HAS NEVER HELD TWO MEMBERS — ${w.arrivals} arrival(s) against ` +
+           `${w.departures} departure(s), so every one of its ${w.picksLifetime} dispatch(es) went to the ` +
+           `only member there was and \`unframedPicksLifetime: ${w.unframedPicksLifetime}\` is decided by ` +
+           `what that member's stack was doing, not by anything the order chose. Neither "the dispatch takes ` +
+           `them" nor "the dispatch never takes them" is available from it, and solver/flow.c's job-split ` +
+           `residual is NOT discharged by this run: it asks which of two readings holds on a frontier the ` +
+           `pick had to choose within.`;
   if (w.picksLifetime === 0)
     return `. This instance has made no dispatch at all, so \`unframedPicksLifetime: 0\` beside that is the ` +
            `ABSENT reading of a zero rather than a measured one, and it says nothing about the order either ` +
