@@ -5254,12 +5254,35 @@ function crashRecord(stage, m, msg, eng) {
    MACROtask (not just an awaited microtask, which the message queue never interleaves with) so the ONE worker
    thread services its message port — triage/GET_STATE evals, postMessage from the offscreen, other timers —
    while a lone engine keeps exploring its byte-identical frontier across qjs_step re-entries. MessageChannel is
-   sub-ms (setTimeout(0) is clamped ~4ms and would dominate a 12ms quantum). §NO BOUNDS: a thread-yield, not a cap. */
+   sub-ms, and HTML §8.7 "Timers"' own timer initialisation steps say
+   "If nestingLevel is greater than 5, and timeout is less than 4, then set timeout to 4" — a third of a 12ms
+   quantum, which would dominate it. §NO BOUNDS: a thread-yield, not a cap.
+
+   AND THE `setTimeout` ARM THAT USED TO STAND UNDER THIS WAS A FALLBACK AND IS DELETED RATHER THAN KEPT, WHICH IS WORTH
+   RECORDING BECAUSE IT READ AS A CAPABILITY CHECK AND BECAUSE THE PARAGRAPH ABOVE IT ALREADY SAID WHY IT WAS WRONG. It was
+   `const _macroChan = (typeof MessageChannel !== "undefined") ? new MessageChannel() : null;` with `macroYield` taking
+   `setTimeout(res, 0)` on the null arm. §C-stack's test settles which it was in one question: delete the thing a predicate
+   selects AGAINST and ask whether the predicate is still needed — delete the `setTimeout` arm and the `typeof` test has no
+   consumer at all, so it was never routing. **AND THE TWO ARMS WERE NOT TWO SPELLINGS OF ONE ANSWER, WHICH THE COMMENT
+   DIRECTLY ABOVE THEM STATED AND NOTHING ACTED ON**: the clamp is a THIRD of this quantum, so a run that took the second arm
+   returned the thread to the event loop three times later than the slice asked, on every yield, for the whole run — and
+   nothing in any output said which arm it had taken. That is §A-FIELD-A-CONSUMER-DEFAULTS exactly: not a wrong number but a
+   PLAUSIBLE one, a run that completes and reports and whose slice was never the slice. The forcing function is the crash.
+
+   IT IS A `CHECK` AND NOT A `DCHECK` BECAUSE THERE IS NO ROUTE BEHIND IT. check.js's law puts an always-fatal assertion where
+   the engine must not PROCEED even in production, and with the fallback gone there is nothing to proceed with: the host would
+   have no macrotask to return to the event loop on, so a lone engine would never service its port, which is the freeze
+   §scheduler names the cooperative quantum to prevent. A DCHECK here would be compiled out in exactly the build that ships. */
 const PARTIAL_MS = 750;   // incremental-merge cadence: a hot engine surfaces its current findings this often
-const _macroChan = (typeof MessageChannel !== "undefined") ? new MessageChannel() : null;
+CHECK(typeof MessageChannel !== "undefined",
+      "this realm has no MessageChannel, so the host has no sub-millisecond macrotask to return to its event loop on " +
+      "between two engine quanta — a lone engine would hold the one thread across qjs_step re-entries and never service " +
+      "its message port. There is deliberately no setTimeout fallback: HTML §8.7 'Timers' clamps a nested zero-delay " +
+      "timer to at least 4ms, a third of the 12ms quantum, and a slice silently three times late is the plausible datum " +
+      "this CHECK exists instead of. Build the macrotask source this realm does have, and name it here.");
+const _macroChan = new MessageChannel();
 function macroYield() {
-  if (_macroChan) return new Promise((res) => { _macroChan.port1.onmessage = () => res(); _macroChan.port2.postMessage(0); });
-  return new Promise((res) => setTimeout(res, 0));
+  return new Promise((res) => { _macroChan.port1.onmessage = () => res(); _macroChan.port2.postMessage(0); });
 }
 /* ─── THE LEVEL-1 CENSUS ─────────────────────────────────────────────────────────────────────────────────
    THE ORDER THE HOST TOOK, WRITTEN WHERE IT WAS TAKEN. Level-2's census rides the result document because the

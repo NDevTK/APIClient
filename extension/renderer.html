@@ -412,6 +412,30 @@
            "(engine/host/solver/quantum.h): build the watchdog thread that raises the yield request from " +
            "outside the flow's instruction stream, instead of leaving the slice to be noticed at whichever " +
            "back-edge, call or fork the page happens to reach next");
+    /* NAMED RESIDUAL — WHAT THE ABSENT EDGE LEAVES IS TWO POPULATIONS AND THE `crossOriginIsolated` DCHECK READS AS ONE.
+       The `self.crossOriginIsolated !== true` DCHECK is right that this realm cannot have a watchdog thread, and it is
+       written as though that thread were the whole of the gap. It is not, and the split is decided by ONE question asked
+       of each case: does the flow perform a DISPATCH, which is where the request byte is read.
+       NOT COVERED (a): a stretch of bytecode with no loop back-edge and no call raises nothing, so the slice is not
+       evaluated until the next one. This population is BOUNDED rather than open-ended — the interpreter raises at every
+       back-edge and at every call opcode — so what can evade it is one compiled basic block of the page.
+       NOT COVERED (b): a C activation that declares no step boundary performs NO dispatch at all, so it answers no poll
+       however the request was raised. THE HOST THAT HAS THE ASYNCHRONOUS EDGE HAS THIS HOLE TOO, IDENTICALLY, and that is
+       the part that DCHECK cannot say: a per-thread CPU signal SETS the request byte and the byte is READ at a
+       dispatch, so a signal that fires inside a long C activation is answered when that activation returns and not
+       before. The transport this frame is denied would close (a) and would NOT close (b).
+       WHAT THE NEXT DIFF BUILDS: for (b), the continuation-holding conversion CLAUDE.md §C-stack already prescribes — the
+       builtin declares its steps and offers a point per step — which is host-independent and is therefore the diff that
+       pays on BOTH hosts, owed whether or not this realm ever becomes isolated. For (a), a raise whose period is a
+       property of the ENGINE rather than of the page's code shape; what it may NOT be is a slice denominated in steps or
+       in work, which §NO BOUNDS names as a cap — the budget stays the clock and only the frequency of consulting it would
+       move — and whoever builds it owes that distinction an answer AT `g_flow_work_retired`, the interpreter's own
+       per-dispatch counter, whose banner forbids anything deciding from it, rather than assuming the distinction carries.
+       HOW ITS ABSENCE WOULD SHOW: for (b), a step call whose wall duration exceeds the engine's own slice by more than a
+       margin, observed HERE, around the call this frame makes — this document is the caller, so it is the one place that
+       can time a whole activation without asking the engine anything. For (a), it shows as very nearly nothing, and that
+       is the observation rather than the lack of one: a realm in which (a) were the binding half would show step calls
+       overrunning on documents that enter no long C activation at all. */
   }
 
   /* THE WORKING SET, WHICH IS THIS FRAME'S TO STATE AND NOBODY ELSE'S. `HEAPU8.length` is the view over the
