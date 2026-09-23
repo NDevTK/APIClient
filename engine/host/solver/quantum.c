@@ -136,7 +136,13 @@ char *quantum_json(void)
 /* ── EMSCRIPTEN: no CPU clock, no asynchronous edge ────────────────────────────────────────────────────────
    Both are facts about the transport (quantum.h names the requirement that would change them), so what is
    built here is the honest thing this host CAN do: the slice is measured on the only clock it has, and the
-   claim that this clock is not a CPU clock is CHECKED rather than assumed. */
+   claim that this clock is not a CPU clock is CHECKED rather than assumed.
+   AND THE MISSING EDGE IS ONE OF TWO POPULATIONS THAT CAN HOLD THE THREAD PAST THE BUDGET, NOT THE WHOLE GAP,
+   which is stated where the fact lives (quantum.h) and repeated here only as a bound on what this heading
+   claims: the edge is what a straight-line, call-free, fork-free basic block evades, and a C ACTIVATION THAT
+   DECLARES NO STEP BOUNDARY evades the budget on BOTH hosts alike, because the request byte is answered at a
+   DISPATCH and such an activation performs none however the request was raised. A heading that names one
+   host's absence is otherwise read as the other host having none. */
 #if defined(__EMSCRIPTEN__)
 
 /* THE DAY THE TRANSPORT ARRIVES, THIS BRANCH IS THE WRONG ONE, AND A BUILD IS THE CHEAPEST PLACE TO SAY SO.
@@ -484,5 +490,7 @@ int quantum_expired(void)
 #else
 #error "solver/quantum.c: this host has no cooperative-quantum edge. §scheduler requires one (a lone engine \
 otherwise freezes in a non-returning step), so add the branch that measures this platform's CPU and raises \
-JS_RequestFlowYield from outside the flow's own instruction stream — never a silent fall-through to a clock."
+JS_RequestFlowYield from a source the PAGE'S OWN CODE SHAPE CANNOT WITHHOLD — outside the flow's own \
+instruction stream is one way to have that property and is not the definition of it (solver/quantum.h states \
+the property and what else has it) — never a silent fall-through to a clock."
 #endif

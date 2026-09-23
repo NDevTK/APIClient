@@ -12,6 +12,41 @@
  * So the edge is ASYNCHRONOUS BY CONSTRUCTION: something outside the flow's own instruction stream raises the
  * request, and the flow answers at its very next opcode. That is the whole of this component.
  *
+ * AND THAT SENTENCE NAMES A MECHANISM WHERE THE REQUIREMENT IS A PROPERTY, WHICH FORECLOSES EVERY OTHER
+ * MECHANISM THAT HAS THE PROPERTY. The defect the paragraph above diagnoses is a budget whose expiry is
+ * noticed only when the DEBTOR VOLUNTEERS, and the debtor is the PAGE'S OWN CODE SHAPE: a back-edge, a call
+ * and a fork are occasions the page supplies or withholds. So the property a raise source must have is
+ * UNEVADABLE BY THE PAGE'S OWN CODE SHAPE, and "outside the flow's own instruction stream" is ONE WAY TO HAVE
+ * IT rather than the definition of it — a raise whose period is a count of the interpreter's OWN DISPATCHES is
+ * inside the instruction stream and is equally unevadable, because a page cannot write bytecode that
+ * dispatches without dispatching. Stating the mechanism in the requirement's place is
+ * §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS arriving in a contract. What an asynchronous edge buys ON TOP of the
+ * property is real and is smaller than it reads: it bounds the RAISE in TIME where a dispatch-periodic source
+ * bounds it in DISPATCHES, and one dispatch can be arbitrarily long.
+ *
+ * AND NEITHER BOUNDS THE ANSWER, WHICH IS TWO POPULATIONS AND NOT ONE. The request byte is READ at a DISPATCH
+ * (quickjs.c's DISPATCH) and at a declared step boundary (do_step_step) and nowhere else, so what a raise
+ * source can be says nothing about what an ANSWER costs. Two populations can hold the thread past the budget
+ * and only the first is a fact about THIS host:
+ *   ONE COMPILED BASIC BLOCK WITH NO LOOP, NO CALL AND NO FORK — it supplies no occasion, so on a host whose
+ *     only raise sources are the interpreter's own the budget cannot expire inside it. An asynchronous edge
+ *     closes exactly this one; a dispatch-periodic raise would close it too.
+ *   A C ACTIVATION THAT DECLARES NO STEP BOUNDARY — it performs no dispatch, so it answers no poll HOWEVER the
+ *     request was raised. The native handler raises the byte and the byte is read at a dispatch that will not
+ *     happen until control returns to bytecode, so THE ASYNCHRONOUS EDGE DOES NOT CLOSE THIS ONE AND THE
+ *     NATIVE HOST HAS IT IDENTICALLY. quickjs.c's CALL_YIELD_REQUEST banner states the mechanism in passing —
+ *     "A callee with no bytecode body (a C builtin) executes no dispatch, so its request stands until control
+ *     returns to bytecode" — and argues it lossless because a long C builtin is a step machine and offers its
+ *     own points, which is the right argument and is a claim about EVERY long C builtin. What bounds this
+ *     population is therefore the step-machine conversion and never this file.
+ * NAMED HERE BECAUSE THE ONLY READER OF AN ABSENCE CLAIM IS SOMEBODY DECIDING WHETHER TO BUILD THE THING, and
+ * a host that says "NO asynchronous edge" beside one that says "thread-cpu (timer_create ...)" reads as one
+ * host with a gap and one without. It is stated in this header and NOT in quantum_measure()'s string, which
+ * answers what a run's numbers are DENOMINATED IN: a coverage fact in that field would be a second question
+ * in one answer, and that string already carries one.
+ * RETIREMENT: this record goes when a raise source cannot be added to this component without stating which of
+ * the two populations it closes.
+ *
  * WHAT IT IS MEASURED IN IS NOT A DETAIL. §Testing: "MEASURE THE THING THE INVARIANT IS ABOUT — CPU actually
  * consumed, or work actually performed, never elapsed time". The quantum is about THREAD-SHARING: how much of
  * the thread one flow may hold before the host gets a turn to pump its port, interleave another document's

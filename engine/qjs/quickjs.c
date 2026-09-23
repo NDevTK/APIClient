@@ -33429,10 +33429,44 @@ void JS_RequestFlowYield(void) { FLOW_YIELD_REQUEST(JS_PREEMPT_HOST); }
  *
  * IT IS A COUNTER AND IT IS NOT A BUDGET, and the distinction is the whole of why it is allowed to exist next
  * to a yield request whose own comment says "It is NOT a counter: nothing here counts opcodes and nothing
- * bounds a flow". That sentence is about the REQUEST, and it stays true: nothing below compares this number to
- * anything, nothing branches on it, and no value of it makes any flow run less far. It is READ by the host
- * that measures modelled time (JSFlowControlHooks.work) and by nobody else. The instant something here decides
- * from it, it is a step cap and it is banned.
+ * bounds a flow". That sentence is about the REQUEST, and it stays true. This number is READ by the host that
+ * measures modelled time (JSFlowControlHooks.work) and by the poll that banks it there, and by nobody else.
+ *
+ * AND WHAT IS BANNED IS A PROPERTY, NOT A GRAMMAR — THIS PARAGRAPH STATED A GRAMMAR AND THE CODE BENEATH IT
+ * ALREADY BROKE IT, TWICE, WHICH IS WHY THE OLD WORDING IS QUOTED HERE RATHER THAN DELETED. It read "nothing
+ * below compares this number to anything, nothing branches on it, and no value of it makes any flow run less
+ * far ... The instant something here decides from it, it is a step cap and it is banned", and of that only the
+ * run-less-far clause was ever true. The yield poll COMPARES this counter (`g_flow_work_retired != 0`) and
+ * branches on the comparison, deliberately, under a paragraph of its own explaining that a zero-unit advance
+ * is the ABSENCE of an advance rather than an advance of zero. And the VALUE is the modelled clock's
+ * increment, so a page spinning on `performance.now() - t0 < 8` exits BECAUSE of this number — which is as
+ * direct a way of changing what a flow does as there is. A rule refuted by both of the uses it was written
+ * over is not a strict rule, it is a rule aimed at the wrong axis, and the axis is the clause that survived:
+ * NO VALUE OF IT MAY MAKE ANY FLOW RUN LESS FAR.
+ *
+ * THE TEST IS MECHANICAL AND NEEDS NO RUN — DELETE THE TEST THE COUNTER APPEARS IN AND ASK WHETHER ANY FLOW
+ * THEN RUNS FURTHER. A step cap is exactly a test whose PRESENCE is what stops the flow, so deleting one lets
+ * the flow run on; deleting a GRANULARITY can only make the guarded question be asked MORE often, never less,
+ * so the flow runs the same distance or a shorter one. `if (g_flow_work_retired > N) <raise>` fails the test
+ * at once — with it gone nothing raises and the flow runs on — and that is the banned shape, banned by what it
+ * does rather than by the word "decides". The `!= 0` passes: delete it and the work hook is called with zero
+ * units and aborts, which is not a flow running further.
+ *
+ * SO THE COUNTER MAY DECIDE WHEN A QUESTION IS ASKED AND MAY NEVER BE ANY PART OF THE ANSWER. It may gate a
+ * CLOCK READ — §a-bound-is-not-a-granularity exactly, where the BUDGET STAYS THE CLOCK and the counter
+ * supplies only the occasion — provided the raise it gates is a CONJUNCTION whose other conjunct is the
+ * budget, so that the raises taken with the gate are a SUBSET of those taken without it. It may never be the
+ * sole reason for a raise, a park, a skip, a drop or a reorder, and it may never be compared with a constant
+ * that is not a period. Two things a builder owes beyond that test, neither of which the test catches: the
+ * period is a POLICY INPUT THE SCHEDULER OWNS (§a-bound-is-not-a-granularity — the unit is stated where
+ * ENGINE_QUANTUM_MS is, never as a constant hidden in this file, so two components cannot disagree about it
+ * silently), and the gate is a FLOOR on how often the budget is evaluated and never a ceiling, so the
+ * back-edge, call and fork raises STAY — this counter is zeroed at every switch-in and at every bank, so a
+ * flow switched out before the period elapses would otherwise have its budget evaluated at nothing at all.
+ * A reader who re-derives the old grammar meets this paragraph before acting on it, which is the whole reason
+ * it is here.
+ * RETIREMENT: this record goes when no use of this counter in this tree stands outside a conjunction with the
+ * budget, because the deletion test can then be asserted where the uses are instead of described here.
  *
  * COUNTED AT DISPATCH, WHICH IS WHAT MAKES A PARKED-AND-RESUMED RUN COUNT THE SAME TOTAL AS AN UNINTERRUPTED
  * ONE. The poll branches out of DISPATCH BEFORE `opcode = *pc++`, so the opcode a park suspends in front of is
@@ -45832,8 +45866,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                after the ask would leave that work standing in the counter across the park, where the next
                switch-in discards it as nobody's; handing it over from anywhere else would need a site per call
                shape, and the whole reason the poll is at DISPATCH is that a site per shape is a site that can
-               be forgotten. This is also the ONLY place the count is read, which is what keeps it a counter
-               rather than a budget: nothing here compares it, and no value of it changes what any flow does.
+               be forgotten. This is also the ONLY place the count is read. What keeps it a counter rather
+               than a budget is NOT that nothing here compares it — the `!= 0` below is a comparison and is a
+               branch, and the count it hands over is the page-visible clock's own increment — it is that
+               deleting that comparison makes no flow run further, which is the test the declaration states.
                BATCHING AT THE POLL RATHER THAN AT EVERY OPCODE COSTS NOTHING, and the reason is the clock's
                accumulate-exactly rule (core/timing/event_loop.h): the moment is a base plus an EXACT integer
                count divided once at the read, so it is a pure function of the TOTAL and not of how the total
