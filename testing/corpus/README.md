@@ -271,6 +271,17 @@ pre-skip counter that would make the removed number readable -- it answers 0, ag
 `g_eps_n` control in the same scope that answers 9, so the zero is an ABSENCE and not a
 malformed question. `learnedSurfaceScope` says this on the row itself.
 
+AND THAT GREP IS NOW A COUNT OF A SPELLING AND ITS ZERO IS STALE, which is kept rather than
+deleted because the derivation above is the one a reader re-runs. The engine DOES publish the
+pre-skip counter now -- `epMinted` beside `epAssets`, `epEmitted` and `epPreProgram`, on the
+frontier census -- and none of the three names that grep spells is the name that landed, so
+it still answers 0 and the control still answers, and the pair now says only that the author
+guessed three wrong names. The only reader of "no such counter exists" is somebody deciding
+whether to BUILD one, so a stale absence here argues for a second counter beside a working
+one. What is STILL true is the half this row is about: the engine's count does not reach THIS
+document, so no field of a census row can state the composition. Derive it with the name that
+exists: `git grep -n epAssets engine`.
+
 SO A LOW COUNT HAS THREE READINGS AND THE ROW SEPARATES TWO. The driving never derived
 those requests; this tool's own egress policy refused them (`egressAsked` /
 `egressDeclined`); or the engine learned them and the classifier CORRECTLY removed them.

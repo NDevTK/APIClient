@@ -2425,10 +2425,31 @@ char *result_cold_json(void) {
                  "\"stepUnits\":%s,\"programCursors\":%s,"
                  /* THE @H SURFACE'S OWN DENOMINATOR — endpoint.h states why its length is three states. A run
                     whose `epEmitted` is small with `epAssets` large learned little because the bundle's
-                    addresses were FILES; one whose `epAssets` is 0 with `epMinted` large classified nothing,
-                    which is a reply door that answered without naming a type and NOT a finding about the
-                    surface. Those are different diffs and until these rows existed the array's length was
-                    the only thing published and could not tell them apart. */
+                    addresses were FILES. Those are different diffs and until these rows existed the array's
+                    length was the only thing published and could not tell them apart.
+                    AND `epAssets` 0 UNDER A LARGE `epMinted` IS NOT ONE READING, WHICH THIS SENTENCE USED TO
+                    SAY IT WAS. It read `a reply door that answered without naming a type`, which is a
+                    MECHANISM asserted over a predicate that tests MEMBERSHIP in five media groups. This row
+                    counts the flag `endpoint_mark_asset` SET, so it is an OUTCOME census over a classifier
+                    with a legitimate DECLINING arm, and a 0 is at least three states taking different work:
+                    no reply reached the classifier; one reached it carrying an EMPTY `computedType`, which is
+                    the chokepoint's own refusal record and the only state the retired sentence described; or
+                    one reached it with a perfectly good type on which `is_asset` answered FALSE. The third is
+                    the design working and is what a real page most often produces. MEASURED WITH A CONTROL:
+                    a production host serves its `.woff2` under `application/octet-stream` with `nosniff`, so
+                    the trusted zone's decision returns that essence unchanged and none of the five predicates
+                    names it, while a `.css` on the same host returns `text/css` — four font addresses on the
+                    emitted surface, `epAssets` 0, and nothing marked and nothing wrong. A reader who widens
+                    the predicate to catch them is proposing the URL-suffix matching CLAUDE.md
+                    §RUN-DON'T-MATCH bans.
+                    NAMED RESIDUAL. NOT COVERED: the ASK — how many replies reached the classifier carrying a
+                    type that PARSED — so the first state cannot be told from the other two on this document,
+                    and `hostAsked`/`hostAnswered` bound it from above without being it. WHAT THE NEXT DIFF
+                    BUILDS: that count, raised in solver/reply_decode.c where the type parses, published here
+                    beside this one so the pair is ask-and-outcome rather than outcome alone. HOW ITS ABSENCE
+                    SHOWS: a reader meeting a 0 here and reporting a reply-path defect against a run whose
+                    classifier declined correctly.
+                    RETIREMENT: this record goes when that ask count is published beside `epAssets`. */
                  /* AND HOW MANY OF THE EMITTED ROWS WERE MINTED BEFORE THIS INSTANCE STARTED A PROGRAM —
                     the row the three above cannot compose, because they partition the surface by what the
                     REPLY was and this is about who composed the ADDRESS. `epEmitted - epPreProgram` is the

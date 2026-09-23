@@ -1073,9 +1073,12 @@ const row = {
      cannot state its own composition, because the fact that would split it (is this address an asset) is not
      in the record it reads". The REASON half is still exactly true and `learnedSurfaceScope` below now states
      it -- so what is uncovered is no longer the READING, which the row names, but the COUNT, which no field
-     of this document and no counter in the engine holds.
-     NOT COVERED: how many addresses the classifier REMOVED. NEXT DIFF: the record carrying the classifier's
-     own answer, so learned-addresses and classified-as-asset are two columns neither quotable as the other.
+     of this document holds. THE ENGINE HOLDS IT NOW and this clause used to deny that: `epAssets` beside
+     `epMinted` on the frontier census is the classified-as-asset count, so what is missing is no longer the
+     PRODUCER but the CROSSING, and the next diff is plumbing rather than a mechanism.
+     NOT COVERED: how many addresses the classifier REMOVED, IN THIS DOCUMENT. NEXT DIFF: `epAssets` carried
+     into the record, so learned-addresses and classified-as-asset are two columns neither quotable as the
+     other.
      HOW ITS ABSENCE SHOWS: a reader comparing two rows' endpoint counts as a measure of driving, on a pair
      whose servers labelled their media differently.
      RETIREMENT: it goes when this object publishes a classified-as-asset count, because the composition is
@@ -1089,9 +1092,10 @@ const row = {
      copies that array through untouched -- so an address the classifier removed never reaches `_astResults`,
      never reaches `sites`, and cannot be counted here however this file is written. Derive both halves rather
      than trust them: `git grep -n 'is_asset) continue' engine/host/solver/endpoint.c` is the drop, and
-     `git grep -nE 'assetSkipped|endpointsMinted|epsTotal' engine extension` is the pre-skip counter that would
-     make the removed number readable -- it answers nothing, and a control that DOES answer (`g_eps_n`) is what
-     says the zero is an absence rather than a malformed question.
+     `git grep -n epAssets engine` is the pre-skip counter that makes the removed number readable. THAT
+     SPELLING IS THE CORRECTION: this line used to name `assetSkipped|endpointsMinted|epsTotal` and read their
+     0 as an absence with a `g_eps_n` control, and the counter had since landed under a fourth name -- a count
+     of a SPELLING, whose zero argued for building a second counter beside a working one.
      SO A LOW COUNT HAS THREE READINGS AND THE PAIR BELOW SEPARATES TWO. The driving never derived those
      requests; this tool's own egress policy refused them; or the engine learned them and the classifier
      CORRECTLY removed them. The third takes NO WORK AT ALL -- it is the design doing its job, and CLAUDE.md
@@ -1117,9 +1121,9 @@ const row = {
      RETIREMENT: it goes when this object carries a classified-as-asset COUNT, because the composition is then
      a number this row states rather than a sentence about a number it cannot. */
   learnedSurfaceScope: learnedAddrs.length + ' address(es) that SURVIVED solver/endpoint.c\'s asset skip -- '
-    + 'the pre-skip population they are a fraction OF is held by no counter in the engine and by no field of '
-    + 'this row, so an address the classifier correctly REMOVED and an address the driving never LEARNED are '
-    + 'one silence here',
+    + 'the pre-skip population they are a fraction OF is counted by the ENGINE (epMinted/epAssets on the '
+    + 'frontier census) and reaches no field of this row, so an address the classifier correctly REMOVED and '
+    + 'an address the driving never LEARNED are one silence HERE and separable THERE',
   /* WHICH READING `siteEndpoints` AND `distinctEndpoints` ARE, WHICH THEY CANNOT SAY ALONE AND WHICH IS THE
      WHOLE POINT OF THEM. THIS SENTENCE NAMED THEM BY POSITION ("the two rows above") AND A FIELD WAS LATER
      INSERTED BETWEEN, which is the reference CLAUDE.md §AND-THE-FORM-THAT-SURVIVES-EVERY-SWEEP describes: it
