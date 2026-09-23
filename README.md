@@ -2,7 +2,7 @@
 
 A Chrome extension (MV3) that reverse-engineers a site's API surface and finds client-side XSS by **running the page's own JavaScript bundle for real** — under forced, multi-path exploration on a forked QuickJS-ng engine with a real Lexbor spec DOM. No debugger, no proxy, no `webRequest`.
 
-The one sentence: **a browser with a BFS time-travel solver.** The browser half (Lexbor DOM + patched quickjs-ng, in C) is spec-faithful and boring by design; the solver half — forced multi-path concolic execution over copy-on-write snapshots — is the novel part, and it does one thing no scanner does: compute the **logged-in API surface while logged out**, and construct **replay-verified XSS PoCs**, from code that never ran.
+The one sentence: **a browser with a BFS time-travel solver.** The browser half (Lexbor DOM + patched quickjs-ng, in C) is spec-faithful and boring by design; the solver half — forced multi-path concolic execution over copy-on-write snapshots — is the novel part, and it exists to do one thing no scanner does: compute the **logged-in API surface while logged out**, and construct **replay-verified XSS PoCs**, from code that never ran. Whether that is happening on a given page is a **subtraction, not an opinion**: the addresses a run emitted minus the ones already named in the document's own markup. A parser reaches the second set; only execution reaches the first. The difference is what this tool is worth on that page, and it is the number to ask for — a total is not, because a total is mostly the markup counted back.
 
 ## How It Works
 
