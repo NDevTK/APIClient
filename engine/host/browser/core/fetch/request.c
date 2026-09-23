@@ -1352,6 +1352,13 @@ void request_free(void)
     if (!g_request_rt)
         return;
     /* the prototypes are the REALMS' — released with their contexts, so this component owns no reference and
-       there is nothing to free here. Free, assert, then undo. */
+       there is nothing to free here. Free, assert, then undo.
+       AND §5.3's MIXIN GOES BACK UNDER THIS ROW, which is why this call stands here and not in response.c:
+       core/fetch/body.c is on neither of core/platform.c's columns, so its own state is declared under the
+       row that RELEASES it, and of the two interfaces that include Body this is the one whose release runs
+       LAST — the release column runs in reverse and `request` stands above `response` on it. The undo below
+       resets every slot carrying this row's name, and body.c's slots are among them, so body_agent_free is
+       the claim that the cascade reached that file; without it the undo REFUSES them by name. */
+    body_agent_free();
     agent_state_undo("request");
 }

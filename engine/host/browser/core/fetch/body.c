@@ -19,6 +19,7 @@
 #include "quickjs-step.h"
 #include "solver/concolic.h"
 #include "solver/cow.h"
+#include "core/agent_state.h"
 #include "core/byte_reader.h"
 #include "core/encoding/text_stream.h"
 #include "core/fetch/body.h"
@@ -1113,10 +1114,57 @@ int body_declare(JSContext *ctx, JSClassID class_id, BodyState *(*of)(JSValueCon
         /* §5.3's `textStream()` is declared on the same include and for the same reason: one algorithm, whose
            receiver decides which interface it is running for. */
         g_body_text_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_body_text_decl, 0);
+        /* THE MIXIN'S OWN AGENT STATE, DECLARED ON THE FIRST INCLUDE — core/agent_state.h. The ROW IS
+           `request` AND NOT THIS FILE'S NAME, because a row is a DECLARE and a RELEASE core/platform.c
+           itself calls and this file is on neither column: it is reached only through the two interfaces
+           that include it. Of those two, `request` is the row whose release GIVES THIS BACK, which is a
+           claim body_agent_free below makes true and which the trace settles both ways — core/platform.c's
+           list runs the declare column forward and the release column in REVERSE, `request` stands above
+           `response` on it, so `request` is the first to declare (which is why the mint above is in its
+           init, as handle 0) and the LAST to release (which is why the table may be given back there
+           without response_free reading a cleared one).
+           WHAT A CARRIED COUNTER COSTS, WHICH IS WHY THIS IS NOT BOOKKEEPING. g_body_iface_n is the handle
+           the next include is given. Left set, a second agent's Request comes back as handle 2, so the
+           `handle == 0` arm above never runs again: g_body_text_stepid keeps an index into a member pool
+           idl_args_free has already put back at 0, and body_install's own DCHECK on it PASSES, installing
+           whatever member the next agent's pool has grown into that slot under `textStream`. The third
+           agent in one process reaches 4 and the table-full DCHECK above fires, naming a platform that has
+           two including interfaces in it. */
+        agent_state_flag("request", &g_body_iface_n,
+                         "Fetch §5.3 Body mixin's count of including interfaces — the handle the next "
+                         "include is given, and what decides whether the one-time declarations below are "
+                         "made again");
+        agent_state_id("request", &g_body_text_stepid,
+                       "Fetch §5.3 Body mixin's `textStream()` machine, declared once for both including "
+                       "interfaces");
     } else {
         f->reader_handle = g_body_iface[0].reader_handle;
     }
     return handle;
+}
+
+/* §5.3's AGENT-LIFETIME STATE, GIVEN BACK — CALLED FROM THE RELEASE OF THE ROW THE DECLARATIONS ABOVE NAME.
+ *
+ * IT SAYS THE CASCADE REACHED THIS FILE AND RESETS NOTHING, which is core/agent_state.h's split: the reset is
+ * agent_state_undo at the row's LAST line, in request.c, and this entry is the precondition that undo may not
+ * put a slot back without — because a row is declared from several files and one undo resets every slot
+ * carrying the row's name, so an owner that dropped this call would have the mixin's handles put back by a
+ * release that never reached it.
+ *
+ * THE TABLE IS CLEARED HERE AND NOT BY THE UNDO, because the undo resets HANDLES and never what a handle
+ * names: g_body_iface is an ARRAY OF RECORDS and has no kind in that registry at all, so the count above is
+ * the only part of this pair the registry can hold. Clearing it is what stops a record naming a dead
+ * runtime's class id and a dead agent's byte-reader handle from outliving the count that hides it.
+ * NOTHING READS EITHER AFTER THIS: §5.4's and §5.5's finalizers and gc_marks run after core/platform.c's
+ * release column and reach body_state_free and body_state_mark, which take the BodyState directly and
+ * consult no static of this file's. */
+void body_agent_free(void)
+{
+    DCHECK(g_body_iface_n > 0,
+           "Fetch §5.3's Body mixin was released in an agent in which no interface included it — this runs "
+           "from the release of the row its declarations name, and that release only runs if its init did");
+    memset(g_body_iface, 0, sizeof g_body_iface);
+    agent_state_reached("request");
 }
 
 void body_install(JSContext *ctx, JSValueConst proto, int handle)

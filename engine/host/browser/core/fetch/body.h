@@ -174,4 +174,8 @@ void body_install(JSContext *ctx, JSValueConst proto, int handle);
    and its finalizer are where this belongs. */
 void body_state_mark(JSRuntime *rt, BodyState *b, JS_MarkFunc *mark_func);
 
+/* GIVE BACK THE MIXIN'S OWN AGENT-LIFETIME STATE. This file is on neither of core/platform.c's columns, so it
+   is released by the row its declarations name — see body.c for which and why. */
+void body_agent_free(void);
+
 #endif

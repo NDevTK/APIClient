@@ -428,6 +428,13 @@ void broadcast_channel_init(JSContext *ctx)
     agent_state_value("broadcast_channel", &g_deliver_fn, "§9.5's delivery-task callee, one per agent");
     agent_state_id("broadcast_channel", &g_ctor_stepid, "§9.5's constructor machine");
     agent_state_id("broadcast_channel", &g_deliver_stepid, "§9.5's delivery task machine");
+    /* AND §9.5's TWO METHOD POOL ENTRIES, WHICH ARE AGENT STATE FOR THE SAME REASON THE MACHINES ABOVE ARE
+       AND WERE DECLARED TO NOBODY. An id from idl_method_id is an INDEX INTO core/idl_args.c's member pool,
+       and idl_args_free puts that pool's count back at 0 — so a carried index names a member of a pool that
+       no longer exists, and once the next agent has declared far enough it names a DIFFERENT member, which
+       broadcast_channel_install_realm would then install under `postMessage`. */
+    agent_state_id("broadcast_channel", &g_id_post, "§9.5's `postMessage(any message)` pool entry");
+    agent_state_id("broadcast_channel", &g_id_close, "§9.5's `close()` pool entry");
     realm_declare_intrinsic(broadcast_channel_install_realm);
 }
 
@@ -484,10 +491,14 @@ void broadcast_channel_free(JSRuntime *rt)
     /* NOT `if (!g_bc_rt) return;` — the declare pass of core/platform.c's one list is unconditional. */
     DCHECK(g_bc_rt != NULL, "§9.5's bus was released in an agent that never declared it");
     DCHECK(rt == g_bc_rt, "§9.5's bus was released against a runtime that is not the one it was declared in");
+    /* THE PROTOTYPES ARE THE REALMS' — released with their contexts, so these two values are the only
+       references this component owns. Free, assert, then undo: the reset is agent_state_undo and nothing
+       else, because the four hand-written lines that stood below were this component's declaration list
+       maintained a SECOND time, sixty lines from the first. That is the exact shape core/agent_state.h
+       records — a diff adding a declaration and touching only the `_init` leaves the release short — and it
+       was already short: g_id_post and g_id_close were set by the init above and put back by nothing.
+       chan_finalizer reaches its record with JS_GetAnyOpaque and so reads no slot this undoes. */
     JS_FreeValueRT(rt, g_registry);
     JS_FreeValueRT(rt, g_deliver_fn);
-    g_registry = g_deliver_fn = JS_UNDEFINED;   /* the prototypes are the REALMS' — released with their contexts */
-    g_bc_rt = NULL;
-    g_chan_class = 0;   /* an id in a runtime going away with it — chan_finalizer reads the record without it */
-    g_ctor_stepid = g_deliver_stepid = -1;
+    agent_state_undo("broadcast_channel");
 }
