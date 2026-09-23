@@ -23,6 +23,10 @@
 #       `rm -rf "$DIR"` before the clone asked nothing and carried nothing out, so a lane running two short
 #       commands through the prescribed form re-cloned between them and lost the build the first one made.
 #       Measured: artifact and object directory both gone on the second invocation, same lane, same revision.
+#   (4) ITS OWNER'S OWN EDIT DID NOT SURVIVE, which is (3) outliving the fix to (3): the reuse test below asked
+#       only whether the directory was a FAITHFUL COPY of the revision, and answered a modified one by
+#       replacing it — so the snapshot survived a lane's two commands and not the EDIT BETWEEN them, which is
+#       the one thing CLAUDE.md's prescribed instrument A/B puts there. See the reuse block's own paragraphs.
 # Two lanes independently invented workarounds — a private `FROZEN_SNAPSHOT_ROOT`, and folding every check
 # into one long command — which is the sign that the CONTRACT was missing rather than that they were careless.
 #
@@ -169,6 +173,54 @@ reclaim_snapshot() {
 # `extension/lib/qjs` is untracked and `engine/.work/obj` is ignored, both verified — so a fully built snapshot
 # reads as clean and reuse is available precisely when it is worth the most.
 #
+# AND `no tracked file modified` WAS ONE BIT ANSWERING TWO QUESTIONS, WHICH DESTROYED THE ONE THING IN A
+# SNAPSHOT THAT IS NOT RE-DERIVABLE. The paragraph above is right about the question it asks — IS THIS STILL A
+# FAITHFUL COPY OF $SHA — and a modified tree is not, so it may not be reused AS one. It is silent about the
+# second question the same bit was deciding — HAS ITS OWNER DELIBERATELY MODIFIED IT — so the bit kept what
+# the stricter question needed and the looser one was refused with nothing to say it was ever asked, and the
+# answer to "somebody edited this" was `rm -rf`.
+#
+# THAT IS THIS FILE'S OWN RECLAMATION ARGUMENT VIOLATED WORD FOR WORD. A snapshot is sheddable because it is
+# RE-DERIVABLE — a clone plus a checkout at a named SHA — and the two things that are not are answered first
+# and separately: the liveness gate keeps a run in progress, `preserve_evidence` carries a run's evidence out.
+# An EDIT is a third, no SHA names it, and it was the only one nothing asked about.
+#
+# AND IT DEFEATED THE PROCEDURE CLAUDE.md SENDS EVERY LANE HERE FOR. §AND-THAT-PRESCRIPTION-MANUFACTURES-A-
+# HAZARD-IT-DOES-NOT-NAME concludes that an instrument A/B must run INSIDE a snapshot — only there does the
+# tool sit in place relative to its own corpus while being unreachable from the shared tree — so editing the
+# instrument here IS the prescribed procedure and is exactly what made this tree modified. MEASURED at
+# 725d1460 on a private root: freeze, append a marker to `engine/citegen.mjs` in the snapshot, freeze again
+# through this script's own prescribed command form — the marker is gone, the command runs against the
+# pristine tree, and the AFTER therefore reads identically to the BEFORE, whose only available reading is "my
+# change is inert". The `replacing` line was printed, so this was never silent; what it did not say is that
+# what went was not re-derivable, and the `revision` line below went on naming $SHA with nothing beside it.
+#
+# SO ONE FACT, THREE ANSWERS, AND THE THIRD IS THE ONE gate_revision ALREADY SEPARATES: ASKED-AND-CLEAN,
+# ASKED-AND-MODIFIED, and NOT ASKED. A `git status` that FAILS is the half-clone shape and is not a claim that
+# anything was edited, so it replaces; folding it into "modified" — which the `|| echo dirty` here used to do
+# — would now KEEP a directory whose git cannot answer, which is the destroying direction of the same
+# conflation. A modified tree at this SHA is REUSED AND KEPT, and the line a reader quotes says so: `revision`
+# names the modification count rather than $SHA alone, because a qualification on a NEIGHBOURING line is the
+# one a relay drops.
+#
+# PRINTED RATHER THAN REFUSED, WHICH IS THIS FILE'S OWN ANSWER ONE BLOCK DOWN — the gitlink EDITION DISAGREES
+# case prints and does not refuse, because "the honest report of a corpus measured at a different edition is
+# the edition, not a failure to measure", and that sentence holds here unchanged. A flat refusal would also
+# put the caller straight back on the `cd`-into-the-snapshot workaround this file's head paragraph exists to
+# remove the REASON for, which is the one path that degrades into a measurement of the working tree.
+# WHAT STILL REFUSES IS THE REQUEST THAT CANNOT BE SERVED AT ALL: modified AND not at $SHA, or modified and
+# the fork unpopulated. Keeping the edit and handing back a snapshot OF $SHA are then incompatible, so it
+# refuses instead of choosing one silently, and names both exits.
+# AND AN OBEDIENT CALLER HAS SOMETHING TO CALL, since a hazard named with no exit is a bug report:
+# FROZEN_SNAPSHOT_REPLACE_MODIFIED=1 asks for the replacement deliberately — and it goes through the same
+# gated, evidence-preserving, logged delete every other snapshot gets, which is also why the bare `rm -rf`
+# that stood at this site is gone. That bare delete was the second of the two delete implementations this
+# file's own paragraph above complains about; there is one now, so the questions cannot drift apart again.
+#
+# RETIREMENT: this record goes when this script cannot destroy modified tracked content at all — when an edit
+# is CARRIED OUT the way `preserve_evidence` carries a log out — because the question is then closed by
+# construction rather than by an opt-in somebody has to remember not to pass.
+#
 # AND REUSING THE OBJECT DIRECTORY DOES NOT BREAK THE RULE BELOW THAT MAKES IT PRIVATE AND EMPTY, because that
 # rule's argument is about objects compiled from OTHER REVISIONS leaking between snapshots. These are this
 # snapshot's own objects, compiled from these sources, at this SHA, shared with nobody. Wiping them here would
@@ -187,6 +239,8 @@ reclaim_snapshot() {
 # --porcelain` reports as untracked, where the same command in a freshly cloned snapshot of the same SHA
 # cannot see it.
 REUSE=""
+MODIFIED_KEPT=""
+MODN=0
 if [ -e "$DIR" ]; then
   if snapshot_is_live "$DIR"; then
     echo "REFUSING: $DIR is open or cwd'd by a live process — a second freeze into a path a first is still" >&2
@@ -194,15 +248,36 @@ if [ -e "$DIR" ]; then
     exit 1
   fi
   HEAD_THERE=$(git -C "$DIR" rev-parse HEAD 2>/dev/null || echo none)
-  DIRTY=$(git -C "$DIR" status --porcelain --untracked-files=no 2>/dev/null || echo dirty)
   POP=$(ls -A "$DIR/engine/qjs" 2>/dev/null | wc -l)
-  if [ "$HEAD_THERE" = "$SHA" ] && [ -z "$DIRTY" ] && [ "$POP" -ge 50 ]; then
+  # THE ASK IS SEPARATED FROM ITS ANSWER. `|| echo dirty` folded a git that could not be asked into "modified",
+  # which was harmless while both replaced and destroys in the other direction now that "modified" is KEPT.
+  if MODIFIED=$(git -C "$DIR" status --porcelain --untracked-files=no 2>/dev/null); then ASKED=yes; else ASKED=""; MODIFIED=""; fi
+  MODN=$(printf '%s\n' "$MODIFIED" | grep -c . || true)
+  USABLE=""
+  if [ "$HEAD_THERE" = "$SHA" ] && [ "$POP" -ge 50 ]; then USABLE=yes; fi
+  if [ -z "$ASKED" ]; then
+    reclaim_snapshot "$DIR" "replaced by this freeze — its own git could not be asked whether anything is modified, which is the half-clone shape and is not a claim that anybody edited it"
+  elif [ "$MODN" -eq 0 ] && [ -n "$USABLE" ]; then
     REUSE=yes
     echo "reusing    $DIR — already at $SHA, no tracked file modified, $POP entries in engine/qjs"
+  elif [ "$MODN" -eq 0 ]; then
+    reclaim_snapshot "$DIR" "replaced by this freeze — HEAD $HEAD_THERE, engine/qjs $POP entries, tracked tree clean so nothing standing here was anybody's edit"
+  elif [ -n "${FROZEN_SNAPSHOT_REPLACE_MODIFIED:-}" ]; then
+    reclaim_snapshot "$DIR" "replaced by this freeze — $MODN modified tracked file(s) discarded ON REQUEST (FROZEN_SNAPSHOT_REPLACE_MODIFIED)"
+  elif [ -n "$USABLE" ]; then
+    REUSE=yes
+    MODIFIED_KEPT="$MODIFIED"
+    echo "reusing    $DIR — at $SHA, with $MODN MODIFIED TRACKED FILE(S) KEPT: an edit is not re-derivable from"
+    echo "           a SHA, so it is not this script's to discard. THIS TREE IS NOT $SHA — see 'revision' below."
   else
-    echo "replacing  $DIR — HEAD $HEAD_THERE, $([ -n "$DIRTY" ] && echo "tracked files modified" || echo "tracked tree clean"), engine/qjs $POP entries"
-    preserve_evidence "$DIR"
-    rm -rf "$DIR"
+    echo "REFUSING: $DIR holds $MODN modified tracked file(s) AND is not a usable snapshot of $SHA (HEAD" >&2
+    echo "  $HEAD_THERE, engine/qjs $POP entries), so keeping the edit and handing back $SHA are incompatible." >&2
+    echo "  An edit is not re-derivable from a SHA, so this script will not choose between them for you:" >&2
+    echo "    - use another lane name, which leaves this directory alone; or" >&2
+    echo "    - copy out of $DIR what you want to keep; or" >&2
+    echo "    - FROZEN_SNAPSHOT_REPLACE_MODIFIED=1 to discard it deliberately (evidence is carried out first)." >&2
+    printf '%s\n' "$MODIFIED" | sed 's/^/  /' >&2
+    exit 1
   fi
 fi
 
@@ -386,7 +461,18 @@ fi
 echo "evidence   $ROOT/EVIDENCE-*.log  (per-revision logs kept when a snapshot is reclaimed)"
 echo "reclaimed  $ROOT/RECLAIMED.log   (why a snapshot that is gone went, and to whose freeze)"
 echo "snapshot   $DIR"
-echo "revision   $SHA"
+# THE MODIFICATION GOES ON THE `revision` LINE ITSELF, NOT BESIDE IT. This is the line a reader quotes a
+# number against, and a qualification on a neighbouring line is the one a relay drops — so a reused snapshot
+# a lane has edited cannot be quoted as though it were the revision. The listing below it is the evidence;
+# the count on the line above is the summary, and both are printed because a count that disagrees with its
+# own list is a thing a reader can only catch when they have both.
+if [ -n "$MODIFIED_KEPT" ]; then
+  echo "revision   $SHA + $MODN MODIFIED TRACKED FILE(S) — THIS TREE IS NOT THAT REVISION and no number taken"
+  echo "           from it may be quoted against it. What differs from $SHA:"
+  printf '%s\n' "$MODIFIED_KEPT" | sed 's/^/             /'
+else
+  echo "revision   $SHA"
+fi
 # HOW FAR THIS REVISION IS FROM THE BRANCH, PRINTED AT BOTH ENDS BECAUSE ONLY THE SECOND IS THE NUMBER A
 # READER OF THE VERDICT NEEDS. The revision above is chosen when a caller LAUNCHES, and a full build is tens
 # of minutes, so a gate's verdict is stale in proportion to HOW LONG THE GATE TOOK -- the more thorough the
