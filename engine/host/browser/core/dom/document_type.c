@@ -31,24 +31,65 @@
 static JSClassID g_doctype_class;
 static int       g_ready;
 
+/* §4.6's THREE ATTRIBUTE NAMES, IN MAGIC ORDER, stated ONCE. The install below indexes this and so does the
+   receiver test's message, so the magic a getter is minted with and the identifier the property is keyed by
+   cannot drift — which they could while the install spelled each name and the body switched on a bare 0/1/2. */
+static const char *const DOCTYPE_MEMBERS[] = { "name", "publicId", "systemId" };
+
+/* WEB IDL §3.7.6 "Attributes"' RECEIVER TEST, A THROW AND NEVER AN ASSERT — §3.7.6's create an attribute getter
+   says what a foreign receiver gets, in two steps: Web IDL §3.7.6 "Attributes": "If jsValue does not implement
+   target, then:", and its second arm, Web IDL §3.7.6 "Attributes": "Otherwise, throw a TypeError."
+
+   THE THREE GETTERS BELOW CONVERGE ON NOTHING THAT COULD ASK THAT FOR THEM. They are minted by
+   idl_install_accessor as plain JS_CFUNC_getter_magic functions with no pool entry, so core/idl_args.c's
+   idl_implementation_check — which is where every member that states core/idl_args' idl_this_iface has §3.7
+   Interfaces' implementation check performed for it — never runs, and the receiver arrives exactly as the page
+   wrote it. core/dom/range.c's range_here states the same thing of the one §5.5 member in that position.
+
+   IT ASSERTED ON THAT RECEIVER, WHICH IS A PAGE-HELD SWITCH AND NOT A CHECK. `DocumentType.prototype.name` is
+   one expression, and DocumentType.prototype is an ordinary object of no node class — so node_of answered NULL,
+   the assert fired in dev, and in release, where a DCHECK is compiled out, `lxb_dom_document_type_name` read
+   `doc_type->node.owner_document->attrs` through that NULL. A forcing multi-path solver reaches members with
+   unusual receivers constantly, which is what makes this a live cause of runs ending rather than a conformance
+   detail.
+
+   IT ROUTES TO THIS FILE'S OWN document_type_is RATHER THAN RESTATING THE TEST. That predicate is already the
+   IdlThisIs-shaped answer core/dom/dom_implementation.c narrows an ARGUMENT position with
+   (`idl_iface_narrow(document_type_is)`), so the receiver question and the §3.2.15 argument question are ONE
+   answer and cannot come apart. The DCHECK that survives stands on what the predicate just read — engine
+   state — and never on what the page passed. */
+static lxb_dom_document_type_t *doctype_receiver(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_node_t *n;
+
+    DCHECK(magic >= 0 && magic < (int)(sizeof DOCTYPE_MEMBERS / sizeof DOCTYPE_MEMBERS[0]),
+           "a DocumentType getter was declared with a magic this table does not name");
+    if (!document_type_is(this_val)) {
+        JS_ThrowTypeError(ctx, "DocumentType.%s was reached on something that is not a DocumentType",
+                          DOCTYPE_MEMBERS[magic]);
+        return NULL;
+    }
+    n = node_of(this_val);
+    DCHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE,
+           "document_type_is admitted a receiver that node_of then answered NULL for — the predicate IS that "
+           "read of the node class plus the type test, so the two answers cannot disagree");
+    return lxb_dom_interface_document_type(n);
+}
+
 /* §4.6's three strings. Lexbor holds the name as an interned attribute id and the two ids as plain strings, and
    its own accessors already answer "" for an unset one — which is what §4.6 says, since a doctype created with
    no public id has the EMPTY STRING and not null.
-   magic 0 = name, 1 = publicId, 2 = systemId. */
+   magic 0 = name, 1 = publicId, 2 = systemId — DOCTYPE_MEMBERS is that order. */
 static JSValue js_doctype_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    lxb_dom_node_t *n = node_of(this_val);
-    lxb_dom_document_type_t *dt;
+    lxb_dom_document_type_t *dt = doctype_receiver(ctx, this_val, magic);
     const lxb_char_t *s;
     size_t len = 0;
 
-    DCHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE,
-           "a DocumentType member ran on something that is not a doctype");
-    dt = lxb_dom_interface_document_type(n);
+    if (dt == NULL) return JS_EXCEPTION;   /* §3.7.6's TypeError is live */
     s = magic == 0 ? lxb_dom_document_type_name(dt, &len)
       : magic == 1 ? lxb_dom_document_type_public_id(dt, &len)
                    : lxb_dom_document_type_system_id(dt, &len);
-    DCHECK(magic >= 0 && magic <= 2, "a DocumentType getter was declared with a magic this table does not name");
     return s ? JS_NewStringLen(ctx, (const char *)s, len) : JS_NewString(ctx, "");
 }
 
@@ -88,9 +129,10 @@ void document_type_install_proto(JSContext *ctx)
     JS_FreeValue(ctx, base);
     CHECK(!JS_IsException(proto), "DocumentType.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "DocumentType");
-    idl_install_accessor(ctx, proto, "name",     js_doctype_get, 0, -1);
-    idl_install_accessor(ctx, proto, "publicId", js_doctype_get, 1, -1);
-    idl_install_accessor(ctx, proto, "systemId", js_doctype_get, 2, -1);
+    /* KEYED BY THE SAME TABLE THE GETTER'S RECEIVER TEST INDEXES, so a magic and its identifier are one fact. */
+    idl_install_accessor(ctx, proto, DOCTYPE_MEMBERS[0], js_doctype_get, 0, -1);
+    idl_install_accessor(ctx, proto, DOCTYPE_MEMBERS[1], js_doctype_get, 1, -1);
+    idl_install_accessor(ctx, proto, DOCTYPE_MEMBERS[2], js_doctype_get, 2, -1);
     /* §4.6: `DocumentType includes ChildNode` — before/after/replaceWith/remove, over this receiver. */
     node_install_child_mixin(ctx, proto);
     JS_SetClassProto(ctx, g_doctype_class, proto);

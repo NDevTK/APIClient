@@ -1977,6 +1977,32 @@ static const char *HTML =
     "try { document.body.moveBefore(mbDt, null); mbThrew += ':none'; } catch (e) { mbThrew += ':' + e.name; }"
     "fetch('/api/movebeforethrow?v=' + encodeURIComponent(mbThrew)"
     " + '&doctype=' + (mbDt ? 'has' : 'null'));"
+    /* DOM §4.6's THREE ATTRIBUTES ASKED OF A RECEIVER THAT IS NOT A DocumentType — Web IDL §3.7.6
+       "Attributes"' create an attribute getter, whose foreign-receiver arm is "Otherwise, throw a TypeError."
+       The three getters are minted with no pool entry, so core/idl_args.c's idl_implementation_check never runs
+       for them and the receiver reaches the body exactly as written here; core/dom/document_type.c is where
+       that is answered and why.
+       THE THREE RECEIVERS ARE THREE DIFFERENT REFUSALS AND NOT ONE REPEATED. The interface PROTOTYPE is an
+       ordinary object carrying no node class at all and is the one a page reaches by writing
+       `DocumentType.prototype.name`; a bare object is the `.call({})` a conformance corpus writes; and
+       `document.body` IS a node wrapper of the right class whose node TYPE is wrong, which is the only one of
+       the three a class comparison alone would admit.
+       IT LIVES IN THIS PROGRAM RATHER THAN IN ONE OF ITS OWN BECAUSE REACHABILITY HAS TO BE WITNESSED: `mbDt`
+       is already in hand above and `/api/movebeforethrow` is this program's own proof that it ran, so a silent
+       `/api/doctypebrand` is the REQUEST being absent and never a program the cursor never reached.
+       `r` AND `ok` ARE LITERALS, which is the rule a witness in this engine obeys: a payload composed out of a
+       value the solver can make unknown is a request that never goes out, and its absence then reads exactly
+       like the arm not running. `v` carries the names for diagnosis and decides nothing.
+       THE POSITIVE HALF IS ON THE SAME LINE because a getter that threw for EVERYTHING would satisfy all three
+       rows above and answer no member at all. */
+    "var dtB = '';"
+    "var dtG = Object.getOwnPropertyDescriptor(DocumentType.prototype, 'name').get;"
+    "try { dtG.call(DocumentType.prototype); } catch (e) { dtB += e.name; }"
+    "try { dtG.call({}); } catch (e) { dtB += ':' + e.name; }"
+    "try { dtG.call(document.body); } catch (e) { dtB += ':' + e.name; }"
+    "fetch('/api/doctypebrand?v=' + encodeURIComponent(dtB)"
+    " + '&r=' + (dtB === 'TypeError:TypeError:TypeError' ? 'threw3' : 'not3')"
+    " + '&ok=' + (mbDt && mbDt.name === 'html' ? 'named' : 'wrong'));"
     /* THE STATE-PRESERVING HALF. The element is appended (one `c`), then moved between two connected parents
        (one `m` and nothing else). A move written as remove-then-insert reads 'cdc' here and the tree looks
        identical either way, which is the whole reason this is the assertion. */
