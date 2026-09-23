@@ -207,10 +207,40 @@ const PROBE = `(() => ({
      WHAT IT DOES NOT ARM IS THE BARE-TRUTHINESS GATE, which is a fifth shape and files under none of these
      four keys: solver/decide.c carries a named residual saying so, and \`if (c.admin)\` is still the one
      narrowing this surface cannot look up. That is why the data-channel reading above is kept rather than
-     deleted — it is the measured shape of exactly that gap. */
+     deleted — it is the measured shape of exactly that gap.
+     AND THE OTHER FACT A SHAPE STATES HAS NO COLUMN HERE AT ALL, WHICH IS THIS BLOCK MEASURING ONE HALF OF
+     THE RULE IT QUOTES. The four columns above are the DOMAIN; the VALUE pool is what the product's headline
+     is made of — an endpoint drop-down carrying, per parameter, a key and MULTIPLE example values — and
+     nothing in this census counts it. MEASURED over this file case-insensitively, against a control of
+     \`astHoleParams\` 13: \`_astValidValues\` 0, \`_astForcedValues\` 0, \`valueCount\` 0. So "how many
+     parameters end with no value, one value, or a set to choose from" has never been measurable from the
+     corpus, and the question was answerable only by inference — which is the state CLAUDE.md's opening says
+     to replace with a derivation the reader runs.
+     IT IS A PARTITION AND NOT A COUNT, for the reason that file gives a bare count over a population nobody
+     partitioned: \`valNone + valOne + valMany === params\` holds by construction, so a total that moved
+     without one of its parts moving is a finding about this walk. The three are over the OFFERABLE pool
+     alone because that pool is what lib/learn.js promotes to \`enum\` at two or more (\`valid.length >= 2\`),
+     which is the \`<select>\` lib/popup-form.js renders — so \`valMany\` IS the drop-down population and the
+     other two are what it is drawn from.
+     \`valManyForced\` IS THE SAME COUNT OVER THE OTHER POOL AND IS DELIBERATELY NOT SUMMED WITH THEM. A value
+     every sighting of which stood on a forced arm is a real observation and a request no client makes, so
+     lib/endpoint-record.js's \`provenanceOffersExample\` keeps it out of the pool \`enum\` is promoted from
+     and lib/popup-form.js renders it on its own row — never prefilled, never in the datalist. Adding the two
+     would state of the drop-down a membership the app's own code never computed, which is the merge
+     CLAUDE.md forbids by name. The PAIR is the reading: a run whose \`valMany\` is 0 while \`valManyForced\`
+     is not has learned several values per key and has learned none it may offer.
+     IT DOES NOT GATE ON \`_astInferred\`, AND THAT IS THE ONE THING A READER WOULD CHANGE FIRST. The columns
+     above do, correctly — they are about the engine's own params. The value pool has a SECOND producer:
+     lib/learn.js's templated-path reconcile dissolves a CONCRETE learned address into a matching template
+     and merges its segment as a path-param example, and it mints \`m.parameters[hole]\` with no
+     \`_astInferred\` on it. That producer is the one whose grade can be \`observed\` or \`derived\`, so it is
+     the one that can reach \`enum\` at all — gating these columns on \`_astInferred\` would count only the
+     population that structurally cannot become a drop-down.
+ */
   domains: (() => {
     let params = 0, astParams = 0, astPathParams = 0, astHoleParams = 0, astUnstatedParams = 0,
-        withExcl = 0, withBnd = 0, withPred = 0, withLeq = 0, reached = false;
+        withExcl = 0, withBnd = 0, withPred = 0, withLeq = 0,
+        valNone = 0, valOne = 0, valMany = 0, valManyForced = 0, reached = false;
     for (const svc of globalStore.discoveryDocs.values()) {
       const methods = svc && svc.doc && svc.doc.resources && svc.doc.resources.learned
                    && svc.doc.resources.learned.methods;
@@ -248,11 +278,29 @@ const PROBE = `(() => ({
              \`intersectPredicates\` does, so an empty one is a param an engine run reached and narrowed
              nothing on, which is not a param carrying a domain. */
           if (p && Array.isArray(p._looselyEquals) && p._looselyEquals.length) withLeq++;
+          /* THE VALUE POOLS — see the banner for why this is a partition and why it asks no
+             \`_astInferred\`. \`_astValidValues\` is written ONLY as a non-empty array (lib/learn.js writes
+             the key only where the pool is non-empty, and deletes \`_astForcedValues\` when its last member
+             is promoted out), so an absent key and an empty one are one statement here and \`length\` reads
+             both. */
+          const _vv = p && Array.isArray(p._astValidValues) ? p._astValidValues.length : 0;
+          if (_vv === 0) valNone++; else if (_vv === 1) valOne++; else valMany++;
+          if (p && Array.isArray(p._astForcedValues) && p._astForcedValues.length >= 2) valManyForced++;
         }
       }
     }
+    /* THE PARTS SUM TO THE TOTAL, ASSERTED WHERE BOTH ARE IN ONE HAND. A count over a population nobody
+       partitioned is a claim that cannot be checked; this one can, and the check is what makes a later
+       reader able to trust a single column of it. */
+    DCHECK(valNone + valOne + valMany === params,
+           "the offerable value-pool partition does not sum to the parameter count it was drawn from — " +
+           "every parameter this walk visits raises exactly one of the three, so a disagreement is this " +
+           "walk having gained a path that leaves a parameter uncounted, and each column would then be a " +
+           "fraction of a denominator nothing states (params=" + params + " none=" + valNone +
+           " one=" + valOne + " many=" + valMany + ")");
     return reached ? { params, astParams, astPathParams, astHoleParams, astUnstatedParams,
-                       withExcl, withBnd, withPred, withLeq } : null;
+                       withExcl, withBnd, withPred, withLeq,
+                       valNone, valOne, valMany, valManyForced } : null;
   })(),
   /* THE ADDRESSES WHOSE ORIGIN THE CODE NEVER DETERMINED — ONCE THE READING OF \`domains\`' ZERO THAT WAS NOT
      ABOUT PARAMETERS AT ALL, NOW THE CONFIRMATION THAT THEY ARE COUNTED.
