@@ -495,6 +495,30 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      tracked driver in this tree has ever printed it. */
   "stepUs", "schedUs",
   "unitMidProgram", "unitParked", "unitCheckpointOwed",
+  /* AND THE ROW THAT DECIDES WHICH READING OF `orphansAsked: 0` IS EVEN AVAILABLE, which this driver carries
+     the numerator of in COUNTERS and has never carried the denominator of. flow_step's whole work ladder —
+     the routed deliveries, the checkpoint, the reply, the program sequence, the task, the lifecycle, the
+     ORPHAN rungs, the clock-driven sources and every resting arm — is inside one `if (!f->frame)`, so a step
+     on a framed member asks none of those conditions and shows up in none of them. `unframedStepsLifetime`
+     is how many steps entered that block. Read beside `orphansAsked`: 0 here says the ladder was never
+     descended and the cause is upstream of every arm in it; a large value says it WAS descended and an arm
+     ABOVE the orphan rung took every descent, which `stepUnitRuns` then names by arm.
+     IT IS NOT `unitMidProgram` ABOVE IT AND IS NOT DERIVABLE FROM IT. That row is the member's frame AFTER
+     the step, taken at the convergence point; this is the branch the step TOOK. They differ by exactly the
+     arms that change framedness — a start compiles and leaves framed, a resume ends its frame and leaves
+     unframed — and neither bounds the other. MEASURED on gitlab.com/explore, one terminal census: 209 and 210
+     respectively, from 285 steps of which 75 descended the ladder.
+     IT IS NOT `unframedPicksLifetime` IN WFQ_LIFETIME EITHER, WHICH IS THE TRAP THE NAMES SET. That one is
+     raised in flow_credit_pick, whose only caller is the scheduler's `best != cur` block, so it counts
+     SWITCH-INS that found an empty JavaScript execution context stack — a member switched in framed that
+     unframes later is a descent this row sees and that one does not. Same page, same census: 3 against 75.
+     AND IT IS NOT COMPARABLE WITH `steps`, which is why it is named for what it counts rather than for a
+     share: `steps` is raised once per entry into flow_step and this per PASS through the block, because the
+     loop body iterates at the reply delivery's turn continuation. The pair it belongs to is
+     (`unframedStepsLifetime`, `orphansAsked`), counted on one basis, with the containment asserted in the
+     engine. An artifact older than this row prints `-`, which is this driver's absent-versus-zero rule and is
+     the honest answer: the run did not state it. */
+  "unframedStepsLifetime",
   "classicCompiles", "classicCompileOverruns",
   "rootPrograms", "deepest", "completed", "deepestLeft", "finished",
   /* AND THE @H SURFACE'S OWN DENOMINATOR, WHICH IS THE PAIR THIS DRIVER'S HEADLINE COLUMN CANNOT BE READ

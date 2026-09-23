@@ -2515,6 +2515,27 @@ char *result_cold_json(void) {
                     which is what lets a reader compose the split across two objects of this document at all.
                     See solver/engine.h's `unit_mid_program`. */
                  "\"unitMidProgram\":%ld,\"unitParked\":%ld,\"unitCheckpointOwed\":%ld,"
+                 /* AND HOW MANY STEPS DESCENDED flow_step's WORK LADDER AT ALL, which is the denominator the
+                    four `outOfPrograms` rows below it were being read as and are not. Every arm of that
+                    ladder — the deliveries, the checkpoint, the reply, the sequence, the task, the lifecycle,
+                    the ORPHAN rungs, the clock-driven sources and every resting arm — sits inside one
+                    `if (!f->frame)`, so a step on a framed member asks none of them and appears in none of
+                    them. This is a LIFETIME count of the steps that entered that block, and it is what makes
+                    `_orphansAsked == 0` readable: 0 here says the ladder was never descended and the cause is
+                    upstream of every arm in it, while a large value says it WAS descended and an arm above
+                    the orphan rung took every descent — which `stepUnitRuns` then names.
+                    IT IS NOT `outOfProgramsAtTheLadder`, AND THAT ROW CAN NO LONGER STAND IN FOR IT. That
+                    family selects on `script_i == dyn_n`, which WAS the rung's precondition and is not any
+                    more: the rung binds to `seq_compiles`, so a member holding a row it cannot RUN descends
+                    the ladder and is in none of those four rows. On a document whose members always hold a
+                    row they read 0 for a reason that has nothing to do with the ladder — measured on one live
+                    page at 0 while 75 steps descended.
+                    NOT COMPARABLE WITH `steps` ABOVE: that is raised once per entry into flow_step and this
+                    per PASS through the block, because the loop body iterates. What it IS comparable with is
+                    `_orphansAsked`, raised on the same basis inside the same block, with the containment
+                    asserted in the engine where both are in one hand. See solver/engine.h's
+                    `unframed_steps`. */
+                 "\"unframedStepsLifetime\":%ld,"
                  "\"outOfPrograms\":%ld,"
                  "\"outOfProgramsUnrun\":%ld,\"outOfProgramsFramed\":%ld,"
                  "\"outOfProgramsAtTheLadder\":%ld,"
@@ -2603,6 +2624,7 @@ char *result_cold_json(void) {
                  r.classic_compiles, r.classic_compile_overruns,
                  r.unit_mid_program, r.unit_parked, r.unit_checkpoint_owed,
                  c.out_of_programs,
+                 r.unframed_steps,
                  c.out_of_programs_unrun, c.out_of_programs_framed, c.out_of_programs_at_the_ladder,
                  ladder, hist, cursors,
                  ep_minted, ep_assets, ep_emitted, ep_pre_program,

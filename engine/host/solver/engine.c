@@ -9282,6 +9282,17 @@ static inline long step_unit_over_total(void)
    lesson made checkable rather than restated. A total incremented on the line beside the bucket would be
    equal by construction and would assert nothing at all. */
 static long g_steps;
+/* …AND HOW MANY OF THOSE STEPS GOT AS FAR AS THE WORK LADDER — see solver/engine.h's `unframed_steps` for
+   what it separates, why no row already on the document composes it, and why it is NOT `unframed_picks_
+   lifetime`. It is raised at the one line that ENTERS flow_step's `if (!f->frame)` block, which is the
+   ladder's whole precondition: a step taken on a framed member asks none of the ladder's conditions and is
+   therefore invisible in every one of them, including the orphan ask this row is the denominator of.
+   PER PASS AND NOT PER ENTRY, DELIBERATELY, which is why it may not be compared with `g_steps` above. The
+   loop body iterates (the turn continuation at the reply delivery) and `g_steps` is raised once at the
+   function's entry; the orphan ask is raised per pass inside this same block, so the pair this row belongs to
+   is counted on one basis and the containment between them is exact.
+   A REPORT AND NEVER A BOUND (§NO BOUNDS) — nothing reads it to decide anything. */
+static long g_unframed_steps;
 /* …AND WHY A TURN DID NOT END A UNIT OF WORK, WHICH IS THE THREE-STATE ANSWER BEHIND `g_units_done`'s
    ONE-STATE ZERO. The unit boundary in the dispatch loop is a CONJUNCTION of three clauses — no live frame, no
    parked continuation on the runtime, no microtask checkpoint still owed — and `g_units_done` counts only the
@@ -9861,6 +9872,12 @@ static int flow_step(JSContext *ctx, Flow *f) {
         int last_compiled0 = f->last_compiled;
         if (!f->frame) {
             const char *body;
+            /* THE LADDER HAS BEEN DESCENDED — counted at the one line that enters it, BEFORE any arm is
+               asked, because what this number exists to say is that the conditions below were REACHED. The
+               orphan ask far down this chain is raised on the same per-pass basis, so `asked` is a subset of
+               this by construction and the containment is asserted where both are in hand
+               (engine_step_unit_runs). See solver/engine.h's `unframed_steps`. */
+            g_unframed_steps++;
             /* AND ITS LENGTH, WHICH THE BODY ALREADY KNOWS. Both compiles below took `strlen(body)`, which is
                a pass over every byte of the program each time one starts — on a real single-page app's module
                bundle that is 2.1 MB walked to learn a number the row was already holding (solver/dyn_body.h). */
@@ -11652,6 +11669,7 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
     DCHECK(out != NULL, "the lifetime step histogram was asked for into nothing — a reading that lands nowhere "
                         "is a reading whose caller cannot have taken it");
     out->steps = g_steps;
+    out->unframed_steps = g_unframed_steps;
     /* AND WHAT THEY COST, COPIED OUT IN THE SAME READING AS THE COUNT IT IS DIVIDED BY. The two are taken here
        rather than through two accessors precisely so that a caller cannot compose the quotient out of two
        instants: between two entries the loop can step, and a total read one call later than its denominator is
@@ -11826,6 +11844,41 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
     /* THE TWO OVERRUN-PATH ROWS' EQUIVALENCE, ASSERTED RATHER THAN DESCRIBED — see solver/engine.h's
        `slice_overrun_asks`. A turn adds to the sum precisely when it is not counted as seamless, by the order
        of two statements in one branch, so an empty sum and a wholly-seamless population are the SAME fact and
+    /* THE IDENTITY, ASSERTED WHERE ALL THREE ARE IN ONE HAND — see g_slice_us for why the halves are rows and
+       not a subtraction. Both arms are added inside the same iteration the charge is taken in, from the same
+       two clock readings, so a difference is a THIRD phase having been added to the turn without an arm of its
+       own, and the symptom would be a per-phase reading that silently stopped covering the turn. */
+    DCHECKF(g_slice_us + g_sched_us == g_step_us,
+            "the dispatch turn's phases do not partition its cost (%lld slice + %lld scheduler against %lld "
+            "step) — both arms are written inside the iteration the charge is taken in and from the same two "
+            "clock readings, so a difference is a phase of the turn that has no arm and a reading that has "
+            "stopped being about the whole turn",
+            (long long)g_slice_us, (long long)g_sched_us, (long long)g_step_us);
+    /* THE ORPHAN ASK IS A SUBSET OF THE LADDER DESCENTS, ASSERTED WHERE BOTH ARE IN ONE HAND — the only
+       statement about this pair a reader can check instead of believe, and the one a later edit would break.
+       `g_orphan_asks` is raised inside engine_orphan_seed, which flow_step reaches only from inside the
+       `if (!f->frame)` block the row above is counted at, and both are raised per PASS through that block. So
+       an ask with no descent under it is the seed having been reached from somewhere else — a second caller,
+       or the rung hoisted out of the block — which is exactly the routing this pair would otherwise report as
+       a frontier finding.
+       IT IS A FLOOR ACROSS A RESTART AND NOT AN EQUALITY, WHICH IS WHY THE DIRECTION IS THE ONE ASSERTED.
+       engine_session_close releases `g_orphan_asks` with the agent and releases nothing here, so a second
+       session begins with the ask at 0 against a descent count that kept climbing. That can only make the
+       containment MORE true, and it is the reason a reader may not take the two as one span. */
+    DCHECKF(g_orphan_asks <= g_unframed_steps,
+            "solver/engine.c: the orphan surface was asked %ld time(s) against %ld descent(s) of the ladder "
+            "it is a rung of — the ask is raised inside engine_orphan_seed, which is reached only from within "
+            "flow_step's `if (!f->frame)` block, and both are counted per pass through that block, so an ask "
+            "outside that containment is a second path to the seed rather than a fact about the frontier",
+            g_orphan_asks, g_unframed_steps);
+    for (i = 0; i < STEP_UNIT_N; i++) out->arms[i] = g_step_unit_runs[i];
+}
+
+/* TWO FACTS THE SCHEDULER HAS AND HAS NEVER SAID, and both of them are questions that were being ANSWERED BY
+ * INFERENCE from numbers that do not mean what they were read as.
+ *
+ * `g_finished` — how many flows have ever reached flow_step's "all scripts, chunks, jobs, replies and load
+ * listeners done" and been finished. It was being read off `live == flows`, which is a comparison of the
        a reader may take either as the other. A break is those two statements having stopped being exclusive,
        and the symptom would be a pair that reads as a partition of the overrunning turns and is not one. */
     DCHECKF((out->slice_overrun_asks == 0) == (out->slice_overrun_seamless == out->slice_overruns),

@@ -1479,6 +1479,55 @@ typedef struct {
                                 assertion about routing rather than an arithmetic identity — engine.c asserts it
                                 at the convergence point, where it is exact and where the offending step is
                                 still in hand. */
+    /* …AND HOW MANY OF THOSE STEPS DESCENDED THE LADDER AT ALL — the one number a reader of the orphan
+       census's `asked` has never had, and the one that decides which of that zero's readings is available.
+       IT IS NOT DERIVABLE FROM ANY ROW ON THIS DOCUMENT, which is the whole reason it is a field. flow_step's
+       entire work ladder — the routed deliveries, the checkpoint, the reply, the program sequence, the task,
+       the lifecycle, the orphan rungs, the clock-driven sources and every resting arm — sits inside one
+       `if (!f->frame)`, so a step taken on a FRAMED member asks none of those conditions and is invisible in
+       all of them. This counts the steps that entered that block, and there are three reasons a reader cannot
+       compose it out of what is already published:
+         · `unit_mid_program` below is the member's frame AFTER the step, read at the convergence point. A
+           step that enters unframed and COMPILES leaves framed, and one that enters framed and ENDS its frame
+           leaves unframed, so the two readings differ by exactly the arms that change framedness and neither
+           bounds the other. They were 209 and 210 on one measured run and are free to differ by any amount.
+         · Summing the `arms` that live under the `if` needs a per-arm branch label, and solver/step_unit.h
+           declares none — solver/cold.h says so in its own words ("a reader told to read that arm's position
+           in flow_step's chain against `engine_orphan_seed` finds it has no position in that chain at all").
+           A list kept here would be a second copy of flow_step's structure and would drift from it.
+         · `unframed_picks_lifetime` (solver/flow.h) is NOT this number and pairs with it by name, which is
+           the trap. It is raised in flow_credit_pick, whose only caller is engine.c's `best != cur` block, so
+           it counts SWITCH-INS that found an empty JavaScript execution context stack — a member switched in
+           framed that unframes later is one descent this row sees and that one does not. Measured on one live
+           page: 3 against 75.
+       WHAT IT SEPARATES, AND THE TWO TAKE OPPOSITE WORK. `orphansAsked == 0` with this row 0 says the ladder
+       was never descended at all, so the cause is UPSTREAM of every arm in it — members framed, or never
+       handed the thread (solver/cold.h's `stepUnits` `none`) — and no ordering of the arms could have changed
+       it. The same zero with this row LARGE says the ladder was descended and an arm ABOVE the orphan rung
+       took every descent, which is a statement about those arms and is read off `stepUnitRuns` beside it.
+       AND IT IS THE ROW `out_of_programs_at_the_ladder` CAN NO LONGER STAND IN FOR, which is why it is filed
+       beside that family in the document rather than here at the top. That census selects on
+       `script_i == dyn_n`, which WAS the rung's precondition and is no longer: the rung binds to
+       `seq_compiles` — `a program of this flow's own sequence STARTS on this step` — so a member holding a row
+       it cannot run descends the ladder and is counted in no `out_of_programs` row. On a document whose
+       members always hold a row that family reads 0 for a reason that has nothing to do with the ladder.
+       A COUNT OF DESCENTS AND NOT OF ENTRIES, so it is NOT comparable with `steps` above: flow_step's loop
+       body iterates (the turn continuation at the reply delivery), and `steps` is raised once at the
+       function's entry while this is raised on every pass that reaches the block. What it IS comparable with
+       is `engine_orphan_census`'s `asked`, which is raised on the same per-pass basis inside this block — the
+       containment is asserted at engine_step_unit_runs, where both are in one hand.
+       AND THE TWO ARE PER-INSTANCE AND PER-SESSION RESPECTIVELY, WHICH IS STATED RATHER THAN LEFT TO A
+       READER. solver/engine.c releases the orphan pair with the agent and never releases this one, so across
+       a restart `asked` returns to 0 while this keeps climbing. The containment still holds in that direction;
+       what does not hold is reading the pair as one span, exactly as engine/build.mjs already says of the
+       orphan pair against @COLD.
+       A REPORT AND NEVER A BOUND (§NO BOUNDS), for `arms`' reason exactly: nothing in the engine reads it, no
+       arm of any verdict branches on it, and "how many steps got as far as the work ladder" is precisely the
+       shape a no-progress detector would be built from.
+       RETIREMENT: this row goes when solver/step_unit.h declares each arm's side of `if (!f->frame)`, because
+       the descent count is then a sum over `arms` that cannot disagree with flow_step — which is also
+       solver/cold.h's own stated retirement condition for the classes it carries in prose. */
+    long unframed_steps;
     /* WHAT THE STEPS ABOVE COST, IN THE ONE MEASURE THE SLICE AND THE AGING CHARGE ARE ALREADY DENOMINATED IN
        — and it is in THIS struct rather than beside any other row because it is over exactly the population
        `steps` is: one charge per iteration of the scheduler loop that stepped a flow, taken at the line that
