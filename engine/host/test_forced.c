@@ -490,7 +490,36 @@ static int fixture_provide(JSContext *ctx) {
            this fixture served was identical, so a GET's body arriving on a POST's promise looked exactly like
            the right answer. It rides a HEADER rather than the body deliberately — the body is 22 bytes and two
            probes read that length back as evidence that arrayBuffer() and bytes() are one byte sequence. */
-        {
+        /* AND THE ONE ADDRESS THIS FIXTURE'S ZONE REFUSES TO ASK FOR — see the row it is appended for in
+           HTML_COLD. A REFUSAL IS AN ANSWER AND IS NOT A REPLY: `engine_decline` leaves `haveValue` clear,
+           so the flow stays PARKED at its sequence row instead of being told a server was unreachable for
+           a request nobody sent, and flow_decline_fork then explores BOTH feasible outcomes — a waiting arm
+           holding no invented reply, and a failure arm that takes the network error. Neither is fabricated.
+           THE REASON IS THE ZONE'S OWN WORDS AND IS REQUIRED, which is why it names the rule rather than
+           the row: `blocked-signal` is the vocabulary for a refusal a WIDENING would reopen, which is what
+           an un-widened origin is, and this fixture is standing in for the zone that grades it. Nothing
+           matches on the string; it is the only account anybody gets of a request nobody made.
+           IT IS REFUSED IN EVERY SESSION AND NOT ONLY IN THE ONE THAT PARKS, WHICH IS A CORRECTION TO THE
+           OBVIOUS SPELLING AND NOT A WIDENING. The precondition it constructs belongs to the park, so a
+           SESS_PARK guard reads as the tighter choice — fixture_route_peer_post is guarded exactly that way
+           one function down. It is the wrong model twice over. A refusal is a fact about the REQUEST (the
+           address, its method, its provenance and this session's per-origin policy), which pending.h states
+           where it declares the field SHARE; a zone that will not ask for an address does not start asking
+           because a different session is running, and a fixture that flipped would be modelling a policy
+           that changed between two runs of one document. AND THE GUARD WOULD HAVE SERVED THE ADDRESS IN THE
+           RESUME SESSION, where the reply this branch is skipping is the JSON every other address gets — so
+           a `<script src>` whose destination is `script` would have been handed a JSON body, and whether
+           that ends in a CORB refusal or in a compile of `{"region":"us-west-2"}` is a question this file
+           would then be asking by accident. Refusing it in both sessions asks nothing by accident.
+           IT IS ASKED ONCE AND CANNOT SPIN, and that is a property of the engine rather than of a flag
+           here: `engine_pending_fetches` skips a refused entry, so the address is never joined again and
+           this branch is never reached a second time. A fixture-side `once` flag would be a second answer
+           to that question and free to disagree with it. */
+        if (!strcmp(abs, "https://x.test/api/cold/held.js")) {
+            filled += engine_decline(ctx, method, url,
+                                     "blocked-signal: this origin has not been widened for a program load "
+                                     "at this address, so the act is derived and reported and not spent");
+        } else {
             HeaderList eh = { 0 };
             /* WHAT THIS PARTICULAR ADDRESS IS SERVED AS, which for every address but two is the JSON above.
                See TF_SERVED for the two and for why one of them is the other's control. */
@@ -516,9 +545,9 @@ static int fixture_provide(JSContext *ctx) {
             reply = fetch_reply_new(ctx, 200, "OK", &eh, rbody, strlen(rbody),
                                     (const char *const *)&abs, 1, rtype);
             header_list_free(&eh);
+            filled += engine_provide(ctx, method, url, reply);
+            JS_FreeValue(ctx, reply);
         }
-        filled += engine_provide(ctx, method, url, reply);
-        JS_FreeValue(ctx, reply);
         free(abs);
         free(one);
         if (!nl) break;
@@ -4783,6 +4812,35 @@ static const char *HTML_COLD =
     "       ? '/api/nwiso/f-clean' : '/api/nwiso/f-sees-t');"
     "}"
     "</script>"
+    /* AND ONE EXTERNAL SCRIPT THIS FIXTURE'S ZONE REFUSES TO ASK FOR, WHICH IS THE ONE CURSOR THIS ENGINE
+       CANNOT PASS AND THEREFORE THE FIRST HALF OF `park-remoteop`. That row asks whether a flow parked
+       ACROSS a cross-agent operation resumes, and it reads 0 for a reason no peer and no second instance
+       moves: a queued operation becomes a PROGRAM ROW only when a member is STEPPED holding it, and the
+       member then compiles that row on its very next step — because flow_step's sequence arm stands above
+       every resting arm, so a member whose sequence is EXHAUSTED runs whatever an append puts at its end.
+       A row a member cannot reach is what makes the operation SURVIVE to the park, and there is exactly one
+       kind: a DYN_SCRIPT_SRC row whose bytes have not come back, which sets `seq_awaits`, compiles nothing
+       and rests. Every other fetch in this document is UNAWAITED, so its members rest on
+       `pending_outstanding` with the sequence exhausted — which is precisely the shape that RUNS the
+       appended row.
+       IT IS A REFUSAL AND NOT A WITHHELD REPLY, WHICH IS WHAT MAKES IT LEGAL HERE. run_scheduler asserts
+       after every payment that this host owes nothing, so a provider that simply sat on a reply would abort
+       at that line before any of this row's rungs were read. `engine_decline` is the third state: it leaves
+       `haveValue` CLEAR, so the flow is not handed a network error it never observed and stays PARKED, and
+       `engine_pending_fetches` SKIPS a refused entry in the same expression that skips an answered one, so
+       the assert cannot fire on it and the host is never re-shown the request.
+       IT IS APPENDED AND NOT INSERTED, for this document's own stated reason and for a second one that is
+       specific to this kind of row: a member RESTS here, so everything below this line would never run for
+       the waiting arm. At the end, the waiting arm has run the whole document and the FAILURE arm
+       flow_decline_fork mints — which takes the network error and advances through DYN_SCRIPT_FAILED —
+       finds nothing after it. No statement of this document is lost by either arm.
+       IT HAS NO BODY AND NEVER WILL, WHICH IS NOT A STUB. The address is refused, so the bytes are not a
+       thing this fixture declined to write — they are a thing no party ever asks for, which is the whole
+       of what a decline means. A reader looking for what it would have contained has misread the row.
+       THE ADDRESS IS A CONSTANT AND IS NAMED BY NOTHING ELSE IN THIS FILE, so the provider's refusal can
+       be keyed on it by equality rather than by a shape, and a later address that happens to resemble it
+       cannot be refused by accident. */
+    "<script src=/api/cold/held.js></script>"
     "</body></html>";
 
 /* THE CLOSE-REQUEST DOCUMENT — the fourth, and it exists because the road from HTML §6.12 "The popover
@@ -15876,6 +15934,22 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        IS LANDABLE ALONE and the second is the dangerous one — the window without the blocked cursor lets the
        operation COMPLETE in that slice, which takes `park-remoteop-asked`, `-many` and `-once` from 1 to 0,
        so a diff that builds the window first regresses the three rungs that currently pass.
+       BOTH ARE BUILT AND THEY LANDED AS ONE DIFF, for exactly the reason the sentence above gives: neither
+       moves this row alone and the second REGRESSES three rungs alone, so there was no coherent smaller
+       landing to make. The first is an external script at the end of HTML_COLD that fixture_provide
+       DECLINES; the second is one declined consultation at the tail of fixture_want_park, with an assert
+       beside it that a token is on a program row at the instant the park is requested.
+       WHAT IS STILL A RESIDUAL AFTER THEM, because building a precondition is not the same as discharging
+       the question: this row reads the STRIP, and the two halves only make the strip REACHABLE. A 0 here
+       now means engine_retract_span walked a frontier that held a token and stripped nothing, which is a
+       DEFECT and no longer a named residual — that is the whole point of the assert, and it is why the
+       `unaskable` declaration below is left exactly as it is: it retires itself the moment the
+       cross-agent-operation arm of `stepUnitRuns` leaves 0, with no edit at that line.
+       AND THE INDEPENDENT WITNESS FOR THE FIRST HALF ALONE IS `fork-over-a-declined-request`, which stands
+       in this host's NEVER-run list beside `cross-agent-operation` and `await-a-refused-request`. A build
+       that moves one and not the other is diagnosable: the decline arm running with this row still 0 says
+       the window did not open, and this row moving with that arm silent is not a reading this diff can
+       produce at all.
        AND THE `SCOPE OF THE FIRST IS SHORT BY ONE FILE` CLAUSE IS REFUTED AT THE ONE FILE IT NAMES. It is
        REWRITTEN RATHER THAN DELETED because every step of its reasoning is sound and a reader who re-derives
        it reaches the same conclusion: it read that
@@ -15926,8 +16000,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        to a row on one step and reports OWED on a later one. A member parked MID-FRAME never reaches that
        branch at all — JS_ResumeParkedFlow answers first — which is why the clause says "at the cursor it was
        already owed a reply at" and not "mid-expression".)
-       RETIREMENT: this record goes when `g_retract_started` is raised by a park this fixture takes, because
-       the clause is then built rather than described.
+       RETIREMENT: this record goes when a park this fixture takes raises `g_retract_started`, because what
+       is described above is then held by the assert at fixture_want_park rather than by this paragraph.
        HOW ITS ABSENCE SHOWS: this row reads 0 while all three rungs below it read 1 — the arrival-slot half of
        the same call having run over many timelines, handed back once, without the row half ever existing.
        AND THE THREE RUNGS BELOW IT ARE A LADDER FOR THE ACCESSOR'S REASON, WHICH IS THE CORRECTION THIS
@@ -15945,7 +16019,21 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        engine_perform attaches one question to EVERY live timeline, so a notice per holder would be one
        hand-back repeated once per member — and worse than noisy: the zone would be told to forget a token a
        surviving timeline is about to answer under, which its own assert catches one seam away from the engine
-       that caused it. One question asked, many holders, exactly one notice. */
+       that caused it. One question asked, many holders, exactly one notice.
+       AND THE RUNGS ARE NOT ENTAILED, WHICH WAS CONSIDERED AND DECLINED RATHER THAN MISSED — recorded so
+       the next reader does not "fix" it. A ladder is supposed to be a chain of implications, each rung
+       implying the one below, and `-many` implies `-asked` while `-once` does NOT imply `-many` (one
+       holder handing back once satisfies `back == 1` with `flows == 1`) and `park-remoteop` does not imply
+       `-once` (two tokens last-held give `back == 2`; it holds today only because this fixture asks ONE
+       operation, which is a property of the fixture and not of the ladder). So a 1 can stand above a 0.
+       WHAT MAKES THAT SAFE IS THE SENTENCE ABOVE IT: each `why` states what ITS OWN rung observed and
+       nothing about its neighbours, so the reader who takes the lowest 0 is correctly localised anyway —
+       `-many`'s own text says in as many words that the rung above it decides a last-holder rule over a
+       single holder and states NOTHING. All three available repairs are worse: folding `flows > 1 && back
+       == 1` re-introduces the exact conflation this ladder was split apart to end, asserting the
+       entailment aborts on a document that legitimately does not fork, and relaxing `== 1` destroys the
+       last-holder rule the row exists for. A finding about a contract is a finding; it is not a licence to
+       change the contract. */
     long retract_flows = 0, retract_started = 0, retract_back = 0;
     int cold_park_remoteop, cold_park_remoteop_once, cold_park_remoteop_asked, cold_park_remoteop_many;
 
@@ -15986,12 +16074,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     const char *remoteop_why =
         "no member carried a peer's rendezvous token on a PROGRAM ROW at this park. That is the `dyn_token` "
         "strip, and for a single-instance host it is a NAMED RESIDUAL rather than a defect — but the FIRST "
-        "cause is not the one this string used to name. `fixture_ask_remote_op` runs at the PAYMENT and "
-        "engine_sched_slice honours a requested park BEFORE its pick loop, so with the moment latched there "
-        "are ZERO picks between the ask and the park and flow_perform cannot run at all; and a member that "
-        "DID convert one would compile the appended row on its very next step, because flow_step's sequence "
-        "arm stands above every resting arm. Read this row's banner for the two ordered subproblems, and "
-        "never engine_retract_span. THIS ROW IS NOT ABOUT THE RESIDUE KINDS: it reads engine_retract_census, so what "
+        "cause is not the one this string used to name, and is no longer the one that holds. BOTH HALVES THIS "
+        "ROW WAITED FOR ARE BUILT: HTML_COLD ends in an external script fixture_provide DECLINES, so a member "
+        "rests at the one cursor flow_step cannot pass and an appended row lands behind it; and this host now "
+        "lets ONE slice of picks run between the ask and the park, so flow_perform can convert the question "
+        "to a program row at all. fixture_want_park ASSERTS at the park that a token is on a row, so a 0 here "
+        "can no longer be either half failing silently — it is the STRIP, which is what this row has always "
+        "been about. Read this row's banner, and never engine_retract_span. THIS ROW IS NOT ABOUT THE "
+        "RESIDUE KINDS: it reads engine_retract_census, so what "
         "park.recipes carries, and whether a resume rebuilt it, says nothing about it in either direction. "
         "The rungs printed beside this one are where what the park DID exercise is stated. THIS ROW IS "
         "DECLARED UNASKABLE while the cross-agent-operation arm of `stepUnitRuns` stands at 0, so it is "
@@ -17726,7 +17816,7 @@ static int fixture_have_answers(void) {
  * rungs `park-remoteop-asked`, `park-remoteop-many` and `park-remoteop-once`, split apart because a single
  * folded row could not say which of those three a 0 was about. The last of them is the one a per-flow hand-back
  * would fail. The `dyn_token` half is named where its row is. */
-static int g_cold_moment, g_op_asked, g_post_routed;
+static int g_cold_moment, g_op_asked, g_post_routed, g_op_window;
 
 static int fixture_cold_moment(void) {
     ColdPreview would;
@@ -17928,7 +18018,12 @@ static void fixture_ask_remote_op(JSContext *ctx) {
    ever asked between two. Latching it would have been worse than leaving it, in two independent ways — the
    sampled value is never true, so a latch over it latches nothing; and even a latch that HAD caught one would
    park after the operation completed, when engine_retract_span has no token left to strip, so the row it was
-   protecting would still read 0 with the park now claiming to have exercised it. */
+   protecting would still read 0 with the park now claiming to have exercised it.
+   BOTH REASONS WERE RIGHT ABOUT A DOCUMENT WITH NO UNREACHABLE ROW IN IT, AND HTML_COLD NOW HAS ONE, so the
+   question IS answerable at this hook and the value is read here as an ASSERT. It is still not a CONJUNCT,
+   and the second reason above is why: a conjunct that is never true never parks, which is furniture, where
+   an assert that is never true crashes and names the half that did not engage. See the window at the tail
+   of this function. */
 static int fixture_want_park(void) {
     /* THE PEER'S POST, ROUTED AT THE EARLIEST INSTANT THIS HOST HAS, AND STRICTLY BEFORE THE MOMENT IS ASKED.
        This seam is the TOP of run_scheduler's loop, so it is the first thing the host does after
@@ -17980,6 +18075,47 @@ static int fixture_want_park(void) {
            "`park-remoteop-asked`, `-many` and `-once` will read 0 for a reason that is THIS CONSULTATION "
            "ORDER and not the arrival-slot walk those rungs are about: read run_scheduler's loop (hook, step, "
            "payment) and fixture_provide's tail, never engine_retract_span");
+    /* AND ONE SLICE OF PICKS RUNS BETWEEN THE ASK AND THE PARK, WHICH IS THE SECOND HALF OF THE ROW AND
+       THE REASON THE FIRST HALF IS NOT LANDABLE WITHOUT IT. engine_perform ATTACHES a question; only a
+       STEP converts it to a program row, and engine_sched_slice honours a requested park BEFORE its first
+       pick — so with the moment latched at the payment that asked, the park walked a frontier on which
+       flow_perform had never run and `park-remoteop` could not be a finding in either direction.
+       ONE CONSULTATION AND NOT A COUNT OF WORK. What is needed is that the scheduler gets ONE slice, and
+       a slice is exactly what lies between two consultations of this hook — so declining once is the
+       whole mechanism and there is no quantity to tune. It is NOT a bound: it decides WHEN the residue
+       leaves memory and never how much of it survives, which is the line §NO BOUNDS draws between paging
+       and a cap, and it is the same kind of choice the conjunction above already is. The moment is
+       LATCHED, so waiting cannot lose the park: fixture_cold_moment returns the latched value for ever
+       once it is set.
+       WHAT THE EXTRA SLICE COSTS IS STATED RATHER THAN HIDDEN: `refuses` is transient and is read at the
+       LATCH, so a park taken one slice later can meet a member cold_park_flow refuses. That exposure is
+       not new — the latch and the park were already one consultation apart — and it is widened by one
+       slice here. If it ever fires it fires BY NAME, at cold_park_flow, which is a statement about a
+       member and not a silent 0.
+       AND THE ASSERT BELOW IS THE CONJUNCT THIS FUNCTION ONCE DELETED, WHICH THIS DIFF RETIRES THE
+       DELETION OF. The banner above this function records that `engine_operations_started() > 0` was
+       removed because "a started operation lives strictly inside one slice, and this hook is only ever
+       asked between two", and because a latch that HAD caught one would park after the operation
+       completed with no token left to strip. Both were exactly right about a document with no
+       unreachable row in it. HTML_COLD now has one, so a token SURVIVES a slice and this question is
+       answerable here — and it is an ASSERT rather than a conjunct for the reason that deletion still
+       holds: a conjunct that is never true never parks, which is furniture, while an assert that is
+       never true CRASHES and names the half that did not engage.
+       IT IS THE ASK AND THE OUTCOME AT ONCE BECAUSE NOTHING RUNS BETWEEN THEM. Returning non-zero here
+       is engine_request_park and the park is honoured before the next pick, so the count this reads is
+       the same count engine_retract_span is about to strip — which is what makes it a precondition of
+       the row rather than a second spelling of it. */
+    if (!g_op_window) { g_op_window = 1; return 0; }
+    DCHECK(engine_operations_started() > 0,
+           "a slice of picks ran between the peer's question and this park and NO member converted it to "
+           "a program row — so engine_retract_span will find no `dyn_token` to strip and `park-remoteop` "
+           "will read 0 with the window it needed already open. The two halves are HTML_COLD's declined "
+           "external script and this consultation order, and this abort says the FIRST one did not "
+           "engage: either no member was resting at that row when the question arrived, or a member "
+           "converted it and then COMPLETED it, which flow_step does on the next step of any member "
+           "whose sequence is exhausted. Read fixture_provide's decline branch and `seq_awaits`, and "
+           "never engine_retract_span. `fork-over-a-declined-request` in this run's `stepUnitRuns` says "
+           "whether the decline forked at all, which separates those two");
     return 1;
 }
 
