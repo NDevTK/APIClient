@@ -1040,6 +1040,7 @@ void mutation_observer_init(JSContext *ctx)
     if (g_ready) return;   /* one AGENT, one class */
     JS_NewClassID(JS_GetRuntime(ctx), &g_mo_class);
     JS_NewClass(JS_GetRuntime(ctx), g_mo_class, &d);
+    agent_state_class("element", &g_mo_class, "DOM §4.3.1 \"Interface MutationObserver\"'s class");
     mutation_record_init(ctx);
 
     g_mo_key = JS_NewSymbol(ctx, "mutationObserverState", false);

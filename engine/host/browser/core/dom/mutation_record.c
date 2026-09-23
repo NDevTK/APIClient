@@ -22,6 +22,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/node.h"
@@ -115,6 +116,11 @@ void mutation_record_init(JSContext *ctx)
     if (g_record_class) return;   /* one AGENT, one class */
     JS_NewClassID(JS_GetRuntime(ctx), &g_record_class);
     JS_NewClass(JS_GetRuntime(ctx), g_record_class, &d);
+    /* THE LATCH ABOVE IS THIS SLOT, WHICH IS WHY DECLARING IT IS WHAT MAKES A SECOND AGENT CORRECT. While
+       nothing put the id back, `if (g_record_class) return;` read agent one's number and returned before
+       JS_NewClass, so every record agent two minted wore a class the live runtime never registered. See
+       core/agent_state.h's ONE POLICY paragraph. */
+    agent_state_class("element", &g_record_class, "DOM §4.3.3 \"Interface MutationRecord\"'s class");
     g_fields_key = JS_NewSymbol(ctx, "mutationRecordFields", false);
     CHECK(!JS_IsException(g_fields_key), "the MutationRecord field-list slot key allocation failed");
     g_atom_fields = JS_ValueToAtom(ctx, g_fields_key);
@@ -163,4 +169,9 @@ void mutation_record_free(JSRuntime *rt)
     g_atom_fields = JS_ATOM_NULL;
     JS_FreeValueRT(rt, g_fields_key);
     g_fields_key = JS_UNDEFINED;
+    /* THE CASCADE REACHED THIS FILE — the claim that entitles element_free's last line to put this file's
+       class back, which is why the id is not reset here. See core/agent_state.h's agent_state_reached.
+       THE GUARD AT THE TOP READS THE SAME SLOT and still answers, because this release runs inside
+       element_free's cascade and agent_state_undo is that cascade's LAST line. */
+    agent_state_reached("element");
 }

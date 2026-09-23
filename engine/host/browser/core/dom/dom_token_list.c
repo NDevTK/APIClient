@@ -28,6 +28,7 @@
 #include "quickjs.h"
 #include "solver/dom_cow.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/idl_index_arg.h"   /* §7.1's `item` takes an index unknown external input crosses AS ITSELF */
 #include "core/realm.h"
@@ -818,6 +819,7 @@ void dom_token_list_init(JSContext *ctx)
           "the DOMTokenList slot keys could not be allocated");
     JS_NewClassID(JS_GetRuntime(ctx), &g_tl_class);
     JS_NewClass(JS_GetRuntime(ctx), g_tl_class, &d);
+    agent_state_class("element", &g_tl_class, "DOM §7.1 \"Interface DOMTokenList\"'s class");
     g_set_value_id = idl_setter_id(ctx, IDL_DOMSTRING, false, js_tl_set_value, 0);
     /* §7.1 writes `getter DOMString? item(unsigned long index)` and carries NO [EnforceRange], so §3.2.4.9
        Abstract operations' ConvertToInt modulo IS the specified behaviour and there is nothing here to throw.
@@ -947,4 +949,9 @@ void dom_token_list_free(JSRuntime *rt)
     /* the prototypes are the REALMS' — released with their contexts */
     g_owner_key = g_which_key = JS_UNDEFINED;
     g_ready = 0;
+    /* THE CLASS ID IS NOT RESET HERE, unlike the pool ids above: it is declared under `element`, whose
+       release ends in agent_state_undo, so the one reset is computed from the registry that already holds
+       its address. This line is the claim that entitles that reset — the cascade reached this file. See
+       core/agent_state.h's agent_state_undo and agent_state_reached. */
+    agent_state_reached("element");
 }

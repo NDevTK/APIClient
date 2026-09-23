@@ -27,6 +27,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/dom/node.h"
 #include "core/dom/node_filter.h"
 #include "core/dom/node_iterator.h"
@@ -170,9 +171,22 @@ static IterData *iter_receiver(JSValueConst v)
    NULL in release. The refusal that replaces it is idl_this_attribute_get's THROW, which names the member and
    the interface and is compiled into both builds. */
 
+/* NEITHER OF THESE TWO READS THE CLASS ID, AND THAT IS THE PRICE OF DECLARING IT. The collector runs after
+   core/platform.c's release column — every host's teardown is platform_agent_free(), JS_RunGC,
+   JS_FreeRuntime — so by the time either of these is reached `g_iter_class` is back at 0 and
+   `JS_GetOpaque(val, 0)` answers NULL for every object of this class. THE TWO FAILURES ARE NOT ALIKE: the
+   finalizer would leak the record, its traverser and its two node pointers, silently; the mark is worse, because an
+   unmarked child keeps the internal reference gc_decref exists to subtract, so gc_scan reads it as rooted
+   from outside the heap and the object is never collected at all. The id is not needed — the collector
+   dispatched here THROUGH the class, so it is a fact these already have. JS_GetAnyOpaque and never iter_of,
+   for the reason core/geometry/dom_rect.c's pair reaches past its accessor: a capture during collection
+   would dup values on an object being torn down. See core/agent_state.h's closing paragraph. */
 static void iter_finalizer(JSRuntime *rt, JSValue val)
 {
-    IterData *it = JS_GetOpaque(val, g_iter_class);
+    JSClassID id = 0;
+    IterData *it = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
     if (!it) return;
     iter_unregister(val);
     iter_live_drop();
@@ -184,7 +198,10 @@ static void iter_finalizer(JSRuntime *rt, JSValue val)
 
 static void iter_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    IterData *it = JS_GetOpaque(val, g_iter_class);
+    JSClassID id = 0;
+    IterData *it = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
     if (!it) return;
     traverser_mark(rt, &it->t, mark_func);
     JS_MarkValue(rt, it->ref_node, mark_func);
@@ -438,8 +455,21 @@ void node_iterator_init(JSContext *ctx)
     JSClassDef d = { "NodeIterator", iter_finalizer, iter_gc_mark };
 
     if (g_iter_class) return;   /* one AGENT, one class and one set of pool entries */
+    /* THE LIVE LIST'S CLOSED FLAG IS PUT BACK HERE AND NOT AT THE RELEASE, AND THIS FUNCTION CAN NOW BE
+       REACHED A SECOND TIME — the latch above is a declared slot that agent_state_undo resets, where before
+       the class id carried and this returned. node_iterator_free says only "no more registrations are
+       coming"; the LAST finalizer frees the array, which is after the release column, so the flag is
+       legitimately non-pre-init at the release and core/agent_state.h's closing paragraph puts its assert
+       at the next `_init` rather than declaring it. This is that moment: the previous agent's runtime is
+       gone, so every iterator of it has been finalized. */
+    DCHECK(g_live == NULL && g_live_n == 0,
+           "node_iterator_init ran with a previous agent's live-NodeIterator list still allocated — that "
+           "agent's last finalizer was what frees it, so either an iterator outlived its runtime or the "
+           "list was never closed");
+    g_live_closed = 0;
     JS_NewClassID(JS_GetRuntime(ctx), &g_iter_class);
     JS_NewClass(JS_GetRuntime(ctx), g_iter_class, &d);
+    agent_state_class("element", &g_iter_class, "DOM §6.1 \"Interface NodeIterator\"'s class");
     node_filter_init(ctx);
 
     g_id_next   = idl_method_id_step(ctx, NULL, 0, NULL, 0, &NI_TRAVERSE, NI_NEXT);
@@ -500,4 +530,9 @@ void node_iterator_free(JSRuntime *rt)
        frees the array. A list that is already empty is freed at once, which is the ordinary case. */
     g_live_closed = 1;
     iter_live_drop();
+    /* THE CLASS ID IS NOT RESET HERE. It is declared under `element`, whose release ends in
+       agent_state_undo — one reset, computed from the registry that already holds this slot's address — and
+       this line is the claim that entitles it: element_free calls node_iterator_free, so the cascade
+       reached this file. See core/agent_state.h's agent_state_reached. */
+    agent_state_reached("element");
 }

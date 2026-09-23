@@ -3107,6 +3107,11 @@ void element_init(JSContext *ctx)
     node_init(ctx);
     JS_NewClassID(JS_GetRuntime(ctx), &g_element_class);
     JS_NewClass(JS_GetRuntime(ctx), g_element_class, &d);
+    /* DECLARED HERE AND NOT WITH THIS FILE'S OTHER THREE AT THE END OF THIS FUNCTION, because
+       core/agent_state.h's rule is that a slot is named beside the line that SETS it and this one is set
+       here. Those three are grouped for the reason core/dom/node.c's block states: g_ts is written by the
+       tree-steps RECORDER rather than by this function, and a declaration must run once per AGENT. */
+    agent_state_class("element", &g_element_class, "DOM §4.9 \"Interface Element\"'s class");
     node_claim_type(LXB_DOM_NODE_TYPE_ELEMENT, g_element_class);
     /* §13.3's serializer, declared before the four members that name it — `getHTML` is its own declaration and
        innerHTML's and outerHTML's getters are two magics on the same machine. */

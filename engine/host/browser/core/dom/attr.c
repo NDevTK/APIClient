@@ -31,6 +31,7 @@
 #include "solver/attr_shadow.h"
 #include "solver/concolic.h"
 #include "solver/dom_cow.h"
+#include "core/agent_state.h"
 #include "core/dom/attr.h"
 #include "core/dom/attr_list.h"
 #include "core/dom/element.h"
@@ -659,8 +660,10 @@ void attr_init(JSContext *ctx)
     CHECK(!JS_IsException(g_nnm_key), "the NamedNodeMap owner key could not be allocated");
     JS_NewClassID(JS_GetRuntime(ctx), &g_attr_class);
     JS_NewClass(JS_GetRuntime(ctx), g_attr_class, &ad);
+    agent_state_class("element", &g_attr_class, "DOM §4.9.2 \"Interface Attr\"'s class");
     JS_NewClassID(JS_GetRuntime(ctx), &g_nnm_class);
     JS_NewClass(JS_GetRuntime(ctx), g_nnm_class, &nd);
+    agent_state_class("element", &g_nnm_class, "DOM §4.9.1 \"Interface NamedNodeMap\"'s class");
     /* §4.9.2 `interface Attr : Node` — so it inherits Node's members rather than repeating them, and node_wrap
        hands an attribute THIS from now on instead of the bare Node it was giving. */
     node_claim_type(LXB_DOM_NODE_TYPE_ATTRIBUTE, g_attr_class);
@@ -746,4 +749,10 @@ void attr_free(JSRuntime *rt)
     JS_FreeValueRT(rt, g_nnm_key);   /* the prototypes are the REALMS' — released with their contexts */
     g_nnm_key = JS_UNDEFINED;
     g_ready = 0;
+    /* THE TWO CLASS IDS ARE NOT PUT BACK HERE. They are declared under `element`, whose release ends in
+       agent_state_undo — one reset, computed from the registry that already holds both addresses and their
+       kind, rather than a second list kept in step with the declarations above by whoever remembered.
+       AND THE CASCADE REACHED THIS FILE, which is the claim that entitles element_free's last line to put
+       them back: element_free calls attr_free and this says so. See core/agent_state.h. */
+    agent_state_reached("element");
 }

@@ -29,6 +29,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/dom/node.h"
 #include "core/dom/node_filter.h"
 #include "core/dom/tree_walker.h"
@@ -133,9 +134,22 @@ static WalkerData *walker_receiver(JSValueConst v)
    dereference of NULL in release. The refusal that replaces it is idl_this_attribute_get's THROW, which names
    the member and the interface and is compiled into both builds. */
 
+/* NEITHER OF THESE TWO READS THE CLASS ID, AND THAT IS THE PRICE OF DECLARING IT. The collector runs after
+   core/platform.c's release column — every host's teardown is platform_agent_free(), JS_RunGC,
+   JS_FreeRuntime — so by the time either of these is reached `g_walker_class` is back at 0 and
+   `JS_GetOpaque(val, 0)` answers NULL for every object of this class. THE TWO FAILURES ARE NOT ALIKE: the
+   finalizer would leak the record, its traverser and its `current` node pointer, silently; the mark is worse, because an
+   unmarked child keeps the internal reference gc_decref exists to subtract, so gc_scan reads it as rooted
+   from outside the heap and the object is never collected at all. The id is not needed — the collector
+   dispatched here THROUGH the class, so it is a fact these already have. JS_GetAnyOpaque and never walker_of,
+   for the reason core/geometry/dom_rect.c's pair reaches past its accessor: a capture during collection
+   would dup values on an object being torn down. See core/agent_state.h's closing paragraph. */
 static void walker_finalizer(JSRuntime *rt, JSValue val)
 {
-    WalkerData *w = JS_GetOpaque(val, g_walker_class);
+    JSClassID id = 0;
+    WalkerData *w = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
     if (!w) return;
     traverser_release(rt, &w->t);
     JS_FreeValueRT(rt, w->current);
@@ -144,7 +158,10 @@ static void walker_finalizer(JSRuntime *rt, JSValue val)
 
 static void walker_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    WalkerData *w = JS_GetOpaque(val, g_walker_class);
+    JSClassID id = 0;
+    WalkerData *w = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
     if (!w) return;
     traverser_mark(rt, &w->t, mark_func);
     JS_MarkValue(rt, w->current, mark_func);
@@ -625,6 +642,7 @@ void tree_walker_init(JSContext *ctx)
     g_walker_rt = JS_GetRuntime(ctx);
     JS_NewClassID(g_walker_rt, &g_walker_class);
     JS_NewClass(g_walker_rt, g_walker_class, &d);
+    agent_state_class("element", &g_walker_class, "DOM §6.2 \"Interface TreeWalker\"'s class");
     node_filter_init(ctx);
 
     /* EVERY ONE OF THEM STATES ITS RECEIVER INTERFACE — see walker_is. A member that does not is not merely
@@ -700,4 +718,12 @@ void tree_walker_install(JSContext *ctx, JSValueConst global)
 void tree_walker_free(JSRuntime *rt)
 {
     (void)rt;   /* the prototype is the REALM's — released with its context */
+    /* THE CLASS ID IS NOT RESET HERE. It is declared under `element`, whose release ends in
+       agent_state_undo — one reset, computed from the registry that already holds this slot's address — and
+       this line is the claim that entitles it: element_free calls tree_walker_free, so the cascade reached
+       this file. See core/agent_state.h's agent_state_reached.
+       g_walker_rt IS NOT DECLARED and stays as it is: it is re-set by the line under the latch above, which
+       is reachable again now that the latch is a slot the undo puts back. It is agent state this registry
+       has not been told about, and it is one of the rows `node engine/agentstate.mjs` does not search for. */
+    agent_state_reached("element");
 }

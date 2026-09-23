@@ -35,6 +35,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/idl_index_arg.h"
 #include "core/realm.h"
@@ -789,8 +790,10 @@ void collections_init(JSContext *ctx)
           "the collection slot keys could not be allocated");
     JS_NewClassID(JS_GetRuntime(ctx), &g_nodelist_class);
     JS_NewClass(JS_GetRuntime(ctx), g_nodelist_class, &nl);
+    agent_state_class("element", &g_nodelist_class, "DOM §4.2.10.1 \"Interface NodeList\"'s class");
     JS_NewClassID(JS_GetRuntime(ctx), &g_htmlcoll_class);
     JS_NewClass(JS_GetRuntime(ctx), g_htmlcoll_class, &hc);
+    agent_state_class("element", &g_htmlcoll_class, "DOM §4.2.10.2 \"Interface HTMLCollection\"'s class");
     /* ONE declaration for `item`, installed on BOTH prototypes — it is the same operation with the same
        conversion in both IDLs, and two pool entries would be two copies of one fact. */
     g_item_id = idl_method_id_step(ctx, ONE_ULONG, 1, NULL, 0, &COLL_ITEM_DECL, 0);
@@ -875,4 +878,8 @@ void collections_free(JSRuntime *rt)
     JS_FreeValueRT(rt, g_cache_key);
     g_key = g_cache_key = JS_UNDEFINED;
     g_ready = 0;
+    /* THE TWO CLASS IDS ARE NOT PUT BACK HERE — they are declared under `element`, whose release ends in
+       agent_state_undo, and this states that the cascade reached this file so that line may put them back.
+       See core/agent_state.h's agent_state_undo and agent_state_reached. */
+    agent_state_reached("element");
 }

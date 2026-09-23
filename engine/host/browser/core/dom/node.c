@@ -5370,18 +5370,34 @@ void node_init(JSContext *ctx)
     event_target_set_tree(&NODE_EVENT_TREE);
     engine_set_wrap_stats(node_wrap_stats);
 
+    /* THE SIX ARE DECLARED BESIDE THEIR MINTS AND NOT WITH THIS FILE'S OTHER TEN AT THE END OF THIS
+       FUNCTION: the block below is grouped because three of its slots are written by a REGISTRAR rather
+       than by this function, which is the exception core/agent_state.h's rule about declaring beside the
+       setting line names. These six are set here.
+       WHAT CARRYING THEM COST, WHICH IS WHY THIS IS NOT BOOKKEEPING: nothing put them back, and g_type_class
+       is refilled from them at every node_init, so a second agent in one process would have branded every
+       wrapper it minted with six ids the live runtime never handed out — JS_NewClassID in this fork returns
+       the number it is handed when that number is not 0, and the new runtime's allocator restarts at
+       JS_CLASS_INIT_COUNT and gives the same six to somebody else. */
     JS_NewClassID(JS_GetRuntime(ctx), &g_node_class);
     JS_NewClass(JS_GetRuntime(ctx), g_node_class, &def);
+    agent_state_class("element", &g_node_class, "DOM §4.4 \"Interface Node\"'s class");
     JS_NewClassID(JS_GetRuntime(ctx), &g_chardata_class);
     JS_NewClass(JS_GetRuntime(ctx), g_chardata_class, &cd_def);
+    agent_state_class("element", &g_chardata_class, "DOM §4.10 \"Interface CharacterData\"'s class");
     JS_NewClassID(JS_GetRuntime(ctx), &g_text_class);
     JS_NewClass(JS_GetRuntime(ctx), g_text_class, &tx_def);
+    agent_state_class("element", &g_text_class, "DOM §4.11 \"Interface Text\"'s class");
     JS_NewClassID(JS_GetRuntime(ctx), &g_comment_class);
     JS_NewClass(JS_GetRuntime(ctx), g_comment_class, &cm_def);
+    agent_state_class("element", &g_comment_class, "DOM §4.14 \"Interface Comment\"'s class");
     JS_NewClassID(JS_GetRuntime(ctx), &g_cdata_class);
     JS_NewClass(JS_GetRuntime(ctx), g_cdata_class, &cs_def);
+    agent_state_class("element", &g_cdata_class, "DOM §4.12 \"Interface CDATASection\"'s class");
     JS_NewClassID(JS_GetRuntime(ctx), &g_pi_class);
     JS_NewClass(JS_GetRuntime(ctx), g_pi_class, &pi_def);
+    agent_state_class("element", &g_pi_class,
+                      "DOM §4.13 \"Interface ProcessingInstruction\"'s class");
 
     /* Every node kind is a Node until a component claims it. A ProcessingInstruction wrapper answering the Node
        members is honest; a bare object answering none of them is not. */
