@@ -275,6 +275,23 @@ void css_cascade_pass_census(CssCascadePassCensus *out)
             "is an arm that took an answer without saying which outcome it was, and every share a reader "
             "divides out of these rows is over a denominator that is not the population",
             g_asks, g_served, g_resolved);
+    /* …AND THE DISCRIMINATOR'S OWN PRECONDITION, WHICH IS CHECKABLE ON ONE CENSUS AND WAS ASSERTED
+       NOWHERE. `g_served` is raised only past the `!g_open` gate in the ask, and `g_open` is set only by the
+       open that raises `g_passes` — so a served answer implies a span, and the implication costs one
+       comparison and needs no series. It is not decoration on the identity above: the header rests the whole
+       readability of `served_life` on `passes_life` telling an absent CALLER apart from keys that do not
+       repeat, and that row is the one this file's own residual names as the open question, so a SECOND opener
+       is the change most likely to be made here. An opener that set the record open without counting a span
+       would leave this row at zero while answers were served out of its spans — the discriminator lying
+       about exactly the split it exists to make, with the identity above still closing. */
+    DCHECKF(g_served == 0 || g_passes > 0,
+            "css-cascade-5 §4.2's cascaded-value record served %lld answers across %lld spans. An answer is "
+            "served only inside an open pass and a pass is opened only by the call that counts one, so a "
+            "served answer with no span counted is an opener that set this record open without raising that "
+            "count. `passes_life` is the one row that says whether a zero in `served_life` means there was no "
+            "caller or means the keys do not repeat, and those ask for opposite work — so every reader of "
+            "that split would be told there was no caller while this record was answering out of its spans",
+            g_served, g_passes);
     out->asks_life = g_asks;
     out->served_life = g_served;
     out->resolved_life = g_resolved;

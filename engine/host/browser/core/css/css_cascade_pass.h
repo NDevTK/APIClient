@@ -145,6 +145,41 @@
  * and core/css/css_computed_value.h. NEITHER IS PROPOSED HERE AS WORK: they are components this file does not
  * call, their magnitude is unmeasured, and a span attached on an argument rather than on a number is the
  * change CLAUDE.md refuses by name.
+ * AND WHAT THE SHIPPED PATH'S ASKS ARE IS DERIVABLE BY READING CALLERS, WHICH THE COUNT CANNOT SAY AND WHICH
+ * DECIDES THE NEXT DIFF. GREPPED: `cssom_cascaded_value` has three callers — this component's computed-value
+ * entry, core/html/html_element_view.c's chain detector and core/layout/used_value.c's positioning
+ * containing-block detector — and the first is reached from about twenty layout and view components, so the
+ * route is NOT one entry and no sentence naming one is true. What IS true is a statement about ORIGINS and it
+ * is the one the span question needs: `document_paint` is the only originator in this engine that is not
+ * either a JS member call or a step of HTML §8.1.7.3 "Processing model"'s update the rendering, and it has no
+ * shipped caller. So on a non-painting path every ask begins in one of those two, and BETWEEN two of them
+ * arbitrary page code runs — which the three write-side crashes above forbid inside a span, and which
+ * CLAUDE.md's per-opcode attention makes a possible flow SWITCH, the one case the tree version exists to
+ * crash on. A SPAN HELD ACROSS TWO ORIGINS IS THEREFORE NOT MERELY UNBUILT, IT IS UNSOUND, which is a
+ * stronger and more useful statement than `there is no caller`.
+ * A SPAN INSIDE ONE MEMBER CALL IS SOUND AND ITS WORTH IS UNMEASURED, WHICH IS THE HONEST STATE RATHER THAN A
+ * PROPOSAL. One member call is one C activation: no page code runs in it, and the per-opcode preempt is in
+ * the interpreter and not in a C body, so all three of this record's assertions hold over it by construction
+ * — and that is true of BOTH kinds of origin, which is why the observer gathers named above are candidates
+ * for the same reason a member call is and not for a different one. The two detectors are the clearest
+ * shipped-path instances, each a C loop over the ancestor chain asking the cascade once per ancestor per
+ * property, which is the many-elements property a span needs. What is unknown is whether a span would SERVE
+ * anything, which turns on whether one activation asks one PAIR twice. INFERRED and not measured, so it is
+ * written as the hypothesis it is: css-logical-1 §4's pairing climb asks `writing-mode` and `direction` once
+ * per ancestor and the positioning detector asks its three properties once per ancestor, and those are
+ * DISTINCT keys — so the repeats this record lives on may all be ACROSS member calls, which is the span that
+ * cannot be held. If that is so, the sound span serves nothing and the span that would serve is unsound, and
+ * the answer is neither an opener nor a memo but a caller that asks about many elements at once.
+ * THE ONE NUMBER THAT DECIDES IT IS NOT IN THIS CENSUS AND `passes_life` IS NOT IT: that row separates an
+ * absent CALLER from keys that do not repeat, and with no pass ever opened it separates nothing about
+ * repeats. What answers it is `served_life` read from a span opened around ONE of the two detectors, which is
+ * the candidate fix and its own measurement at once and costs a run that opens no pass nothing at all. It is
+ * NOT proposed here as work — whether either detector is worth a span is a question about a magnitude nobody
+ * has — and these paragraphs exist so the next reader spends their first command on that number rather than
+ * on an opener.
+ * RETIREMENT FOR THESE THREE PARAGRAPHS: they go when `served_life` has been read from a span opened anywhere
+ * on a non-painting path, because the repeat question is then answered by a measurement instead of by the
+ * inference above.
  * HOW ITS ABSENCE WOULD SHOW, AS AN OBSERVATION AND NOT AS AN INSTANCE: `node engine/layout_cost.mjs
  * <native binary>` on the `styled` shape reports `cascade_emit` EQUAL to `cssom_cascaded_value`, which that
  * file's own banner states is the sheet being flattened once per (element, property) resolution rather than
@@ -152,12 +187,21 @@
  * seeing the residue this record cannot remove rather than its absence. The absence itself is observed one
  * level out, in a run of the shipped extension: no paint entry is asked, so no pass is opened, so every ask
  * is a miss.
- * THE ACT THAT RETIRES IT AND WHO MAY PERFORM IT, because a passive condition reads as merely pending: the
- * census named above WAS an ENGINE-ONLY diff any lane may write, it is now written, and what is left is the
- * one act only the role that builds may perform — the number is in this tree and is not yet in any artifact,
- * so a reader who runs the product today still sees no `_cascade` block and that is a build and not a gap.
- * It is a narrower act than the trusted-zone landing the old clause asked for, and it is owed to a reader
- * rather than to a renderer.
+ * THE ACT THAT RETIRES THIS CLAUSE IS PERFORMED AND THE RESIDUAL IS NOT, WHICH IS THE PAIR A READER MUST NOT
+ * COLLAPSE. It read that the census was written, that the number was in this tree and in NO ARTIFACT, and
+ * that a reader who ran the product would therefore still see no `_cascade` block; it is rewritten rather
+ * than struck because a discharged act sitting inside a live residual reads as the whole record being spent.
+ * MEASURED, by content in the installed artifact and with two invented negative controls answering zero,
+ * against a stamp carrying an empty dirty cone: `_cascade`, `asksLife` and `passesLife` all occur in the
+ * shipped bytes. So the observation below can be RUN now, and running it retires THIS CLAUSE and nothing
+ * else — the RETIREMENT at the foot of this record is a shipped-path OPENER, and no build supplies one.
+ * AND IT HAS BEEN RUN, WHICH IS WHAT TURNS THE ARGUMENT AT THE TOP OF THIS FILE INTO A NUMBER. RELAYED to
+ * the lane that wrote this rather than taken by it, and labelled as a relay for that reason: a live run over
+ * a real page read `asksLife 4380, servedLife 0, resolvedLife 4380, passesLife 0`. Three of those four are
+ * what solver/result.c's own block predicts BY CONSTRUCTION for any path that does not paint, so they
+ * corroborate the wiring and settle nothing. The MAGNITUDE is the new fact and it is the one this component
+ * was justified by: four thousand asks, on one page, for an answer that is a function of the element and the
+ * property and of nothing about who is asking, with this record never once consulted.
  * RETIREMENT — IT NO LONGER GOES WITH qjs_abi.h's, AND THE UNCOUPLING IS THE CORRECTION RATHER THAN A
  * DETAIL: this record goes when `css_cascade_pass_open` has a caller on a path the shipped product runs,
  * whatever that caller turns out to be. Tying the condition to a PAINT is what made every reader of it,
@@ -272,7 +316,13 @@ void css_cascade_pass_record(lxb_dom_element_t *el, const char *name, const char
    function opens both passes today: that is a fact about one caller rather than about either component, and
    the open question this file records is whether a SECOND, non-paint opener belongs here — the day one lands,
    the two rows legitimately differ and a reader who had been inferring one from the other is reading a number
-   about the other component's spans. */
+   about the other component's spans.
+   AND THIS ROW'S OWN PRECONDITION IS ASSERTED BESIDE THE IDENTITY RATHER THAN LEFT TO A READER'S ARITHMETIC:
+   an answer is served only inside an open pass and a pass is opened only by the call that counts one, so
+   `served_life > 0` implies `passes_life > 0`. It is checkable on ONE census, and it is the check that says
+   this row may be TRUSTED as the discriminator at all — a second opener, which is the change this file's own
+   residual names as the open question, could set the record open without counting a span, and would then
+   leave this row at zero while answers were served out of its spans with the identity above still closing. */
 typedef struct {
     long long asks_life;
     long long served_life;
