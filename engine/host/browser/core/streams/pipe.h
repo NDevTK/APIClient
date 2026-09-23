@@ -5,7 +5,11 @@
 #include "quickjs.h"
 
 void pipe_init(JSContext *ctx);
-void pipe_free(JSContext *ctx);
+/* THE SUB-COMPONENT'S HALF OF `readable_stream`'s RELEASE, reached from readable_stream_free and from
+   nowhere else -- this component has no row on core/platform.c's list, because a row is a declare and a
+   release that file itself calls. It takes NOTHING: the state it gives back is the AGENT'S, and the one
+   per-realm value it named went back with its context, so the JSContext this used to take was unread. */
+void pipe_free(void);
 
 /* Install `pipeTo` and `pipeThrough` on ReadableStream.prototype. Called by readable_stream_install with the
    prototype it has just built: the two members belong to §4.2's interface, and the ALGORITHM behind them is

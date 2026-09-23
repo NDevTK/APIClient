@@ -10,7 +10,13 @@ void readable_stream_init(JSContext *ctx);
 /* §4.2's, §4.4's, §4.5's and §4.6's prototypes and INTERFACE OBJECTS, for ONE realm — Web IDL §3.8 "Platform
    objects implementing interfaces" is given a realm, so there is no per-document half to declare here. */
 void readable_stream_install_protos(JSContext *ctx);
-void readable_stream_free(JSContext *ctx);
+/* THE AGENT'S HALF, RUN ONCE FROM core/platform.c's RELEASE COLUMN, and the CASCADE that reaches this row's
+   two sub-components -- core/streams/pipe.c and core/streams/readable_byte_stream.c, neither of which has a
+   row of its own, because a row is a declare and a release core/platform.c itself calls. It takes NOTHING:
+   the state it gives back is the AGENT'S, and the prototypes and captured operations belong to the realms
+   that hold them and go with their contexts, so the JSContext this used to take was passed straight to
+   pipe_free, which did not read it either. */
+void readable_stream_free(void);
 
 /* A STREAM OVER BYTES THE HOST ALREADY HAS — `blob.stream()`, and every other place a spec answers with a
    stream whose source is not the page's. The bytes are enqueued as one chunk and the stream is closed, which is

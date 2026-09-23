@@ -383,6 +383,36 @@ static void r_nav_destination(JSRuntime *rt) { navigation_destination_free(rt); 
 /* §5's four interned field names. fetch was one of the forty-three rows with a declare and an EMPTY third
    column, and the atom walk named all four on 118 files of an area that touches fetch only incidentally. */
 static void r_fetch(JSRuntime *rt) { fetch_free(rt); }
+/* THE WHOLE STREAMS GROUP, AND IT MOVES AS A BLOCK FOR THE REASON THE DOM GROUP DOES. All four releases were
+   written by hand into THREE host teardowns — engine/host/main.c, engine/host/wpt_runner.c and
+   engine/host/test_forced.c — and run AFTER platform_agent_free had already run this entire column. Reverse
+   declaration order over these four rows is transform_stream, writable_stream, queuing_strategy,
+   readable_stream, which is EXACTLY the sequence all three hand-written lists already had them in, so nothing
+   about the group's internal order changes; taking one of them alone would have lifted it over the other
+   three, since everything on this column runs before everything left out there.
+   WHAT THEY HELD WHILE THEY SAT OUT THERE, which is the point rather than the tidiness. A row with agent state
+   and an empty release column is what platform_check_agent_state below fires on, so NONE of these four could
+   declare a slot to core/agent_state.h while its release was a line in a host — and between them they carried
+   FIFTEEN CLASS IDS and THIRTY-THREE PER-REALM VALUE SLOTS past their own release — nine slot identifiers,
+   most of them arrays — every one of them a number JS_NewClassID handed out of a runtime that is gone.
+   A carried class id is not the cautious half of a tie: it
+   doubles as each component's declaration latch, so the NEXT agent's `_init` returns before re-registering,
+   and every ReadableStream, WritableStream, TransformStream and queuing strategy that agent mints is branded
+   with an id the live runtime never issued, with every `JS_GetOpaque(v, id)` in the group answering about
+   whichever class did get that number.
+   THE CASCADE IS readable_stream's: core/streams/pipe.c and core/streams/readable_byte_stream.c have no row
+   here and never should, because readable_stream_init calls their inits and readable_stream_free calls their
+   releases — a row is a declare and a release THIS FILE calls. Both declare their own state under
+   `readable_stream` and both say so with agent_state_reached at the end of their own release, which is what
+   lets the undo at the end of readable_stream_free refuse to put back a slot the cascade never reached.
+   NONE OF THE FOUR TAKES A JSContext ANY MORE. Each used to and none of them read it: the prototypes and the
+   captured operations are the REALMS' and go with their contexts, so what was left was the agent's, which is
+   this column's entry condition. The parameter was the last thing making them look like per-realm components
+   in the wrong column. */
+static void r_readable_stream(JSRuntime *rt) { (void)rt; readable_stream_free(); }
+static void r_queuing_strategy(JSRuntime *rt) { (void)rt; queuing_strategy_free(); }
+static void r_writable_stream(JSRuntime *rt) { (void)rt; writable_stream_free(); }
+static void r_transform_stream(JSRuntime *rt) { (void)rt; transform_stream_free(); }
 /* THE DOM GROUP, WHOSE ROOT IS THE LARGEST CASCADE IN THIS BROWSER. element_free reaches forty-two further
    releases — node.c's WRAPPER IDENTITY TABLE (a counted reference to every node wrapper ever minted, and a
    wrapper holds its prototype, which holds the realm), custom_elements' registry backup and active-constructor
@@ -764,10 +794,10 @@ static const PlatformComponent PLATFORM[] = {
        prototypes come from a second realm intrinsic that `readable_stream`'s declare half registers, and its
        two interface objects used to be placed by a call on the last line of the per-document install this
        comment replaces. */
-    { "readable_stream",     d_readable_stream,     NULL },
-    { "queuing_strategy",    d_queuing_strategy,    NULL },
-    { "writable_stream",     d_writable_stream,     NULL },
-    { "transform_stream",    d_transform_stream,    NULL },
+    { "readable_stream",     d_readable_stream,     NULL,        r_readable_stream },
+    { "queuing_strategy",    d_queuing_strategy,    NULL,        r_queuing_strategy },
+    { "writable_stream",     d_writable_stream,     NULL,        r_writable_stream },
+    { "transform_stream",    d_transform_stream,    NULL,        r_transform_stream },
     /* NO DOCUMENT HALF. File API §3 "The Blob Interface and Binary Data" declares Blob and File API §4 "The
        File Interface" declares File, both `[Exposed=(Window,Worker)]`, and Web IDL §3.8 Platform objects
        implementing interfaces is "To define the global property references on target, given realm realm" whose

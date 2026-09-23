@@ -34,6 +34,7 @@
 #include "core/events/event_target.h"
 #include "core/streams/stream_work.h"
 #include "solver/cow.h"
+#include "core/agent_state.h"
 #include "core/streams/writable_stream.h"
 
 /* §5.2's four states are declared in the header: §4.2.4's pipeTo branches on them, and two spellings of one
@@ -91,7 +92,8 @@ static int g_ws_ctor_stepid = -1, g_wr_ctor_stepid = -1, g_getwriter_stepid = -1
 
 static void ws_finalizer(JSRuntime *rt, JSValue val)
 {
-    WsData *d = JS_GetOpaque(val, g_ws_class);
+    JSClassID id;
+    WsData *d = JS_GetAnyOpaque(val, &id);
     int i;
     if (!d) return;
     JS_FreeValueRT(rt, d->stored_error);
@@ -112,7 +114,8 @@ static void ws_finalizer(JSRuntime *rt, JSValue val)
 
 static void ws_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    WsData *d = JS_GetOpaque(val, g_ws_class);
+    JSClassID id;
+    WsData *d = JS_GetAnyOpaque(val, &id);
     int i;
     if (!d) return;
     JS_MarkValue(rt, d->stored_error, mark_func);
@@ -132,7 +135,8 @@ static void ws_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 
 static void wr_finalizer(JSRuntime *rt, JSValue val)
 {
-    WsWriterData *w = JS_GetOpaque(val, g_wr_class);
+    JSClassID id;
+    WsWriterData *w = JS_GetAnyOpaque(val, &id);
     int i;
     if (!w) return;
     JS_FreeValueRT(rt, w->stream);
@@ -144,7 +148,8 @@ static void wr_finalizer(JSRuntime *rt, JSValue val)
 
 static void wr_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    WsWriterData *w = JS_GetOpaque(val, g_wr_class);
+    JSClassID id;
+    WsWriterData *w = JS_GetAnyOpaque(val, &id);
     int i;
     if (!w) return;
     JS_MarkValue(rt, w->stream, mark_func);
@@ -158,7 +163,8 @@ static void wr_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 
 static void wc_finalizer(JSRuntime *rt, JSValue val)
 {
-    WsCtrlData *c = JS_GetOpaque(val, g_wc_class);
+    JSClassID id;
+    WsCtrlData *c = JS_GetAnyOpaque(val, &id);
     if (!c) return;
     JS_FreeValueRT(rt, c->stream);
     JS_FreeValueRT(rt, c->sink);
@@ -174,7 +180,8 @@ static void wc_finalizer(JSRuntime *rt, JSValue val)
 
 static void wc_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    WsCtrlData *c = JS_GetOpaque(val, g_wc_class);
+    JSClassID id;
+    WsCtrlData *c = JS_GetAnyOpaque(val, &id);
     if (!c) return;
     JS_MarkValue(rt, c->stream, mark_func);
     JS_MarkValue(rt, c->sink, mark_func);
@@ -190,7 +197,15 @@ static void wc_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 /* THE RECORDS TIME-TRAVEL, AND THE CAPTURE IS IN THE ACCESSOR — §4's comment on the same three lines gives the
    whole reason, and this half has the identical exposure: a flow that took the writer held the lock for every
    sibling, and one flow's write advanced the queue head for all of them. The offset lists are the same lists
-   the finalizers free. Finalizers and gc_marks go through JS_GetOpaque, deliberately. */
+   the finalizers free.
+   THE FINALIZERS AND gc_marks USED TO GO THROUGH JS_GetOpaque AND NOW GO THROUGH JS_GetAnyOpaque, which is this
+   component's own agent state becoming CHECKED rather than a style change -- the word `deliberately` stood here
+   and was true only while this row's three class ids were never given back. core/agent_state.h's closing
+   paragraph is the argument: the collection that finalizes a page's object graph runs AFTER the release column,
+   so a finalizer reading the very id its own release has put back at 0 gets `JS_GetOpaque(val, 0)` and answers
+   NULL for every live object of it. The collector dispatched HERE THROUGH the class, so the id is a fact it
+   already has and must not look up; the brand-checking accessors below still ask by id, because a brand check is
+   the one question JS_GetAnyOpaque cannot answer. */
 #define WS_OFF(T, f) (uint16_t)offsetof(T, f)
 #define WS_NVAL(a)   (int)(sizeof(a) / sizeof((a)[0]))
 static const uint16_t WS_VALS[] = {
@@ -2028,31 +2043,47 @@ void writable_stream_init(JSContext *ctx)
     DCHECK(g_ws_rt == NULL || g_ws_rt == rt, "WritableStream was installed into a second runtime");
     if (g_ws_rt == rt) return;
     g_ws_rt = rt;
+    /* EVERY STATIC BELOW IS THIS AGENT'S, DECLARED BESIDE THE LINE THAT SETS IT (core/agent_state.h). The three
+       class ids are the sharp ones: this file's release used to leave all three SET, and an id carried into a
+       second agent names a class in a runtime that is gone while the latch above reads it as already declared,
+       so the next agent's init returns before re-registering and every WritableStream it mints is branded with
+       a number the live runtime never issued. */
+    agent_state_ptr("writable_stream", &g_ws_rt, "the runtime §5's three classes and its machines were declared in");
     JS_NewClassID(rt, &g_ws_class);  JS_NewClass(rt, g_ws_class, &sd);
+    agent_state_class("writable_stream", &g_ws_class, "§5.2 The WritableStream class's class, and the declaration latch's brand");
     JS_NewClassID(rt, &g_wr_class);  JS_NewClass(rt, g_wr_class, &rd);
+    agent_state_class("writable_stream", &g_wr_class, "§5.3 The WritableStreamDefaultWriter class's class");
     JS_NewClassID(rt, &g_wc_class);  JS_NewClass(rt, g_wc_class, &cd);
+    agent_state_class("writable_stream", &g_wc_class, "§5.4 The WritableStreamDefaultController class's class");
 
     for (i = 0; i < OP_N; i++) {
         g_op_stepid[i] = JS_RegisterStepDef(rt, &js_ws_defs[i]);
         CHECK(g_op_stepid[i] >= 0, "streams: no step id for a §5 operation");
+        agent_state_id("writable_stream", &g_op_stepid[i], "one of §5's step machines");
     }
 
     g_getwriter_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_gw_decl, GW_SELF);
+    agent_state_id("writable_stream", &g_getwriter_stepid, "§5.2.4 The WritableStream class's getWriter declaration");
     {
         static const char *const OP_NAME[WS_OP_N] = {
             "WritableStream.getWriter", "WritableStream.abort", "writer.write", "writer.close",
             "writer.abort", "writer.releaseLock", "controller.error",
         };
-        for (i = 0; i < WS_OP_N; i++)
+        for (i = 0; i < WS_OP_N; i++) {
             g_op_fn_slot[i] = realm_value_declare(ctx, OP_NAME[i]);
+            agent_state_realm_slot("writable_stream", &g_op_fn_slot[i],
+                                   "one of §5's seven captured operations' per-realm value slots");
+        }
     }
     realm_declare_intrinsic(writable_stream_install_protos);
 
     g_ws_ctor_stepid = idl_method_id_step(ctx, SINK_AND_STRATEGY, 2, QUEUING_STRATEGY,
                                           (int)(sizeof QUEUING_STRATEGY / sizeof QUEUING_STRATEGY[0]),
                                           &js_ws_ctor_decl, 0);
+    agent_state_id("writable_stream", &g_ws_ctor_stepid, "§5.2 The WritableStream class's constructor declaration");
     idl_optional_from(0);   /* §5.2: both constructor arguments are optional */
     g_wr_ctor_stepid = idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &js_gw_decl, GW_CTOR);
+    agent_state_id("writable_stream", &g_wr_ctor_stepid, "§5.3 The WritableStreamDefaultWriter class's constructor declaration");
 }
 
 /* §5.2's, §5.3's AND §5.4's INTERFACE PROTOTYPE OBJECTS AND INTERFACE OBJECTS, FOR ONE REALM, and the abstract
@@ -2155,12 +2186,18 @@ void writable_stream_install_protos(JSContext *ctx)
     JS_FreeValue(ctx, global);
 }
 
-void writable_stream_free(JSContext *ctx)
+void writable_stream_free(void)
 {
-    int i;
     if (!g_ws_rt) return;
-    /* the prototypes and the captured operations are the REALMS' — released with their contexts */
-    g_ws_rt = NULL;
-    g_ws_ctor_stepid = g_wr_ctor_stepid = g_getwriter_stepid = -1;
-    for (i = 0; i < OP_N; i++) g_op_stepid[i] = -1;
+    /* The prototypes and the captured operations are the REALMS' — released with their contexts, so this
+       component owns no reference and there is nothing to free above the undo.
+       EVERY HANDLE THIS ROW DECLARED, GIVEN BACK FROM THE ONE LIST THAT ALREADY NAMES THEM. The three lines
+       that stood here reset the runtime pointer, three declaration ids and the machine ids, and left ALL THREE
+       CLASS IDS AND ALL SEVEN REALM SLOTS SET — a hand-maintained second copy of the declaration list, which
+       is the failure core/agent_state.h's undo exists to end. A declaration added to the init above now owes
+       this function nothing.
+       LAST, AND THE ORDER IS THE CONTRACT: nothing above reads any of these slots today, and the undo goes at
+       the end so a release that later has to assert a claimant has handed something back can do so against a
+       slot this has not yet nulled. */
+    agent_state_undo("writable_stream");
 }

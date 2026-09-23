@@ -9,7 +9,12 @@ void writable_stream_init(JSContext *ctx);
 /* §5.2's, §5.3's and §5.4's prototypes and INTERFACE OBJECTS, for ONE realm — Web IDL §3.8 "Platform objects
    implementing interfaces" is given a realm, so there is no per-document half to declare here. */
 void writable_stream_install_protos(JSContext *ctx);
-void writable_stream_free(JSContext *ctx);
+/* THE AGENT'S HALF, RUN ONCE FROM core/platform.c's RELEASE COLUMN. It takes NOTHING because the state it
+   gives back is the AGENT'S and not a realm's: the prototypes and the seven captured operations belong to
+   the realms that hold them and go with their contexts, so the JSContext this used to take was unread.
+   That argument is core/platform.c's own -- a row that wanted a JSContext would be a per-realm component
+   in the wrong column -- and the parameter was the last thing making this look like one. */
+void writable_stream_free(void);
 
 /* IS THIS A WritableStream? §4.2's `pipeTo` takes one, and a union arm is a brand test. */
 bool writable_stream_is(JSValueConst v);

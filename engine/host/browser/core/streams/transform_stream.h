@@ -9,7 +9,12 @@ void transform_stream_init(JSContext *ctx);
 /* §6.2's and §6.3's prototypes and INTERFACE OBJECTS, for ONE realm — Web IDL §3.8 "Platform objects
    implementing interfaces" is given a realm, so there is no per-document half to declare here. */
 void transform_stream_install_protos(JSContext *ctx);
-void transform_stream_free(JSContext *ctx);
+/* THE AGENT'S HALF, RUN ONCE FROM core/platform.c's RELEASE COLUMN. It takes NOTHING because the state it
+   gives back is the AGENT'S and not a realm's: the prototypes and the four captured operations belong to
+   the realms that hold them and go with their contexts, so the JSContext this used to take was unread.
+   That argument is core/platform.c's own -- a row that wanted a JSContext would be a per-realm component
+   in the wrong column -- and the parameter was the last thing making this look like one. */
+void transform_stream_free(void);
 
 /* IS THIS A TransformStream? A brand test, for the same reason §4's and §5's exist. */
 bool transform_stream_is(JSValueConst v);

@@ -47,6 +47,7 @@
 #include "core/streams/stream_work.h"
 #include "solver/cow.h"
 #include "core/structured_clone.h"
+#include "core/agent_state.h"
 #include "core/streams/readable_stream.h"
 #include "core/streams/readable_stream_impl.h"
 #include "core/streams/readable_byte_stream.h"
@@ -102,7 +103,8 @@ static int       g_rxn_stepids[4] = { -1, -1, -1, -1 };
 
 static void stream_finalizer(JSRuntime *rt, JSValue val)
 {
-    StreamData *d = JS_GetOpaque(val, g_stream_class);
+    JSClassID id;
+    StreamData *d = JS_GetAnyOpaque(val, &id);
     if (!d) return;
     JS_FreeValueRT(rt, d->stored_error);
     JS_FreeValueRT(rt, d->reader);
@@ -118,7 +120,8 @@ static void stream_finalizer(JSRuntime *rt, JSValue val)
    gc_mark is for. */
 static void stream_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    StreamData *d = JS_GetOpaque(val, g_stream_class);
+    JSClassID id;
+    StreamData *d = JS_GetAnyOpaque(val, &id);
     if (!d) return;
     JS_MarkValue(rt, d->stored_error, mark_func);
     JS_MarkValue(rt, d->reader, mark_func);
@@ -131,7 +134,8 @@ static void stream_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fu
 
 static void reader_finalizer(JSRuntime *rt, JSValue val)
 {
-    ReaderData *r = JS_GetOpaque(val, g_reader_class);
+    JSClassID id;
+    ReaderData *r = JS_GetAnyOpaque(val, &id);
     if (!r) return;
     JS_FreeValueRT(rt, r->stream);
     JS_FreeValueRT(rt, r->closed);
@@ -142,7 +146,8 @@ static void reader_finalizer(JSRuntime *rt, JSValue val)
 
 static void reader_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    ReaderData *r = JS_GetOpaque(val, g_reader_class);
+    JSClassID id;
+    ReaderData *r = JS_GetAnyOpaque(val, &id);
     if (!r) return;
     JS_MarkValue(rt, r->stream, mark_func);
     JS_MarkValue(rt, r->closed, mark_func);
@@ -152,7 +157,8 @@ static void reader_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fu
 
 static void ctrl_finalizer(JSRuntime *rt, JSValue val)
 {
-    ControllerData *c = JS_GetOpaque(val, g_ctrl_class);
+    JSClassID id;
+    ControllerData *c = JS_GetAnyOpaque(val, &id);
     if (!c) return;
     JS_FreeValueRT(rt, c->stream);
     JS_FreeValueRT(rt, c->pull_fn);
@@ -164,7 +170,8 @@ static void ctrl_finalizer(JSRuntime *rt, JSValue val)
 
 static void ctrl_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    ControllerData *c = JS_GetOpaque(val, g_ctrl_class);
+    JSClassID id;
+    ControllerData *c = JS_GetAnyOpaque(val, &id);
     if (!c) return;
     JS_MarkValue(rt, c->stream, mark_func);
     JS_MarkValue(rt, c->pull_fn, mark_func);
@@ -181,8 +188,16 @@ static void ctrl_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func
  * record reached by a flow is a record that flow may write, the delta dedups it to one entry, and there are at
  * most a handful of streams in a flow — so capturing on REACH costs nothing measurable and removes the entire
  * class of "a write site was missed", which is the only way this can go wrong.
- * The finalizers and gc_marks go through JS_GetOpaque instead, deliberately: a capture during collection would
- * dup values on an object that is being torn down.
+ * The finalizers and gc_marks do NOT come through these accessors, deliberately: a capture during collection
+ * would dup values on an object that is being torn down. They read the record with JS_GetAnyOpaque, which is
+ * this component's own agent state becoming CHECKED rather than a style change -- that line read JS_GetOpaque
+ * while these six class ids were never given back. core/agent_state.h's closing paragraph is the argument: the
+ * collection that finalizes a page's object graph runs AFTER the release column, so a finalizer reading the
+ * very id its own release has put back at 0 gets `JS_GetOpaque(val, 0)` and answers NULL for every live object
+ * of it -- and an unmarked child is worse than a leaked one, because it keeps the internal reference gc_decref
+ * subtracts and gc_scan then reads it as rooted from OUTSIDE the heap. The collector dispatched THERE THROUGH
+ * the class, so the id is a fact it already has and must not look up; the accessors below still ask by id,
+ * because a brand check is the one question JS_GetAnyOpaque cannot answer.
  * The offset lists say what the record OWNS, and they are the SAME lists the finalizers free. A field added to
  * one and not the other is exactly the bug this exists to prevent, which is why they are read together. */
 #define RS_OFF(T, f) (uint16_t)offsetof(T, f)
@@ -2430,7 +2445,8 @@ static int       g_tee_stepids[TEE_N];
 
 static void tee_finalizer(JSRuntime *rt, JSValue val)
 {
-    TeeData *t = JS_GetOpaque(val, g_tee_class);
+    JSClassID id;
+    TeeData *t = JS_GetAnyOpaque(val, &id);
     int i;
     if (!t) return;
     JS_FreeValueRT(rt, t->stream);
@@ -2447,7 +2463,8 @@ static void tee_finalizer(JSRuntime *rt, JSValue val)
 
 static void tee_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    TeeData *t = JS_GetOpaque(val, g_tee_class);
+    JSClassID id;
+    TeeData *t = JS_GetAnyOpaque(val, &id);
     int i;
     if (!t) return;
     JS_MarkValue(rt, t->stream, mark_func);
@@ -3688,7 +3705,8 @@ static int       g_from_stepids[FROM_N];
 
 static void from_finalizer(JSRuntime *rt, JSValue val)
 {
-    FromData *f = JS_GetOpaque(val, g_from_class);
+    JSClassID id;
+    FromData *f = JS_GetAnyOpaque(val, &id);
     if (!f) return;
     JS_FreeValueRT(rt, f->iterator);
     JS_FreeValueRT(rt, f->next_fn);
@@ -3698,7 +3716,8 @@ static void from_finalizer(JSRuntime *rt, JSValue val)
 
 static void from_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    FromData *f = JS_GetOpaque(val, g_from_class);
+    JSClassID id;
+    FromData *f = JS_GetAnyOpaque(val, &id);
     if (!f) return;
     JS_MarkValue(rt, f->iterator, mark_func);
     JS_MarkValue(rt, f->next_fn, mark_func);
@@ -4146,7 +4165,8 @@ static int       g_drain_stepids[DRAIN_N];
 
 static void drain_finalizer(JSRuntime *rt, JSValue val)
 {
-    DrainData *dr = JS_GetOpaque(val, g_drain_class);
+    JSClassID id;
+    DrainData *dr = JS_GetAnyOpaque(val, &id);
     if (!dr) return;
     JS_FreeValueRT(rt, dr->reader);
     JS_FreeValueRT(rt, dr->recv);
@@ -4158,7 +4178,8 @@ static void drain_finalizer(JSRuntime *rt, JSValue val)
 
 static void drain_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    DrainData *dr = JS_GetOpaque(val, g_drain_class);
+    JSClassID id;
+    DrainData *dr = JS_GetAnyOpaque(val, &id);
     if (!dr) return;
     JS_MarkValue(rt, dr->reader, mark_func);
     JS_MarkValue(rt, dr->recv, mark_func);
@@ -4808,18 +4829,32 @@ void readable_stream_init(JSContext *ctx)
     DCHECK(g_rs_rt == NULL || g_rs_rt == rt, "ReadableStream was installed into a second runtime");
     if (g_rs_rt == rt) return;
     g_rs_rt = rt;
+    /* EVERY STATIC BELOW IS THIS AGENT'S, DECLARED BESIDE THE LINE THAT SETS IT (core/agent_state.h), AND SO
+       IS EVERY ONE IN THE TWO SUB-COMPONENTS THIS FUNCTION INITIALISES — core/streams/pipe.c and
+       core/streams/readable_byte_stream.c declare under THIS row's name, because this row's release is what
+       reaches theirs, which is what core/agent_state.h means by a sub-component naming the row that releases
+       it. The SIX class ids here are the sharp ones: this file's release used to leave every one of them SET,
+       and an id carried into a second agent names a class in a runtime that is gone while the latch above
+       reads it as already declared — so the next agent's init returns before re-registering and every
+       ReadableStream it mints is branded with a number the live runtime never issued. */
+    agent_state_ptr("readable_stream", &g_rs_rt, "the runtime §4's classes and its machines were declared in");
     JS_NewClassID(rt, &g_stream_class);
     JS_NewClass(rt, g_stream_class, &sd);
+    agent_state_class("readable_stream", &g_stream_class,
+                      "§4.2 The ReadableStream class's class, and the declaration latch's brand");
     JS_NewClassID(rt, &g_reader_class);
     JS_NewClass(rt, g_reader_class, &rd);
+    agent_state_class("readable_stream", &g_reader_class, "§4.4 The ReadableStreamDefaultReader class's class");
 
     g_getreader_id = idl_method_id_step(ctx, ONE_DICT, 1, GET_READER_OPTIONS,
                                        (int)(sizeof GET_READER_OPTIONS / sizeof *GET_READER_OPTIONS),
                                        &js_get_reader_decl, GR_SELF);
+    agent_state_id("readable_stream", &g_getreader_id, "§4.2's getReader declaration");
     idl_optional_from(0);   /* §4.2: `getReader(optional ReadableStreamGetReaderOptions options = {})` */
     for (i = 0; i < 3; i++) {
         g_cancel_stepids[i] = JS_RegisterStepDef(rt, &js_cancel_defs[i]);
         CHECK(g_cancel_stepids[i] >= 0, "streams: no step id for cancel");
+        agent_state_id("readable_stream", &g_cancel_stepids[i], "one of cancel's three step machines");
     }
 
     {
@@ -4827,32 +4862,42 @@ void readable_stream_init(JSContext *ctx)
                           .gc_mark = ctrl_gc_mark };
         JS_NewClassID(rt, &g_ctrl_class);
         JS_NewClass(rt, g_ctrl_class, &cd);
+        agent_state_class("readable_stream", &g_ctrl_class,
+                          "§4.6 The ReadableStreamDefaultController class's class");
         for (i = 0; i < 3; i++) {
             g_ctrl_stepids[i] = JS_RegisterStepDef(rt, &js_ctrl_defs[i]);
             CHECK(g_ctrl_stepids[i] >= 0, "streams: no step id for a controller member");
+            agent_state_id("readable_stream", &g_ctrl_stepids[i], "one of §4.6's three member step machines");
         }
     }
     for (i = 0; i < 4; i++) {
         g_rxn_stepids[i] = JS_RegisterStepDef(rt, &js_rxn_defs[i]);
         CHECK(g_rxn_stepids[i] >= 0, "streams: no step id for a §4.5 reaction");
+        agent_state_id("readable_stream", &g_rxn_stepids[i], "one of §4.5's four reaction step machines");
     }
     for (i = 0; i < 2; i++) {
         g_fwd_stepids[i] = JS_RegisterStepDef(rt, &js_fwd_defs[i]);
         CHECK(g_fwd_stepids[i] >= 0, "streams: no step id for a forwarding reaction");
+        agent_state_id("readable_stream", &g_fwd_stepids[i], "one of the two forwarding reaction step machines");
     }
 
     for (i = 0; i < 2; i++) {
         g_release_stepids[i] = JS_RegisterStepDef(rt, &js_release_defs[i]);
         CHECK(g_release_stepids[i] >= 0, "streams: no step id for releaseLock");
+        agent_state_id("readable_stream", &g_release_stepids[i], "one of releaseLock's two step machines");
     }
     g_read_stepid = JS_RegisterStepDef(rt, &js_read_def);
     CHECK(g_read_stepid >= 0, "streams: no step id for read");
+    agent_state_id("readable_stream", &g_read_stepid, "§4.4's read step machine");
 
     /* §4.7's controller and §4.8's BYOB request are their own component, and it declares itself here for the
        reason every other one does: a realm's list of intrinsics is built from the declarations, so a component
        nobody initialises is a component no realm has. */
     readable_byte_stream_init(ctx);
     g_byob_proto_slot = realm_value_declare(ctx, "ReadableStreamBYOBReader.prototype");
+    agent_state_realm_slot("readable_stream", &g_byob_proto_slot,
+                           "§4.5 The ReadableStreamBYOBReader class's per-realm prototype slot — it shares "
+                           "§4.4's class, so its prototype cannot live in the class slot");
 
     /* §4.2.1's `async_iterable<any>(optional ReadableStreamIteratorOptions options = {})`. The DECLARATION is
        Web IDL's — the iterator class, its prototype, the three step machines behind `next` and `return`, and
@@ -4861,8 +4906,12 @@ void readable_stream_init(JSContext *ctx)
     for (i = 0; i < RSI_RXN_N; i++) {
         g_rsi_stepids[i] = JS_RegisterStepDef(rt, &js_rs_iter_rxn_defs[i]);
         CHECK(g_rsi_stepids[i] >= 0, "streams: no step id for a §4.2.5 read request");
+        agent_state_id("readable_stream", &g_rsi_stepids[i], "one of §4.2.5's read-request reaction machines");
     }
     g_rs_iter_handle = idl_async_iter_declare(ctx, &RS_ITER_OPS);
+    agent_state_id("readable_stream", &g_rs_iter_handle,
+                   "§4.2.1's async_iterable declaration handle — a handle into the IDL pool, which gives its "
+                   "storage back with the runtime, so what this component owns is the number");
 
     /* §4.2's tee. Its branches' pull and cancel are step closures, so they need the controller's members as
        function objects for the same reason §4.4 needs the reader's. */
@@ -4870,19 +4919,26 @@ void readable_stream_init(JSContext *ctx)
         JSClassDef td = { "ReadableStream tee", .finalizer = tee_finalizer, .gc_mark = tee_gc_mark };
         JS_NewClassID(rt, &g_tee_class);
         JS_NewClass(rt, g_tee_class, &td);
+        agent_state_class("readable_stream", &g_tee_class, "§4.2's tee record's class");
         for (i = 0; i < TEE_N; i++) {
             g_tee_stepids[i] = JS_RegisterStepDef(rt, &js_tee_defs[i]);
             CHECK(g_tee_stepids[i] >= 0, "streams: no step id for a tee operation");
+            agent_state_id("readable_stream", &g_tee_stepids[i], "one of §4.2's tee operations' machines");
         }
         /* §4.9.1's OTHER tee, which shares this record and this class and nothing else. */
         for (i = 0; i < BTEE_N; i++) {
             g_btee_stepids[i] = JS_RegisterStepDef(rt, &js_btee_defs[i]);
             CHECK(g_btee_stepids[i] >= 0, "streams: no step id for a byte tee operation");
+            agent_state_id("readable_stream", &g_btee_stepids[i], "one of §4.9.1's byte tee operations' machines");
         }
         g_tee_id = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_tee_call_decl, 0);
+        agent_state_id("readable_stream", &g_tee_id, "§4.2's tee declaration");
         /* §4.9.1 with cloneForBranch2, which is NOT a page-visible member — it is the operation Fetch's "clone
            a body" performs, so it is a function object this component hands out and nothing installs. */
         g_tee_clone_id = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_tee_clone_decl, 0);
+        agent_state_id("readable_stream", &g_tee_clone_id,
+                       "§4.9.1's cloning tee declaration — Fetch §2.2.4 Bodies's clone a body, which is a "
+                       "function object this component hands out and nothing installs");
     }
 
     /* Fetch §2.2.4 "Bodies"'s "fully read", whose record is a class for the reason every other one here is: it is a
@@ -4891,9 +4947,12 @@ void readable_stream_init(JSContext *ctx)
         JSClassDef dd = { "ReadableStream drain", .finalizer = drain_finalizer, .gc_mark = drain_gc_mark };
         JS_NewClassID(rt, &g_drain_class);
         JS_NewClass(rt, g_drain_class, &dd);
+        agent_state_class("readable_stream", &g_drain_class,
+                          "Fetch §2.2.4 Bodies's fully-read record's class");
         for (i = 0; i < DRAIN_N; i++) {
             g_drain_stepids[i] = JS_RegisterStepDef(rt, &js_drain_defs[i]);
             CHECK(g_drain_stepids[i] >= 0, "streams: no step id for a drain reaction");
+            agent_state_id("readable_stream", &g_drain_stepids[i], "one of the fully-read drain reaction machines");
         }
     }
 
@@ -4903,21 +4962,27 @@ void readable_stream_init(JSContext *ctx)
         static const IdlArgType ONE_ANY_ARG[1] = { IDL_ANY };
         JS_NewClassID(rt, &g_from_class);
         JS_NewClass(rt, g_from_class, &fd);
+        agent_state_class("readable_stream", &g_from_class, "§4.2's `from` record's class");
         for (i = 0; i < FROM_N; i++) {
             g_from_stepids[i] = JS_RegisterStepDef(rt, &js_from_defs[i]);
             CHECK(g_from_stepids[i] >= 0, "streams: no step id for a `from` operation");
+            agent_state_id("readable_stream", &g_from_stepids[i], "one of §4.2's `from` operations' machines");
         }
         g_from_ctor_stepid = idl_method_id_step(ctx, ONE_ANY_ARG, 1, NULL, 0, &js_from_call_decl, 0);
+        agent_state_id("readable_stream", &g_from_ctor_stepid, "§4.2's `from` declaration");
     }
 
     g_ctor_stepid = idl_method_id_step(ctx, SOURCE_AND_STRATEGY, 2, QUEUING_STRATEGY,
                                        (int)(sizeof QUEUING_STRATEGY / sizeof *QUEUING_STRATEGY),
                                        &js_rs_ctor_decl, 0);
+    agent_state_id("readable_stream", &g_ctor_stepid, "§4.2's constructor declaration");
     idl_optional_from(0);   /* §4.2: both constructor arguments are optional */
     /* §4.4's and §4.5's constructors ARE getReader spelled the other two ways — SetUpReadableStream*Reader
        reached with the stream in an argument instead of in the receiver, which is all the magic says. */
     g_reader_ctor_stepid = idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &js_get_reader_decl, GR_CTOR);
+    agent_state_id("readable_stream", &g_reader_ctor_stepid, "§4.4's constructor declaration");
     g_byob_ctor_stepid = idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &js_get_reader_decl, GR_CTOR_BYOB);
+    agent_state_id("readable_stream", &g_byob_ctor_stepid, "§4.5's constructor declaration");
 
     /* §4.9.1's ReadableStreamPipeTo is its own component — it holds a reader on one stream and a writer on
        another, so it belongs to neither half — but `pipeTo` and `pipeThrough` are §4.2's MEMBERS, and this is
@@ -4932,8 +4997,16 @@ void readable_stream_init(JSContext *ctx)
         static const char *const CTRL_NAME[RS_CTRL_N] = {
             "controller.enqueue", "controller.close", "controller.error",
         };
-        for (i = 0; i < RSF_N; i++)   g_rs_fn_slot[i] = realm_value_declare(ctx, FN_NAME[i]);
-        for (i = 0; i < RS_CTRL_N; i++) g_ctrl_fn_slot[i] = realm_value_declare(ctx, CTRL_NAME[i]);
+        for (i = 0; i < RSF_N; i++) {
+            g_rs_fn_slot[i] = realm_value_declare(ctx, FN_NAME[i]);
+            agent_state_realm_slot("readable_stream", &g_rs_fn_slot[i],
+                                   "one of §4's eight captured operations' per-realm value slots");
+        }
+        for (i = 0; i < RS_CTRL_N; i++) {
+            g_ctrl_fn_slot[i] = realm_value_declare(ctx, CTRL_NAME[i]);
+            agent_state_realm_slot("readable_stream", &g_ctrl_fn_slot[i],
+                                   "one of §4.6's three captured controller members' per-realm value slots");
+        }
     }
     realm_declare_intrinsic(readable_stream_install_protos);
     realm_declare_intrinsic(readable_byte_stream_install_protos);
@@ -5091,25 +5164,27 @@ void readable_stream_install_protos(JSContext *ctx)
     JS_FreeValue(ctx, global);
 }
 
-void readable_stream_free(JSContext *ctx)
+void readable_stream_free(void)
 {
-    int i;
     if (!g_rs_rt) return;
-    pipe_free(ctx);
-    /* the prototypes and the captured operations are the REALMS' — released with their contexts */
-    for (i = 0; i < RSI_RXN_N; i++) g_rsi_stepids[i] = -1;
-    g_rs_iter_handle = -1;
-    for (i = 0; i < TEE_N; i++) g_tee_stepids[i] = -1;
-    for (i = 0; i < BTEE_N; i++) g_btee_stepids[i] = -1;
-    for (i = 0; i < FROM_N; i++) g_from_stepids[i] = -1;
-    for (i = 0; i < DRAIN_N; i++) g_drain_stepids[i] = -1;
-    g_from_ctor_stepid = -1;
-    g_rs_rt = NULL;
-    g_ctor_stepid = g_reader_ctor_stepid = g_read_stepid = g_byob_ctor_stepid = -1;
-    for (i = 0; i < 3; i++) g_cancel_stepids[i] = -1;
-    for (i = 0; i < 2; i++) g_release_stepids[i] = -1;
+    /* THE TWO SUB-COMPONENTS FIRST, BECAUSE THIS ROW'S RELEASE IS WHAT REACHES THEM. Each declares its own
+       state under THIS row's name (core/agent_state.h: a sub-component names the row whose release reaches it,
+       never its own file) and each says so at the end of its own `_free` with agent_state_reached — which is a
+       CLAIM and not a reset, so it may be made here in the middle of the cascade. The undo below REFUSES to put
+       back a slot declared in a file that has not spoken, which is the one direction the release check is
+       structurally blind to: an owner that drops a member would otherwise have that member's handles reset by a
+       release that never ran.
+       The prototypes and the captured operations are the REALMS' — released with their contexts — so this
+       component owns no reference and there is nothing to free here either. */
+    pipe_free();
     readable_byte_stream_free();
-    for (i = 0; i < 3; i++) g_ctrl_stepids[i] = -1;
-    for (i = 0; i < 4; i++) g_rxn_stepids[i] = -1;
-    for (i = 0; i < 2; i++) g_fwd_stepids[i] = -1;
+    /* EVERY HANDLE THIS ROW DECLARED, GIVEN BACK FROM THE ONE LIST THAT ALREADY NAMES THEM. Fourteen reset
+       lines stood here, and between them they left SIX CLASS IDS, TWELVE REALM SLOTS, three declaration ids and
+       the tee's two ids SET — a hand-maintained second copy of the declaration list, kept in step with an init
+       five thousand lines above by whoever remembered, which is the failure core/agent_state.h's undo exists to
+       end. A declaration added to that init now owes this function nothing.
+       LAST, AND THE ORDER IS THE CONTRACT: the two cascaded releases above read their own slots (each opens on
+       its runtime latch), so an undo placed first would answer their guards for them and turn both into no-ops.
+       Free, assert, then undo. */
+    agent_state_undo("readable_stream");
 }

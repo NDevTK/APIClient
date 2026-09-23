@@ -24,6 +24,7 @@
 #include "quickjs-step.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
+#include "core/agent_state.h"
 #include "core/streams/queuing_strategy.h"
 
 enum { QS_COUNT = 0, QS_BYTE_LENGTH, QS_N };
@@ -50,9 +51,17 @@ static JSRuntime *g_qs_rt;
    since `unrestricted double` admits them and §7 does not check. */
 typedef struct { double hwm; int kind; } QueuingStrategyData;
 
+/* THE FINALIZER GOES THROUGH JS_GetAnyOpaque AND THE TWO GETTERS BELOW DO NOT, and the difference is not
+   taste: core/agent_state.h's closing paragraph says the collection that finalizes a page's object graph runs
+   AFTER the release column, so this component's class id is already back at 0 by the time a surviving
+   instance is collected and `JS_GetOpaque(val, 0)` answers NULL for every one of them -- the mark it leaks is
+   §7's stored double, which reaches neither of JS_FreeRuntime's censuses. The collector dispatched HERE
+   THROUGH the class, so the id is a fact it already has and must not look up. The getters keep asking by id
+   because what they are doing is a BRAND CHECK, which is the one question JS_GetAnyOpaque cannot answer. */
 static void qs_finalizer(JSRuntime *rt, JSValue val)
 {
-    QueuingStrategyData *q = JS_GetOpaque(val, g_qs_class);
+    JSClassID id;
+    QueuingStrategyData *q = JS_GetAnyOpaque(val, &id);
     if (q) js_free_rt(rt, q);
 }
 
@@ -175,19 +184,38 @@ void queuing_strategy_init(JSContext *ctx)
     DCHECK(g_qs_rt == NULL || g_qs_rt == rt, "the queuing strategies were installed into a second runtime");
     if (g_qs_rt == rt) return;
     g_qs_rt = rt;
+    /* EVERY STATIC BELOW IS THIS AGENT'S, DECLARED BESIDE THE LINE THAT SETS IT (core/agent_state.h). The
+       class id is the sharp one: this file's release used to leave it SET, and an id carried into a second
+       agent names a class in a runtime that is gone while the latch above reads it as already declared, so
+       the next agent's init returns before re-registering and every strategy it mints is branded with a
+       number the live runtime never issued. */
+    agent_state_ptr("queuing_strategy", &g_qs_rt, "the runtime §7's one class and its size machine were declared in");
     JS_NewClassID(rt, &g_qs_class);
     JS_NewClass(rt, g_qs_class, &cd);
+    agent_state_class("queuing_strategy", &g_qs_class,
+                      "the ONE class §7.2's and §7.3's instances both wear, and the declaration latch's brand");
 
     g_byte_size_stepid = JS_RegisterStepDef(rt, &js_byte_size_def);
     CHECK(g_byte_size_stepid >= 0, "queuing strategies: no step id for the byte-length size function");
+    agent_state_id("queuing_strategy", &g_byte_size_stepid,
+                   "§7.2.3's size function's step machine — the `byteLength` read is a machine because it is one "
+                   "accessor or Proxy trap away from being the page's own code");
     for (i = 0; i < QS_N; i++) {
         char what[64];
         g_qs_ctor_stepid[i] = idl_method_id_dict(ctx, ONE_DICT, 1, QS_INIT,
                                                  (int)(sizeof QS_INIT / sizeof *QS_INIT), js_qs_ctor, i);
+        agent_state_id("queuing_strategy", &g_qs_ctor_stepid[i],
+                       "one of §7.2.3's and §7.3.3's two constructor declarations");
         snprintf(what, sizeof what, "%s.prototype", NAMES[i]);
         g_qs_proto_slot[i] = realm_value_declare(ctx, what);
+        agent_state_realm_slot("queuing_strategy", &g_qs_proto_slot[i],
+                               "one of §7.2's and §7.3's two per-realm prototype slots — both interfaces' "
+                               "instances wear ONE class, so neither prototype can live in the class slot");
         snprintf(what, sizeof what, "%s size", NAMES[i]);
         g_size_fn_slot[i] = realm_value_declare(ctx, what);
+        agent_state_realm_slot("queuing_strategy", &g_size_fn_slot[i],
+                               "one of §7.2.3's and §7.3.3's two per-realm size functions — a function object "
+                               "carries the realm it was minted in, and the getter hands out the same one");
     }
     realm_declare_intrinsic(queuing_strategy_install_protos);
 }
@@ -261,14 +289,18 @@ void queuing_strategy_install_protos(JSContext *ctx)
     JS_FreeValue(ctx, global);
 }
 
-void queuing_strategy_free(JSContext *ctx)
+void queuing_strategy_free(void)
 {
-    int i;
     if (!g_qs_rt) return;
-    for (i = 0; i < QS_N; i++) {
-        /* the prototypes and size functions are the REALMS' — released with their contexts */
-        g_qs_ctor_stepid[i] = -1;
-    }
-    g_byte_size_stepid = -1;
-    g_qs_rt = NULL;
+    /* The prototypes and the size functions are the REALMS' — released with their contexts, so this component
+       owns no reference and there is nothing to free above the undo.
+       EVERY HANDLE THIS ROW DECLARED, GIVEN BACK FROM THE ONE LIST THAT ALREADY NAMES THEM. The loop that stood
+       here reset the two constructor ids, the size machine and the runtime pointer, and left THE CLASS ID and
+       ALL FOUR REALM SLOTS SET — a hand-maintained second copy of the declaration list, which is the failure
+       core/agent_state.h's undo exists to end. A declaration added to the init above now owes this function
+       nothing.
+       LAST, AND THE ORDER IS THE CONTRACT: nothing above reads any of these slots today, and the undo goes at
+       the end so a release that later has to assert a claimant has handed something back can do so against a
+       slot this has not yet nulled. */
+    agent_state_undo("queuing_strategy");
 }

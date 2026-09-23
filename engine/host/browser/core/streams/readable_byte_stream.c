@@ -38,6 +38,7 @@
 #include "core/streams/stream_work.h"
 #include "core/streams/readable_stream.h"
 #include "core/streams/readable_stream_impl.h"
+#include "core/agent_state.h"
 #include "core/streams/readable_byte_stream.h"
 
 /* §4.7's controller. The four flags are the spec's own [[started]], [[pulling]], [[pullAgain]] and
@@ -82,9 +83,18 @@ static int g_byob_read_stepid = -1;
 
 /* ---- the records ------------------------------------------------------------------------------------------ */
 
+/* THE FINALIZERS AND gc_marks GO THROUGH JS_GetAnyOpaque AND THE BRAND-CHECKING ACCESSORS BELOW DO NOT, and
+   the difference is not taste: core/agent_state.h's closing paragraph says the collection that finalizes a
+   page's object graph runs AFTER the release column, so these two class ids are already back at 0 by the time
+   a surviving controller or BYOB request is collected and `JS_GetOpaque(val, 0)` answers NULL for every one of
+   them. The gc_marks are the worse half, because an unmarked child keeps the internal reference gc_decref
+   subtracts and gc_scan then reads it as rooted from OUTSIDE the heap. The collector dispatched HERE THROUGH
+   the class, so the id is a fact it already has and must not look up; the accessors keep asking by id because
+   a brand check is the one question JS_GetAnyOpaque cannot answer. */
 static void bctrl_finalizer(JSRuntime *rt, JSValue val)
 {
-    ByteCtrlData *c = JS_GetOpaque(val, g_bctrl_class);
+    JSClassID id;
+    ByteCtrlData *c = JS_GetAnyOpaque(val, &id);
     if (!c) return;
     JS_FreeValueRT(rt, c->stream);
     JS_FreeValueRT(rt, c->pull_fn);
@@ -98,7 +108,8 @@ static void bctrl_finalizer(JSRuntime *rt, JSValue val)
 
 static void bctrl_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    ByteCtrlData *c = JS_GetOpaque(val, g_bctrl_class);
+    JSClassID id;
+    ByteCtrlData *c = JS_GetAnyOpaque(val, &id);
     if (!c) return;
     JS_MarkValue(rt, c->stream, mark_func);
     JS_MarkValue(rt, c->pull_fn, mark_func);
@@ -111,7 +122,8 @@ static void bctrl_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fun
 
 static void byobreq_finalizer(JSRuntime *rt, JSValue val)
 {
-    ByobReqData *q = JS_GetOpaque(val, g_byobreq_class);
+    JSClassID id;
+    ByobReqData *q = JS_GetAnyOpaque(val, &id);
     if (!q) return;
     JS_FreeValueRT(rt, q->controller);
     JS_FreeValueRT(rt, q->view);
@@ -120,7 +132,8 @@ static void byobreq_finalizer(JSRuntime *rt, JSValue val)
 
 static void byobreq_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    ByobReqData *q = JS_GetOpaque(val, g_byobreq_class);
+    JSClassID id;
+    ByobReqData *q = JS_GetAnyOpaque(val, &id);
     if (!q) return;
     JS_MarkValue(rt, q->controller, mark_func);
     JS_MarkValue(rt, q->view, mark_func);
@@ -2586,36 +2599,58 @@ void readable_byte_stream_init(JSContext *ctx)
     DCHECK(g_bs_rt == NULL || g_bs_rt == rt, "ReadableByteStreamController was installed into a second runtime");
     if (g_bs_rt == rt) return;
     g_bs_rt = rt;
+    /* EVERY STATIC BELOW IS THIS AGENT'S, AND IT IS DECLARED UNDER `readable_stream` RATHER THAN UNDER THIS
+       FILE'S OWN NAME. core/agent_state.h: a sub-component names the row whose RELEASE reaches it, never its
+       own file — core/platform.c's list has NO ROW for this component at all (its own comment on the streams
+       group says so in as many words), because readable_stream_init calls this init and readable_stream_free
+       calls this release. The two class ids are the sharp ones: this file's release used to leave both SET,
+       and an id carried into a second agent names a class in a runtime that is gone while the latch above
+       reads it as already declared. */
+    agent_state_ptr("readable_stream", &g_bs_rt,
+                    "the runtime §4.7's and §4.8's classes and their machines were declared in");
     JS_NewClassID(rt, &g_bctrl_class);
     JS_NewClass(rt, g_bctrl_class, &cd);
+    agent_state_class("readable_stream", &g_bctrl_class,
+                      "§4.7 The ReadableByteStreamController class's class, and this component's declaration latch's brand");
     JS_NewClassID(rt, &g_byobreq_class);
     JS_NewClass(rt, g_byobreq_class, &qd);
+    agent_state_class("readable_stream", &g_byobreq_class, "§4.8 The ReadableStreamBYOBRequest class's class");
 
     for (i = 0; i < 3; i++) {
         g_bctrl_stepids[i] = JS_RegisterStepDef(rt, &js_byte_ctrl_defs[i]);
         CHECK(g_bctrl_stepids[i] >= 0, "streams: no step id for a byte controller member");
+        agent_state_id("readable_stream", &g_bctrl_stepids[i], "one of §4.7's three member step machines");
     }
     for (i = 0; i < BQ_N; i++) {
         g_byobreq_stepids[i] = JS_RegisterStepDef(rt, &js_byobreq_defs[i]);
         CHECK(g_byobreq_stepids[i] >= 0, "streams: no step id for a BYOB request member");
+        agent_state_id("readable_stream", &g_byobreq_stepids[i], "one of §4.8's member step machines");
     }
     for (i = 0; i < 4; i++) {
         g_byte_rxn_stepids[i] = JS_RegisterStepDef(rt, &js_byte_rxn_defs[i]);
         CHECK(g_byte_rxn_stepids[i] >= 0, "streams: no step id for a §4.9.5 reaction");
+        agent_state_id("readable_stream", &g_byte_rxn_stepids[i], "one of §4.9.5's four reaction step machines");
     }
     g_byob_read_stepid = JS_RegisterStepDef(rt, &js_byob_read_def);
     CHECK(g_byob_read_stepid >= 0, "streams: no step id for the BYOB reader's read");
+    agent_state_id("readable_stream", &g_byob_read_stepid, "§4.5's read step machine");
     /* §4.5.1's dictionary has no ARGUMENT POSITION to be declared at — `read` is a step machine, so it
        converts the value it is holding — and its member name is interned here, once for this runtime, because
        the read is two halves with a suspension between them. idl_dict_declare also runs §3.2.17's
        lexicographic read-order check over the list, which is why it is the way in rather than JS_NewAtom. */
     g_byob_read_options_atoms = idl_dict_declare(ctx, &BYOB_READ_OPTIONS_DECL);
+    agent_state_ptr("readable_stream", &g_byob_read_options_atoms,
+                    "§4.5.1's ReadableStreamBYOBReaderReadOptions member-name handle into the IDL atom pool");
     {
         static const char *const RBC_NAME[RBC_N] = {
             "byteController.enqueue", "byteController.close", "byteController.error",
             "§4.9.5 ReadableByteStreamControllerRespond", "§4.9.5 ReadableByteStreamControllerRespondWithNewView",
         };
-        for (i = 0; i < RBC_N; i++) g_byte_ctrl_fn_slot[i] = realm_value_declare(ctx, RBC_NAME[i]);
+        for (i = 0; i < RBC_N; i++) {
+            g_byte_ctrl_fn_slot[i] = realm_value_declare(ctx, RBC_NAME[i]);
+            agent_state_realm_slot("readable_stream", &g_byte_ctrl_fn_slot[i],
+                                   "one of §4.7's and §4.9.5's five captured operations' per-realm value slots");
+        }
     }
 }
 
@@ -2697,14 +2732,18 @@ void readable_byte_stream_install_protos(JSContext *ctx)
 
 void readable_byte_stream_free(void)
 {
-    int i;
     if (!g_bs_rt) return;
-    g_bs_rt = NULL;
-    for (i = 0; i < 3; i++) g_bctrl_stepids[i] = -1;
-    for (i = 0; i < BQ_N; i++) g_byobreq_stepids[i] = -1;
-    for (i = 0; i < 4; i++) g_byte_rxn_stepids[i] = -1;
-    g_byob_read_stepid = -1;
-    /* The atoms belong to the IDL pool, which gives them back with the runtime; what this component owns is
-       the HANDLE, and a handle left pointing into a released pool is a stale slot. */
-    g_byob_read_options_atoms = NULL;
+    /* THE CASCADE REACHED THIS FILE, SAID AS THE LAST LINE OF ITS OWN RELEASE. This is a CLAIM and not a
+       reset — it writes no slot, which is the whole reason it can be made here, in the MIDDLE of
+       readable_stream_free's cascade, where a reset would move every handle this file declared earlier than
+       the row's own last line. The undo at the end of that function REFUSES to put back a slot declared in a
+       file that has not spoken, so an owner that dropped this member would be caught by the release check
+       instead of being answered by the undo (core/agent_state.h).
+       THE FIVE RESET LINES THAT STOOD HERE ARE GONE and the undo does them, at the row's last line. They reset
+       the runtime pointer, the machine ids and the atom-pool handle — and left BOTH CLASS IDS and ALL FIVE
+       REALM SLOTS SET, which is the population that list was most needed for. What each of those handles is
+       remains true and is said where it is declared: the atoms belong to the IDL pool, which gives them back
+       with the runtime, so what this component owns is the HANDLE and a handle left pointing into a released
+       pool is a stale slot. */
+    agent_state_reached("readable_stream");
 }

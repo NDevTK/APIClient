@@ -29578,10 +29578,18 @@ int main(int argc, char **argv) {
     headers_free(ctx);    /* Headers.prototype and the name it interned */
     url_free(ctx);
     usp_free(ctx);
-    transform_stream_free(ctx);
-    writable_stream_free(ctx);
-    queuing_strategy_free(ctx);
-    readable_stream_free(ctx);
+    /* THE WHOLE STREAMS GROUP — §4's ReadableStream with core/streams/pipe.c and
+       core/streams/readable_byte_stream.c under it, §5's WritableStream, §6's TransformStream and §7's two
+       queuing strategies — is NOT freed here any more: all four are ROWS on core/platform.h's release column,
+       run by the platform_agent_free above, and reverse declaration order gives them the same sequence they
+       had here. All three hosts wrote these four lines and none of them agreed on where:
+       this list and main.c's had the four together, while wpt_runner.c ran transform and writable, then SIX
+       other releases — the frontier's own agent half among them — and then queuing and readable.
+       Out here NONE of the four could declare its state to
+       core/agent_state.h at all — a row with agent state and no release is what platform_check_agent_state
+       fires on — so between them FIFTEEN CLASS IDS and THIRTY-THREE per-realm value slots were carried
+       past their own release, each one a number JS_NewClassID handed out of a runtime that is gone and
+       each one doubling as its component's declaration latch. See core/platform.c's entry. */
     blob_free(ctx);
     encoding_free(ctx);
     text_stream_free(ctx);

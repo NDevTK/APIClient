@@ -39,6 +39,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/abort.h"
+#include "core/agent_state.h"
 #include "core/streams/pipe.h"
 #include "core/streams/readable_stream.h"
 #include "core/streams/transform_stream.h"
@@ -157,9 +158,18 @@ static JSRuntime *g_pipe_rt;
 
 static PipeData *pipe_of(JSValueConst v) { return JS_GetOpaque(v, g_pipe_class); }
 
+/* THE FINALIZER AND gc_mark GO THROUGH JS_GetAnyOpaque AND pipe_of DOES NOT, and the difference is not taste:
+   core/agent_state.h's closing paragraph says the collection that finalizes a page's object graph runs AFTER
+   the release column, so this component's class id is already back at 0 by the time a surviving PipeState is
+   collected and `JS_GetOpaque(val, 0)` answers NULL for every one of them. The gc_mark is the worse of the
+   two, because an unmarked child keeps the internal reference gc_decref subtracts and gc_scan then reads it as
+   rooted from OUTSIDE the heap, so it is never collected at all. The collector dispatched HERE THROUGH the
+   class, so the id is a fact it already has and must not look up; pipe_of keeps asking by id because what it
+   is doing is a BRAND CHECK, which is the one question JS_GetAnyOpaque cannot answer. */
 static void pipe_finalizer(JSRuntime *rt, JSValue val)
 {
-    PipeData *p = JS_GetOpaque(val, g_pipe_class);
+    JSClassID id;
+    PipeData *p = JS_GetAnyOpaque(val, &id);
     int k;
     if (!p) return;
     JS_FreeValueRT(rt, p->source);   JS_FreeValueRT(rt, p->dest);
@@ -173,7 +183,8 @@ static void pipe_finalizer(JSRuntime *rt, JSValue val)
 
 static void pipe_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark)
 {
-    PipeData *p = JS_GetOpaque(val, g_pipe_class);
+    JSClassID id;
+    PipeData *p = JS_GetAnyOpaque(val, &id);
     int k;
     if (!p) return;
     JS_MarkValue(rt, p->source, mark);   JS_MarkValue(rt, p->dest, mark);
@@ -1163,23 +1174,44 @@ void pipe_init(JSContext *ctx)
     DCHECK(g_pipe_rt == NULL || g_pipe_rt == rt, "piping was installed into a second runtime");
     if (g_pipe_rt == rt) return;
     g_pipe_rt = rt;
+    /* EVERY STATIC BELOW IS THIS AGENT'S, AND IT IS DECLARED UNDER `readable_stream` RATHER THAN UNDER THIS
+       FILE'S OWN NAME. core/agent_state.h: a sub-component names the row whose RELEASE reaches it, never its
+       own file — this component has no row on core/platform.c's list at all, because pipe_init is called from
+       readable_stream_init and pipe_free from readable_stream_free, and a row is precisely a declare and a
+       release that file itself calls. The class id is the sharp one: this file's release used to leave it SET,
+       and an id carried into a second agent names a class in a runtime that is gone while the latch above
+       reads it as already declared. */
+    agent_state_ptr("readable_stream", &g_pipe_rt, "the runtime §4.9.1's class and its machines were declared in");
     JS_NewClassID(rt, &g_pipe_class);
     JS_NewClass(rt, g_pipe_class, &cd);
+    agent_state_class("readable_stream", &g_pipe_class,
+                      "§4.9.1's pipe record's class, and piping's declaration latch's brand");
 
     for (i = 0; i < OP_N; i++) {
         g_op_stepid[i] = JS_RegisterStepDef(rt, &js_pipe_defs[i]);
         CHECK(g_op_stepid[i] >= 0, "piping: no step id for a §4.9.1 operation");
+        agent_state_id("readable_stream", &g_op_stepid[i], "one of §4.9.1's operations' step machines");
     }
     g_pipe_to_stepid = g_op_stepid[OP_PIPE_TO];
+    agent_state_id("readable_stream", &g_pipe_to_stepid, "§4.2's pipeTo declaration");
     g_pipe_through_stepid = g_op_stepid[OP_PIPE_THROUGH];
+    agent_state_id("readable_stream", &g_pipe_through_stepid, "§4.2's pipeThrough declaration");
 
     /* §4.2.1's two dictionaries' member names, interned ONCE for this runtime — a member read is two halves
        with a suspension in between, so the atom must outlive the park and cannot be made per read. This is
        also where §3.2.17's LEXICOGRAPHIC read order is checked over each declaration, so a member written out
        of order aborts here rather than on whichever call first reaches it. */
     g_pipe_pair_atoms = idl_dict_declare(ctx, &PIPE_PAIR_DECL);
+    agent_state_ptr("readable_stream", &g_pipe_pair_atoms,
+                    "§4.2.1's ReadableWritablePair member-name handle into the IDL atom pool");
     g_pipe_options_atoms = idl_dict_declare(ctx, &PIPE_OPTIONS_DECL);
+    agent_state_ptr("readable_stream", &g_pipe_options_atoms,
+                    "§4.2.1's StreamPipeOptions member-name handle into the IDL atom pool");
     g_spec_through_slot = realm_value_declare(ctx, "Streams §9.5 Piping's piped through");
+    agent_state_realm_slot("readable_stream", &g_spec_through_slot,
+                           "§9.5 Piping's piped-through operation's per-realm value slot — a function object "
+                           "carries the realm it was minted in, so one held for the agent ran every document's "
+                           "pipe through the first one's realm");
 }
 
 void pipe_install(JSContext *ctx, JSValueConst stream_proto)
@@ -1227,22 +1259,24 @@ JSValue pipe_through_op(JSContext *ctx)
     return realm_value_get(ctx, g_spec_through_slot);   /* OWNED */
 }
 
-void pipe_free(JSContext *ctx)
+void pipe_free(void)
 {
-    int i;
-    (void)ctx;
     if (!g_pipe_rt) return;
-    g_pipe_rt = NULL;
-    for (i = 0; i < OP_N; i++) g_op_stepid[i] = -1;
-    g_pipe_to_stepid = g_pipe_through_stepid = -1;
-    /* The atoms belong to the IDL pool, which gives them back with the runtime; what this component owns is
-       the HANDLE, and a handle left pointing into a released pool is a stale slot. The two resolved interface
-       classes go back to zero for the same reason — a class id is the RUNTIME's, so one carried into the next
-       runtime would brand this dictionary's members against a class that runtime never minted. */
-    g_pipe_pair_atoms = g_pipe_options_atoms = NULL;
+    /* THE TWO RESOLVED INTERFACE CLASSES ARE NOT THIS COMPONENT'S SLOTS AND SO ARE NOT DECLARED: they are
+       fields of a dictionary DECLARATION this file owns, written at pipe_install from whatever ids §4 and §5
+       had minted by then, and core/agent_state.h's registry takes the address of a STATIC that holds
+       agent-lifetime state rather than of a member inside one. They go back to zero for the same reason every
+       carried id does — a class id is the RUNTIME's, so one carried into the next runtime would brand this
+       dictionary's members against a class that runtime never minted. */
     PIPE_PAIR[TR_READABLE].iface = PIPE_PAIR[TR_WRITABLE].iface = 0;
-    /* The realm slot is a HANDLE into the same per-runtime pool, and the values it named went back with their
-       contexts — so it is released here for the reason the atoms are, and a slot carried into the next runtime
-       would read a value that runtime never set. */
-    g_spec_through_slot = JS_INVALID_CLASS_ID;
+    /* THE CASCADE REACHED THIS FILE, SAID AS THE LAST LINE OF ITS OWN RELEASE. This is a CLAIM and not a
+       reset — it writes no slot, which is the whole reason it can be made here, in the MIDDLE of
+       readable_stream_free's cascade, where a reset would move every handle this file declared earlier than
+       the row's own last line. The undo at the end of that function REFUSES to put back a slot declared in a
+       file that has not spoken, so an owner that dropped this member would be caught by the release check
+       instead of being answered by the undo (core/agent_state.h).
+       THE SIX RESET LINES THAT STOOD HERE ARE GONE and the undo does them, at the row's last line. They reset
+       the runtime pointer, the machine ids, the two declaration ids, both atom-pool handles and the realm slot
+       — and left THE CLASS ID SET, which is the one thing that list was most needed for. */
+    agent_state_reached("readable_stream");
 }

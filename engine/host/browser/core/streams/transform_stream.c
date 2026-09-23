@@ -30,6 +30,7 @@
 #include "quickjs-step.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
+#include "core/agent_state.h"
 #include "core/streams/transform_stream.h"
 #include "core/streams/readable_stream.h"
 #include "core/streams/writable_stream.h"
@@ -68,7 +69,15 @@ static JSRuntime *g_ts_rt;
 /* THE RECORDS TIME-TRAVEL, AND THE CAPTURE IS IN THE ACCESSOR — §4's comment on the same lines gives the whole
    reason. §6's exposure is the backpressure state: one flow writing while the stream is under backpressure
    installed a change promise every sibling then waited on, so a fork's arms blocked each other's writes. The
-   offset lists are the same lists the finalizers free; the finalizers and gc_marks go through JS_GetOpaque. */
+   offset lists are the same lists the finalizers free.
+   THE FINALIZERS AND gc_marks USED TO GO THROUGH JS_GetOpaque AND NOW GO THROUGH JS_GetAnyOpaque, which is
+   this component's own agent state becoming CHECKED rather than a style change. core/agent_state.h's closing
+   paragraph is the whole argument: the collection that finalizes a page's object graph runs AFTER the release
+   column, so a finalizer reading the very class id its own release has just put back at 0 gets
+   `JS_GetOpaque(val, 0)` and answers NULL for every live object of it -- four components were reached that way
+   and each leaked or aborted differently. The collector dispatched HERE THROUGH the class, so the id is a fact
+   it already has and must not look up; only the brand-checking accessors below still ask by id, because a
+   brand check is exactly the question JS_GetAnyOpaque cannot answer. */
 #define TS_OFF(T, f) (uint16_t)offsetof(T, f)
 #define TS_NVAL(a)   (int)(sizeof(a) / sizeof((a)[0]))
 static const uint16_t TSD_VALS[] = {
@@ -125,7 +134,8 @@ static void tc_set_at(JSContext *ctx, TsCtrlData *c, JSValue *slot, JSValue v,
 
 static void ts_finalizer(JSRuntime *rt, JSValue val)
 {
-    TsData *t = JS_GetOpaque(val, g_ts_class);
+    JSClassID id;
+    TsData *t = JS_GetAnyOpaque(val, &id);
     int k;
     if (!t) return;
     JS_FreeValueRT(rt, t->readable);   JS_FreeValueRT(rt, t->writable);
@@ -136,7 +146,8 @@ static void ts_finalizer(JSRuntime *rt, JSValue val)
 
 static void ts_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark)
 {
-    TsData *t = JS_GetOpaque(val, g_ts_class);
+    JSClassID id;
+    TsData *t = JS_GetAnyOpaque(val, &id);
     int k;
     if (!t) return;
     JS_MarkValue(rt, t->readable, mark);   JS_MarkValue(rt, t->writable, mark);
@@ -146,7 +157,8 @@ static void ts_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark)
 
 static void tc_finalizer(JSRuntime *rt, JSValue val)
 {
-    TsCtrlData *c = JS_GetOpaque(val, g_tc_class);
+    JSClassID id;
+    TsCtrlData *c = JS_GetAnyOpaque(val, &id);
     int k;
     if (!c) return;
     JS_FreeValueRT(rt, c->stream);        JS_FreeValueRT(rt, c->transformer);
@@ -158,7 +170,8 @@ static void tc_finalizer(JSRuntime *rt, JSValue val)
 
 static void tc_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark)
 {
-    TsCtrlData *c = JS_GetOpaque(val, g_tc_class);
+    JSClassID id;
+    TsCtrlData *c = JS_GetAnyOpaque(val, &id);
     int k;
     if (!c) return;
     JS_MarkValue(rt, c->stream, mark);        JS_MarkValue(rt, c->transformer, mark);
@@ -1462,12 +1475,21 @@ void transform_stream_init(JSContext *ctx)
     DCHECK(g_ts_rt == NULL || g_ts_rt == rt, "TransformStream was installed into a second runtime");
     if (g_ts_rt == rt) return;
     g_ts_rt = rt;
+    /* EVERY STATIC BELOW IS THIS AGENT'S, DECLARED BESIDE THE LINE THAT SETS IT (core/agent_state.h). The two
+       class ids are the sharp ones: this file's release used to leave both SET, and an id carried into a second
+       agent names a class in a runtime that is gone while the latch above reads it as already declared, so the
+       next agent's init returns before re-registering and every TransformStream it mints is branded with a
+       number the live runtime never issued. */
+    agent_state_ptr("transform_stream", &g_ts_rt, "the runtime §6's two classes and sixteen machines were declared in");
     JS_NewClassID(rt, &g_ts_class);  JS_NewClass(rt, g_ts_class, &sd);
+    agent_state_class("transform_stream", &g_ts_class, "§6.2 The TransformStream class's class, and the declaration latch's brand");
     JS_NewClassID(rt, &g_tc_class);  JS_NewClass(rt, g_tc_class, &cd);
+    agent_state_class("transform_stream", &g_tc_class, "§6.3 The TransformStreamDefaultController class's class");
 
     for (i = 0; i < OP_N; i++) {
         g_op_stepid[i] = JS_RegisterStepDef(rt, &js_ts_defs[i]);
         CHECK(g_op_stepid[i] >= 0, "streams: no step id for a §6 operation");
+        agent_state_id("transform_stream", &g_op_stepid[i], "one of §6's sixteen step machines");
     }
 
     /* §6.2's constructor: `(optional object transformer, optional QueuingStrategy writableStrategy = {},
@@ -1475,14 +1497,18 @@ void transform_stream_init(JSContext *ctx)
        declared as IDL dictionaries, because the standard's order runs through them AND the transformer, and
        only one reader can sequence all three. */
     g_ctor_stepid = idl_method_id_step(ctx, TS_ARGS, 3, NULL, 0, &js_ts_ctor_decl, 0);
+    agent_state_id("transform_stream", &g_ctor_stepid, "§6.2 The TransformStream class's constructor declaration");
     idl_optional_from(0);   /* §6.2: all three constructor arguments are optional */
 
     {
         static const char *const OP_NAME[TS_OP_N] = {
             "§9.3.1 set up", "controller.enqueue", "controller.terminate", "controller.error",
         };
-        for (i = 0; i < TS_OP_N; i++)
+        for (i = 0; i < TS_OP_N; i++) {
             g_ts_fn_slot[i] = realm_value_declare(ctx, OP_NAME[i]);
+            agent_state_realm_slot("transform_stream", &g_ts_fn_slot[i],
+                                   "one of §9.3's four operations' per-realm value slots");
+        }
     }
     realm_declare_intrinsic(transform_stream_install_protos);
 }
@@ -1586,12 +1612,19 @@ JSValueConst transform_stream_writable(JSValueConst stream)
     return t->writable;
 }
 
-void transform_stream_free(JSContext *ctx)
+void transform_stream_free(void)
 {
-    int i;
     if (!g_ts_rt) return;
-    /* the prototypes and the captured operations are the REALMS' — released with their contexts */
-    g_ts_rt = NULL;
-    g_ctor_stepid = -1;
-    for (i = 0; i < OP_N; i++) g_op_stepid[i] = -1;
+    /* The prototypes and the captured operations are the REALMS' — released with their contexts, so this
+       component owns no reference and there is nothing to free above the undo.
+       EVERY HANDLE THIS ROW DECLARED, GIVEN BACK FROM THE ONE LIST THAT ALREADY NAMES THEM. The three lines
+       that stood here reset the runtime pointer, the constructor id and the sixteen machine ids and left BOTH
+       CLASS IDS AND ALL FOUR REALM SLOTS SET — which is exactly the shape core/agent_state.h was written
+       against, and exactly what a
+       second hand-maintained copy of a declaration list produces. It is not a shorter release; it is a release
+       that can no longer be short, because a declaration added to the init above owes this function nothing.
+       LAST, AND THE ORDER IS THE CONTRACT: nothing above reads any of these slots today, and the undo goes at
+       the end so that a release which later has to assert a claimant has handed something back can do so
+       against a slot this has not yet nulled. */
+    agent_state_undo("transform_stream");
 }

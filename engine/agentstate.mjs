@@ -78,9 +78,47 @@ const read = (p) => REV ? execFileSync("git", ["show", `${REV}:${p}`], { encodin
    slot in a file that has none. Measured once, on `JS_NewClassID(rt, &f->class_id)` against a `static JSValue
    ait_fulfil_result(..., const IdlAsyncIface *f, ...)` eight hundred lines away. It is the accusing direction
    CLAUDE.md says to suspect hardest, so the trailing `\s*\)` and `\s*[,)]` are load-bearing. */
+/* AN ARRAY SUBSCRIPT IS ADMITTED ON ALL THREE PATTERNS HERE AND ON `DECLARED` BELOW, AND THE REASON IS THAT
+   THE THREE MUST TAKE THE SAME INPUTS. A component that holds N slots of one kind holds them in an array and
+   mints them in a loop -- `g_fn_slot[i] = realm_value_declare(...)`, `JS_NewClassID(rt, &g_class[k])` -- and
+   the realm mint below admitted that from the start while the class mint and the declared check did not.
+   CLAUDE.md names the shape: an instrument's confirming path and its refuting path can admit different
+   populations, and where the ACCUSING one is wider it certifies exactly what the other cannot refute. Here it
+   was wider on the REALM channel, so a component that declared an array of realm slots correctly, in the only
+   way C affords, was banded UNDECLARED and no spelling of a correct declaration could clear it -- the accusing
+   direction, manufactured entirely by this file. It was LATENT rather than harmless: at the revision this was
+   written, no file in the tree had yet declared a realm slot through `&x[i]`, so nothing had exercised it, and
+   the first diff that did met seven rows it could not clear.
+   THE CLASS CHANNEL WAS BLIND ON BOTH HALVES AND SO WAS QUIET, which is the other direction and is why it had
+   to be fixed in the same breath rather than left: `JS_NewClassID(rt, &g_class[k])` matched neither the mint
+   nor the declaration, so those slots appeared in NO BAND AT ALL -- not declared, not accused, absent from
+   every total, which is the under-count CLAUDE.md rates as the one nothing announces.
+   THE PRICE OF THE WIDENING WAS MEASURED AND NOT PREDICTED, AND THE PREDICTION WAS WRONG, which is recorded
+   rather than quietly corrected because the wrong reasoning is what a reader re-derives. It said: two sites
+   tree-wide, core/css/css_math_value.c's `g_class` and core/dom/abstract_range.c's `g_bounds_classes`, both
+   already declared, so nothing would be accused. It was reached by grepping for array-element DECLARATIONS
+   and assuming the mint side saw the same population -- the same two-halves confusion this paragraph is about,
+   committed while writing it. `g_bounds_classes` is never handed to JS_NewClassID at all (it is filled by
+   assignment from ids other components minted), so it stays invisible to the mint side and moved nothing; and
+   the widening surfaced a site no grep for declarations could have found. RUN BOTH INSTRUMENT VERSIONS AGAINST
+   ONE UNCHANGED REVISION, which is the confound-free form and needs no copy of the tree: `class: declared`
+   98 -> 99 and `class: UNDECLARED, NOT reset` 82 -> 83, with the realm bands unmoved. The cleared row is
+   css_math_value's; the new accusation is core/html/html_element.c's `g_iface_class`, a real array of class
+   ids minted in a loop and declared to nobody, which this sweep had been structurally unable to see. One true
+   accusation bought, none false, one row cleared -- which is the trade a widening has to show, and the point
+   is that it was SHOWN.
+   THE GRANULARITY IS THE IDENTIFIER AND NOT THE ELEMENT, on both sides, which is what makes this symmetric
+   rather than generous: `seen` dedups a mint to one row per identifier, so a declaration of one element reads
+   as a declaration of the array exactly as a mint of one element reads as a mint of the array. A component
+   that declares only SOME elements of an array is a state this sweep cannot see and never could; the run-side
+   instrument core/platform.c brackets the declare column with counts per SLOT and is what catches it.
+   RETIREMENT: this record goes when the mint and the declaration are ONE call -- core/agent_state.h's own
+   closing note names that root, a door taking the slot's address and the component's row -- because an
+   undeclared class id is then unconstructible and no pattern here has two halves to disagree. */
+const SUBSCRIPT = "(?:\\s*\\[[^\\]]*\\])?";
 const MINTS = [
-  ["class", /JS_NewClassID\s*\(\s*[^,]+,\s*&\s*([A-Za-z_]\w*)\s*\)/g],
-  ["realm", /(?<![>.*])\b([A-Za-z_]\w*)(?:\s*\[[^\]]*\])?\s*=\s*realm_value_declare\s*\(/g],
+  ["class", new RegExp(`JS_NewClassID\\s*\\(\\s*[^,]+,\\s*&\\s*([A-Za-z_]\\w*)${SUBSCRIPT}\\s*\\)`, "g")],
+  ["realm", new RegExp(`(?<![>.*])\\b([A-Za-z_]\\w*)${SUBSCRIPT}\\s*=\\s*realm_value_declare\\s*\\(`, "g")],
 ];
 /* THE DECLARING KINDS ARE DERIVED FROM core/agent_state.h AND NOT RESTATED HERE. CLAUDE.md: an auditor
    derives the rule it checks from the code that owns it, because a restated rule is a SECOND COPY and the one
@@ -96,7 +134,7 @@ if (!KINDS.length)
   throw new Error(`agentstate: no declaring entry was found in ${HEADER} -- this sweep's whole `
                 + `\`declared\` band is derived from that list, so an empty one would report every declared `
                 + `slot in the tree as undeclared. Either the header's entry shape changed or the path is wrong.`);
-const DECLARED = new RegExp(`agent_state_(?:${KINDS.join("|")})(?:_at)?\\s*\\([^;]*?&\\s*([A-Za-z_]\\w*)\\s*[,)]`, "gs");
+const DECLARED = new RegExp(`agent_state_(?:${KINDS.join("|")})(?:_at)?\\s*\\([^;]*?&\\s*([A-Za-z_]\\w*)${SUBSCRIPT}\\s*[,)]`, "gs");
 
 /* Top-level function bodies, by brace balance -- used only to ask whether a RELEASE resets a slot, so a
    miss here can only move a row into the louder band, never out of it. */
