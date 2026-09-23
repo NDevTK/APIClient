@@ -67,11 +67,18 @@ const read = (p) => REV ? execFileSync("git", ["show", `${REV}:${p}`], { encodin
                         : readFileSync(p, "utf8");
 
 /* THE TWO SPELLINGS THIS SWEEP CAN SEE, named in the output because they bound it. */
+/* THE CAPTURE ENDS AT THE ARGUMENT'S END, WHICH IS NOT PEDANTRY: `&f->class_id`, `&rec->slot` and `*slot =` are mints
+   into a STRUCT MEMBER, and a pattern that stops at the first identifier captures the POINTER instead. That
+   name then has to be tested for being a file static, and the test is a regex over `static ... \bname\b`,
+   which a function PARAMETER of the same name satisfies -- so the row is admitted and reads as an undeclared
+   slot in a file that has none. Measured once, on `JS_NewClassID(rt, &f->class_id)` against a `static JSValue
+   ait_fulfil_result(..., const IdlAsyncIface *f, ...)` eight hundred lines away. It is the accusing direction
+   CLAUDE.md says to suspect hardest, so the trailing `\s*\)` and `\s*[,)]` are load-bearing. */
 const MINTS = [
-  ["class", /JS_NewClassID\s*\(\s*[^,]+,\s*&\s*([A-Za-z_]\w*)/g],
-  ["realm", /([A-Za-z_]\w*)(?:\s*\[[^\]]*\])?\s*=\s*realm_value_declare\s*\(/g],
+  ["class", /JS_NewClassID\s*\(\s*[^,]+,\s*&\s*([A-Za-z_]\w*)\s*\)/g],
+  ["realm", /(?<![>.*])\b([A-Za-z_]\w*)(?:\s*\[[^\]]*\])?\s*=\s*realm_value_declare\s*\(/g],
 ];
-const DECLARED = /agent_state_(?:id|flag|class|atom|value|ptr)(?:_at)?\s*\([^;]*?&\s*([A-Za-z_]\w*)/gs;
+const DECLARED = /agent_state_(?:id|flag|class|atom|value|ptr)(?:_at)?\s*\([^;]*?&\s*([A-Za-z_]\w*)\s*[,)]/gs;
 
 /* Top-level function bodies, by brace balance -- used only to ask whether a RELEASE resets a slot, so a
    miss here can only move a row into the louder band, never out of it. */
