@@ -769,15 +769,43 @@ int realm_value_declare(JSContext *ctx, const char *what)
            "macros are what supply the pair at the call, and a realm.c-internal path with no caller to name " \
            "passes REALM_VALUE_SITE_INTERNAL rather than a null")
 
+/* THE SLOT IS A MINTED CLASS ID, AND THAT IS WHAT IS ASSERTED — NOT THAT IT SITS OUTSIDE A LIST OF SENTINELS.
+   Both entries USED TO READ `slot > 0`, which is a RANGE over the two pre-declaration values an `int` can
+   hold — a property of the slot's C TYPE and not of the quantity. That is the wrong shape of predicate twice
+   over, and the reasoning is kept because a reader who re-derives it will write the range back.
+     - IT DOES NOT SURVIVE THE TYPE THE QUANTITY ACTUALLY HAS. A slot is a class id and quickjs spells one
+       `typedef uint32_t JSClassID`, under which `> 0` refuses `0` and ADMITS `-1`: it arrives as 0xFFFFFFFF,
+       passes, and indexes `ctx->class_proto` out of bounds — a wild read in release, where every assert
+       between this line and the array is compiled out. A guard whose correctness depends on the operand
+       staying signed is a guard that a signature change silently turns into a hole.
+     - AND IT IS WEAKER THAN THE INVARIANT EVEN WHERE IT HOLDS. `int` is also the C type of a step id and of
+       core/idl_args' method id in this engine, and every one of those is `> 0` too. The range admits an
+       operand that was never a slot at all, which is exactly the confusion a range cannot see.
+   WHAT REPLACES IT IS THE RUNTIME'S OWN QUESTION, asked of the runtime rather than of the bit pattern.
+   JS_IsRegisteredClass is `class_id < rt->class_count && rt->class_array[class_id].class_id != 0` over a
+   `JSClassID` parameter, and each conjunct earns its place here: the first is a BOUNDS PROOF for the very
+   array both entries are about to index, since JS_NewClass1 grows `class_proto` and `class_count` together;
+   the second refuses JS_INVALID_CLASS_ID, which quickjs defines as 0 and which nothing can register because
+   JS_CLASS_OBJECT is 1 and `JS_NewClassID` treats a zero as not-yet-minted. `-1` fails the first conjunct
+   under either signedness. So one predicate is correct for the operand this quantity has today and for the
+   one it is being given, and it refuses a registered-looking integer that no mint ever handed out.
+   IT IS A MACRO FOR THE REASON `REALM_VALUE_SITE_PRESENT` IS: a shared function would stamp its own line for
+   both entries, so a @WHY about a slot would name neither the read nor the write. The verb is the parameter
+   because the caller's address says WHERE and only the entry says WHICH DOOR the operand came through. */
+#define REALM_VALUE_SLOT_MINTED(ctx_, slot_, verb_, at_file_, at_line_) \
+    DCHECKF(JS_IsRegisteredClass(JS_GetRuntime(ctx_), (JSClassID)(slot_)), \
+            "%s:%d " verb_ " a per-realm value through a slot this runtime never minted — the slot is the " \
+            "class id realm_value_declare returns, so a component whose own `_init` never ran, or whose " \
+            "static slot was read before that `_init` wrote it, arrives here holding its pre-declaration " \
+            "value rather than a class id", \
+            (at_file_), (at_line_))
+
 void realm_value_set_at(JSContext *ctx, int slot, JSValue v, const char *at_file, int at_line)
 {
     JSValue prev;
 
     REALM_VALUE_SITE_PRESENT(at_file);
-    DCHECKF(slot > 0, "%s:%d set a per-realm value through a slot that was never declared — the slot is the "
-                      "class id realm_value_declare returns, so a zero or negative one is a component whose "
-                      "own `_init` never ran or whose static slot was read before that `_init` wrote it",
-            at_file, at_line);
+    REALM_VALUE_SLOT_MINTED(ctx, slot, "set", at_file, at_line);
     prev = JS_GetClassProto(ctx, (JSClassID)slot);
     DCHECKF(JS_IsNull(prev), "%s:%d set a per-realm value twice in one realm — the first is what everything "
                              "already built in this realm is holding, so this write would hand later readers "
@@ -792,10 +820,7 @@ JSValue realm_value_get_at(JSContext *ctx, int slot, const char *at_file, int at
     JSValue v;
 
     REALM_VALUE_SITE_PRESENT(at_file);
-    DCHECKF(slot > 0, "%s:%d read a per-realm value through a slot that was never declared — the slot is the "
-                      "class id realm_value_declare returns, so a zero or negative one is a component whose "
-                      "own `_init` never ran or whose static slot was read before that `_init` wrote it",
-            at_file, at_line);
+    REALM_VALUE_SLOT_MINTED(ctx, slot, "read", at_file, at_line);
     v = JS_GetClassProto(ctx, (JSClassID)slot);
     /* THE ADDRESS IS THE WHOLE OF THE REMEDY HERE. What went wrong is a missing SET, and the set is in some
        other component's per-realm install — so the reader's own file and line is what says which install to
