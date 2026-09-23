@@ -399,4 +399,34 @@ void    endpoint_mark_asset(const char *method, const char *url);
    instant, which is the two-instants collapse §Testing names. */
 void    endpoint_surface_census(long *minted, long *assets, long *emitted, long *pre_program);
 
+/* WHAT THE CENSUS ABOVE COUNTS IS AN OUTCOME, AND THIS IS THE ASK. Every figure that function produces comes
+   off a walk of the RECORD ARRAY, so each one says what LANDED — and CLAUDE.md §AN-INVARIANT-OVER-A-GATED-
+   OPERATION names the cost of that exactly: a census of what landed cannot tell a component that never asked
+   from one whose ask a gate correctly refused, and the repair is to record at the CALL rather than to relocate
+   the outcome. endpoint_record is the ONE door every HTTP-shaped edge in this engine passes through (see this
+   header's funnel note above and the derivation beside it), so a count taken at its entry, BEFORE the
+   suppression gate, is the number of times this engine's execution REACHED a network call site.
+   WHAT IT SEPARATES, WHICH IS THE PRODUCT'S OWN QUESTION AND WAS UNMEASURABLE. `emitted - preProgram` is
+   documented above as a CEILING on what forced execution contributed, and a ZERO there has at least two
+   readings that take opposite work:
+     NEVER REACHED — no arm ever arrived at a network call site, so there was nothing for the surface to learn
+       and the work is upstream of this file entirely;
+     REACHED AND ALREADY KNOWN — arms arrived and every address they composed was one the surface already held,
+       so each ask MERGED: the record exists, its `pre_program` was decided at ITS mint and is deliberately not
+       re-armed (see the struct), `g_eps_n` does not move, and all four rows above are byte-identical to the
+       first case.
+   `asks - preProgram` is nonzero in the second and zero in the first. That is the separation, and nothing on
+   the surface could state it, because a merge is an event with no record of its own.
+   IT IS NOT A THIRD READING OF THE SAME FACT. A reader who has both lines can also see the case neither has
+   alone: in-program asks that MINTED, which must show up as `emitted - preProgram` moving unless the reply
+   classified them as files — so the two censuses constrain each other rather than repeating each other.
+   EVERY ROW IS A LIFETIME COUNT AND NONE IS A GAUGE. They may be differenced across samples and accumulated,
+   they cannot decrease, and a sample below its predecessor is this instrument and not the run — stated in the
+   contract because CLAUDE.md §Testing records this tree being misled by that distinction twice. Their SCOPE is
+   the SURFACE's: they are reset wherever `g_eps_n` is, so they answer for the session whose records the census
+   above is walking and never for the process.
+   A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing branches on one, no ask is refused because of one, and no
+   arm is narrowed by one. */
+void    endpoint_ask_census(long *asks, long *pre_program, long *suppressed, long *merged, long *minted);
+
 #endif
