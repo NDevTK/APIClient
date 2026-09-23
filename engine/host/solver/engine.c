@@ -10268,17 +10268,15 @@ static int flow_step(JSContext *ctx, Flow *f) {
                  * (`microtask-checkpoint` reads 0, for the reason the paragraph at turn_continues gives), and
                  * every job that did not run was standing behind this arm — two of them for 443 steps on the
                  * site whose microtasks were draining normally the whole time.
-                 * NAMED RESIDUAL — the census splits the backlog by WHAT A JOB WAITS ON, never by WHICH ARM
-                 * CAN TAKE IT.
-                 * NOT COVERED: a rank-ready TASK and a rank-ready MICROTASK are one number in `jobs_ready`
-                 * while their dispatches sit on opposite sides of the sequence arm, so that row cannot say
-                 * which of the two is starving.
-                 * WHAT THE NEXT DIFF BUILDS: `jobs_ready` split on JOB_TASK at flow_wfq_census's own arm, in
-                 * the same walk and beside it, so the pair is one sample.
-                 * HOW ITS ABSENCE WOULD SHOW: a reader meeting `jobsReady` above zero with `_jobsRun` at zero
-                 * cannot say whether the checkpoint declined or the sequence did, and those are two arms of
-                 * this function taking opposite work — which is what establishing the above cost: a lifetime
-                 * step histogram and an inference, where one row would have answered.
+                 * THE RESIDUAL THAT STOOD HERE IS SPENT AND ITS ROW IS `jobsReadyTask`/`jobsReadyMicro`,
+                 * raised in flow_wfq_census's own ready arm and published beside `jobWGap`. It said the census
+                 * splits the backlog by WHAT A JOB WAITS ON and never by WHICH ARM CAN TAKE IT, so a reader
+                 * meeting `jobsReady` above zero with `_jobsRun` at zero could not say whether the checkpoint
+                 * declined or the sequence did — two arms of this function taking opposite work. Establishing
+                 * it once cost a lifetime step histogram and an inference; it is now one comparison, and the
+                 * legend for it is at `jobs_ready_task` in solver/flow.h rather than here, beside the gauge,
+                 * where a reader holding the digit will be. WHAT THE PAIR DOES NOT DECIDE IS THIS ARM'S
+                 * POSITION, which is the open question the paragraphs above state and which no census answers.
                  * AND THE NAIVE REPAIR IS STILL WIRED TO FIRE: the DCHECK below is what catches it. Hoisted
                  * above the sequence, this arm becomes reachable with a DYN_POS_IMMEDIATE row at the cursor —
                  * the one row flow_stack_empty holds the checkpoint off for — so the flow arrives here holding

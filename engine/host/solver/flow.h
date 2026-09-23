@@ -1316,6 +1316,11 @@ int  flow_job_pending(const Flow *f);
 /* DOES IT STILL HOLD A MICROTASK? The checkpoint is over exactly when it does not — a task on the queue is the
    NEXT turn of the event loop and not part of this checkpoint, which is the same distinction the pick makes. */
 int  flow_job_microtask(const Flow *f);
+/* AND HOW MANY OF EACH KIND — the same walk, counting rather than short-circuiting. BOTH halves are returned
+   because the reading is a PARTITION: a half derived by subtracting the other from `flow_job_pending` makes
+   the identity that states it an assertion whose two sides cannot disagree. See the `jobs_ready_task` bullet
+   below for what the pair answers and why it is asked of admitted members only. */
+void flow_job_kinds(const Flow *f, int *task_out, int *micro_out);
 /* APPEND, with `argv` dup'd into the record. `task` picks which of HTML §8.1.7 "Event loops"' two queues.
    `handle` is the name the runtime issued for this callback (see the record's HANDLE bullet above), carried
    into the record because the host that TOOK the job is then the only thing that can find it again. */
@@ -2485,6 +2490,45 @@ typedef struct {
      * walks — so a negative value is the pick and the census disagreeing about the one comparator, which is
      * the edit the DCHECK beside it catches.
      *
+     * `jobs_ready_task` / `jobs_ready_micro` SPLIT THAT READY ROW AGAIN, ON THE AXIS THAT DECIDES WHICH ARM OF
+     * flow_step CAN DISPATCH THE JOB. The three-way split above says what a job WAITS ON; this says which arm
+     * TAKES it, and those are different questions. solver/engine.c's ladder puts the checkpoint arm
+     * (`flow_checkpoint_due`, which is `flow_job_microtask && flow_stack_empty`) ABOVE the program sequence and
+     * the task arm BELOW it, as the `else` of `if (seq_compiles)` — `a program of this flow's own sequence
+     * STARTS on this step`. So for a member this scan has already admitted to the ready arm:
+     *   a MICROTASK it holds makes `flow_checkpoint_due` true outright, because the ready arm's own guard is
+     *   the second conjunct of it — so the SEQUENCE cannot exclude that job, the checkpoint arm standing above
+     *   it;
+     *   a TASK it holds is reached only on a step where the member holds NO microtask AND starts no program,
+     *   so a member whose cursor names a runnable row takes the sequence arm instead, every time, for as long
+     *   as the page keeps appending rows it can run.
+     * `jobs_ready` calls both of those RANK-READY, and one of them is waiting on the order while the other is
+     * waiting on the order AND on the sequence running out of rows.
+     * WHAT THE PAIR ANSWERS IS A READING THAT HAS ALREADY BEEN MADE BY INFERENCE AND COST A LIFETIME STEP
+     * HISTOGRAM TO MAKE. `jobsReady > 0` with a run's `_jobsRun` flat at zero is consistent with the checkpoint
+     * declining and with the sequence declining, and those are two arms of one function taking opposite work.
+     * AND THE CLAIM THE PAIR MAKES IS THE NARROW ONE, STATED AT THE STRENGTH IT WAS DERIVED AT: it is about
+     * the SEQUENCE ARM'S EXCLUSION and about nothing else. All `jobsReadyTask` and no `jobsReadyMicro` is that
+     * exclusion measured — every rank-ready job is behind the arm whose `else` binds to `seq_compiles`, so a
+     * page that keeps appending runnable rows holds all of it, permanently. Any `jobsReadyMicro` at all
+     * REFUTES that diagnosis for the jobs it counts, because `seq_compiles` stands below their arm and cannot
+     * hold them — and it does NOT say they would have run, because flow_step has arms ABOVE the checkpoint too
+     * (a peer answer, a declined request, a parked resume, a routed delivery, a cross-agent operation), each
+     * of which is a unit of work in its own right rather than a program the page appended, and because the
+     * PICK may not have reached the holder at all. Those are different work from an arm order, which is the
+     * whole reason the row is worth taking before either fix downstream of it is priced.
+     * THEY ARE GAUGES, by the same convention `jobs_ready` is one under and the same one the `Lifetime` suffix
+     * elsewhere on this census marks the other kind with: one walk, the members standing NOW. Neither may be
+     * differenced across samples, neither accumulates, and neither is a rate.
+     * `jobs_ready_task + jobs_ready_micro == jobs_ready` IS THE IDENTITY, AND IT IS ASSERTED at the end of the
+     * scan where all three are in one hand. The sides have DIFFERENT WRITERS, which is what makes it a check
+     * rather than a restatement: the total accumulates the queue's own `length` and the halves accumulate a
+     * walk of the queue's records, so it fires on an edit that moves one accumulation site and not the other.
+     * engine/build.mjs asserts it again for `unframed_picks_lifetime`'s reason — the DCHECK is compiled out of
+     * a release build that reader still runs over.
+     * READ THEM BESIDE `jobs_ready` AND NOT INSTEAD OF IT: 0 and 0 is a frontier with no rank-ready job at all,
+     * which is the pair of silences `mem_unframed` separates and neither of these halves can.
+     *
      * `vis_zero` IS THE OTHER HALF OF `jobs_framed`, counted over MEMBERS rather than over jobs: how many of
      * them have completed no unit of work at all. `vis_min: 0` says at least one and a frontier of thousands
      * makes that unremarkable; the COUNT is what says whether the framed backlog belongs to a handful of deep
@@ -2495,6 +2539,8 @@ typedef struct {
     long jobs_framed;
     long jobs_owed;
     double job_w_gap;
+    long jobs_ready_task;
+    long jobs_ready_micro;
     long vis_zero;
 
     /* HOW MANY MEMBERS HOLD NO FRAME — the denominator `jobs_ready` has always needed and never had, taken on

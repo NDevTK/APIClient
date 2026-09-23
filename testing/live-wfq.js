@@ -54,6 +54,12 @@ const COUNTERS = ["picksLifetime", "starvedPicks", "workDone", "rankChanges", "t
                   "arrivals", "departures"];
 const GAUGES = ["members", "unrun", "neverPicked", "neverPickedGap", "neverPickedAtTop",
                 "picksLive", "picksMax", "families", "jobsReady", "jobsFramed", "jobsOwed",
+                /* …AND WHICH ARM OF flow_step CAN DISPATCH THE READY HALF, which `jobsReady` alone cannot
+                   say: the checkpoint arm stands above the program sequence and the task arm below it, so
+                   an all-TASK backlog is the sequence arm's exclusion MEASURED and any MICROTASK refutes that
+                   exclusion for the jobs it counts. It does not say those jobs would have run — arms stand
+                   above the checkpoint too. Gauges, like every row on this line. */
+                "jobsReadyTask", "jobsReadyMicro",
                 "delivReady", "delivFramed", "delivOwed", "valTop", "valMin", "valMax"];
 
 /* THE BRANCH SCOPE, WHICH THE TWO LISTS ABOVE DO NOT REACH AND WHICH IS THE ONE FAMILY A PAGE-SCALE

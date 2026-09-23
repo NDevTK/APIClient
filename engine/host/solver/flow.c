@@ -3335,6 +3335,33 @@ int flow_job_microtask(const Flow *f) {
     return 0;
 }
 
+/* THE QUEUE'S TWO KINDS, COUNTED IN ONE WALK — see flow.h's `jobs_ready_task` for what the pair answers and
+   solver/engine.c's task arm for why the two are dispatched from opposite sides of one ladder.
+   BOTH HALVES ARE COUNTED AND NEITHER IS SUBTRACTED, which is the whole reason this is a function rather than
+   a task count the caller takes away from `flow_job_pending`. The reading is a PARTITION, so the identity that
+   states it has to be one two independent writers can fail; `n - t` makes `t + (n - t) == n`, which is an
+   assert whose two sides cannot disagree and certifies nothing. flow_wfq_census accumulates these two and
+   accumulates the queue's own length separately, and asserts the sum where all three are in one hand.
+   IT IS A WALK, so a caller asks it only of a member it has already admitted — the census asks inside the
+   ready arm alone, whose population `mem_unframed` bounds, and never once per member. */
+void flow_job_kinds(const Flow *f, int *task_out, int *micro_out) {
+    int n = flow_job_pending(f), i, t = 0, m = 0;
+
+    DCHECK(task_out != NULL && micro_out != NULL,
+           "a job-kind split was asked for with nowhere to put one of its two halves — the pair is the whole "
+           "reading, and a caller holding one of them has a count with nothing to check it against");
+    for (i = 0; i < n; i++) {
+        JSValue e = job_entry(f, i);
+        int task = job_field_int(e, JOB_TASK);
+
+        JS_FreeValue(pending_ctx(), e);
+        if (task) t++;
+        else      m++;
+    }
+    *task_out = t;
+    *micro_out = m;
+}
+
 void flow_job_push(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueConst *argv, int task,
                    JSTaskHandle handle) {
     JSValue e;
@@ -5153,6 +5180,11 @@ void flow_wfq_census(WfqCensus *out) {
        exactly why it can be trusted as the denominator of a reading about members. */
     out->nonreward_max = FLOW_NONREWARD_MAX;
     out->jobs_ready = out->jobs_framed = out->jobs_owed = out->vis_zero = 0;
+    /* …AND THE TWO HALVES OF THE READY ROW, ZEROED ON THEIR OWN LINE RATHER THAN CHAINED ONTO THAT ONE so the
+       partition they state is visible as one statement. A half left un-zeroed would accumulate across censuses
+       while the total it is a half of did not, which is exactly what the sum assert at the end of this scan
+       fires on — the reset and the identity are one contract. */
+    out->jobs_ready_task = out->jobs_ready_micro = 0;
     out->mem_unframed = 0;
     out->job_w_gap = 0.0;
     out->deliv_ready = out->deliv_framed = out->deliv_owed = 0;
@@ -5369,6 +5401,13 @@ void flow_wfq_census(WfqCensus *out) {
            `progStarts`, and `_jobsRun` stayed at zero — `progStarts` equals the number of frame-ends the run
            consumed plus one (the boot flow, which had no prior frame-end) in BOTH runs, 22 against 21 and 17
            against 16. Not one pick of this population has ever reached the job arm.
+           AND THAT POPULATION NOW HAS A COUNT RATHER THAN A DERIVATION: `jobs_ready_task`, raised in the arm
+           just below this one. This residual's NOT COVERED clause is a claim about the TASKS inside
+           `jobs_ready`, and until that row existed the only way to size it was the four-bucket step partition
+           plus the argument above. IT IS NOT RETIRED BY THAT ROW — the row measures the population, it does
+           not stop the population being reported as rank-ready — and what it buys is that the two halves of
+           this row's error are separable: the microtask half is exact, and the task half is exactly
+           `jobs_ready_task`.
            NEXT DIFF: REWRITTEN RATHER THAN DELETED, BECAUSE THE CLAUSE THAT STOOD HERE IS THE ONE A READER
            RE-DERIVES FROM THE SENTENCE ABOVE IT AND IT IS REFUTED. It read: the per-source task queue that
            arm's own residual names — a source on a `jobs` entry as it is now on a row — after which the arm's
@@ -5425,7 +5464,23 @@ void flow_wfq_census(WfqCensus *out) {
                 if (flow_host_owed(f))         out->jobs_owed   += jn;
                 else if (!flow_stack_empty(f)) out->jobs_framed += jn;
                 else {
+                    int jt, jm;
+
                     out->jobs_ready += jn;
+                    /* …AND SPLIT AGAIN ON THE ONE AXIS THAT DECIDES WHICH ARM OF flow_step CAN TAKE THE JOB —
+                       see flow.h. The split above says what a job WAITS ON; this says which arm DISPATCHES it,
+                       and a MICROTASK's arm (the checkpoint) stands ABOVE the program sequence while a TASK's
+                       stands below it, so `jobs_ready` calls rank-ready two populations of which one is also
+                       waiting on the ladder to reach its arm.
+                       TAKEN HERE, INSIDE THE ARM THAT ALREADY ADMITTED THIS MEMBER, so the queue walk it costs
+                       is paid only for the population `mem_unframed` bounds and never once per member — an
+                       instrument that ran at the frequency of the frontier would be measuring a different run.
+                       BOTH HALVES COME FROM flow_job_kinds AND NEITHER IS `jn` MINUS THE OTHER, because the
+                       sum asserted at the end of this scan is what states the partition, and a subtracted half
+                       makes that assert one whose two sides cannot disagree. */
+                    flow_job_kinds(f, &jt, &jm);
+                    out->jobs_ready_task  += jt;
+                    out->jobs_ready_micro += jm;
                     /* THE BEST OF THEM, against which `job_w_gap` is taken below. A maximum and not a first
                        hit: the question is how far the backlog's BEST claim stands from the front of the
                        queue, and any other holder is further still. */
@@ -5966,6 +6021,20 @@ void flow_wfq_census(WfqCensus *out) {
            "no job that waits on rank at all — the gap is written only for a holder the ready arm admitted, so "
            "a distance with no population under it means the two rows have stopped being about one set and "
            "`jobsReady: 0` no longer makes `jobWGap: 0`");
+    /* AND THE TWO KINDS OF READY JOB ADD UP TO THE READY COUNT — the identity that makes the pair a PARTITION
+       rather than two counts standing beside a total, asserted here because this is where all three are in one
+       hand. THAT THE SIDES HAVE DIFFERENT WRITERS IS THE WHOLE CONTENT OF THE CHECK: the total accumulates the
+       queue's own `length` and the halves accumulate a walk of its records, so it can fail, and what it fails
+       on is an edit that moves one accumulation site and not the other, or a reset that stopped covering one
+       half. A reader meeting a split that does not close would be deciding which arm of flow_step is holding a
+       backlog from two numbers taken over different sets, which is the one reading the pair exists to make.
+       engine/build.mjs asserts the same identity again, for `unframed_picks_lifetime`'s reason: this DCHECK is
+       compiled out of a release build that reader still runs over. */
+    DCHECK(out->jobs_ready_task + out->jobs_ready_micro == out->jobs_ready,
+           "the WFQ census splits the rank-ready job backlog into two kinds that do not add up to it — the "
+           "total is the queue's length and the halves are a walk of the queue's own records, so a split that "
+           "does not close means the two are no longer one sample, and neither half then says which arm of "
+           "flow_step is holding the backlog");
     /* AND THE REPLY BACKLOG'S IS NON-NEGATIVE BY THE SAME CONSTRUCTION AND ASSERTED FOR THE SAME REASON — a
        ready delivery holder is one of the members flow_best's maximum is taken over, read through the same
        flow_weight in the same scan. The row exists to answer whether a delivery backlog is an ORDERING problem,

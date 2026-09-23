@@ -1425,6 +1425,19 @@ function wfqReading(out) {
                     `one of ${w.members} members holds a frame — the ready arm is reached only through ` +
                     `!frame, so these are the same predicate asked twice in one loop and one of them has ` +
                     `been re-spelled.`);
+  /* AND THE READY ROW'S OWN PARTITION, re-asserted here for the reason the `unframedPicksLifetime` guard below
+     is: flow_wfq_census DCHECKs it and that DCHECK is compiled out of a release build where this reader still
+     runs. It is the whole contract of the pair — `jobsReadyTask` and `jobsReadyMicro` say which ARM of
+     flow_step can dispatch the backlog `jobsReady` counts, the checkpoint arm standing above the program
+     sequence and the task arm below it — and a split that does not close is two numbers taken over different
+     sets, which is the one reading they exist to make. The sides have different writers in the engine (the
+     job queue's `length` against a walk of its records), so this can fail. */
+  if (w.jobsReadyTask + w.jobsReadyMicro !== w.jobsReady)
+    throw new Error(`[build] the @WFQ census splits jobsReady ${w.jobsReady} into ${w.jobsReadyTask} task(s) ` +
+                    `and ${w.jobsReadyMicro} microtask(s), which do not add up to it — the total is the job ` +
+                    `queue's length and the halves are a walk of its records, so a split that does not close ` +
+                    `means they are no longer one sample and neither half says which arm of flow_step is ` +
+                    `holding the backlog.`);
   /* AND THE LIFETIME HALF OF THAT ROW AGAINST THE TOTAL IT IS A SUBSET OF, re-asserted here for the reason the
      `jobWGap` guard above is: flow_wfq_census DCHECKs it and that DCHECK is compiled out of a release build,
      where this reader still runs. It is a count offered as a share of another, so the arithmetic tell

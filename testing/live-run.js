@@ -357,7 +357,16 @@ const CENSUS_GAUGE = ["stepUnits", "programCursors", "replyOutstanding"];
    monotone total. `jobWGap` is read with `jobsReady` and never alone (0 is both "no ready holder" and "the
    top of the queue holds a runnable job"); `memUnframed` separates `jobsReady: 0`'s two silences; and
    `wfqMembers` is the population all of them are taken over. */
-const WFQ_JOB_SPLIT = ["jobsReady", "jobsFramed", "jobsOwed", "jobWGap", "memUnframed", "visZero"];
+const WFQ_JOB_SPLIT = ["jobsReady", "jobsFramed", "jobsOwed", "jobWGap", "jobsReadyTask", "jobsReadyMicro",
+                       "memUnframed", "visZero"];
+/* `jobsReadyTask`/`jobsReadyMicro` ARE IN THAT LIST AND NOT AN AFTERTHOUGHT, because the reading they make is
+   one only a REAL DOCUMENT poses and this driver is what carries a census off one. `jobsReady` says a backlog
+   waits on rank; these say which ARM of flow_step can dispatch it — the checkpoint, which stands above the
+   program sequence, or the task arm below it — so a run reporting `jobsRun: 0` has the SEQUENCE ARM'S
+   exclusion confirmed by an all-TASK reading and refuted by any MICROTASK, which is the narrow claim the pair
+   makes and the only one in this file's output. They are GAUGES like their neighbours and are
+   filed with them for that reason, and the identity `jobsReadyTask + jobsReadyMicro == jobsReady` holds within
+   ONE line and on no pair of them. */
 /* …AND THE ONE @WFQ ROW THAT IS A LIFETIME COUNT, FILED APART FROM THEM BECAUSE THE KINDS ARE OPPOSITE AND
    THE NAMES DO NOT SAY. Every row above is a walk of the frontier at one instant and may FALL;
    `unframedPicksLifetime` is raised once per dispatch in flow_credit_pick and lowered by nothing, so it is

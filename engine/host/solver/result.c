@@ -583,6 +583,15 @@ static char *errs_json_array(ErrsArray which) {
    OWN PROGRAMS — §8.1.4.4's clean-up step, one component away from anything this file orders. `jobsOwed` says
    the same for the host. So the pair is read BEFORE a zero is charged to the ordering, and a reader who has
    only the job count has not got the evidence to charge anything.
+   AND `jobsReady` ITSELF HAS TWO POPULATIONS UNDER IT, WHICH IS WHERE THAT REFUSAL USED TO STOP. Having
+   declined to charge the zero to the order, a reader is left with the LADDER — and flow_step has two job arms
+   on opposite sides of the program sequence, so "the ladder is holding it" is two statements and the row that
+   sends a reader there cannot say which. `jobsReadyTask` and `jobsReadyMicro` are that split, and what they
+   turn from an inference into a reading is ONE claim and not the whole diagnosis: all TASK is the SEQUENCE
+   ARM'S exclusion measured, and any MICROTASK refutes that exclusion for the jobs it counts, whose arm stands
+   above the sequence. What is left over when it is refuted — the arms above the checkpoint, and the pick — is
+   not decided here and must not be read as decided. A reader who charges a flat `_jobsRun` to the arm below
+   the sequence without this pair has made the same shape of claim the paragraph above refuses one level up.
    THE READING IS AVAILABLE HERE AND IS NOW ALSO WHERE THE ZERO IS PRINTED — the residual that stood here is
    SPENT, and it is REWRITTEN RATHER THAN DELETED because a reader who re-derives its reason would re-add a
    second copy of a row that already has one. It said the `@HWORK` line a host prints carried the job count
@@ -1003,6 +1012,21 @@ char *result_wfq_json(void) {
                         states the pair. `valTop / topForgiven` is points per finding on the leading account. */
                      "\"topSvc\":%lld,\"topSvcFam\":%lld,\"topForgiven\":%lld,\"nonrewardMax\":%.3f,"
                      "\"jobsReady\":%ld,\"jobsFramed\":%ld,\"jobsOwed\":%ld,\"jobWGap\":%.3f,"
+                     /* …AND THE RANK-READY ROW SPLIT AGAIN BY WHICH ARM OF flow_step CAN DISPATCH THE JOB.
+                        The triple above says what a job WAITS ON; this pair says which arm TAKES it, and those
+                        are different questions: a MICROTASK is taken by the checkpoint arm, which stands ABOVE
+                        the program sequence, and a TASK by the arm below it, which is the `else` of `a program
+                        starts on this step`. Read the pair when `jobsReady` is above zero and the run's
+                        `_jobsRun` is not moving, and read it for the NARROW claim it makes: all TASK says the
+                        SEQUENCE ARM'S EXCLUSION is what holds the backlog, every job of it standing behind the
+                        `else` of `a program starts on this step`; any `jobsReadyMicro` REFUTES that for the
+                        jobs it counts, their holders satisfying `flow_checkpoint_due` outright and their arm
+                        standing above the sequence. It does not say those jobs would have RUN — flow_step has
+                        arms above the checkpoint as well, and the pick may not have reached the holder — and
+                        both of those are different work from an arm order. The two sum to `jobsReady` by an
+                        identity flow_wfq_census asserts and engine/build.mjs re-asserts for the release build;
+                        solver/flow.h carries the legend and states why neither half is a rate. */
+                     "\"jobsReadyTask\":%ld,\"jobsReadyMicro\":%ld,"
                      /* AND THE DENOMINATOR `jobsReady` HAS ALWAYS NEEDED — how many members hold no
                         frame, taken on the same walk as `members` so the two are ONE SAMPLE. A reader
                         who has correctly declined to charge `jobsReady: 0` to the ordering needs this
@@ -1228,6 +1252,7 @@ char *result_wfq_json(void) {
                      (long long)w.top_svc, (long long)w.top_svc_fam, (long long)w.top_forgiven,
                      w.nonreward_max,
                      w.jobs_ready, w.jobs_framed, w.jobs_owed, w.job_w_gap,
+                     w.jobs_ready_task, w.jobs_ready_micro,
                      w.mem_unframed, (long long)w.unframed_picks_lifetime,
                      w.deliv_ready, w.deliv_framed, w.deliv_owed, w.deliv_w_gap,
                      (long long)w.deliv_w_gap_vis, (long long)w.w_top_vis,
