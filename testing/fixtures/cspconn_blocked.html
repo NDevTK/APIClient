@@ -1,0 +1,125 @@
+<!doctype html><meta charset="utf-8"><title>csp connect-src: the blocked arm</title>
+<!-- CONFORMANCE FIXTURE (kept, not a regression test): every assertion below is a SPEC-DEFINED OBSERVABLE of
+     an unmodified page. Nothing here names a symbol, a file or a commit, and there is no stored expected
+     output anywhere — the document carries its own oracle, the way a test262 file does.
+
+     WHAT THE PAIR IS FOR. cspconn_blocked.html and cspconn_open.html run the SAME MACHINERY, and the ONE REAL
+     VARIABLE is a file that is not either of them: the sidecar `cspconn_blocked.html.headers`. The banners
+     differ — each names both arms, and CSP §4.1.2's own title carries the word `blocked` — so the identity
+     that matters is from the first element onward, which is how testing/corpus/control's CSP pair states the
+     same property ("byte-identical from the `body` element onward"). Check it, do not believe it:
+
+         cd testing/fixtures && \
+           diff <(sed -n '/^<img /,$p' cspconn_blocked.html | sed 's/blocked/ARM/g') \
+                <(sed -n '/^<img /,$p' cspconn_open.html    | sed 's/open/ARM/g')
+
+     must print nothing. A pair whose arms drifted is one document measured twice.
+
+     WHY A HEADER AND NOT A `meta`, WHICH IS WHAT THIS CORPUS COULD ALREADY DO. testing/corpus/control's CSP
+     pair delivers its policy with `<meta http-equiv>`, and CSP §3.3 "The <meta> element" is explicit about
+     what that cannot reach: "The Content-Security-Policy-Report-Only header is not supported inside a meta
+     element. Neither are the report-uri, frame-ancestors, and sandbox directives." It is also explicit that
+     a meta policy governs less of its own document — "policies in meta elements are not applied to content
+     which precedes them" — while CSP §3.1 "The Content-Security-Policy HTTP Response Header Field" calls the
+     header "the preferred mechanism for delivering a policy from a server to a client". So a header-delivered
+     policy is a different capability and not a tidier spelling of the same one.
+
+     WHAT IS UNDER TEST. CSP §6.1.2 "connect-src": "The connect-src directive restricts the URLs which can be
+     loaded using script interfaces", and "This directive controls requests which transmit or receive data
+     from other origins". Under `connect-src 'none'` the `fetch()` below must never reach the network. The
+     refusal itself is CSP §4.1.2 "Should request be blocked by Content Security Policy?".
+
+     THE ORACLE IS THE FIXTURE SERVER'S ACCESS LOG, which is evidence from OUTSIDE the engine: each witness
+     requests one distinctive path, and the server logs every request line before it resolves a file. The
+     witness paths do not exist on disk and answer 404 — the REQUEST is the record, not the reply.
+
+     EVERY WITNESS PATH IS A CONSTANT, which is not a style choice. This engine's whole purpose is to make
+     values unknown, and a request whose path was COMPUTED from an unknown is not a concrete string, so it is
+     never sent — a witness built that way goes silent in exact proportion to how well the engine is working.
+     `e.effectiveDirective` is read only as a CONDITION; no witness is composed from it.
+
+     THE WITNESS CHANNEL IS `img` BECAUSE THE POLICY UNDER TEST BLOCKS THE OTHER ONE. A `fetch()` beacon
+     cannot report a `connect-src` violation — it is the thing being blocked — so the channel is chosen to be
+     one this policy permits, by CSP §6.1.6 "img-src": "The img-src directive restricts the URLs from which
+     image resources may be loaded", and the sidecar states `img-src 'self'` for exactly that reason.
+
+     THE SUBJECT IS AN ABSENCE, SO IT IS BRACKETED AT BOTH ENDS. `cspconn-blocked-connect.txt` missing from the
+     log is consistent with a refusal AND with a document that never ran, a script that never reached the
+     call, or an engine with no `fetch` at all — so `-fetch-called` fires immediately BEFORE the call and
+     `-connect-rejected` fires from the promise's own rejection AFTER it. An absent count and a zero count are
+     different facts; these two make the absence a reading rather than silence.
+
+     CSP §5.5 "Report a violation" is the positive record: "Given a violation violation, this algorithm
+     reports it to the endpoint specified in violation's policy, and fires a SecurityPolicyViolationEvent at
+     violation's element, or at violation's global object". The EVENT is not gated on a report endpoint, so a
+     policy with no `report-uri`/`report-to` — this one — still owes the event.
+
+     THE LOG HAS TWO AUTHORS. Driving this document through testing/harness.js loads it TWICE: real Chrome in
+     the tab, and the extension's engine through `safeFetch`. Chrome sends a `Referer` on every subresource
+     and states `sec-fetch-dest`; safeFetch sends no referer. So the browser's own answer is a control sitting
+     in the same log as the subject, at no cost, and the two are separated per request line by this server's
+     `referer=` and `dest=` fields. The one line neither channel can attribute is this document itself — a
+     top-level navigation carries neither — so two of those are one Chrome load and one engine load.
+
+     EXPECTED (spec-correct) access log, per author. The two arms are COMPLEMENTARY — every witness the one
+     requests, the other omits — so a reading is checkable in both directions and neither list is a subset of
+     the other:
+       blocked arm — requested: parsed, script-ran, fetch-called, connect-rejected, violation-any,
+                                violation-connect
+                     ABSENT   : connect.txt, connect-resolved
+       open arm    — requested: parsed, script-ran, fetch-called, connect.txt, connect-resolved
+                     ABSENT   : connect-rejected, violation-any, violation-connect
+     MEASURED in real headless Chrome, no extension, against this corpus's own fixtures_server.cjs: both
+     lists exactly, with the browser naming the refusal in its own words — "Connecting to
+     'http://127.0.0.1:PORT/cspconn-blocked-connect.txt' violates the following Content Security Policy
+     directive: \"connect-src 'none'\". The action has been blocked." That is the SERVER half of this
+     mechanism confirmed end to end; it is NOT a reading about this engine, which is a separate run.
+     THE INVERSION TO WATCH FOR is `cspconn-blocked-connect.txt` present: that is a policy the server sent and
+     the fetch integration did not honour, which is the one reading that makes every `cspBlocks` verdict this
+     product emits unfalsifiable.
+     THE OTHER READING, AND IT IS NOT THE SAME DEFECT: `connect.txt` absent in the blocked arm together with
+     `violation-any` absent is a refusal that fired no event — §5.5 owed and not paid — which is a narrower
+     finding than a policy not enforced, and the two must not be reported as one.
+
+     WHICH HALF OF THE CITATIONS ABOVE IS MACHINE-CHECKED, AND WHICH IS NOT CHECKED BY ANYTHING. A default
+     `node engine/citegen.mjs` DOES walk `testing/` — it collects by EXTENSION, and the set is
+     `AUDITED_EXT = /\.(c|h|md|js|mjs)$/`, which admits neither `.html` nor the `.cjs` the server half is
+     written in. So no whole-tree run reads either file, and the reason is the extension and not the
+     directory. Aimed at this file by hand, citegen RESOLVES every citation and COMPARES NO QUOTATION.
+     THAT SECOND HALF IS MEASURED WITH AN ARMED CONTROL rather than read off a zero, which is the only way a
+     blind spot may be claimed: the same real CSP sentence, deliberately mis-attributed to Fetch, answers
+     `QUOTE-WRONG-STANDARD: 1` from a `.cjs` and `0` from this `.html`, which prints
+     `0 quotation of 0 compared` beside it. So the NUMBERS and TITLES above are checked and the QUOTED
+     SENTENCES are not. They were verified by fetching the Editor's Draft this tree's own committed corpus
+     names as its base, and a reader who edits one owes that fetch again — no instrument here will say so.
+     RETIREMENT: this record goes when `AUDITED_EXT` admits the extensions this fixture and its server are
+     written in, because the claim is then re-derivable by running the tool instead of reading this. -->
+
+<!-- WITNESS: the document PARSED and the policy permits an image. Markup rather than script, so this one is
+     true even if no script runs — which is what separates "never ran" from "ran and was refused". -->
+<img src="/cspconn-blocked-parsed.png" alt="">
+
+<script>
+(function () {
+  "use strict";
+  new Image().src = "/cspconn-blocked-script-ran.png";
+
+  /* CSP §5.5's event. Registered BEFORE the call it is about, or a synchronous refusal has nothing
+     listening. The directive is read as a condition; the path it selects is a literal. */
+  document.addEventListener("securitypolicyviolation", function (e) {
+    new Image().src = "/cspconn-blocked-violation-any.png";
+    if (e.effectiveDirective === "connect-src")
+      new Image().src = "/cspconn-blocked-violation-connect.png";
+  });
+
+  /* THE SUBJECT, bracketed. A CSP refusal rejects the promise, it does not throw synchronously, so the
+     rejection is caught rather than wrapped in try/catch — a `catch` block here would record nothing and
+     read as the refusal not happening. */
+  new Image().src = "/cspconn-blocked-fetch-called.png";
+  fetch("/cspconn-blocked-connect.txt").then(function () {
+    new Image().src = "/cspconn-blocked-connect-resolved.png";
+  }, function () {
+    new Image().src = "/cspconn-blocked-connect-rejected.png";
+  });
+})();
+</script>

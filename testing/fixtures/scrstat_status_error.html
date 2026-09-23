@@ -51,10 +51,18 @@
      THE INVERSION TO WATCH FOR is `scrstat-404-body-ran` and `scrstat-404-load` together: that is the error
      page compiled and run as this document's program, with the element told it succeeded.
 
-     WHERE THE CITATIONS ABOVE ARE ACTUALLY CHECKED, because it is not here. `engine/citegen.mjs` audits
-     `.c/.h/.md/.js/.mjs` and walks `engine/host`, `extension` and `engine/*.mjs`; an `.html` under `testing/`
-     is outside both, so no whole-tree run reads this file at all — MEASURED at 6cc8439a, `testing/fixtures`
-     occurs ZERO times in the output of a bare `node engine/citegen.mjs`. So the load-bearing quotations are
+     WHERE THE CITATIONS ABOVE ARE ACTUALLY CHECKED, because it is not here. THE REASON THIS PARAGRAPH GAVE
+     HAS GONE STALE WHILE ITS CONCLUSION HELD, which is the pairing CLAUDE.md rates worse than an open
+     question — a reader who checks the argument finds it false and discards the conclusion with it. It said
+     citegen "walks `engine/host`, `extension` and `engine/*.mjs`" and that an `.html` under `testing/` is
+     outside that walk. The collector pushes `join(ROOT, "testing")` and walks it; what keeps this document
+     out is the EXTENSION SET, `AUDITED_EXT = /\.(c|h|md|js|mjs)$/`, which admits neither `.html` nor the
+     `.cjs` the fixture server is written in. So the conclusion stands for a different reason, and one
+     consequence INVERTS what the old sentence implied: the two `.js` siblings named below are `.js` under
+     `testing/`, so a bare run now collects them rather than skipping them — which is what this paragraph
+     wanted all along. The old MEASURED count is not restated here because it was taken under the walk this
+     note had wrong, and the box was not free to re-derive it; run the command, do not quote a number from a
+     comment. So the load-bearing quotations are
      ALSO carried by scrstat_bad.js and scrstat_ok.js beside this file, where
      `node engine/citegen.mjs testing/fixtures/scrstat_bad.js testing/fixtures/scrstat_ok.js`
      compares and VERIFIES every one of them against the
@@ -72,7 +80,18 @@
      and not a defect in the prose: the citation `status §2.2.3` sits at the end of a comment line and the next
      double-quoted run in the file is the `src` ATTRIBUTE VALUE beneath it, so the quotation channel compares a
      URL against Fetch and reports it diverging at word zero. A `.c` file cannot produce that shape, which is
-     why it appears only when the tool is aimed here by hand. The point the sentence was making stands and is
+     why it appears only when the tool is aimed here by hand.
+     AND THAT PINNED MEASUREMENT NO LONGER DESCRIBES A RUN TODAY, which is recorded beside it rather than over
+     it, because a count taken at a named revision cannot go stale while the sentence around it is written in
+     the present tense. Re-run on this file alone, citegen resolves its citations and compares ZERO quotations
+     and reports ZERO findings — so the false positive is gone and, with it, the only evidence this file had
+     that the quotation channel reads it at all. THAT IS ESTABLISHED WITH AN ARMED CONTROL rather than from
+     the zero, which alone cannot tell "nothing wrong here" from "nothing was ever asked": the same real
+     sentence, deliberately mis-attributed to a standard that does not contain it, answers
+     `QUOTE-WRONG-STANDARD: 1` from a `.cjs` and `0` from an `.html`. So the first claim this paragraph
+     retired — that the tool compares none of the quotations in this document — is what a run answers now.
+     The paragraph is kept WHOLE because which of the two holds has already changed once, and the next reader
+     is owed the fact that it moves rather than a tidy statement of wherever it happens to stand. The point the sentence was making stands and is
      now checkable: run the two `.js` siblings for the judged copies, and do not read a run over this file as
      evidence about them.
      RETIREMENT: this record goes when a coverage note in this tree cannot state what an instrument compares
