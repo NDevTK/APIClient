@@ -518,7 +518,7 @@ static JSTaskHandle fr_queue(JSContext *ctx, JSValueConst reader, JSValueConst b
     fn = JS_NewStepClosure(ctx, g_task_stepid, 0, FR_CD_N, data);
     CHECK(!JS_IsException(fn), "FileReader: OOM building a file reading task — a dropped task is a read that "
                                "never completes and a handler this solver never reaches");
-    h = JS_EnqueueCallTask(ctx, fn, 0, NULL);
+    h = JS_EnqueueCallTask(ctx, fn, 0, NULL, TASK_SOURCE_FILE_READING);
     JS_FreeValue(ctx, fn);
     DCHECK(h != JS_TASK_HANDLE_NONE,
            "a file reading task was queued and issued no handle — §6.2.3.5 step 3 removes these tasks BY "

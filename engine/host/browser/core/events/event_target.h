@@ -10,6 +10,7 @@
    and spelling `__FILE__, __LINE__` here instead would be a second copy of a convention core/idl_args.h owns.
    No cycle: idl_args.h names this header only in prose. */
 #include "core/idl_args.h"
+#include "core/timing/task_source.h"   /* HTML §8.1.7.1's `source`: which task source queues a fire */
 
 void event_target_init(JSContext *ctx);                          /* the private listener key (agent init) */
 /* §2.7's PROTOTYPE FOR ONE REALM. Run it where a realm's other intrinsics are added — at the realm's creation,
@@ -516,7 +517,19 @@ void event_target_set_activation(bool (*has)(JSContext *ctx, JSValueConst el),
    their target (what the spec spells as the legacy target override flag). It is the VALUE rather than a
    boolean because the flag's whole content is "the target's associated Document" and the caller holds it;
    asked as a boolean this component would have to resolve a Window whose realm it may not own. */
-void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev, JSValueConst target_override);
+/* `src` IS §8.1.7.1's TASK SOURCE, AND IT IS A PARAMETER BECAUSE THIS IS A SHARED HELPER WHOSE CALLERS DO NOT
+   AGREE ABOUT IT. Twelve standards reach this one queue — §13.2.7 "The end" and §12.2.1 "The Storage
+   interface" on the DOM manipulation task source, §4.10.5.4 "Common input element APIs" and §6.2 "Page
+   visibility" on the user interaction one, Permissions §3.4 on its own, CSP §5.5 "Report a violation" naming
+   none at all — so a constant here would state one file's answer for every caller, which is exactly the
+   two-carriers-one-source defect one level down. A caller whose standard states the fire as a BARE synchronous
+   step says TASK_SOURCE_NOT_A_TASK, which is the positive statement that nothing queued it and which makes
+   this component's own note above ("Queuing one of those here does not make it asynchronous rather than
+   synchronous, it puts the page's listener AFTER work the standard puts it before") a GREPPABLE population
+   rather than a paragraph: `TASK_SOURCE_NOT_A_TASK` at a call of this function IS the list of callers that owe
+   the request reach, and it cannot go stale behind a caller added later. */
+void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev, JSValueConst target_override,
+                       TaskSource src);
 /* THE FIRE REQUEST BUFFER, AS A TYPE. §2.9's dispatcher takes THREE arguments (target, event, targetOverride)
    and step_call_run's operand shape is [this, func, args…], so the buffer is 2 + 3 slots wide.
    IT IS A TYPE BECAUSE A WIDTH EVERY CALLER RESTATES IS A WIDTH EVERY CALLER IS FREE TO BE BEHIND ON.

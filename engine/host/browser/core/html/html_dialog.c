@@ -950,7 +950,7 @@ static void dialog_queue_toggle_task(JSContext *ctx, JSValueConst element, const
        submitting a `<form method=dialog>` inside an open `<dialog>`, so a microtask fired `toggle` inside the
        checkpoint of the script that called `submit()` — ahead of every task already standing, an expired
        timer or a delivered message among them. */
-    handle = JS_EnqueueCallTask(ctx, fn, 4, argv);   /* §4.11.4: the DOM manipulation task source */
+    handle = JS_EnqueueCallTask(ctx, fn, 4, argv, TASK_SOURCE_DOM_MANIPULATION);   /* §4.11.4 step 2 */
     /* Step 3: "set element's dialog toggle task tracker to a struct with task set to the just-queued task and
        old state set to oldState" — BOTH fields, in the two slots that are the one struct. */
     ds_set(ctx, element, DS_TRACKER, JS_DupValue(ctx, ov));
@@ -1037,7 +1037,7 @@ void html_dialog_close_release(JSContext *ctx, DialogCloseRun **slot)
 static int dialog_close_tail(JSContext *ctx, DialogCloseRun *r)
 {
     event_target_fire(ctx, r->subject, event_new(ctx, "close", /*bubbles*/ false, /*cancelable*/ false),
-                      JS_UNDEFINED);
+                      JS_UNDEFINED, TASK_SOURCE_USER_INTERACTION);   /* §4.11.4 step 13 names it */
     return 0;
 }
 

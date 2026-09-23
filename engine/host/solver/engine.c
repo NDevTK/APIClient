@@ -9000,8 +9000,29 @@ void engine_orphan_claims(long *met, long *unmet) {
     *unmet = g_orphan_claims_unmet;
 }
 
+/* THE OTHER CARRIER'S §8.1.7.1 DECLARATION, WHICH IS WHAT MAKES THE ONE-SOURCE-ONE-QUEUE QUESTION ASKABLE OF A
+   FLOW AT ALL. engine_queue_into asserts the same field for the `dyn` carrier and stores nothing, so the answer
+   for programs is a grep for the enumerator; this is the same assert for `jobs`, and with both in place the
+   answer for a whole flow is a grep rather than a reading of every call site. The value is not recorded on the
+   flow's job record: nothing reads it there yet, and a field written with no reader is the defect
+   §A-FIELD-A-CONSUMER-DEFAULTS names. It IS recorded on the runtime's entry, because `baseline_call_list` hands
+   a task to this hook LATER and a fact the entry does not carry is one the handover loses.
+   THE SENTINEL IS THE ONE VALUE THE TWO TYPE SYSTEMS SHARE, so it is asserted here rather than believed: the
+   fork carries an opaque scalar (quickjs.h's JSTaskSource) and this file's enum is where the values live, and
+   the only thing that could put them out of step is the zero. */
+_Static_assert((int)TASK_SOURCE_UNSTATED == JS_TASK_SOURCE_UNSTATED,
+               "the fork's never-stated task source and this engine's differ — quickjs carries the scalar "
+               "without interpreting it and states only the zero, so a disagreement here makes every microtask "
+               "arrive naming whatever this enum puts first");
+
 static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueConst *argv, bool is_task,
-                              JSTaskHandle handle) {
+                              JSTaskSource raw_src, JSTaskHandle handle) {
+    /* THE HOOK'S SIGNATURE IS THE FORK'S, AND THE CONVERSION IS HERE BECAUSE THIS IS WHERE THE TWO VOCABULARIES
+       MEET. quickjs carries an opaque scalar it never interprets (quickjs.h's JSTaskSource) and this engine's
+       enum is where the values are named, so a hook declared with the enum would be a DIFFERENT function
+       pointer type — an enum's underlying type is the compiler's choice — and the install would not compile,
+       which is the loud version of two ends disagreeing about a field's width. */
+    TaskSource src = (TaskSource)raw_src;
     /* THE OWNER IS NAMED WHEN THE USER AGENT IS THE QUEUER — see g_enqueue_owner, declared beside the one
        bracket that sets it. Everywhere else the callback belongs to the flow whose program queued it. */
     Flow *f = g_enqueue_owner;
@@ -9057,6 +9078,31 @@ static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueCo
            "a job reached the scheduler under the never-issued handle — quickjs mints one at every enqueue and "
            "carries it across the baseline handover, so a job without a name has come from a path that does "
            "not, and nothing could ever take it back off this flow's queue");
+    /* WHICH TASK SOURCE PUT IT HERE — HTML §8.1.7.1's `source`, asserted at the ONE site that takes ownership
+       of a queued callback, exactly as engine_queue_into asserts it at the one site that creates a row. The
+       pair is what the ordering question needs: §8.1.7.1 requires that "For each event loop, every task source
+       must be associated with a specific task queue", a flow's work is split across carriers that partition by
+       what a work item IS rather than by where it came from, and until both carriers STATED a source the only
+       answer to "is any one source in two of them" was prose beside each call — which a producer added later
+       does not write and nothing notices.
+       IT IS TWO-SIDED AND THE TWO SIDES CAN DISAGREE, which is the whole of why it is an assert and not a
+       field. A producer that never thought about the question reaches a TASK queue carrying the never-written
+       sentinel and this fires; a caller that states a source for a MICROTASK is caught one level down, in
+       js_enqueue, because that is where the fork knows which queue it is about to use. Neither direction can
+       be satisfied by omission.
+       WHAT IS DELIBERATELY NOT ASSERTED IS `task_source_is_task(src)`, and the reason is a population rather
+       than a doubt: this engine QUEUES AS A TASK several fires whose standard states them as bare synchronous
+       steps of an algorithm already running — core/events/event_target.h says so in its own words at
+       `event_target_fire`, and names the request reach those callers belong on. Each of those honestly declares
+       TASK_SOURCE_NOT_A_TASK, so the stricter assert would abort on a state this tree already knows about and
+       already records, rather than on anything a diff got wrong. The declaration makes that population
+       GREPPABLE, which is what it is for: `TASK_SOURCE_NOT_A_TASK` at a JS_EnqueueCallTask call site IS the
+       list, and it cannot go stale behind a producer added later the way the prose could. */
+    DCHECKF(!is_task || task_source_stated(src),
+            "a callback was queued as a TASK without saying which task source, if any, put it there — HTML "
+            "§8.1.7.1 gives a task a source so that one source is in one queue, and a job that states none "
+            "cannot be ordered against the same source's work on this flow's other carrier or shown not to "
+            "have any (is_task=%d)", (int)is_task);
     flow_job_push(ctx, f, fn, argc, argv, is_task, handle);
     return 1;   /* host owns it */
 }

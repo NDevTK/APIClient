@@ -1460,7 +1460,7 @@ int timer_run_due(JSContext *ctx)
         CHECK(!JS_IsException(task),
               "timer: §8.7 Timers's step 9 task could not be allocated — a dropped task is a callback the "
               "page asked for and never gets, which is invisible from outside");
-        JS_EnqueueCallTask(docctx, task, TT_ARG_N, targ);
+        JS_EnqueueCallTask(docctx, task, TT_ARG_N, targ, TASK_SOURCE_TIMER);   /* §8.7 step 9 */
         JS_FreeValue(docctx, task);
         JS_FreeValue(docctx, lvl);
         JS_FreeValue(docctx, idv);

@@ -810,7 +810,7 @@ static void popover_queue_toggle_task(JSContext *ctx, JSValueConst element, cons
     argv[3] = source;
     /* Step 2 is "QUEUE AN ELEMENT TASK GIVEN THE DOM MANIPULATION TASK SOURCE and element", so it is a TASK and
        not a microtask — a different position in HTML §8.1.7's event loop and not a smaller one. */
-    handle = JS_EnqueueCallTask(ctx, fn, 4, argv);
+    handle = JS_EnqueueCallTask(ctx, fn, 4, argv, TASK_SOURCE_DOM_MANIPULATION);   /* §6.12 step 2 */
     /* Step 3: "set element's popover toggle task tracker to a struct with task set to the just-queued task and
        old state set to oldState" — BOTH fields, in the two slots that are the one struct. */
     ps_set(ctx, element, PS_TRACKER, JS_DupValue(ctx, ov));

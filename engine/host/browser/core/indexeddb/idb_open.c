@@ -285,7 +285,7 @@ static void entry_enqueue(JSContext *ctx, int stepid, JSValueConst entry)
            "record, and nothing else, so which machine runs an entry is decided by its kind and by no caller");
     fn = JS_NewStepClosure(ctx, stepid, 0, 1, &entry);
     CHECK(!JS_IsException(fn), "IndexedDB: an §5.1 task could not be minted");
-    JS_EnqueueCallTask(ctx, fn, 0, NULL);
+    JS_EnqueueCallTask(ctx, fn, 0, NULL, TASK_SOURCE_DATABASE_ACCESS);
     JS_FreeValue(ctx, fn);
 }
 

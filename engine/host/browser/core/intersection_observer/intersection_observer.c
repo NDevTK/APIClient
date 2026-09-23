@@ -291,7 +291,7 @@ static void io_queue_task(JSContext *ctx)
     fn = realm_value_get(ctx, g_notify_slot);
     DCHECK(JS_IsFunction(ctx, fn),
            "an intersection observer task was queued in a realm that never built its notification driver");
-    JS_EnqueueCallTask(ctx, fn, 0, NULL);
+    JS_EnqueueCallTask(ctx, fn, 0, NULL, TASK_SOURCE_INTERSECTION_OBSERVER);   /* §3.2.4 */
     JS_FreeValue(ctx, fn);
 }
 

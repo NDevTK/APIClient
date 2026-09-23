@@ -459,7 +459,7 @@ static void port_enqueue_delivery(JSContext *ctx, JSValueConst port)
     JSValueConst args[1];
     args[0] = port;
     DCHECK(JS_IsFunction(ctx, g_deliver_fn), "a port delivery was queued before message_port_init built it");
-    JS_EnqueueCallTask(ctx, g_deliver_fn, 1, args);
+    JS_EnqueueCallTask(ctx, g_deliver_fn, 1, args, TASK_SOURCE_PORT_MESSAGE_QUEUE);
 }
 
 /* §9.4.4's "enable this's port message queue": everything already in it becomes a task, in order. */

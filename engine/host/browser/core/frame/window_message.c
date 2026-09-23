@@ -549,7 +549,7 @@ void window_message_deliver_remote(JSContext *ctx, const char *sender_doc, const
         JSValueConst args[2];
         args[0] = target;
         args[1] = entry;
-        JS_EnqueueCallTask(ctx, g_deliver_fn, 2, args);
+        JS_EnqueueCallTask(ctx, g_deliver_fn, 2, args, TASK_SOURCE_POSTED_MESSAGE);   /* §9.3.3 step 8 */
     }
     JS_FreeValue(ctx, entry);
 }
@@ -825,7 +825,7 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
 
         args[0] = target;
         args[1] = entry;
-        JS_EnqueueCallTask(ctx, g_deliver_fn, 2, args);
+        JS_EnqueueCallTask(ctx, g_deliver_fn, 2, args, TASK_SOURCE_POSTED_MESSAGE);   /* §9.3.3 step 8 */
         JS_FreeValue(ctx, entry);
     }
     return JS_UNDEFINED;

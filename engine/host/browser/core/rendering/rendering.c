@@ -1282,7 +1282,7 @@ int rendering_run_opportunity(JSContext *ctx)
     DCHECK(JS_IsFunction(topctx, driver),
            "the rendering task source has no driver in this realm — rendering_install_driver is what mints "
            "one, and a realm without it would queue a task nothing can run");
-    JS_EnqueueCallTask(topctx, driver, 0, NULL);
+    JS_EnqueueCallTask(topctx, driver, 0, NULL, TASK_SOURCE_RENDERING);
     JS_FreeValue(topctx, driver);
     /* AND THE GRANT, WITH THE STANDING FLOW'S SITE SET — the other half of solver/dom_cow.h's pair, and the
        reason it is HERE rather than at the top: this is the moment §8.1.7.3's in-parallel list step 3 defines,

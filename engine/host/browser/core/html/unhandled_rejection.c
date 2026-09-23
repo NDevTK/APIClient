@@ -281,7 +281,7 @@ static void rejection_tracker(JSContext *ctx, JSValueConst promise, JSValueConst
                handed, read off the promise by call_promise_rejection_tracker. */
             JSValueConst argv[2];
             argv[0] = promise; argv[1] = reason;
-            JS_EnqueueCallTask(ctx, mine, 2, argv);
+            JS_EnqueueCallTask(ctx, mine, 2, argv, TASK_SOURCE_DOM_MANIPULATION);
         }
         JS_FreeValue(ctx, mine);
     }
@@ -566,7 +566,7 @@ int unhandled_rejection_notify(JSContext *ctx)
            `unhandledrejection` handler's own promise reaction was queued BEHIND the remaining notifications
            instead of running before the next one, which is what the spec's one-task-then-checkpoint shape
            gives. */
-        JS_EnqueueCallTask(ctx, notify, 2, argv);
+        JS_EnqueueCallTask(ctx, notify, 2, argv, TASK_SOURCE_DOM_MANIPULATION);
         JS_FreeValue(ctx, notify);
         JS_FreeValue(ctx, promise);
         JS_FreeValue(ctx, reason);

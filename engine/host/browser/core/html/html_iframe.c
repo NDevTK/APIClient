@@ -592,8 +592,11 @@ void iframe_run_load_event_steps(JSContext *ctx, JSValueConst wrap)
            "this one has none in the running flow — §7.5.8 named this element as its document's navigable's "
            "container, so the container link and the content-navigable slot are naming each other in only one "
            "direction");
+    /* NO TASK SOURCE: step 6 is a BARE "Fire an event named load at element" — §4.8.5's iframe load event
+       steps queue nothing, so this engine's queued reach is a divergence core/events/event_target.h already
+       names, and the positive no-source answer is what makes that divergence greppable. */
     event_target_fire(ctx, wrap, event_new(ctx, "load", /*bubbles*/ false, /*cancelable*/ false),
-                      JS_UNDEFINED);                                                              /* STEP 6 */
+                      JS_UNDEFINED, TASK_SOURCE_NOT_A_TASK);                                      /* STEP 6 */
 }
 
 /* §4.8.5 FOR THE ELEMENTS THE PARSER INSERTED. A browser runs the insertion steps during tree construction, so

@@ -727,7 +727,7 @@ static void media_queue_task(JSContext *ctx, JSValueConst el, JSValue events, JS
     argv[1] = events;
     argv[2] = promises;
     argv[3] = act;
-    JS_EnqueueCallTask(ctx, fn, 4, argv);   /* §4.8.11: the media element event task source */
+    JS_EnqueueCallTask(ctx, fn, 4, argv, TASK_SOURCE_MEDIA_ELEMENT_EVENT);   /* §4.8.11 */
     JS_FreeValue(ctx, fn);
     JS_FreeValue(ctx, events);
     JS_FreeValue(ctx, promises);

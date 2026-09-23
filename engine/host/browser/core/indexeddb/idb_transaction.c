@@ -836,7 +836,7 @@ static void tx_commit_step2(JSContext *ctx, JSValueConst tx)
     tx_set_int(ctx, tx, TX_COMMIT, TX_COMMIT_QUEUED);
     fn = JS_NewStepClosure(ctx, g_complete_stepid, 0, 1, &tx);
     CHECK(!JS_IsException(fn), "IndexedDB: §5.4's commit task could not be minted");
-    JS_EnqueueCallTask(ctx, fn, 0, NULL);
+    JS_EnqueueCallTask(ctx, fn, 0, NULL, TASK_SOURCE_DATABASE_ACCESS);
     JS_FreeValue(ctx, fn);
 }
 
@@ -955,7 +955,7 @@ void idb_transaction_abort(JSContext *ctx, JSValueConst tx, JSValue error)
     /* §5.5 step 7's database task. */
     fn = JS_NewStepClosure(ctx, g_abort_stepid, 0, 1, &tx);
     CHECK(!JS_IsException(fn), "IndexedDB: §5.5's abort task could not be minted");
-    JS_EnqueueCallTask(ctx, fn, 0, NULL);
+    JS_EnqueueCallTask(ctx, fn, 0, NULL, TASK_SOURCE_DATABASE_ACCESS);
     JS_FreeValue(ctx, fn);
 }
 
@@ -1175,7 +1175,7 @@ static void tx_schedule_start(JSContext *ctx, JSValueConst tx)
     tx_set_int(ctx, tx, TX_START, TX_START_QUEUED);
     fn = JS_NewStepClosure(ctx, g_start_stepid, 0, 1, &tx);
     CHECK(!JS_IsException(fn), "IndexedDB: §2.7.1's start task could not be minted");
-    JS_EnqueueCallTask(ctx, fn, 0, NULL);
+    JS_EnqueueCallTask(ctx, fn, 0, NULL, TASK_SOURCE_DATABASE_ACCESS);
     JS_FreeValue(ctx, fn);
 }
 
@@ -1229,7 +1229,7 @@ void idb_transaction_start(JSContext *ctx, JSValueConst tx)
         JSValue fn = JS_GetPropertyUint32(ctx, held, i);
 
         DCHECK(JS_IsFunction(ctx, fn), "§2.7's list of held request tasks held something that is not one");
-        JS_EnqueueCallTask(ctx, fn, 0, NULL);
+        JS_EnqueueCallTask(ctx, fn, 0, NULL, TASK_SOURCE_DATABASE_ACCESS);
         JS_FreeValue(ctx, fn);
     }
     JS_SetPropertyStr(ctx, held, "length", JS_NewInt32(ctx, 0));
@@ -1246,7 +1246,7 @@ void idb_transaction_queue_request_task(JSContext *ctx, JSValueConst tx, JSValue
            "a request was placed against a FINISHED transaction — §5.6 step 2 asserts the state is active, and "
            "§4.6's members report a \"TransactionInactiveError\" before this algorithm is reached");
     if (idb_transaction_started(ctx, tx)) {
-        JS_EnqueueCallTask(ctx, task, 0, NULL);
+        JS_EnqueueCallTask(ctx, task, 0, NULL, TASK_SOURCE_DATABASE_ACCESS);
         return;
     }
     held = tx_field(ctx, tx, TX_HELD);

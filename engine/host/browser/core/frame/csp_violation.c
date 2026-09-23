@@ -384,7 +384,7 @@ static void csp_fire_violation(JSContext *ctx, const CspPolicy *policy, const ch
        for a given violation (which might manipulate the DOM)". core/events/event_target.h names
        `event_target_fire` as exactly that reach and `event_target_fire_run` as the synchronous one, and this
        is the queued caller its contract is written for. `ev` is CONSUMED. */
-    event_target_fire(ctx, target, ev, JS_UNDEFINED);
+    event_target_fire(ctx, target, ev, JS_UNDEFINED, TASK_SOURCE_UNNAMED_BY_ITS_STANDARD);   /* §5.5 */
     JS_FreeValue(ctx, target);
 }
 

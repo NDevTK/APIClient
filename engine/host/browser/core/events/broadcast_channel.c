@@ -266,7 +266,7 @@ static JSValue js_chan_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
             JSValueConst args[2];
             args[0] = d;
             args[1] = buf;
-            JS_EnqueueCallTask(ctx, g_deliver_fn, 2, args);
+            JS_EnqueueCallTask(ctx, g_deliver_fn, 2, args, TASK_SOURCE_DOM_MANIPULATION);   /* §9.5 step 7 */
         }
         JS_FreeValue(ctx, d);
     }

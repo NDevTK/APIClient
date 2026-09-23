@@ -60,6 +60,24 @@ typedef enum {
        DynPos (solver/engine.h): an eval sink is PerformEval and runs inside the call expression, a markup
        sink's auto-firing handler and a URL sink's `javascript:` navigation take the tail. */
     TASK_SOURCE_SOLVER_CANDIDATE,
+    /* …AND THE TASK WHOSE OWN STANDARD QUEUES IT AND NAMES NO SOURCE. This is a POSITIVE statement about the
+       ALGORITHM and is not the sentinel one member up: the producer read its standard, found the words "queue a
+       task" with nothing after them, and says so. CSP §5.5 "Report a violation" is the shape — "Queue a task to
+       run the following steps", whose own Note explains only WHY it is queued ("to ensure that the event
+       targeting and dispatch happens after JavaScript completes execution of the task responsible for a given
+       violation") and never on what. Such a task cannot be in two queues FOR ONE SOURCE, because it has no
+       source to be in two queues with, so §8.1.7.1's ordering rule does not reach it — the same standing as the
+       two members above and for a third reason. Inventing a source for it would order it against the page's
+       real tasks by a fact nobody stated, which is §@H's line between a value the code determined and a value
+       made up to satisfy a gate. */
+    TASK_SOURCE_UNNAMED_BY_ITS_STANDARD,
+    /* HTML §8.1.7.4 "Generic task sources"' DOM manipulation task source — "This task source is used for features
+       that react to DOM manipulations, such as things that happen in a non-blocking fashion when an element is
+       inserted into the document." */
+    TASK_SOURCE_DOM_MANIPULATION,
+    /* HTML §8.1.7.4 "Generic task sources"'s user interaction task source — "This task source is used for features that react to user
+       interaction, for example keyboard or mouse input." */
+    TASK_SOURCE_USER_INTERACTION,
     /* §8.1.7.4 "Generic task sources"' networking task source — "This task source is used for features that
        trigger in response to network activity." A program whose bytes came from a response is this: §8.1.7.1
        lists the case in its own words ("When an algorithm fetches a resource, if the fetching occurs in a
@@ -68,7 +86,49 @@ typedef enum {
     TASK_SOURCE_NETWORKING,
     /* §8.1.7.4's navigation and traversal task source — "This task source is used to queue tasks involved in
        navigation and history traversal." */
-    TASK_SOURCE_NAVIGATION_AND_TRAVERSAL
+    TASK_SOURCE_NAVIGATION_AND_TRAVERSAL,
+    /* HTML §8.1.7.4 "Generic task sources"'s rendering task source — "This task source is used solely to update the rendering." */
+    TASK_SOURCE_RENDERING,
+    /* AND THE SOURCES A SINGLE STANDARD DEFINES FOR ITSELF. HTML §8.1.7.4 "Generic task sources"'s five are the ones "used by a number of
+       mostly unrelated features"; every other source belongs to one algorithm's own specification, which is
+       where its name is defined and where it must be read from. They are listed here rather than collapsed
+       into the generic five because §8.1.7.1's guarantee is about a source and a collapsed one would put two
+       standards' tasks in one queue by this file's decision rather than by anybody's standard. */
+    /* HTML §8.7 "Timers"' timer task source — step 9's completionStep is "an algorithm step which queues a
+       global task on the timer task source given global to run task". */
+    TASK_SOURCE_TIMER,
+    /* HTML §9.3.3 "Posting messages"' posted message task source — "Queue a global task on the posted message
+       task source given targetWindow to run the following steps". */
+    TASK_SOURCE_POSTED_MESSAGE,
+    /* HTML §9.4.4 "Message ports"' port message queue, which is a task source PER PORT: "Each MessagePort
+       object also has a task source called the port message queue" and "When a port's port message queue is
+       enabled, the event loop must use it as one of its task sources." One enumerator covers every port for the
+       same reason the engine has one task queue — what a per-port source decides is the order two ports drain
+       in, which this engine does not model, and what it decides that IS modelled is that a port delivery is a
+       TASK. */
+    TASK_SOURCE_PORT_MESSAGE_QUEUE,
+    /* HTML §4.8.11 "Media elements"' media element event task source — "Each media element has a unique media
+       element event task source." Per element, and one enumerator, for the port message queue's reason. */
+    TASK_SOURCE_MEDIA_ELEMENT_EVENT,
+    /* File API §6.1 "The File Reading Task Source" — the section is the definition. */
+    TASK_SOURCE_FILE_READING,
+    /* IndexedDB §4 "API"'s database access task source — "The task source for these tasks is the database
+       access task source. To queue a database task, perform queue a task on the database access task source". */
+    TASK_SOURCE_DATABASE_ACCESS,
+    /* Cooperative Scheduling of Background Tasks' idle-task task source — "Queue a task on the queue associated
+       with the idle-task task source". That standard's maintained edition is unrendered ReSpec source with no
+       section numbers in the bytes a fetch returns, so it is cited by algorithm name here and carries no number
+       for the same reason engine/citegen.mjs records it as a foreign row. */
+    TASK_SOURCE_IDLE_TASK,
+    /* Performance Timeline §5.3 "Queue the PerformanceObserver task" — "The task source for the queued task is
+       the performance timeline task source." */
+    TASK_SOURCE_PERFORMANCE_TIMELINE,
+    /* Intersection Observer §3.2.4 "Queue an Intersection Observer Task" — "The IntersectionObserver task
+       source is a task source used for scheduling tasks to §3.2.5 Notify Intersection Observers." */
+    TASK_SOURCE_INTERSECTION_OBSERVER,
+    /* Permissions §3.4 "Permissions task source" — "The permissions task source is a task source used to
+       perform permissions-related tasks in this specification." */
+    TASK_SOURCE_PERMISSIONS
 } TaskSource;
 
 /* IS §8.1.7.1's ORDERING RULE ABOUT THIS WORK ITEM? Only a task has a source, so only a task can have one in
@@ -76,7 +136,29 @@ typedef enum {
    causing algorithm runs this in place, the other says no algorithm of the standard queued it. */
 static inline int task_source_is_task(TaskSource s)
 {
-    return s == TASK_SOURCE_NETWORKING || s == TASK_SOURCE_NAVIGATION_AND_TRAVERSAL;
+    switch (s) {
+    case TASK_SOURCE_UNSTATED:
+    case TASK_SOURCE_NOT_A_TASK:
+    case TASK_SOURCE_SOLVER_CANDIDATE:
+    case TASK_SOURCE_UNNAMED_BY_ITS_STANDARD:
+        return 0;
+    default:
+        return 1;
+    }
+}
+
+/* MAY A WORK ITEM DECLARING THIS BE PUT ON A TASK QUEUE AT ALL — a DIFFERENT question from the one above, and
+   the two are split rather than merged because one value answers both and they are not the same answer.
+   `task_source_is_task` asks whether §8.1.7.1's ONE-SOURCE-ONE-QUEUE RULE is about this work item, which is a
+   question about the SOURCE; this asks whether the producer stated anything at all, which is a question about
+   the PRODUCER. A task whose standard names no source (CSP §5.5) and a fire the standard runs in place that
+   this engine queues anyway are both legitimate answers to the second and both `no` to the first — so a single
+   predicate would either refuse them, which is wrong, or admit the never-written sentinel, which is the whole
+   thing the sentinel exists to catch. Splitting them is §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS's own cure:
+   one FACT, two QUESTIONS asked of it, rather than two bits that can disagree. */
+static inline int task_source_stated(TaskSource s)
+{
+    return s != TASK_SOURCE_UNSTATED;
 }
 
 /* THE SOURCE'S OWN NAME, for the assert that names it. A `@WHY` reading "a work item's source is one this
@@ -90,6 +172,20 @@ static inline const char *task_source_name(TaskSource s)
     case TASK_SOURCE_SOLVER_CANDIDATE:         return "solver-candidate";
     case TASK_SOURCE_NETWORKING:               return "networking";
     case TASK_SOURCE_NAVIGATION_AND_TRAVERSAL: return "navigation-and-traversal";
+    case TASK_SOURCE_UNNAMED_BY_ITS_STANDARD:  return "unnamed-by-its-standard";
+    case TASK_SOURCE_DOM_MANIPULATION:         return "dom-manipulation";
+    case TASK_SOURCE_USER_INTERACTION:         return "user-interaction";
+    case TASK_SOURCE_RENDERING:                return "rendering";
+    case TASK_SOURCE_TIMER:                    return "timer";
+    case TASK_SOURCE_POSTED_MESSAGE:           return "posted-message";
+    case TASK_SOURCE_PORT_MESSAGE_QUEUE:       return "port-message-queue";
+    case TASK_SOURCE_MEDIA_ELEMENT_EVENT:      return "media-element-event";
+    case TASK_SOURCE_FILE_READING:             return "file-reading";
+    case TASK_SOURCE_DATABASE_ACCESS:          return "database-access";
+    case TASK_SOURCE_IDLE_TASK:                return "idle-task";
+    case TASK_SOURCE_PERFORMANCE_TIMELINE:     return "performance-timeline";
+    case TASK_SOURCE_INTERSECTION_OBSERVER:    return "intersection-observer";
+    case TASK_SOURCE_PERMISSIONS:              return "permissions";
     }
     return "unknown";
 }

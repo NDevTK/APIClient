@@ -1013,7 +1013,7 @@ void input_files_update(JSContext *ctx, JSValueConst wrap, JSValueConst files)
     CHECK(!JS_IsException(fn), "§4.10.5.1.17's element task callee could not be allocated");
     argv[0] = wrap;
     argv[1] = files;
-    JS_EnqueueCallTask(ctx, fn, 2, argv);   /* §4.10.5.1.17: the user interaction task source */
+    JS_EnqueueCallTask(ctx, fn, 2, argv, TASK_SOURCE_USER_INTERACTION);   /* §4.10.5.1.17 */
     JS_FreeValue(ctx, fn);
 }
 

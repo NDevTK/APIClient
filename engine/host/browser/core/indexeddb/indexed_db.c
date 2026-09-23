@@ -43,6 +43,7 @@
 #include <stdbool.h>
 
 #include "check.h"
+#include "core/timing/task_source.h"   /* IndexedDB §4 "API"'s database access task source */
 #include "core/agent_state.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
@@ -453,7 +454,7 @@ static int js_idb_databases(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                 JSValue task = JS_NewStepClosure(ctx, g_id_databases_task, 0, 1, (JSValueConst *)&funcs[0]);
 
                 CHECK(!JS_IsException(task), "IndexedDB: §4.3 databases()'s database task could not be minted");
-                JS_EnqueueCallTask(ctx, task, 0, NULL);
+                JS_EnqueueCallTask(ctx, task, 0, NULL, TASK_SOURCE_DATABASE_ACCESS);
                 JS_FreeValue(ctx, task);
             }
             JS_FreeValue(ctx, funcs[0]);

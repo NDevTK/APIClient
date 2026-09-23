@@ -2234,7 +2234,8 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
     argv[9] = coep_ro_endpoint;
     argv[10] = prov;
     argv[11] = integ;
-    JS_EnqueueCallTask(ctx, fn, COUNTOF(argv), argv);   /* §7.4.2.2: the navigation and traversal task source */
+    JS_EnqueueCallTask(ctx, fn, COUNTOF(argv), argv,
+                       TASK_SOURCE_NAVIGATION_AND_TRAVERSAL);   /* §7.4.2.2 step 21 */
     JS_FreeValue(ctx, integ);
     JS_FreeValue(ctx, prov);
     JS_FreeValue(ctx, coep_ro_endpoint);

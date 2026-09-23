@@ -806,8 +806,12 @@ static int g_close_stepid = -1;
    context, which is the other half of the getter. A single byte written at the removal collapsed those two
    times into one and reported a destruction that had not happened — while the document it claimed to have
    destroyed was still there, still scheduled, and still entangled. */
+/* `src` IS §8.1.7.1's TASK SOURCE, AND IT IS A PARAMETER BECAUSE THE PARAGRAPH ABOVE NAMES TWO. The subtree
+   operations are §7.4.2.4, §7.5.9 and §7.5.10's, on the navigation and traversal task source; §7.2.2.1's
+   definitely-close is on the DOM manipulation one. A constant here would state one of those for both, which is
+   the two-sources-one-answer shape this whole declaration exists to make impossible. */
 static void enqueue_job(JSContext *ctx, JSValueConst proxy, const JSTrampStepDef *def, int *pid, const char *nm,
-                        int after)
+                        int after, TaskSource src)
 {
     JSValueConst argv[2];
     JSValue fn, cont;
@@ -819,7 +823,7 @@ static void enqueue_job(JSContext *ctx, JSValueConst proxy, const JSTrampStepDef
     cont = JS_NewInt32(ctx, after);
     argv[0] = proxy;
     argv[1] = cont;
-    JS_EnqueueCallTask(ctx, fn, 2, argv);
+    JS_EnqueueCallTask(ctx, fn, 2, argv, src);
     JS_FreeValue(ctx, cont);
     JS_FreeValue(ctx, fn);
 }
@@ -848,13 +852,15 @@ static void descend_enqueue(JSContext *ctx, JSValueConst proxy, int op, int afte
            "in the peer's own scheduled turn, so this job has to be POSTED to the instance holding that "
            "document (window_proxy_doc names which one) and its completion reported back the way a "
            "cross-origin read's answer is");
-    enqueue_job(ctx, proxy, LC_DESCEND_DEF[op], &g_descend_stepid[op], LC_DESCEND_NAME[op], after);
+    enqueue_job(ctx, proxy, LC_DESCEND_DEF[op], &g_descend_stepid[op], LC_DESCEND_NAME[op], after,
+                TASK_SOURCE_NAVIGATION_AND_TRAVERSAL);   /* §7.4.2.4, §7.5.9, §7.5.10 */
 }
 
 static void self_enqueue(JSContext *ctx, JSValueConst proxy, int op, int after)
 {
     DCHECK(op >= 0 && op < LC_OP_N, "a subtree operation this file does not name reached its per-document body");
-    enqueue_job(ctx, proxy, LC_SELF_DEF[op], &g_self_stepid[op], LC_SELF_NAME[op], after);
+    enqueue_job(ctx, proxy, LC_SELF_DEF[op], &g_self_stepid[op], LC_SELF_NAME[op], after,
+                TASK_SOURCE_NAVIGATION_AND_TRAVERSAL);   /* §7.4.2.4, §7.5.9, §7.5.10 */
 }
 
 /* ---- §7.3's DESTROY A TOP-LEVEL TRAVERSABLE ------------------------------------------------------------------
@@ -1005,7 +1011,8 @@ void document_lifecycle_window_close(JSContext *ctx, JSValueConst proxy)
     window_proxy_set_closing(ctx, proxy);                                 /* step 6.1 */
     /* STEP 6.2: queue a task to DEFINITELY CLOSE — never a call, so the page's own line after `close()` runs
        first and reads the `closed` step 6.1 just made true. */
-    enqueue_job(ctx, proxy, &js_close_def, &g_close_stepid, "definitelyClose", LC_AFTER_NONE);
+    enqueue_job(ctx, proxy, &js_close_def, &g_close_stepid, "definitelyClose", LC_AFTER_NONE,
+                TASK_SOURCE_DOM_MANIPULATION);   /* §7.2.2.1 step 6.2 */
 }
 
 void document_lifecycle_destroy_child(JSContext *ctx, JSValueConst proxy)

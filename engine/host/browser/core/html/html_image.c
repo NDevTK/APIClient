@@ -571,7 +571,7 @@ static void img_queue_fire(JSContext *ctx, JSValueConst el, const char *name)
     CHECK(!JS_IsException(nm), "§4.8.4.3.5: OOM allocating a queued image task's event name");
     argv[0] = el;
     argv[1] = nm;
-    JS_EnqueueCallTask(ctx, fn, 2, argv);   /* §4.8.4.3.5: the DOM manipulation task source */
+    JS_EnqueueCallTask(ctx, fn, 2, argv, TASK_SOURCE_DOM_MANIPULATION);   /* §4.8.4.3.5 */
     JS_FreeValue(ctx, fn);
     JS_FreeValue(ctx, nm);
 }

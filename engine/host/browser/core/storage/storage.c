@@ -385,7 +385,8 @@ static void st_broadcast(JSContext *ctx, JSValueConst self, JSValueConst slots, 
         ev = storage_event_new_to_fire(rctx, key, old_value, new_value, url, remote);
         CHECK(!JS_IsException(ev), "storage: §12.2.1 step 4's StorageEvent could not be allocated — a dropped "
                                    "broadcast is a document that never learns another wrote its storage");
-        event_target_fire(rctx, win, ev, JS_UNDEFINED);     /* CONSUMES ev */
+        event_target_fire(rctx, win, ev, JS_UNDEFINED,
+                          TASK_SOURCE_DOM_MANIPULATION);     /* §12.2.1 step 4; CONSUMES ev */
         JS_FreeValue(rctx, win);
         JS_FreeValue(ctx, remote);
     }

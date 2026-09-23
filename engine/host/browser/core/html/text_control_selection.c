@@ -326,7 +326,7 @@ static void tcs_queue_select_event(JSContext *ctx, JSValueConst wrap)
     fn = JS_NewCFunction2(ctx, NULL, "fireSelect", 1, JS_CFUNC_step, g_id_select_task);
     CHECK(!JS_IsException(fn), "§4.10.20's `select` task callee could not be allocated");
     argv[0] = wrap;
-    JS_EnqueueCallTask(ctx, fn, 1, argv);   /* §4.10.20: the user interaction task source */
+    JS_EnqueueCallTask(ctx, fn, 1, argv, TASK_SOURCE_USER_INTERACTION);   /* §4.10.20 */
     JS_FreeValue(ctx, fn);
 }
 

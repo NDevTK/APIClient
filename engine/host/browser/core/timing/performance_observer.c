@@ -404,7 +404,7 @@ static void po_queue_task(JSContext *ctx)
     fn = realm_value_get(ctx, g_notify_slot);
     DCHECK(JS_IsFunction(ctx, fn),
            "§5.3's task was queued in a realm that never built its own notification driver");
-    JS_EnqueueCallTask(ctx, fn, 0, NULL);
+    JS_EnqueueCallTask(ctx, fn, 0, NULL, TASK_SOURCE_PERFORMANCE_TIMELINE);   /* §5.3 step 3 */
     JS_FreeValue(ctx, fn);
 }
 

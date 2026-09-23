@@ -662,7 +662,7 @@ void idb_request_abort(JSContext *ctx, JSValueConst request)
     rq_set(ctx, request, RQ_PROCESSED, JS_TRUE);
     fn = JS_NewStepClosure(ctx, g_abort_stepid, 0, 1, &request);
     CHECK(!JS_IsException(fn), "IndexedDB: §5.5's per-request abort task could not be minted");
-    JS_EnqueueCallTask(ctx, fn, 0, NULL);
+    JS_EnqueueCallTask(ctx, fn, 0, NULL, TASK_SOURCE_DATABASE_ACCESS);
     JS_FreeValue(ctx, fn);
 }
 

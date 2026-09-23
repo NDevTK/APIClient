@@ -103,7 +103,7 @@ static bool input_supports_picker(HtmlInputState st)
 static void picker_fire_cancel(JSContext *ctx, JSValueConst element)
 {
     event_target_fire(ctx, element, event_new(ctx, "cancel", /*bubbles*/ true, /*cancelable*/ false),
-                      JS_UNDEFINED);
+                      JS_UNDEFINED, TASK_SOURCE_USER_INTERACTION);   /* §4.10.5.4 step 5.4 names it */
 }
 
 /* WHERE THIS MACHINE RESTS, AS THE STANDARD NUMBERS IT. Five stages, and four of them exist because an

@@ -83,7 +83,10 @@ void page_visibility_update(JSContext *ctx, bool hidden)
        fires `unload` after step 9.3, so a queued `visibilitychange` arrives AFTER the `unload` listener the
        spec puts it before. The fix is event_target_fire_run and this function becoming a REQUEST — its one
        caller (core/frame/document_lifecycle.c's js_unload_step) is already a step machine that can park. */
-    event_target_fire(ctx, document_object(ctx), event_new(ctx, "visibilitychange", true, false), JS_UNDEFINED);
+    event_target_fire(ctx, document_object(ctx), event_new(ctx, "visibilitychange", true, false),
+                      JS_UNDEFINED, TASK_SOURCE_NOT_A_TASK);   /* §6.2's last step is a BARE fire; the USER
+                                                                  INTERACTION source belongs to §6.2's other
+                                                                  caller, which queues the update — see above */
 }
 
 /* `readonly attribute boolean hidden` — §6.2 defines it as `visibilityState === "hidden"`, so that is what it

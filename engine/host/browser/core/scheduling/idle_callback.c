@@ -376,7 +376,7 @@ static int idle_invoke_one(JSContext *ctx)
     {
         JSValueConst args[1] = { deadline };
 
-        JS_EnqueueCallTask(ctx, cb, 1, args);
+        JS_EnqueueCallTask(ctx, cb, 1, args, TASK_SOURCE_IDLE_TASK);
     }
     JS_FreeValue(ctx, deadline);
     JS_FreeValue(ctx, cb);

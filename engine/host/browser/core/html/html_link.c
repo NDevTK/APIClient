@@ -381,7 +381,16 @@ static const JSTrampStepDef link_task_def = {
     .steps = link_task_steps
 };
 
-static void link_queue_fire(JSContext *ctx, JSValueConst el, const char *name)
+/* `src` IS §8.1.7.1's TASK SOURCE AND IS THE CALLER'S, because the two algorithms this one task serves do not
+   agree about it — which is the whole reason it is a parameter rather than a constant here. §4.6.8.12 "Link
+   type `modulepreload`"'s STEP 3 is the one arm of either that names a source: "queue an element task on the
+   networking task source given el to fire an event named error at el, and return". Every other fire either
+   file reaches is a BARE one — §4.6.8.12's own step 14 ("then fire an event named error at el" / "Fire an
+   event named load at el"), §4.6.8.20 "Link type `preload`"'s preload options steps, and §4.6.8.23 "Link type
+   `stylesheet`"'s ("Fire an event named load at el. Otherwise, fire an event named error at el.") — so those
+   state TASK_SOURCE_NOT_A_TASK, which is the positive statement that no algorithm of the standard queued them
+   and is honest about this engine queueing one anyway (see the paragraph below, which is why it does). */
+static void link_queue_fire(JSContext *ctx, JSValueConst el, const char *name, TaskSource src)
 {
     JSValueConst argv[2];
     JSValue fn, nm;
@@ -400,7 +409,7 @@ static void link_queue_fire(JSContext *ctx, JSValueConst el, const char *name)
     CHECK(!JS_IsException(nm), "§4.6.8.20: OOM allocating a queued link task's event name");
     argv[0] = el;
     argv[1] = nm;
-    JS_EnqueueCallTask(ctx, fn, 2, argv);
+    JS_EnqueueCallTask(ctx, fn, 2, argv, src);
     JS_FreeValue(ctx, fn);
     JS_FreeValue(ctx, nm);
 }
@@ -427,7 +436,8 @@ static JSValue link_deliver(JSContext *ctx, JSValueConst this_val, int argc, JSV
            "a preload reply arrived as something other than the host's reply record — every host builds one "
            "with fetch_reply_new or parses the trusted zone's JSON into one, and a bare string here is a host "
            "still delivering only bytes");
-    link_queue_fire(ctx, el, (argc >= 1 && JS_IsNull(argv[0])) ? "error" : "load");
+    link_queue_fire(ctx, el, (argc >= 1 && JS_IsNull(argv[0])) ? "error" : "load",
+                    TASK_SOURCE_NOT_A_TASK);   /* §4.6.8.20's preload options steps fire BARE */
     return JS_UNDEFINED;
 }
 
@@ -816,7 +826,7 @@ static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueCon
     if (fetch_main_blocked(ctx, abs, destination, metadata, mode)) {
         JS_FreeCString(ctx, nonce);
         JS_FreeValue(ctx, nonce_slot);
-        link_queue_fire(ctx, wrap, "error");
+        link_queue_fire(ctx, wrap, "error", TASK_SOURCE_NOT_A_TASK);   /* §4.6.8.20, a bare fire */
         return;
     }
 
@@ -1217,7 +1227,8 @@ static JSValue link_module_deliver(JSContext *ctx, JSValueConst this_val, int ar
             header_list_free(&hl);
         }
     }
-    link_queue_fire(ctx, el, created ? "load" : "error");
+    link_queue_fire(ctx, el, created ? "load" : "error",
+                    TASK_SOURCE_NOT_A_TASK);   /* §4.6.8.12 step 14 fires BARE, unlike its step 3 */
     return JS_UNDEFINED;
 }
 
@@ -1302,7 +1313,7 @@ static void link_modulepreload(JSContext *ctx, lxb_dom_element_t *el)
     if (!is_module_preload_destination(destination)) {
         wrap = node_wrap(ctx, lxb_dom_interface_node(el));
         CHECK(!JS_IsException(wrap), "§4.6.8.12: OOM reaching a link element to fire `error` at");
-        link_queue_fire(ctx, wrap, "error");
+        link_queue_fire(ctx, wrap, "error", TASK_SOURCE_NETWORKING);   /* §4.6.8.12 step 3 names it */
         JS_FreeValue(ctx, wrap);
         return;
     }
@@ -1711,10 +1722,10 @@ static JSValue link_stylesheet_deliver(JSContext *ctx, JSValueConst this_val, in
         /* "Fire an event named load at el." QUEUED rather than fired, for the reason link_queue_fire states:
            the handler is the page's, and a `head.appendChild(link)` must not run its own `onload` before the
            next statement of the script that appended it. */
-        link_queue_fire(ctx, el, "load");
+        link_queue_fire(ctx, el, "load", TASK_SOURCE_NOT_A_TASK);   /* §4.6.8.23 fires BARE */
     } else {
         /* STEP 5 — "Otherwise, fire an event named error at el." */
-        link_queue_fire(ctx, el, "error");
+        link_queue_fire(ctx, el, "error", TASK_SOURCE_NOT_A_TASK);   /* §4.6.8.23 step 5, a bare fire */
     }
     if (have_mime) mime_type_free(&mt);
     JS_FreeValue(ctx, body);

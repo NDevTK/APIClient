@@ -298,7 +298,8 @@ static int psc_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
        of the event loop, which is the half §6.3.4 names. It ran as a MICROTASK, which put this `change` ahead
        of every task already standing — a permission a page revoked while a timer was pending was observed in
        the wrong order relative to that timer. */
-    event_target_fire(ctx, status, event_new(ctx, "change", false, false), JS_UNDEFINED);
+    event_target_fire(ctx, status, event_new(ctx, "change", false, false), JS_UNDEFINED,
+                      TASK_SOURCE_PERMISSIONS);   /* §3.4's source, which §6.3.4 step 4 names */
     /* AND ASK AGAIN. A permission the user changed once is a permission the user may change again, and the
        next generation is its own predicate — see the chain's comment above. */
     psc_queue(ctx, status);

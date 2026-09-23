@@ -896,7 +896,8 @@ static int sh_update_document_for_history_step(JSContext *ctx, SessionHistoryApp
         if (!sh_fragment_equal(old_url, new_url)) {
             JSValue win = JS_GetGlobalObject(ctx);
 
-            event_target_fire(ctx, win, hash_change_event_new_to_fire(ctx, old_url, new_url), JS_UNDEFINED);
+            event_target_fire(ctx, win, hash_change_event_new_to_fire(ctx, old_url, new_url), JS_UNDEFINED,
+                              TASK_SOURCE_DOM_MANIPULATION);   /* §7.4.6.2 queues this one, and names it */
             JS_FreeValue(ctx, win);
         }
         JS_FreeCString(ctx, new_url);
@@ -1937,7 +1938,10 @@ void session_history_traverse_by_delta(JSContext *ctx, int32_t delta)
        it ran inside the calling script's own checkpoint, so `history.back()` fired `popstate` before a timer
        that had already expired and before a message already delivered — a traversal completing inside the
        turn that requested it, which no browser does and which §8.1.7's two queues exist to forbid. */
-    JS_EnqueueCallTask(ctx, fn, 1, argv);   /* §7.4.1.3's session history traversal queue */
+    JS_EnqueueCallTask(ctx, fn, 1, argv,
+                       TASK_SOURCE_NAVIGATION_AND_TRAVERSAL);   /* §7.4.1.3's traversal queue, whose
+                                                                   observable effects §7.4.6.1 queues on
+                                                                   this source */
     JS_FreeValue(ctx, d);
     JS_FreeValue(ctx, fn);
 }

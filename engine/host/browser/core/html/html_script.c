@@ -167,7 +167,7 @@ void html_script_queue_error(JSContext *ctx, lxb_dom_element_t *el)
     elv = node_wrap(ctx, lxb_dom_interface_node(el));
     CHECK(!JS_IsException(elv), "§4.12.1.1: OOM wrapping the element its error event is fired at");
     argv[0] = elv;
-    JS_EnqueueCallTask(ctx, fn, 1, argv);   /* §4.12.1.1: the DOM manipulation task source */
+    JS_EnqueueCallTask(ctx, fn, 1, argv, TASK_SOURCE_DOM_MANIPULATION);   /* §4.12.1.1 */
     JS_FreeValue(ctx, elv);
     JS_FreeValue(ctx, fn);
 }

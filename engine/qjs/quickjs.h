@@ -1776,6 +1776,25 @@ typedef void JSPromiseHook(JSContext *ctx, JSPromiseHookType type,
 typedef uint64_t JSTaskHandle;
 #define JS_TASK_HANDLE_NONE ((JSTaskHandle)0)
 
+/* WHICH TASK SOURCE QUEUED ONE TASK — HTML §8.1.7.1 "Definitions"' `source` field, CARRIED BY THIS FORK AND
+   NEVER INTERPRETED BY IT. §8.1.7.1 requires that "For each event loop, every task source must be associated
+   with a specific task queue", and a host whose work is split across several carriers cannot check that unless
+   the source travels with the work item — so it travels here, beside `is_task` and `handle`, for the same
+   reason those do: a task that lands on `baseline_call_list` is handed to the enqueue hook LATER, and a fact
+   the entry does not hold is a fact the handover loses.
+   IT IS AN OPAQUE SCALAR AND NOT AN ENUM, WHICH IS A DECISION ABOUT THE DEPENDENCY AND NOT ABOUT TASTE. The
+   values are the BROWSER's — one per task source some standard defines — and this fork includes no host header
+   (quickjs.c's ECMA-402 banner states that direction and why keeping it is the SMALLER delta), so naming them
+   here would be a second copy of a list the host already owns and the copy that drifts. Nothing in this file
+   reads the value; it is stored, carried and handed back.
+   THE ONE VALUE THIS FORK DOES STATE IS THE ABSENCE OF ONE, because a MICROTASK has no task source at all
+   (§8.1.7.1 gives a source to a TASK) and every enqueue this file makes on its own account is a microtask: a
+   promise reaction, a thenable job, a FinalizationRegistry cleanup. Zero, so that a zeroed field is honestly
+   "no source stated" rather than silently claiming whatever the host's list happens to put first — the same
+   reason the host's own sentinel is zero, and the one value the two ends have to agree on. */
+typedef int JSTaskSource;
+#define JS_TASK_SOURCE_UNSTATED ((JSTaskSource)0)
+
 /* Enqueue `func(arg)` as a JOB that runs as a CALL-ROOT FLOW — the platform's route from a host edge to a page
    callback (an event listener, a timer). Not a JS_Call: the callback is the page's code and must be able to
    loop, await and fork, which a C activation cannot host. Answers the queued callback's HANDLE.
@@ -1800,8 +1819,13 @@ JS_EXTERN JSTaskHandle JS_EnqueueCallJob(JSContext *ctx, JSValueConst func, int 
    reports nothing and JS_FreeRuntime aborts on a runtime freed still holding one. It is never dropped
    silently, and no embedder pump ever runs it — the callback belongs to a flow's timeline.
    ANSWERS THE TASK'S HANDLE, which is what a §4.11.4-shaped task tracker stores: the caller keeps it, and hands
-   it to JS_RemoveQueuedTask when the next transition must take this task back off the queue. */
-JS_EXTERN JSTaskHandle JS_EnqueueCallTask(JSContext *ctx, JSValueConst func, int argc, JSValueConst *argv);
+   it to JS_RemoveQueuedTask when the next transition must take this task back off the queue.
+   `source` IS §8.1.7.1's OWN FIELD AND IS THE CALLER'S TO STATE — see JSTaskSource. It is a PARAMETER and not
+   a bracket the caller sets around this call, because a parameter is a compile error for a producer that has
+   not thought about the question and a bracket is a thing a producer can forget; and it is on THIS entry
+   rather than on JS_EnqueueCallJob because a microtask has no source to state. */
+JS_EXTERN JSTaskHandle JS_EnqueueCallTask(JSContext *ctx, JSValueConst func, int argc, JSValueConst *argv,
+                                          JSTaskSource source);
 JS_EXTERN void JS_SetPromiseHook(JSRuntime *rt, JSPromiseHook promise_hook,
                                  void *opaque);
 
@@ -3029,9 +3053,10 @@ JS_EXTERN JSValue JS_GetModulePrivateValue(JSContext *ctx, JSModuleDef *m);
 typedef JSValue JSJobFunc(JSContext *ctx, int argc, JSValueConst *argv);
 JS_EXTERN int JS_EnqueueJob(JSContext *ctx, JSJobFunc *job_func,
                             int argc, JSValueConst *argv);
-/* …onto a TASK SOURCE instead of the microtask queue. See JS_EnqueueCallTask. */
+/* …onto a TASK SOURCE instead of the microtask queue. See JS_EnqueueCallTask, whose `source` this takes for
+   the same reason and under the same contract. */
 JS_EXTERN int JS_EnqueueTaskJob(JSContext *ctx, JSJobFunc *job_func,
-                                int argc, JSValueConst *argv);
+                                int argc, JSValueConst *argv, JSTaskSource source);
 
 /* forced-exec ASYNC-AS-FLOW: every enqueued job (a promise .then/.catch/.finally reaction, queueMicrotask, a
    thenable-resolve, a dynamic-import continuation) is routed to the SCHEDULER as a first-class flow instead of a
@@ -3049,9 +3074,13 @@ JS_EXTERN int JS_EnqueueTaskJob(JSContext *ctx, JSJobFunc *job_func,
    HERE rather than by the host so that one runtime issues every handle — a host-side counter would collide with
    the runtime's own queues the moment a callback is queued with no flow to own it. It is carried across the
    baseline handover too, so a task the user agent queued before the frontier existed keeps the name its tracker
-   already holds. */
+   already holds.
+   `source` IS §8.1.7.1's TASK SOURCE and travels for the same reason `is_task` does: the host owns the queues,
+   so the host is the only thing that can answer "is any one source in two of my queues", and it cannot answer
+   it from a value it was never handed. JS_TASK_SOURCE_UNSTATED whenever `is_task` is false — a microtask has no
+   source — which makes the pair a two-sided statement the host can assert rather than a field it must trust. */
 typedef int (*JSJobEnqueueHook)(JSContext *ctx, JSJobFunc *job_func, int argc, JSValueConst *argv,
-                                bool is_task, JSTaskHandle handle);
+                                bool is_task, JSTaskSource source, JSTaskHandle handle);
 JS_EXTERN void JS_SetJobEnqueueHook(JSJobEnqueueHook h);
 
 /* THE OTHER HALF OF OWNERSHIP. A host that TOOK a job is the only thing that can give it back, so the drop

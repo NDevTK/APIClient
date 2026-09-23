@@ -4468,7 +4468,8 @@ static JSValue dispatch_fn_new(JSContext *ctx)
    properly (the caller passed the window in by hand as `bubble_to`), and could not answer whether anything
    cancelled. There is one dispatch now.
    The event stays TRUSTED, which is what distinguishes one the engine fired from one the page dispatched. */
-void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev, JSValueConst target_override)
+void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev, JSValueConst target_override,
+                       TaskSource src)
 {
     JSValueConst argv[3];
     JSValue fn;
@@ -4495,7 +4496,7 @@ void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev, JSValueC
        It is still a call-root flow, so it is preemptible, forkable and parkable like any other program, which
        is what every listener body needs and what a C activation cannot host; the queue decides only WHEN the
        event loop begins it relative to the microtasks and tasks already outstanding. */
-    JS_EnqueueCallTask(ctx, fn, 3, argv);
+    JS_EnqueueCallTask(ctx, fn, 3, argv, src);
     JS_FreeValue(ctx, fn);
     JS_FreeValue(ctx, ev);
 }

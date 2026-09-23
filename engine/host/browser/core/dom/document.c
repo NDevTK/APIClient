@@ -2245,8 +2245,13 @@ static void document_set_ready(JSContext *ctx, int stage)
     DCHECK(JS_IsObject(d->doc_obj),
            "a document's readiness moved before its `document` object existed — §3.1.5 step 4 fires "
            "`readystatechange` AT the document, so there would be no target for the event the page listens for");
+    /* NO TASK SOURCE: §3.1.5's step 4 is a BARE "fire an event named readystatechange at document", a
+       synchronous step of whichever algorithm moved the readiness — §13.2.7 "The end"'s own queued tasks
+       among them, which are the ones on the DOM manipulation task source. Nothing queues THIS fire, so it
+       states the positive no-source answer rather than borrowing its caller's. */
     event_target_fire(ctx, d->doc_obj,                                            /* STEP 4 */
-                      event_new(ctx, "readystatechange", /*bubbles*/ false, /*cancelable*/ false), JS_UNDEFINED);
+                      event_new(ctx, "readystatechange", /*bubbles*/ false, /*cancelable*/ false),
+                      JS_UNDEFINED, TASK_SOURCE_NOT_A_TASK);
 }
 
 /* HTML §8.4.1 "Opening the input stream" step 18 — "Update the current document readiness of document to
@@ -2448,7 +2453,8 @@ static int document_done_stage(JSContext *ctx, int stage)
            listener registered on window hears it — the propagation path derives that from the document's
            ancestors now rather than the caller naming the window. It is not cancelable. */
         event_target_fire(ctx, doc_here(ctx)->doc_obj,
-                          event_new(ctx, "DOMContentLoaded", /*bubbles*/ true, /*cancelable*/ false), JS_UNDEFINED);
+                          event_new(ctx, "DOMContentLoaded", /*bubbles*/ true, /*cancelable*/ false),
+                          JS_UNDEFINED, TASK_SOURCE_DOM_MANIPULATION);   /* §13.2.7 */
         return 1;
     }
     DCHECK(stage == 1, "the document lifecycle was asked for a stage it does not have");
@@ -2475,7 +2481,7 @@ static int document_done_stage(JSContext *ctx, int stage)
        fired WITH THE LEGACY TARGET OVERRIDE FLAG SET, so a listener's `e.target` is the DOCUMENT. */
     event_target_fire(ctx, doc_here(ctx)->win_obj,
                       event_new(ctx, "load", /*bubbles*/ false, /*cancelable*/ false),
-                      doc_here(ctx)->doc_obj);
+                      doc_here(ctx)->doc_obj, TASK_SOURCE_DOM_MANIPULATION);   /* §13.2.7 */
     /* STEPS 9.9-9.11: the document is now SHOWING, and `pageshow` says so with `persisted` false — this
        document was loaded rather than restored from a session history entry. §7.5.9's `pagehide` is the other
        end of that pair and fires only because this ran. */
@@ -2495,7 +2501,7 @@ static int document_done_stage(JSContext *ctx, int stage)
         document_page_showing_set(ctx, true);
         event_target_fire(ctx, doc_here(ctx)->win_obj,
                           page_transition_event_new(ctx, "pageshow", /*persisted*/ false),
-                          doc_here(ctx)->doc_obj);
+                          doc_here(ctx)->doc_obj, TASK_SOURCE_DOM_MANIPULATION);   /* §13.2.7 */
     }
     completely_finish_loading(ctx);                                              /* step 9.12 */
     return 1;
