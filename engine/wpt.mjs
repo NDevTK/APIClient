@@ -1321,8 +1321,32 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       this file's port of it:
                         python3 engine/wpt_classify.py engine/.work/wpt
                       NOTHING IS PREDICTED HERE ABOUT WHAT ANY OF IT SCORES. Not one of these files has ever
-                      run in this tree, and a sentence claiming which capability they will name would be a
-                      guess sitting where the next reader takes it for a fact. */
+                      run in this tree, so a pass count stated here would be invented.
+                      THE CLAUSE THAT RATED NAMING A CAPABILITY THE SAME KIND OF GUESS IS RETIRED, and is
+                      recorded rather than deleted because it re-derives easily: which capability a file
+                      NAMES is a count of a SPELLING over a PINNED revision, which this entry already says
+                      cannot go stale. A score is a fact about a run nobody has made; a spelling is a fact
+                      about bytes already on disk, and only the first is unavailable here.
+                      311 OF THE 1126 RUNS REGISTER A `securitypolicyviolation` LISTENER, AN
+                      `onsecuritypolicyviolation` HANDLER OR CONSTRUCT `SecurityPolicyViolationEvent`; 322
+                      name it at all. CSP §5.5 "Report a violation" is what fires it, and it is UNBUILT -- a
+                      NAMED RESIDUAL at core/frame/policy_container.c, which the paragraph above already
+                      points at without its magnitude. So better than a quarter of what these rows collect
+                      rests on ONE absent observable, and the first run's red is a WORK QUEUE carrying one
+                      component's name rather than a per-file fidelity defect.
+                      AND THE SHAPE OUTLIVES THE COUNT, WHICH IS WHY IT IS SAID APART FROM IT: that event is
+                      the IDIOM THIS CORPUS USES TO ASSERT THAT A BLOCK HAPPENED, so it is not confined to
+                      the areas named for it. `script-src` carries 62 of those runs, `style-src` 41 and
+                      `connect-src` 30, against 16 in `securitypolicyviolation` itself and 9 in
+                      `reporting-api`. A reader expecting the absence to fall in a reporting area and leave
+                      the directive tests alone has it backwards, and no per-file reading recovers it.
+                      RE-DERIVE IT, AND READ THE CONTROLS BEFORE THE NUMBER: materialize the three rows'
+                      blobs into a scratch root, classify with the command above, and count the files each
+                      pattern matches. An INVENTED event name must answer 0; a bare `addEventListener(`
+                      answers 369 files, so the 311 is 84% of every file in these rows that registers any
+                      listener at all, which is what shows the matcher can see one.
+                      RETIREMENT: these paragraphs go when a run of these rows has been scored, because the
+                      count is then a statement about a run rather than about the corpus. */
                    "content-security-policy", "trusted-types",
                    /* AND THE ONE HELPER THOSE ROWS NAME THAT IS NOT UNDER EITHER OF THEM.
                       `reporting/resources/report-helper.js` is declared by TEN of the files above -- nine
