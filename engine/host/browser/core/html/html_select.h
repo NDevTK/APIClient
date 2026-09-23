@@ -46,5 +46,11 @@ void html_select_declare(JSContext *ctx);
 /* §4.10.7's `remove` on HTMLSelectElement.prototype. Handed the prototype by core/html/html_element.c, which
    owns the table of which interface a tag wears, for the same reason §4.10.13's progress members are. */
 void html_select_install(JSContext *ctx, JSValueConst proto);
+/* §4.10.7's half of the `element` row's release, reached from html_element_free. It gives back no
+   reference and takes no runtime — what this component holds for the agent is one member id, which
+   element_free's closing agent_state_undo("element") resets from the registry. What this states is that
+   the cascade REACHED this file, which is what entitles that line to put this file's slot back and
+   which it refuses to proceed without. See core/agent_state.h's agent_state_reached. */
+void html_select_free(void);
 
 #endif

@@ -1624,6 +1624,7 @@ void html_element_free(JSRuntime *rt)
     html_image_free(rt);
     html_audio_free(rt);
     html_option_free(rt);
+    html_select_free();   /* §4.10.7's `remove` id, declared under `element` from this cascade */
     html_link_free(rt);
     element_internals_free(rt);
     if (g_dataset_key != JS_ATOM_NULL) { JS_FreeAtomRT(rt, g_dataset_key); g_dataset_key = JS_ATOM_NULL; }

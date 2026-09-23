@@ -201,11 +201,37 @@ void html_select_declare(JSContext *ctx)
        off the shorter entry's list instead, the same call would have been an absent argument and would have
        run the ChildNode entry, which is the defect this file exists to end arriving one input later. */
     idl_overload_split_optional_from(1);
-    agent_state_id("html_select", &g_id_remove, "§4.10.7's `remove` overload");
+    /* `element`, THE ROW THAT RELEASES THIS, and not this file — html_select_free is reached from
+       html_element_free and thence from element_free, which is the `element` row's release column, and this
+       component has no row of its own. core/html/html_canvas_element.c declares under the same name and is
+       given back by html_element_free like this one; core/html/close_watcher.c does too, one level
+       deeper, through html_form_free.
+       WHAT STOOD HERE WAS THIS FILE'S OWN NAME, and core/platform.c's list holds no row of it — so the
+       pairing that asks "does anybody RELEASE this?" was never run over this slot at all, and `element`,
+       which really owns it, reported "declared no agent state" in character-for-character the words a
+       component that declared nothing produces. core/platform.c's walk over declarations that name no row
+       caught it on the first dev build after this file landed. */
+    agent_state_id("element", &g_id_remove, "§4.10.7's `remove` overload");
 }
 
 void html_select_install(JSContext *ctx, JSValueConst proto)
 {
     DCHECK(g_id_remove >= 0, "§4.10.7's `remove` was installed before html_select_declare declared it");
     idl_install_method(ctx, proto, "remove", g_id_remove);
+}
+
+void html_select_free(void)
+{
+    /* THE ID IS NOT PUT BACK HERE, and that is the contract rather than an omission. It is declared under
+       `element`, whose release ends in agent_state_undo — ONE reset, computed from the registry that already
+       holds this slot's address and its kind. A line here as well would be a SECOND resetter beside that
+       one, which is the pair core/agent_state.h's undo exists to stop being kept by hand.
+       SO THIS FUNCTION GIVES BACK NO REFERENCE AND TAKES NO RUNTIME: what §4.10.7 holds for the agent is one
+       member id, and an id is not a reference. The claim below is the whole of what this release is.
+       AND THE CASCADE REACHED THIS FILE — the claim that entitles element_free's last line to put this
+       file's slot back, and which that line REFUSES to proceed without: a row is declared from several
+       files, the undo resets every slot carrying the row's name, and a member the cascade DROPPED would
+       otherwise have its handle put back by a release that never ran. See core/agent_state.h's
+       agent_state_reached. */
+    agent_state_reached("element");
 }
