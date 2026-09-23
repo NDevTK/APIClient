@@ -33491,6 +33491,66 @@ static _Thread_local uint64_t g_flow_work_retired __attribute__((tls_model("loca
 #define FLOW_WORK_RETIRE()  (g_flow_work_retired++)
 void JS_FlowDiscardRetiredWork(void) { g_flow_work_retired = 0; }
 
+/* HOW MANY DISPATCHES UNTIL THE COOPERATIVE BUDGET IS NEXT ASKED — the OCCASION for a clock read and no part of
+ * the answer. It closes the gap solver/quantum.h names first: every source that raised a yield request was a
+ * shape of the PAGE'S OWN BYTECODE (a back-edge, a call, a fork), so a straight-line call-free stretch expired
+ * no slice, and a budget noticed only when the debtor volunteers is not a budget. A dispatch count has the
+ * property that file states — UNEVADABLE BY THE PAGE'S OWN CODE SHAPE — because no bytecode dispatches without
+ * dispatching.
+ *
+ * A SEPARATE COUNTER FROM g_flow_work_retired, DELIBERATELY. That one's reset points belong to the CLOCK it
+ * banks into — a switch-in discards it, a poll banks it — and a period inheriting them would change silently
+ * whenever the banking policy did, which is one quantity answering two questions. This one's reset point is its
+ * own: it is re-armed where the budget is evaluated, and nowhere else.
+ *
+ * IT PASSES THE TEST THE DECLARATION ABOVE STATES. Delete `--g_flow_budget_countdown <= 0` and flow_budget_poll
+ * runs at EVERY dispatch: the budget is asked more often, so a raise lands at the same opcode or an earlier one
+ * and NO FLOW RUNS FURTHER. The raise itself is a CONJUNCTION whose other conjunct is the budget, so the raises
+ * taken with the period are a subset of those taken without it. The `0` this is compared against IS the period
+ * — a countdown's exhaustion — and not a second constant; the period itself is the scheduler's
+ * (JSFlowControlHooks.budget_period, solver/engine.h's ENGINE_QUANTUM_ASK_EVERY) and never this file's.
+ *
+ * IT IS A FLOOR ON HOW OFTEN THE BUDGET IS EVALUATED AND NEVER A CEILING, which is why the back-edge, call and
+ * fork raises STAY. Those fire on occasions this counter does not reach at all, and each is a chance to expire
+ * a slice sooner; removing one because this exists would be the only edit here that could make a flow run
+ * further than it does today.
+ *
+ * COUNTS DOWN RATHER THAN UP so the hot path is one thread-local decrement and one predicted-not-taken branch
+ * with no second load — DISPATCH is expanded at every BREAK in the interpreter. local-exec and non-atomic for
+ * g_flow_work_retired's reasons exactly. INT32_MAX is the no-policy value: a host that installs no `budget`
+ * reaches flow_budget_poll once in two billion dispatches, finds no hook, and re-arms. */
+static _Thread_local int32_t g_flow_budget_countdown __attribute__((tls_model("local-exec"))) = INT32_MAX;
+static void flow_budget_arm(void)
+{
+    DCHECK(g_flow_control.budget == NULL || g_flow_control.budget_period > 0,
+           "a flow-control policy installed a budget hook with a period of 0 — the dispatch gate would ask the "
+           "budget at every opcode, and on the host that needs this edge most that question is a call into JS. "
+           "State the period the scheduler owns (solver/engine.h)");
+    DCHECK(g_flow_control.budget_period <= (uint32_t)INT32_MAX,
+           "a flow-control policy's budget period does not fit the dispatch countdown — the period is a "
+           "granularity of a few thousand dispatches, so a value this size is a unit confusion rather than a "
+           "policy");
+    g_flow_budget_countdown = (g_flow_control.budget != NULL && g_flow_control.budget_period > 0)
+                            ? (int32_t)g_flow_control.budget_period : INT32_MAX;
+}
+static void flow_budget_poll(void)
+{
+    flow_budget_arm();
+    /* NO FLOW, NO BUDGET — the same positive statement the yield poll makes in its own body ("NO FLOW, NO
+       PARK"), made here so the question is not even asked. It is NOT a fallback by §C-stack's test: delete the
+       population it selects against and the question still has to be asked, because a slice is a fact about a
+       RUNNING FLOW and between two scheduler steps there is none. It is also what keeps the host's own
+       precondition true by construction rather than by hope — solver/quantum.c's quantum_expired() aborts
+       outside an open slice, and a host-time entry into the interpreter has no flow base to reach this by. */
+    if (g_flow_base_gen != NULL && g_flow_control.budget != NULL && g_flow_control.budget())
+        FLOW_YIELD_REQUEST(JS_PREEMPT_HOST);
+}
+/* THE SAME KIND A HOST REQUEST CARRIES, because it IS one: the thread is wanted back by the scheduler and not
+   by anything about this flow's bytecode. A policy that answers per source (run-test262 forces back-edges and
+   samples calls) must not see a slice expiry as a shape of the page's code, which is what any other kind would
+   tell it. */
+#define FLOW_BUDGET_TICK()  do { if (unlikely(--g_flow_budget_countdown <= 0)) flow_budget_poll(); } while (0)
+
 /* FEATURE-ENGAGEMENT COUNTERS — the honest anti-fake-green instrument. A test passing proves the RESULT is
    spec-correct; it does NOT prove the time-travel feature ever RAN on that test's logic. So we count, per YIELD
    POLL WHERE THE POLICY SAID PARK: g_flow_preempt_requested (the scheduler wanted this flow suspended here) vs
@@ -33982,7 +34042,11 @@ static int branch_arm_fork(JSContext *ctx, JSValueConst op1, uint8_t *if_pc,
    time and RESTORES the same number when it resumes; a boolean could only be cleared and re-entered, which
    restarted the counter at 1 and would have made a slice-2 object compare as older than a slice-1 fork. */
 void JS_SetFlowGen(uint32_t gen) { g_flow_gen = gen; }
-void JS_SetFlowControlHooks(const JSFlowControlHooks *h) { g_flow_control = *h; }
+/* THE COUNTDOWN IS RE-ARMED HERE so an installed policy takes effect within one period rather than within the
+   two billion dispatches a host that installed none is counting off. It ARMS and does not POLL: a policy is
+   installed on the host's own time, outside any slice, and asking the budget there is the one thing the gate's
+   flow-base conjunct exists to prevent. */
+void JS_SetFlowControlHooks(const JSFlowControlHooks *h) { g_flow_control = *h; flow_budget_arm(); }
 void JS_SetTimeTravelHooks(const JSTimeTravelHooks *h) { g_time_travel = *h; }
 void JS_SetConcolicHooks(const JSConcolicHooks *h) { g_concolic = *h; }
 void JS_SetEvalSinkHook(JSEvalSinkFunc *cb) { g_eval_sink = cb; }
@@ -34483,6 +34547,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                              opcode = *pc++;                                         \
                              sf->cur_pc = pc;                                         \
                              FLOW_WORK_RETIRE();                                      \
+                             FLOW_BUDGET_TICK();                                      \
                              goto *dispatch_table[opcode]; } while (0)
 #define SWITCH(pc)      DISPATCH();
 #define CASE(op)        case_ ## op

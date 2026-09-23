@@ -1928,6 +1928,33 @@ typedef struct JSFlowControlHooks {
    cross-instance read needing the flow suspended. */
 #define JS_PREEMPT_HOST     3
     int  (*preempt)(int kind);
+    /* IS THE RUNNING FLOW'S COOPERATIVE SLICE SPENT — the same question `preempt`'s own policy answers on its
+       quantum clause, asked from the interpreter's DISPATCH so that the budget can expire inside a stretch of
+       bytecode that raises nothing. It is a SECOND QUESTION AND NOT A SECOND POLICY: `preempt` answers "should
+       this flow park", which is rank AND budget, and this answers the budget alone — because the only thing a
+       dispatch does with the answer is RAISE, and the raise is then answered by the poll through `preempt`
+       exactly as a back-edge's is. One park decision, still in one place.
+       WHY IT EXISTS: solver/quantum.h's raise sources were a loop back-edge, a call and a fork, and all three
+       are occasions THE PAGE'S OWN CODE SHAPE supplies or withholds, so a straight-line call-free stretch could
+       not expire the slice it was supposed to be bounded by. A count of the interpreter's own dispatches is
+       UNEVADABLE — a page cannot write bytecode that dispatches without dispatching — which is the property
+       that header states and which is not restated here.
+       `budget_period` IS A GRANULARITY AND NOT A BUDGET. It says how often the question is ASKED; the answer is
+       the hook's, and the hook's is a CLOCK. It buys the one thing a period can buy: on a host whose clock read
+       is a call into JS, asking at every opcode is unaffordable, and asking every N amortises it while bounding
+       the OVERSHOOT at N dispatches. The raise is a CONJUNCTION with the hook's answer, so the raises taken with
+       the period are a SUBSET of those taken without it — which is the test g_flow_work_retired's declaration in
+       quickjs.c states in full, applied at the countdown that gates this call.
+       A DISPATCH-DENOMINATED BUDGET WOULD BE A DIFFERENT THING AND IS BANNED, and the reason bounds what this
+       can reach too: the dispatch count has ONE increment site, inside DISPATCH, so a C activation that declares
+       no step boundary retires zero of it however long it runs. That is the same population no raise source
+       reaches, and it is why solver/engine.c charges its aging term in thread time and not in work.
+       INSTALLED AND REMOVED WITH `preempt`, by one owner in one registration, for `work`'s reason below: a
+       budget is a fact about a scheduler session and about nothing else. A NULL `budget` is a host that declines
+       this edge — wpt_runner.c drives flows under its own policy with no frontier to be fair between — and it
+       costs that host one predicted-not-taken branch per dispatch and nothing else. */
+    int      (*budget)(void);
+    uint32_t budget_period;
     /* THE WORK THE RUNNING FLOW HAS RETIRED since this hook last saw it, in OPCODES — reported at the yield
      * poll, immediately BEFORE `preempt` is asked, so a flow that parks there has already banked the work it
      * did to reach that point. `units` is never 0 — a poll at which nothing was retired reports nothing rather

@@ -509,6 +509,26 @@ uint64_t engine_preempt_asks(void);
 #define ENGINE_QUANTUM_MS  12  /* a thread-sharing floor, not a cap: nothing is dropped across it. It is a budget
                                   of CPU actually consumed — solver/quantum.h owns the edge that expires it and
                                   says what each host can measure. */
+/* HOW OFTEN THAT BUDGET IS ASKED, counted in the interpreter's own DISPATCHES — the second half of one policy
+   and declared beside the first so the two cannot drift and a reader finds them together. It reaches the
+   interpreter as JSFlowControlHooks.budget_period rather than as a constant quickjs.c could read, because
+   quickjs.c includes no host header and must not: a period spelled there would be a second component's opinion
+   about this policy, which is the disagreement §a-bound-is-not-a-granularity says a scheduler-owned unit exists
+   to make impossible.
+   IT IS AN OCCASION AND NEVER A VERDICT, AND A DISPATCH-DENOMINATED BUDGET IS THE BANNED THING NEXT DOOR. The
+   budget stays the CLOCK; this only says how often the clock is read. What forbids the other reading is not a
+   grammar but the same fact that bounds what this can reach: quickjs.c's retired-dispatch count has ONE
+   increment site, inside DISPATCH, so a C activation that declares no step boundary retires zero of it however
+   long it runs — see the aging charge in engine.c, which is denominated in thread time for exactly that reason
+   and which states the history of having been denominated otherwise.
+   WHY 4096, AS A DERIVATION RATHER THAN A NUMBER TO PRESERVE. It bounds two quantities at once and both are
+   read against ENGINE_QUANTUM_MS above. OVERSHOOT: a flow can pass the budget by at most one period of
+   dispatches, and a few thousand dispatches is tens of microseconds against a twelve-millisecond slice. COST:
+   on the host that needs this edge most, the budget is a clock read that calls into JS, so it has to be
+   amortised over enough dispatches to disappear — the same arithmetic, and the same answer. Both land under one
+   percent of the slice anywhere from about a thousand to about sixteen thousand, so re-derive this against the
+   slice rather than copying it. Nothing requires a power of two: the gate counts down. */
+#define ENGINE_QUANTUM_ASK_EVERY 4096
 /* THE SEAM ASSERTION'S MARGIN, counted in WORK the step performed (forks + flows created + jobs run) rather
    than in milliseconds — see the verdict in engine_sched_step for why a WALL clock cannot decide this on a
    loaded machine. A step that performs this much work without once consulting the preempt hook has no

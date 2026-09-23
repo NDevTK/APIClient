@@ -12025,10 +12025,33 @@ static int engine_outcome_hook(JSContext *ctx, JSValueConst over, const char *op
    asks only under a live flow base, and a case where that is not a running flow is a route to fix at the
    route. */
 static void engine_work_hook(JSContext *ctx, uint64_t units) { event_loop_work_advance(ctx, units); }
+/* JSFlowControlHooks.budget — IS THIS SLICE SPENT, asked from the interpreter's own dispatch every
+   ENGINE_QUANTUM_ASK_EVERY of them, so the budget can expire inside a stretch of bytecode that raises nothing.
+   IT IS THE SAME CALL clause (2) of preempt_hook makes, and that is the point rather than a coincidence: ONE
+   budget and ONE edge, now with THREE consumers — a flow that parks on it, a step that returns the thread on
+   it, and a dispatch that asks for the park to be REQUESTED at all. A second opinion here would be the second
+   scheduler §THERE-IS-NO-GRIND bans, and an arithmetic here would be the one solver/quantum.h took away from
+   preempt_hook.
+   IT HOLDS NO POLICY, WHICH IS WHAT KEEPS IT A SEAM RATHER THAN A FORK IN THE ROAD. The interpreter decides
+   nothing from the answer except whether to RAISE; the raise is then answered by preempt_hook exactly as a
+   back-edge's is, so every park this engine makes is still decided at the one point §scheduler puts it, with
+   the rank comparison in front of it. Nothing is dropped, skipped, starved or reordered by asking earlier —
+   the flow parks as a COW snapshot and the same flow resumes unless the WFQ says otherwise.
+   ITS PRECONDITION IS THE CALLEE'S AND IS ASSERTED THERE: quantum_expired() aborts outside an open slice, and
+   the gate asks only under a live flow base, which between two engine_sched_step calls there is not. So a new
+   host-time entry into the interpreter reaches that abort by its own route and names itself, rather than being
+   given a quieter answer here. */
+static int engine_budget_hook(void) { return quantum_expired(); }
 static const JSFlowControlHooks FC_EXPLORE = { .branch = engine_branch_hook, .outcome = engine_outcome_hook,
                                                .fork = engine_fork_finalize, .preempt = preempt_hook,
+                                               .budget = engine_budget_hook,
+                                               .budget_period = ENGINE_QUANTUM_ASK_EVERY,
                                                .work = engine_work_hook };
 static const JSFlowControlHooks FC_VERIFY  = { .preempt = preempt_hook,      /* candidate re-fire: no fork, still preemptible */
+                                               .budget = engine_budget_hook, /* …and the SAME slice: a candidate holds the thread
+                                                                                the way any flow does, so the edge that expires it
+                                                                                may not be the one thing a verify does without */
+                                               .budget_period = ENGINE_QUANTUM_ASK_EVERY,
                                                .work = engine_work_hook };   /* …and a verify's clock still runs: §@S re-fires a
                                                                                 candidate as a FLOW, and a sink that reads a
                                                                                 duration must see the one the explore run saw */
@@ -12976,7 +12999,17 @@ static int engine_sched_slice(void) {
                WORK-DONE WOULD BE THE WRONG QUANTITY HERE even though it is the right one below: a flow that
                forks nothing, queues nothing and emits nothing — a tight compute loop over opaque input — burns
                the thread while its share of engine_work_done() stays at zero, so aging by work would never
-               demote the very shape this term exists for. */
+               demote the very shape this term exists for.
+               AND THE FINER WORK UNIT IS BLIND WHERE THIS TERM MOST NEEDS TO SEE, which is the question that
+               paragraph opens and does not close: the interpreter's own retired-DISPATCH count DOES move in
+               that tight compute loop, so it reads as the better work unit and it is not one. It has exactly
+               ONE increment site, inside quickjs.c's DISPATCH, so a C ACTIVATION THAT DECLARES NO STEP BOUNDARY
+               retires zero of it however long it runs — and a charge denominated in it would leave a
+               C-builtin-heavy flow UN-DEMOTABLE for as long as it ran, which is §ONE-WFQ-policy's aging term
+               failing not for the charged flow but for its siblings. That is the SAME population solver/quantum.h
+               names as the one no raise source reaches, so the blind spot in the RAISE and the blind spot in the
+               CHARGE are one blind spot, and what closes it is the step-machine conversion (§C-stack) rather
+               than any choice of unit here. */
             int64_t t0 = now;   /* this step's start: the previous iteration's reading, carried */
 #if APICLIENT_DEV
             uint64_t pq0 = 0, pf0 = 0, pa0 = g_preempt_asked;
