@@ -29623,8 +29623,15 @@ int main(int argc, char **argv) {
        no release is what platform_check_agent_state fires on — so THREE CLASS IDS were carried past their
        own release, one of them the brand every BlobPart and BodyInit position reads. See core/platform.c's
        entry. */
-    encoding_free(ctx);
-    text_stream_free(ctx);
+    /* ENCODING §7.2, §7.4, §7.5 AND §7.6 are NOT freed here any more — `encoding` and `text_stream` are
+       ROWS on core/platform.h's release column, run by the platform_agent_free above. These two lines were in
+       all three host teardowns and ran AFTER that call had already run the whole column, and the WPT runner
+       ran them a hundred lines below where the other two did. Out here neither file could declare its agent
+       state to core/agent_state.h at all — a row with agent state and no release is what
+       platform_check_agent_state fires on — so FOUR CLASS IDS and ONE PER-REALM VALUE SLOT were carried past
+       their own release, read by two finalizers and a shared gc_mark that run later still. Reverse
+       declaration order releases `text_stream` before `encoding`, the dependent first, which is the order
+       these lines already had. See core/platform.c's entry. */
     /* XHR §4 "Interface FormData" is NOT freed here any more — `form_data` is a ROW on core/platform.h's
        release column, run by the platform_agent_free above. This line was in all three host teardowns and ran
        AFTER that call had already run the whole column, and the three did not agree on where it went: this

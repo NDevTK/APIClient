@@ -13,7 +13,11 @@ void text_stream_init(JSContext *ctx);
    core/platform.c's per-document column, a worker realm, which reaches no platform_document_install, received
    neither. */
 void text_stream_install_realm(JSContext *ctx);
-void text_stream_free(JSContext *ctx);
+/* THE AGENT'S — core/platform.h's release column, which is why it takes NOTHING where it used to take a
+   JSContext no line of it read. §7.5's and §7.6's prototypes, their interface objects and each realm's copy
+   of the decode operation are the REALMS' and go with their contexts; what this gives back is the two class
+   ids, the realm-slot handle, the recorded runtime and seven step ids. */
+void text_stream_free(void);
 
 /* THE UTF-8 TEXT DECODE OF A ReadableStream, AS THIS REALM'S FUNCTION OBJECT — Fetch §5.3 "Body mixin"'s
  * `textStream()` steps 4-6 and File API §3.3.6 "The textStream() method"'s steps 2-4, which are the same three

@@ -19,7 +19,10 @@ void encoding_init(JSContext *ctx);
    and §7.3 Interface mixin TextEncoderCommon are MIXINS, and Web IDL §3.7.1 Interface object is written of an
    interface — so a mixin has no interface object and Web IDL §3.8 defines no property reference for one. */
 void encoding_install_realm(JSContext *ctx);
-void encoding_free(JSContext *ctx);
+/* THE AGENT'S — core/platform.h's release column, which is why it takes NOTHING where it used to take a
+   JSContext no line of it read. §7.2's and §7.4's prototypes and interface objects are the REALMS' and go
+   with their contexts; what this gives back is the two class ids, the recorded runtime and two step ids. */
+void encoding_free(void);
 
 /* ---- WHAT §7.5's TextDecoderStream AND §7.6's TextEncoderStream REACH THIS COMPONENT THROUGH ---------------
  *

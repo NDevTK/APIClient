@@ -33,6 +33,7 @@
 #include "core/encoding/encoding.h"
 #include "core/encoding/text_stream.h"
 #include "core/idl_args.h"
+#include "core/agent_state.h"
 #include "core/realm.h"
 #include "core/streams/pipe.h"
 #include "core/streams/readable_stream.h"
@@ -80,10 +81,21 @@ static TextStreamData *ts_any_of(JSValueConst v)
     return t ? t : (TextStreamData *)JS_GetOpaque(v, g_tes_class);
 }
 
+/* NEITHER OF THESE MAY LOOK A CLASS ID UP, because the collector runs AFTER core/platform.h's release
+   column — every host's teardown is platform_agent_free(), JS_RunGC, JS_FreeRuntime in that order — and both
+   ids are agent state the `text_stream` row's release now puts back at 0. The two-step lookup below would
+   then be `JS_GetOpaque(val, 0)` TWICE, NULL for every live stream, and the halves fail differently: the
+   finalizer would leak the decoder record and drop the TransformStream reference, and the MARK would leave
+   the cycle its own comment describes unseen, so every TextDecoderStream a page made is uncollectable. The
+   two-step lookup also goes away rather than being converted twice: the collector dispatched here THROUGH
+   the class, so which of the two it was is a fact this function already has and never had to re-derive. See
+   core/agent_state.h's closing paragraph. */
 static void text_stream_finalizer(JSRuntime *rt, JSValue val)
 {
-    TextStreamData *t = JS_GetOpaque(val, g_tds_class);
-    if (!t) t = JS_GetOpaque(val, g_tes_class);
+    JSClassID id = 0;
+    TextStreamData *t = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
     if (!t) return;
     JS_FreeValueRT(rt, t->transform);
     enc_decoder_free(t->dec);
@@ -95,8 +107,10 @@ static void text_stream_finalizer(JSRuntime *rt, JSValue val)
    every TextDecoderStream a page makes is a leak the runtime's own walk reports at teardown. */
 static void text_stream_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    TextStreamData *t = JS_GetOpaque(val, g_tds_class);
-    if (!t) t = JS_GetOpaque(val, g_tes_class);
+    JSClassID id = 0;
+    TextStreamData *t = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
     if (!t) return;
     JS_MarkValue(rt, t->transform, mark_func);
 }
@@ -772,6 +786,15 @@ void text_stream_init(JSContext *ctx)
     g_ts_rt = rt;
     JS_NewClassID(rt, &g_tds_class); JS_NewClass(rt, g_tds_class, &dsd);
     JS_NewClassID(rt, &g_tes_class); JS_NewClass(rt, g_tes_class, &esd);
+    /* THE AGENT STATE THOSE TWO LINES JUST CREATED, DECLARED BESIDE THEM. `text_stream` is this file's own
+       row on core/platform.c's list, and it could declare nothing at all until that row had a release
+       column. Both ids are inside the window that file's declare column brackets with `minted == declared`. */
+    agent_state_class("text_stream", &g_tds_class,
+                      "Encoding §7.5's TextDecoderStream class — the brand §7.1's two getters read through "
+                      "tds_of and the per-realm prototype slot");
+    agent_state_class("text_stream", &g_tes_class,
+                      "Encoding §7.6's TextEncoderStream class — the brand §7.3's getter reads through tes_of "
+                      "and the per-realm prototype slot");
 
     for (i = 0; i < ALG_N; i++) {
         g_alg_stepid[i] = JS_RegisterStepDef(rt, &js_tx_defs[i]);
@@ -788,6 +811,15 @@ void text_stream_init(JSContext *ctx)
        operation is the caller that performs it. */
     g_td_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_td_decl, 0);
     g_td_slot = realm_value_declare(ctx, "Encoding §7.5's UTF-8 text decode of a ReadableStream");
+    /* A REALM SLOT IS A CLASS ID — core/realm.h's realm_value_declare is JS_NewClassID plus JS_NewClass over
+       a local that starts at 0, so it always mints — and it is its own KIND here rather than an id, because
+       core/agent_state.h's identity counts SLOT_CLASS and SLOT_REALM together against one allocator and a
+       realm slot left as an id is a class id in the one band that identity does not count. The declaration
+       is BELOW the line that assigns it because agent_state_realm_slot_at asserts the slot is already
+       minted. */
+    agent_state_realm_slot("text_stream", &g_td_slot,
+                           "Encoding §7.5's UTF-8 text decode of a ReadableStream — the per-realm slot Fetch "
+                           "§5.3's `textStream()` and File API §3.3.6's read the function object out of");
     realm_declare_intrinsic(text_stream_install_realm);
 }
 
@@ -866,12 +898,21 @@ JSValue text_stream_decode_op(JSContext *ctx)
     return realm_value_get(ctx, g_td_slot);   /* OWNED */
 }
 
-void text_stream_free(JSContext *ctx)
+/* THE AGENT'S — core/platform.h's release column. IT TAKES NOTHING, and no line of the old body read the
+   JSContext it used to take: §7.5's and §7.6's per-realm prototypes and interface objects, and each realm's
+   own copy of the decode operation, are the REALMS' and went with their contexts. What is left is two class
+   ids, a realm-slot HANDLE, a runtime handle and seven step ids — no JSValue and no JSAtom, so there is not
+   even a JS_FreeValueRT to want a runtime for. */
+void text_stream_free(void)
 {
     int i;
     if (!g_ts_rt) return;
     /* the prototypes are the REALMS' — released with their contexts */
     g_ts_rt = NULL;
+    /* §7.5'S AND §7.6'S CLASS IDS GO BACK AT 0 — core/agent_state.h's ONE policy. A carried id names a class
+       in a runtime that is gone, and JS_NewClassID in this fork RETURNS a non-zero id it is handed rather
+       than minting. */
+    g_tds_class = g_tes_class = 0;
     g_tds_ctor_stepid = g_tes_ctor_stepid = -1;
     g_td_stepid = -1;
     /* The realm's own copy went back with its context; what this component owns is the HANDLE, and one carried

@@ -44,6 +44,7 @@
 #include "core/encoding/encoding.h"
 #include "core/encoding/encoding_table.h"
 #include "core/idl_args.h"
+#include "core/agent_state.h"
 #include "core/realm.h"
 
 /* ---- §4.2's "get an encoding" ------------------------------------------------------------------------------
@@ -169,10 +170,22 @@ static int       g_id_decode = -1, g_id_encode = -1, g_id_encode_into = -1;
 static JSRuntime *g_enc_rt;
 static int       g_dec_ctor_stepid = -1, g_enc_ctor_stepid = -1;
 
+/* THIS MAY NOT LOOK THE CLASS ID UP, because the collector runs AFTER core/platform.h's release column —
+   every host's teardown is platform_agent_free(), JS_RunGC, JS_FreeRuntime in that order — and §7.2's class
+   id is agent state the `encoding` row's release now puts back at 0. `JS_GetOpaque(val, g_dec_class)` here
+   would be `JS_GetOpaque(val, 0)`, NULL for every live TextDecoder, and enc_decoder_free would be handed
+   NULL: the decoder record leaks, silently in dev AND release, because a malloc'd block appears in neither of
+   JS_FreeRuntime's censuses. The id is not needed — the collector dispatched here THROUGH the class, so it is
+   a fact this function already has. See core/agent_state.h's closing paragraph.
+   §7.4's finalizer below needs no such repair and is left alone: it reads no opaque at all, because §7.3
+   makes a TextEncoder's encoding always UTF-8 and the object holds nothing. */
 static void decoder_finalizer(JSRuntime *rt, JSValue val)
 {
-    EncDecoder *d = JS_GetOpaque(val, g_dec_class);
+    JSClassID id = 0;
+    EncDecoder *d = JS_GetAnyOpaque(val, &id);
+
     (void)rt;
+    (void)id;
     enc_decoder_free(d);
 }
 
@@ -1504,6 +1517,16 @@ void encoding_init(JSContext *ctx)
     JS_NewClass(rt, g_dec_class, &dec_def);
     JS_NewClassID(rt, &g_enc_class);
     JS_NewClass(rt, g_enc_class, &enc_def);
+    /* THE AGENT STATE THOSE FOUR LINES JUST CREATED, DECLARED BESIDE THEM. `encoding` is this file's own row
+       on core/platform.c's list, and the row could declare nothing at all until it had a release column: a
+       row with agent state and an EMPTY release is what platform_check_agent_state fires on. Both ids are
+       inside the window that file's declare column brackets with `minted == declared`. */
+    agent_state_class("encoding", &g_dec_class,
+                      "Encoding §7.2's TextDecoder class — the brand its three members' receivers are checked "
+                      "against and the per-realm prototype slot");
+    agent_state_class("encoding", &g_enc_class,
+                      "Encoding §7.4's TextEncoder class — the per-realm prototype slot; §7.3 makes the "
+                      "encoding always UTF-8, so the object it brands holds nothing");
 
     g_id_decode = idl_method_id_dict(ctx, DECODE_ARGS, 2, DECODE_OPTIONS,
                                      (int)(sizeof DECODE_OPTIONS / sizeof DECODE_OPTIONS[0]),
@@ -1603,11 +1626,21 @@ void encoding_install_realm(JSContext *ctx)
     JS_FreeValue(ctx, global);
 }
 
-void encoding_free(JSContext *ctx)
+/* THE AGENT'S — core/platform.h's release column. IT TAKES NOTHING, and no line of the old body read the
+   JSContext it used to take: §7.2's and §7.4's per-realm prototypes and their interface objects are the
+   REALMS' and went with their contexts. core/platform.h says the test is WHAT A RELEASE GIVES BACK — here
+   two class ids, a runtime handle and two step ids, with no JSValue and no JSAtom, so unlike `blob` there is
+   not even a JS_FreeValueRT to want a runtime for. */
+void encoding_free(void)
 {
     if (!g_enc_rt)
         return;
     /* the prototypes are the REALMS' — released with their contexts */
     g_enc_rt = NULL;
+    /* §7.2'S AND §7.4'S CLASS IDS GO BACK AT 0 — core/agent_state.h's ONE policy for a class id, and not a
+       preference: a carried id names a class in a RUNTIME THAT IS GONE, and JS_NewClassID in this fork
+       RETURNS a non-zero id it is handed rather than minting, so every TextDecoder and TextEncoder a second
+       agent minted would be branded with a number the live runtime never gave out. */
+    g_dec_class = g_enc_class = 0;
     g_dec_ctor_stepid = g_enc_ctor_stepid = -1;
 }

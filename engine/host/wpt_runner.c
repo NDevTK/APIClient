@@ -3975,8 +3975,15 @@ int main(int argc, char **argv)
     /* The File System model and its two standards, the two delivery callees, §9.5's bus and
        XMLHttpRequest are ROWS on core/platform.h's release column now — this runner never had the
        XMLHttpRequest line at all, so §5's ProgressEvent slot Symbol leaked in every file it ran. */
-    encoding_free(ctx);
-    text_stream_free(ctx);
+    /* ENCODING §7.2, §7.4, §7.5 AND §7.6 are NOT freed here any more — `encoding` and `text_stream` are
+       ROWS on core/platform.h's release column, run by the platform_agent_free above. These two lines were in
+       all three host teardowns and ran AFTER that call had already run the whole column, and the WPT runner
+       ran them a hundred lines below where the other two did. Out here neither file could declare its agent
+       state to core/agent_state.h at all — a row with agent state and no release is what
+       platform_check_agent_state fires on — so FOUR CLASS IDS and ONE PER-REALM VALUE SLOT were carried past
+       their own release, read by two finalizers and a shared gc_mark that run later still. Reverse
+       declaration order releases `text_stream` before `encoding`, the dependent first, which is the order
+       these lines already had. See core/platform.c's entry. */
     /* AFTER THE FRONTIER (solver_agent_free above), because a flow parked inside an IDL member reads this pool
        at its teardown — the position this runner already had, and the one idl_args_free now asserts. */
     idl_args_free(ctx);

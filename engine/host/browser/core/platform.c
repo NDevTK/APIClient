@@ -479,6 +479,29 @@ static void r_usp(JSRuntime *rt) { (void)rt; usp_free(); }
    outside core/html/form_data.c and reading the function each stands in — a member body or a per-realm
    install in every case. */
 static void r_form_data(JSRuntime *rt) { (void)rt; form_data_free(); }
+/* ENCODING §7.2/§7.4 AND §7.5/§7.6. Both releases were hand-written lines in THREE host teardowns —
+   engine/host/main.c, engine/host/test_forced.c and engine/host/wpt_runner.c — running AFTER
+   platform_agent_free had already run this entire column, which is the drift this column exists to end, and
+   the WPT runner ran them a hundred lines below where the other two did, past its own realm_intrinsics_free.
+   WHAT IT COST TO BE OUT THERE was a question nobody could ask. A row with agent state and an EMPTY release
+   column is what platform_check_agent_state fires on, so while the two `_free`s sat in the hosts NEITHER FILE
+   COULD DECLARE ANYTHING AT ALL — and between them FOUR CLASS IDS and ONE PER-REALM VALUE SLOT (which is a
+   class id too: realm_value_declare is JS_NewClassID plus JS_NewClass) were carried past their own release,
+   read by a finalizer each and by §7.5/§7.6's shared gc_mark, all of which run later still.
+   NEITHER TAKES A JSContext ANY MORE AND NEITHER READ THE ONE IT TOOK: the four prototypes, the four
+   interface objects and each realm's copy of §7.5's decode operation are the REALMS' and go with their
+   contexts, so what is left is class ids, a realm-slot handle, runtime handles and step ids — no JSValue and
+   no JSAtom, hence not even a JS_FreeValueRT to want the runtime for, which is where these differ from
+   `blob` above.
+   THE ORDER BETWEEN THEM IS THE POINT AND REVERSE DECLARATION ORDER GIVES IT. §7.5's streams are built out of
+   §7.2's decoder — text_stream.c calls enc_decoder_new, enc_decoder_decode and enc_decoder_free — so
+   `text_stream` is declared BELOW `encoding` and therefore releases BEFORE it, the dependent first. In the
+   other direction no release in this agent calls either component: text_stream_decode_op's only two callers
+   outside this pair are core/fetch/body.c's and core/file/blob.c's step visits, and every encoding entry
+   reached from elsewhere (encoding_lookup, encoding_decode, encoding_name, enc_decoder_*) reads the generated
+   tables rather than any static this release resets. */
+static void r_encoding(JSRuntime *rt) { (void)rt; encoding_free(); }
+static void r_text_stream(JSRuntime *rt) { (void)rt; text_stream_free(); }
 /* DOM §3.1/§3.2 AND THE OBSERVABLE STANDARD, AND THE PAIR INVERTS — WHICH IS THE POINT RATHER THAN A SIDE
    EFFECT. Both releases were hand-written lines in THREE host teardowns — engine/host/main.c,
    engine/host/wpt_runner.c and engine/host/test_forced.c — running AFTER platform_agent_free had already run
@@ -945,8 +968,8 @@ static const PlatformComponent PLATFORM[] = {
        realm" — a REALM, with no Document in the algorithm. Each component's own realm intrinsic places its two
        interface objects beside the prototypes it already built there, so a realm that reaches no
        platform_document_install gets all four. */
-    { "encoding",            d_encoding,            NULL },
-    { "text_stream",         d_text_stream,         NULL },
+    { "encoding",            d_encoding,            NULL,        r_encoding },
+    { "text_stream",         d_text_stream,         NULL,        r_text_stream },
     /* §2.7 before §7.2.5, and its per-document half is inside window_install for the reason above. */
     { "event_target",        d_event_target,        NULL,        r_event_target },
     /* HTML §10.2.1.1 The WorkerGlobalScope common interface and §10.2.1.2 Dedicated workers and the
