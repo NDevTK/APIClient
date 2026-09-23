@@ -6,6 +6,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/timing/performance_entry.h"
@@ -236,6 +237,26 @@ void performance_observer_entry_list_init(JSContext *ctx)
     g_id_by_name = idl_method_id(ctx, BY_NAME_ARGS, 2, js_pel_get, PEL_BY_NAME);
     idl_optional_from(1);                /* `getEntriesByName(DOMString name, optional DOMString type)` */
     g_ready = 1;
+
+    /* EVERY SLOT THIS FILE HOLDS FOR THE AGENT, DECLARED — and it declared NONE of them until now, so
+       agent_state_check_released has never once been able to ask about §4.2.2. That is the silent half of
+       core/agent_state.h rather than the loud one: a release left with a slot still set is caught at the
+       release column, and an UNDECLARED slot is a question nothing anywhere asks, so no run of this project
+       could ever have reported one. The seven were in fact put back by hand, which is the state that reads as
+       safe and is not — it is correct only while whoever edits this function remembers, which is the shape
+       that already cost this row its §2 buffer map and cost `user_timing` four slots of one landing.
+       THE ROW IS `performance_observer` AND NOT THIS FILE, because a sub-component names the row whose
+       RELEASE reaches it: this file's `_init` is called from performance_observer_init and its `_free` from
+       performance_observer_free, and core/platform.c has no row of its own for §4.2.2. Each `what` therefore
+       names §4.2.2 itself, since it is read out of a report headed by the owner's name. */
+    agent_state_class("performance_observer", &g_class,
+                      "§4.2.2's PerformanceObserverEntryList class, and this file's declaration latch's twin");
+    agent_state_value("performance_observer", &g_list_key, "§4.2.2's entry-list slot key");
+    agent_state_atom("performance_observer", &g_atom_list, "§4.2.2's entry-list slot key, interned");
+    agent_state_id("performance_observer", &g_id_get, "§4.2.2's getEntries declaration");
+    agent_state_id("performance_observer", &g_id_by_type, "§4.2.2's getEntriesByType declaration");
+    agent_state_id("performance_observer", &g_id_by_name, "§4.2.2's getEntriesByName declaration");
+    agent_state_flag("performance_observer", &g_ready, "§4.2.2's declaration latch");
 }
 
 void performance_observer_entry_list_install(JSContext *ctx)
@@ -270,13 +291,20 @@ void performance_observer_entry_list_free(JSRuntime *rt)
     /* NOT `if (!g_ready) return;` — the declare pass this pairs with is unconditional, so a release in an
        agent that never declared is the thing to CRASH on rather than the thing to skip. */
     DCHECK(g_ready, "§4.2.2 was released in an agent that never declared it");
-    /* The prototypes and interface objects are the REALMS' and go with their contexts. The class id goes back
-       to 0 because a class is registered in a RUNTIME and because it doubles as this file's init latch. */
+    /* The prototypes and interface objects are the REALMS' and go with their contexts. What this file owns is
+       the two below; every HANDLE it holds is put back by the owner's agent_state_undo, which is why none of
+       them is assigned here any more.
+       THE RESET IS NOT MERELY DERIVED, IT HAS MOVED — and that is the point rather than a side effect. This
+       release runs in the MIDDLE of performance_observer_free's cascade, so a reset written here would put
+       §4.2.2's class id back at 0 while the rest of that release is still running; core/dom/abstract_range.c
+       and core/dom/range.c each record in their own words what that costs, which is why core/agent_state.h
+       puts the reset at the ROW's last line and nowhere else. The class id going back to 0 is unchanged and
+       its reason is unchanged — a class is registered in a RUNTIME, and JS_NewClassID returns the number it
+       is handed rather than minting a fresh one, so a carried id names a class in a runtime that is gone.
+       THE LAST LINE IS A CLAIM AND NOT A RESET: it writes no slot, which is the whole reason it can be made
+       from inside a cascade, and without it the owner's undo would put these seven back whether this release
+       ran or not — the one direction the release check is structurally blind to. */
     JS_FreeValueRT(rt, g_list_key);
-    g_list_key = JS_UNDEFINED;
     JS_FreeAtomRT(rt, g_atom_list);
-    g_atom_list = JS_ATOM_NULL;
-    g_ready = 0;
-    g_class = 0;
-    g_id_get = g_id_by_type = g_id_by_name = -1;
+    agent_state_reached("performance_observer");
 }
