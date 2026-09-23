@@ -5400,7 +5400,22 @@ void node_init(JSContext *ctx)
                       "DOM §4.13 \"Interface ProcessingInstruction\"'s class");
 
     /* Every node kind is a Node until a component claims it. A ProcessingInstruction wrapper answering the Node
-       members is honest; a bare object answering none of them is not. */
+       members is honest; a bare object answering none of them is not.
+       THIS TABLE IS DELIBERATELY NOT DECLARED AS AGENT STATE, AND THE REASON IS NOT THAT IT IS UNIMPORTANT —
+       it is that declaring it would make core/platform.c's conservation identity report a mint nobody made.
+       Every element here is a COPY of a class id the six declarations above already hold; this loop and
+       node_claim_type only ever assign one, and JS_NewClassID is never reached from either. That registry
+       counts its SLOT_CLASS and SLOT_REALM rows as the left-hand side of `minted == declared` over the window
+       core/platform.c's declare column brackets, so N copies declared through agent_state_class would come
+       out with MORE DECLARED THAN MINTED — which is the accusing direction, and the one state that identity
+       exists to get right. agent_state_zeroed is not the answer either: its image is the zero bytes and this
+       table's content is a class id, so the read would refuse a table the loop above has just filled.
+       WHAT MAKES THAT SAFE RATHER THAN MERELY UNCHECKED is that the table carries no reference and is
+       refilled WHOLE here on every agent, and every one of its readers — node_interface_proto, Node.prototype
+       and node_claim_type — is gated on g_protos_ready, which IS declared and which the undo puts back. So a
+       carried table is unreadable between the release that leaves it and the next init that overwrites it.
+       That is a statement about THIS table and does not generalise: the paragraph above records what carrying
+       the six MASTERS cost, and they are declared. */
     for (i = 0; i < LXB_DOM_NODE_TYPE_LAST_ENTRY; i++)
         g_type_class[i] = g_node_class;
     for (i = 0; i < (int)(sizeof(g_mixin_id) / sizeof(g_mixin_id[0])); i++)
@@ -5542,6 +5557,27 @@ void node_init(JSContext *ctx)
     agent_state_flag("element", &g_tree_hook_n, "DOM §4.2.3's insertion- and removing-steps list, its length");
     agent_state_flag("element", &g_cc_hook_n, "DOM §4.2.3's children-changed-steps list, its length");
     agent_state_flag("element", &g_moving_hook_n, "DOM §4.2.3's moving-steps list, its length");
+    /* AND THE THREE LISTS THEMSELVES, NOT ONLY THEIR LENGTHS — core/agent_state.h's agent_state_zeroed, whose
+       image is the zero bytes because each of these carries no initialiser. THE LENGTH AND THE TABLE ARE TWO
+       OBLIGATIONS: a length back at 0 makes a stale entry UNREADABLE, and only clearing the table makes it
+       GONE. Those are not the same thing here, because what a stale entry holds is a FUNCTION POINTER INTO
+       ANOTHER COMPONENT — every registrar is some other file's `_init` handing this one its §4.2.3 steps —
+       and core/agent_state.h's own account of what a dropped release loses names exactly that as the silent
+       case: a malloc'd block reaches no census with an assert over it, and a hook this component holds for
+       another leaves a DANGLING CALLBACK rather than memory, which nothing anywhere reports. The paragraph
+       three lines up says ALL OF THEM OR NONE, and a table whose length is checked while the table is not is
+       the short count it is about.
+       BOTH HALVES ARE RESET BY THE ONE UNDO, so there is no instant at which a length outlives its table or a
+       table its length: element_free's last line writes every slot carrying this row's name, and
+       node_tree_hooks_run — the only reader of any of the three — is gated on the length that goes back with
+       them. */
+    agent_state_zeroed("element", g_tree_hooks,
+                       "DOM §4.2.3's insertion- and removing-steps list — the hooks themselves, each a "
+                       "function pointer another component handed this one");
+    agent_state_zeroed("element", g_cc_hooks,
+                       "DOM §4.2.3's children-changed-steps list — the hooks themselves");
+    agent_state_zeroed("element", g_moving_hooks,
+                       "DOM §4.2.3's moving-steps list — the hooks themselves");
 }
 
 /* §4.4's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM — Node, CharacterData, Text and Comment. */
