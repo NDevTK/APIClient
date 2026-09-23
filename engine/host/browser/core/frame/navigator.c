@@ -146,6 +146,98 @@ static const IdlExposure NAV_EXPOSURE[] = { NAV_MEMBERS(NAV_EXPOSURE_ONE) };
    the mode the four lines above commit to, and asserted per realm by idl_members_excluded. */
 static const char *const NAV_MODE_EXCLUDED[] = { "taintEnabled", "oscpu" };
 
+/* `clipboard` IS AN ABSENT ROW THIS FILE DELIBERATELY LEAVES STANDING, AND IT IS NOT A CANDIDATE FOR THE
+   DECLARATION ABOVE. The two members up are ones the SPEC FORBIDS this user agent; this is one the engine
+   OWES and has not built, so an idl_members_excluded entry for it would state something about the Clipboard
+   API that the Clipboard API does not say, and would spend the only row the work has. The audit carries
+   `clipboard` inside this interface's ABSENT list and carries NO row at all for `Clipboard` or
+   `ClipboardItem`, because an auditor keyed on what EXISTS cannot count an interface that is wholly absent.
+
+   WHY IT IS NOT LANDED AS A HALF, WHICH IS THE QUESTION A READER ARRIVES WITH. The member is cheap to
+   picture and its guard population is not: the page-facing unit is TWO interfaces, and real bundles guard
+   them as a CONJUNCTION IN BOTH ORDERS, so either alone turns a guard that works today into a throw.
+     - This member WITHOUT `ClipboardItem`: a site writing
+       `navigator.clipboard?.write([new ClipboardItem({...})])` evaluates no argument at all today, because
+       ECMAScript §13.3.9.1 "Runtime Semantics: Evaluation" short-circuits an optional chain on an undefined
+       BASE and never reaches what follows it. The moment this member exists the chain proceeds, the argument
+       is evaluated, and `ClipboardItem` — which platform_names.h lists, so absent.c leaves that read alone
+       instead of forking it — raises a ReferenceError at a line that costs nothing now.
+     - `ClipboardItem` WITHOUT this member: a site writing
+       `typeof ClipboardItem != "undefined" && navigator.clipboard.write` short-circuits on the FIRST
+       conjunct today and dereferences `navigator.clipboard` UNGUARDED the moment that conjunct turns true.
+   Neither is the smaller half of one landing; they are two halves of one, and CLAUDE.md §NO-STUBS' unit —
+   the smallest diff that makes the guard's TRUE branch survivable — is both interfaces or neither.
+
+   AND THE OPTIONAL-CHAIN POPULATION IS NOT THE THROWING POPULATION, which is the reading this shape invites
+   and which the sites refute. An optional chain guards the BASE, so what an absent member costs depends on
+   what the site does with it: a non-optional CALL through the chain throws, an optional call short-circuits,
+   and a member read as a VALUE — a ternary condition, a `&&` operand, a render test — is merely falsy.
+   Counting the optional chain on the attribute counts all three and reports the last two as hazards they are
+   not. The property worth counting is a NON-OPTIONAL CALL of the member.
+
+   THE DERIVATION, never a figure, because a corpus moves and this one grew by three quarters while the
+   question was being asked. engine/absentrank.mjs already publishes the receiver spellings and their armed
+   control; what this adds is the CALL-versus-VALUE partition, over a mirror of real bundles, with an
+   invented member as the negative control and the ClipboardItem neighbourhood READ rather than counted.
+   The patterns are kept SHORT on purpose: a long run in quotes is read as a quotation belonging to the
+   nearest citation above it, which is a finding this block earned once before it was written this way.
+     cd <dir>/mirror
+     grep -rohE 'navigator\.clipboard' . | wc -l
+     grep -rohE 'clipboard\?\.(read|readText|write|writeText)\(' . | sort | uniq -c
+     grep -rohE 'clipboard\?\.zzznope\(' . | wc -l
+     grep -rohE '.{110}ClipboardItem.{60}' .
+
+   WHAT IS NOT COVERED: this Navigator declares no `clipboard` member, so Clipboard API §7.1.1 "clipboard"'s
+   getter steps never run, no Clipboard object is minted in any realm, and none of Clipboard API §7.3
+   "Clipboard Interface"'s four operations exists. That is CORRECT and NARROWER rather than unfinished: a
+   real browser without the Async Clipboard API answers this read with the undefined that
+   ECMAScript §10.1.8.1 "OrdinaryGet ( obj, propertyKey, receiver )" step 2.b returns, which is what every
+   guard in the corpus is written against and what this engine already gives.
+     THE READ HALF IS NARROWER FOR A SECOND REASON, WHICH IS THE STANDARD'S OWN AND SURVIVES THE BUILD.
+   Clipboard API §9.1.1 "check clipboard read permission" consults no permission descriptor, reads no
+   permission store and requests nothing; its only true arm is a script running from a Paste element created
+   by the user agent or the operating system, and it returns false otherwise. Clipboard API §9 "Permissions
+   API Integration" states the same thing directly, that one permission is defined for the clipboard and it
+   is the write one — which is the sentence core/permissions/permission_store.c reasoned to when it
+   registered that feature and refused a read one, reached from the specification rather than from Chrome. So
+   a built readText() would REJECT in every world this engine can model, and that rejection is the answer
+   Clipboard API §7.3.2 "readText()" computes rather than a stub.
+     THE WRITE HALF IS THE OPPOSITE, AND IS THE HALF THE READ REFUSAL DOES NOT REACH. Clipboard API §9.2.1
+   "check clipboard write permission" reaches a permission request on BOTH of its arms, which
+   permission_request_run already answers by FORKING the user's decision, over a feature the store already
+   carries with its aspect and its partial order. What forbids a write-only landing is the entanglement
+   above, never this check.
+
+   WHAT THE NEXT DIFF BUILDS, AS ONE LANDING — numbered as one and not as five, because a set that cannot
+   land except together is a single landing: Clipboard API §7.2 "ClipboardItem Interface" whole, whose
+   constructor, presentationStyle, types, getType and static supports round-trip inside the object and need
+   no system clipboard at all; §7.3's four operations as STEP MACHINES, each parking across a permission
+   question; §7.1 "Navigator Interface"'s [SecureContext, SameObject] attribute here, as IDL_SECURE_CONTEXT
+   and reading the receiver's environment exactly as `permissions` does below; Clipboard API §4 "Model"'s
+   system clipboard as per-agent state that ROUND-TRIPS, so a page's own write is its read's reader; and
+   §9.2.1's check over permission_request_run. Every mechanism this clause names was grepped before it was
+   written — permission_request_run in core/permissions/permission_store.h, transient activation in
+   core/html/user_activation.c, Blob in core/file/blob.c — and ClipboardItem was grepped too and is in the
+   generated name tables and in no component.
+     WHAT IS NOT IN THAT LANDING AND SITS BEFORE IT IN THE STANDARD'S OWN ORDER. Clipboard API §7.3.3
+   "write(data)" reads the mandatory and optional data type lists that Clipboard API §6 "Clipboard Event API"
+   owns, and both permission checks turn on user interaction with a user-agent-created affordance, which is
+   Clipboard API §8 "Clipboard Actions"' and §5.3 "Integration with other scripts and events"'. DataTransfer,
+   ClipboardEvent and the copy, cut and paste actions are in the generated name tables and in no component,
+   so those arms are false BY ABSENCE rather than by decision — sound for a user agent offering no such
+   affordance, and the reason a read() sitting inside a paste handler, which is how the corpus reaches it,
+   would be unreachable here even with §7 built.
+
+   HOW ITS ABSENCE WOULD SHOW: the audit's Navigator line carries `clipboard` among its ABSENT members while
+   no line anywhere names Clipboard or ClipboardItem, and a page whose copy control is guarded reports its
+   fallback path rather than its clipboard one. NO INSTRUMENT HERE JUDGES THE CITATIONS ABOVE: `clipboard`
+   and `clipboard api` are both foreign entries in engine/citegen.mjs, so this block is COUNTED and never
+   CHECKED, which is what that band costs and is why each number was fetched one at a time from the editor's
+   draft this standard's own editors maintain. That draft's heading list is identical to the published
+   snapshot's, so no level and no edition separates them.
+   RETIREMENT: this block goes when both interfaces are installed, at which point the audit's Navigator line
+   stops naming `clipboard` and the rows that replace it are what a reader should be reading instead. */
+
 /* THE CLASS IS THE BRAND. Web IDL §3.7.6 "Attributes" makes every getter refuse a receiver that "does not
    implement the interface" before it reads anything, and §3.7.7 "Operations" says the same of every method —
    and the one object per realm WEARS the class, so the check is a class-id comparison a page cannot forge. It
