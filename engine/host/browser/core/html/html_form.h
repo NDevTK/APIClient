@@ -263,6 +263,20 @@ const char *html_form_control_name(JSValueConst wrap, size_t *plen);
    word, so this asks input_value.c for that mode rather than spelling the same two lines again. OWNED. */
 JSValue html_form_checkbox_value(JSContext *ctx, JSValueConst wrap);
 
+/* §4.10.7's "to get the list of options given a select element select", as the JS Array of option wrappers in
+   TREE ORDER that the algorithm returns. OWNED.
+ *
+ * IT IS THE WHOLE OF WHAT `options` IS, WHICH IS WHY IT IS EXPORTED. §4.10.7: "The options IDL attribute must
+ * return an HTMLOptionsCollection rooted at the select node, whose filter matches the elements in the list of
+ * options" — so every member §4.10.7 or §2.6.4.3 "The HTMLOptionsCollection interface" states over that
+ * collection is stated over THIS list, and "the number of nodes represented by collection" and "the indexth
+ * element in collection" are this array's length and its indexth entry. A member elsewhere that
+ * needs either asks here; a second walk would be a second answer to §4.10.7's own algorithm, which the
+ * `select_of_option` note below already says is the fact this file owns.
+ * THE RECEIVER IS A NODE AND NOT A WRAPPER because the walk is over the tree, and because the caller has
+ * already answered Web IDL §3.7.7 Operations' brand check by the time it has one. */
+JSValue html_form_select_option_list(JSContext *ctx, lxb_dom_node_t *select);
+
 /* §4.10.7's LIST OF OPTIONS for a `select`, narrowed to §4.10.22.4 step 5.6's condition — selectedness true and not
    disabled — with §4.10.7's SELECTEDNESS SETTING ALGORITHM already applied. A JS Array of option wrappers in
    tree order. OWNED. */

@@ -65,6 +65,7 @@
 #include "core/html/nonce_attribute.h"   /* §2.5.6's `nonce`, whose getter is not a reflection */
 #include "core/html/html_meter.h"
 #include "core/html/html_progress.h"
+#include "core/html/html_select.h"
 #include "core/events/event_target.h"
 #include "core/html/custom_elements.h"
 #include "core/dom/slot.h"
@@ -1121,6 +1122,10 @@ void html_element_init(JSContext *ctx)
        so each needs a setter id of its own rather than a reflection row. */
     html_meter_declare(ctx);
     html_progress_declare(ctx);
+    /* §4.10.7's `remove` overload — declared here because HTMLSelectElement is a row of the table above, and
+       because the member is ONE declaration carrying both of the section's entries: the Web IDL §3.6 split it
+       states is a property of the declaration rather than of any install. */
+    html_select_declare(ctx);
     /* §4.13.7 — declared here because `attachInternals` is an HTMLElement member, which is what this file
        owns the table of; the algorithms are element_internals.c's. */
     element_internals_declare(ctx);
@@ -1290,6 +1295,13 @@ void html_element_install_protos(JSContext *ctx)
             !strcmp(HTML_IFACE[i].iface, "HTMLSelectElement") ||
             !strcmp(HTML_IFACE[i].iface, "HTMLTextAreaElement"))
             autofill_install(ctx, p);
+        /* §4.10.7's `remove`, which is TWO operations of one name distinguished by ARITY — handed the
+           prototype for the reason §4.12.1's `async` is, and NOT a reflection row: neither entry mirrors an
+           attribute and §4.10.7 states the dispatch between them in prose. Until it was installed here the
+           name resolved up the chain to DOM §4.2.8 Mixin ChildNode's `remove()` on Element.prototype, so
+           `select.remove(0)` removed the SELECT. */
+        if (!strcmp(HTML_IFACE[i].iface, "HTMLSelectElement"))
+            html_select_install(ctx, p);
         /* §4.10.14's six numbers and §4.10.13's three, each an algorithm over the element's attributes rather
            than a mirror of one — handed the prototype for the reason §4.12.1's `async` is. */
         if (!strcmp(HTML_IFACE[i].iface, "HTMLMeterElement"))

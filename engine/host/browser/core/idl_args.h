@@ -1900,7 +1900,21 @@ void idl_overload_split_optional_from(int longer_first_optional);
  * LAST declaration made, as idl_optional_from does, and it must be stated BEFORE
  * idl_overload_split_optional_from, which asserts a split exists to describe. A member whose type list already
  * names a split may not also state one here: two answers to "which count removes an entry" is a member whose
- * every arity is resolved by whichever was found first. */
+ * every arity is resolved by whichever was found first.
+ *
+ * **-1 IS A SHORTER ENTRY THAT DECLARES NOTHING, AND IT IS NOT A SENTINEL.** This refused anything below 0
+ * under a sentence claiming the shorter entry "DECLARES AT LEAST ONE POSITION" — which was never derived from
+ * the standard: Web IDL §2.5.8 Overloading's own worked example for an effective overload set contains
+ * `(f3, « », « »)`, and §3.6 step 4's removal "by argument count" has nothing to say about a count of zero.
+ * The bound was true of every member that had been declared and it was read as a rule. HTML §4.10.7 "The
+ * select element" is where it breaks: `[CEReactions] undefined remove();` and `[CEReactions] undefined
+ * remove(long index);` are ONE identifier with two entries, the shorter declaring no argument at all, and the
+ * whole of what distinguishes them is arity — §4.10.7 says so in prose rather than by type, "when it has
+ * arguments" against "when it has no arguments". So the shorter entry's final index is the position BEFORE
+ * the list, exactly as idl_optional_from's "there are none" is the position PAST it.
+ * IT COST A SEPARATE `has_split` FIELD, WHICH IS THE §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS SPLIT: `split_at`
+ * was answering both "is there a split" and "where", the two agreed for as long as no shorter entry was
+ * empty, and the stricter question owned the sentinel. */
 void idl_overload_length_split_at(int shorter_last_position);
 
 /* DECLARE §3.6's DISTINGUISHING ARGUMENT INDEX — the position step 12 chooses the surviving overload entry at,

@@ -68,6 +68,14 @@ JSClassID node_class_id(void);
    (These read "§4.2.7 ChildNode and §4.2.8 ParentNode"; §4.2.7 is Mixin NonDocumentTypeChildNode and §4.2.8 is
    Mixin ChildNode, so both numbers named the wrong section and the title is what keeps that visible.) */
 void node_install_child_mixin(JSContext *ctx, JSValueConst proto);
+/* DOM §4.2.8 Mixin ChildNode's `remove()` STEPS, AS THE ONE IMPLEMENTATION — "If this's parent is null, then
+   return. Remove this." A member elsewhere that must run them is routed HERE rather than spelling the pair
+   again, because two right answers to one question is the shape that drifts: HTML §4.10.7 "The select
+   element" declares an overload whose zero-argument entry must act "like its namesake method on the ChildNode
+   interface implemented by the HTMLSelectElement ancestor interface Element when it has no arguments", which
+   is this and nothing else. It takes the NODE and not the wrapper, because the wrapper is what the mixin's
+   own body already resolved and a second resolution would be a second answer to that too. */
+void node_child_node_remove(lxb_dom_node_t *n);
 /* DOM §4.2.7 Mixin NonDocumentTypeChildNode — previousElementSibling / nextElementSibling, on the two
    interfaces §4.2.7 includes: `Element includes NonDocumentTypeChildNode` and `CharacterData includes
    NonDocumentTypeChildNode`. Deliberately NOT beside ChildNode above: §4.2.7's note keeps these two members

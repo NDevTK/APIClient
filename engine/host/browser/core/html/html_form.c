@@ -2728,8 +2728,10 @@ static bool optgroup_is_nested(lxb_dom_node_t *node, lxb_dom_node_t *select)
     return false;
 }
 
-/* §4.10.7 "to get the list of options given a select element select", verbatim. */
-static JSValue select_option_list(JSContext *ctx, lxb_dom_node_t *select)
+/* §4.10.7 "to get the list of options given a select element select", verbatim — see html_form.h for why it
+   is EXPORTED rather than static: the list is what every member §4.10.7 declares over the options collection
+   is defined in terms of, and those members do not all live in this file. */
+JSValue html_form_select_option_list(JSContext *ctx, lxb_dom_node_t *select)
 {
     JSValue arr = JS_NewArray(ctx);
     lxb_dom_node_t *node = select ? select->first_child : NULL;
@@ -2777,7 +2779,7 @@ JSValue html_form_placeholder_label_option(JSContext *ctx, JSValueConst select)
        and the FIRST option in the list of options has the empty string as its value and the select — not an
        optgroup — as its parent. */
     if (!sel || !has_attr(sel, "required") || select_display_size(sel) != 1) return JS_NULL;
-    list = select_option_list(ctx, n);
+    list = html_form_select_option_list(ctx, n);
     if (js_array_len(ctx, list) == 0) { JS_FreeValue(ctx, list); return JS_NULL; }
     first = JS_GetPropertyUint32(ctx, list, 0);
     JS_FreeValue(ctx, list);
@@ -2819,7 +2821,7 @@ void html_form_selectedness_setting_algorithm(JSContext *ctx, lxb_dom_node_t *se
     sel = lxb_dom_interface_element(select);
     multiple = has_attr(sel, "multiple");
     if (multiple) return;   /* both steps are conditioned on the attribute being ABSENT */
-    list = select_option_list(ctx, select);
+    list = html_form_select_option_list(ctx, select);
     len = js_array_len(ctx, list);
     for (i = 0; i < len; i++) {
         JSValue opt = JS_GetPropertyUint32(ctx, list, i);
@@ -2872,7 +2874,7 @@ lxb_dom_node_t *html_form_select_of_option(JSContext *ctx, lxb_dom_node_t *opt)
     for (a = opt->parent; a; a = a->parent)
         if (tag_is(a, "select")) { select = a; break; }
     if (!select) return NULL;
-    list = select_option_list(ctx, select);
+    list = html_form_select_option_list(ctx, select);
     len = js_array_len(ctx, list);
     for (i = 0; i < len && !found; i++) {
         JSValue o = JS_GetPropertyUint32(ctx, list, i);
@@ -2898,7 +2900,7 @@ JSValue html_form_selected_options(JSContext *ctx, JSValueConst select)
        the collapse. See core/html/html_option.h for why running it at the read is this engine's spelling of
        §4.10.7's own invocation points rather than a narrowing of them. */
     html_form_selectedness_setting_algorithm(ctx, n);
-    list = select_option_list(ctx, n);
+    list = html_form_select_option_list(ctx, n);
     len = js_array_len(ctx, list);
     for (i = 0; i < len; i++) {
         JSValue opt = JS_GetPropertyUint32(ctx, list, i);

@@ -1341,6 +1341,21 @@ static lxb_dom_node_t *node_convert_into_a_node(JSContext *ctx, lxb_dom_node_t *
     return fnode;                                                      /* STEP 5 */
 }
 
+/* DOM §4.2.8 Mixin ChildNode's `remove()` steps, VERBATIM: "If this's parent is null, then return. Remove
+   this." Lifted out of the mixin body below so that HTML §4.10.7 "The select element"'s zero-argument
+   overload entry — which that section defines as its "namesake method on the ChildNode interface implemented
+   by the HTMLSelectElement ancestor interface Element" — routes to these two steps rather than carrying a
+   second copy of them. See node.h.
+   THE PARENT TEST IS STEP 1 AND NOT A GUARD. A node with no parent has nothing to be removed from and that
+   is a NO-OP rather than an error, which is what lets a page call `el.remove()` twice; `dom_cow_remove_child`
+   is the removal chokepoint every other mutation in this file goes through, so the per-flow delta captures
+   this one exactly as it captures theirs. */
+void node_child_node_remove(lxb_dom_node_t *n)
+{
+    if (!n || !n->parent) return;
+    dom_cow_remove_child(n);
+}
+
 static JSValue js_node_mixin(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     lxb_dom_node_t *n = node_of(this_val), *parent, *ref, *added;
@@ -1351,7 +1366,7 @@ static JSValue js_node_mixin(JSContext *ctx, JSValueConst this_val, int argc, JS
        not an error, which is what lets a page call `el.remove()` twice. */
     if (magic <= 3 && !parent) return JS_UNDEFINED;
 
-    if (magic == 0) { dom_cow_remove_child(n); return JS_UNDEFINED; }   /* §4.2.8 remove */
+    if (magic == 0) { node_child_node_remove(n); return JS_UNDEFINED; }   /* §4.2.8 remove */
 
     /* §4.2.8 STEP 2 — the VIABLE sibling, computed BEFORE the conversion because the conversion MOVES the
        nodes it is given and a reference child that moves is a reference to nothing. It is the nearest sibling
