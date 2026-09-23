@@ -1230,6 +1230,19 @@ char *result_wfq_json(void) {
                         from outside the process; a violation means one of them has a second writer and the
                         ratio is about some other population than the members it is divided against. */
                      "\"arrivals\":%lld,\"departures\":%lld,"
+                     /* …AND WHETHER THE ORDER WAS EVER OFFERED ANYTHING TO ORDER BY, which every reward row
+                        on this line presupposes and none of them asks. `valTop`, `topForgiven` and `selfEmit`
+                        all read ZERO both for a run in which no detector fired and for a run in which every
+                        detection happened on HOST TIME with no flow to pay — the root document's markup,
+                        inventoried by `qjs_init`'s parse before `qjs_begin` seeds the frontier. Those take
+                        opposite work (build the reach, against nothing at all: the discard is correct) and no
+                        other row here separates them. `creditsDroppedLifetime > 0` with
+                        `creditsPaidLifetime: 0` is the second; `creditsOfferedLifetime: 0` is the first.
+                        THREE LIFETIME COUNTERS, so all three may be DIFFERENCED, unlike the reward rows above
+                        which are gauges. Their identity is offered == paid + dropped, asserted in
+                        flow_wfq_census where all three are in one hand and checkable on this document. */
+                     "\"creditsOfferedLifetime\":%lld,\"creditsPaidLifetime\":%lld,"
+                     "\"creditsDroppedLifetime\":%lld,"
                      "\"workDone\":%ld,\"rankChanges\":%ld}",
                      w.members, w.val_min, w.val_max, w.val_top, w.vt,
                      w.val_zero, w.val_arrived, w.val_unplaced, w.self_emit, w.unrun,
@@ -1265,6 +1278,7 @@ char *result_wfq_json(void) {
                      (unsigned long long)engine_preempt_asks(),
                      flow_starved_picks(), flow_starved_picks_idle(),
                      (long long)w.arrivals, (long long)w.departures,
+                     (long long)w.credit_calls, (long long)w.credit_paid, (long long)w.credit_dropped,
                      engine_work_done(), flow_rank_changes());
 }
 

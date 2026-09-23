@@ -1191,6 +1191,38 @@ void  flow_set_running(Flow *f) {
 }
 Flow *flow_running(void) { return g_running; }
 
+/* HOW MANY TIMES A FINDING WAS OFFERED TO THE ORDER, AND HOW MANY OF THOSE THE ORDER COULD NOT BE GIVEN —
+   the partition `valTop`, `topForgiven` and `selfEmit` each presuppose and none of them can make. All three
+   read ZERO for two states that take OPPOSITE work: no detector ever fired, which is a REACH question and
+   sends a reader to build the surface; and detectors fired where there was no flow to pay, which is a question
+   about WHICH SIDE OF THE HOST/FLOW BOUNDARY the detection happened on and sends them nowhere near the order.
+   Nothing this engine publishes separates them, and the flattering reading — that a ledger was SPENT — is the
+   one a reader reaches for, because a spent ledger explains the zero while an unopened one looks like a defect
+   somewhere else entirely.
+   THE DROP IS CORRECT, WHICH IS PRECISELY WHY IT NEEDS A COUNTER RATHER THAN A FIX. This function is reached
+   on HOST TIME: core/loader/document_load.c states it in its own words — "the production ABI's `qjs_init`,
+   which parses before the first flow is seeded" — so every subresource the root document's markup names is
+   minted by endpoint_record with `g_running` NULL, and there is no account to credit because no flow
+   discovered anything. The `<head>` is what a plain parse gives, and paying an arm for it would pay it for
+   work it did not do. What is wrong is not the discard; it is that the discard is SILENT.
+   IT HAS BITTEN ONCE ALREADY AND THIS TREE RECORDS IT. solve.c's sink_search credit used to sit on the search
+   CREATE, which cold_resume reaches at engine init with no running flow, and that site's own comment says the
+   credit was "dropped on the floor" while "the exploration flow that later did the real detecting was paid
+   nothing for it". That one WAS a defect and was repaired by moving the credit — and nothing distinguished the
+   two cases from outside the process then either, which is the whole argument for these rows.
+   THREE AND NOT TWO, for `g_prog_starts`'s reason exactly: the total is raised at the ONE entry and each arm
+   on the line that decides it, so the identity holds by inspection and what it catches is a THIRD exit added
+   later that moves the total without saying which population it moved. flow_wfq_census reads all three
+   together and is where it fires.
+   LIFETIME COUNTERS — the kind is stated in flow.h's rows, and it decides the arithmetic: none of the three
+   ever falls, nothing resets them, so all three may be DIFFERENCED across two censuses, which is what turns
+   them into a rate over a window rather than an average over a session.
+   A REPORT AND NEVER A BOUND (§NO BOUNDS): no term of flow_weight reads one, no pick branches on one, nothing
+   is capped, shed or deduplicated by any of them.
+   RETIREMENT: this record goes when a credit made outside a slice has an account to land on, because the
+   dropped arm is then unreachable and the partition it exists to publish has one state left. */
+static int64_t g_credit_calls = 0, g_credit_paid = 0, g_credit_dropped = 0;
+
 /* Credit the running flow with newly EMITTED value (a new @H endpoint / @S PoC): its WFQ reward rises and its
    CPU-since-emit aging resets, so a productive flow outranks fresh + starved flows. Called by the detectors
    (endpoint.c / solve.c) when they record something NEW — this is what makes the WFQ value-of-information
@@ -1204,7 +1236,14 @@ void flow_credit_emit(double v) {
     DCHECK(v > 0.0, "a flow was credited a non-positive emission — the WFQ's reward term counts NEW @H/@S "
                     "findings at one point each, and a zero credit resets the aging that outranks a monopolizer "
                     "while adding nothing to weigh it against");
-    if (!g_running) return;
+    /* THE OFFER, COUNTED BEFORE THE ONE TEST THAT CAN REFUSE IT, so the total is over every ask this function
+       is made and the two arms below partition exactly it. */
+    g_credit_calls++;
+    /* …AND THE ARM WHERE THERE IS NOBODY TO PAY. It is not an error and gets no assert: a detector reached on
+       the host's own time — the root document's markup, inventoried by `qjs_init`'s parse before `qjs_begin`
+       seeds the frontier — has no running flow because no flow discovered it. Counted rather than silent, for
+       the reason the banner above gives. */
+    if (!g_running) { g_credit_dropped++; return; }
     /* THE ORDER'S REWARD IS THE FAMILY'S, so the credit lands on the family — see FlowAcct's `val`. This is the
        whole of the difference between a credit that can be paid off and one that cannot: raise the family once
        and the silence charged to that same family cancels exactly it; raise every ARM instead and one emission
@@ -1222,6 +1261,7 @@ void flow_credit_emit(double v) {
            "fact have come apart and this account's reward is about to be a ledger stacked on a clock reading "
            "that is still moving underneath it");
     g_running->family->earned += v;
+    g_credit_paid++;   /* …and the arm that reached an account — the ledger write and its count are one event */
     /* …AND THE FRONTIER'S CLOCK, BECAUSE THE ITEM IN SERVICE IS WHAT THE CLOCK IS A READING OF AND ITS TAG HAS
        JUST MOVED. This is frontier_vt_serve's ONLY event now, and it is the one that makes v(t) a CONTINUING
        relation rather than a coordinate copied once: without it, every account that has never been served
@@ -6169,6 +6209,22 @@ void flow_wfq_census(WfqCensus *out) {
        document a reader is most likely to take it from. */
     out->arrivals   = g_arrivals;
     out->departures = g_departures;
+    /* …AND WHETHER THE ORDER WAS EVER OFFERED ANYTHING TO ORDER BY, which every reward row above presupposes
+       and none of them asks. See the banner at `g_credit_calls` for the two states a zero reward band hides
+       and for why the dropped arm is correct rather than a defect to repair. */
+    out->credit_calls   = g_credit_calls;
+    out->credit_paid    = g_credit_paid;
+    out->credit_dropped = g_credit_dropped;
+    /* THE IDENTITY THAT DEFINES THE PARTITION, ASSERTED AT THE ONE MOMENT ALL THREE ARE IN ONE HAND. The total
+       is raised at flow_credit_emit's single entry and each arm on the line that decides it, so this is exact
+       rather than approximate; what it catches is a THIRD exit added to that function later — an early return
+       past a departed family, a release-mode arm on a non-positive credit — which would move the total while
+       leaving both published arms describing a different population than the one they are a partition of. */
+    DCHECK(out->credit_calls == out->credit_paid + out->credit_dropped,
+           "the credit partition does not add up — flow_credit_emit's arms are supposed to be exactly two and "
+           "the total is raised at its one entry, so a third exit has been added that leaves the order's own "
+           "ledger unaccounted for, and `creditsDroppedLifetime` is about to be published as the count of "
+           "findings no account could be given when it is a count of something narrower");
     /* THE IDENTITY THAT DEFINES THEM, ASSERTED AT THE ONE MOMENT ALL THREE TERMS ARE IN ONE HAND — which is
        what makes them counters rather than numbers, and what makes the pair checkable from OUTSIDE this
        process on the published document. Each has exactly one writer (flow_new's append, flow_remove's

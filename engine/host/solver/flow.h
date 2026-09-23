@@ -1773,6 +1773,40 @@ typedef struct {
        populations on every run that fetches or emits anything. */
     int64_t arrivals;
     int64_t departures;
+    /* HOW MANY FINDINGS WERE OFFERED TO THE ORDER, AND HOW THAT TOTAL SPLIT — the partition `val_top`,
+       `top_forgiven` and `self_emit` each presuppose and none of them can make. All three of those read ZERO
+       for two states that take OPPOSITE work, and this triple is what tells them apart:
+         `credit_calls == 0`                           — no detector ever fired. A REACH question: the run
+                                                          reached no fetch, no XHR, no sink. Nothing about the
+                                                          order is implicated and no weight change can help.
+         `credit_dropped > 0` with `credit_paid == 0`   — findings were made where there was no flow to pay.
+                                                          Every one of them was detected on HOST TIME, which
+                                                          for the root document's markup is correct and
+                                                          expected (flow.c's banner at `g_credit_calls` says
+                                                          why): the `<head>` is what a plain parse gives and no
+                                                          arm discovered it. The reward term is then the
+                                                          CONSTANT ZERO rather than a common offset, and it
+                                                          costs nothing that it is, because there is no member
+                                                          it would have had to be ranked ahead of.
+         `credit_paid > 0` with `val_top` at zero       — impossible: the ledger write and the paid count are
+                                                          one statement. It is the two-writers-apart state
+                                                          flow_wfq_census's `f->val <= acct_family_val(f)`
+                                                          already fires on.
+       WHY THE TRIPLE IS NOT DERIVABLE FROM THE @H SURFACE. The three rows of solver/endpoint.h's surface
+       census partition the ENDPOINT RECORDS and say nothing about the ORDER: a record minted pre-program
+       is one whose address the page's code did not compose, and whether the flow that minted it existed at
+       all is a different question about a different component. A reader holding `epEmitted: 43` beside a
+       reward band pinned at zero has been measured concluding that the ledger was SPENT — the flattering
+       reading, and the opposite of what these rows say happened.
+       LIFETIME COUNTERS, all three, which is the kind and decides the arithmetic: none ever falls, nothing
+       resets them, so each may be DIFFERENCED across two censuses. They are not gauges and are not high-water
+       marks. Their identity is `credit_calls == credit_paid + credit_dropped`, asserted at the end of
+       flow_wfq_census where all three are in one hand and checkable from OUTSIDE this process on the published
+       document.
+       A REPORT AND NEVER A BOUND (§NO BOUNDS): no term of flow_weight reads one and no arm branches on any. */
+    int64_t credit_calls;
+    int64_t credit_paid;
+    int64_t credit_dropped;
     int64_t svc_max;   /* the largest service notch in the frontier — who is actually consuming the thread */
     /* …AND THE OTHER END OF IT, WHICH IS THE ONLY NUMBER IN THIS STRUCT THAT CAN ANSWER "IS THE AGING TERM
        MEASURING THIS FLOW OR THE WHOLE FRONTIER". `svc_max` alone reads identically for a single monopolizer on
