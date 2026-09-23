@@ -33,6 +33,17 @@ typedef enum { PO_TYPE_UNDEFINED = 0, PO_TYPE_SINGLE, PO_TYPE_MULTIPLE } PoObser
    performance observer objects that is initially empty". */
 enum { PO_R_OBSERVER = 0, PO_R_OPTIONS, PO_R_COUNT };
 
+/* §2's PERFORMANCE ENTRY TUPLE, as a three-slot Array: "a performance entry buffer", "a maxBufferSize" and
+   "a dropped entries count". §5.6 Determine if a performance entry buffer is full reads all three and writes
+   the third, which is why they are ONE record rather than three parallel maps.
+   IT IS A JS VALUE AND NOT A C LIST, AND THAT IS LOAD-BEARING RATHER THAN A STYLE: CLAUDE.md's
+   §PLATFORM-DATA-A-FLOW-QUEUES-IS-A-JS-VALUE says a queue a flow writes must park to the IndexedDB cold tier,
+   resume, and fork per flow — an Array's mutations are property writes the per-flow COW delta already
+   captures, where a malloc'd list captured by head/tail POINTERS reverts the pointers on a context switch and
+   leaves the nodes reachable from nothing, a leak the runtime's own gc_obj_list walk cannot see. The same
+   sentence the observer's own buffer above is held under. */
+enum { PO_T_BUFFER = 0, PO_T_MAX, PO_T_DROPPED, PO_T_COUNT };
+
 static JSClassID g_class;
 static JSValue   g_state_key = JS_UNDEFINED;
 static JSAtom    g_atom_state = JS_ATOM_NULL;
@@ -43,6 +54,7 @@ static JSAtom    g_atom_queued = JS_ATOM_NULL;
 static int       g_reg_slot = -1;      /* this realm's §2 list of registered performance observer objects */
 static int       g_notify_slot = -1;   /* this realm's §5.3 task callee */
 static int       g_types_slot = -1;    /* this realm's §4.5 frozen array of supported entry types */
+static int       g_buf_slot = -1;      /* this realm's §2 performance entry buffer map, keyed by entry type */
 static int       g_notify_stepid = -1;
 static int       g_id_ctor = -1, g_id_observe = -1, g_id_take = -1, g_id_disconnect = -1;
 static int       g_ready;
@@ -52,9 +64,15 @@ static int       g_ready;
    which is bounded by the number of timing standards the engine implements and is nowhere near this. */
 #define PO_MAX_ENTRY_TYPES 32
 static const char *g_entry_types[PO_MAX_ENTRY_TYPES];
+/* THE REGISTRY'S maxBufferSize FOR EACH DECLARED TYPE, STATED BY THE PRODUCER BESIDE ITS NAME. §5.6 reads it
+   off the tuple, and it is a row of the TIMING ENTRY TYPES REGISTRY rather than a number this file may pick —
+   so it arrives with the declaration for the same reason the name does, and a producer that cannot state its
+   own row cannot declare its type. It is a `double` because the registry writes `Infinite` for several rows
+   and §5.6's test is an ordinary numeric comparison against it. */
+static double      g_entry_type_max[PO_MAX_ENTRY_TYPES];
 static int         g_n_entry_types;
 
-void performance_observer_declare_entry_type(const char *name)
+void performance_observer_declare_entry_type(const char *name, double max_buffer_size)
 {
     int i;
 
@@ -66,8 +84,14 @@ void performance_observer_declare_entry_type(const char *name)
                "one entry type was declared by two producers — §4.5's array answers WHICH TYPES THIS BUILD CAN "
                "MINT, so two declarations are two answers to one question and §5.1 step 7.1 would then have two "
                "producers it cannot tell apart");
+    DCHECK(max_buffer_size > 0,
+           "an entry type was declared with a maxBufferSize of zero or less — the TIMING ENTRY TYPES REGISTRY "
+           "writes a positive count or `Infinite` for every row, and §5.6's test is `num current entries is "
+           "less than maxBufferSize`, so a non-positive one answers FULL for the first entry ever minted and "
+           "the type's buffer could never hold anything");
     CHECK(g_n_entry_types < PO_MAX_ENTRY_TYPES,
           "more entry types were declared than §4.5's array can hold");
+    g_entry_type_max[g_n_entry_types] = max_buffer_size;
     g_entry_types[g_n_entry_types++] = name;
 }
 
@@ -110,6 +134,92 @@ static JSValue po_reg_list(JSContext *ctx)
            "performance_observer_install_realm built one — it is built EAGERLY with the realm precisely so "
            "that no flow's own `observe` is what creates it");
     return list;
+}
+
+/* THIS REALM'S §2 PERFORMANCE ENTRY BUFFER MAP. OWNED. Keyed by the registry's own entry-type string, which
+   is why it is a plain object rather than an Array parallel to g_entry_types: a rank into that table would be
+   a fact about the DECLARATION ORDER, and the tuple has to be found from an entry's own `entryType`. */
+static JSValue po_buffer_map(JSContext *ctx)
+{
+    JSValue m = realm_value_get(ctx, g_buf_slot);
+
+    DCHECK(JS_IsObject(m),
+           "a realm was asked for §2's performance entry buffer map before performance_observer_install_realm "
+           "built one — it is built EAGERLY with the realm precisely so that no flow's own mint is what "
+           "creates it, which would put the baseline map in that one flow's COW delta");
+    return m;
+}
+
+/* §5.1 step 9's "the relevant performance entry tuple of entryType and relevantGlobal". OWNED.
+   `entry_type` IS A PRODUCER'S OWN CONSTANT AND NEVER PAGE INPUT — every mint in this build writes it from a
+   string literal of its own standard (USER TIMING §2.1.1 step 4's "mark", §2.1.3's "measure") — so reading
+   its bytes here launders no taint. That is asserted rather than assumed, because the one thing that would
+   make it false is a producer that passed a page's value through, and the assert names it. */
+static JSValue po_tuple(JSContext *ctx, JSValueConst entry_type)
+{
+    JSValue map, t;
+    const char *k;
+
+    DCHECK(JS_IsString(entry_type),
+           "§5.1 step 9 was asked for the tuple of an entryType that is not a string — PERFORMANCE TIMELINE "
+           "§3 says an entry's entryType is a DOMString from the entry type registry and every producer here "
+           "mints it as a literal, so a non-string means a mint passed a page's value into that field");
+    k = JS_ToCString(ctx, entry_type);
+    CHECK(k != NULL, "§5.1 step 9 could not read an entryType it had just asserted is a string");
+    map = po_buffer_map(ctx);
+    t = JS_GetPropertyStr(ctx, map, k);
+    DCHECK(JS_IsArray(t),
+           "§5.1 step 9 found no performance entry tuple for an entry type this build minted — the map is "
+           "built at install from the SAME declared table §4.5's array is, and po_should_add_entry already "
+           "asserts the type was declared, so a missing tuple means the map and that table disagree");
+    JS_FreeValue(ctx, map);
+    JS_FreeCString(ctx, k);
+    return t;
+}
+
+/* §5.6 "determine if a performance entry buffer is full, with tuple as input": "Let num current entries be
+   the size of tuple's performance entry buffer. If num current entries is less than tuple's maxBufferSize,
+   return false. Increase tuple's dropped entries count by 1. Return true."
+   THE DROPPED COUNT IS RAISED HERE AND READ NOWHERE YET, and that is the standard's own placement rather than
+   a write with no reader of this file's making: §5.3 step 3.3.7 is its reader and is this component's named
+   residual. The alternative — not counting a drop until something reads the count — would make the first
+   reader installed answer a number that is not the number of entries this build dropped. */
+static bool po_buffer_full(JSContext *ctx, JSValueConst tuple)
+{
+    JSValue buf = JS_GetPropertyUint32(ctx, (JSValue)tuple, PO_T_BUFFER);
+    JSValue maxv = JS_GetPropertyUint32(ctx, (JSValue)tuple, PO_T_MAX);
+    JSValue dropped;
+    double max = 0, n;
+    int64_t d = 0;
+
+    DCHECK(JS_IsArray(buf), "a §2 performance entry tuple carries no performance entry buffer");
+    n = (double)po_len(ctx, buf);
+    JS_FreeValue(ctx, buf);
+    CHECK(JS_ToFloat64(ctx, &max, maxv) == 0, "a §2 tuple's maxBufferSize could not be read back as a number");
+    JS_FreeValue(ctx, maxv);
+    if (n < max) return false;
+    dropped = JS_GetPropertyUint32(ctx, (JSValue)tuple, PO_T_DROPPED);
+    CHECK(JS_ToInt64(ctx, &d, dropped) == 0, "a §2 tuple's dropped entries count could not be read back");
+    JS_FreeValue(ctx, dropped);
+    JS_SetPropertyUint32(ctx, (JSValue)tuple, PO_T_DROPPED, JS_NewInt64(ctx, d + 1));
+    return true;
+}
+
+JSValue performance_observer_buffer(JSContext *ctx, const char *entry_type)
+{
+    JSValue map = po_buffer_map(ctx), buf, t;
+
+    DCHECK(entry_type != NULL && *entry_type != '\0',
+           "§2's performance entry buffer was asked for by a caller that named no entry type");
+    t = JS_GetPropertyStr(ctx, map, entry_type);
+    JS_FreeValue(ctx, map);
+    DCHECK(JS_IsArray(t),
+           "§2's performance entry buffer was asked for an entry type this build does not declare — the map "
+           "holds a tuple per DECLARED type, so a caller reaching here has named a type no producer minted "
+           "and would read an absence as an empty timeline");
+    buf = JS_GetPropertyUint32(ctx, t, PO_T_BUFFER);
+    JS_FreeValue(ctx, t);
+    return buf;
 }
 
 /* THE OBSERVER'S OWN STATE. OWNED, or an exception. */
@@ -446,9 +556,8 @@ void performance_observer_queue_entry(JSContext *ctx, JSValueConst entry)
            "§5.1 Queue a PerformanceEntry was handed something that is not a PerformanceEntry — its callers are "
            "the mints of the timing standards in this build, each of which has just built one");
     /* STEPS 1, 5 and 6 (`id` and `navigationId`) are core/timing/performance_entry.h's residual and are not
-       performed here; steps 9-12 (the performance entry buffer) are this file's, named in
-       core/timing/performance_observer.h. What is left is the observer half, which is steps 2, 3, 4, 7, 8
-       and 13 — the whole of what a page's PerformanceObserver observes. */
+       performed here. Everything else is: the observer half is steps 2, 3, 4, 7, 8 and 13, and steps 9-12 are
+       the performance entry buffer below. */
     interested = JS_NewArray(ctx);                                        /* step 2 */
     CHECK(!JS_IsException(interested), "§5.1 step 2's interested-observer set could not be allocated");
     /* STEP 3 is `e->entry_type` and STEP 4 is `ctx`: a C member runs in the realm that DEFINED it, and every
@@ -488,6 +597,28 @@ void performance_observer_queue_entry(JSContext *ctx, JSValueConst entry)
         JS_FreeValue(ctx, po);
     }
     JS_FreeValue(ctx, interested);
+    {
+        /* STEPS 9-12 — THE PERFORMANCE ENTRY BUFFER. Step 9 is the tuple, step 10 is §5.6, step 11 is the
+           registry's `should add entry` row, and step 12 appends when the buffer is not full and the row says
+           to. The two declared types both read `Infinite` / "Return true", so step 12 always appends for them
+           TODAY — which is a fact about those rows and not about this code, and §5.6 is performed rather than
+           short-circuited precisely so a later producer whose row states a real maxBufferSize gets the
+           standard's behaviour without this line being revisited.
+           THE ENTRY IS DUP'D AND NOT COPIED: §5.1 step 12 appends the SAME PerformanceEntry the observers in
+           step 8 were handed and the mint is about to return, so a page holding the object it got back from
+           `performance.mark()` is holding the object on the timeline — which is what makes an identity test
+           between them answer as a browser's does. */
+        JSValue tuple = po_tuple(ctx, e->entry_type);                     /* step 9 */
+        bool full = po_buffer_full(ctx, tuple);                           /* step 10 */
+
+        if (!full && po_should_add_entry(ctx, e->entry_type)) {           /* steps 11 and 12 */
+            JSValue buf = JS_GetPropertyUint32(ctx, tuple, PO_T_BUFFER);
+
+            po_push(ctx, buf, JS_DupValue(ctx, entry));
+            JS_FreeValue(ctx, buf);
+        }
+        JS_FreeValue(ctx, tuple);
+    }
     po_queue_task(ctx);                                                   /* step 13 */
 }
 
@@ -819,6 +950,7 @@ void performance_observer_init(JSContext *ctx)
     g_reg_slot    = realm_value_declare(ctx, "§2's list of registered performance observer objects");
     g_notify_slot = realm_value_declare(ctx, "§5.3's queued task callee");
     g_types_slot  = realm_value_declare(ctx, "§4.5's frozen array of supported entry types");
+    g_buf_slot    = realm_value_declare(ctx, "§2's performance entry buffer map");
 
     g_id_ctor = idl_method_id_step(ctx, CTOR_ARGS, 1, NULL, 0, &js_po_ctor_decl, 0);
     g_id_observe = idl_method_id_dict(ctx, OBSERVE_ARGS, 1, OBSERVE_INIT, (int)COUNTOF(OBSERVE_INIT),
@@ -893,6 +1025,27 @@ void performance_observer_install_realm(JSContext *ctx)
         CHECK(!JS_IsException(fn), "§5.3's task callee could not be allocated");
         realm_value_set(ctx, g_notify_slot, fn);
     }
+    {
+        /* §2's PERFORMANCE ENTRY BUFFER MAP, one tuple per DECLARED entry type, built EAGERLY with the realm
+           for the same reason the registered-observer list above is: built lazily at the first mint it would
+           land in whichever flow happened to mint first, and every sibling would then be reading that one
+           flow's baseline through its own COW delta. The tuple's three fields are §2's own — an empty buffer,
+           the registry's maxBufferSize as the producer declared it, and a dropped entries count of 0. */
+        JSValue map = JS_NewObject(ctx);
+
+        CHECK(!JS_IsException(map), "a realm's §2 performance entry buffer map could not be allocated");
+        for (i = 0; i < g_n_entry_types; i++) {
+            JSValue tuple = JS_NewArray(ctx);
+
+            CHECK(!JS_IsException(tuple), "a realm's §2 performance entry tuple could not be allocated");
+            JS_SetPropertyUint32(ctx, tuple, PO_T_BUFFER, JS_NewArray(ctx));
+            JS_SetPropertyUint32(ctx, tuple, PO_T_MAX, JS_NewFloat64(ctx, g_entry_type_max[i]));
+            JS_SetPropertyUint32(ctx, tuple, PO_T_DROPPED, JS_NewInt32(ctx, 0));
+            JS_SetPropertyStr(ctx, map, g_entry_types[i], tuple);
+        }
+        realm_value_set(ctx, g_buf_slot, map);
+    }
+
     /* §4.5's "frozen array of supported entry types ... created from the sequence of strings among the registry
        that are supported for the global object in ALPHABETICAL ORDER". The membership is the producers' (see
        performance_observer_declare_entry_type); the order is this line's, by insertion over a set this small. */

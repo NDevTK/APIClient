@@ -30,7 +30,14 @@
  * true — that §4's PerformanceObserver was absent, so a queue here would be a write with no reader. It has a
  * reader now, which is why the residual below is step 3 alone.
  *
- * NOT BUILT — §2.1.1's STEP 3, and this is a NAMED RESIDUAL rather than a partial member:
+ * BUILT SINCE — §2.1.1's STEP 3. "Add entry to the performance entry buffer" is inside PERFORMANCE TIMELINE
+ * §5.1 steps 9-12, which core/timing/performance_observer.c now performs, so a mark this engine mints is
+ * RETAINED on the timeline and not only delivered. THE RESIDUAL BELOW PREDICTED THIS FILE WOULD CHANGE BY
+ * NOTHING AT ALL FOR IT, AND THAT HELD: step 3 is §5.1's, not a second call from here, and not one line of
+ * §2.1.1's body moved. It is kept in its own words below rather than deleted, because the reasoning that
+ * placed step 3 inside §5.1 is what a reader would otherwise re-derive as a second append.
+ *
+ * RETIRED — §2.1.1's STEP 3, kept for the placement argument it makes:
  *   WHAT IS NOT COVERED. USER TIMING §2.1.1's "Add entry to the performance entry buffer" — so a mark this
  *     engine mints is delivered to an observer that asked for one and is not RETAINED on any timeline.
  *   WHY THE CODE IS CORRECT AND NOT MERELY UNFINISHED. The buffer's remaining readers are PERFORMANCE TIMELINE
@@ -55,11 +62,17 @@
  *     which is the forcing function. An observer registered with `buffered: true` AFTER the mark receives
  *     nothing, where a browser hands it the earlier mark.
  *
- * NOT BUILT — §2.1.2 clearMarks(), §2.1.3 measure(), §2.1.4 clearMeasures() and §2.3's PerformanceMeasure.
- * All four are operations over the same buffer: `clearMarks` empties it, `measure` reads two of its entries
- * through §3.1 Convert a mark to a timestamp, `clearMeasures` empties it again. They arrive with the buffer
- * above and not before it, because every one of them would otherwise be a member with nothing to operate on.
- * They are ABSENT rather than shaped, so each is a TypeError naming itself.
+ * BUILT SINCE — §2.1.3 measure(), §2.3's PerformanceMeasure, and §3.1/§3.2's two conversions. THAT PARAGRAPH SAID
+ * ALL FOUR "arrive with the buffer above and not before it", AND THAT WAS EXACTLY RIGHT: the buffer landed and
+ * `measure` landed with it, because §3.1 is a READER of that buffer and the entry it mints is a second type on
+ * it. What the paragraph did NOT say, and what decided which of the four came first, is that §3.1 reads
+ * PerformanceMark entries ONLY and reports an absent one by THROWING rather than by an empty list — so it is
+ * outside the plausible-datum argument that still refuses PERFORMANCE TIMELINE §2.1.1-§2.1.3. See
+ * core/timing/performance_entry.h, where that argument lives.
+ *
+ * NOT BUILT — §2.1.2 clearMarks() and §2.1.4 clearMeasures(), which are the other two operations over the same
+ * buffer and are now unblocked rather than blocked: each empties it, both have a buffer to empty, and neither
+ * was in this diff's scope. They are ABSENT rather than shaped, so each is a TypeError naming itself.
  */
 #ifndef ENGINE_HOST_BROWSER_CORE_TIMING_USER_TIMING_H
 #define ENGINE_HOST_BROWSER_CORE_TIMING_USER_TIMING_H
@@ -72,7 +85,8 @@
 void user_timing_init(JSContext *ctx);
 void user_timing_free(void);
 
-/* Web IDL §3.7 Interfaces' implementation-check, for §2.2's `detail`. */
+/* Web IDL §3.7 Interfaces' implementation-check, for §2.2's and §2.3's `detail`. */
 bool performance_mark_is(JSValueConst v);
+bool performance_measure_is(JSValueConst v);
 
 #endif

@@ -21,31 +21,29 @@
  * PerformanceObserverCallbackOptions; §5.1's observer half (steps 2, 3, 4, 7, 8 and 13); §5.3 whole. §4.2.2
  * and §5.5 are core/timing/performance_observer_entry_list.h.
  *
- * NOT BUILT, AND NAMED RATHER THAN SHAPED — §5.1 STEPS 9-12 AND §4.2 STEP 7.5, THE PERFORMANCE ENTRY BUFFER:
- *   WHAT IS NOT COVERED. There is no per-global performance entry buffer map in this build, so §5.1 steps 9-12
- *     do not run and §4.2 step 7.5's `buffered: true` registers the observer and delivers it NOTHING that was
- *     queued before it observed. Its `droppedEntriesCount` is consequently always absent from §4.1's
- *     dictionary rather than a number: §5.3 step 3.3.7.2.1.3 reads a tuple's dropped entries count off that
- *     same absent map, and inventing a 0 there would be a datum a page could not tell from a measurement.
- *   WHY IT IS NOT HERE YET, which is a rule and not a shortage of effort. core/timing/performance_entry.h
- *     declines to build that buffer because its other readers — PERFORMANCE TIMELINE §2.1.1 getEntries(),
- *     §2.1.2 getEntriesByType() and §2.1.3 getEntriesByName() on the Performance interface — would then hand a
- *     page a whole timeline containing marks and NOTHING ELSE, which a page cannot tell from a page on which
- *     nothing else happened. THAT ARGUMENT DOES NOT REACH THE OBSERVER, and the difference is what makes this
- *     component landable ahead of the buffer: an observer NAMES the entry types it wants and §4.5 states
- *     exactly which of them exist, so a page asking for `mark` gets marks and a page asking for anything else
- *     is told so rather than being handed an empty answer to a question this build cannot answer.
- *   WHAT THE NEXT DIFF BUILDS. A per-global performance entry buffer map keyed by entry type, holding for each
- *     a performance entry buffer, a maxBufferSize and a dropped entries count taken from the Timing Entry
- *     Types Registry's row for that type (for `mark` the row reads maxBufferSize Infinite and should add entry
- *     "Return true", so §5.6 Determine if a performance entry buffer is full answers false for it and §5.1
- *     step 12 always appends); §5.1 steps 9-12 appending into it; §4.2 step 7.5 reading it back; and §5.3 step
- *     3.3.7's dropped-entries walk over it. §2.1.1-§2.1.3 are a SEPARATE decision that stays with
- *     performance_entry.h's argument above.
+ * BUILT SINCE — §5.1 STEPS 9-12, §5.6 AND §2'S PERFORMANCE ENTRY BUFFER MAP. The map is per-global, keyed by
+ * entry type, built EAGERLY with the realm, and holds §2's three-field tuple per DECLARED type with the
+ * registry's maxBufferSize as its producer stated it. §5.6 is performed rather than short-circuited even
+ * though both declared rows read `Infinite`, so a later producer's real maxBufferSize needs no edit here. The
+ * paragraph below is what is LEFT of the residual that named them, and its two halves are now unblocked
+ * rather than blocked — which is the only thing that changed about them.
+ *
+ * NOT BUILT, AND NAMED RATHER THAN SHAPED — §4.2 STEP 7.5 AND §5.3 STEP 3.3.7, THE TWO OBSERVER-SIDE READERS:
+ *   WHAT IS NOT COVERED. §4.2 step 7.5's `buffered: true` registers the observer and delivers it NOTHING that
+ *     was queued before it observed, and its `droppedEntriesCount` is absent from §4.1's dictionary rather
+ *     than a number. Both now have a map to read; neither reads it.
+ *   WHY THEY ARE STILL HERE, WHICH IS A SCOPE AND NO LONGER AN ARGUMENT. The blocker was the absent map and
+ *     it is gone. What stands in their way is only that the diff which built the map was scoped to the
+ *     buffer and its first reader, so these two are the next diff rather than a decision.
+ *   WHAT THE NEXT DIFF BUILDS. §4.2 step 7.5 reading the map back into a newly-registered observer's buffer,
+ *     and §5.3 step 3.3.7's dropped-entries walk over the same tuples. performance_observer_buffer is the
+ *     accessor both want and it already exists. §2.1.1-§2.1.3 remain a SEPARATE decision that stays with
+ *     performance_entry.h's argument, which the buffer's arrival did not touch.
  *   HOW ITS ABSENCE WOULD SHOW. `performance.mark('a')` followed by
  *     `new PerformanceObserver(cb).observe({type: 'mark', buffered: true})` never calls `cb`, where a browser
  *     calls it with the earlier mark; and a callback that reads `options.droppedEntriesCount` finds the member
- *     absent on every call.
+ *     absent on every call. Both are now observations about these two steps ALONE, because the mark really is
+ *     on the timeline: `performance.measure('m', 'a')` resolves it.
  */
 #ifndef ENGINE_HOST_BROWSER_CORE_TIMING_PERFORMANCE_OBSERVER_H
 #define ENGINE_HOST_BROWSER_CORE_TIMING_PERFORMANCE_OBSERVER_H
@@ -77,7 +75,19 @@ void performance_observer_free(JSRuntime *rt);
  * literal, which is what lets this keep the pointer rather than a copy. Declaring one twice is a DCHECK — two
  * producers for one entry type is two answers to §4.5's question. The ORDER of declaration does not matter;
  * §4.5's "in alphabetical order" is applied where the frozen array is built. */
-void performance_observer_declare_entry_type(const char *name);
+/* A PRODUCER DECLARES ITS TYPE AND THE REGISTRY ROW THAT GOVERNS IT. `max_buffer_size` is the TIMING ENTRY
+   TYPES REGISTRY's maxBufferSize column for this type and is a `double` because several rows read `Infinite`;
+   §5.6 compares the buffer's size against it. It arrives WITH the name rather than from a table here for the
+   reason the name does: a list somebody maintains beside the producers is the second copy of a generated fact,
+   and the copy that drifts is the one nobody runs against reality. */
+void performance_observer_declare_entry_type(const char *name, double max_buffer_size);
+
+/* THIS REALM'S §2 PERFORMANCE ENTRY BUFFER for one entry type — the Array §5.1 step 12 appends into. OWNED.
+   Its READER today is USER TIMING §3.1 "Convert a mark to a timestamp"; see core/timing/performance_entry.h
+   for why that reader, and not PERFORMANCE TIMELINE §2.1.1-§2.1.3, is the one this build may install. The
+   entry type must be one a producer DECLARED: an undeclared one is a caller reading an absence as an empty
+   timeline, which is the plausible datum that argument is about, so it aborts rather than answering. */
+JSValue performance_observer_buffer(JSContext *ctx, const char *entry_type);
 
 /* §5.1 Queue a PerformanceEntry — the door every timing standard's mint calls. `entry` is BORROWED and `ctx`
    is the entry's relevant global object's realm, which for every producer in this build is the realm its own
