@@ -339,6 +339,28 @@ const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "u
  * overran 227 of 5797 and 20 of 25102. Those three rows name three different diffs and the runs half alone
  * names none of them. The reading took an ad-hoc script against scratchpad probe JSON because no tracked
  * driver in this tree read either row; `testing/step_unit_read.py` is that derivation, tracked. */
+/* AND WHY THESE THREE LISTS ARE HAND-KEPT WHEN engine/build.mjs DERIVES ITS @COLD ROW SET, asked and answered
+   here because it is the first question a reader of them has and the answer is not the one the shape suggests.
+   `coldFields()` solves a DIFFERENT problem: it derives PRESENCE — which rows the composer publishes — from
+   `result_cold_json`'s own format string. These lists declare KIND — which rows may be DIFFERENCED — and no
+   artifact in this tree states a @COLD row's kind at all. extension/bridge.js's own named residual says so in
+   as many words and names the diff that would change it: result.c stating each nested row's kind beside it,
+   after which a consumer derives instead of listing. Until then a kind list is a fact only a reader of the
+   producer's header can state, and a derivation that guessed it from a name would be guessing.
+   AND THE DERIVATION COULD NOT REACH THE `epFetch*` ROWS EVEN FOR PRESENCE, WHICH IS WORTH KNOWING BEFORE
+   ANYBODY REACHES FOR IT. They are composed by solver/endpoint.c and spliced into result_cold_json through a
+   BARE `%s` that names no row, so `censusComposerFields`' `\"name\":%` match cannot see them — and neither can
+   `censusRowSet`'s object check, since an unnamed splice lands in neither the numeric list nor the object one
+   and the extra/gone mismatch never fires. MEASURED at 468e06ee over that composer's own region: 123 named
+   rows as the armed control, ZERO of them named `epFetch`, one bare `%s`. So the five are in build.mjs's
+   unchecked half BY DEFAULT — which is the hole `censusRowSet`'s banner exists to end, arriving one splice
+   over — and this driver asking for them by name is the only thing that reads them anywhere.
+   WHAT THE PRODUCER DID INSTEAD IS SPELL THE KIND INTO THE NAME (`Life`), which is checkable by eye and covers
+   five rows of the fifty-odd lifetime rows on this line; a suffix rule standing beside these lists would be
+   two mechanisms answering one question with the partial one drifting, which is the second copy this file's
+   own `absentPair` reader exists to avoid.
+   RETIREMENT: this note goes when result.c states each @COLD row's kind beside it and these three lists are
+   derived from that, because the question it answers can then be asked of the producer. */
 const CENSUS_LIFETIME = ["stepUnitRuns", "stepUnitOverruns"];
 /* …AND THE REPLY DOOR'S ONE LEVEL, FILED WITH THE GAUGES AND NOT WITH ITS OWN THREE SIBLINGS, which is the
    whole reason this driver splits the two lists: `replyOutstanding` is the count of records the host may still
