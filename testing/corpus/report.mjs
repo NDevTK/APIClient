@@ -767,8 +767,16 @@ if (nPredates.length)
 {
   const owed = new Map();                       // name -> Set of site ids
   let asked = 0, clean = 0, unstated = 0;
+  /* THE THREE STATES ARE READ OFF THE VALUE AND NOT OFF THE KEY, WHICH IS THE ONE THING A SCRATCH HARNESS
+     WILL NOT TEACH YOU. The triage above asks `'absentOwedNames' in r` of the RAW jsonl row, where the key
+     really is absent on an old pass; by the time a row reaches here it has been through the measurement
+     mapper, which writes `anames:` UNCONDITIONALLY — so the key is always present and only its VALUE says
+     which state this is. An `in` test here is true for all three, and the first thing it reaches is
+     `undefined.length`. Found by running the instrument rather than by the harness that exercised this block
+     against a hand-built `{}` no mapper produces: the harness modelled the shape I meant instead of the shape
+     the file makes, which is the mis-addressed question arriving inside my own control. */
   for (const t of table) for (const m of t.measurements) {
-    if (!('anames' in m)) continue;             // a pass that predates the field: shouted above, never counted
+    if (m.anames === undefined) continue;       // a pass that predates the field: shouted above, never counted
     if (m.anames === null) { unstated++; continue; }   // a run that stated no census — not a clean bill
     asked++;
     if (!m.anames.length) clean++;
