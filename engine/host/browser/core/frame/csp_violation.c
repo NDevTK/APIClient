@@ -76,11 +76,19 @@ CspReporter csp_reporter_none(void)
    STEP 1 RETURNS A BARE SCHEME AND NOT A URL, which is the whole of this algorithm's privacy purpose: a
    `data:` or `blob:` or `filesystem:` address carries the content itself, so what a report may say about one
    is its scheme and nothing more.
-   THE FRAGMENT IS SET TO THE EMPTY STRING AND NOT TO NULL, which the URL Standard's serializer renders as a
-   trailing `#` because it appends for any fragment that is non-null. That is what the step says — "Set url's
-   fragment to the empty string", and then the plain serializer with no exclude-fragment flag — so it is
-   written that way here rather than to the answer a reader expects, and a disagreement with a browser is a
-   disagreement with this step and is found at this line. */
+   THE FRAGMENT IS SET TO THE EMPTY STRING AND NOT TO NULL, AND THE OBSERVABLE OF THAT IS LARGE: the URL
+   Standard's serializer appends for any fragment that is NON-NULL — core/url/url.c's own arm tests the
+   POINTER — so EVERY `documentURI` and EVERY `blockedURI` this component produces ends in a bare `#`, for
+   an address that carried no fragment as much as for one that did. That is what the two steps say when they
+   are read together: "Set url's fragment to the empty string", then the plain URL serializer with no
+   exclude-fragment flag. It is written that way here rather than to the answer a reader expects, because
+   CLAUDE.md's browser half makes the SPEC the source of truth and real Chrome the confirmation.
+   IT IS FALSIFIABLE IN ONE PAGE LOAD AND THE ANSWER IS ONE LINE. Serve a document a policy refuses one
+   request for, listen for `securitypolicyviolation`, and read `e.blockedURI`. If real Chrome answers with no
+   trailing `#`, the divergence is THIS step and nothing downstream of it — the repair is to serialize with
+   the exclude-fragment flag here, and the finding is about §5.4's own wording rather than about anything
+   else in this file. Nothing that reads this result branches on the character, so the two answers differ in
+   exactly the bytes a handler sees. */
 static char *csp_strip_url_for_reports(const UrlRecord *url)
 {
     UrlRecord stripped;
