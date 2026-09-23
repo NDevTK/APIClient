@@ -824,6 +824,16 @@ static double acct_family_val(const Flow *f);
    it and the raise is defined with the registry it belongs to. */
 static void frontier_rank_changed(void);
 
+#if APICLIENT_DEV
+/* …AND THE MEMBER HALF OF THE WEIGHT, forward-declared for the ONE writer that moves it without raising the
+   statement above. flow_age_running is that writer and it is deliberately silent (see its own banner: the
+   charge IS the quantity the aging term exists to read, and a bump per charge would invalidate every cached
+   rival every dispatch), so it MAINTAINS the stamp flow_best's walk compares against rather than leaving a
+   move behind it. Declared here beside the other three and not defined here, because the key is stated once,
+   beside the terms it is made of. DEV-only in the declaration as in the use, for `Flow.key_last`'s reason. */
+static double flow_member_key(const Flow *f);
+#endif
+
 /* THE FRONTIER'S VIRTUAL TIME — SFQ's v(t), WHICH IS THE SERVICE TAG OF THE ITEM IN SERVICE AND NOT A QUANTITY
  * OF ITS OWN. It is the one place the queue's clock is spelled, and the reason it is a stored scalar rather
  * than a derivation is that it has to be readable when NOTHING is in service: the frontier persists across
@@ -1714,6 +1724,41 @@ void flow_age_running(int64_t us) {
        charge that reached `cpu` and missed `fam_us` would make an arm's own silence outgrow its family's and
        put the sum back in two epochs. */
     DCHECK_AGING_ONE_WINDOW(g_running, "a slice of the thread was charged to this flow and its family");
+#if APICLIENT_DEV
+    /* AND THE STAMP flow_best's WALK COMPARES AGAINST, MAINTAINED HERE BECAUSE THIS IS THE ONE WRITER OF A
+       MEMBER-HALF SUMMAND THAT RAISES NO GENERATION. `cpu` is read by flow_own_silence, quantised by
+       flow_service_notch and priced into flow_member_key's first term, so the two statements above MOVE the
+       member half of the flow they charge — by design, and with the frontier generation standing still, which
+       is what the banner at the top of this function calls "not an omission but the quantity the aging term
+       exists to read".
+       THE WALK'S EXEMPTION IS `m == g_running` AND IT IS EVALUATED AT THE SCAN RATHER THAN AT THE CHARGE, so
+       it covers this member only WHILE it holds the thread. flow_switch_out clears the pointer and leaves the
+       charge in the key, so the first scan after a slice boundary meets a member that is not running, whose
+       generation has not moved, and whose key carries a slice of thread time — and fires. Measured on both
+       hosts of one build at one revision: the vehicle's key fell by 0.012000000000000122, which is EXACTLY
+       one FLOW_AGE_QUANTUM and is a value no other summand can produce (optimism steps by 1/(1+v) differences
+       and the branch bonus by 1/n differences; neither is 0.012 for any small integer), and the native host's
+       fell by 2.904 — 242 notches, one long compile overrun charged in a single slice. One mechanism, two
+       magnitudes, and the cold-park, cold-resume, two-instance and browser-process stages, which drain in few
+       dispatches, did not reach it.
+       THIS IS NOT A WEAKENING AND THE CONDITION IS UNTOUCHED. flow_silence_phase's decomposition — the thing
+       the walk's assert names as its source — says `k` "moves only when the flow being CHARGED crosses a
+       quantum, and flow_age_running charges exactly one member — the running one — so between two dispatches
+       this moves for AT MOST ONE MEMBER of the frontier". It permits one member to move and names which; the
+       assert demanded zero, which is strictly stronger than its own source. Re-stamping here restores the
+       claim the decomposition actually makes, and every OTHER member still fires — which is the whole of the
+       suspect list that assert carries.
+       AND THE SUB-LINEAR ORDER SURVIVES, which is the part worth more than the repair: one re-key per
+       dispatch is O(1), so an index over this key updates at THIS line and the frontier still needs no walk.
+       A fire here after this stamp is a member the charge is NOT about, and that is the state the walk was
+       written for.
+       AFTER BOTH CHARGES AND AFTER THE WINDOW ASSERT, because the stamp must be the key this member now
+       carries and not the one it carried when the function was entered. Read-only on its operands, so it
+       cannot move what the assertions above it just examined. */
+    g_running->key_last    = flow_member_key(g_running);
+    g_running->key_gen     = g_gen;
+    g_running->key_stamped = 1;
+#endif
     /* THE RESOLUTION THIS CHARGE MUST HAVE — that a slice of the thread MOVES the rank it is charged to — is
        asserted at the seam where the charge meets the pick, in engine.c's scheduler loop, because that is the
        one place both are visible and the claim is about their ORDER. See §scheduler's monopolizer sentence
@@ -4805,6 +4850,17 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
            raises no generation and charges only the flow holding the thread, which is not an omission but the
            quantity the aging term exists to read; its family half reaches everybody and is common, and its own
            half reaches nobody else.
+           AND THAT EXEMPTION IS EVALUATED AT THE SCAN RATHER THAN AT THE CHARGE, WHICH IS WHY IT USED TO
+           EXPIRE WITH THE POINTER AND NOT WITH THE CHARGE. `m == g_running` is false the instant
+           flow_switch_out clears it, and the slice of thread time is still in the member's key — so the first
+           scan after a slice boundary met a member that was not running, whose generation had not moved, and
+           whose key had fallen by whole quanta, and this assert fired on BOTH hosts of one build. The charge
+           now maintains its own stamp at flow_age_running, so the one member the remaining writer is about is
+           current here by construction rather than by a pointer that has already been cleared. The condition
+           below is UNCHANGED: what was wrong was that it demanded ZERO members move while the decomposition
+           it names permits exactly ONE — "between two dispatches this moves for at most ONE member of the
+           frontier" — and a fire here now names a member the charge is NOT about, which is the state this
+           walk was written for.
            TWO OF THOSE WRITERS ARE CORRECT BY ADJACENCY RATHER THAN BY CONSTRUCTION, AND THAT IS THE REASON
            THIS IS AN ASSERT AND NOT A PARAGRAPH. flow_fork_inherit raises `sub_born` for the bucket the arm
            JOINS — re-ranking every live member of that arm at once — and raises no generation of its own; it

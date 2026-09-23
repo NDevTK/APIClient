@@ -11800,6 +11800,33 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
  * other) and `finished` from the SAME `@COLD` line, at the SAME census index in every log compared, and
  * discard any log that did not reach that index.
  *
+ * AND THAT DERIVATION IS UNFOLLOWABLE OVER THE STREAM ITS READER ACTUALLY HAS. "The SAME census index"
+ * presupposes ONE instance per file, and a build log CONCATENATES SEVERAL PROCESSES' censuses with nothing on
+ * the `@COLD` line that says so — no stage, no pid, no ordinal. This counter is a lifetime total of ONE
+ * instance and is reset by nothing: MEASURED-with-the-command,
+ * `grep -cE 'g_finished(_flows|_cands)?[[:space:]]*=[^=]'` answers 0 over this file against a positive
+ * control of 2 for two statics it does assign, and the only writes are the `++` pair in flow_finish. So it
+ * restarts at 0 in the next process.
+ * THE COST IS NOT A MISREAD INDEX — IT IS THAT THE ONE FREE CHECK CLAUDE.md PRESCRIBES FOR THIS COUNTER'S
+ * KIND ANSWERS BACKWARDS. A lifetime counter cannot decrease, and over a build log every lifetime row on this
+ * line decreases at every process boundary, so a reader applying the prescribed tell concludes `finished` is a
+ * GAUGE and stops differencing the one row here that may be differenced. Measured on one build's own log in
+ * FILE ORDER: exactly ONE decrease of `finished` in the whole file, 36 -> 0, on the first census after a
+ * `[build] … — live at …run-smoke-test.<pid>.log` banner; within every stage the series is monotone, which is
+ * the control.
+ * AND `tail -1` IS BIASED TOWARD THE STAGE THAT RETIRED NOTHING, which is what makes this expensive rather
+ * than untidy. A stage killed at its rlimit is the one with the widest frontier and the most censuses, and
+ * the budgeted stages run LAST; a stage that DRAINS finishes early, so the census carrying every retirement a
+ * build ever made sits UPSTREAM of the one `tail -1` selects. The terminal line of a build log is therefore
+ * systematically the instance least likely to have finished a flow, and reading it as the build's answer
+ * turns "this stage was killed at its budget" into "this engine never retires anything". Both readings were
+ * available in one file at one revision and they take OPPOSITE work — the first is a question about the
+ * budget and the second would send a lane to flow_finish, which is not where anything is wrong.
+ * SPLIT THE FILE AT EVERY DECREASE BEFORE READING ANY ROW OF IT. That needs no new row and is one `awk`; it
+ * is the honest reading until the line can name its own instance.
+ * RETIREMENT: this record goes when the `@COLD` line carries an ordinal of the instance that composed it, so
+ * a process boundary is visible IN the line rather than recoverable from a counter going backwards.
+ *
  * `g_deepest` — the highest program index this DOCUMENT has ever compiled, across every flow. The progress
  * line's `script` is the CURRENT flow's cursor, which says what the flow holding the thread is doing and
  * nothing about the document's coverage: a run reporting `script: 1` forever may be one where no flow has ever

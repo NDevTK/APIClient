@@ -1735,6 +1735,27 @@ typedef struct {
        `picks_lifetime` is the LIFETIME COUNTER: every dispatch this instance has ever made, held off the flows
        entirely (flow.c's `g_picks_total`) because a per-member field cannot be one, and reset by nothing for
        the reason `rank_changes` is reset by nothing. It is the ONLY one of the three a reader may difference.
+       AND THE FALL IS NOT NEUTRAL ACROSS RUNS: `picks_max`'s TOP MEMBER IS THE ONE NEAREST TO DEPARTING, so
+       the gauge is biased against its own maximum and the THIRD ROW of the table above reads ABSENT exactly
+       when it was satisfied. A member retires by exhausting its programs and its queue, which costs
+       dispatches, so `picks` is monotone in progress toward the finish and the retiring member is drawn from
+       the TOP of this distribution — it then leaves and takes its dispatches out of `picks_max`. Comparing
+       the row across two runs therefore compares a scheduler state with an artifact of the OUTCOME, which is
+       CLAUDE.md's stratified-by-outcome defect, and the direction is the flattering one: the run that RETIRED
+       members reads as the run with no monopolizer, so the row is silent about a monopolizer exactly where
+       one finished.
+       MEASURED over sixteen archived smoke runs of one fixture. Every run with `departures` 0 has
+       `picks_live == picks_lifetime` exactly, with `picks_max` 331..747; the two with `departures` 2 have
+       `picks_lifetime - picks_live` of 538 and 545, so a departed member held AT LEAST 269 and 273 against a
+       surviving `picks_max` of 141 and 146. The top member departed in both, and the survivors' maximum fell
+       by roughly a factor of four with nothing about the order having changed.
+       SO THE THIRD ROW IS READ AGAINST `picks_lifetime` AND `departures` AND NEVER OFF `picks_max` ALONE:
+       `(picks_lifetime - picks_live) / departures` is what a departed member held on average and is the half
+       of the distribution this gauge cannot see. `finished + sold == departures` (engine_frontier_census
+       asserts it), so the two ends of that subtraction are already on the line. WITHIN one run at one census
+       nothing here applies and the table stands exactly as written; this is about comparing two.
+       RETIREMENT: this record goes when the census publishes the dispatches departed members took with them
+       as a ROW rather than as that subtraction, so `picks_max` cannot be read as the distribution's maximum.
        THE IDENTITY THAT DEFINES THEM, and it is checked in both directions rather than described: within the
        census, `picks_live <= picks_lifetime` with the difference being exactly what departed members took away
        (asserted at the end of flow_wfq_census); across the document, `picks_lifetime` must EQUAL the result's
