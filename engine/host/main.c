@@ -2103,11 +2103,11 @@ QJS_EXPORT void qjs_teardown(void)
     /* FETCH §5.1 "Headers class", §5.5 "Response class" and §5.4 "Request class" are ROWS on
        core/platform.h's release column now, run by the platform_agent_free above, and reverse declaration
        order releases them headers-then-response-then-request, which is the sequence all three hosts already
-       had them in. Out here NONE of the three could declare its state to core/agent_state.h at all -- a row
+       had them in. Out here NONE of the three could declare its state to core/agent_state.h at all — a row
        with agent state and no release is what platform_check_agent_state fires on, and a release run AFTER
        platform_agent_free is a release agent_state_check_released has already finished asking about. What
        they held meanwhile: THREE CLASS IDS, §5.5's per-realm %JSON.stringify% slot, §5.3's two body handles,
-       §5.1's six member declarations and its pair-iterator handle, and §5.5's clone machine -- every class id
+       §5.1's six member declarations and its pair-iterator handle, and §5.5's clone machine — every class id
        a number JS_NewClassID handed out of a runtime that is gone, read by §5.1's finalizer and §5.4's and
        §5.5's finalizer-and-mark pairs, which run later still. See core/platform.c's entries. */
     /* URL §6.1 AND §6.2 are NOT freed here any more — `url` and `url_search_params` are ROWS on
