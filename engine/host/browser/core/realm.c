@@ -61,25 +61,30 @@ void realm_declare_intrinsic(RealmIntrinsic install)
     g_list[g_n++] = install;
 }
 
-/* HTML §8.1.3.1's TOP-LEVEL CREATION URL, in the per-realm store this file already owns. Zero is the "not
-   declared" value because it is also the invalid slot realm_value_set asserts against, so there is one
-   sentinel rather than two. The DECLARATION is per AGENT (a slot is a class id, which belongs to a runtime),
-   so it happens on the first realm and is released with the agent below. */
-static int g_top_level_url_slot;
+/* HTML §8.1.3.1's TOP-LEVEL CREATION URL, in the per-realm store this file already owns. `JS_INVALID_CLASS_ID`
+   is the "not declared" value because it is quickjs's own reserved class id and therefore the one value
+   realm_value_declare can never hand back, so there is one sentinel rather than two.
+   THIS USED TO SAY "zero ... because it is also the invalid slot realm_value_set asserts against", which was
+   true of an assert that is gone: that entry no longer asks whether the number is positive, it asks the
+   RUNTIME whether the class was minted. The conclusion is unchanged and its reason is not, and the reason is
+   rewritten rather than deleted because a reader who re-derives the old one will write a second sentinel back.
+   The DECLARATION is per AGENT (a slot is a class id, which belongs to a runtime), so it happens on the first
+   realm and is released with the agent below. */
+static JSClassID g_top_level_url_slot;
 
 /* WEB IDL §3.3.8 [Global]'s GLOBAL NAMES OF THIS REALM, in the same per-realm store and for the same reason as
    the URL above: it is a fact about the ENVIRONMENT, it is settled when the realm is built, and §3.3.7 step 1
    is asked of it while the intrinsics are still installing. Resolved to the generated bit set at the call
    rather than at each ask, so a host names an interface and nothing downstream re-derives what that name
    means. */
-static int g_global_names_slot;
+static JSClassID g_global_names_slot;
 
 /* HTML §8.1.3.5 "Secure contexts" STEP 1.2.1's OPERAND — the answer the worker's owner gave — in the same
    per-realm store and for the same reason as the two above: it is a fact about the ENVIRONMENT, settled when
    the realm is built, and step 1.2.1 is asked of it while the intrinsics are still installing (every
    [SecureContext] member of every per-realm install runs §3.3.7 step 2 through it). WRITTEN ONLY FOR A WORKER
    REALM, because it is the only realm the step reaches; see realm.h for why the fact crosses as a boolean. */
-static int g_owner_secure_slot;
+static JSClassID g_owner_secure_slot;
 
 #if APICLIENT_DEV
 /* bsearch over IDL_EXPOSURE's own rows, keyed by the identifier — the same shape core/idl_args.c uses over the
@@ -359,24 +364,24 @@ void realm_assert_global_property_references(JSContext *ctx)
    answers depend on which names ECMAScript happens to define is a set that answers a different question than
    the one asked.
    DEV ONLY, with the walk. */
-static int g_proto_tagged_slot;      /* §3.7.3 — identifiers this realm built an interface prototype object for */
-static int g_reference_asked_slot;   /* §3.8   — identifiers some component asked this realm's global for */
+static JSClassID g_proto_tagged_slot;      /* §3.7.3 — identifiers this realm built an interface prototype object for */
+static JSClassID g_reference_asked_slot;   /* §3.8   — identifiers some component asked this realm's global for */
 
 /* The per-realm census object, created on first note. `create` false is a PEEK: a realm that never noted has
    no object, and the walk has to tell that apart from an empty one rather than mint one to read. */
-static JSValue realm_census(JSContext *ctx, int *slot, const char *what, bool create)
+static JSValue realm_census(JSContext *ctx, JSClassID *slot, const char *what, bool create)
 {
     JSValue set;
 
-    if (!*slot) {
+    if (*slot == JS_INVALID_CLASS_ID) {
         if (!create) return JS_NULL;
         *slot = realm_value_declare(ctx, what);
     }
-    set = JS_GetClassProto(ctx, (JSClassID)*slot);
+    set = JS_GetClassProto(ctx, *slot);
     if (JS_IsNull(set) && create) {
         set = JS_NewObjectProto(ctx, JS_NULL);
         CHECK(!JS_IsException(set), "realm: a Web IDL §3.8 census object could not be allocated");
-        JS_SetClassProto(ctx, (JSClassID)*slot, JS_DupValue(ctx, set));
+        JS_SetClassProto(ctx, *slot, JS_DupValue(ctx, set));
     }
     return set;   /* OWNED by the caller */
 }
@@ -389,7 +394,7 @@ static JSValue realm_census(JSContext *ctx, int *slot, const char *what, bool cr
    CHECK rather than DCHECK because the define consumes nothing a caller could retry with and the only way it
    fails is allocation — a census that silently dropped an identifier would report a component as having asked
    when it did not, which is the one direction this instrument must never fail in. */
-static void realm_census_note(JSContext *ctx, int *slot, const char *what, const char *name, JSValue value)
+static void realm_census_note(JSContext *ctx, JSClassID *slot, const char *what, const char *name, JSValue value)
 {
     JSValue set = realm_census(ctx, slot, what, true);
 
@@ -596,11 +601,11 @@ void realm_install_intrinsics(JSContext *ctx, const char *top_level_creation_url
            "a realm was built with no [Global] INTERFACE — Web IDL §3.3.7 [Exposed] step 1 asks which "
            "interface this realm's global object implements, and the answer decides which of the platform's "
            "interface objects exist here at all. A Window realm states \"Window\"");
-    if (!g_top_level_url_slot)
+    if (g_top_level_url_slot == JS_INVALID_CLASS_ID)
         g_top_level_url_slot = realm_value_declare(ctx, "HTML §8.1.3.1 the environment's top-level creation URL");
-    if (!g_global_names_slot)
+    if (g_global_names_slot == JS_INVALID_CLASS_ID)
         g_global_names_slot = realm_value_declare(ctx, "Web IDL §3.3.8 [Global] the realm's global names");
-    if (!g_owner_secure_slot)
+    if (g_owner_secure_slot == JS_INVALID_CLASS_ID)
         g_owner_secure_slot = realm_value_declare(ctx, "HTML §8.1.3.5 the worker owner's secure-context answer");
     /* THE GLOBAL NAMES FIRST, because everything below and every install after it reads them: §3.3.7 step 1
        through idl_exposed_in_realm, and §8.1.3.5's own branch through realm_global_is_worker. */
@@ -642,7 +647,7 @@ void realm_install_intrinsics(JSContext *ctx, const char *top_level_creation_url
 
 JSValue realm_top_level_creation_url(JSContext *ctx)
 {
-    DCHECK(g_top_level_url_slot != 0,
+    DCHECK(g_top_level_url_slot != JS_INVALID_CLASS_ID,
            "a realm's top-level creation URL was read in an agent where no realm has been built — the field is "
            "created WITH the realm, so a reader that gets here is standing outside every realm there is");
     /* AND THIS REALM'S ENVIRONMENT HAS ONE. HTML §10.2.6.2 Script settings for workers sets a worker
@@ -673,7 +678,7 @@ bool realm_owner_is_secure_context(JSContext *ctx)
     JSValue v;
     bool r;
 
-    DCHECK(g_owner_secure_slot != 0,
+    DCHECK(g_owner_secure_slot != JS_INVALID_CLASS_ID,
            "HTML §8.1.3.5 step 1.2.1's operand was read in an agent where no realm has been built — the field "
            "is created WITH the realm, so a reader that gets here is standing outside every realm there is");
     /* A WORKER REALM IS THE ONLY ONE THAT WRITES IT, so this is the same two-sided statement the URL accessor
@@ -700,7 +705,7 @@ unsigned realm_global_names(JSContext *ctx)
     JSValue v;
     int32_t names = 0;
 
-    DCHECK(g_global_names_slot != 0,
+    DCHECK(g_global_names_slot != JS_INVALID_CLASS_ID,
            "a realm's Web IDL §3.3.8 [Global] global names were read in an agent where no realm has been "
            "built — the field is created WITH the realm, so a reader that gets here is standing outside every "
            "realm there is");
@@ -730,21 +735,21 @@ void realm_intrinsics_free(void)
     g_realm_built = false;
     /* The slot's VALUES are the realms' and went with them; what the agent holds is the slot id, which is a
        class id in a runtime that is going away with it. */
-    g_top_level_url_slot = 0;
-    g_global_names_slot = 0;
-    g_owner_secure_slot = 0;
+    g_top_level_url_slot = JS_INVALID_CLASS_ID;
+    g_global_names_slot = JS_INVALID_CLASS_ID;
+    g_owner_secure_slot = JS_INVALID_CLASS_ID;
 #if APICLIENT_DEV
     /* The two §3.8 censuses are slots like the three above and are released the same way — their CONTENTS are
        the realms' and went with them; what the agent holds is the slot id. */
-    g_proto_tagged_slot = 0;
-    g_reference_asked_slot = 0;
+    g_proto_tagged_slot = JS_INVALID_CLASS_ID;
+    g_reference_asked_slot = JS_INVALID_CLASS_ID;
 #endif
 }
 
 /* A slot IS a class id whose per-context prototype slot holds something that is not a prototype. Nothing is
    ever constructed with the class — it exists for the SLOT, which is the per-realm store quickjs already keeps
    and already frees with the context. The `what` string is the class name, so a heap dump names the slot. */
-int realm_value_declare(JSContext *ctx, const char *what)
+JSClassID realm_value_declare(JSContext *ctx, const char *what)
 {
     JSClassID id = 0;
     JSClassDef d;
@@ -753,7 +758,7 @@ int realm_value_declare(JSContext *ctx, const char *what)
     d = (JSClassDef){ what };
     JS_NewClassID(JS_GetRuntime(ctx), &id);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), id, &d) == 0, "realm: a per-realm value slot could not be declared");
-    return (int)id;
+    return id;
 }
 
 /* THE SITE IS THE CALLER'S AND IT IS NOT OPTIONAL — see realm.h's macros, which supply it. A NULL is the one
@@ -787,41 +792,42 @@ int realm_value_declare(JSContext *ctx, const char *what)
    array both entries are about to index, since JS_NewClass1 grows `class_proto` and `class_count` together;
    the second refuses JS_INVALID_CLASS_ID, which quickjs defines as 0 and which nothing can register because
    JS_CLASS_OBJECT is 1 and `JS_NewClassID` treats a zero as not-yet-minted. `-1` fails the first conjunct
-   under either signedness. So one predicate is correct for the operand this quantity has today and for the
-   one it is being given, and it refuses a registered-looking integer that no mint ever handed out.
+   under either signedness, so this one predicate was correct while the operand was still `int` and is correct
+   now that it is `JSClassID` — which is why it could land BEFORE the type did. It also refuses a
+   registered-looking integer that no mint ever handed out, which the range it replaced admitted.
    IT IS A MACRO FOR THE REASON `REALM_VALUE_SITE_PRESENT` IS: a shared function would stamp its own line for
    both entries, so a @WHY about a slot would name neither the read nor the write. The verb is the parameter
    because the caller's address says WHERE and only the entry says WHICH DOOR the operand came through. */
 #define REALM_VALUE_SLOT_MINTED(ctx_, slot_, verb_, at_file_, at_line_) \
-    DCHECKF(JS_IsRegisteredClass(JS_GetRuntime(ctx_), (JSClassID)(slot_)), \
+    DCHECKF(JS_IsRegisteredClass(JS_GetRuntime(ctx_), (slot_)), \
             "%s:%d " verb_ " a per-realm value through a slot this runtime never minted — the slot is the " \
             "class id realm_value_declare returns, so a component whose own `_init` never ran, or whose " \
             "static slot was read before that `_init` wrote it, arrives here holding its pre-declaration " \
             "value rather than a class id", \
             (at_file_), (at_line_))
 
-void realm_value_set_at(JSContext *ctx, int slot, JSValue v, const char *at_file, int at_line)
+void realm_value_set_at(JSContext *ctx, JSClassID slot, JSValue v, const char *at_file, int at_line)
 {
     JSValue prev;
 
     REALM_VALUE_SITE_PRESENT(at_file);
     REALM_VALUE_SLOT_MINTED(ctx, slot, "set", at_file, at_line);
-    prev = JS_GetClassProto(ctx, (JSClassID)slot);
+    prev = JS_GetClassProto(ctx, slot);
     DCHECKF(JS_IsNull(prev), "%s:%d set a per-realm value twice in one realm — the first is what everything "
                              "already built in this realm is holding, so this write would hand later readers "
                              "a different object than the one earlier readers are already using",
             at_file, at_line);
     JS_FreeValue(ctx, prev);
-    JS_SetClassProto(ctx, (JSClassID)slot, v);
+    JS_SetClassProto(ctx, slot, v);
 }
 
-JSValue realm_value_get_at(JSContext *ctx, int slot, const char *at_file, int at_line)
+JSValue realm_value_get_at(JSContext *ctx, JSClassID slot, const char *at_file, int at_line)
 {
     JSValue v;
 
     REALM_VALUE_SITE_PRESENT(at_file);
     REALM_VALUE_SLOT_MINTED(ctx, slot, "read", at_file, at_line);
-    v = JS_GetClassProto(ctx, (JSClassID)slot);
+    v = JS_GetClassProto(ctx, slot);
     /* THE ADDRESS IS THE WHOLE OF THE REMEDY HERE. What went wrong is a missing SET, and the set is in some
        other component's per-realm install — so the reader's own file and line is what says which install to
        look for, and which realm kind (a worker's, a worklet's, a child navigable's) reached a component that

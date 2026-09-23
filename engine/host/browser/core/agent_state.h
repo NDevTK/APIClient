@@ -182,12 +182,13 @@ void agent_state_ptr_at(const char *component, const void *slot, const char *wha
  * then re-derivable from the assert instead of from here.
  *
  * WHY THE PRE-INIT IS `-1` AND NOT `0`, WHICH IS THE ANSWER THE ARGUMENT ABOVE INVITES AND WHICH THIS TREE
- * REFUTES. A class id's never-minted value is 0; core/realm.c says so of its own slots in as many words
- * (`Zero is the 'not declared' value because it is also the invalid slot realm_value_set asserts against`);
- * and both accessors refuse `slot > 0`. Every step of that is true and it does not reach this entry, for two
- * measured reasons and one read one.
- *   - THE ACCESSORS DO NOT PICK. realm_value_set_at and realm_value_get_at assert `slot > 0`, which is a
- *     RANGE: `0` and `-1` are both absent to them, so neither is the sentinel the read side asks for.
+ * REFUTES. A class id's never-minted value is 0 — quickjs names it `JS_INVALID_CLASS_ID` — and core/realm.c
+ * uses it for its own slots. Every step of that is true and it does not reach this entry, for two measured
+ * reasons and one read one.
+ *   - THE ACCESSORS DO NOT PICK. realm_value_set_at and realm_value_get_at ask JS_IsRegisteredClass, which
+ *     refuses `0` and `-1` alike, so neither is the sentinel the read side asks for. THIS READ `they assert
+ *     slot > 0, which is a RANGE`, and the range is gone; the conclusion is unchanged and is if anything
+ *     firmer, since a registry query cannot be read as preferring either end of an `int`.
  *   - THE COMPONENTS HAVE PICKED, AND THEY PICKED `-1`. Derived at 8de85780, over every realm slot in
  *     engine/host: 61 of 75 initialise their own static to `-1` and 28 of those gate their re-declaration on
  *     its SIGN (`< 0` / `>= 0`); the 14 that rely on C's implicit `0` gate on ZERO where they gate at all.

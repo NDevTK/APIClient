@@ -255,8 +255,18 @@ void realm_intrinsics_free(void);
  * THE STORE IS QUICKJS'S OWN PER-CONTEXT SLOT ARRAY, reached by declaring a class whose slot never holds a
  * prototype. That array is what the runtime already frees with the context, so a realm's value is released
  * exactly when the realm is and there is no second lifetime to get wrong. Declared ONCE PER AGENT (from a
- * component's `_init`), set from that component's per-realm install, read wherever the member runs. */
-int     realm_value_declare(JSContext *ctx, const char *what);
+ * component's `_init`), set from that component's per-realm install, read wherever the member runs.
+ *
+ * AND THE TYPE IS `JSClassID`, WHICH IS WHAT THIS HANDS OUT RATHER THAN A NUMBER THAT HAPPENS TO FIT. The
+ * declaration's body is JS_NewClassID plus JS_NewClass, so a slot IS a class id — the same object, minted by
+ * the same allocator, indexed into the same `class_proto` array — and returning it as `int` erased that in
+ * the type system: a slot and a step id and core/idl_args' method id became one C type, so a call routed to
+ * the wrong door compiled. The erasure is also what made `-1` spellable as a pre-declaration value, and a
+ * `-1` reaching JS_GetClassProto is a read of element 0xFFFFFFFF rather than a wrong answer.
+ * THE PRE-DECLARATION VALUE IS THEREFORE `JS_INVALID_CLASS_ID`, quickjs's own reserved 0, and it is not a
+ * choice this header makes: JS_CLASS_OBJECT is 1, nothing registers id 0, and JS_NewClassID reads a zero as
+ * not-yet-minted. A static with no initialiser is already at it. */
+JSClassID realm_value_declare(JSContext *ctx, const char *what);
 
 /* THE READ AND THE WRITE CARRY THE CALLER'S SITE, which is why each is a MACRO over an `_at` function.
  *
@@ -273,8 +283,8 @@ int     realm_value_declare(JSContext *ctx, const char *what);
  * WHY THE PAIR IS REQUIRED AND NOT DEFAULTED. Both `_at` entries take it, so a caller that reaches one
  * without a site does not compile, and realm.c refuses a NULL rather than printing "(null)". An optional
  * site is what lets an unconverted caller masquerade as one with nothing to say. */
-void    realm_value_set_at(JSContext *ctx, int slot, JSValue v, const char *at_file, int at_line);
-JSValue realm_value_get_at(JSContext *ctx, int slot, const char *at_file, int at_line);
+void    realm_value_set_at(JSContext *ctx, JSClassID slot, JSValue v, const char *at_file, int at_line);
+JSValue realm_value_get_at(JSContext *ctx, JSClassID slot, const char *at_file, int at_line);
 #define realm_value_set(ctx_, slot_, v_) \
     realm_value_set_at((ctx_), (slot_), (v_), IDL_SITE)   /* CONSUMES v */
 #define realm_value_get(ctx_, slot_) \

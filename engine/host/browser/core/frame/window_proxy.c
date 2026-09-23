@@ -1858,8 +1858,12 @@ static JSAtom g_xo_atom[CROSS_ORIGIN_NAME_N];
 static JSAtom g_xo_fallback[XO_FALLBACK_N];
 /* §7.2.1.3.4's getters for the entries above, ONE ARRAY PER REALM — see window_proxy.h. The array is indexed
    by the CROSS_ORIGIN row, so the standard's own list is what says which slot is which and there is no second
-   ordering to keep in step. `-1` and not 0: realm_value_set's own assert is `slot > 0`, so a slot that was
-   never declared must not read as one that was. */
+   ordering to keep in step. `-1` AND NOT 0, AND THE REASON IS NO LONGER THE ONE WRITTEN HERE: this said
+   "realm_value_set's own assert is `slot > 0`", and that entry now asks the RUNTIME whether the class was
+   minted instead, which refuses `0` and `-1` alike. What still picks `-1` is core/agent_state.c's own
+   realm-slot entry, whose `*slot > 0` is what a row declared above its assignment fires on. The reason is
+   rewritten rather than deleted because a reader who re-derives the old one will conclude the sentinel is
+   free to move while that assert still reads the sign. */
 static int g_xo_getter_slot = -1;
 
 /* §7.2.1.3.1 CrossOriginProperties ( O )'s WINDOW ARM, ASKED BY NAME — the one list answering one more caller.
