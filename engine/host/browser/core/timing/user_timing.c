@@ -929,23 +929,27 @@ static int js_perf_measure_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
 
     /* ---- STEPS 4-12 ---------------------------------------------------------------------------------------
      *
-     * NAMED RESIDUAL — A NEGATIVE DURATION WHOSE END TIME IS EXACTLY 0:
-     *   WHAT IS NOT COVERED. Step 8's "The resulting duration value MAY be negative" holds for every pair
-     *     except one: PERFORMANCE TIMELINE §3's record carries `end time` as a double whose value 0 is also
-     *     its "no end time" sentinel, and core/timing/performance_entry.c's duration getter answers 0 for it
-     *     without subtracting. So `performance.measure('m', 'a', 'navigationStart')` — whose end time §3.2
-     *     step 2 answers with the constant 0 — reads duration 0 where the subtraction gives minus the mark's
-     *     startTime.
-     *   WHY THE CODE IS CORRECT AND NOT MERELY UNFINISHED. That arm is what makes §2.2.1 step 6's "Set
-     *     entry's duration attribute to 0" true of every PerformanceMark, so it cannot be deleted here; and
-     *     computing the subtraction at this site instead would be a second answer to §3's own getter.
-     *   WHAT THE NEXT DIFF BUILDS. A `has_end_time` bit on PerfEntry beside `end_time`, written by the mint
-     *     and read by the getter in place of the `== 0` test, which makes the collision impossible rather
-     *     than documented. It is a change to the BASE record and to every mint of it, which is why it is not
-     *     folded into this one.
-     *   HOW ITS ABSENCE WOULD SHOW. A measure whose end time is 0 and whose start time is not reads
-     *     `duration === 0` where a browser reads a negative number, and `entry.startTime + entry.duration`
-     *     does not equal its end. */
+     * RETIRED, AND WITHDRAWN RATHER THAN BUILT — "A NEGATIVE DURATION WHOSE END TIME IS EXACTLY 0" WAS NOT A
+     * DEFECT AND THE RESIDUAL THAT NAMED IT WAS FALSE AT THE COMMIT THAT WROTE IT.
+     *   WHAT IT CLAIMED. That §3's record carries `end time` as a double whose 0 doubles as its own absence,
+     *     that `performance.measure('m', 'a', 'navigationStart')` therefore reads `duration === 0` where a
+     *     browser reads minus the mark's startTime, and that the next diff was a `has_end_time` bit on the
+     *     base record and every mint of it.
+     *   WHY IT IS WRONG. PERFORMANCE TIMELINE §3 states the getter itself: "The getter steps for the
+     *     duration attribute are to return 0 if this's end time is 0; otherwise this's end time - this's
+     *     startTime." The arm is the ALGORITHM, so a browser answers 0 for that call too, and the proposed
+     *     bit would have made this engine DIVERGE from §3 rather than repair anything. §2.1.3 step 8's "The
+     *     resulting duration value MAY be negative" is satisfied by the OTHER arm — an end time of 5 under a
+     *     start time of 10 returns -5 — and was never about the zero.
+     *   THE METHOD IS THE FINDING AND THE CLAUSE WAS ONLY ITS SYMPTOM. Its author read the RECORD's shape,
+     *     recognised `== 0` as the zero-doubling-as-absence pattern this project hunts, and inferred the
+     *     standard from the code — having fetched §3's IDL and its initialize algorithm but not this
+     *     attribute's getter steps. The clause named an INPUT and asserted the algorithm gets it wrong, and
+     *     the step that FIRST sees that input has an explicit arm for it. The spec sentence now sits at the
+     *     getter in core/timing/performance_entry.c, which is the repair: a `== 0` test is not evidence
+     *     about who chose it, and nothing at that line had said.
+     *   IT IS RECORDED RATHER THAN DELETED because a reader who re-derives it from the record's shape will
+     *     write it again, and because it was quoted back into a brief as work to do. */
     {
         JSValue proto, obj, detail, entry_type;
         PerfMeasure *m;

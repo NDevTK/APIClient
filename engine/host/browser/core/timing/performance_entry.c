@@ -224,6 +224,21 @@ static JSValue js_entry_get_duration(JSContext *ctx, JSValueConst this_val, int 
 
     (void)magic;
     if (!e) return JS_EXCEPTION;
+    /* §3's `duration` IN ITS OWN WORDS: "The getter steps for the duration attribute are to return 0 if this's
+       end time is 0; otherwise this's end time - this's startTime."
+       THE `== 0` ARM IS THE STANDARD'S AND NOT A SENTINEL THIS ENGINE CHOSE, and that sentence is quoted here
+       because the code alone cannot say so — a zero doing double duty as a value and as its own absence is a
+       defect shape this project hunts, so a reader who meets `end_time == 0` without the spec beside it will
+       read it as one. MEASURED: one did, filed a residual against it naming `performance.measure('m', 'a',
+       'navigationStart')` as reading `duration === 0` where the subtraction gives minus the mark's startTime,
+       and proposed a `has_end_time` bit to make the "collision" impossible. There is no collision: a browser
+       returns 0 for that call too, because this IS the algorithm, and the bit would have made this engine
+       DIVERGE. A NEGATIVE duration is reachable and correct by the other arm — an end time of 5 under a start
+       time of 10 returns -5 — which is what §2.1.3 step 8's "The resulting duration value MAY be negative"
+       is about.
+       THE METHOD THAT PRODUCED THE WRONG READING IS THE PART WORTH KEEPING: the residual's author read the
+       RECORD's shape and inferred the standard from it, having fetched §3's IDL and its initialize algorithm
+       but not this attribute's getter steps. A `== 0` test is not evidence about who chose it. */
     if (e->end_time == 0) return JS_NewFloat64(ctx, 0);
     /* An end time this engine WROTE, so the arithmetic needs a real startTime. The one interface that will
        reach here is User Timing §2.3's PerformanceMeasure, whose §2.1.3 measure() resolves both ends through
