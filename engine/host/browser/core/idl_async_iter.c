@@ -102,38 +102,62 @@ typedef struct {
 static const uint16_t AIT_VALS[] = { AIT_OFF(target), AIT_OFF(ongoing), AIT_OFF(state) };
 static const CowRecord AIT_REC = { sizeof(IdlAsyncIter), AIT_VALS, (int)(sizeof AIT_VALS / sizeof *AIT_VALS) };
 
+/* THE TWO COLLECTOR ENTRIES REACH THE RECORD WITHOUT READING THIS FILE'S TABLE, and that is the whole of why
+   neither is the loop it was. core/agent_state.h states the obligation where it is created: a finalizer and a
+   gc_mark run AFTER the release column, so neither may read a slot declared there — reach the record with
+   JS_GetAnyOpaque, because the collector dispatched to these two functions THROUGH the class, so the id is a
+   fact they already have and must not look up.
+   HERE THAT WAS NOT A HAZARD TO COME, IT WAS LIVE, and the escalation is one line of this file's own
+   declaration: `agent_state_class(component, &f->class_id, ...)` makes every `class_id` in `g_async` a
+   SLOT_CLASS of the declaring row, and core/agent_state.c's undo writes 0 into one. Both hosts run
+   platform_agent_free — every undo — and only then JS_RunGC and JS_FreeRuntime, so at the moment either of
+   these ran, every entry's id was already 0 and `JS_GetOpaque(val, 0)` answers NULL for every object there is.
+   The loop then fell off its end and the finalizer returned having freed NOTHING: §3.7.10.1's target, its
+   ongoing promise, the component's own state and the js_mallocz'd record, for every iterator a page still held.
+   THE gc_mark HALF WAS THE WORSE ONE, for the reason core/agent_state.h gives — an unmarked child keeps the
+   internal reference gc_decref subtracts, so gc_scan reads it as rooted from outside the heap and the whole
+   graph behind the target is never collected at all, silently.
+   `g_async_n` IS NOT CONSULTED EITHER, ONE LEVEL OUT: idl_async_iter_free resets it, and it happens to run
+   after JS_FreeRuntime in both hosts today — so unlike the ids it was not the live half. Dropping it anyway is
+   what stops either answer depending on a teardown ORDER at all, which is a fact about this file rather than
+   about whichever host links it.
+   NEITHER IS THE BRAND CHECK AND NEITHER MAY BE READ AS ONE. ait_of keeps the class-id comparison
+   deliberately: §3.7.10.2's `next` and `return` reach it holding `s->hdr.this_val`, so it IS step 7's "if
+   object is not a default asynchronous iterator object for interface" — with `rec->iface != handle` beside it
+   for the FOR-INTERFACE half — and JS_GetAnyOpaque there would hand a page's Headers iterator back as an
+   IdlAsyncIter. What arrives HERE is only ever an object this file minted, because these two functions are
+   installed on no other class: §2.5.10's end-of-iteration marker shares this file and carries neither.
+   A NULL OPAQUE IS STILL POSSIBLE AND IS STILL ANSWERED — js_idl_async_make builds the object before it
+   allocates the record, so an OOM between the two leaves one finalizable with nothing in it.
+   RETIREMENT: this record goes when a check in the build refuses a read of a declared agent-state slot inside
+   a function installed as a JSClassDef finalizer or gc_mark, because the rule is then true by construction and
+   a reader re-derives it from the refusal instead of from here. */
 static void idl_async_iter_finalizer(JSRuntime *rt, JSValue val)
 {
-    int i;
+    JSClassID cid;
+    IdlAsyncIter *it = JS_GetAnyOpaque(val, &cid);
 
-    for (i = 0; i < g_async_n; i++) {
-        IdlAsyncIter *it = JS_GetOpaque(val, g_async[i].class_id);
-        if (it) {
-            JS_FreeValueRT(rt, it->target);
-            JS_FreeValueRT(rt, it->ongoing);
-            JS_FreeValueRT(rt, it->state);
-            js_free_rt(rt, it);
-            return;
-        }
+    if (it) {
+        JS_FreeValueRT(rt, it->target);
+        JS_FreeValueRT(rt, it->ongoing);
+        JS_FreeValueRT(rt, it->state);
+        js_free_rt(rt, it);
     }
 }
 
 /* THE RECORD IS A CYCLE WAITING TO HAPPEN — `for await (const [name, h] of dir)` puts the iterator inside a
-   closure the target can reach — so it is marked like every other component record that holds values. It goes
-   through JS_GetOpaque rather than through the accessor below on purpose: a COW capture during collection would
-   dup values on an object being torn down. */
+   closure the target can reach — so it is marked like every other component record that holds values. It does
+   NOT go through ait_of, and that reason is unchanged by the paragraph above: a COW capture during collection
+   would dup values on an object being torn down. What changed is only how the record is reached. */
 static void idl_async_iter_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    int i;
+    JSClassID cid;
+    IdlAsyncIter *it = JS_GetAnyOpaque(val, &cid);
 
-    for (i = 0; i < g_async_n; i++) {
-        IdlAsyncIter *it = JS_GetOpaque(val, g_async[i].class_id);
-        if (it) {
-            JS_MarkValue(rt, it->target, mark_func);
-            JS_MarkValue(rt, it->ongoing, mark_func);
-            JS_MarkValue(rt, it->state, mark_func);
-            return;
-        }
+    if (it) {
+        JS_MarkValue(rt, it->target, mark_func);
+        JS_MarkValue(rt, it->ongoing, mark_func);
+        JS_MarkValue(rt, it->state, mark_func);
     }
 }
 
