@@ -95,8 +95,20 @@ const PROBE = `(() => ({
        PRESENT on one row and ABSENT on the other and neither arm states it alone.
        WHAT THE DERIVATION ANSWERED BEFORE THIS DIFF, AND IT WILL NOT ANSWER IT AGAIN -- SO RUN IT AT THE
        PARENT AND NOT AT THE TIP, or it reports this line and reads as a repair that was never needed:
-         git grep -n 'cspBlocks\\|trustedTypes' <this commit>^ -- testing/
-       TWO LINES OF PROSE in control/serve.mjs and nothing else. csp-blocked.html says why in its own words
+         git grep -c 'cspBlocks\\|trustedTypes' <this commit>^ -- testing/
+       THREE FILES AND NOT ONE OF THEM AN INSTRUMENT: this document's own pair state the claim in their own
+       prose (csp-blocked.html 10 lines, csp-open.html 9), and control/serve.mjs argues for the pair at its
+       two rows. Drop the fixtures and only serve.mjs's two prose lines survive:
+         git grep -c 'cspBlocks\\|trustedTypes' <this commit>^ -- testing/ | grep -v '[.]html:'
+       A GLOB PATHSPEC IS DELIBERATELY NOT WRITTEN HERE, and the reason is the one core/frame/
+       csp_source_list.h records at its own grammar examples: a star followed by a slash ENDS A BLOCK
+       COMMENT, so the obvious spelling of that filter does not compile and node --check cannot see it
+       inside this template literal -- it is a string here and a comment only once new Function compiles it.
+       BOTH NUMBERS ARE STATED because the UNFILTERED one is
+       what a reader will actually type, and its extra hits are the fixtures SAYING what nothing measured;
+       reporting the narrow figure alone would be a count over a population whose filter is unstated, which
+       is the defect the column below exists to keep out of the corpus. csp-blocked.html says why in its own
+       words
        -- "site.mjs's \`sinks\` column is a COUNT of that array and cannot see either field" -- so the pair
        was served, documented to the byte, and measured by nobody. That is the write-with-no-reader half of
        the contract this file already names at \`candidates\` and at the orphan pair, arriving on the one

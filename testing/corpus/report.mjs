@@ -431,9 +431,13 @@ for (const p of passes) for (const r of p.rows) {
        of the answer; site.mjs now carries it onto every row, and this file -- the one that RANKS the corpus
        -- is where it becomes readable. Until both landed NO INSTRUMENT ANYWHERE READ EITHER FIELD, and the
        derivation for that is run AT THE PARENT rather than at the tip, or it returns these lines and reads
-       as a repair nobody needed: `git grep -n 'cspBlocks\|trustedTypes' <this commit>^ -- testing/`
-       answered two lines of prose in control/serve.mjs, while a control PAIR built to state exactly this
-       claim sat served and documented and measured by nobody.
+       as a repair nobody needed. `git grep -c 'cspBlocks\|trustedTypes' <this commit>^ -- testing/` answers
+       THREE files, none of them an instrument: the control pair stating the claim in its own prose, and
+       control/serve.mjs's two lines arguing for the pair. Pipe it through `grep -v '[.]html:'` and only
+       serve.mjs survives -- a glob pathspec is not written here because a star followed by a slash ends
+       this comment. Both are stated because the
+       unfiltered command is the one a reader types and its extra hits are the fixtures saying what nothing
+       measured.
        ALL THREE NUMBERS OR NONE, because the two counts are worthless without their denominator and each
        other. `ent` is the sinks this walk actually looked at -- site.mjs's own count off the same arrays,
        never the `sinks` column beside it, which is read off the run record's last log entry and is a
