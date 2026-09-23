@@ -725,7 +725,18 @@ function boolConsumer(struct, code, start) {
  * `for` clause, by splitting that header on its top-level `;` and asking the operand question of the second
  * piece — the only one of the two whose region is already delimited by a parenthesis this walk finds. HOW ITS
  * ABSENCE SHOWS: a row standing in DEFAULTED whose `||` a reader can see is the whole test of a loop header
- * or of a `?`, met as an accusation asking for a DCHECK on a line that stores nothing. */
+ * or of a `?`, met as an accusation asking for a DCHECK on a line that stores nothing.
+ *
+ * WHAT THIS TOOK WITH IT, MEASURED AS A CLASSIFIER OVER ITS WHOLE POPULATION BEFORE IT LANDED rather than
+ * over the rows that happen to surface in a band. Of the reads a `||`/`??` directly follows and §boolConsumer
+ * declines, this fires on FORTY and leaves 553; all forty were read one by one and every one is a pure
+ * condition, and of the 553 the forty that stand on an `if`/`while` line were read too and every one KEEPS
+ * the value — a `.some()` receiver, a `process.exit(…)` argument, a `return`, an assignment. The frozen pair
+ * 5febfb35 -> 95c82527, which are a commit and its own parent, moved exactly one row: DEFAULTED 3 -> 2 and
+ * this band 0 -> 1, with every other line of the report identical. Its commit message quotes a table taken at
+ * 122b9d13 instead, and three peer commits had moved the calibration under it — the figures above are the
+ * ones that belong to this landing. RETIREMENT: this record goes when the numbers a landing was measured at
+ * cannot be written into a commit message without the revision pair they were taken at. */
 
 /* A top-level logical join — ECMAScript §13.13 "Binary Logical Operators" — by its operators and never by a
    character class: `?.` is not `??`, and `||=`/`&&=`/`??=` belong to §13.15 "Assignment Operators", whose
@@ -4869,6 +4880,19 @@ function identityOfBinding(t, off, scan, s) {
 }
 
 /* ---- the ORIGIN of a value: the same specifier, followed further than one callback parameter --------------- */
+
+/* A PARAMETER OF A CORPUS-DECLARED FUNCTION IS A ROUTE THIS WALK DOES NOT HAVE AND `ifaceOfExpr` DOES, AND
+ * THE ASYMMETRY IS REAL — measured, `scan.localParamSlot` and `scan.callArgsOf` resolve here exactly as they
+ * do there. What is recorded is that building the mirror arm would NOT have moved the row it was proposed
+ * for, so a reader is not sent to spend a diff finding that out: at testing/static_surface.mjs:190 the
+ * receiver is `fold`'s first parameter, `callArgsOf` finds NINE call sites, and `originOfExpr` answers null
+ * for all nine — eight because a self-recursive walker passes paths rooted at its own parameter, which this
+ * walk's cycle guard declines by construction, and the ninth (`a` at :390) because it is a computed index
+ * over a binding written from another corpus callback's parameter, which no arm here reads either. Under
+ * `agreeOrigin` one null is the whole answer. A widening would therefore need BOTH the parameter arm and a
+ * rule that an argument rooted at the parameter under question contributes the answer being computed — which
+ * is §MAP_PATH's argument one construct over — and neither is landed here. RETIREMENT: this record goes when
+ * a parameter arm exists on this walk, because the question is then answered by code rather than by a note. */
 
 /* THE FOREIGN ARM ABOVE ANSWERS FOR ONE CONSTRUCT AND THE QUESTION IS BIGGER THAN THAT CONSTRUCT. Its sentence
  * is right — "the specifier says where the producer is" — and the shape it reads it off is a callback PARAMETER,
