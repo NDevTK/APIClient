@@ -2755,11 +2755,12 @@ static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         JSValue fn = xhr_run_closure(ctx, hdr->this_val, XHR_MODE_FETCH, XHR_ERR_NONE);
         JS_FreeValue(ctx, in);
         if (JS_IsException(fn)) return -1;
-        /* NO TASK SOURCE, AND THAT IS A STATEMENT ABOUT §3.5.6 RATHER THAN A GAP. Its asynchronous arm is
-           "Return, and continue running these steps in parallel" — it queues nothing, so no task source put
-           this work item anywhere and inventing one would order the rest of `send()` against the page's real
-           tasks by a fact no standard states. What this engine does with "in parallel" is make it a work item
-           on the one frontier, which is why it reaches a TASK queue at all. */
+        /* NO TASK SOURCE, AND THAT IS A STATEMENT ABOUT §3.5.6 RATHER THAN A GAP. Its asynchronous arm
+           QUEUES NOTHING: it fires `loadstart`, binds the processResponse callbacks, sets the fetch controller
+           from a fetch with `useParallelQueue set to true`, and returns. No task source put this work item
+           anywhere, so inventing one would order the rest of `send()` against the page's real tasks by a fact
+           no standard states. What this engine does with a fetch run off a parallel queue is make it a work
+           item on the one frontier, which is why it reaches a TASK queue at all. */
         JS_EnqueueCallTask(ctx, fn, 0, NULL, TASK_SOURCE_NOT_A_TASK);
         JS_FreeValue(ctx, fn);
         *presult = JS_UNDEFINED;

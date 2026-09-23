@@ -523,11 +523,11 @@ void event_target_set_activation(bool (*has)(JSContext *ctx, JSValueConst el),
    visibility" on the user interaction one, Permissions §3.4 on its own, CSP §5.5 "Report a violation" naming
    none at all — so a constant here would state one file's answer for every caller, which is exactly the
    two-carriers-one-source defect one level down. A caller whose standard states the fire as a BARE synchronous
-   step says TASK_SOURCE_NOT_A_TASK, which is the positive statement that nothing queued it and which makes
-   this component's own note above ("Queuing one of those here does not make it asynchronous rather than
-   synchronous, it puts the page's listener AFTER work the standard puts it before") a GREPPABLE population
-   rather than a paragraph: `TASK_SOURCE_NOT_A_TASK` at a call of this function IS the list of callers that owe
-   the request reach, and it cannot go stale behind a caller added later. */
+   step says TASK_SOURCE_NOT_A_TASK, which is the positive statement that nothing queued it. That is what
+   turns this component's own paragraph above — the one saying that queuing a bare fire here does not make it
+   asynchronous rather than synchronous but puts the page's listener after work the standard puts it before —
+   into a GREPPABLE population rather than prose: `TASK_SOURCE_NOT_A_TASK` at a call of this function IS the
+   list of callers that owe the request reach, and it cannot go stale behind a caller added later. */
 void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev, JSValueConst target_override,
                        TaskSource src);
 /* THE FIRE REQUEST BUFFER, AS A TYPE. §2.9's dispatcher takes THREE arguments (target, event, targetOverride)

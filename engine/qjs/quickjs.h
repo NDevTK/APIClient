@@ -3076,8 +3076,8 @@ JS_EXTERN int JS_EnqueueTaskJob(JSContext *ctx, JSJobFunc *job_func,
    baseline handover too, so a task the user agent queued before the frontier existed keeps the name its tracker
    already holds.
    `source` IS §8.1.7.1's TASK SOURCE and travels for the same reason `is_task` does: the host owns the queues,
-   so the host is the only thing that can answer "is any one source in two of my queues", and it cannot answer
-   it from a value it was never handed. JS_TASK_SOURCE_UNSTATED whenever `is_task` is false — a microtask has no
+   so the host is the only thing that can answer whether one source has landed in two of them, and it cannot
+   answer that from a value it was never handed. JS_TASK_SOURCE_UNSTATED whenever `is_task` is false — a microtask has no
    source — which makes the pair a two-sided statement the host can assert rather than a field it must trust. */
 typedef int (*JSJobEnqueueHook)(JSContext *ctx, JSJobFunc *job_func, int argc, JSValueConst *argv,
                                 bool is_task, JSTaskSource source, JSTaskHandle handle);
