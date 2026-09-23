@@ -174,7 +174,43 @@ function absentPair(census, composer = COMPOSER) {
   };
   const a = num(TOKEN_ASKED), o = num(TOKEN_OWED);
   if (a.err || o.err) return { err: a.err || o.err };
-  return { asked: a.v, owed: o.v };
+
+  /* AND WHICH NAMES THEY WERE, BECAUSE `owed 3` IS A NUMERATOR NOBODY CAN ACT ON. The count says a document
+     asked for something this realm could not answer; the NAMES say what to build, and they are the whole
+     work queue — `extension/popup.js` already puts them in front of a person for exactly that reason ("a row
+     reading `owed 0` is a real clean bill and a row naming three interfaces is a work queue"), and until this
+     the drivers carried the digit and dropped the list.
+     A ROW IS EVERY KEY THAT DOES NOT OPEN ON `_`, which is the same emitter rule the member set above uses
+     read the other way round, so there is no second list of names at either end. Sorted, because the emission
+     order is the order names were first missed and two runs of one page would otherwise differ on a field a
+     reader compares by eye.
+     AND THE PARTS ARE ASSERTED TO SUM TO THE TOTAL, which is the one property of this pair a consumer can
+     check without re-deriving the mechanism: `absent.c` raises exactly one bucket per owed read and asserts
+     each row's buckets sum to that row's own reads, so the buckets of every row sum to `owed`. A count that
+     cannot be true is caught here rather than carried — and it is a REFUSAL rather than a thrown assert
+     because these bytes came out of an artifact this process did not build. */
+  let bucketSum = 0;
+  const names = Object.keys(census).filter((k) => !k.startsWith("_")).sort();
+  for (const n of names) {
+    const row = census[n];
+    if (!row || typeof row !== "object")
+      return { err: "the `absent` census states the owed name " + JSON.stringify(n) + " as " + typeof row +
+                    " rather than as the per-entry histogram solver/absent.c writes for every row" };
+    for (const b of Object.keys(row)) {
+      if (typeof row[b] !== "number")
+        return { err: "the `absent` census states bucket " + JSON.stringify(b) + " of owed name " +
+                      JSON.stringify(n) + " as a non-number" };
+      bucketSum += row[b];
+    }
+  }
+  if (bucketSum !== o.v)
+    return { err: "the `absent` census's owed rows do not sum to the owed total it states (" + bucketSum +
+                  " by the buckets of " + names.length + " row(s), " + o.v + " by the member) — solver/" +
+                  "absent.c raises exactly one bucket per owed read and asserts that identity at the " +
+                  "composer, so a disagreement here is a row lost between the engine and this reader and " +
+                  "every fraction taken off these numbers would be a fraction of a denominator that is not " +
+                  "the number of owed reads" };
+  return { asked: a.v, owed: o.v, names };
 }
 
 module.exports = { ABSENT_COMPOSER: COMPOSER, TOKEN_ASKED, TOKEN_OWED,

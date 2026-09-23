@@ -669,6 +669,15 @@ function census(r) {
   const ab = absentPair(("absent" in r) ? r.absent : null);
   o.absentAsked = ab.err ? null : ab.asked;
   o.absentOwed = ab.err ? null : ab.owed;
+  /* AND WHICH NAMES, WHICH IS THE ONLY HALF OF THIS PAIR A READER CAN ACT ON. `absentOwed: 3` says a
+     document asked for three components this build does not have; the LIST says which three, and that is
+     the work queue rather than a measurement. It is a field on this row and not a spread line for the same
+     reason the numbers are: the summary compares WITHIN a kind and a list of names has no range.
+     `[]` HERE IS A READING AND `null` IS NOT ONE — the empty list is the positive statement that this
+     document read no name a standard owns and this realm lacks, which beside a nonzero `absentAsked` is the
+     clean bill; `null` is the census not stated at all. absent_census.js has already asserted that these
+     rows' buckets sum to `absentOwed`, so the two cannot disagree by the time they arrive here. */
+  o.absentOwedNames = ab.err ? null : ab.names;
   if (ab.err) o.absentRefused = ab.err;
   return o;
 }
