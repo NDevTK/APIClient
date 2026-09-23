@@ -70,9 +70,17 @@
  * outside the plausible-datum argument that still refuses PERFORMANCE TIMELINE §2.1.1-§2.1.3. See
  * core/timing/performance_entry.h, where that argument lives.
  *
- * NOT BUILT — §2.1.2 clearMarks() and §2.1.4 clearMeasures(), which are the other two operations over the same
- * buffer and are now unblocked rather than blocked: each empties it, both have a buffer to empty, and neither
- * was in this diff's scope. They are ABSENT rather than shaped, so each is a TypeError naming itself.
+ * BUILT SINCE — §2.1.2 clearMarks() and §2.1.4 clearMeasures(), as ONE algorithm with two doors: the two
+ * sections differ in three nouns (the interface, the entry type, the argument's name) and in nothing else.
+ * WHAT MADE clearMeasures() LANDABLE WAS NOT THIS FILE. Its only observable reader in this build is
+ * PERFORMANCE TIMELINE §4.2 step 7.5's `buffered: true` — §3.1 reads PerformanceMark entries ONLY, so nothing
+ * in USER TIMING ever reads the measure buffer back. clearMarks() had a reader the moment the buffer did
+ * (§3.1 resolves against it), and clearMeasures() had none until that step landed, which is why they went in
+ * that order rather than together with the buffer.
+ * AN UNKNOWN NAME MAKES THE REMOVAL A FORK, and the walk therefore runs over an UNMUTATED buffer with the
+ * removal in a second pass — a walk that removed as it went would shorten an array a parked sibling is
+ * still holding a cursor into. The YES arm PINS locally, so the rest of the removal asks nothing. Both are
+ * argued at the site.
  */
 #ifndef ENGINE_HOST_BROWSER_CORE_TIMING_USER_TIMING_H
 #define ENGINE_HOST_BROWSER_CORE_TIMING_USER_TIMING_H

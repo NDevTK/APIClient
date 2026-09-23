@@ -370,6 +370,8 @@ static const PerfEntryClass MEASURE_CLASS = { "PerformanceMeasure", &MEASURE_REC
 
 static JSClassID g_measure_proto_slot;   /* a per-realm PROTOTYPE SLOT — see §2.2's, and performance_entry.h */
 static int g_id_measure = -1;            /* §2.1.3's measure() machine */
+static int g_id_clear_marks = -1;        /* §2.1.2's clearMarks() machine */
+static int g_id_clear_measures = -1;     /* §2.1.4's clearMeasures() machine */
 
 bool performance_measure_is(JSValueConst v)
 {
@@ -455,7 +457,16 @@ static int ut_name_to_timestamp(JSContext *ctx, const char *name, double *out)
  * is the opposite of that — every `performance.mark()` appends to it — so a replayed rank would name a
  * DIFFERENT mark at a second `measure()`, with every arm in range and every assert satisfied. */
 
-#define UT_MEASURE_PREDICATE "USER TIMING §3.1 convert a mark to a timestamp (name ="
+/* THE SHARED NAME-EQUALITY PREDICATE, AND ITS SPELLING IS FROZEN.
+   "Is this operand the name X" is ONE FACT, and §3.1, §2.1.2 and §2.1.4 all ask it of the same kind of
+   operand — so they share one key, exactly as core/idl_index_arg.h's predicate is shared by eleven members
+   because `index == 3` is one fact. Sharing is not a convenience: two keys over one operand would let a
+   world answer YES under one and NO under the other, which is a world no input produces.
+   THE STRING NAMES §3.1 BECAUSE THAT IS WHERE THE QUESTION WAS FIRST ASKED AND THE BYTES MAY NOT MOVE. A
+   constraint key is what a parked flow's recorded answers are filed under, out of the IndexedDB cold tier
+   and into the next session, so re-spelling it does not rename a question — it ORPHANS every answer already
+   recorded against it. The macro's NAME is this file's and may change; the literal may not. */
+#define UT_NAME_PREDICATE "USER TIMING §3.1 convert a mark to a timestamp (name ="
 #define UT_MEASURE_ALGORITHM "USER TIMING §2.1.3 measure()"
 
 typedef struct {
@@ -644,7 +655,7 @@ static int ut_mark_to_timestamp(JSContext *ctx, JSStepHdr *hdr, JSMeasureState *
         ex = concolic_example(ctx, s->operand);
         real = JS_IsUndefined(ex) ? JS_OUTCOME_REAL_UNSTATED : (JS_IsStrictEqual(ctx, ex, e->name) ? 1 : 0);
         JS_FreeValue(ctx, ex);
-        rc = idl_name_chain_ask_supplied(ctx, hdr, &s->key, s->operand, UT_MEASURE_PREDICATE, member, real,
+        rc = idl_name_chain_ask_supplied(ctx, hdr, &s->key, s->operand, UT_NAME_PREDICATE, member, real,
                                          UT_MEASURE_ALGORITHM, &yes);
         JS_FreeCString(ctx, member);
         if (rc) { JS_FreeValue(ctx, held); return rc; }
@@ -974,6 +985,252 @@ static const IdlStepDecl js_perf_measure_decl = {
     "USER TIMING §2.1.3 Performance.measure(measureName, startOrMeasureOptions, endMark)", UT_MEASURE_STEPS
 };
 
+
+/* ---- §2.1.2 clearMarks() and §2.1.4 clearMeasures() -------------------------------------------------------
+ *
+ * ONE ALGORITHM WITH TWO DOORS, exactly as §2.2.1 and §2.1.1 are. The two sections differ in three nouns and
+ * in nothing else: "If markName is omitted, remove all PerformanceMark objects from the performance entry
+ * buffer. Otherwise, remove all PerformanceMark objects listed in the performance entry buffer whose name is
+ * markName" against the same sentence with PerformanceMeasure and measureName. Two copies would be the dual
+ * system this codebase forbids and the seam between them is where the drift would be, so the CLASS and the
+ * entry type are this operation's parameters and the doors carry nothing else.
+ *
+ * IT REMOVES IN A SECOND PASS, AND THAT IS THE LOAD-BEARING PART RATHER THAN A TIDY-UP. An unknown name makes
+ * "whose name is markName" a question this flow must FORK on, and a fork PARKS — so a walk that removed as it
+ * went would mutate the buffer with a sibling's snapshot already taken at a cursor into it, and the sibling
+ * would resume walking an array its parent had shortened underneath it. core/timing/timer.c's chain states
+ * the same hazard for a map one entry shorter at a second call. So the chain runs over an UNMUTATED buffer
+ * and the removal happens once the name is settled, when nothing can park any more.
+ *
+ * THE YES ARM PINS, WHICH IS WHAT KEEPS THE WORLDS FEASIBLE. §3.1 wants ONE entry and stops at its first YES;
+ * these two want ALL of them, so a naive chain would ask "is it `a`?" and then "is it `b`?" of an operand a
+ * YES has already determined, and a world answering YES to both is one no input produces. Once a link answers
+ * YES at name X this flow KNOWS the operand is X, so every remaining entry is decided by comparing its name
+ * with X — the interpreter's own comparison on bytes the run has determined, no further question asked. That
+ * is §Solver's concretize-on-pin performed LOCALLY over the rest of this walk, and it is sound for the reason
+ * that rule gives: the determination comes from a predicate THIS FLOW evaluated, about THIS value.
+ *
+ * NAMED RESIDUAL — AN ENTRY IN THE BUFFER WHOSE OWN NAME IS UNKNOWN:
+ *   WHAT IS NOT COVERED. The same population §3.1's walk steps over, and for the same reason: a chain link is
+ *     keyed by the member's own name, and an entry minted as `performance.mark(location.hash)` has none this
+ *     engine may spell without filing two marks' questions under one key. Such an entry is never removed by
+ *     the NAMED arm of either member.
+ *   WHY THE CODE IS CORRECT AND NOT MERELY UNFINISHED. The OMITTED arm removes it like any other, because it
+ *     asks no question at all; only the named arm skips it, and skipping is the arm that keeps a mark the run
+ *     cannot prove is the named one. Removing it instead would delete an entry on a comparison nothing made.
+ *   WHAT THE NEXT DIFF BUILDS. The same one §3.1's residual names: a link key composed from the entry's own
+ *     concolic identity rather than from its bytes.
+ *   HOW ITS ABSENCE WOULD SHOW. A page that marks under an injected name and then clears that same name finds
+ *     the mark still on the timeline — `performance.measure()` against it still resolves — where a browser
+ *     has removed it. */
+
+#define UT_CLEAR_MARKS_ALGORITHM "USER TIMING §2.1.2 clearMarks()"
+#define UT_CLEAR_MEASURES_ALGORITHM "USER TIMING §2.1.4 clearMeasures()"
+
+typedef struct {
+    JSStepHdr hdr;                    /* FIRST — the driver writes the def and the operand bounds through it */
+    IdlNameChainSuppliedKey key;
+    JSValue  buffer;                  /* the tuple's buffer for this member's entry type — OWNED */
+    JSValue  pinned;                  /* the name a YES arm determined, or UNDEFINED — OWNED */
+    uint32_t cursor;                  /* entries still to be eliminated; the one under test is at cursor - 1 */
+    uint8_t  started;                 /* HAVE THE OWNED FIELDS BEEN PLACED — see §2.1.3's machine for why this
+                                         is its own byte and not a JS_IsUndefined test */
+    uint8_t  walking;                 /* the elimination walk has been set up */
+    uint8_t  settled;                 /* the walk is done: `pinned` holds the name, or nothing matched */
+} JSClearState;
+
+static void js_clear_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    JSClearState *s = st;
+
+    if (s->started) {
+        v->val(ctx, &s->buffer);
+        v->val(ctx, &s->pinned);
+    }
+    idl_name_chain_supplied_visit(ctx, &s->key, v);
+}
+
+/* THE REMOVAL, over a buffer nothing can park inside any more. `keep` is NULL for the OMITTED arm — "remove
+   all PerformanceMark objects" — and otherwise the name the arm above settled on.
+   IT REWRITES THE ARRAY IN PLACE rather than replacing the tuple's slot, which keeps the buffer's IDENTITY:
+   §4.2 step 7.5 and §5.1 step 12 both reach it through the tuple, and a caller holding the old Array across a
+   swap would append into an array the map no longer names. Every write here is a property write, which is
+   what the per-flow COW delta captures — see core/timing/performance_observer.c on why the buffer is a JS
+   value at all. */
+static void ut_clear_remove(JSContext *ctx, JSValueConst buffer, const PerfEntryClass *cls, JSValueConst keep)
+{
+    uint32_t n = 0, i, k = 0;
+    JSValue lenv = JS_GetPropertyStr(ctx, (JSValue)buffer, "length");
+
+    CHECK(JS_ToUint32(ctx, &n, lenv) == 0, "§2's performance entry buffer answered no length");
+    JS_FreeValue(ctx, lenv);
+    for (i = 0; i < n; i++) {
+        JSValue held = JS_GetPropertyUint32(ctx, (JSValue)buffer, i);
+        PerfEntry *e = performance_entry_of(held);
+        bool remove;
+
+        DCHECK(e != NULL, "§2's performance entry buffer holds something that is not a PerformanceEntry");
+        /* THE BUFFER FOR AN ENTRY TYPE HOLDS ONLY THAT TYPE'S ENTRIES — §5.1 step 9 keys the tuple by the
+           entry's own entryType — so this test is an ASSERTION of that keying rather than a filter that does
+           work. Both sections say "remove all PerformanceMark objects", and in a per-type map that is the
+           whole of the mark tuple. */
+        DCHECK(e->cls == cls,
+               "a performance entry tuple holds an entry of another interface — §5.1 step 9 keys the tuple by "
+               "the entry's own entryType, so the two populations cannot differ unless a producer minted an "
+               "entry whose entryType is not its interface's");
+        remove = JS_IsUndefined(keep) ? true : JS_IsStrictEqual(ctx, e->name, keep);
+        if (!remove) {
+            if (k != i) JS_SetPropertyUint32(ctx, (JSValue)buffer, k, JS_DupValue(ctx, held));
+            k++;
+        }
+        JS_FreeValue(ctx, held);
+    }
+    /* TRUNCATE. The kept entries were compacted to the front above, so setting `length` drops exactly the
+       removed ones and releases their references. */
+    JS_SetPropertyStr(ctx, (JSValue)buffer, "length", JS_NewUint32(ctx, k));
+}
+
+/* THE SHARED BODY. `entry_type` names the tuple, `cls` is the interface both sections name, and `algorithm` is
+   the ADDRESS a should-never-happen inside the chain reports — §2.1.2's or §2.1.4's own spec identity rather
+   than this file and this line, which is what core/idl_name_chain.h asks of every caller. */
+static int ut_clear_step(JSContext *ctx, JSStepHdr *hdr, JSClearState *s, int argc, JSValueConst *argv,
+                         const char *entry_type, const PerfEntryClass *cls, const char *algorithm)
+{
+    JSValueConst name = argc > 0 ? argv[0] : JS_UNDEFINED;
+
+    if (!s->started) {
+        s->buffer = JS_UNDEFINED;
+        s->pinned = JS_UNDEFINED;
+        s->started = 1;
+    }
+    /* STEP 1: "If markName is omitted, remove all PerformanceMark objects from the performance entry buffer."
+       An OMITTED argument and an explicit `undefined` are one value here, which is what `optional DOMString
+       markName` with no default means: the declaration places nothing, so the member is absent either way and
+       the standard's "omitted" is the absence this reads. */
+    if (JS_IsUndefined(name)) {
+        JSValue buf = performance_observer_buffer(ctx, entry_type);
+
+        ut_clear_remove(ctx, buf, cls, JS_UNDEFINED);
+        JS_FreeValue(ctx, buf);
+        return 0;
+    }
+    /* STEP 2 over a name the run DETERMINED — the comparison is the interpreter's own and nothing forks. */
+    if (!concolic_is(name)) {
+        JSValue buf = performance_observer_buffer(ctx, entry_type);
+
+        ut_clear_remove(ctx, buf, cls, name);
+        JS_FreeValue(ctx, buf);
+        return 0;
+    }
+    /* STEP 2 over an UNKNOWN. The elimination walk first, over an unmutated buffer; the removal afterwards. */
+    if (!s->walking && !s->settled) {
+        JSValue lenv;
+        uint32_t n = 0;
+
+        JS_FreeValue(ctx, s->buffer);
+        s->buffer = performance_observer_buffer(ctx, entry_type);
+        lenv = JS_GetPropertyStr(ctx, s->buffer, "length");
+        CHECK(JS_ToUint32(ctx, &n, lenv) == 0, "§2's performance entry buffer answered no length");
+        JS_FreeValue(ctx, lenv);
+        s->cursor = n;
+        s->walking = 1;
+    }
+    while (!s->settled) {
+        JSValue held, ex;
+        PerfEntry *e;
+        const char *member;
+        int real, rc;
+        bool yes = false;
+
+        /* EVERY ENTRY ELIMINATED: this flow's world is the one in which the name matches nothing in the
+           buffer, and both sections' answer for it is to remove nothing. */
+        if (s->cursor == 0) { s->settled = 1; break; }
+        held = JS_GetPropertyUint32(ctx, s->buffer, s->cursor - 1);
+        e = performance_entry_of(held);
+        DCHECK(e != NULL, "§2's performance entry buffer holds something that is not a PerformanceEntry");
+        if (concolic_is(e->name)) {   /* the residual's arm — an entry this walk cannot name */
+            JS_FreeValue(ctx, held);
+            s->cursor--;
+            continue;
+        }
+        member = JS_ToCString(ctx, e->name);
+        if (!member) { JS_FreeValue(ctx, held); return -1; }
+        ex = concolic_example(ctx, name);
+        real = JS_IsUndefined(ex) ? JS_OUTCOME_REAL_UNSTATED : (JS_IsStrictEqual(ctx, ex, e->name) ? 1 : 0);
+        JS_FreeValue(ctx, ex);
+        rc = idl_name_chain_ask_supplied(ctx, hdr, &s->key, name, UT_NAME_PREDICATE, member, real,
+                                         algorithm, &yes);
+        JS_FreeCString(ctx, member);
+        if (rc) { JS_FreeValue(ctx, held); return rc; }
+        if (yes) {
+            /* THE LOCAL PIN — see the banner. This world has determined the operand, so the rest of the
+               removal asks nothing. */
+            JS_FreeValue(ctx, s->pinned);
+            s->pinned = JS_DupValue(ctx, e->name);
+            s->settled = 1;
+        }
+        JS_FreeValue(ctx, held);
+        if (!s->settled) s->cursor--;
+    }
+    /* NOTHING CAN PARK BELOW THIS LINE, which is what makes the mutation safe. */
+    if (!JS_IsUndefined(s->pinned))
+        ut_clear_remove(ctx, s->buffer, cls, s->pinned);
+    JS_FreeValue(ctx, s->buffer);
+    s->buffer = JS_UNDEFINED;
+    s->walking = 0;
+    return 0;
+}
+
+#define UT_CLEAR_MARKS_STAGES(X) \
+    X(UT_CLEAR_MARKS_RUN = IDL_STEP_FIRST, \
+      "USER TIMING §2.1.2 clearMarks() steps 1-3 — re-entered once per link of the elimination chain an " \
+      "unknown markName asks, which is the only thing in it that parks")
+enum { UT_CLEAR_MARKS_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const UT_CLEAR_MARKS_STEPS[] = { UT_CLEAR_MARKS_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+#define UT_CLEAR_MEASURES_STAGES(X) \
+    X(UT_CLEAR_MEASURES_RUN = IDL_STEP_FIRST, \
+      "USER TIMING §2.1.4 clearMeasures() steps 1-3 — re-entered once per link of the elimination chain an " \
+      "unknown measureName asks, which is the only thing in it that parks")
+enum { UT_CLEAR_MEASURES_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const UT_CLEAR_MEASURES_STEPS[] = { UT_CLEAR_MEASURES_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* THE TWO DOORS. Each carries its section's three nouns and nothing else; the body above is the algorithm.
+   STEP 3, "Return undefined", is the `*presult` these leave untouched — a step machine's result is undefined
+   unless it writes one, which is what `undefined clearMarks(...)` declares. */
+static int js_clear_marks_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                               JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    (void)presult; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    DCHECK(hdr->stage == UT_CLEAR_MARKS_RUN, "§2.1.2's clearMarks() resumed at a stage it does not have");
+    DCHECK(performance_is(hdr->this_val),
+           "§2.1.2's clearMarks() ran on a receiver that is not a Performance — the declaration states Web IDL "
+           "§3.7 Interfaces' implementation check");
+    return ut_clear_step(ctx, hdr, st, argc, argv, "mark", &MARK_CLASS, UT_CLEAR_MARKS_ALGORITHM);
+}
+
+static int js_clear_measures_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                  JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    (void)presult; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    DCHECK(hdr->stage == UT_CLEAR_MEASURES_RUN, "§2.1.4's clearMeasures() resumed at a stage it does not have");
+    DCHECK(performance_is(hdr->this_val),
+           "§2.1.4's clearMeasures() ran on a receiver that is not a Performance — the declaration states Web "
+           "IDL §3.7 Interfaces' implementation check");
+    return ut_clear_step(ctx, hdr, st, argc, argv, "measure", &MEASURE_CLASS, UT_CLEAR_MEASURES_ALGORITHM);
+}
+
+static const IdlStepDecl js_clear_marks_decl = {
+    js_clear_marks_step, sizeof(JSClearState), js_clear_visit, NULL,
+    "USER TIMING §2.1.2 Performance.clearMarks(markName)", UT_CLEAR_MARKS_STEPS
+};
+static const IdlStepDecl js_clear_measures_decl = {
+    js_clear_measures_step, sizeof(JSClearState), js_clear_visit, NULL,
+    "USER TIMING §2.1.4 Performance.clearMeasures(measureName)", UT_CLEAR_MEASURES_STEPS
+};
+
 /* ---- the declaration and the per-realm install ------------------------------------------------------------ */
 
 static void user_timing_install(JSContext *ctx)
@@ -1032,6 +1289,8 @@ static void user_timing_install(JSContext *ctx)
     perf_proto = performance_proto(ctx);
     idl_install_method(ctx, perf_proto, "mark", g_id_mark);
     idl_install_method(ctx, perf_proto, "measure", g_id_measure);
+    idl_install_method(ctx, perf_proto, "clearMarks", g_id_clear_marks);
+    idl_install_method(ctx, perf_proto, "clearMeasures", g_id_clear_measures);
     JS_FreeValue(ctx, perf_proto);
 }
 
@@ -1108,6 +1367,20 @@ void user_timing_init(JSContext *ctx)
     idl_optional_from(1);
     idl_this_iface(performance_is, "Performance");
 
+    /* `undefined clearMarks(optional DOMString markName)` and `undefined clearMeasures(optional DOMString
+       measureName)` — one optional argument each and no dictionary, so an omitted one is the absence §2.1.2
+       step 1 and §2.1.4 step 1 read. */
+    {
+        static const IdlArgType CLEAR_ARGS[1] = { IDL_DOMSTRING };
+
+        g_id_clear_marks = idl_method_id_step(ctx, CLEAR_ARGS, 1, NULL, 0, &js_clear_marks_decl, 0);
+        idl_optional_from(0);
+        idl_this_iface(performance_is, "Performance");
+        g_id_clear_measures = idl_method_id_step(ctx, CLEAR_ARGS, 1, NULL, 0, &js_clear_measures_decl, 0);
+        idl_optional_from(0);
+        idl_this_iface(performance_is, "Performance");
+    }
+
     JS_NewClassID(JS_GetRuntime(ctx), &g_measure_proto_slot);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_measure_proto_slot, &dm) == 0,
           "PerformanceMeasure: the per-realm prototype slot could not be declared");
@@ -1130,6 +1403,8 @@ void user_timing_init(JSContext *ctx)
     performance_observer_declare_entry_type("measure", INFINITY);
     agent_state_id("user_timing", &g_id_mark, "§2.1.1's mark() machine");
     agent_state_id("user_timing", &g_id_measure, "§2.1.3's measure() machine");
+    agent_state_id("user_timing", &g_id_clear_marks, "§2.1.2's clearMarks() machine");
+    agent_state_id("user_timing", &g_id_clear_measures, "§2.1.4's clearMeasures() machine");
     agent_state_class("user_timing", &g_measure_proto_slot, "§2.3's PerformanceMeasure prototype slot");
     realm_declare_intrinsic(user_timing_install);
 }
