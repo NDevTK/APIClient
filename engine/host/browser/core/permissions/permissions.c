@@ -5,6 +5,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/document.h"
@@ -460,6 +461,26 @@ void permissions_init(JSContext *ctx)
     CHECK(JS_NewClass(rt, g_permissions_class, &def) == 0,
           "Permissions: the per-realm prototype slot could not be declared");
     g_obj_slot = realm_value_declare(ctx, "Permissions §6.1 the Navigator's Permissions object");
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The row is `navigator`
+       and NOT this file: Permissions §6.1 is a partial interface of HTML §8.6 Navigator, it is declared
+       from navigator_init, and navigator_free is the release that reaches this one — so the name is
+       the row whose RELEASE undoes this slot, which is what core/platform.c's first walk checks.
+       THE SLOT IS A CLASS ID: core/realm.c's realm_value_declare is JS_NewClassID plus JS_NewClass
+       over a local that starts at 0, so it always mints — and this one was minted INSIDE the window
+       core/platform.c's declare column brackets and named to no declaration, which is the direction
+       that file's conservation identity aborts on.
+       AND THE RESET BELOW STAYS, WHICH IS NOT THE SAME ANSWER THE `document` AND `element` ROWS GET.
+       Those two end their releases in agent_state_undo, which puts every slot carrying the row's name
+       back out of this registry — so a line in the component as well would be a second resetter beside
+       it. navigator_free ends in no undo: it puts its own two slots back by hand, one line each, and
+       this slot is the third. Deleting the reset here would leave nothing resetting it, and
+       agent_state_check_released would fire at the end of the release column on a correct program.
+       WHAT THE DECLARATION BUYS WHERE THE RESET ALREADY EXISTS is that the reset becomes FALSIFIABLE:
+       a line somebody wrote and somebody must keep is correct today and reports nothing if a later
+       diff drops it, and a declared slot is asserted back at its pre-init value by a walk that cannot
+       be forgotten. */
+    agent_state_realm_slot("navigator", &g_obj_slot,
+                           "Permissions §6.1's per-realm Navigator-associated Permissions object slot");
     g_atom_name = JS_NewAtom(ctx, "name");
     CHECK(g_atom_name != JS_ATOM_NULL, "PermissionDescriptor's `name` could not be interned");
     g_id_query = idl_method_id_step(ctx, PQ_ARGS, 1, NULL, 0, &PQ_DECL, 0);
