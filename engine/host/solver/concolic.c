@@ -175,6 +175,23 @@ typedef struct {
        conjuncts of something that is neither. */
     char **conj;
     int    conj_n;
+    /* THE ATOM THIS VALUE WAS SPENT ON, where its SHAPE alone could not name it — written once, by
+       keyname_atom and by nothing else, and NULL on every value whose identity this engine can spell.
+       IT EXISTS BECAUSE THE SHAPE IS 1:N OVER EXACTLY THE POPULATION THE IDENTITY IS ABSENT FOR. A key's
+       atom is its shape (concolic_key_name_hook), and that is 1:1 while the identity separates every pair
+       the shape does — which is the rule stated at keyname_record. Where an operand is an Object or a
+       Symbol the identity is ABSENT, so two genuinely different derivations carry one shape, equal src and
+       equal root: they buy ONE atom and land in ONE slot, and the page loses a member of its own object.
+       MEMOIZED HERE AND NOT RECOMPUTED, which is the whole of why it is a field. The atom is composed from
+       WHERE THE PAGE WAS STANDING at the first purchase, and a value written under one key on two lines is
+       one value: recomputing would buy it two atoms and split a slot a real browser keeps whole. A field on
+       the record makes the atom a pure function of the VALUE, which is the property the keyname table's own
+       declaration rests on ("two flows minting one unknown record ONE entry").
+       OWNED, so a field added here is an obligation at concolic_finalizer and at nowhere else: this record
+       has ONE mint (concolic_alloc, through reclaim_calloc, so the never-purchased state is the zero) and no
+       field-by-field clone. It is bytes rather than a JSValue, so concolic_gc_mark is not its second half —
+       that pairing is `example` and `proto`'s and is stated there. */
+    char *key_atom;
 } Concolic;
 
 /* ONE DISPOSER FOR AN OWNED LIST OF SPELLED STRINGS, because several records hold one — a call predicate's
@@ -1771,6 +1788,7 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     ident_list_free(c->sp_args, c->sp_nargs);
     free(c->sp_subj);
     ident_list_free(c->conj, c->conj_n);
+    free(c->key_atom);
     JS_FreeValueRT(rt, c->example);
     /* …AND THE SECOND OWNED JSValue ON THIS RECORD. A field added to the struct creates an obligation here and
        at concolic_gc_mark together, and the two are read as a pair for that reason. JS_UNINITIALIZED is not
@@ -4192,8 +4210,26 @@ JSValue concolic_builtin_hook(JSContext *ctx, JSValueConst v, const char *op, JS
    input through as itself on purpose, so the coercion crashed and `document.querySelector(location.hash)` ended
    the document. An unknown NAME denotes its SHAPE, which is the same rule the key_name hook already states for
    `obj[x]` and the same one setAttribute already applies to an unknown VALUE: a real string, stable per source,
-   so two lookups through one source agree and two sources never collide. OWNED either way, so the call site
-   keeps one free path and does not grow a branch. */
+   so two lookups through one source agree. OWNED either way, so the call site keeps one free path and does not
+   grow a branch.
+   THAT SENTENCE ENDED "and two sources never collide" AND IS REWRITTEN RATHER THAN DELETED, because the
+   reasoning that produced it is what a reader re-derives: a shape is 1:1 with a value exactly while the
+   identity separates every pair the shape does, which is keyname_record's rule, and where the identity is
+   ABSENT that rule is satisfied vacuously and the shape is 1:N. So two sources CAN collide here, and the
+   `obj[x]` half it cited no longer states the claim unqualified — keyname_atom is what .key_name spends for
+   that population now, and this accessor spends the bare shape.
+   NAMED RESIDUAL — AN UNSPELLABLE NAME IS STILL 1:N AT THIS ACCESSOR. NOT COVERED:
+   `el.setAttribute(h.slice({}), "a")` and `el.setAttribute(h.slice({z:1}), "b")` compose one shape, so the
+   second write lands on the attribute the first named and the element carries ONE of them — the same
+   collapse keyname_record states for a property slot, over the DOM's name-taking members instead.
+   WHAT THE NEXT DIFF BUILDS: this accessor routed through keyname_atom, so a name and a property key composed
+   from one value are the SAME bytes by construction rather than by two spellers agreeing — which is also what
+   stops the split from being observable as a disagreement between them. It is a separate diff because a name
+   from here is PARSED (a selector, a class token) where a property key is not, so the byte that discriminates
+   has to be shown not to change how one parses before it may be spent here.
+   HOW ITS ABSENCE WOULD SHOW: a document whose attribute name or selector is derived through an Object or a
+   Symbol operand reports fewer attributes than it set, with no abort anywhere, while the property-key half of
+   the same expression reports the number it wrote. */
 const char *concolic_name_cstr(JSContext *ctx, JSValueConst v) {
     if (concolic_is(v)) {
         const char *sh = concolic_shape_c(v);
@@ -4224,22 +4260,32 @@ const char *concolic_name_cstr(JSContext *ctx, JSValueConst v) {
    the value, so two flows minting one unknown record ONE entry and neither can disagree with the other. What
    is per-flow is the SLOT the name goes on, and that is an ordinary property write the COW delta already
    carries. It is AGENT state, released with the sources and the paths at concolic_free. */
-typedef struct { char *shape, *src, *root, *ident; } KeyName;
+/* THE ATOM AND THE SHAPE ARE TWO FIELDS BECAUSE THEY ANSWER TWO QUESTIONS, and they were one field for as
+   long as they were one string. The ATOM is the bytes the PAGE holds — what an enumeration hands back, what
+   the inverse below is looked up by — and the SHAPE is the @H provenance a report renders. They are the same
+   string for every value this engine can spell; keyname_atom makes them differ for exactly the population
+   whose shape cannot name it, and merging them would have put that discriminator into every rendered
+   provenance while keying the table on a name two values can share. One bit answering two questions is the
+   defect this file names at concolic_shape_of; this is the same split over a record. */
+typedef struct { char *atom, *shape, *src, *root, *ident; } KeyName;
 static KeyName *g_keynames; static int g_keynames_n, g_keynames_cap;
 static int *g_keynames_hash; static int g_keynames_hash_cap;   /* the index (shape -> idx+1) */
 
-static int keyname_find(const char *shape) {
+/* KEYED ON THE ATOM AND NOT ON THE SHAPE, because the one caller that looks anything up here has the PAGE's
+   bytes in hand and nothing else (concolic_key_value_hook), and because two values may share a shape while
+   the whole point of the atom is that they do not share one. */
+static int keyname_find(const char *atom) {
     uint32_t m, h;
     if (!g_keynames_hash) return -1;
-    m = (uint32_t)g_keynames_hash_cap - 1; h = cons_hash(shape) & m;
+    m = (uint32_t)g_keynames_hash_cap - 1; h = cons_hash(atom) & m;
     while (g_keynames_hash[h]) {
-        if (!strcmp(g_keynames[g_keynames_hash[h] - 1].shape, shape)) return g_keynames_hash[h] - 1;
+        if (!strcmp(g_keynames[g_keynames_hash[h] - 1].atom, atom)) return g_keynames_hash[h] - 1;
         h = (h + 1) & m;
     }
     return -1;
 }
 static void keyname_hash_put(int idx) {   /* caller guarantees room */
-    uint32_t m = (uint32_t)g_keynames_hash_cap - 1, h = cons_hash(g_keynames[idx].shape) & m;
+    uint32_t m = (uint32_t)g_keynames_hash_cap - 1, h = cons_hash(g_keynames[idx].atom) & m;
     while (g_keynames_hash[h]) h = (h + 1) & m;
     g_keynames_hash[h] = idx + 1;
 }
@@ -4267,14 +4313,19 @@ static void keyname_hash_rebuild(void) {
 static int keyname_str_same(const char *a, const char *b) { return a ? (b && !strcmp(a, b)) : !b; }
 #endif
 
-static void keyname_record(const char *shape, const char *src, const char *root, const char *ident)
+static void keyname_record(const char *atom, const char *shape, const char *src, const char *root,
+                           const char *ident)
 {
     KeyName *e;
-    int i = keyname_find(shape);
+    int i = keyname_find(atom);
 
     if (i >= 0) {
-        /* ONE SHAPE, ONE VALUE — the claim this engine's whole slot model rests on, asserted at the one place
-           a second value can arrive under a name the first already holds. quickjs.h states it in prose at
+        /* ONE ATOM, ONE VALUE — the claim this engine's whole slot model rests on, asserted at the one place
+           a second value can arrive under a name the first already holds. IT WAS "ONE SHAPE, ONE VALUE" WHILE
+           THE ATOM WAS THE SHAPE, and the rename is the whole of what keyname_atom changed here: the shape is
+           still compared (a second entry differing in it under one atom is a finding of its own), and it is
+           no longer what the table is keyed by, because the population whose shape cannot name it is exactly
+           the population that was arriving twice under one name. quickjs.h states it in prose at
            .key_name ("two writes through the same unknown source land in the SAME slot, two different sources
            in different ones"), concolic.h repeats it and concolic_name_cstr repeats it again, and until this
            line nothing checked any of them.
@@ -4328,15 +4379,25 @@ static void keyname_record(const char *shape, const char *src, const char *root,
            buy one atom and land in ONE slot. Measured on the artifact of 9c757178:
            `o[h.slice({})] = "a"; o[h.slice({z:1})] = "b";` emitted `Object.keys(o).length` as 1 and read `b`
            back through the first key, with no abort anywhere.
-           WHAT THE NEXT DIFF BUILDS: not a finer shape — there is none, because the identity is absent too —
-           but an ANSWER for a key whose value has no spellable identity at all. That is a question about what
-           .key_name may spend, not about what a speller renders, and it is the only half of this defect that
-           is a missing capability rather than a wrong rendering.
-           HOW ITS ABSENCE SHOWS: a page whose unknown key is derived through an unspellable operand (a RegExp
-           handed to `replace`, an options object handed to a formatter) loses members off its own object —
-           `Object.keys(o).length` short by one per collision — while this assert stays silent. */
+           THAT ANSWER IS keyname_atom AND THE CLAUSE THAT ASKED FOR IT IS REWRITTEN RATHER THAN DELETED,
+           because its reasoning is what a reader re-derives. It read: "not a finer shape — there is none,
+           because the identity is absent too — but an ANSWER for a key whose value has no spellable identity
+           at all. That is a question about what .key_name may spend, not about what a speller renders." Both
+           halves held. What .key_name spends for this population is now the shape PLUS the site the page's
+           own code was standing at when the value first bought an atom, memoized on the record, and the
+           reason that may land while the object namer cannot is at keyname_atom: an atom is not a constraint
+           key, so a coarse one merges two SLOTS where a coarse constraint key would let one flow's fact
+           decide another flow's read — and this population's atom is already coarse, so a site can only
+           SPLIT and never merge.
+           WHAT IS LEFT IS ONE PAIR AND THE ASSERT IS STILL BLIND TO IT: two unspellable values whose FIRST
+           purchase is at ONE site — a loop writing `o[f(a[i])]` over unnameable `a[i]`. Its next diff is the
+           per-flow ordinal beside the site, which keyname_atom states with its own three clauses.
+           HOW THE REMAINDER SHOWS: a page that writes an unknown key inside a LOOP still loses members off
+           its own object — `Object.keys(o).length` short by one per collision — while this assert stays
+           silent, because every field it compares still agrees. The two-line form above no longer does. */
 #if APICLIENT_DEV
-        DCHECK(keyname_str_same(g_keynames[i].src, src) &&
+        DCHECK(keyname_str_same(g_keynames[i].shape, shape) &&
+               keyname_str_same(g_keynames[i].src, src) &&
                keyname_str_same(g_keynames[i].root, root) &&
                keyname_str_same(g_keynames[i].ident, ident),
                "two different unknowns denote ONE property name — a display shape is what this engine spends "
@@ -4355,8 +4416,10 @@ static void keyname_record(const char *shape, const char *src, const char *root,
         g_keynames = nv; g_keynames_cap = nc;
     }
     e = &g_keynames[g_keynames_n];
+    e->atom = strdup(atom);
+    CHECK(e->atom, "concolic: OOM copying the name spent on an unknown key");
     e->shape = strdup(shape);
-    CHECK(e->shape, "concolic: OOM copying an unknown key's name");
+    CHECK(e->shape, "concolic: OOM copying an unknown key's display shape");
     e->src   = src   ? strdup(src)   : NULL;
     CHECK(!src   || e->src,   "concolic: OOM copying an unknown key's provenance");
     e->root  = root  ? strdup(root)  : NULL;
@@ -4368,16 +4431,107 @@ static void keyname_record(const char *shape, const char *src, const char *root,
     else keyname_hash_put(g_keynames_n - 1);
 }
 
+/* THE ONE BYTE THAT PUTS A DISCRIMINATED ATOM IN ITS OWN NAMESPACE — US (0x1f), a byte no speller in this
+   file produces, chosen for decide.c's FORK_SITE_PREFIX reason exactly: a shape carries the PAGE's own text
+   (a string literal it wrote, a member name it chose), so no PRINTABLE separator is this file's to reserve
+   and reserving one would be a claim about what a document may contain.
+   A SHAPE THAT ALREADY CARRIES IT IS A REFUSAL AND NOT AN ASSERT. A page may write \x1f into a string that
+   reaches a shape, and those are the page's bytes: an abort over them would hand any document a switch
+   (§WHOSE-BYTES-STATE-THE-VALUE). Such a purchase keeps exactly the atom it bought before this line existed,
+   which is ABSENCE rather than a wrong name; and if the two populations ever do meet under one string,
+   keyname_record's "one shape, one value" assert is what reports it, because the pair then differs in `src`
+   or `root` or `ident` and that is the comparison it already makes. */
+#define KEYNAME_SITE_SEP '\x1f'
+
+/* THE ATOM AN UNSPELLABLE KEY IS SPENT ON — its shape, PLUS WHERE THE PAGE'S OWN CODE WAS STANDING when this
+ * value first bought one. BORROWED from the record (or the caller's own `sh`), never owned here.
+ *
+ * WHY THE SHAPE ALONE IS NOT AN ANSWER FOR THIS POPULATION, AND IS ONE FOR EVERY OTHER. An atom is bought
+ * with a shape, and a shape is 1:1 with a value exactly while the rule at keyname_record holds — a shape
+ * separates every pair the IDENTITY separates. Where the identity is ABSENT it separates NOTHING, so the
+ * rule is satisfied vacuously and the shape is 1:N: `o[h.slice({})] = "a"; o[h.slice({z:1})] = "b";` spells
+ * one shape, buys one atom, lands in one slot, and `Object.keys(o).length` comes back 1 with `b` readable
+ * through the key that was `a`. That is the wrong-identity half of this file's own trade — "Absence costs
+ * forks; a wrong identity costs the arm" — arriving as a page losing a member of its own object.
+ *
+ * AND THE ANSWER IS A SPLIT RATHER THAN A NAME, WHICH IS WHY IT MAY LAND WITHOUT THE NAMER. An atom is not a
+ * constraint key: keyname_record's entry carries the value's `ident` VERBATIM and concolic_key_value_hook
+ * re-mints with it, so a coarse atom merges two SLOTS where a coarse constraint key would let one flow's
+ * fact decide another flow's read. §Solver-half's refusal of a site WITHOUT an ordinal — "three iterations of
+ * one loop would name one object, so iteration 1's constraint would refine 2 and 3 and ARMS WOULD BE LOST" —
+ * is a statement about a CONSTRAINT and does not transfer here, and the direction is the opposite one: a
+ * coarse atom is what this population already has, so a site that separates SOME of it can only split.
+ *
+ * STRICTLY FINER, WHICH IS THE WHOLE SOUNDNESS ARGUMENT AND IS PROVABLE BY READING RATHER THAN BY RUNNING.
+ * Two atoms composed here are equal only where the two shapes are equal AND the two first-purchase sites
+ * are, so every pair this returns as equal was already equal; no pair that was distinct becomes equal. It
+ * can therefore LOSE no slot a page had, and it can only stop two values sharing one.
+ *
+ * THE SITE IS A PROGRAM FACT AND NOT AN ADDRESS, which is the requirement §Time-travel-resume states rather
+ * than uniqueness-in-a-heap: JS_RunningSiteHash folds a body locator (script, position, body text) with the
+ * frame's own byte offset, so a replay standing at the same line composes the same bytes where an address is
+ * reused by js_malloc and survives no park.
+ *
+ * MEMOIZED AT THE FIRST PURCHASE, which is what keeps `o[k]` on two lines ONE slot. Recomputing per purchase
+ * would name the SITE and not the VALUE, and a value written under one key at two sites would split a slot a
+ * real browser keeps whole — a fidelity loss this file would be introducing rather than removing.
+ *
+ * NO PAGE FRAME IS STANDING IS ABSENCE AND CARRIES NO RESERVED TOKEN. JS_RunningSiteHash returns WHETHER a
+ * page frame is standing precisely so that the whole of host time and the initial parse is not seated on a
+ * hash a real site can also fold to; a token for it here would re-create that, and every purchase made
+ * outside page code would share it. Such a purchase keeps the shape, which is what it bought before.
+ *
+ * NAMED RESIDUAL — TWO VALUES FIRST PURCHASED AT ONE SITE STILL SHARE AN ATOM, which is a loop writing
+ * `o[f(a[i])]` over unnameable `a[i]`: one line, N objects, one slot. NOT COVERED: that pair, and no other —
+ * two sites separate, a spellable identity never reached this function, and a purchase outside page code is
+ * unchanged. WHAT THE NEXT DIFF BUILDS: the CREATING FLOW'S OWN COUNT OF PRIOR PURCHASES AT THIS SITE beside
+ * the site, which is the same (site, ordinal) pair literal_ident's residual names for the object namer and
+ * is a fact about the executed prefix, so a replay reproduces it by reproducing the prefix and a fork carries
+ * it as it carries every other prefix quantity — it is per-flow state and therefore belongs to the constraint
+ * chain rather than to this agent-lifetime table, which is the one design question it has to answer.
+ * HOW ITS ABSENCE WOULD SHOW: a document that writes an unknown key inside a loop reports fewer own property
+ * names than it wrote, with the keyname table holding ONE entry whose shape ends in a single site. */
+static const char *keyname_atom(JSContext *ctx, JSValueConst key, const char *sh)
+{
+    Concolic *c = g_concolic_class ? JS_GetOpaque(key, g_concolic_class) : NULL;
+    uint64_t site;
+
+    /* A SPELLABLE IDENTITY NEEDS NOTHING FROM THIS FUNCTION — its shape already separates every pair the
+       identity does, which is the rule, and adding a site would split a slot that rule keeps whole. */
+    if (!c || c->ident) return sh;
+    if (c->key_atom) return c->key_atom;
+    if (strchr(sh, KEYNAME_SITE_SEP)) return sh;      /* the page's own bytes — see the separator */
+    if (!JS_RunningSiteHash(ctx, &site)) return sh;   /* no page frame: there is no site to name it by */
+    c->key_atom = shapef("%s%c%016llx", sh, KEYNAME_SITE_SEP, (unsigned long long)site);
+    /* THE SENTINEL AND THE CONDITION IT STANDS FOR, ASSERTED WHERE BOTH ARE IN ONE HAND. `key_atom` is
+       written HERE and nowhere else, so "this value bought a discriminated atom" and "this value has no
+       spellable identity" are one fact — and a record carrying one without the other would be a value whose
+       atom says it could not be named while its identity says it could, which is the pair every later
+       purchase of it reads. */
+    DCHECK(c->key_atom != NULL && c->ident == NULL,
+           "a value bought a site-discriminated atom while carrying a spellable identity — the two are one "
+           "fact written at one line, so a record holding both is one whose shape already separates what "
+           "the site is being spent to separate, and the atom has split a slot the identity keeps whole");
+    return c->key_atom;
+}
+
 /* THE NAME an unknown key denotes: its own SHAPE, as a real string. Stable per source, so every key-taking
    operation agrees with every other — see the contract at JS_ToPropertyKeyInternal. */
 JSValue concolic_key_name_hook(JSContext *ctx, JSValueConst key) {
-    const char *sh;
+    const char *sh, *atom;
     if (!concolic_is(key)) return JS_UNINITIALIZED;
     sh = concolic_shape_c(key);
+    /* …AND THE SHAPE IS NOT THE ATOM WHERE THE SHAPE CANNOT NAME THE VALUE — see keyname_atom. The two are
+       the same string for every value this engine can spell, which is every value the rule at keyname_record
+       is about; they differ for exactly the population that rule is vacuous over. */
+    atom = keyname_atom(ctx, key, sh ? sh : "{}");
     /* WHAT THIS TRADE COSTS IS WRITTEN DOWN AS IT IS SPENT — see the table above. The atom is bytes, the
-       value was an unknown, and the only place that trade can be undone is the one place it is made. */
-    keyname_record(sh ? sh : "{}", concolic_src_c(key), concolic_root_c(key), concolic_ident_c(key));
-    return JS_NewString(ctx, sh ? sh : "{}");
+       value was an unknown, and the only place that trade can be undone is the one place it is made. IT IS
+       THE ATOM AND NOT THE SHAPE THAT IS RECORDED, because the record is what concolic_key_value_hook
+       inverts BY THE BYTES THE PAGE HANDS BACK: recording the shape while spending the atom would be a write
+       with no reader standing next to a read with no writer, and a restored key would answer nothing. */
+    keyname_record(atom, sh ? sh : "{}", concolic_src_c(key), concolic_root_c(key), concolic_ident_c(key));
+    return JS_NewString(ctx, atom);
 }
 
 /* JSConcolicHooks.key_value — the trade above, UNDONE where a property name is handed back to the program as a
@@ -5207,8 +5361,9 @@ void concolic_free(void)
        keyname_record's own collision assert exists to prevent, arriving across an agent boundary instead of
        within one. */
     for (i = 0; i < g_keynames_n; i++) {
-        free(g_keynames[i].shape); free(g_keynames[i].src);
-        free(g_keynames[i].root);  free(g_keynames[i].ident);
+        free(g_keynames[i].atom);  free(g_keynames[i].shape);
+        free(g_keynames[i].src);   free(g_keynames[i].root);
+        free(g_keynames[i].ident);
     }
     free(g_keynames);      g_keynames = NULL;      g_keynames_n = g_keynames_cap = 0;
     free(g_keynames_hash); g_keynames_hash = NULL; g_keynames_hash_cap = 0;
