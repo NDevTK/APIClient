@@ -317,8 +317,21 @@ static int g_pair_n;
    agent_state_check_released to find, which is the forcing function this must not stand in front of. */
 static int g_pair_released;
 
-/* §3.7.9.1's iterator object: the TARGET and an INDEX, not a snapshot, so a list mutated between steps is seen. */
-typedef struct { JSValue target; int index; int kind; int iface; } IdlPairIter;
+/* §3.7.9.1's iterator object: the TARGET and an INDEX, not a snapshot, so a list mutated between steps is seen.
+   `target` IS THIS RECORD'S ONE OWNED VALUE, AND THAT IS A THREE-CONSUMER STATEMENT RATHER THAN A NOTE ON A
+   FIELD: js_idl_pair_make DUPS it, idl_pair_iter_finalizer FREES it, and idl_pair_iter_gc_mark WALKS it.
+   solver/cow.h says the same of a CowRecord's `val_off` — it is there `the one statement of what a record OWNS`
+   and carries FOUR consumers, the fourth being a WRITE, which this record has none of: `target` is set once at
+   the mint, and cow.h's own paragraph says an initialization is not a write. So a second JSValue added here is
+   owed the other three, and the MARK is the one it is likeliest to be denied — the dup and the free are each
+   one line from the field's own use, while the mark is the only reading whose absence nothing in this
+   component reports. */
+typedef struct {
+    JSValue target;   /* §3.7.9.1's "target" — the object this iterator iterates (OWNED) */
+    int index;        /* §3.7.9.1's "index" */
+    int kind;         /* PAIR_KEYS / PAIR_VALUES / PAIR_ENTRIES */
+    int iface;        /* the g_pair handle of the interface this iterator was minted for */
+} IdlPairIter;
 
 /* THE RECORD IS REACHED WITHOUT READING THIS FILE'S TABLE, and that is the whole of why this is not the loop
    it was. core/agent_state.h states the rule by name — a finalizer reads NO static its own release resets, and
@@ -329,22 +342,44 @@ typedef struct { JSValue target; int index; int kind; int iface; } IdlPairIter;
    this function returns having freed NOTHING: every live iterator's target and its malloc'd record leak, in a
    teardown where the undos have already run and JS_FreeRuntime has not. That order is not a hazard to argue
    about — engine/host/main.c runs platform_agent_free (every undo) and only then JS_RunGC and JS_FreeRuntime
-   (every finalizer).
+   (every mark and every finalizer: JS_RunGC IS the mark phase, so the ids are as gone for one as for the other).
    `g_pair_n` IS NOT CONSULTED EITHER, WHICH MATTERS FOR THE SAME REASON ONE LEVEL OUT: a table reset would
    make the loop walk zero entries and free nothing, so the count was a second static this function's answer
    depended on. It now depends on none.
    IT IS NOT THE BRAND CHECK AND MUST NOT BE READ AS ONE. idl_pair_iter_of below keeps the class-id comparison
    deliberately: its operand is a `this_val` the PAGE chose, so JS_GetAnyOpaque there would hand back a
-   stranger's opaque as an IdlPairIter. Here every object that arrives is one this file minted, because this
-   finalizer is installed on no other class. A NULL opaque is still possible and still answered: js_idl_pair_make
-   builds the object before it allocates the record, so an OOM between the two leaves one finalizable with
-   nothing in it. */
+   stranger's opaque as an IdlPairIter. Here every object that arrives is one this file minted, because
+   idl_pair_iter_finalizer and idl_pair_iter_gc_mark are installed on no other class. A NULL opaque is still
+   possible and still answered: js_idl_pair_make builds the object before it allocates the record, so an OOM
+   between the two leaves one finalizable with nothing in it. */
 static void idl_pair_iter_finalizer(JSRuntime *rt, JSValue val)
 {
     JSClassID cid;
     IdlPairIter *it = JS_GetAnyOpaque(val, &cid);
 
     if (it) { JS_FreeValueRT(rt, it->target); js_free_rt(rt, it); }
+}
+
+/* THE OTHER READING OF THE SAME OWNERSHIP, AND THE ONE WHOSE ABSENCE IS SILENT. `target` is a COUNTED
+   reference that lives nowhere the collector can see — not a property, not a slot, only the malloc'd record
+   behind the class opaque — so a class declaring the free and not the walk does not merely under-report: an
+   unmarked child keeps the internal reference gc_decref exists to subtract, gc_scan then reads the target as
+   rooted from OUTSIDE the heap, and NEITHER object is ever collected. A page builds the cycle in one line,
+   because §3.7.9's iterator is reachable from the very object it holds: `h.it = h.entries()`. The failure
+   cannot surface here, which is the whole reason it needs saying at the entry rather than at the leak —
+   idl_pair_iter_finalizer is exactly the entry that stops running, so the component that owns the defect is
+   the one component guaranteed to stay quiet about it, and what names it is run-test262's gc_obj_list walk in
+   JS_FreeRuntime, a whole run later and pointing at no component at all.
+   Everything the banner over idl_pair_iter_finalizer establishes is established for this entry by the same
+   sentences and is not restated: the record is reached with JS_GetAnyOpaque because the collector dispatched
+   here THROUGH the class, no static this file's release resets is consulted, and the NULL is the same NULL
+   from the same OOM window and is answered rather than asserted. */
+static void idl_pair_iter_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
+{
+    JSClassID cid;
+    IdlPairIter *it = JS_GetAnyOpaque(val, &cid);
+
+    if (it) JS_MarkValue(rt, it->target, mark_func);
 }
 
 /* The declared interface whose instance `v` is, or NULL. */
@@ -549,6 +584,7 @@ int idl_pair_iter_declare(JSContext *ctx, const char *component, const IdlPairIt
     memset(&def, 0, sizeof def);
     def.class_name = name;   /* JS_NewClass copies it */
     def.finalizer = idl_pair_iter_finalizer;
+    def.gc_mark = idl_pair_iter_gc_mark;
     JS_NewClassID(rt, &f->class_id);
     /* THE RETURN IS READ, AND A `CHECK` IS WHAT IT IS READ WITH. JS_NewClass answers -1 on three states and
        every one of them is fatal in production: an id past the 16-bit class space, an OOM in any of the three
