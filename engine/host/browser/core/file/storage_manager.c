@@ -596,15 +596,30 @@ void storage_manager_init(JSContext *ctx)
     agent_state_id("storage_manager", &g_id_get_directory, "File System §3's getDirectory machine");
     agent_state_id("storage_manager", &g_persistent_storage,
                    "Storage §5's \"persistent-storage\" row in Permissions §4's registry");
+    /* AND §3's CLASS, WHICH IS A HANDLE AND NOT A REFERENCE — declared here and freed nowhere, because a
+       class id is a registration in the runtime rather than a counted reference. What is owed is putting the
+       NUMBER back: JS_NewClassID in this fork opens `if (class_id == 0)` and otherwise RETURNS THE NUMBER IT
+       IS HANDED, so a carried id is never re-minted — it names a class in a runtime that is gone, while the
+       next agent's allocator restarts at JS_CLASS_INIT_COUNT and hands the same number to somebody else. It
+       sits inside the window core/platform.c's declare column brackets with `minted == declared`, so while
+       it went undeclared that sum was short with nothing at this site to say which mint it was. The slot
+       beside it is a realm slot rather than a class for the reason core/agent_state.h's realm-slot entry
+       gives; both are class ids and the identity counts them together. */
+    agent_state_class("storage_manager", &g_sm_class,
+                      "Storage §8's StorageManager class, and its per-realm prototype slot");
     realm_declare_intrinsic(storage_manager_install_realm);
 }
 
 void storage_manager_free(void)
 {
-    int m;
-
-    g_obj_slot = JS_INVALID_CLASS_ID;
-    g_id_get_directory = -1;
-    g_persistent_storage = -1;
-    for (m = 0; m < SG_MEMBER_N; m++) g_id_storage[m] = -1;
+    /* THE ONE RESET, COMPUTED FROM THE DECLARATIONS THEMSELVES, replacing the four hand-written lines that
+       stood here — the realm slot, §3's getDirectory id, Storage §5's feature row and the loop over
+       SG_MEMBER_N. Those were a list maintained twice forty lines apart, and core/agent_state.h names the
+       exact diff that breaks one: a declaration ADDED to a component that already has a release, touching
+       only the `_init`, which is precisely the diff landing §3's class id above. This component holds no
+       reference at all — an id, a realm slot and a class id are registrations — so there is nothing for this
+       release to free BEFORE the undo, which is why the undo is the whole of it rather than its last line.
+       The prototypes are the REALMS' and go with their contexts. This file is the only one declaring under
+       `storage_manager`, so the undo's exemption covers it and no agent_state_reached is owed here. */
+    agent_state_undo("storage_manager");
 }

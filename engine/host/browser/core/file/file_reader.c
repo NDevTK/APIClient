@@ -132,11 +132,24 @@ static void fr_set_at(JSContext *ctx, FileReaderData *d, JSValue *slot, JSValue 
 }
 #define fr_set(ctx_, d_, slot_, v_) fr_set_at((ctx_), (d_), (slot_), (v_), __FILE__, __LINE__)
 
+/* THE COLLECTOR RUNS AFTER THE RELEASE COLUMN, SO NEITHER OF THESE MAY LOOK THE CLASS ID UP. Every host's
+   teardown is platform_agent_free(), JS_RunGC, JS_FreeRuntime in that order, and this file's class id is
+   agent state that the `file_reader` row's release puts back at 0 — so `JS_GetOpaque(val, g_fr_class)` here
+   would be `JS_GetOpaque(val, 0)`, NULL for every live reader. The finalizer would then leak the record and
+   both of the values it owns, and the mark is worse: an unmarked child keeps the internal reference
+   gc_decref exists to subtract, so gc_scan reads a completed read's `result` as rooted from OUTSIDE the heap
+   and it is never collected at all — which is the cycle this file's own mark comment says the walk exists
+   for. The id is not needed: the collector dispatched here THROUGH the class, so it is a fact these already
+   have. JS_GetAnyOpaque and never fr_of, for the reason that accessor's own body gives — a
+   cow_capture_host_record during collection would dup values on an object being torn down. See
+   core/agent_state.h's closing paragraph. */
 static void fr_finalizer(JSRuntime *rt, JSValue val)
 {
-    FileReaderData *d = JS_GetOpaque(val, g_fr_class);
+    JSClassID id = 0;
+    FileReaderData *d = JS_GetAnyOpaque(val, &id);
     size_t i;
 
+    (void)id;
     if (!d) return;
     for (i = 0; i < sizeof(FR_VALS) / sizeof(FR_VALS[0]); i++)
         JS_FreeValueRT(rt, *(JSValue *)((char *)d + FR_VALS[i]));
@@ -145,8 +158,11 @@ static void fr_finalizer(JSRuntime *rt, JSValue val)
 
 static void fr_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    FileReaderData *d = JS_GetOpaque(val, g_fr_class);
+    JSClassID id = 0;
+    FileReaderData *d = JS_GetAnyOpaque(val, &id);
     size_t i;
+
+    (void)id;
 
     /* A page routinely holds the reader from a listener registered on it and the reader holds its `result`;
        an ArrayBuffer result whose page kept a view on it closes the cycle. Without this walk the pair is
@@ -820,11 +836,27 @@ void file_reader_init(JSContext *ctx)
     agent_state_id("file_reader", &g_task_stepid, "§6.1's file reading task machine");
     for (i = 0; i < 4; i++)
         agent_state_id("file_reader", &g_id_read[i], FR_READ_SLOT[i]);
-    /* THE CLASS ID IS DELIBERATELY NOT DECLARED. core/agent_state.h states the consequence of declaring one:
-       the release column runs BEFORE the collection that finalizes the page's object graph, so a class id
-       reset there leaves this component's own finalizer reading `JS_GetOpaque(val, 0)` — NULL for every live
+    /* THE CLASS ID IS DECLARED, AND THE ARGUMENT AGAINST IT IS REWRITTEN RATHER THAN DELETED BECAUSE A
+       READER WHO RE-DERIVES THE FINALIZER HAZARD RE-DERIVES THE DECLINE WITH IT. What stood here was: "THE
+       CLASS ID IS DELIBERATELY NOT DECLARED. core/agent_state.h states the consequence of declaring one: the
+       release column runs BEFORE the collection that finalizes the page's object graph, so a class id reset
+       there leaves this component's own finalizer reading `JS_GetOpaque(val, 0)` — NULL for every live
        reader, and a silent leak of the record and both of its owned values. The id is a registration in the
-       runtime and goes with it. */
+       runtime and goes with it."
+       EVERY CLAUSE OF THAT IS TRUE AND THE CONCLUSION DOES NOT FOLLOW, which is why it survived: the hazard
+       it names is real, and core/agent_state.h states it in the same breath as the cure. That header settled
+       the policy for exactly this reason — components had been settling it per file and had settled it BOTH
+       WAYS, "two self-consistent ones are worse than either of them" — and its answer is that a class id is
+       given back like every other slot and that what it COSTS is a finalizer and a gc_mark reaching the
+       record with JS_GetAnyOpaque, which the two above now do. A carried id is not the cautious half of a
+       tie: JS_NewClassID in this fork opens `if (class_id == 0)` and otherwise RETURNS THE NUMBER IT IS
+       HANDED, so it is never re-minted — it names a class in a runtime that is gone, while the new runtime's
+       allocator restarts at JS_CLASS_INIT_COUNT and hands the same number to somebody else.
+       AND THE DECLINE WAS NOT MERELY A PREFERENCE, WHICH IS THE HALF NO PROSE HERE COULD HAVE SEEN:
+       core/platform.c brackets its declare column with a conservation identity — of everything that column
+       MINTED, was all of it DECLARED — and this mint is inside that window, so an undeclared id left the sum
+       short with nothing at the site to say which one it was. */
+    agent_state_class("file_reader", &g_fr_class, "§6.2's FileReader class, the brand its members read");
     realm_declare_intrinsic(file_reader_install_proto);
 }
 
@@ -882,15 +914,19 @@ void file_reader_install_proto(JSContext *ctx)
 
 void file_reader_free(JSRuntime *rt)
 {
-    int i;
-
     DCHECK(g_ready, "FileReader was released in an agent that never declared it");
     DCHECK(rt == g_fr_rt, "FileReader was released against a runtime that is not the one it declared in");
     (void)rt;
     /* the prototype is the REALM'S — released with its context */
-    g_ready = 0;
-    g_fr_rt = NULL;
-    g_abort_stepid = g_task_stepid = -1;
-    for (i = 0; i < 4; i++)
-        g_id_read[i] = -1;
+    /* THE ONE RESET, COMPUTED FROM THE DECLARATIONS THEMSELVES, and it replaces the eight hand-written lines
+       that stood here (`g_ready`, `g_fr_rt`, the two step ids and the four pool entries). Those were a list
+       maintained twice a hundred lines apart, and core/agent_state.h names the exact diff that breaks one:
+       a declaration ADDED to a component that already has a release, touching only the `_init` — which is
+       precisely the diff that lands §6.2's class id above. The undo resets HANDLES and frees nothing, so
+       everything this release owns is still released by this release; it holds no reference at all (a step
+       id, a flag, a recorded runtime and a class id are all registrations), so there is nothing above this
+       line for it to have taken. It is LAST because core/agent_state.h's ordering contract says so: free,
+       assert, then undo. This file is the only one declaring under `file_reader`, so the undo's exemption
+       covers it and no agent_state_reached is owed here. */
+    agent_state_undo("file_reader");
 }

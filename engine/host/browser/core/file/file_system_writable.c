@@ -959,13 +959,28 @@ void fs_writable_init(JSContext *ctx)
     agent_state_atom("file_system_writable", &g_atom_data, "the write-params `data` member name");
     agent_state_atom("file_system_writable", &g_atom_position, "the write-params `position` member name");
     agent_state_atom("file_system_writable", &g_atom_size, "the write-params `size` member name");
+    /* AND THE CLASS ID, WHICH IS A HANDLE AND NOT A REFERENCE — which is why it is declared here and freed
+       nowhere. The paragraph in the release below is right that the id "is a registration and not a
+       reference", so no JS_Free of any kind is owed for it; what IS owed is putting the NUMBER back, because
+       JS_NewClassID in this fork opens `if (class_id == 0)` and otherwise returns the number it is handed. A
+       carried id is therefore never re-minted: it names a class in a runtime that is gone, while the next
+       agent's allocator restarts at JS_CLASS_INIT_COUNT and hands the same number to somebody else. It is
+       also inside the window core/platform.c's declare column brackets with `minted == declared`, so leaving
+       it undeclared left that sum short with nothing at this site to say which mint it was. */
+    agent_state_class("file_system_writable", &g_fw_class,
+                      "File System §2.5's FileSystemWritableFileStream per-realm prototype slot");
+    /* AND §2.5.1-3's THREE METHOD IDS, which this release was resetting by hand while the three STEP ids
+       beside them were declared — the same handle, from the same pool, half of it inside the registry and
+       half of it outside. Declaring them is what lets the undo below be the whole inverse of this `_init`
+       rather than most of it. */
+    agent_state_id("file_system_writable", &g_id_write, "§2.5.1's write() operation");
+    agent_state_id("file_system_writable", &g_id_seek, "§2.5.2's seek() operation");
+    agent_state_id("file_system_writable", &g_id_truncate, "§2.5.3's truncate() operation");
     realm_declare_intrinsic(fs_writable_install_realm);
 }
 
 void fs_writable_free(JSRuntime *rt)
 {
-    g_stepid_write = g_stepid_close = g_stepid_abort = -1;
-    g_id_write = g_id_seek = g_id_truncate = -1;
     /* THE ATOMS ARE GIVEN BACK, and the sentence that used to stand here — "the atoms and the class id belong
        to a runtime that is going away with them" — was HALF true and that is what made it dangerous. It is
        true of the class id, which is a registration and not a reference. It is false of an INTERNED name:
@@ -1002,5 +1017,17 @@ void fs_writable_free(JSRuntime *rt)
     JS_FreeAtomRT(rt, g_atom_data);
     JS_FreeAtomRT(rt, g_atom_position);
     JS_FreeAtomRT(rt, g_atom_size);
-    g_slot_key = g_atom_type = g_atom_data = g_atom_position = g_atom_size = JS_ATOM_NULL;
+    /* THE ONE RESET, COMPUTED FROM THE DECLARATIONS THEMSELVES — it replaces the five atom handles nulled on
+       one line here and the three step ids nulled above, which were a list maintained twice a hundred lines
+       from their declarations. core/agent_state.h names the exact diff that breaks such a list: a
+       declaration ADDED to a component that already has a release, touching only the `_init`, which is
+       precisely the diff landing §2.5's class id above. It resets HANDLES and frees nothing, so every
+       JS_FreeAtomRT above still runs and still runs FIRST — free, assert, then undo is that header's
+       ordering contract, and an atom nulled before its free would be a leak. This file is the only one
+       declaring under `file_system_writable`, so the undo's exemption covers it and no agent_state_reached
+       is owed here.
+       AND IT IS THE WHOLE INVERSE AND NOT MOST OF ONE: §2.5.1-3's three METHOD ids were reset here by hand
+       while the three STEP ids beside them were declared, so half of one pool's handles sat inside the
+       registry and half outside. They are declared at the `_init` now, which is what this line puts back. */
+    agent_state_undo("file_system_writable");
 }
