@@ -36,6 +36,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/document.h"
@@ -635,6 +636,14 @@ void autofocus_init(JSContext *ctx)
     g_slot = realm_value_declare(ctx, "HTML §6.6.7 autofocus candidates and processed flag");
     g_id_flush = idl_method_id_step(ctx, NULL, 0, NULL, 0, &FLUSH_STEP, 0);
     g_ready = 1;
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The row is `document` and
+       NOT this file: §6.6.7's machine is declared from document_init, so document_agent_free is the release that
+       reaches this one, and a sub-component names the row that releases it. The class id was minted
+       inside core/platform.c's declare column and named to no declaration, which is the direction that
+       file's conservation identity aborts on — a handle nothing gives back, read by the next agent's
+       own init as a latch. */
+    agent_state_realm_slot("document", &g_slot,
+                           "HTML §6.6.7's per-realm autofocus candidates and processed flag");
 }
 
 void autofocus_install_document(JSContext *ctx)
@@ -658,6 +667,12 @@ void autofocus_free(void)
 {
     DCHECK(g_ready, "§6.6.7's autofocus machine was released in an agent that never declared it");
     g_ready = 0;
-    g_slot = JS_INVALID_CLASS_ID;
     g_id_flush = -1;
+    /* THE SLOT IS NOT PUT BACK HERE ANY MORE. It is declared under `document`, whose release ends in
+       agent_state_undo — one reset, computed from the registry that already holds this slot's address
+       and its kind. A line here as well would be a SECOND resetter beside that one, which is the pair
+       core/agent_state.h's undo exists to stop being kept by hand. */
+    /* AND THE CASCADE REACHED THIS FILE — the claim that entitles document_agent_free's last line to put
+       this file's slot back. See core/agent_state.h's agent_state_reached. */
+    agent_state_reached("document");
 }

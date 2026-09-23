@@ -21,6 +21,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/dom/document_type.h"
 #include "core/dom/node.h"
 #include "core/dom/node_heap.h"
@@ -110,6 +111,14 @@ void document_type_init(JSContext *ctx)
        what is claimed is the CLASS and each realm fills its own slot. */
     node_claim_type(LXB_DOM_NODE_TYPE_DOCUMENT_TYPE, g_doctype_class);
     g_ready = 1;
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The row is `document` and
+       NOT this file: §4.6 is declared from document_init, so document_agent_free is the release that
+       reaches this one, and a sub-component names the row that releases it. The class id was minted
+       inside core/platform.c's declare column and named to no declaration, which is the direction that
+       file's conservation identity aborts on — a handle nothing gives back, read by the next agent's
+       own init as a latch. */
+    agent_state_class("document", &g_doctype_class,
+                      "DOM §4.6's DocumentType class, claimed for the doctype node type");
     realm_declare_intrinsic(document_type_install_proto);
 }
 
@@ -157,7 +166,13 @@ void document_type_free(void)
 {
     DCHECK(g_ready, "§4.6's DocumentType was released in an agent that never declared it");
     g_ready = 0;
-    g_doctype_class = 0;
+    /* THE CLASS IS NOT PUT BACK HERE ANY MORE. It is declared under `document`, whose release ends in
+       agent_state_undo — one reset, computed from the registry that already holds this slot's address
+       and its kind. A line here as well would be a SECOND resetter beside that one, which is the pair
+       core/agent_state.h's undo exists to stop being kept by hand. */
+    /* AND THE CASCADE REACHED THIS FILE — the claim that entitles document_agent_free's last line to put
+       this file's slot back. See core/agent_state.h's agent_state_reached. */
+    agent_state_reached("document");
 }
 
 /* §4.6's DESTROY — see document_type.h for WHICH arena and why it is not lexbor's.

@@ -60,6 +60,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/css/style_sheet_list.h"
 #include "core/dom/document.h"
 #include "core/dom/document_fragment.h"
@@ -861,6 +862,14 @@ void shadow_root_init(JSContext *ctx)
     g_id_set_html_unsafe = element_declare_set_html_unsafe(ctx, SHADOW_ROOT_SET_HTML_UNSAFE);
     g_id_set_html = element_declare_set_html(ctx, SHADOW_ROOT_SET_HTML);
     g_ready = 1;
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The row is `document` and
+       NOT this file: §4.8 is declared from document_init, so document_agent_free is the release that
+       reaches this one, and a sub-component names the row that releases it. The class id was minted
+       inside core/platform.c's declare column and named to no declaration, which is the direction that
+       file's conservation identity aborts on — a handle nothing gives back, read by the next agent's
+       own init as a latch. */
+    agent_state_class("document", &g_sr_class,
+                      "DOM §4.8's ShadowRoot class, claimed for the shadow-root node type");
     realm_declare_intrinsic(shadow_root_install_proto);
 }
 
@@ -952,6 +961,12 @@ void shadow_root_free(JSRuntime *rt)
     JS_FreeValueRT(rt, g_shadow_key);
     g_slots_key = g_shadow_key = JS_UNDEFINED;
     g_id_attach = g_id_inner_get = g_id_inner_set = g_id_set_html_unsafe = g_id_set_html = -1;
-    g_sr_class = 0;   /* the handle this release kept — core/agent_state.h's dom_rect defect, exactly */
     g_ready = 0;
+    /* THE CLASS IS NOT PUT BACK HERE ANY MORE. It is declared under `document`, whose release ends in
+       agent_state_undo — one reset, computed from the registry that already holds this slot's address
+       and its kind. A line here as well would be a SECOND resetter beside that one, which is the pair
+       core/agent_state.h's undo exists to stop being kept by hand. */
+    /* AND THE CASCADE REACHED THIS FILE — the claim that entitles document_agent_free's last line to put
+       this file's slot back. See core/agent_state.h's agent_state_reached. */
+    agent_state_reached("document");
 }

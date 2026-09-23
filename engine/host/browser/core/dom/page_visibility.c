@@ -4,6 +4,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/document.h"
@@ -160,6 +161,14 @@ void page_visibility_init(JSContext *ctx)
        which is the shape core/agent_state.h found five inits in and 8987603c deleted. */
     DCHECK(g_vis_slot == JS_INVALID_CLASS_ID, "page_visibility_init ran twice — §6.2's realm slot is declared once per AGENT");
     g_vis_slot = realm_value_declare(ctx, "the document's §6.2 visibility state");
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The row is `document` and
+       NOT this file: §6.2 is declared from document_init, so document_agent_free is the release that
+       reaches this one, and a sub-component names the row that releases it. The class id was minted
+       inside core/platform.c's declare column and named to no declaration, which is the direction that
+       file's conservation identity aborts on — a handle nothing gives back, read by the next agent's
+       own init as a latch. */
+    agent_state_realm_slot("document", &g_vis_slot,
+                           "Page Visibility §6.2's per-realm visibility-state slot");
 }
 
 /* RELEASED BY ITS DECLARER — §6.2 is declared from document_init, so document_agent_free gives it back. The
@@ -168,7 +177,13 @@ void page_visibility_init(JSContext *ctx)
 void page_visibility_free(void)
 {
     DCHECK(g_vis_slot != JS_INVALID_CLASS_ID, "§6.2's visibility state was released in an agent that never declared it");
-    g_vis_slot = JS_INVALID_CLASS_ID;
+    /* THE SLOT IS NOT PUT BACK HERE ANY MORE. It is declared under `document`, whose release ends in
+       agent_state_undo — one reset, computed from the registry that already holds this slot's address
+       and its kind. A line here as well would be a SECOND resetter beside that one, which is the pair
+       core/agent_state.h's undo exists to stop being kept by hand. */
+    /* AND THE CASCADE REACHED THIS FILE — the claim that entitles document_agent_free's last line to put
+       this file's slot back. See core/agent_state.h's agent_state_reached. */
+    agent_state_reached("document");
 }
 
 void page_visibility_install(JSContext *ctx, JSValueConst proto)

@@ -24,6 +24,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "solver/dom_cow.h"
 #include "core/dom/document.h"
 #include "core/dom/document_type.h"
@@ -344,6 +345,14 @@ void dom_implementation_init(JSContext *ctx)
     }
     g_id_has_feature = idl_method_id(ctx, NULL, 0, js_impl_has_feature, 0);
     g_ready = 1;
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The row is `document` and
+       NOT this file: §4.5.1 is declared from document_init, so document_agent_free is the release that
+       reaches this one, and a sub-component names the row that releases it. The class id was minted
+       inside core/platform.c's declare column and named to no declaration, which is the direction that
+       file's conservation identity aborts on — a handle nothing gives back, read by the next agent's
+       own init as a latch. */
+    agent_state_class("document", &g_impl_class,
+                      "DOM §4.5.1's DOMImplementation class, its brand and its per-realm prototype slot");
     realm_declare_intrinsic(dom_implementation_install_proto);
 }
 
@@ -386,6 +395,12 @@ void dom_implementation_free(void)
 {
     DCHECK(g_ready, "§4.5.1's DOMImplementation was released in an agent that never declared it");
     g_ready = 0;
-    g_impl_class = 0;
     g_id_doctype = g_id_document = g_id_html_document = g_id_has_feature = -1;
+    /* THE CLASS IS NOT PUT BACK HERE ANY MORE. It is declared under `document`, whose release ends in
+       agent_state_undo — one reset, computed from the registry that already holds this slot's address
+       and its kind. A line here as well would be a SECOND resetter beside that one, which is the pair
+       core/agent_state.h's undo exists to stop being kept by hand. */
+    /* AND THE CASCADE REACHED THIS FILE — the claim that entitles document_agent_free's last line to put
+       this file's slot back. See core/agent_state.h's agent_state_reached. */
+    agent_state_reached("document");
 }
