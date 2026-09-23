@@ -35,6 +35,7 @@
 #include "core/file/blob.h"
 #include "core/file/file_list.h"
 #include "core/idl_args.h"
+#include "core/agent_state.h"
 #include "core/realm.h"
 #include "core/idl_iter.h"
 #include "core/encoding/text_stream.h"
@@ -82,10 +83,20 @@ static int       g_blob_reader_handle = -1;
 static JSValue blob_alloc(JSContext *ctx, JSValueConst proto, const char *bytes, size_t len,
                           const char *type, size_t type_len);
 
+/* THE COLLECTOR RUNS AFTER THE RELEASE COLUMN, SO THIS MAY NOT LOOK THE CLASS ID UP. Every host's teardown is
+   platform_agent_free(), JS_RunGC, JS_FreeRuntime in that order, and §3's class id is agent state the `blob`
+   row's release now puts back at 0 — so `JS_GetOpaque(val, g_blob_class)` here would be
+   `JS_GetOpaque(val, 0)`, NULL for every live Blob, and this would leak the record and all five malloc'd
+   blocks it owns: silent in dev AND release, because a malloc'd block appears in neither of JS_FreeRuntime's
+   censuses. The id is not needed — the collector dispatched here THROUGH the class, so it is a fact this
+   function already has. See core/agent_state.h's closing paragraph. */
 static void blob_finalizer(JSRuntime *rt, JSValue val)
 {
-    BlobObj *b = JS_GetOpaque(val, g_blob_class);
+    JSClassID id = 0;
+    BlobObj *b = JS_GetAnyOpaque(val, &id);
+
     (void)rt;
+    (void)id;
     if (b) { free(b->bytes); free(b->type); free(b->name); free(b->src); free(b->shape); free(b); }
 }
 
@@ -958,10 +969,22 @@ void blob_init(JSContext *ctx)
     JS_SetProperty(ctx, g_blob_url_store, g_atom_url_next, JS_NewUint32(ctx, 0));
     JS_NewClassID(rt, &g_blob_class);
     JS_NewClass(rt, g_blob_class, &def);
+    /* `blob` IS THIS FILE'S OWN ROW, which is only worth saying because the row beneath it is not: §5's class
+       is declared under this same name from core/file/file_list.c, whose release this one reaches. */
+    agent_state_class("blob", &g_blob_class,
+                      "File API §3's Blob class — the brand every BlobPart and BodyInit position reads, and "
+                      "the class §4's File wears too");
     {
         JSClassDef fdef = { "File" };
         JS_NewClassID(rt, &g_file_class);
         JS_NewClass(rt, g_file_class, &fdef);
+        /* §4's id NAMES NO INSTANCE and is agent state all the same: it is a handle into the runtime's class
+           table, and JS_NewClassID in this fork opens `if (class_id == 0)` and otherwise RETURNS THE NUMBER
+           IT IS HANDED — so an id carried into a second agent is never re-minted. It names a class in a
+           runtime that is gone while the new runtime's allocator restarts at JS_CLASS_INIT_COUNT and hands
+           the same number to somebody else. It is also inside the window core/platform.c's declare column
+           brackets with `minted == declared`. */
+        agent_state_class("blob", &g_file_class, "File API §4's File per-realm prototype slot");
     }
     g_blob_id_stream = idl_method_id(ctx, SLICE_ARGS, 0, js_blob_stream, 0);
     g_blob_textstream_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_blob_text_decl, 0);
@@ -1059,19 +1082,33 @@ void blob_install_protos(JSContext *ctx)
     JS_SetClassProto(ctx, g_file_class, file_p);
 }
 
-void blob_free(JSContext *ctx)
+/* IT TAKES THE RUNTIME BECAUSE IT IS ON core/platform.h's RELEASE COLUMN NOW, and the parameter does not go
+   away: this release genuinely READ the context it used to take, for a JS_FreeValue of §8's store and two
+   JS_FreeAtoms of the keys that store is read by. All three are AGENT-lifetime values, so each has an exact
+   runtime-scoped spelling and the column already holds the runtime to pass. A release that wanted a JSContext
+   would be a per-realm component in the wrong column; this one wanted a JS_FreeValue and was spelling it per
+   realm. */
+void blob_free(JSRuntime *rt)
 {
     if (!g_blob_rt)
         return;
     /* The ENTRIES are the flows' — each arm's are in the delta that captured them, and the collector owns the
        bytes. What the agent owns is the record itself and the two keys it is read by. */
-    JS_FreeValue(ctx, g_blob_url_store);
+    JS_FreeValueRT(rt, g_blob_url_store);
     g_blob_url_store = JS_UNDEFINED;
-    JS_FreeAtom(ctx, g_atom_urls);
-    JS_FreeAtom(ctx, g_atom_url_next);
+    JS_FreeAtomRT(rt, g_atom_urls);
+    JS_FreeAtomRT(rt, g_atom_url_next);
     g_atom_urls = g_atom_url_next = JS_ATOM_NULL;
-    file_list_free(ctx);
+    file_list_free(rt);
     /* the prototypes are the REALMS' — released with their contexts */
     g_blob_rt = NULL;
     g_blob_ctor_stepid = g_file_ctor_stepid = -1;
+    /* §3's AND §4's CLASS IDS, PUT BACK BESIDE THE HANDLES ABOVE. This row hand-resets rather than ending in
+       agent_state_undo, and core/agent_state.h states why that stays a checked shape: a row that hand-resets
+       leaves a dropped member's slots SET for agent_state_check_released to find, so there is no wrong reset
+       for the undo's precondition to refuse and no agent_state_reached is owed by core/file/file_list.c
+       below. What the two lines buy is that the ids do not survive this agent: JS_NewClassID in this fork
+       returns the number it is handed whenever that number is not 0, so a carried id is never re-minted and
+       names a class in a runtime that is gone. */
+    g_blob_class = g_file_class = 0;
 }

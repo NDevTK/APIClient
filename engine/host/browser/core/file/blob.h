@@ -13,7 +13,11 @@ void blob_init(JSContext *ctx);
    and names no Document, and both sections are `[Exposed=(Window,Worker)]`, so both names are owed by a realm
    that reaches no per-document install. */
 void blob_install_protos(JSContext *ctx);
-void blob_free(JSContext *ctx);
+/* THE AGENT'S — core/platform.h's release column, which is why it takes a JSRuntime rather than the
+   JSContext it used to: §8's store and the two keys it is read by are runtime-lifetime values, and
+   JS_FreeValueRT/JS_FreeAtomRT are what release those. It reaches file_list_free, so §5 is released with §3
+   and §4 and the three are one row. */
+void blob_free(JSRuntime *rt);
 
 /* BUILD ONE from bytes the host already holds — Fetch's `blob()` reader, and every other spec that answers with
    a Blob it did not receive. `type` is the MIME type as the caller's own rules produced it, "" for none; it is

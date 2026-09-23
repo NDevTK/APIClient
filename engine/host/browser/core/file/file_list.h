@@ -17,7 +17,10 @@ void file_list_init(JSContext *ctx);
 void file_list_install_protos(JSContext *ctx);
 /* PER REALM. OWNED: the caller frees. */
 JSValue file_list_proto(JSContext *ctx);
-void file_list_free(JSContext *ctx);
+/* Reached from blob_free, which is the `blob` row's release — §3, §4 and §5 are one component and one row,
+   so this is released with them. It takes the runtime that row is handed rather than a context, because both
+   values it frees are of agent lifetime. */
+void file_list_free(JSRuntime *rt);
 
 /* §5's "list of File objects", as the FileList that IS one. `files` is a JS Array of File objects and is
    CONSUMED — the list lives as a JS value so it forks per flow and parks with the flow holding it, which a

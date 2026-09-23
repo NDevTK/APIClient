@@ -2124,7 +2124,14 @@ QJS_EXPORT void qjs_teardown(void)
        fires on — so between them FIFTEEN CLASS IDS and THIRTY-THREE per-realm value slots were carried
        past their own release, each one a number JS_NewClassID handed out of a runtime that is gone and
        each one doubling as its component's declaration latch. See core/platform.c's entry. */
-    blob_free(g_ctx);
+    /* FILE API §3, §4 AND §5 are NOT freed here any more — `blob` is a ROW on core/platform.h's release
+       column, run by the platform_agent_free above. This line was in all three host teardowns and ran AFTER
+       that call had already run the whole column, which is the drift the column exists to end. blob_free
+       reaches file_list_free, so §5 goes with §3 and §4 and the three are one row on both columns. Out here
+       neither file could declare its agent state to core/agent_state.h at all — a row with agent state and
+       no release is what platform_check_agent_state fires on — so THREE CLASS IDS were carried past their
+       own release, one of them the brand every BlobPart and BodyInit position reads. See core/platform.c's
+       entry. */
     /* THE ONE VIRTUAL FILESYSTEM and its two standards, §9.4.4's and §9.5's delivery callees, §9.5's bus
        and XMLHttpRequest are NOT freed here any more — all eight are ROWS on core/platform.h's release
        column, run by the platform_agent_free above. This list had them and test_forced.c did not, and

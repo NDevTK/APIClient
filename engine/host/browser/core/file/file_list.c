@@ -34,6 +34,7 @@
 #include "quickjs-step.h"
 #include "core/file/blob.h"
 #include "core/file/file_list.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/idl_index_arg.h"
 #include "core/idl_indexed.h"
@@ -268,6 +269,11 @@ void file_list_init(JSContext *ctx)
        anything to select against. `index` is REQUIRED, and it can be unknown external input. */
     g_item_id = idl_method_id_step(ctx, ITEM_ARGS, 1, NULL, 0, &FL_ITEM_DECL, 0);
     g_ready = 1;
+    /* `blob`, THE ROW THAT RELEASES THIS, AND NEVER THIS FILE — core/platform.c's list is a list of DECLAREs
+       and RELEASEs that file itself calls, and this component has neither: its declaration is reached from
+       blob_init's last line and its release from blob_free's, so `blob` is whose release gives this slot
+       back. A sub-component names the row that releases it — core/agent_state.h. */
+    agent_state_class("blob", &g_fl_class, "File API §5's FileList per-realm prototype slot");
     realm_declare_intrinsic(file_list_install_protos);
 }
 
@@ -309,16 +315,28 @@ JSValue file_list_proto(JSContext *ctx)
     return proto;   /* OWNED */
 }
 
-void file_list_free(JSContext *ctx)
+/* IT TAKES THE RUNTIME BECAUSE ITS CALLER DOES: blob_free is on core/platform.h's release column now, and the
+   column passes the runtime an agent's state is freed against. Both of the values below are runtime-lifetime,
+   so JS_FreeAtomRT and JS_FreeValueRT are their exact spellings and the parameter changes kind rather than
+   going away. */
+void file_list_free(JSRuntime *rt)
 {
     if (!g_ready) return;
     /* The prototypes and interface objects are the REALMS' — each is released with its context. The Symbol is
        the AGENT's, and a runtime-lifetime value nobody frees is a live GC object JS_FreeRuntime's walk counts
        as a leak. */
-    JS_FreeAtom(ctx, g_files_atom);
+    JS_FreeAtomRT(rt, g_files_atom);
     g_files_atom = JS_ATOM_NULL;
-    JS_FreeValue(ctx, g_files_key);
+    JS_FreeValueRT(rt, g_files_key);
     g_files_key = JS_UNDEFINED;
     g_item_id = -1;
+    /* §5's CLASS ID, PUT BACK BESIDE THE HANDLES ABOVE. The `blob` row hand-resets rather than ending in
+       agent_state_undo, so no agent_state_reached is owed here: core/agent_state.h states that a
+       hand-resetting row leaves a dropped member's slots SET for agent_state_check_released to find, which is
+       the direction the undo's precondition exists to cover and this row is not on. The line matters because
+       a carried id is never re-minted — JS_NewClassID in this fork returns the number it is handed whenever
+       that number is not 0 — so it would name a class in a runtime that is gone while the next agent's
+       allocator hands the same number to somebody else. */
+    g_fl_class = 0;
     g_ready = 0;
 }

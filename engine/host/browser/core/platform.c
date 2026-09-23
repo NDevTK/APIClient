@@ -416,6 +416,22 @@ static void r_request(JSRuntime *rt) { (void)rt; request_free(); }
 /* §5's four interned field names. fetch was one of the forty-three rows with a declare and an EMPTY third
    column, and the atom walk named all four on 118 files of an area that touches fetch only incidentally. */
 static void r_fetch(JSRuntime *rt) { fetch_free(rt); }
+/* FILE API §3, §4 AND §5, WHICH ARE ONE COMPONENT AND ARE NOW ONE ROW ON BOTH COLUMNS. blob_free was a
+   hand-written line in THREE host teardowns — engine/host/main.c, engine/host/wpt_runner.c and
+   engine/host/test_forced.c — running AFTER platform_agent_free had already run this entire column, which is
+   the drift this column exists to end. It reaches file_list_free, so §5's declaration (blob_init's last line
+   is file_list_init) and §5's release travel with §3's and §4's; core/file/file_list.c therefore declares its
+   class id under THIS row's name rather than its own file's, which is what a sub-component does.
+   WHAT IT COST TO BE OUT THERE was not a leak but a question nobody could ask: a row with agent state and an
+   EMPTY release column is what platform_check_agent_state fires on, so while blob_free sat in the hosts
+   neither file could declare anything at all — and between them THREE CLASS IDS, one of which every BlobPart
+   and BodyInit position brands against, were carried past their own release with core/agent_state.h never
+   told they existed.
+   IT TAKES THE RUNTIME NOW AND DID READ THE CONTEXT IT USED TO TAKE, unlike the streams group above: §8's
+   blob URL store is a JS_FreeValue and the two keys it is read by are JS_FreeAtoms, and §5's slot key is one
+   of each. All are AGENT-lifetime values, so each has an exact runtime-scoped spelling (JS_FreeValueRT,
+   JS_FreeAtomRT) and the parameter becomes the runtime this column already holds rather than going away. */
+static void r_blob(JSRuntime *rt) { blob_free(rt); }
 /* DOM §3.1/§3.2 AND THE OBSERVABLE STANDARD, AND THE PAIR INVERTS — WHICH IS THE POINT RATHER THAN A SIDE
    EFFECT. Both releases were hand-written lines in THREE host teardowns — engine/host/main.c,
    engine/host/wpt_runner.c and engine/host/test_forced.c — running AFTER platform_agent_free had already run
@@ -870,7 +886,7 @@ static const PlatformComponent PLATFORM[] = {
        also DECLARES File API §5 "The FileList Interface" (blob_init calls file_list_init), whose own realm intrinsic
        had been placing its interface object that way all along — which is the shape the two above are now on
        rather than a new one. */
-    { "blob",                d_blob,                NULL },
+    { "blob",                d_blob,                NULL,        r_blob },
     /* NO DOCUMENT HALF. Encoding §7.2 Interface TextDecoder, §7.4 Interface TextEncoder, §7.5 Interface
        TextDecoderStream and §7.6 Interface TextEncoderStream all declare `[Exposed=*]`, and Web IDL §3.8
        Platform objects implementing interfaces is "To define the global property references on target, given
