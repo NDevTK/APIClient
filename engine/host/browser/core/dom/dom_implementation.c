@@ -353,6 +353,25 @@ void dom_implementation_init(JSContext *ctx)
        own init as a latch. */
     agent_state_class("document", &g_impl_class,
                       "DOM §4.5.1's DOMImplementation class, its brand and its per-realm prototype slot");
+    /* AND THE FOUR POOL ENTRIES AND THE LATCH, WHICH WERE THE OTHER FIVE SIXTHS OF THIS COMPONENT'S AGENT
+       STATE AND WERE RESET BY HAND. One slot declared here against five reset in a list at the bottom of this
+       file is the pair core/agent_state.h was written against: the registry could ask about the class and
+       could not ask about the rest, so a sixth member added to this init with no matching line in that list
+       was a state nothing anywhere could report. An id from idl_method_id is an INDEX INTO core/idl_args.c's
+       member pool and idl_args_free puts that pool's count back at 0, so a carried one names a member of a
+       pool that no longer exists; the latch is what this file's own install reads to decide the prototype was
+       built. With these declared the reset is agent_state_undo at `document`'s last line and nothing else, so
+       a seventh member owes that release nothing new. */
+    agent_state_id("document", &g_id_doctype,
+                   "DOM §4.5.1's `createDocumentType(qualifiedName, publicId, systemId)` pool entry");
+    agent_state_id("document", &g_id_document,
+                   "DOM §4.5.1's `createDocument(namespace, qualifiedName, doctype)` pool entry");
+    agent_state_id("document", &g_id_html_document,
+                   "DOM §4.5.1's `createHTMLDocument(optional title)` pool entry");
+    agent_state_id("document", &g_id_has_feature, "DOM §4.5.1's `hasFeature()` pool entry");
+    agent_state_flag("document", &g_ready,
+                     "DOM §4.5.1's declared latch — what dom_implementation_install reads to decide the "
+                     "prototype this agent installs from was built");
     realm_declare_intrinsic(dom_implementation_install_proto);
 }
 
@@ -394,12 +413,15 @@ void dom_implementation_install(JSContext *ctx, JSValueConst global)
 void dom_implementation_free(void)
 {
     DCHECK(g_ready, "§4.5.1's DOMImplementation was released in an agent that never declared it");
-    g_ready = 0;
-    g_id_doctype = g_id_document = g_id_html_document = g_id_has_feature = -1;
-    /* THE CLASS IS NOT PUT BACK HERE ANY MORE. It is declared under `document`, whose release ends in
-       agent_state_undo — one reset, computed from the registry that already holds this slot's address
-       and its kind. A line here as well would be a SECOND resetter beside that one, which is the pair
-       core/agent_state.h's undo exists to stop being kept by hand. */
+    /* NOTHING IS PUT BACK HERE. All six slots are declared under `document`, whose release ends in
+       agent_state_undo — one reset, computed from the registry that already holds each slot's address and
+       its kind. The two lines that stood here were the other five spelled out a second time, which is the
+       pair core/agent_state.h's undo exists to stop being kept by hand: they were correct and they were
+       unfalsifiable, since nothing could report the day one of them went missing.
+       THIS COMPONENT OWNS NO REFERENCE, so there is nothing above them that had to stay: the prototype is
+       each REALM's and every DOMImplementation object is a GC object of the realm that minted it. A release
+       that frees a value and keeps its handle is a different case and keeps its own null (see
+       document_agent_free's note on fullscreen_free). */
     /* AND THE CASCADE REACHED THIS FILE — the claim that entitles document_agent_free's last line to put
        this file's slot back. See core/agent_state.h's agent_state_reached. */
     agent_state_reached("document");
