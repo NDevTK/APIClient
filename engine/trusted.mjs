@@ -101,10 +101,34 @@
  * "at this host, navigate what the bundle reaches past a forced gate" and is the zone's to own; and a record
  * that states nothing now THROWS rather than declining, which is the crash that bullet asks for.
  * WHAT REMAINS OPEN IS THE CREDENTIAL HALF AND THE REPLY'S GRADE, NOT THE FIRING DECISION. This process has
- * no cookie jar, so nothing here can act as a person; the offscreen can, and `bridge.js` still leaves
- * `msg.credentialed` unwritten for a learned GET. And a FORCED reply, once a widening lets one be fetched,
- * must be carried as FORCED by the engine and never merged into the observed pool (§@H) — that carrying is
- * the subproblem AFTER this one and it is named at the widening rather than assumed away.
+ * no cookie jar, so nothing here can act as a person; the offscreen can, and a learned GET there is
+ * uncredentialed BY A STATED LITERAL and not by an absence — `fetched` passes `credentialed: false`, which
+ * is what `navigate` and `workFetch` below write at every one of this host's own call sites, for the reason
+ * `navigate` gives: a request answered from fewer facts than it states is a question about a different one.
+ * THIS CLAUSE READ "`bridge.js` still leaves `msg.credentialed` unwritten for a learned GET" AND WAS FALSE
+ * IN BOTH ITS READINGS — rewritten rather than deleted, because a reader re-derives it from the true
+ * sentence beside it (this host has no cookie jar, that one does) and re-adds it. The FIELD is written: the
+ * seed's `AST_ANALYZE` states it from `navigationCarriesSession`, and the child-navigable, swap and
+ * cold-rehydration messages inherit it. The DECISION is stated too, as that literal. THE PROOF OF BOTH IS
+ * THE INCIDENT THAT PRODUCED THEM, which is what makes this checkable rather than another assertion:
+ * `fetched` USED to read `!!(msg && msg.credentialed)` and cookies WERE attached on this exact population,
+ * which an unwritten field cannot do — and every such reply was then refused `blocked-cors-credentialed:`
+ * unread, because that call states no `pageOrigin`. One field was answering two questions (did the DOCUMENT
+ * LOAD carry the session, should the REPLAY) and it is a literal now so the two cannot re-converge.
+ * WHY THIS SITE OUTLIVED A SWEEP THAT NAMED ITS OWN COMPLETENESS IS THE DURABLE HALF. That retirement
+ * enumerated FOUR sites and corrected all four, and it derived the population from
+ * `git grep -n 'credentialed:' extension/bridge.js` — a ONE-FILE grep, which could not see this host at any
+ * revision. A sweep's "all four" is a claim about its SEARCH and is read as a claim about the TREE, and
+ * nobody re-sweeps a cluster somebody has just repaired: the survivor is not merely missed, it is CERTIFIED.
+ * WHAT IS GENUINELY OPEN IS THE `pageOrigin` HALF: the flag and the browser-stated principal are two halves
+ * of one decision, so turning a learned GET credentialed needs `msg.origin` beside it and never
+ * `originOf(msg.sourceUrl)`, which is the URL-derivation that principal exists to forbid. And a FORCED
+ * reply, once a widening lets one be fetched, must be carried as FORCED by the engine and never merged into
+ * the observed pool (§@H) — that carrying is the subproblem AFTER this one and it is named at the widening
+ * rather than assumed away.
+ * RETIREMENT: this record goes when a claim one host's prose makes about another host's field is CHECKED by
+ * something that reads both — `fieldgate.mjs` already walks `engine/*.mjs` and `extension` and already
+ * answers who writes `credentialed`; what is missing is the join from a field NAME IN PROSE to that answer.
  * A CONSTANT NAMED `UNSTATED_PROVENANCE` ONCE STOOD AT A CROSS-REFERENCE HERE, dead and unreferenced,
  * describing a zone that could not tell a page `fetch()` from a forced arm's. `PROVENANCE_DECLINE`,
  * `NAVIGATION_WIDENING` and `FORCED_NAVIGATION` have now followed it out for the mirror-image reason: not
