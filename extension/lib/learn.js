@@ -1803,11 +1803,19 @@ function _applyStatsToField(field, fieldStats, requestCount) {
      `_detectedEnum` over it — see that function for what the pair of producers cost and why the standing
      claim's OWNER, rather than its mere existence, is the question.
      NAMED RESIDUAL — THE WIRE SAMPLE UNDER A DECLARED MEMBERSHIP NOW REACHES NO FIELD.
-       WHAT IS NOT COVERED: which of a declared `enum`'s members traffic actually exercised. Before this
-         guard that fact was recorded by OVERWRITING the declaration, which is the wrong field for it (it
-         states what the API accepts, not what this tool saw); refusing the overwrite is a strictly better
-         answer by §@H — a thin report rather than a wrong one — and it does drop the datum, because the
-         stats pass has no other field to put it in and `_astValidValues` is the AST producer's pool.
+       WHAT IS NOT COVERED: any statement about a value the WIRE carried for a field whose membership was
+         declared — which is two facts and not one, and the second is the larger. Traffic that exercises only
+         SOME declared members is the small half. Traffic that carries a value the declaration does NOT
+         contain is the other, and it is evidence the third-party document is INCOMPLETE — precisely the kind
+         of thing §What-the-tool-produces exists to surface. Before this guard both were recorded by
+         OVERWRITING the declaration, which is the wrong field for either (it states what the API accepts,
+         not what this tool saw), and the second was additionally OFFERABLE in the panel because the
+         overwrite put it in `enum`. So this guard is a real trade and not a free correction: it buys a thin
+         report in place of a wrong one, which §@H ranks correctly, and it pays an undeclared observed value
+         that used to reach the reviewer. THE DATUM IS NOT LOST FROM THE RECORD — `stats.values` still holds
+         every one of them on `m._stats`; what it has lost is a field on the parameter and therefore a
+         surface. `_astValidValues` is not that field: it is the AST producer's pool and folding wire values
+         into it would make one pool answer two questions.
        WHAT THE NEXT DIFF BUILDS: an observed-value pool for the STATS producer, beside `enum` rather than
          in it, written here whenever `analyzeEnum` fires — with a reader, or it is a field nobody will
          notice is never read. lib/openapi-export.js already has the vocabulary for it: `x-observed-values`
