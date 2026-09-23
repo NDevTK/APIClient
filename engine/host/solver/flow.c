@@ -1758,6 +1758,13 @@ void flow_age_running(int64_t us) {
     g_running->key_last    = flow_member_key(g_running);
     g_running->key_gen     = g_gen;
     g_running->key_stamped = 1;
+    /* …AND THE PHASE, ON THE SAME STATEMENT GROUP AND FOR THE SAME REASON. This charge is the ONE writer of
+       `own_silence` that does not raise the generation, so it is the one writer both stamps must survive —
+       and the phase is the half the key cannot carry, because the key reads the FLOOR of the quantity this
+       line advances and a charge smaller than one quantum moves the remainder while leaving the floor alone.
+       Stamping only the key here would therefore leave the phase's check firing on exactly the member the
+       charge IS about, which is the state solver/flow.h's `phase_last` says the walk is NOT written for. */
+    g_running->phase_last  = flow_silence_phase(g_running);
 #endif
     /* THE RESOLUTION THIS CHARGE MUST HAVE — that a slice of the thread MOVES the rank it is charged to — is
        asserted at the seam where the charge meets the pick, in engine.c's scheduler loop, because that is the
@@ -4389,7 +4396,32 @@ static double flow_nonreward(const Flow *f) {
        that reached one of the two and not the other.
        IT IS ASKED HERE AND NOT AT flow_member_key BECAUSE THIS IS THE SITE A NEW TERM IS ADDED TO. A guard
        written at the reader would go on passing for as long as nobody re-read it; written at the writer it
-       fires on the diff that causes it. */
+       fires on the diff that causes it.
+       AND ITS PRECONDITION IS NEVER TRUE ON A REAL PAGE, WHICH IS A FINDING ABOUT THIS GUARD AND NOT A REASON
+       TO WIDEN IT. `flow_family_notch(f) == 0` says this family has burned less than ONE cooperative quantum
+       since any of its arms last emitted, and flow_pick's `unrun` banner already records what that costs one
+       scope over in its own words: "once a family has burned one cooperative quantum since any of its arms
+       last emitted, `acct_family_us` alone exceeds FLOW_SERVICE_US and NO member of it can answer this" and
+       "on a real page the whole frontier is one family". The same operand empties this guard for the same
+       reason, and the two sites had never been read together. So the check that the two spellings agree is
+       armed on the smoke fixture and on the interval after an emission, and on the population an index would
+       actually be built over it is SILENT.
+       THE OBVIOUS STRENGTHENING IS REFUSED AND THE REASON IS THE ONE THIS FILE ALREADY STATES ABOUT INDEXES.
+       A guard that held in general would have to compare this sum against a re-association of it — either
+       `member_key + (family and carry terms)` or `n` minus a subtraction — and `a + b + c + d` associates as
+       `((a+b)+c)+d`, so every such spelling differs from this one in the last bit. flow_pick's own words for
+       that hazard are that an index "would differ from it in the last bit and reorder two members the order
+       currently ties", and a GUARD written that way would report a divergence the comparator does not have.
+       Nothing here is worth a rounding difference in the order.
+       WHAT COVERS THE POPULATION INSTEAD IS THE WALK, WHICH ASKS A DIFFERENT QUESTION AND CAN. flow_pick
+       stamps `key_last`/`phase_last` per member per scan and compares them across a frontier generation, so
+       the claim an index rests on — that a non-running member's own half and its phase stand still — is
+       armed on every member of every scan, including every member of the one family a real page presents.
+       This guard is about a SUMMAND reaching one function and not the other; that one is about a VALUE
+       moving when nothing may move it. Two questions, and only the second is answerable in general.
+       RETIREMENT: this record goes when flow_weight is composed so that its member half is a SUBEXPRESSION of
+       it rather than a re-association — at which point the equality holds by construction for every family
+       notch and this guard has no precondition left to be vacuous under. */
     DCHECK(!(flow_family_notch(f) == 0 && flow_silence_carry(f) == 0) || flow_member_key(f) == n,
            "the member half of the WFQ's weight is no longer what flow_weight computes — with this family's "
            "aging at zero and no carry the two are the same expression on the same operands, so a difference "
@@ -4881,11 +4913,17 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
            the ones a DCHECK below it makes, and this is one of those. It is dev-only in both the check and the
            stamp, for the reason the fields carry in solver/flow.h — a second evaluation of the member half per
            member per scan is affordable in the build that makes the check and is an instrument changing the
-           run it samples in the build that does not. */
+           run it samples in the build that does not. THAT COST IS NOW THE MEMBER HALF **AND** ITS REMAINDER,
+           which is one more integer modulo on a member the loop is already holding and is in the same class;
+           it is named here rather than left at the old figure because the sentence prices the guard and a
+           reader deciding whether the guard is affordable reads the price. */
 #if APICLIENT_DEV
         {
             Flow *m = g_flows[i];
             double mk = flow_member_key(m);
+            /* …AND THE REMAINDER THAT KEY THROWS AWAY, READ ON THE SAME MEMBER THE WALK IS ALREADY HOLDING.
+               solver/flow.h's `phase_last` states why the key does not cover it and why an index needs it. */
+            int64_t mp = flow_silence_phase(m);
             /* WHICH ARM OF THE DISJUNCTION THIS MEMBER TOOK, DECIDED ONCE AND READ BY BOTH THE COUNT AND THE
                CHECK. The condition below used to spell the three exemptions a second time, which is a copy of
                one decision that can drift from its count the day a fourth exemption is added — the shape
@@ -4900,7 +4938,7 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
                        : m->key_gen != g_gen ? &g_key_checks.stale_gen
                        :                       &g_key_checks.armed;
             (*kind)++;
-            DCHECKF(kind != &g_key_checks.armed || mk == m->key_last,
+            DCHECKF(kind != &g_key_checks.armed || (mk == m->key_last && mp == m->phase_last),
                     "a member that is not holding the thread changed its own half of the WFQ's weight with "
                     "the frontier generation standing still — flow_silence_phase's decomposition says only "
                     "the family's common half and the carry bit may move between two generations, and every "
@@ -4908,10 +4946,15 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
                     "Either a writer of the optimism, the fitness distance, the branch bucket or this "
                     "member's own silence has stopped raising the generation, or a weighing has been "
                     "introduced between one of those writes and its bump — flow_fork_inherit's `sub_born++` "
-                    "and acct_depart's `sub_gone++` are both correct only by adjacency. At generation %u the "
-                    "member half was %.17g and is now %.17g",
-                    g_gen, m->key_last, mk);
-            m->key_last = mk; m->key_gen = g_gen; m->key_stamped = 1;
+                    "and acct_depart's `sub_gone++` are both correct only by adjacency. THE PHASE IS THE "
+                    "SECOND OPERAND AND CAN FAIL WHERE THE KEY CANNOT: the key reads `own_silence / "
+                    "FLOW_SERVICE_US` and the phase reads `own_silence %% FLOW_SERVICE_US`, so a write "
+                    "smaller than one quantum moves the phase and leaves the key standing — and the phase is "
+                    "what an index over this frontier BUCKETS on, so that write re-buckets a member with "
+                    "nothing else in this engine able to say so. At generation %u the member half was %.17g "
+                    "and is now %.17g; the phase was %lld and is now %lld",
+                    g_gen, m->key_last, mk, (long long)m->phase_last, (long long)mp);
+            m->key_last = mk; m->key_gen = g_gen; m->key_stamped = 1; m->phase_last = mp;
         }
 #endif
         if (g_flows[i]->visits == 0 && flow_silence_notch(g_flows[i]) == 0 && (!unrun || w > unrun_w)) {

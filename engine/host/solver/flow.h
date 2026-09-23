@@ -1118,10 +1118,34 @@ typedef struct Flow {
        RESETS it, so any value a fresh member could be born holding is one a live generation can reach. A flow
        that has never been weighed and one weighed at generation zero are two different states and only one of
        them has anything to compare against. */
+    /* …AND THE ONE PER-MEMBER QUANTITY THE KEY ABOVE DOES NOT COVER, WHICH IS THE KEY AN INDEX IS ACTUALLY
+       BUILT ON. flow_member_key reads flow_service_notch, which is `own_silence / FLOW_SERVICE_US` — a FLOOR
+       — so every value of `own_silence` inside one quantum produces the SAME key and the check above passes
+       for all of them. flow_silence_phase is `own_silence % FLOW_SERVICE_US`, the REMAINDER that floor throws
+       away, and flow.c's decomposition makes it the bucket key: `notch = k + K + (p + R >= S)`, the carry
+       flips in descending order of `p` as the common threshold `S - R` sweeps down, and the maximum an index
+       returns is the larger of two CONTIGUOUS RANGES OF `p`. So an index keyed on the phase rests on the
+       phase standing still for a non-running member between two generations, and the key check asserts a
+       STRICTLY WEAKER consequence of that — a writer moving `own_silence` by less than a whole quantum
+       leaves `own_silence / S` untouched, leaves `key_last` agreeing, and SILENTLY RE-BUCKETS the member.
+       IT IS NOT A THEOREM AND THAT IS WHY IT IS ASSERTED. `own_silence` has two writers: flow_age_running,
+       which charges only the member holding the thread and re-stamps both fields on the same statement, and
+       flow_credit_emit, which zeroes it through the account's generation and therefore raises `g_gen`. Both
+       are correct today BY CONVENTION, and flow.c already records two neighbouring writers that are
+       "correct by adjacency rather than by construction"; this makes the phase's half true by construction
+       instead, at the one seam that is already holding every member.
+       FOLDED INTO THE SAME COMPARISON AND THE SAME COUNTER as the key rather than given its own, because
+       `key_checks_total()` is asserted equal to the weighings one loop performed — a second bucket would
+       make that partition disagree with the counter it is a partition of, which is the defect that check
+       exists to catch. One arming, one bucket, two operands.
+       DEV-ONLY FOR `key_last`'s REASON EXACTLY: it is a fourth field on every member of a frontier that grows
+       because forking is the point, and its stamp is a call, so paying it in the build the product ships
+       would be an instrument changing the run it samples. */
 #if APICLIENT_DEV
     double   key_last;
     unsigned key_gen;
     int      key_stamped;
+    int64_t  phase_last;
 #endif
 } Flow;
 
@@ -1991,17 +2015,33 @@ typedef struct {
          d=[json.loads(l[5:]) for l in sys.stdin if "silPhases" in l]
          print(len(d), sum(1 for x in d if x["silPhases"]==1),
                sum(1 for x in d if x["silPhases"]==1 and x["members"]>1))'
-       WHAT A REAL FRONTIER READS INSTEAD: on the three live-page runs in that corpus, all at `families: 1`,
-       the terminal readings are 3432/6243, 3263/5888 and 3121/5882 — 0.53 to 0.55, ABOUT EVERY OTHER MEMBER
-       ITS OWN GROUP. The ratio reads 1.000 at the four members of each run's FIRST census, where every member
-       is trivially its own group, FALLS to 0.16-0.19 by four hundred, and then climbs MONOTONICALLY to those
-       terminal figures at six thousand — so it is the frontier's own growth that fills the residues and there
-       is no reading at which it settles. The collapsing emission did fire on each of those runs (the leading
-       account's `top_forgiven` stood at 17) and no sample ever caught the frontier at one group, which is what
-       a state that lives between an emission and the very NEXT charge looks like from a census sampled per
-       REPORT. So the reading an index designer actually gets is not 1 and is not small: it is half the
-       frontier and rising, and the single-cached-maximum class is what the mechanism PERMITS rather than what
-       the measurement supports.
+       WHAT A REAL FRONTIER READS INSTEAD — ON THE HOST THOSE THREE RUNS WERE TAKEN ON, WHICH THIS PASSAGE DID
+       NOT SAY AND WHICH IS THE WHOLE OF ITS SCOPE. The readings are `3432/6243, 3263/5888 and 3121/5882 —
+       0.53 to 0.55, ABOUT EVERY OTHER MEMBER ITS OWN GROUP`, climbing MONOTONICALLY from 0.16-0.19 at four
+       hundred to those terminal figures at six thousand, with the collapsing emission firing on each run
+       (`top_forgiven` 17) and no sample ever catching the frontier at one group. All of that is kept in its
+       own words because it is true of what it measured and a reader who re-derives it from the same corpus
+       will write it again. WHAT IT LEFT OUT IS THAT ALL THREE CARRY `isCpu: true` — they are NATIVE-host
+       drives, whose slice is thread-CPU, and the conclusion drawn from them ("the reading an index designer
+       actually gets is not 1 and is not small: it is half the frontier and rising") was stated about live
+       pages in general while being about one host.
+       THE VEHICLE READS SOMETHING ELSE ENTIRELY, AND THE VEHICLE IS WHAT SHIPS. MEASURED at artifact
+       `9c2c239d` on codesandbox.io, one fresh browser, 90 s, 58 censuses carrying this row: `sil_phases` is
+       **120** at census 9 and **120** at census 60 while `members` goes 2757 -> 13389 — FLAT across a 4.9x
+       frontier growth, ratio 0.009 and FALLING, which is the opposite direction. Against `picksLifetime`
+       5449 it is the reading the paragraph below already names: the residues are INHERITED rather than
+       earned. A second vehicle document did not settle it — gitlab.com/explore reaches four members on the
+       vehicle where the native corpus reaches 6243 on the same page — so what is established is ONE
+       document's series and not a host law. That 120 is `FLOW_SERVICE_US / 100` and that a non-isolated
+       `performance.now()` is coarsened to 100us are an INFERENCE about the cause and are recorded as one.
+       SO NEITHER FIGURE MAY PRICE AN INDEX, AND THE DESIGN IS CHOSEN SO THAT NEITHER HAS TO. A structure
+       that SWEEPS the distinct phases costs `sil_phases` per query and is therefore a 100x win on one host
+       and a 2x win on the other — a design whose value is a fact about a clock. A structure over the FIXED
+       phase domain `[0, FLOW_SERVICE_US)` costs a logarithm of that domain whatever `sil_phases` reads, and
+       the two contiguous ranges the carry splits it into are `[0, S-R)` and `[S-R, S)` however many members
+       stand in them. Prefer the second and the question stops being load-bearing.
+       RETIREMENT (this correction): it goes when a census row in this tree carries the host's slice measure
+       beside it, so a live-page figure cannot be quoted without saying which clock it was denominated in.
        RETIREMENT: this record goes when a census in this tree reports `sil_phases == 1` with `members > 1` —
        the one observation that would make the retired headline a statement about this engine rather than
        about its arithmetic.
