@@ -1350,12 +1350,85 @@ function _signalRegistryCheck() {
     });
   }
 }
-/* THE VECTOR FOR ONE REQUEST — every signal's value, computed from the facts this file has already
-   validated. It is what the firing walk asks and what the surface renders, so there is one derivation and
-   not two: a control that showed a person a value the walk did not decide from would be a permission
-   surface about a different request. */
+/* ── THE FACTS EVERY SIGNAL IS COMPUTED FROM, REQUIRED AT THE ONE DERIVATION BOTH READERS SHARE ──────────
+   THIS USED TO STAND INSIDE `_firingRefusal` AND IS MOVED RATHER THAN COPIED, BECAUSE THE SENTENCE BELOW
+   CLAIMED A PROPERTY ONLY ONE OF THE TWO READERS WAS ENFORCING. `_signalVector`'s own banner said its facts
+   were ones "this file has already validated" — true of the firing walk, which CHECKed all seven, and FALSE
+   of the surface, which reached the identical derivation through `safeFetchSignalVector` having checked only
+   that a URL parses. One derivation, two gates, and the weaker one decided what a PERSON was shown.
+   THE THREE THAT FAILED SILENTLY ARE THE POINT, AND THEY ARE THE ONES NO ASSERT ANYWHERE COULD CATCH. An
+   unstated fact whose value lands OUTSIDE its signal's declared space is caught by the `DCHECK` below —
+   `provenance`, `doc-reach`, `witness` and `actor` compute `undefined` and fire it in dev. The other three
+   compute a value INSIDE the space, from nothing: an absent `destination` takes neither `_isScriptLike` nor
+   `_isDocumentSubresource` and reads `value`; an absent `credentialed` is `!!undefined` and reads `no`; an
+   absent `headers` is falsy and reads `none`. MEASURED: the vector for a request stating none of the three is
+   BYTE-IDENTICAL to one stating all of them, in dev and in release alike, with nothing raised anywhere.
+   AND THE DIRECTION IS THE REASSURING ONE, WHICH IS WHY IT IS A `CHECK`. `cookies` and `header-authority` are
+   the two rows this registry grades `certain` — "this tool computed it", the strongest thing the surface can
+   say — so a person about to widen an origin was shown `cookies=no` and `header-authority=none`, marked as
+   THIS REQUEST, for a request whose credential state and header list nobody had stated. That is
+   CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS at the one boundary where the CONSUMER IS THE PERSON, which
+   §NOTHING-IS-REFUSED-AT-EVERY-SETTING makes the whole of the safety: with no combination refused, the only
+   thing between somebody and a combination they did not intend is whether the control stated the
+   consequence. A plausible datum here is not a wrong number in a report, it is a decision made on a fact
+   nobody established — so release cannot PROCEED correctly through it and the grade is the firing walk's own.
+   IT MAY ASSERT AT ALL FOR `_refuseUnreadOptions`' REASON, WHICH IS THE ONE THAT DECIDES IT: every field here
+   is composed in TRUSTED-ZONE SOURCE. The surface's only caller builds an object LITERAL whose seven facts
+   are literals, and whose `url` is a subject `safeFetchWidenable` has already answered for; the untrusted
+   engine supplies header VALUES and grade WORDS through `safeFetch`'s own options, every one of which is
+   CHECKed at its read one function per fact above. So no bundle and no compromised renderer can reach this
+   abort — CLAUDE.md §WHOSE-BYTES-STATE-THE-VALUE's discriminator is who DETERMINES the value, and here it is
+   this zone in every frame. A stranger's bytes are asserted about nowhere in this function. */
+function _requireFacts(facts) {
+  CHECK(facts !== null && typeof facts === "object",
+        "the signal vector was asked for with no facts — every signal is computed from them and a caller " +
+        "that passed none would be answered by whichever arm each signal's predicate happens to reach first");
+  CHECK(typeof facts.destination === "string" && _PROVENANCE_TYPES.indexOf(facts.provenance) >= 0 &&
+        _PROVENANCE_TYPES.indexOf(facts.docReach) >= 0 &&
+        _PINNED_MARKS.indexOf(facts.pinned) >= 0 && _ACTOR_WORDS.indexOf(facts.actor) >= 0 &&
+        typeof facts.credentialed === "boolean" &&
+        facts.url !== null && typeof facts.url === "object" && typeof facts.url.origin === "string",
+        "a signal vector was asked for without the facts that decide it — Fetch §2.2.5 \"Requests\"' " +
+        "DESTINATION says " +
+        "whether this reply becomes a PROGRAM or a VALUE, the actor says whether the ANALYSED PAGE composed " +
+        "this request or THIS TOOL did, the provenance says what its path is evidence of, the reach " +
+        "grade says whose act the DOCUMENT it was made from was, the witness " +
+        "mark says whether the address may rest on a value this engine chose, the credential flag says " +
+        "whether the person's session pays, and the parsed URL is what the address-borne authority is read " +
+        "off. A caller that omitted any of them would be answered by the FIRING walk's permissive arm, " +
+        "which is the one that spends an act, and shown on the SURFACE as a value with no fact under it: " +
+        "an absent destination reads `value`, an absent credential flag reads `cookies=no` and an absent " +
+        "header list reads `header-authority=none`, both of those on rows this registry grades `certain`. " +
+        "Every one of them is a fact the CALLER holds and this file cannot " +
+        "re-derive: forgetting to state one may never be a way to be exempted");
+  /* AND THE HEADER LIST'S SHAPE, WHICH NOTHING WAS ASKING — THE `header-authority` ROW IS THE ONE PLACE A
+     PRIMITIVE READS AS AN ESTABLISHED ABSENCE. That row's own declaration says `none` IS A FACT and grades
+     it `certain`: with no list this zone adds no authority beyond what `init.credentials` says. It computes
+     that fact by TRUTHINESS, so a caller that passed `""`, `0` or `false` — none of which is a header list
+     and every one of which is a bug at the call site — is told, on the strongest grade this registry has,
+     that the question was asked and answered. A list is an OBJECT; `null` and absent are the honest
+     spellings of "this caller composed none", which is what every call site in this tree states today.
+     IT IS THE SHAPE AND NEVER THE CONTENTS, which is the line §WHOSE-BYTES-STATE-THE-VALUE draws: the VALUES
+     in that list are the analysed BUNDLE's on the XHR path, so this file may assert that a list IS a list
+     and may never assert anything about what a stranger put in it. A name or a value inside it is input. */
+  CHECK(facts.headers === null || facts.headers === undefined || typeof facts.headers === "object",
+        "a signal vector was asked for with a header list that is not one: " +
+        JSON.stringify(facts.headers) + " — the `header-authority` row reads this by TRUTHINESS and grades " +
+        "the answer `certain`, so a primitive here is rendered to a person as the established fact that no " +
+        "authority rides in a header, on a request whose header list was never stated. `null` is how a " +
+        "caller with no list says so and is a fact; anything that is not an object is a call site that " +
+        "meant something else. This asserts the SHAPE and never the CONTENTS — the names and values are " +
+        "the analysed bundle's on the XHR path and are input this zone may not assert about");
+}
+/* THE VECTOR FOR ONE REQUEST — every signal's value, computed from the facts REQUIRED DIRECTLY ABOVE. It is
+   what the firing walk asks and what the surface renders, so there is one derivation and not two: a control
+   that showed a person a value the walk did not decide from would be a permission surface about a different
+   request. The gate is HERE, on the derivation, rather than at each of the two entries — an entry is a list
+   somebody maintains and this is every asker by construction, which is the same argument
+   `safeFetchEgressStating` makes one door over. */
 function _signalVector(facts) {
   var v = Object.create(null), i, s, val;
+  _requireFacts(facts);
   for (i = 0; i < _SIGNALS.length; i++) {
     s = _SIGNALS[i];
     val = s.of(facts);
@@ -1604,7 +1677,11 @@ var _DEFAULT_ARMS = [
      the analysed document reached through `XMLHttpRequest`, on a document whose `fetch()`es to the same host
      are answered on the lines around it.
      AND WHAT FIRES HERE IS UNCREDENTIALED, WHICH IS STATED SO THAT NOBODY READS THIS ARM AS THE WHOLE OF THE
-     OWNER'S SENTENCE. Their words were "same-origin and credentialed like a browser", and the relay that
+     OWNER'S SENTENCE. Their words were "same-origin and credentialed exactly as a browser is" (CLAUDE.md
+     §THE-PER-ORIGIN-OPT-IN-GOVERNS-EGRESS; this quoted them as "like a browser", which is a PARAPHRASE IN
+     QUOTATION MARKS — the marks carry an authority the words never earned, and the citation auditor reported
+     it as a fetch §2.2.5 quotation because the nearest preceding anchor is a spec rather than the owner),
+     and the relay that
      reaches this arm passes `credentialed: false` — so the reply is the LOGGED-OUT one, and an app whose
      boot data differs by session boots on the wrong payload. That is a decision in another file and is NOT
      this arm's to make; it is named here because a person reading what they permitted is entitled to know
@@ -1909,23 +1986,13 @@ function safeFetchPermitted(origin) {
    cannot". */
 function _firingRefusal(facts) {
   var v, i, s;
-  CHECK(facts !== null && typeof facts === "object",
-        "the firing question was asked with no facts — every signal is computed from them and a caller that " +
-        "passed none would be answered by whichever arm this function happens to reach first");
-  CHECK(typeof facts.destination === "string" && _PROVENANCE_TYPES.indexOf(facts.provenance) >= 0 &&
-        _PROVENANCE_TYPES.indexOf(facts.docReach) >= 0 &&
-        _PINNED_MARKS.indexOf(facts.pinned) >= 0 && _ACTOR_WORDS.indexOf(facts.actor) >= 0 &&
-        typeof facts.credentialed === "boolean" &&
-        facts.url !== null && typeof facts.url === "object" && typeof facts.url.origin === "string",
-        "the firing question was asked without the facts that decide it — Fetch §2.2.5's DESTINATION says " +
-        "whether this reply becomes a PROGRAM or a VALUE, the actor says whether the ANALYSED PAGE composed " +
-        "this request or THIS TOOL did, the provenance says what its path is evidence of, the reach " +
-        "grade says whose act the DOCUMENT it was made from was, the witness " +
-        "mark says whether the address may rest on a value this engine chose, the credential flag says " +
-        "whether the person's session pays, and the parsed URL is what the address-borne authority is read " +
-        "off. A caller that omitted any of them would be answered by this function's permissive arm, which " +
-        "is the one that spends an act. Every one of them is a fact the CALLER holds and this file cannot " +
-        "re-derive: forgetting to state one may never be a way to be exempted");
+  /* THE FACTS ARE REQUIRED BY `_signalVector`, WHICH IS WHY THE VECTOR IS COMPUTED FIRST HERE. This
+     function used to carry its own copy of that CHECK and the copy is DELETED rather than left standing
+     beside the hoisted one: two readers of one contract is the shape that drifts, and the drift had already
+     happened in the only direction it could — the surface reader, which never had a copy, was enforcing
+     nothing. Computing `v` before the nesting CHECK below is what keeps that check's operands validated, so
+     its message names a real grade rather than printing `undefined` back at whoever reads it. */
+  v = _signalVector(facts);
   /* THE NESTING, ASSERTED AT THE CONSUMER — solver/flow.h declares `path_pinned` strictly inside
      `path_forced`, so a park that is not FORCED cannot be carrying a witness this engine chose, and the two
      halves of that contract are checked by the two parties to it (`pending_pinned_compose` is the other).
@@ -1934,7 +2001,6 @@ function _firingRefusal(facts) {
         "a request states that its address may rest on a witness this engine DETERMINED, while stating a " +
         "provenance of `" + facts.provenance + "` — solver/flow.h declares the witness mark strictly nested " +
         "inside the forced-path bit, so this pair cannot both be true and one of the two producers is wrong");
-  v = _signalVector(facts);
   /* AND NO PAIRING OF `provenance` WITH `doc-reach` IS ASSERTED, WHICH IS A DECISION AND NOT AN OMISSION —
      WRITTEN DOWN BECAUSE THE ASSERT IS THE OBVIOUS THING TO REACH FOR AND IT WOULD FIRE ON THE ONE
      POPULATION THIS ROW EXISTS TO SEPARATE. The tempting one is `observed` ⇒ not `forced`: a page makes its
@@ -2022,7 +2088,7 @@ function safeFetchFiringRefusal(facts) {
   return _firingRefusal({ url: new URL(String(facts.url)), destination: facts.destination,
                           provenance: facts.provenance, pinned: facts.pinned, docReach: facts.docReach,
                           actor: facts.actor,
-                          credentialed: !!facts.credentialed, headers: facts.headers });
+                          credentialed: facts.credentialed, headers: facts.headers });
 }
 /* THE VECTOR FOR A HYPOTHETICAL REQUEST, FOR A SURFACE THAT MUST SHOW A PERSON WHAT THEY ARE DECIDING
    ABOUT. It is the SAME derivation the firing walk reads, handed out rather than re-computed, for the reason
@@ -2043,7 +2109,7 @@ function safeFetchSignalVector(facts) {
   return _signalVector({ url: new URL(String(facts.url)), destination: facts.destination,
                          provenance: facts.provenance, pinned: facts.pinned, docReach: facts.docReach,
                          actor: facts.actor,
-                         credentialed: !!facts.credentialed, headers: facts.headers });
+                         credentialed: facts.credentialed, headers: facts.headers });
 }
 function _corbDeniesScript(mime, nosniff, sniff, sameOrigin) {
   // same-origin: the page's own data is its to read, and the only thing refused is
