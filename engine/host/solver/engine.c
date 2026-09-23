@@ -11823,6 +11823,27 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
             "was not counted: flow_step has gained a caller outside the dispatch loop's clock bracket, or an "
             "arm that returns before the slice accounting",
             out->classic_compile_overruns, (long long)out->slice_overruns);
+    /* THE TWO OVERRUN-PATH ROWS' EQUIVALENCE, ASSERTED RATHER THAN DESCRIBED — see solver/engine.h's
+       `slice_overrun_asks`. A turn adds to the sum precisely when it is not counted as seamless, by the order
+       of two statements in one branch, so an empty sum and a wholly-seamless population are the SAME fact and
+       a reader may take either as the other. A break is those two statements having stopped being exclusive,
+       and the symptom would be a pair that reads as a partition of the overrunning turns and is not one. */
+    DCHECKF((out->slice_overrun_asks == 0) == (out->slice_overrun_seamless == out->slice_overruns),
+            "solver/engine.c: the overrunning turns offered %llu suspend point(s) with %ld of %lld of those "
+            "turns offering none — the sum is raised on exactly the turns the seamless count is not, so these "
+            "two can only disagree if one of them has a second raise site or the seamless count is being "
+            "raised for a turn the overrun total never counted",
+            (unsigned long long)out->slice_overrun_asks, out->slice_overrun_seamless,
+            (long long)out->slice_overruns);
+    /* AND ITS CONTAINMENT IN THE LIFETIME TOTAL IT IS A SUBSET OF, which is the one check a reader of this row
+       can make against a number published in ANOTHER census (the @WFQ line's `preemptAsksLifetime`): every
+       consultation charged here happened inside a step, and every step is inside the lifetime the hook counts
+       over. A violation is this sum having been accumulated across a bracket wider than the turn. */
+    DCHECKF(out->slice_overrun_asks <= engine_preempt_asks(),
+            "solver/engine.c: the overrunning turns alone account for %llu consultations of the preempt policy "
+            "against %llu in the whole instance — the sum is a per-step delta of that same counter, so a "
+            "subset larger than its population is a bracket that spans more than one step",
+            (unsigned long long)out->slice_overrun_asks, (unsigned long long)engine_preempt_asks());
     /* THE IDENTITY, ASSERTED WHERE ALL THREE ARE IN ONE HAND — see g_slice_us for why the halves are rows and
        not a subtraction. Both arms are added inside the same iteration the charge is taken in, from the same
        two clock readings, so a difference is a THIRD phase having been added to the turn without an arm of its
@@ -11858,27 +11879,6 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
  *
  * `g_finished` — how many flows have ever reached flow_step's "all scripts, chunks, jobs, replies and load
  * listeners done" and been finished. It was being read off `live == flows`, which is a comparison of the
-    /* THE TWO OVERRUN-PATH ROWS' EQUIVALENCE, ASSERTED RATHER THAN DESCRIBED — see solver/engine.h's
-       `slice_overrun_asks`. A turn adds to the sum precisely when it is not counted as seamless, by the order
-       of two statements in one branch, so an empty sum and a wholly-seamless population are the SAME fact and
-       a reader may take either as the other. A break is those two statements having stopped being exclusive,
-       and the symptom would be a pair that reads as a partition of the overrunning turns and is not one. */
-    DCHECKF((out->slice_overrun_asks == 0) == (out->slice_overrun_seamless == out->slice_overruns),
-            "solver/engine.c: the overrunning turns offered %llu suspend point(s) with %ld of %lld of those "
-            "turns offering none — the sum is raised on exactly the turns the seamless count is not, so these "
-            "two can only disagree if one of them has a second raise site or the seamless count is being "
-            "raised for a turn the overrun total never counted",
-            (unsigned long long)out->slice_overrun_asks, out->slice_overrun_seamless,
-            (long long)out->slice_overruns);
-    /* AND ITS CONTAINMENT IN THE LIFETIME TOTAL IT IS A SUBSET OF, which is the one check a reader of this row
-       can make against a number published in ANOTHER census (the @WFQ line's `preemptAsksLifetime`): every
-       consultation charged here happened inside a step, and every step is inside the lifetime the hook counts
-       over. A violation is this sum having been accumulated across a bracket wider than the turn. */
-    DCHECKF(out->slice_overrun_asks <= engine_preempt_asks(),
-            "solver/engine.c: the overrunning turns alone account for %llu consultations of the preempt policy "
-            "against %llu in the whole instance — the sum is a per-step delta of that same counter, so a "
-            "subset larger than its population is a bracket that spans more than one step",
-            (unsigned long long)out->slice_overrun_asks, (unsigned long long)engine_preempt_asks());
  * frontier's CURRENT size against the number ever CREATED: those are equal whenever creations and finishes
  * happen to balance, and they are also equal when nothing has ever finished. One number says which, and "not
  * one flow has ever completed" is a strong enough claim about a scheduler that it should not be a subtraction
