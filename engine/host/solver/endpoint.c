@@ -205,11 +205,37 @@ static long g_ask_minted;       /* created a record — the arm, and the only on
    classified them as files; or they merged only into records post-program code had minted itself. A NONZERO
    is one statement and one only. */
 static long g_ask_merged_pre_program;
+/* AND WHETHER THE BOUNDARY THE TWO PROGRAM-STATE ROWS ARE GRADED AGAINST WAS ALREADY PAST WHEN THIS SURFACE'S
+   COUNTERS WERE LAST RESET — a latch, because the disagreement it catches is between two SCOPES and neither
+   census can see a scope from inside itself.
+   THE ARM IS IN A CALLEE AND NO COUNT OF WHAT IS WRITTEN AT THE RAISE SITE CAN REACH IT (CLAUDE.md
+   §COUNT-THE-ARMS-THAT-CAN-PRODUCE-THE-VALUE). `engine_any_program_started` reads `g_prog_starts`, which
+   solver/engine.c's session teardown NAMES ON ITS NOT-RESET LIST and never assigns anywhere: it is the
+   INSTANCE's total, monotone for the life of the process, and it is deliberately so because it partitions
+   against two siblings that would break their identity if some of them were zeroed. Every counter in THIS
+   file is reset at `endpoint_free`, because one process runs many sessions and a count left standing would
+   report a previous document's asks under this document's name. Those two scopes are not the same scope.
+   WHAT A SECOND SESSION THEREFORE READS IS THE RAZOR AT ITS MAXIMUM AND ITS WHOLE VALUE IS WRONG. The @H
+   counters restart at zero and the program bit does not, so EVERY ask of the second document — including
+   every `<script src>` and `<link>` of a `<head>` that had not run a line — grades POST-program:
+   `preProgram` reads 0, `emitted - preProgram` reads the whole surface, and a number CLAUDE.md
+   §What-the-tool-produces calls the product's own razor reports the markup door as forced execution's entire
+   contribution. It is the flattering direction, it is silent, and it is invisible to both censuses' own
+   identities, every one of which holds perfectly while it happens.
+   IT IS A LATCH AND NOT A COMPARISON AT THE CENSUS, because by the census the damage is already in the
+   records: `pre_program` is decided at each MINT and never re-armed, so a run that graded wrongly cannot be
+   detected from the figures it produced — they are internally consistent. The only instant at which the two
+   scopes are distinguishable is the one where this file's scope restarts and the engine's has not, which is
+   what this records.
+   A REPORT AND NEVER A BOUND: nothing branches on it but the assert, no ask is refused because of it, and it
+   is compiled out of release with the assert that reads it. */
+static int g_boundary_spent;
 
 void endpoint_init(void) {
     g_eps = NULL; g_eps_n = 0; g_eps_cap = 0; g_suppress = 0;
     g_asks = g_asks_pre_program = g_ask_suppressed = g_ask_merged = g_ask_minted = 0;
     g_ask_merged_pre_program = 0;
+    g_boundary_spent = 0;
 }
 void endpoint_suppress(int on) { g_suppress = on ? 1 : 0; }
 
@@ -1638,6 +1664,23 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        cheaper than arguing that nothing between here and there can start a program and is the only form of
        that claim a later diff cannot quietly falsify. */
     int ask_pre_program = !engine_any_program_started();
+    /* AND THAT THE BOUNDARY THIS BIT IS READ AGAINST BELONGS TO THIS SURFACE'S SESSION — see g_boundary_spent
+       for the two scopes and for why no figure either census produces can show the disagreement afterwards.
+       ASSERTED AT THE FIRST ASK AND NOT AT THE RESET, because the reset is a legitimate act on its own: a
+       process may end there. What is not legitimate is an ask arriving afterwards, because that ask and every
+       record it mints are graded against a boundary another document crossed. WHAT THE NEXT DIFF BUILDS is the
+       one endpoint.h's fourth-number residual already names — the any-program-started bit carried on the
+       DOCUMENT the record's realm belongs to, raised where THAT document's first program starts — which
+       answers this and the child-navigable case with one change, since both are the same mistake about whose
+       progress the boundary describes. */
+    DCHECK(!g_boundary_spent,
+           "an @H ask arrived on a surface whose counters were reset while a program had already started on "
+           "this instance — the program-state boundary is `g_prog_starts`, which the engine's session "
+           "teardown names on its NOT-RESET list, and every counter here is reset per session, so this "
+           "document's whole markup door will grade POST-program: `preProgram` reads 0, `emitted - "
+           "preProgram` reads the entire surface, and the product's razor reports the `<head>` counted back "
+           "as everything forced execution contributed. Nothing downstream can see it: both censuses' "
+           "identities hold, and `pre_program` is decided at each mint and never re-armed");
     g_asks++;
     if (ask_pre_program) g_asks_pre_program++;
     if (g_suppress) { g_ask_suppressed++; return; }   /* candidate/verify run -> not a real @H endpoint */
@@ -1881,7 +1924,8 @@ void endpoint_surface_census(long *minted, long *assets, long *emitted, long *pr
    is that it is ONE WALK OVER A MUTABLE ARRAY. These are not on the array: they are monotone scalars raised on
    the three paths out of one door, so reading them at a different instant than the walk costs nothing a reader
    can observe — the walk's figures can only have grown since, and by a mint the mint arm already counted.
-   THE TWO PARTITIONS AND THE CUT ARE ASSERTED HERE BECAUSE THIS IS THE ONLY PLACE ALL SIX ARE IN ONE HAND. The cross
+   THE TWO PARTITIONS AND THE CUT ARE ASSERTED HERE BECAUSE THIS IS THE ONLY PLACE ALL SIX ARE IN ONE
+   HAND. The cross
    identity against the record array is asserted in endpoint_surface_census for the same reason and not here,
    where `g_eps_n` is a fact about a different structure that this function has no business reading. */
 void endpoint_ask_census(long *asks, long *pre_program, long *suppressed, long *merged, long *minted,
@@ -2211,4 +2255,8 @@ void endpoint_free(void) {
        the pair behind would abort the next session's first census. */
     g_asks = g_asks_pre_program = g_ask_suppressed = g_ask_merged = g_ask_minted = 0;
     g_ask_merged_pre_program = 0;
+    /* AND WHAT THE NEXT SESSION WOULD BE GRADING AGAINST, TAKEN HERE BECAUSE HERE IS WHERE THE SCOPES PART.
+       This line puts this file's program-state boundary back to the start of time and the engine's stays
+       where it is; the latch is the difference, and the door asserts on it at the first ask. */
+    g_boundary_spent = engine_any_program_started();
 }
