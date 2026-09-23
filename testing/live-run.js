@@ -461,7 +461,40 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
   "steps", "sliceUs", "sliceOverruns",
   "unitMidProgram", "unitParked", "unitCheckpointOwed",
   "classicCompiles", "classicCompileOverruns",
-  "rootPrograms", "deepest", "completed", "deepestLeft", "finished"];
+  "rootPrograms", "deepest", "completed", "deepestLeft", "finished",
+  /* AND THE @H SURFACE'S OWN DENOMINATOR, WHICH IS THE PAIR THIS DRIVER'S HEADLINE COLUMN CANNOT BE READ
+     WITHOUT. `endpoints` in COUNTERS is the store's SIZE — a reach figure — and solver/result.c records what
+     such a number has already been quoted as: "every row of a 43-row surface was one of that document's own
+     `<script src>`, `<link rel=stylesheet>` or `<link rel=preload>` elements, so the number a person reads as
+     a learned API surface was the `<head>` counted back". `epEmitted - epPreProgram` is the most addresses
+     FORCED EXECUTION can have contributed to that surface, so a run reading the two EQUAL learned nothing the
+     markup did not already state, whatever `endpoints` says. That subtraction is §What-the-tool-produces'
+     thesis stated as a number, and NO TRACKED DRIVER IN THIS TREE READ EITHER ROW — the same instrument gap
+     the `census()` banner records for `forkAt` and `cold`, pointed at the one surface the product exists for.
+     `epMinted`/`epAssets` ARE A DIFFERENT PARTITION OF THE SAME SURFACE AND ARE CARRIED SO THE SUBTRACTION IS
+     NEVER READ ALONE: those two split it by what the REPLY was, and this pair splits it by who composed the
+     ADDRESS. result.c gives an `epAssets: 0` three readings and names the one a reader reaches for first as
+     the rarest, so the row is here to be read with its siblings rather than to be read.
+     THE FIVE `epAsk*` ROWS ARE THE ASK SIDE OF THE SAME GATE — how many addresses were OFFERED, and what
+     became of the ones that did not mint — without which every row above is an OUTCOME census over a gate
+     with a legitimate declining arm. An artifact older than them prints `-` for each, which is this driver's
+     absent-versus-zero rule and is the honest answer: the run did not state them. All nine are lifetime
+     counts and may be differenced across two samples of ONE instance, like their neighbours on this list.
+     MEASURED WITH THE ROWS, WHICH IS WHY THEY ARE HERE AND NOT ARGUED. `gitlab.com/explore`, TWO FRESH
+     BROWSERS (one per case — the frontier is cross-session by design, so consecutive cases in one browser are
+     not independent experiments), artifact stamped d18fa92658db25b9f64000ae7a16e10c9103f9da, one run each:
+     `epEmitted` 43 and `epPreProgram` 43 — EQUAL IN BOTH — against `endpoints` 43, `replyAsked`/`replyAnswered`
+     43/43 and `replyDeclined` 0. So the reply door opened for every address on the surface and answered every
+     one, and the surface is the markup door counted back: forced execution contributed ZERO addresses to a
+     document that ships `rootPrograms` 33. The same two rows read `deepest` 4 and 7 with `finished` 0, and
+     `start-a-classic-program` ran 6 and 8 times, so programs 9 through 33 were never started at all.
+     THE TWO RUNS DISAGREE BY 1550x ON `flows` (4 against 6199) AND AGREE EXACTLY ON THE SUBTRACTION, which is
+     the only reason one page's reading is worth stating: CLAUDE.md §Testing says a reach total is not
+     comparable across two runs of a wall-denominated quantum, and an IDENTITY is. `epEmitted == epPreProgram`
+     is an identity; `endpoints: 43` beside it is not, and was the number being quoted before these rows had a
+     reader. */
+  "epMinted", "epAssets", "epEmitted", "epPreProgram",
+  "epAsks", "epAskPreProgram", "epAskSuppressed", "epAskMerged", "epAskMinted"];
 
 /* WHERE THE FRONTIER STOOD, WHAT ITS STEPS DID, AND WHAT GREW IT — read off the row bridge.js wrote, never
    recomputed. `forkAt` is taken WHOLE and is not truncated to its heaviest rows: it is already a Space-Saving
