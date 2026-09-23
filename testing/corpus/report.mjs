@@ -64,7 +64,16 @@ const passes = files.map((f) => {
               one `arrival` state would report an instrument that could not ask about drives as one that
               could, in whichever direction the @S half happened to answer. */
            orphan: measured.length === 0 ? 'nothing-measured'
-             : measured.some((r) => 'orphansAsked' in r) ? 'carried' : 'predates' };
+             : measured.some((r) => 'orphansAsked' in r) ? 'carried' : 'predates',
+           /* AND THE SAME QUESTION ASKED A THIRD TIME, OF THE @S POLICY ENVELOPE, for the reason the pair
+              above is already asked twice: the three censuses entered site.mjs at three different commits,
+              so a pass can carry any of them and predate the others. Folding this one into `arrival` would
+              report an instrument that could not ask whether a finding is policy-dead as one that could --
+              and in THIS column that is the difference between a corpus of XSS findings and a corpus of
+              findings the page's own policy kills, which is the one distinction §@S says must never be made
+              by omission. */
+           policy: measured.length === 0 ? 'nothing-measured'
+             : measured.some((r) => 'policyEnvelope' in r) ? 'carried' : 'predates' };
 });
 /* THE LIST THIS CENSUS MEASURED, NAMED AND THEN CHECKED AGAINST THE ROWS. This file used to read `sites.tsv`
    unconditionally and look every row's id up in it — and the app-page census walks twelve ids that appear in
@@ -415,6 +424,28 @@ for (const p of passes) for (const r of p.rows) {
        as unforgeable -- so the column says WHERE the zero starts, and a corpus-wide `sinks: 0` stops being
        one number with three opposite meanings. site.mjs carries these off the run record bridge.js writes. */
     src: r.sourceReads, reach: r.sinkReached, taint: r.sinkTainted, sup: r.sinkSuppressed,
+    /* THE @S POLICY ENVELOPE, WHICH IS WHAT MAKES `sinks: N` A SECURITY FINDING RATHER THAN A COUNT.
+       CLAUDE.md §@S: a firing breakout in the model is NOT yet a working exploit -- it has to run under the
+       page's ACTUAL policy, and "sink REAL, CSP blocks: needs X" is a different verdict from a bare XSS.
+       solver/solve.c has answered that on every detected sink all along and lib/popup-security.js badges out
+       of the answer; site.mjs now carries it onto every row, and this file -- the one that RANKS the corpus
+       -- is where it becomes readable. Until both landed NO INSTRUMENT ANYWHERE READ EITHER FIELD, and the
+       derivation for that is run AT THE PARENT rather than at the tip, or it returns these lines and reads
+       as a repair nobody needed: `git grep -n 'cspBlocks\|trustedTypes' <this commit>^ -- testing/`
+       answered two lines of prose in control/serve.mjs, while a control PAIR built to state exactly this
+       claim sat served and documented and measured by nobody.
+       ALL THREE NUMBERS OR NONE, because the two counts are worthless without their denominator and each
+       other. `ent` is the sinks this walk actually looked at -- site.mjs's own count off the same arrays,
+       never the `sinks` column beside it, which is read off the run record's last log entry and is a
+       different population. `csp` and `tt` are TWO INDEPENDENT facts (popup-security.js's own banner) of
+       which either one alone means the payload does not run on the real page, so reading one and not the
+       other is how a sink under `require-trusted-types-for 'script'` gets badged a clean HIGH.
+       `-` HAS TWO READINGS HERE AND THE SHOUT BELOW SEPARATES THEM: a pass that predates the field, and a
+       site no document of which was ever answered. Neither is "this page's findings all survive its
+       policy", which is `0>0` over a nonzero `ent`. */
+    pent: r.policyEnvelope ? r.policyEnvelope.entries : null,
+    pcsp: r.policyEnvelope ? r.policyEnvelope.cspBlocked : null,
+    ptt:  r.policyEnvelope ? r.policyEnvelope.ttRequired : null,
     /* THE ORPHAN PAIR, WHICH IS THE HEADLINE SURFACE AND HAD NO COLUMN AT ALL. §What-the-tool-produces makes
        the drive of code the bundle shipped and never ran the whole proposition — "a sniffer shows what FIRED;
        this shows what the bundle CAN do but didn't" — and every layer between the engine and this line was
@@ -515,6 +546,7 @@ const table = [...seen.entries()].map(([id, ms]) => ({
      found the heap empty (a fact about the page), and only the two together tell them apart. Printed as one
      spread per number rather than as a ratio, because a ratio of two spreads is a number nobody measured. */
   orphans: ['oask', 'odrv'].map((k) => spread(ms, k)).join('>'),
+  policy: ['pent', 'pcsp', 'ptt'].map((k) => spread(ms, k)).join('>'),
   epMax: Math.max(-1, ...ms.map((m) => m.endpoints).filter((x) => typeof x === 'number')),
   epAnswered: ms.filter((m) => typeof m.endpoints === 'number').length,
   sigs: [...new Set(ms.flatMap((m) => m.sigs))],
@@ -534,6 +566,7 @@ console.log(`list: ${list.rel} (${list.rows.length} sites, ${table.length} measu
 console.log('\n' + pad('site', 20) + pad('outcome', 20) + pad('abort/n', 8) + pad('fin/n', 7) +
   pad('terminal', termW) +
   pad('ep', 8) + pad('sinks', 7) + pad('src>reach>taint>sup', 21) + pad('ask>drv', 13) +
+  pad('sink>csp>tt', 16) +
   pad('flows', 12) + pad('switches', 12) + pad('units', 9) + pad('fl/unit', 14) + pad('gone', 6) +
   pad('load', 10) + 'signature');
 for (const t of table)
@@ -541,6 +574,7 @@ for (const t of table)
     pad(t.finishedPasses + '/' + t.n, 7) + pad(t.terminal, termW) +
     pad(t.ep, 8) + pad(t.sk, 7) + pad(t.arrival, 21) +
     pad(t.orphans, 13) +
+    pad(t.policy, 16) +
     pad(t.fl, 12) + pad(t.sw, 12) + pad(t.un, 9) + pad(t.fpu, 14) + pad(t.gone, 6) +
     pad(t.ld, 10) + (t.sigs[0] ? t.sigs[0].split(' :: ')[0] : '-'));
 
@@ -572,6 +606,22 @@ if (oPredates.length)
     ' PASS(ES) — ' + oPredates.join(', ') + ' predate(s) the orphan census entirely (the rows carry no ' +
     '`orphansAsked` field), so a `-` there is this instrument being unable to ask, NOT a frontier that ' +
     'never reached the question and NOT a bundle that ships no uncalled code. ***');
+
+/* AND THE THIRD, FOR THE @S POLICY ENVELOPE. Asked separately for the reason the two above are separate --
+   three censuses, three commits, and a pass can carry any of them -- and it matters MOST here, because this
+   column's `-` and its `0>0` are the two readings a security report cannot survive confusing. `-` is this
+   file unable to ask whether a finding is policy-dead; `0>0` over a nonzero `sink` is the positive statement
+   that every detected vector SURVIVES the page's own policy, which is the finding. Reading the first as the
+   second publishes a corpus of clean XSS verdicts that no oracle has contradicted, which is exactly the
+   state CLAUDE.md records for this field and exactly what the control pair was built to end. */
+const pPredates = passes.filter((p) => p.policy === 'predates').map((p) => p.label);
+const pCarried = passes.filter((p) => p.policy === 'carried').map((p) => p.label);
+if (pPredates.length)
+  console.log('\n*** THE `sink>csp>tt` COLUMN IS OVER ' + pCarried.length + ' OF ' + passes.length +
+    ' PASS(ES) — ' + pPredates.join(', ') + ' predate(s) the @S policy envelope entirely (the rows carry no ' +
+    '`policyEnvelope` field), so a `-` there is this instrument being unable to ask, NOT a corpus whose ' +
+    'findings all survive their pages\' policies. A `-` on a CARRIED pass is a site no document of which ' +
+    'was ever answered, which is a third fact again. ***');
 
 /* THE WORK QUEUE. A DFAIL's reason names what to build, so it is printed rather than summarised -- but only
    the head of it, because one 1169-character reason per row buries the RANKING, which is the thing this

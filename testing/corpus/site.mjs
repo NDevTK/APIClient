@@ -86,6 +86,52 @@ const PROBE = `(() => ({
     sites: (d._astResults || []).flatMap(a => (a.fetchCallSites || []).map(x => (x.method||'?') + ' ' + (x.url||''))),
     sinks: (d._astResults || []).reduce((n,a) => n + ((a.securitySinks||[]).length), 0),
     errs:  (d._astResults || []).flatMap(a => (a.resolverErrors || []).map(e => e.context + ': ' + e.message)),
+    /* THE @S POLICY ENVELOPE, WHICH THE ENGINE COMPUTES ON EVERY DETECTED SINK AND WHICH THIS LINE IS THE
+       FIRST INSTRUMENT TO READ. solver/solve.c writes \`cspBlocks\` onto an entry only where the document's
+       policy kills that vector, and \`trustedTypes\` only where the document requires a trusted type at that
+       sink's group; lib/popup-security.js computes the card's badge out of the two. A CONTROL PAIR exists
+       for exactly this claim -- control/csp-blocked.html and control/csp-open.html are byte-identical from
+       the \`body\` element onward and differ in one \`meta http-equiv\`, so the claim is that a field is
+       PRESENT on one row and ABSENT on the other and neither arm states it alone.
+       WHAT THE DERIVATION ANSWERED BEFORE THIS DIFF, AND IT WILL NOT ANSWER IT AGAIN -- SO RUN IT AT THE
+       PARENT AND NOT AT THE TIP, or it reports this line and reads as a repair that was never needed:
+         git grep -n 'cspBlocks\\|trustedTypes' <this commit>^ -- testing/
+       TWO LINES OF PROSE in control/serve.mjs and nothing else. csp-blocked.html says why in its own words
+       -- "site.mjs's \`sinks\` column is a COUNT of that array and cannot see either field" -- so the pair
+       was served, documented to the byte, and measured by nobody. That is the write-with-no-reader half of
+       the contract this file already names at \`candidates\` and at the orphan pair, arriving on the one
+       field that decides whether a reported XSS is real.
+       PRESENCE IS A STRING TEST AND NOT TRUTHINESS, WHICH IS A DELIBERATE DISAGREEMENT WITH THE PRODUCT.
+       lib/popup-security.js badges on \`if (item.cspBlocks)\`, so a field the engine emitted as an EMPTY
+       STRING would be a present field the badge cannot see -- a policy-dead vector reported as a clean XSS,
+       which is the recorded \`cspBlocked\` defect in its other direction. Counting PRESENCE and carrying the
+       TEXT is what makes that state visible here rather than counted away by the same polarity that would
+       hide it.
+       BOTH FIELDS OR NEITHER. popup-security.js's own banner calls them TWO INDEPENDENT facts of which
+       either one alone means the payload does not run on the real page, and records that asking only the
+       first is how a sink under \`require-trusted-types-for 'script'\` badged a clean HIGH one line above an
+       envelope saying the assignment throws.
+       THE DENOMINATOR IS THIS WALK'S OWN \`entries\` AND NEVER THE ROW'S \`sinks\`, which is read off the
+       run record's LAST LOG ENTRY and is a different population. One fraction over two populations is the
+       defect this file's own parameter columns fix twice, and it is cheaper to avoid than to detect. */
+    policy: (d._astResults || []).reduce((o, a) => {
+      const ss = a.securitySinks;
+      if (!Array.isArray(ss)) return o;
+      for (const e of ss) {
+        o.entries++;
+        if (typeof e.cspBlocks === 'string') {
+          o.cspBlocked++;
+          if (o.policies.length < 4 && o.policies.indexOf(e.cspBlocks) < 0)
+            o.policies.push(e.cspBlocks.slice(0, 160));
+        }
+        if (typeof e.trustedTypes === 'string') {
+          o.ttRequired++;
+          if (o.ttGroups.length < 4 && o.ttGroups.indexOf(e.trustedTypes) < 0)
+            o.ttGroups.push(e.trustedTypes);
+        }
+      }
+      return o;
+    }, { entries: 0, cspBlocked: 0, ttRequired: 0, policies: [], ttGroups: [] }),
   })),
   global: [...globalStore.endpoints.keys()],
   /* THE DOMAIN COLUMNS, AND WHY THEY ARE NOT READ OFF \`endpoints\`. That map is endpointKey → the record
@@ -742,6 +788,41 @@ const row = {
   sinkReached: counted.length ? counted[counted.length - 1].sinkReached : null,
   sinkTainted: counted.length ? counted[counted.length - 1].sinkTainted : null,
   sinkSuppressed: counted.length ? counted[counted.length - 1].sinkSuppressed : null,
+  /* THE @S POLICY ENVELOPE, WHICH IS THE ONLY THING THAT SEPARATES A REPORTED XSS FROM ONE THE PAGE'S OWN
+     POLICY KILLS. CLAUDE.md §@S: a firing breakout in the model is NOT yet a working exploit -- the PoC has
+     to run under the page's ACTUAL policy, and an inline `onerror` is dead under `script-src 'self'`. The
+     engine answers that on every detected sink and the popup badges out of the answer; until this column no
+     run-level instrument had ever OBSERVED it, so a corpus-wide `sinks: N` said nothing whatever about how
+     many of those N are dead on arrival. That is the same consumer-that-never-asked defect as `candidates`
+     and the orphan pair above, on the field that decides whether this product's HIGH badges are real.
+     THREE STATES, KEPT APART. `null` = no document of this origin was ever ANSWERED, so no `securitySinks`
+     array has existed to ask and this instrument could not look. `entries: 0` = a document was answered and
+     no sink was detected in it, which is a fact about the PAGE. And `entries > 0` with `cspBlocked: 0` is
+     the POSITIVE statement that every detected vector survives the document's policy -- which is what a page
+     carrying no policy at all correctly reads, and is control-csp-open's half of the pair's claim.
+     THE PAIR IS THE CLAIM AND NEITHER ARM PROVES ANYTHING ALONE, which control/serve.mjs states at the two
+     rows and which is why they are two ORIGINS: a field non-empty on both is a field that does not depend on
+     the policy, and empty on both is a path that never ran. control-csp carries `script-src 'unsafe-inline';
+     require-trusted-types-for 'script'`, whose missing `'unsafe-eval'` is the whole of what CSP §4.4.1
+     "EnsureCSPDoesNotBlockStringCompilation( realm , parameterStrings , bodyString , codeString ,
+     compilationType , parameterArgs , bodyArg )" refuses -- so that row must read `cspBlocked >= 1` and
+     `ttRequired >= 1` where control-csp-open reads `0` and `0` over a comparable `entries`.
+     THE POLICY TEXT IS CARRIED AND NOT JUST COUNTED, because the count says a vector died and the text says
+     WHAT KILLED IT -- csp-blocked.html's own argument for choosing that policy is that a reader can then see
+     the absent `'unsafe-eval'` is the whole of it. It is also the one place an EMPTY `cspBlocks` would be
+     visible, which the count cannot show and the popup's truthiness test cannot see at all.
+     `d.policy` IS READ WITHOUT A GUARD, LIKE `d.sites` ABOVE AND UNLIKE `d.errs`. Its producer is the PROBE
+     in this file rather than the engine, so it is written for every document unconditionally; a `|| {}` here
+     would be a default past a field this file guarantees, which is the defect the column exists to find. */
+  policyEnvelope: mine.some(d => d.answered)
+    ? mine.reduce((o, d) => {
+        const p = d.policy;
+        o.entries += p.entries; o.cspBlocked += p.cspBlocked; o.ttRequired += p.ttRequired;
+        for (const t of p.policies) if (o.policies.length < 6 && o.policies.indexOf(t) < 0) o.policies.push(t);
+        for (const g of p.ttGroups) if (o.ttGroups.length < 6 && o.ttGroups.indexOf(g) < 0) o.ttGroups.push(g);
+        return o;
+      }, { entries: 0, cspBlocked: 0, ttRequired: 0, policies: [], ttGroups: [] })
+    : null,
   /* THE ABSENT-GLOBAL CENSUS, WHICH IS THE ONLY THING THAT SEPARATES "THIS PAGE HAD NOTHING BEHIND THAT
      GUARD" FROM "WE COULD NOT LOOK" — the same defect as the five fields above, one rung further out.
      §NO-STUBS: a page writes `if (window.X)`, this engine does not have `X`, the read is CORRECTLY decided
