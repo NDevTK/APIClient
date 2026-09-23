@@ -41,10 +41,18 @@
  * the head of that band. A widening worth taking because it changed the answer, not because it enlarged the
  * table. It changed no ranking in engine/nsguardrank.mjs, which shares the fix; that is recorded rather than
  * smoothed over, because the two instruments held the IDENTICAL wrong selector and only one of them moved.
- * There is no pasted member list and no pasted name list anywhere in this file. A hand list is the second copy
- * of a generated fact, and this project has been wrong about that list before; a probe that silently measures
- * a SUBSET reports a smaller absence and reads as progress, which is the one direction nothing here would
- * catch. Hence: the shape changed is a THROW, never a shorter table.
+ * There is no pasted member list and no pasted name list anywhere in this file, with ONE STATED EXCEPTION that
+ * is not the banned thing. A hand list is the second copy of a generated fact, and this project has been wrong
+ * about that list before; a probe that silently measures a SUBSET reports a smaller absence and reads as
+ * progress, which is the one direction nothing here would catch. Hence: the shape changed is a THROW, never a
+ * shorter table.
+ * THE EXCEPTION IS THE `down=` READING TABLE IN B(anchored), AND IT IS NAMED HERE RATHER THAN LEFT FOR A GREP
+ * TO FIND, because an absolute a reader can refute in one command takes the true part of its paragraph down
+ * with the false part. It is a MEASUREMENT and not a generated fact — nothing regenerates what a reader found
+ * when they opened the sites, so there is no first copy for it to be the second of. It is held to the same
+ * discipline by a different route: it decides NO population, adds and removes NO row and changes NO count, so
+ * it cannot report a smaller absence however stale it gets; and each entry is checked against BOTH generated
+ * populations it rests on, so it THROWS rather than quietly outliving its own row.
  *
  * IT PRINTS NO EXPECTED TOTAL AND NO EXPECTED COUNT OF ITS OWN. There is no baseline, no threshold and no
  * allowlist — every one of those is a number about nothing, and a count of what is missing shrinks as people
@@ -119,6 +127,41 @@
  * RECEIVER itself, a destructure, a dynamic key, a receiver returned by a call, and a receiver of the right
  * type reached some other way. Every count is a FLOOR and the alias column is the measured size of one part
  * of what it floors.
+ *
+ * AND THE RANK ANSWERS A COST WHERE A DISPATCHER NEEDS A VALUE, SO THE TWO ORDERS ARE PRINTED SIDE BY SIDE
+ * AND THE VALUE ONE IS A READING. Every channel above measures HOW OFTEN a name is read. What this product
+ * exists to surface is the INTERESTING UNUSED endpoint — what the bundle CAN do but didn't — so the question
+ * a reader acts on is WHAT IS GATED BEHIND THE SITE, and no count expresses it. THE TWO ARE NOT CORRELATED
+ * AND THE HEAD OF A CHANNEL IS WHERE THEY COME APART, because a name is read often for the same reason it is
+ * cheap: it is a UI affordance. So B(anchored) carries a `down=` column, it is a READING rather than a
+ * computation, and it ORDERS NOTHING — the same treatment, for the same reason, as the `alias` column.
+ * THE READING'S MEASURED PRICE, held to the standard the widenings above are held to. It moved NO count, NO
+ * rank and NO class anywhere in this file: the diff is a pure addition beside the existing columns. What it
+ * BUYS is that the top of the channel stops being read as a work queue. Over the corpus it was taken on, the
+ * head row was opened at EVERY one of its sites and every one is copy/paste UI — a toast, a `copied!` state,
+ * or an execCommand textarea fallback — with the only two endpoints in the neighbourhood sitting STRICTLY
+ * UPSTREAM of the read in the same callback, so they are reached whether the member exists or not. The row a
+ * quarter of its size is where the programs are: a quarter of ITS sites are `register(...)`, naming that many
+ * distinct worker scripts across as many origins, and behind the rest sit an editor's whole request-proxy
+ * loopback and a push subscription. Four more rows between them, carrying a combined read count larger than
+ * the program row's, are timings, UA sniffing, a scheduler hint and a `|| documentElement`. AND ONE ROW
+ * INVERTS: its sites gate a PREFETCH on a slow link, so the ABSENCE takes the arm that prefetches.
+ * THE COST-ORDER AND THE VALUE-ORDER THEREFORE DISAGREE, AT THE HEAD, BY MORE THAN A PLACE — which is a
+ * finding and is the only reason to spend a column on it.
+ * TWO STATIC ATTEMPTS AT COMPUTING THE COLUMN ARE ON THE RECORD AND BOTH FAILED, SO NO THIRD ONE IS MADE. A
+ * fixed character window after each call site, scanned for endpoint and sink spellings with an armed control,
+ * read ZERO behind every row — and that zero was worth nothing, because those spellings occupy well under one
+ * percent of a random window of that size, so it is equally what an instrument which can see NOTHING prints
+ * and what one which can see EVERYTHING prints for an empty row; the control had armed on a successor
+ * CHARACTER and said nothing about a successor STATEMENT; widening the window inverted the column's own head.
+ * A window after a call site is a PROXY, so a nonzero is a reason to OPEN the sites and a ZERO IS NOT A REASON
+ * TO DECLINE ONE. Where a grep is a proxy for reading and the artifact can be read directly, it is read.
+ * THE READING IS A MEASUREMENT AND NOT A GENERATED FACT, WHICH IS WHY IT IS THE ONE TABLE IN THIS FILE THAT IS
+ * WRITTEN BY HAND — and it is bounded on both sides so it cannot go quietly stale: each entry's interface must
+ * still carry that member in idlgen's own ABSENT rows, and its receiver must still be in the map derived from
+ * Window's IDL, or the run THROWS. A member that gets BUILT retires its own verdict LOUDLY. The verdicts are
+ * about the corpus they were taken on and the run prints the command that re-takes any of them, because a
+ * reading nobody can re-take is a claim competing with a command.
  *
  * AN IDENTIFIER PASSED AS AN ARGUMENT IS EVALUATED, AND EVERY CHANNEL ABOVE READS ONLY THE OPERATORS.
  * `new X(`, `instanceof X` and `X.member` are the three shapes that evaluate a binding, and they are all
@@ -273,9 +316,22 @@ const pub = (re, what) => {
               `silently smaller population would read as progress. Re-read its output and fix the parse.`);
   return m;
 };
-const totals = pub(/(\d+) distinct spec members this engine does not install \((\d+) across all interfaces/,
-                   "its absent-member totals");
-const PUB_DISTINCT = Number(totals[1]), PUB_PAIRS = Number(totals[2]);
+/* ONE ANCHOR SPANNING TWO NUMBERS BREAKS WHEN THE SENTENCE BETWEEN THEM GROWS, AND IT BROKE — SO EACH
+   NUMBER IS ANCHORED ON THE PHRASE THAT NAMES ITS OWN QUANTITY AND ON NOTHING ELSE. This read used to be a
+   single regex requiring `(N across all interfaces` to follow the distinct count immediately. idlgen then
+   published a THIRD total between them (`M counting each interface that DECLARES one, and N across all
+   interfaces`), which is a strictly better census and not a mistake — and this parse answered by THROWING at
+   every revision from that commit onward, which is the calibration working exactly as its header promises:
+   the one thing that must never happen here is a quiet shorter list, and a run that dies is not one.
+   WHAT THE INCIDENT TEACHES IS ABOUT THE ANCHOR AND NOT ABOUT THE REGEX. A parse that spans two quantities
+   asserts the PROSE BETWEEN THEM, which is the part of a sentence an author is most free to edit — so it is
+   the widest claim the parse could have made and the one least related to what it needed. Anchored per
+   quantity, a fourth total inserted tomorrow moves neither read. Both remain REQUIRED, so a rename of either
+   phrase still throws rather than ranking a subset. */
+const PUB_DISTINCT = Number(pub(/(\d+) distinct spec members this engine does not install/,
+                                "its distinct absent-member total")[1]);
+const PUB_PAIRS = Number(pub(/(\d+) across all interfaces/,
+                             "its interface-member-pair total (`N across all interfaces`)")[1]);
 /* TWO THINGS SILENCE THIS LINE AND THE MESSAGE NAMES BOTH, because one of them is not a format change and a
    reader sent to fix the parse would find nothing wrong with it: idlgen prints `platform_names.h current — N`
    only while the checked-in table MATCHES the corpus, and prints `platform_names.h STALE — ...` otherwise.
@@ -1470,6 +1526,13 @@ say(`   rank = R.m + window.R.m + R["m"], minus shadow. alias = the same read of
     `(usually a real global alias, sometimes a string) — printed, RANKS NOTHING. guard = \`"m" in R\`, ` +
     `which answers false and handles the absence. shadow = occurrences in a file that BINDS the receiver's ` +
     `own name. bare = the unanchored \`.m\` count, so each row carries the price of its own anchor.`);
+say(`   down = WHAT A READER FOUND WHEN THEY OPENED THE SITES, and it ORDERS NOTHING — the sort is still ` +
+    `rank-first. THE RANK IS A COST AND THIS IS A VALUE, AND THE TWO COME APART AT THE HEAD: a name is read ` +
+    `often for the same reason it is cheap, because it is a UI affordance. prog = the branch reaches a ` +
+    `PROGRAM this engine would otherwise never fetch. net = it composes a request or submits a form nothing ` +
+    `else on the page composes. none = it writes to the screen, the clipboard or a device and composes no ` +
+    `address. gain = the ABSENCE takes the more exploratory arm, so it costs nothing and reaches further. ` +
+    `A BLANK IS NOT A VERDICT OF none — it is a row nobody has opened.`);
 {
   const ifaceOf = new Map();                       /* interface -> the receiver name(s) that reach it */
   for (const [r, i] of RECEIVER) {
@@ -1488,6 +1551,72 @@ say(`   rank = R.m + window.R.m + R["m"], minus shadow. alias = the same read of
       `rest sit on interfaces a page reaches through the DOM rather than off a named global, and no count ` +
       `here is evidence about them either way.`);
 
+  /* ---- DOWNSTREAM: what a reader found when they OPENED the sites ------------------------------------ */
+  /* THE RANK ABOVE ANSWERS HOW OFTEN A NAME IS READ AND SAYS NOTHING ABOUT WHAT IS BEHIND IT, AND THOSE TWO
+     ORDERS COME APART AT THE HEAD. §What-the-tool-produces asks for INTERESTING UNUSED endpoints — what the
+     bundle CAN do but didn't — so what a dispatcher acts on is WHAT IS GATED BEHIND THE SITE, and a count of
+     reads cannot express it: a name is read often for the same reason it is cheap, because it is a UI
+     affordance. This column is the answer and it is A READING, not a computation.
+     TWO STATIC ATTEMPTS AT COMPUTING IT ARE ON THE RECORD AND BOTH FAILED, WHICH IS WHY NO THIRD ONE IS MADE
+     HERE. A window of N characters after each call site, scanned for endpoint and sink spellings, was built,
+     armed with a control, and reported ZERO behind every row — and the zero was worth nothing, because the
+     union of those spellings occupies well under one percent of a random window of that size, so ZERO is
+     equally what an instrument that can see NOTHING prints and what one that can see EVERYTHING prints for an
+     empty row. Its control had armed on a successor CHARACTER and established nothing about a successor
+     STATEMENT. Widening the window inverted the column's own head. A window after a call site is a PROXY: a
+     nonzero is a reason to OPEN the sites and a zero is not a reason to decline one.
+     SO THE COLUMN CARRIES WHAT READING THE SITES ESTABLISHED AND NOTHING ELSE, AND IT ORDERS NOTHING — the
+     sort stays rank-first, by the same argument the `alias` column is printed and does not rank: a column
+     says which rows it would move, and a rank would assert of the UNREAD rows an identity this file cannot
+     establish. A pair with no entry prints blank, which is the honest state and not a verdict of `none`.
+       prog  the branch reaches a PROGRAM this engine would otherwise never fetch — a worker script, a chunk
+       net   the branch composes a request or submits a form that nothing else on the page composes
+       none  the branch writes to the screen, the clipboard or a device and composes no address
+       gain  the ABSENCE takes the more exploratory arm, so it costs nothing here and reaches further
+     EVERY ENTRY IS CHECKED AGAINST THE GENERATED POPULATIONS AND A STALE ONE THROWS. A reading is a
+     measurement nothing regenerates, so it is the one thing in this file that cannot be derived from an
+     artifact — and that is exactly why it is bounded on both sides: its interface must still carry that
+     member in idlgen's own ABSENT rows, and its receiver must still be in the map derived from Window's IDL.
+     A member that gets BUILT, or a receiver that stops being interface-typed, therefore fails LOUD here
+     instead of leaving a verdict standing about a row that no longer exists. */
+  const READ = new Map([
+    ["Navigator\u0000clipboard", ["none",
+      "all sites are copy/paste UI — a toast, a `copied!` state, or an execCommand textarea fallback; two " +
+      "carry an endpoint in the same callback and STRICTLY UPSTREAM of the read, so it is reached either way"]],
+    ["Navigator\u0000serviceWorker", ["prog",
+      "a quarter of the sites are `register(...)`, naming that many distinct worker scripts across as many " +
+      "origins; behind the rest sit an editor's whole request-proxy loopback and a push subscription"]],
+    ["Performance\u0000getEntriesByType", ["none",
+      "RUM timings read BACK for a metric; the beacon that reports them is composed elsewhere and is not " +
+      "behind the read"]],
+    ["Document\u0000scrollingElement", ["none", "every site is `|| document.documentElement`"]],
+    ["Navigator\u0000userAgentData", ["none", "UA sniffing, falling through to `navigator.userAgent`"]],
+    ["Navigator\u0000connection", ["gain",
+      "the sites gate a PREFETCH on a slow link, so an absent connection takes the arm that prefetches — " +
+      "the scripts and the payload preload both run"]],
+    ["Navigator\u0000scheduling", ["none", "a scheduler's input-pending hint, falling back to a time slice"]],
+    ["Document\u0000execCommand", ["none", "copy/cut/paste — it IS the fallback the clipboard rows fall to"]],
+    ["Document\u0000prerendering", ["none", "a boolean a web-vitals metric reads to label its own sample"]],
+    ["Navigator\u0000usb", ["none", "a hardware-wallet transport: device I/O, composing no address"]],
+    ["Document\u0000startViewTransition", ["none", "wraps a DOM update whose else-arm performs it anyway"]],
+    ["Navigation\u0000navigate", ["none", "a router hop whose else-arm is `history.pushState`"]],
+    ["Navigator\u0000credentials", ["net",
+      "a WebAuthn assertion whose JSON is written into a form the same handler then SUBMITS, and a passkey " +
+      "create/get pair — an endpoint no other branch of those pages composes"]],
+  ]);
+  for (const [k, v] of READ) {
+    const i = k.slice(0, k.indexOf("\u0000")), m = k.slice(k.indexOf("\u0000") + 1);
+    if (!ifaceOf.has(i))
+      die(`a recorded reading names ${i}.${m} and ${i} is no longer reached by any receiver this file ` +
+          `derives from Window's IDL — the reading is about a row this section can no longer rank.`);
+    if (!(absentBy.get(i) || []).includes(m))
+      die(`a recorded reading names ${i}.${m} and engine/idlgen.mjs no longer calls that member ABSENT — ` +
+          `if it was BUILT the reading is spent and goes; a verdict may not outlive its own row.`);
+    if (!["prog", "net", "none", "gain"].includes(v[0]))
+      die(`a recorded reading gives ${i}.${m} the verdict "${v[0]}", which is not one of the four this ` +
+          `section's legend defines.`);
+  }
+
   const pairsSeen = new Set();
   for (const k of [...Object.keys(RCHAN), ...Object.keys(RPRINT)])
     for (const p of rHit.get(k).keys()) pairsSeen.add(p);
@@ -1504,7 +1633,7 @@ say(`   rank = R.m + window.R.m + R["m"], minus shadow. alias = the same read of
     const mem = r.p.slice(r.p.indexOf("\u0000") + 1), bare = dotC.get(mem) || 0;
     say(`   ${String(r.rank).padStart(4)}  alias=${String(r.alias).padStart(3)} guard=${String(r.guard).padStart(3)} ` +
         `shadow=${String(r.sh).padStart(2)}  bare=${String(bare).padStart(6)}` +
-        `${r.rank ? ` (${(bare / r.rank).toFixed(0)}x)` : "      "}  ` +
+        `${r.rank ? ` (${(bare / r.rank).toFixed(0)}x)` : "      "}  down=${(READ.get(r.p) || [""])[0].padEnd(4)}  ` +
         `${r.p.replace("\u0000", ".").padEnd(40)} ${[...(rBy.get(r.p) || new Map())].map(([n, c]) => `${n}=${c}`).join(" ")}`);
   }
   /* SAME CUT, SAME OBLIGATION AS LIST A — and here the cut is BOTH a tail and a class, because the sort is
@@ -1519,6 +1648,23 @@ say(`   rank = R.m + window.R.m + R["m"], minus shadow. alias = the same read of
         `guard-only=${cut.filter((r) => !r.rank && !r.alias && r.guard).length} — raise --top to read them. ` +
         `The sort is rank-first, so the alias-only and guard-only rows are cut FIRST and their absence above ` +
         `is not evidence the corpus does not read them.`);
+  /* A COVERAGE FIGURE STATES WHAT IT IS A FRACTION OF, and this one is a fraction of the RANKED rows rather
+     than of the askable pairs: an unranked row has no sites in this corpus to open. The notes print in full
+     because the verdict token is four characters and the reading is the whole content — and the command that
+     regenerates any row's sites prints with them, since a reading nobody can re-take is a claim competing
+     with a command. */
+  const readRows = rows.filter((r) => r.rank && READ.has(r.p));
+  say(`   ${readRows.length} of the ${rows.filter((r) => r.rank).length} ranked row(s) have had their sites ` +
+      `OPENED AND READ; the rest print a blank down= and are unread rather than empty. Of those read, ` +
+      `${["prog", "net", "none", "gain"].map((v) => `${readRows.filter((r) => READ.get(r.p)[0] === v).length} ` +
+      `${v}`).join(", ")} — which sums to the read count and is the whole of what the column asserts.`);
+  for (const r of readRows)
+    say(`     down ${READ.get(r.p)[0].padEnd(4)} rank ${String(r.rank).padStart(3)}  ` +
+        `${r.p.replace("\u0000", ".").padEnd(36)} ${READ.get(r.p)[1]}`);
+  say(`   TO RE-TAKE ANY ROW'S READING, OR TO TAKE ONE FOR A BLANK ROW, the sites are the same occurrences ` +
+      `this section counts and the spelling is this file's own R.m / g.R.m channels:`);
+  say(`     grep -robE '(window|self|globalThis)?[.]?<receiver>[[:space:]]*[.][[:space:]]*<member>' ` +
+      `<corpus> | head   # then OPEN each offset and read the enclosing function`);
   for (const [k, re] of [...Object.entries(RCHAN), ...Object.entries(RPRINT)]) {
     void re;
     const t = rHit.get(k);
