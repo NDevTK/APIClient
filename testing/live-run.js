@@ -470,6 +470,30 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      maximum saturates and then plateaus, so a plateau in one is NOT a ceiling and the series length is part of
      quoting it. `finished` is the departure fact and is a genuine lifetime count. */
   "steps", "sliceUs", "sliceOverruns",
+  /* AND THE ONE THING `sliceOverruns` AND `stepUnitOverruns` TOGETHER CANNOT SAY, WHICH IS WHAT THOSE TURNS
+     WERE INSIDE. An arm is where a step ENDED, and `resume-program` and `start-a-classic-program` both end
+     inside one call whether the time went into the page's bytecode between two of its own raise points or
+     into a single native call that never returned — and those take opposite work, one being a page's own
+     choice that §NO BOUNDS forbids capping and the other a step-machine conversion (§C-stack) in whichever
+     component owns the call. `sliceOverrunSeamless` is how many of the overrunning turns offered NOT ONE
+     suspend point and `sliceOverrunAsks` is how many the rest offered between them; read as a pair, because a
+     sum can be carried by one chatty turn. An artifact older than them prints `-`, which is this driver's
+     absent-versus-zero rule and is the honest answer — the run did not state them. */
+  "sliceOverrunAsks", "sliceOverrunSeamless",
+  /* AND THE OTHER TWO THIRDS OF THE TURN, WITHOUT WHICH `sliceUs` IS A NUMERATOR WHOSE TOTAL THIS DRIVER
+     NEVER PRINTED. solver/engine.h splits a turn into the STEP (`sliceUs`) and EVERYTHING ELSE (`schedUs` —
+     the pick, the context switch, the delta swap and the previous iteration's tail), and states that they are
+     TWO ROWS AND NOT A SUBTRACTION precisely so a reader ADDS rather than infers: `sliceUs + schedUs ==
+     stepUs` is asserted at engine_step_unit_runs where all three are in one hand, so carrying all three makes
+     that identity checkable FROM THIS DRIVER'S OWN OUTPUT rather than on trust.
+     THE PAIR IS WHAT SEPARATES THE TWO DIAGNOSES A LARGE `sliceUs` INVITES, and they are in different
+     components: a turn whose STEP dominates is the cooperative quantum with nothing to expire it mid-call,
+     which is solver/quantum.h's transport; a turn whose PICK and SWAP dominate is the ORDERING and the COW
+     delta costing more than the work they order, which is the frontier's own shape and an O(members) walk at
+     every ask. This driver carried `sliceUs` alone, so every reading it has ever produced was consistent with
+     both and could refute neither — the engine has computed `schedUs` on every census of every run and no
+     tracked driver in this tree has ever printed it. */
+  "stepUs", "schedUs",
   "unitMidProgram", "unitParked", "unitCheckpointOwed",
   "classicCompiles", "classicCompileOverruns",
   "rootPrograms", "deepest", "completed", "deepestLeft", "finished",

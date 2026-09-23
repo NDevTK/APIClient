@@ -2486,6 +2486,18 @@ char *result_cold_json(void) {
                     no overruns is cheap however often it is taken, and an arm whose two counts are EQUAL is a
                     step that cannot rest. See solver/engine.h's `over_arms`. */
                  "\"stepUnitOverruns\":%s,"
+                 /* AND WHETHER THE PAGE'S OWN CODE WAS RUNNING IN THOSE TURNS AT ALL, which the arm row
+                    above cannot say and which its reading rests on. An arm is where a step ENDED, and
+                    `resume-program` and `start-a-classic-program` both end inside the same call whether the
+                    time went into the page's bytecode between two of its own raise points or into ONE native
+                    call that never returned — and those are opposite diffs in different components.
+                    `sliceOverrunAsks` is how many suspend points those turns OFFERED and
+                    `sliceOverrunSeamless` is how many of them offered NOT ONE; a sum alone can be carried by
+                    a single chatty turn, so the pair is the reading. All-seamless says the thread was inside
+                    C that declares no step boundary and the answer is a step-machine conversion; a large sum
+                    says the points were there and the stretch ran anyway, which is a question about the page
+                    and not about this engine. See solver/engine.h's `slice_overrun_asks`. */
+                 "\"sliceOverrunAsks\":%llu,\"sliceOverrunSeamless\":%ld,"
                  /* AND WHICH PHASE OF A START STEP SPENT THE TIME, which no row above can say. A start is a
                     COMPILE and then an EXECUTION and only the second runs bytecode, so only the second can
                     reach one of the page's own raise points; the compile is O(a length the page chose) with
@@ -2609,6 +2621,7 @@ char *result_cold_json(void) {
 
    `miscBytes`/`miscParts` ARE NAMED AFTER WHAT THEY COUNT AND WERE NOT. They were emitted as
    `realmBytes`/`realmParts` on the claim that quickjs's `memory_used_*` is a walk of the CONTEXT LIST, so a
+                 (unsigned long long)r.slice_overrun_asks, r.slice_overrun_seamless,
    reader asking "is the growth child realms?" read them and got an answer about something else:
    JS_ComputeMemoryUsage adds two entries per realm and then adds EVERY object's property array, every fast
    array's element vector, every var_ref, bound function, C-closure record and module entry to the same pair.
