@@ -28,22 +28,20 @@
  * paragraph below is what is LEFT of the residual that named them, and its two halves are now unblocked
  * rather than blocked — which is the only thing that changed about them.
  *
- * NOT BUILT, AND NAMED RATHER THAN SHAPED — §4.2 STEP 7.5 AND §5.3 STEP 3.3.7, THE TWO OBSERVER-SIDE READERS:
- *   WHAT IS NOT COVERED. §4.2 step 7.5's `buffered: true` registers the observer and delivers it NOTHING that
- *     was queued before it observed, and its `droppedEntriesCount` is absent from §4.1's dictionary rather
- *     than a number. Both now have a map to read; neither reads it.
- *   WHY THEY ARE STILL HERE, WHICH IS A SCOPE AND NO LONGER AN ARGUMENT. The blocker was the absent map and
- *     it is gone. What stands in their way is only that the diff which built the map was scoped to the
- *     buffer and its first reader, so these two are the next diff rather than a decision.
- *   WHAT THE NEXT DIFF BUILDS. §4.2 step 7.5 reading the map back into a newly-registered observer's buffer,
- *     and §5.3 step 3.3.7's dropped-entries walk over the same tuples. performance_observer_buffer is the
- *     accessor both want and it already exists. §2.1.1-§2.1.3 remain a SEPARATE decision that stays with
- *     performance_entry.h's argument, which the buffer's arrival did not touch.
- *   HOW ITS ABSENCE WOULD SHOW. `performance.mark('a')` followed by
- *     `new PerformanceObserver(cb).observe({type: 'mark', buffered: true})` never calls `cb`, where a browser
- *     calls it with the earlier mark; and a callback that reads `options.droppedEntriesCount` finds the member
- *     absent on every call. Both are now observations about these two steps ALONE, because the mark really is
- *     on the timeline: `performance.measure('m', 'a')` resolves it.
+ * BUILT SINCE — §4.2 STEP 7.5 AND §5.3 STEP 3.3.7, THE TWO OBSERVER-SIDE READERS OF THAT MAP. `buffered: true`
+ * now replays a type's tuple into the newly-registered observer's buffer and queues the task, and §4.1's
+ * `droppedEntriesCount` is a SUM over the registered observer's own options list rather than an absent member.
+ *   THE 0 IT WRITES IS A MEASUREMENT AND NOT AN INVENTION, which is the whole of what changed. The residual
+ *     that stood here refused to write one because "inventing a 0 there would be a datum a page could not
+ *     tell from a measurement", and that was right while there was no map: the number is now read off the §2
+ *     tuples that §5.6 raises, and it is 0 for every declared type only because the TIMING ENTRY TYPES
+ *     REGISTRY gives both of them maxBufferSize Infinite. That is a fact about those rows, which a page may
+ *     read; the absent member was a fact about the engine, which it may not.
+ *   §4.2 STEP 7.5 IS ONLY EVER REACHED ON THE `type` ARM and that is the standard's placement rather than a
+ *     narrowing — step 3 refuses `entryTypes` beside any other member, so an `entryTypes` observer cannot
+ *     carry `buffered` and there is no `options's type` for step 7.5.1 to key on.
+ *   §2.1.1-§2.1.3 remain a SEPARATE decision that stays with performance_entry.h's argument, which neither
+ *     the buffer's arrival nor these two readers touched.
  */
 #ifndef ENGINE_HOST_BROWSER_CORE_TIMING_PERFORMANCE_OBSERVER_H
 #define ENGINE_HOST_BROWSER_CORE_TIMING_PERFORMANCE_OBSERVER_H

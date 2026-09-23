@@ -205,6 +205,64 @@ static bool po_buffer_full(JSContext *ctx, JSValueConst tuple)
     return true;
 }
 
+/* §5.3 STEP 3.3.7's SUM, over ONE registered performance observer's options list. "For each
+ * PerformanceObserverInit item in registeredObserver's options list: For each DOMString entryType that
+ * appears either as item's type or in item's entryTypes: Let map be relevantGlobal's performance entry buffer
+ * map. Let tuple be the result of getting the value of entry on map given entryType as key. Increase
+ * droppedEntriesCount by tuple's dropped entries count."
+ *
+ * EVERY TYPE IT MEETS HAS A TUPLE, and that is §4.2's doing rather than an assumption: step 6.2 removes from
+ * `entryTypes` every type not in §4.5's frozen array, and step 7.2 aborts for a `type` that is not in it — so
+ * a type reached a registration only by being one this build declares, and the map holds a tuple per declared
+ * type. po_tuple asserts it, which is where a disagreement between those two populations would surface. */
+static int64_t po_dropped_total(JSContext *ctx, JSValueConst rec)
+{
+    JSValue opts = JS_GetPropertyUint32(ctx, (JSValue)rec, PO_R_OPTIONS);
+    uint32_t n = po_len(ctx, opts), i;
+    int64_t total = 0;
+
+    for (i = 0; i < n; i++) {
+        JSValue item = JS_GetPropertyUint32(ctx, opts, i);
+        JSValue one = idl_dict_get(ctx, item, "type");
+        JSValue many = idl_dict_get(ctx, item, "entryTypes");
+        uint32_t m, k;
+
+        /* `type` AND `entryTypes` NEVER STAND TOGETHER — §4.2 step 3 throws a TypeError for `entryTypes`
+           beside any other member — so this reads one of the two per item and the loop below runs for at most
+           one of them. Both are read anyway rather than branched on, because the step says "either as item's
+           type or in item's entryTypes" and a branch here would be this file restating §4.2's refusal. */
+        if (JS_IsString(one)) {
+            JSValue t = po_tuple(ctx, one), d = JS_GetPropertyUint32(ctx, t, PO_T_DROPPED);
+            int64_t v = 0;
+
+            CHECK(JS_ToInt64(ctx, &v, d) == 0, "a §2 tuple's dropped entries count could not be read back");
+            total += v;
+            JS_FreeValue(ctx, d);
+            JS_FreeValue(ctx, t);
+        }
+        m = JS_IsArray(many) ? po_len(ctx, many) : 0;
+        for (k = 0; k < m; k++) {
+            JSValue et = JS_GetPropertyUint32(ctx, many, k);
+            JSValue t, d;
+            int64_t v = 0;
+
+            if (!JS_IsString(et)) { JS_FreeValue(ctx, et); continue; }
+            t = po_tuple(ctx, et);
+            d = JS_GetPropertyUint32(ctx, t, PO_T_DROPPED);
+            CHECK(JS_ToInt64(ctx, &v, d) == 0, "a §2 tuple's dropped entries count could not be read back");
+            total += v;
+            JS_FreeValue(ctx, d);
+            JS_FreeValue(ctx, t);
+            JS_FreeValue(ctx, et);
+        }
+        JS_FreeValue(ctx, many);
+        JS_FreeValue(ctx, one);
+        JS_FreeValue(ctx, item);
+    }
+    JS_FreeValue(ctx, opts);
+    return total;
+}
+
 JSValue performance_observer_buffer(JSContext *ctx, const char *entry_type)
 {
     JSValue map = po_buffer_map(ctx), buf, t;
@@ -439,15 +497,32 @@ static int js_po_notify_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
             JS_SetPropertyUint32(ctx, ostate, PO_S_BUFFER, JS_NewArray(ctx));
             s->entry_list = performance_observer_entry_list_new(ctx, entries);   /* step 3.3.5 */
             JS_FreeValue(ctx, entries);
-            /* STEPS 3.3.6 - 3.3.8. `droppedEntriesCount` is left NULL, so §4.1's dictionary has no member at
-               all — see performance_observer.h's residual: the count comes from a per-global performance entry
-               buffer map this build has none of, and a 0 written here would be a number a page could not tell
-               from a measurement. Step 3.3.7.3's "Set po's requires dropped entries to false" is NOT part of
-               that residual and runs: it is a fact about the OBSERVER, which this file holds. */
-            JS_SetPropertyUint32(ctx, ostate, PO_S_DROPPED, JS_FALSE);           /* step 3.3.7.3 */
-            s->cbopts = JS_NewObject(ctx);                                       /* step 3.3.8 */
-            CHECK(!JS_IsException(s->cbopts),
-                  "§4.1's PerformanceObserverCallbackOptions could not be allocated");
+            /* STEPS 3.3.6 - 3.3.8. Step 3.3.6 is `droppedEntriesCount` = null, and step 3.3.7 replaces it with
+               a SUM over this registered observer's own options list when the observer requires dropped
+               entries — which §4.2 step 5 sets on every `observe()` and step 3.3.7.3 clears here, so a page
+               reads the member on the FIRST delivery after each `observe()` and not on the ones after it.
+               THE 0 THIS NOW WRITES IS A MEASUREMENT AND NOT AN INVENTION, which is what changed: the count is
+               read off the §2 tuples, and §5.6 raises it. It is 0 today for every type this build declares
+               because the TIMING ENTRY TYPES REGISTRY gives both of them maxBufferSize Infinite, so nothing is
+               ever dropped — and that is a fact about those rows that a page may read, where the absent member
+               this used to write was a fact about the engine that it may not. */
+            {
+                JSValue req = JS_GetPropertyUint32(ctx, ostate, PO_S_DROPPED);
+                bool requires_dropped = JS_ToBool(ctx, req) != 0;                /* step 3.3.7's test */
+
+                JS_FreeValue(ctx, req);
+                s->cbopts = JS_NewObject(ctx);                                   /* step 3.3.8 */
+                CHECK(!JS_IsException(s->cbopts),
+                      "§4.1's PerformanceObserverCallbackOptions could not be allocated");
+                if (requires_dropped) {                                          /* steps 3.3.7.1 and 3.3.7.2 */
+                    JS_SetPropertyStr(ctx, s->cbopts, "droppedEntriesCount",
+                                      JS_NewInt64(ctx, po_dropped_total(ctx, rec)));
+                    JS_SetPropertyUint32(ctx, ostate, PO_S_DROPPED, JS_FALSE);   /* step 3.3.7.3 */
+                }
+                /* STEP 3.3.8's "otherwise unset" is the ABSENCE of the member, which is why the object is
+                   built empty and the property is added only on the arm that has a number — a member set to
+                   `undefined` would be a member a page's `in` test finds. */
+            }
             JS_FreeValue(ctx, ostate);
             JS_FreeValue(ctx, rec);
             s->cur = po;
@@ -773,10 +848,47 @@ static JSValue js_po_observe(JSContext *ctx, JSValueConst this_val, int argc, JS
             JS_SetPropertyUint32(ctx, rec, PO_R_OPTIONS, opts);
             po_push(ctx, list, rec);
         }
-        /* STEP 7.5's `buffered` arm is performance_observer.h's NAMED RESIDUAL: there is no per-global
-           performance entry buffer map in this build, so the historical entries it would deliver do not exist
-           and there is nothing here to read. The flag is still CONVERTED and still refused by step 3 beside
-           `entryTypes`, which is the half of it that is observable today. */
+        /* STEP 7.5: "If options's buffered flag is set: Let tuple be the relevant performance entry tuple of
+           options's type and relevantGlobal. For each entry in tuple's performance entry buffer: If should
+           add entry with entry and options as parameters returns true, append entry to the observer buffer.
+           Queue the PerformanceObserver task with relevantGlobal as input."
+           IT IS INSIDE STEP 7 AND THEREFORE ONLY EVER REACHED ON THE `type` ARM, which is the standard's own
+           placement and not a narrowing: step 3 throws a TypeError for `entryTypes` beside any other member,
+           so an observer registered with `entryTypes` cannot carry `buffered` at all and there is no
+           `options's type` for this step to key on.
+           `buffered` IS RE-READ RATHER THAN HELD from step 3's conversion check above. The dictionary was
+           converted by the declaration, so reading a member off it runs none of the page's code — and holding
+           it across steps 4 through 7.4 would be a value this function has to free on six paths. */
+        {
+            JSValue flag = idl_dict_get(ctx, argv[0], "buffered");
+            bool buffered_set = JS_ToBool(ctx, flag) != 0;
+
+            JS_FreeValue(ctx, flag);
+            if (buffered_set) {
+                JSValue tuple = po_tuple(ctx, type);                      /* step 7.5.1 */
+                JSValue buf = JS_GetPropertyUint32(ctx, tuple, PO_T_BUFFER);
+                JSValue obuf = JS_GetPropertyUint32(ctx, state, PO_S_BUFFER);
+                uint32_t nb = po_len(ctx, buf), b;
+
+                for (b = 0; b < nb; b++) {                                /* step 7.5.2 */
+                    JSValue entry = JS_GetPropertyUint32(ctx, buf, b);
+
+                    /* STEP 7.5.2.1's "should add entry with entry and options as parameters" — the TWO-operand
+                       form of the registry row, where §5.1 step 11 asks the one-operand form. Both declared
+                       rows read "Return true", which is an answer that consults neither operand, so the one
+                       implementation answers both call shapes; a row that read its `options` (the registry
+                       gives `event` such a row, over durationThreshold) would need the operand and would say
+                       so at po_should_add_entry, whose assert is what stops this becoming a placeholder. */
+                    if (po_should_add_entry(ctx, type))
+                        po_push(ctx, obuf, JS_DupValue(ctx, entry));
+                    JS_FreeValue(ctx, entry);
+                }
+                JS_FreeValue(ctx, obuf);
+                JS_FreeValue(ctx, buf);
+                JS_FreeValue(ctx, tuple);
+                po_queue_task(ctx);                                       /* step 7.5.3 */
+            }
+        }
     }
     JS_FreeValue(ctx, list);
     JS_FreeValue(ctx, entry_types);
