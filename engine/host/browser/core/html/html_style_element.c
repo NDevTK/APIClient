@@ -167,7 +167,8 @@ void html_style_element_update(lxb_dom_element_t *el)
            THE ELEMENT IS PASSED, NOT JUST THE POLICY, and it is what makes `<style nonce=…>` work: §6.7.3.3's
            nonce arm applies to inline STYLE exactly as it applies to inline script, so a policy of
            `style-src 'nonce-abc'` allows this element and refuses the identical `<style>` beside it. */
-        if (!policy_allows_inline(document_policy(realm), CSP_INLINE_STYLE, el, (const char *)content, clen)) {
+        if (!policy_allows_inline(csp_reporter(realm), document_policy(realm), CSP_INLINE_STYLE, el,
+                                  (const char *)content, clen)) {
             if (content) lxb_dom_document_destroy_text(n->owner_document, content);
             JS_FreeValue(realm, wrap);
             return;

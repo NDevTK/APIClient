@@ -67,7 +67,7 @@ static lxb_dom_element_t *first_base_with_href(lxb_dom_document_t *doc)
    read from the other end and for the same reason — a second policy can only narrow.
    `redirect count` IS ZERO AND STATED SO BY THE ALGORITHM, which is why it is a literal here: a base URL is
    not a request and has not been redirected. */
-static bool base_allowed_for_document(const PolicyContainer *policy, const UrlRecord *base)
+static bool base_allowed_for_document(JSContext *realm, const PolicyContainer *policy, const UrlRecord *base)
 {
     const CspList *list = policy_container_csp_list(policy);
     size_t i;
@@ -80,22 +80,21 @@ static bool base_allowed_for_document(const PolicyContainer *policy, const UrlRe
 
         if (!d) continue;   /* "if source list is null, skip to the next policy" */
         if (csp_source_list_match_url(d, base, list->self_origin, 0) == CSP_MATCHES) continue;
-        /* §6.3.1.1's violation steps, of which CSP §5.5 "Report a violation" is not built. The REFUSAL is
-           right and whole — §6.3.1.1 returns "Blocked" and this `return false` is that answer — and what is
-           unbuilt is the violation's observables.
-           THIS USED TO BE A `DCHECK` ON THE POLICY'S OWN `report-uri`/`report-to`, RETIRED FOR THE REASON
-           policy_blocks_request states at length in core/frame/policy_container.c: a policy is a stranger's
-           header, so an assert over one hands every origin an abort switch, and CSP §5.5 gates only the report
-           POST on those directives while firing the event unconditionally — so the condition was also an
-           under-claim about the gap it named. That site holds the argument and this one does not repeat it,
-           but the residual is OWED SEPARATELY HERE because the violation object differs: §6.3.1.1 creates it
-           through CSP §2.4.1 "Create a violation object for global, policy, and directive" with effective
-           directive "base-uri", where a request creates one through CSP §2.4.2.
-           NAMED RESIDUAL — WHAT IS NOT COVERED: §5.5 for a `<base href>` refusal. WHAT THE NEXT DIFF BUILDS:
-           CSP §2.4.1's violation object beside CSP §2.4.2's, over the one SecurityPolicyViolationEvent mint
-           core/frame/policy_container.c names. HOW ITS ABSENCE WOULD SHOW: a page that counts
-           `securitypolicyviolation` events at its own document reads zero when its own `<base href>` is
-           refused, where a browser fires one. */
+        /* §6.3.1.1's VIOLATION STEPS — "let violation be the result of executing §2.4.1 Create a violation
+           object for global, policy, and directive on document's global object, policy and "base-uri". Set
+           violation's resource to "inline". Execute §5.5 Report a violation on violation."
+           THE RESOURCE IS "inline" AND THAT IS THE ALGORITHM'S OWN WORD, not this site's reading of it: a base
+           URL is neither inline content nor a request, and §2.4's resource has no arm for it, so §6.3.1.1
+           picks the string it picks and a reader who expects the refused address in `blockedURI` is reading a
+           different algorithm's answer. The RESIDUAL that stood here is retired — §2.4.1's violation object,
+           §5.2, §5.4 and §5.5's event are core/frame/csp_violation.c's and are built.
+           THE REALM IS THE DOCUMENT'S AND NOT THE RUNNING ONE, which is §6.3.1.1's own words twice over: it
+           reads "document's global object's csp list" and creates the violation on "document's global
+           object". `<base href>` is set by a PARSE as often as by a script, so there is frequently no running
+           realm at all, and a same-origin script reaching into another document's tree would otherwise report
+           that document's violation into its own. */
+        csp_report_violation_for_global(csp_reporter(realm), &list->policies[i], "base-uri",
+                                        CSP_RESOURCE_INLINE, NULL, 0, NULL);
         return false;   /* every policy this build parses has disposition "enforce" */
     }
     return true;
@@ -103,7 +102,7 @@ static bool base_allowed_for_document(const PolicyContainer *policy, const UrlRe
 
 /* §4.2.3's "SET THE FROZEN BASE URL for an element element". Every step is here in its own order, including
    step 3's `return`, which is what makes the blocked/failed case skip step 5. */
-static void set_the_frozen_base_url(lxb_dom_element_t *element)
+static void set_the_frozen_base_url(JSContext *realm, lxb_dom_element_t *element)
 {
     lxb_dom_node_t *node = lxb_dom_interface_node(element);
     lxb_dom_document_t *document = node->owner_document;   /* STEP 1: element's node document */
@@ -142,7 +141,7 @@ static void set_the_frozen_base_url(lxb_dom_element_t *element)
        to base URL changes does not run for them. */
     if (!parsed || (url_record.scheme && (strcmp(url_record.scheme, "data") == 0 ||
                                           strcmp(url_record.scheme, "javascript") == 0)) ||
-        !base_allowed_for_document(document_policy_of(document), &url_record)) {
+        !base_allowed_for_document(realm, document_policy_of(document), &url_record)) {
         document_set_frozen_base_url(document, element, fallback);
         url_record_free(&url_record);
         url_record_free(&base);
@@ -191,13 +190,15 @@ static void set_the_frozen_base_url(lxb_dom_element_t *element)
 static void base_element_process(lxb_dom_document_t *document, lxb_dom_element_t *href_changed)
 {
     lxb_dom_element_t *first, *frozen;
+    JSContext *realm;
 
     /* A LEXBOR TREE IS NOT ALWAYS A Document. §4.2.3 and §2.4.3 are both stated over one — a tree the solver
        parsed for a scan, or a fragment parser's scratch root, has no record, no realm, no address and nothing
        a base URL could be frozen against. That is the standard's own domain restriction rather than a case to
        tolerate, and `document_realm_of` is this engine's EXISTING (tree -> is there a Document here) answer:
        asking it rather than growing a second predicate is what keeps the two from disagreeing. */
-    if (!document_realm_of(lxb_dom_interface_node(document))) return;
+    realm = document_realm_of(lxb_dom_interface_node(document));
+    if (!realm) return;
     first = first_base_with_href(document);
     frozen = document_frozen_base_element(document);
     if (first == frozen && first != href_changed) return;
@@ -208,7 +209,10 @@ static void base_element_process(lxb_dom_document_t *document, lxb_dom_element_t
         document_set_frozen_base_url(document, NULL, NULL);
         return;
     }
-    set_the_frozen_base_url(first);
+    /* THE REALM IS THE ONE THE GUARD ABOVE ALREADY ASKED FOR, kept rather than asked for twice: it is what
+       §6.3.1.1 reports its violation into and what that guard is already the presence test for, so taking it
+       from the same call is one answer to one question. */
+    set_the_frozen_base_url(realm, first);
 }
 
 /* Does this subtree contain a base element with an href? The tree-steps hook is handed the node that moved and

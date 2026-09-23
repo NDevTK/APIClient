@@ -76,8 +76,8 @@ static void eha_apply(JSContext *ctx, lxb_dom_element_t *el, lxb_dom_node_t *n, 
            on an element of another same-origin document is that document's question.
            RETURNING HERE LEAVES THE HANDLER AS IT WAS, which is what the step says and is not the same as
            deactivating: a blocked write does not remove a handler an earlier allowed write installed. */
-        if (!policy_allows_inline(document_policy_of(n->owner_document), CSP_INLINE_SCRIPT_ATTRIBUTE, el,
-                                  value, value_len)) {
+        if (!policy_allows_inline(csp_reporter(ctx), document_policy_of(n->owner_document),
+                                  CSP_INLINE_SCRIPT_ATTRIBUTE, el, value, value_len)) {
             JS_FreeValue(ctx, target);
             return;
         }

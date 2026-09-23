@@ -1048,7 +1048,7 @@ static int js_timer_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSVa
                spelling twice. HOW ITS ABSENCE WOULD SHOW: a page whose `window.onerror` counts errors sees
                the count unchanged across a `setTimeout` string handler its own policy refused, where a
                browser fires one. */
-            if (!policy_allows_string_compilation(document_policy(ctx))) {
+            if (!policy_allows_string_compilation(csp_reporter(ctx), document_policy(ctx))) {
                 JS_FreeCString(ctx, src);
                 s->aborted = 1;
                 JS_FreeValue(ctx, cb_result);   /* no request was made on this leg — see TT_INVOKE's arm */

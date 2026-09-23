@@ -24,6 +24,7 @@
 
 #include "core/frame/csp_directive_list.h"
 #include "core/frame/csp_source_list.h"
+#include "core/frame/csp_violation.h"
 #include "core/frame/embedder_policy.h"
 #include "core/frame/sandboxing.h"
 
@@ -306,16 +307,24 @@ SerializedPolicyContainer policy_container_determine_navigation_params(const cha
  * alone refuses a sheet every browser applies, and every value the cascade then resolves is wrong. `element`
  * may be NULL — §4.2.4 runs this check "upon null" for a javascript: navigation, and an injected breakout has
  * been inserted nowhere; core/frame/csp_source_list.h says why that needs no branch of its own. `source` is
- * BORROWED, is not NUL-terminated, and is the bytes §6.7.3.3's hash arm digests. */
-bool policy_allows_inline(const PolicyContainer *p, CspInlineType type, const lxb_dom_element_t *element,
-                          const char *source, size_t source_len);
+ * BORROWED, is not NUL-terminated, and is the bytes §6.7.3.3's hash arm digests.
+ *
+ * `reporter` IS §4.2.3's OWN STEP AND NOT A HOOK ON IT. That algorithm does not merely decide: for every
+ * policy whose directive refuses, it runs §2.4.1 "Create a violation object for global, policy, and
+ * directive", sets the violation's resource to "inline" and its element to `element`, and executes §5.5
+ * "Report a violation" on it — and only THEN sets result to Blocked. §5.5 fires at a global object's
+ * associated Document, which this walk has no way to reach, so the realm is the CALLER's to state. The same
+ * argument holds one algorithm over for §4.4.1 and §4.1.2 below, which is why all three take one.
+ * core/frame/csp_violation.h has the two ways to build one and why there are exactly two. */
+bool policy_allows_inline(CspReporter reporter, const PolicyContainer *p, CspInlineType type,
+                          const lxb_dom_element_t *element, const char *source, size_t source_len);
 
 /* CSP §4.4.1 "EnsureCSPDoesNotBlockStringCompilation" — `eval`, `new Function`, `setTimeout(string)`. NOT an
    inline check: no element, no type, no §6.8.2 mapping, and §6.1.10 states that its directive lookup is
    deliberately not §6.8's fallback machinery — 'unsafe-eval' acts as a page-wide flag, so the granular
    `script-src-elem`/`script-src-attr` forms are never consulted for it. That difference is the whole reason
    this is its own entry point rather than one more member of a shared enum. */
-bool policy_allows_string_compilation(const PolicyContainer *p);
+bool policy_allows_string_compilation(CspReporter reporter, const PolicyContainer *p);
 
 /* CSP §4.1.2 "should request be blocked by Content Security Policy?" — Fetch's MAIN FETCH STEP 7, and the one
  * question this container answers about a URL rather than about inline content.
@@ -417,9 +426,9 @@ CspRequestMetadata csp_request_metadata(const char *nonce, size_t nonce_len,
    it by passing NULL, and a caller that uses it NAMES the algorithm it is making that claim about. */
 CspRequestMetadata csp_request_metadata_unstated(void);
 
-CspRequestVerdict policy_should_block_request(const PolicyContainer *p, const UrlRecord *url,
-                                              const char *destination, CspRequestMetadata metadata,
-                                              int redirect_count);
+CspRequestVerdict policy_should_block_request(CspReporter reporter, const PolicyContainer *p,
+                                              const UrlRecord *url, const char *destination,
+                                              CspRequestMetadata metadata, int redirect_count);
 
 /* §7.1.5's CSP-DERIVED SANDBOXING FLAGS for a CSP list, which is the ONE thing a policy container contributes
  * to a Document's active sandboxing flag set. §7.4.5 builds navigationParams's final sandboxing flag set as

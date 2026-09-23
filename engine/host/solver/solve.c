@@ -3114,9 +3114,16 @@ char *solve_json_array(JSContext *ctx) {
            attacker markup cannot carry a nonce the page's own policy lists. */
         {
             const char *poc = g_sinks[i].poc;
+            /* NO REPORTER, AND THAT IS THE CLAIM RATHER THAN A CONVENIENCE. §4.2.3 and §4.4.1 report a
+               violation for content the PAGE ran; this asks the same algorithms about a breakout THIS ENGINE
+               composed and has inserted nowhere, to decide whether the finding carries "CSP blocks". No
+               content was refused, so there is no violation to report and no document whose listeners should
+               see one — firing here would put an event in the page's timeline that names an attack the page
+               never suffered. csp_reporter_none is that statement; see core/frame/csp_violation.h. */
+            CspReporter no_report = csp_reporter_none();
             int allowed = sc->policy < 0
-                              ? policy_allows_string_compilation(pc)
-                              : policy_allows_inline(pc, (CspInlineType)sc->policy, NULL, poc,
+                              ? policy_allows_string_compilation(no_report, pc)
+                              : policy_allows_inline(no_report, pc, (CspInlineType)sc->policy, NULL, poc,
                                                      poc ? strlen(poc) : 0);
 
             if (!allowed) {

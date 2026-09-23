@@ -559,26 +559,67 @@ static bool policy_permits_inline(const CspPolicy *policy, CspInlineType type,
    question over the same list, and for the same reason: a second policy can only narrow. A document with no
    policy allows everything, which is the overwhelmingly common case and is what "no Content-Security-Policy
    header" means. */
-bool policy_allows_inline(const PolicyContainer *p, CspInlineType type, const lxb_dom_element_t *element,
-                          const char *source, size_t source_len)
+/* THE LOOP RUNS TO THE END AND DOES NOT RETURN ON THE FIRST REFUSAL, and that is §4.2.3's own shape rather
+   than a change of mind about the quantifier. Its inner steps are "execute §5.5 Report a violation on
+   violation" and THEN "if policy's disposition is enforce then set result to Blocked" — a SET and not a
+   return — so a document carrying two policies that both refuse gets TWO events, which is what a browser
+   fires. This used to return on the first, which was indistinguishable from the spec while §5.5 was unbuilt
+   and is a lost event per policy the moment it is not. The ANSWER is identical either way. */
+bool policy_allows_inline(CspReporter reporter, const PolicyContainer *p, CspInlineType type,
+                          const lxb_dom_element_t *element, const char *source, size_t source_len)
 {
+    bool allowed = true;
     size_t i;
 
     if (!p) return true;
     for (i = 0; i < p->csp.n_policies; i++)
-        if (!policy_permits_inline(&p->csp.policies[i], type, element, source, source_len)) return false;
-    return true;
+        if (!policy_permits_inline(&p->csp.policies[i], type, element, source, source_len)) {
+            /* §4.2.3: "let violation be the result of executing §2.4.1 … on the current settings object's
+               global object, policy and directive name. Set violation's resource to "inline". Set
+               violation's element to element." The directive NAME is §6.8.2's over the inline type, which is
+               the same one `policy_permits_inline` just asked §6.8.4 about — one answer, asked once. */
+            csp_report_violation_for_global(reporter, &p->csp.policies[i],
+                                            csp_effective_directive_for_inline_checks(type),
+                                            CSP_RESOURCE_INLINE, source, source_len, element);
+            allowed = false;
+        }
+    return allowed;
 }
 
-bool policy_allows_string_compilation(const PolicyContainer *p)
+/* THE SAME SHAPE AS §4.2.3 ABOVE AND FOR §4.4.1's OWN REASON: its per-policy steps end "execute §5.5 Report
+   a violation on violation. If policy's disposition is enforce then set result to Blocked", and only after
+   the loop does it "if result is Blocked, throw an EvalError exception". */
+bool policy_allows_string_compilation(CspReporter reporter, const PolicyContainer *p)
 {
+    bool allowed = true;
     size_t i;
 
     if (!p) return true;
     for (i = 0; i < p->csp.n_policies; i++)
-        if (!policy_permits_compilation(&p->csp.policies[i])) return false;
-    return true;
+        if (!policy_permits_compilation(&p->csp.policies[i])) {
+            /* §4.4.1: "let violation be the result of executing §2.4.1 … on global, policy and
+               "script-src". Set violation's resource to "eval"." The directive is the LITERAL
+               `script-src` and not §6.8's fallback answer — §6.1.10 says why in as many words, and it is the
+               same reason `policy_permits_compilation` above writes its own two-line lookup rather than
+               calling csp_policy_governing_directive. The SAMPLE is the compiled source, which this entry
+               point does not carry: see the residual below. */
+            csp_report_violation_for_global(reporter, &p->csp.policies[i], "script-src", CSP_RESOURCE_EVAL,
+                                            NULL, 0, NULL);
+            allowed = false;
+        }
+    return allowed;
 }
+/* NAMED RESIDUAL — WHAT IS NOT COVERED: §4.4.1's sample step, "if source list contains the expression
+   'report-sample' then set violation's sample to the substring of sourceString containing its first 40
+   characters". The 40-character cut and the 'report-sample' test are core/frame/csp_violation.c's and are
+   built; what this entry point does not carry is the SOURCE. §4.4.1 takes `codeString` as an argument and
+   this one takes a policy container and nothing else, deliberately — §6.1.10 makes 'unsafe-eval' a page-wide
+   flag whose answer reads no source at all, so the decision never needed the bytes and the entry point never
+   asked for them. WHAT THE NEXT DIFF BUILDS: the two remaining parameters of §4.4.1's own signature that this
+   engine can state — `codeString` and `compilationType` — carried from core/timing/timer.c's string
+   compilation site, which is holding both, and passed through to the report. HOW ITS ABSENCE WOULD SHOW: a
+   handler on a document whose policy writes `script-src 'report-sample'` reads `e.sample` as "" for an `eval`
+   violation, where a browser gives the first forty characters of the code. */
 
 /* §6.7.2.1 "does request violate policy?" for ONE policy, over the FETCH DIRECTIVES — which is every directive
  * whose pre-request check can answer "Blocked".
@@ -672,44 +713,29 @@ static bool policy_blocks_request(const CspPolicy *policy, const UrlRecord *url,
     }
     if (csp_source_list_match_url(d, url, self_origin, redirect_count) == CSP_MATCHES)
         return false;
-    /* §4.1.2 STEP 3.3.1 — "execute §5.5 Report a violation on the result of executing §2.4.2 Create a
-       violation object for request, and policy" — WHICH THIS ENGINE DOES NOT PERFORM. The BLOCK itself is
-       right and whole: §4.1.2's own "Set result to Blocked" is what the `return true` below is, so the answer
-       this walk gives the page is the standard's answer. What is unbuilt is the violation's OBSERVABLES.
+    /* §4.1.2's "Set result to Blocked" is what this `return true` is — the DECISION, and only the decision.
+       §4.1.2 STEP 3.3.1 runs §5.5 "Report a violation" over §2.4.2's violation object, and it runs it in the
+       CALLER's loop rather than here, because this function answers about ONE policy and §4.1.2 reports per
+       violating policy while continuing. policy_should_block_request below is that loop.
+
+       THE RESIDUAL THAT STOOD HERE IS RETIRED: §5.5's event half is built — core/frame/csp_violation.c — and
+       its remaining half, the `report-uri` and `report-to` POST, is named as a residual THERE. What is kept
+       is the argument that retired an earlier guard, because it re-derives easily and reads as rigour.
 
        THIS USED TO BE A `DCHECK` ON THE POLICY'S OWN `report-uri`/`report-to`, AND IT STOOD ON A STRANGER'S
-       BYTES. The retired argument is kept because it re-derives easily and reads as rigour: an endpoint is
-       DECLARED IN THE POLICY, so a report nobody can deliver looks like a gap this function can see coming
-       and refuse. A policy is bytes whichever server served the document sent, and both directives are
-       ordinary and widely deployed — so the guard handed EVERY ORIGIN an abort switch for the dev engine, on
-       the one input this product exists to run. A `DCHECK` asserts that this codebase's OWN logic is correct,
-       and no byte of a policy is this codebase's. core/timing/timer.c states the same rule in its own words at
-       the string-compilation refusal, and CSP's other refusal paths in this engine already obey it
-       and block in silence — `git grep -n policy_allows_inline -- '*.c'` and the same for
-       `policy_allows_string_compilation` names them, and not one carries an assert.
+       BYTES. An endpoint is DECLARED IN THE POLICY, so a report nobody can deliver looks like a gap this
+       function can see coming and refuse. A policy is bytes whichever server served the document sent, and
+       both directives are ordinary and widely deployed — so the guard handed EVERY ORIGIN an abort switch for
+       the dev engine, on the one input this product exists to run. A `DCHECK` asserts that this codebase's
+       OWN logic is correct, and no byte of a policy is this codebase's. core/timing/timer.c states the same
+       rule in its own words at the string-compilation refusal.
 
-       AND THE CONDITION WAS AN UNDER-CLAIM ABOUT ITS OWN GAP, SO REMOVING IT NARROWS NOTHING. CSP §5.5 gates
-       only the report POST on those two directives — "If violation's policy's directive set contains a
-       directive named "report-uri" directive" — while the event step ahead of it is unconditional: CSP §5.5
-       "Report a violation" says "If target implements EventTarget, fire an event named securitypolicyviolation
-       that uses the SecurityPolicyViolationEvent interface at target". A blocking policy that names NO
-       endpoint therefore owes an event exactly as one that does, and the guard certified those as fine.
-
-       NAMED RESIDUAL — WHAT IS NOT COVERED: CSP §5.5 "Report a violation", both observables, for every
-       violation this walk decides and not only for the endpoint-bearing ones. WHAT THE NEXT DIFF BUILDS: the
-       EVENT half, which needs no network at all — §2.4.2's violation object, §5.2's blockedURI and §5.4's
-       strip-url over its fields, and a SecurityPolicyViolationEvent built the way
-       core/events/hash_change_event.h builds its own, as a mint handing back an owned event with
-       event_target_fire as the queued reach §5.5's "Queue a task to run the following steps" asks for. The
-       interface and the fire land TOGETHER: core/events/event_target.c installs `onsecuritypolicyviolation`
-       and nothing in this tree writes it, and an interface installed alone would flip a page's own
-       `if (window.SecurityPolicyViolationEvent)` true while leaving the branch behind it unreachable.
-       THE POST HALF IS NEITHER THE NEXT DIFF NOR THIS COMPONENT'S: §5.5 gives that request method "POST", so
-       whether it is sent is a firing decision for the trusted zone's one chokepoint to make out of its method,
-       its credential state and the provenance of the path that reached it — a violation this engine FORCED is
-       a report no real client would have sent. The engine composes a violation; it does not decide an egress.
-       HOW ITS ABSENCE WOULD SHOW: a page that counts `securitypolicyviolation` events at its own document
-       reads zero across every refusal this engine makes, where a browser fires one per violation. */
+       AND THE CONDITION WAS AN UNDER-CLAIM ABOUT ITS OWN GAP, WHICH IS WHY THE DIFF THAT BUILT §5.5 DID NOT
+       HAVE TO REVISIT IT. §5.5 gates only the report POST on those two directives — "If violation's policy's
+       directive set contains a directive named "report-uri" directive" — while the event step ahead of it is
+       unconditional: "If target implements EventTarget, fire an event named securitypolicyviolation that uses
+       the SecurityPolicyViolationEvent interface at target". A blocking policy that names NO endpoint owes an
+       event exactly as one that does, and that is what the loop below now fires for both. */
     return true;
 }
 
@@ -748,11 +774,13 @@ CspRequestMetadata csp_request_metadata_unstated(void)
     return csp_request_metadata("", 0, "", 0, CSP_PARSER_METADATA_EMPTY);
 }
 
-CspRequestVerdict policy_should_block_request(const PolicyContainer *p, const UrlRecord *url,
-                                              const char *destination, CspRequestMetadata metadata,
-                                              int redirect_count)
+CspRequestVerdict policy_should_block_request(CspReporter reporter, const PolicyContainer *p,
+                                              const UrlRecord *url, const char *destination,
+                                              CspRequestMetadata metadata, int redirect_count)
 {
+    CspRequestVerdict result = CSP_REQUEST_ALLOWED;
     const char *effective;
+    char *serialized = NULL;
     size_t i;
 
     /* THE ONE STATE A CONSTRUCTOR CANNOT PREVENT. Both spellings of CspRequestMetadata place two non-NULL
@@ -782,9 +810,39 @@ CspRequestVerdict policy_should_block_request(const PolicyContainer *p, const Ur
        the step's "if policy's disposition is report, skip" is vacuous rather than skipped.
        THE QUANTIFIER IS THE SAME ONE `policy_allows_inline` RUNS, from the other end: §4.1.2 sets result to Blocked
        if ANY policy is violated, which is "allowed only if EVERY policy permits it". */
+    /* THE LOOP RUNS TO THE END AND DOES NOT RETURN ON THE FIRST VIOLATION, which is §4.1.2's own shape:
+       step 3.3 is "execute §5.5 Report a violation …" followed by "SET result to Blocked" — a set and not a
+       return — so a document carrying two policies that both refuse one request gets TWO events, which is
+       what a browser fires. Returning early was indistinguishable from the standard while §5.5 was unbuilt,
+       and is a lost event per policy the moment it is not. The ANSWER is identical either way, which is why
+       the early return survived as long as it did. */
     for (i = 0; i < p->csp.n_policies; i++)
         if (policy_blocks_request(&p->csp.policies[i], url, effective, destination, metadata,
-                                  p->csp.self_origin, redirect_count))
-            return CSP_REQUEST_BLOCKED;
-    return CSP_REQUEST_ALLOWED;
+                                  p->csp.self_origin, redirect_count)) {
+            /* §4.1.2 STEP 3.3.1 — "execute §5.5 Report a violation on the result of executing §2.4.2 Create
+               a violation object for request, and policy on request, and policy".
+               THE ADDRESS IS SERIALIZED ONCE AND ONLY IF SOMETHING VIOLATES, because the overwhelming
+               majority of requests violate nothing and a serialization per allowed request is a malloc per
+               subresource of every page. */
+            if (!serialized) {
+                serialized = url_serialize(url, /*exclude_fragment*/ false);
+                CHECK(serialized != NULL,
+                      "§2.4.2's resource could not be serialized — an allocation failure while composing a "
+                      "violation for a request this walk has already refused");
+            }
+            csp_report_violation_for_request(reporter, &p->csp.policies[i], destination, serialized);
+            result = CSP_REQUEST_BLOCKED;
+        }
+    free(serialized);
+    return result;
 }
+/* NAMED RESIDUAL — WHAT IS NOT COVERED: §2.4.2 step 3 sets the violation's resource to "request's url" and
+   its own note says why that is not the CURRENT url — "the latter might contain information about redirect
+   targets to which the page must not be given access" — and the address handed over above is the CURRENT
+   one, which is what §6.7.2 matched against. The two are THE SAME RECORD for every request this engine makes
+   today, because `redirect_count` is 0 for all of them (policy_container.h says so at the parameter) and a
+   request that has not been redirected has one url. WHAT THE NEXT DIFF BUILDS: the request's ORIGINAL url,
+   carried beside its current one by whatever first follows a redirect, and passed here instead. HOW ITS
+   ABSENCE WOULD SHOW: on the day a redirect is followed, a handler reads `e.blockedURI` as the address the
+   redirect LANDED on rather than the one the page asked for — which is the exact disclosure §2.4.2's note
+   exists to prevent, so the residual retires with the redirect rather than after it. */

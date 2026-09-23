@@ -855,8 +855,8 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
     if (!has_src) {
         size_t csp_n = 0;
         char *csp_text = dom_child_text_content(n, &csp_n);
-        bool allowed = policy_allows_inline(document_policy_of(n->owner_document), CSP_INLINE_SCRIPT, el,
-                                            csp_text, csp_n);
+        bool allowed = policy_allows_inline(csp_reporter(ctx), document_policy_of(n->owner_document),
+                                            CSP_INLINE_SCRIPT, el, csp_text, csp_n);
 
         free(csp_text);
         if (!allowed) return;

@@ -5218,6 +5218,23 @@ static void csp_url_matching_selftest(void)
         url_record_free(&u);
     }
 
+    /* EVERY CSP ROW BELOW AND IN policy_container_selftest PASSES `csp_reporter_none()`, AND THAT IS A CLAIM
+       ABOUT THIS FIXTURE RATHER THAN A CONVENIENCE. §4.1.2, §4.2.3 and §4.4.1 each end their per-policy
+       arm in §5.5 "Report a violation", which fires at a global object's associated Document; these rows run
+       BEFORE `main` creates a JSRuntime, deliberately, so that a source-list relation's failure is reported at
+       the matcher's own row rather than inside whatever realm-owning algorithm first consults it — the same
+       tiering `secure_hash_selftest` runs in front of the CSP element-matching rows for. There is no global
+       object here for §2.4.1 to read a url off, and that is what the argument says.
+       IT IS NOT A DEFAULT AND CANNOT BE FORGOTTEN: core/frame/csp_violation.h gives a reporter two
+       constructors and a latch, so a zero-filled one aborts at the first walk handed it rather than deciding
+       a request and reporting nothing.
+       NAMED RESIDUAL — WHAT IS NOT COVERED: §5.5's own steps have no row in THIS fixture, because every one
+       of them needs a realm and a document and these rows have neither. WHAT THE NEXT DIFF BUILDS: a row in
+       the realm-owning half of this file — beside `exposure_selftest`, which already takes a `JSContext` —
+       that gives a document a policy, provokes one refusal, and asserts the event's twelve attributes at a
+       listener. HOW ITS ABSENCE WOULD SHOW: §5.5's composition is exercised only by a driven document, so a
+       defect in it is reported by the live harness or by WPT rather than by this file's own row. */
+
     /* §6.7.2.7's THREE PRE-LOOP STEPS, over a real directive so the `'none'` rules are read off the parse. */
     {
         static const struct { const char *policy; const char *url; CspRequestVerdict want; const char *why; }
@@ -5253,7 +5270,8 @@ static void csp_url_matching_selftest(void)
             url_record_init(&u);
             CHECK(url_parse(&u, LISTS[k].url, strlen(LISTS[k].url), NULL),
                   "the §4.1.2 fixture named a URL its own parser refuses");
-            CHECK(policy_should_block_request(p, &u, "", csp_request_metadata_unstated(), 0) == LISTS[k].want,
+            CHECK(policy_should_block_request(csp_reporter_none(), p, &u, "",
+                                              csp_request_metadata_unstated(), 0) == LISTS[k].want,
                   LISTS[k].why);
             url_record_free(&u);
             policy_container_free(p);
@@ -5269,19 +5287,19 @@ static void csp_url_matching_selftest(void)
 
         url_record_init(&u);
         CHECK(url_parse(&u, "https://anywhere.test/a", 23, NULL), "the no-policy fixture's URL would not parse");
-        CHECK(policy_should_block_request(none, &u, "", csp_request_metadata_unstated(), 0) ==
-              CSP_REQUEST_ALLOWED,
+        CHECK(policy_should_block_request(csp_reporter_none(), none, &u, "",
+                                          csp_request_metadata_unstated(), 0) == CSP_REQUEST_ALLOWED,
               "a document with no Content-Security-Policy must permit every request");
         /* And §6.8.1's "report" destination is governed by no fetch directive even under `default-src 'none'`,
            which is what stops a report to a blocked endpoint from being blocked and never sent. */
         policy_container_free(none);
         none = policy_container_new("default-src 'none'", https_self, NULL, serialized_embedder_policy_new(),
                                                                             /*integrity policy*/ NULL);
-        CHECK(policy_should_block_request(none, &u, "report", csp_request_metadata_unstated(), 0) ==
-              CSP_REQUEST_ALLOWED,
+        CHECK(policy_should_block_request(csp_reporter_none(), none, &u, "report",
+                                          csp_request_metadata_unstated(), 0) == CSP_REQUEST_ALLOWED,
               "§6.8.1 returns null for the report destination, so no fetch directive governs it");
-        CHECK(policy_should_block_request(none, &u, "", csp_request_metadata_unstated(), 0) ==
-              CSP_REQUEST_BLOCKED,
+        CHECK(policy_should_block_request(csp_reporter_none(), none, &u, "",
+                                          csp_request_metadata_unstated(), 0) == CSP_REQUEST_BLOCKED,
               "while the same policy blocks an ordinary fetch — the two lines differ in the destination alone");
         url_record_free(&u);
         policy_container_free(none);
@@ -5399,7 +5417,9 @@ static void csp_url_matching_selftest(void)
             url_record_init(&u);
             CHECK(url_parse(&u, "https://other.test/a.js", 23, NULL),
                   "the §6.7.1.1 fixture named a URL its own parser refuses");
-            CHECK(policy_should_block_request(p, &u, REQ[k].destination, m, 0) == REQ[k].want, REQ[k].why);
+            CHECK(policy_should_block_request(csp_reporter_none(), p, &u, REQ[k].destination, m, 0) ==
+                      REQ[k].want,
+                  REQ[k].why);
             url_record_free(&u);
             policy_container_free(p);
         }
@@ -5412,7 +5432,7 @@ static void csp_url_matching_selftest(void)
    carry a real element stay visibly different from the many that cannot. */
 static bool csp_ok(const PolicyContainer *p, CspInlineType type)
 {
-    return policy_allows_inline(p, type, NULL, "", 0);
+    return policy_allows_inline(csp_reporter_none(), p, type, NULL, "", 0);
 }
 
 static void policy_container_selftest(void)
@@ -5428,7 +5448,7 @@ static void policy_container_selftest(void)
     /* No policy is not an empty policy: a document with no Content-Security-Policy permits everything, which
        is the overwhelmingly common case and the one a wrong default would mis-report on every page. */
     CHECK(csp_ok(none, CSP_INLINE_SCRIPT_ATTRIBUTE), "no policy must permit an inline handler");
-    CHECK(policy_allows_string_compilation(none), "no policy must permit eval");
+    CHECK(policy_allows_string_compilation(csp_reporter_none(), none), "no policy must permit eval");
 
     self_only = policy_container_new("script-src 'self'", self_origin, NULL,
                                      serialized_embedder_policy_new(), /*integrity policy*/ NULL);
@@ -5436,12 +5456,12 @@ static void policy_container_selftest(void)
        host source never permits inline execution — that is what 'unsafe-inline' is for. */
     CHECK(!csp_ok(self_only, CSP_INLINE_SCRIPT_ATTRIBUTE), "'self' must not permit an inline handler");
     CHECK(!csp_ok(self_only, CSP_INLINE_NAVIGATION), "'self' must not permit a javascript: URL");
-    CHECK(!policy_allows_string_compilation(self_only), "'self' must not permit eval");
+    CHECK(!policy_allows_string_compilation(csp_reporter_none(), self_only), "'self' must not permit eval");
 
     inline_ok = policy_container_new("default-src 'none'; script-src 'unsafe-inline'", self_origin, NULL,
                                      serialized_embedder_policy_new(), /*integrity policy*/ NULL);
     CHECK(csp_ok(inline_ok, CSP_INLINE_SCRIPT_ATTRIBUTE), "'unsafe-inline' must permit an inline handler");
-    CHECK(!policy_allows_string_compilation(inline_ok), "'unsafe-inline' must not permit eval");
+    CHECK(!policy_allows_string_compilation(csp_reporter_none(), inline_ok), "'unsafe-inline' must not permit eval");
 
     /* CSP §6.1: a nonce source makes 'unsafe-inline' be IGNORED — the rule that makes adding a nonce to a
        legacy policy actually tighten it rather than widen it. A handler can carry no nonce, so it stays dead. */
@@ -5478,7 +5498,8 @@ static void policy_container_selftest(void)
               "§6.8.2 maps a `navigation` inline check to script-src-elem, so script-src-attr must not touch it");
         CHECK(csp_ok(granular, CSP_INLINE_SCRIPT),
               "script-src-attr must not govern a script ELEMENT — that is script-src-elem's fallback to script-src");
-        CHECK(policy_allows_string_compilation(granular), "eval has no granular form and reads script-src");
+        CHECK(policy_allows_string_compilation(csp_reporter_none(), granular),
+              "eval has no granular form and reads script-src");
         policy_container_free(granular);
     }
     /* ...and the same policy with the granular form that DOES govern a navigation kills it, which is what
@@ -5582,7 +5603,7 @@ static void policy_container_selftest(void)
                                  serialized_embedder_policy_new(), /*integrity policy*/ NULL);
         CHECK(csp_ok(hosts, CSP_INLINE_SCRIPT_ATTRIBUTE),
               "host and scheme sources are invisible to §6.7.3.2, so 'unsafe-inline' still allows all inline");
-        CHECK(!policy_allows_string_compilation(hosts), "and none of them is 'unsafe-eval'");
+        CHECK(!policy_allows_string_compilation(csp_reporter_none(), hosts), "and none of them is 'unsafe-eval'");
         policy_container_free(hosts);
     }
     /* §2.2.1: within ONE policy a repeated directive is IGNORED, so the first wins... */
@@ -5616,13 +5637,14 @@ static void policy_container_selftest(void)
                                                           serialized_embedder_policy_new(),
                                                           /*integrity policy*/ NULL);
         CHECK(csp_ok(unrelated, CSP_INLINE_SCRIPT_ATTRIBUTE), "img-src must not block a handler");
-        CHECK(policy_allows_string_compilation(unrelated), "frame-ancestors must not block eval");
+        CHECK(policy_allows_string_compilation(csp_reporter_none(), unrelated),
+              "frame-ancestors must not block eval");
         policy_container_free(unrelated);
     }
 
     evals = policy_container_new("script-src 'unsafe-eval'", self_origin, NULL,
                                  serialized_embedder_policy_new(), /*integrity policy*/ NULL);
-    CHECK(policy_allows_string_compilation(evals), "'unsafe-eval' must permit eval");
+    CHECK(policy_allows_string_compilation(csp_reporter_none(), evals), "'unsafe-eval' must permit eval");
     CHECK(!csp_ok(evals, CSP_INLINE_SCRIPT_ATTRIBUTE), "'unsafe-eval' must not permit an inline handler");
 
     /* §7.4: the initial about:blank's container is a CLONE of its creator's — which is the whole of how a
@@ -7695,23 +7717,23 @@ static void csp_element_matching_selftest(void)
 
         /* THE POINT OF THE WHOLE CHANGE: the nonced element runs and the identical element beside it does
            not, under one policy, decided by the element rather than by the policy alone. */
-        CHECK(policy_allows_inline(pol, CSP_INLINE_STYLE, nonced, S, slen),
+        CHECK(policy_allows_inline(csp_reporter_none(), pol, CSP_INLINE_STYLE, nonced, S, slen),
               "<style nonce=abc> under style-src 'nonce-abc' must be ALLOWED — §6.7.3.3's nonce arm");
-        CHECK(!policy_allows_inline(pol, CSP_INLINE_STYLE, bare, S, slen),
+        CHECK(!policy_allows_inline(csp_reporter_none(), pol, CSP_INLINE_STYLE, bare, S, slen),
               "…and the <style> beside it, with no nonce, must be Blocked by the same policy");
-        CHECK(!policy_allows_inline(pol, CSP_INLINE_STYLE, NULL, S, slen),
+        CHECK(!policy_allows_inline(csp_reporter_none(), pol, CSP_INLINE_STYLE, NULL, S, slen),
               "…and so must an injected one, which has no element at all");
-        CHECK(!policy_allows_inline(other, CSP_INLINE_STYLE, nonced, S, slen),
+        CHECK(!policy_allows_inline(csp_reporter_none(), other, CSP_INLINE_STYLE, nonced, S, slen),
               "a nonce that does not match must not admit the element");
         /* §2.3.1's ABNF literal `'nonce-` is CASE-INSENSITIVE (RFC 5234 §2.3) and its base64-value is NOT:
            the value is data, not a keyword. These two lines differ only in which half is capitalised. */
-        CHECK(policy_allows_inline(cased, CSP_INLINE_STYLE, nonced, S, slen),
+        CHECK(policy_allows_inline(csp_reporter_none(), cased, CSP_INLINE_STYLE, nonced, S, slen),
               "the nonce-source PREFIX is matched ASCII case-insensitively");
-        CHECK(!policy_allows_inline(upper, CSP_INLINE_STYLE, nonced, S, slen),
+        CHECK(!policy_allows_inline(csp_reporter_none(), upper, CSP_INLINE_STYLE, nonced, S, slen),
               "…while the base64-value is compared exactly, so 'nonce-ABC' must not admit a nonce of abc");
         /* §6.7.3.3's own note: "Nonces only apply to inline script and inline style, not to attributes of
            either element or to javascript: navigations." The element is the same one. */
-        CHECK(!policy_allows_inline(pol, CSP_INLINE_STYLE_ATTRIBUTE, nonced, S, slen),
+        CHECK(!policy_allows_inline(csp_reporter_none(), pol, CSP_INLINE_STYLE_ATTRIBUTE, nonced, S, slen),
               "a nonce on the element must not admit a STYLE ATTRIBUTE — §6.7.3.3 step 2 excludes the type");
         policy_container_free(pol);
         policy_container_free(other);
@@ -7766,10 +7788,12 @@ static void csp_element_matching_selftest(void)
             PolicyContainer *p = policy_container_new(ROWS[k].policy, self_origin, NULL,
                                                       serialized_embedder_policy_new(), /*integrity policy*/ NULL);
 
-            CHECK(!!policy_allows_inline(p, CSP_INLINE_STYLE, bare, S, slen) == ROWS[k].expect, ROWS[k].why);
+            CHECK(!!policy_allows_inline(csp_reporter_none(), p, CSP_INLINE_STYLE, bare, S, slen) ==
+                      ROWS[k].expect,
+                  ROWS[k].why);
             /* The ELEMENT is not what a hash arm reads — §6.7.3.3 step 5 is over `source` alone — so the
                nonce-less and the nonced element must answer alike under a hash policy. */
-            CHECK(!!policy_allows_inline(p, CSP_INLINE_STYLE, nonced, S, slen) == ROWS[k].expect,
+            CHECK(!!policy_allows_inline(csp_reporter_none(), p, CSP_INLINE_STYLE, nonced, S, slen) == ROWS[k].expect,
                   "§6.7.3.3's hash arm reads the SOURCE and not the element, so a nonce on the element must "
                   "not change its answer");
             policy_container_free(p);
@@ -7785,10 +7809,10 @@ static void csp_element_matching_selftest(void)
                 "style-src 'unsafe-hashes' 'sha256-p0bF+un5yUb9MBO6xRb8kPHlY2BdpHVtLiFkDrZPF64='",
                 self_origin, NULL, serialized_embedder_policy_new(), /*integrity policy*/ NULL);
 
-            CHECK(!policy_allows_inline(plain, CSP_INLINE_STYLE_ATTRIBUTE, bare, S, slen),
+            CHECK(!policy_allows_inline(csp_reporter_none(), plain, CSP_INLINE_STYLE_ATTRIBUTE, bare, S, slen),
                   "a hash alone must NOT admit a style attribute — §6.7.3.3 step 5's condition is `type is "
                   "\"script\" or \"style\", or unsafe-hashes flag is true`");
-            CHECK(policy_allows_inline(hashes, CSP_INLINE_STYLE_ATTRIBUTE, bare, S, slen),
+            CHECK(policy_allows_inline(csp_reporter_none(), hashes, CSP_INLINE_STYLE_ATTRIBUTE, bare, S, slen),
                   "…and 'unsafe-hashes' beside it must, which is the only thing that flag does");
             policy_container_free(plain);
             policy_container_free(hashes);
@@ -7823,7 +7847,7 @@ static void document_policy_selftest(void)
     CHECK(!csp_ok(p, CSP_INLINE_SCRIPT_ATTRIBUTE),
           "two meta policies must INTERSECT — the second's 'self' forbids what the first's 'unsafe-inline' "
           "permits, and a scan that let the last one win would report a live handler on a page that blocks it");
-    CHECK(!policy_allows_string_compilation(p), "neither meta policy carries 'unsafe-eval'");
+    CHECK(!policy_allows_string_compilation(csp_reporter_none(), p), "neither meta policy carries 'unsafe-eval'");
 
     /* A page with no CSP at all is the overwhelmingly common one, and the scan must not invent a policy for
        it — an empty container that answered "blocked" would suppress every real finding on every such page. */

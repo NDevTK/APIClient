@@ -261,8 +261,12 @@ int fetch_main_blocked(JSContext *ctx, const char *url, const char *destination,
                   would answer it the same way. */
                mixed_content_should_block_fetching(ctx, &rec, destination,
                                                    !window_proxy_is_top_level(document_window_proxy(ctx))) ||
-               policy_should_block_request(document_policy(ctx), &rec, destination, metadata,
-                                           /*redirect count*/ 0) == CSP_REQUEST_BLOCKED ||
+               /* THE REPORTER IS THIS REALM. §4.1.2 step 3.3.1 runs §5.5 "Report a violation" for every
+                  policy that refuses, and §2.4.1 reads the GLOBAL OBJECT's url off it — `ctx` is the client
+                  here for the same reason the line above gives about the URL parse and the policy container,
+                  and is the global §2.4.2 means by "request's client's global object". */
+               policy_should_block_request(csp_reporter(ctx), document_policy(ctx), &rec, destination,
+                                           metadata, /*redirect count*/ 0) == CSP_REQUEST_BLOCKED ||
                integrity_policy_should_block_request(
                    ctx, policy_container_integrity_policy(document_policy(ctx)), &rec, destination,
                    metadata.integrity, metadata.integrity_len, mode) == INTEGRITY_POLICY_BLOCKED);
