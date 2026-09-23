@@ -523,10 +523,49 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
                                _requiredConfidence: null, _detectedEnum: false,
                                _defaultValue: null, _defaultConfidence: null, _range: null,
                                _exampleValue: null, _exampleValueSource: null,
-                               /* THE FOUR DOMAIN FACTS ARE THE RECORD'S, NOT A STATED EMPTY. The paragraph
-                                  above is right that a templated segment has no enum, no format and no
-                                  observed range — those come from a DISCOVERY DECLARATION or from traffic
-                                  statistics and there is none for a hole. These four do not: they are the
+                               /* `enum: null` IS RIGHT HERE AND ITS REASON IS NOT WHAT THIS PARAGRAPH SAID.
+                                  It read: a templated segment has no enum, no format and no observed range,
+                                  "those come from a DISCOVERY DECLARATION or from traffic statistics and
+                                  there is none for a hole". That names TWO of the THREE producers of an
+                                  `enum` in this extension and misses the one that actually fires for a
+                                  templated path hole — lib/learn.js's `_mergeAstValues`, which promotes a
+                                  hole's AST-learned values to a membership at two distinct values, and which
+                                  lib/learn.js's own templated-path reconcile drives by dissolving a concrete
+                                  sibling address into the template. A hole CAN carry an inferred enum, and
+                                  the sentence said it cannot.
+                                  THE CONCLUSION SURVIVES THE CORRECTION AND IT IS DECIDED ONE LINE UP, NOT
+                                  HERE. All three producers write onto a METHOD RECORD parameter, and this
+                                  literal is the arm where `declared` is FALSE — the matched method has no
+                                  such parameter — so by construction no producer has ever run for this name
+                                  and `null` is the true statement. The DECLARED arm is the one that carries
+                                  a promoted membership, and it carries it through `parameters[pName].enum`
+                                  above, which is why nothing is missing here. Recorded rather than quietly
+                                  reworded because the retired reason is re-derivable from this file alone: a
+                                  reader who re-checks "does a hole have an enum source" against the two
+                                  sources named here will conclude it has none and write this sentence again.
+                                  NAMED RESIDUAL — THE FOLD BELOW WIDENS THE POOL AND LEAVES A STANDING
+                                  MEMBERSHIP STALE.
+                                    WHAT IS NOT COVERED: the DECLARED arm. `cur` is then the method's own
+                                      parameter, `foldValuePools` merges this endpoint record's pools into
+                                      `cur._astValidValues`, and `cur.enum` is not restated — so a value that
+                                      reached the flat record and not the method is in the pool and outside
+                                      the membership. lib/popup-form.js's `createSingleInput` tests `enum`
+                                      FIRST and returns a `<select>`, so the `<datalist>` arm is unreachable
+                                      for a field carrying both and a `<select>` takes no free text: the
+                                      value is neither offered nor typeable. lib/learn.js now restates an
+                                      INFERRED membership as its own pool grows, which closes this inside
+                                      that file; this fold is the third site and is not covered by it.
+                                    WHAT THE NEXT DIFF BUILDS: the same two predicates this file does not yet
+                                      reach — `enumClaimIsDeclared` and `_restatementWidens` (lib/learn.js) —
+                                      applied to `cur` after the fold, so an inferred membership is restated
+                                      from `_f.valid` and a declared one is left alone. It is `_f.valid` and
+                                      never `_f.forced`: the offerable pool is the only operand a membership
+                                      may take, which is the split this fold exists to keep.
+                                    HOW ITS ABSENCE WOULD SHOW: a path parameter rendered as a select whose
+                                      option list is shorter than the value list the same record carries in
+                                      `_astValidValues`, on an address whose endpoint record was unioned from
+                                      more documents than the method was.
+                                  THE FOUR DOMAIN FACTS ARE THE RECORD'S, NOT A STATED EMPTY. These four do not: they are the
                                   ENGINE'S own forced execution, merged by lib/learn.js onto the very method
                                   parameter lib/merge.js copies the value pools from, and they arrive here on
                                   the flat record. `null` for them was one sentence covering two sources and

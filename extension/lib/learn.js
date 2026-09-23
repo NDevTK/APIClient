@@ -668,13 +668,32 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
          a THIRD statement beside "no forced value was observed" and "these were", which no reader has. */
       if (_f.forced.length) target._astForcedValues = _f.forced;
       else if (Array.isArray(target._astForcedValues)) delete target._astForcedValues;
-      // (No `customEnum` test: nothing writes that flag — see _applyStatsToField. An existing `enum` still
-      //  wins, which is the real condition, since a declared one is a fact about the API description.)
+      // (No `customEnum` test: nothing writes that flag — see _applyStatsToField.)
       /* AND THE MEMBERSHIP IS PROMOTED OUT OF THE OFFERABLE POOL ALONE. An `enum` is a CLAIM about what this
          API accepts, rendered as a `<select>` the reviewer picks from and exported into the OpenAPI document
          as a validation keyword — so a member that exists only because a gate was forced is the same
          fabrication one container further out, where it also escapes the two-pool split entirely. */
-      if (valid.length >= 2 && !target.enum) {
+      /* `!target.enum` STOOD HERE AND IT ANSWERED TWO QUESTIONS, WHICH IS WHY ITS OWN COMMENT DESCRIBED ONLY
+         ONE OF THEM. The sentence above this line used to read "an existing `enum` still wins, since a
+         DECLARED one is a fact about the API description" — correct, and about a third party's claim — while
+         the predicate it justified was written over `target.enum` with no reference to WHOSE claim that is.
+         So it also refused to restate a membership THIS PRODUCER HAD MINTED ONE MERGE EARLIER, and the cost
+         landed silently on the looser question exactly as §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS says it
+         does: the first promotion FROZE the claim while `_astValidValues` went on growing underneath it.
+         MEASURED on the real function, three single-value merges: `enum` stands at the first two values and
+         `_astValidValues` at all three. THAT IS A WRONG REPORT AND NOT A THIN ONE, because the two fields do
+         not reach the reviewer as peers — lib/popup-form.js's `createSingleInput` tests `enum` FIRST and
+         returns a `<select>`, so the `<datalist>` arm below it is unreachable for any field carrying both,
+         and a `<select>` takes no free text. The third value is one the run COMPUTED, and it was neither
+         offered nor typeable while the same record carried it one field over.
+         THE RESTATEMENT IS MONOTONE BY TEST AND NOT BY ARGUMENT. `_restatementWidens` requires the standing
+         claim to be CONTAINED in the pool being promoted, so this arm can only ever widen: it cannot narrow
+         a claim, and it cannot take one from the OTHER inferred-enum producer (`_applyStatsToField`, whose
+         members are wire values that need not appear in this pool at all) — where the two disagree, the
+         containment fails and the standing claim is left alone, which is the only answer that asserts
+         nothing neither producer observed. §@H's line is untouched: the operand is `valid`, the OFFERABLE
+         pool, so a forced value cannot enter a membership here any more than it could before. */
+      if (valid.length >= 2 && !enumClaimIsDeclared(target) && _restatementWidens(target.enum, valid)) {
         target.enum = valid.slice();
         target._detectedEnum = true;
       }
@@ -1705,6 +1724,61 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
   }
 }
 
+/* WHOSE CLAIM THE `enum` FIELD IS CARRYING — ASKED ONCE, FOR BOTH PRODUCERS OF AN INFERRED MEMBERSHIP.
+   `enum` is written by THREE sites and they are not three of a kind. lib/discovery.js parses a membership a
+   third-party DOCUMENT declared; `_mergeAstValues` and `_applyStatsToField` below both INFER one, and both
+   stamp `_detectedEnum` to say so. lib/openapi-export.js already splits those two claims apart on the way
+   out — an inferred one leaves as `x-observed-values` and a declared one as the `enum` validation keyword —
+   so the distinction is load-bearing and every producer owes it the same answer.
+   THE TWO INFERRING PRODUCERS DID NOT AGREE, AND NEITHER NAMED THE OTHER. `_mergeAstValues` refused to write
+   over ANY standing `enum` and justified it by a DECLARED one being a fact about the API description;
+   `_applyStatsToField` wrote unconditionally. Since `applyStatsToMethod` runs at the END of both
+   `learnFromAstCallSite` and `learnFromRequest`, the unconditional one had the last word inside the same
+   call, so the guard never achieved the thing its own comment gave as its reason. Measured on the real two
+   functions with synthetic records: an AST-promoted membership is replaced wholesale by the stats pass, with
+   NONE of its members surviving. A third party's declaration went the same way — narrowed to whatever sample
+   the wire happened to carry, and flipped to `_detectedEnum` with it, which after the export split means a
+   round trip through this tool DEMOTES a spec's own `enum` to an annotation and drops the members traffic
+   did not exercise. §@H forbids exactly that: the sample is not the domain.
+   A DECLARED MEMBERSHIP IS NOT OURS. A membership WE inferred is, and a later inference supersedes an
+   earlier one — those are the two questions, and this is the one place they are told apart.
+   AN ABSENT `_detectedEnum` READS AS DECLARED, which is the conservative arm and is deliberate: a record
+   persisted before that flag existed carries no claim about its own provenance, and treating it as ours
+   would license overwriting somebody else's document on the strength of a missing field. */
+function enumClaimIsDeclared(field) {
+  return Array.isArray(field.enum) && field.enum.length > 0 && field._detectedEnum !== true;
+}
+
+/* AND THE TWO INFERRING PRODUCERS KEEP TWO DIFFERENT THRESHOLDS, WHICH IS A DECISION AND NOT AN OVERSIGHT.
+   `_mergeAstValues` promotes at `valid.length >= 2` with no sighting gate at all; `analyzeEnum` (lib/stats.js)
+   additionally requires `observedCount >= STATS_MIN_SIGHTINGS_FOR_ENUM`. One field, one flag, one export, two
+   numbers — and the obvious tidy-up, one constant for both, would be wrong in the direction that loses the
+   evidence, because the two are not two guesses at one quantity. They gate two KINDS of evidence:
+     CODE-ENUMERATED. `_mergeAstValues`' pool is what the forced execution COMPUTED — a bundle that sets
+       `role` to "admin" on one branch and "guest" on another CONTAINS the alternatives, so the distinct
+       count IS the evidence and there is no sample to size. A sighting gate here never opens: each branch is
+       computed once, and asking how many times the run saw it is a question the bundle does not answer.
+     WIRE-SAMPLED. `analyzeEnum`'s pool is what requests HAPPENED to carry, which is a sample of the domain
+       and not the domain. Two requests carrying two values is no evidence the set is closed, so the sample
+       size is exactly the thing that has to be gated before the claim may be made.
+   lib/stats.js's own header already draws this line one level down — a REQUEST count and a SIGHTING count
+   are two populations and may not share a constant — and could not see this pair, because the other half of
+   it is not in that file. This is the same rule at the level above: a threshold belongs to the KIND OF
+   EVIDENCE it is weighing, so the two numbers stay two, and the next edit to either is a decision about one
+   kind rather than a silent edit to both.
+   NEITHER IS A BOUND IN §NO BOUNDS' SENSE. That rule forbids deciding that WORK will not happen — a depth,
+   step, time, memory or seen-set cap that truncates a search. These stop no flow, truncate no exploration
+   and prevent no address, value or path from being learned: every value is in `_astValidValues` and in
+   `stats.values` whatever they answer, and all they decide is whether this tool is yet willing to ASSERT
+   that the set it has is CLOSED. Declining to make a claim is not declining to do the work. */
+function _restatementWidens(prevEnum, valid) {
+  if (!Array.isArray(prevEnum) || prevEnum.length === 0) return true;
+  for (let i = 0; i < prevEnum.length; i++) {
+    if (valid.indexOf(String(prevEnum[i])) < 0) return false;
+  }
+  return true;
+}
+
 function _applyStatsToField(field, fieldStats, requestCount) {
   if (!field || !fieldStats) return;
 
@@ -1724,8 +1798,26 @@ function _applyStatsToField(field, fieldStats, requestCount) {
   field._requiredConfidence = reqAnalysis.confidence;
 
   // Enum detection
+  /* THE DECLARED-MEMBERSHIP REFUSAL IS `enumClaimIsDeclared`'S AND NOT A SECOND SPELLING OF IT. This write
+     stood unguarded, so it narrowed a third-party document's `enum` to whatever the wire sampled and stamped
+     `_detectedEnum` over it — see that function for what the pair of producers cost and why the standing
+     claim's OWNER, rather than its mere existence, is the question.
+     NAMED RESIDUAL — THE WIRE SAMPLE UNDER A DECLARED MEMBERSHIP NOW REACHES NO FIELD.
+       WHAT IS NOT COVERED: which of a declared `enum`'s members traffic actually exercised. Before this
+         guard that fact was recorded by OVERWRITING the declaration, which is the wrong field for it (it
+         states what the API accepts, not what this tool saw); refusing the overwrite is a strictly better
+         answer by §@H — a thin report rather than a wrong one — and it does drop the datum, because the
+         stats pass has no other field to put it in and `_astValidValues` is the AST producer's pool.
+       WHAT THE NEXT DIFF BUILDS: an observed-value pool for the STATS producer, beside `enum` rather than
+         in it, written here whenever `analyzeEnum` fires — with a reader, or it is a field nobody will
+         notice is never read. lib/openapi-export.js already has the vocabulary for it: `x-observed-values`
+         is exactly this claim, and it is currently sourced from `enum`+`_detectedEnum` rather than from a
+         pool of its own.
+       HOW ITS ABSENCE WOULD SHOW: a parameter whose panel badge says its membership was declared, on an
+         endpoint with request statistics, where no surface anywhere states which of the declared members
+         this tool has ever seen sent. */
   const enumAnalysis = analyzeEnum(fieldStats);
-  if (enumAnalysis.isEnum) {
+  if (enumAnalysis.isEnum && !enumClaimIsDeclared(field)) {
     field.enum = enumAnalysis.values;
     field._detectedEnum = true;
   }
