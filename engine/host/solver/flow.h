@@ -2644,6 +2644,23 @@ typedef struct {
      * a release build that reader still runs over.
      * READ THEM BESIDE `jobs_ready` AND NOT INSTEAD OF IT: 0 and 0 is a frontier with no rank-ready job at all,
      * which is the pair of silences `mem_unframed` separates and neither of these halves can.
+     * AND THE READING HAS BEEN TAKEN ON A REAL PAGE, WHICH IS WHAT THIS LEGEND WAS WRITTEN TO BE READ AGAINST.
+     * Measured over one real application page, three drives, 87 censuses, through the installed artifact
+     * stamped d18fa92658db25b9f64000ae7a16e10c9103f9da with a clean cone: `jobs_ready_micro` is ZERO in EVERY
+     * census of all three, and `jobs_ready_task` equals `jobs_ready` in every one. Terminal rows 17/17/0,
+     * 35/35/0 and 52/52/0 against 51, 98002 and 112156 framed and 4, 2803 and 3117 members, with
+     * `jobs_owed` 0 throughout. By the arms above, that is THE SEQUENCE ARM'S EXCLUSION MEASURED: every
+     * rank-ready job a real document holds stands behind the arm whose `else` binds to `seq_compiles`, and
+     * none of it is behind the checkpoint. The alternative arm this legend offers -- any `jobs_ready_micro`
+     * at all, which would refute that diagnosis for the jobs it counts -- did not occur once.
+     * THE ABSENT-VERSUS-ZERO CONTROL IS WHAT MAKES THE ZERO A READING RATHER THAN A SILENCE, and it was
+     * armed by the same run: rows that artifact does not carry rendered as a DASH in the same output while
+     * `jobs_ready_micro` rendered as `0`, so the driver distinguishes a row the build has no counter for
+     * from a counter the run read as empty -- which is the one way this pair could have been misread.
+     * WHAT IT DOES NOT SETTLE IS THE ARM'S POSITION, exactly as the paragraph at that arm says: no census
+     * answers it, and the ordered predecessor is the task source on a `jobs` entry rather than a reorder.
+     * RETIREMENT: this record goes when that arm's position is settled, because the pair is then evidence
+     * about a ladder nobody is deciding between any more.
      *
      * `vis_zero` IS THE OTHER HALF OF `jobs_framed`, counted over MEMBERS rather than over jobs: how many of
      * them have completed no unit of work at all. `vis_min: 0` says at least one and a frontier of thousands
