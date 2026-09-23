@@ -3178,7 +3178,7 @@ function classifyAnchor(toks) {
  * nobody runs against reality. `AUDITED_EXT` keeps its single reader in `walk`; the delta asks the function
  * that owns the population. RETIREMENT: this record goes when a second selector can no longer be written —
  * while `walk` and `defaultTargets` are the only things that decide, a reader can still add one back. */
-const AUDITED_EXT = /\.(c|h|md|js|mjs)$/;
+const AUDITED_EXT = /\.(c|h|md|js|mjs|html)$/;
 
 function walk(dir, out = []) {
   /* THE CHECKOUT IS SHARED AND EDITED UNDER THIS WALK. An editor's temporary file appears between the readdir
@@ -3210,6 +3210,37 @@ function walk(dir, out = []) {
      * CLAUDE.md §Architecture makes the bridge a first-class half of the product, and §Security puts the CORB
      * gate, the SOP/CORS decision and the destructive-path deny list in `safe-fetch.js` BY NAME: a wrong Fetch
      * number there governs a security decision and misleads exactly as `core/fetch/fetch.c` would. */
+    /* AND `.html` IS THAT SAME JAVASCRIPT ONE CONTAINER OUT. The paragraph above admits `.js` because it is
+     * prose this project WROTE, so a number in it is a number this audit is for, and the trusted zone's
+     * documents are where that JavaScript actually lives: `renderer.html` carries the engine driver,
+     * `popup.html` the surface, and the corpus control pages argue the standards they are controls FOR at
+     * length. Pointing this walk at them for the first time read 140 numbered citations across 46 files and
+     * resolved 103 of them, with ZERO findings in every band, so what this line cost on the day it landed was
+     * nothing and what it closes is standing. MEASURED on a frozen snapshot at f53ca106.
+     *
+     * ITS ONE EFFECT ON A FILE IT DOES NOT ADD IS A CLEARANCE, WHICH IS NAMED HERE BECAUSE IT FLATTERS. The
+     * whole-tree finding total moved DOWN by one as this landed, and not because anything was repaired: the
+     * own-prose corpus this audit clears against is built from the files it READS, so admitting these 46
+     * handed it more of this project's unquoted sentences and one accusation elsewhere was re-classified.
+     * A clearance is evidence about the EXONERATING file and not about the accused one, so a reader watching
+     * that total fall must not read it as a repair.
+     *
+     * NAMED RESIDUAL — THE NUMBERS ARE READ AND THE QUOTATIONS ARE NOT, AND NO LINE OF THE OUTPUT SAYS SO.
+     * WHAT IS NOT COVERED: a citation carrying a section sign is read wherever it stands, and only a BARE
+     * dotted number is taken out of a prose span, so this line buys the whole numbered population of these
+     * files and almost none of their quoted one. `proseSpans` walks an HTML file with the C scanner, which
+     * does not know that a comment body is prose and which leaves template scanning off; measured over these
+     * same 46 files it compared 2 double-quoted runs of six or more words where the population holds about
+     * 90, with 26 of those inside HTML comments and 48 in `renderer.html`, which carries 268 backticks.
+     * WHAT THE NEXT DIFF BUILDS: a branch in `proseSpans` reading a comment body as a comment and a script
+     * body as JavaScript. IT IS NOT A FREE WIDENING AND THE PRICE IS MEASURED RATHER THAN GUESSED — built
+     * and run on this population it took the quotations compared from 2 to 52 and produced FIVE findings,
+     * every one of them FALSE and every one a run the file DISPLAYS rather than claims: a browser console
+     * message, a URL, and a sentence of this tree's own prose. So that branch lands AFTER those runs are
+     * backticked at their sites, never before, or it arrives having manufactured five accusations.
+     * HOW ITS ABSENCE SHOWS: point this tool at the `.html` files alone and read its quotations-compared
+     * figure against the count of quoted runs those files hold. While the first is a small fraction of the
+     * second, these files stand in the population for their NUMBERS and nothing else. */
     else if (AUDITED_EXT.test(e)) out.push(p);
   }
   return out;
