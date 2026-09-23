@@ -13092,6 +13092,22 @@ static int engine_sched_slice(void) {
                         "counts against %lld overruns) — both are raised on this line from one turn's arm and "
                         "one turn's clock readings, so a difference is a second raise site for one of them",
                         step_unit_over_total(), (long long)g_slice_over);
+                /* …AND THE PER-ARM CONTAINMENT, WHICH NEITHER TOTAL ABOVE CAN SEE. `sum(over) ==
+                   g_slice_over` and `sum(runs) == g_steps` both hold with ONE arm's overrun count standing
+                   above its own run count and another's standing below it, so the two sums are blind to
+                   exactly the row a reader subtracts. This turn raised `g_step_unit_runs[g_step_unit]`
+                   unconditionally at the convergence point above — same arm, same turn, and no branch
+                   between the two lines — so the containment is true by construction HERE, which is why
+                   it is asked here rather than at the accessor: the turn that broke it is the turn that has
+                   just returned. It is what makes `arms[i] - over_arms[i]` a non-negative reading of one
+                   population rather than a subtraction nobody licensed. */
+                DCHECKF(g_step_unit_over[g_step_unit] <= g_step_unit_runs[g_step_unit],
+                        "arm %d has overrun the slice %ld time(s) against %ld run(s) of that arm — the "
+                        "run is counted at the convergence point above and the overrun on the line above "
+                        "this one, from ONE turn's arm, so a subset larger than its own population is "
+                        "`g_step_unit` having been rewritten between the two lines or an overrun counted "
+                        "for a turn whose arm was never recorded",
+                        (int)g_step_unit, g_step_unit_over[g_step_unit], g_step_unit_runs[g_step_unit]);
             }
             /* WHAT THIS TURN OF THE DISPATCH LOOP COST, ACCUMULATED FROM THE SAME DELTA THE CHARGE BILLS AND
                NOT FROM A SECOND READING — see g_step_us. It is written BEFORE the charge for the ordinary

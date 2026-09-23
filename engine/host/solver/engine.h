@@ -1665,7 +1665,29 @@ typedef struct {
      * looks like — a long back-edge-free, call-free run — and not where this engine's C is. `resume-program`
      * at 55 of 2085 is the same population one step later. A unit is not uninterruptible because it is C; it
      * is uninterrupted because the BYTECODE it is running offered no raise point, and only the page decides
-     * that. */
+     * that.
+     * AND IT IS NOT A COUNT OF THE TURNS THAT ENDED ON THE COOPERATIVE QUANTUM, WHICH IS THE READING A
+     * READER HOLDING A FRAME-CLEARING RATE ARRIVES AT AND THE ONE THIS ROW MOST INVITES. preempt_hook's
+     * third clause ends a turn when the quantum is SPENT, so it reads as though that population must be
+     * exactly the turns counted here. The budget is the SLICE's and a slice holds MANY turns:
+     * solver/quantum.c arms the edge once at engine_sched_slice's `quantum_begin()` and the dispatch loop
+     * ends the slice on the same expiry, so at most ONE turn per slice can end on that clause and ITS OWN
+     * delta is whatever was left of the budget when the edge fired — usually far under it, and therefore
+     * not in this row at all. What this row counts is a turn that ALONE met the whole budget, which is the
+     * transport question the paragraphs above are about and is a different population entirely.
+     * WHAT WOULD ANSWER THE OTHER QUESTION IS A COUNT OF SLICES, AND NOTHING RAISES ONE. NOT COVERED: how
+     * a turn in any arm — this row's included — came to end, which is one of three clauses and is
+     * unreadable at every arm today; the two that matter take OPPOSITE work, a quantum-ended turn saying
+     * the slice is short for the spans being run (a policy input this scheduler owns and may tune) and an
+     * OUTRANKED turn saying the order moved the thread to a better-ranked member, which is the WFQ doing
+     * what it is for and is not a thing to repair. NEXT DIFF: raise a slice count beside `quantum_begin()`
+     * in engine_sched_slice, carry it on this struct, and publish it in solver/result.c's census — both
+     * halves in ONE landing, because a field no composer reads is not a mechanism; the quantum-ended
+     * population is then bounded above by the slices and `steps - slices - <the blocked arms>` is a FLOOR
+     * on the outranked one. HOW ITS ABSENCE SHOWS: a reader meeting a low frame-clearing rate reaches for
+     * this row, finds it small, and concludes the slice is not what ends those turns — which this row
+     * cannot support in either direction, because the population it counts is not the one that question is
+     * about. */
     long over_arms[STEP_UNIT_N];
     /* …AND THE ONE PHASE OF A START STEP THAT CANNOT REST AT ANY INPUT SIZE, which the two rows above can
      * locate to an ARM and never to a PHASE. A start is a COMPILE and then an EXECUTION, only the second runs
