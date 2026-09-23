@@ -54,6 +54,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { topLevelFactFields } from './top_level_facts.mjs';
 
 const [bin, maxArg] = process.argv.slice(2);
 if (!bin) {
@@ -196,13 +197,22 @@ const styled = (n) => '<!DOCTYPE html><html><head><title>t</title>' +
   '<style>div{color:red}p{margin-top:2px}.q{padding-left:1px}</style></head><body>' +
   '<div>'.repeat(n) + 'x' + '</div>'.repeat(n) + '</body></html>';
 
-/* The record's eleven facts are engine/one_document.mjs's `topLevelFacts`, copied for the reason that file
-   states about copying them from engine/trusted.mjs: importing would mean loading a zone that fetches in
-   order to count calls. `abi_take` refuses an absent field, so a record that has drifted short stops rather
-   than seating a document on defaults. */
+/* The record's eleven facts are `engine/top_level_facts.mjs`'s, which is the ONE statement of HTML §7.5.1's
+   answers for a document nothing embeds.
+   THE COMMENT THIS REPLACES IS REWRITTEN RATHER THAN DELETED, because its reasoning is what the next reader
+   re-derives and the conclusion it drew from that reasoning is the thing that was wrong. It said the eleven
+   were "engine/one_document.mjs's `topLevelFacts`, copied for the reason that file states about copying them
+   from engine/trusted.mjs: importing would mean loading a zone that fetches in order to count calls" — a
+   retired argument inherited at one remove, and the clearest evidence that the copy propagates: `one_document`
+   copied `trusted`, this copied `one_document`, and each carried the previous one's justification forward
+   without re-deriving it. What it establishes is that the facts must not come from THE ZONE; it establishes
+   nothing about copying, and the module fetches nothing. Its claim about `abi_take` is also only half the
+   protection it sounds like — that entry refuses an ABSENT field and nothing refuses a SHORT record, so a
+   drifted one seats a document with every later fact read one slot early; the module refuses both directions
+   of that skew at the composer, which is why it is a narrowing rather than a relocation. */
 const b64 = (s) => Buffer.from(s).toString('base64');
 const record = (html, url) => ['document', url, 'offline', b64('content-type: text/html; charset=utf-8\n'),
-  b64(html), url, b64(''), '', 'unsafe-none', '', 'unsafe-none', '', 'u', 'null', 'none', 'none', '0'].join('\t') + '\n';
+  b64(html), ...topLevelFactFields(url), '0'].join('\t') + '\n';
 
 const dir = mkdtempSync(join(tmpdir(), 'layout-cost-'));
 const counts = (html) => {

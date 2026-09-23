@@ -138,6 +138,7 @@ import { childCpuSeconds, childCpuDelta, cpuText } from "./gate_cpu.mjs";
    silence, so `navigable_root_ancestor_origins` aborted EVERY document under EVERY schedule and the solver's
    only oracle answered nothing while reading as one document's bug. */
 import { GLUE_PATH as WASM, abiOperands } from "./renderer_abi.mjs";
+import { topLevelFacts } from "./top_level_facts.mjs";
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
 const SELF = fileURLToPath(import.meta.url);
@@ -792,60 +793,27 @@ async function child(docPath, schedName) {
          parameter this record has no value for refuses BY NAME instead of shifting every later operand one
          slot, a key the interface declares no parameter of refuses too, and the operand count the walk
          produces is compared against what the BUILT GLUE declares the entry accepts.
-         `inheritedCsp`/`inheritedCspSelfOrigin` ARE HTML §7.1.7's INHERITED POLICY CONTAINER, ABSENT: this
-         gate roots each instance at a fixture document with no creator, so there is no container to clone and
-         CSP §2.2.2's self-origin (this address's origin, which the entry derives) is the right one. The empty
-         pair says that, rather than being an argument this driver forgot when the entry grew one.
-         THE FOUR `inheritedCoep*` ARE §7.1.4's EMBEDDER POLICY of that same container, and they are NOT empty
-         — they are the section's own "a new embedder policy", because §7.1.7 gives every container one and
-         there is therefore no absence to spell. The two values are §7.1.4's token strings; main.c refuses one
-         that names none of the three rather than reading it as the default.
-         `parentNavigable` IS HTML §7.3.1.3's PARENT, `u` — this gate's fixture documents are rooted with no
-         embedder, so their navigables are top-level traversables. It is the engine's own encoding for the
-         absence rather than an empty string, because a navigable either has a parent or is a top-level
-         traversable and both are facts a host states.
-         `containerPolicy` IS Permissions Policy §9.5's CONTAINER, `null` — the same fact one algorithm over,
-         and it is stated separately for the reason §7.3.1.3 defines the two links separately: a parent is a
-         navigable, a container is the ELEMENT that presents it, and a document can be told about one without
-         the other. §9.5 takes "null or an element (container)", and null is what this gate's fixtures are:
-         it invents them, so nothing presents them, and §9.7 step 1 then returns "Enabled" for every feature.
-         Stating it rather than letting the record default is the whole point — the engine refuses a record
-         that states NOTHING for the container, because a silent absence and a stated null are different
-         claims and only one of them is this gate's.
-         `ancestorOrigins` IS HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST for the
-         Document this instance builds — a THIRD statement about the same navigable and not a derivation of
-         the two above it. §3.1.3's step 2 takes the Document's CONTAINER DOCUMENT and its step 3 returns the
-         EMPTY output when there is none, which is what a top-level traversable's list is: `none` is that
-         grammar's word for exactly that, a POSITIVE claim this gate is entitled to make about fixtures
-         nothing embeds. An EMPTY FIELD IS NOT THE SAME CLAIM — it is a host that stopped writing the field,
-         which the engine refuses, because reading silence as the empty list is what tells a cross-origin
-         frame it is the top of its own tree, and no page can tell that from the truth.
-         `creationSandboxFlags` IS HTML §7.1.5 "Sandboxing"'s CREATION SANDBOXING FLAG SET for that same
-         navigable — a FOURTH statement about it, and the one this driver went short on next. §7.1.5's
-         determine-the-creation-sandboxing-flags is "given null or an element embedder, return the union of the
-         flags that are present in the following sandboxing flag sets: if embedder is null, then the flags set
-         on browsing context's popup sandboxing flag set; if embedder is an element, then the flags set on
-         embedder's iframe sandboxing flag set; [and] … on embedder's node document's active sandboxing flag
-         set". This gate's fixtures have NO embedder — the same absence `parentNavigable` and `containerPolicy`
-         each state one algorithm over — so only the first arm applies, and §7.1.5 says of that set: "Every
-         top-level browsing context has a popup sandboxing flag set… When a browsing context is created, its
-         popup sandboxing flag set must be empty. It is populated by the rules for choosing a navigable and the
-         obtain a browsing context to use for a navigation response algorithm", and this driver runs neither.
-         The union is EMPTY, and `none` is that grammar's word for it — a POSITIVE claim on `ancestorOrigins`'
-         rule: core/frame/sandboxing.c's sandbox_flags_of_serialized refuses an empty field, because an empty
-         one is a host that stopped writing it and reading that as the empty set is what would let a
-         cross-origin `<iframe sandbox>` child run the scripts its embedder's markup forbids.
-         IT IS STATED, NOT DERIVED FROM THE `u` PARENT BESIDE IT. main.c says outright that the two navigables
-         its entry roots — a top-level traversable and one a PEER created — are told apart by nobody there, so
-         a zero would be right for one of them and the absence of an answer for the other; each fact crosses on
-         its own. */
+         AND THE ELEVEN THAT ARE NOT THIS GATE'S OWN COME FROM `engine/top_level_facts.mjs`, WHICH IS THE ONE
+         STATEMENT OF THEM. What this gate still states itself is the four per-run facts — the bytes, the
+         address, the fixture's name and the (empty) header block; HTML §7.5.1's other eleven are the same
+         answers for every document nothing embeds, and they were spelled out here, in `pagecensus.mjs`, in
+         `trusted.mjs`, in `one_document.mjs` and as `route.mjs`'s parameter defaults.
+         THE ARGUMENT FOR EACH OF THEM IS KEPT WHOLE IN THAT MODULE AND NOT DUPLICATED HERE, which is the
+         point of moving it: it was §7.1.7's inherited container empty in BOTH halves (CSP §2.2.2 states the
+         self-origin from outside the policy bytes, so it is not recoverable from them), §7.1.4's item of that
+         same container carrying that section's own initial value because it has NO empty spelling, §7.3.1.3's
+         parent as `u`, Permissions Policy §9.5's container as `null`, §3.1.3's ancestor origins as `none` and
+         §7.1.5's creation sandboxing flag set as `none` — every one a POSITIVE claim in its own grammar,
+         because the engine refuses an empty field at each and reading silence as the empty answer is what
+         tells a framed document it is the top of its own tree, and what would run a sandboxed frame with its
+         sandbox deleted.
+         AND THE MODULE REFUSES BOTH DIRECTIONS OF THE SKEW ITSELF, which is what makes this a narrowing of
+         what this gate can be wrong about rather than a relocation of it: a declared parameter it has no
+         value for and a value no parameter declares each throw at the composer, so the record spread below
+         cannot go short or long in silence any more than the walk it is spread into can. */
       const operands = abiOperands("Init", "qjs_init", {
-        document: [hp, u8.length], url, docId: name, headers: "", topLevelUrl: url,
-        inheritedCsp: "", inheritedCspSelfOrigin: "",
-        inheritedCoep: "unsafe-none", inheritedCoepEndpoint: "",
-        inheritedCoepReportOnly: "unsafe-none", inheritedCoepReportOnlyEndpoint: "",
-        parentNavigable: "u", containerPolicy: "null", ancestorOrigins: "none",
-        creationSandboxFlags: "none",
+        document: [hp, u8.length], url, docId: name, headers: "",
+        ...topLevelFacts(url),
       }, e.cs);
 
       /* THE TYPE LIST IS THE OPERAND LIST'S OWN LENGTH — a wasm operand is a number whatever the declared

@@ -27,15 +27,17 @@
  * about parse, layout and paint. It is not a number about a website, and a report that quotes one as though
  * it were has said something this entry cannot support.
  *
- * THE RECORD'S FACTS ARE `trusted.mjs`'s `topLevelFacts`, COPIED AND NOT RE-DERIVED — HTML §7.5.1 "Shared
- * document creation infrastructure"'s eleven remaining facts for a document that is its own top-level
- * traversable. They are copied deliberately rather than imported, and the reason is the direction of the
- * dependency: `trusted.mjs` holds them as a closure-local inside a zone that also owns fetching, so
- * importing them would mean loading the network client to render a file. What that costs is a SECOND COPY
- * that can drift, and the mitigation is stated rather than assumed — `abi_take` in `test_forced.c` REFUSES
- * an absent field and every field below has a positive spelling, so a record that has drifted short does not
- * seat a document on silent defaults, it stops. A field whose VALUE drifts is the residual this copy leaves,
- * and it is named at the bottom of this file.
+ * THE RECORD'S FACTS ARE `engine/top_level_facts.mjs`'s — HTML §7.5.1 "Shared document creation
+ * infrastructure"'s eleven remaining facts for a document that is its own top-level traversable, read from
+ * the ONE statement of them rather than copied. THE PARAGRAPH THIS REPLACES IS REWRITTEN AND NOT DELETED,
+ * because its reasoning is what the next reader re-derives and what it argued FOR is the thing that was
+ * wrong. It said they were copied "deliberately rather than imported, and the reason is the direction of the
+ * dependency: `trusted.mjs` holds them as a closure-local inside a zone that also owns fetching, so importing
+ * them would mean loading the network client to render a file." Every clause of that is TRUE and the
+ * conclusion does not follow: what it establishes is that the facts must not come from THE ZONE, never that
+ * they must be copied. The module is pure data — it reads `content.mojom.Renderer.Init`'s parameter names
+ * and nothing else, opens no socket and never touches the built wasm glue — so this entry imports it and
+ * still fetches nothing. The residual that named this copy is discharged at the bottom of this file.
  *
  * WHAT THIS CANNOT SEE, STATED HERE BECAUSE AN INSTRUMENT TRUSTED PAST ITS EVIDENCE IS WORSE THAN NONE:
  * anything a subresource would have changed. A document whose appearance comes from its stylesheets renders
@@ -46,6 +48,7 @@
  */
 import { spawn } from 'node:child_process';
 import { readFileSync, mkdirSync } from 'node:fs';
+import { topLevelFactFields } from './top_level_facts.mjs';
 
 const [bin, htmlPath, url, outDir] = process.argv.slice(2);
 if (!bin || !htmlPath || !url || !outDir) {
@@ -67,8 +70,10 @@ const bytes = readFileSync(htmlPath);
    visible, rather than by discovering that the default sent them somewhere else. */
 const headers = 'content-type: text/html; charset=utf-8\n';
 
-/* `trusted.mjs`'s `topLevelFacts` — see the header above for why this is a copy. */
-const facts = [url, b64(''), '', 'unsafe-none', '', 'unsafe-none', '', 'u', 'null', 'none', 'none'];
+/* HTML §7.5.1's eleven for a top-level traversable, from the ONE statement of them — see
+   `engine/top_level_facts.mjs`, which is what this file's residual named as its next diff and which is
+   now what both this entry and `trusted.mjs` read. */
+const facts = topLevelFactFields(url);
 
 /* THE DOCUMENT NAME IS THIS FILE'S OWN CONSTANT AND NOT THE ADDRESS. `abi_main` refuses an empty one and
    `abi_paint` composes the image's FILE NAME out of it, so a name derived from a URL would put a caller's
@@ -97,15 +102,17 @@ child.on('close', (code, signal) => {
                 'and a @RESULT that found nothing are different facts; a signal here is the first.');
 });
 
-/* NAMED RESIDUAL — THE ELEVEN FACTS ARE A COPY AND NOTHING COMPARES THE TWO.
-   NOT COVERED: a field of HTML §7.5.1's top-level set whose VALUE changes in `trusted.mjs`'s `topLevelFacts`
-   and not here. The ARITY is covered by `abi_take`, which refuses an absent field, so a record gone short
-   stops rather than seating a document on defaults; a record gone WRONG parses and seats a document under a
-   policy, an embedder policy or a secure-context answer that the zone would not have given it.
-   WHAT THE NEXT DIFF BUILDS: the eleven facts in one module both this file and `trusted.mjs` read, so there
-   is one statement of them and no copy to drift — which is possible only because they are pure data and need
-   none of the zone's fetching, and is therefore a smaller diff than importing the zone would be.
-   HOW ITS ABSENCE WOULD SHOW: a document rendered here answers a §8.1.3.5 secure-context question, or is
-   judged under an inherited policy, differently from the same document rendered through `trusted.mjs` — so
-   the tell is a member of Web IDL §3.3.13's secure-context-gated set present in one run and absent in the
-   other, observed in `@RESULT`'s `_absent` census, for a document neither run fetched anything for. */
+/* THE RESIDUAL THAT STOOD HERE IS DISCHARGED AND ITS ARGUMENT IS KEPT, because the argument is what a reader
+   re-derives and re-implementing the copy is what they would re-derive. It said the eleven facts were a copy
+   of `trusted.mjs`'s with nothing comparing the two, that the ARITY was covered by `abi_take` (which refuses
+   an ABSENT field, so a record gone short stops) while a record gone WRONG parses and seats a document under
+   a policy, an embedder policy or a secure-context answer the zone would not have given it — and it named
+   its own next diff: "the eleven facts in one module both this file and `trusted.mjs` read … possible only
+   because they are pure data and need none of the zone's fetching". That module is
+   `engine/top_level_facts.mjs` and both files now read it, so there is one statement and no copy.
+   WHAT THE DISCHARGE ADDED BEYOND ENDING THE COPY, AND IT IS THE HALF THE RESIDUAL COULD NOT SEE FROM HERE:
+   the ARITY is no longer `abi_take`'s to catch one process away. The module walks the eleven NAMES off
+   `content.mojom.Renderer.Init` itself and refuses BOTH directions of the skew at the composer — a declared
+   parameter with no value (a driver older than the interface) and a value no parameter declares (one newer,
+   or misspelled) — which is `abiOperands`' pair of checks, owed on this channel because the native record
+   never goes through that function. */

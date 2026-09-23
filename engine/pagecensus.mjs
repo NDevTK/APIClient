@@ -89,11 +89,23 @@
  * content type the capture RECORDED, which is what the real server said on the day the bytes were frozen.
  *
  * NAMED RESIDUAL — the session. Boot, the print sink, the operand placement, the three step codes and the
- * reply seam are spelled here and in engine/solvergate.mjs. NOT COVERED: a contract that moves on that seam
- * has to be repaired in both, which is the defect that already cost this project once — solvergate's own
- * comment records `computedType` "stopped engine/route.mjs, left behind in the one driver whose whole subject
- * is documents that consume replies". WHAT THE NEXT DIFF BUILDS: the session as a module both import, the way
- * both already import `abiOperands`. HOW ITS ABSENCE WOULD SHOW: a field added to the reply record makes one
+ * reply seam are spelled here, in engine/solvergate.mjs and in engine/route.mjs. NOT COVERED: a contract that
+ * moves on that seam has to be repaired in all three, which is the defect that already cost this project once
+ * — solvergate's own comment records `computedType` "stopped engine/route.mjs, left behind in the one driver
+ * whose whole subject is documents that consume replies".
+ * THIS CLAUSE SAID `here and in engine/solvergate.mjs` AND THE COUNT IS CORRECTED RATHER THAN THE SENTENCE
+ * REPLACED, because what it got wrong is the one thing a NOT-COVERED clause is rated reliable for and is
+ * therefore worth recording: it named a POPULATION of this tree rather than a property, and a population's
+ * membership only a grep decides. `route.mjs` spells the same session — `boot`, the `cs`/`str` pair, the
+ * `provide` seam, the three step codes with the same fourth-code refusal, and the seven-field pending line —
+ * and it is the driver solvergate's own quoted incident is ABOUT, so the sentence named the injured party in
+ * its evidence and left it out of its count. The THIRD copy also spells the pending line POSITIONALLY, which
+ * is the spelling solvergate's `PENDING_LINE_FIELDS` exists because of.
+ * AND THE OPERAND PLACEMENT IS NO LONGER AMONG THEM, which narrows this residual rather than retiring it:
+ * HTML §7.5.1's eleven facts are `engine/top_level_facts.mjs`'s now, so what is left spelled three times is
+ * the SESSION — the boot, the sink, the step codes and the reply seam — and not the document.
+ * WHAT THE NEXT DIFF BUILDS: the session as a module all three import, the way all three already import
+ * `abiOperands` and two of them now import the document's facts. HOW ITS ABSENCE WOULD SHOW: a field added to the reply record makes one
  * driver abort at its first park while the other keeps running.
  *
  * Usage:  node engine/pagecensus.mjs <document-url> [transcript.jsonl]
@@ -103,6 +115,7 @@
  */
 import { appendFileSync, existsSync } from "node:fs";
 import { GLUE_PATH as WASM, abiOperands } from "./renderer_abi.mjs";
+import { topLevelFacts } from "./top_level_facts.mjs";
 
 /* THE PRODUCTION CADENCE, NOT ONE OF THIS FILE'S OWN. extension/bridge.js composes a partial every
    `PARTIAL_MS` on every real page, so sampling at any other rate would measure a run production never has —
@@ -202,19 +215,24 @@ const hp = M._malloc(docBytes.length + 1);
 M.HEAPU8.set(docBytes, hp);
 M.HEAPU8[hp + docBytes.length] = 0;
 
-/* EVERY FACT A DOCUMENT ARRIVAL CARRIES, BY `content.mojom.Renderer.Init`'S OWN PARAMETER NAMES. The values
-   are the ones engine/solvergate.mjs states for a document nothing embeds, and each is a POSITIVE claim
-   rather than a silence: HTML §7.1.7's inherited policy container is absent (no creator), §7.1.4's embedder
-   policy is that container's own "new embedder policy", §7.3.1.3's parent and Permissions Policy §9.5's
-   container are both absent, §3.1.3's ancestor origins list is EMPTY and §7.1.5's creation sandboxing flag
-   set is EMPTY — `none` being this grammar's word for each, because the engine refuses an empty field there
-   and reading silence as the empty list is what tells a framed document it is the top of its own tree. */
+/* EVERY FACT A DOCUMENT ARRIVAL CARRIES, BY `content.mojom.Renderer.Init`'S OWN PARAMETER NAMES — the four
+   this host states itself, and HTML §7.5.1's other ELEVEN from `engine/top_level_facts.mjs`, which is the
+   ONE statement of them for every host this engine is driven through.
+   THE PARAGRAPH THIS REPLACES SAID "the values are the ones engine/solvergate.mjs states for a document
+   nothing embeds", and that sentence is the defect rather than the documentation of it: two drivers agreeing
+   because one of them was written by reading the other is the shape that drifts, and there were FIVE of them
+   — the two wasm records, the two native ordered ones, and `route.mjs`'s parameter defaults. Its argument for
+   every value being a POSITIVE claim rather than a silence is kept whole in the module, section by section,
+   with the ORDER walked off the declaration instead of written down.
+   AND THE COST OF THE COPY IS NOT ONLY DRIFT, WHICH IS WHY THIS FILE IN PARTICULAR READS THE MODULE: the one
+   experiment §Testing names as unrun is this page against the NATIVE host, and that is a comparison only if
+   both hosts seat the SAME document — a §8.1.3.5 secure-context answer or a §7.1.5 flag set that differed
+   between them would make every census row below it a reading of two different pages reported as two hosts.
+   `headers` IS NOT ONE OF THE ELEVEN AND IS STILL STATED HERE, because it is the RESPONSE's and not the
+   navigable's — see the sniff residual in the banner for what this driver does and does not carry of it. */
 const operands = abiOperands("Init", "qjs_init", {
-  document: [hp, docBytes.length], url: finalUrl, docId, headers: "", topLevelUrl: finalUrl,
-  inheritedCsp: "", inheritedCspSelfOrigin: "",
-  inheritedCoep: "unsafe-none", inheritedCoepEndpoint: "",
-  inheritedCoepReportOnly: "unsafe-none", inheritedCoepReportOnlyEndpoint: "",
-  parentNavigable: "u", containerPolicy: "null", ancestorOrigins: "none", creationSandboxFlags: "none",
+  document: [hp, docBytes.length], url: finalUrl, docId, headers: "",
+  ...topLevelFacts(finalUrl),
 }, cs);
 M.ccall("qjs_init", "number", operands.map(() => "number"), operands);
 M.ccall("qjs_begin", "void", ["number"], [cs("")]);

@@ -103,6 +103,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
+import { topLevelFactFields as topLevelFacts } from './top_level_facts.mjs';
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
 const EXT_DIR = join(ENGINE, '..', 'extension');
@@ -483,30 +484,16 @@ async function main() {
      it and two peers may hold the same number — which is exactly the fact only the routing zone has. */
   const reads = new Map();
 
-  /* HTML §7.5.1 "Shared document creation infrastructure"'s eleven remaining facts, for a document that is its
-     own TOP-LEVEL TRAVERSABLE. They are written HERE and not assumed by the child, because the party that
-     knows a document is at the top of its tree is the party that seated it — and every one of them is a
-     POSITIVE statement in its own grammar rather than a blank:
-       · §8.1.3.1 "Environments"' TOP-LEVEL CREATION URL is this document's own address.
-       · §7.1.7 "Policy containers"' inherited container is EMPTY IN BOTH HALVES — §7.1.7 clones a CREATOR's
-         and a top-level traversable has none. Two halves because CSP §2.2 "Policies" makes a CSP list "a
-         struct consisting of policies (a list of policies) and a self-origin" and §2.2.2 states the second
-         from outside the policy bytes.
-       · §7.1.4 "Cross-origin embedder policies"' item of that container has NO empty spelling, so a container
-         with no creator states that section's own initial value.
-       · §7.3.1.3 "Child navigables" defines "is a child navigable" as "its parent is non-null", so `u` —
-         core/frame/remote_object.h's undefined — says this navigable has none.
-       · Permissions Policy §9.5 "Create a Permissions Policy for a navigable" is given "null or an element
-         (container) and an origin"; `null` is that grammar's word for the first, and nothing embeds this.
-       · HTML §3.1.3 "Ancestor origins"' list is `none` by the same sentence read one algorithm along.
-       · HTML §7.1.5 "Sandboxing"'s creation sandboxing flag set is EMPTY by that sentence read one algorithm
-         further: the section fills a top-level browsing context's set from its POPUP sandboxing flag set,
-         which is empty when the context is created and which only §7.3.1.7 "Navigable target names"'s rules
-         for choosing a navigable ever populate — and nothing chose this one. `none` is that grammar's word
-         for the empty set, stated rather than left blank because a navigable either carries flags or carries
-         none and both are facts a host states. */
-  const topLevelFacts = (url) =>
-    [url, b64(''), '', 'unsafe-none', '', 'unsafe-none', '', 'u', 'null', 'none', 'none'];
+  /* HTML §7.5.1 "Shared document creation infrastructure"'s ELEVEN REMAINING FACTS FOR A TOP-LEVEL
+     TRAVERSABLE ARE `engine/top_level_facts.mjs`'s, IMPORTED AT THE TOP OF THIS FILE. They are still written
+     by the ZONE and not assumed by the child — the party that knows a document is at the top of its tree is
+     the party that seated it — and what has changed is only that the zone reads them from one statement
+     instead of holding one of five.
+     THE ARGUMENT FOR EACH OF THE ELEVEN MOVED WITH THEM RATHER THAN BEING COPIED, which is the point: this
+     paragraph was the fullest statement of the set in the tree, and leaving it where ONE of five consumers
+     could read it is the same defect as leaving the values here. The module states each section's own
+     sentence, why every answer is POSITIVE rather than a blank, and — which no consumer could — why the
+     ORDER is walked off `content.mojom.Renderer.Init` rather than written down. */
 
   /* …AND THE SAME ELEVEN FOR A PEER, TAKEN OFF THE CREATE NOTICE VERBATIM. Not one of them is derivable in the
      instance that will host the child — they are items of the CREATOR's §7.1.7 container plus three separate
