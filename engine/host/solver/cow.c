@@ -1360,17 +1360,29 @@ void cow_capture_host_record_at(JSValueConst owner, void *p, const CowRecord *re
        unitsDone at 71 on both sides, so nothing about the run's shape moved either. A number that a cost
        model predicts to within 10% and that does not move when the modelled cost is removed was never that
        cost; the fit was a coincidence, and two readers reached it independently from the same multiplication.
-       WHAT IS ACTUALLY THERE, and it is a bigger defect than the one this comment was written about: an ask
-       costs ~3.95 us. This function's body past the guard is a call, a few asserts, a generation compare and
-       a hash probe — call it 50-100 instructions. ~3.95 us is on the order of TEN THOUSAND. So the cost is
-       in the ask path and is NOT the layout loop, and the candidates are the three things the loop was
-       hiding: `cow_state_ask`, `JS_ObjFlowGen`, and `cow_hash_find` on a delta whose entry count grows
-       ~8,900 per step. A hash probe that degrades toward a scan over a growing delta is the reading that
-       fits both the magnitude and the growth, and it is UNMEASURED — no row attributes time inside this
-       function, which is why an arithmetic fit was all anyone had.
-       HOW ITS ABSENCE WOULD SHOW: `sliceUs / cowStateAsks.hostRec` sitting in the microseconds on any page
-       whose CSSOM is read in a loop, while `cowStateMade.hostRec` stays three orders of magnitude below the
-       ask count — which is what both sides of this measurement look like today.
+       AND THE SENTENCE THAT STOOD HERE MADE THE SAME MISTAKE A SECOND TIME, one function further out, which
+       is why it is rewritten rather than corrected in place. It said the cost must be "in the ask path" and
+       named `cow_state_ask`, `JS_ObjFlowGen` and `cow_hash_find` as candidates, reasoning that ~3.95 us is
+       ten thousand instructions and this body is fifty. The arithmetic is right and the inference is the
+       error: 3.95 us is `sliceUs` DIVIDED BY asks, so it is only a cost OF the ask if the ask is what the
+       slice was doing. IT IS NOT. `browser/core/css/css_rule.c`'s `rule_of` is a plain accessor and it is
+       the FIRST LINE of `cascade_emit_one`, ahead of the media test and ahead of any selector test, so it
+       counts one RULE VISIT of the cascade. The quotient is the cost of a visit, and the capture is a few
+       instructions of it.
+       WHERE THE TIME GOES IS STATED BY THAT FILE'S OWN BANNER: "This cascade flattens the rules that apply
+       into TEXT that is re-parsed and matched by selector." Two multipliers, neither in this component:
+       there is no selector index of any kind under `browser/core/css` (measured: every bucketing spelling
+       reads 0, with `specificity` at 10 files as a positive control and an invented name at 0), so every
+       (element, property) visits EVERY rule; and each visit re-parses selector text. 48,387,842 asks over
+       32,954 distinct records is ~1,468 cascades of ~33,000 rules. `core/css/css_cascade_pass.h` already
+       holds the memo that collapses RE-DERIVATION per (element, property) and is not the gap.
+       SO THIS COMPONENT IS EXONERATED BY THE SAME MEASUREMENT THAT CONVICTED IT, and the general lesson is
+       the one the first error already taught and the second ignored: a rate whose denominator is somebody
+       else's event counter is a fact about THAT event, and attributing it to the counter's own code is the
+       error both of these corrections are.
+       HOW TO TELL WITHOUT REPEATING EITHER MISTAKE: `sliceUs / cowStateAsks.hostRec` is a CASCADE cost per
+       rule visit and is read as one. The row that would price THIS function is a clock inside it, which no
+       census has; until one exists, no number here attributes anything to this code.
        THE LAYOUT IS A COMPILE-TIME CONSTANT AND THE SITE IS A MACRO EXPANSION, so `rec` is the same static
        every time a given site runs and re-deciding it per ask asks a question whose answer cannot have
        changed. NOTHING IS DELETED: every assertion still fires, and it fires at the FIRST ask at each site
