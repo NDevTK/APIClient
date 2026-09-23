@@ -1846,6 +1846,26 @@ void endpoint_surface_census(long *minted, long *assets, long *emitted, long *pr
        reaching `g_eps` by a path that did not pass endpoint_record's door. endpoint.h's funnel note is a claim
        about this tree that a grep answers today; this is the same claim made by something that cannot go
        stale, and it is what keeps the ask counters read on every run by code that is here already. */
+    /* AND THE SECOND CROSS-INSTRUMENT RELATION, WHICH IS THE ONE THE RAZOR'S OWN NUMERATOR RESTS ON AND WHICH
+       NOTHING ASSERTED. endpoint.h says the two censuses "constrain each other rather than repeating each
+       other", and until this line only ONE direction of that was checkable — the mint count against the record
+       array. The PROGRAM-STATE halves were not: every pre-program record was minted by an ask whose own
+       pre-program bit was true (the mint asserts that pairing one record at a time), so the emitted
+       pre-program count is contained in the pre-program ASK count, and the assets skipped above only make it
+       smaller. It is exactly the relation a reader performs without noticing when they read `emitted -
+       preProgram` beside `asks - preProgram` as two complements of ONE boundary: if these two rows can drift,
+       those two subtractions are complements of two different boundaries and the pair says nothing.
+       THE TWO SIDES CAN DISAGREE, WHICH IS THE TEST. They are raised at different events on different
+       structures — one per ASK at the door's entry, one per RECORD by this walk — and a per-record DCHECK at
+       the mint constrains one pairing at a time and cannot see a total. What this fires on is the shape that
+       makes both subtractions unreadable at once: a boundary read at two instants, or a record reaching the
+       array by a path the door never counted a pre-program ask for. */
+    DCHECK(pre <= g_asks_pre_program,
+           "the @H surface emits more records minted before the first program than the door counted asks made "
+           "before one — every such record was minted by such an ask and the assets skipped by this walk can "
+           "only make the first number smaller, so a value above it means the ask census's program-state "
+           "boundary and this walk's are two different boundaries, and `emitted - preProgram` and `asks - "
+           "preProgram` are then complements of two different populations read as complements of one");
     DCHECK(g_ask_minted == (long)g_eps_n,
            "the @H surface holds a different number of records than the number of asks that minted one — the "
            "mint is counted on the one path that grows this array, so a disagreement is a record built "
