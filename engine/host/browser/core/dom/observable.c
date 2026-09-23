@@ -38,6 +38,7 @@
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
 #include "core/realm.h"
+#include "core/agent_state.h"
 #include "core/dom/abort.h"
 #include "core/dom/document.h"
 #include "core/events/event_target.h"
@@ -1538,16 +1539,39 @@ void observable_init(JSContext *ctx)
            "Observable was declared into a second runtime — its step ids belong to the first, and a runtime "
            "is an AGENT");
     g_obs_rt = rt;
+    /* EVERY STATIC THIS COMPONENT HOLDS FOR THE WHOLE AGENT, DECLARED BESIDE THE LINE THAT SETS IT
+       (core/agent_state.h). None of them could be declared while this component's release was a hand-written
+       line in three host teardowns: a row that declares agent state and carries an EMPTY release column is
+       exactly what core/platform.c's platform_check_agent_state fires on. What was carried past the release
+       meanwhile was the two class ids — each of which is also read as a brand by observable_is and
+       subscriber_is — and the per-realm value slots below, which are three IDENTIFIERS and six slots because
+       §2.1's is an array of four. The hand-written reset list put back none of them. */
+    agent_state_ptr("observable", &g_obs_rt, "the runtime §2's two classes and every operation's step "
+                                             "machine were registered in");
     g_key = JS_NewSymbol(ctx, "observableState", false);
     CHECK(!JS_IsException(g_key), "the Observable slot key allocation failed");
+    agent_state_value("observable", &g_key,
+                      "§2.1's and §2.2's internal-slot record key — the private Symbol an "
+                      "Observable's `{callback, subscriber}` and a Subscriber's four items hang off");
     g_katom = JS_ValueToAtom(ctx, g_key);
     CHECK(g_katom != JS_ATOM_NULL, "the Observable slot key could not be interned");
+    agent_state_atom("observable", &g_katom, "the slot key above, interned — every slot read goes through "
+                                             "the atom rather than re-interning the Symbol");
     g_ready = 1;
+    agent_state_flag("observable", &g_ready,
+                     "the key's own latch — it is read rather than g_key because a static JSValue is "
+                     "zero-initialised and zero is not JS_UNDEFINED");
 
     JS_NewClassID(rt, &g_obs_class);
     JS_NewClass(rt, g_obs_class, &od);
+    /* CARRIED PAST THE RELEASE UNTIL THIS ROW REACHED THE COLUMN. An id left set names a class in a runtime
+       that is gone, and observable_is asks `JS_GetClassID(v) == g_obs_class` of every operator's receiver —
+       so in a second agent that brand answers about whichever class the new runtime's allocator handed the
+       number to. */
+    agent_state_class("observable", &g_obs_class, "§2.2's Observable class — observable_is's brand");
     JS_NewClassID(rt, &g_sub_class);
     JS_NewClass(rt, g_sub_class, &sd);
+    agent_state_class("observable", &g_sub_class, "§2.1's Subscriber class — subscriber_is's brand");
 
     DCHECK(sizeof(js_obs_defs) / sizeof(js_obs_defs[0]) == OP_N,
            "an Observable operation was declared with no step definition beside it — the table is written in "
@@ -1555,23 +1579,39 @@ void observable_init(JSContext *ctx)
     for (i = 0; i < OP_N; i++) {
         g_op_stepid[i] = JS_RegisterStepDef(rt, &js_obs_defs[i]);
         CHECK(g_op_stepid[i] >= 0, "observable: no step id for one of its operations");
+        agent_state_id("observable", &g_op_stepid[i],
+                       "one of §2.2's and §2.3's operations' step machines — every one of them runs "
+                       "the page's own callback and therefore suspends");
     }
     {
         static const char *const FN[EM_N] = {
             "Subscriber.prototype.next", "Subscriber.prototype.error", "Subscriber.prototype.complete",
             "Subscriber.prototype.addTeardown"
         };
-        for (i = 0; i < EM_N; i++)
+        for (i = 0; i < EM_N; i++) {
             g_sub_fn_slot[i] = realm_value_declare(ctx, FN[i]);
+            agent_state_realm_slot("observable", &g_sub_fn_slot[i],
+                                   "one of §2.1's four Subscriber member slots — a function object carries "
+                                   "the realm it was minted in, so the per-realm slot is what hands out the "
+                                   "same one");
+        }
     }
     g_sub_native_slot = realm_value_declare(ctx, "Observable §2.2.1 subscribe-to (spec prose)");
+    agent_state_realm_slot("observable", &g_sub_native_slot,
+                           "§2.2.1's per-realm `subscribe to` callee");
     g_from_fn_slot    = realm_value_declare(ctx, "Observable §2.2.1 convert-to-an-Observable");
+    agent_state_realm_slot("observable", &g_from_fn_slot,
+                           "§2.2.1's per-realm `convert to an Observable` callee");
     /* §2.2's SubscribeOptions has no ARGUMENT POSITION to be declared at — every operation in this component
        registers its own step definition, so there is no idl_method_id_* entry for the argument machine to
        convert it at — which is exactly the entry idl_dict_declare is public for. It interns the member names
        once per runtime AND runs §3.2.17's read-order check over the declaration, which is why the walk goes
        through it rather than reaching for JS_NewAtom. */
     g_subscribe_options_atoms = idl_dict_declare(ctx, &SUBSCRIBE_OPTIONS_DECL);
+    agent_state_ptr("observable", &g_subscribe_options_atoms,
+                    "the HANDLE on §2.2's SubscribeOptions member names — the atoms are the IDL pool's and "
+                    "go back with the runtime, and a handle left pointing into a released pool is what the "
+                    "next agent would read");
     obs_ops_init(ctx);   /* Observable §3's ObservableEventListenerOptions, declared beside `when()` */
     realm_declare_intrinsic(observable_install_protos);
 }
@@ -1687,21 +1727,26 @@ void observable_install_protos(JSContext *ctx)
     JS_FreeValue(ctx, global);
 }
 
-void observable_free(JSContext *ctx)
+/* THE AGENT'S HALF, RUN ONCE FROM core/platform.c's RELEASE COLUMN — see observable.h for why it takes the
+   RUNTIME. The two things it frees are the Symbol and its interned name, both agent-lifetime values given back
+   against the runtime they were minted in; the prototypes, the interface objects and the four per-realm member
+   functions are the REALMS' and go with their contexts.
+   THE HAND-WRITTEN RESET LIST IS GONE RATHER THAN KEPT BESIDE THE UNDO, and its drift is the argument rather
+   than its length: it reset the key, the atom, the latch, the runtime pointer, the dictionary handle and the
+   operation ids, and left BOTH CLASS IDS and ALL THREE REALM-SLOT IDENTIFIERS standing — a second copy of a
+   declaration list, which is what agent_state_undo derives from the declarations themselves so that there is
+   only ever one. A declaration added above now owes this function nothing.
+   THE UNDO IS LAST AND obs_ops_free RUNS BEFORE IT, which is agent_state.h's ordering contract twice over:
+   nothing above reads a slot this has nulled, and the undo REFUSES to put back a slot declared in a file that
+   has not said its own release ran. observable_ops.c declares under THIS row — a row is a declare and a
+   release core/platform.c itself calls, and that file has neither — so it makes that claim as the last line
+   of obs_ops_free. */
+void observable_free(JSRuntime *rt)
 {
-    int i;
-
     if (!g_ready)
         return;
-    JS_FreeAtom(ctx, g_katom);
-    JS_FreeValue(ctx, g_key);
-    g_key = JS_UNDEFINED;      /* the prototypes are the REALMS' — released with their contexts */
-    g_katom = JS_ATOM_NULL;
-    g_ready = 0;
-    g_obs_rt = NULL;
-    /* The atoms belong to the IDL pool, which gives them back with the runtime; what this component owns is
-       the HANDLE, and a handle left pointing into a released pool is a stale slot the next agent would read. */
-    g_subscribe_options_atoms = NULL;
+    JS_FreeAtomRT(rt, g_katom);
+    JS_FreeValueRT(rt, g_key);
     obs_ops_free();
-    for (i = 0; i < OP_N; i++) g_op_stepid[i] = -1;
+    agent_state_undo("observable");
 }

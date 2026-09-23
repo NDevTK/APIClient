@@ -2051,8 +2051,19 @@ QJS_EXPORT void qjs_teardown(void)
        run by the platform_agent_free above. It was a line in this list and in nobody else's, and the host that
        did not have it aborted every file it ran on the runtime's leak walk. Every other line below is still a
        hand-copied teardown, which is the same defect waiting: they belong on that column too. */
-    abort_free(g_ctx);
-    observable_free(g_ctx);
+    /* DOM §3.1/§3.2's AbortController and AbortSignal WITH the Observable standard's §2, which used to be
+       the two lines here. Both are ROWS on core/platform.h's release column now, run by the
+       platform_agent_free above — and this is a pair every host had INVERTED. Written here as
+       `abort_free(); observable_free();`, the DEPENDED-ON component went first: §2.2's SubscribeOptions
+       declares `AbortSignal signal`, so observable.c reads abort_signal_class() for the brand its declaration
+       states, and §2.1's subscription controller is an AbortSignal every Subscriber holds. Reverse
+       declaration order gives observable, then `fetch`, then abort — the dependent first. It is the same
+       inversion this column already corrected for `viewport`/`visual_viewport` and for `timer`/`event_loop`,
+       both of which every host also had the wrong way round. Out here neither component could declare its
+       agent state to core/agent_state.h at all, since a row with agent state and no release is what
+       platform_check_agent_state fires on, so between them FOUR CLASS IDS — two of which are read as BRANDS
+       by observable_is and subscriber_is — and three per-realm value slot identifiers, six slots between
+       them, were carried past their own release. See core/platform.c's entry. */
     document_free(g_ctx);   /* the Document and the window it fires `load` at — both HELD across the lifecycle */
     /* AND THE HOST'S REFERENCE TO EVERY JOINED REALM, GIVEN BACK HERE rather than by a `document_free` of its
        own. A joined document's per-realm record is released by quickjs's realm-teardown hook — the one

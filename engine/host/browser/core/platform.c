@@ -416,6 +416,36 @@ static void r_request(JSRuntime *rt) { (void)rt; request_free(); }
 /* §5's four interned field names. fetch was one of the forty-three rows with a declare and an EMPTY third
    column, and the atom walk named all four on 118 files of an area that touches fetch only incidentally. */
 static void r_fetch(JSRuntime *rt) { fetch_free(rt); }
+/* DOM §3.1/§3.2 AND THE OBSERVABLE STANDARD, AND THE PAIR INVERTS — WHICH IS THE POINT RATHER THAN A SIDE
+   EFFECT. Both releases were hand-written lines in THREE host teardowns — engine/host/main.c,
+   engine/host/wpt_runner.c and engine/host/test_forced.c — running AFTER platform_agent_free had already run
+   this entire column, and all three wrote them in the SAME wrong order: `abort_free(); observable_free();`.
+   Observable DEPENDS ON abort. Its §2.2 SubscribeOptions declares `AbortSignal signal`, and a DECLARED
+   interface-typed member states the class it brands against — observable.c reads abort_signal_class() for it,
+   and the Observable standard §2.1 "The Subscriber interface"'s subscription controller is an
+   AbortSignal every Subscriber holds. Forward order on this list is
+   therefore `abort` then `observable`, which is why the two rows sit where they do; reverse declaration order
+   makes the RELEASE observable-then-abort, so the dependent gives up its state first. The hand-written lists
+   had the depended-on component going first, which is the same inversion this column already found in
+   `viewport`/`visual_viewport` and in `timer`/`event_loop`.
+   THE THREE HOSTS DID NOT AGREE ON THE REST OF THE POSITION EITHER: main.c and test_forced.c ran the pair
+   immediately before `document_free`, while wpt_runner.c ran it after six other hand-written releases and
+   before `navigable_free`, `solver_agent_free` and `document_free`. That is the drift core/platform.h's
+   release column exists to end, and it cannot be repaired one row at a time:
+   everything on this column runs before everything left out there, so lifting either of these alone would
+   have moved it over its own partner.
+   `fetch` SITS BETWEEN THEM ON THIS LIST AND READS NEITHER. fetch_free gives back §5's four interned names,
+   three handles and its recorded runtime, and no release in this agent reads abort's or observable's statics
+   at all — which is what makes the pair's new positions a question about DECLARATION order rather than about
+   a dependency between releases.
+   NEITHER TAKES A JSContext ANY MORE, and unlike the groups converted above each of them genuinely READ the
+   one it used to take: abort_free for a JS_FreeValue of §3.2's slot-key Symbol, observable_free for a
+   JS_FreeAtom and a JS_FreeValue of §2's. Both are AGENT-lifetime values, so both reads have an exact
+   runtime-scoped spelling (JS_FreeValueRT, JS_FreeAtomRT) and the parameter becomes the runtime this column
+   already holds rather than going away. A row that wanted a JSContext would be a per-realm component in the
+   wrong column; a row that wanted a JS_FreeValue is on the right one and was spelling it per-realm. */
+static void r_abort(JSRuntime *rt) { abort_free(rt); }
+static void r_observable(JSRuntime *rt) { observable_free(rt); }
 /* THE WHOLE STREAMS GROUP, AND IT MOVES AS A BLOCK FOR THE REASON THE DOM GROUP DOES. All four releases were
    written by hand into THREE host teardowns — engine/host/main.c, engine/host/wpt_runner.c and
    engine/host/test_forced.c — and run AFTER platform_agent_free had already run this entire column. Reverse
@@ -1198,7 +1228,7 @@ static const PlatformComponent PLATFORM[] = {
        realm that reaches no platform_document_install gets both names. §3.2's three STATICS moved with its
        interface object: `abort`, `timeout` and `any` are members OF that object, and one minted without them
        is an `AbortSignal` a page can feature-detect and not call. */
-    { "abort",               d_abort,               NULL },
+    { "abort",               d_abort,               NULL,        r_abort },
     /* FETCH §5.4 "Request class", §5.5 "Response class" and §5.1 "Headers class", ABOVE `fetch` AND IN THE
        ORDER THAT MAKES THE RELEASE READ HEADERS-RESPONSE-REQUEST. Reverse declaration order is what this
        column gives the release, and that sequence is the one all three host teardowns already had these three
@@ -1251,7 +1281,7 @@ static const PlatformComponent PLATFORM[] = {
        THE COLUMN GOES ENTIRELY, unlike `fetch` above, whose row keeps a document half for a MEMBER §3.8 does
        not define. This component's entry placed these two interface objects and nothing else, so there is
        nothing left for a third column to do. */
-    { "observable",          d_observable,          NULL },
+    { "observable",          d_observable,          NULL,        r_observable },
     /* GEOMETRY INTERFACES §3 and §4, before the component that returns one. Neither reads anything of the DOM's
        — a rectangle is four numbers — so their position is decided only by their CONSUMER: CSSOM VIEW §6's
        `getBoundingClientRect` is installed on Element.prototype by the row below, and it mints a DOMRect out of

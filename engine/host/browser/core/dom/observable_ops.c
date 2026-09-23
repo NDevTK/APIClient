@@ -34,6 +34,7 @@
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
 #include "core/realm.h"
+#include "core/agent_state.h"
 #include "core/dom/abort.h"
 #include "core/events/event_target.h"
 #include "core/events/report_exception.h"
@@ -250,13 +251,26 @@ void obs_ops_init(JSContext *ctx)
        runs §3.2.17's read-order check over the array above, which is why the walk goes through it rather than
        reaching for JS_NewAtom. Idempotent per runtime. */
     g_when_options_atoms = idl_dict_declare(ctx, &WHEN_OPTIONS_DECL);
+    /* DECLARED UNDER `observable` AND NOT UNDER THIS FILE'S OWN NAME, because a row on core/platform.c's list
+       is a DECLARE and a RELEASE that file itself calls, and this component has neither: observable_init calls
+       the init above and observable_free calls the release below. core/agent_state.h states that rule for a
+       sub-component, and the walk in platform_check_agent_state refuses a declaration naming a row that does
+       not exist — so `obs_ops` would abort every dev build. */
+    agent_state_ptr("observable", &g_when_options_atoms,
+                    "the HANDLE on §3's ObservableEventListenerOptions member names — the atoms are the "
+                    "IDL pool's and go back with the runtime, and a handle left pointing into a released pool "
+                    "is what the next agent would read");
 }
 
+/* THE HAND-WRITTEN RESET IS GONE AND WHAT REPLACES IT IS A CLAIM RATHER THAN A WRITE. agent_state_undo runs
+   ONCE, at the END of observable_free, and resets every slot carrying that row's name — so it would put this
+   file's handle back whether or not this release ever ran, which is precisely the direction
+   agent_state_check_released is structurally blind to. agent_state_reached writes no slot; it says THE
+   DECLARING FILE'S RELEASE RAN, which is the one fact the undo cannot know and may not act without, and
+   writing nothing is what lets it be made here in the middle of the owner's cascade. */
 void obs_ops_free(void)
 {
-    /* The atoms belong to the IDL pool, which gives them back with the runtime; the HANDLE is this file's,
-       and one left pointing into a released pool is a stale slot the next agent would read. */
-    g_when_options_atoms = NULL;
+    agent_state_reached("observable");
 }
 
 void obs_ops_install(JSContext *ctx, JSValueConst proto)

@@ -64,6 +64,7 @@
 #include "core/events/event_target.h"
 #include "core/timing/timer.h"
 #include "core/realm.h"
+#include "core/agent_state.h"
 #include "core/dom/abort.h"
 
 /* The private key the signal's internal slots hang off — a Symbol, so a page enumerating its own objects
@@ -94,17 +95,36 @@ void abort_init(JSContext *ctx)
     DCHECK(!g_ready, "abort_init ran twice — one instance is one document");
     g_key = JS_NewSymbol(ctx, "abortState", false);
     CHECK(!JS_IsException(g_key), "the AbortSignal slot key allocation failed");
+    /* EVERY STATIC THIS COMPONENT HOLDS FOR THE WHOLE AGENT, DECLARED BESIDE THE LINE THAT SETS IT
+       (core/agent_state.h). Until this component's release reached core/platform.c's column, not one of them
+       could be declared at all — platform_check_agent_state fires on a row that declares agent state and
+       carries an EMPTY release column — so the two class ids below were carried into whatever agent came
+       next, and each of them doubles as this file's own declaration latch. */
+    agent_state_value("abort", &g_key,
+                      "§3.1's and §3.2's internal-slot record key — the private Symbol a signal's "
+                      "`{aborted, reason}` and a controller's `{signal}` hang off");
     g_ready = 1;
+    agent_state_flag("abort", &g_ready,
+                     "the key's own latch — it is read rather than g_key because a static JSValue is "
+                     "zero-initialised and zero is not JS_UNDEFINED");
     abort_build_agent(ctx);
 }
 
-void abort_free(JSContext *ctx)
+/* THE AGENT'S HALF, RUN ONCE FROM core/platform.c's RELEASE COLUMN — see abort.h for why it takes the
+   RUNTIME. What it frees is the Symbol above, which is an agent-lifetime value and therefore given back
+   against the runtime it was minted in; the two prototypes and the two interface objects are the REALMS' and
+   go with their contexts, which is why nothing else here is freed.
+   THE HAND-WRITTEN RESET LINES ARE GONE RATHER THAN KEPT BESIDE THE UNDO. They put back two of this
+   component's NINE slots and left the two class ids, the four step ids and the recorded runtime standing —
+   the second copy of a declaration list whose drift is exactly what agent_state_undo exists to end. A
+   declaration added above now owes this function nothing.
+   THE UNDO IS LAST, which is agent_state.h's ordering contract: nothing above reads a slot this has nulled. */
+void abort_free(JSRuntime *rt)
 {
     if (!g_ready)
         return;
-    JS_FreeValue(ctx, g_key);
-    g_key = JS_UNDEFINED;   /* the prototypes are the REALMS' — released with their contexts */
-    g_ready = 0;
+    JS_FreeValueRT(rt, g_key);
+    agent_state_undo("abort");
 }
 
 /* The internal-slot record on `o` — `{ aborted, reason }` for a signal, `{ signal }` for a controller — or
@@ -999,8 +1019,17 @@ static int js_timeout_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
        never ran f, a fetch's abort algorithm never shut the request down, and `AbortSignal.any([c.signal,
        timeout])` had one arm that could not fire.
        THE SIGNAL TRAVELS AS CLOSURE DATA because §8.7 Timers performs the completion steps with no arguments. */
-    if (g_timeout_fire_stepid < 0)
+    if (g_timeout_fire_stepid < 0) {
         g_timeout_fire_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_timeout_fire_def);
+        /* DECLARED HERE AND NOT IN abort_build_agent, BECAUSE HERE IS WHERE IT IS SET. It is the one slot of
+           this component's that is minted LAZILY — an agent whose pages never call `AbortSignal.timeout()`
+           leaves it at -1 and owes the undo nothing — so a declaration written beside the eager three would
+           be a claim about a registration that may never happen. The guard is what makes this run once:
+           core/agent_state.h aborts on one address declared twice. */
+        agent_state_id("abort", &g_timeout_fire_stepid,
+                       "§3.2 step 3's completion steps — the machine `run steps after a timeout` parks on, "
+                       "registered at the first timeout signal rather than at declaration");
+    }
     {
         JSValueConst data = s->result;
         JSValue steps = JS_NewStepClosure(ctx, g_timeout_fire_stepid, 0, 1, &data);
@@ -1153,15 +1182,33 @@ static void abort_build_agent(JSContext *ctx)
 
     if (g_timeout_stepid < 0) {
         g_abort_rt = JS_GetRuntime(ctx);
+        agent_state_ptr("abort", &g_abort_rt, "the runtime §3.2's three step machines were registered in");
         g_timeout_stepid = JS_RegisterStepDef(g_abort_rt, &js_timeout_def);
+        agent_state_id("abort", &g_timeout_stepid,
+                       "§3.2's `AbortSignal.timeout()` machine — `[EnforceRange] unsigned long long` is "
+                       "ToNumber on whatever the page passed, so the coercion is the page's own code");
         g_abort_stepid = JS_RegisterStepDef(g_abort_rt, &js_abort_def);
+        agent_state_id("abort", &g_abort_stepid, "§3.2's `AbortSignal.abort()` machine");
         g_any_stepid = JS_RegisterStepDef(g_abort_rt, &js_any_def);
+        agent_state_id("abort", &g_any_stepid,
+                       "§3.2's `AbortSignal.any()` machine — `sequence<AbortSignal>` is Web IDL "
+                       "§3.2.21.1's iterator protocol, which is the page's code at every step of it");
     }
     if (g_sig_class) return;
     JS_NewClassID(JS_GetRuntime(ctx), &g_sig_class);
     JS_NewClass(JS_GetRuntime(ctx), g_sig_class, &sd);
+    /* THE SHARP ONE. This release used to leave the id SET, and an id carried into a second agent names a
+       class in a runtime that is gone while the `if (g_sig_class) return;` above reads it as already
+       declared — so that agent's abort_build_agent returns before re-registering and every AbortSignal it
+       mints is branded with a number the live runtime never issued. It is also the class a DECLARED
+       interface-typed position brands against (abort_signal_class below), so a zero there is a declaration
+       that brands nothing. */
+    agent_state_class("abort", &g_sig_class,
+                      "§3.2's AbortSignal class — the brand abort_signal_class hands a declaration, and "
+                      "this file's declaration latch");
     JS_NewClassID(JS_GetRuntime(ctx), &g_ctrl_class);
     JS_NewClass(JS_GetRuntime(ctx), g_ctrl_class, &cd);
+    agent_state_class("abort", &g_ctrl_class, "§3.1's AbortController class");
     realm_declare_intrinsic(abort_install_protos);
 }
 

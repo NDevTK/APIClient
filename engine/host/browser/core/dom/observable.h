@@ -12,7 +12,14 @@ void observable_init(JSContext *ctx);
    REALM and names no Document, so the two names are owed by a realm that reaches no per-document install and
    are placed from here rather than from core/platform.c's third column. */
 void observable_install_protos(JSContext *ctx);
-/* Agent teardown: the step ids and class ids are the agent's; the prototypes are the realms'. */
-void observable_free(JSContext *ctx);
+/* THE AGENT'S HALF, RUN ONCE FROM core/platform.c's RELEASE COLUMN. It takes the RUNTIME and not a JSContext
+   because that is what an AGENT is: the step ids, the two class ids, the slot key and its interned name are
+   held for the whole agent and are given back against the runtime they were minted in, which is that column's
+   entry condition — core/platform.c's own note says a row that wanted a JSContext would be a per-realm
+   component in the wrong column. The prototypes, the two interface objects and §2.1's four per-realm member
+   functions ARE per-realm and go with their contexts, so the context this used to take was read for exactly
+   two things, a JS_FreeAtom and a JS_FreeValue, whose runtime-scoped spellings are JS_FreeAtomRT and
+   JS_FreeValueRT. */
+void observable_free(JSRuntime *rt);
 
 #endif

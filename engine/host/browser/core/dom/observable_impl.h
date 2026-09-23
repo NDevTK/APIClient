@@ -338,6 +338,9 @@ void obs_ops_install(JSContext *ctx, JSValueConst proto);
    are interned once per runtime. Called from observable_init, released by observable_free — this file has no
    platform row of its own, for the same reason it has no machine of its own. */
 void obs_ops_init(JSContext *ctx);
+/* IT TAKES NOTHING AND WRITES NOTHING. The handle above is declared to core/agent_state.h under the
+   `observable` ROW — the row whose release reaches this one, which is what a sub-component names — so
+   observable_free's agent_state_undo is what puts it back, and all this owes is the CLAIM that it ran. */
 void obs_ops_free(void);
 
 #endif

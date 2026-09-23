@@ -17,7 +17,13 @@ void abort_init(JSContext *ctx);
 void abort_install_protos(JSContext *ctx);
 /* §3.2's interface prototype object for THIS realm. PER REALM. OWNED: the caller frees. */
 JSValue abort_signal_proto(JSContext *ctx);
-void abort_free(JSContext *ctx);                                 /* release the slot key this component owns */
+/* THE AGENT'S HALF, RUN ONCE FROM core/platform.c's RELEASE COLUMN. It takes the RUNTIME and not a JSContext
+   because that is what an AGENT is: the Symbol it gives back is agent-lifetime state, freed against the
+   runtime it was minted in, and core/platform.c's own note says a row that wanted a JSContext would be a
+   per-realm component in the wrong column. The two prototypes and the two interface objects ARE per-realm and
+   are released with their contexts, so the context this used to take was read for exactly one thing — a
+   JS_FreeValue of the key — whose runtime-scoped spelling is JS_FreeValueRT. */
+void abort_free(JSRuntime *rt);
 
 /* A FRESH, UNABORTED SIGNAL.
  *

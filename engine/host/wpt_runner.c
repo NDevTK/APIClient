@@ -3906,8 +3906,15 @@ int main(int argc, char **argv)
        fires on — so between them FIFTEEN CLASS IDS and THIRTY-THREE per-realm value slots were carried
        past their own release, each one a number JS_NewClassID handed out of a runtime that is gone and
        each one doubling as its component's declaration latch. See core/platform.c's entry. */
-    abort_free(ctx);
-    observable_free(ctx);
+    /* DOM §3.1/§3.2's AbortController and AbortSignal WITH the Observable standard's §2, which used to be
+       the two lines here. Both are ROWS on core/platform.h's release column now, run by the
+       platform_agent_free above. All three hosts wrote this pair and all three wrote it INVERTED —
+       `abort_free(); observable_free();` releases the depended-on component first, when §2.2's
+       SubscribeOptions declares `AbortSignal signal` and observable.c reads abort_signal_class() for its
+       brand — and the three did not agree on WHERE either: main.c's and test_forced.c's ran the pair
+       immediately before `document_free`, while THIS list ran it after six other hand-written releases and
+       before navigable, the solver's own agent half and document. Reverse declaration order gives observable,
+       then `fetch`, then abort. See core/platform.c's entry. */
     navigable_free(ctx);
     /* NOTHING SWITCHES THE RUNNING FLOW OUT HERE ANY MORE, and the line that did is deleted rather than kept
        as a safety net: a session ends by CLOSING (engine_session_close performs exactly that switch-out, which

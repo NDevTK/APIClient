@@ -29558,8 +29558,19 @@ int main(int argc, char **argv) {
        it. See core/platform.c's entry. */
     /* §8.1.4.7's rejection list is a row on core/platform.h's release column now, run by the
        platform_agent_free above — see main.c's teardown for what having it here cost the host that did not. */
-    abort_free(ctx);
-    observable_free(ctx);
+    /* DOM §3.1/§3.2's AbortController and AbortSignal WITH the Observable standard's §2, which used to be
+       the two lines here. Both are ROWS on core/platform.h's release column now, run by the
+       platform_agent_free above — and this is a pair every host had INVERTED. Written here as
+       `abort_free(); observable_free();`, the DEPENDED-ON component went first: §2.2's SubscribeOptions
+       declares `AbortSignal signal`, so observable.c reads abort_signal_class() for the brand its declaration
+       states, and §2.1's subscription controller is an AbortSignal every Subscriber holds. Reverse
+       declaration order gives observable, then `fetch`, then abort — the dependent first. It is the same
+       inversion this column already corrected for `viewport`/`visual_viewport` and for `timer`/`event_loop`,
+       both of which every host also had the wrong way round. Out here neither component could declare its
+       agent state to core/agent_state.h at all, since a row with agent state and no release is what
+       platform_check_agent_state fires on, so between them FOUR CLASS IDS — two of which are read as BRANDS
+       by observable_is and subscriber_is — and three per-realm value slot identifiers, six slots between
+       them, were carried past their own release. See core/platform.c's entry. */
     document_free(ctx);   /* the window reference the lifecycle holds */
     /* THE WHOLE DOM GROUP — element_free's cascade, the <iframe> element and GEOMETRY INTERFACES §3/§4 — is a
        set of ROWS on core/platform.h's release column now, run by the platform_agent_free above. This LINE
