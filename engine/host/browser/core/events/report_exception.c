@@ -499,15 +499,41 @@ not_handled:
        would report as unhandled an exception the page handled. */
     if (not_canceled && g_console)
         g_console(ctx, exception);
+    /* THE PATH IS §8.1.4.6 STEP 7.2's OWN CONDITION, AND IT USED TO BE `Worker` — A NAME THE STEP NEVER
+       ASKS ABOUT AND WHICH IS EXPOSED IN EVERY WINDOW REALM. The retired argument is rewritten rather than
+       dropped, because it is the one a reader re-derives: it read that `Worker` is what makes a
+       DedicatedWorkerGlobalScope reachable, so with it in this build step 7.2 is due. Both halves are wrong.
+       STEP 7.2 IS STATED OVER THE GLOBAL THIS EXCEPTION IS BEING REPORTED FOR — "If global implements
+       DedicatedWorkerGlobalScope" — and never over what that global can NAME, which for this interface is a
+       different question: HTML §10.2.6.3 "Dedicated workers and the Worker interface" declares
+       `[Exposed=(Window,DedicatedWorker,SharedWorker)]`, and browser/idl_exposure.h carries that row with
+       IDL_GLOBAL_WINDOW set. So the probe would have fired in every WINDOW realm, on every uncaught exception
+       a page did not cancel, for a step a Window global can never reach.
+       IT IS A THIRD DIRECTION BESIDE THE TWO core/realm.h RECORDS, which are a producer that is an internal
+       algorithm and an operand with several writers. Here the producer is a real member a page can name and
+       the probe still cannot be aimed by it, because the name's EXPOSURE SET is wider than the set of realms
+       the step governs — so the question to ask of a path is not only whether a page could name it, but
+       whether every realm that can name it is a realm the step is about.
+       AND THE PREMISE WAS FALSE, WHICH IS THE HALF WORTH KEEPING: exposing the interface object does not make
+       a worker global reachable. HTML §10.2.4 "Processing model"'s run a worker step 4 is "Let agent be the
+       result of obtaining a dedicated/shared worker agent given outside settings and is shared", and its next
+       sentence is "Run the rest of these steps in that agent" — so the realm whose global implements
+       DedicatedWorkerGlobalScope is built by a SECOND AGENT, while §10.2.6.3's constructor hands run-a-worker
+       to an in-parallel step and keeps the rest for itself. A `new Worker()` can therefore construct, hold the
+       outside MessagePort that constructor mints and serialize into nowhere — §9.4.4's own step 6 arm for a
+       port with nothing on the other end — with no such agent anywhere in the process.
+       HTML §10.2.1.2 "Dedicated workers and the DedicatedWorkerGlobalScope interface" declares
+       `[Exposed=DedicatedWorker]`, so the path below names exactly the realms step 7.2 governs and no others.
+       RETIREMENT: this record goes when core/workers/ exports the brand step 7.2's condition asks for and this
+       site tests THAT, because the question is then asked of the global rather than of a name on it. */
     if (not_canceled)
-        realm_awaits(ctx, "Worker",
+        realm_awaits(ctx, "DedicatedWorkerGlobalScope",
                      "§8.1.4.6 step 7.2 queues a global task on the DOM manipulation task source, at the "
                      "worker's owner, that fires `error` at the Worker object using ErrorEvent and — if that "
                      "is not handled either — REPORTS the exception again for the owner's global with "
                      "omitError true. That parameter is step 5, which this component does not yet take, so "
                      "both land together: give report_exception_run an omitError argument that nulls the "
-                     "ErrorEvent's `error` before the fire, and write 7.1 and 7.2 here. `Worker` is what makes "
-                     "a DedicatedWorkerGlobalScope reachable, so with it in this build they are due");
+                     "ErrorEvent's `error` before the fire, and write 7.1 and 7.2 here");
     JS_FreeValue(ctx, w->ev);
     w->ev = JS_UNDEFINED;
     /* AND THE ALGORITHM IS BACK AT ITS FIRST STEP: the record a caller holds names the step it would be
