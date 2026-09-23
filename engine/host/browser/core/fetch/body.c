@@ -1157,7 +1157,20 @@ int body_declare(JSContext *ctx, JSClassID class_id, BodyState *(*of)(JSValueCon
  * runtime's class id and a dead agent's byte-reader handle from outliving the count that hides it.
  * NOTHING READS EITHER AFTER THIS: §5.4's and §5.5's finalizers and gc_marks run after core/platform.c's
  * release column and reach body_state_free and body_state_mark, which take the BodyState directly and
- * consult no static of this file's. */
+ * consult no static of this file's.
+ *
+ * NAMED RESIDUAL — THE MEMSET IS A HAND-WRITTEN RESET THAT NO REGISTRY HOLDS.
+ *   NOT COVERED: core/agent_state.h has one kind per SCALAR slot and none for an AGGREGATE, so g_body_iface
+ *     is declared to nothing and the line above is exactly the kind of second list that header's undo exists
+ *     to end — correct today and unfalsifiable, since agent_state_check_released cannot report the day it is
+ *     dropped. The COUNT beside it is checked; the records it counts are not.
+ *   THE NEXT DIFF BUILDS: an aggregate kind taking the slot's address and its SIZE and reading it as BYTES
+ *     against a zero block, which is what SLOT_PTR's memcmp/memcpy pair already does for the one existing
+ *     kind whose value no C type can be read through — so the write side is slot_set_pre_init's memset arm
+ *     and the read side is its memcmp arm, both over a length the declaration carries.
+ *   HOW ITS ABSENCE WOULD SHOW: a release that clears an aggregate passes the end-of-column check with that
+ *     clearing line deleted, so the check's own report is BYTE-IDENTICAL either way — there is no run of
+ *     this engine, at any revision, in which a dropped aggregate reset is distinguishable from a kept one. */
 void body_agent_free(void)
 {
     DCHECK(g_body_iface_n > 0,
