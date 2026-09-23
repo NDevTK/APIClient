@@ -9062,7 +9062,35 @@ function since(ref, argv) {
      audit, and the two readers cannot answer differently about it. The git queries below carry no pathspec
      BECAUSE the Set decides — a pathspec here would be the restatement over again, one alphabet later. */
   const inScope = new Set(defaultTargets((m) => console.log(m)));
-  const changed = git(["diff", "--name-only", ref]);
+  /* THE REF IS RESOLVED BEFORE ANY FILE IS READ, BECAUSE THE `catch` BELOW CANNOT TELL A MALFORMED REF FROM
+     AN ABSENT PATH AND THE TWO FAIL IN OPPOSITE DIRECTIONS. `git diff --name-only <A>..<B>` is accepted, so a
+     caller who writes a RANGE — which is the natural spelling, and which this mode's own prose invites by
+     naming a "diff" — gets a correct changed-file list and then a `git show <A>..<B>:<path>` that yields
+     NOTHING for every one of them. The catch reads that as "absent at ref", the comment beside it says a new
+     file owns every finding in it, and the base audit is therefore run over EMPTY SOURCES: `0 finding(s)
+     before`, and every PRE-EXISTING finding in the diff's files reported as INTRODUCED BY THIS DIFF.
+     THAT IS THE ACCUSING DIRECTION AND IT IS AIMED AT THE LANE WHOSE DIFF IS BEING AUDITED — a prose-only
+     commit was measured reporting ELEVEN introduced findings, at lines its four hunks do not touch, every one
+     of them standing unchanged at the base revision. A frozen whole-file pair at both revisions answered
+     11 before and 11 after; run with a single ref, this mode answers INTRODUCED 0 / RETIRED 0, which is the
+     same fact. So the failure is not a wrong number, it is a manufactured accusation with a clean transcript.
+     A rev-parse here makes the state impossible instead of reporting it, and it is the whole repair: once the
+     ref is known to name one commit, a failing `git show` means what the catch already claims it means. */
+  const commit = (() => {
+    try { return execFileSync("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`],
+      { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); }
+    catch { return ""; }
+  })();
+  if (!commit) {
+    console.log(`--since takes ONE revision and "${ref}" does not name one commit.` +
+      (ref.includes("..") ? ` It looks like a RANGE: this mode audits the WORKING TREE against a single ref,` +
+        ` so the right spelling is the range's LEFT end alone — \`--since ${ref.split("..")[0]}\`.` : ``) +
+      ` Nothing was read; no delta is reported, because a base this mode cannot resolve reads as an EMPTY` +
+      ` tree and would print every pre-existing finding as introduced.`);
+    process.exitCode = 1;
+    return;
+  }
+  const changed = git(["diff", "--name-only", commit]);
   /* AND THE FILE THAT IS NOT IN GIT YET, WHICH THIS MODE REPORTED AS `0 introduced` WHILE READING NONE OF IT.
      `git diff` compares two trees and an UNTRACKED file is in neither, so it is not omitted with a message —
      it is absent from the list, and the delta prints a clean zero for a diff whose whole content is a new
@@ -9071,7 +9099,7 @@ function since(ref, argv) {
      as empty, which is exactly the right answer for one: every finding in a new file is that diff's own. */
   const untracked = git(["ls-files", "--others", "--exclude-standard"]);
   const files = [...new Set([...changed, ...untracked])].map((r) => join(ROOT, r)).filter((p) => inScope.has(p));
-  if (!files.length) { console.log(`no file this audit reads differs from ${ref} or stands untracked — nothing for this mode to compare`); return; }
+  if (!files.length) { console.log(`no file this audit reads differs from ${commit} or stands untracked — nothing for this mode to compare`); return; }
 
   const baseSrc = new Map();
   for (const p of files) {
@@ -9082,7 +9110,7 @@ function since(ref, argv) {
        top of a report, and a reader who has just been told this mode reads untracked files has every reason
        to read it as the mode failing on exactly those. Nothing is hidden: the header line states how many of
        the files read were untracked. */
-    try { baseSrc.set(p, execFileSync("git", ["show", `${ref}:${rel}`],
+    try { baseSrc.set(p, execFileSync("git", ["show", `${commit}:${rel}`],
       { cwd: ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })); }
     catch { baseSrc.set(p, ""); }        /* absent at ref — a new file owns every finding in it */
   }
@@ -9104,8 +9132,16 @@ function since(ref, argv) {
   const added = tip.filter((f) => !had.has(key(f)));
   const gone = base.filter((f) => !new Set(tip.map(key)).has(key(f)));
 
-  console.log(`spec-citation delta against ${ref}: ${files.length} audited file(s) read (${changed.length} ` +
-    `differ from ${ref}, ${untracked.length} untracked), ${base.length} finding(s) before, ${tip.length} after`);
+  /* THE BRACKET COUNTS ARE POST-FILTER, SO THE PARTS RELATE TO THE TOTAL THEY STAND BESIDE. They used to be
+     the RAW `git` answers while the leading number was the filtered `files.length`, so a diff touching a
+     `.png` or a path this audit does not read printed a total smaller than its own parts with nothing saying
+     why — and the untracked count, which here is a freeze script's `node_modules` symlink, named a file the
+     run never read. A header whose parts do not sum to its total is the coverage-figure defect arriving in
+     one line of output: the reader cannot tell a filtered total from a wrong one. */
+  const changedIn = changed.map((r) => join(ROOT, r)).filter((p) => inScope.has(p));
+  const untrackedIn = untracked.map((r) => join(ROOT, r)).filter((p) => inScope.has(p));
+  console.log(`spec-citation delta against ${commit}: ${files.length} audited file(s) read (${changedIn.length} ` +
+    `differ from it, ${untrackedIn.length} untracked), ${base.length} finding(s) before, ${tip.length} after`);
   console.log(`\nINTRODUCED BY THIS DIFF: ${added.length}`);
   for (const f of added) { console.log(`  ${f.file}:${f.line}  ${f.kind}  ${f.msg}`); console.log(`      ${f.text.trim()}`); }
   console.log(`\nRETIRED BY THIS DIFF: ${gone.length}`);
