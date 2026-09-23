@@ -7563,6 +7563,11 @@ static void display_image_mark_selftest(void)
     uint32_t idx;
     uint8_t q[4];
     int i;
+    /* THE WITNESS'S OWN COUNTERS. Every one is a plain C `size_t` this function accumulated off the
+       rasterizer's own out-parameter over bytes committed above it — nothing here is read back out of the
+       engine, so none of them can become concolic and silently never be written, which is the one way a
+       witness fails exactly when the thing it witnesses is working. */
+    size_t img_pixels = 0, img_spans = 0, clip_pixels = 0;
     /* x, destination width, and the source column the sample must land in. The 3-wide row is the
        discriminating one; the other two agree under both spellings and are here as the ordinary cases. */
     static const struct { int dw, x, want; } SAMPLE[] = {
@@ -7617,6 +7622,8 @@ static void display_image_mark_selftest(void)
         display_list_raster(&one, 1.0, &surf, &cnt);
         CHECKF(cnt.marks == 1 && cnt.pixels == (size_t)SAMPLE[i].dw * 2,
                "@IMGMARK composited %zu pixels into a %dx2 destination", cnt.pixels, SAMPLE[i].dw);
+        img_pixels += cnt.pixels;
+        img_spans += cnt.spans;
         raster_surface_get(&surf, SAMPLE[i].x, 0, q);
         CHECKF(q[0] == WANT[SAMPLE[i].want][0] && q[1] == WANT[SAMPLE[i].want][1]
                && q[2] == WANT[SAMPLE[i].want][2] && q[3] == 0xff,
@@ -7648,6 +7655,7 @@ static void display_image_mark_selftest(void)
         raster_surface_init(&surf, 6, 6);
         cnt.marks = 0; cnt.spans = 0; cnt.pixels = 0;
         display_list_raster(&off, 1.0, &surf, &cnt);
+        clip_pixels = cnt.pixels;
         raster_surface_get(&surf, 0, 0, q);
         CHECKF(q[3] == 0, "@IMGMARK wrote alpha %u at (0,0) for a mark whose rectangle starts at (2,2)", q[3]);
         raster_surface_get(&surf, 2, 2, q);
@@ -7655,6 +7663,27 @@ static void display_image_mark_selftest(void)
         raster_surface_free(&surf);
         display_list_free(&off);
     }
+
+    /* THE WITNESS, ON STDOUT THE BUILD LOG CAPTURES — the one row this arc did not have, and the reason it
+       did not is worth stating because it is the reason it was owed. Every number this fixture can derive is
+       PINNED by a CHECK above, so there was no document-dependent residue to print and no row got written;
+       and a witness is not for the residue. Without one, a run in which all thirteen assertions above hold
+       and a run in which this function was never called are THE SAME SILENCE, which is the weakest evidence a
+       fix can produce — every sibling arc in this file says so at its own row and this one alone could not be
+       scored. ON AN ARTIFACT BUILT BEFORE THIS ROW EXISTED IT IS ABSENT ENTIRELY: `grep -c '@IMGMARK samples'`
+       over a run's output answers 0 rather than a row of zeros, which is this row's own control and is the
+       same one every `@PAINT` row in this file carries. THE FIRST TOKEN IS PART OF THAT CONTROL and a bare
+       `grep -c '@IMGMARK'` is NOT it — this marker is also the NAME every assertion above puts in front of
+       its own message, so a bare count answers 1 for a clean run and 1 for a crashed one, which is the two
+       states a control exists to separate.
+       `pixels` AND `bitmaps` ARE ASSERTED ABOVE AND ARE PRINTED ANYWAY, for the reason `@PAINT tail` gives
+       about `strays`: a reader sees the number the CHECK stands on rather than inferring it from the absence
+       of a crash. `spans` AND `clip_pixels` ARE THE RESIDUE — the rasterizer decides how many spans a scaled
+       image costs and how many pixels a clipped mark covers, and nothing here asserts either, so those two
+       are what a comparison across two artifacts of this one fixture actually reads. */
+    printf("@IMGMARK samples=%d pixels=%zu spans=%zu bitmaps=%zu clip_pixels=%zu\n",
+           (int)(sizeof SAMPLE / sizeof SAMPLE[0]), img_pixels, img_spans,
+           display_list_bitmap_count(&dl), clip_pixels);
 
     display_list_free(&dl);
     display_list_free(&dl);     /* display_list.h: a double free is not reachable */

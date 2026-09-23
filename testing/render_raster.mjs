@@ -75,6 +75,23 @@ const { artifactStamp } = require_(join(HERE, 'artifact_stamp.js'));
 
 function fail(msg) { throw new Error('@WHY render_raster: ' + msg); }
 
+/* ONE DOOR FOR EVERY ALLOCATION IN THE WASM HEAP. `_malloc` reports failure by RETURNING ZERO rather than by
+   throwing, so no `catch` anywhere in this file sees one: every caller here then writes its operand over the
+   null page and hands the ENGINE that address, which is a corrupt reply the engine cannot tell from a real
+   one. Three sites were asking that question three ways and not one of them had anything downstream to make
+   the silence loud, so this is a route to a canonical spelling rather than three correct answers — the shape
+   that drifts. §CHECK's own category: an allocation failure is fatal in dev and in release alike, because a
+   dropped reply corrupts the frontier. */
+function heapAlloc(M, n, what) {
+  const p = M._malloc(n);
+  if (p === 0)
+    fail('_malloc refused ' + n + ' byte(s) for ' + what + ' — the WASM heap is out. That is the physical ' +
+         'floor §CHECK names and never something to answer a request past: a zero here is an ADDRESS as far ' +
+         'as every line below is concerned, so the alternative to this crash is the engine parsing whatever ' +
+         'happens to sit at offset 0 as a reply nobody sent.');
+  return p;
+}
+
 const FLAGS_WITH_VALUES = new Set(['--glue', '--doc', '--url', '--out', '--doc-id', '--steps', '--ext']);
 const FLAGS_BARE = new Set(['--serve']);
 function parseArgs(argv) {
@@ -293,44 +310,57 @@ async function serveOne(M, cs, req, docOrigin, log) {
     return decline('cross-origin (' + u.origin + ' vs the document\'s ' + docOrigin + '); a program load is ' +
                    'the page loading ITSELF, and a stranger\'s origin is not that');
   if (req.method !== 'GET') return decline('method ' + req.method + ' is outside RFC 9110 §9.2.1\'s safe set');
+  /* THE TRY COVERS EXACTLY THE ACT A NETWORK ERROR CAN COME OUT OF AND NOTHING THIS HOST DOES AFTERWARDS.
+     Which failures may be answered rather than asserted is decided by WHOSE BYTES STATE THE VALUE: a `fetch`
+     rejection is a fact about a STRANGER'S server and the wire, so the answer is a refusal yielding the
+     record's declared absence — Fetch §5.6's network error, which is what `qjs_provide` with the JSON `null`
+     is, and not a decline, which would be this host refusing to spend an act it did in fact spend.
+     EVERYTHING BELOW THE CATCH IS THIS HOST'S OWN WORK AND THE ENGINE'S: a composition, an allocation in the
+     WASM heap, a write into it, and an ABI call whose abort surfaces here as a thrown `RuntimeError`. Those
+     are broken invariants of this codebase, and the catch that used to cover them turned each one into a
+     PLAUSIBLE DATUM — the engine told the WIRE had failed, the flow forking the page's own failure path, and
+     the run reporting a clean result with a reply nobody sent. It also delivered `qjs_provide` a SECOND time
+     into a runtime that had just aborted inside the first. Widening this back is not a smaller fix; it is
+     the swallow, and the reason it looked harmless is that its one legitimate member — the fetch — really
+     does belong in it. */
+  let r, body;
   try {
-    const r = await fetch(req.url, { redirect: 'follow' });
-    const body = new Uint8Array(await r.arrayBuffer());
-    /* THE REPLY'S METADATA CROSSES AS JSON AND THE BODY CROSSES AS BYTES, BESIDE IT, because JSON cannot say
-       a byte sequence and the only way to put one in JSON is to run an algorithm over it first — which is the
-       defect the ABI's own entry records: a script served `charset=windows-1252` decoded here would reach
-       HTML §8.1.4.2's classic decode already mangled. No transform happens on this line. */
-    const reply = JSON.stringify({
-      status: r.status, statusText: r.statusText || '',
-      headers: [...r.headers].map(([k, v]) => [k, v]),
-      urlList: [req.url, ...(r.url && r.url !== req.url ? [r.url] : [])],
-    });
-    const bp = M._malloc(body.length + 1);
-    M.HEAPU8.set(body, bp); M.HEAPU8[bp + body.length] = 0;
-    M.ccall('qjs_provide', 'void', ['number', 'number', 'number', 'number', 'number'],
-            [cs(req.method), cs(req.url), cs(reply), bp, body.length]);
-    log.push({ url: req.url, destination: req.destination, action: 'provide',
-               status: r.status, bytes: body.length });
+    r = await fetch(req.url, { redirect: 'follow' });
+    body = new Uint8Array(await r.arrayBuffer());
   } catch (e) {
-    /* A REAL BROWSER PERFORMING THIS REQUEST WOULD PRODUCE A NETWORK ERROR HERE, so this is `qjs_provide`
-       with the JSON `null` — Fetch §5.6's network error — and not a decline, which would be this host
-       refusing to spend an act it did in fact spend. */
     M.ccall('qjs_provide', 'void', ['number', 'number', 'number', 'number', 'number'],
             [cs(req.method), cs(req.url), cs('null'), 0, 0]);
     log.push({ url: req.url, destination: req.destination, action: 'network-error',
                why: (e && e.message) || String(e) });
+    return;
   }
+  /* THE REPLY'S METADATA CROSSES AS JSON AND THE BODY CROSSES AS BYTES, BESIDE IT, because JSON cannot say
+     a byte sequence and the only way to put one in JSON is to run an algorithm over it first — which is the
+     defect the ABI's own entry records: a script served `charset=windows-1252` decoded here would reach
+     HTML §8.1.4.2's classic decode already mangled. No transform happens on this line. */
+  const reply = JSON.stringify({
+    status: r.status, statusText: r.statusText || '',
+    headers: [...r.headers].map(([k, v]) => [k, v]),
+    urlList: [req.url, ...(r.url && r.url !== req.url ? [r.url] : [])],
+  });
+  const bp = heapAlloc(M, body.length + 1, 'the body of ' + req.url);
+  M.HEAPU8.set(body, bp); M.HEAPU8[bp + body.length] = 0;
+  M.ccall('qjs_provide', 'void', ['number', 'number', 'number', 'number', 'number'],
+          [cs(req.method), cs(req.url), cs(reply), bp, body.length]);
+  log.push({ url: req.url, destination: req.destination, action: 'provide',
+             status: r.status, bytes: body.length });
 }
 
 async function drive(opts) {
   const factory = await import(pathToFileURL(opts.glue).href);
   const M = await (factory.default ?? factory)();
-  const cs = (s) => { const n = M.lengthBytesUTF8(s) + 1, p = M._malloc(n); M.stringToUTF8(s, p, n); return p; };
+  const cs = (s) => { const n = M.lengthBytesUTF8(s) + 1, p = heapAlloc(M, n, 'a string operand');
+                      M.stringToUTF8(s, p, n); return p; };
   const bs = (b) => {
     /* THE DOCUMENT CROSSES AS A PAIR because a zero byte is legal in a document and `strlen` would end the
        parse at the first one. */
     const u8 = new TextEncoder().encode(b);
-    const p = M._malloc(u8.length + 1);
+    const p = heapAlloc(M, u8.length + 1, 'a document operand');
     M.HEAPU8.set(u8, p); M.HEAPU8[p + u8.length] = 0;
     return [p, u8.length];
   };
