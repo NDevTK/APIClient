@@ -207,7 +207,16 @@ function _chokepointGetFn(tab, who) {
        the wire and what follows is the server's answer, an HTTP error status included. So this reads the
        field rather than inferring a refusal from `!ok`, which would report a 404 as something this zone
        declined and a decline as something the service said. */
-    if (r.refusal) return { error: r.refusal.kind + ":" + r.refusal.reason };
+    /* AND THE GRADE RIDES BESIDE THE SENTENCE, BECAUSE THE LOOP HAS TO TELL A DECLINE FROM A 404 AND A
+       STRING CANNOT BE ASKED. `error` is the account a reader gets; `refusal` is the same fact GRADED, and
+       a consumer that recovered the grade by matching the prefix of `error` would be writing a second copy
+       of safe-fetch.js's own vocabulary in a format nothing checks — which that file forbids by name at
+       `_refused`. The relay arm (lib/schema.js `pageContextGet`) carries NO `refusal`, and that absence is a
+       POSITIVE statement rather than a hole: `pageContextFetch` is a different transport with a different
+       authorization — a human at a surface that shows them the bytes — so its refusals are not this egress
+       policy's and may not be counted as though they were. */
+    if (r.refusal) return { error: r.refusal.kind + ":" + r.refusal.reason,
+                            refusal: { kind: r.refusal.kind, reason: r.refusal.reason } };
     return { ok: r.ok, status: r.status, headers: r.headers, body: new TextDecoder().decode(r.body) };
   };
 }
@@ -255,6 +264,14 @@ async function fetchDiscoveryForService(
     : _chokepointGetFn(tab, "lib/discovery-probe.js fetchDiscoveryForService, service " +
                             JSON.stringify(service));
   const triedKeys = new Set();
+  /* AND WHAT THE EGRESS POLICY REFUSED TO ASK, KEYED ON THE WHOLE TOKEN, BESIDE THE KEYS THAT WERE TRIED.
+     Without it a sweep every candidate of which this zone DECLINED is indistinguishable from a sweep whose
+     candidates a server answered 404 to: both fall through `resp.error || !resp.ok` below and both end at
+     the same `not_found` record. Those two take opposite work — widen the origin, or accept that the
+     service publishes no document — and CLAUDE.md §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES is exact that an
+     absent result and a zero result may never be averaged. `Object.create(null)` so the `in` test below is
+     exact rather than answering true for `toString`, which is bridge.js's own egress counter's reason. */
+  const declined = Object.create(null);
 
   // Build a deduplicated candidate list across all keys
   // Try each key separately to track which one works
@@ -280,10 +297,20 @@ async function fetchDiscoveryForService(
            because the point of one loop over two is that neither gets to answer in its own dialect. */
         DCHECK(resp && typeof resp === "object",
                "the discovery GET function answered with no reply record — lib/schema.js's `pageContextGet` " +
-               "and this file's `_chokepointGetFn` each return {ok, status, headers, body} or {error}, so " +
+               "and this file's `_chokepointGetFn` each return {ok, status, headers, body} or {error} (the " +
+               "chokepoint arm grading that error with a `refusal` beside it), so " +
                "anything else is one of those two edges broken and every discovery candidate would read as " +
                "an address that published nothing");
 
+        /* A DECLINE IS COUNTED WHERE IT ARRIVES AND THE CONTROL FLOW IS UNCHANGED — this permits nothing
+           and refuses nothing; it is the one account anybody gets of a request this zone chose not to make.
+           IT READS THE GRADE AND NEVER THE STATUS: a `network` refusal is one a real browser performing this
+           same request also makes, so it is a fact about the ORIGIN and belongs with the 404s below; a
+           `decline` is this tool's own policy and is the only thing a person can act on by widening. */
+        if (resp.refusal && resp.refusal.kind === "decline") {
+          if (!(resp.refusal.reason in declined)) declined[resp.refusal.reason] = 0;
+          declined[resp.refusal.reason]++;
+        }
         if (resp.error || !resp.ok) continue;
 
         let doc;
@@ -402,6 +429,38 @@ async function fetchDiscoveryForService(
     }
   }
 
+  /* AND IT IS SAID OUT LOUD, ONCE PER SWEEP, IN THE VOCABULARY THE CHOKEPOINT COMPOSED. bridge.js writes
+     the identical line at its own decline seam and states the reason there: the refusal reaches the engine
+     over the wire and NOTHING IN THIS EXTENSION RENDERS IT, so a refusal relayed only inward is the one
+     account of a request this tool declined to make, shown to nobody. This sweep had not even that — its
+     refusals were flattened into `continue` and the run ended at a `not_found` record indistinguishable
+     from a service that really publishes nothing.
+     ONE LINE PER SWEEP AND NOT ONE PER CANDIDATE, so the volume is bounded by services and not by the
+     candidate list, and the TOKENS travel whole rather than being parsed: safe-fetch.js composed
+     `blocked-signal:<name>=<value>` out of the signal it walked, so the token IS the structured fact and a
+     consumer that split it would be writing a second copy of that policy.
+     NAMED RESIDUAL. WHAT IS NOT COVERED: the RECORD. A sweep whose every candidate was declined still
+     writes `status: "not_found"` below with `_triedKeys` naming every key — and lib/response-decode.js
+     reads exactly that Set to decide whether a later ask is a DIFFERENT question, so a key whose candidates
+     were never sent reads as a key that was tried and found nothing, and the service is not re-swept when
+     the person widens the origin. That is the opposite of what a `decline` promises: safe-fetch.js says the
+     flow "stays PARKED and fires the day the origin is widened", and this path instead records a terminal
+     negative that widening does not reopen. WHAT THE NEXT DIFF BUILDS: a third status beside `pending` and
+     `not_found` — a DECLINED record carrying these tokens, with lib/response-decode.js's re-ask gate
+     reading it as an ask that never happened rather than as one that came up empty. It is two files because
+     the record and its only reader are in two files, and landing the producer alone would be a field with
+     no reader. HOW ITS ABSENCE WOULD SHOW, as an OBSERVATION and never as an instance: an origin widened
+     from the popup after a first sweep, on which no discovery document is ever fetched for a service the
+     first sweep touched, while a service first seen AFTER the widening fetches one from the same host. */
+  {
+    const _tok = Object.keys(declined);
+    if (_tok.length !== 0)
+      console.warn("[discovery] " + service + " — this zone DECLINED " +
+                   _tok.reduce((n, k) => n + declined[k], 0) + " of its discovery candidate(s): " +
+                   _tok.map((k) => k + " x" + declined[k]).join(", ") +
+                   ". The addresses were derived and are NOT reported as absent by this line; what follows " +
+                   "is what the candidates this zone did ask returned");
+  }
   // All keys (including null) failed.
   // FALLBACK: Try req2proto probing if we have a seed URL.
   const currentStatus = tab.discoveryDocs.get(service);
