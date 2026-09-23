@@ -33,15 +33,34 @@
  * whose value is compatible with cross-origin isolation" — which is precisely what §7.1.3's
  * `same-origin-plus-COEP` value means (core/frame/opener_policy.h).
  *
- * THE `concrete` ARM IS UNREACHABLE IN THIS BUILD AND THAT IS CHECKABLE, NOT A HEDGE. `same-origin-plus-COEP`
- * is produced only when the SAME response carries a `Cross-Origin-Embedder-Policy` compatible with cross-origin
- * isolation (§7.1.3 step 4.1, core/frame/opener_policy.c), and core/frame/navigation_params.c already CRASHES
- * on exactly that predicate over exactly that header list — §7.1.7's policy container has nowhere to carry an
- * embedder policy yet. So every response this build can process reaches here with `none`, by construction and
- * not by luck, and the day the container travels as a container that crash goes and this arm becomes live.
- * WHAT MUST BE SETTLED BEFORE IT DOES: a CHILD instance's group is its PARENT's — a child navigable never
- * leaves its creator's browsing context group — so a cross-origin child provisioned as its own WASM instance
- * must be created with the GROUP's mode and not with the mode its own response would imply (§7.4.5 obtains an
+ * THIS ENTRY SAID THE `concrete` ARM WAS UNREACHABLE IN THIS BUILD, AND THE CRASH IT RESTED ON IS GONE. It
+ * read: "`same-origin-plus-COEP` is produced only when the SAME response carries a
+ * `Cross-Origin-Embedder-Policy` compatible with cross-origin isolation (§7.1.3 step 4.1,
+ * core/frame/opener_policy.c), and core/frame/navigation_params.c already CRASHES on exactly that predicate
+ * over exactly that header list — §7.1.7's policy container has nowhere to carry an embedder policy yet."
+ * The first clause is still exactly right and is why the rest is rewritten rather than deleted: a reader who
+ * re-derives the arm's reachability from §7.1.3 step 4.1 alone will re-add the crash clause with it.
+ * WHAT IS FALSE IS THE CLAIM ABOUT THIS TREE, WHICH IS THE HALF NO INSTRUMENT HERE CAN SEE — a header naming
+ * ANOTHER FILE as crashing is a `DFAIL`'s failure mode arriving in prose, and it goes wrong in the direction
+ * that argues for BUILDING what already exists. Read at the files rather than recalled:
+ * core/frame/navigation_params.c calls `embedder_policy_obtain` and its only assert is a pointer check, and
+ * its own comment at the §7.1.3 line records that this line "stood beside a crash saying so";
+ * core/frame/policy_container.h carries the embedder policy as a REQUIRED item (`SerializedEmbedderPolicy
+ * embedder`, with `policy_container_embedder` to read it back); and core/frame/opener_policy.c produces
+ * `OPENER_POLICY_SAME_ORIGIN_PLUS_COEP` on both of §7.1.3's arms. So the sentence "every response this build
+ * can process reaches here with `none`, by construction" is no longer true by construction.
+ * WHAT REPLACES IT IS A QUESTION AND NOT A SECOND CLAIM. Whether a response in this tree REACHES `concrete`
+ * is a fact about a RUN, and nothing here has ever run one: engine/wpt.mjs now lists
+ * `html/cross-origin-embedder-policy`, which is the first oracle this chain has had, and that row says in its
+ * own words that its first figure is a FLOOR OF FAILURES rather than a defect list. Until it has run, the
+ * honest state is that the arm is LIVE and UNOBSERVED — which is a different thing from unreachable and takes
+ * different work.
+ * RETIREMENT: this record goes when a run has read this mode on a response carrying both headers, because the
+ * arm's reachability is then a measurement rather than either of the two sentences above.
+ * WHAT A CHILD INSTANCE STILL OWES, WHICH THAT RUN WILL NOT ANSWER: a CHILD instance's group is its PARENT's
+ * — a child navigable never leaves its creator's browsing context group — so a cross-origin child
+ * provisioned as its own WASM instance must be created with the GROUP's mode and not with the mode its own
+ * response would imply (HTML §7.4.5 "Populating a session history entry" obtains an
  * opener policy only for a top-level traversable, and a child's is `unsafe-none` whatever it sent). The
  * trusted zone already routes on group identity (`eng.groupId` in extension/bridge.js), so the mode is a fact
  * it can state; nothing states it today, which is why this note is here and not a comment about a value.

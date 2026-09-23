@@ -1161,6 +1161,78 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       NOTHING IS PREDICTED HERE ABOUT WHAT ANY OF THE 267 SCORES. */
                    "html/semantics/forms/the-input-element", "html/semantics/forms/the-select-element",
                    "html/semantics/forms/form-submission-0",
+                   /* HTML §7.1.4 "Cross-origin embedder policies", SHIPPED END TO END AND JUDGED BY
+                      NOTHING. This engine reads `Cross-Origin-Embedder-Policy` and its report-only sibling
+                      at core/frame/embedder_policy.c, through core/fetch/structured_fields.c's item parse;
+                      carries the result as HTML §7.1.7 "Policy containers"' container ITEM
+                      (core/frame/policy_container.h's `embedder` field and its `policy_container_embedder`
+                      accessor); turns it into HTML §7.1.3 "Cross-origin opener policies"'
+                      `same-origin-plus-COEP` at core/frame/opener_policy.c; and ends at
+                      HTML §7.3.2.3 "Groupings of browsing contexts"' cross-origin isolation mode
+                      (core/frame/browsing_context_group.h) and HTML §8.1.7.1 "Definitions"'
+                      `crossOriginIsolated`, which core/frame/agent_cluster.c INSTALLS as an accessor. Every
+                      one of those was read AT THE FILE rather than matched on a name, which is the check the
+                      row below records a previous reading of this tree getting wrong in the other direction.
+                      Not one line of that chain has ever met an oracle: before this entry
+                      `git grep -ci cross-origin-embedder-policy engine/wpt.mjs` answered 0, with an invented
+                      control answering 0 beside it.
+                      IT IS WORTH A ROW FOR A REASON THE CONFORMANCE ROWS ABOVE DO NOT HAVE. The isolation
+                      mode is what decides `crossOriginIsolated`, which core/frame/agent_cluster.h names as a
+                      value a page READS and a flow forks on, and it is the same bit SECURITY.md's own
+                      per-instance key is stated against — so a wrong answer here is not only a divergence
+                      from a browser, it is a fork this engine takes or fails to take. A component with a
+                      consumer that deep and no oracle at all is CLAUDE.md's
+                      ships-a-component-and-nothing-judges-it, which is a FINDING rather than a gap.
+                      IT COSTS 153 BLOBS AND 258718 BYTES AT THE PINNED REVISION. Re-price with
+                        git -C engine/.work/wpt ls-tree -r -l <rev> -- html/cross-origin-embedder-policy \
+                          | awk '{n++;b+=$4} END{print n,b}'
+                      IT MUST BE A WPT_PATHS ENTRY AND NOT A WPT_OWN_LEVEL ONE, and it drags NO new own
+                      level: `/html/` is already a cone directory with its subdirectories excluded, so cone
+                      mode materializes THIS subtree and no ancestor that was not already on disk. The stray
+                      census is therefore unmoved BY CONSTRUCTION rather than by measurement, which is the
+                      property a leaf row has and a `resources` row does not.
+                      EVERY DECLARED FIXTURE RESOLVES INSIDE THE CONE THIS ROW JOINS, checked BEFORE the row
+                      went in rather than after: 248 declared references over this directory's `.html` and
+                      `.js` files, 14 distinct targets, ZERO outside cone+subtree. `/common/` (including
+                      `common/dispatcher/`), `/resources/` and
+                      `service-workers/service-worker/resources/` are the three it reaches outside itself and
+                      all three are listed above. Re-derive with
+                        for p in $(git -C engine/.work/wpt ls-tree -r --name-only <rev> -- \
+                                   html/cross-origin-embedder-policy | grep -E '\.(html|js)$'); do \
+                          git -C engine/.work/wpt show <rev>:$p | grep -oE \
+                          '(// META: script=[^ ]*|<script[^>]+src="[^"]*")'; done | sort | uniq -c
+                      THAT ZERO IS A FLOOR AND IT SAYS SO, for the same reason the row below states: it sees
+                      a `<script src>` element and a `// META: script=` line and nothing else, so a helper a
+                      test reaches by a runtime `fetch()`, an `<iframe src>`, a WORKER CONSTRUCTOR or a
+                      `?pipe=` handler is outside what it can look at — and this directory reaches for all
+                      four, which makes the floor looser here than at any row above.
+                      `service-workers/service-worker/resources/test-helpers.sub.js`, named by 18 of these
+                      files, is the one already-known hazard and it is RETIRED: it answered HTTP 500 until
+                      engine/wptserve.py declared `wss`, which that file records at its own site.
+                      WHAT THE COLLECTOR TAKES IS NOT STATED HERE, because the classifier cannot be run
+                      against a directory that is not on disk and this entry was written before one existed.
+                      A NAME CONVENTION IS A FLOOR AND NOT A CLASSIFICATION — WPT decides a test document by
+                      what it LOADS — so the number is taken the way every other row's is,
+                        python3 engine/wpt_classify.py engine/.work/wpt
+                      run before and after this entry, and the DIFF of the two listings is what this row
+                      contributes. The 153 above is a BLOB count and is not that number.
+                      NOTHING IS PREDICTED HERE ABOUT WHAT ANY OF IT SCORES, AND THE FIRST RUN'S FIGURE IS A
+                      FLOOR OF FAILURES RATHER THAN A DEFECT LIST. Not one of these files has ever run in
+                      this tree; HTML §7.1.4.2 "Embedder policy checks"' reporting half is a NAMED RESIDUAL
+                      rather than a built mechanism — core/frame/embedder_policy.c names the observable, which
+                      is Reporting API §3.4.1 "Generate report of type with data";
+                      and whether HTML §7.3.2.3's `concrete` arm is REACHED is a question a run answers
+                      and this comment does not. THE ONE FAILURE THIS ENTRY CAN HAVE is a first run read as a
+                      REGRESSION, and it is read as the first measurement of a component that had none.
+                      ITS TWO SIBLINGS ARE NOT THE SAME DECISION AND ARE NAMED SO THEY ARE NOT SWEPT IN WITH
+                      IT. `html/cross-origin-opener-policy` (192 blobs) has a component too —
+                      core/frame/opener_policy.c — and is a row somebody should write, after resolving its
+                      fixtures the way this one's were; it is left out because two unrun rows at once produce
+                      a failure count with no name in it. `fetch/cross-origin-resource-policy` (17 blobs) is
+                      the opposite case and must NOT be added: `git grep -ic cross-origin-resource-policy
+                      -- 'engine/host/**'` answers 0 against a COEP control of 13, so there is no component
+                      there and widening into it buys refusals this engine already gives honestly. */
+                   "html/cross-origin-embedder-policy",
                    /* THE TWO STANDARDS THAT DECIDE AN `@S` VERDICT, AND WHICH NOTHING IN THIS TREE HAS EVER
                       JUDGED. Every other row here buys CONFORMANCE: a wrong answer is a divergence from a
                       browser. These two buy something else, and CLAUDE.md §@S names it in one line -- a PoC
@@ -1200,9 +1272,17 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       sent, so the guard was an assert over a stranger's bytes, and §5.5 gates only the report
                       POST on `report-uri`/`report-to` while firing the `securitypolicyviolation` event
                       unconditionally — so it was also silent about the endpoint-free policies that owe an
-                      event just the same. FIFTEEN files under this row serve an ENFORCE
-                      `Content-Security-Policy` carrying one of those two directives at the pinned revision,
-                      and `base-uri/report-uri-does-not-respect-base-uri.sub.html` is one of them, which is
+                      event just the same. THIS ENTRY READ `FIFTEEN FILES` AND THE COMMAND BELOW ANSWERS 47,
+                      recorded rather than quietly corrected because the count is the half a reader quotes
+                      onward and the command is the half they were told to run: the abort surface those two
+                      asserts covered was THREE TIMES what this entry claimed. Four narrower readings were
+                      tried and none is fifteen — `report-to` alone 14, `report-uri` alone 35, excluding
+                      `support`/`resources` 41, the non-`.sub.headers` half 0 — so it was wrong WHEN WRITTEN
+                      rather than a different question asked, which is a fact about how it was derived and
+                      not about the corpus, since a count over a PINNED revision cannot go stale.
+                      RETIREMENT: this record goes when no count in this entry stands beside a command that
+                      answers differently.
+                      `base-uri/report-uri-does-not-respect-base-uri.sub.html` is one of the 47, which is
                       the second site's own subject. Re-derive with
                         for p in $(git -C engine/.work/wpt ls-tree -r --name-only <rev> -- \
                                    content-security-policy | grep \.headers$); do \
