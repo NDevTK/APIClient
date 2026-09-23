@@ -4388,9 +4388,72 @@ long flow_branch_born(const Flow *f) {
     return f->acct->branch->sub_born;
 }
 
-/* EVERY TERM OF THE WEIGHT THAT IS A READING OF **THIS MEMBER** — the key an index over this frontier would
-   be built on, and the quantity whose invariance between two frontier generations is the precondition of
-   every sub-linear order anybody can propose here. flow_weight is the family's coordinate plus this member's
+/* THE HALF OF THAT KEY AN INDEX MAY ACTUALLY BE KEYED ON — every summand of the member half that is a reading
+   of THIS MEMBER and of nothing this member SHARES, which is a strictly smaller set than the member half
+   itself, and the difference is the whole of what an index's UPDATE COST is decided by.
+   TWO BLOCKS OF THIS FILE DISAGREED ABOUT flow_branch_bonus AND THIS SAYS WHICH ONE IS RIGHT. The banner below
+   opened "EVERY TERM OF THE WEIGHT THAT IS A READING OF **THIS MEMBER** — the key an index over this frontier
+   would be built on" and then summed flow_branch_bonus, which is `1.0 / sub_born` read through
+   `f->acct->branch` — ONE POINTER SHARED BY EVERY LIVE ARM OF THAT BUCKET, which is the exact property that
+   same sentence uses to exclude acct_family_val and the family notch. flow_pick's banner says the opposite in
+   as many words: the branch term "is neither", the `br->sub_born++` at the fork "raises it for the bucket the
+   arm JOINS, and every live member of that bucket changes weight in that one statement", so an index that
+   bakes it into a per-member key "pays O(live members of the bucket) PER FORK" and it "is carried as a
+   per-BUCKET OFFSET read at query time or the index is not sub-linear". Five hundred lines apart, and a reader
+   reaching the key's own banner last keys an index on the quantity the other block forbids — which is the cost
+   MOVED rather than removed, on exactly the forking page an index is wanted for.
+   THE PARTITION IS THREE-WAY AND WAS BEING SPELLED AS TWO, and it is by SCOPE rather than by arrival door:
+   acct_family_val and the family notch are per-ACCOUNT, flow_branch_bonus is per-BUCKET, and the own notch,
+   the optimism and the fitness distance are per-MEMBER — `f->cpu` against its family's `emit_gen`, `f->visits`,
+   and `f->cand_replay`/`cand_surv`/`cand_rung`, no one of which any other member can move. flow_pick's banner
+   already names those three groups in prose; this is that sentence written as code, so the two cannot come to
+   disagree again.
+   IT IS A SUBEXPRESSION AND NOT A RE-ASSOCIATION, WHICH IS THE WHOLE REASON IT IS WORTH LANDING. C evaluates
+   `A + B + C + D` as `((A + B) + C) + D`, so the member key's first three summands ARE this expression and the
+   function below is now literally this value plus the bucket term. A candidate set keyed HERE, with
+   flow_branch_bonus applied as a per-bucket offset at query time, therefore reproduces flow_member_key EXACTLY
+   — bit for bit, not to within a last bit, which is the difference between a check that can be exact and the
+   tolerance this file refuses everywhere. solver/flow.h's FlowIndexChecks names the re-association standing
+   between this frontier and a sub-linear order; this removes the one that is FREE, and leaves flow_weight's
+   own member half not being a subexpression of IT exactly where it was, because that one is an ORDER change in
+   the last bit and is a decision rather than a diff.
+   THE ONE WAY THE IDENTITY COULD FAIL IS EXCESS PRECISION, AND IT IS GUARDED RATHER THAN ARGUED. A host whose
+   FLT_EVAL_METHOD is 2 evaluates doubles wider than binary64 and ROUNDS at a return, so the call boundary this
+   introduces would be a rounding the flat spelling does not make. Both hosts this project builds for are
+   binary64 throughout; the DCHECK below is what says so on the day one is not — loudly, rather than by
+   reordering two members the order currently ties.
+   ONE CONSUMER, AND THAT IS NOT THE PRODUCER-WITH-NO-READER SHAPE: this is a NAMED SUBEXPRESSION of the
+   function directly beneath it and not a stored field, so there is no value here that could go unread.
+   IT IS NOT A TERM AND NOTHING RANKS BY IT, for flow_member_key's own reason and with nothing added: flow_weight
+   is untouched by this, and so is every number it returns.
+   NAMED RESIDUAL — THE OFFSET IS NAMED AND NOT CARRIED. NOT COVERED: nothing in this engine holds a per-bucket
+   offset, so no ask is answered from this key and flow_pick still walks every member. WHAT THE NEXT DIFF
+   BUILDS: that offset on FlowAcct beside `sub_born`, maintained on the statement that maintains `sub_born`, so
+   a bucket's contribution is read once per BUCKET at query time instead of once per member. HOW ITS ABSENCE
+   WOULD SHOW: `scanNextWeights` divided by `scanNextRuns` on any @WFQ census stands at the size of the
+   frontier itself, which is what an ask that walks reads and what an ask answered from an index cannot.
+   RETIREMENT: this record goes when flow_member_key cannot be written without naming the scope each of its
+   summands is read at — a term added to it that lands in neither this function nor an explicit bucket offset
+   being a compile error rather than a sentence here. */
+static double flow_index_key(const Flow *f) {
+    return -(double)flow_service_notch(f) * FLOW_AGE_QUANTUM
+           + flow_optimism(f) + flow_distance(f);
+}
+
+/* EVERY TERM OF THE WEIGHT THAT IS NOT THE FAMILY'S — the quantity whose invariance between two frontier
+   generations is the precondition of every sub-linear order anybody can propose here, and NOT the key such an
+   order may be KEYED on, which is flow_index_key directly above.
+   THIS BANNER OPENED "EVERY TERM OF THE WEIGHT THAT IS A READING OF **THIS MEMBER** — the key an index over
+   this frontier would be built on", AND IS REWRITTEN RATHER THAN DELETED BECAUSE THAT IS THE SENTENCE A READER
+   RE-DERIVES. It follows from the stability walk and only from it: the walk must stamp EVERYTHING that can
+   move, so the composition the walk needs is the composition a reader will go on calling the key. It was false
+   of flow_branch_bonus, and flow_index_key's banner says how and what it costs.
+   ONE QUANTITY, TWO QUESTIONS, AND THE STRICTER ONE DECIDES THE COMPOSITION — which is why the looser one was
+   answered wrongly in silence. What must STAND STILL between two generations is THIS, the bucket term
+   included, or flow_pick's walk goes blind to a fork re-ranking a whole arm at once; what an index may be
+   KEYED on is flow_index_key, the bucket term EXCLUDED, or that index pays O(live members of the bucket) per
+   fork. The split is two functions over ONE composition rather than two compositions free to disagree.
+   flow_weight is the family's coordinate plus this member's
    minus a carry bit: the reward and the family's aging notch are read through ONE pointer by every arm of a
    family, so they are a COMMON OFFSET that orders nothing within one — and a real page's whole frontier is one
    family — while flow_silence_phase decomposes the carry out as a single bit against a threshold that is the
@@ -4412,8 +4475,32 @@ long flow_branch_born(const Flow *f) {
    MENTIONED ONLY INSIDE DCHECK CONDITIONS, so release neither calls it nor emits it — the shape acct_vt_leads
    and flow_is_min_weight already establish in this file. */
 static double flow_member_key(const Flow *f) {
-    return -(double)flow_service_notch(f) * FLOW_AGE_QUANTUM
-           + flow_optimism(f) + flow_distance(f) + flow_branch_bonus(f);
+    /* THE BUCKET TERM IS THE LAST SUMMAND, AND THAT IS WHAT MAKES THE SPLIT EXACT rather than a
+       re-association: `A + B + C + D` is `((A + B) + C) + D`, so flow_index_key IS this expression's first
+       three summands and this is that value plus the fourth, bit for bit. */
+    double k = flow_index_key(f) + flow_branch_bonus(f);
+    /* THE FLAT SPELLING IS KEPT AS THE OTHER SIDE, WHICH IS WHAT MAKES THIS A CHECK AND NOT A TAUTOLOGY: the
+       two are maintained by two statements, so a fifth summand reaching one and not the other fires here, and
+       so does a host that evaluates doubles wider than binary64 and therefore rounds at the call boundary
+       above.
+       A NEW MEMBER-HALF TERM GOES AT THE END OF flow_index_key AND A NEW BUCKET TERM AFTER THIS ONE, which is
+       the only pair of placements under which both sides go on associating the same way. It is stated here
+       because this guard is what enforces it, and a reader meeting a fire needs to know which end to add to
+       rather than to conclude that the split is unsound.
+       IT IS A SECOND EVALUATION OF THE MEMBER HALF PER CALL, so in a dev build flow_pick's per-member stamp
+       now pays this key twice where it paid it once. That is the class flow_pick already prices for the stamp
+       itself, and it is named here rather than left to be rediscovered, because the sentence that prices a
+       guard is what a reader deciding whether the guard is affordable reads. In release the condition is a
+       `sizeof` and neither side is evaluated at all. */
+    DCHECK(k == -(double)flow_service_notch(f) * FLOW_AGE_QUANTUM
+                + flow_optimism(f) + flow_distance(f) + flow_branch_bonus(f),
+           "the member half of the WFQ's weight is no longer its per-member half plus its bucket term — the "
+           "two spellings associate identically by construction, so a difference is a summand that reached "
+           "one of them and not the other, or a host evaluating doubles wider than binary64 and rounding at "
+           "the return from flow_index_key. Every claim that a candidate set may be taken from the per-member "
+           "key with the bucket applied as a query-time offset rests on this being EXACT rather than close, "
+           "and an index built on a key that is merely close reorders two members this order ties");
+    return k;
 }
 
 #if APICLIENT_DEV
