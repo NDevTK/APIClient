@@ -14160,22 +14160,58 @@ static int engine_sched_slice(void) {
         DCHECK(flow_job_pending(flow_at(i)) == 0,
                "the frontier was declared exhausted while a live flow still held queued jobs — its promise "
                "reactions, timer callbacks and delivered messages die with the session");
+        /* THE OWED-ANSWER ASSERT THAT STOOD HERE IS GONE, AND WHAT RETIRED IT IS THE PARK AT THE FOOT OF THIS
+           FUNCTION RATHER THAN ANYBODY DISAGREEING WITH IT. Its text read "the frontier was declared exhausted
+           while a live flow still owed a peer the answer to a cross-agent operation … this session is about to
+           end without ever telling it anything", and every word of that was true while this exit DROPPED its
+           survivors — which is exactly what engine_park_frontier's own banner below says of the state it ended
+           ("A SESSION THAT CLOSES OVER LIVE MEMBERS WRITES THEM DOWN FIRST, and until this line it did not").
+           IT IS NOT TRUE IN ANY STATE THIS LOOP CAN RUN IN, which is stronger than saying it went stale. The
+           loop iterates flow_count() times and the park below is gated on flow_count() > 0, so a body that
+           executes at all is a body whose park runs — and engine_retract_operations is the FIRST thing that
+           park does, unconditionally and ahead of cold_park, clearing BOTH disjuncts of flow_owes_answer for
+           every flow and emitting `remoteop.retracted` for every token that no staying member still holds. The
+           peer IS told, so the assert's own stated harm was false in one hundred per cent of the states it
+           could fire in — the concession tell (§Offensive-programming) arriving as a claim about the
+           continuation rather than about the case.
+           AND THE OBLIGATION IS ASSERTED TWICE MORE, both times AFTER the repair rather than in front of it:
+           engine_retract_span's own postcondition ("disjuncts of flow_owes_answer are addressed above"), and
+           cold_park_flow's pair over the arrival slot and the program's row. This line was the only one of the
+           three standing BEFORE the hand-back, which is why it was the only one that could abort a correct
+           session; deleting it loses no coverage and removes the copy that cannot be right.
+           WHAT WAS PROPOSED INSTEAD, RECORDED BECAUSE THE NEXT READER WILL RE-DERIVE IT AND BOTH ARMS ARE
+           WRONG: move the assert below engine_park_frontier — which is a fourth copy of a predicate already
+           asserted at its producer AND at its consumer — or scope it to the flow_count() == 0 arm, where this
+           loop iterates ZERO times and the assert becomes one whose two sides cannot disagree. The remedy half
+           of that reasoning was a hypothesis and its order half was evidence; only the order half held.
+           RESIDUAL — THE TWO ASSERTS THIS LOOP STILL CARRIES REST ON THE SAME RETIRED PREMISE AND ARE NOT SWEPT
+           WITH IT, because what stands downstream of them is not the same thing. NOT COVERED: `flow_job_pending
+           == 0` forbids a state cold_park_flow's own banner argues at length is CORRECT (a job the replay
+           re-causes rides the recipe; only flow_job_external is refused there), and `flow_deliver_pending == 0`
+           forbids a state the park REPAIRS by writing an 'm' record per delivery — but only when the park is
+           TAKEN, and cold_park has a declining arm. NEXT DIFF: settle whether the `zero == 0` conservation
+           assert further down still holds without this walk, since its banner cites "the walk above asserts no
+           live flow holds one" as its premise, then move both below the park gated on the decline
+           engine_frontier_paged() already names. ABSENCE SHOWS: a session whose members hold replay-caused
+           jobs, or a peer's message the park would have written, aborts at this loop instead of parking.
+           AND THE NOTE DIRECTLY BELOW IS NOW ADJACENT TO ITS OWN SUBJECT, which it was not before: it is about
+           a ROUTED RECORD and it sat above the owed-answer assert, one declaration too high, so a reader
+           scanning the loop bound it to the wrong line. A comment binds by POSITION and by nothing else, and
+           an assert inserted between a note and the thing it describes re-points it silently. */
         /* AND THE SAME RULE FOR A ROUTED RECORD, which is a work item exactly as a job is. flow_finish asserts
            it for the flow that RUNS OUT of work; a flow that leaves this loop alive (every member host-owed, so
            none is pickable) had nothing checking it, and the record then dies in flow_registry_free — the
            peer's message, dropped, indistinguishable from a page that registered no handler. A flow suspended
            inside a live frame is the shape that reaches here holding one: the delivery is made only where
            flow_step has no frame, so if this fires, the enqueue belongs earlier than that branch. */
-        DCHECK(!flow_owes_answer(flow_at(i)),
-               "the frontier was declared exhausted while a live flow still owed a peer the answer to a "
-               "cross-agent operation — the asking flow, in another instance, is suspended at the line that "
-               "asked and this session is about to end without ever telling it anything");
         DCHECK(flow_deliver_pending(flow_at(i)) == 0,
                "the frontier was declared exhausted while a live flow still held routed records — a peer's "
                "message this document never received, dropped with the session");
     }
-    /* AND THE CONSERVATION LAW OVER THE DELIVERIES THAT DID BECOME TASKS. The four asserts above are each about
-       ONE queue at ONE moment; this is the only line that can say the queued §9.3.3 tasks all reached an end,
+    /* AND THE CONSERVATION LAW OVER THE DELIVERIES THAT DID BECOME TASKS. The THREE asserts above are each about
+       ONE queue at ONE moment — it read FOUR until the owed-answer assert above was retired, and the count is
+       stated here rather than silently renumbered so a reader re-deriving it does not put the fourth back;
+       this is the only line that can say the queued §9.3.3 tasks all reached an end,
        because a task's end is a fact about a run and not about a queue. flow_deliver asserts the delivery
        became exactly one task (§9.3.3 step 8 queues one global task, singular); nothing asserted that the task
        RUNS, and a task that never ran leaves the page unable to tell a message it did not get from one that was
@@ -14198,7 +14234,7 @@ static int engine_sched_slice(void) {
         (void)sum;
     }
     /* …AND THE CONSERVATION LAW ONE LEVEL UP, WHICH IS ABOUT RECORDS AND NOT ABOUT TASKS. Everything above is
-       per (record, TIMELINE) attachment: the four asserts are each about one queue, and the inequality beside
+       per (record, TIMELINE) attachment: the three asserts are each about one queue, and the inequality beside
        them compares two counts of attachments. NONE of them can say whether some ONE record was admitted by no
        timeline at all — one record admitted by N timelines pays for N-1 records admitted by none, so a
        shortfall in any of those sums names a loss when it fires and establishes nothing when it does not.
