@@ -32,6 +32,12 @@ const fs = require("fs");
 const puppeteer = require("puppeteer");
 const { artifactStamp } = require("./artifact_stamp.js");
 const { absentPair } = require("./absent_census.js");
+/* WHAT KIND EACH CENSUS ROW IS, ASKED OF THE PRODUCER THAT EMITS IT. The six lists below used to answer
+   TWO questions with one array — WHICH ROWS THIS DRIVER CARRIES and WHAT KIND EACH IS — and only the
+   first of those is this file's to answer. The curation is a driver's own and is deliberately a SUBSET
+   (the `census()` banner refuses to take everything, in as many words); the KIND is a fact only the
+   composer can state, and until this it was stated in no artifact at all. */
+const { kindsOf } = require("./census_rows.js");
 
 const LOCK_FILE = process.env.HARNESS_LOCK
   ? path.resolve(process.env.HARNESS_LOCK) : path.join(__dirname, "harness.lock");
@@ -361,7 +367,7 @@ const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "u
    own `absentPair` reader exists to avoid.
    RETIREMENT: this note goes when result.c states each @COLD row's kind beside it and these three lists are
    derived from that, because the question it answers can then be asked of the producer. */
-const CENSUS_LIFETIME = ["stepUnitRuns", "stepUnitOverruns"];
+const COLD_STEP_UNITS = ["stepUnitRuns", "stepUnitOverruns"];
 /* …AND THE REPLY DOOR'S ONE LEVEL, FILED WITH THE GAUGES AND NOT WITH ITS OWN THREE SIBLINGS, which is the
    whole reason this driver splits the two lists: `replyOutstanding` is the count of records the host may still
    be shown AT THE INSTANT the census was composed, so it may FALL and differencing it reads a level as a rate.
@@ -378,7 +384,7 @@ const CENSUS_LIFETIME = ["stepUnitRuns", "stepUnitOverruns"];
    per MEMBER at the instant the census was composed, so a fork copies its parent's rows into the count and a
    sold member takes its rows out of it — it may FALL, and no inequality against the seed's arm holds in
    either direction. */
-const CENSUS_GAUGE = ["stepUnits", "programCursors", "replyOutstanding", "rowsAwaitingBytes"];
+const COLD_FRONTIER = ["stepUnits", "programCursors", "replyOutstanding", "rowsAwaitingBytes"];
 /* …AND THE CONSTANT IT IS READ AGAINST, WHICH IS NEITHER OF THE TWO KINDS EVERY OTHER LIST HERE STATES.
    solver/engine.c writes both arms at the ONE line `rootPrograms` is written and never again, because the pair
    is a DENOMINATOR — a fact about what the DOCUMENT owed the reply door when its rows were laid down — so it
@@ -396,10 +402,10 @@ const CENSUS_GAUGE = ["stepUnits", "programCursors", "replyOutstanding", "rowsAw
    frontier stood at cursor 7 of `rootPrograms 35`. Both halves were on the engine's census the whole time and
    neither was on this driver's row.
    RETIREMENT: this list goes when result.c states each @COLD row's KIND beside it and the three lists here are
-   derived from that, which is the same condition the note above CENSUS_LIFETIME already carries — a third
+   derived from that, which is the same condition the note above COLD_STEP_UNITS already carries — a third
    hand-kept list is a third copy of a fact only the producer's header states, and adding one is what makes
    that condition worth more rather than less. */
-const CENSUS_CONSTANT = ["rootProgramsHeldAtSeed", "rootProgramsAwaitedAtSeed"];
+const COLD_SEED = ["rootProgramsHeldAtSeed", "rootProgramsAwaitedAtSeed"];
 /* AND WHAT THE JOB BACKLOG IS WAITING ON — solver/flow.h's split, off `wfq` rather than `cold`. This
    driver already carries `jobsQueued`/`jobsRun`/`unitsDone` in COUNTERS and those cannot name a component:
    a queued job waits on the HOST (`jobsOwed`), on its member finishing its own program (`jobsFramed`, HTML
@@ -450,7 +456,7 @@ const WFQ_JOB_SPLIT = ["jobsReady", "jobsFramed", "jobsOwed", "jobWGap", "jobsRe
    GATED ON `live` WITH ITS NEIGHBOURS EVEN THOUGH IT IS NOT A READING OF THE WALK, because solver/result.c
    composes `{members: 0}` with NO term rows at all: on an empty frontier the row is absent from the document
    and `null` is the honest answer, never 0. */
-const WFQ_LIFETIME = ["unframedPicksLifetime"];
+const WFQ_PICKS = ["unframedPicksLifetime"];
 /* THE OWED-GLOBALS PAIR, NAMED HERE SO THE KIND LINE CANNOT DRIFT FROM THE ROWS. Both are LIFETIME
    counts over the agent's life — solver/absent.c raises them per read and zeroes them only when the
    agent goes — so they are differenceable, unlike the gauges beside them. The names are this list and
@@ -458,6 +464,19 @@ const WFQ_LIFETIME = ["unframedPicksLifetime"];
    statement that does not cover it, which is the §a-quantity-whose-kind-you-cannot-name defect wearing
    a header. */
 const ABSENT_ROWS = ["absentAsked", "absentOwed"];
+/* THE TWO CURATED SETS, AND THE KIND OF EVERY MEMBER TAKEN FROM THE COMPOSER RATHER THAN FROM THEIR NAMES.
+   The lists above are this driver's CURATION — which rows it carries and why, one group per question they
+   answer — and that is the half no derivation may take over: `result_cold_json` publishes 124 rows against
+   the 56 here and `result_wfq_json` 107 against 9, and a driver that took everything would be a second
+   copy of the popup. What is derived is the KIND, which is the half that was a second copy: four of these
+   arrays were NAMED for a kind, so each was a statement about the producer kept by hand at a consumer, and
+   the row that made the case landed with a kind stated in no artifact anywhere. They are named for their
+   SUBJECT now, and `census_rows.js` reads the kind off the composer that emits the row.
+   A CARRIED ROW WITH NO DECLARED KIND THROWS AT STARTUP AND NAMES ITSELF, which is the whole gain: adding
+   a row here without stating its kind at the producer is a loud failure where it used to be a silent one.
+   `members` IS THE COMPOSER'S SPELLING AND `wfqMembers` IS THIS DRIVER'S, which is why the alias is stated
+   rather than guessed either way round — the kind is asked under the name the producer emits and the
+   header prints the name a reader will meet in the output. */
 const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered",
   /* AND THE OTHER THREE ENDS OF THE REPLY DOOR, WITHOUT WHICH `replyAsked - replyAnswered` IS A NUMBER WITH
      THREE READINGS THAT TAKE OPPOSITE WORK. A record ends answered, REFUSED by this tool's own egress policy,
@@ -515,7 +534,7 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      UPPER BOUND on a mean overrun rather than one, exact only where every turn overran — which is the shape
      of this document's real-page runs and is why the error has never shown. The count alone still cannot
      tell a turn 1.2x past the slice from one 7400x past it, and what prices an overrun without borrowing a
-     non-overrunning turn's time is `stepUnitOverruns` in CENSUS_LIFETIME above — the per-arm histogram
+     non-overrunning turn's time is `stepUnitOverruns` in COLD_STEP_UNITS above — the per-arm histogram
      solver/engine.c raises on the overrun line itself and asserts against `sliceOverruns` there. Read that
      against `stepUnitRuns` arm by arm; read `sliceUs` against `steps`, which is the population it is over.
      RETIREMENT: this correction goes when no reading in this file divides a whole-population accumulator by
@@ -569,7 +588,7 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      arms that change framedness — a start compiles and leaves framed, a resume ends its frame and leaves
      unframed — and neither bounds the other. MEASURED on gitlab.com/explore, one terminal census: 209 and 210
      respectively, from 285 steps of which 75 descended the ladder.
-     IT IS NOT `unframedPicksLifetime` IN WFQ_LIFETIME EITHER, WHICH IS THE TRAP THE NAMES SET. That one is
+     IT IS NOT `unframedPicksLifetime` IN WFQ_PICKS EITHER, WHICH IS THE TRAP THE NAMES SET. That one is
      raised in flow_credit_pick, whose only caller is the scheduler's `best != cur` block, so it counts
      SWITCH-INS that found an empty JavaScript execution context stack — a member switched in framed that
      unframes later is a descent this row sees and that one does not. Same page, same census: 3 against 75.
@@ -734,6 +753,10 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
   "epXhrAskBeganLife", "epXhrAskPlacedLife", "epXhrAskOfferedLife",
   "epXhrOutFreedLife", "epXhrOutFreedPlacedLife", "epXhrOutDiedAtLife"];
 
+const COLD_ROWS = COLD_STEP_UNITS.concat(COLD_FRONTIER, COLD_SEED, COLD_COUNTERS);
+const WFQ_ROWS = ["members"].concat(WFQ_JOB_SPLIT, WFQ_PICKS);
+const OUT_NAME = { members: "wfqMembers" };
+
 /* WHERE THE FRONTIER STOOD, WHAT ITS STEPS DID, AND WHAT GREW IT — read off the row bridge.js wrote, never
    recomputed. `forkAt` is taken WHOLE and is not truncated to its heaviest rows: it is already a Space-Saving
    table with a bounded row count and it publishes its own understatement bound as a member, so a driver
@@ -742,10 +765,7 @@ function census(r) {
   const o = {};
   o.forkAt = ("forkAt" in r) ? r.forkAt : null;
   const c = ("cold" in r) ? r.cold : null;
-  for (const k of CENSUS_LIFETIME) o[k] = c && (k in c) ? c[k] : null;
-  for (const k of CENSUS_GAUGE) o[k] = c && (k in c) ? c[k] : null;
-  for (const k of CENSUS_CONSTANT) o[k] = c && (k in c) ? c[k] : null;
-  for (const k of COLD_COUNTERS) o[k] = c && (k in c) ? c[k] : null;
+  for (const k of COLD_ROWS) o[k] = c && (k in c) ? c[k] : null;
   /* AND THE RAZOR IS COMPUTED HERE RATHER THAN LEFT TO THE READER, BECAUSE A SUBTRACTION A READER MUST
      PERFORM IS ONE NOBODY PERFORMS. Both halves are already rows above; this is the difference §What-the-tool-
      produces names as the product's own razor — the addresses this run emitted MINUS the ones minted before it
@@ -781,8 +801,7 @@ function census(r) {
   const w = ("wfq" in r) ? r.wfq : null;
   const live = w && typeof w === "object" && w.members > 0;
   o.wfqMembers = w && typeof w.members === "number" ? w.members : null;
-  for (const k of WFQ_JOB_SPLIT) o[k] = live && typeof w[k] === "number" ? w[k] : null;
-  for (const k of WFQ_LIFETIME) o[k] = live && typeof w[k] === "number" ? w[k] : null;
+  for (const k of WFQ_ROWS) if (k !== "members") o[k] = live && typeof w[k] === "number" ? w[k] : null;
   /* AND WHAT THE PAGE ASKED FOR AND DID NOT GET, WHICH IS THE ONE ABSENCE NOTHING ELSE ON THIS ROW CAN
      STATE. Every other column here is the engine reporting what it DID; this is solver/absent.c reporting
      what a document READ that a STANDARD owns and this realm does not answer. CLAUDE.md §NO-STUBS: a page
@@ -1010,11 +1029,29 @@ async function main() {
   const stamp = artifactStamp();
   console.log("# artifact " + JSON.stringify(stamp));
   console.log("# runs=" + runs + " budgetMs=" + budgetMs + " (budget is a BACKSTOP, not the verdict)");
-  /* THE KIND OF EVERY CENSUS ROW, STATED WHERE THE ROWS ARE FILED UNDER IT — §Testing: a quantity whose kind
-     you cannot name FROM ITS OUTPUT is one you are not entitled to do arithmetic on, and the names do not say. */
-  console.log("# frontier.* — LIFETIME (may be differenced): " +
-              CENSUS_LIFETIME.concat(COLD_COUNTERS).concat(WFQ_LIFETIME).concat(ABSENT_ROWS).join(",") +
+  /* THE KIND OF EVERY CENSUS ROW, TAKEN FROM THE COMPOSER THAT EMITS IT — §Testing: a quantity whose kind
+     you cannot name FROM ITS OUTPUT is one you are not entitled to do arithmetic on, and the names do not
+     say. This line used to be composed from four arrays here that were NAMED for a kind, which is a statement
+     about the producer kept by hand at a consumer; it is now composed from the producer's own declaration, so
+     a row whose kind this driver would have had to guess makes it THROW at startup naming that row.
+     A FOURTH KIND APPEARS HERE THAT THE HAND LISTS COULD NOT STATE, AND IT IS THE ONE §Testing RECORDS BEING
+     MISREAD. `deepest`, `completed` and `deepestLeft` were filed with the lifetime counts — true, because a
+     maximum is monotone and may be differenced, and INSUFFICIENT, because a high-water mark SATURATES and
+     then plateaus, so a plateau in one is not a ceiling and it is not comparable across two runs of different
+     length. This file's own banner says that in prose twelve paragraphs up while the line beneath it said
+     LIFETIME; the producer now says MAXIMUM and this prints what the producer says.
+     AND HOW MUCH OF THE CENSUS HAS NO KIND YET IS PRINTED RATHER THAN ARGUED. The declaration is not complete
+     — a kind nobody has determined must not be invented, because a WRONG one licenses the arithmetic a
+     missing one merely fails to authorise — so the count of undeclared rows rides this line and shrinks as
+     the work is done, which is a figure a reader can act on where a sentence about it would rot. */
+  const K = kindsOf(COLD_ROWS.concat(WFQ_ROWS));
+  const show = (names) => names.map((n) => OUT_NAME[n] || n).join(",");
+  console.log("# frontier.* — LIFETIME (may be differenced): " + show(K.byKind.lifetime) + "," +
+              ABSENT_ROWS.join(",") +
               ", and every `forkAt` row" +
+              " | MAXIMA (monotone, so differenceable — but a HIGH-WATER MARK saturates and PLATEAUS, so a" +
+              " plateau is NOT a ceiling and two runs of different length are not comparable on one): " +
+              show(K.byKind.maximum) +
               " | UNITS: replayHits+replayLeftArms are ARMS (decision-vector slots), replayLeft is EVENTS" +
               /* SAID WHERE THE NUMBER IS READ AND NOT ONLY WHERE THE ROW IS FILED, on the clause above's own
                  precedent: a unit and a shape are facts a reader HOLDING the figure needs, and this table is
@@ -1026,14 +1063,16 @@ async function main() {
               " and every stage is emitted including the zeroes). The two edges are NEVER summed: they count" +
               " two machines' states, and epXhr*'s are `send()`'s while its OFFER is raised one machine on" +
               " (epXhrAskPlacedLife and epXhrAskOfferedLife are two populations with no relation asserted)" +
-              " | GAUGES (may FALL; never difference): " +
-              CENSUS_GAUGE.concat(WFQ_JOB_SPLIT).concat(["wfqMembers"]).join(",") +
-              /* A THIRD KIND, STATED BECAUSE A ROW THAT IS NEITHER OF THE TWO ABOVE WOULD OTHERWISE BE READ AS
-                 WHICHEVER LIST A READER'S EYE LANDED ON. These are written once at the seed and never again,
-                 so they may be neither differenced nor read as a level — and `rowsAwaitingBytes` in the gauge
-                 list is the live half they are read against. */
+              " | GAUGES (may FALL; never difference): " + show(K.byKind.gauge) +
+              /* A KIND THAT IS NEITHER OF THE TWO ABOVE, STATED BECAUSE A ROW THAT IS NEITHER WOULD OTHERWISE
+                 BE READ AS WHICHEVER LIST A READER'S EYE LANDED ON. These are written once at the seed and
+                 never again, so they may be neither differenced nor read as a level — and `rowsAwaitingBytes`
+                 in the gauge list is the live half they are read against. */
               " | CONSTANTS (written at seed, never again; neither differenced nor read as a level): " +
-              CENSUS_CONSTANT.join(","));
+              show(K.byKind.constant) +
+              " | " + K.undeclared + " row(s) of these censuses carry NO declared kind and are not carried" +
+              " here; that count is a floor on what a later reader may not do arithmetic on, and it shrinks" +
+              " as the producer states them");
 
   const { browser, extId } = await connect();
   try {

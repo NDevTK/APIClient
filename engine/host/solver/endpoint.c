@@ -2346,6 +2346,52 @@ static void edge_stage_hist(JsonBuf *b, const EndpointEdge *e) {
     json_buf_raw(b, "}");
 }
 
+/* THE KIND OF EVERY ROW THIS COMPOSER PUBLISHES THAT A CONSUMER CARRIES — stated HERE because it is this
+   composer's fact and nowhere else's, and stated in a form a machine reads because a comment stating it is
+   read by nobody holding the number. CLAUDE.md §A-GAUGE-AND-A-LIFETIME-COUNTER: a quantity whose kind a
+   reader cannot name FROM ITS OUTPUT is one they are not entitled to do arithmetic on, and the names do not
+   say. Four kinds and what each permits:
+     lifetime  raised and never lowered — MAY be differenced across two samples of ONE instance.
+     gauge     a walk at one instant — may FALL, so differencing one reads a level as a rate.
+     constant  written once at a seed and never again — neither differenced nor read as a level.
+     maximum   monotone like a count and a HIGH-WATER MARK — it saturates and then plateaus, so a plateau is
+               NOT a ceiling and the length of the series is part of quoting it. Filed apart from `lifetime`
+               for that reason and no other: both may be differenced, and only one may be compared across two
+               runs of different length.
+   IT IS HERE AND NOT AT THE CONSUMER BECAUSE THE PERSON WHO ADDS A ROW IS THE PERSON WHO KNOWS. Every reader
+   of this census used to hold its own kind list, and the row that made the case landed one commit before this
+   one with a kind stated in no artifact at all: the author added it here and had no reason to open a driver
+   two directories away. A declaration at the emitter is edited by the diff that adds the row.
+   IT IS CHECKED IN BOTH DIRECTIONS AND NEITHER SIDE IS DEFAULTED. `testing/census_rows.js` refuses a name
+   here that this composer no longer publishes — a kind statement about a renamed row is a sentence about
+   nothing that a consumer goes on printing — and refuses a row a consumer CARRIES with no kind stated here,
+   which is the moment an omission becomes a false statement rather than an absent one. It also refuses a
+   SECOND declaration for one composer and a row stated twice, because a reader that resolved either would
+   publish a shorter contract as a complete one.
+   IT IS NOT COMPLETE AND THE CONSUMER PRINTS HOW INCOMPLETE. A row nobody carries is not declared here,
+   because a kind nobody has determined must not be invented: a WRONG kind is worse than a missing one, since
+   it LICENSES the arithmetic a missing one merely fails to authorise. The reader counts what is left and the
+   driver prints that count, so the gap is a figure that shrinks as the work is done rather than a sentence
+   that rots.
+   IT CHANGES NO EMITTED BYTE. This is comment text, so there is no half of it that goes live at an instant
+   the other does not — a consumer reads it from SOURCE and is therefore right about an artifact of any age,
+   including one whose stamp predates a row, where the kind is stated and the row is absent. Those are two
+   facts and they stay two.
+   AND THE SUFFIX IS NOT THE DECLARATION, WHICH IS WHY THIS BLOCK EXISTS BESIDE IT. The paragraph inside this
+   composer already spells each row's kind into its NAME — `Life` for a lifetime count rather than a gauge —
+   and says in the same breath that a comment stating it is read by nobody holding the number. A consumer
+   keying on the suffix instead would be a second mechanism answering this one's question, with the partial
+   one drifting; the suffix stays a note to a reader and this is the statement to a machine.
+   THESE ROWS REACH THE FRONTIER CENSUS THROUGH A SPLICE THAT NAMES NONE OF THEM, so no presence reader in
+   this tree can see them at all — `build.mjs`'s row set is taken from a name-and-conversion match on the
+   receiving composer's format string, and an unnamed splice lands in neither its numeric list nor its object
+   one, so the mismatch that would report it never fires. A kind stated here is therefore the only machine-
+   readable fact about these rows anywhere.
+
+   @kinds-of fetchEdge
+   @kind lifetime: epFetchAskBeganLife epFetchAskOfferedLife
+   @kind lifetime: epFetchOutFreedLife epFetchOutFreedOfferedLife epFetchOutDiedAtLife
+*/
 char *endpoint_fetch_edge_rows(void) {
     JsonBuf b = { 0 };
     long sum = 0;
@@ -2420,6 +2466,45 @@ char *endpoint_fetch_edge_rows(void) {
 /* THE OTHER EDGE'S ROWS. endpoint.h states what each is, which identities close over them, that the stage
    arms are a PARTITION and not a ladder, and why there is no relation between the placement row and the offer
    row. The two emitters are separate for one reason and it is the one above: the row NAMES are literals. */
+/* THE KIND OF EVERY ROW THIS COMPOSER PUBLISHES THAT A CONSUMER CARRIES — stated HERE because it is this
+   composer's fact and nowhere else's, and stated in a form a machine reads because a comment stating it is
+   read by nobody holding the number. CLAUDE.md §A-GAUGE-AND-A-LIFETIME-COUNTER: a quantity whose kind a
+   reader cannot name FROM ITS OUTPUT is one they are not entitled to do arithmetic on, and the names do not
+   say. Four kinds and what each permits:
+     lifetime  raised and never lowered — MAY be differenced across two samples of ONE instance.
+     gauge     a walk at one instant — may FALL, so differencing one reads a level as a rate.
+     constant  written once at a seed and never again — neither differenced nor read as a level.
+     maximum   monotone like a count and a HIGH-WATER MARK — it saturates and then plateaus, so a plateau is
+               NOT a ceiling and the length of the series is part of quoting it. Filed apart from `lifetime`
+               for that reason and no other: both may be differenced, and only one may be compared across two
+               runs of different length.
+   IT IS HERE AND NOT AT THE CONSUMER BECAUSE THE PERSON WHO ADDS A ROW IS THE PERSON WHO KNOWS. Every reader
+   of this census used to hold its own kind list, and the row that made the case landed one commit before this
+   one with a kind stated in no artifact at all: the author added it here and had no reason to open a driver
+   two directories away. A declaration at the emitter is edited by the diff that adds the row.
+   IT IS CHECKED IN BOTH DIRECTIONS AND NEITHER SIDE IS DEFAULTED. `testing/census_rows.js` refuses a name
+   here that this composer no longer publishes — a kind statement about a renamed row is a sentence about
+   nothing that a consumer goes on printing — and refuses a row a consumer CARRIES with no kind stated here,
+   which is the moment an omission becomes a false statement rather than an absent one. It also refuses a
+   SECOND declaration for one composer and a row stated twice, because a reader that resolved either would
+   publish a shorter contract as a complete one.
+   IT IS NOT COMPLETE AND THE CONSUMER PRINTS HOW INCOMPLETE. A row nobody carries is not declared here,
+   because a kind nobody has determined must not be invented: a WRONG kind is worse than a missing one, since
+   it LICENSES the arithmetic a missing one merely fails to authorise. The reader counts what is left and the
+   driver prints that count, so the gap is a figure that shrinks as the work is done rather than a sentence
+   that rots.
+   IT CHANGES NO EMITTED BYTE. This is comment text, so there is no half of it that goes live at an instant
+   the other does not — a consumer reads it from SOURCE and is therefore right about an artifact of any age,
+   including one whose stamp predates a row, where the kind is stated and the row is absent. Those are two
+   facts and they stay two.
+   THE TWO EDGES ARE NEVER SUMMED and their kinds are stated apart for the reason the rows are emitted apart:
+   they count states of two different machines whose stages are their own, so one declaration over both would
+   read as one population.
+
+   @kinds-of xhrEdge
+   @kind lifetime: epXhrAskBeganLife epXhrAskPlacedLife epXhrAskOfferedLife
+   @kind lifetime: epXhrOutFreedLife epXhrOutFreedPlacedLife epXhrOutDiedAtLife
+*/
 char *endpoint_xhr_edge_rows(void) {
     JsonBuf b = { 0 };
     long sum = 0;

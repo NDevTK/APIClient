@@ -691,6 +691,48 @@ static char *errs_json_array(ErrsArray which) {
    `%.1f` double's widest decimal form is 309 integer digits plus sign, point and fraction, so ten of them made
    a 4096-byte buffer out of a document whose real pages are two lines long. That number was the reason nothing
    here could ever have found a miscount — the slack was three orders larger than the rows. */
+/* THE KIND OF EVERY ROW THIS COMPOSER PUBLISHES THAT A CONSUMER CARRIES — stated HERE because it is this
+   composer's fact and nowhere else's, and stated in a form a machine reads because a comment stating it is
+   read by nobody holding the number. CLAUDE.md §A-GAUGE-AND-A-LIFETIME-COUNTER: a quantity whose kind a
+   reader cannot name FROM ITS OUTPUT is one they are not entitled to do arithmetic on, and the names do not
+   say. Four kinds and what each permits:
+     lifetime  raised and never lowered — MAY be differenced across two samples of ONE instance.
+     gauge     a walk at one instant — may FALL, so differencing one reads a level as a rate.
+     constant  written once at a seed and never again — neither differenced nor read as a level.
+     maximum   monotone like a count and a HIGH-WATER MARK — it saturates and then plateaus, so a plateau is
+               NOT a ceiling and the length of the series is part of quoting it. Filed apart from `lifetime`
+               for that reason and no other: both may be differenced, and only one may be compared across two
+               runs of different length.
+   IT IS HERE AND NOT AT THE CONSUMER BECAUSE THE PERSON WHO ADDS A ROW IS THE PERSON WHO KNOWS. Every reader
+   of this census used to hold its own kind list, and the row that made the case landed one commit before this
+   one with a kind stated in no artifact at all: the author added it here and had no reason to open a driver
+   two directories away. A declaration at the emitter is edited by the diff that adds the row.
+   IT IS CHECKED IN BOTH DIRECTIONS AND NEITHER SIDE IS DEFAULTED. `testing/census_rows.js` refuses a name
+   here that this composer no longer publishes — a kind statement about a renamed row is a sentence about
+   nothing that a consumer goes on printing — and refuses a row a consumer CARRIES with no kind stated here,
+   which is the moment an omission becomes a false statement rather than an absent one. It also refuses a
+   SECOND declaration for one composer and a row stated twice, because a reader that resolved either would
+   publish a shorter contract as a complete one.
+   IT IS NOT COMPLETE AND THE CONSUMER PRINTS HOW INCOMPLETE. A row nobody carries is not declared here,
+   because a kind nobody has determined must not be invented: a WRONG kind is worse than a missing one, since
+   it LICENSES the arithmetic a missing one merely fails to authorise. The reader counts what is left and the
+   driver prints that count, so the gap is a figure that shrinks as the work is done rather than a sentence
+   that rots.
+   IT CHANGES NO EMITTED BYTE. This is comment text, so there is no half of it that goes live at an instant
+   the other does not — a consumer reads it from SOURCE and is therefore right about an artifact of any age,
+   including one whose stamp predates a row, where the kind is stated and the row is absent. Those are two
+   facts and they stay two.
+   NAMED RESIDUAL. NOT COVERED: the rows of this composer no consumer carries yet, which is most of them —
+   `testing/census_rows.js` counts them and the driver prints the count, so the figure is in the output rather
+   than in this sentence. WHAT THE NEXT DIFF BUILDS: a kind line for each, determined from the site that
+   raises it rather than from its name, until the reader's undeclared count is zero and completeness can be
+   REQUIRED here instead of counted. HOW ITS ABSENCE SHOWS: a driver that adds one of them to what it carries
+   meets a throw naming that row, which is this contract working rather than failing.
+
+   @kinds-of wfq
+   @kind gauge: members jobsReady jobsFramed jobsOwed jobWGap jobsReadyTask jobsReadyMicro memUnframed visZero
+   @kind lifetime: picksLifetime unframedPicksLifetime readyPicksLifetime
+*/
 char *result_wfq_json(void) {
     WfqCensus w;
 
@@ -2096,6 +2138,59 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
     return out;
 }
 
+/* THE KIND OF EVERY ROW THIS COMPOSER PUBLISHES THAT A CONSUMER CARRIES — stated HERE because it is this
+   composer's fact and nowhere else's, and stated in a form a machine reads because a comment stating it is
+   read by nobody holding the number. CLAUDE.md §A-GAUGE-AND-A-LIFETIME-COUNTER: a quantity whose kind a
+   reader cannot name FROM ITS OUTPUT is one they are not entitled to do arithmetic on, and the names do not
+   say. Four kinds and what each permits:
+     lifetime  raised and never lowered — MAY be differenced across two samples of ONE instance.
+     gauge     a walk at one instant — may FALL, so differencing one reads a level as a rate.
+     constant  written once at a seed and never again — neither differenced nor read as a level.
+     maximum   monotone like a count and a HIGH-WATER MARK — it saturates and then plateaus, so a plateau is
+               NOT a ceiling and the length of the series is part of quoting it. Filed apart from `lifetime`
+               for that reason and no other: both may be differenced, and only one may be compared across two
+               runs of different length.
+   IT IS HERE AND NOT AT THE CONSUMER BECAUSE THE PERSON WHO ADDS A ROW IS THE PERSON WHO KNOWS. Every reader
+   of this census used to hold its own kind list, and the row that made the case landed one commit before this
+   one with a kind stated in no artifact at all: the author added it here and had no reason to open a driver
+   two directories away. A declaration at the emitter is edited by the diff that adds the row.
+   IT IS CHECKED IN BOTH DIRECTIONS AND NEITHER SIDE IS DEFAULTED. `testing/census_rows.js` refuses a name
+   here that this composer no longer publishes — a kind statement about a renamed row is a sentence about
+   nothing that a consumer goes on printing — and refuses a row a consumer CARRIES with no kind stated here,
+   which is the moment an omission becomes a false statement rather than an absent one. It also refuses a
+   SECOND declaration for one composer and a row stated twice, because a reader that resolved either would
+   publish a shorter contract as a complete one.
+   IT IS NOT COMPLETE AND THE CONSUMER PRINTS HOW INCOMPLETE. A row nobody carries is not declared here,
+   because a kind nobody has determined must not be invented: a WRONG kind is worse than a missing one, since
+   it LICENSES the arithmetic a missing one merely fails to authorise. The reader counts what is left and the
+   driver prints that count, so the gap is a figure that shrinks as the work is done rather than a sentence
+   that rots.
+   IT CHANGES NO EMITTED BYTE. This is comment text, so there is no half of it that goes live at an instant
+   the other does not — a consumer reads it from SOURCE and is therefore right about an artifact of any age,
+   including one whose stamp predates a row, where the kind is stated and the row is absent. Those are two
+   facts and they stay two.
+   THE THREE ROWS `programsAhead` ASIDE ARE OBJECTS AND ARE STATED HERE TOO, because a histogram has a kind
+   exactly as a scalar does — a per-arm partition raised once per event may be differenced and a per-member
+   walk may not, and a reader who differences the second reads a level as a rate whether it arrived as one
+   number or as twenty.
+   NAMED RESIDUAL. NOT COVERED: the rows of this composer no consumer carries yet — `testing/census_rows.js`
+   counts them and the driver prints the count. WHAT THE NEXT DIFF BUILDS: a kind line for each, determined
+   from the site that raises it, until the undeclared count is zero and completeness can be REQUIRED here.
+   HOW ITS ABSENCE SHOWS: a driver adding one of them to what it carries meets a throw naming that row.
+
+   @kinds-of cold
+   @kind gauge: stepUnits programCursors replyOutstanding rowsAwaitingBytes
+   @kind lifetime: stepUnitRuns stepUnitOverruns
+   @kind lifetime: hostAsked hostAnswered replyAsked replyAnswered replyDeclined replyDropped
+   @kind lifetime: replayHits replayLeft replayLeftArms
+   @kind lifetime: steps sliceUs sliceOverruns sliceOverrunAsks sliceOverrunSeamless stepUs schedUs
+   @kind lifetime: unitMidProgram unitParked unitCheckpointOwed unframedStepsLifetime
+   @kind lifetime: classicCompiles classicCompileOverruns finished
+   @kind lifetime: epMinted epAssets epEmitted epPreProgram
+   @kind lifetime: epAsks epAskPreProgram epAskSuppressed epAskMerged epAskMinted epAskMergedPreProgram
+   @kind constant: rootPrograms rootProgramsHeldAtSeed rootProgramsAwaitedAtSeed
+   @kind maximum: deepest completed deepestLeft
+*/
 char *result_cold_json(void) {
     ColdCensus c;
     /* THE THREE PER-ARM HISTOGRAMS, EACH COMPOSED INTO ITS OWN BUFFER AND SPLICED AS ONE `%s`. Their width is
