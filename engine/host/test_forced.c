@@ -15876,27 +15876,42 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        IS LANDABLE ALONE and the second is the dangerous one — the window without the blocked cursor lets the
        operation COMPLETE in that slice, which takes `park-remoteop-asked`, `-many` and `-once` from 1 to 0,
        so a diff that builds the window first regresses the three rungs that currently pass.
-       AND THE SCOPE OF THE FIRST IS SHORT BY ONE FILE, WHICH IS A CLAIM ABOUT THIS TREE RATHER THAN ABOUT THE
-       DESIGN — re-derived at a later revision by a reader who came to build it, and recorded here because the
-       clause reads as a change confined to THIS file and is not one. `the provider withholds` names a thing
-       fixture_provide MAY NOT DO. A `<script src>` row is put on its flow's pending register at creation
-       (solver/engine.c's engine_pending_docscript, from engine_queue_into's DYN_SCRIPT_SRC arm), and
-       engine_pending_fetches() joins that register — so a withheld reply is an entry still standing at the
-       next payment, and run_scheduler asserts against exactly that, unconditionally whenever a provider is
-       installed: a DCHECK that engine_pending_fetches() is empty, reading `the smoke host paid and a reply is
-       still owed`. The first park that tried to withhold would abort in dev at that line, before any of this
-       row's rungs were read. THE ASSERT IS RIGHT ABOUT TODAY'S PROVIDER AND ITS OWN MESSAGE SAYS WHY — this
-       one `answers out of its OWN tables … and has nothing it may legitimately still owe once it has run` —
-       so what the first subproblem needs is for that premise to stop being true: the provider gains a
-       DELIBERATE decline that it STATES, and the payment's question becomes what the provider still OWES
-       rather than whether the register is empty. It keeps catching the two things it exists to catch (a
-       record never handed, a record walked past) and stops forbidding the one an in-flight reply is. That is
-       a change in solver/engine.c, and the clause above was written from inside this file by an author who
-       had no reason to look there.
+       AND THE `SCOPE OF THE FIRST IS SHORT BY ONE FILE` CLAUSE IS REFUTED AT THE ONE FILE IT NAMES. It is
+       REWRITTEN RATHER THAN DELETED because every step of its reasoning is sound and a reader who re-derives
+       it reaches the same conclusion: it read that
+       `the provider withholds` names a thing fixture_provide MAY NOT DO, that the first park to try it would
+       abort in dev at run_scheduler's `engine_pending_fetches() == ` empty DCHECK, and that what the first
+       subproblem needs is a DELIBERATE decline the provider STATES — "That is a change in solver/engine.c".
+       THE DECLINE IS ALREADY BUILT AND NOTHING IN solver/engine.c HAS TO MOVE.
+       `engine_decline(ctx, method, url, reason)` answers the SAME (method, url) pair `engine_provide` answers
+       and is declared beside it; `engine_pending_fetches` SKIPS a refused entry, reading
+       `pending_entry_declined` in the same expression that skips an ANSWERED one, so the assert the clause
+       names cannot fire on one; a refusal leaves `haveValue` CLEAR, so the flow stays PARKED rather than
+       being handed a network error it never observed; and `flow_decline_fork` already names THIS document's
+       shape in its own words — "a document's own external script parks at its sequence row with no frame at
+       all". That waiting arm is FRAMELESS, which is what carries it past the `if (!f->frame)` block head and
+       in front of flow_perform_pending, and its cursor stands at the DYN_SCRIPT_SRC row that sets
+       `seq_awaits` — the one cursor this engine cannot pass, which is exactly what the first subproblem asked
+       for and reported as absent.
+       SO THE SCOPE OF THE FIRST IS ONE FILE AND IT IS THIS ONE: fixture_provide DECLINES one address this
+       document names instead of providing it. A diff that obeyed the retired clause would have built a SECOND
+       spelling of a decline beside engine_decline, which is the dual-system rot a superseded system may not
+       be kept as, reached by a reader who had no reason to grep for a mechanism the clause told them was
+       absent.
+       WHETHER IT WAS STALE OR FALSE AT BIRTH IS NOT ESTABLISHABLE FROM THIS CHECKOUT, which is a result and
+       not a failure to look: `git rev-parse --is-shallow-repository` answers true here, so a pickaxe reports
+       the graft commit for every pre-existing line and cannot tell the two apart. What is recorded instead is
+       the METHOD, because that is the half which predicts the next one: the clause reasoned from ONE register
+       and ONE assert and never asked what ELSE a record may carry, so it enumerated TWO states of a field
+       that has THREE — answered, outstanding, and REFUSED.
        THE DERIVATION RATHER THAN THE COORDINATE, because the lines move:
-       `git grep -n 'engine_pending_fetches() == ' engine/host/solver/engine.c` names the assert, and
-       `git grep -n engine_pending_docscript engine/host/solver/engine.c` names the arm that puts a
-       `<script src>` row on the register it reads.
+       `git grep -n 'int engine_decline' engine/host/solver/engine.c` names the entry,
+       `git grep -n pending_entry_declined engine/host/solver/engine.c` names the skip that keeps a refused
+       entry out of the join that assert reads, and
+       `git grep -n 'external script parks at its sequence row' engine/host/solver/engine.c` names the fork
+       arm that already takes this document's own external script as one of its two shapes.
+       RETIREMENT: this record goes when fixture_provide declines an address of this document, because the
+       clause is then built rather than described.
        AND THE OTHER HALF IS STRONGER THAN IT WAS STATED, WHICH IS WORTH THE SAME AS THE CORRECTION: the
        zero-pick window is not a property of this host's schedule that a cleverer moment could dodge, it is
        FORCED. The conjunction fixture_cold_moment latches reads state that only a STEP changes; the loop is

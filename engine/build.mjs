@@ -5094,8 +5094,16 @@ const CENSUS_WITNESS = /^\[[a-z][a-z-]*\] FAILED — (\d+) (?:FINDING )?category
    BLIND SPOTS as separate verdicts, because an instrument that cannot see something has not found anything"
    — and summing them is the several-states-behind-one-answer shape surviving in the one line a reader stops
    at. MEASURED: three builds at three revisions reported `1 DEFECT` over `park-remoteop`, whose own `why`
-   calls itself a NAMED RESIDUAL and whose 0 is forced by this host having one instance; the figures repeated
-   byte-identically, which is how a chronic red becomes furniture and why nobody had read the body.
+   calls itself a NAMED RESIDUAL; the figures repeated byte-identically, which is how a chronic red becomes
+   furniture and why nobody had read the body. THE CAUSE THAT CLAUSE NAMED — `this host having one
+   instance` — IS NOT THE ONE, and it is corrected here rather than dropped because it is the reading a
+   reader re-derives from the word RESIDUAL and it prescribes the largest possible diff. This host DOES
+   stand in for a peer: the operation is asked, is attached to every live timeline, and the three rungs
+   printed beside that row read 1 for exactly that reason. What no moment of this host reaches is a
+   scheduler PICK between the ask and the park, which is a CONSULTATION ORDER in the fixture and not an
+   instance count — so a reader who took the retired clause would have gone to provision a second
+   instance for a row that a second instance does not move. The row's own `why` and its banner carry the
+   two ordered subproblems; this file states no cause of its own and names where the cause is kept.
    THE CLASSIFICATION IS THE CHILD'S, exactly as a source census's is: only the fixture knows which of its
    rows this host could put, and a list HERE of rows this file is willing to excuse would be the hand-kept
    list whose entries nothing checks. It fails LOUD — a fixture that changes this sentence stops matching and
