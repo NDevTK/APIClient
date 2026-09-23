@@ -2632,27 +2632,66 @@ static const char *HTML =
     "fetch('/api/aelunset?v=' + (uawh === 'U-passive' && uawhx === 'E-cancel' ? 'isunsetpassive'"
     " : uawh + '/' + uawhx));"
     /* …AND THE SECOND MEMBER THAT DECLARES A `(boolean or D)` UNION, REACHED. CSSOM VIEW §6 Extensions to the
-       Element Interface's `scrollIntoView(optional (boolean or ScrollIntoViewOptions) arg = {})` is where
-       step 4 costs an ALIGNMENT: its step 5 is the dictionary clause and its step 6 is "Otherwise, if arg is
-       false, then set block to "end"", so an omitted call handed the boolean `false` set `block` to "end"
-       where step 2's "start" should stand.
+       Element Interface's `Promise<undefined> scrollIntoView(optional (boolean or ScrollIntoViewOptions) arg =
+       {})` is where step 4 costs an ALIGNMENT: its step 5 is the dictionary clause and its step 6 is
+       "Otherwise, if arg is false, then set block to "end"", so an omitted call handed the boolean `false` set
+       `block` to "end" where step 2's "start" should stand.
        WHAT THIS ROW ASSERTS IS REACHABILITY AND THE DECLARATION, NOT THE ALIGNMENT, and that limit is stated
        rather than papered over: this engine's viewport scrolling area equals its viewport, so nothing
        scrolls and "start" and "end" are the same observable ZERO — a row comparing them would pass whichever
-       arm ran, which is worse than no row. What IS observable with no layout is that the four spellings do
-       not throw and that a bogus enumeration DOES: Web IDL §3.2.18 Enumeration types' membership test belongs
-       to the DECLARED member, so `X` is the proof that the dictionary arm's declaration ran at all, and `o`
-       and `n` are the two values §3.2.25 step 4 routes through it. It also puts both of this change's own
-       asserts within reach of one run — element_view.c's `JS_IsObject(argv[0])` at the dictionary arm, and
-       idl_dict_walk_begin's frames-capacity DCHECK, neither of which an omitted argument could reach while
-       the boolean arm swallowed it. */
-    "var uasc = document.createElement('p'); bpar.appendChild(uasc); var uascarm = '';"
-    "try { uasc.scrollIntoView(); uascarm += 'o'; } catch (e) { uascarm += 'O'; }"
-    "try { uasc.scrollIntoView(null); uascarm += 'n'; } catch (e) { uascarm += 'N'; }"
-    "try { uasc.scrollIntoView({}); uascarm += 'd'; } catch (e) { uascarm += 'D'; }"
-    "try { uasc.scrollIntoView(false); uascarm += 'b'; } catch (e) { uascarm += 'B'; }"
-    "try { uasc.scrollIntoView({ block: 'bogus' }); uascarm += 'x'; } catch (e) { uascarm += 'X'; }"
-    "fetch('/api/scrollarm?v=' + (uascarm === 'ondbX' ? 'isscrollarm' : 'arm' + uascarm));"
+       arm ran, which is worse than no row.
+       THIS ROW WAS WRITTEN AGAINST A SYNCHRONOUS-THROW MODEL AND EVERY ONE OF ITS FIVE ARMS INHERITED IT, which
+       is why the paragraph is rewritten rather than edited: a reader who re-derives "a bogus enumeration throws"
+       from §3.2.18 alone will write these five lines again. It read "the four spellings do not throw and a bogus
+       enumeration DOES … so `X` is the proof that the dictionary arm's declaration ran at all", and the member's
+       RETURN TYPE makes both halves false. Web IDL §3.7.7 Operations' create-an-operation-function ends "And
+       then, if an exception E was thrown: If op has a return type that is a promise type, then return !
+       Call(%Promise.reject%, %Promise%, «E»). Otherwise, end these steps and allow the exception to propagate."
+       — and its `Try` opens before the brand check and closes after the method steps, which element_view.c's
+       own `idl_returns_promise()` comment states in the same words. So a promise-returning operation NEVER
+       throws synchronously, and the five `catch` arms that stood here could not run for any state of this
+       engine: `X` was unreachable, `O`/`N`/`D`/`B` were unreachable, and the row's token could only ever be
+       `ondbx`. THE COST WAS NOT A FAILING ROW. The bogus arm left a REJECTED PROMISE WITH NO HANDLER, which
+       HTML §8.1.4.7 "Unhandled promise rejections" correctly reports, so this statement MANUFACTURED the build's
+       only `UNSTAGED UNCAUGHT PAGE ERROR` on every run there has ever been — a chronic accusation of the kind
+       CLAUDE.md names, at the document's own address, where neither the staged-address channel nor the
+       staged-token channel can reach it (the value is the ENGINE's TypeError and the address covers the whole
+       program). It recruited a lane. The repair is not a declaration: it is the page doing what a page must.
+       WHAT THE FIVE ARMS ASSERT NOW. `o`/`n`/`d`/`b` are Web IDL §3.7.7's RETURN TYPE — each spelling answers a
+       THENABLE — which is a positive statement where "did not throw" was a property of every promise-returning
+       member and therefore of nothing. `X` is Web IDL §3.2.18's membership test AND Web IDL §3.7.7's reject step together,
+       delivered where the standard delivers it; `x` is the engine having ACCEPTED `'bogus'`; `W` is a rejection
+       carrying something other than a TypeError; and `T` — reachable at every arm — is the member throwing
+       SYNCHRONOUSLY, which is the regression this shape exists to catch and which the old `try`/`catch` would
+       have SWALLOWED into a passing `ondbX`. `o` and `n` are still the two values Web IDL §3.2.25 step 4 routes through
+       the dictionary arm, and the row still puts both of the union change's asserts within reach of one run —
+       element_view.c's `JS_IsObject(argv[0])` at the dictionary arm, and idl_dict_walk_begin's frames-capacity
+       DCHECK, neither of which an omitted argument could reach while the boolean arm swallowed it.
+       THE SITE COUNT IS ONE AND IT WAS DERIVED RATHER THAN ASSUMED: of every member this fixture wraps in a
+       `try`, `grep -h "Promise<[^>]*> *<name> *(" node_modules/@webref/idl/[a-z]*.idl` answers for `scrollIntoView`
+       alone — `set` and `clone` also match, on CookieStore and LanguageModel, and the calls here are WeakMap's
+       and Response's. The emit now rides the reaction, so this row is a SCHEDULED one: a run whose microtask
+       never ran carries no /api/scrollarm record at all, which is the schedule and not the member. */
+    "var uasc = document.createElement('p'); bpar.appendChild(uasc); var uascarm = ''; var uascp;"
+    "try { uascp = uasc.scrollIntoView();"
+    " uascarm += (uascp && typeof uascp.then === 'function') ? 'o' : 'O'; } catch (e) { uascarm += 'T'; }"
+    "try { uascp = uasc.scrollIntoView(null);"
+    " uascarm += (uascp && typeof uascp.then === 'function') ? 'n' : 'N'; } catch (e) { uascarm += 'T'; }"
+    "try { uascp = uasc.scrollIntoView({});"
+    " uascarm += (uascp && typeof uascp.then === 'function') ? 'd' : 'D'; } catch (e) { uascarm += 'T'; }"
+    "try { uascp = uasc.scrollIntoView(false);"
+    " uascarm += (uascp && typeof uascp.then === 'function') ? 'b' : 'B'; } catch (e) { uascarm += 'T'; }"
+    /* THE REJECTION HANDLER IS ATTACHED SYNCHRONOUSLY ON THE RETURNED PROMISE, which is the half that removes
+       the page error rather than declaring it: HTML §8.1.4.7's notify-about-rejected-promises runs at the end of the
+       turn, so a promise already handled here is never reported at all and there is nothing to retract. Both
+       arms emit, so a run that reached this statement always carries a record — an ABSENT /api/scrollarm and an
+       `arm…` one are different facts. Neither handler can throw, so the derived promise cannot become a second
+       unhandled rejection. */
+    "try { uasc.scrollIntoView({ block: 'bogus' }).then(function () { uascarm += 'x';"
+    "   fetch('/api/scrollarm?v=arm' + uascarm); }, function (e) {"
+    "   uascarm += (e instanceof TypeError ? 'X' : 'W');"
+    "   fetch('/api/scrollarm?v=' + (uascarm === 'ondbX' ? 'isscrollarm' : 'arm' + uascarm)); }); }"
+    " catch (e) { uascarm += 'T'; fetch('/api/scrollarm?v=arm' + uascarm); }"
     /* …AND THE MEASUREMENT THE ROW ABOVE REFUSES TO ASSERT, EMITTED ANYWAY AND ASSERTED BY NOTHING. `na` says
        CSSOM VIEW §5's `scrollingElement` is not on this Document, and two equal numbers say the layout model
        has no scrolling area to align within — either answer is the reason the alignment has no row yet, and
