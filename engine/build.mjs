@@ -2766,32 +2766,9 @@ function stepCostReading(a, b, q) {
      format string, so censusRowSet requires it and an artifact without it fails loudly here rather than
      reading as a run that never overran. */
   const overFrac = b.sliceOverruns / b.steps;
-  /* AND WHETHER THE PAGE'S OWN CODE WAS RUNNING IN THOSE TURNS, WHICH IS THE HALF THE ARM HISTOGRAM'S
-     CONCLUSION RESTS ON AND CANNOT MEASURE. `stepUnitOverruns` names the arm a turn ENDED in, and the two
-     program arms end inside one call whether the time went into the page's bytecode between two of its own
-     raise points or into ONE native call that never returned — opposite diffs, in different components.
-     `sliceOverrunSeamless` is how many of those turns offered NOT ONE suspend point and `sliceOverrunAsks` is
-     how many the rest offered between them; the pair is the reading, because a sum alone can be carried by a
-     single chatty turn. READ AND NOT DEFAULTED, for the reason directly above: both rows are in
-     result_cold_json's own format string, so `coldFields()` requires them and an artifact without them fails
-     loudly here rather than reading as a run whose overruns offered nothing. */
-  const seam =
-    b.sliceOverruns === 0
-      ? ``
-      : b.sliceOverrunSeamless === b.sliceOverruns
-        ? `, and NOT ONE of them offered a single suspend point — so no ordering and no slice could have ` +
-          `rested any of them: the thread was inside C that declares no step boundary, and what reaches that ` +
-          `is a step-machine conversion in whichever component owns the call, never a weight term`
-        : b.sliceOverrunSeamless === 0
-          ? `, and every one of them offered at least one suspend point (${b.sliceOverrunAsks} in all) — so ` +
-            `the seam was there and the stretch ran past the budget anyway, which is a question about what ` +
-            `the page's code does between two of its own raise points and not about this scheduler`
-          : `, of which ${b.sliceOverrunSeamless} offered NO suspend point at all while the other ` +
-            `${b.sliceOverruns - b.sliceOverrunSeamless} offered ${b.sliceOverrunAsks} between them — two ` +
-            `populations under one count, and only the first is a span no ordering could have rested`;
   const over = ` ${b.sliceOverruns} of the ${b.steps} turn(s) — ${(100 * overFrac).toFixed(1)}% — met or ` +
                `passed the slice outright, which is the count the mean above cannot give and is the one ` +
-               `number here that is a fraction of a denominator rather than an average of a spread` + seam;
+               `number here that is a fraction of a denominator rather than an average of a spread`;
   const dSteps = b.steps - a.steps, dUs = b.stepUs - a.stepUs;
   const ivl = dSteps > 0
     ? `, and ${(dUs / dSteps).toFixed(0)} over the last window's ${dSteps} turn(s)`

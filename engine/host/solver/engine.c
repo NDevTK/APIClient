@@ -11833,27 +11833,6 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
             "clock readings, so a difference is a phase of the turn that has no arm and a reading that has "
             "stopped being about the whole turn",
             (long long)g_slice_us, (long long)g_sched_us, (long long)g_step_us);
-    for (i = 0; i < STEP_UNIT_N; i++) out->arms[i] = g_step_unit_runs[i];
-}
-
-/* TWO FACTS THE SCHEDULER HAS AND HAS NEVER SAID, and both of them are questions that were being ANSWERED BY
- * INFERENCE from numbers that do not mean what they were read as.
- *
- * `g_finished` — how many flows have ever reached flow_step's "all scripts, chunks, jobs, replies and load
- * listeners done" and been finished. It was being read off `live == flows`, which is a comparison of the
-    /* THE TWO OVERRUN-PATH ROWS' EQUIVALENCE, ASSERTED RATHER THAN DESCRIBED — see solver/engine.h's
-       `slice_overrun_asks`. A turn adds to the sum precisely when it is not counted as seamless, by the order
-       of two statements in one branch, so an empty sum and a wholly-seamless population are the SAME fact and
-    /* THE IDENTITY, ASSERTED WHERE ALL THREE ARE IN ONE HAND — see g_slice_us for why the halves are rows and
-       not a subtraction. Both arms are added inside the same iteration the charge is taken in, from the same
-       two clock readings, so a difference is a THIRD phase having been added to the turn without an arm of its
-       own, and the symptom would be a per-phase reading that silently stopped covering the turn. */
-    DCHECKF(g_slice_us + g_sched_us == g_step_us,
-            "the dispatch turn's phases do not partition its cost (%lld slice + %lld scheduler against %lld "
-            "step) — both arms are written inside the iteration the charge is taken in and from the same two "
-            "clock readings, so a difference is a phase of the turn that has no arm and a reading that has "
-            "stopped being about the whole turn",
-            (long long)g_slice_us, (long long)g_sched_us, (long long)g_step_us);
     /* THE ORPHAN ASK IS A SUBSET OF THE LADDER DESCENTS, ASSERTED WHERE BOTH ARE IN ONE HAND — the only
        statement about this pair a reader can check instead of believe, and the one a later edit would break.
        `g_orphan_asks` is raised inside engine_orphan_seed, which flow_step reaches only from inside the
@@ -11879,6 +11858,9 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
  *
  * `g_finished` — how many flows have ever reached flow_step's "all scripts, chunks, jobs, replies and load
  * listeners done" and been finished. It was being read off `live == flows`, which is a comparison of the
+    /* THE TWO OVERRUN-PATH ROWS' EQUIVALENCE, ASSERTED RATHER THAN DESCRIBED — see solver/engine.h's
+       `slice_overrun_asks`. A turn adds to the sum precisely when it is not counted as seamless, by the order
+       of two statements in one branch, so an empty sum and a wholly-seamless population are the SAME fact and
        a reader may take either as the other. A break is those two statements having stopped being exclusive,
        and the symptom would be a pair that reads as a partition of the overrunning turns and is not one. */
     DCHECKF((out->slice_overrun_asks == 0) == (out->slice_overrun_seamless == out->slice_overruns),

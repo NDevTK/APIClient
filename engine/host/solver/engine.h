@@ -1824,72 +1824,8 @@ typedef struct {
      * those turns — which this row cannot support in either direction, because the population it counts is
      * not the one that question is about. */
     long over_arms[STEP_UNIT_N];
-    /* …AND WHETHER THE PAGE'S OWN CODE WAS EVEN RUNNING IN THOSE TURNS, WHICH IS THE ONE THING THE ARM
-     * HISTOGRAM ABOVE CANNOT SAY AND THE THING ITS OWN CONCLUSION RESTS ON. `over_arms`' banner reaches a
-     * verdict — "the overruns sit where page code was still executing, which is what a stretch between two of
-     * the page's OWN raise points looks like" — and NOTHING in this struct measures that. It is an inference
-     * from the ARM a turn declared, and an arm is where a step ENDED: `resume-program` and
-     * `start-a-classic-program` both end inside JS_FlowResume whether the time went into the page's bytecode
-     * or into ONE native call that never returned, and those take OPPOSITE work. One is the page choosing a
-     * back-edge-free stretch, which no ordering reaches and which §NO BOUNDS forbids capping; the other is a
-     * C activation that declares no step boundary, which is a step-machine conversion (§C-stack) in whichever
-     * component owns that call.
-     * AND THE EVIDENCE THAT CONCLUSION RESTS ON IS A FIXTURE'S, WHICH A REAL PAGE DISAGREES WITH — RELAYED
-     * AND NOT RE-DERIVED HERE, SO IT IS A CLAIM TO CHECK AND NOT A ROW. `over_arms`' banner reaches its
-     * verdict partly from `deliver-one-reply` running 6990 times on the native smoke and overrunning NOT
-     * ONCE, i.e. engine C at its own door never holding the slice. A reading relayed from gitlab.com/explore
-     * has that same arm overrunning 4 of 43 runs. If that holds, the fixture's zero is a statement about
-     * REPLIES THE FIXTURE SERVES and not about engine C, which is exactly the shape CLAUDE.md's
-     * fixture-workload rule names: a body whose length the page chose is not a quantity a fixture's
-     * denominator contains. The rows below are what settles it either way, on either host, without anybody
-     * having to believe the relay.
-     * WHAT SEPARATES THEM IS ALREADY COMPUTED AND HAS NO READER FOR THIS POPULATION. solver/engine.c samples
-     * `g_preempt_asked` at each turn's start, and the difference across the turn is how many suspend points
-     * the path OFFERED — zero means the turn never reached ONE interpreter raise point. Both seam verdicts in
-     * engine_sched_step are ANDed with `g_preempt_asked == pa0`, so they can only ever name a turn that
-     * offered NO point, and a turn in `slice_overruns` ended at the slice boundary, where the hook WAS
-     * consulted to end it. The CPU verdict additionally requires quantum_measure_is_cpu(), which is FALSE on
-     * the host that ships. So on the shipped host the consultation count is written every turn and read by
-     * nothing that can fire on an overrunning one: CLAUDE.md's computed-writer-with-no-reader defect, with
-     * the value real and the only reader structurally disarmed.
-     * TWO ROWS AND NOT ONE, because a SUM over the overrunning turns can be carried by one chatty turn while
-     * every other one of them offered nothing. `slice_overrun_asks` is the total and
-     * `slice_overrun_seamless` is HOW MANY of those turns offered zero — a count of turns, not of
-     * consultations — so the pair partitions the population by the property that decides the diff rather than
-     * averaging over it. THE TWO ARE EXACTLY EQUIVALENT AT THEIR ENDPOINTS and that is asserted where both
-     * are in one hand: `slice_overrun_asks == 0` if and only if `slice_overrun_seamless == slice_overruns`,
-     * because a turn contributes to the sum precisely when it is not seamless.
-     * IN EVERY BUILD, unlike the seam verdict's own sampling, and the price is ONE READ OF A STATIC per turn
-     * beside the two clock readings the turn already takes — the same argument solver/engine.c already makes
-     * for `g_preempt_asked`'s increment being outside the dev guard, one indirection cheaper. The bracket is
-     * the STEP's and not the turn's: it opens at the same `t_slice0` `slice_us` opens at, so the count is
-     * over exactly the span the overrun test is about and not over the pick and the swap.
-     * THEY DECIDE NOTHING AND BOUND NOTHING (§NO BOUNDS). Nothing reads either to refuse a step, shorten a
-     * slice or demote a flow; a per-turn count of suspend points offered is precisely what a "this flow is
-     * not yielding, take the thread" watchdog would be built from.
-     * AND THE THIRD READING IS THE ONE THE PHASE SPLIT ABOVE CANNOT MAKE, WHICH IS WHY THIS PAIR IS NOT A
-     * RESTATEMENT OF `sched_us`. `sched_us` bounds what the PICK cost — flow_next_to_run runs before the step
-     * bracket opens — and the preempt hook's OWN rescan of the frontier does not land there: it is called
-     * from the interpreter, so an O(members) walk through flow_rival_of is charged to `slice_us`, inside the
-     * very turns this row counts. A reader who takes a small `sched_us` for "the ordering is not the cost"
-     * has bounded the pick and said nothing about the hook. `slice_overrun_seamless == slice_overruns`
-     * settles it outright and in the other direction: flow_rival_of's only caller is that hook, which raises
-     * the consultation count before it rescans, so a turn that offered no consultation performed no rescan
-     * and weighed no member. The ordering is then excluded from those turns by construction rather than by a
-     * bound on a neighbouring row.
-     * HOW THEIR ABSENCE WOULD SHOW, as an observation and not an instance: a reader holding a nonzero
-     * `slice_overruns` reaches for `over_arms`, finds mass in a program arm, and states which of the two
-     * spans held the thread — with no row anywhere in the artifact that could have contradicted them.
-     * RETIREMENT: these two go when a seam verdict can judge a turn that ENDED at the slice boundary, i.e.
-     * when it is no longer conjoined with `g_preempt_asked == pa0`, because the existing reader then names
-     * the same population and these rows are a second copy of it. */
-    uint64_t slice_overrun_asks;      /* suspend points OFFERED, summed over the turns that met the slice */
-    long     slice_overrun_seamless;  /* …and how many of those turns offered NOT ONE */
-    /* …AND THE ONE PHASE OF A START STEP THAT CANNOT REST AT ANY INPUT SIZE, which `slice_overruns` and
-     * `over_arms` can locate to an ARM and never to a PHASE. (This sentence said `the two rows above` until
-     * two rows were inserted between it and them — a reference by POSITION resolves to whatever now occupies
-     * that position, which is why it carries their NAMES now.) A start is a COMPILE and then an EXECUTION,
-     * only the second runs
+    /* …AND THE ONE PHASE OF A START STEP THAT CANNOT REST AT ANY INPUT SIZE, which the two rows above can
+     * locate to an ARM and never to a PHASE. A start is a COMPILE and then an EXECUTION, only the second runs
      * bytecode, and quickjs raises its yield request from exactly four kinds of site of which three are the
      * interpreter's own dispatch — so a parse offers no raise point for its whole length, and its length is
      * `body_n`, the page-chosen quantity solver/rest_unit.h's bound (1) forbids in a step's cost.

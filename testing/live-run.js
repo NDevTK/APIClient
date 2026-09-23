@@ -445,20 +445,9 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      of all steps — so the turns are not parked on the host and not owed a checkpoint, which is a pair of
      NEGATIVES no other row in this driver's output can state. The same counters read 12-19 and 34-38 on the
      native smoke at the same revisions, so that zero is an armed measurement and not a dead probe.
-     `sliceOverruns` IS THE TURNS THAT MET THE COOPERATIVE SLICE, AND `sliceUs` IS NOT WHAT THOSE TURNS
-     SPENT — this sentence said it was, and it is corrected rather than deleted because the division it
-     prescribed is the one a reader re-derives. solver/engine.c accumulates `g_slice_us` UNCONDITIONALLY, on
-     the line directly above the overrun test, so it is the STEP half of EVERY turn; solver/engine.h declares
-     it as one of the two phases of `step_us`, and `slice + sched == step` is DCHECK'd where all three are in
-     one hand. So `sliceUs / sliceOverruns` charges the turns that did NOT overrun to the ones that did: an
-     UPPER BOUND on a mean overrun rather than one, exact only where every turn overran — which is the shape
-     of this document's real-page runs and is why the error has never shown. The count alone still cannot
-     tell a turn 1.2x past the slice from one 7400x past it, and what prices an overrun without borrowing a
-     non-overrunning turn's time is `stepUnitOverruns` in CENSUS_LIFETIME above — the per-arm histogram
-     solver/engine.c raises on the overrun line itself and asserts against `sliceOverruns` there. Read that
-     against `stepUnitRuns` arm by arm; read `sliceUs` against `steps`, which is the population it is over.
-     RETIREMENT: this correction goes when no reading in this file divides a whole-population accumulator by
-     a subset count.
+     `sliceOverruns` IS THE TURNS THAT MET THE COOPERATIVE SLICE and `sliceUs` is what those turns spent; the
+     pair is the only way to price an overrun, because the count alone cannot tell a turn 1.2x past the slice
+     from one 7400x past it and this document's real-page runs contain both. Read them together or not at all.
      `classicCompiles`/`classicCompileOverruns` SPLIT A START'S COMPILE FROM ITS EXECUTION and landed later
      than the rest; an artifact older than them prints `-`, which is this driver's absent-versus-zero rule and
      is the honest answer — the run did not state them. As of this commit NO measurement artifact in this tree
@@ -470,30 +459,6 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      maximum saturates and then plateaus, so a plateau in one is NOT a ceiling and the series length is part of
      quoting it. `finished` is the departure fact and is a genuine lifetime count. */
   "steps", "sliceUs", "sliceOverruns",
-  /* AND THE ONE THING `sliceOverruns` AND `stepUnitOverruns` TOGETHER CANNOT SAY, WHICH IS WHAT THOSE TURNS
-     WERE INSIDE. An arm is where a step ENDED, and `resume-program` and `start-a-classic-program` both end
-     inside one call whether the time went into the page's bytecode between two of its own raise points or
-     into a single native call that never returned — and those take opposite work, one being a page's own
-     choice that §NO BOUNDS forbids capping and the other a step-machine conversion (§C-stack) in whichever
-     component owns the call. `sliceOverrunSeamless` is how many of the overrunning turns offered NOT ONE
-     suspend point and `sliceOverrunAsks` is how many the rest offered between them; read as a pair, because a
-     sum can be carried by one chatty turn. An artifact older than them prints `-`, which is this driver's
-     absent-versus-zero rule and is the honest answer — the run did not state them. */
-  "sliceOverrunAsks", "sliceOverrunSeamless",
-  /* AND THE OTHER TWO THIRDS OF THE TURN, WITHOUT WHICH `sliceUs` IS A NUMERATOR WHOSE TOTAL THIS DRIVER
-     NEVER PRINTED. solver/engine.h splits a turn into the STEP (`sliceUs`) and EVERYTHING ELSE (`schedUs` —
-     the pick, the context switch, the delta swap and the previous iteration's tail), and states that they are
-     TWO ROWS AND NOT A SUBTRACTION precisely so a reader ADDS rather than infers: `sliceUs + schedUs ==
-     stepUs` is asserted at engine_step_unit_runs where all three are in one hand, so carrying all three makes
-     that identity checkable FROM THIS DRIVER'S OWN OUTPUT rather than on trust.
-     THE PAIR IS WHAT SEPARATES THE TWO DIAGNOSES A LARGE `sliceUs` INVITES, and they are in different
-     components: a turn whose STEP dominates is the cooperative quantum with nothing to expire it mid-call,
-     which is solver/quantum.h's transport; a turn whose PICK and SWAP dominate is the ORDERING and the COW
-     delta costing more than the work they order, which is the frontier's own shape and an O(members) walk at
-     every ask. This driver carried `sliceUs` alone, so every reading it has ever produced was consistent with
-     both and could refute neither — the engine has computed `schedUs` on every census of every run and no
-     tracked driver in this tree has ever printed it. */
-  "stepUs", "schedUs",
   "unitMidProgram", "unitParked", "unitCheckpointOwed",
   /* AND THE ROW THAT DECIDES WHICH READING OF `orphansAsked: 0` IS EVEN AVAILABLE, which this driver carries
      the numerator of in COUNTERS and has never carried the denominator of. flow_step's whole work ladder —
