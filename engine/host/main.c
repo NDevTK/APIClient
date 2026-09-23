@@ -2110,8 +2110,13 @@ QJS_EXPORT void qjs_teardown(void)
        §5.1's six member declarations and its pair-iterator handle, and §5.5's clone machine -- every class id
        a number JS_NewClassID handed out of a runtime that is gone, read by §5.1's finalizer and §5.4's and
        §5.5's finalizer-and-mark pairs, which run later still. See core/platform.c's entries. */
-    url_free(g_ctx);
-    usp_free(g_ctx);
+    /* URL §6.1 AND §6.2 are NOT freed here any more — `url` and `url_search_params` are ROWS on
+       core/platform.h's release column, run by the platform_agent_free above. These two lines were in all
+       three host teardowns and ran AFTER that call had already run the whole column, which is the drift the
+       column exists to end. Out here neither file could declare its agent state to core/agent_state.h at all
+       — a row with agent state and no release is what platform_check_agent_state fires on — so TWO CLASS IDS
+       were carried past their own release, each read by a finalizer and a gc_mark that run later still. See
+       core/platform.c's entry. */
     /* THE WHOLE STREAMS GROUP — §4's ReadableStream with core/streams/pipe.c and
        core/streams/readable_byte_stream.c under it, §5's WritableStream, §6's TransformStream and §7's two
        queuing strategies — is NOT freed here any more: all four are ROWS on core/platform.h's release column,

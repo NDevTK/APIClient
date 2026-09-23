@@ -38,6 +38,7 @@
 #include "core/file/blob.h"
 #include "core/url/idna.h"
 #include "core/idl_args.h"
+#include "core/agent_state.h"
 #include "core/realm.h"
 #include "core/url/url_search_params.h"
 
@@ -1615,15 +1616,31 @@ static int       g_url_ctor_stepid = -1;
    §6.2 URLSearchParams class's update steps back onto this record). A real cycle, which is what gc_mark is for. */
 typedef struct { UrlRecord rec; JSValue params; } UrlObj;
 
+/* NEITHER OF THESE MAY LOOK THE CLASS ID UP, because the collector runs AFTER core/platform.h's release
+   column — every host's teardown is platform_agent_free(), JS_RunGC, JS_FreeRuntime in that order — and
+   §6.1's class id is agent state the `url` row's release now puts back at 0. `JS_GetOpaque(val, g_url_class)`
+   here would be `JS_GetOpaque(val, 0)`, NULL for every live URL, and the two would then fail DIFFERENTLY: the
+   finalizer would leak the record and the [SameObject] `searchParams` it holds, silent in dev AND release
+   because a malloc'd block appears in neither of JS_FreeRuntime's censuses; the MARK is worse, because an
+   unmarked child keeps the internal reference gc_decref subtracts, so gc_scan reads that URLSearchParams as
+   rooted from OUTSIDE the heap and it is never collected at all — which is the exact pair core/agent_state.h
+   records for core/geometry/dom_rect.c. The id is not needed: the collector dispatched here THROUGH the
+   class, so it is a fact both functions already have. See core/agent_state.h's closing paragraph. */
 static void url_finalizer(JSRuntime *rt, JSValue val)
 {
-    UrlObj *u = JS_GetOpaque(val, g_url_class);
+    JSClassID id = 0;
+    UrlObj *u = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
     if (u) { url_record_free(&u->rec); JS_FreeValueRT(rt, u->params); free(u); }
 }
 
 static void url_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    UrlObj *u = JS_GetOpaque(val, g_url_class);
+    JSClassID id = 0;
+    UrlObj *u = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
     if (u) JS_MarkValue(rt, u->params, mark_func);
 }
 
@@ -2286,6 +2303,13 @@ void url_init(JSContext *ctx)
     g_url_rt = rt;
     JS_NewClassID(rt, &g_url_class);
     JS_NewClass(rt, g_url_class, &def);
+    /* THE AGENT STATE THIS LINE JUST CREATED, DECLARED BESIDE IT. `url` is this file's own row on
+       core/platform.c's list, and the row could not declare anything at all until it had a release column:
+       a row with agent state and an EMPTY release is what platform_check_agent_state fires on. The id is
+       also inside the window that file's declare column brackets with `minted == declared`. */
+    agent_state_class("url", &g_url_class,
+                      "URL §6.1's URL class — the brand every member's receiver is checked against and the "
+                      "per-realm prototype slot");
     g_url_ctor_stepid = idl_method_id_step(ctx, CTOR_ARGS, 2, NULL, 0, &js_url_ctor_decl, 0);
     idl_optional_from(1);   /* §5.1: `constructor(USVString url, optional USVString base)` */
     /* §6.1'S SETTERS, DECLARED RATHER THAN HANDED TO A PROPERTY LIST. Each is `attribute USVString`, so the
@@ -2407,13 +2431,23 @@ void url_install_realm(JSContext *ctx)
     JS_SetClassProto(ctx, g_url_class, proto);   /* the realm owns it from here */
 }
 
-void url_free(JSContext *ctx)
+/* THE AGENT'S — core/platform.h's release column. IT TAKES NOTHING, and that is what it always did: this
+   body's first statement was `(void)ctx;`, so the JSContext was a parameter no line read. core/platform.h
+   says the test is WHAT A RELEASE GIVES BACK and that the signature follows from it — what this gives back
+   is a class id, a runtime handle and eleven pool indices, none of which is a value or an atom, so there is
+   no JS_FreeValueRT to want a runtime either. A release that wanted a real per-realm JSContext would be a
+   component in the wrong column; this one wanted nothing. */
+void url_free(void)
 {
     int i;
 
-    (void)ctx;
     /* the prototypes are the REALMS' — released with their contexts */
     g_url_rt = NULL;
+    /* §6.1'S CLASS ID GOES BACK AT 0, which is core/agent_state.h's ONE policy for a class id and not this
+       file's choice. A carried id names a class in a RUNTIME THAT IS GONE, and because the id doubles as no
+       latch here the next agent's JS_NewClassID would be handed a non-zero id and RETURN IT unchanged — so
+       every URL that agent mints would be branded with a number the live runtime never gave out. */
+    g_url_class = 0;
     g_url_ctor_stepid = -1;
     /* THE POOL IDS GO BACK WITH THE POOL. They index the agent's IDL pool, which the next agent rebuilds from
        zero, so an id left standing is a live-looking index into a pool that no longer holds that member —

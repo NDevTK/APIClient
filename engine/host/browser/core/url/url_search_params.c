@@ -20,6 +20,7 @@
 #include "core/url/url.h"
 #include "core/url/url_search_params.h"
 #include "core/idl_args.h"
+#include "core/agent_state.h"
 #include "core/realm.h"
 #include "core/idl_iter.h"
 #include "solver/concolic.h"
@@ -46,15 +47,28 @@ static int       g_usp_pair_handle = -1;
 
 /* ---- the object ------------------------------------------------------------------------------------------ */
 
+/* NEITHER OF THESE MAY LOOK THE CLASS ID UP, because the collector runs AFTER core/platform.h's release
+   column — every host's teardown is platform_agent_free(), JS_RunGC, JS_FreeRuntime in that order — and
+   §6.2's class id is agent state the `url_search_params` row's release now puts back at 0. The two fail
+   differently on a NULL: the finalizer would leak the list and every name/value pair in it, and the MARK
+   would leave the cycle below unseen, so the URL each object holds keeps the internal reference gc_decref
+   subtracts and gc_scan reads it as rooted from OUTSIDE the heap. The id is not needed — the collector
+   dispatched here THROUGH the class. See core/agent_state.h's closing paragraph. */
 static void usp_finalizer(JSRuntime *rt, JSValue val)
 {
-    UspObj *u = JS_GetOpaque(val, g_usp_class);
+    JSClassID id = 0;
+    UspObj *u = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
     if (u) { usp_list_free(&u->list); JS_FreeValueRT(rt, u->owner); js_free_rt(rt, u); }
 }
 
 static void usp_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    UspObj *u = JS_GetOpaque(val, g_usp_class);
+    JSClassID id = 0;
+    UspObj *u = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
     /* The URL holds this object and this object holds the URL — a real cycle, which is what gc_mark is for. */
     if (u) JS_MarkValue(rt, u->owner, mark_func);
 }
@@ -655,6 +669,11 @@ void usp_init(JSContext *ctx)
     g_usp_rt = rt;
     JS_NewClassID(rt, &g_usp_class);
     JS_NewClass(rt, g_usp_class, &def);
+    /* THE AGENT STATE THIS LINE JUST CREATED, DECLARED BESIDE IT — `url_search_params` is this file's own row
+       on core/platform.c's list, and it could declare nothing at all until that row had a release column. */
+    agent_state_class("url_search_params", &g_usp_class,
+                      "URL §6.2's URLSearchParams class — the brand Fetch §5.2's BodyInit arm reads through "
+                      "usp_list_of and the per-realm prototype slot");
     g_usp_id[USP_APPEND]   = idl_method_id(ctx, TWO_STR, 2, js_usp_member, USP_APPEND);
     g_usp_id[USP_DELETE]   = idl_method_id(ctx, TWO_STR, 2, js_usp_member, USP_DELETE);
     idl_optional_from(1);   /* §6.2: `delete(name, optional value)` — undefined is NOT the value "undefined" */
@@ -723,11 +742,19 @@ void usp_install_realm(JSContext *ctx)
     JS_SetClassProto(ctx, g_usp_class, proto);   /* the realm owns it from here */
 }
 
-void usp_free(JSContext *ctx)
+/* THE AGENT'S — core/platform.h's release column. IT TAKES NOTHING, and no line of the old body read the
+   JSContext it used to take: §6.2's per-realm prototypes and its interface object are the REALMS' and went
+   with their contexts, and what is left is a class id, a runtime handle and two pool indices — no value and
+   no atom, so not even a JS_FreeValueRT to want the runtime for. */
+void usp_free(void)
 {
     if (!g_usp_rt)
         return;
     /* the prototypes are the REALMS' — released with their contexts */
     g_usp_rt = NULL;
+    /* §6.2'S CLASS ID GOES BACK AT 0 — core/agent_state.h's ONE policy. usp_list_of already reads this slot
+       defensively (`g_usp_class ? … : NULL`), which is the shape a zeroed id makes correct rather than one
+       this line breaks: a carried id would name a class in a runtime that is gone. */
+    g_usp_class = 0;
     g_usp_ctor_stepid = -1;
 }

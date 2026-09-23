@@ -227,6 +227,10 @@ void url_init(JSContext *ctx);
    under this project's standard is URL §4.4 URL parsing — an algorithm over a string with nothing to say
    about an interface's prototype; the concept is Web IDL's and is named above.) */
 void url_install_realm(JSContext *ctx);
-void url_free(JSContext *ctx);
+/* THE AGENT'S — core/platform.h's release column, which is why it takes NOTHING where it used to take a
+   JSContext: the first statement of the body was `(void)ctx;`. What it gives back is §6.1's class id, the
+   recorded runtime and the pool indices its members were declared into — no value and no atom, so there is
+   not even a JS_FreeValueRT to want the runtime for. */
+void url_free(void);
 
 #endif

@@ -432,6 +432,28 @@ static void r_fetch(JSRuntime *rt) { fetch_free(rt); }
    of each. All are AGENT-lifetime values, so each has an exact runtime-scoped spelling (JS_FreeValueRT,
    JS_FreeAtomRT) and the parameter becomes the runtime this column already holds rather than going away. */
 static void r_blob(JSRuntime *rt) { blob_free(rt); }
+/* URL §6.1 URL class AND §6.2 URLSearchParams class. Both releases were hand-written lines in THREE host
+   teardowns — engine/host/main.c, engine/host/test_forced.c and engine/host/wpt_runner.c — running AFTER
+   platform_agent_free had already run this entire column, which is the drift this column exists to end, and
+   the three did not even agree on what travelled with them: main.c and test_forced.c wrote `url_free();
+   usp_free();` and then form_data a whole group later, while wpt_runner.c wrote the three together.
+   WHAT IT COST TO BE OUT THERE was a question nobody could ask rather than a leak. A row with agent state and
+   an EMPTY release column is what platform_check_agent_state fires on, so while the two `_free`s sat in the
+   hosts NEITHER FILE COULD DECLARE ANYTHING AT ALL — and between them TWO CLASS IDS were carried past their
+   own release, each a number JS_NewClassID handed out of a runtime that is gone, one of them the brand Fetch
+   §5.2's BodyInit arm reads a URLSearchParams body through.
+   NEITHER TAKES A JSContext ANY MORE AND NEITHER READ THE ONE IT TOOK — url_free's first statement was
+   `(void)ctx;`. core/platform.h says the test is WHAT A RELEASE GIVES BACK and that the signature follows
+   from it: these give back class ids, runtime handles and pool indices, with no JSValue and no JSAtom
+   anywhere, so unlike `blob` above there is not even a JS_FreeValueRT to want the runtime for.
+   THE ORDER IS CHECKED IN BOTH DIRECTIONS. These are the third and fourth rows of the list, so reverse
+   declaration order runs them LAST but for `console` and `hr_time`, and every component that reads either —
+   Fetch's body extractor through usp_list_of, §6.1's own `searchParams` — has released long before. In the
+   other direction no release in this agent calls either component: derived by taking every caller of
+   url_record_of, usp_new, usp_reset and usp_list_of outside core/url/ and reading the function each one
+   stands in, which is a member body or a per-realm install in every case. */
+static void r_url(JSRuntime *rt) { (void)rt; url_free(); }
+static void r_usp(JSRuntime *rt) { (void)rt; usp_free(); }
 /* DOM §3.1/§3.2 AND THE OBSERVABLE STANDARD, AND THE PAIR INVERTS — WHICH IS THE POINT RATHER THAN A SIDE
    EFFECT. Both releases were hand-written lines in THREE host teardowns — engine/host/main.c,
    engine/host/wpt_runner.c and engine/host/test_forced.c — running AFTER platform_agent_free had already run
@@ -848,8 +870,8 @@ static const PlatformComponent PLATFORM[] = {
        exposed in realm" — a REALM, with no Document in the algorithm. Each component's own realm intrinsic
        places its interface object beside the prototype it already built there, so a realm that reaches no
        platform_document_install gets both. */
-    { "url",                 d_url,                 NULL },
-    { "url_search_params",   d_usp,                 NULL },
+    { "url",                 d_url,                 NULL,        r_url },
+    { "url_search_params",   d_usp,                 NULL,        r_usp },
     /* NO DOCUMENT HALF. XHR §4 "Interface FormData" declares `[Exposed=(Window,Worker)]`, and Web IDL §3.8
        Platform objects implementing interfaces is "To define the global property references on target, given
        realm realm" whose step 1 is "Let interfaces be a list that contains every interface that is exposed in

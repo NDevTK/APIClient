@@ -14,7 +14,10 @@ void usp_init(JSContext *ctx);
    interface object was installed from core/platform.c's per-document column, a worker realm, which reaches no
    platform_document_install, received neither. */
 void usp_install_realm(JSContext *ctx);
-void usp_free(JSContext *ctx);
+/* THE AGENT'S — core/platform.h's release column, which is why it takes NOTHING where it used to take a
+   JSContext no line of it read. §6.2's prototypes and interface object are the REALMS' and go with their
+   contexts; what this gives back is the class id, the recorded runtime and two pool indices. */
+void usp_free(void);
 
 /* §6.2 URLSearchParams class's "a URLSearchParams object has an associated URL object". A URL's
    `searchParams` is [SameObject] and every mutation of it runs those same UPDATE STEPS on that URL — so the
