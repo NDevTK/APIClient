@@ -1329,11 +1329,24 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       about bytes already on disk, and only the first is unavailable here.
                       311 OF THE 1126 RUNS REGISTER A `securitypolicyviolation` LISTENER, AN
                       `onsecuritypolicyviolation` HANDLER OR CONSTRUCT `SecurityPolicyViolationEvent`; 322
-                      name it at all. CSP §5.5 "Report a violation" is what fires it, and it is UNBUILT -- a
-                      NAMED RESIDUAL at core/frame/policy_container.c, which the paragraph above already
-                      points at without its magnitude. So better than a quarter of what these rows collect
-                      rests on ONE absent observable, and the first run's red is a WORK QUEUE carrying one
-                      component's name rather than a per-file fidelity defect.
+                      name it at all. CSP §5.5 "Report a violation" is what fires it.
+                      THIS SENTENCE USED TO END "and it is UNBUILT -- a NAMED RESIDUAL at
+                      core/frame/policy_container.c", AND IT IS REWRITTEN RATHER THAN DELETED BECAUSE THE
+                      ARGUMENT AROUND IT IS UNCHANGED AND A READER WHO RE-DERIVES IT WILL RE-ADD IT. §5.5
+                      IS BUILT: core/frame/csp_violation.c composes §2.4.2's violation object and fires
+                      §5.1's event, and the residual that sentence pointed at is retired. An absence
+                      asserted after it has been filled is the one stale claim whose only reader is
+                      somebody deciding whether to BUILD the thing -- so it argues for a second copy of a
+                      component that already exists, which is why it is corrected here rather than left
+                      for the first run to contradict. Derive it rather than trusting this line:
+                          git grep -c securitypolicyviolation engine/host/browser/core/frame/csp_violation.c
+                      answers nonzero, with an invented spelling beside it answering 0 as the control.
+                      WHAT THE COUNT NOW MEANS IS DIFFERENT AND SMALLER, AND NO SCORE IS PREDICTED FOR IT
+                      EITHER: better than a quarter of what these rows collect still rests on ONE
+                      observable, but that observable now EXISTS and its red -- if any -- is per-file
+                      fidelity against a built component rather than one component's name. Several of its
+                      fields are themselves named residuals reading "" or 0, so a first run's failures may
+                      still cluster; that is a prediction nobody has earned and this entry does not make.
                       AND THE SHAPE OUTLIVES THE COUNT, WHICH IS WHY IT IS SAID APART FROM IT: that event is
                       the IDIOM THIS CORPUS USES TO ASSERT THAT A BLOCK HAPPENED, so it is not confined to
                       the areas named for it. `script-src` carries 62 of those runs, `style-src` 41 and
