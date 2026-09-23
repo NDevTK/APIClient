@@ -240,14 +240,44 @@ const PROBE = `(() => ({
   domains: (() => {
     let params = 0, astParams = 0, astPathParams = 0, astHoleParams = 0, astUnstatedParams = 0,
         withExcl = 0, withBnd = 0, withPred = 0, withLeq = 0,
-        valNone = 0, valOne = 0, valMany = 0, valManyForced = 0, reached = false;
+        valNone = 0, valOne = 0, valMany = 0, valManyForced = 0, reached = false,
+        /* NAMED \`methodCount\` AND NOT \`methods\`, WHICH IS NOT A STYLE CHOICE: the loop below binds
+           \`const methods\` to the learned-method collection, and that binding SHADOWS this one for every
+           line that counts. Spelled \`methods\` here, \`methods++\` is an assignment to that const and the
+           whole walk throws on the first document that has any — which \`node --check\` and a parse of the
+           enclosing template literal both pass, because it is a runtime error and not a syntax one. It is
+           published as \`methods\` below, where there is no collection in scope to shadow it. */
+        methodCount = 0, tmplMethods = 0;
     for (const svc of globalStore.discoveryDocs.values()) {
       const methods = svc && svc.doc && svc.doc.resources && svc.doc.resources.learned
                    && svc.doc.resources.learned.methods;
       if (!methods) continue;
       for (const m of Object.values(methods)) {
-        if (!m || !m.parameters) continue;
+        if (!m) continue;
+        /* THE TWO DENOMINATORS EVERY COLUMN BELOW IS A FRACTION OF, COUNTED BEFORE THE SKIP THAT USED TO HIDE
+           THEM. This walk visited PARAMETERS and published only parameter counts, so a store holding learned
+           methods that carry no parameter at all raised nothing anywhere and \`reached\` stayed false — and a
+           null \`domains\` row is what this census also prints for a store with no discovery document at all.
+           MEASURED, and it is why these are columns rather than a caution: one real-site run learned 97
+           addresses while its methods carried ONE parameter between them, and NEITHER the 97 nor the fact
+           that they were learned at all appears anywhere in the row. A reader meeting \`params: 1\` cannot
+           tell a document whose code makes one request from one that made ninety-seven and parameterised
+           none of them, and those two take opposite work.
+           \`tmplMethods\` IS THE POPULATION THE RECONCILE CAN DISSOLVE INTO, AND IT IS NOT DERIVABLE FROM
+           \`astHoleParams\`. lib/learn.js's templated-path reconcile fires only where the TEMPLATE record
+           already carries a brace segment (\`_isHole\` with \`_concreteAtHole\` on the other record); it
+           dissolves a concrete address into a template and cannot create one. So a run with no templated path
+           has no site for that mechanism whatever its traffic, and \`valMany: 0\` there is ENTAILED rather
+           than measured. \`astHoleParams\` cannot stand in for this: it is gated on \`_astInferred\`, and the
+           reconcile mints \`m.parameters[hole]\` WITHOUT that key, so a template that absorbed values reads 0
+           in that column while being exactly the row a reader is looking for.
+           NO ENTAILMENT IS CLAIMED IN THE OTHER DIRECTION, and asserting one would be wrong: \`_mergeAstValues\`
+           has three callers and only one is the reconcile, so a query parameter with two values raises
+           \`valMany\` on a document with no template at all. The pair is the reading, not a law. */
+        methodCount++;
+        if (typeof m.path === "string" && m.path.indexOf("{") >= 0) tmplMethods++;
         reached = true;
+        if (!m.parameters) continue;
         for (const p of Object.values(m.parameters)) {
           params++;
           if (p && p._astInferred) astParams++;
@@ -298,7 +328,15 @@ const PROBE = `(() => ({
            "walk having gained a path that leaves a parameter uncounted, and each column would then be a " +
            "fraction of a denominator nothing states (params=" + params + " none=" + valNone +
            " one=" + valOne + " many=" + valMany + ")");
-    return reached ? { params, astParams, astPathParams, astHoleParams, astUnstatedParams,
+    /* A TEMPLATE IS A METHOD, ASSERTED WHERE BOTH ARE IN ONE HAND. The two are raised on adjacent lines of
+       one walk over one collection, so a disagreement is this walk having gained a second path to one of
+       them, after which \`tmplMethods\` is a fraction of a denominator nothing states. */
+    DCHECK(tmplMethods <= methodCount,
+           "the templated-path count exceeds the method count it is drawn from — both are raised once per " +
+           "learned method in a single walk, so a disagreement is that walk having gained a second writer " +
+           "for one of them (methods=" + methodCount + " templated=" + tmplMethods + ")");
+    return reached ? { methods: methodCount, tmplMethods,
+                       params, astParams, astPathParams, astHoleParams, astUnstatedParams,
                        withExcl, withBnd, withPred, withLeq,
                        valNone, valOne, valMany, valManyForced } : null;
   })(),
