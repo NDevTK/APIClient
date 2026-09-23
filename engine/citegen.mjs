@@ -19,6 +19,22 @@
  *                                         several different steps and no reading can be accused
  *   node engine/citegen.mjs --regen [key] fetch the standard(s), rewrite engine/specindex/<key>.json
  *
+ * AND A SWEEP OVER THIS FILE USED TO TRUNCATE SILENTLY, which is worth a line here because every rule in
+ * this tree about sweeping prose rests on `grep` answering honestly, and the file those rules are enforced
+ * BY is this one. Three key separators here, and two in idlgen.mjs, were written as RAW NUL BYTES instead of
+ * the `\u0000` escape the nine other separator sites in this file already used. GNU grep declares a file
+ * binary at the first NUL and stops printing matches from there on — to STDOUT, with exit status 0 — so
+ * `grep -n` reported a FLOOR with only a line on stderr to say so, while `grep -c` and `git grep` were
+ * unaffected and quietly disagreed with it. THE SILENT HALF IS THE WHOLE DEFECT: a truncated listing renders
+ * exactly like a complete one, and a reader who sweeps a cluster and repairs what printed reports the cluster
+ * HANDLED. Measured before the repair, on idlgen.mjs, whose first raw NUL sat far earlier in its file than
+ * these three did in this one: `grep -n` printed 108 of the 396 `const ` lines `grep -c` counted. A count
+ * taken HERE is not quoted, because this record names the token a sweeper would search for and would then be
+ * a figure its own commit moved. The escape parses to the identical character, so this was an ENCODING and
+ * not a behaviour one; it was measured as a program change anyway, in a frozen snapshot, and every number
+ * this auditor prints was byte-identical across the pair. KEEP USING THE ESCAPE — a raw control byte in
+ * source text is a claim on every tool that reads the file as lines, and the tools disagree.
+ *
  * WHY THIS EXISTS. CLAUDE.md §Browser half: a named spec with no number cannot be looked up, so it cannot
  * be checked, so it is indistinguishable from a recollection — and a WRONG number is worse than none,
  * because it reads as authoritative and sends the next reader to a section that does not say what the code
@@ -7408,7 +7424,7 @@ function audit(argv, opts = {}) {
       };
       const secWords = new Map();
       const wordsOf = (spec, sec) => {
-        const k = spec + " " + sec;
+        const k = spec + "\u0000" + sec;
         if (!secWords.has(k)) {
           const s = txt.has(spec) ? txt.get(spec).sections[sec] : null;
           secWords.set(k, s ? s.split(" ") : null);
@@ -7833,8 +7849,8 @@ function audit(argv, opts = {}) {
      * fact it rests on is still true of the words and the file, and a guard would need the walk and this
      * filter to agree on an offset neither of them holds in the other's coordinates. */
     const forkKey = new Set(forkSites.filter((s) => s.held === "held")
-                                     .map((s) => s.file + " " + quoteTokens(s.quote, false)));
-    const isForkHeld = (q) => forkKey.has(q.file + " " + quoteTokens(q.quote, false));
+                                     .map((s) => s.file + "\u0000" + quoteTokens(s.quote, false)));
+    const isForkHeld = (q) => forkKey.has(q.file + "\u0000" + quoteTokens(q.quote, false));
     const kept = quotes.filter((q) =>
       (q.kind === "QUOTE-NOT-FOUND" && !divergedLate(q) && isForkHeld(q) ? (forkProse.push(q), false) : true));
     quotes.length = 0;

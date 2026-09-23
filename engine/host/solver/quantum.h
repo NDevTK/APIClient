@@ -83,20 +83,44 @@
  *         security boundary itself, not an incidental. MEASURED IN THAT REALM ON REAL CHROME: a shared
  *         WebAssembly.Memory CONSTRUCTS and grows there, and `new Worker` succeeds — what fails is handing the
  *         memory across, with `DataCloneError: SharedArrayBuffer transfer requires self.crossOriginIsolated`.
- *         So the gate is the AGENT CLUSTER's cross-origin isolation, and an opaque origin is same-origin with
- *         nothing, so it is never isolated: `crossOriginIsolated === false` there under the manifest's COOP at
- *         `same-origin-allow-popups` AND at `same-origin`, with the frame's sandbox attribute as shipped,
- *         widened with allow-same-origin, and removed entirely. The identical watchdog runs END TO END in the
- *         offscreen document at BOTH COOP values (worker created, memory transferred, Atomics.wait returned,
- *         its store read back on the main thread), which is exactly the point: the flip provisions the
- *         transport where the engine is not, and it is not free — measured under `same-origin` a live verify's
- *         `window.open` still navigated and the sink's proof relay still fired, but the openee's
- *         `window.opener` was null (HTML 7.1.3 "Cross-origin opener policies": under "same-origin" an
- *         auxiliary browsing context "will appear closed to the opener"), which is the handle a postMessage
- *         delivery arm would need. THE REQUIREMENT IS THEREFORE `self.crossOriginIsolated` IN THE ENGINE'S OWN
- *         REALM, which this project cannot buy without giving up the boundary that realm exists to be.
- *         renderer.html asserts on that exact gate, so the day it opens the crash names the watchdog to build;
- *         quantum.c #errors if this branch is ever linked WITH shared memory.
+ *         AND THAT MESSAGE NAMES A SUFFICIENT GATE AS IF IT WERE THE NECESSARY ONE. This paragraph used to
+ *         read it as a biconditional — `so the gate is the AGENT CLUSTER's cross-origin isolation` — and the
+ *         retired sentence is kept because a reader who re-derives it from the same error text will write it
+ *         again. MEASURED SINCE, in one browser at both COOP values (extension/renderer.html holds the method
+ *         and the readings): an EXTENSION-ORIGIN document reads `crossOriginIsolated === false` and transfers
+ *         the memory ANYWAY at the value the manifest ships, while an ordinary http page equally false is
+ *         REFUSED. The grant tracks the ORIGIN, so isolation is one of TWO routes to the transport and not
+ *         the gate on it.
+ *         THE VERDICT IS UNCHANGED AND ONLY ITS REASON MOVES: THIS REALM HAS NEITHER ROUTE. Its origin is
+ *         OPAQUE, so it is not the extension origin and cannot inherit that grant; and an opaque origin is
+ *         same-origin with nothing, so it is never isolated either — `crossOriginIsolated === false` there
+ *         under the manifest's COOP at `same-origin-allow-popups` AND at `same-origin`, with the frame's
+ *         sandbox attribute as shipped, widened with allow-same-origin, and removed entirely. That origin is
+ *         stated by the CSP `sandbox` directive of manifest.sandbox.pages, which is the security boundary
+ *         itself, so the only edit that could buy this realm the transport is the one that removes it.
+ *         AND THE REFUTATION WAS ALREADY IN THIS PARAGRAPH, UNSUBTRACTED FOR AS LONG AS THE RETIRED SENTENCE
+ *         STOOD. The identical watchdog runs END TO END in the offscreen document at BOTH
+ *         COOP values (worker created, memory transferred, Atomics.wait returned, its store read back on the
+ *         main thread), and the offscreen's own `crossOriginIsolated` goes TRUE only at `same-origin` — so
+ *         this file had already recorded a transfer succeeding WITHOUT isolation, in the same paragraph as
+ *         the sentence concluding isolation was the gate, and nobody subtracted them. A paragraph read for
+ *         its conclusion rather than for its own observations is where a counterexample sits unread.
+ *         That is also still the point: the flip provisions the transport where the engine is not, and it is
+ *         not free — measured under `same-origin` a live verify's `window.open` still navigated and the sink's
+ *         proof relay still fired, but the openee's `window.opener` was null (HTML §7.1.3 "Cross-origin opener
+ *         policies": under "same-origin" an auxiliary browsing context "will appear closed to the opener"),
+ *         which is the handle a postMessage delivery arm would need.
+ *         SO THE REQUIREMENT IS EITHER ROUTE IN THE ENGINE'S OWN REALM, AND NO GETTER STATES IT. A CAPABILITY
+ *         IS CONFIRMED BY ATTEMPTING THE ACT AND A GETTER IS A TRIPWIRE IN FRONT OF IT: `crossOriginIsolated`
+ *         names the STANDARD's gate, which is not the one the runtime keys on alone, and `typeof
+ *         SharedArrayBuffer` names a CONSTRUCTOR, which is a different act from handing the memory across —
+ *         so a test naming either reads correctly on every document where it and the runtime agree and
+ *         silently wrongly on the one where they do not. renderer.html asserts BOTH tripwires and tells its
+ *         reader to confirm with a real postMessage of a shared WebAssembly.Memory before building anything,
+ *         so the day either opens the crash names the watchdog to build; quantum.c #errors if this branch is
+ *         ever linked WITH shared memory. RETIREMENT: the retired `so the gate is the AGENT CLUSTER's
+ *         cross-origin isolation` goes when a capability guard in this tree is written over the ACT rather
+ *         than over a getter.
  *         Until then the extension's raise sources are the interpreter's own (back-edge, call, fork) — the
  *         yield poll is at every dispatch, so the SUSPEND POINT is universal and only the RAISE is not — and
  *         this host's slice is bounded by the wall clock read at whichever of those the flow next reaches.
@@ -124,7 +148,7 @@
  * `_swap` and `_wfq` do, and it is NOT a fifth census: those are readings of an INSTANT whose value a schedule
  * chooses, and this is a constant property of the HOST and the build that no schedule and no instant can move.
  * That difference is why extension/bridge.js asserts it as three NAMED, TYPED fields rather than folding it
- * into the "every row is a finite number" loop the four censuses share, and why engine/solvergate.mjs COMPARES
+ * into the `every row is a finite number` loop the four censuses share, and why engine/solvergate.mjs COMPARES
  * it across schedules instead of dropping it.
  *
  * The slice is a FLOOR ON SHARING, never a cap: nothing is dropped, starved, skipped, reordered or forgotten

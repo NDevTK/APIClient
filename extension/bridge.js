@@ -252,14 +252,21 @@ function assertResultDocument(r) {
      loop that only knows how to say "number" would either reject the object or force the producer to spell a
      yes/no as 0/1 — at which point it silently becomes a sixth census and the one fact it carries is gone.
      WHY THIS ZONE NEEDS IT AT ALL, WHICH IS NOT DIAGNOSTIC POLISH. On a host with no CPU clock — and the
-     engine's own realm is exactly that host, an opaque origin that is never crossOriginIsolated, so it cannot
-     hand a watchdog thread the shared memory it would need — the cooperative slice AND solver/engine.c's
-     `flow_age_running` charge are billed in WALL TIME. That charge is a comparison BETWEEN flows, so a
+     engine's own realm is exactly that host, an opaque origin, which is neither the extension origin nor ever
+     isolated, and a shared-memory transfer needs one of those two, so no watchdog thread can be handed the
+     memory it would need — the cooperative slice AND solver/engine.c's `flow_age_running` charge are billed
+     in WALL TIME. That charge is a comparison BETWEEN flows, so a
      descheduling the OS chose lands on whichever flow was running, moves its rank alone and re-picks: two runs
      of ONE build over ONE page take different frontier orders, and every census under that order differs with
      nothing about the tree differing. A person comparing two runs in the popup would read that as a change in
      the engine. §NO BOUNDS and §scheduler's razor forbid both cures (drop the quantum and it drives to
      completion; bound the slice in steps and it is a cap), so the variance stays and the document NAMES it.
+     THE CAUSE IS THE OPAQUE ORIGIN AND NOT THE ISOLATION FLAG, and this caveat used to rest on the flag
+     alone — `never crossOriginIsolated, so it cannot hand a watchdog thread the shared memory` — which is a
+     right conclusion on a wrong step, kept here because the browser's own DataCloneError names isolation and
+     invites it. An extension-origin document transfers shared memory while reading `crossOriginIsolated ===
+     false` (extension/renderer.html holds the method), so isolation is one of TWO routes; this realm has
+     neither, and a capability is confirmed by ATTEMPTING THE ACT rather than by reading either getter.
      THREE FIELDS AND ALL THREE ASSERTED, because each answers a question the other two cannot: `isCpu` is
      whether the caveat applies at all, `measure` is what it was billed in instead, and `sliceMs` is how coarse
      the slicing was. Never defaulted — `quantum_json` reads nothing but compile-time constants of its own
@@ -640,8 +647,10 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            the readings it qualifies. It is the ONE field on this record that is neither a total over the run
            nor a reading of an instant: it is a property of the HOST, constant for the session, and it is here
            because without it the `wfq` order and every census under it are two numbers a reader cannot
-           compare. On the host this extension actually runs — an opaque origin that is never
-           crossOriginIsolated, so the engine can never be handed a watchdog thread — the WFQ's aging charge is
+           compare. On the host this extension actually runs — an opaque origin, which is neither the
+           extension origin nor ever isolated, and a shared-memory transfer needs one of those two, so the
+           engine can never be handed a watchdog thread (the isolation flag alone was the reason this clause
+           used to give, and solver/quantum.h records why that step does not hold) — the WFQ's aging charge is
            billed in WALL TIME, and that charge is a comparison BETWEEN flows, so the OS's descheduling decides
            part of the frontier's order. Two runs of one build over one page then differ with nothing about the
            tree differing, and the popup renders this beside the order so nobody reads that as a change. */

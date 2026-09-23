@@ -332,9 +332,20 @@ const INTERFACES = {
                         /* §7.2.6.2's `[Replaceable] readonly attribute Navigation navigation`, installed
                            with the object it answers with rather than with the Window it hangs off. */
                         "core/frame/navigation.c",
-                        /* §7.1.2's `originAgentCluster` and §8.1.7.1's `crossOriginIsolated` — two answers
-                           about one agent cluster, installed by the component that computes it because
-                           §7.1.1.2's `document.domain` setter reads the same fact. */
+                        /* HTML §7.1.2 "Origin-keyed agent clusters" declares `originAgentCluster`, and
+                           HTML §8.2 "The WindowOrWorkerGlobalScope mixin" declares `crossOriginIsolated`:
+                           two answers about one agent cluster, installed by the component that computes it
+                           because HTML §7.1.1.2 "Relaxing the same-origin restriction" has the
+                           `document.domain` setter that reads the same fact.
+                           THE SECOND NUMBER USED TO BE §8.1.7.1, WHICH IS "Definitions" UNDER §8.1.7 "Event
+                           loops" — a real section that does not hold the member anywhere in its text, and the
+                           harvested `.idl` THIS FILE ITSELF READS declares `crossOriginIsolated` on
+                           `interface mixin WindowOrWorkerGlobalScope`, which is what §8.2 is titled for.
+                           IT SURVIVED BECAUSE THE CITATION NAMED NO STANDARD, which matters more than the
+                           digit: a file vote placed it, so engine/citegen.mjs compared the quotation against
+                           nothing at all, and correcting the number alone would have left it unjudgeable for
+                           ever. All three here now name HTML and carry the corpus's own title, so the next
+                           run can contradict them. */
                         "core/frame/agent_cluster.c",
                         /* Indexed Database §4.3's `[SameObject] readonly attribute IDBFactory indexedDB`, a
                            member of the WindowOrWorkerGlobalScope mixin Window includes — installed with the
@@ -2169,7 +2180,10 @@ const memberOps = (iface) => {
   for (const x of flatten(iface)) {
     if ((x.type !== "operation" && x.type !== "constructor") || (x.type === "operation" && !x.name)) continue;
     if (x.type === "constructor" && !own.has(x)) continue;        /* a base's constructor is not this one's */
-    const key = x.type === "constructor" ? " ctor" : x.name;
+    /* The separator is the ESCAPE and never a raw NUL byte: a raw one makes `grep` call this file binary
+       and stop printing matches from that line on, to stdout, with status 0 — see engine/citegen.mjs's
+       header, where the same three sites and the measurement are recorded. */
+    const key = x.type === "constructor" ? "\u0000ctor" : x.name;
     if (!m.has(key)) m.set(key, []);
     m.get(key).push(x);
   }
@@ -2231,7 +2245,7 @@ for (const r of world.records) {
     if (ops) asks.push([`${iface}.${r.name}`, ops]);
   }
   if (byName.has(r.name)) {
-    const ctors = memberOps(r.name).get(" ctor");
+    const ctors = memberOps(r.name).get("\u0000ctor");
     /* ONLY WHERE THIS ENGINE ACTUALLY CONSTRUCTS. An interface OBJECT is installed for every exposed
        interface, and §3.7.1 gives it [[Construct]] steps only where the interface declares a constructor —
        which this engine states with idl_step_constructor and states nowhere else (idl_installed.mjs's

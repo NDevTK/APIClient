@@ -1739,9 +1739,11 @@ function renderEngineRuns() {
     /* AND WHAT THAT ORDER WAS DENOMINATED IN — solver/quantum.h's `_quantum`, relayed whole by bridge.js and
        rendered HERE, immediately under the order, because it is the fact that decides whether the order above
        may be compared with another run's at all. A person reading this panel is doing exactly one thing with
-       two rows of it: comparing them. On the host this extension runs — the engine's realm is an opaque origin
-       and so is never crossOriginIsolated, which is what denies it the watchdog thread a CPU-clocked slice
-       would need — solver/engine.c's `flow_age_running` charge is billed in WALL TIME, and that charge is a
+       two rows of it: comparing them. On the host this extension runs — the engine's realm is an opaque
+       origin, so it is neither the extension origin nor ever isolated, and a shared-memory transfer needs one
+       of those two, which is what denies it the watchdog thread a CPU-clocked slice would need (the isolation
+       flag alone was the reason this clause used to give; solver/quantum.h records why that step does not
+       hold) — solver/engine.c's `flow_age_running` charge is billed in WALL TIME, and that charge is a
        comparison BETWEEN flows, so a descheduling the OS chose lands on whichever flow was running and moves
        its rank alone. Two runs of ONE build over ONE page then take different frontier orders. Without this
        sentence the only available reading of that is "the engine changed", which is the one thing it is not.

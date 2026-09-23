@@ -170,11 +170,24 @@ int64_t quantum_thread_us(void)
     return (int64_t)t.tv_sec * 1000000 + t.tv_nsec / 1000;
 }
 
+/* AND THE REASON IN IT IS THE OPAQUE ORIGIN AND NOT THE ISOLATION FLAG, which is the correction this string
+   carries. It used to read `never crossOriginIsolated, so it cannot hand a watchdog thread the shared
+   memory` — a conclusion that is right resting on a causal step that is not, and the retired clause is kept
+   because the browser's own DataCloneError names isolation and invites exactly that inference. Measured
+   since (extension/renderer.html holds the method): an extension-origin document transfers shared memory
+   while reading `crossOriginIsolated === false`, so isolation is ONE OF TWO ROUTES and not the gate. This
+   realm has neither, because an opaque origin is not the extension origin and is same-origin with nothing.
+   THE FIELD IS A DISPLAY LABEL AND NOT AN IDENTITY, so its wording is free to be corrected: every consumer
+   checks its TYPE (a non-empty string) or compares it with ANOTHER ANNOUNCE OF THE SAME BINARY, and none
+   matches on its content — `isCpu` is the typed field a reader branches on. What the wording may not carry
+   is a quote, a backslash or a byte under 0x20, which quantum_json asserts at its own origin because it
+   interpolates this string into JSON unescaped. */
 const char *quantum_measure(void)
 {
     return "wall (this host has NO cpu clock and NO asynchronous edge — the engine's realm is an opaque "
-           "origin, never crossOriginIsolated, so it cannot hand a watchdog thread the shared memory that "
-           "thread would raise the request through; see solver/quantum.h)";
+           "origin, which is neither the extension origin nor ever isolated, and a shared-memory transfer "
+           "needs one of those two, so no watchdog thread can be handed the memory it would raise the "
+           "request through; see solver/quantum.h)";
 }
 
 int quantum_measure_is_cpu(void) { return 0; }
