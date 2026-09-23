@@ -322,7 +322,34 @@ const stampPath = (artifact) => artifact + STAMP_SUFFIX;
 /* WRITTEN BY THE BUILD, THROUGH THE ONE PLACE THAT ANSWERS "what revision is this tree". `build.mjs` does not
    re-derive the pair — it calls gateRevision() and writes what a gate would have computed, so the stamp and
    the check are the same answer by construction rather than by two authors agreeing. */
-export function stampArtifact(artifact, cone) {
+/* AND A REVISION IS NOT THE WHOLE IDENTITY: `assertRegime` IS THE AXIS THAT DECIDES WHAT AN ABSENT ABORT MEANS,
+   AND WITHOUT IT EVERY ASSERT-BASED READING OF THIS ARTIFACT IS UNSCORABLE. `-DAPICLIENT_DEV=0` compiles every
+   DCHECK and DFAIL out, so a release artifact's silence is TOTAL: "no abort fired" is the CONFIRMING reading
+   for every assert-based prediction ever made against it, at any depth. CLAUDE.md's cure for an absent crash
+   — pair the absence with a reachability witness — does not reach that, because the path WAS taken and the
+   check was simply not in the program, so a reader who does everything that rule asks gets a scored-looking
+   pass out of a binary that could not have failed. A stamp carrying `head`, `branch`, an empty `dirty` and an
+   `at` states four true facts and leaves that reader unable to say whether the thing they are about could have
+   failed at all.
+   IT IS REQUIRED AT THE CALL SITE AND NEVER DEFAULTED, for the reason engine/build.mjs's `nativeProgram` gives
+   about the same two words: the value a silent caller would take is the one whose silence this field exists to
+   distrust. A build that cannot state the regime does not get to write a stamp.
+   AND IT IS A FACT ABOUT THE ARTIFACT AND NOT ABOUT THE RUN, WHICH THIS BUILD ALREADY PROVES: `node
+   engine/build.mjs release` links a DEV=0 wasm and compiles its native verdict host at DEV=1 in the same
+   invocation, and build.mjs says so at that call. So the caller reads the word back out of the flag list that
+   compiled THIS artifact rather than off argv, and two artifacts of one run carry two answers.
+   A STAMP WRITTEN BEFORE THIS FIELD CARRIES NO `assertRegime`, AND NOTHING DEFAULTS IT. An absent field is a
+   question a reader cannot ask wrongly; a defaulted one is the plausible datum §Offensive-programming names,
+   arriving in the one record that exists to say which program a number belongs to. testing/artifact_stamp.js
+   classifies the absence as a third state and takes the same arm for it as for `release`. */
+export function stampArtifact(artifact, cone, assertRegime) {
+  if (assertRegime !== "dev" && assertRegime !== "release")
+    throw new Error(`[rev] stampArtifact was asked to stamp ${artifact} with the assertion regime ` +
+                    `${JSON.stringify(assertRegime)}. It is check.h's own two words and nothing else: "dev" ` +
+                    `(-DAPICLIENT_DEV=1, every DCHECK and DFAIL compiled in) or "release" ` +
+                    `(-DAPICLIENT_DEV=0, every one of them compiled out). A stamp that cannot say which one ` +
+                    `describes an artifact whose silence means nothing, and every driver reading it would ` +
+                    `file an absent abort as a scored absence.`);
   const rev = gateRevision(cone);
   writeFileSync(stampPath(artifact), JSON.stringify(
     /* `unasked` IS STAMPED BESIDE `dirty` FOR THE SAME REASON THE VERDICT PRINTS THEM APART. A build whose
@@ -333,7 +360,7 @@ export function stampArtifact(artifact, cone) {
        removed rather than left holding a tree hash. A stamp written before this diff carries `qjsHead`, and
        readers treat its PRESENCE as dating the artifact to before the subtree merge rather than as a field to
        compare; nothing defaults it, because an absent field is a question that cannot be asked wrongly. */
-    { head: rev.head, branch: rev.branch,
+    { head: rev.head, branch: rev.branch, assertRegime,
       dirty: rev.dirty, unasked: rev.unasked, cone, at: new Date().toISOString() }, null, 1));
   return rev;
 }

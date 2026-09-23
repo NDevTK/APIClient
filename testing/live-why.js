@@ -14,7 +14,7 @@
 const path = require("path");
 const fs = require("fs");
 const puppeteer = require("puppeteer");
-const { artifactStamp } = require("./artifact_stamp.js");
+const { artifactStamp, absentAbortIsEvidence } = require("./artifact_stamp.js");
 
 const LOCK_FILE = process.env.HARNESS_LOCK
   ? path.resolve(process.env.HARNESS_LOCK) : path.join(__dirname, "harness.lock");
@@ -34,7 +34,8 @@ async function main() {
      be a bare JSON.parse here: it printed three fields as fact, so the one failure that
      cannot be seen in the output (a wasm copied in over an older stamp) was the one this
      tool published. An unreadable stamp is a refusal for the same reason and not an ENOENT. */
-  console.log("# artifact " + JSON.stringify(artifactStamp()));
+  const stamp = artifactStamp();
+  console.log("# artifact " + JSON.stringify(stamp));
 
   const lock = JSON.parse(fs.readFileSync(LOCK_FILE, "utf8"));
   const browser = await puppeteer.connect({
@@ -88,6 +89,23 @@ async function main() {
       console.log(JSON.stringify(probe, null, 1));
       const mine = eng.slice(mark);
       console.log("── engine stderr for this navigation (" + mine.length + " line(s)) ──");
+      /* WHAT A ZERO HERE IS WORTH, SAID WHERE THE ZERO IS PRINTED. This tool exists to capture the @WHY, and
+         a @WHY is a DCHECK or a DFAIL, both of which check.h compiles OUT at -DAPICLIENT_DEV=0 — so against a
+         release artifact a navigation that violated every invariant in the engine prints exactly what a clean
+         one prints. That is the absence CLAUDE.md's reachability witness cannot separate: the path WAS taken
+         and the check was simply not in the program. The regime is in the `# artifact` line above, and it is
+         also SAID HERE, because the header is the line a reader files the run under and this is the line they
+         are looking at when they conclude nothing went wrong.
+         ONLY THE ZERO IS QUALIFIED. A non-empty list is the tool working whatever the regime, and a paragraph
+         under every navigation would be the noise that gets scrolled past on the way to the one that matters. */
+      if (!mine.length)
+        console.log(absentAbortIsEvidence(stamp)
+          ? "  (nothing matched, and this absence is SCORED: " + stamp.assertsAtBuild + ")"
+          : "  (nothing matched, and THIS ABSENCE IS NOT EVIDENCE OF A CLEAN RUN: " + stamp.assertsAtBuild +
+            ". Every @WHY is a DCHECK or a DFAIL, and the reading above is what says whether this " +
+            "program contains them; it does not say yes. So this zero rules out a CHECK (@E, fatal in both " +
+            "regimes) and an offscreen page error and NOTHING ELSE. Re-read against a `dev` artifact " +
+            "before concluding anything about an invariant.)");
       for (const l of mine.slice(0, 60)) console.log("  " + l);
     }
   } finally { browser.disconnect(); }

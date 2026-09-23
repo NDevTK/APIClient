@@ -57,6 +57,46 @@ function stampReading(b) {
   return "clean(asked, nothing differs)";
 }
 
+/* AND THE AXIS `head`, `dirty` AND `at` ARE ALL SILENT ABOUT: WHETHER THIS ARTIFACT'S ASSERTS WERE COMPILED
+   INTO IT. check.h compiles every DCHECK and DFAIL out at `-DAPICLIENT_DEV=0`, so a release artifact's silence
+   is TOTAL: "no abort fired" is the CONFIRMING reading for every assert-based prediction ever made against it,
+   at any depth. CLAUDE.md's cure for an absent crash — pair the absence with a reachability witness — does not
+   reach that, because the path WAS taken and the check was simply not in the program, so a driver that does
+   everything the file asks publishes a scored-looking pass out of a binary that could not have failed. Every
+   other field this module classifies tells a reader WHICH PROGRAM they measured; this one tells them whether
+   that program could have said no.
+   THREE STATES, the same discipline stampReading uses, and the third is the one that decides the rule: a stamp
+   that PREDATES the field has NO OPINION, and it takes the SAME ARM as `release` because forgetting may never
+   be a way to be treated as checked. They are still REPORTED apart, because "built with the asserts out" is a
+   decision somebody made and "nobody recorded which" is not, and a reader who wants to fix the second goes to
+   engine/build.mjs while a reader who meets the first goes and rebuilds.
+   AND AN UNREADABLE VALUE IS NOT A FOURTH ARM, IT IS THE SAME ARM SAID DIFFERENTLY: a word that is neither of
+   check.h's two is a claim nobody can act on, and defaulting it to the permissive reading is the plausible
+   datum §Offensive-programming names arriving in the record that exists to prevent exactly that. */
+function assertRegimeReading(b) {
+  if (b.assertRegime === undefined || b.assertRegime === null)
+    return "unstated(stamp predates the field — this is NOT a claim that the asserts were compiled in, so an " +
+           "absent @WHY from this artifact is evidence of NOTHING)";
+  if (b.assertRegime === "dev")
+    return "dev(-DAPICLIENT_DEV=1, every DCHECK/DFAIL compiled in — an absent @WHY is a SCORED absence)";
+  if (b.assertRegime === "release")
+    return "release(-DAPICLIENT_DEV=0, every DCHECK/DFAIL compiled OUT — an absent @WHY is evidence of NOTHING)";
+  return "unreadable(assertRegime is " + JSON.stringify(b.assertRegime) + ", which is neither of check.h's two " +
+         "words — read as `release` would be, because a value nobody can interpret is not a claim)";
+}
+
+/* THE ONE QUESTION A DRIVER ASKS OF THAT FACT. The reading above is a SENTENCE for a report and this is the
+   DECISION, and neither is a second spelling of the other: one fact, two questions asked of it, which is what
+   stops a predicate answering a question it was not asked. Only `dev` is true — `release`, the unstated stamp
+   and an unreadable value all take the same arm, which is "an unstated mode may not be treated as checked"
+   written as code rather than as a comment somebody has to remember.
+   IT IS A QUALIFIER AND NOT A GATE, DELIBERATELY. CLAUDE.md records that the trade is sometimes FORCED — while
+   a forcing-function identity is open a dev artifact aborts at init and can drive nothing, so a release
+   artifact is the only thing that can produce an emitted observation — and a driver that REFUSED to run
+   against one would be choosing a rule over the only measurement available. What a caller owes is to say what
+   its own silence is worth, not to decline to speak. */
+function absentAbortIsEvidence(stamp) { return stamp.assertRegime === "dev"; }
+
 /* AND THE HALF OF THE PROGRAM NO BUILD STAMP CAN EVER DESCRIBE, BECAUSE IT IS NOT BUILT.
    The stamp below reads the builder's cone — `engine/host` and `engine/qjs` — and engine/build.mjs is right
    to scope it that way: another agent's popup edit is not a reason to distrust a JS-engine number. But a LIVE
@@ -142,8 +182,15 @@ function artifactStamp(extDir) {
      (it could no longer disagree with itself). A stamp that HAS the field was therefore written before that
      merge, which is a fact about the artifact's era rather than about its engine — so it is forwarded under a
      name that says which of the two it is, instead of under one a reader would compare against a commit. */
+  /* `assertRegime` IS FORWARDED AS `null` AND NEVER AS `undefined`, because this record is JSON.stringify'd
+     into the `# artifact` line every driver prints and stringify DROPS an undefined value — so the one state
+     this field exists to make visible would have been the one state that printed nothing. A stated null is a
+     positive statement that the stamp had no opinion; a missing key is a question the reader never sees. */
   return { head: j.head, preSubtreeQjsHead: typeof j.qjsHead === "string" ? j.qjsHead : null,
-           at: j.at, treeAtBuild: stampReading(j), trustedAtRun: trustedZoneAtRun() };
+           at: j.at, treeAtBuild: stampReading(j), trustedAtRun: trustedZoneAtRun(),
+           assertRegime: typeof j.assertRegime === "string" ? j.assertRegime : null,
+           assertsAtBuild: assertRegimeReading(j) };
 }
 
-module.exports = { artifactStamp, stampReading, trustedZoneAtRun };
+module.exports = { artifactStamp, stampReading, trustedZoneAtRun,
+                   assertRegimeReading, absentAbortIsEvidence };

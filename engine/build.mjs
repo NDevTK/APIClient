@@ -6476,6 +6476,48 @@ const CFLAGS = [
   "-DAPICLIENT_DEV=" + (process.argv.includes("release") ? "0" : "1"),
 ];
 
+/* WHICH ASSERTION REGIME AN ARTIFACT WAS COMPILED IN, READ BACK OUT OF THE LIST ITS COMPILER WAS HANDED.
+   THE STAMP STATES THIS AND IT IS THE AXIS THAT DECIDES WHAT AN ABSENT ABORT MEANS. `-DAPICLIENT_DEV=0`
+   compiles every DCHECK and DFAIL out (check.h), so a release artifact's silence is TOTAL: "no abort fired"
+   is the CONFIRMING reading for every assert-based prediction ever made against it, at any depth, and
+   CLAUDE.md's cure for an absent crash — pair the absence with a reachability witness — does not reach it,
+   because the path WAS taken and the check was simply not in the program. A reader holding a stamp's `head`,
+   `branch`, empty `dirty` and `at` has four true facts and still cannot say whether the artifact they name
+   could have failed.
+   IT IS READ BACK OUT OF `cflags` RATHER THAN RE-DERIVED FROM argv, which is the whole of why it can be
+   trusted. A second `process.argv.includes("release")` beside the stamp would be a second copy of "am I in
+   release mode", and a stamp that disagrees with the flags is worse than a stamp that says nothing: it is a
+   scored-looking answer to the one question that decides whether an absence is evidence. This is the move
+   `depRecord` makes below — the object identity is derived from the same CFLAGS array the link uses rather
+   than restated — applied to the record a driver reads.
+   AND IT IS PER ARTIFACT, NEVER PER RUN, WHICH THIS BUILD ALREADY PROVES: `node engine/build.mjs release`
+   links a DEV=0 wasm and compiles its native verdict host at DEV=1 in the SAME invocation, and the comment at
+   that `nativeProgram("none", "dev")` call says so in as many words. A per-run answer would therefore be
+   false of one of the two programs it described. The native target already carries its own regime in its
+   BINARY NAME and its STAGE LABEL for the reason stated above `nativeProgram`; the wasm artifact carried it
+   nowhere, and this is that same fact in the one record the wasm has.
+   IT THROWS, AND IT THROWS HERE RATHER THAN AT THE STAMP. The stamp is written after the link, so a build that
+   cannot say what it compiled would otherwise put an eight-minute compile between the defect and the
+   diagnosis. Zero matches and two matches are refusals for one reason: a list with no `-DAPICLIENT_DEV` gets
+   check.h's own `#ifndef` default and this function would be GUESSING which, and a list with two has a
+   last-one-wins answer no reader of the record can see. */
+function regimeOf(cflags, what) {
+  const hits = cflags.filter((f) => f.startsWith("-DAPICLIENT_DEV="));
+  const word = hits.length === 1
+    ? { "-DAPICLIENT_DEV=0": "release", "-DAPICLIENT_DEV=1": "dev" }[hits[0]]
+    : undefined;
+  if (word === undefined)
+    throw new Error("[build] cannot state the assertion regime " + what + " is compiled in: its flag list "
+                  + "carries " + hits.length + " `-DAPICLIENT_DEV=` flag(s)"
+                  + (hits.length ? " (" + hits.join(" ") + ")" : "") + " and this build names only check.h's "
+                  + "own two values. The build stamp records that regime and a driver reads it to decide "
+                  + "whether an ABSENT ABORT from this artifact is evidence of anything, so a build that "
+                  + "cannot name it may not write one.");
+  return word;
+}
+/* TAKEN AT DEFINITION, so the refusal above lands before the first compiler runs rather than after the link. */
+const WASM_REGIME = regimeOf(CFLAGS, "the wasm artifact");
+
 const LDFLAGS_COMMON = [
   LEXBOR_LIB,                 // link the cached Lexbor DOM archive
   // Opt-in `assert` build: emscripten ASSERTIONS=2 turns a bare terse `Aborted()` into an INFORMATIVE crash
@@ -6870,7 +6912,12 @@ const ABI_LINK = ABI_LIST.code
    backstop for the case that already happened, not a second way to be right. */
 if (ABI_LINK.code === 0) {
   const stageArtifact = join(ABI_STAGE, "qjs.mjs");
-  const rev = stampArtifact(stageArtifact, ["engine/host", "engine/qjs"]);
+  /* `WASM_REGIME` AND NOT `"dev"`, BECAUSE THIS STAMP DESCRIBES THE WASM AND NOT THE VERDICT HOST. The two
+     programs this invocation builds do not share the regime — see the `nativeProgram("none", "dev")` call
+     below, whose own comment states the consequence — so a stamp that named the run rather than the artifact
+     would be false of one of them. It is derived from the flag list that compiled these objects, never from
+     argv: see `regimeOf`. */
+  const rev = stampArtifact(stageArtifact, ["engine/host", "engine/qjs"], WASM_REGIME);
   const why = rev.dirty.length ? rev.dirty.length + " dirty path(s) in the compiled cone: "
                                  + rev.dirty.map((d) => d.trim()).join(", ")
             : rev.unasked.length ? rev.unasked.length + " path(s) this tree could not be asked about: "
@@ -6879,7 +6926,11 @@ if (ABI_LINK.code === 0) {
   if (why === null) {
     for (const f of ["qjs.mjs", "qjs.wasm", "qjs.mjs" + ".build.json"])
       if (existsSync(join(ABI_STAGE, f))) renameSync(join(ABI_STAGE, f), join(EXT_QJS, f));
-    console.log("[build] installed -> " + join(EXT_QJS, "qjs.mjs") + " (head " + rev.head + ", clean cone)");
+    /* THE REGIME IS IN THE INSTALL LINE FOR THE REASON THE NATIVE TARGET PUTS IT IN A STAGE LABEL: a green
+       line from a program with its invariants compiled out is a SMALLER claim than one from a program with
+       them armed, and two claims of different size may not share a spelling. */
+    console.log("[build] installed -> " + join(EXT_QJS, "qjs.mjs") + " (head " + rev.head + ", clean cone, "
+                + WASM_REGIME + " asserts)");
   } else {
     console.error("[build] NOT INSTALLED — this artifact belongs to NO REVISION: " + why + ". It is staged at "
                   + stageArtifact + " with its stamp beside it, and " + join(EXT_QJS, "qjs.mjs")
