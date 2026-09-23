@@ -354,8 +354,17 @@ const CENSUS_GAUGE = ["stepUnits", "programCursors", "replyOutstanding"];
    by THESE rows and by nothing else in this file's output.
    THEY ARE GAUGES, filed here rather than with the counters for the reason the header line below states: a
    walk of the frontier at one instant may FALL and may never be differenced, and `jobsRun` beside it is a
-   monotone total. `jobWGap` is read with `jobsReady` and never alone (0 is both "no ready holder" and "the
-   top of the queue holds a runnable job"); `memUnframed` separates `jobsReady: 0`'s two silences; and
+   monotone total. `jobWGap` is read with `jobsReady` and never alone: 0 means EITHER that no holder is
+   ready OR that the queue's top holds a runnable job. THOSE TWO READINGS ARE THIS ENGINE'S AND NOT
+   HTML'S, AND THEY ARE DELIBERATELY NOT IN QUOTATION MARKS. They used to be, three lines under a
+   §8.1.4.4 citation, and the citation auditor read a nine-word gloss of a `jobWGap` reading as a
+   quotation of a standard that has no such counter — it diverged after four words and was reported
+   as a spec defect. The words were ours the whole time. A run in quotation marks near a citation IS
+   a quotation claim, whatever it was meant as, so a gloss of one of this engine's own rows is
+   written as plain prose and a spelling being shown is written in backticks; neither is quoted.
+   Derive rather than trust this: `grep -rci "top of the queue" engine/specindex/html*.json` answers
+   0, with `clean up after running script` answering 1 as the armed control. `memUnframed` separates
+   `jobsReady: 0`'s two silences; and
    `wfqMembers` is the population all of them are taken over. */
 const WFQ_JOB_SPLIT = ["jobsReady", "jobsFramed", "jobsOwed", "jobWGap", "jobsReadyTask", "jobsReadyMicro",
                        "memUnframed", "visZero"];
