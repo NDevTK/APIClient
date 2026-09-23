@@ -345,4 +345,21 @@ char   *endpoint_json_array(void);
    second answer waiting for its first reader to trust it. */
 void    endpoint_mark_asset(const char *method, const char *url);
 
+/* WHAT THE SURFACE ABOVE IS A FRACTION OF, WHICH ITS LENGTH ALONE CANNOT SAY. `endpoint_json_array` SKIPS every
+   record the verdict above marked, so the emitted array's length is three states wearing one number: N real
+   endpoints, or N real ones out of a far larger mint whose rest were files, or N records nothing ever
+   classified because no reply named a type. Those take different work — the first is a result, the second is a
+   working classifier, the third is a reply door that answered without a type — and a reader of the array can
+   tell them apart from nothing.
+   IT IS NOT `endpoint_count` COMING BACK. That returned a bare mint total with NO CALLER, which is why it went:
+   a second answer waiting for its first reader to trust it. This is a PARTITION with a reader in the diff that
+   added it (solver/result.c's census composes `epMinted`/`epAssets`/`epEmitted`) and an identity asserted where
+   all three are in one hand, so the total cannot move without one of its parts moving — which is the one
+   property that makes a count readable at all.
+   THE EMITTED FIGURE IS DERIVED BY THE SAME SKIP THE EMIT PERFORMS rather than by subtracting, so a record kind
+   that stops being written cannot make the two disagree silently.
+   RETIREMENT: this record goes when the emitted array carries its own denominator, because the partition is
+   then a property of the document rather than a row beside it. */
+void    endpoint_surface_census(long *minted, long *assets, long *emitted);
+
 #endif

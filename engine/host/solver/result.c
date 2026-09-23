@@ -1936,6 +1936,7 @@ char *result_cold_json(void) {
        session ever held. */
     long rp_hits, rp_left, rp_left_arms;
     long awaiting_rows;   /* the awaited-rows gauge, read ONCE below and used by the assert and the row */
+    long ep_minted, ep_assets, ep_emitted;   /* what the emitted @H array is a fraction of — endpoint.h */
 
     cold_census(&c);
     engine_step_unit_runs(&r);
@@ -2016,6 +2017,11 @@ char *result_cold_json(void) {
        when two rows taken at two ends of a run were differenced into a contradiction that held of no
        quantity. A second call at the emit would be a second instant. */
     awaiting_rows = engine_rows_awaiting_bytes();
+    /* AND WHAT THE @H SURFACE ITSELF IS A FRACTION OF, read once here beside the other gauges. The emitted
+       array's length is the product's headline number and it has never carried a denominator, so a reader has
+       had no way to tell a run that learned N endpoints from one that minted many and classified nearly all of
+       them as files. endpoint.c asserts the two arms sum to the mint where all three are in one hand. */
+    endpoint_surface_census(&ep_minted, &ep_assets, &ep_emitted);
     /* AND IT IS A SUBSET OF THE REGISTERS IT IS COUNTED AGAINST, which is the only relation these two rows
        have and therefore the only one worth asserting. Every row standing as an external script has exactly
        one entry naming it by `dyn_id` on the SAME member's register — solver/engine.c pushes the two together
@@ -2361,7 +2367,14 @@ char *result_cold_json(void) {
                  "\"outOfProgramsUnrun\":%ld,\"outOfProgramsFramed\":%ld,"
                  "\"outOfProgramsAtTheLadder\":%ld,"
                  "\"outOfProgramsAtTheLadderUnits\":%s,"
-                 "\"stepUnits\":%s,\"programCursors\":%s}",
+                 "\"stepUnits\":%s,\"programCursors\":%s,"
+                 /* THE @H SURFACE'S OWN DENOMINATOR — endpoint.h states why its length is three states. A run
+                    whose `epEmitted` is small with `epAssets` large learned little because the bundle's
+                    addresses were FILES; one whose `epAssets` is 0 with `epMinted` large classified nothing,
+                    which is a reply door that answered without naming a type and NOT a finding about the
+                    surface. Those are different diffs and until these rows existed the array's length was
+                    the only thing published and could not tell them apart. */
+                 "\"epMinted\":%ld,\"epAssets\":%ld,\"epEmitted\":%ld}",
                  c.flows, c.framed, c.blocked, flow_host_owed_count(),
                  e.finished, e.finished_flows, e.finished_cands,
                  e.deepest, e.completed, e.deepest_left,
@@ -2402,7 +2415,8 @@ char *result_cold_json(void) {
                  r.unit_mid_program, r.unit_parked, r.unit_checkpoint_owed,
                  c.out_of_programs,
                  c.out_of_programs_unrun, c.out_of_programs_framed, c.out_of_programs_at_the_ladder,
-                 ladder, hist, cursors);
+                 ladder, hist, cursors,
+                 ep_minted, ep_assets, ep_emitted);
     free(cursors);
     cold_census_release(&c);
     return out;

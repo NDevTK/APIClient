@@ -1651,6 +1651,25 @@ void endpoint_mark_asset(const char *method, const char *url) {
     kv_free(&kvb);
 }
 
+/* THE THREE NUMBERS THE EMITTED ARRAY IS A FRACTION OF — see endpoint.h for why its length alone is three
+   states. ONE walk, and the emitted arm is spelled with the SAME `is_asset` skip `endpoint_json_array`
+   performs, so the two producers of this figure cannot disagree about what an endpoint is. */
+void endpoint_surface_census(long *minted, long *assets, long *emitted) {
+    long a = 0, em = 0;
+    DCHECK(minted && assets && emitted,
+           "the @H surface census was asked for with somewhere to put fewer than three of its numbers — the "
+           "partition is the whole point and a caller taking one of them is reading a bare count again");
+    for (int i = 0; i < g_eps_n; i++) {
+        if (g_eps[i].is_asset) a++;
+        else em++;
+    }
+    DCHECK(a + em == (long)g_eps_n,
+           "the @H surface's asset and endpoint counts do not sum to the records minted — they are one walk "
+           "over one array with a two-arm split, so a disagreement here is a record that is neither kind and "
+           "the emitted figure is about a population this census cannot see");
+    *minted = (long)g_eps_n; *assets = a; *emitted = em;
+}
+
 /* Serialize the @H surface DIRECTLY to a JSON string in C (caller frees) — no JS-object round-trip. The
    writer is core/json_buf.h's: this file and solve.c each carried a private copy of it, which is one copy too
    many of a thing that has exactly one correct behaviour. */
