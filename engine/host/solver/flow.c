@@ -5393,6 +5393,17 @@ void flow_wfq_census(WfqCensus *out) {
            this file refuses everywhere else. What IS established is that the reading `jobs_ready` publishes —
            `waits on RANK ALONE` — is not an ordering problem the weight can be shown to have, because the
            same census says these members are already at the front of it.
+           AND THE DICHOTOMY IS WRONG, RECORDED RATHER THAN CORRECTED AWAY BECAUSE THE PAIR IS WHAT A READER
+           RE-DERIVES FROM `job_w_gap` AND `jobs_ready` STANDING TOGETHER. `unframed_picks_lifetime` has been
+           read — solver/flow.h carries the measurement — and it refutes the FIRST reading's second half
+           outright: the dispatch DOES take these members. The second reading is untouched and still
+           unestablished. What the runs are actually in is a THIRD state this paragraph did not offer and its
+           own NOT COVERED clause above had already described: the member is picked, and flow_step's ladder
+           declines the job at an arm ABOVE the one that would run it, so the job is never what that step is
+           about. A two-way choice between a SCHEDULER fault and a COMPARATOR fault has no room for a LADDER
+           fault — and the clause naming the ladder was six lines up while the pair below it went on sending
+           the reader to flow_pick.
+           RETIREMENT: this correction goes when the dichotomy above is rewritten to three arms.
            HOW ITS ABSENCE SHOWS: a census publishing `jobsReady` above zero with `jobWGap` at zero, on a run
            whose LIFETIME `_jobsRun` never leaves zero — a backlog standing at the front of the order that the
            order cannot move, which is the pair this row exists to make impossible to say. IT HAS FIRED, on
@@ -5402,12 +5413,12 @@ void flow_wfq_census(WfqCensus *out) {
            `unframedPicksLifetime`, raised in flow_credit_pick and published beside `memUnframed`. What that
            retires is this paragraph's standing in for a MEASUREMENT: the two readings are separated by a row
            now, and the legend that says which value means which lives at `unframed_picks_lifetime` in
-           flow.h, beside the gauge it is the counter for, where a reader who meets the number will be. What
-           is NOT retired is the analysis above it, because the row has been published and not yet READ, and
-           a reader who deleted the reasoning would be left holding a digit with no statement of what either
-           of its outcomes implies. RETIREMENT: this paragraph goes when a run in this tree has read that row,
-           because one of the two readings is then established and the other is refuted — and whichever it
-           is, it is recorded at the site it names rather than here. */
+           flow.h, beside the gauge it is the counter for, where a reader who meets the number will be. THE ROW HAS NOW
+           BEEN READ AND THE READING IS AT THAT LEGEND, so what is left standing here is the analysis and not
+           the wait: a reader holding the digit needs the statement of what each outcome implies, and the
+           NOT COVERED clause above is the arm the answer turned out to be about. RETIREMENT: this paragraph
+           goes when the ladder's own arm order is settled, because the reachability question it exists to
+           frame is then answered at flow_step rather than inferred from a census here. */
         {
             int jn = flow_job_pending(f);
             if (jn > 0) {

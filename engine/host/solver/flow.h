@@ -2546,6 +2546,23 @@ typedef struct {
      *                            make the first. What is left open is whether `w_top` and the ready holder's
      *                            weight are the quantities the dispatch compares at all, which is where a
      *                            gap of zero over members the order really does reach has to be read next.
+     * IT HAS BEEN READ AND THE SECOND ARM IS THE ONE TAKEN, recorded here because the residual in solver/flow.c
+     * that asked for this row says whichever reading a run establishes is recorded AT THE SITE THIS ROW NAMES
+     * rather than there. Measured on two real documents through one artifact stamped 18550a41 with a clean
+     * cone, 146 censuses over three runs: this reads 4 and 5 against `picks_lifetime` 9 and 10 on one site and
+     * 280 against 619 on the other, with `_jobsRun` 0, 0 and 8. "Ranked at the front and never taken" is
+     * REFUTED. The order DOES hand the thread to these members, so the DISPATCH PATH is not the defect and the
+     * reader goes to flow_step's ladder rather than to flow_pick.
+     * AND THE ASYMMETRY THE RESIDUAL BELOW NAMES AS THE PRICE WAS CLOSED BY MEASUREMENT ON THOSE RUNS, which
+     * is what makes the arm a MEASUREMENT of the ready holders there and not the bound it is in general. The
+     * uncovered population — an unframed member holding NO job — was EMPTY, because
+     * `jobs_ready == (jobs / members) * mem_unframed` held at 146 of 146 censuses: a fork DUPLICATES its
+     * parent's queue and nothing had consumed one, so every member held the same pending count and none held
+     * zero. READ THAT IDENTITY PER RUN AND NEVER ASSUME IT — it is a property of a frontier that has run no
+     * job, so the first dispatch a member makes falsifies it, and with it the licence to read this arm as
+     * anything narrower than the superset.
+     * RETIREMENT: this record goes when the second row the clause below names is published, because the ready
+     * subset is then counted directly and no identity has to hold for this arm to be read.
      *
      * NAMED RESIDUAL, AND IT IS THE PRICE OF THE PAIRING RATHER THAN AN OVERSIGHT.
      * NOT COVERED: a dispatch to a member that is unframed and holds NO job is counted here exactly as one to

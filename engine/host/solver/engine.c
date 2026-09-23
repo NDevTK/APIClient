@@ -10252,6 +10252,33 @@ static int flow_step(JSContext *ctx, Flow *f) {
                  * defect the paragraphs above name, it needs one queue per source, and that needs the source
                  * on a `jobs` entry as it is now on a row — solver/engine.h's engine_queue_javascript_url
                  * states what that is and how its absence shows.
+                 * AND THE OPEN POSITION IS NOT AN OCCASIONAL PREFERENCE, IT IS THE ORDINARY STATE OF A REAL
+                 * DOCUMENT, WHICH IS MEASURED RATHER THAN ARGUED. Three runs of two real pages through one
+                 * artifact stamped 18550a41 with a clean cone, 146 censuses: `run-a-task` is 0 over 78, 78 and
+                 * 736 steps, so THIS ARM HAS NEVER ONCE BEEN ENTERED, while the same runs carry jobs pending
+                 * at every census and hand the thread to a member holding them (`unframedPicksLifetime` 4, 5
+                 * and 280 against `picksLifetime` 9, 10 and 619). The sequence arm took every such step. What
+                 * the paragraph above calls a preference between two carriers is what a page with a non-empty
+                 * row list always gets, and the bound it says holds but does not bind is the reason.
+                 * AND THE TWO KINDS OF JOB ARE ON OPPOSITE SIDES OF THE SEQUENCE, which is the half a reader
+                 * of `jobsReady` cannot see. A MICROTASK is taken by the checkpoint arm, which stands ABOVE
+                 * the sequence, so it runs on the holder's next step; a TASK is THIS arm, so it runs only on a
+                 * step that starts no program. In those three runs every job that ran — 8 of them — went
+                 * through the checkpoint on a turn continuation and is counted under `deliver-one-reply`
+                 * (`microtask-checkpoint` reads 0, for the reason the paragraph at turn_continues gives), and
+                 * every job that did not run was standing behind this arm — two of them for 443 steps on the
+                 * site whose microtasks were draining normally the whole time.
+                 * NAMED RESIDUAL — the census splits the backlog by WHAT A JOB WAITS ON, never by WHICH ARM
+                 * CAN TAKE IT.
+                 * NOT COVERED: a rank-ready TASK and a rank-ready MICROTASK are one number in `jobs_ready`
+                 * while their dispatches sit on opposite sides of the sequence arm, so that row cannot say
+                 * which of the two is starving.
+                 * WHAT THE NEXT DIFF BUILDS: `jobs_ready` split on JOB_TASK at flow_wfq_census's own arm, in
+                 * the same walk and beside it, so the pair is one sample.
+                 * HOW ITS ABSENCE WOULD SHOW: a reader meeting `jobsReady` above zero with `_jobsRun` at zero
+                 * cannot say whether the checkpoint declined or the sequence did, and those are two arms of
+                 * this function taking opposite work — which is what establishing the above cost: a lifetime
+                 * step histogram and an inference, where one row would have answered.
                  * AND THE NAIVE REPAIR IS STILL WIRED TO FIRE: the DCHECK below is what catches it. Hoisted
                  * above the sequence, this arm becomes reachable with a DYN_POS_IMMEDIATE row at the cursor —
                  * the one row flow_stack_empty holds the checkpoint off for — so the flow arrives here holding
