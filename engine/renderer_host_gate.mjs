@@ -208,6 +208,27 @@ const fs = require('node:fs'), path = require('node:path'), nodeUrl = require('n
 const STAGING_MARK = ${JSON.stringify(STAGING_MARK)};
 globalThis.self = globalThis;
 
+/* THIS SUBSTITUTE STATES NO CROSS-ORIGIN ISOLATED CAPABILITY, AND SAYS SO RATHER THAN LEAVING IT TO BE FOUND.
+   renderer.html performs a real shared-memory serialization at boot and classifies the RESULT, and the one
+   thing that decides whether that result is about a GRANT is whether the realm states the quantity HTML §2.7.3
+   "StructuredSerializeInternal ( value , forStorage [ , memory ] )" gates on — "the current settings object's
+   cross-origin isolated capability". A Node worker states none, and its SharedArrayBuffer is unconditional, so
+   the frame records \`ungated\` here: a positive statement that this realm's shared memory is not decided by the
+   web platform's grant, rather than a pass by default and rather than a name-check for this harness.
+   THE CHECK IS THE PROPERTY AND NOT THE NAME, which is why it is asserted instead of assumed. A shim that
+   acquired \`crossOriginIsolated\` — because a future Node defines it, or because someone adds it here to make
+   the frame "more browser-like" — would silently move this realm into the GATED population, and the frame's
+   act would then answer with Node's unconditional shared memory wearing the grade of a capability the browser
+   handed the renderer. That is the one reading this substitute must never manufacture, so it fails loudly at
+   the property the moment it changes. It is a bare \`@E\` throw for the same reason the shim's other refusals
+   are: check.js does not exist in this realm until the frame's own boot imports it. */
+if ('crossOriginIsolated' in globalThis)
+  throw new Error('@E the frame realm of this harness states a cross-origin isolated capability — ' +
+                  'renderer.html classifies its shared-memory act by whether the realm states that quantity ' +
+                  'at all, so a realm that states one is judged as a GATED web agent and this substitute ' +
+                  'would then be answering for the browser with the unconditional shared memory of a Node ' +
+                  'worker');
+
 /* THE THIRD ARGUMENT IS OPTIONAL AND ITS ABSENCE IS A POSITIVE STATEMENT — HTML §9.3.3 "Posting messages" declares \`postMessage(message, targetOrigin, transfer)\` with \`transfer\` defaulting to an empty
    sequence, so "this post carries no handles" is what \`undefined\` MEANS here. The default is written on the
    PRODUCING side, once, and every consumer below then reads a \`ports\` field that is always present. */

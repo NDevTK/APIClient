@@ -330,6 +330,81 @@
     try { return await import(u); } finally { URL.revokeObjectURL(u); }
   }
 
+  /* THE SHARED-MEMORY ACT, PERFORMED ONCE AND RECORDED, SO THE ASSERT BELOW CAN STAND ON A RESULT RATHER THAN
+     ON A GETTER. A DCHECK condition must be side-effect-free (check.js's own law, and check.h's), so the
+     attempt cannot live inside one: it happens here, exactly once per boot, and what the assert reads is what
+     it wrote down.
+     THE ACT IS A STRUCTURED CLONE AND NEEDS NO SECOND AGENT, which is the correction to the instruction this
+     file used to carry ("postMessage a shared WebAssembly.Memory to a Worker"). HTML §2.7.3
+     "StructuredSerializeInternal ( value , forStorage [ , memory ] )" puts the gate on the SERIALIZING side —
+     "If IsSharedArrayBuffer(value) is true: If the current settings object's cross-origin isolated capability
+     is false, then throw a "DataCloneError" DOMException" — and carries its own note that the check "is only
+     needed when serializing (and not when deserializing)". §2.7.10 "Structured cloning API" makes
+     `structuredClone(value, options)` step 1 a `StructuredSerializeWithTransfer`, so it runs that same step. A
+     Worker would spawn an agent, need a blob: URL and be asynchronous; the clone is synchronous, allocates one
+     page, and exercises the identical gate.
+     THE OPERAND IS MINTED THROUGH `WebAssembly.Memory` AND NEVER THROUGH `new SharedArrayBuffer`, because in
+     the realm this file is about the constructor is not there to call — which is the whole reason the
+     constructor is a tripwire and not the capability.
+     THE CONTROL RUNS FIRST AND MUST SPEAK. A refusal means nothing from a serializer that refuses everything,
+     so an uncloneable value is offered first and ITS refusal is what arms the act; where it does not refuse,
+     the act is UNATTEMPTED and says so rather than reporting a refusal nobody can interpret. The operand is
+     armed the same way: a memory asked for shared that answers a plain buffer is not the value §2.7.3 gates.
+     `ungated` IS A POSITIVE STATEMENT AND NOT A PASS BY DEFAULT. §2.7.3 names "the current settings object's
+     cross-origin isolated capability" as the gate, and a realm that states no such capability has no gate for
+     the act to pass: its shared memory is unconditional, so a success there is a fact about that realm's KIND
+     and never about a grant this document was given. The classification reads whether the realm STATES the
+     capability and never its VALUE — the value is a tripwire, recorded and never asserted on. */
+  function sharedMemoryRecord(mod) {
+    function txt(e) { return String((e && e.name) || "Error") + ": " + String((e && e.message) || e); }
+    var r = {
+      coiStated: ("crossOriginIsolated" in self),
+      coi: self.crossOriginIsolated,
+      sabCtor: typeof SharedArrayBuffer,
+      /* THE ENGINE'S OWN LINEAR MEMORY, WHICH IS A TYPE AND NOT A CAPABILITY — there is no act to attempt,
+         since nothing at runtime can make a non-shared memory shared. It is recorded because a reader who
+         meets the assert below needs to know whether the shared-memory LINK is still owed on top of the
+         grant: a watchdog thread with no shared heap to store the yield request into is half a mechanism. */
+      engineHeap: Object.prototype.toString.call(mod.HEAPU8.buffer),
+      act: null,
+      why: null,
+    };
+    if (typeof structuredClone !== "function") {
+      r.act = "unattempted";
+      r.why = "this realm has no structuredClone, so the act has no spelling here";
+      return r;
+    }
+    var armed = false;
+    try { structuredClone(function () {}); } catch (e) { armed = true; }
+    if (!armed) {
+      r.act = "unattempted";
+      r.why = "the serializer did not refuse an uncloneable value, so a refusal of a shared buffer would say nothing";
+      return r;
+    }
+    var buf = null;
+    try { buf = new WebAssembly.Memory({ initial: 1, maximum: 1, shared: true }).buffer; }
+    catch (e) {
+      r.act = "unattempted";
+      r.why = "no shared WebAssembly.Memory could be minted to try with — " + txt(e);
+      return r;
+    }
+    var kind = Object.prototype.toString.call(buf);
+    if (kind !== "[object SharedArrayBuffer]") {
+      r.act = "unattempted";
+      r.why = "a memory asked for shared answered " + kind + ", which is not the value §2.7.3 gates";
+      return r;
+    }
+    try {
+      structuredClone(buf);
+      r.act = r.coiStated ? "granted" : "ungated";
+      r.why = "the serializer let a SharedArrayBuffer through";
+    }
+    catch (e) { r.act = r.coiStated ? "refused" : "ungated"; r.why = txt(e); }
+    if (!r.coiStated)
+      r.why = "this realm states no cross-origin isolated capability, so it has no gate for the act to pass — " + r.why;
+    return r;
+  }
+
   /* THE PROGRAM THE INVITATION DELIVERED, RUN IN DEPENDENCY ORDER. Each step is what the next one needs, which
      is why this is a sequence and not a Promise.all: check.js installs the assertion mechanism every line below
      asserts with; mojo.js is the transport this frame's only channel is made of; mojom.js is VALIDATED as it is
@@ -429,24 +504,54 @@
        already provisioned there BEFORE any flip.
        THE FAILURE IS GOOD NEWS AND THE MESSAGE SAYS SO — the shape of quantum.c's clock check. An absence
        stated in prose is one nobody re-measures; asserted on the browser's OWN gate it ends by crashing, in
-       the realm that would host the thing that has become buildable. IT ASSERTS BOTH ROUTES rather than only
-       the flag, because the measurement above is exactly a case of the capability arriving WITHOUT it, and an
-       assert watching one of two routes is silent on the one the sibling document actually takes.
+       the realm that would host the thing that has become buildable.
+       IT USED TO ASSERT THE TWO ROUTES THEMSELVES — `self.crossOriginIsolated !== true && typeof
+       SharedArrayBuffer === "undefined"` — and that is REWRITTEN RATHER THAN DELETED, because the reasoning
+       that produced it is sound and a reader who re-derives it will write it again. Widening from the flag
+       alone to both routes was CORRECT and is not the defect: the measurement above is exactly a case of the
+       capability arriving WITHOUT the flag, and an assert watching one of two routes is silent on the one the
+       sibling document takes. What was wrong is that both routes are GETTERS, and the message standing over
+       them said so in its own words — "the constructor being present is a tripwire and not the capability".
+       A getter that is not the capability is not a stricter test of it, it is a DIFFERENT test: this one fired
+       where the capability was absent, and would have stayed silent in a realm that held the capability with
+       neither getter set. THE FILE STATED THE RULE CORRECTLY IN THE SENTENCE ABOVE THE LINE THAT BROKE IT.
+       MEASURED, and it is why this is a defect rather than a preference: a Node worker realm defines
+       `SharedArrayBuffer` unconditionally, so `engine/renderer_host_gate.mjs` — which hosts this exact script
+       in one — aborted here on every archived run whose renderer.html carried the widened form (4 of 4) and on
+       none of the 7 carrying the older one, partitioned by the text at each revision rather than by ancestry.
+       WHAT STANDS INSTEAD IS THE ACT, performed once above and recorded, with the two getters kept as the
+       tripwires they are — read on every run, in the one direction §2.7.3 guarantees, and never the thing the
+       absence is asserted on.
        RETIREMENT: this paragraph goes when renderer.html is no longer listed in `manifest.sandbox.pages`,
        because the opaque origin is then not stated and the question it answers is a different question. */
-    DCHECK(self.crossOriginIsolated !== true && typeof SharedArrayBuffer === "undefined",
-           "this renderer may now hold shared memory — either its agent cluster became cross-origin isolated, " +
-           "or SharedArrayBuffer became defined in this realm without it, which is the route ast-worker.html " +
-           "already takes and the one this assert used to be blind to. Read BOTH `self.crossOriginIsolated` " +
-           "and `typeof SharedArrayBuffer` here, and confirm with an actual transfer (postMessage a shared " +
-           "WebAssembly.Memory to a Worker) before building anything, because the constructor being present " +
-           "is a tripwire and not the capability. If the transfer lands, the cooperative quantum can finally " +
-           "have an asynchronous edge (engine/host/solver/quantum.h): build the watchdog thread that raises " +
-           "the yield request from outside the flow's instruction stream, instead of leaving the slice to be " +
-           "noticed at whichever back-edge, call or fork the page happens to reach next");
+    var SHM = sharedMemoryRecord(M);
+    DCHECK(SHM.act !== "granted",
+           "this renderer's realm GRANTED a shared-memory serialization — the act ran, the platform's own gate " +
+           "saw it, and it was let through, so the absence this file is built on is over. Recorded here: act=" +
+           SHM.act + " (" + SHM.why + "), self.crossOriginIsolated=" + String(SHM.coi) +
+           ", typeof SharedArrayBuffer=" + SHM.sabCtor + ", this engine's linear memory is " + SHM.engineHeap +
+           ". The cooperative quantum can now have an asynchronous edge (engine/host/solver/quantum.h): build " +
+           "the watchdog thread that raises the yield request from outside the flow's instruction stream, " +
+           "instead of leaving the slice to be noticed at whichever back-edge, call or fork the page happens " +
+           "to reach next — and if the memory above is still [object ArrayBuffer] that thread has nothing to " +
+           "store into, so the shared-memory link is the first half of it and the grant is only the second");
+    /* THE TRIPWIRES ARE READ ON EVERY RUN, IN THE ONE DIRECTION §2.7.3 GUARANTEES. A grant arriving while
+       `crossOriginIsolated` is FALSE is real and is the route ast-worker.html takes, so that disagreement is
+       RECORDED and never asserted — asserting it would abort on a shape the sibling document has. The other
+       direction cannot happen: with the capability TRUE, §2.7.3's SharedArrayBuffer branch has nothing left to
+       throw for once `forStorage` is false, and a `structuredClone` is never for storage. So a refusal there is
+       this file's reading of the standard disagreeing with the browser, which is a should-never-happen about
+       our OWN logic and is exactly what a DCHECK is for. */
+    DCHECK(!(SHM.coi === true && SHM.act === "refused"),
+           "this realm reports `self.crossOriginIsolated === true` and its serializer refused a " +
+           "SharedArrayBuffer anyway (" + SHM.why + ") — HTML §2.7.3 \"StructuredSerializeInternal " +
+           "( value , forStorage [ , memory ] )\" throws there only when that capability is false or " +
+           "when forStorage is " +
+           "true, and a structuredClone is neither, so this file's reading of the gate is wrong about this " +
+           "browser and every classification above it is drawn on the wrong map");
     /* NAMED RESIDUAL — WHAT THE ABSENT EDGE LEAVES IS TWO POPULATIONS AND THE SHARED-MEMORY DCHECK READS AS ONE.
-       The `crossOriginIsolated`/`SharedArrayBuffer` DCHECK above is right that this realm cannot have a watchdog
-       thread, and it is written as though that thread were the whole of the gap. It is not, and the split is
+       `sharedMemoryRecord`'s act, and the DCHECK on `SHM.act`, are right that this realm cannot have a watchdog
+       thread, and they are written as though that thread were the whole of the gap. It is not, and the split is
        decided by ONE question asked of each case: does the flow perform a DISPATCH, which is where the request
        byte is read.
        (a) IS RETIRED AND IS KEPT HERE BECAUSE THE CLAUSE THAT ASKED FOR IT WAS ONE COMMIT FROM BEING EXECUTED.
