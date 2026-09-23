@@ -21,6 +21,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/css/css_cascade_pass.h"   /* the render record a cascade-input write may not land inside */
 #include "core/css/css_style_sheet.h"
 #include "core/css/style_sheet_list.h"
@@ -500,6 +501,7 @@ void style_sheet_list_init(JSContext *ctx)
     if (g_list_class) return;   /* one AGENT, one class and one pool entry */
     JS_NewClassID(JS_GetRuntime(ctx), &g_list_class);
     JS_NewClass(JS_GetRuntime(ctx), g_list_class, &d);
+    agent_state_class("element", &g_list_class, "CSSOM §6.2.2 \"The StyleSheetList Interface\"'s class");
     g_sheets_key = JS_NewSymbol(ctx, "cssStyleSheets", false);
     g_view_key = JS_NewSymbol(ctx, "styleSheetsView", false);
     g_holder_key = JS_NewSymbol(ctx, "cssStyleSheetHolder", false);
@@ -569,4 +571,15 @@ void style_sheet_list_free(JSRuntime *rt)
     JS_FreeValueRT(rt, g_backing_key);
     g_sheets_key = g_view_key = g_holder_key = g_backing_key = JS_UNDEFINED;
     g_id_item = -1;
+    /* THE CLASS ID IS NOT RESET HERE. It is declared under `element`, whose release ends in
+       agent_state_undo — one reset, computed from the registry that already holds this slot's address and
+       kind, rather than a second list kept in step with the declaration by whoever remembered. AND THE
+       CASCADE REACHED THIS FILE, which is the claim that entitles element_free's last line to put it
+       back: element_free calls style_sheet_list_free, and this says so.
+       AND THE ID WAS THE ONE THING THIS RELEASE DID NOT GIVE BACK, while everything beside it did:
+       the four §6.2 slot atoms, their keys and the pool entries above are reset here and the class was not, so a
+       SECOND agent in one process met the init's own latch on a stale id, returned at once, and
+       every StyleSheetList of that agent would have been keyed by JS_ATOM_NULL and served by pool entry -1.
+       See core/agent_state.h. */
+    agent_state_reached("element");
 }

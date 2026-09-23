@@ -20,6 +20,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/css/css_cascade_pass.h"   /* the render record a cascade-input write may not land inside */
 #include "core/css/css_at_rule_prelude.h"
 #include "core/css/css_nesting.h"
@@ -466,11 +467,25 @@ bool css_rule_is_import(JSValueConst v)
     return r->type == RULE_TYPE_IMPORT;
 }
 
-/* Through JS_GetOpaque, never the accessor: a capture during collection would dup values on an object being
-   torn down. */
+/* NEITHER OF THESE TWO READS THE CLASS ID, AND THAT IS THE PRICE OF DECLARING IT. The collector runs after
+   core/platform.c's release column — every host's teardown is platform_agent_free(), JS_RunGC, JS_FreeRuntime
+   — so by the time either of these is reached `g_rule_class` is back at JS_INVALID_CLASS_ID and
+   `JS_GetOpaque(val, 0)` answers NULL for every live rule. THE TWO FAILURES ARE NOT ALIKE: the finalizer
+   would leak the record and its twenty-one owned values for every rule a sheet parsed; the mark is worse,
+   because an unmarked child keeps the internal reference gc_decref exists to subtract, so gc_scan reads it
+   as rooted from OUTSIDE the heap and it is never collected at all. The id is not needed — the collector
+   dispatched here THROUGH the class, so it is a fact these already have.
+   STILL NOT THE ACCESSOR, for the reason that stood here and is unchanged: a capture during collection would
+   dup values on an object being torn down. JS_GetAnyOpaque reaches the record without either.
+   THE EXOTIC HOOKS BELOW KEEP THEIR JS_GetOpaque and must: rule_indexed_decl runs on an own-property miss
+   during PAGE EXECUTION, which is before the release column and not after it. See core/agent_state.h's
+   closing paragraph. */
 static void rule_finalizer(JSRuntime *rt, JSValue val)
 {
-    CssRuleData *r = JS_GetOpaque(val, g_rule_class);
+    JSClassID id = 0;
+    CssRuleData *r = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
 
     if (!r) return;
     JS_FreeValueRT(rt, r->parent_style_sheet);
@@ -499,7 +514,10 @@ static void rule_finalizer(JSRuntime *rt, JSValue val)
 
 static void rule_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    CssRuleData *r = JS_GetOpaque(val, g_rule_class);
+    JSClassID id = 0;
+    CssRuleData *r = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
 
     if (!r) return;
     JS_MarkValue(rt, r->parent_style_sheet, mark_func);
@@ -4687,6 +4705,18 @@ static void rule_install_constants(JSContext *ctx, JSValueConst target)
                                   JS_NewUint32(ctx, CR_CONSTS[i].v), JS_PROP_ENUMERABLE);
 }
 
+/* ONE SPELLING FOR BOTH HALVES OF EACH §6.4 PROTOTYPE SLOT. core/realm.h names a slot for a heap dump and
+   core/agent_state.h names it for the assert a forgotten release fires, and eighteen sentences typed twice
+   on adjacent lines is a list kept in step by whoever remembers — which is the clerical error that registry
+   exists to stop being asked of a person. It is a MACRO and not a helper so that the __FILE__ and
+   __LINE__ agent_state_realm_slot stamps are each DECLARATION's rather than one forwarding line's for
+   all eighteen, which is core/agent_state.h's own reason for its `_at` entries. */
+#define RULE_PROTO_SLOT(ctx_, k_, what_)                                       \
+    do {                                                                       \
+        g_proto_slot[(k_)] = realm_value_declare((ctx_), (what_));             \
+        agent_state_realm_slot("element", &g_proto_slot[(k_)], (what_));       \
+    } while (0)
+
 void css_rule_init(JSContext *ctx)
 {
     /* THE EXOTIC IS CSS Animations §6.3.3's INDEXED PROPERTY GETTER, and it is on the class every rule shares
@@ -4697,29 +4727,26 @@ void css_rule_init(JSContext *ctx)
     if (g_rule_class) return;   /* one AGENT, one class and one set of pool entries */
     JS_NewClassID(JS_GetRuntime(ctx), &g_rule_class);
     JS_NewClass(JS_GetRuntime(ctx), g_rule_class, &d);
-    g_proto_slot[PROTO_RULE] = realm_value_declare(ctx, "CSSOM §6.4.2 CSSRule.prototype");
-    g_proto_slot[PROTO_GROUPING] = realm_value_declare(ctx, "CSSOM §6.4.5 CSSGroupingRule.prototype");
-    g_proto_slot[PROTO_STYLE] = realm_value_declare(ctx, "CSSOM §6.4.3 CSSStyleRule.prototype");
-    g_proto_slot[PROTO_CONDITION] = realm_value_declare(ctx, "CSS Conditional 3 §7.2 CSSConditionRule.prototype");
-    g_proto_slot[PROTO_MEDIA] = realm_value_declare(ctx, "CSS Conditional 3 §7.3 CSSMediaRule.prototype");
-    g_proto_slot[PROTO_SUPPORTS] = realm_value_declare(ctx, "CSS Conditional 3 §7.4 CSSSupportsRule.prototype");
-    g_proto_slot[PROTO_CONTAINER] =
-        realm_value_declare(ctx, "CSS Conditional 5 §9.1 CSSContainerRule.prototype");
-    g_proto_slot[PROTO_IMPORT] = realm_value_declare(ctx, "CSSOM §6.4.4 CSSImportRule.prototype");
-    g_proto_slot[PROTO_NAMESPACE] = realm_value_declare(ctx, "CSSOM §6.4.9 CSSNamespaceRule.prototype");
-    g_proto_slot[PROTO_FONT_FACE] = realm_value_declare(ctx, "CSS Fonts 5 §9.1 CSSFontFaceRule.prototype");
-    g_proto_slot[PROTO_PAGE] = realm_value_declare(ctx, "CSSOM §6.4.7 CSSPageRule.prototype");
-    g_proto_slot[PROTO_MARGIN] = realm_value_declare(ctx, "CSSOM §6.4.8 CSSMarginRule.prototype");
-    g_proto_slot[PROTO_KEYFRAMES] = realm_value_declare(ctx, "CSS Animations §6.3 CSSKeyframesRule.prototype");
-    g_proto_slot[PROTO_KEYFRAME] = realm_value_declare(ctx, "CSS Animations §6.2 CSSKeyframeRule.prototype");
-    g_proto_slot[PROTO_LAYER_BLOCK] =
-        realm_value_declare(ctx, "CSS Cascade 5 §8.1 CSSLayerBlockRule.prototype");
-    g_proto_slot[PROTO_LAYER_STATEMENT] =
-        realm_value_declare(ctx, "CSS Cascade 5 §8.2 CSSLayerStatementRule.prototype");
-    g_proto_slot[PROTO_PROPERTY] =
-        realm_value_declare(ctx, "CSS Properties and Values API 1 §6.1 CSSPropertyRule.prototype");
-    g_proto_slot[PROTO_STARTING_STYLE] =
-        realm_value_declare(ctx, "CSS Transitions 2 §3.3.1 CSSStartingStyleRule.prototype");
+    agent_state_class("element", &g_rule_class,
+                      "CSSOM §6.4.2 \"The CSSRule Interface\"'s class, and this component's latch");
+    RULE_PROTO_SLOT(ctx, PROTO_RULE, "CSSOM §6.4.2 CSSRule.prototype");
+    RULE_PROTO_SLOT(ctx, PROTO_GROUPING, "CSSOM §6.4.5 CSSGroupingRule.prototype");
+    RULE_PROTO_SLOT(ctx, PROTO_STYLE, "CSSOM §6.4.3 CSSStyleRule.prototype");
+    RULE_PROTO_SLOT(ctx, PROTO_CONDITION, "CSS Conditional 3 §7.2 CSSConditionRule.prototype");
+    RULE_PROTO_SLOT(ctx, PROTO_MEDIA, "CSS Conditional 3 §7.3 CSSMediaRule.prototype");
+    RULE_PROTO_SLOT(ctx, PROTO_SUPPORTS, "CSS Conditional 3 §7.4 CSSSupportsRule.prototype");
+    RULE_PROTO_SLOT(ctx, PROTO_CONTAINER, "CSS Conditional 5 §9.1 CSSContainerRule.prototype");
+    RULE_PROTO_SLOT(ctx, PROTO_IMPORT, "CSSOM §6.4.4 CSSImportRule.prototype");
+    RULE_PROTO_SLOT(ctx, PROTO_NAMESPACE, "CSSOM §6.4.9 CSSNamespaceRule.prototype");
+    RULE_PROTO_SLOT(ctx, PROTO_FONT_FACE, "CSS Fonts 5 §9.1 CSSFontFaceRule.prototype");
+    RULE_PROTO_SLOT(ctx, PROTO_PAGE, "CSSOM §6.4.7 CSSPageRule.prototype");
+    RULE_PROTO_SLOT(ctx, PROTO_MARGIN, "CSSOM §6.4.8 CSSMarginRule.prototype");
+    RULE_PROTO_SLOT(ctx, PROTO_KEYFRAMES, "CSS Animations §6.3 CSSKeyframesRule.prototype");
+    RULE_PROTO_SLOT(ctx, PROTO_KEYFRAME, "CSS Animations §6.2 CSSKeyframeRule.prototype");
+    RULE_PROTO_SLOT(ctx, PROTO_LAYER_BLOCK, "CSS Cascade 5 §8.1 CSSLayerBlockRule.prototype");
+    RULE_PROTO_SLOT(ctx, PROTO_LAYER_STATEMENT, "CSS Cascade 5 §8.2 CSSLayerStatementRule.prototype");
+    RULE_PROTO_SLOT(ctx, PROTO_PROPERTY, "CSS Properties and Values API 1 §6.1 CSSPropertyRule.prototype");
+    RULE_PROTO_SLOT(ctx, PROTO_STARTING_STYLE, "CSS Transitions 2 §3.3.1 CSSStartingStyleRule.prototype");
     g_id_set_selector = idl_setter_id(ctx, IDL_DOMSTRING, false, js_rule_set_selector, 0);
     g_id_set_page_selector = idl_setter_id(ctx, IDL_DOMSTRING, false, js_rule_set_page_selector, 0);
     g_id_set_key_text = idl_setter_id(ctx, IDL_DOMSTRING, false, js_rule_set_key_text, 0);
@@ -4749,6 +4776,8 @@ void css_rule_init(JSContext *ctx)
     }
     realm_declare_intrinsic(css_rule_install_proto);
 }
+
+#undef RULE_PROTO_SLOT
 
 void css_rule_install_proto(JSContext *ctx)
 {
@@ -5060,4 +5089,15 @@ void css_rule_install(JSContext *ctx, JSValueConst global)
 void css_rule_free(JSRuntime *rt)
 {
     (void)rt;   /* every prototype is the REALM's — released with its context */
+    /* THE CLASS ID AND THE EIGHTEEN §6.4 PROTOTYPE SLOTS ARE NOT RESET HERE. All nineteen are declared
+       under `element`, whose release ends in agent_state_undo — one reset, computed from the registry that
+       already holds every address and every kind, rather than a nineteen-line enumeration four hundred
+       lines from the declarations.
+       THIS FUNCTION USED TO RESET NOTHING AT ALL. Nineteen slots were carried straight into the next agent,
+       so a second agent in one process met css_rule_init's own latch on a stale class id, returned at once,
+       and left every pool entry below naming the dead runtime's pool and every prototype slot naming a
+       realm array that no longer exists.
+       AND THE CASCADE REACHED THIS FILE, which is the claim that entitles element_free's last line to put
+       them back: element_free calls css_rule_free, and this says so. See core/agent_state.h. */
+    agent_state_reached("element");
 }

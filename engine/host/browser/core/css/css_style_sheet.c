@@ -34,6 +34,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/css/css_cascade_pass.h"   /* the render record a cascade-input write may not land inside */
 #include "core/css/css_rule.h"
 #include "core/css/css_rule_list.h"
@@ -170,11 +171,23 @@ bool css_style_sheet_is(JSValueConst v)
     return JS_GetOpaque(v, g_sheet_class) != NULL;
 }
 
-/* Finalizers and gc_marks go through JS_GetOpaque rather than the accessor DELIBERATELY: a capture during
-   collection would dup values on an object being torn down. */
+/* NEITHER OF THESE TWO READS THE CLASS ID, AND THAT IS THE PRICE OF DECLARING IT. The collector runs after
+   core/platform.c's release column — every host's teardown is platform_agent_free(), JS_RunGC, JS_FreeRuntime
+   — so by the time either of these is reached `g_sheet_class` is back at JS_INVALID_CLASS_ID and
+   `JS_GetOpaque(val, 0)` answers NULL for every live sheet. THE TWO FAILURES ARE NOT ALIKE: the finalizer
+   would leak the record and its eight owned values for every sheet a page built; the mark is worse, because
+   an unmarked child keeps the internal reference gc_decref exists to subtract, so gc_scan reads it as rooted
+   from OUTSIDE the heap and it is never collected at all. The id is not needed — the collector dispatched
+   here THROUGH the class, so it is a fact these already have.
+   STILL NOT THE ACCESSOR, for the reason that stood here and is unchanged: a capture during collection would
+   dup values on an object being torn down. JS_GetAnyOpaque is what reaches the record without either.
+   See core/agent_state.h's closing paragraph. */
 static void sheet_finalizer(JSRuntime *rt, JSValue val)
 {
-    CssStyleSheetData *s = JS_GetOpaque(val, g_sheet_class);
+    JSClassID id = 0;
+    CssStyleSheetData *s = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
 
     if (!s) return;
     JS_FreeValueRT(rt, s->owner_node);
@@ -190,7 +203,10 @@ static void sheet_finalizer(JSRuntime *rt, JSValue val)
 
 static void sheet_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    CssStyleSheetData *s = JS_GetOpaque(val, g_sheet_class);
+    JSClassID id = 0;
+    CssStyleSheetData *s = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
 
     if (!s) return;
     JS_MarkValue(rt, s->owner_node, mark_func);
@@ -1111,11 +1127,18 @@ static JSValue js_css_style_sheet_ctor(JSContext *ctx, JSValueConst this_val, in
 void css_style_sheet_init(JSContext *ctx)
 {
     JSClassDef d = { "CSSStyleSheet", sheet_finalizer, sheet_gc_mark };
+    /* ONE SPELLING, READ BY BOTH HALVES. core/realm.h names the slot for a heap dump and
+       core/agent_state.h names it for the assert a forgotten release fires; a second copy of the same
+       sentence on the next line is a fact kept in step by whoever remembers. */
+    static const char STYLESHEET_PROTO[] = "CSSOM §6.1.1 StyleSheet.prototype";
 
     if (g_sheet_class) return;   /* one AGENT, one class and one set of pool entries */
     JS_NewClassID(JS_GetRuntime(ctx), &g_sheet_class);
     JS_NewClass(JS_GetRuntime(ctx), g_sheet_class, &d);
-    g_stylesheet_proto_slot = realm_value_declare(ctx, "CSSOM §6.1.1 StyleSheet.prototype");
+    agent_state_class("element", &g_sheet_class,
+                      "CSSOM §6.1.2 \"The CSSStyleSheet Interface\"'s class, and this component's latch");
+    g_stylesheet_proto_slot = realm_value_declare(ctx, STYLESHEET_PROTO);
+    agent_state_realm_slot("element", &g_stylesheet_proto_slot, STYLESHEET_PROTO);
     g_id_set_disabled = idl_setter_id(ctx, IDL_BOOLEAN, false, js_sheet_set_disabled, 0);
     {
         /* §6.1.2: `unsigned long insertRule(CSSOMString rule, optional unsigned long index = 0)` and
@@ -1255,5 +1278,14 @@ void css_style_sheet_install(JSContext *ctx, JSValueConst global)
 
 void css_style_sheet_free(JSRuntime *rt)
 {
-    (void)rt;   /* both prototypes are the REALM's — released with its context, and the class is the agent's */
+    (void)rt;   /* both prototypes are the REALM's — released with its context */
+    /* THE CLASS ID AND THE §6.1.1 PROTOTYPE SLOT ARE NOT RESET HERE. Both are declared under `element`,
+       whose release ends in agent_state_undo — one reset, computed from the registry that already holds
+       their addresses and their kinds, rather than a second list a thousand lines from the declarations.
+       THIS FUNCTION USED TO RESET NOTHING AT ALL and say the class "is the agent's": it was, and it was
+       never given back, so a second agent in one process met css_style_sheet_init's own latch on a stale
+       id, returned at once, and ran with every pool entry below still naming the dead runtime's pool.
+       AND THE CASCADE REACHED THIS FILE, which is the claim that entitles element_free's last line to put
+       them back: element_free calls css_style_sheet_free, and this says so. See core/agent_state.h. */
+    agent_state_reached("element");
 }

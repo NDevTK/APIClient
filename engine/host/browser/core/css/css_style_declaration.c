@@ -86,6 +86,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/idl_slots.h"
 #include "core/idl_args.h"
 #include "core/idl_index_arg.h"   /* §6.6.1's `item` index, known and unknown — the ARGUMENT half */
@@ -5620,6 +5621,9 @@ static JSValue js_get_computed_style(JSContext *ctx, JSValueConst this_val, int 
 void cssom_init(JSContext *ctx)
 {
     uintptr_t id;
+    static const char DECLARATION_PROTO[] = "CSSOM §6.6.1 CSSStyleDeclaration.prototype";
+    static const char FONT_FACE_PROTO[]   = "CSS Fonts 5 §9.1 CSSFontFaceDescriptors.prototype";
+    static const char PAGE_PROTO[]        = "CSSOM §6.4.7 CSSPageDescriptors.prototype";
 
     DCHECK(!g_ready, "cssom_init ran twice — one instance is one document");
     /* The shorthand table's own invariants, asserted before anything reads it — §6.6's serialization walks it
@@ -5661,10 +5665,19 @@ void cssom_init(JSContext *ctx)
         JSClassDef d = { "CSSStyleProperties" };
         JS_NewClassID(JS_GetRuntime(ctx), &g_cssd_class);
         JS_NewClass(JS_GetRuntime(ctx), g_cssd_class, &d);
+        agent_state_class("element", &g_cssd_class,
+                          "CSSOM §6.6.1 \"The CSSStyleDeclaration Interface\"'s per-realm prototype-holder class");
     }
-    g_declaration_proto_slot = realm_value_declare(ctx, "CSSOM §6.6.1 CSSStyleDeclaration.prototype");
-    g_font_face_proto_slot = realm_value_declare(ctx, "CSS Fonts 5 §9.1 CSSFontFaceDescriptors.prototype");
-    g_page_proto_slot = realm_value_declare(ctx, "CSSOM §6.4.7 CSSPageDescriptors.prototype");
+    /* ONE SPELLING FOR BOTH HALVES OF EACH SLOT. core/realm.h names it for a heap dump and
+       core/agent_state.h names it for the assert a forgotten release fires; the same sentence typed twice
+       on two adjacent lines is a fact kept in step by whoever remembers, which is what the registry exists
+       to stop being asked of a person. */
+    g_declaration_proto_slot = realm_value_declare(ctx, DECLARATION_PROTO);
+    agent_state_realm_slot("element", &g_declaration_proto_slot, DECLARATION_PROTO);
+    g_font_face_proto_slot = realm_value_declare(ctx, FONT_FACE_PROTO);
+    agent_state_realm_slot("element", &g_font_face_proto_slot, FONT_FACE_PROTO);
+    g_page_proto_slot = realm_value_declare(ctx, PAGE_PROTO);
+    agent_state_realm_slot("element", &g_page_proto_slot, PAGE_PROTO);
     g_ready = 1;
     {
         static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
@@ -5924,4 +5937,13 @@ void cssom_free(JSRuntime *rt)
         g_parser = NULL;
     }
     g_ready = 0;
+    /* THE CLASS ID AND THE THREE PROTOTYPE SLOTS ARE NOT RESET HERE. All four are declared under
+       `element`, whose release ends in agent_state_undo — one reset, computed from the registry that
+       already holds their addresses and their kinds, rather than a second list kept in step with the
+       declarations three hundred lines above by whoever remembered. What stays is every REFERENCE and the
+       null that guards a free: the undo resets HANDLES and never references, so the two key values, the
+       parse table, the selector state and the parser keep their own reset beside them.
+       AND THE CASCADE REACHED THIS FILE, which is the claim that entitles element_free's last line to put
+       the four back: element_free calls cssom_free, and this says so. See core/agent_state.h. */
+    agent_state_reached("element");
 }

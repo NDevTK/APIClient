@@ -12,6 +12,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/css/css_cascade_pass.h"   /* the render record a cascade-input write may not land inside */
 #include "core/css/media_list.h"
 #include "core/css/media_query.h"
@@ -443,6 +444,7 @@ void media_list_init(JSContext *ctx)
     if (g_list_class) return;   /* one AGENT, one class and one set of pool entries */
     JS_NewClassID(JS_GetRuntime(ctx), &g_list_class);
     JS_NewClass(JS_GetRuntime(ctx), g_list_class, &d);
+    agent_state_class("element", &g_list_class, "CSSOM §4.4 \"The MediaList Interface\"'s class");
     g_queries_key = JS_NewSymbol(ctx, "mediaListQueries", false);
     CHECK(!JS_IsException(g_queries_key), "the MediaList slot key allocation failed");
     g_atom_queries = JS_ValueToAtom(ctx, g_queries_key);
@@ -503,4 +505,15 @@ void media_list_free(JSRuntime *rt)
     g_queries_key = JS_UNDEFINED;
     g_id_item = g_id_append = g_id_delete = g_id_to_string = -1;
     g_id_set_media_text = g_id_put_forwards = -1;
+    /* THE CLASS ID IS NOT RESET HERE. It is declared under `element`, whose release ends in
+       agent_state_undo — one reset, computed from the registry that already holds this slot's address and
+       kind, rather than a second list kept in step with the declaration by whoever remembered. AND THE
+       CASCADE REACHED THIS FILE, which is the claim that entitles element_free's last line to put it
+       back: element_free calls media_list_free, and this says so.
+       AND THE ID WAS THE ONE THING THIS RELEASE DID NOT GIVE BACK, while everything beside it did:
+       g_atom_queries, g_queries_key and the pool entries above are reset here and the class was not, so a
+       SECOND agent in one process met the init's own latch on a stale id, returned at once, and
+       every MediaList of that agent would have been keyed by JS_ATOM_NULL and served by pool entry -1.
+       See core/agent_state.h. */
+    agent_state_reached("element");
 }
