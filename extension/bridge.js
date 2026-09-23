@@ -3193,10 +3193,13 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          "this zone could not serialize an origin from a document address the engine's own url.c accepted — " +
          "the frontier key would name a document by a string the two parsers do not agree is one");
   const fkey = msg.sourceUrl + "|" + _bid;
-  /* ONE READ, AND IT ANSWERS `WHY NOT` BESIDE `WHAT`. This was `frontierGet(fkey)`, whose null is three facts
-     that take opposite work — never parked, parked under another bundle id, or parked under THIS key and not
-     handed back — and a live drive could separate none of them: it read `resumed: 0` and the key the answer
-     turns on was composed on the line above and published nowhere. frontierLookup asks the same key AND, in
+  /* ONE READ, AND IT ANSWERS `WHY NOT` BESIDE `WHAT`. This was `frontierGet(fkey)`, whose null is FIVE facts
+     that take opposite work — nothing was asked, the read edge failed, nothing is parked for this address,
+     something is parked under another bundle id, or THIS key is in the store and was not handed back —
+     and a live drive could separate none of them: it read `resumed: 0` and the key the answer
+     turns on was composed on the line above and published nowhere. `COLD_LOOKUP` is the whole set and the
+     paragraph above it is what each word means; this line does not restate them, because a count of a closed
+     set written beside the set is the census that goes wrong the moment a word is added. frontierLookup asks the same key AND, in
      the same transaction, which keys this store holds for this document's ADDRESS, which is a bounded walk of
      the store's own primary-key ordering rather than a scan (the key is `address + "|" + bundle`, so one
      document's entries are contiguous). The three fields below are what a reader of a run meets instead of the
