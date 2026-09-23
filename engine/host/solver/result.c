@@ -1962,7 +1962,8 @@ char *result_cold_json(void) {
        session ever held. */
     long rp_hits, rp_left, rp_left_arms;
     long awaiting_rows;   /* the awaited-rows gauge, read ONCE below and used by the assert and the row */
-    long ep_minted, ep_assets, ep_emitted;   /* what the emitted @H array is a fraction of — endpoint.h */
+    /* what the emitted @H array is a fraction of, and what of it predates any program — endpoint.h */
+    long ep_minted, ep_assets, ep_emitted, ep_pre_program;
 
     cold_census(&c);
     engine_step_unit_runs(&r);
@@ -2047,7 +2048,7 @@ char *result_cold_json(void) {
        array's length is the product's headline number and it has never carried a denominator, so a reader has
        had no way to tell a run that learned N endpoints from one that minted many and classified nearly all of
        them as files. endpoint.c asserts the two arms sum to the mint where all three are in one hand. */
-    endpoint_surface_census(&ep_minted, &ep_assets, &ep_emitted);
+    endpoint_surface_census(&ep_minted, &ep_assets, &ep_emitted, &ep_pre_program);
     /* AND IT IS A SUBSET OF THE REGISTERS IT IS COUNTED AGAINST, which is the only relation these two rows
        have and therefore the only one worth asserting. Every row standing as an external script has exactly
        one entry naming it by `dyn_id` on the SAME member's register — solver/engine.c pushes the two together
@@ -2414,7 +2415,19 @@ char *result_cold_json(void) {
                     which is a reply door that answered without naming a type and NOT a finding about the
                     surface. Those are different diffs and until these rows existed the array's length was
                     the only thing published and could not tell them apart. */
-                 "\"epMinted\":%ld,\"epAssets\":%ld,\"epEmitted\":%ld}",
+                 /* AND HOW MANY OF THE EMITTED ROWS WERE MINTED BEFORE THIS INSTANCE STARTED A PROGRAM —
+                    the row the three above cannot compose, because they partition the surface by what the
+                    REPLY was and this is about who composed the ADDRESS. `epEmitted - epPreProgram` is the
+                    most addresses forced execution can have contributed to this document's surface, so a run
+                    reading them EQUAL learned nothing the markup did not already state, whatever the array's
+                    length says. THE SHAPE THIS ROW EXISTS FOR, measured on one production single-page app
+                    and re-derived from its served markup: every row of a 43-row surface was one of that
+                    document's own `<script src>`, `<link rel=stylesheet>` or `<link rel=preload>` elements,
+                    so the number a person reads as a learned API surface was the `<head>` counted back. It
+                    reproduced across two engine revisions and across two different terminal events, which is
+                    what a figure fixed before the search starts looks like. endpoint.h holds the contract,
+                    the ceiling reading and the residual for a resumed timeline. */
+                 "\"epMinted\":%ld,\"epAssets\":%ld,\"epEmitted\":%ld,\"epPreProgram\":%ld}",
                  c.flows, c.framed, c.blocked, flow_host_owed_count(),
                  e.finished, e.finished_flows, e.finished_cands,
                  e.deepest, e.completed, e.deepest_left,
@@ -2457,7 +2470,7 @@ char *result_cold_json(void) {
                  c.out_of_programs,
                  c.out_of_programs_unrun, c.out_of_programs_framed, c.out_of_programs_at_the_ladder,
                  ladder, hist, cursors,
-                 ep_minted, ep_assets, ep_emitted);
+                 ep_minted, ep_assets, ep_emitted, ep_pre_program);
     free(cursors);
     cold_census_release(&c);
     return out;

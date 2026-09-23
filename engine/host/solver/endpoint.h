@@ -359,7 +359,44 @@ void    endpoint_mark_asset(const char *method, const char *url);
    THE EMITTED FIGURE IS DERIVED BY THE SAME SKIP THE EMIT PERFORMS rather than by subtracting, so a record kind
    that stops being written cannot make the two disagree silently.
    RETIREMENT: this record goes when the emitted array carries its own denominator, because the partition is
-   then a property of the document rather than a row beside it. */
-void    endpoint_surface_census(long *minted, long *assets, long *emitted);
+   then a property of the document rather than a row beside it.
+
+   …AND THE FOURTH NUMBER, WHICH IS ABOUT WHO COMPOSED THE ADDRESS RATHER THAN WHAT THE RESOURCE TURNED OUT TO
+   BE. The three rows above partition the surface by the REPLY — a file or not a file — and say nothing
+   whatever about whether the page's own code had run when a record was born. `pre_program` is how many of the
+   EMITTED records were minted while this instance had started no program at all, so `emitted - preProgram` is
+   the largest number of addresses forced execution could have contributed, and it is the product's headline
+   claim stated as a figure a reader of one run can check.
+   WHY IT IS A ROW AND NOT A COUNT OF `prov`. Every record already carries a provenance and a reader can count
+   them; on a real page that count answers the wrong question, and answers it in the flattering direction.
+   `observed` requires HTML §4.12.1.1 "Processing model"'s `parser document`, which only the PARK register
+   holds, so every subresource a browser algorithm records — core/html/html_link.c's stylesheets and preloads,
+   core/html/html_image.c's candidates — is graded through `engine_prov_of_running_path`, whose own
+   declaration states that it can never answer `observed`. Those records land on `derived`, whose definition is
+   that running code COMPUTED the address. A document whose whole surface is its own markup therefore publishes
+   a surface of `derived` rows, and a reader counting them counts addresses that were read out of the `<head>`.
+   §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS is that shape exactly, and its cure is the one taken here: the
+   provenance is left alone, because it is right for the firing policy that reads it, and the REPORTING
+   question gets its own predicate over a fact the engine already computes.
+   IT IS A CEILING ON THE CONTRIBUTION AND NOT A MEASURE OF IT, which is the one thing a reader must not
+   over-read. A record minted after the first program started is not thereby code-composed — a `<link>` the
+   parser inventoried is served by the first flow, and a document whose markup is walked late would mint markup
+   addresses on the far side of the boundary — so the complement BOUNDS what forced execution can have
+   contributed and never states it. The direction is the honest one: it cannot report a contribution that did
+   not happen.
+   NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: the markup of a document that is not the one
+   this instance opened over. The boundary is per INSTANCE, and a CHILD navigable's Document is parsed and its
+   `<link>` inventory served long after the root has started programs — so every subresource a child's own
+   markup names is minted on the post-program side while being markup, exactly like the root's own would have
+   been had it arrived later. Those records widen the complement and none of them is an address running code
+   composed. WHAT THE NEXT DIFF BUILDS: the boundary taken per DOCUMENT rather than per instance — an
+   any-program-started bit carried on the Document the record's realm belongs to, raised where that document's
+   first program starts, so a child's markup grades against its own parse and not against the root's progress.
+   HOW ITS ABSENCE WOULD SHOW: a page whose subresources are mostly its children's reports a complement that
+   grows with the number of child navigables it creates rather than with anything its code computed, and it
+   does so while the array beside the number holds nothing but files.
+   FOUR NUMBERS AND NOT A FIFTH CALL: they are one walk over one array and a second accessor would be a second
+   instant, which is the two-instants collapse §Testing names. */
+void    endpoint_surface_census(long *minted, long *assets, long *emitted, long *pre_program);
 
 #endif

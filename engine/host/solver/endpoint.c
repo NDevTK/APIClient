@@ -75,8 +75,16 @@ typedef struct { char *name; char *value; } EpHeader;   /* the transport half: w
    — see endpoint.h for why the pending line's most-observed fold is right there and wrong here. The one
    consequence to keep in view while reading the merges below: every value, exclusion, bound and predicate on
    a record was observed at ONE grade, because a sighting at another grade cannot reach it. */
+/* `pre_program` IS WHETHER THIS INSTANCE HAD RUN A LINE OF ANY PROGRAM WHEN THIS RECORD WAS MINTED, and it is
+   the one fact about a sighting that `prov` structurally cannot carry — see endpoint.h's census contract and
+   solver/engine.h's `engine_any_program_started` for why the provenance is the wrong field to ask.
+   IT IS A PROPERTY OF THE MINT AND NOT OF THE ADDRESS, which is what makes it answer the question it is for.
+   A later sighting of an address already on this surface teaches the surface nothing new — the record exists,
+   the WFQ was credited for it once, and the merge below adds structure rather than an endpoint — so what a
+   reader wants to know is whether the SIGHTING THAT CREATED THE RECORD needed the page's code to run. A flag
+   re-armed on every merge would answer a different question and would answer it about the last sighting. */
 typedef struct { char *method; char *path; Param *params; int np, pcap;
-                 EpHeader *hdrs; int nh, hcap; int is_asset; int prov;
+                 EpHeader *hdrs; int nh, hcap; int is_asset; int prov; int pre_program;
                  /* THE BODY THIS ENGINE HAD NO FIELD READER FOR — see endpoint.h. Set only where
                     `body_params` named NOTHING, so it is never a second spelling of fields already on
                     `params`, and never overwritten once set: a request body is ONE example, not a set.
@@ -1630,6 +1638,10 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     Endpoint *e = &g_eps[g_eps_n++];
     memset(e, 0, sizeof *e);
     e->method = strdup(method); e->path = strdup(path); e->prov = prov;
+    /* WHETHER ANY PROGRAM HAD STARTED WHEN THIS RECORD WAS BORN — read HERE, at the mint, because that is the
+       instant the fact is about and the only instant at which it is still true. A read at the census would
+       answer for the census's moment, which is the end of the run, and every record would grade the same. */
+    e->pre_program = !engine_any_program_started();
     if (kvb.n) { e->params = calloc((size_t)kvb.n, sizeof(Param)); CHECK(e->params, "endpoint: OOM params"); }
     for (int j = 0; j < kvb.n; j++) {
         e->params[e->np].name = strdup(kvb.e[j].name);
@@ -1690,23 +1702,42 @@ void endpoint_mark_asset(const char *method, const char *url) {
     kv_free(&kvb);
 }
 
-/* THE THREE NUMBERS THE EMITTED ARRAY IS A FRACTION OF — see endpoint.h for why its length alone is three
-   states. ONE walk, and the emitted arm is spelled with the SAME `is_asset` skip `endpoint_json_array`
-   performs, so the two producers of this figure cannot disagree about what an endpoint is. */
-void endpoint_surface_census(long *minted, long *assets, long *emitted) {
-    long a = 0, em = 0;
-    DCHECK(minted && assets && emitted,
-           "the @H surface census was asked for with somewhere to put fewer than three of its numbers — the "
+/* THE NUMBERS THE EMITTED ARRAY IS A FRACTION OF — see endpoint.h for why its length alone is three states,
+   and for what the fourth adds that the first three structurally cannot: they partition the surface by what
+   the REPLY turned out to be, and it says how much of the surface predates the page's own code running.
+   ONE walk, and the emitted arm is spelled with the SAME `is_asset` skip `endpoint_json_array` performs, so
+   the two producers of this figure cannot disagree about what an endpoint is. */
+void endpoint_surface_census(long *minted, long *assets, long *emitted, long *pre_program) {
+    long a = 0, em = 0, pre = 0;
+    DCHECK(minted && assets && emitted && pre_program,
+           "the @H surface census was asked for with somewhere to put fewer than four of its numbers — the "
            "partition is the whole point and a caller taking one of them is reading a bare count again");
     for (int i = 0; i < g_eps_n; i++) {
         if (g_eps[i].is_asset) a++;
-        else em++;
+        else {
+            em++;
+            /* COUNTED INSIDE THE EMITTED ARM AND NOWHERE ELSE, so this number is a subset of the figure it
+               will be read against rather than of the mint. Spelled with the SAME `is_asset` skip
+               `endpoint_json_array` performs, for the reason `emitted` is: a record kind that stops being
+               written cannot make the two disagree silently. */
+            if (g_eps[i].pre_program) pre++;
+        }
     }
     DCHECK(a + em == (long)g_eps_n,
            "the @H surface's asset and endpoint counts do not sum to the records minted — they are one walk "
            "over one array with a two-arm split, so a disagreement here is a record that is neither kind and "
            "the emitted figure is about a population this census cannot see");
-    *minted = (long)g_eps_n; *assets = a; *emitted = em;
+    /* AND THE CONTAINMENT THAT MAKES THE FOURTH NUMBER READABLE AT ALL. It is the whole of the relation these
+       two rows have — the pre-program records are a SUBSET of the emitted ones, never a partition of the mint
+       — and it is the one thing a reader has to be able to assume to compute the complement. A value above
+       `emitted` would be the count having been raised outside the skip above, which is the one way this walk
+       can go wrong and the one way the arithmetic a reader does with it silently inverts. */
+    DCHECK(pre <= em,
+           "the @H surface counted more records minted BEFORE the first program than it emits at all — the "
+           "pre-program count is raised only inside the emitted arm of this one walk, so a value above it is "
+           "a second raise added outside that arm; a reader computing `emitted - preProgram` as the number of "
+           "addresses running code could have composed would read a negative count as a large one");
+    *minted = (long)g_eps_n; *assets = a; *emitted = em; *pre_program = pre;
 }
 
 /* Serialize the @H surface DIRECTLY to a JSON string in C (caller frees) — no JS-object round-trip. The

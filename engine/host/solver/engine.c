@@ -9565,6 +9565,22 @@ static int  g_completed = -1;
    A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing reads them and no arm branches on one. */
 static long g_prog_starts, g_prog_starts_cand, g_prog_starts_other;
 
+/* See engine.h. THE READ IS OF THE TOTAL AND NOT OF EITHER ARM, which is the whole of what "any" means here:
+   a candidate re-fire and a host's synthesized row are programs, and an address minted while one of them was
+   running was minted after this instance had begun executing. Answering from `g_prog_starts_other` alone —
+   or from the page arm alone — would make the bit say something narrower than its name and would be a second
+   partition of a line that already has one.
+   NO ASSERT STANDS HERE AND THAT IS A PROPERTY OF THE READ RATHER THAN AN OMISSION. The only thing that could
+   make this bit wrong is the counter going BACKWARD, and it is `++`-only at the single line a program starts
+   (there is no reset anywhere), so the monotonicity this depends on is true by construction and there is no
+   state to check. The identity between the total and its two arms is a different claim, it belongs to the
+   three rows rather than to this read, and engine_frontier_census already makes it where all three are in one
+   hand — restating it here would be a second copy of one rule, free to drift from the one that is checked. */
+int engine_any_program_started(void)
+{
+    return g_prog_starts > 0;
+}
+
 /* HTML §8.1.4.4 "Calling scripts", "run a module script" step 8: "If preventErrorReporting is false, then upon rejection of
  * evaluationPromise with reason, report an exception given by reason for script's settings object's global
  * object." A module completes as a PROMISE — that is the whole difference between running a module script and

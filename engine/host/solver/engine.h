@@ -1922,6 +1922,29 @@ void engine_frontier_census(EngineFrontierCensus *out);
  * below — which is why there is no assert between the two. */
 long engine_rows_awaiting_bytes(void);
 
+/* HAS ANY PROGRAM STARTED IN THIS INSTANCE AT ALL — one bit, monotone, read by the @H surface to say which of
+ * its records were minted before the page's own code had run a line.
+ * WHY THE @H SURFACE NEEDS IT AND CANNOT COMPOSE IT. An endpoint record carries a PROVENANCE, and that field
+ * answers what a request is EVIDENCE OF — whether a real load makes it, whether a forced arm is under it —
+ * which is the firing policy's question and is the right question for the firing policy. It is not the
+ * REPORTING question, and the two came apart on every real page measured: `engine_prov_of_running_path`
+ * states in its own declaration above that it can never answer `observed`, so every subresource a PARSER
+ * inserted and a browser algorithm recorded is graded `derived` — and `derived`'s own definition, the code
+ * COMPUTED this address from real inputs, is the product's headline claim. A document whose whole surface is
+ * its own markup therefore reports a surface of `derived` rows, and a reader counting them counts addresses
+ * forced execution never composed. §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS is the shape exactly: one field,
+ * two questions, decided by the stricter one, with the cost landing silently on the other. The cure that rule
+ * prescribes is TWO predicates over ONE fact rather than a second field free to disagree, and the fact this
+ * one is asked of is `g_prog_starts` — written at the single line a program starts, beside the two arms that
+ * partition it.
+ * IT IS A COUNT CROSSING ZERO AND NOT A HIGH-WATER MARK, DELIBERATELY. `g_deepest` would answer the same
+ * question today and its own declaration is a paragraph about how it has been misread — it SATURATES, reads
+ * flat, and was dispatched as a ceiling into three briefs. A reader who follows this call reaches a monotone
+ * count whose zero means one thing.
+ * A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing branches on it, no request is refused because of it, and
+ * the surface it feeds is a census row. */
+int engine_any_program_started(void);
+
 /* THE ALLOCATOR UNDER THE JS HEAP, which is the one number quickjs's own accounting structurally cannot give.
  * `JS_ComputeMemoryUsage` walks the RUNTIME; Lexbor's document arenas, the per-flow COW deltas and every other
  * `malloc` in this host are invisible to it, so a run whose RSS is sixteen times its JS heap has nothing in
