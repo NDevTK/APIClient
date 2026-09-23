@@ -7168,6 +7168,32 @@ STAGES.push(onHost(runProgram("Web IDL gap audit", [join(ENGINE, "idlgen.mjs")],
                        "is closed IN THE AUDIT, never by implementing anything in a component, and until it is the " +
                        "finding count is a FLOOR. There is no baseline to update: the findings ARE the gap."),
   STAGE_HOST.SOURCE));
+/* THE FOURTH AREA, AND THE ONLY ONE WHOSE SUBJECT IS THIS PROJECT'S OWN SPEC. CLAUDE.md's opening argues that
+   its recording rules only ever ADD — a retired argument is REWRITTEN RATHER THAN DELETED, an incident is KEPT
+   AT THE SITE — that the cost is a measured legibility defect rather than a matter of taste, and that the cure
+   is a RETIREMENT CONDITION stated per record. It then names the construction that would close the ratchet by
+   itself, as a residual with its next diff spelled out: "a check in the build that reads this file and refuses
+   an emphasised record carrying none". This is that check, and it is pushed HERE rather than left to be run by
+   hand for the reason every other audit on this list is: a gate that only prints is a gate somebody has to
+   remember to read, and the one population nobody re-reads is the document they are all quoting.
+   ITS EXIT CODE IS SCOPED TO WHAT THIS CHECKOUT INTRODUCED, WHICH IS WHAT KEEPS IT OFF THE FURNITURE PILE.
+   CLAUDE.md measured, on this build's own record-field stage, that a verdict summing a pre-existing population
+   is red on every run — so the change that is the signal never comes and nobody opens the body. This one
+   carries only what the work between `origin/main` and the working tree put there, and prints everything already
+   standing as a WORK QUEUE with line numbers on every run including the clean day. That is a list of DEFECTS
+   PRESENT and never a count of conditions ABSENT, which is the status CLAUDE.md bans outright.
+   IT IS A SOURCE STAGE ON THE SAME ARGUMENT AS THE TWO ABOVE: it compiles no C, reads no artifact, and opens
+   no engine slice, so it has no denomination to state and its finding is about the REVISION on every host. */
+STAGES.push(onHost(runProgram("CLAUDE.md record-landing gate", [join(ENGINE, "mdgate.mjs")],
+                       "a record that lands with no retirement condition is one nothing will ever retire, and " +
+                       "CLAUDE.md's own opening is what says why that is a defect rather than a habit. State " +
+                       "the condition IN THE SAME PARAGRAPH, and state it over the TREE, the BUILD or an " +
+                       "ARTIFACT: a condition satisfied by something NOT EXISTING, or quantified over that " +
+                       "file's own prose, is met by an EDIT while nothing has been built — a sweep target and " +
+                       "never a removal licence. A broken-emphasis finding is a MARKER repair and never a " +
+                       "word: the slip is a record appended after an emphasised run whose closing `**` was " +
+                       "then consumed as the new headline's opener. There is no baseline to update and no " +
+                       "allowlist: the findings ARE the disagreement."), STAGE_HOST.SOURCE));
 report(STAGES, FINDINGS);
 
 /* A THIRD DRIVE STOOD HERE — the driver for the deleted second program, which put the RENDERER REGISTRY's
