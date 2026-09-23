@@ -76,19 +76,40 @@ CspReporter csp_reporter_none(void)
    STEP 1 RETURNS A BARE SCHEME AND NOT A URL, which is the whole of this algorithm's privacy purpose: a
    `data:` or `blob:` or `filesystem:` address carries the content itself, so what a report may say about one
    is its scheme and nothing more.
-   THE FRAGMENT IS SET TO THE EMPTY STRING AND NOT TO NULL, AND THE OBSERVABLE OF THAT IS LARGE: the URL
-   Standard's serializer appends for any fragment that is NON-NULL — core/url/url.c's own arm tests the
-   POINTER — so EVERY `documentURI` and EVERY `blockedURI` this component produces ends in a bare `#`, for
-   an address that carried no fragment as much as for one that did. That is what the two steps say when they
-   are read together: "Set url's fragment to the empty string", then the plain URL serializer with no
-   exclude-fragment flag. It is written that way here rather than to the answer a reader expects, because
-   CLAUDE.md's browser half makes the SPEC the source of truth and real Chrome the confirmation.
-   IT IS FALSIFIABLE IN ONE PAGE LOAD AND THE ANSWER IS ONE LINE. Serve a document a policy refuses one
-   request for, listen for `securitypolicyviolation`, and read `e.blockedURI`. If real Chrome answers with no
-   trailing `#`, the divergence is THIS step and nothing downstream of it — the repair is to serialize with
-   the exclude-fragment flag here, and the finding is about §5.4's own wording rather than about anything
-   else in this file. Nothing that reads this result branches on the character, so the two answers differ in
-   exactly the bytes a handler sees. */
+   STEP 2 IS SPELLED `null` HERE AND §5.4 SAYS "the empty string", AND THAT DEVIATION IS DELIBERATE — IT IS
+   THE ONE WORD OF §5.4 THIS COMPONENT READS AGAINST ITS LETTER, SO IT CARRIES ITS EVIDENCE.
+   This file used to write the empty string literally, and the observable of that was large: URL §4.5 "URL
+   serializing" says "If exclude fragment is false and url's fragment is NON-NULL, then append U+0023 (#),
+   followed by url's fragment, to output", and core/url/url.c's own arm tests the POINTER — so every
+   `documentURI` and every `blockedURI` ended in a bare `#`, for an address that carried no fragment as much
+   as for one that did. Step 5 invokes "the URL serializer" with no exclude-fragment argument, and §4.5 gives
+   that argument a default of false, so the literal composition of the two steps really does emit the `#`.
+   WHY THE WORD RATHER THAN THE FLAG. One of the two steps has to give, and only one of them has a spec
+   sentence behind it. Referrer Policy §8.4 "Strip url for use as a referrer" is the same working group's
+   algorithm for the same job — its prose says "a URLs fragment, username, and password components must be
+   stripped from the URL before it's sent out" — and it spells the three steps APART: "Set url's username to
+   the empty string", "Set url's password to the empty string", "Set url's fragment to NULL". That is the
+   distinction §5.4 loses: an empty username or password serializes to nothing, because §4.5 emits credentials
+   only when "url includes credentials", while an empty FRAGMENT is the one of the three whose empty value is
+   still emitted, and null is the only value that strips it. §5.4 carries the credential idiom onto a field
+   where it has a different observable, which is why the section titled "Strip URL for use in reports" would
+   not strip. So the deviation is confined to step 2 and step 5 stays exactly as §5.4 writes it — the plain
+   serializer, no flag — rather than the other way round, for which no standard anywhere gives a sentence.
+   MEASURED, AND THE SPEC IS NOT ALONE IN SAYING SO. web-platform-tests' own
+   `content-security-policy/support/testharness-helper.js` resolves on `e.blockedURI == url` against a
+   FRAGMENTLESS url, so the literal reading does not fail those tests, it hangs them; and a document served
+   `connect-src 'none'` whose handler beacons its fields to the serving host's access log had real Chrome
+   write `https://example.invalid/x` where this engine wrote `https://example.invalid/x#`, in one log, from
+   one fixture, the two runs separated by `sec-fetch-dest`. A no-policy control on the same host produced no
+   beacon from either.
+   THIS TREE ALREADY HELD THE CORRECT SPELLING ONE ZONE OVER, WHICH IS THE CHEAPEST CHECK OF ALL: the
+   trusted zone strips a page address the same way in `extension/offscreen-brain.js`, as `base.hash = ""`,
+   under a comment reading "empty string ⇒ fragment null ⇒ no trailing `#` in href" — and it is right,
+   because URL §6.1 "URL class" gives that setter a first step of "If the given value is the empty string,
+   then set this's URL's fragment to null and return". The JS half asked the URL API and got null; the C
+   half wrote the field directly and got the empty string. One project, one question, two answers.
+   THE TELL FOR THE NEXT READER, WHO WILL REACH FOR THE OTHER REPAIR: passing the exclude-fragment flag at
+   step 5 gets the same bytes and cites nothing. This spelling is the one Referrer Policy §8.4 writes down. */
 static char *csp_strip_url_for_reports(const UrlRecord *url)
 {
     UrlRecord stripped;
@@ -110,17 +131,20 @@ static char *csp_strip_url_for_reports(const UrlRecord *url)
         url_record_free(&stripped);
         return NULL;
     }
-    free(stripped.fragment);                    /* STEP 2 — "set url's fragment to the empty string" */
-    stripped.fragment = malloc(1);
-    if (stripped.fragment) stripped.fragment[0] = 0;
+    free(stripped.fragment);                    /* STEP 2 — §5.4 says "the empty string"; see the banner */
+    stripped.fragment = NULL;
     free(stripped.username);                    /* STEP 3 — "set url's username to the empty string" */
     stripped.username = malloc(1);
     if (stripped.username) stripped.username[0] = 0;
     free(stripped.password);                    /* STEP 4 — "set url's password to the empty string" */
     stripped.password = malloc(1);
     if (stripped.password) stripped.password[0] = 0;
-    /* STEP 5 — "return the result of executing the URL serializer on url", with no exclude-fragment flag. */
-    out = (stripped.fragment && stripped.username && stripped.password)
+    /* STEP 5 — "return the result of executing the URL serializer on url", with no exclude-fragment flag.
+       THE GUARD NO LONGER NAMES THE FRAGMENT, AND MUST NOT: it is an allocation-failure test, and step 2 now
+       stores a NULL there ON PURPOSE. Leaving `stripped.fragment` in this conjunction would read the step's
+       own correct answer as a failed `malloc` and return NULL, which the caller turns into a fatal `CHECK` —
+       so the two lines are one change and splitting them aborts every violation this component reports. */
+    out = (stripped.username && stripped.password)
               ? url_serialize(&stripped, /*exclude_fragment*/ false)
               : NULL;
     url_record_free(&stripped);
