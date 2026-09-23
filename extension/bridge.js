@@ -347,7 +347,7 @@ function assertResultDocument(r) {
        reason this refusal was written with, and the reason it still holds for seven of the eight tables on this
        document — is a statement about a table whose keys COME FROM A FIXED LIST, and it is false of one whose
        keys are DERIVED. `_cold`'s five walk solver/step_unit.h's STEP_UNITS ("Both arms are emitted, always,
-       zeroes included, and engine/build.mjs's `COLD_FIELDS` throws on either going absent"), `_swap`'s two walk
+       zeroes included, and engine/build.mjs's `coldFields()` throws on either going absent"), `_swap`'s two walk
        solver/cow.h's COW_STATE_KINDS (cow_state_hist_json loops cow_state_kind_count() and "HOLDS NO LIST OF ITS
        OWN"), and solver/absent.c emits its members on every census — so `{}` in any of those is a broken relay
        and is still refused. `_heap`'s ONE table is not like them: `childRealmRefSites` is keyed on the engine's

@@ -1745,8 +1745,12 @@ char *result_swap_json(void) {
    THE PARTS ARE ROWS AND NOT A SUBTRACTION, deliberately. Emitting the candidate half alone would leave the
    other half to be derived by a consumer, and a derived half cannot be checked: `finished - finishedCands`
    is a number for every pair of inputs, including the pair where one of them stopped being written. Both
-   arms are emitted, always, zeroes included, and engine/build.mjs's `COLD_FIELDS` throws on either going
-   absent exactly as it does for every other row here.
+   arms are emitted, always, zeroes included, and engine/build.mjs's `coldFields()` throws on either going
+   absent exactly as it does for every other row here. THAT GUARD IS A DERIVATION FROM THIS COMPOSER'S OWN
+   FORMAT STRING and never a list beside it, so a row added here is required there with no second copy for
+   anybody to edit. It WAS such a list, spelled COLD_FIELDS, and that name is rewritten here rather than
+   deleted because a reader who re-derives the hand-kept list will re-add it: the derivation is the reason
+   the list is gone, never a reason to rebuild it.
 
    `live` IS NOT SPLIT HERE AND THAT IS NOT AN OVERSIGHT. It is compound in the same way — `cold_census` and
    `flow_wfq_census` walk the SAME registry — and the `_wfq` census on this same document already carries the
@@ -1805,9 +1809,10 @@ char *result_swap_json(void) {
    `resumedOrphans` IS NOT A ROW: `orphanClaims` IS that number, and two spellings of one number in one
    document is the drift the record-field contract exists to catch — the same sentence the paragraph below
    makes about `_orphansDriven`.
-   ALL FIVE ARE IN engine/build.mjs's `COLD_FIELDS`, which is the guard that a row this composer stops emitting
-   or renames fails there instead of being compared as `undefined` — and both of that list's readers throw on a
+   ALL FIVE ARE IN engine/build.mjs's `coldFields()`, which is the guard that a row this composer stops emitting
+   or renames fails there instead of being compared as `undefined` — and both of that set's readers throw on a
    non-numeric row, so dropping one of these five is caught rather than reported as a verdict nobody can read.
+   The set is DERIVED from this function's own format string, so it cannot fall behind the rows above it.
 
    NO `orphans` ROW: the count of drives this session STARTED is `_orphansDriven` on the document already, and
    two spellings of one number in one document is the drift the record-field contract exists to catch.
