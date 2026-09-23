@@ -393,29 +393,62 @@
        DOCUMENT, and the engine has not run there since every instance became a renderer. Measured here, on
        real Chrome: this realm CAN construct a shared WebAssembly.Memory and CAN create a Worker, and the
        Worker's `postMessage` of that memory throws `DataCloneError: SharedArrayBuffer transfer requires
-       self.crossOriginIsolated`. So the gate is the AGENT CLUSTER's cross-origin isolation, and this frame's
-       agent cluster is keyed on an OPAQUE origin — renderer.html is in manifest.sandbox.pages, whose CSP
-       `sandbox` directive forces that, and it is the security boundary rather than an incidental. An opaque
-       origin is same-origin with nothing, so it is never isolated: measured `crossOriginIsolated === false`
-       with the manifest's COOP at `same-origin-allow-popups` AND at `same-origin`, and with this frame's
-       sandbox attribute as shipped, widened with allow-same-origin, and removed entirely. The same watchdog
-       runs end to end in the offscreen document at BOTH COOP values (worker created, memory transferred,
-       Atomics.wait returned, its store read back on the main thread) — which is the point: the flip would
-       provision the transport in a document the engine does not run in, and would sever every live-verify
-       popup's opener to do it.
+       self.crossOriginIsolated`.
+       AND THAT MESSAGE NAMES A SUFFICIENT GATE AS IF IT WERE THE NECESSARY ONE, WHICH IS THE HALF THIS
+       PARAGRAPH USED TO REPEAT. It said "the gate is the AGENT CLUSTER's cross-origin isolation", and the
+       SIBLING DOCUMENT refutes that at the value the manifest ships: in ast-worker.html
+       `self.crossOriginIsolated` is FALSE and the very same transfer SUCCEEDS. An ordinary http page in the
+       same browser, equally not isolated, is REFUSED with the same DataCloneError. Three documents, one
+       browser, one policy — so what the grant tracks is the EXTENSION ORIGIN and not the isolation, and
+       `crossOriginIsolated` is one of TWO routes to the transport rather than the gate on it.
+       WHY THIS REALM HAS NEITHER ROUTE, AND WHY NO POLICY VALUE BUYS ONE. Its origin is OPAQUE, so it is not
+       the extension origin and cannot inherit that grant; and an opaque origin is same-origin with nothing, so
+       its agent cluster is never isolated either. MEASURED on real Chrome, one browser per case with the
+       IndexedDB cleared, every reading taken beside an INVENTED sibling so a false is separable from a getter
+       that is not there, and an uncloneable value posted first so the clone check is shown ARMED:
+           node testing/harness.js restart <port>
+           node testing/harness.js goto <any page>
+           node testing/harness.js offscreen 'self.__r = await self.rendererLaunch(group + "\0" + origin)'
+         then, evaluated IN this frame: self.origin | self.crossOriginIsolated | typeof SharedArrayBuffer |
+           new Worker(blob).postMessage(new WebAssembly.Memory({initial:1,maximum:1,shared:true})) |
+           performance.now() sampled 30000 times, reading the MINIMUM NONZERO delta
+       At BOTH `same-origin-allow-popups` and `same-origin` this frame reads `self.origin === "null"`,
+       `crossOriginIsolated === false`, `typeof SharedArrayBuffer === "undefined"`, the shared-memory transfer
+       throwing, and a 100µs clock. THOSE FALSES ARE SCORED RATHER THAN A PAIR OF ZEROS BECAUSE THE FLIP IS NOT
+       INERT EVERYWHERE: at `same-origin` the OFFSCREEN's `crossOriginIsolated` goes TRUE and its clock sharpens
+       to 5µs, in the same browser and the same run. The flip moves that document and moves nothing here.
+       AND THE `sandbox` ATTRIBUTE IS NOT WHAT MAKES THIS ORIGIN OPAQUE, so widening or dropping it is not a
+       route either. The case measured is the attribute REMOVED ENTIRELY, which DOMINATES widening it with
+       `allow-same-origin` — the effective flags are the union of both restrictions, so an absent attribute
+       restricts strictly less than any value of one — and at `same-origin` such a frame still reads
+       `self.origin === "null"` and `crossOriginIsolated === false`. renderer.html is in
+       `manifest.sandbox.pages`, and that listing's CSP `sandbox` directive states the opaque origin on its own
+       — which is the boundary itself, so the only edit that could buy this realm the transport is the one that
+       removes the boundary. The offscreen's own end-to-end watchdog is therefore not a cheaper route but a
+       DIFFERENT DOCUMENT: the transport is provisioned where the engine is not, at both COOP values, and it is
+       already provisioned there BEFORE any flip.
        THE FAILURE IS GOOD NEWS AND THE MESSAGE SAYS SO — the shape of quantum.c's clock check. An absence
        stated in prose is one nobody re-measures; asserted on the browser's OWN gate it ends by crashing, in
-       the realm that would host the thing that has become buildable. */
-    DCHECK(self.crossOriginIsolated !== true,
-           "this renderer's agent cluster is cross-origin isolated now, so it may transfer shared memory to a " +
-           "Worker — the cooperative quantum can finally have an asynchronous edge " +
-           "(engine/host/solver/quantum.h): build the watchdog thread that raises the yield request from " +
-           "outside the flow's instruction stream, instead of leaving the slice to be noticed at whichever " +
-           "back-edge, call or fork the page happens to reach next");
-    /* NAMED RESIDUAL — WHAT THE ABSENT EDGE LEAVES IS TWO POPULATIONS AND THE `crossOriginIsolated` DCHECK READS AS ONE.
-       The `self.crossOriginIsolated !== true` DCHECK is right that this realm cannot have a watchdog thread, and it is
-       written as though that thread were the whole of the gap. It is not, and the split is decided by ONE question asked
-       of each case: does the flow perform a DISPATCH, which is where the request byte is read.
+       the realm that would host the thing that has become buildable. IT ASSERTS BOTH ROUTES rather than only
+       the flag, because the measurement above is exactly a case of the capability arriving WITHOUT it, and an
+       assert watching one of two routes is silent on the one the sibling document actually takes.
+       RETIREMENT: this paragraph goes when renderer.html is no longer listed in `manifest.sandbox.pages`,
+       because the opaque origin is then not stated and the question it answers is a different question. */
+    DCHECK(self.crossOriginIsolated !== true && typeof SharedArrayBuffer === "undefined",
+           "this renderer may now hold shared memory — either its agent cluster became cross-origin isolated, " +
+           "or SharedArrayBuffer became defined in this realm without it, which is the route ast-worker.html " +
+           "already takes and the one this assert used to be blind to. Read BOTH `self.crossOriginIsolated` " +
+           "and `typeof SharedArrayBuffer` here, and confirm with an actual transfer (postMessage a shared " +
+           "WebAssembly.Memory to a Worker) before building anything, because the constructor being present " +
+           "is a tripwire and not the capability. If the transfer lands, the cooperative quantum can finally " +
+           "have an asynchronous edge (engine/host/solver/quantum.h): build the watchdog thread that raises " +
+           "the yield request from outside the flow's instruction stream, instead of leaving the slice to be " +
+           "noticed at whichever back-edge, call or fork the page happens to reach next");
+    /* NAMED RESIDUAL — WHAT THE ABSENT EDGE LEAVES IS TWO POPULATIONS AND THE SHARED-MEMORY DCHECK READS AS ONE.
+       The `crossOriginIsolated`/`SharedArrayBuffer` DCHECK above is right that this realm cannot have a watchdog
+       thread, and it is written as though that thread were the whole of the gap. It is not, and the split is
+       decided by ONE question asked of each case: does the flow perform a DISPATCH, which is where the request
+       byte is read.
        NOT COVERED (a): a stretch of bytecode with no loop back-edge and no call raises nothing, so the slice is not
        evaluated until the next one. This population is BOUNDED rather than open-ended — the interpreter raises at every
        back-edge and at every call opcode — so what can evade it is one compiled basic block of the page.
