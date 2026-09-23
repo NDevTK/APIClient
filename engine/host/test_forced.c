@@ -1979,9 +1979,15 @@ static const char *HTML =
     " + '&doctype=' + (mbDt ? 'has' : 'null'));"
     /* DOM §4.6's THREE ATTRIBUTES ASKED OF A RECEIVER THAT IS NOT A DocumentType — Web IDL §3.7.6
        "Attributes"' create an attribute getter, whose foreign-receiver arm is "Otherwise, throw a TypeError."
-       The three getters are minted with no pool entry, so core/idl_args.c's idl_implementation_check never runs
-       for them and the receiver reaches the body exactly as written here; core/dom/document_type.c is where
-       that is answered and why.
+       THESE THREE ROWS ARE UNCHANGED BY WHERE THE REFUSAL COMES FROM, WHICH IS WHY THEY SURVIVED THE MOVE. This
+       said the three getters are minted with no pool entry, so core/idl_args.c's idl_implementation_check never
+       runs for them and the receiver reaches the body exactly as written here — true while the members were
+       installed through idl_install_accessor, and the reason core/dom/document_type.c held a receiver test of
+       its own. They now install through core/idl_args.h's idl_install_accessor_this, which states
+       document_type_is at the DECLARATION and performs Web IDL §3.7 Interfaces' implementation check before the
+       body, so the TypeError arrives from the shared machine and the component's own helper is gone. A page
+       sees the same three refusals either way; what it stops seeing is the ASSERT that stood behind them, which
+       is why this row is the oracle for that change and not a restatement of it.
        THE THREE RECEIVERS ARE THREE DIFFERENT REFUSALS AND NOT ONE REPEATED. The interface PROTOTYPE is an
        ordinary object carrying no node class at all and is the one a page reaches by writing
        `DocumentType.prototype.name`; a bare object is the `.call({})` a conformance corpus writes; and
