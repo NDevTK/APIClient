@@ -413,6 +413,31 @@ void reply_decode_learn(JSContext *ctx, const char *method, const char *url, JSV
     CHECK(essence, "reply_decode: OOM reading a reply's computed essence");
     mime_type_free(&computed);
 
+    /* NAMED RESIDUAL — A REPLY WHOSE ESSENCE IS A JAVASCRIPT MIME TYPE IS LEARNED FROM BY NOBODY.
+       WHAT IS NOT COVERED: this reader dispatches on ONE essence, so a body whose type `mime_type_is_javascript`
+       would answer for falls past every arm below and is freed unread. It is a property and not a population:
+       `is_asset` above does not claim JavaScript (it names image, audio/video, font, zip-based and archive), so
+       such a body really does reach this line rather than leaving at the asset arm. The engine still EXECUTES
+       JavaScript that arrives as a PROGRAM ROW — flow_deliver_one_reply's FLOW_PENDING_DOCSCRIPT,
+       FLOW_PENDING_SCRIPT and FLOW_PENDING_MODULE arms are the document's own `<script src>`, an injected one
+       and a dynamic `import()` — and what is uncovered is the reply that settles a page `fetch()`
+       (FLOW_PENDING_RESOLVE), which is executed only if the page's own code goes on to eval it. CLAUDE.md
+       §Learning-from-replies asks for more than that in as many words: a fetch whose body is JAVASCRIPT is
+       ALWAYS fetched AND EXECUTED, because a lazy chunk is the headline moat surface and a bundle that fetches
+       one without evaling it on the path taken is exactly the code no sniffer sees.
+       WHAT THE NEXT DIFF BUILDS: a second arm here, keyed on `mime_type_is_javascript` over the SAME computed
+       essence, which decodes the bytes as this one does and queues them as a program rather than parsing them
+       for addresses. Queuing is the part that does not exist yet and is not this file's to invent: the kinds a
+       row may carry are engine.c's DynKind, whose seven members are all either a program already in hand or a
+       row awaiting an address the host was asked for, and none of them is a body that arrived unasked. So the
+       ordered subproblems are (1) a DynKind for a program whose bytes arrived without a row having parked on
+       them, with its minting site and every closed switch over DynKind widened, and (2) this arm, which has no
+       reader until (1) exists and must not land before it.
+       HOW ITS ABSENCE WOULD SHOW: on a document that fetches a chunk and does not eval it on the path taken,
+       the reply door is paid in full and the census's `progStarts` does not move for that payment — a reply
+       counted as answered that buys no program. It is stated as an observation rather than as a member,
+       because whether any bundle in a corpus exhibits it today is one run of the instrument and this clause is
+       about the algorithm. */
     if (!strcmp(essence, "text/x-component")) {
         /* AND THE TEXT OF IT, decoded HERE. A Flight stream is `text/x-component` — text, whose charset React
            does not label and whose default is therefore UTF-8 — so §6's UTF-8 decode is the algorithm this

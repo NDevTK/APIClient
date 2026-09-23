@@ -14535,9 +14535,32 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
            extension's bridge pulls qjs_pending and qjs_host_requests after EVERY non-DONE return — a stall and
            an ordinary quantum are paid on the same schedule there, which is why main.c carrying the stall code
            separately changes what the host KNOWS and not when it pays — so in the extension a blocked flow is
-           answered at the next quantum. This driver now speaks the same schedule,
-           which is also what makes it a fair oracle for the product: a difference in findings between the two
-           hosts should be a difference in the ENGINE, and a payment schedule is not one.
+           answered at the next quantum. This driver now speaks the same schedule.
+           AND THE CLAUSE THAT STOOD HERE — "which is also what makes it a fair oracle for the product: a
+           difference in findings between the two hosts should be a difference in the ENGINE, and a payment
+           schedule is not one" — IS TRUE OF `run_scheduler` AND FALSE OF THE NATIVE BINARY, because that
+           binary has TWO drivers and only this one was fixed. Its `--abi` arm is a host of the production
+           `qjs_*` entries and pays inside `if (step == ENGINE_STEP_STALLED)`, which is the schedule this
+           paragraph's own first half names as the defect. It is rewritten rather than deleted because the
+           reasoning is right and is what a reader re-derives: a driver repaired at ONE of two call sites
+           reads as a host repaired, and nothing named the second.
+           AND THE STALL-ONLY SCHEDULE IS NOT MERELY SLOWER THERE, IT IS UNREACHABLE. ENGINE_STEP_STALLED is
+           returned only where the run queue is EMPTY, so a frontier forking on unknowns never produces it and
+           the payment is never reached at all — the coupling this paragraph describes is not a delay but a
+           LIVELOCK, since the one reply that did arrive is what starts the forking that prevents the next.
+           MEASURED over the archived censuses, partitioned by HOST rather than by revision: one real SPA (26
+           of its programs awaiting bytes at seed, 43 reply-door asks) read `replyAnswered 43` with
+           `rowsAwaitingBytes 0` in 3 of 3 runs under the WASM artifact, and `replyAnswered 1` with
+           `replyOutstanding 42` held across 37, 35, 35 and 18 CONSECUTIVE censuses in 4 of 4 runs under the
+           `--abi` arm, forks climbing 3 -> 6242 in the same series while the count stayed at 1. A second real
+           page read 27 of 27 under the WASM artifact. Those runs were relayed as a page whose bytes never
+           arrived and a fetch path that was broken; the bytes arrive, and what does not is the host's payment.
+           SO A NATIVE `--abi` CENSUS AND A WASM ONE ARE NOT COMPARABLE ON ANY REPLY-CONSUMING ROW until
+           `replyOutstanding` is read: a GAUGE standing at a positive value across a whole census series is
+           this schedule, and it is not a delivery defect however much it reads like one.
+           RETIREMENT: this record goes when every host of the `qjs_*` entries in this tree pays on the same
+           schedule, because the sentence above is then true as originally written and no second driver exists
+           for it to be false of.
            WHY IT ABORTED WHEN IT WAS TRIED, and it was neither the provider nor the reply record. `pending_ready`
            answered YES for an ANSWERED HOSTREQ, so a synchronous answer arriving between two slices made the
            register look deliverable, flow_step called the reply delivery, and it swap-removed the rendezvous
