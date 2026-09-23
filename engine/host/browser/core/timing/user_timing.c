@@ -479,7 +479,22 @@ static int ut_name_to_timestamp(JSContext *ctx, const char *name, double *out)
    next author will weigh it the same way unless they meet this sentence.
 
    THE CITATIONS LIVE AT THE THREE ASK SITES, as prose, where they can be corrected when an edition moves.
-   The composed key is `"performance entry buffer (name = <the entry's own name>)"`. */
+   The composed key is `"performance entry buffer (name = <the entry's own name>)"`.
+
+   AND THE OTHER CHAIN PREDICATES IN THIS TREE CARRY CITATIONS, WHICH IS NOT A QUEUE OF FOUR REPAIRS — IT
+   IS FOUR SITES THIS RULE CAN NO LONGER REACH, AND A READER WHO FIXES THEM DOES THE HARM THE RULE EXISTS
+   TO PREVENT. A key freezes when a flow PARKS with answers filed under it, not when its source lands, so
+   the rule is an AUTHORING one that binds a key which is not yet in a built artifact and binds nothing
+   about one that is: re-spelling a frozen key does not correct a citation, it ORPHANS every answer already
+   recorded against it and a resumed flow re-asks every member it had eliminated. Which of them is frozen
+   is a fact about ARTIFACTS rather than about this tree, so it is a derivation and never a figure — run it
+   against whichever artifact you are about to reason about, and never from this paragraph:
+     git grep -hoE '#define [A-Z_]*PREDICATE "[^"]*"' -- engine/host
+   and for each literal it prints, plus an invented one as the control:
+     grep -ac '<the literal>' extension/lib/qjs/qjs.wasm
+   A 1 means that key is spent and must be left exactly as it is; a 0 means it is still an authoring
+   decision. This one was measured 0 with the other four at 1, which is the only reason it was repairable
+   at all — and it is why the repair had to land before the next build rather than after it. */
 #define UT_NAME_PREDICATE "performance entry buffer (name ="
 #define UT_MEASURE_ALGORITHM "USER TIMING §2.1.3 measure()"
 
