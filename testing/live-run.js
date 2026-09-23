@@ -667,7 +667,38 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      RETIREMENT: that measurement goes when this driver prints the artifact's own distance from the rows it
      asks for, because the absence is then derivable from the output rather than stated here. */
   "epFetchAskBeganLife", "epFetchAskOfferedLife",
-  "epFetchOutFreedLife", "epFetchOutFreedOfferedLife", "epFetchOutDiedAtLife"];
+  "epFetchOutFreedLife", "epFetchOutFreedOfferedLife", "epFetchOutDiedAtLife",
+  /* AND THE OTHER DOOR, WITHOUT WHICH THE FIVE ROWS ABOVE ARE READ AS THE WHOLE OF WHAT A PAGE CALLED. The
+     reading solver/endpoint.h names is the one this driver is pointed at every day: a document whose
+     `epFetchAskBeganLife` is ZERO and whose `epAsks` is not, taken for a page that reached no network call
+     site, when what it reached was XMLHttpRequest — which is what a large share of real bundles ship, since
+     axios's browser adapter IS one. These six say so, and they are NEVER SUMMED with the five above: they
+     count states of a DIFFERENT machine whose stages are its own.
+     THE UNIT IS STATES OF `send()`'s MACHINE AND NOT OF THE ONE THAT RECORDS, which is the correction
+     solver/endpoint.h carries in full at the residual that had it the other way round. `send()` is its own
+     declared member with seven stages and four page-code park points, and the lifecycle machine it mints
+     records at the FIRST stage that machine has — so where an XHR request DIES is a fact about `send()` and
+     the lifecycle machine's stages are all downstream of the door.
+     WHY THERE ARE SIX AND NOT FIVE. The fetch edge's second row is an OFFER, because one state constructs and
+     offers; here the send state is torn down before the asynchronous arm's task runs, so it can say only that
+     it PLACED the fetch (`epXhrAskPlacedLife`) and the OFFER is a row of its own raised at the door
+     (`epXhrAskOfferedLife`). They are two different populations and the producer asserts NO relation between
+     them — a placed send whose task never runs offers nothing, and abort() and the request error steps mint
+     lifecycle machines that record nothing.
+     THE IDENTITIES CHECKABLE FROM THIS DRIVER'S OWN OUTPUT: the stage arms plus `epXhrOutFreedPlacedLife`
+     equal `epXhrOutFreedLife` (a PARTITION over one teardown); `epXhrOutFreedPlacedLife <=
+     epXhrAskPlacedLife`, whose slack is the SYNCHRONOUS sends still parked inside §3.5.6's pause; and
+     `epXhrAskOfferedLife <= epAsks`, whose slack is every OTHER door — which is what makes this edge's SHARE
+     of the ask population readable beside the fetch edge's.
+     KIND IS SPELLED INTO EVERY NAME BY THE PRODUCER AND IS NOT THIS FILE'S CLAIM — `Life` is a LIFETIME
+     COUNT, `Ask` or `Out` is which side of the gate it counts — so they are filed here with the lifetime
+     rows. `epXhrOutDiedAtLife` IS A PARTITION AND NOT A LADDER, exactly as its fetch sibling is.
+     AN ARTIFACT OLDER THAN THESE ROWS PRINTS `-` FOR ALL SIX, which is this driver's absent-versus-zero rule
+     and is the honest answer. The engine's absent form is the rows being ABSENT from `_cold` rather than six
+     zeroes — a host that installs no XMLHttpRequest runs no send machine and has no population — so `k in c`
+     is false and this list yields `null`, with no arm anywhere that could turn that into a 0. */
+  "epXhrAskBeganLife", "epXhrAskPlacedLife", "epXhrAskOfferedLife",
+  "epXhrOutFreedLife", "epXhrOutFreedPlacedLife", "epXhrOutDiedAtLife"];
 
 /* WHERE THE FRONTIER STOOD, WHAT ITS STEPS DID, AND WHAT GREW IT — read off the row bridge.js wrote, never
    recomputed. `forkAt` is taken WHOLE and is not truncated to its heaviest rows: it is already a Space-Saving
@@ -696,6 +727,13 @@ function census(r) {
      A DIAGNOSTIC AND NEVER A TARGET, on §netdiff's own terms: optimising toward a subtraction optimises the
      instrument. A zero here is a REFUSAL TO CLAIM the capability on this document, not a smaller version of
      it, and it is not comparable across two runs — it is an identity read WITHIN one. */
+  /* AND IT IS NO LONGER THE ONLY STATEMENT AVAILABLE, WHICH IS THAT RECORD'S OWN RETIREMENT CONDITION AND IS
+     THE FIRST THING A READER OF THIS NUMBER SHOULD BE TOLD. `endpointDoors`/`endpointMintedAt` on the spread
+     line partition the run's emitted rows BY ADDRESS, so "thirty rows beyond the markup" and "which thirty"
+     are now two questions with two answers rather than one number with none. They are composed from a
+     DIFFERENT DOCUMENT at a different instant — this from the engine's `_cold` census, those from the @H
+     array bridge.js holds at composition — so no identity between them is asserted anywhere and none may be
+     read: they are a CROSS-CHECK, and a disagreement is a lead rather than an arithmetic error. */
   o.epBeyondMarkup = (typeof o.epEmitted === "number" && typeof o.epPreProgram === "number")
     ? o.epEmitted - o.epPreProgram : null;
   o.epBeyondMarkupOf = (o.epBeyondMarkup === null) ? null : "epEmitted - epPreProgram";
@@ -882,6 +920,20 @@ async function oneRun(browser, pg, url, budgetMs) {
        `counters` is a TOTAL over the run; every member of this is a census, and two of its four are gauges. A
        reader compares WITHIN a kind and never across, and one object holding both invites exactly the
        comparison neither supports — the same reason bridge.js keeps the four censuses as four objects. */
+    /* WHICH MECHANISM COMPOSED EACH ADDRESS THE RUN EMITTED, AND WHETHER THE PAGE'S CODE HAD RUN WHEN IT
+       DID — the pair that makes `endpoints` in COUNTERS readable and the pair `epBeyondMarkup` below is a
+       SUBTRACTION over. That subtraction says how many addresses forced execution CAN HAVE contributed and
+       names none of them, so a run reading `epBeyondMarkup: 0` and one reading 30 are two numbers with no row
+       under either; these two are the rows. CLAUDE.md §What-the-tool-produces asks for exactly this as that
+       record's retirement, extension/bridge.js composes both off the ONE `fetchCallSites` array the
+       `endpoints` figure is the length of, and each is asserted there to SUM to it.
+       IT IS ITS OWN ARRAY FOR `cold`'s REASON: every member of `counters` is a number and every member of
+       this is a histogram, and one object holding both invites a comparison neither supports.
+       `undefined` IS A RUN WHOSE RECORD PREDATES THE FIELD and is a different fact from a run whose surface
+       was empty — the first is this driver reading an older relay, the second is a finding about the page —
+       so the formatter below spells them `-` and `{}` and never folds either into the other. */
+    doors: mine.map((r) => ({ doors: ("endpointDoors" in r) ? r.endpointDoors : undefined,
+                              mintedAt: ("endpointMintedAt" in r) ? r.endpointMintedAt : undefined })),
     frontier: mine.map(census),
     storeEndpointsDelta: (last.endpoints === null || before.endpoints === null)
       ? null : last.endpoints - before.endpoints,
@@ -889,6 +941,20 @@ async function oneRun(browser, pg, url, budgetMs) {
       ? null : last.findings - before.findings,
     pageConsole: pageConsole.slice(0, 8),
   };
+}
+
+/* A HISTOGRAM RENDERED AS ITS OWN ROWS AND NEVER AS A SPREAD, because a range over buckets says nothing and
+   because the three states a bucket map can be in are not one kind of number. `-` is ABSENT — the run record
+   predates the field, which is this driver's absent-versus-zero rule and is the honest answer that the run did
+   not state it; `{}` is a run that stated the partition of an EMPTY surface, which is a finding about the page;
+   anything else is the partition. Sorted by count and then by name so two runs' strings are comparable by eye,
+   which is the whole reason a driver prints a histogram at all. */
+function hist(h) {
+  if (h === undefined) return "-";
+  const ks = Object.keys(h);
+  if (!ks.length) return "{}";
+  ks.sort((a, b) => (h[b] - h[a]) || (a < b ? -1 : a > b ? 1 : 0));
+  return ks.map((k) => k + ":" + h[k]).join(",");
 }
 
 function spread(runs, pick) {
@@ -918,10 +984,13 @@ async function main() {
               /* SAID WHERE THE NUMBER IS READ AND NOT ONLY WHERE THE ROW IS FILED, on the clause above's own
                  precedent: a unit and a shape are facts a reader HOLDING the figure needs, and this table is
                  the one whose arms a reader will otherwise walk looking for a lowest zero. */
-              " | epFetch* count STATES of core/fetch's machine, never calls — a deep fork byte-copies one, so" +
-              " epFetchAskBeganLife is read as a fact and NEVER subtracted from; epFetchOutDiedAtLife is a" +
-              " PARTITION over that machine's own stage labels and NOT a ladder (a 0 in one stage says nothing" +
-              " about its neighbours, and every stage is emitted including the zeroes)" +
+              " | epFetch*/epXhr* count STATES of a REQUEST-CONSTRUCTION machine, never calls — a deep fork" +
+              " byte-copies one, so epFetchAskBeganLife and epXhrAskBeganLife are read as facts and NEVER" +
+              " subtracted from; epFetchOutDiedAtLife and epXhrOutDiedAtLife are PARTITIONS over their own" +
+              " machine's stage labels and NOT ladders (a 0 in one stage says nothing about its neighbours," +
+              " and every stage is emitted including the zeroes). The two edges are NEVER summed: they count" +
+              " two machines' states, and epXhr*'s are `send()`'s while its OFFER is raised one machine on" +
+              " (epXhrAskPlacedLife and epXhrAskOfferedLife are two populations with no relation asserted)" +
               " | GAUGES (may FALL; never difference): " +
               CENSUS_GAUGE.concat(WFQ_JOB_SPLIT).concat(["wfqMembers"]).join(","));
 
@@ -984,6 +1053,16 @@ async function main() {
                             (c.other === undefined || c.other === null ? "" : "+" + c.other)).join("|") ||
                             "no-row"),
         endpoints: spread(rs, first("endpoints")),
+        /* AND WHAT THOSE ENDPOINTS WERE, WHICH IS THE ONE COLUMN ON THIS LINE THAT CAN TELL A RUN THAT
+           LEARNED A GATED API SURFACE FROM ONE THAT COUNTED A `<head>` BACK. It is NOT a spread, for `cold`'s
+           reason one field up: the sequence is the answer, and a range over bucket names is not a quantity.
+           READ WITH `epBeyondMarkup` IN `frontier` AND NOT INSTEAD OF IT. That subtraction is composed from
+           the ENGINE's own census and this from the emitted array, so they are two documents at two instants
+           and this driver asserts no identity between them — they are a CROSS-CHECK, and a door partition
+           that is all markup beside a nonzero `epBeyondMarkup` is a disagreement worth opening, not a sum
+           to reconcile. */
+        endpointDoors: rs.map((r) => r.doors.map((d) => hist(d.doors)).join("|") || "no-row"),
+        endpointMintedAt: rs.map((r) => r.doors.map((d) => hist(d.mintedAt)).join("|") || "no-row"),
         sinks: spread(rs, first("sinks")),
         candidates: spread(rs, first("candidates")),
         flows: spread(rs, first("flows")),

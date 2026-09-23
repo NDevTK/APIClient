@@ -2387,28 +2387,28 @@ char *endpoint_json_array(void) {
            composed the address. A `<head>` whose first `<script src>` runs before the parser reaches the
            `<link>` below it mints that link POST-program, so the timing fact is a proxy for the markup door
            and not the door — in the flattering direction, on the commonest document shape there is. */
-        /* NAMED RESIDUAL — NOT COVERED: no consumer in the trusted zone reads either key, so the surface
-           carries the partition and nothing renders it. The engine's own reader is `endpoint_door_token`,
-           which refuses an out-of-vocabulary door on every row in every build; `mintedAt` has none beyond the
-           record's own mint-time pairing assert. WHAT THE NEXT DIFF BUILDS: extension/lib/merge.js's per-row
-           check for both, beside the `provenance` one it already makes and spelled the same way — present and
-           in vocabulary, read with an `in` test and never with a `||`, because a default would render a
-           `<head>`'s own `<link>` and a lazy chunk with identical bytes, which is the whole thing this pair
-           exists to separate. HOW ITS ABSENCE WOULD SHOW: a reader holding a run's emitted surface can say
-           how many rows it has and not which mechanism composed any of them, so the only statement available
-           about forced execution's contribution is the census subtraction this pair was added to retire.
-           IT IS DEFERRED BY THE SEAM AND NOT BY EFFORT (CLAUDE.md §A-CROSS-BOUNDARY-DIFF). That zone's
-           JavaScript is INTERPRETED FROM THE TREE and is live on WRITE, while these bytes are live only after
-           somebody builds — so a reader landed beside this emission would assert, against the SHIPPED wasm,
-           the presence of a key that wasm does not write, and abort the trusted zone on every endpoint of
-           every document until an install caught up. The half that is live on write is the one that must
-           wait.
-           THE OBSERVATION THAT RETIRES IT, AND WHO MAY MAKE IT: grep the INSTALLED artifact
-           (`extension/lib/qjs/qjs.mjs`) for `post-program` and for `reply-chunk`, with an invented token
-           beside them as the negative control — a zero with no armed control is a probe that never reached
-           the check rather than a key that is not there. The ACT that changes that answer is a BUILD and an
-           INSTALL, which is one role's to perform and no reader's: a lane that runs the observation and gets
-           the defer answer has learned nothing about this residual except that nobody has installed yet. */
+        /* THE RESIDUAL THAT STOOD HERE IS RETIRED, AND ITS WHAT-THE-NEXT-DIFF-BUILDS CLAUSE WAS WRONG —
+           RECORDED RATHER THAN DELETED, BECAUSE THE WRONG SITE IS THE ONE A READER RE-DERIVES. It said no
+           consumer in the trusted zone read either key, which was true, and named extension/lib/merge.js's
+           call-site loop as the diff that would fix it, beside the `provenance` check that loop already
+           makes. THE SECOND HALF DOES NOT HOLD AND THE REASON IS ABOUT POPULATIONS: that loop `continue`s
+           past a structural @T candidate (`url == null`) and past every `data:`/`blob:`/`about:`/
+           `javascript:` address before it registers anything, and it folds several rows of THIS array onto
+           one `method+host+path` key — so a partition built there is over a smaller, deduped set than the
+           emitted figure a reader holds beside it, and would sum to nothing checkable. A per-ADDRESS record
+           would also have needed a fold rule for two doors reaching one address, which the enum above
+           deliberately declines to invent.
+           WHERE IT LANDED INSTEAD is extension/bridge.js's run-record composition, which holds THIS ARRAY at
+           the instant it writes the `endpoints` figure that is its length — so the partition and the number
+           it partitions are one population at one moment, and each histogram is asserted there to sum to it.
+           WHAT THAT READER DOES NOT DO, AND IT IS THE HALF THE DEFERRAL WAS ABOUT (CLAUDE.md
+           §A-CROSS-BOUNDARY-DIFF): it does not ASSERT either key's presence. That zone's JavaScript is
+           INTERPRETED FROM THE TREE and live on WRITE, while these bytes are live only after somebody builds,
+           so a reader demanding a key the SHIPPED wasm does not write would abort the trusted zone on every
+           endpoint of every document until an install caught up. It buckets an absent key as its own stated
+           third state instead, and the retiring observation and the actor who may make it are recorded at
+           that reader rather than here — the tolerance is the JS half's to drop, and this file's own
+           contract is unchanged: both keys are written on every row, unconditionally, in every build. */
         json_buf_raw(&b, ","); json_buf_key(&b, "door");
         json_buf_str(&b, endpoint_door_token(e->door));
         json_buf_raw(&b, ","); json_buf_key(&b, "mintedAt");

@@ -506,6 +506,64 @@ function engineColdLookup(eng) {
          "OTHER bundle ids, which is the evidence under the word beside it");
   return { lookup: eng._coldLookup, other: eng._coldOther, bundle: eng._bundleId };
 }
+/* THE EMITTED SURFACE PARTITIONED BY A FACT EACH ROW STATES ABOUT ITSELF, over the @H array `endpoints` on the
+   run record is the LENGTH of — so the partition and the number it partitions are ONE POPULATION read at ONE
+   MOMENT, which is the whole reason it is composed here and not off a census taken elsewhere.
+   WHY THERE IS A READER AT ALL. CLAUDE.md §What-the-tool-produces states this product's razor as
+   `epEmitted - epPreProgram` — the most addresses FORCED EXECUTION can have contributed to a surface whose
+   other rows a markup parser reaches for free — and names its own retirement: the emitted surface carrying
+   each row's own door, so a reader partitions it without a subtraction. solver/endpoint.c has written `door`
+   and `mintedAt` on every row since, and NOTHING in this zone read either: the partition was carried and
+   nothing rendered it, so the only statement available about forced execution's contribution stayed a
+   difference of two totals that names none of the addresses it counts.
+   AND THE RESIDUAL THAT DEFERRED IT NAMED THE WRONG FILE, WHICH IS RECORDED AT THAT SITE AND NOT ONLY HERE.
+   It named lib/merge.js's call-site loop. That loop `continue`s past a structural @T candidate (`url == null`)
+   and past every `data:`/`blob:`/`about:`/`javascript:` address before it registers anything, and it folds
+   several @H rows onto one `method+host+path` key — so a histogram built there partitions a SMALLER, DEDUPED
+   population than the `endpoints` figure a reader holds beside it, and could be asserted to sum to nothing.
+   The engine's door is ALSO a per-SIGHTING fact its own header refuses to fold ("two doors reaching one
+   address is one endpoint two mechanisms can reach"), so a per-ADDRESS record would have needed a fold rule
+   the producer deliberately declined to invent. This array is the emitted surface itself and needs neither.
+   THE ABSENT KEY IS ITS OWN BUCKET AND IS NEVER FOLDED INTO A VALUE. This zone is deployed on WRITE and the
+   engine is live only after a build, so a row from an artifact that predates these keys is the ORDINARY case
+   and states NOTHING — which is a third fact and not a quiet member of either vocabulary, exactly as
+   lib/learn.js's `_mergeValueClass` treats an absent `valueClass` one record down. It is spelled with
+   parentheses so it can never collide with a token the producer adds: `ENDPOINT_DOORS` are hyphenated
+   lowercase words and a C identifier cannot make one of these.
+   AND THE TOKEN IS NOT CHECKED AGAINST A COPIED VOCABULARY, WHICH IS WHERE THIS PARTS FROM THE `provenance`
+   CHECK lib/merge.js MAKES AND THE REASON IS THE SHAPE OF THE TWO LISTS. `provenance` is THREE words that are
+   exhaustive over the ways this engine can come to know an address, so a fourth is two halves having parted
+   and crashing is right. A DOOR LIST GROWS — solver/endpoint.h derives it from endpoint_record's own call
+   sites — so a door landed in the engine and INSTALLED before a copy here was widened would abort the trusted
+   zone, which is live on write, on every endpoint of every document, for an engine doing exactly what the
+   design asks. The bucket key is therefore the token the producer wrote, a new door arrives as a new row with
+   nothing edited on this path, and what is asserted is only what this zone owns: that the value is a non-empty
+   string, and (at the composition below) that the histogram PARTITIONS the array it was built from.
+   A NULL-PROTOTYPE MAP IN AND A PLAIN ONE OUT, for `egressDeclined`'s reason and with a sharper one: the keys
+   are strings the ENGINE chose, so a door spelled `constructor` or `__proto__` would read a function off
+   `Object.prototype` and turn its count into `NaN` on a plain object. */
+const ENDPOINT_FACT_UNSTATED = "(unstated)";
+function endpointFactHistogram(rows, key) {
+  const h = Object.create(null);
+  for (let i = 0; i < rows.length; i++) {
+    /* `in` AND NEVER A `||`, because the two things it separates take opposite work: an absent key is an
+       artifact older than the key and is a fact about the BUILD, while every present one is a fact about the
+       ADDRESS, and a default would render a `<head>`'s own `<link>` and a lazy chunk with identical bytes —
+       which is the whole thing this pair exists to separate. */
+    let v;
+    if (!(key in rows[i])) v = ENDPOINT_FACT_UNSTATED;
+    else {
+      DCHECK(typeof rows[i][key] === "string" && rows[i][key] !== "",
+             "an @H row carries `" + key + ": " + JSON.stringify(rows[i][key]) + "` — solver/endpoint.c " +
+             "writes both of these keys through a function returning one of a fixed table of C string " +
+             "literals, so anything that is not a non-empty string is that emission and this reader having " +
+             "parted, and the row would partition under a key nothing can be read as");
+      v = rows[i][key];
+    }
+    h[v] = (h[v] === undefined ? 0 : h[v]) + 1;
+  }
+  return Object.assign({}, h);
+}
 function linesToAnalysis(lines, msg, outcome, eng) {
   DCHECK(RUN_OUTCOMES.indexOf(outcome) >= 0,
          "a run outcome this seam does not speak: `" + outcome + "` — every consumer of an analysis branches " +
@@ -736,6 +794,20 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            and a row is SERIALIZED out of this realm by whoever reads it. */
         egressAsked: eng._egress.asked, egressDeclined: Object.assign({}, eng._egress.declined),
         endpoints: result.fetchCallSites.length, sinks: result.securitySinks.length,
+        /* AND WHAT COMPOSED EACH OF THOSE ADDRESSES, AND WHETHER THE PAGE'S CODE HAD RUN WHEN IT DID — the
+           two facts `endpoints` cannot state and the pair CLAUDE.md's razor is a SUBTRACTION OF TWO TOTALS
+           over. `endpoints` is a REACH figure, and solver/result.c records what such a number has already been
+           quoted as: "every row of a 43-row surface was one of that document's own `<script src>`,
+           `<link rel=stylesheet>` or `<link rel=preload>` elements, so the number a person reads as a learned
+           API surface was the `<head>` counted back". These two say WHICH rows those were, per address, so the
+           reading is available without subtracting one total from another and without naming any of them.
+           TWO HISTOGRAMS AND NOT ONE KEYED ON THE PAIR. solver/endpoint.c states why they are two facts and
+           never two spellings of one — "`link-element` alone cannot say whether the `<link>` was in the markup
+           or one the router created, and `pre-program` alone cannot say what composed the address" — and a
+           cross-product is a table of mostly zeroes whose two MARGINS are the thing a reader reads. Each
+           partitions the same array, each therefore sums to `endpoints`, and neither is quotable alone. */
+        endpointDoors: endpointFactHistogram(result.fetchCallSites, "door"),
+        endpointMintedAt: endpointFactHistogram(result.fetchCallSites, "mintedAt"),
         park: result._park.length, resumed: resumed,
         coldLookup: cold.lookup, coldOther: cold.other, bundleId: cold.bundle,
         url: (msg && msg.sourceUrl) || "" }
@@ -788,6 +860,30 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            "request(s) asked of it — the two are raised in one loop, one `asked` per delivered pending line " +
            "and at most one refusal inside that same iteration, so a sum above the denominator is a second " +
            "site raising one of them and every share read off this pair is over a population that never ran");
+    /* AND THE TWO ENDPOINT PARTITIONS ARE PARTITIONS, ASSERTED WHERE EVERY SIDE IS IN ONE HAND. Two claims,
+       and only the second can fail against today's producer. (a) Each histogram SUMS to `endpoints` — one row,
+       one bucket, one array — which is asserted for the reason the egress containment above is: the edit that
+       breaks it is precisely the one the residual this landing retires proposed, a histogram built over a
+       FILTERED or DEDUPED walk of these rows, and a partition that does not sum is the cheapest finding this
+       pair has. (b) The unstated bucket is ALL OR NOTHING, and this one has two sides that really can
+       disagree: one instance emits one document shape, so a run stating a door for some rows and not others
+       is that emit having become conditional — and a half-unstated histogram says "this artifact predates the
+       key" about part of one array, which is true of no build. */
+    for (const _p of [["endpointDoors", m.endpointDoors], ["endpointMintedAt", m.endpointMintedAt]]) {
+      let _n = 0;
+      for (const k of Object.keys(_p[1])) _n += _p[1][k];
+      DCHECK(_n === m.endpoints,
+             "this run's `" + _p[0] + "` partition sums to " + _n + " over an emitted surface of " +
+             m.endpoints + " row(s) — both are read off the ONE `fetchCallSites` array at this composition, " +
+             "so a difference is a walk that filtered or deduped rows the figure beside it still counts, and " +
+             "the partition would be read as a statement about the surface a person is shown");
+      const _u = _p[1][ENDPOINT_FACT_UNSTATED] === undefined ? 0 : _p[1][ENDPOINT_FACT_UNSTATED];
+      DCHECK(_u === 0 || _u === m.endpoints,
+             "this run's `" + _p[0] + "` partition states the fact for some rows and not others (" + _u +
+             " unstated of " + m.endpoints + ") — solver/endpoint.c writes both keys unconditionally in one " +
+             "loop over one array, so a mixed run is that emit having become conditional, and the bucket " +
+             "that means 'this artifact predates the key' would be read as a property of some addresses");
+    }
   }
   DCHECK(outcome !== "crashed" || (typeof crashErr === "string" && crashErr !== ""),
          "a crashed run reached the run log with no `engine-crash` line among its output — every crash path " +
