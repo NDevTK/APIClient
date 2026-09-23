@@ -166,7 +166,33 @@ int  idl_pair_iter_declare(JSContext *ctx, const IdlPairIterOps *ops);
    the SAME function object as `entries` (one `F`, defined twice), which this does — and §3.7.12.2 makes it the
    `values` object for a `setlike<V>`. */
 void idl_pair_iter_install(JSContext *ctx, JSValueConst proto, int handle);
-/* Release the iterator prototype the declaration minted. */
+/* NAMED RESIDUAL — THIS DECLARATION GIVES NOTHING BACK, AND THE ENTRY THAT WOULD IS NOT DECLARED HERE.
+   A line stood above the next declaration reading "Release the iterator prototype the declaration minted", with
+   no entry under it. It is rewritten rather than deleted because a reader meeting an install with no release
+   re-derives that sentence, and because the sentence bound to its neighbour BY ADJACENCY: the declaration it
+   sat over is the per-realm prototype install, which releases nothing, so a reader scanning declarations
+   resolved it to a function it was never about.
+     NOT COVERED: the class id idl_pair_iter_declare mints is AGENT-LIFETIME state that no core/platform.c row
+       names. core/agent_state.h is therefore never told about it, so agent_state_check_released cannot ask
+       whether it came back, and core/platform.c's `minted == declared` identity over the declare column counts
+       it on the MINTED side and on neither declared one. The handle table's own count is not put back either,
+       so a second agent's handles begin where the first agent's ended. Both are correct for the regime this
+       tree enforces — core/platform.c refuses a second live agent by name — and narrower than the regime the
+       sibling core/idl_async_iter.c already supports.
+     THE NEXT DIFF BUILDS: the sibling's shape, which is three entries and not one. (1) a `component` on
+       idl_pair_iter_declare, as a REQUIRED PARAMETER and not a member of IdlPairIterOps — every other fact in
+       that struct is the WEB IDL DECLARATION'S and a platform row is this engine's, and a parameter a caller
+       omits does not compile where a designated initializer a caller omits is silently NULL; (2)
+       `agent_state_class(component, &f->class_id, ...)` on the line that mints, so the mint is inside the
+       window that identity brackets; (3) an `idl_pair_iter_release(handle)` calling agent_state_reached, called
+       from each owning row's own `_free` BEFORE its agent_state_undo, plus a table reset for the handle count.
+       It is ONE landing and not four: (1) changes a signature four callers spell, so a partial one does not
+       build.
+     HOW ITS ABSENCE WOULD SHOW: core/platform.c's declare-column identity reports more class ids minted than
+       declared, by one per interface that reached idl_pair_iter_declare, and no release this agent runs can be
+       caught forgetting any of them — `node engine/agentstate.mjs --rev <rev>` cannot see them either, because
+       its class channel captures a bare identifier after the `&` and these are minted into a struct member. */
+
 /* §3.7.9.2's iterator prototype objects for ONE realm, declared into core/realm.h's list by the first
    idl_pair_iter_declare — one install builds every declared interface's. */
 void idl_pair_iter_install_protos(JSContext *ctx);

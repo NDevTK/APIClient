@@ -302,13 +302,31 @@ static int g_pair_n;
 /* §3.7.9.1's iterator object: the TARGET and an INDEX, not a snapshot, so a list mutated between steps is seen. */
 typedef struct { JSValue target; int index; int kind; int iface; } IdlPairIter;
 
+/* THE RECORD IS REACHED WITHOUT READING THIS FILE'S TABLE, and that is the whole of why this is not the loop
+   it was. core/agent_state.h states the rule by name — a finalizer reads NO static its own release resets, and
+   reaches its record with JS_GetAnyOpaque, because the collector dispatched HERE THROUGH THE CLASS, so the id
+   is a fact it already has and must not look up. The loop looked every class id up in `g_pair`, so the day
+   those ids become declared agent state (they are minted here and declared to nobody — see the mint below)
+   the owning row's `agent_state_undo` zeroes them, `JS_GetOpaque(val, 0)` answers NULL for every entry, and
+   this function returns having freed NOTHING: every live iterator's target and its malloc'd record leak, in a
+   teardown where the undos have already run and JS_FreeRuntime has not. That order is not a hazard to argue
+   about — engine/host/main.c runs platform_agent_free (every undo) and only then JS_RunGC and JS_FreeRuntime
+   (every finalizer).
+   `g_pair_n` IS NOT CONSULTED EITHER, WHICH MATTERS FOR THE SAME REASON ONE LEVEL OUT: a table reset would
+   make the loop walk zero entries and free nothing, so the count was a second static this function's answer
+   depended on. It now depends on none.
+   IT IS NOT THE BRAND CHECK AND MUST NOT BE READ AS ONE. idl_pair_iter_of below keeps the class-id comparison
+   deliberately: its operand is a `this_val` the PAGE chose, so JS_GetAnyOpaque there would hand back a
+   stranger's opaque as an IdlPairIter. Here every object that arrives is one this file minted, because this
+   finalizer is installed on no other class. A NULL opaque is still possible and still answered: js_idl_pair_make
+   builds the object before it allocates the record, so an OOM between the two leaves one finalizable with
+   nothing in it. */
 static void idl_pair_iter_finalizer(JSRuntime *rt, JSValue val)
 {
-    int i;
-    for (i = 0; i < g_pair_n; i++) {
-        IdlPairIter *it = JS_GetOpaque(val, g_pair[i].class_id);
-        if (it) { JS_FreeValueRT(rt, it->target); js_free_rt(rt, it); return; }
-    }
+    JSClassID cid;
+    IdlPairIter *it = JS_GetAnyOpaque(val, &cid);
+
+    if (it) { JS_FreeValueRT(rt, it->target); js_free_rt(rt, it); }
 }
 
 /* The declared interface whose instance `v` is, or NULL. */
@@ -495,7 +513,6 @@ int idl_pair_iter_declare(JSContext *ctx, const IdlPairIterOps *ops)
     int handle = g_pair_n;
     IdlPairIface *f;
     JSClassDef def;
-    JSValue intrinsic;
     char name[64];
     static JSTrampStepDef foreach_def = {
         sizeof(IdlPairForEachState), js_idl_pair_foreach_step, NULL, 0,   /* forEach returns undefined */
@@ -514,7 +531,31 @@ int idl_pair_iter_declare(JSContext *ctx, const IdlPairIterOps *ops)
     def.class_name = name;   /* JS_NewClass copies it */
     def.finalizer = idl_pair_iter_finalizer;
     JS_NewClassID(rt, &f->class_id);
-    JS_NewClass(rt, f->class_id, &def);
+    /* THE RETURN IS READ, AND A `CHECK` IS WHAT IT IS READ WITH. JS_NewClass answers -1 on three states and
+       every one of them is fatal in production: an id past the 16-bit class space, an OOM in any of the three
+       reallocs JS_NewClass1 makes, and — the one this file can actually reach — AN ID THIS RUNTIME HAS ALREADY
+       REGISTERED. That last arm is why it is not a DCHECK. `JS_NewClassID` mints only when the slot it is
+       handed reads 0 and otherwise RETURNS THE NUMBER IT WAS GIVEN, and nothing in this file ever puts
+       `f->class_id` back, so a second agent in one process arrives here with the FIRST agent's id — a number
+       the new runtime's allocator, which restarts at JS_CLASS_INIT_COUNT, is going to hand to somebody else.
+       Ignored, the two outcomes are a silent -1 leaving `f->class_id` naming a class this file did not declare
+       (its finalizer is another component's, so `JS_GetOpaque` answers with that component's record and
+       `JS_SetClassProto` overwrites that component's per-realm prototype), or a success that makes the LATER
+       claimant of the same number the one that fails. Both are type confusion across a component boundary,
+       which is core/check.h's data-integrity entry rather than a should-never-happen about this engine's own
+       logic — so it must not be compiled out.
+       IT IS ALSO THE SPELLING THE SIBLING ALREADY USES for the identical call, which is what makes this a
+       route to a canonical answer rather than a second correct one: core/idl_async_iter.c checks this return
+       on both of its class registrations.
+       IT CANNOT FIRE ON THE FIRST AGENT OF A PROCESS, which is every host today: the slot starts at 0, the id
+       is minted fresh, and a fresh id is by construction one no runtime has registered. So this is not a
+       behaviour change for anything that runs now — it is what makes the SECOND agent loud instead of
+       silently branded. */
+    CHECK(JS_NewClass(rt, f->class_id, &def) == 0,
+          "an iterable<>'s iterator class could not be declared — if this is the second agent of one process, "
+          "the id is the FIRST agent's, because nothing gives this file's class ids back: they are minted here "
+          "and declared to no core/platform.c row, so no agent_state_undo resets them. The repair is the "
+          "declaration and not a retry (core/agent_state.h, and core/idl_async_iter.c for the shape)");
 
     f->foreach_stepid = JS_RegisterStepDef(rt, &foreach_def);
     CHECK(f->foreach_stepid >= 0, "no step id for an iterable<>'s forEach");
