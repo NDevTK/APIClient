@@ -46,6 +46,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/dom/attr_list.h"
 #include "core/dom/element.h"
 #include "core/dom/node.h"
@@ -1307,10 +1308,23 @@ bool sanitizer_is(JSValueConst v)
     return JS_GetOpaque(v, g_class) != NULL;
 }
 
+/* NEITHER OF THESE TWO READS THE CLASS ID, AND THAT IS THE PRICE OF DECLARING IT. The collector runs after
+   core/platform.c's release column — every host's teardown is platform_agent_free(), JS_RunGC,
+   JS_FreeRuntime — so by the time either of these is reached `g_class` is back at 0 and
+   `JS_GetOpaque(val, 0)` answers NULL for every Sanitizer there is. THE TWO FAILURES ARE NOT ALIKE: the
+   finalizer would leak the record and the §8.6.3 configuration it owns, silently, since a malloc'd block
+   reaches neither of JS_FreeRuntime's censuses; the mark is worse, because an unmarked child keeps the
+   internal reference gc_decref exists to subtract, so gc_scan reads the configuration as rooted from
+   OUTSIDE the heap and it is never collected at all. The id is not needed — the collector dispatched here
+   THROUGH the class, so it is a fact these already have. JS_GetAnyOpaque and never san_rec_of, for the
+   reason that accessor's own comment gives: a capture during collection would dup values on an object
+   being torn down. See core/agent_state.h's closing paragraph. */
 static void san_finalizer(JSRuntime *rt, JSValue val)
 {
-    SanitizerRec *r = JS_GetOpaque(val, g_class);   /* NOT the accessor: a capture during collection would dup */
+    JSClassID id = 0;
+    SanitizerRec *r = JS_GetAnyOpaque(val, &id);
 
+    (void)id;
     if (!r) return;
     JS_FreeValueRT(rt, r->config);
     free(r);
@@ -1318,8 +1332,10 @@ static void san_finalizer(JSRuntime *rt, JSValue val)
 
 static void san_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    SanitizerRec *r = JS_GetOpaque(val, g_class);
+    JSClassID id = 0;
+    SanitizerRec *r = JS_GetAnyOpaque(val, &id);
 
+    (void)id;
     if (!r) return;
     JS_MarkValue(rt, r->config, mark_func);
 }
@@ -2409,6 +2425,12 @@ void sanitizer_init(JSContext *ctx)
     DCHECK(!g_ready, "sanitizer_init ran twice — §8.6's interface is declared once per AGENT");
     JS_NewClassID(JS_GetRuntime(ctx), &g_class);
     JS_NewClass(JS_GetRuntime(ctx), g_class, &d);
+    /* `element`, THE ROW THAT RELEASES THIS, and never this file — core/platform.c's list is a list of
+       DECLAREs and RELEASEs that file itself calls, and this component has neither: its declaration is
+       reached from element_init (the `element` row's declare column) and its release from element_free
+       (that row's release column), so `element` is whose release gives this slot back. A sub-component
+       names the row that releases it — core/agent_state.h. */
+    agent_state_class("element", &g_class, "HTML §8.6.2's Sanitizer class");
     /* `(SanitizerConfig or SanitizerPresets)`, DECLARED: §3.2.25 sends null, undefined and every Object down
        the dictionary arm — whose nine members, and the sequences and dictionaries inside them, the args machine
        converts before this file's body runs — and everything else to the enumeration's string. Unknown
@@ -2480,4 +2502,10 @@ void sanitizer_free(void)
     g_id_ctor = g_id_get = g_id_remove_unsafe = g_id_set_comments = g_id_set_data_attributes = -1;
     g_id_allow_element = g_id_remove_element = g_id_replace_with_children = -1;
     g_id_allow_pi = g_id_remove_pi = g_id_allow_attribute = g_id_remove_attribute = -1;
+    /* AND THE CASCADE REACHED THIS FILE — the claim that entitles element_free's last line to put this
+       file's class back, and which that line REFUSES to proceed without. The class id is NOT reset here:
+       the undo is the one reset, computed from the registry that already holds this slot's address and
+       kind, and a line here as well would be the second resetter it exists to stop being kept by hand.
+       See core/agent_state.h's agent_state_reached. */
+    agent_state_reached("element");
 }

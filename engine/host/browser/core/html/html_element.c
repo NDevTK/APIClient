@@ -45,6 +45,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/node.h"
@@ -978,6 +979,13 @@ void html_element_init(JSContext *ctx)
     JS_NewClass(JS_GetRuntime(ctx), g_html_class, &hd);
     JS_NewClassID(JS_GetRuntime(ctx), &g_unknown_class);
     JS_NewClass(JS_GetRuntime(ctx), g_unknown_class, &ud);
+    /* `element`, THE ROW THAT RELEASES THIS, and never this file — core/platform.c's list is a list of
+       DECLAREs and RELEASEs that file itself calls, and this component has neither: its declaration is
+       reached from element_init (the `element` row's declare column) and its release from element_free
+       (that row's release column), so `element` is whose release gives this slot back. A sub-component
+       names the row that releases it — core/agent_state.h. */
+    agent_state_class("element", &g_html_class, "HTML §3.2.2's HTMLElement class");
+    agent_state_class("element", &g_unknown_class, "HTML §3.2.2's HTMLUnknownElement class");
     /* THE TABLE'S OWN INVARIANT, ASSERTED BEFORE ANYTHING IS BUILT FROM IT. §3.2.2's first four steps are
        ORDERED, and this file collapses them into ONE first-match walk — which is the standard's answer only
        while no local name is decided twice. The generator refuses to emit a duplicate; this is the same claim
@@ -1004,6 +1012,25 @@ void html_element_init(JSContext *ctx)
             JSClassDef d = { HTML_IFACE[i].iface };
             JS_NewClassID(JS_GetRuntime(ctx), &g_iface_class[i]);
             JS_NewClass(JS_GetRuntime(ctx), g_iface_class[i], &d);
+            /* ONE DECLARATION PER MINT, AND THAT IS WHY IT STANDS IN THIS ARM AND NOT OVER THE ARRAY. The
+               two arms above ASSIGN — a base interface takes a class declared above, and a row sharing an
+               interface name takes the earlier row's — so an element of this array is agent state only
+               where the allocator was asked for it. Declaring every element would count ids nobody minted,
+               which is the MORE DECLARED THAN MINTED direction of core/platform.c's conservation identity;
+               leaving the minted ones undeclared is the other direction, and it is what this arm was in
+               until the sweep that reads `&x[i]` could see it at all.
+               THE ASSIGNED ELEMENTS NEED NO RESET AND MUST NOT HAVE ONE: this loop takes exactly one of its
+               three arms for every row and the two assigning arms write unconditionally, so a second agent
+               overwrites them before anything reads one. The MINTED elements do need it, because
+               JS_NewClassID in this fork returns the number it is handed when that number is not 0 — so a
+               carried element would never be re-minted and every element of that interface would wear a
+               class the live runtime never registered.
+               THE `what` IS THE INTERFACE NAME rather than one literal repeated across the array: the
+               string is the generated table's own, which has static storage and outlives the agent exactly
+               as a literal does, and a report whose whole job is to name WHICH slot was not given back may
+               not answer the same sentence for a hundred-odd rows. The standard is HTML §3.2.2, stated in
+               this file's banner and in the two declarations above. */
+            agent_state_class("element", &g_iface_class[i], HTML_IFACE[i].iface);
         }
     }
     /* THE JOIN — each row's reflection set, looked up by interface NAME in the hand-written IFACE_REFL. The two
@@ -1630,4 +1657,10 @@ void html_element_free(JSRuntime *rt)
     if (g_dataset_key != JS_ATOM_NULL) { JS_FreeAtomRT(rt, g_dataset_key); g_dataset_key = JS_ATOM_NULL; }
     /* the prototypes are the REALMS' — each is released with its context; the AGENT holds only class ids */
     g_html_ready = 0;
+    /* AND THE CASCADE REACHED THIS FILE — the claim that entitles element_free's last line to put this
+       file's class back, and which that line REFUSES to proceed without. The class id is NOT reset here:
+       the undo is the one reset, computed from the registry that already holds this slot's address and
+       kind, and a line here as well would be the second resetter it exists to stop being kept by hand.
+       See core/agent_state.h's agent_state_reached. */
+    agent_state_reached("element");
 }

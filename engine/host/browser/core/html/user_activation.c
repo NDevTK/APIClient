@@ -831,6 +831,11 @@ void user_activation_init(JSContext *ctx)
     JS_NewClassID(JS_GetRuntime(ctx), &g_ua_class);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_ua_class, &d) == 0,
           "UserActivation: the per-realm prototype slot could not be declared");
+    /* AND THE CLASS IS AGENT STATE BESIDE THE TWO SLOTS BELOW, UNDER THE SAME ROW. It is minted inside
+       core/platform.c's declare column by the same allocator realm_value_declare draws from, so leaving it
+       undeclared is a class id that column minted and this browser was never told about — the direction
+       that file's conservation identity aborts on. */
+    agent_state_class("element", &g_ua_class, "HTML §6.4.4's UserActivation class");
     g_obj_slot = realm_value_declare(ctx, "HTML §6.4.4 the Window's associated UserActivation");
     /* THE TWO GETTERS ARE ONE DECLARATION WITH TWO MAGICS — declared once per AGENT, like every other member,
        because the id a declaration returns is the RUNTIME's and a per-realm declaration would mint the machine

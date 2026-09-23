@@ -26,6 +26,7 @@
  * silently absent in that realm with nothing to say so. */
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/dom/node.h"
 #include "core/events/event.h"
 #include "core/idl_args.h"
@@ -211,6 +212,12 @@ void submit_event_init(JSContext *ctx)
     CHECK(!JS_IsException(g_key), "the SubmitEvent slot key allocation failed");
     JS_NewClassID(JS_GetRuntime(ctx), &g_se_class);
     JS_NewClass(JS_GetRuntime(ctx), g_se_class, &d);
+    /* `element`, THE ROW THAT RELEASES THIS, and never this file — core/platform.c's list is a list of
+       DECLAREs and RELEASEs that file itself calls, and this component has neither: its declaration is
+       reached from element_init (the `element` row's declare column) and its release from element_free
+       (that row's release column), so `element` is whose release gives this slot back. A sub-component
+       names the row that releases it — core/agent_state.h. */
+    agent_state_class("element", &g_se_class, "§4.10.22.10's SubmitEvent class");
     g_ctor_stepid = idl_method_id_dict(ctx, SE_CTOR_ARGS, 2, SE_INIT,
                                        (int)(sizeof(SE_INIT) / sizeof(SE_INIT[0])), js_se_ctor, 0);
     /* `HTMLElement? submitter` — a NODE by class and an HTML-namespace ELEMENT by narrowing, which is the pair
@@ -271,4 +278,13 @@ void submit_event_free(JSRuntime *rt)
     g_key = JS_UNDEFINED;
     g_ready = 0;
     g_ctor_stepid = -1;
+    /* BELOW THE GUARD ABOVE, AND THAT IS THE CONTRACT: this says THE SLOTS THIS FILE DECLARED have been
+       given back, so a component whose init never ran has nothing to say here and agent_state_reached
+       refuses a file with no declarations under the row. */
+    /* AND THE CASCADE REACHED THIS FILE — the claim that entitles element_free's last line to put this
+       file's class back, and which that line REFUSES to proceed without. The class id is NOT reset here:
+       the undo is the one reset, computed from the registry that already holds this slot's address and
+       kind, and a line here as well would be the second resetter it exists to stop being kept by hand.
+       See core/agent_state.h's agent_state_reached. */
+    agent_state_reached("element");
 }

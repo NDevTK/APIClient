@@ -72,6 +72,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/css/media_query.h"
 #include "core/dom/document.h"
 #include "core/dom/element.h"
@@ -2289,6 +2290,14 @@ void media_element_declare(JSContext *ctx)
         JS_NewClassID(rt, &g_ranges_class);
         JS_NewClass(rt, g_ranges_class, &r);
     }
+    /* `element`, THE ROW THAT RELEASES THIS, and never this file — core/platform.c's list is a list of
+       DECLAREs and RELEASEs that file itself calls, and this component has neither: its declaration is
+       reached from element_init (the `element` row's declare column) and its release from element_free
+       (that row's release column), so `element` is whose release gives this slot back. A sub-component
+       names the row that releases it — core/agent_state.h. */
+    agent_state_class("element", &g_media_class, "§4.8.11's HTMLMediaElement class");
+    agent_state_class("element", &g_error_class, "§4.8.11.1's MediaError class");
+    agent_state_class("element", &g_ranges_class, "§4.8.11.14's TimeRanges class");
     g_state_key = JS_NewSymbol(ctx, "mediaElementState", false);
     CHECK(!JS_IsException(g_state_key), "§4.8.11: the media element state slot key allocation failed");
     g_atom_state = JS_ValueToAtom(ctx, g_state_key);
@@ -2450,4 +2459,13 @@ void media_element_free(JSRuntime *rt)
     g_id_start_date = g_id_range_start = g_id_range_end = -1;
     g_set_src_object = g_set_current_time = g_set_volume = g_set_muted = -1;
     g_set_rate = g_set_default_rate = g_set_pitch = -1;
+    /* BELOW THE GUARD ABOVE, AND THAT IS THE CONTRACT: this says THE SLOTS THIS FILE DECLARED have been
+       given back, so a component whose init never ran has nothing to say here and agent_state_reached
+       refuses a file with no declarations under the row. */
+    /* AND THE CASCADE REACHED THIS FILE — the claim that entitles element_free's last line to put this
+       file's class back, and which that line REFUSES to proceed without. The class id is NOT reset here:
+       the undo is the one reset, computed from the registry that already holds this slot's address and
+       kind, and a line here as well would be the second resetter it exists to stop being kept by hand.
+       See core/agent_state.h's agent_state_reached. */
+    agent_state_reached("element");
 }

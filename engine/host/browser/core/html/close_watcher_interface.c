@@ -41,6 +41,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/abort.h"
@@ -335,6 +336,12 @@ void close_watcher_interface_declare(JSContext *ctx)
                           "members' pool ids are the AGENT's");
     JS_NewClassID(JS_GetRuntime(ctx), &g_cw_class);
     JS_NewClass(JS_GetRuntime(ctx), g_cw_class, &d);
+    /* `element`, THE ROW THAT RELEASES THIS, and never this file — core/platform.c's list is a list of
+       DECLAREs and RELEASEs that file itself calls, and this component has neither: its declaration is
+       reached from element_init (the `element` row's declare column) and its release from element_free
+       (that row's release column), so `element` is whose release gives this slot back. A sub-component
+       names the row that releases it — core/agent_state.h. */
+    agent_state_class("element", &g_cw_class, "HTML §6.10.3's CloseWatcher class");
     g_slot_key = JS_NewSymbol(ctx, "closeWatcherInternal", false);
     CHECK(!JS_IsException(g_slot_key), "the CloseWatcher internal-close-watcher slot key allocation failed");
     g_slot_atom = JS_ValueToAtom(ctx, g_slot_key);
@@ -369,4 +376,10 @@ void close_watcher_interface_free(JSRuntime *rt)
     JS_FreeValueRT(rt, g_slot_key);
     g_slot_key = JS_UNDEFINED;
     g_id_ctor = g_id_request_close = g_id_close = g_id_destroy = -1;
+    /* AND THE CASCADE REACHED THIS FILE — the claim that entitles element_free's last line to put this
+       file's class back, and which that line REFUSES to proceed without. The class id is NOT reset here:
+       the undo is the one reset, computed from the registry that already holds this slot's address and
+       kind, and a line here as well would be the second resetter it exists to stop being kept by hand.
+       See core/agent_state.h's agent_state_reached. */
+    agent_state_reached("element");
 }

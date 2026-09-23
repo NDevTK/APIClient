@@ -3705,6 +3705,11 @@ void custom_elements_init(JSContext *ctx)
         CHECK(JS_NewClass(JS_GetRuntime(ctx), g_registry_class, &d) == 0,
               "the CustomElementRegistry class could not be declared");
     }
+    /* AND THE CLASS IS THE AGENT'S TOO, DECLARED UNDER THE SAME ROW AS THE MAP BELOW. The latch this
+       component's init opens with is g_ready, not this id, so nothing here reads a carried number — what a
+       carried one costs is core/platform.c's conservation identity, which counts every class id the declare
+       column minted against every one it was told about. */
+    agent_state_class("element", &g_registry_class, "§4.13.4's CustomElementRegistry class");
     g_reg_key = JS_NewSymbol(ctx, "customElementRegistryRecord", false);
     CHECK(!JS_IsException(g_reg_key), "the CustomElementRegistry record slot key allocation failed");
     g_atom_reg = JS_ValueToAtom(ctx, g_reg_key);
@@ -3723,6 +3728,14 @@ void custom_elements_init(JSContext *ctx)
           "a §4.13.4 CustomElementRegistry field name could not be interned");
     g_registry_slot = realm_value_declare(ctx, "§4.13.4 the Document's CustomElementRegistry");
     g_html_ctor_slot = realm_value_declare(ctx, "§3.2.3's active function object (HTMLElement)");
+    /* AND THE TWO REALM SLOTS ARE CLASS IDS — core/realm.c's realm_value_declare mints one, which is why
+       core/agent_state.h gives them their own kind and why the identity in core/platform.c counts them
+       beside SLOT_CLASS rather than apart from it. Declared BELOW the lines that assign them, because a row
+       declared above one is counted against an allocator it never asked. */
+    agent_state_realm_slot("element", &g_registry_slot,
+                           "§4.13.4's per-realm Document CustomElementRegistry slot");
+    agent_state_realm_slot("element", &g_html_ctor_slot,
+                           "§3.2.3's per-realm active function object (HTMLElement) slot");
     /* §4.13.4's active custom element constructor map is the AGENT's, not a realm's — a class defined in one
        realm's scoped registry and constructed from another must find the same entry. */
     g_active_ctor_map = JS_NewArray(ctx);

@@ -32,6 +32,7 @@
 #include "solver/attr_shadow.h"
 #include "solver/concolic.h"
 #include "solver/dom_cow.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/element.h"
@@ -323,6 +324,12 @@ void dom_string_map_init(JSContext *ctx)
     JS_NewClassID(JS_GetRuntime(ctx), &g_class);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_class, &g_class_def) == 0,
           "the DOMStringMap class could not be registered");
+    /* `element`, THE ROW THAT RELEASES THIS, and never this file — core/platform.c's list is a list of
+       DECLAREs and RELEASEs that file itself calls, and this component has neither: its declaration is
+       reached from element_init (the `element` row's declare column) and its release from element_free
+       (that row's release column), so `element` is whose release gives this slot back. A sub-component
+       names the row that releases it — core/agent_state.h. */
+    agent_state_class("element", &g_class, "HTML §3.2.6.6's DOMStringMap class");
     g_ready = 1;
     realm_declare_intrinsic(dom_string_map_install_proto);
 }
@@ -377,4 +384,13 @@ void dom_string_map_free(JSRuntime *rt)
 {
     if (!g_ready) return;
     g_ready = 0;   /* the prototypes are the REALMS' — released with their contexts */
+    /* BELOW THE GUARD ABOVE, AND THAT IS THE CONTRACT: this says THE SLOTS THIS FILE DECLARED have been
+       given back, so a component whose init never ran has nothing to say here and agent_state_reached
+       refuses a file with no declarations under the row. */
+    /* AND THE CASCADE REACHED THIS FILE — the claim that entitles element_free's last line to put this
+       file's class back, and which that line REFUSES to proceed without. The class id is NOT reset here:
+       the undo is the one reset, computed from the registry that already holds this slot's address and
+       kind, and a line here as well would be the second resetter it exists to stop being kept by hand.
+       See core/agent_state.h's agent_state_reached. */
+    agent_state_reached("element");
 }
