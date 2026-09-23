@@ -860,11 +860,31 @@ const row = {
      copy §AN-AUDITOR-DERIVES-THE-RULE forbids and this directory has paid for that twice already. What the
      driver now holds is a C IDENTIFIER rather than a fragment of a sentence a person reads, so `absent.c` is
      free to reword its members and every consumer follows unedited. */
+  /* AND WHICH NAMES THEY WERE, WHICH IS THE ONLY HALF OF THIS PAIR ANYBODY CAN ACT ON AND THE HALF THIS ROW
+     DROPPED ON THE FLOOR. `absentPair` has returned `names` all along — it derives them from the census's own
+     rows, sorts them, and REFUSES rather than answering when their buckets do not sum to `absentOwed` — and
+     this composer took `.asked` and `.owed` out of that object and let the third member go. That is the
+     defaulted-field defect with no default in it: nothing crashed, no name was missing on either side, and the
+     row that RANKS THE CORPUS carried a numerator with its work queue discarded one property access away.
+     `owed: 3` says a document asked for three components this build does not have; the NAMES say which three,
+     and extension/popup.js already puts them in front of a person for exactly that reason.
+     THE KIND IS NOT THE PAIR'S AND MUST NOT BE READ AS IT. `absentAsked` and `absentOwed` count READS;
+     `absentOwedNames.length` counts DISTINCT NAMES. One name read forty times is 40 there and 1 here, so the
+     two are never differenced against each other and the list is never quoted as a fraction of the pair.
+     `[]` IS A READING AND `null` IS NOT ONE — the empty list is the positive statement that this document read
+     no name a standard owns and this realm lacks, which beside a nonzero `absentAsked` is the clean bill;
+     `null` is the census not stated at all, and the FATAL arm is neither. Those three arms are the ones this
+     composer already had and the list rides every one of them unchanged, so a consumer that can read the pair
+     can read the list without a fourth state to learn.
+     A ROW WRITTEN BEFORE THIS LINE CARRIES `absentAsked` AND NO `absentOwedNames`, and that is a FIFTH state
+     for whoever reads these rows back: it is not a pass that predates the census and it is not a clean bill.
+     testing/corpus/report.mjs asks it separately for that reason, on the same argument its four sibling
+     triages already make. */
   ...(() => {
-    if (!counted.length) return { absentAsked: null, absentOwed: null };
+    if (!counted.length) return { absentAsked: null, absentOwed: null, absentOwedNames: null };
     const r = absentPair(counted[counted.length - 1].absent);
     if (r.err) return { absentFatal: r.err };
-    return { absentAsked: r.asked, absentOwed: r.owed };
+    return { absentAsked: r.asked, absentOwed: r.owed, absentOwedNames: r.names };
   })(),
   /* THE ORPHAN SURFACE, WHICH IS THE HEADLINE ONE AND HAD NO COLUMN. §What-the-tool-produces is "what the
      bundle CAN do but didn't", and until the engine's own pair crossed the result document, whether a session

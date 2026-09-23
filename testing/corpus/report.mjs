@@ -91,7 +91,19 @@ const passes = files.map((f) => {
               sides move together — so the only thing left that can fire this is the pair being out of step. */
            absent: measured.length === 0 ? 'nothing-measured'
              : measured.some((r) => 'absentFatal' in r) ? 'fatal'
-             : measured.some((r) => 'absentAsked' in r) ? 'carried' : 'predates' };
+             : measured.some((r) => 'absentAsked' in r) ? 'carried' : 'predates',
+           /* AND A FIFTH, FOR THE OWED NAMES, ASKED SEPARATELY FROM THE PAIR IT RIDES BESIDE — which is the
+              same argument the four above make and which is LIVE rather than prospective: site.mjs began
+              writing `absentAsked` at one commit and `absentOwedNames` at a later one, so a pass between them
+              carries the DIGIT and no queue. Folding the two would print an empty work queue over a pass that
+              could not be asked, and an empty queue is this file's positive statement that no site owed a
+              name — which is the clean bill. Opposite findings, one silence.
+              IT INHERITS THE FATAL ARM RATHER THAN RE-DERIVING ONE, so the two states cannot disagree about
+              which pass a row belongs to: a census whose members are not this tree's composer's yields no
+              pair AND no names, and that is one fact about the artifact rather than two about two fields. */
+           absentNames: measured.length === 0 ? 'nothing-measured'
+             : measured.some((r) => 'absentFatal' in r) ? 'fatal'
+             : measured.some((r) => 'absentOwedNames' in r) ? 'carried' : 'predates' };
 });
 /* THE LIST THIS CENSUS MEASURED, NAMED AND THEN CHECKED AGAINST THE ROWS. This file used to read `sites.tsv`
    unconditionally and look every row's id up in it — and the app-page census walks twelve ids that appear in
@@ -509,6 +521,14 @@ for (const p of passes) for (const r of p.rows) {
        was never reached — which is a scheduling result about the run and not a fact about the page. A
        numerator alone reproduces the ambiguity the pair exists to remove. */
     aask: r.absentAsked, aowed: r.absentOwed,
+    /* AND WHICH NAMES, WHICH IS THE WORK QUEUE THE PAIR IS A NUMERATOR OF. It gets NO COLUMN and that is a
+       decision rather than an omission — see the queue printed under the table, which states what a reader
+       loses by it. Carried onto the measurement so the queue can be composed per pass and per site without
+       re-reading the rows, and left as whatever site.mjs wrote: `[]` is a clean bill, `null` is a run that
+       stated no census, and ABSENT is a pass that predates the field. Three facts, none defaulted into
+       another — a `|| []` here would turn all three into the clean bill, which is the one this file most
+       exists not to publish. */
+    anames: r.absentOwedNames,
     sigs, wasm: (r.artifact && r.artifact.wasmSha256 || '').slice(0, 12),
     /* THE ARTIFACT IS NAMED BY ITS HASH ALONE. This read `r.artifact.head`, a field site.mjs deliberately
        renamed to `builtFromHeadClaim` when it stopped being trustworthy, so it resolved to '' for every row
@@ -700,6 +720,77 @@ if (aFatal.length)
       .map((p) => '    ' + p.label + ': ' +
         (p.rows.filter((r) => r.absentFatal).map((r) => r.id + ' — ' + r.absentFatal)[0] || '(no message)'))
       .join('\n'));
+
+/* AND THE SHOUT FOR THE NAMES, WHICH IS NOT DECORATION ON THE `miss>owed` ONE ABOVE. Those two report on
+   DIFFERENT FIELDS that entered site.mjs at different commits, so a pass can carry the pair and not the
+   queue; a single shout covering both would report one instrument's silence as the other's answer, which is
+   the reason every triage in this file is asked separately. It matters here because the queue's own empty
+   state is a CLEAN BILL — "no site owed a name a standard puts on a global" — and a pass that could not be
+   asked renders identically to it. */
+const nPredates = passes.filter((p) => p.absentNames === 'predates').map((p) => p.label);
+const nCarried = passes.filter((p) => p.absentNames === 'carried').map((p) => p.label);
+if (nPredates.length)
+  console.log('\n*** THE OWED-GLOBALS QUEUE BELOW IS OVER ' + nCarried.length + ' OF ' + passes.length +
+    ' PASS(ES) — ' + nPredates.join(', ') + ' predate(s) the NAMES (their rows carry `absentAsked` and no ' +
+    '`absentOwedNames`), so an EMPTY queue over those passes is this instrument unable to ask, NOT a corpus ' +
+    'that owed nothing. The `miss>owed` column above is over a DIFFERENT set of passes and the two numbers ' +
+    'are not each other. ***');
+
+/* THE OTHER WORK QUEUE, AND IT IS THE ONE §NO-STUBS SAYS NO CRASH WILL EVER PRODUCE. A `DFAIL` names what to
+   build and the queue below prints it; an absent global names what to build and NOTHING THROWS — the page
+   writes `if (window.X)`, the read is correctly decided false, the fallback runs, and every endpoint and sink
+   behind the true branch is unreachable in silence. So this is the one queue in this file whose entries have
+   no signature, no stack and no abort, and until this diff the corpus's own census carried the COUNT of them
+   and threw the list away one property access from where it arrived.
+   IT IS A SECTION AND NOT A COLUMN, WHICH IS A DECISION AND NOT AN OMISSION. `pad` TRUNCATES, and this file
+   already records what that costs on a partition (`crashed x6 partial x3` clipped to `crashed x6 par` reads
+   as a site that only ever crashed). A truncated NAME is strictly worse than a truncated partition: it is a
+   spelling that exists nowhere, so a reader greps the tree for it, gets zero, and reads that as the component
+   being absent from the standard rather than from their column — an instrument manufacturing the perfect
+   silence CLAUDE.md teaches readers to distrust. And a list has no RANGE, so `spread` cannot express it
+   across passes at all; `terminal` and `cold` are already printed as sequences for that same reason.
+   WHAT A READER LOSES BY THAT, SAID PLAINLY: scanning ONE site's row in the table, they cannot see which
+   names that site owed — the row gives them `miss>owed` and sends them here. The mitigation is that this
+   queue prints the SITES under each name, so the mapping is recoverable in the other direction and the
+   question "which sites owe this" — which is the one a work queue is actually read for, because a name owed
+   by six sites generalises and one owed by one may not — is answered directly rather than by eye.
+   RANKED BY SITES AND NOT BY READS, BECAUSE READS ARE NOT AVAILABLE HERE. NAMED RESIDUAL — CORRECT AND
+   NARROWER. WHAT IS NOT COVERED: how MANY times each name was read. solver/absent.c keys a per-entry
+   histogram under every owed name and testing/absent_census.js walks those buckets — it sums them to check
+   the total — and then returns the KEYS alone, so the per-name counts are computed on every census of every
+   run and reach no consumer. WHAT THE NEXT DIFF BUILDS: `absentPair` returning that per-name total beside
+   `names`, which both drivers already call and neither would have to learn a new shape for. HOW ITS ABSENCE
+   WOULD SHOW: a name read once to feature-detect and a name read in a loop rank identically here, so a queue
+   whose head and tail are one site each states no order at all.
+   THE DENOMINATOR IS PRINTED WITH THE QUEUE and not left to the reader: a list of names over an unstated
+   number of sites is a count whose fraction nobody can take. */
+{
+  const owed = new Map();                       // name -> Set of site ids
+  let asked = 0, clean = 0, unstated = 0;
+  for (const t of table) for (const m of t.measurements) {
+    if (!('anames' in m)) continue;             // a pass that predates the field: shouted above, never counted
+    if (m.anames === null) { unstated++; continue; }   // a run that stated no census — not a clean bill
+    asked++;
+    if (!m.anames.length) clean++;
+    for (const n of m.anames) {
+      if (!owed.has(n)) owed.set(n, new Set());
+      owed.get(n).add(t.id);
+    }
+  }
+  if (asked || unstated) {
+    console.log('\n=== absent globals owed, ranked by sites that owed them ===');
+    console.log(owed.size + ' distinct name(s) over ' + asked + ' measurement(s) that stated the census (' +
+                clean + ' of those owed nothing, which is the clean bill; ' + unstated +
+                ' more stated none at all, which is not one)');
+    /* SORTED BY SITES DESCENDING AND THEN BY NAME, so two runs of one corpus print the same order — the
+       insertion order here is the order sites happened to be walked, which is not a fact about the corpus. */
+    for (const [n, sites] of [...owed.entries()].sort((a, b) => b[1].size - a[1].size || (a[0] < b[0] ? -1 : 1)))
+      console.log(`${sites.size}  ${n}\n     sites: ${[...sites].sort().join(', ')}`);
+    if (!owed.size)
+      console.log('    (none — over the measurements that stated the census, every standard name a document ' +
+                  'read was one this engine answers)');
+  }
+}
 
 /* THE WORK QUEUE. A DFAIL's reason names what to build, so it is printed rather than summarised -- but only
    the head of it, because one 1169-character reason per row buries the RANKING, which is the thing this
