@@ -3897,7 +3897,13 @@ int main(int argc, char **argv)
        — a row with agent state and no release is what platform_check_agent_state fires on — so TWO CLASS IDS
        were carried past their own release, each read by a finalizer and a gc_mark that run later still. See
        core/platform.c's entry. */
-    form_data_free(ctx);
+    /* XHR §4 "Interface FormData" is NOT freed here any more — `form_data` is a ROW on core/platform.h's
+       release column, run by the platform_agent_free above. This line was in all three host teardowns and ran
+       AFTER that call had already run the whole column, and the three did not agree on where it went: this
+       host and one other ran it beside encoding and text_stream, the third ran it up beside the two URL rows.
+       Out here the file could declare no agent state to core/agent_state.h at all — a row with agent state
+       and no release is what platform_check_agent_state fires on — so §4's CLASS ID was carried past its own
+       release, read by a finalizer and a gc_mark that run later still. See core/platform.c's entry. */
     /* THE WHOLE STREAMS GROUP — §4's ReadableStream with core/streams/pipe.c and
        core/streams/readable_byte_stream.c under it, §5's WritableStream, §6's TransformStream and §7's two
        queuing strategies — is NOT freed here any more: all four are ROWS on core/platform.h's release column,

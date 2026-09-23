@@ -24,7 +24,10 @@ void form_data_init(JSContext *ctx);
    no realm that has no Document over it. (`§5's prototype` stood on the deleted second line, and §5 is
    "Interface ProgressEvent".) */
 void form_data_install_realm(JSContext *ctx);
-void form_data_free(JSContext *ctx);
+/* THE AGENT'S — core/platform.h's release column, which is why it takes NOTHING where it used to take a
+   JSContext no line of it read. §4's prototype and interface object are the REALMS' and go with their
+   contexts; what this gives back is the class id, the recorded runtime and two pool indices. */
+void form_data_free(void);
 
 /* A FormData over an entry list the caller built — how `.formData()` hands back what it parsed out of a body
    without going through the interface's own members. The list is COPIED. */

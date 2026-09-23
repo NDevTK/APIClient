@@ -41,6 +41,7 @@
 #include "core/html/html_element.h"
 #include "core/html/html_form.h"
 #include "core/idl_args.h"
+#include "core/agent_state.h"
 #include "core/realm.h"
 #include "core/idl_iter.h"
 #include "solver/concolic.h"
@@ -118,9 +119,20 @@ static JSRuntime *g_fd_rt;
 static int       g_fd_ctor_stepid = -1;
 static int       g_fd_pair_handle = -1;
 
+/* NEITHER OF THESE MAY LOOK THE CLASS ID UP, because the collector runs AFTER core/platform.h's release
+   column — every host's teardown is platform_agent_free(), JS_RunGC, JS_FreeRuntime in that order — and §4's
+   class id is agent state the `form_data` row's release now puts back at 0. `JS_GetOpaque(val, g_fd_class)`
+   here would be `JS_GetOpaque(val, 0)`, NULL for every live FormData, and the two halves fail differently:
+   the finalizer would leak the entry list and every name it owns, and the MARK is worse, because an unmarked
+   child keeps the internal reference gc_decref subtracts, so gc_scan reads each entry's File as rooted from
+   OUTSIDE the heap and it is never collected at all. The id is not needed — the collector dispatched here
+   THROUGH the class. See core/agent_state.h's closing paragraph. */
 static void form_data_finalizer(JSRuntime *rt, JSValue val)
 {
-    FormDataObj *d = JS_GetOpaque(val, g_fd_class);
+    JSClassID id = 0;
+    FormDataObj *d = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
     if (d) { fd_list_free(rt, &d->list); free(d); }
 }
 
@@ -128,8 +140,11 @@ static void form_data_finalizer(JSRuntime *rt, JSValue val)
    is what gc_mark is for. */
 static void form_data_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    FormDataObj *d = JS_GetOpaque(val, g_fd_class);
+    JSClassID id = 0;
+    FormDataObj *d = JS_GetAnyOpaque(val, &id);
     int i;
+
+    (void)id;
     if (!d) return;
     for (i = 0; i < d->list.n; i++)
         JS_MarkValue(rt, d->list.e[i].value, mark_func);
@@ -910,6 +925,13 @@ void form_data_init(JSContext *ctx)
     g_fd_rt = rt;
     JS_NewClassID(rt, &g_fd_class);
     JS_NewClass(rt, g_fd_class, &def);
+    /* THE AGENT STATE THIS LINE JUST CREATED, DECLARED BESIDE IT. `form_data` is this file's own row on
+       core/platform.c's list, and the row could declare nothing at all until it had a release column: a row
+       with agent state and an EMPTY release is what platform_check_agent_state fires on. The id is also
+       inside the window that file's declare column brackets with `minted == declared`. */
+    agent_state_class("form_data", &g_fd_class,
+                      "XHR §4's FormData class — the brand `formData` and every BodyInit position reads "
+                      "through form_data_is and form_data_class_id, and the per-realm prototype slot");
     /* The value argument is IDL_ANY because XHR §4's overload picks its type: a Blob crosses as itself and
        everything else is a USVString. With no Blob interface nothing is one, and the member's own
        JS_ToCStringLen is that arm — declaring it USVString here would convert a Blob too, once there is one. */
@@ -983,11 +1005,22 @@ void form_data_install_realm(JSContext *ctx)
     JS_SetClassProto(ctx, g_fd_class, proto);   /* the realm owns it from here */
 }
 
-void form_data_free(JSContext *ctx)
+/* THE AGENT'S — core/platform.h's release column. IT TAKES NOTHING, and no line of the old body read the
+   JSContext it used to take: §4's per-realm prototype and its interface object are the REALMS' and went with
+   their contexts. core/platform.h says the test is WHAT A RELEASE GIVES BACK — here a class id, a runtime
+   handle and two pool indices, with no JSValue and no JSAtom anywhere, so unlike `blob` there is not even a
+   JS_FreeValueRT to want a runtime for. */
+void form_data_free(void)
 {
     if (!g_fd_rt)
         return;
     /* the prototypes are the REALMS' — released with their contexts */
     g_fd_rt = NULL;
+    /* §4'S CLASS ID GOES BACK AT 0 — core/agent_state.h's ONE policy for a class id. form_data_is already
+       reads this slot defensively (`g_fd_class != 0 && …`), which the zeroing makes correct rather than
+       breaks: a carried id would name a class in a runtime that is gone, and JS_NewClassID in this fork
+       RETURNS a non-zero id it is handed rather than minting, so the next agent's FormData objects would all
+       be branded with a number the live runtime never gave out. */
+    g_fd_class = 0;
     g_fd_ctor_stepid = -1;
 }

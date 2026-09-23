@@ -454,6 +454,31 @@ static void r_blob(JSRuntime *rt) { blob_free(rt); }
    stands in, which is a member body or a per-realm install in every case. */
 static void r_url(JSRuntime *rt) { (void)rt; url_free(); }
 static void r_usp(JSRuntime *rt) { (void)rt; usp_free(); }
+/* XHR §4 "Interface FormData". form_data_free was a hand-written line in THREE host teardowns —
+   engine/host/main.c, engine/host/test_forced.c and engine/host/wpt_runner.c — running AFTER
+   platform_agent_free had already run this entire column, and this is the row where the three hosts most
+   visibly disagreed about WHERE: main.c and test_forced.c ran it after encoding and text_stream, a whole
+   group below the two URL rows, while wpt_runner.c ran it immediately after them and a hundred lines above
+   its own encoding pair. Nothing was missing in any of the three; there were three answers.
+   WHAT IT COST TO BE OUT THERE was a question nobody could ask. A row with agent state and an EMPTY release
+   column is what platform_check_agent_state fires on, so while form_data_free sat in the hosts this file
+   could declare nothing at all — and §4's CLASS ID was carried past its own release, which is the brand
+   Fetch §5.2's BodyInit arm, XHR §4's own body arm and NavigateEvent's `formData` all read through
+   form_data_is and form_data_class_id.
+   IT TAKES NOTHING NOW AND READ NOTHING BEFORE: §4's prototype and interface object are each realm's and go
+   with their contexts, so what is left is a class id, a runtime handle and two pool indices — no JSValue and
+   no JSAtom, hence not even a JS_FreeValueRT to want the runtime for, which is where this row differs from
+   `blob` two entries up.
+   THE ORDER IS CHECKED IN BOTH DIRECTIONS. This is the fifth row of the list, so reverse declaration order
+   runs it after every component that reads a FormData — core/fetch/body.c's extractor, core/html/html_form.c
+   and its FormDataEvent under `element`, core/events/navigate_event.c under `navigate_event_fire` — and
+   before only `url_search_params`, `url`, `console` and `hr_time`, none of which names this component. In the
+   other direction no release in this agent calls a form_data entry: derived by taking every caller of
+   form_data_is, form_data_class_id, form_data_new, form_data_clone, form_data_parse_multipart,
+   form_data_serialize_multipart, form_data_append_entry, form_data_append_all and the three entry accessors
+   outside core/html/form_data.c and reading the function each stands in — a member body or a per-realm
+   install in every case. */
+static void r_form_data(JSRuntime *rt) { (void)rt; form_data_free(); }
 /* DOM §3.1/§3.2 AND THE OBSERVABLE STANDARD, AND THE PAIR INVERTS — WHICH IS THE POINT RATHER THAN A SIDE
    EFFECT. Both releases were hand-written lines in THREE host teardowns — engine/host/main.c,
    engine/host/wpt_runner.c and engine/host/test_forced.c — running AFTER platform_agent_free had already run
@@ -881,7 +906,7 @@ static const PlatformComponent PLATFORM[] = {
        core/html/ because HTML §4.10.22.4 builds the entry list AS one, and the exposure set is `xhr.idl`'s;
        neither the directory nor the neighbours decide the column, which is why this row outlived the
        conversion that moved every other XHR placement. */
-    { "form_data",           d_form_data,           NULL },
+    { "form_data",           d_form_data,           NULL,        r_form_data },
     /* NO DOCUMENT HALF. The Streams Standard declares THIRTEEN interfaces and every one of them is
        `[Exposed=*]` — §4.2 "The ReadableStream class", §4.4 "The ReadableStreamDefaultReader class", §4.5 "The
        ReadableStreamBYOBReader class", §4.6 "The ReadableStreamDefaultController class", §4.7 "The

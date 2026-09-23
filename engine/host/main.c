@@ -2146,7 +2146,13 @@ QJS_EXPORT void qjs_teardown(void)
        teardown, which is the same defect waiting. */
     encoding_free(g_ctx);
     text_stream_free(g_ctx);
-    form_data_free(g_ctx);        /* URLSearchParams.prototype */
+    /* XHR §4 "Interface FormData" is NOT freed here any more — `form_data` is a ROW on core/platform.h's
+       release column, run by the platform_agent_free above. This line was in all three host teardowns and ran
+       AFTER that call had already run the whole column, and the three did not agree on where it went: this
+       host and one other ran it beside encoding and text_stream, the third ran it up beside the two URL rows.
+       Out here the file could declare no agent state to core/agent_state.h at all — a row with agent state
+       and no release is what platform_check_agent_state fires on — so §4's CLASS ID was carried past its own
+       release, read by a finalizer and a gc_mark that run later still. See core/platform.c's entry. */
     navigable_free(g_ctx);
     /* navigator (and Permissions §6 + §3.2's store with it), storage_manager and screen are ROWS on
        core/platform.h's release column now, run by the platform_agent_free above. §3.2's store is two live
