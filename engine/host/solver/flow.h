@@ -1930,13 +1930,42 @@ typedef struct {
        family's, and a CARRY BIT whose threshold is the family's residue and is therefore common (flow.c). So
        between two frontier generations nothing in any member's weight moves except that bit, and the members
        that flip it together are exactly the ones sharing a phase.
-       `1` IS THE STRONGEST READING AND IT IS NOT A DEGENERATE ONE. Every member then crosses at the same
-       instant, the bit is a COMMON OFFSET, no two members reorder between generation bumps at all, and a
-       single cached maximum is exact — which is a whole class of index cheaper than the sweep a larger
-       reading needs. A fork COPIES its parent's `cpu` and window mark verbatim (flow_fork_inherit) and an
-       emission sends every member of a family to a phase of zero in one statement (flow_credit_emit), so the
-       state is reachable by construction rather than by luck; what refills it is a member being CHARGED, and
-       only the running one ever is.
+       `1` IS REACHABLE BY CONSTRUCTION AND HAS NEVER BEEN OBSERVED HERE EXCEPT DEGENERATELY. This sentence
+       read "`1` IS THE STRONGEST READING AND IT IS NOT A DEGENERATE ONE" and is REWRITTEN rather than deleted,
+       because the mechanism under it is CORRECT and a reader who re-derives that mechanism will re-introduce
+       the headline with it. The mechanism, unchanged: every member then crosses at the same instant, the bit
+       is a COMMON OFFSET, no two members reorder between generation bumps at all, and a single cached maximum
+       is exact — a whole class of index cheaper than the sweep a larger reading needs. A fork COPIES its
+       parent's `cpu` and window mark verbatim (flow_fork_inherit) and an emission sends every member of a
+       family to a phase of zero in one statement (flow_credit_emit), so the state is REACHABLE rather than
+       lucky; what refills it is a member being CHARGED, and only the running one ever is.
+       WHAT THE HEADLINE ADDED TO THAT MECHANISM WAS A CLAIM ABOUT THIS TREE, AND MEASUREMENT CONTRADICTS IT.
+       Over every archived census on this machine's disk at the time of writing — 742 samples in 139 files,
+       394 of them carrying this row on a live frontier, one build in flight excluded because its writer had
+       not exited — `sil_phases == 1` occurs 48 times and `members == 1` in ALL FORTY-EIGHT. Zero
+       counterexamples, and none either in the 166-sample corpus left after the duplicate run-log twins and
+       the build transcripts that contain them are removed. Every `1` anybody has ever seen here is the reading
+       the paragraph below already names as the frontier being EMPTY OF THE QUESTION.
+       THE CORPUS IS SCRATCH AND IS NOT IN THIS REPOSITORY, so what is handed over is the DERIVATION and the
+       counterexample count is the whole of the claim — the third number below is the one that must stay zero:
+         grep -ho '@WFQ {.*}' <logs> | python3 -c 'import sys,json
+         d=[json.loads(l[5:]) for l in sys.stdin if "silPhases" in l]
+         print(len(d), sum(1 for x in d if x["silPhases"]==1),
+               sum(1 for x in d if x["silPhases"]==1 and x["members"]>1))'
+       WHAT A REAL FRONTIER READS INSTEAD: on the three live-page runs in that corpus, all at `families: 1`,
+       the terminal readings are 3432/6243, 3263/5888 and 3121/5882 — 0.53 to 0.55, ABOUT EVERY OTHER MEMBER
+       ITS OWN GROUP. The ratio reads 1.000 at the four members of each run's FIRST census, where every member
+       is trivially its own group, FALLS to 0.16-0.19 by four hundred, and then climbs MONOTONICALLY to those
+       terminal figures at six thousand — so it is the frontier's own growth that fills the residues and there
+       is no reading at which it settles. The collapsing emission did fire on each of those runs (the leading
+       account's `top_forgiven` stood at 17) and no sample ever caught the frontier at one group, which is what
+       a state that lives between an emission and the very NEXT charge looks like from a census sampled per
+       REPORT. So the reading an index designer actually gets is not 1 and is not small: it is half the
+       frontier and rising, and the single-cached-maximum class is what the mechanism PERMITS rather than what
+       the measurement supports.
+       RETIREMENT: this record goes when a census in this tree reports `sil_phases == 1` with `members > 1` —
+       the one observation that would make the retired headline a statement about this engine rather than
+       about its arithmetic.
        READ IT AGAINST `members`, NEVER ALONE: `sil_phases` at 1 with `members` at one is the frontier being
        empty of the question, and at tens of thousands it is the finding. Read it against `picksLifetime` too
        — a member that has never held the thread carries the phase it was forked with, so a reading far below
@@ -2955,6 +2984,55 @@ static inline const char *flow_scan_name(FlowScan s)
    `if (!best) break`. So there is no floor to assert between these two rows and none is asserted. */
 long flow_scan_runs(FlowScan s);
 long flow_scan_weights(FlowScan s);
+
+/* …AND WHAT THE ONE ASSERTION IN THAT SAME WALK DID WITH THE WEIGHTS THOSE ROWS COUNT — the partition the
+   banner above is the exact complement of. FLOW_SCANS counts the flow_weight the scan PERFORMED "and never
+   the ones a DCHECK below it makes"; this counts what that DCHECK did, and the two are disjoint by
+   construction.
+   WHY IT IS A ROW AT ALL: flow_pick's member-key invariant is a predicted ABSENCE — the claim is that it
+   never fires — and a clean run is satisfied identically by an invariant that HOLDS and by a path NOBODY
+   TOOK. Its condition is a four-way disjunction whose first three arms EXEMPT the member (it holds the
+   thread, it has never been weighed, or the generation has moved since it was), so a scan can walk a whole
+   frontier and compare nothing whatever. `armed` is the number of comparisons actually made and is the only
+   quantity that scores that prediction. Until this row the arming could only be INFERRED, by pigeonhole,
+   from four scan counters against `rankChanges`.
+   THE OTHER THREE ARE NOT DECORATION AND THEY TAKE DIFFERENT WORK. `running` is bounded by one member per
+   scan and `first_seen` by one per member ever created, so both are structurally small; `stale_gen`
+   approaching the total is the FRONTIER GENERATION MOVING FASTER THAN MEMBERS ARE RE-WEIGHED, which makes the
+   invariant vacuous rather than held — a finding about the frontier, and the one a bare `armed: 0` could not
+   distinguish from a quiet engine.
+   ONE STRUCT AND ONE CALL, because the four are a PARTITION and a partition read through four calls is four
+   moments. §Testing's rule is that a conservation identity holds WITHIN ONE SAMPLE and nowhere else, so this
+   is taken at one instant by construction rather than by the caller remembering to.
+   THE KIND IS THE SAME FOR ALL FOUR AND IT IS IN EVERY PUBLISHED NAME: LIFETIME COUNTS OF COMPARISONS, never
+   reset and monotone, which is the only kind a reader may DIFFERENCE. None of them is a gauge over the
+   frontier and none is per-member, so none may be read against `members` as a share of anything.
+   ZERO IN A RELEASE BUILD, AND THAT IS NOT A READING OF ANYTHING. The check and its per-member stamp are
+   `#if APICLIENT_DEV` (see `Flow.key_last` for why), so nothing raises these where the product ships — while
+   solver/result.c publishes unconditionally, because that composer has no dev arm at all and engine/build.mjs
+   takes its REQUIRED row set from that composer's own format string, so a row emitted in one build only would
+   fail every release census this repository takes. The discriminator needs no sentinel and is already on the
+   line: ALL FOUR AT ZERO WITH ANY `scan<Entry>Weights` NONZERO IS A BUILD THAT MAKES NO CHECK, because in a
+   dev build every member the dispatch loop weighs raises exactly one of the four. `armed: 0` with the four
+   summing ABOVE zero is the real finding — the walk ran, and compared nothing.
+   THE IDENTITY IS ASSERTED WHERE THE PARTS ARE IN ONE HAND, in flow_pick and across ONE call: the four are
+   raised on the statement after `g_scan_weights[why]++` with no branch between them, so their delta over one
+   loop must EQUAL that counter's delta. Two counters maintained by two statements, which is what makes it a
+   check rather than a sum compared with its own summands. It is also the one thing that catches the way this
+   pair rots — a `continue` introduced between the weighing and the block, which is the same correct-by-
+   ADJACENCY shape flow.c's `sub_born++` and `sub_gone++` already stand on.
+   IT DECIDES NOTHING, for the scan counters' reason exactly: no term of flow_weight reads any of the four, no
+   pick branches on them, nothing is bounded by them.
+   RETIREMENT: this goes when the ask no longer walks the frontier — the invariant is then held at the index's
+   own update site, where it is not a disjunction and has nothing to be exempt from, so there is no arming
+   left to count. */
+typedef struct {
+    long armed;       /* comparisons the check actually MADE — the row that scores its predicted absence */
+    long stale_gen;   /* exempt: the frontier generation moved since this member was last weighed */
+    long first_seen;  /* exempt: this member had never been weighed, so there was nothing to compare against */
+    long running;     /* exempt: it held the thread, which is the one writer that may move its own half */
+} FlowKeyChecks;
+FlowKeyChecks flow_key_checks(void);
 
 /* HOW MANY TIMES THE ORDER CHANGED — the denominator the hook's rescan count has and `scanNextRuns` is NOT,
  * and without which the two readings of that count disagree with each other.

@@ -151,13 +151,16 @@ static int64_t g_unframed_picks_total = 0;
    artifact 9213fbab, 64 commits behind its tip, TWO runs of 161 s and 163 s under one 180 s CPU budget on a
    quiet box, served by any static server over that directory:
      node engine/pagecensus.mjs http://127.0.0.1:<port>/wjp_absent.html <transcript.jsonl>
-   `scanNextWeights / steps` reads 17604 and 17801 against `members` 31828 and 32232 — a ratio of 0.553 and
-   0.552 — and the same ratio read 0.5531 at a sample a THIRD of the way through the first run, on a frontier
-   that tripled between the two readings. A quotient that holds to three figures while its denominator triples
-   is a FULL O(members) walk per step, which no single sample could have said. `scanRivalRuns / forks` reads
-   1.985 and 1.992: the hook rescans about twice per fork, where flow.h's own cadence note predicts about once,
-   so something raises the frontier generation a second time per fork and `flow_rank_changes` is the row that
-   would name it.
+   `scanNextWeights / steps` reads 17604 and 17801 against `members` 31828 and 32232 — so THAT QUOTIENT OVER
+   `members` is 0.553 and 0.552, which is a second division and not this one — and that second quotient read
+   0.5531 at a sample a THIRD of the way through the first run, on a frontier that tripled between the two
+   readings. A quotient that holds to three figures while its denominator triples is a FULL O(members) walk
+   per step, which no single sample could have said. THE DENOMINATOR IS NAMED BECAUSE LEAVING IT UNNAMED COST
+   A RELAY: `0.553` sitting beside a named quotient was passed on AS that quotient, which reads as half an
+   evaluation per step — cheap — where the figure this paragraph is about is seventeen thousand of them.
+   `scanRivalRuns / forks` reads 1.985 and 1.992: the hook rescans about twice per fork, where flow.h's own
+   cadence note predicts about once, so something raises the frontier generation a second time per fork and
+   `flow_rank_changes` is the row that would name it.
    SUMMED, THE TWO RUNS EVALUATED 2.17 AND 2.22 BILLION MEMBER WEIGHTS TO PERFORM `unitsDone` 380 AND 522 —
    5.70 and 4.25 million weight evaluations per unit of work — a figure whose 34% spread is ENTIRELY its
    denominator's, which the sentence below names as the one column that moves, so it is quoted as the pair it
@@ -4589,6 +4592,18 @@ static unsigned char g_phase_seen[(size_t)FLOW_SERVICE_US];
    because they are compared against `steps` and `forks`, which are. */
 static long g_scan_runs[FLOW_SCAN_N];
 static long g_scan_weights[FLOW_SCAN_N];
+/* …AND WHAT THE ONE ASSERTION IN THAT SAME WALK DID WITH THOSE WEIGHTS — solver/flow.h states the partition,
+   the kind, why the four are read through ONE call, and why all four reading zero beside a nonzero scan row
+   is a build that makes no check rather than a check that never armed. Raised only inside the dev block in
+   flow_pick; the STORAGE and the ACCESSOR are unconditional because solver/result.c publishes them in every
+   build and that composer has no dev arm to put them behind. */
+static FlowKeyChecks g_key_checks;
+FlowKeyChecks flow_key_checks(void) { return g_key_checks; }
+#if APICLIENT_DEV
+static long key_checks_total(void) {
+    return g_key_checks.armed + g_key_checks.stale_gen + g_key_checks.first_seen + g_key_checks.running;
+}
+#endif
 long flow_scan_runs(FlowScan s) {
     DCHECK((unsigned)s < (unsigned)FLOW_SCAN_N,
            "an order-scan count was asked for an entry that is not in solver/flow.h's list — the index would "
@@ -4740,6 +4755,11 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        RETIREMENT: this record goes when the ask no longer walks the frontier, or when no per-bucket quantity
        can be summed into flow_weight at all. */
     int seed_live = 0;
+#if APICLIENT_DEV
+    /* THE TWO SIDES OF THE ONE IDENTITY THAT MAKES THE ARMING COUNT A MEASUREMENT RATHER THAN A SUM OF ITS OWN
+       SUMMANDS — snapshotted here and compared where the loop ends. See solver/flow.h's FlowKeyChecks. */
+    long kc_before = key_checks_total(), sw_before = g_scan_weights[why];
+#endif
     for (int i = 0; i < g_flows_n; i++) {
         double w;
         /* THE REGISTRY HANDLE, CROSS-CHECKED AGAINST THE WALK IT REPLACES — flow.h's `reg_i` rests on this
@@ -4803,7 +4823,21 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
         {
             Flow *m = g_flows[i];
             double mk = flow_member_key(m);
-            DCHECKF(m == g_running || !m->key_stamped || m->key_gen != g_gen || mk == m->key_last,
+            /* WHICH ARM OF THE DISJUNCTION THIS MEMBER TOOK, DECIDED ONCE AND READ BY BOTH THE COUNT AND THE
+               CHECK. The condition below used to spell the three exemptions a second time, which is a copy of
+               one decision that can drift from its count the day a fourth exemption is added — the shape
+               flow_member_key itself was written to end one scope up. Selecting the bucket IS the decision,
+               and `kind != &g_key_checks.armed` is the same predicate the disjunction was.
+               THE COUNT IS WHAT SCORES THE PREDICTION THIS CHECK MAKES. Its author's claim is that it never
+               fires, and a predicted ABSENCE is satisfied identically by an invariant that holds and by a walk
+               that compared nothing; `armed` is the number of comparisons actually made, and the three
+               exemptions say which arm absorbed the rest. Solver/flow.h carries the reading. */
+            long *kind = m == g_running      ? &g_key_checks.running
+                       : !m->key_stamped     ? &g_key_checks.first_seen
+                       : m->key_gen != g_gen ? &g_key_checks.stale_gen
+                       :                       &g_key_checks.armed;
+            (*kind)++;
+            DCHECKF(kind != &g_key_checks.armed || mk == m->key_last,
                     "a member that is not holding the thread changed its own half of the WFQ's weight with "
                     "the frontier generation standing still — flow_silence_phase's decomposition says only "
                     "the family's common half and the carry bit may move between two generations, and every "
@@ -4828,6 +4862,27 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
            one scan, one direction bit. */
         if (!best || (worst ? w < bw : w > bw)) { best = g_flows[i]; bw = w; }
     }
+#if APICLIENT_DEV
+    /* THE PARTITION AGAINST THE COUNTER IT IS A PARTITION OF, WITH BOTH DELTAS IN ONE HAND. The four buckets
+       are raised on the statement after `g_scan_weights[why]++` with no branch between them, so over one loop
+       their total must move by exactly what that counter moved — and the two are maintained by two different
+       statements, which is what makes this a check rather than a sum compared with its own summands.
+       IT IS ASKED BEFORE THE SEED FOLD BELOW, which weighs one more member and is deliberately OUTSIDE the
+       stamped population: the seed is the incumbent, the one member the exemption above is about, and pricing
+       it here would make the identity false by exactly one on every seeded scan.
+       WHAT IT CATCHES IS AN ADJACENCY, which is the one way this pair rots — a `continue` introduced between
+       the weighing and the block, after which the arming count silently describes a subset of the frontier
+       the order actually walked. flow_fork_inherit's `sub_born++` and acct_depart's `sub_gone++` stand on the
+       same kind of adjacency and this file says so at both. */
+    DCHECKF(key_checks_total() - kc_before == g_scan_weights[why] - sw_before,
+            "the member-key check ran on a different set of members than this scan weighed — the four buckets "
+            "are raised on the statement after the scan's own weight counter with nothing between them, so "
+            "over one loop the two deltas are the same number by adjacency. A difference is a branch that has "
+            "been introduced between them, and `keyArmedLifetime` is then a count over a subset of the "
+            "frontier the order walked while reading as a count over all of it. This scan weighed %ld "
+            "member(s) and the check classified %ld",
+            g_scan_weights[why] - sw_before, key_checks_total() - kc_before);
+#endif
     /* THE SEED FOLDED IN AFTER THE SCAN, WITH A NON-STRICT COMPARISON, WHICH IS THE SAME ANSWER AND NOT A NEW
        TIE-BREAK — and that equality is what makes this a RELOCATION rather than a policy change. Seeded before
        the loop, `best` started at the seed and a member displaced it only on a STRICT improvement, so what was
@@ -5673,9 +5728,15 @@ void flow_wfq_census(WfqCensus *out) {
            DISTINCT VALUES AND NOT A SPREAD, because the two answer different questions and only one of them
            is about an index. A spread says how far apart two members stand; what an index over this key needs
            to know is HOW MANY GROUPS the frontier partitions into, and `sil_phases: 1` is the strongest
-           possible answer — every member crosses the carry boundary at the same instant, so the bit is a
-           COMMON OFFSET, nothing reorders between generation bumps at all, and a single cached maximum is
-           exact. Any larger reading is the number of ranges a sweep has to move through. */
+           answer the ARITHMETIC permits — every member crosses the carry boundary at the same instant, so the
+           bit is a COMMON OFFSET, nothing reorders between generation bumps at all, and a single cached
+           maximum is exact. Any larger reading is the number of ranges a sweep has to move through.
+           THIS USED TO READ `the strongest possible answer` FLAT, AND THE ARCHIVE CONTRADICTS THAT AS A CLAIM
+           ABOUT THIS ENGINE — every `sil_phases == 1` in this repository's logs stands at `members == 1`, and
+           a live page reads about half its frontier. solver/flow.h carries the measurement, the corpus it was
+           taken over and the retirement condition; it is repaired HERE TOO because one sentence held at three
+           sites is three chances to be stale, and repairing the one a reader happens to find is how the other
+           two get certified. */
         {
             int64_t ph = flow_silence_phase(f);
             if (!g_phase_seen[(size_t)ph]) { g_phase_seen[(size_t)ph] = 1; out->sil_phases++; }

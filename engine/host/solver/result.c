@@ -684,6 +684,31 @@ char *result_wfq_json(void) {
     WfqCensus w;
 
     flow_wfq_census(&w);
+    /* THE FOUR ARMING BUCKETS IN ONE READ, BECAUSE THEY ARE A PARTITION. solver/flow.h states the kind, the
+       reading, and why a partition taken through four calls is four moments; one call makes the sample true by
+       construction rather than by this caller remembering that nothing between the calls steps anything.
+       AFTER THE CENSUS AND NOT BEFORE IT, because flow_wfq_census calls flow_best — which is flow_pick, which
+       classifies every member it weighs — so a read taken above that walk would publish a partition one whole
+       frontier older than the scan rows it is contained by, and the containment below would be slack by that
+       walk for no reason. Nothing between this line and the composition steps anything. */
+    FlowKeyChecks kc = flow_key_checks();
+    /* THE ONE CLAIM ABOUT THE PARTITION THAT HOLDS IN BOTH BUILDS. Every bucket is raised on the statement
+       after a scan's own `g_scan_weights[why]++`, so a classification without a weighing is impossible and the
+       four can never sum above the weighings this instance performed. The EQUALITY is not asserted here and
+       must not be: the scan totals also carry flow_pick's seed fold and the census's own walk, neither of
+       which is stamped, so a reader comparing them expects slack — the tight identity is asserted inside
+       flow_pick, over ONE loop, where both deltas are in one hand. This is the containment only, which is what
+       makes a violation unambiguous: the check has been moved off the line that weighs.
+       IN RELEASE ALL FOUR ARE ZERO AND THIS PASSES VACUOUSLY, which is stated rather than relied on — the
+       discriminator a reader uses is the one solver/flow.h names, four zeros beside a nonzero scan row. */
+    DCHECK(kc.armed + kc.stale_gen + kc.first_seen + kc.running
+               <= flow_scan_weights(FLOW_SCAN_NEXT) + flow_scan_weights(FLOW_SCAN_RIVAL)
+                + flow_scan_weights(FLOW_SCAN_OTHER) + flow_scan_weights(FLOW_SCAN_CENSUS),
+           "the member-key check classified more members than this instance's scans ever weighed — every "
+           "bucket is raised on the statement after the scan's own weight counter, so the four are a SUBSET "
+           "of those weighings by construction. A count above them is a classification reached without a "
+           "weighing, which means the block has been moved off the line it is about and `keyArmedLifetime` is "
+           "no longer a count of comparisons this order made");
     /* THE ONE IDENTITY THAT DEFINES `picksLifetime`, CHECKED AT THE ONE MOMENT BOTH TERMS ARE IN ONE HAND.
        solver/flow.h states it ("across the document, `picks_lifetime` must EQUAL the result's `_switches`")
        and the composition below repeats it, and until this line NOTHING asserted it — a counter whose stated
@@ -836,11 +861,18 @@ char *result_wfq_json(void) {
                         currently on the far side of the carry boundary.
                         WHY A READER WANTS THEM: between two frontier generations the ONLY per-member quantity
                         in the order that moves is that carry, and members sharing a remainder flip it
-                        together. `silPhases: 1` therefore says NOTHING IN THE FRONTIER REORDERS between
-                        generation bumps — the bit is a common offset and one cached maximum is exact — while
-                        a large reading is the number of groups a maximum has to sweep through. It is a
-                        statement about what a sub-linear ask would have to index, never about what the order
-                        decided; no term of flow_weight reads either row.
+                        together. `silPhases: 1` would therefore say NOTHING IN THE FRONTIER REORDERS
+                        between generation bumps — the bit is a common offset and one cached maximum is exact
+                        — while a large reading is the number of groups a maximum has to sweep through. THE
+                        CONDITIONAL IS THE REPAIR AND NOT A HEDGE: this read as a flat statement of what a `1`
+                        SAYS, and in this repository's whole archived corpus every `silPhases == 1` stands at
+                        `members == 1`, which is the frontier being empty of the question rather than
+                        structurally ordered. A live page reads about HALF its frontier. solver/flow.h carries
+                        the measurement, the corpus it was taken over and the retirement condition; it is
+                        repaired here too because one sentence held at three sites is three chances to be
+                        stale, and fixing the one a reader happens to find certifies the other two.
+                        EITHER ROW IS A STATEMENT about what a sub-linear ask would have to index, never about
+                        what the order decided; no term of flow_weight reads either.
                         THE KINDS DIFFER AND THE NAMES DO NOT SAY SO, as with the notch rows above: `silPhases`
                         is a count of distinct keys and `silCarry` is a GAUGE that may FALL between samples,
                         because the boundary sweeps downward as the family burns and every member resets at
@@ -1133,6 +1165,31 @@ char *result_wfq_json(void) {
                         interval between them, and that is the only reading a wall-denominated quantum leaves
                         quotable at all. */
                      "\"preemptAsksLifetime\":%llu,"
+                     /* …AND WHETHER THE ONE ASSERTION THE DISPATCH WALK MAKES WAS EVER ACTUALLY ASKED,
+                        WHICH EVERY ROW ABOVE IS SILENT ABOUT BECAUSE EVERY ROW ABOVE COUNTS A WALK PERFORMED.
+                        flow_pick's member-key invariant — solver/flow.h's FlowKeyChecks — is a predicted
+                        ABSENCE, and a run in which it never fires is satisfied identically by an invariant
+                        that HOLDS and by a walk that COMPARED NOTHING. Its condition exempts a member on
+                        three arms before it compares anything, so until these rows the arming could only be
+                        INFERRED by pigeonhole from the scan counts against `rankChanges`.
+                        READ `keyArmedLifetime` AS THE SCORE AND THE OTHER THREE AS WHY. The three are the
+                        exemptions, they PARTITION the classifications with `keyArmedLifetime`, and they are
+                        not alike: `keyRunningLifetime` is bounded by one member per scan and
+                        `keyFirstSeenLifetime` by one per member ever created, while `keyStaleGenLifetime`
+                        near the total is the frontier generation moving faster than members are re-weighed —
+                        which makes the invariant VACUOUS rather than held, and is a finding about the
+                        frontier that `keyArmedLifetime: 0` alone cannot distinguish from a quiet engine.
+                        ALL FOUR LIFETIME COUNTS OF COMPARISONS, which the names say and which is the only
+                        kind on this line a reader may DIFFERENCE. None is a gauge, none is per-member, and
+                        none may be read against `members` as a share of anything.
+                        ALL FOUR AT ZERO BESIDE A NONZERO `scan<Entry>Weights` IS A RELEASE BUILD AND NOT A
+                        READING. The check and its per-member stamp are dev-only; this composer has no dev arm
+                        and engine/build.mjs takes its required row set from this format string, so a row
+                        emitted in one build only would fail every release census. In a dev build every member
+                        the dispatch loop weighs raises exactly one of the four, so the four summing to zero
+                        while the order demonstrably weighed something is the build, and nothing else. */
+                     "\"keyArmedLifetime\":%ld,\"keyStaleGenLifetime\":%ld,"
+                     "\"keyFirstSeenLifetime\":%ld,\"keyRunningLifetime\":%ld,"
                      /* AND THE DENOMINATOR THE HOOK'S RESCAN COUNT HAS. `scanRivalRuns / scanNextRuns` is
                         a COST — scan work per step — and it was being read as the hook's cadence, which it
                         is not: the rescan fires on a rank change or an incumbent switch, so a step that
@@ -1276,6 +1333,7 @@ char *result_wfq_json(void) {
                      flow_scan_runs(FLOW_SCAN_OTHER), flow_scan_weights(FLOW_SCAN_OTHER),
                      flow_scan_runs(FLOW_SCAN_CENSUS), flow_scan_weights(FLOW_SCAN_CENSUS),
                      (unsigned long long)engine_preempt_asks(),
+                     kc.armed, kc.stale_gen, kc.first_seen, kc.running,
                      flow_starved_picks(), flow_starved_picks_idle(),
                      (long long)w.arrivals, (long long)w.departures,
                      (long long)w.credit_calls, (long long)w.credit_paid, (long long)w.credit_dropped,
