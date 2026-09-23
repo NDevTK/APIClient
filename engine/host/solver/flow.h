@@ -1751,8 +1751,13 @@ typedef struct {
        by roughly a factor of four with nothing about the order having changed.
        SO THE THIRD ROW IS READ AGAINST `picks_lifetime` AND `departures` AND NEVER OFF `picks_max` ALONE:
        `(picks_lifetime - picks_live) / departures` is what a departed member held on average and is the half
-       of the distribution this gauge cannot see. `finished + sold == departures` (engine_frontier_census
-       asserts it), so the two ends of that subtraction are already on the line. WITHIN one run at one census
+       of the distribution this gauge cannot see, and `departures` is the denominator because it counts every
+       member that left by any cause. THE PARTITION HAS THREE TERMS AND NOT TWO — engine_frontier_census
+       asserts `finished + sold + flow_departures_teardown() == flow_departures()` — and this sentence said
+       `finished + sold == departures` until a grep of that assert refuted it. It is corrected rather than
+       deleted because the two-term reading is the one a reader re-derives from the two retirement totals
+       beside each other, and it is exactly right on a run that never tore down (which every run measured here
+       was, teardown 0), so it is a claim that looks confirmed on the evidence nearest to hand. WITHIN one run at one census
        nothing here applies and the table stands exactly as written; this is about comparing two.
        RETIREMENT: this record goes when the census publishes the dispatches departed members took with them
        as a ROW rather than as that subtraction, so `picks_max` cannot be read as the distribution's maximum.
