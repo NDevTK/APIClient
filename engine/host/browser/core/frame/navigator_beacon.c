@@ -346,7 +346,7 @@ static JSValue js_nav_send_beacon(JSContext *ctx, JSValueConst this_val, int arg
        request whose origin and client name whichever document the surface infers, so two sightings that a
        browser distinguishes by client would be indistinguishable in the emitted @H surface. */
     endpoint_record(ctx, "POST", url_value, nhdrs ? hdrs : NULL, nhdrs, ebp,
-                    engine_prov_of_running_path());
+                    engine_prov_of_running_path(), EPD_BEACON);
 
     ret = beacon_queue_result(ctx, url_text);
 

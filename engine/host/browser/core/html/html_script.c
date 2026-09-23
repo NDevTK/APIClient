@@ -878,7 +878,7 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
                "written only by a script assigning the attribute, so either the parser has started routing "
                "attribute values through it (and this request's provenance is `observed`, which the running "
                "path cannot say) or an element's shadow entry is being read for the wrong element");
-        endpoint_record(ctx, "GET", t, NULL, 0, NULL, engine_prov_of_running_path());
+        endpoint_record(ctx, "GET", t, NULL, 0, NULL, engine_prov_of_running_path(), EPD_SCRIPT_ELEMENT);
         return;
     }
     /* HTML §4.12.1.1's `src` BRANCH IS ENTERED ON THE ATTRIBUTE, which is the same correction the document scan needed

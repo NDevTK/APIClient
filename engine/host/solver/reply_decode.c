@@ -144,7 +144,7 @@ static void record_chunk(JSContext *ctx, const UrlRecord *base, const char *chun
        an answer to a request whose grade solver/engine.c joined; a chunk the page will fetch is worth exactly
        what the reply that named it is worth, and no less — a route reached only because a gate was forced
        names its chunks to nobody but this run. */
-    endpoint_record(ctx, "GET", uv, NULL, 0, NULL, prov);
+    endpoint_record(ctx, "GET", uv, NULL, 0, NULL, prov, EPD_REPLY_CHUNK);
     JS_FreeValue(ctx, uv);
     free(abs);
     url_record_free(&u);

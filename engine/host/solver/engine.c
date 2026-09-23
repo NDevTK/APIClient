@@ -272,6 +272,41 @@ static void script_csp_meta_free(JSContext *ctx, ScriptCspMeta *h)
     h->nonce_slot = JS_UNDEFINED;
 }
 
+/* WHICH OF THE THREE PROGRAM DOORS THIS PARK IS, which is the one place in this engine where the @H
+   surface's mechanism cannot be a literal at the call. Every other recorder IS its mechanism — a `<link>`
+   element's algorithm, an XHR's send, a `fetch()`'s step machine — and this one line sees the whole set that
+   solver/pending.h's own `pending_kind_is_program` enumerates, so what it states has to be read off the park.
+   THE SET IS EXACTLY THAT PREDICATE'S TRUE ARM AND THE ARMS BELOW ARE ITS THREE, so this switch's fallthrough
+   is a GUARD rather than an unbuilt capability (CLAUDE.md §AND-A-CRASH-IN-THE-`default:`-ARM): the operand is
+   an enumeration THIS codebase owns, and the caller has already refused every value that is not one of these
+   three. What reaches it is a program kind added to that predicate's true arm and not here — which is a door
+   nobody named, not a park nobody handled.
+   THREE TOKENS AND NOT ONE, WHICH IS THE POINT AND IS THE CASE CLAUDE.md NAMES BY HAND: an injected `src` and
+   an `import()` reporting one word is the residual it cites as worth keeping, and the reason the three are
+   worth separating is what they are evidence OF. A document's own external script is markup; a script an
+   insertion prepared and a dynamic `import()` are code this engine RAN, and a lazy chunk reached through the
+   third is the address CLAUDE.md §What-the-tool-produces' headline claim is most about. Folded to one token
+   the emitted surface cannot tell the `<head>` from the router. */
+static int program_load_door(int kind)
+{
+    switch (kind) {
+    case FLOW_PENDING_DOCSCRIPT: return EPD_DOCUMENT_SCRIPT;
+    case FLOW_PENDING_SCRIPT:    return EPD_INJECTED_SCRIPT;
+    case FLOW_PENDING_MODULE:    return EPD_MODULE_IMPORT;
+    }
+    DCHECKF(0, "a park whose reply becomes a PROGRAM states the kind %d, which `pending_kind_is_program` "
+               "admitted and this mapping has no door for — the two read the same enumeration one line "
+               "apart, so this is a program kind added to that predicate's true arm without saying which "
+               "mechanism composes its address, and the @H row for every such load would name a mechanism "
+               "nothing ran", kind);
+    /* THE RELEASE ARM IS DELIBERATELY THE REFUSED VALUE AND NOT A PLAUSIBLE DOOR. `endpoint_door_token`'s
+       `CHECK` is fatal in EVERY build, so a release engine reaching here aborts at the emit naming the door
+       rather than publishing whichever of the three a fallback happened to pick — CLAUDE.md §BUT-THE-ARM-
+       BENEATH-A-`DFAIL`-IS-A-SHIPPED-CODE-PATH: the two components' release arms of one algorithm are chosen
+       together here rather than locally, so the pair cannot compose into a row that reads as a measurement. */
+    return EPD_UNSTATED;
+}
+
 static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *req)
 {
     JSValue reply = JS_UNDEFINED;
@@ -283,6 +318,8 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
     /* §4.3's request, which is this one with step 6's address on it — a COPY because the caller's record is
        `const` and belongs to the component that built it. */
     FetchRequest sf;
+    /* WHAT THIS PARK IS, read once below and used by the program gate and by the @H door it states. */
+    int pkind;
 
     /* THE METHOD AND THE URL ARE THE REQUEST'S IDENTITY, and both are what this park is keyed on: the join
        lists the PAIR and engine_provide delivers against it (engine.h). Fetch §2.2.5 Requests: "A request has an
@@ -373,13 +410,19 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
        BEFORE STEP 6 AND BEFORE STEP 7, which is where core/html/html_link.c and core/fetch/fetch.c put
        theirs and for their stated reason: the endpoint is what the page's code COMPOSED, so a policy that
        refuses it and an upgrade that rewrites it both leave a request the bundle can still make. */
-    if (pending_kind_is_program((int)pending_get_int(e, PEND_KIND))) {
+    /* READ ONCE AND USED TWICE — the gate below and the door it states are two questions about ONE park, and
+       this file's own argument two paragraphs up (the grade is READ rather than recomputed because "asking a
+       second time would be two computations of one fact, free to disagree") is the same argument for a second
+       `pending_get_int` of the same field. */
+    pkind = (int)pending_get_int(e, PEND_KIND);
+    if (pending_kind_is_program(pkind)) {
         JSValue uv = JS_NewString(ctx, req->url);
         CHECK(!JS_IsException(uv), "engine: OOM naming a program load for the endpoint surface");
         /* HTML §8.1.4.2 "Fetching scripts" creates every one of these requests without setting a method, so
            it is Fetch §2.2.5 "Requests"' `GET` — and `req->method` is what the producer stated one frame up
            and what the DCHECK above has already refused to be absent, so it is read rather than restated. */
-        endpoint_record(ctx, req->method, uv, NULL, 0, NULL, (int)pending_get_int(e, PEND_PROV));
+        endpoint_record(ctx, req->method, uv, NULL, 0, NULL, (int)pending_get_int(e, PEND_PROV),
+                        program_load_door(pkind));
         JS_FreeValue(ctx, uv);
     }
     /* FETCH §4.1 "Main fetch" STEP 6, AND IT RUNS BEFORE THE KEY IS COMPOSED — WHICH IS THE ORDERING THIS

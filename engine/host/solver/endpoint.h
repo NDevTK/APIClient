@@ -175,6 +175,86 @@ typedef struct { size_t off, len; const char *shape, *example; } EndpointBodySpa
 typedef struct { const char *mime, *bytes; size_t len; EndpointBodyKind kind;
                  const EndpointBodySpan *span; int nspan; } EndpointBody;
 
+/* WHICH MECHANISM COMPOSED THIS ADDRESS — the third fact about a sighting, and the one CLAUDE.md
+   §What-the-tool-produces' razor was standing in for. That razor is `epEmitted - epPreProgram`, and it is a
+   SUBTRACTION OF TWO TOTALS: it says how many addresses forced execution CAN HAVE contributed and names none
+   of them, so a reader cannot tell a run that learned ten gated API calls from one that learned ten
+   `<link rel=preload>` elements of one `<head>`. Its own retirement clause asks for exactly this — each row
+   carrying its own door, so the surface partitions without a subtraction.
+   IT IS NEITHER OF THE TWO FACTS ALREADY ON THE RECORD AND NEITHER CAN STAND IN FOR IT. `prov` is what the
+   sighting's PATH is evidence of (observed/derived/forced) and is blind to the mechanism: measured on one
+   document carrying a `<script src>`, a `<link rel=preload>` of each kind, an `<img src>`, a `fetch()` and
+   two JS-composed images, the only row graded `observed` was the markup `<script src>` and every other
+   mechanism graded `derived` alike (extension/lib/safe-fetch.js records that measurement at its own site).
+   `pre_program` is WHEN, which is a proxy for the markup door and not the door: a `<head>` whose first
+   `<script src>` runs before the parser reaches the `<link>` below it mints that link POST-program, so the
+   razor counts a markup subresource as forced execution's contribution — in the flattering direction, on the
+   commonest document shape there is.
+   IT IS A PROPERTY OF THE MINT AND IS NEVER RE-ARMED, for `pre_program`'s reason exactly: a later sighting of
+   an address this surface already holds teaches it structure rather than an endpoint, so what a reader wants
+   is which mechanism COMPOSED the address first. A door re-armed on every merge would answer about the last
+   sighting.
+   AND IT IS DELIBERATELY NOT PART OF `same_identity`, which is where it differs from `prov` and the reason is
+   not a preference. The grade is in the identity because a FORCED sighting merging into a `derived` record
+   would publish a fabrication under the stronger claim — a wrong VALUE. Two doors reaching one address is not
+   that: it is one endpoint two mechanisms can reach, and splitting it would inflate `epMinted`, split the
+   params of one request across two rows, and make the surface a function of how many ways the page happens to
+   name a thing.
+   IT HAS NO SAFE DEFAULT, so its zero is UNSTATED and endpoint_record aborts on it — `EPB_UNSTATED`'s rule and
+   for its reason: every producer knows which mechanism it IS, a producer that forgets takes the same arm as
+   one with nothing to say, and forgetting is therefore not a way to be exempted. There is no absence-is-the-
+   statement here, the way there is for `excludes` and `bounds`: the list below is exhaustive over the ways an
+   address can reach this surface, because it is derived from endpoint_record's own call sites —
+     git grep -n 'endpoint_record(ctx' -- engine/host | grep -v solver/endpoint
+   THE THREE PROGRAM DOORS ARE THREE AND NOT ONE, which is the case CLAUDE.md names by hand as a residual
+   worth keeping ("an injected `src` and an `import()` reporting one token where Fetch §2.2.5's DESTINATION
+   separates them"). All three arrive at ONE call site — solver/engine.c's park consumer, whose own comment
+   says they are "a `<script src>` an insertion prepared, a document's own external script taking its slot,
+   and a dynamic `import()`" and that this is the only line that sees the set — so the site cannot spell a
+   literal and reads solver/pending.h's kind instead, which is in hand there and separates them exactly.
+   A LIST AND NOT A SET OF `#define`s, so the enum, the token table and any census over it are ONE list: a
+   name added to the enum and not to the table is a row whose token comes off the end of a name array, which
+   is the defect endpoint_json_array's `ep_loc_name` CHECK exists for one field over. */
+#define ENDPOINT_DOORS(X)                                                                                    \
+    /* HTML §4.12.1.1 "Processing model" — the document's OWN external script, its reply filling the row */ \
+    X(EPD_DOCUMENT_SCRIPT, "document-script")                                                                \
+    /* …a `<script src>` an insertion prepared, whose reply is queued as the running flow's next program */   \
+    X(EPD_INJECTED_SCRIPT, "injected-script")                                                                \
+    /* …and a dynamic `import()`, whose promise is settled with the SOURCE TEXT the compiler is handed */     \
+    X(EPD_MODULE_IMPORT,   "module-import")                                                                  \
+    /* a `<script src>` whose address running code ASSIGNED and this engine cannot fetch: the taint shadow  \
+       map holds an entry only where a script wrote the attribute, so this door is never parser-inserted */   \
+    X(EPD_SCRIPT_ELEMENT,  "script-element")                                                                 \
+    /* HTML §4.2.4.3 "Fetching and processing a resource from a link element", preloads included */           \
+    X(EPD_LINK_ELEMENT,    "link-element")                                                                   \
+    /* HTML §4.8.4.3.5 "Updating the image data", its source set and its undecided arm */                     \
+    X(EPD_IMAGE_ELEMENT,   "image-element")                                                                  \
+    X(EPD_FORM_SUBMIT,     "form-submit")                                                                    \
+    X(EPD_FETCH,           "fetch")                                                                          \
+    X(EPD_XHR,             "xhr")                                                                            \
+    X(EPD_BEACON,          "beacon")                                                                         \
+    /* a sub-request written INSIDE a multipart batch body the page composed */                               \
+    X(EPD_BATCH_PART,      "batch-part")                                                                     \
+    /* an address a REPLY named and no line of the page ever composed */                                      \
+    X(EPD_REPLY_CHUNK,     "reply-chunk")
+
+typedef enum {
+    EPD_UNSTATED = 0,   /* nobody said; endpoint_record refuses it */
+#define ENDPOINT_DOOR_MEMBER(id, token) id,
+    ENDPOINT_DOORS(ENDPOINT_DOOR_MEMBER)
+#undef ENDPOINT_DOOR_MEMBER
+    EPD_COUNT           /* the list's own end — what the mint's range check and any census over it are bounded
+                           by, and it is a MEMBERSHIP test rather than a range because the members above take
+                           no explicit values, so the enum is dense by construction */
+} EndpointDoor;
+
+/* THE ONE WIRE SPELLING OF A DOOR, for `engine_provenance_token`'s reason and with its severity. A `CHECK`
+   and not a `DCHECK` on the fallthrough: this is called once per emitted row in EVERY build, and a release
+   build that fell through would write whatever the register held into a JSON string — which is not a missing
+   field a consumer can see is missing but a plausible mechanism name in the @H record, the same shape as
+   `ep_loc_name` indexed out of range one field over. */
+const char *endpoint_door_token(int door);
+
 /* Record one learned endpoint (deduped by method+url). `url` may be concolic (shape) or concrete. Headers are
    MERGED into a same-identity endpoint: a header seen with a concrete value supersedes the same header seen
    only as a shape, which is the rule the param values already follow. `body` is NULL where the request has
@@ -203,12 +283,16 @@ typedef struct { const char *mime, *bytes; size_t len; EndpointBodyKind kind;
    path it is about is standing; a reply-learned address states the grade of the reply that named it
    (solver/reply_decode.h), which no flow can answer because that path runs outside every flow. A default
    here would be `observed` by the numbering, on a record nobody graded. */
+/* `door` IS WHICH MECHANISM COMPOSED THE ADDRESS — one of the EPD_* above, stated by the producer because
+   it is the one fact about a sighting no consumer of this surface can re-derive. See the enum for why it is
+   neither `prov` nor the program-state flag, and why it is not part of the endpoint's identity. */
 void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
-                        const EndpointHeader *hdrs, int nhdrs, const EndpointBody *body, int prov);
+                        const EndpointHeader *hdrs, int nhdrs, const EndpointBody *body, int prov, int door);
 
 /* The @H surface as a malloc'd JSON ARRAY (caller frees) — findings are C data, so the emit is C, never a
    JS-object round-trip.
    `[ {"method":..,"url":..,"provenance":"observed"|"derived"|"forced",
+      "door":"document-script"|…|"reply-chunk","mintedAt":"pre-program"|"post-program",
       "params":[{"name":..,"location":..,"valueClass":"unknown"|"concrete","validValues":[..],"excludes":[..],
       "bounds":{"minimum"|"exclusiveMinimum":N,"maximum"|"exclusiveMaximum":N},
       "predicates":[{"method":..,"arguments":[..],"holds":true|false}],

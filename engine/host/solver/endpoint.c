@@ -84,7 +84,7 @@ typedef struct { char *name; char *value; } EpHeader;   /* the transport half: w
    reader wants to know is whether the SIGHTING THAT CREATED THE RECORD needed the page's code to run. A flag
    re-armed on every merge would answer a different question and would answer it about the last sighting. */
 typedef struct { char *method; char *path; Param *params; int np, pcap;
-                 EpHeader *hdrs; int nh, hcap; int is_asset; int prov; int pre_program;
+                 EpHeader *hdrs; int nh, hcap; int is_asset; int prov; int pre_program; int door;
                  /* THE BODY THIS ENGINE HAD NO FIELD READER FOR — see endpoint.h. Set only where
                     `body_params` named NOTHING, so it is never a second spelling of fields already on
                     `params`, and never overwritten once set: a request body is ONE example, not a set.
@@ -102,6 +102,28 @@ typedef struct { char *method; char *path; Param *params; int np, pcap;
                     these bytes are an unknown's example and some are bytes nobody wrote — which is why it
                     cannot share `body_b64`'s key however the two are spelled. */
                  char *body_mime, *body_b64, *body_shape, *body_example_b64; } Endpoint;
+
+/* See endpoint.h. THE SWITCH IS GENERATED FROM THE SAME LIST THE ENUM IS, so the two cannot part: a door
+   added to `ENDPOINT_DOORS` gains its arm here in the same expansion, and one added anywhere else does not
+   compile. That is the difference between this and `ep_loc_name` one screen down, whose three-entry table is
+   hand-kept beside its enum and which needs a `CHECK` at every subscript to say so.
+   THE FALLTHROUGH IS A `CHECK` AND NOT A `DCHECK` — `engine_provenance_token`'s reason exactly, and the same
+   severity for the same hazard: this runs once per emitted row in EVERY build, so a release build reaching it
+   would put whatever the register held into a JSON string and publish a plausible mechanism name on an @H
+   record. A zero arrives here only in release, where the mint's own DCHECK is compiled out, which is why the
+   arm that catches a producer who never stated a door has to be the one that ships. */
+const char *endpoint_door_token(int door) {
+    switch (door) {
+#define ENDPOINT_DOOR_ARM(id, token) case id: return token;
+    ENDPOINT_DOORS(ENDPOINT_DOOR_ARM)
+#undef ENDPOINT_DOOR_ARM
+    }
+    CHECK_FAILF("endpoint: an @H record states the door %d, which is none of endpoint.h's ENDPOINT_DOORS — "
+                "the mechanism that composed an address is stated by its producer and refused at the door "
+                "when it is not, so this is a record that reached the surface in a release build with no "
+                "producer having said, and the word about to be published names a mechanism nothing ran",
+                door);
+}
 
 /* A value carrying a `{hole}` is a SHAPE — an unknown the code did not compute — and a hole-free one is the
    real thing. The distinction decides the merge: a concrete value supersedes a shape for the same header, which
@@ -1643,7 +1665,7 @@ static int same_identity(Endpoint *e, const char *method, const char *path, int 
 }
 
 void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
-                     const EndpointHeader *hdrs, int nhdrs, const EndpointBody *body, int prov) {
+                     const EndpointHeader *hdrs, int nhdrs, const EndpointBody *body, int prov, int door) {
     /* WHAT THIS SIGHTING IS EVIDENCE OF, ASSERTED AT THE MINT for `kv_add`'s reason exactly: every site that
        records an endpoint passes through here, so there is no way to add one without answering, and the
        answer cannot be defaulted later by a consumer. The value outside the vocabulary is the dangerous one
@@ -1653,6 +1675,21 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
             "an endpoint was recorded with the provenance %d, which is none of the three solver/pending.h "
             "defines — the grade is part of this record's identity and is emitted on it, so an unrecognised "
             "one both merges with nothing and publishes a word no consumer can read. method=%s", prov, method);
+    /* AND WHICH MECHANISM COMPOSED THE ADDRESS, ASSERTED AT THE SAME MINT AND FOR THE SAME REASON THE GRADE
+       ABOVE IS: every site that records an endpoint passes through here, so there is no way to add one
+       without answering. IT IS A MEMBERSHIP TEST AND NOT A RANGE despite its spelling — `ENDPOINT_DOORS`
+       gives its members no explicit values, so the enum is dense from `EPD_UNSTATED` to `EPD_COUNT` by
+       construction and the two bounds are the list's own ends rather than numbers anybody chose.
+       THE ZERO IS THE ONE THAT MATTERS AND IT IS THE ONE A PRODUCER REACHES BY FORGETTING, which is why
+       `EPD_UNSTATED` is 0 rather than a door: an uninitialised or dropped answer is refused here instead of
+       being read downstream as whichever mechanism the numbering put first, and endpoint_door_token's
+       `CHECK` catches the same record in the build where this assert is compiled out. */
+    DCHECKF(door > EPD_UNSTATED && door < EPD_COUNT,
+            "an endpoint was recorded with the door %d, which is none of endpoint.h's ENDPOINT_DOORS — the "
+            "mechanism that composed an address is the one fact about a sighting no consumer can re-derive, "
+            "and it is what CLAUDE.md's `epEmitted - epPreProgram` razor subtracts two totals to approximate, "
+            "so a record without one is a row that partitions with nothing. State the door for the mechanism "
+            "this call site IS. method=%s", door, method);
     /* AND WHOSE BYTES THE BODY IS, ASSERTED AT THE SAME MINT AND FOR A SHARPER REASON THAN THE GRADE ABOVE.
        A body's bytes are either what the request SENDS or the engine's display spelling of an unknown, and
        only the producer knows which — it asked core/fetch/body.h that question in order to obtain them. The
@@ -1813,6 +1850,12 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        instant the fact is about and the only instant at which it is still true. A read at the census would
        answer for the census's moment, which is the end of the run, and every record would grade the same. */
     e->pre_program = !engine_any_program_started();
+    /* AND WHICH MECHANISM COMPOSED IT — decided HERE and never re-armed, which is `pre_program`'s rule one
+       line up and holds for its reason: a later sighting of an address this surface already holds merges, and
+       what a reader wants to know is which mechanism composed the address that CREATED the record. A door
+       re-armed on every merge would answer about the last sighting, and the emitted row would then say that a
+       `<head>`'s own `<link>` was composed by a `fetch()` that merely asked for it again. */
+    e->door = door;
     /* AND THAT THE ASK AND THE MINT ARE ONE INSTANT. The bit is monotone and `++`-only at engine.c's single
        program-start line, so the only way these can differ is a program having started between this function's
        entry and this line — which would mean something on the path above (a display spelling, a path scan, a
@@ -2254,6 +2297,55 @@ char *endpoint_json_array(void) {
            CLAUDE.md §@H forbids, performed by omission. */
         json_buf_raw(&b, ","); json_buf_key(&b, "provenance");
         json_buf_str(&b, engine_provenance_token(e->prov));
+        /* …AND WHICH MECHANISM COMPOSED THE ADDRESS, AND WHETHER THE PAGE'S CODE HAD RUN WHEN IT DID —
+           ALWAYS, both of them, for `provenance`'s reason above and with its exhaustiveness. These are the
+           two facts CLAUDE.md §What-the-tool-produces' razor is a SUBTRACTION OF TWO TOTALS over: `epEmitted
+           - epPreProgram` says how many addresses forced execution CAN HAVE contributed and names none of
+           them, so a reader cannot tell a run that learned ten gated API calls from one that learned ten
+           `<link rel=preload>` elements of one `<head>`. Carried per row, the surface partitions directly and
+           the subtraction has nothing left to say — which is that record's own retirement clause.
+           NEITHER IS AN OPTIONAL KEY AND NEITHER HAS AN ABSENCE-IS-THE-STATEMENT READING, which is the
+           opposite of `excludes` and `bounds` below and the same split `provenance` makes: `door` is
+           exhaustive over the ways an address can reach this surface because endpoint.h derives the list from
+           this function's own call sites, and `mintedAt`'s two words are exhaustive over a boolean fact. A
+           silent one would be read as whichever value a consumer's `||` names, and for the door that is a
+           mechanism nothing ran.
+           `mintedAt` IS TWO WORDS AND NOT A BOOLEAN, deliberately and for `valueClass`'s reason exactly: this
+           record is read by a zone deployed on WRITE while this engine is live only after a build, so a
+           consumer WILL meet rows from an artifact that predates this key — and `false` and absent are one
+           value under every truthiness test a reader reaches for, while neither word is.
+           THEY ARE TWO FACTS AND NOT TWO SPELLINGS OF ONE. The door is WHICH MECHANISM and the mint state is
+           WHEN, and the pair is what makes either readable: `link-element` alone cannot say whether the
+           `<link>` was in the markup or one the router created, and `pre-program` alone cannot say what
+           composed the address. A `<head>` whose first `<script src>` runs before the parser reaches the
+           `<link>` below it mints that link POST-program, so the timing fact is a proxy for the markup door
+           and not the door — in the flattering direction, on the commonest document shape there is. */
+        /* NAMED RESIDUAL — NOT COVERED: no consumer in the trusted zone reads either key, so the surface
+           carries the partition and nothing renders it. The engine's own reader is `endpoint_door_token`,
+           which refuses an out-of-vocabulary door on every row in every build; `mintedAt` has none beyond the
+           record's own mint-time pairing assert. WHAT THE NEXT DIFF BUILDS: extension/lib/merge.js's per-row
+           check for both, beside the `provenance` one it already makes and spelled the same way — present and
+           in vocabulary, read with an `in` test and never with a `||`, because a default would render a
+           `<head>`'s own `<link>` and a lazy chunk with identical bytes, which is the whole thing this pair
+           exists to separate. HOW ITS ABSENCE WOULD SHOW: a reader holding a run's emitted surface can say
+           how many rows it has and not which mechanism composed any of them, so the only statement available
+           about forced execution's contribution is the census subtraction this pair was added to retire.
+           IT IS DEFERRED BY THE SEAM AND NOT BY EFFORT (CLAUDE.md §A-CROSS-BOUNDARY-DIFF). That zone's
+           JavaScript is INTERPRETED FROM THE TREE and is live on WRITE, while these bytes are live only after
+           somebody builds — so a reader landed beside this emission would assert, against the SHIPPED wasm,
+           the presence of a key that wasm does not write, and abort the trusted zone on every endpoint of
+           every document until an install caught up. The half that is live on write is the one that must
+           wait.
+           THE OBSERVATION THAT RETIRES IT, AND WHO MAY MAKE IT: grep the INSTALLED artifact
+           (`extension/lib/qjs/qjs.mjs`) for `post-program` and for `reply-chunk`, with an invented token
+           beside them as the negative control — a zero with no armed control is a probe that never reached
+           the check rather than a key that is not there. The ACT that changes that answer is a BUILD and an
+           INSTALL, which is one role's to perform and no reader's: a lane that runs the observation and gets
+           the defer answer has learned nothing about this residual except that nobody has installed yet. */
+        json_buf_raw(&b, ","); json_buf_key(&b, "door");
+        json_buf_str(&b, endpoint_door_token(e->door));
+        json_buf_raw(&b, ","); json_buf_key(&b, "mintedAt");
+        json_buf_str(&b, e->pre_program ? "pre-program" : "post-program");
         json_buf_raw(&b, ","); json_buf_key(&b, "params"); json_buf_raw(&b, "[");
         for (int j = 0; j < e->np; j++) {
             if (j) json_buf_raw(&b, ",");

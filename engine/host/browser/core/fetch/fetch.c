@@ -1578,7 +1578,7 @@ static int js_fetch_step_1(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
                "construction as two offers while the surface merged the second address into the first");
         s->offered = 1;
         endpoint_fetch_edge_offered();
-        endpoint_record(ctx, s->rec.method, s->url, eh, s->hdrs.n, ebp, prov);
+        endpoint_record(ctx, s->rec.method, s->url, eh, s->hdrs.n, ebp, prov, EPD_FETCH);
         if (ext_mime) JS_FreeCString(ctx, ext_mime);
         free(body_ct);
         js_free(ctx, espan);
