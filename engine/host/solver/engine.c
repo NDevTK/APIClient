@@ -14055,8 +14055,15 @@ void engine_set_park_hook(int (*want_park)(void)) { g_park_hook = want_park; }
  * set. `engine_work_done` is a LIFETIME counter that this file refuses to reset at a session boundary, so a
  * cadence restarting per call would be a reporting interval keyed on a clock that does not restart with it.
  * `long` rather than the `int` the local carried, for the same reason: the counter is a long and a run that
- * outlives an `int` would wrap its own reporting interval. */
-void engine_census_emit(void)
+ * outlives an `int` would wrap its own reporting interval.
+ *
+ * AND IT ANSWERS WHETHER IT SAMPLED, WHICH IS THE ONE FACT A LINE-STREAM HOST CANNOT RE-DERIVE WITHOUT
+ * KEEPING A SECOND COPY OF THIS CADENCE. solver/engine.h states what that answer is for and why a caller may
+ * not compute it for itself; what it is used for TODAY is the other half of the sentence this banner already
+ * makes — the result DOCUMENT is composed when the frontier drains or stalls, and a real page's does neither,
+ * so a host that streams its five lines and not its FINDINGS has made the run legible and left the product's
+ * own answer on the floor. `test_forced.c`'s `--abi` arm spends this return on `qjs_emit_partial`. */
+int engine_census_emit(void)
 {
     static long next = ENGINE_PROGRESS_EVERY;
     static int  last_cands = -1;
@@ -14073,7 +14080,7 @@ void engine_census_emit(void)
     /* Either enough work has happened to be worth a line, or the SEARCH grew — a new candidate is the event
        that changes what the rest of the run will cost, so it is worth saying when it happens. */
     if (engine_work_done() < next && solve_candidate_count() == last_cands)
-        return;
+        return 0;
     while (engine_work_done() >= next) next += ENGINE_PROGRESS_EVERY;
     last_cands = solve_candidate_count();
 
@@ -14136,6 +14143,10 @@ void engine_census_emit(void)
         free(swap); free(cold); free(heap); free(wfq); free(forks);
     }
     fflush(stdout);
+    /* THE SAMPLE HAPPENED — said AFTER the flush rather than at the gate above, because what a caller does
+       with this answer is write MORE of its own stream at the same instant, and a `1` handed out before these
+       five lines were on the wire would order a host's output by whichever `printf` ran first. */
+    return 1;
 }
 
 static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types,

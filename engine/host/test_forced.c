@@ -28168,8 +28168,54 @@ static int abi_main(int argc, char **argv)
            what a reader of that abort needs. The bill follows for the same reason in reverse: what the
            frontier IS explains what it is asking for.
            ITS COST IS PUBLISHED ON THE LINE ITSELF and is not this driver's to state twice — see
-           engine_census_emit, and read @WFQ's `scanCensusWeights` against `scanNextWeights` on any sample. */
-        engine_census_emit();
+           engine_census_emit, and read @WFQ's `scanCensusWeights` against `scanNextWeights` on any sample.
+           AND WHAT IT ANSWERS IS SPENT ON THE LINE BELOW — see there for why. */
+        if (engine_census_emit()) {
+            /* ...AND THE PRODUCT'S OWN DOCUMENT AT THAT SAME SAMPLE, WHICH IS THE ONE THING THIS HOST COULD
+               NOT REPORT AT ALL. The paragraph above fixed the SCHEDULER's half of a single defect and left
+               the other half standing: `@RESULT` below is written after the step loop, so it is composed only
+               where the frontier DRAINS or where a stall goes unpaid — and a real page's frontier does
+               neither inside any budget anyone has given one. Every real-site run of this host has therefore
+               ended on a signal with its endpoint surface, its example values, its verified `@S` sinks and its
+               page errors unwritten, which is §What-the-tool-produces' whole answer reaching nobody on
+               precisely the runs it was asked about. CLAUDE.md §A-DIAGNOSTIC-GATED-ON-A-FINDING states the
+               rule the old shape broke, one word wider than it was written: a run's OUTPUT may not be gated
+               on how that run ENDED, because the runs whose ending is worst are the runs whose output matters
+               most.
+               IT IS NOT A SECOND REPORTING PATH AND THAT IS WHY IT IS ONE LINE. main.c's `qjs_emit_partial`
+               already exists, already prints the SAME `@RESULT <json>` line from the SAME `result_json`, and
+               is already what the SHIPPED host calls — extension/bridge.js's `streamPartial`, every
+               PARTIAL_MS, for the whole of any analysis that outlives one. Two hosts of one ABI, one of them
+               streaming its findings for years and the other not, is the divergence rather than the fix; what
+               was missing here was the CALL. A driver that composed its own document, or printed under a
+               marker of its own, would be the second spelling this file refuses everywhere else.
+               ON THE CENSUS'S CADENCE AND NOT ON ONE OF THIS FILE'S — `engine_work_done()` units, which is
+               §Testing's "work ACTUALLY PERFORMED" rather than the elapsed time bridge.js can afford because
+               it is pumping a browser and this host is not. An interval held here would also publish a stream
+               whose `@RESULT` and whose five census lines describe two different instants with nothing saying
+               so, and the two carry the same five censuses from the same composers — so a reader comparing
+               them would be differencing one quantity across two moments, which is the defect that reading is
+               most often the victim of.
+               AFTER THE LINES AND BEFORE THE PAINT, WHICH IS AN ORDERING WITH A REASON AT BOTH ENDS. AFTER,
+               because composing a document WEIGHS the frontier (main.c names the four `_wfq` rows it raises),
+               so a document composed second carries the census's own cost and this host's reporting prices
+               itself honestly; a document composed first would report a cheaper sample than the one the
+               reader is holding. BEFORE the paint, for the reason the FINAL paint is placed after `@RESULT`
+               below: a painter aborting at a capability this engine has not built should cost a picture and
+               not a finding set.
+               ITS PRICE, STATED RATHER THAN LEFT TO BE DISCOVERED: it DOUBLES the per-sample reporting cost,
+               because the census walk and this composition each weigh every member twice. That is not an
+               estimate this comment is asking to be believed — `_wfq`'s `scanCensusWeights` against
+               `scanNextWeights`, on the very document this line prints, is the share of all frontier-weighing
+               that went to the report, and a reader who thinks the cadence is wrong has the number in hand
+               rather than an argument.
+               AND A CHANGE FILTER IS DELIBERATELY NOT HERE, because it would never fire: those four `_wfq`
+               rows are LIFETIME scan counters that rise on every sample, so no two documents this line
+               composes are ever byte-equal and "announce it only when it changed" — which is exactly the rule
+               `abi_announce` one line below correctly uses for the bill — would be a comparison that always
+               answers yes plus a second mechanism to maintain. */
+            qjs_emit_partial();
+        }
         /* AND THE IMAGE THIS ROUND WAS HANDED THE THREAD FOR — @PERWORLD. A yield leaves the member the
            scheduler was holding SWITCHED IN, with its COW and DOM deltas applied (solver/engine.c holds it in
            a static across this return and asserts it is still a member when it picks it back up), so this is
@@ -28187,13 +28233,19 @@ static int abi_main(int argc, char **argv)
            walk of CSS 2.1 §E.2 "Painting order" over every box of a real page, per slice boundary, on the
            thread the engine is aging its members in. It is paid ONLY under `--paint-dir`; a run without the
            flag reaches none of this.
-           A CRASH HERE COSTS THE FINDING SET, AND THAT TRADE IS THE OPPOSITE OF THE ONE THE FINAL PAINT BELOW
-           TAKES. That one is placed after `@RESULT` precisely so a painter aborting at a capability this
-           engine has not built costs a picture rather than every endpoint and every verified sink; this one
-           stands before the result and cannot be. What it buys is the direction §Offensive-programming asks
-           for — the abort arrives at the FIRST boundary rather than at the last, naming the same unbuilt
-           capability hours earlier — and the findings are recoverable by re-running without the flag, which is
-           what makes the trade payable at all. */
+           A CRASH HERE COSTS THE FINDINGS SINCE THE LAST SAMPLE, AND THAT SENTENCE USED TO READ "COSTS THE
+           FINDING SET" — it is rewritten rather than deleted because its reasoning is what a reader
+           re-derives and only its ARITHMETIC has changed. In its own words: "That one is placed after
+           `@RESULT` precisely so a painter aborting at a capability this engine has not built costs a picture
+           rather than every endpoint and every verified sink; this one stands before the result and cannot
+           be." Every clause of that was true while the ONLY `@RESULT` this host wrote was the one below the
+           loop. The streaming partial above now stands between the census and this call, so a paint abort
+           costs the findings accumulated since the last SAMPLE rather than every finding of the run — which
+           is a bound the flag's user can read off the census cadence instead of a loss they discover
+           afterwards. What it buys is unchanged and is the direction §Offensive-programming asks for: the
+           abort arrives at the FIRST boundary rather than at the last, naming the same unbuilt capability
+           hours earlier — and the findings are recoverable by re-running without the flag, which is what makes
+           the trade payable at all. */
         if (paint_dir != NULL) abi_paint(paint_dir, doc_id, url);
         /* THE BILL GOES OUT ON EVERY ROUND AND IS READ BACK ON NONE OF THEM — see abi_announce for why the
            announcement and the payment are separate halves and why the channel is half-duplex between them. */
@@ -28232,7 +28284,19 @@ static int abi_main(int argc, char **argv)
        session's finding set has to have already been told which documents are missing from it. */
     abi_report_declines();
     /* THE RESULT, on the same @RESULT line every other host of this engine writes — the one the harnesses
-       already read, rather than a marker invented here that no shipped path emits. */
+       already read, rather than a marker invented here that no shipped path emits.
+       IT IS NO LONGER THE ONLY ONE ON THIS STREAM AND IT IS STILL THE AUTHORITATIVE ONE, which is a fact
+       about the READER and is stated here because nothing else says it. The loop above streams a partial on
+       every census sample, so this line is the LAST of a series and every one of them is a snapshot of the
+       same register at an earlier instant — a reader takes the last and never merges two, because the
+       document is composed whole each time rather than accumulated (main.c's `result_json`, once per call).
+       `trusted.mjs`'s `onLine` does exactly that by construction: its `@RESULT` arm ASSIGNS rather than
+       appends, so the freshest snapshot wins and this terminal one supersedes them all.
+       A RUN THAT REACHED THIS LINE HAS NOT LEARNED ANYTHING THE LAST PARTIAL DID NOT unless work happened
+       between them, so the two are legitimately byte-equal on a frontier that drained inside one sample. That
+       is a duplicate and not a disagreement, and it is cheaper than a condition here that would have to ask
+       whether the register had moved — which is the same question `abi_announce` asks of the bill and which
+       the four `_wfq` scan counters make unanswerable for a document. */
     printf("@RESULT %s\n", qjs_result());
     fflush(stdout);
     /* AND THE LAST IMAGE OF THAT DOCUMENT, AFTER THE RESULT AND BEFORE THE TEARDOWN. This sentence used to

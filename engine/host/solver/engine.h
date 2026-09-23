@@ -624,8 +624,31 @@ int  engine_sched_step(void);
  *
  * ITS COST IS ON THE LINE IT PRINTS. A sample is O(frontier members) and solver/flow.h's `FLOW_SCAN_CENSUS`
  * note says it weighs every member TWICE; @WFQ's `scanCensusWeights` against `scanNextWeights` is what
- * fraction of all frontier-weighing went to the REPORT rather than to the run, on the very run being read. */
-void engine_census_emit(void);
+ * fraction of all frontier-weighing went to the REPORT rather than to the run, on the very run being read.
+ *
+ * IT ANSWERS WHETHER THIS ROUND WAS A SAMPLE — 1 when the five lines went out, 0 when the cadence was not
+ * due — AND THAT RETURN IS A SEAM AND NOT A CONVENIENCE. The paragraph above says why a host needs the
+ * census: the result DOCUMENT is built when the frontier drains or stalls, which a real page's frontier does
+ * neither of inside any budget anyone has run. That argument is about the FINDINGS as much as it is about
+ * these five lines — §What-the-tool-produces' endpoint surface, its example values and its verified sinks are
+ * on that same document and reach nobody on a killed run — and the engine already exports the ungated channel
+ * for them: main.c's `qjs_emit_partial` writes the one result document on the host's own cadence, which is
+ * what extension/bridge.js calls every PARTIAL_MS while an instance is live. A line-stream host that wants
+ * its findings streamed therefore needs ONE fact this function already computes and used to keep: WHEN.
+ *
+ * WHY THE CADENCE IS NOT THE HOST'S TO CHOOSE, WHICH IS THE WHOLE REASON THIS IS A RETURN RATHER THAN A
+ * SECOND COUNTER IN THE CALLER. The banner above already refuses one ("a host that called it per opcode would
+ * be choosing a cadence the engine already owns"), and §Testing refuses the obvious alternative for a sharper
+ * reason: a cadence denominated in ELAPSED TIME is a fact about the machine, while `engine_work_done()` is
+ * work ACTUALLY PERFORMED, which is exactly the quantity that rule names. A host holding its own interval
+ * would also publish a stream whose `@RESULT` and whose five census lines describe two different instants,
+ * with nothing saying so — the two-moments defect §A-CONSERVATION-IDENTITY-HOLDS-WITHIN-ONE-SAMPLE names,
+ * manufactured by the reporting rather than met in it.
+ *
+ * WHAT A HOST THAT IGNORES THE RETURN GETS IS EXACTLY WHAT IT GOT BEFORE, which is why this is not a
+ * behaviour change for `run_scheduler`: the five lines still go out on the same cadence and nothing else
+ * happens. The return is information the caller may spend, never an obligation it may forget. */
+int engine_census_emit(void);
 
 /* THE SESSION ENDS WHEN THE HOST STOPS STEPPING, AND EVERY HOST SAYS SO THE SAME WAY. `begin`/`step`/`end`,
  * with `end` called unconditionally at the point the host leaves its loop — never `if (r != ENGINE_STEP_DONE)`,

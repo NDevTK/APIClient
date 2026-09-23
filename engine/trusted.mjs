@@ -567,7 +567,7 @@ async function main() {
          instance's request 1 and this zone would answer a question nobody asked. */
       tag: `${docId}/s${++serial}`,
       say: (rec) => child.stdin.write(rec + '\n'),
-      ready: [], answered: new Map(), stalled: false, live: true, result: null, quantum: null,
+      ready: [], answered: new Map(), stalled: false, live: true, result: null, results: 0, quantum: null,
       /* WHAT THE FRONTIER LOOKED LIKE WHILE THIS INSTANCE WAS STILL RUNNING — see `onLine`'s census arm. The
          COUNT is the load-bearing member and not the numbers: a killed run's result document does not exist,
          so the only thing that separates a run that explored thousands of worlds from one wedged on a single
@@ -1236,8 +1236,37 @@ async function main() {
                     'nothing delivers, and every read through it parks its flow for the rest of the session');
   }
 
+  /* THE PRODUCT'S OWN DOCUMENT, AND IT IS A SERIES NOW RATHER THAN A TERMINAL LINE — the engine's
+     `qjs_emit_partial` writes one on every census sample (test_forced.c's `--abi` loop), so what arrives here
+     is a sequence of whole snapshots of one register and never a stream to be merged. ASSIGNMENT IS THEREFORE
+     CORRECT AND IS NOT AN ACCIDENT OF THE OLD SHAPE: main.c composes the document WHOLE per call, so the
+     freshest one supersedes every earlier one and appending two would double every finding in the older half.
+     AND IT IS ECHOED AT ARRIVAL, FOR THE REASON THE CENSUS ARM BELOW ALREADY STATES IN ITS OWN WORDS — "a
+     line held for a summary is a line a `SIGKILL` deletes". The report at the bottom of this file prints
+     `root.result` on STDOUT, and a process killed at its budget never reaches it; a real page's run is
+     ALWAYS killed, which is the whole of why the engine started streaming these. A zone that captured the
+     stream and printed it only on a clean exit would have re-imposed, one process out, exactly the gate the
+     child just removed.
+     ON STDERR AND NOT ON STDOUT, which is the same split the census arm takes and for a reason this zone
+     cannot trade away: `console.log`'s stdout is the PURE result document `peergate.mjs` reads it as, so a
+     second document written there would be two JSON values on a channel whose reader does one parse.
+     VERBATIM AND NOT A DIGEST, for the census arm's reason exactly: this document carries the endpoint
+     surface, its example values, the `@S` array and the page errors, and a field list chosen HERE would be a
+     second contract over `result_json` maintained by hand in a reader. What this zone adds is the INSTANCE
+     and the SNAPSHOT ORDINAL, which the engine cannot know and which are what make a truncated tail
+     countable and a multi-instance drive readable.
+     ITS COST IS BYTES AND IT IS STATED: the document GROWS with the finding set and one goes out per census
+     sample, so a long productive run writes a great deal of stderr. That is the same trade the five census
+     lines already take — two hundred-odd rows apiece, verbatim, per sample — and the alternative is the one
+     this arm exists to refuse. A reader who wants only the last takes the last; a reader who wants none
+     redirects stderr, and stdout is still the one document. */
   async function onLine(e, line) {
-    if (line.startsWith('@RESULT ')) { e.result = line.slice('@RESULT '.length); return; }
+    if (line.startsWith('@RESULT ')) {
+      e.result = line.slice('@RESULT '.length);
+      e.results += 1;
+      console.error(`[trusted] [${e.tag}] @RESULT#${e.results} ${line}`);
+      return;
+    }
     /* THE DENOMINATION THIS INSTANCE'S SLICE IS MEASURED IN, WHICH IS WHAT DECIDES WHETHER ANY NUMBER BELOW
        IS QUOTABLE AT ALL. solver/quantum.c announces it once per instance at the FIRST SLICE, and this zone
        used to THROW on it — `the host wrote a record under the verb @QUANTUM, which this zone does not
@@ -1505,7 +1534,8 @@ async function main() {
     if (i !== root)
       console.error(`[trusted] peer instance [${i.tag}] at ${i.docUrl} ended ${i.ended} and ` +
                     (i.result === null ? 'produced no @RESULT'
-                                       : `produced a result of ${i.result.length} bytes, which this zone does ` +
+                                       : `produced ${i.results} @RESULT snapshot(s), the last of them ` +
+                                         `${i.result.length} bytes, which this zone does ` +
                                          'not merge into the seed\'s'));
 
   /* AND THE DENOMINATION IS SAID OUT LOUD BESIDE THE FINDINGS, because every total in the document this
@@ -1608,9 +1638,20 @@ async function main() {
                     'picks were moving between them.');
   }
   if (root.result === null) {
-    console.error(`[trusted] the host produced no @RESULT (ended ${root.ended}) — an ABSENT result and a result ` +
-                  'that found nothing are different facts and this is the first, so nothing here may be ' +
-                  'reported as a page that was analysed and found clean.');
+    /* AND THIS IS NARROWER THAN IT USED TO BE, WHICH IS THE POINT OF THE CHANGE ABOVE AND IS SAID HERE SO THE
+       LINE IS NOT READ AS THE OLD ONE. `@RESULT` used to be composed only where the frontier DRAINED or where
+       a stall went unpaid, so this branch was the ORDINARY outcome of every real-site run. The engine now
+       writes one on every census sample, so reaching here means the host produced NOT ONE SAMPLE — it never
+       got through its first census round with a live session, or it is a binary older than that streaming.
+       Those two are the same pair the census report above cannot separate either, and the same artifact
+       question settles both: ask the BINARY by content for `qjs_emit_partial`, with an invented name beside
+       it as the control and `engine_sched_step` beside that so a zero means absent rather than unasked. */
+    console.error(`[trusted] the host produced no @RESULT AT ALL (ended ${root.ended}) — an ABSENT result and ` +
+                  'a result that found nothing are different facts and this is the first, so nothing here may ' +
+                  'be reported as a page that was analysed and found clean. The engine streams one snapshot ' +
+                  'per census sample, so this is a run that reached no sample rather than a run that was ' +
+                  'merely killed: ask the binary by content (`grep -c qjs_emit_partial <binary>`, with an ' +
+                  'invented name as the control) before reading it as a page that produced nothing.');
     process.exitCode = root.exit || 1;
     return;
   }
