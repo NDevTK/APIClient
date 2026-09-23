@@ -450,10 +450,14 @@ static void r_blob(JSRuntime *rt) { blob_free(rt); }
    release column exists to end, and it cannot be repaired one row at a time:
    everything on this column runs before everything left out there, so lifting either of these alone would
    have moved it over its own partner.
-   `fetch` SITS BETWEEN THEM ON THIS LIST AND READS NEITHER. fetch_free gives back §5's four interned names,
-   three handles and its recorded runtime, and no release in this agent reads abort's or observable's statics
-   at all — which is what makes the pair's new positions a question about DECLARATION order rather than about
-   a dependency between releases.
+   WHAT SITS BETWEEN THEM ON THIS LIST READS NEITHER, AND THE SET IS NOT FIXED. When this was written it was
+   `fetch` alone; §5.1's, §5.4's and §5.5's rows landed between the two in the same hour, so it is four
+   today and the next conversion may make it five. That is why the sentence to rely on is the GENERAL one:
+   NO release in this agent reads abort's or observable's statics at all — every `_free` in the eight files
+   that use abort's API was read, and fetch_free, headers_free, response_free and request_free each give back
+   only their own names, handles and recorded runtime. It is what makes the pair's new positions a question
+   about DECLARATION order rather than about a dependency between releases, and it is what makes a row landing
+   between them harmless.
    NEITHER TAKES A JSContext ANY MORE, and unlike the groups converted above each of them genuinely READ the
    one it used to take: abort_free for a JS_FreeValue of §3.2's slot-key Symbol, observable_free for a
    JS_FreeAtom and a JS_FreeValue of §2's. Both are AGENT-lifetime values, so both reads have an exact
