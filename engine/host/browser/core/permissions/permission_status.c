@@ -4,6 +4,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
 #include "core/realm.h"
@@ -408,6 +409,26 @@ void permission_status_init(JSContext *ctx)
           "PermissionStatus: the per-realm prototype slot could not be declared");
     g_change_stepid = JS_RegisterStepDef(rt, &psc_def);
     g_ready = 1;
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The row is `navigator` and NOT
+       this file: Permissions §6.3 is declared from permissions_init, which is declared from navigator_init,
+       and navigator_free is the release that reaches this one through permissions_free — so the name is the
+       row whose RELEASE gives these back, which is what core/platform.c's first walk checks.
+       NO agent_state_reached HERE, and that is the rule rather than an omission: `navigator` ends its release
+       in no agent_state_undo — it puts every slot back by hand, one line each, and the lines below are this
+       file's — so there is no undo to give a precondition to. The day that row is converted to the undo, this
+       file owes the claim as the last line of its own `_free`.
+       EVERY RESET BELOW ALREADY EXISTED IN `permission_status_free` BUT THE CLASS'S; what the declarations buy
+       is that each becomes FALSIFIABLE — a line somebody wrote and somebody must keep is correct today and
+       reports nothing if a later diff drops it, and a declared slot is asserted back at its pre-init value by
+       a walk that cannot be forgotten. */
+    agent_state_class("navigator", &g_status_class,
+                      "Permissions §6.3's PermissionStatus class — the per-realm prototype slot and the brand "
+                      "§3.7.6 Attributes' receiver check compares against");
+    agent_state_value("navigator", &g_key,
+                      "Permissions §6.3's internal-slot key, the Symbol this component minted for the agent");
+    agent_state_id("navigator", &g_change_stepid, "Permissions §6.3.4's change-firing machine");
+    agent_state_ptr("navigator", &g_rt, "the runtime §6.3's slot key was minted in");
+    agent_state_flag("navigator", &g_ready, "Permissions §6.3's declaration latch");
     realm_declare_intrinsic(permission_status_install_realm);
 }
 
@@ -420,6 +441,7 @@ void permission_status_free(void)
        holds is the slot key, and a component that mints a runtime-lifetime value owns it. */
     JS_FreeValueRT(g_rt, g_key);
     g_key = JS_UNDEFINED;
+    g_status_class = 0;
     g_change_stepid = -1;
     g_ready = 0;
     g_rt = NULL;

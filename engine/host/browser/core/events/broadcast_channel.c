@@ -76,9 +76,16 @@ static ChanData *chan_of(JSValueConst v)
     return c;
 }
 
+/* JS_GetAnyOpaque and not JS_GetOpaque — core/agent_state.h's rule: this runs AFTER the release column has put
+   `g_chan_class` back at 0, so looking the id up here would answer NULL for every live channel and leak its
+   record and its interned name. The collector dispatched here THROUGH the class, so the id is a fact it
+   already has. */
 static void chan_finalizer(JSRuntime *rt, JSValue val)
 {
-    ChanData *c = JS_GetOpaque(val, g_chan_class);
+    JSClassID id = 0;
+    ChanData *c = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
     if (!c) return;
     JS_FreeAtomRT(rt, c->name);
     free(c);
@@ -414,6 +421,9 @@ void broadcast_channel_init(JSContext *ctx)
     }
     g_ctor_stepid = idl_method_id_step(ctx, CTOR_ARGS, 1, NULL, 0, &js_bc_ctor_decl, 0);
     agent_state_ptr("broadcast_channel", &g_bc_rt, "the runtime §9.5's bus was declared in, and the latch");
+    agent_state_class("broadcast_channel", &g_chan_class,
+                      "HTML §9.5's BroadcastChannel class — the per-realm prototype slot, the brand, and what "
+                      "carries the channel record");
     agent_state_value("broadcast_channel", &g_registry, "§9.5's registry of open channels");
     agent_state_value("broadcast_channel", &g_deliver_fn, "§9.5's delivery-task callee, one per agent");
     agent_state_id("broadcast_channel", &g_ctor_stepid, "§9.5's constructor machine");
@@ -478,5 +488,6 @@ void broadcast_channel_free(JSRuntime *rt)
     JS_FreeValueRT(rt, g_deliver_fn);
     g_registry = g_deliver_fn = JS_UNDEFINED;   /* the prototypes are the REALMS' — released with their contexts */
     g_bc_rt = NULL;
+    g_chan_class = 0;   /* an id in a runtime going away with it — chan_finalizer reads the record without it */
     g_ctor_stepid = g_deliver_stepid = -1;
 }

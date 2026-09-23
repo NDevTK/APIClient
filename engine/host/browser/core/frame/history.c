@@ -749,25 +749,21 @@ void history_init(JSContext *ctx)
     g_id_scroll_setter = idl_setter_id(ctx, IDL_ENUM, false, js_hist_set_scroll_restoration, 0);
     idl_arg_enum(0, SCROLL_RESTORATION);   /* a setter declares one position, and this is it */
 
-    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. Six member declarations and the
-       realm-value slot this init's own latch consults; a release that kept any of them would hand a second
-       agent a component reporting itself declared and holding pool entries from a declaration pool that is
-       gone.
-       `g_history_class` IS NOT ON THE LIST BECAUSE `history_free` DOES NOT PUT IT BACK, and a declaration
-       whose release is not its inverse fires agent_state_check_released rather than checking anything. The
-       latch is the SLOT, which is why the slot is what the assert at the top of this function reads.
-       THAT IS NOT THE SAME AS SAYING IT IS SETTLED, and this is the honest state of a question two components
-       of this browser answer differently: core/frame/visual_viewport.c zeroes its class at its release and
-       core/dom/selection.c uses its class AS the latch, while this file and core/crypto/crypto.c carry theirs
-       across. Each is self-consistent and the MIXTURE is not, because `JS_NewClassID` hands out ids from
-       `rt->js_class_id_alloc`, which a second agent's runtime starts back at JS_CLASS_INIT_COUNT: a component
-       that zeroed its id then draws a FRESH one from that counter, and the first free number is one a
-       component that carried its id across is about to re-register. `JS_NewClass1` refuses a class id already
-       taken in that runtime, so the `CHECK` on the line above is where that lands. It is unreachable today —
-       `qjs_init` refuses to root a second agent in one instance and every host builds exactly one runtime —
-       which is why this is written down at the site rather than worked around: the fix is ONE policy for a
-       class id across every component, and it belongs in core/agent_state.h beside the kind table that
-       already names 0 as a class id's pre-init value. */
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. Six member declarations, the
+       realm-value slot this init's own latch consults, and the class; a release that kept any of them would
+       hand a second agent a component reporting itself declared and holding pool entries from a declaration
+       pool that is gone.
+       `g_history_class` USED TO BE OFF THIS LIST, on the ground that `history_free` did not put it back and a
+       declaration whose release is not its inverse fires agent_state_check_released rather than checking
+       anything. That was true of this file and it was the wrong half to keep: the paragraph that stood here
+       said the fix was ONE policy for a class id across every component, belonging in core/agent_state.h
+       beside the kind table — and that policy is written there now, so the reset below is what this file owed
+       and the declaration is what makes it falsifiable. The argument is kept in one sentence rather than
+       deleted because a reader who re-derives it — this component's latch is the SLOT, so the class costs
+       nothing to carry — re-derives a state that header refuses: a carried id names a class in a runtime that
+       is gone, and the next agent's `JS_NewClassID` hands the same number to somebody else. */
+    agent_state_class("history", &g_history_class,
+                      "HTML §7.2.5 The History interface's class — the per-realm prototype slot and the brand");
     agent_state_realm_slot("history", &g_obj_slot,
                            "HTML §7.2.5 The History interface's realm-value slot for the Document's associated "
                            "History, and this component's declaration latch");
@@ -784,9 +780,10 @@ void history_init(JSContext *ctx)
 void history_free(void)
 {
     /* The prototypes, the interface objects and the History objects are the REALMS' — each is released with
-       its context. What the agent holds is the slot, and a slot id is a class id in a runtime that is going
-       away with it. */
+       its context. What the agent holds is the slot and the class, and each is an id in a runtime that is
+       going away with it. */
     g_obj_slot = JS_INVALID_CLASS_ID;
+    g_history_class = 0;
     g_id_push = g_id_replace = g_id_scroll_setter = -1;
     g_id_go = g_id_back = g_id_forward = -1;
 }

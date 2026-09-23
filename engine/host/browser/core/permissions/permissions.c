@@ -479,6 +479,8 @@ void permissions_init(JSContext *ctx)
        a line somebody wrote and somebody must keep is correct today and reports nothing if a later
        diff drops it, and a declared slot is asserted back at its pre-init value by a walk that cannot
        be forgotten. */
+    agent_state_class("navigator", &g_permissions_class,
+                      "Permissions §6.2's Permissions class — the per-realm prototype slot and the brand");
     agent_state_realm_slot("navigator", &g_obj_slot,
                            "Permissions §6.1's per-realm Navigator-associated Permissions object slot");
     g_atom_name = JS_NewAtom(ctx, "name");
@@ -501,6 +503,7 @@ void permissions_free(void)
     JS_FreeAtomRT(g_rt, g_atom_name);
     g_atom_name = JS_ATOM_NULL;
     g_obj_slot = JS_INVALID_CLASS_ID;
+    g_permissions_class = 0;
     g_id_query = -1;
     permission_status_free();
     permission_store_free();

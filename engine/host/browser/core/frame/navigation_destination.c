@@ -247,6 +247,9 @@ void navigation_destination_init(JSContext *ctx)
     g_id_get_state = idl_method_id(ctx, NULL, 0, js_dest_get_state, 0);
     g_ready = 1;
     agent_state_flag("navigation_destination", &g_ready, "the declaration latch");
+    agent_state_class("navigation_destination", &g_dest_class,
+                      "§7.2.6.10.3's NavigationDestination class — the per-realm prototype slot, and what "
+                      "§7.2.6.10.1's `required NavigationDestination destination` brands against");
     agent_state_value("navigation_destination", &g_key,
                       "§7.2.6.10.3's internal-slot key, the Symbol this component minted for the agent");
     agent_state_id("navigation_destination", &g_id_get_state, "§7.2.6.10.3's getState declaration");
@@ -286,9 +289,11 @@ void navigation_destination_install_protos(JSContext *ctx)
 void navigation_destination_free(JSRuntime *rt)
 {
     /* The prototypes and the interface objects are the REALMS' — each is released with its context. What the
-       agent holds is the Symbol it minted, which is a runtime-lifetime value this component owns. */
+       agent holds is the Symbol it minted, which is a runtime-lifetime value this component owns, and the
+       class, which is an id in a runtime that is going away with it. */
     JS_FreeValueRT(rt, g_key);
     g_key = JS_UNDEFINED;
+    g_dest_class = 0;
     g_id_get_state = -1;
     g_ready = 0;
 }

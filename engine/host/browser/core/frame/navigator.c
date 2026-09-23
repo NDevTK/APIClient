@@ -727,6 +727,9 @@ void navigator_init(JSContext *ctx)
        entry and a member has ONE, so declaring inside the install would mint a second entry for the second
        realm's prototype — which is what the pool's seal asserts against. */
     g_id_java_enabled = idl_method_id(ctx, NULL, 0, js_nav_java_enabled, 0);
+    agent_state_class("navigator", &g_nav_class,
+                      "HTML §8.10.1's Navigator class — the per-realm prototype slot and the brand §3.7.6/"
+                      "§3.7.7's receiver check compares against");
     agent_state_realm_slot("navigator", &g_obj_slot,
                            "HTML §8.10.1's associated-Navigator realm slot, and the declaration latch");
     agent_state_id("navigator", &g_id_java_enabled, "§8.10.1's javaEnabled declaration");
@@ -753,6 +756,11 @@ void navigator_free(void)
        that is going away with it. (It read "the two slots": the member-values slot moved onto the instance, so
        there is one.) */
     g_obj_slot = JS_INVALID_CLASS_ID;
+    /* AND THE CLASS, for the reason core/agent_state.h states once for every component: a carried id names a
+       class in a runtime that is gone, and nav_finalizer/nav_gc_mark — which run AFTER this release — already
+       reach the record with JS_GetAnyOpaque rather than by looking this up, which is what makes zeroing it
+       safe here. */
+    g_nav_class = 0;
     g_id_java_enabled = -1;
     /* BEACON §2.1's member is declared from navigator_init, so it is released from here — the same rule the
        line below states for Permissions §6, and the same failure if it is not on this list. */
