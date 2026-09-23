@@ -774,8 +774,9 @@ const CALL_FORMS = new Map(Object.entries({
      LANDS is what differs, and the attribution graph already follows the object. */
   idl_install_accessor_unforgeable: { target: 1, name: 2, fn: 3, kind: "accessor" },
   /* WEB IDL §3.7.6 "Attributes"' RECEIVER-STATING ACCESSOR (`idl_install_accessor_this`) IS NOT A ROW HERE,
-     AND THE MEASUREMENT IS WHY — the §3.8 row below says "A new install spelling is a row here, in the same
-     diff that writes it", and that instruction is TRUE OF A DOOR THIS FIXED POINT CANNOT REACH and FALSE OF A
+     AND THE MEASUREMENT IS WHY — the §3.8 row below ends by requiring a new install spelling to be given a row
+     here in the same diff that writes it, and that instruction is TRUE OF A DOOR THIS FIXED POINT CANNOT REACH
+     and FALSE OF A
      FORM THAT FORWARDS ITS OWN `name` PARAMETER INTO ONE IT ALREADY KNOWS. The new form does the second: it
      hands its `name` straight to core/idl_args.c's `idl_define_accessor`, which the derivation below already
      picks up, so a hand row would be the SECOND COPY of a fact this file computes — the same argument that
@@ -790,8 +791,9 @@ const CALL_FORMS = new Map(Object.entries({
      rows together — `JS_DefinePropertyGetSet` alone carries the family through `idl_define_accessor`, and the
      three rows alone carry it without `JS_DefinePropertyGetSet` (2930, four members still 4). Every seed in
      this family is redundant with the others for it.
-     SO THE QUESTION A NEW SPELLING MUST ANSWER IS NOT "is it listed" BUT "does it forward a caller's name into
-     a form already here". Where it does, a row adds nothing and drifts; where it does not — a door that names
+     SO THE QUESTION A NEW SPELLING MUST ANSWER IS NOT WHETHER IT IS LISTED BUT WHETHER IT FORWARDS A CALLER'S
+     NAME INTO A FORM ALREADY HERE. Where it does, a row adds nothing and drifts; where it does not — a door
+     that names
      the member itself, or one whose name argument is a table column the derivation cannot follow — the §3.8
      row's instruction stands unchanged and the row is owed. The way to tell them apart is the control above and
      not a reading of this map. */
