@@ -597,6 +597,25 @@ function census(r) {
   for (const k of CENSUS_LIFETIME) o[k] = c && (k in c) ? c[k] : null;
   for (const k of CENSUS_GAUGE) o[k] = c && (k in c) ? c[k] : null;
   for (const k of COLD_COUNTERS) o[k] = c && (k in c) ? c[k] : null;
+  /* AND THE RAZOR IS COMPUTED HERE RATHER THAN LEFT TO THE READER, BECAUSE A SUBTRACTION A READER MUST
+     PERFORM IS ONE NOBODY PERFORMS. Both halves are already rows above; this is the difference §What-the-tool-
+     produces names as the product's own razor — the addresses this run emitted MINUS the ones minted before it
+     started a program, which is the markup door counted back. A parser reaches the second set; only execution
+     reaches the first.
+     IT IS ENTAILED BY THE TWO ROWS IT SITS BESIDE AND THEREFORE CARRIES ITS DERIVATION, which is the cure
+     §EVIDENCE-INFLATION prescribes for a derived row: three rows here are TWO facts, and a reader counting
+     zeroes must be able to see that from the output rather than by reading this file. The `Of` field is the
+     derivation, spelled, so a row quoted out of this document into a brief carries what it is made of — which
+     is the one copy a relay preserves.
+     AND IT IS null RATHER THAN 0 WHEN EITHER HALF IS ABSENT. A build with no such counter emits nothing for
+     it, and `0 - 0` would render a run that could not be asked identically to a run that was asked and
+     contributed nothing — the absent-versus-zero pair landing on the one column the product is judged by.
+     A DIAGNOSTIC AND NEVER A TARGET, on §netdiff's own terms: optimising toward a subtraction optimises the
+     instrument. A zero here is a REFUSAL TO CLAIM the capability on this document, not a smaller version of
+     it, and it is not comparable across two runs — it is an identity read WITHIN one. */
+  o.epBeyondMarkup = (typeof o.epEmitted === "number" && typeof o.epPreProgram === "number")
+    ? o.epEmitted - o.epPreProgram : null;
+  o.epBeyondMarkupOf = (o.epBeyondMarkup === null) ? null : "epEmitted - epPreProgram";
   /* THE ORDER'S OWN CENSUS, AND `members: 0` IS NOT A READING. extension/bridge.js states the contract it
      asserts: no `wfq` is a BROKEN CONTRACT, `{members: 0}` is an EMPTY FRONTIER carrying NO term rows at
      all, and a full object is a READING. A finalize document is composed after the frontier drained or parked,
