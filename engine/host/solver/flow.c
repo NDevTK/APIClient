@@ -651,6 +651,30 @@ typedef struct FlowAcct {
        neither counter ever falls. */
     long sub_born;
     long sub_gone;
+    /* …AND THE ORDER'S READING OF THE FIRST OF THAT PAIR, HELD ONCE PER BUCKET INSTEAD OF DERIVED ONCE PER
+       MEMBER — `1.0 / sub_born`, which is the whole of what flow_branch_bonus returns and therefore the whole
+       of what this scope contributes to every one of its live members' weight.
+       IT CACHES NOTHING AND IT IS A PRIMITIVE FOR ONE THING. Dividing at each member was never expensive; what
+       it was, was UNSPELLABLE AS A BUCKET QUANTITY — the term existed only as a call taking a Flow, so every
+       proposal for an ask that does not walk had to bake it into a per-member key, which flow_pick's own
+       banner prices at O(live members of the bucket) PER FORK and calls "the cost MOVED rather than removed".
+       This is that offset given a name and a scope, which is the one form an index can hold per bucket and
+       apply once to a whole arm. Nothing here makes any ask cheaper on its own; see the residual at
+       flow_index_key for what still stands between this and one.
+       IT IS WRITTEN ON THE STATEMENT THAT WRITES `sub_born` AND NOWHERE ELSE, which is what makes the pair a
+       CHECK rather than a second copy: the two writers (flow_new's initialisation and flow_fork_inherit's
+       join) each write both fields adjacently, and acct_branch_offset compares the stored double against the
+       quotient recomputed from the integer at every read. A `sub_born` raised without its offset therefore
+       fires at the next weighing instead of re-ranking a whole arm in silence.
+       ITS KIND IS NEITHER OF ITS NEIGHBOURS' AND THIS IS WHERE THAT IS SAID. `sub_born` and `sub_gone` are
+       LIFETIME COUNTS a reader may difference; this is a PURE FUNCTION of the first of them AT THE INSTANT IT
+       IS READ, so differencing it says only that the bucket minted, which the counter it divides already says
+       better and in a unit. It is monotone DOWNWARD over a bucket's life, which is the one respect in which it
+       resembles neither, and it is published nowhere — flow_branch_born publishes the INTEGER, for the reason
+       solver/flow.h gives there.
+       NOTHING NEW RANKS BY IT. This is the value flow_weight already summed, reached by a different route, and
+       flow_member_key asserts the two routes agree BIT FOR BIT rather than closely. */
+    double sub_offset;
     /* HOW DEEP IN THE FORK TREE THIS NODE SITS — 0 at a root, parent + 1 at a fork, never moved by the
        compression (which rewrites `up` and not this). It is a GAUGE over the live members the census reaches,
        it ranks nothing, and it is here to answer ONE question that decides what the next diff may cost: an
@@ -2286,7 +2310,22 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
                "past the one member flow_new wrote — so the two sides of this branch read different "
                "`1/sub_born` from flow_branch_bonus and branching just changed a flow's own rank, which is "
                "the one thing the WFQ may never let it do");
-        if (br != sib->acct) { sib->acct->sub_gone++; br->sub_born++; sib->acct->branch = br; }
+        /* AND THE BUCKET'S OFFSET MOVES ON THE STATEMENT THAT MOVES THE COUNTER IT IS A FUNCTION OF, WHICH IS
+           WHAT KEEPS THE EQUALITY BELOW TRUE OF THE NUMBER flow_weight ACTUALLY READS. The `br->sub_born++`
+           re-ranks every live member of the bucket the arm JOINS and the equality reads both sides AFTER it;
+           now that the term is read out of `sub_offset`, an increment that left the offset standing would
+           leave that equality comparing the OLD denominator against itself AND PASSING — both sides agreeing
+           while every member of the arm carries a weight the order no longer computes. Adjacent, the pair
+           cannot come apart without acct_branch_offset's guard firing at the very next weighing.
+           IT IS STILL ONE STATEMENT, which is what the field block above and this paragraph's own predecessor
+           both claim about the membership move: the departure, the arrival and the re-pointing are the body of
+           ONE `if`, so a census landing anywhere outside it reads a coherent frontier. Wrapped across lines
+           and not widened, because what that sentence is about is atomicity and not column count. */
+        if (br != sib->acct) {
+            sib->acct->sub_gone++;
+            br->sub_born++; br->sub_offset = 1.0 / (double)br->sub_born;
+            sib->acct->branch = br;
+        }
     }
     /* AND THE PATH'S FORCED MARK — the one thing inherited here that the ranking never reads, and it is stated
        at this line for the SAME sentence the five terms above are stated for: an arm is its parent's path with
@@ -2756,7 +2795,14 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
        another's, and it does so as a departure from this bucket and an arrival in that one so neither counter
        ever falls. Depth zero for the same reason — this node is a root until something says otherwise, which
        is the identical sentence `family` one line down already makes about the account. */
-    f->acct->branch = f->acct; f->acct->sub_born = 1; f->acct->depth = 0;
+    f->acct->branch = f->acct; f->acct->sub_born = 1;
+    /* …AND THE BUCKET'S OWN CONTRIBUTION TO ITS MEMBERS' WEIGHT, DERIVED FROM THE FIELD ON THE LINE ABOVE
+       RATHER THAN WRITTEN AS THE LITERAL IT EVALUATES TO. `1.0` is what this is, and spelling it that way
+       would make acct_branch_offset's guard a comparison against a constant somebody typed. Derived, that
+       guard compares two evaluations of ONE expression on ONE operand, which is the only form in which an
+       equality of doubles is exact rather than a tolerance. */
+    f->acct->sub_offset = 1.0 / (double)f->acct->sub_born;
+    f->acct->depth = 0;
     /* …AND IT IS ITS OWN FAMILY UNTIL SOMETHING SAYS OTHERWISE. A from-baseline flow founds a family and keeps
        this; a FORK joins its parent's (flow_fork_inherit) and this root becomes a plain ancestry node. Pointed
        here rather than left NULL so no flow can exist without an account for the aging term OR THE REWARD to
@@ -4229,6 +4275,49 @@ double flow_distance(const Flow *f) {
     return (f->cand_replay + f->cand_surv + (double)f->cand_rung) / (double)FLOW_RUNGS_N;
 }
 
+/* THE BUCKET'S CONTRIBUTION TO THE ORDER, ASKED OF THE BUCKET — the one entry in this file that reads the
+   branch term WITHOUT HOLDING A MEMBER, and therefore the whole of what an ask that does not walk would need
+   from this scope.
+   IT IS THE POINT OF THE FIELD RATHER THAN AN ACCESSOR FOR IT. flow_pick's banner says the branch term "is
+   carried as a per-BUCKET OFFSET read at query time or the index is not sub-linear", and what stood between
+   that sentence and anything built was that the term had no spelling in which the BUCKET IS THE OPERAND:
+   flow_branch_bonus takes a Flow, so a candidate set could only ever bake it into a per-member key and pay
+   O(live members of the bucket) per fork. This takes the bucket, so one read covers a whole arm — and today
+   its only caller is flow_branch_bonus, which asks it once per member, because there is nothing that
+   enumerates buckets for it to be asked by. The residual at flow_index_key says what that costs and does not.
+   THE GUARD IS THIS DIFF'S ONE REAL CHECK AND IT IS TWO WRITERS AGAINST ONE READER. The stored double is
+   maintained at flow_new and at flow_fork_inherit's join; the quotient on the right is recomputed HERE from
+   the integer those same statements wrote. They are the same expression on the same operand at ONE INSTANT,
+   so the equality is exact for the reason flow_member_key's already is and not a tolerance, and exactly two
+   things can break it: a third writer of `sub_born` that does not write the offset, and a host whose
+   FLT_EVAL_METHOD is 2, which would evaluate the right side wider than binary64 and compare it against a
+   field the store has already rounded. Both hosts this project builds for are binary64 throughout; a fire
+   says loudly which of the two has arrived rather than re-ranking an arm in silence.
+   IT IS NOT A SECOND SPELLING OF THE DENOMINATOR, AND THE SENTENCE THAT WOULD SAY IT IS IS ABOUT A STAMP.
+   solver/flow.h publishes `flow_branch_born`, the INTEGER, and gives as its reason that "a double would be
+   compared with `==` against a quotient recomputed at ANOTHER INSTANT" — which is true of engine.c's rival
+   snapshot and is the whole of why that comparison is over the integer. This is a double compared at ONE
+   instant against the integer it was itself derived from, which is the case that sentence does not reach.
+   Read them together or the reasoning for each reads as an argument against the other. */
+static double acct_branch_offset(const FlowAcct *br) {
+    DCHECK(br != NULL,
+           "a branch bucket's own contribution to the order was asked for with no bucket to ask — flow_new "
+           "opens one for every node and the fork moves membership rather than clearing it, so a null here is "
+           "an arm whose whole share of the order's fifth term is attributed to nobody");
+    DCHECK(br->sub_born >= 1,
+           "a branch bucket reports that it has never minted anybody while its contribution to the order is "
+           "being read — `sub_born` is a LIFETIME count written to 1 at flow_new and raised at the fork, so a "
+           "value below one is a retraction of a counter that may never fall, and the offset beside it was "
+           "derived by dividing by exactly this");
+    DCHECK(br->sub_offset == 1.0 / (double)br->sub_born,
+           "a branch bucket's stored offset is no longer `1.0 / sub_born` — the two are written adjacently by "
+           "flow_new and by flow_fork_inherit's join and are read together here, so a difference is a third "
+           "writer of `sub_born` that left the offset standing, or a host evaluating doubles wider than "
+           "binary64 and rounding at the store. Either way every live member of this bucket is about to be "
+           "weighed on a denominator the order no longer holds, and ONE fork re-ranks a whole arm at once");
+    return br->sub_offset;
+}
+
 /* THE RANGE OF EVERYTHING THE ORDER IS MADE OF EXCEPT THE REWARD — written as the DERIVATION and not as the
    number it folds to, term by term against flow_nonreward's own summands, exactly as wfq_accounted_spread is
    written against flow_weight's. Each line is one term at the end of its range that pushes the sum UP:
@@ -4365,8 +4454,14 @@ static double flow_branch_bonus(const Flow *f) {
            "doing the reading is a departure charged to a bucket the flow had already left");
     /* AND THE DENOMINATOR IS THE OTHER HALF OF THAT PAIR. The precondition above is kept and is NOT what this
        returns: it is the pair's own invariant, and it is what makes `sub_born >= 1` a consequence rather than
-       a second thing to believe — `sub_born = live + sub_gone` with `live >= 1` and `sub_gone >= 0`. */
-    return 1.0 / (double)br->sub_born;
+       a second thing to believe — `sub_born = live + sub_gone` with `live >= 1` and `sub_gone >= 0`.
+       AND THE RETURN IS NOW THE BUCKET'S OWN READING RATHER THAN A QUOTIENT TAKEN HERE, which is a change of
+       ROUTE and not of VALUE: acct_branch_offset returns the double flow_new and the fork derived from that
+       same `sub_born` by that same expression, so flow_weight, flow_nonreward, flow_member_key and
+       flow_index_surrogate return the bits they returned before. What the route buys is that the term has a
+       caller-side form in which the bucket is the operand; this function is the PER-MEMBER adapter over it
+       and stays the only thing the order calls. */
+    return acct_branch_offset(br);
 }
 
 /* THE DENOMINATOR THAT TERM DIVIDES BY, AND NOTHING ELSE — see solver/flow.h for why it is published and why
@@ -4426,12 +4521,37 @@ long flow_branch_born(const Flow *f) {
    function directly beneath it and not a stored field, so there is no value here that could go unread.
    IT IS NOT A TERM AND NOTHING RANKS BY IT, for flow_member_key's own reason and with nothing added: flow_weight
    is untouched by this, and so is every number it returns.
-   NAMED RESIDUAL — THE OFFSET IS NAMED AND NOT CARRIED. NOT COVERED: nothing in this engine holds a per-bucket
-   offset, so no ask is answered from this key and flow_pick still walks every member. WHAT THE NEXT DIFF
-   BUILDS: that offset on FlowAcct beside `sub_born`, maintained on the statement that maintains `sub_born`, so
-   a bucket's contribution is read once per BUCKET at query time instead of once per member. HOW ITS ABSENCE
-   WOULD SHOW: `scanNextWeights` divided by `scanNextRuns` on any @WFQ census stands at the size of the
-   frontier itself, which is what an ask that walks reads and what an ask answered from an index cannot.
+   NAMED RESIDUAL — THE OFFSET IS CARRIED AND THE ASK STILL WALKS. The clause that stood here read "nothing in
+   this engine holds a per-bucket offset, so no ask is answered from this key", and named the next diff as
+   "that offset on FlowAcct beside `sub_born`, maintained on the statement that maintains `sub_born`". That is
+   BUILT — `FlowAcct.sub_offset`, written adjacently at flow_new and at flow_fork_inherit's join, read by
+   acct_branch_offset with the BUCKET as its operand, and tied to the published integer by the second
+   equality flow_member_key makes. It is retired in place rather than deleted because a reader who re-derives the gap
+   from this function's name will re-propose exactly it. WHAT IT BOUGHT IS A SPELLING AND NOT A SPEED, and
+   saying so is the point: the term now has a form in which a bucket is the operand, which is what flow_pick's
+   banner means by "carried as a per-BUCKET OFFSET read at query time" and which nothing before it had.
+   NOT COVERED: there is no candidate set, so flow_pick weighs every member and asks that offset once per
+   MEMBER — one read per member of a quantity that is now one number per ARM. Two things stand between that and
+   an ask that does not walk and neither is this function's. Nothing ENUMERATES the frontier's distinct
+   buckets: every reader of one reaches it through a member (`f->acct->branch`, or `f->family` at the census's
+   root door), and `branch_gen` de-duplicates a bucket WITHIN a member walk rather than replacing one. And
+   `FlowAcct` is file-private to flow.c, so no holder outside this file can name a bucket at all — which is why
+   flow_member_key's second equality is stated through `flow_branch_born`'s integer, the one spelling of this
+   quantity that crosses the boundary.
+   WHAT THE NEXT DIFF BUILDS: that enumeration — the distinct `branch` nodes of the live frontier, maintained
+   where membership moves (flow_new opens one, the fork's join is the only thing that ever retires one from
+   use, and acct_depart is where a bucket loses its last member), so one offset can be read for a whole arm
+   instead of once per member of it. It is the operand acct_branch_offset already takes and nothing supplies.
+   HOW ITS ABSENCE WOULD SHOW, AND THE READING IS A DIFFERENCE RATHER THAN A QUOTIENT OF TWO TOTALS: on
+   consecutive @WFQ censuses of ONE run, `scanNextWeights` differenced between two samples, divided by the same
+   interval's `scanNextRuns` delta and priced against the `members` gauge over that same interval, reads about
+   ONE — every member weighed at every ask, which is what a walk reads and what an ask answered from a
+   candidate set cannot. THE CLAUSE THIS REPLACES SAID TO DIVIDE THE LIFETIME TOTALS AND IT UNDER-READ THE
+   COST, which is why the method is spelled out here and not left to the obvious spelling: `scanNextWeights`
+   and `scanNextRuns` are LIFETIME counts and `members` is a GAUGE, so a lifetime quotient priced against a
+   TERMINAL gauge under-reads by the factor the frontier GREW over the run, and on a growing frontier that is
+   the whole of the finding. Two runs of one document read 0.55 that way and a monotone 0.63 → 0.97 per
+   interval, agreeing to three digits at every interval across both. Per interval or it says nothing.
    RETIREMENT: this record goes when flow_member_key cannot be written without naming the scope each of its
    summands is read at — a term added to it that lands in neither this function nor an explicit bucket offset
    being a compile error rather than a sentence here. */
@@ -4500,6 +4620,31 @@ static double flow_member_key(const Flow *f) {
            "the return from flow_index_key. Every claim that a candidate set may be taken from the per-member "
            "key with the bucket applied as a query-time offset rests on this being EXACT rather than close, "
            "and an index built on a key that is merely close reorders two members this order ties");
+    /* …AND THE SAME EQUALITY WRITTEN THE WAY A HOLDER OF THE PUBLISHED INTEGER WOULD HAVE TO TAKE IT, WHICH
+       IS THE ONE ROUTE THAT CROSSES THIS FILE'S BOUNDARY. The left side reaches the bucket term through
+       `FlowAcct.sub_offset`, the stored double the order actually reads; the right side reconstructs it from
+       `flow_branch_born`, the integer solver/flow.h publishes precisely because `FlowAcct` is private here. So
+       this states that the two halves an ask outside flow.c could hold — a per-member key and a per-bucket
+       denominator — rebuild the member half BIT FOR BIT, which is the claim the residual at flow_index_key is
+       about and the one that decides whether a candidate set may be taken from that key at all.
+       IT IS NOT acct_branch_offset'S GUARD RESTATED, AND THE TEST THIS FILE APPLIES TO EVERY ADDED ASSERTION
+       IS WHERE THE TWO SIDES COME FROM. That one compares a stored field against a quotient, both read out of
+       ONE bucket, and catches a writer of `sub_born` that left the offset standing. This compares a SUM built
+       by flow_member_key's own route against a sum built through the published entry, so it also catches the
+       excess-precision case the banner above names — a host whose FLT_EVAL_METHOD is 2 rounds `k` at the store
+       and may not round the right side — and it is the only site at which the INTEGER an index would carry and
+       the DOUBLE the order reads are ever put side by side.
+       IT IS A SECOND EVALUATION OF THE MEMBER HALF PER CALL, NAMED RATHER THAN LEFT TO BE REDISCOVERED, which
+       is the price the guard above already states and this doubles again in a dev build. In release the
+       condition is a `sizeof` and no side of it is evaluated at all. */
+    DCHECK(k == flow_index_key(f) + 1.0 / (double)flow_branch_born(f),
+           "the member half of the WFQ's weight is no longer its per-member key plus `1/sub_born` over its "
+           "branch bucket — the left side takes that term from the bucket's stored offset and the right side "
+           "rebuilds it from the integer flow_branch_born publishes, and the two are written adjacently by "
+           "flow_new and by the fork's join, so a difference is one of those statements having come apart or a "
+           "host evaluating doubles wider than binary64. This is the exact equality every proposal for an ask "
+           "that does not walk this frontier rests on: a candidate set keyed on the per-member half, with one "
+           "offset applied per BUCKET at query time, reproduces this number or it has changed the answer");
     return k;
 }
 
@@ -5051,14 +5196,29 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
            it names permits exactly ONE — "between two dispatches this moves for at most ONE member of the
            frontier" — and a fire here now names a member the charge is NOT about, which is the state this
            walk was written for.
-           TWO OF THOSE WRITERS ARE CORRECT BY ADJACENCY RATHER THAN BY CONSTRUCTION, AND THAT IS THE REASON
+           ONE OF THOSE WRITERS IS CORRECT BY ADJACENCY RATHER THAN BY CONSTRUCTION, AND THAT IS THE REASON
            THIS IS AN ASSERT AND NOT A PARAGRAPH. flow_fork_inherit raises `sub_born` for the bucket the arm
            JOINS — re-ranking every live member of that arm at once — and raises no generation of its own; it
            is sound only because flow_add_unseeded bumped one immediately before it and nothing weighs the
-           frontier in between. acct_depart raises `sub_gone` just before flow_remove's bump, on the same
-           argument. A diff that puts a weighing between either pair would re-rank a whole arm with the
-           generation standing still, silently, and there is no other instrument in this engine that would say
-           so.
+           frontier in between. A diff that puts a weighing between that pair would re-rank a whole arm with
+           the generation standing still, silently, and there is no other instrument in this engine that would
+           say so. The offset beside `sub_born` is written on that same statement and is NOT a second writer to
+           watch: it moves with the counter or acct_branch_offset's guard fires at the next weighing.
+           THIS READ "TWO OF THOSE WRITERS" AND NAMED acct_depart'S `sub_gone++` AS THE SECOND, AND IT IS
+           REWRITTEN RATHER THAN DELETED BECAUSE THE RETIRED READING IS THE ONE A READER RE-DERIVES: a
+           departure plainly changes a bucket, so it plainly changes what every member of that bucket is worth
+           — and it did, for as long as flow_branch_bonus divided by the LIVE gauge `sub_born - sub_gone`. That
+           denominator is now the LIFETIME mint count, which a departure cannot move, so `sub_gone` reaches no
+           term of the weight at all: flow_branch_bonus reads it only to assert its own precondition, in a
+           condition release compiles out. A departure therefore re-ranks NOBODY, and this walk — which is
+           about a member's own half moving with the generation standing still — has nothing to fear from it.
+           WHAT acct_depart'S ADJACENCY IS STILL LOAD-BEARING FOR IS A DIFFERENT CLAIM IN A DIFFERENT SCOPE,
+           AND NAMING THE RIGHT ONE IS THE WHOLE REPAIR. `sub_gone++` sits just before flow_remove's own
+           generation bump, and what a census landing between them would see is a bucket that has shed a member
+           the registry still holds — a MEMBERSHIP incoherence, which flow_wfq_census asserts in its own words
+           at `br_fan_max <= br_live_max` ("a departure left a bucket's `sub_gone` unraised"). That is the site
+           that cares. Filed here, the same fact read as an ORDER hazard, which it has not been since the
+           denominator moved.
            IT RAISES NO SCAN COUNTER, which is what keeps `scanNextWeights` a count of what the ORDER cost:
            flow.h's FLOW_SCANS banner says the rows count the flow_weight the scan itself performed and never
            the ones a DCHECK below it makes, and this is one of those. It is dev-only in both the check and the
@@ -5096,8 +5256,12 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
                     "index, heap or cached maximum anybody builds over this frontier is derived from that. "
                     "Either a writer of the optimism, the fitness distance, the branch bucket or this "
                     "member's own silence has stopped raising the generation, or a weighing has been "
-                    "introduced between one of those writes and its bump — flow_fork_inherit's `sub_born++` "
-                    "and acct_depart's `sub_gone++` are both correct only by adjacency. THE PHASE IS THE "
+                    "introduced between one of those writes and its bump — flow_fork_inherit's `sub_born++`, "
+                    "together with the `sub_offset` written on that same statement, is correct only by "
+                    "adjacency and is the ONE writer here that is. acct_depart's `sub_gone++` is not among "
+                    "them and this message used to say it was: the branch term divides by the LIFETIME mint "
+                    "count, which no departure moves, so a departure re-ranks nobody and a fire here is never "
+                    "about one. THE PHASE IS THE "
                     "SECOND OPERAND AND CAN FAIL WHERE THE KEY CANNOT: the key reads `own_silence / "
                     "FLOW_SERVICE_US` and the phase reads `own_silence %% FLOW_SERVICE_US`, so a write "
                     "smaller than one quantum moves the phase and leaves the key standing — and the phase is "
@@ -5139,8 +5303,15 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        it here would make the identity false by exactly one on every seeded scan.
        WHAT IT CATCHES IS AN ADJACENCY, which is the one way this pair rots — a `continue` introduced between
        the weighing and the block, after which the arming count silently describes a subset of the frontier
-       the order actually walked. flow_fork_inherit's `sub_born++` and acct_depart's `sub_gone++` stand on the
-       same kind of adjacency and this file says so at both. */
+       the order actually walked. flow_fork_inherit's `sub_born++` and the `sub_offset` beside it stand on the
+       same kind of adjacency and the walk above says so.
+       THIS NAMED acct_depart'S `sub_gone++` AS THE SECOND EXEMPLAR AND IT IS NO LONGER ONE, WHICH IS WORTH
+       CORRECTING IN AN ANALOGY RATHER THAN ONLY WHERE THE CLAIM WAS MADE: an analogy is where a reader LEARNS
+       what a load-bearing adjacency looks like, so a retired one teaches the wrong shape at exactly the moment
+       somebody is deciding whether their own pair needs one. `sub_gone` reaches no term of flow_weight — the
+       branch term divides by the LIFETIME mint count — so a departure changes no member's rank and its
+       adjacency to flow_remove's bump is about the CENSUS's membership identity instead, which is asserted at
+       flow_wfq_census and not here. */
     DCHECKF(key_checks_total() - kc_before == g_scan_weights[why] - sw_before,
             "the member-key check ran on a different set of members than this scan weighed — the four buckets "
             "are raised on the statement after the scan's own weight counter with nothing between them, so "

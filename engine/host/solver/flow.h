@@ -3131,7 +3131,14 @@ long flow_scan_weights(FlowScan s);
    loop must EQUAL that counter's delta. Two counters maintained by two statements, which is what makes it a
    check rather than a sum compared with its own summands. It is also the one thing that catches the way this
    pair rots — a `continue` introduced between the weighing and the block, which is the same correct-by-
-   ADJACENCY shape flow.c's `sub_born++` and `sub_gone++` already stand on.
+   ADJACENCY shape flow.c's `sub_born++` and the `sub_offset` written beside it already stand on.
+   THE SECOND HALF OF THAT ANALOGY USED TO BE `sub_gone++` AND IS REWRITTEN RATHER THAN DELETED, BECAUSE THE
+   RETIRED READING IS THE INTUITIVE ONE AND THIS IS THE FOURTH SITE THAT CARRIED IT. A departure obviously
+   changes a bucket, so it looks like it must change what every member of that bucket is worth — and it did,
+   while flow_branch_bonus divided by the live gauge `sub_born - sub_gone`. That denominator is the LIFETIME
+   mint count now, which no departure can move, so `sub_gone` reaches no term of flow_weight and a departure
+   re-ranks nobody; flow.c's own walk over this invariant is where the correction is argued. What
+   acct_depart's adjacency IS still load-bearing for is the census's membership identity, one scope over.
    IT DECIDES NOTHING, for the scan counters' reason exactly: no term of flow_weight reads any of the four, no
    pick branches on them, nothing is bounded by them.
    RETIREMENT: this goes when the ask no longer walks the frontier — the invariant is then held at the index's
