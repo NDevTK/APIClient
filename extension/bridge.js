@@ -3815,8 +3815,13 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          on this record, this zone DCHECKs its vocabulary above — and it stopped there, which is the
          write-with-no-reader half of a broken contract. It is passed as `credentials`, which is a STATEMENT
          about the request, and NOT as `credentialed`, which is this zone's own decision to spend the
-         session and is still false here: the two are composed at the chokepoint and the statement can only
-         ever narrow. Relaying it takes no new decision and gives the refusal below a fact to be about. */
+         session: the two are composed at the chokepoint and the statement can only ever narrow. Relaying it
+         takes no new decision and gives the refusal below a fact to be about.
+         THAT CLAUSE ENDED "and is still false here", WHICH WAS TRUE AND WAS NOT STATED ANYWHERE THE DOOR
+         COULD READ. `credentialed` was the one option this call omitted, and `_credentialedOf`'s `!!undefined`
+         supplied the `false` — so the fact was carried by a coercion rather than by this site, and the
+         egress surface's `cookies` row, which it grades `certain`, rested on a value nobody had stated. It
+         is a literal below now, and the door `DCHECK`s that every caller states one. */
       /* AND `unstated` FOR THE WITNESS MARK, WHICH IS A STATEMENT ABOUT THIS ACT AND NOT A GUESS ABOUT ITS
          PATH. The engine composes `pinned`/`unpinned` at a PARK, off the parking flow's own
          `flow_path_pinned`; an `xhr.send` record is not a park and carries
@@ -3837,6 +3842,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, destination: "",
                                             provenance: q.provenance, pinned: "unstated",
                                             docReach: msg.provenance, actor: "page",
+                                            credentialed: false,
                                             credentials: q.credentials, headers: q.headers });
       DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && typeof r.status === "number" &&
              r.headers && typeof r.headers === "object",

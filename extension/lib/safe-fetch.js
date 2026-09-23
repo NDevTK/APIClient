@@ -965,6 +965,32 @@ function _refuseUnreadOptions(opts) {
    request and carried across the seam on the pending line beside its method and its destination. It can
    only ever NARROW what this zone was already willing to do; the derivation of the pair is below. */
 function _credentialedOf(opts) {
+  /* THE FLAG IS STATED AND NOT COERCED, AND THIS IS A `DCHECK` FOR THIS FILE'S OWN DISCRIMINATOR: WHICH ARM
+     A COMPILED-OUT ASSERT LEAVES. `!!undefined` is `false`, so the arm left here is the UNCREDENTIALED one —
+     release proceeds correctly, nobody's session is spent, and what is lost is only the caller's belief
+     about what it sent. That is `_refuseUnreadOptions`' position one function up, where a dropped
+     `credentials` fires uncredentialed and is a `DCHECK` for the same reason. The two `CHECK`s below are
+     fatal on the opposite ground: the arm THEY leave SENDS the cookies.
+     WHY ASSERT AT ALL WHEN THE DEFAULT IS THE SAFE ONE. An absent key and a stated `false` were ONE fact at
+     this door and TWO facts at the composing site, and the composing site is where the question is asked —
+     so the sites that omitted it were exactly the sites that state a HEADER list (`bridge.js`'s
+     `fetchedXhr`, `discovery-probe.js`'s `_chokepointGetFn`). That is the disjointness SECURITY.md already
+     records as "a fact no site can see, that no diff has to preserve", holding by coincidence of which
+     functions exist. Stating it makes the `credentialed && headers` CHECK below a test of what a caller
+     SAYS rather than of which callers happen to have been written.
+     IT MAY ASSERT AT ALL FOR `_refuseUnreadOptions`' REASON: the KEY is composed in trusted-zone source at
+     every call site this door has — `bridge.js`, `engine/trusted.mjs`, `engine/peergate.mjs`,
+     `lib/discovery-probe.js` — and the untrusted engine supplies only VALUES, never a key, so no bundle and
+     no compromised renderer can reach this abort. */
+  DCHECK(typeof opts.credentialed === "boolean",
+         "safeFetch was called without stating whether the PERSON'S SESSION pays for this request. The " +
+         "coercion below reads an absent flag as `false`, which is the safe arm and is why this is not " +
+         "fatal — but absent and `false` are two different facts AT THE CALL SITE, and only one of them is " +
+         "a decision somebody took. State `credentialed: false` (this zone is unwilling, or supplies no " +
+         "`pageOrigin` for the credentialed SOP to match), or `credentialed: true` beside a " +
+         "Fetch §2.2.5 \"Requests\" credentials mode. A caller that states neither hands the egress " +
+         "surface a `cookies=no` row with no fact under it, which is the reading a person widens an " +
+         "origin on");
   var credentialed = !!opts.credentialed;
   var mode = opts.credentials;
   CHECK(!(credentialed && opts.headers),

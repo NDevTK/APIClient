@@ -201,6 +201,13 @@ function _chokepointGetFn(tab, who) {
          about the CALLER. See safe-fetch.js's `_actorOf`. */
       actor: "tool",
       destination: "",
+      /* AND THIS SWEEP DOES NOT SPEND THE PERSON'S SESSION, STATED RATHER THAN LEFT TO THE DOOR'S COERCION.
+         It was the one fact this call omitted, and `_credentialedOf` read the absence as `false` — the right
+         answer carried by the wrong thing, since an omission is not a decision and the egress surface grades
+         its `cookies` row `certain`. It is `false` because a discovery document is fetched to find out what
+         a well-known path PUBLISHES, which is the same for every visitor: the authenticated view is not what
+         this sweep is asking for, and the header list below could not ride along with cookies anyway. */
+      credentialed: false,
       headers: headers || {},
     });
     /* `refusal` IS A POSITIVE STATEMENT ON EVERY RECORD safeFetch RETURNS — `null` means the request reached
