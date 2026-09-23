@@ -1778,6 +1778,28 @@ void flow_credit_visit(Flow *f) {
            "places that state it and not in the other, so the census row that counts a re-dispatch as having "
            "had nothing to continue is judging a different boundary than the optimism term is credited at");
     f->visits++;
+    /* AND THE ORDER IS TOLD, BECAUSE THIS CREDIT IS A DEMOTION AND A DEMOTION IS A RANK CHANGE. The optimism
+       term is 1/(1+visits), so the line above LOWERS this flow's weight — the paragraph at the head of this
+       function calls that out in its own words and measures what it costs — and every other writer that moves
+       a member's rank raises the generation. This one did not, so between two generations a per-member term
+       moved, which is exactly the ONE-BIT claim engine.c's rescan hook rests on and it was not true of this
+       tree. That hook's DCHECKF names the writer rather than guessing: with the five terms printed side by
+       side it reported `completed units 43 -> 45` with the silence notch, the reward, the fitness distance and
+       the branch bucket mint count all unchanged, and `still a member of the frontier: 1` — one differing pair,
+       a LIVE rival, so a departed-flow cache was refuted in the same line. Its own remedy clause says to raise
+       the generation AT THE WRITER, and the assertion's banner says why that is the fix rather than a fifth
+       clause: a clause would have silenced the assertion while the hook went on ranking against a state the
+       scheduler had not used.
+       IT IS NOT A BOUND AND IT IS NOT A SECOND CLOCK. frontier_rank_changed bumps the generation, counts the
+       change and raises the yield REQUEST; its own contract is that raising is not deciding, so a flow that
+       still outranks the frontier keeps the thread and pays one declined hook call for the question. The rate
+       is one per COMPLETED UNIT, which is the rate at which this term genuinely moves, so nothing here decides
+       that work will not happen.
+       HOW ITS ABSENCE WOULD SHOW: the rescan hook's cached rival goes stale in the one term this line writes,
+       and a reader sees it as a `completed units` pair differing with every other term equal.
+       RETIREMENT: this record goes when the optimism term no longer reads a per-member count, because the
+       demotion it is about can then no longer be spelled here. */
+    frontier_rank_changed();
 }
 
 /* THE SCHEDULER CHOSE THIS MEMBER — see flow.h's `picks` for why a DISPATCH count is the only statement about
