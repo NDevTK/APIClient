@@ -1044,8 +1044,12 @@ const cTopLevel = new Set();    // field name written at some emission's own top
    record when it is READ LIKE IT — two of its fields, not one. The single-name case is not dropped: it is the
    AMBIGUOUS category below, named with its place, because whether a receiver is an endpoint or an AST node is
    a question this cannot answer and answering it either way is the guess the whole file is built against. */
-const shapes = new Map();   // "file:offset" -> Set(name)
+const shapes = new Map();   // "file:line" or "file:line#a.b" (the nesting path) -> Set(name)
 const shapeOf = (id) => { let s = shapes.get(id); if (!s) shapes.set(id, (s = new Set())); return s; };
+/* Every shape a body states, which is the body's own set plus one per nesting path under it. Used wherever a
+   BODY has to be addressed rather than a record — the fragment fold below is the only such place, and it is
+   the reason this is a function and not a second map that could disagree with `shapes` about what exists. */
+const shapeIdsOf = (bodyId) => [...shapes.keys()].filter((k) => k === bodyId || k.startsWith(`${bodyId}#`));
 
 /* AND A SHAPE IS ONE RECORD ONLY WHERE THE BODY COMPOSES ONE OBJECT. The paragraph above is right that the
    CALL is not the record and wrong that the BODY is, wherever the body NESTS: a composer writing an array of
@@ -1063,14 +1067,17 @@ const shapeOf = (id) => { let s = shapes.get(id); if (!s) shapes.set(id, (s = ne
    endpoint's, `name`/`location`/`validValues` are a PARAM's, and it lists the six as one record.
    RECORDED AT SHAPE CONSTRUCTION AND NEVER ASKED OF THE BODY AT REPORT TIME, which is what makes it retire
    itself: the root fix is a shape keyed by nesting depth as well as by body, one object kind per shape, and a
-   depth-keyed shape is not a union BY CONSTRUCTION, so this set empties without anybody deleting a test. */
-const shapeUnion = new Set();   // shape id whose body composes MORE THAN ONE object
-const cObjOpens = new Map();    // shape id -> object opens counted so far
-const noteObjectOpens = (id, n) => {
-  const t = (cObjOpens.get(id) || 0) + n;
-  cObjOpens.set(id, t);
-  if (t > 1) shapeUnion.add(id);
-};
+   depth-keyed shape is not a union BY CONSTRUCTION, so this set empties without anybody deleting a test.
+   THAT ROOT FIX IS BUILT AND THE ARGUMENT ABOVE IS RETIRED FOR EVERY BODY WHOSE EMISSION ORDER READS, which
+   is why it is rewritten here rather than deleted: a reader who re-derives it from a body-keyed set will
+   re-derive the union with it. A body is walked ONCE, in source order, over every construct that states a
+   bracket or a name, and each name is filed under the path the walk was standing in — so one body states as
+   many shapes as it composes objects and no set holds two levels. What is left in this one is the population
+   that walk cannot answer for: a body whose brackets do not balance across its own calls, where a path would
+   be a guess and the honest key is the body. The predicate moved from HOW MANY OBJECTS to WHETHER THE ORDER
+   READS, which is the only version of it a depth key leaves any work for. */
+const shapeUnion = new Set();   // body id whose emission order does not balance — its set is still a union
+const cObjOpens = new Map();    // body id -> object opens its own emission states
 
 /* A BODY THAT EMITS KEYS INTO A BUFFER IT DID NOT DECLARE IS A FRAGMENT OF ITS CALLERS' RECORD, NOT A RECORD.
    "One C function's emissions are one record" is true of a body that OWNS the buffer, and json_buf.h states
@@ -1117,17 +1124,31 @@ const keysIn = (text) => { const out = []; let m; JSON_KEY.lastIndex = 0; while 
    READ OFF THE PRODUCER AND OFF NOTHING ELSE, for `censusComposerFields`' reason exactly: the nesting is a
    fact the composer states in its own bytes, so a row that moves into or out of an object is known on the run
    it moves. A list of which rows are nested would be the second copy this whole file is about. */
-const nestingIn = (text) => {
-  const out = [];          // {name, parent} — parent null at an emission's own top level
-  const stack = [];        // the key that opened each open object, or null for an anonymous one
-  let pending = null;      // a key whose value has not been reached yet
+/* AND THE STRUCTURE IS A STATE THE WHOLE BODY CARRIES, NOT A PROPERTY OF ONE LITERAL, which is the fact that
+   makes a path derivable at all. A composer using the buffer vocabulary states ONE bracket per call — the
+   header names the three roles and `json_buf_raw` is the one that writes structure — so a walk that restarts
+   at each literal answers "the emission's own top level" for every key in the tree, and the depth is gone
+   before anything can key on it. The walker is handed a state its caller carries across that body's calls in
+   SOURCE ORDER, because the caller is the only party that holds that order.
+   A BRACKET CARRIES THE KEY IT BELONGS TO AND AN ANONYMOUS ONE CARRIES ITS CONTAINER'S, which is the one case
+   the per-literal walker read as top level: in `"params":[{"name":…}]` the element object is a value of
+   `params`, so `name` is a row of the params record and not of the emission's own. Reading the bracket as a
+   nameless level put every array element's rows at depth zero beside the fields they are nested under.
+   IT FALSIFIES ITSELF, WHICH IS WHY A PATH MAY BE TRUSTED AT ALL. `short` records a close with nothing open,
+   and a body whose state does not return to an empty stack has an emission order this cannot read — a bracket
+   opened in one arm of a branch and closed in another, a body writing into a buffer it was handed. There the
+   answer is the body-wide set and the band above it, never a path taken off a walk that did not balance. */
+const newStruct = () => ({ open: [], pending: null, opens: 0, short: false });
+const structPath = (st) => st.open.filter((k) => k !== null);
+const structScan = (st, text) => {
+  const out = [];          // {name, path} — path empty at the emission's own top level
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
     if (c === '"') {
       const k = /^"([A-Za-z_$][\w$]*)"\s*:/.exec(text.slice(i));
       if (k) {
-        pending = k[1];
-        out.push({ name: k[1], parent: stack.length ? stack[stack.length - 1] : null });
+        st.pending = k[1];
+        out.push({ name: k[1], path: structPath(st) });
         i += k[0].length - 1;
         continue;
       }
@@ -1135,9 +1156,9 @@ const nestingIn = (text) => {
       if (v) i += v[0].length - 1;
       continue;
     }
-    if (c === "{") { stack.push(pending); pending = null; }
-    else if (c === "}") { stack.pop(); pending = null; }
-    else if (c === ",") pending = null;
+    if (c === "{" || c === "[") { st.open.push(st.pending); st.pending = null; if (c === "{") st.opens++; }
+    else if (c === "}" || c === "]") { if (st.open.length) st.open.pop(); else st.short = true; st.pending = null; }
+    else if (c === ",") st.pending = null;
   }
   return out;
 };
@@ -1199,6 +1220,13 @@ const C_KEY = "json_buf_key";
    without it the split is a convention that decays the first time somebody writes `json_buf_raw(&b, ",\"x\":")`
    because it is one call instead of two. */
 const C_RAW = "json_buf_raw";
+/* AND THE THIRD ROLE THE HEADER NAMES, WHICH DECLARES NOTHING AND IS STILL STRUCTURE. `json_buf_str` writes a
+   string VALUE, so the one thing it states is that the key in front of it has been answered — and that is
+   exactly what decides whether the next bracket belongs to that key or to nothing. Without it a key whose
+   value is a string and whose sibling opens an object would hand its own name to that object. Read here for
+   json_buf.h's own reason: which entry a call is is a fact about the CALLEE, so the third role is asked of
+   the third name rather than guessed from what its argument holds. */
+const C_STR = "json_buf_str";
 const rawKeys = [];   // {file,line,keys,text}
 const C_BUILD = { snprintf: 2, sprintf: 1 };
 const C_MATCH = ["strstr", "strcasestr", "strncmp", "strcmp", "memmem", "strnstr"];
@@ -1476,30 +1504,25 @@ function scanC(file, src) {
                    root: /\bJsonBuf\s+[A-Za-z_]\w*\s*(?:=|;)/.test(body), calls });
   }
 
-  const emit = (text, off, isWrite) => {
+  /* WHAT THIS BODY STATED AND WHERE, so the structure can be read in the order the C says it. Every construct
+     below that writes a bracket or a name pushes one row; nothing here decides a shape, because the shape a
+     name belongs to is a fact about the whole body and no single call can see it. `alt` marks a text that is
+     an ALTERNATIVE rather than a continuation — a ternary's arms are two spellings of one emission, and
+     letting both advance one walk would close brackets the run never opened. */
+  const structEv = [];    // {off, kind:"text"|"key"|"value", text, ks, name, alt}
+
+  const emit = (text, off, isWrite, alt) => {
     const ks = keysIn(text);
     for (const k of ks) {
       (isWrite ? rec(fields, k).writes : rec(fields, k).reads).push(site(off));
-      if (isWrite) { cEmitted.add(k); shapeOf(bodyOf(off)).add(k); }
+      if (isWrite) cEmitted.add(k);
     }
     /* READ FROM THE SAME BYTES AND NEVER JOINED POSITIONALLY AGAINST `ks`: the two scans answer different
        questions, and an index-for-index join would go wrong the moment one regex admitted a key the other
        skipped. Only names `keysIn` has already returned are recorded, so this can add nothing to the
-       namespace and cannot move any count above it. */
-    if (isWrite) {
-      const seen = new Set(ks);
-      const nest = nestingIn(text);
-      for (const { name, parent } of nest) {
-        if (!seen.has(name)) continue;
-        if (parent === null) cTopLevel.add(name);
-        else if (!cNestedIn.has(name)) cNestedIn.set(name, parent);
-      }
-      /* THE UNION, FOR A COMPOSER THAT WRITES ITS OBJECT IN ONE LITERAL. `nestingIn` has already answered the
-         question for this shape — a key carrying a PARENT is a key of an inner object — so a body holding one
-         composes more than one record kind, exactly as a second `json_buf_raw(&b, "{")` does one entry down.
-         Read off the same array the loop above consumes, so the two cannot disagree about what nests. */
-      if (nest.some((x) => seen.has(x.name) && x.parent !== null)) shapeUnion.add(bodyOf(off));
-    }
+       namespace and cannot move any count above it — which is why `ks` travels with the event rather than
+       being re-derived where the walk consumes it. */
+    if (isWrite) structEv.push({ off, kind: "text", text, ks, alt: !!alt });
     return ks.length;
   };
 
@@ -1556,7 +1579,7 @@ function scanC(file, src) {
       const lit = cLiteral(code, struct, a[0], a[1]);
       if (lit === null) {
         const arms = cTernaryArms(code, struct, a[0], a[1]);
-        if (arms) { for (const t of arms) emit(t, a[0], true); continue; }
+        if (arms) { for (const t of arms) emit(t, a[0], true, true); continue; }
         if (builtDests.has(code.slice(a[0], a[1]).trim())) continue;
         /* An unresolvable format is only a refusal where a key could be hiding: a call whose format is a
            variable in a file that emits no JSON at all is a log line, and counting it would bury the report
@@ -1590,7 +1613,7 @@ function scanC(file, src) {
     }
     rec(fields, name).writes.push(site(a[0]));
     cEmitted.add(name);
-    shapeOf(bodyOf(a[0])).add(name);
+    structEv.push({ off: a[0], kind: "key", name });
   }
 
   /* AND THE HALF THAT KEEPS THE OTHER ONE TRUE. The raw entry writes structure and formatted values; a field
@@ -1602,14 +1625,22 @@ function scanC(file, src) {
     const a = c.args[1];
     const lit = cLiteral(code, struct, a[0], a[1]);
     if (lit === null) continue;
-    /* THE RAW ENTRY WRITES STRUCTURE — which is this entry's whole contract one paragraph up — so an opening
-       brace in it is an OBJECT this body composes, and the second one proves the body composes more than one.
-       Counted here rather than inferred from the key list because a nested object's keys are indistinguishable
-       from the outer object's once both are in one Set, which is precisely the fact being recovered. */
-    const opens = (lit.match(/\{/g) || []).length;
-    if (opens) noteObjectOpens(bodyOf(a[0]), opens);
+    /* THE RAW ENTRY WRITES STRUCTURE — which is this entry's whole contract one paragraph up — so its brackets
+       are where the body's own nesting is stated and the walk below cannot read a path without them. It
+       declares NO field: `ks` is empty rather than absent, so the walk files nothing out of this text even
+       where a name is hiding in it, which is the defect the row beside this one reports rather than absorbs. */
+    structEv.push({ off: a[0], kind: "text", text: lit, ks: [], alt: false });
     const ks = keysIn(lit);
     if (ks.length) rawKeys.push({ file, line: lineOf(src, a[0]), keys: ks, text: lit.slice(0, 60) });
+  }
+
+  /* THE VALUE ENTRY, WHICH ANSWERS A KEY AND NAMES NONE. Its argument is a runtime string by construction —
+     `json_buf_str(&b, e->method)` — so there is nothing here to read as a name and nothing is read as one; the
+     only thing recorded is that a pending key has been answered, which is what stops the bracket after it
+     inheriting that key. A non-literal argument is the normal case and is NOT a refusal for that reason. */
+  for (const c of callSites(struct, C_STR)) {
+    if (!c.args || !c.args[1]) continue;
+    structEv.push({ off: c.args[1][0], kind: "value" });
   }
 
   for (const [fn, fmtIdx] of Object.entries(C_BUILD))
@@ -1617,11 +1648,11 @@ function scanC(file, src) {
       if (!c.args) { refuse(file, lineOf(src, c.at), `an unbalanced ${fn}( — the built text cannot be delimited`); continue; }
       const a = c.args[fmtIdx], d = c.args[0];
       if (!a || !d) { refuse(file, lineOf(src, c.at), `a ${fn}( with too few arguments to hold a destination and a format`); continue; }
-      let lit = cLiteral(code, struct, a[0], a[1]);
+      let lit = cLiteral(code, struct, a[0], a[1]), alt = false;
       if (lit === null) {
         const arms = cTernaryArms(code, struct, a[0], a[1]);
         if (!arms) { pendingUnresolved.push({ file, line: lineOf(src, c.at), fn, text: code.slice(a[0], Math.min(a[1], a[0] + 60)) }); continue; }
-        lit = arms.join("");
+        lit = arms.join(""); alt = true;
       }
       if (!keysIn(lit).length) continue;
       const dst = code.slice(d[0], d[1]).trim();
@@ -1629,7 +1660,7 @@ function scanC(file, src) {
         refuse(file, lineOf(src, c.at), `a ${fn}( carrying a JSON key into a destination that is not a plain identifier — whether this text is emitted or matched is not decidable here`, dst);
         continue;
       }
-      emit(lit, a[0], !patterns.has(dst));
+      emit(lit, a[0], !patterns.has(dst), alt);
     }
 
   /* THE RETURNING COMPOSER, read exactly like the build side above and differing in one place only: its
@@ -1641,11 +1672,11 @@ function scanC(file, src) {
       if (!c.args) { refuse(file, lineOf(src, c.at), `an unbalanced ${fn}( — the composed text cannot be delimited`); continue; }
       const a = c.args[fmtIdx];
       if (!a) { refuse(file, lineOf(src, c.at), `a ${fn}( with too few arguments to hold a format`); continue; }
-      let lit = cLiteral(code, struct, a[0], a[1]);
+      let lit = cLiteral(code, struct, a[0], a[1]), alt = false;
       if (lit === null) {
         const arms = cTernaryArms(code, struct, a[0], a[1]);
         if (!arms) { pendingUnresolved.push({ file, line: lineOf(src, c.at), fn, text: code.slice(a[0], Math.min(a[1], a[0] + 60)) }); continue; }
-        lit = arms.join("");
+        lit = arms.join(""); alt = true;
       }
       if (!keysIn(lit).length) continue;
       const d = composeDest(code, struct, c.at);
@@ -1653,7 +1684,7 @@ function scanC(file, src) {
         refuse(file, lineOf(src, c.at), `a ${fn}( carrying a JSON key to a destination this cannot name — whether the document is emitted or matched is not decidable here`);
         continue;
       }
-      emit(lit, a[0], d.kind === "return" || !patterns.has(d.name));
+      emit(lit, a[0], d.kind === "return" || !patterns.has(d.name), alt);
     }
 
   /* The read side of the seam in C: a JSON key literal handed to a matcher. HELD, not credited here, because
@@ -1681,6 +1712,60 @@ function scanC(file, src) {
     if (lit === null) continue;
     if (!keysIn(lit).length) continue;
     emit(lit, at, !patterns.has(m[1]));
+  }
+
+  /* ---- one walk per body, in the order the body writes ---------------------------------------------------
+     THE SHAPE A NAME BELONGS TO IS DECIDED HERE AND NOWHERE ABOVE, because it is the one question no single
+     call can answer: `json_buf_key(&b, "name")` states a name and says nothing about which object is open, and
+     the loops above run per CONSTRUCT rather than per position. Sorting this body's rows by offset recovers
+     the order the compiler will see, which is the order the buffer is written in, and a walk over that order
+     is the only place a path exists at all.
+     WHAT IS FILED IS STILL ONLY WHAT `keysIn` RETURNED. Each text row carries its own `ks`, so this cannot add
+     a name to the namespace or move a count above it; the walk decides WHERE a name goes and never WHETHER it
+     is one. A name `keysIn` found that the structural walk did not reach is a key inside a string VALUE — an
+     embedded document rather than a field of this record — and it stays at the body's own level exactly where
+     a body-keyed set put it, because inventing a path for it would be the guess this file is built against.
+     AND IT REFUSES ITSELF WHERE THE ORDER DOES NOT READ. A body whose brackets do not balance across its own
+     calls — one arm of a branch opening what another closes, a body writing into a buffer it was handed — has
+     no path this can derive, so its names go back into ONE set under the body and the band above keeps it. An
+     unbalanced body that composes more than one object is exactly the population `shapeUnion` now names. */
+  {
+    const byBody = new Map();
+    for (const e of structEv) {
+      const id = bodyOf(e.off);
+      if (!byBody.has(id)) byBody.set(id, []);
+      byBody.get(id).push(e);
+    }
+    for (const [id, evs] of byBody) {
+      evs.sort((a, b) => a.off - b.off);
+      const st = newStruct();
+      const rows = [];                 // {name, path}
+      for (const e of evs) {
+        if (e.kind === "key") { rows.push({ name: e.name, path: structPath(st) }); st.pending = e.name; continue; }
+        if (e.kind === "value") { st.pending = null; continue; }
+        /* An ALTERNATIVE is walked against a COPY of the running state: both arms start where the run stands
+           and neither advances it, because only one of them is ever written. Its opens still count — a body
+           that composes an object in one arm composes one. */
+        const into = e.alt ? { open: st.open.slice(), pending: st.pending, opens: 0, short: false } : st;
+        const seen = new Set(e.ks);
+        const walked = new Set();
+        for (const r of structScan(into, e.text)) {
+          if (!seen.has(r.name)) continue;
+          walked.add(r.name);
+          rows.push(r);
+        }
+        for (const k of e.ks) if (!walked.has(k)) rows.push({ name: k, path: [] });
+        if (e.alt) { st.opens += into.opens; if (into.short) st.short = true; }
+      }
+      const balanced = !st.short && st.open.length === 0;
+      cObjOpens.set(id, st.opens);
+      if (!balanced && st.opens > 1) shapeUnion.add(id);
+      for (const { name, path } of rows) {
+        shapeOf(balanced && path.length ? `${id}#${path.join(".")}` : id).add(name);
+        if (!path.length) cTopLevel.add(name);
+        else if (!cNestedIn.has(name)) cNestedIn.set(name, path[path.length - 1]);
+      }
+    }
   }
 
   collectDomainsC(file, src, code, struct, bodies);
@@ -4068,17 +4153,37 @@ for (const s of jsScans) for (const w of s.localWrites) rec(fields, w.name).writ
    against half of a record. A fragment nothing in its own file calls keeps its keys where they are rather
    than losing them — that is a fragment this scan could not place, and dropping its fields would be the
    silent third state §the REFUSAL discipline refuses. */
+/* AND A FRAGMENT'S NESTING IS ITS OWN, CARRIED WHOLE INTO THE CALLER RATHER THAN FLATTENED INTO IT. The
+   fragment states which of ITS keys sit inside which of ITS objects, and that is a fact about the record it
+   writes whatever depth the caller is standing at when it calls; folding every level onto the caller's own
+   would put the inner levels back in one set and re-make the union this walk exists to take apart. What is NOT
+   derived here is the caller's own depth at the call — a fragment called from inside an object is one level
+   deeper than this records — so a fragment's path is RELATIVE and reads as absolute.
+   NAMED RESIDUAL. NOT COVERED: a fragment invoked while its caller has an object open, whose rows then read
+   one level shallower than the emission writes them. WHAT THE NEXT DIFF BUILDS: the call site is a position in
+   the caller's own ordered walk, so the fold becomes a splice — the fragment's net bracket effect and its rows
+   inserted at the caller's offset, which is the same walk asked one construct wider. HOW ITS ABSENCE WOULD
+   SHOW: a receiver of the CALLER's inner object anchoring to the caller's top-level shape, which is a shape
+   holding the fragment's names beside names no object carries with them. */
 {
   const byName = new Map();
-  for (const b of cBodies) if (b.name && !b.root && shapes.has(b.id)) byName.set(b.name, b);
+  for (const b of cBodies) if (b.name && !b.root && shapeIdsOf(b.id).length) byName.set(b.name, b);
   for (const [nm, frag] of byName) {
     let placed = false;
+    const ids = shapeIdsOf(frag.id);
     for (const b of cBodies) {
       if (b === frag || !b.root || !b.calls.has(nm) || b.file !== frag.file) continue;
-      for (const k of shapes.get(frag.id)) shapeOf(b.id).add(k);
+      for (const fid of ids) {
+        const at = fid.slice(frag.id.length);     // "" at the fragment's own level, "#a.b" under it
+        for (const k of shapes.get(fid)) shapeOf(`${b.id}${at}`).add(k);
+      }
+      /* A FRAGMENT WHOSE ORDER DID NOT READ CARRIES THAT ANSWER INTO ITS CALLER TOO, because the caller's set
+         then holds a union it did not state and the band is the only thing that says so. */
+      if (shapeUnion.has(frag.id)) shapeUnion.add(b.id);
+      cObjOpens.set(b.id, (cObjOpens.get(b.id) || 0) + (cObjOpens.get(frag.id) || 0));
       placed = true;
     }
-    if (placed) shapes.delete(frag.id);
+    if (placed) for (const fid of ids) shapes.delete(fid);
   }
 }
 
@@ -4437,8 +4542,14 @@ const offRecord = [];         // {file,line,recv,shape,name,writes}
    is a record that does not exist and its silence about a name is evidence of nothing. Banded and PRINTED
    with its places, never dropped — a subject can be both unreadable here and a genuine rename, and the honest
    statement about that pair is that this instrument cannot separate them, which is what keeps the finding
-   count an honest floor. RETIRES WITH `shapeUnion`: depth-keyed shapes are not unions, so this band empties. */
-const unionAnchored = [];     // {file,line,recv,shape,name,writes} — OFF-RECORD against a shape that is a union
+   count an honest floor. RETIRES WITH `shapeUnion`: depth-keyed shapes are not unions, so this band empties.
+   THAT RETIREMENT HAS HAPPENED FOR EVERY BODY WHOSE EMISSION ORDER READS and the band is kept armed for the
+   ones whose does not, which is why the paragraph above is rewritten rather than deleted. A body is now walked
+   once in source order and each name filed under the path the walk stood in, so a nesting composer states one
+   shape per object and no anchored set is a merge of levels. What can still be one is a body whose brackets do
+   not balance across its own calls — there a path would be a guess and the body-wide set is the honest key, so
+   the row is exactly as unjudgeable as it was and belongs exactly where it was put. */
+const unionAnchored = [];     // {file,line,recv,shape,name,writes} — OFF-RECORD against a body-wide set
 /* A NAME THE CONSUMER ITSELF PUT ON THE RECORD, which is the one write OFF-RECORD's own sentence excludes and
    its test did not. That category says these reads were "excused by whichever UNRELATED party in the corpus
    happened to spell the field the same way", and a member assignment onto a receiver of THIS record in THIS
@@ -5127,6 +5238,29 @@ for (const s of jsScans) {
       }
     }
     if (bestN < 2) {
+      /* NAMED RESIDUAL — THE FORM OF A READ IS REPORTED HERE ONLY AS A COERCION, AND THE OTHER TWO FORMS RIDE
+         ON HAVING FOUND AN ANCHOR. A `|| 0` is a defect on its own terms whoever wrote the record — the
+         corpus-local band says so in its own words one branch up — and a receiver no single emitted record
+         explains reaches neither that branch nor the anchored one, so its default is reported by nobody.
+         NOT COVERED: a defaulted or operator-consumed read on a receiver whose identity this cannot decide.
+         WHAT THE NEXT DIFF BUILDS: a form channel that does not take its rows out of an identity decision —
+         which is what the coerced push beside this already is, and which is why the asymmetry is visible here
+         rather than argued for.
+         HOW ITS ABSENCE WOULD SHOW: a `|| 0` or a swallowing catch over a name some producer writes, standing
+         in no band of this report at all, in a file whose receivers this scan never anchors.
+         AND THE POPULATION THIS FALL-THROUGH HOLDS IS THE SCALE OF THE QUESTION AND NOT A CONSEQUENCE OF THE
+         DIFF THAT NAMES IT: 6010 receiver groups reached it at `bdc1ec42` before the emission order was walked
+         and 6087 after, so keying a shape by nesting path moved 77 into it — 47 that a merged set had been
+         scoring as a two-record tie and 29 it had been scoring as corpus-local. Every one of the 77 left
+         because no single emitted record explains two of its names, which is the answer and not the loss; what
+         goes with them is their FORM, and that is the residual above.
+         AND THE TWO OBVIOUS WAYS TO CLOSE IT ARE PRICED AND REFUSED, so the next reader does not spend a run
+         rediscovering the number. Reporting every form here regardless of identity takes DEFAULTED from 3 to
+         1350 — an accusation apiece against receivers this gate cannot even place on the seam. Asking the
+         corpus-local side whenever IT explains two names, which would restore the rows an anchor used to carry
+         in, takes DEFAULTED to 668 and DECIDED CORPUS-LOCAL from 84 to 1735, and it overturns the sentence the
+         JS-shape block states outright: a JS record only ever REMOVES a C anchor and never supplies one. Both
+         measured at `bdc1ec42` in one frozen snapshot against this same diff. */
       for (const r of rs)
         if (r.coerced && !r.form && !r.consumed)
           coerced.push({ ...s.site(r.off), recv, name: r.name, ...r.coerced, where: r.coercedAt,
@@ -5979,12 +6113,12 @@ if (offRecord.length) {
   }
 }
 
-/* THE SAME ROWS, AGAINST A SHAPE THAT IS A UNION — printed beside the category they were taken out of, so the
-   subtraction is on one screen and never a number that quietly got smaller. Unlike the band above this is not
-   a decision about the SITE: it is this scan stating that the record it judged the site against is a merge of
-   several nesting levels, so `the anchored record does not emit this name` is a fact about a record no emitted
-   object ever is. Every row keeps its places, because a rename out from under a live consumer would land here
-   too and the count above it is a floor until the shapes are depth-keyed. */
+/* THE SAME ROWS, AGAINST A SET THAT IS STILL A MERGE — printed beside the category they were taken out of, so
+   the subtraction is on one screen and never a number that quietly got smaller. Unlike the band above this is
+   not a decision about the SITE: it is this scan stating that the record it judged the site against is a merge
+   of several nesting levels, so `the anchored record does not emit this name` is a fact about a record no
+   emitted object ever is. Every row keeps its places, because a rename out from under a live consumer would
+   land here too and the count above it is a floor for as long as any body's order goes unread. */
 if (unionAnchored.length) {
   const byRecv = new Map();
   for (const o of unionAnchored) {
@@ -5992,13 +6126,13 @@ if (unionAnchored.length) {
     if (!byRecv.has(k)) byRecv.set(k, []);
     byRecv.get(k).push(o);
   }
-  log(`── OFF-RECORD AGAINST A UNION SHAPE — ${unionAnchored.length} read(s) from ${byRecv.size} receiver(s) ` +
-      `whose anchored body composes MORE THAN ONE object, so its shape is the union of every nesting level and ` +
-      `the anchor cleared on names no emitted object carries together. UNAUDITED, never a finding: the record ` +
-      `the write question was asked of is not a record ──`);
+  log(`── OFF-RECORD AGAINST A BODY-WIDE SET — ${unionAnchored.length} read(s) from ${byRecv.size} receiver(s) ` +
+      `whose anchored body composes more than one object AND whose emission order does not balance, so no path ` +
+      `could be derived and its set is still the merge of every nesting level. UNAUDITED, never a finding: the ` +
+      `record the write question was asked of is not a record ──`);
   for (const [, os] of byRecv) {
     log(`  ${os[0].file}  \`${os[0].recv}\` anchors to ${os[0].shape}, which composes ` +
-        `${cObjOpens.get(os[0].shape) || "several"} object(s)`);
+        `${cObjOpens.get(os[0].shape) || "several"} object(s) in an order this could not walk`);
     const seen = new Set();
     for (const x of os) {
       if (seen.has(x.name)) continue;
@@ -6208,8 +6342,8 @@ const blind = [
      blindness of this scan and not a defect of the subject. It sits here rather than in the findings for the
      reason the block above gives in its own words: an instrument that cannot read a construct has not found
      anything, and summing the two is how a verdict becomes furniture. */
-  ["reads OFF a record whose shape is a UNION of several nesting levels — the anchor is this scan's own, so " +
-   "unaudited", unionAnchored.length],
+  ["reads OFF a body-wide set that is still a merge of nesting levels, because that body's emission order does " +
+   "not balance and no path could be derived — the anchor is this scan's own, so unaudited", unionAnchored.length],
 ].filter(([, n]) => n);
 const blindN = ambiguous.length + refusals.length + unclassified.length + unionAnchored.length;
 for (const [k, n] of blind) log(`  ${String(n).padStart(5)}  ${k}`);
