@@ -486,8 +486,39 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      `epEmitted` 43 and `epPreProgram` 43 — EQUAL IN BOTH — against `endpoints` 43, `replyAsked`/`replyAnswered`
      43/43 and `replyDeclined` 0. So the reply door opened for every address on the surface and answered every
      one, and the surface is the markup door counted back: forced execution contributed ZERO addresses to a
-     document that ships `rootPrograms` 33. The same two rows read `deepest` 4 and 7 with `finished` 0, and
-     `start-a-classic-program` ran 6 and 8 times, so programs 9 through 33 were never started at all.
+     document that ships `rootPrograms` 33. The same two rows read `deepest` 4 and 7 AGAINST that 33, so
+     programs 9 through 33 were never started at all.
+     THAT SENTENCE USED TO REACH ITS CONCLUSION THROUGH `start-a-classic-program` — "ran 6 and 8 times, so
+     programs 9 through 33 were never started" — AND IS REWRITTEN RATHER THAN DELETED BECAUSE THE CONCLUSION
+     IS RIGHT AND THE ROW CANNOT CARRY IT, which CLAUDE.md rates worse than an open question: a reader checks
+     the conclusion, finds it holds, and inherits the METHOD. The banner at the head of this file already
+     says that row counts starts which were PREEMPTED mid-program and tells its reader to read the
+     assignment rather than the name — so the file disagreed with itself twelve paragraphs apart, and the
+     paragraph carrying a NUMBER won, because a digit beside a conclusion reads as its evidence.
+     WHICH ROW A START LANDS IN IS SELECTED BY `started_here` IN solver/engine.c, so a start is counted in
+     whichever of SIX its outcome takes: `start-a-classic-program` (preempted, frame still live),
+     `start-ended-its-frame`, `start-reported-an-exception`, `start-detached-its-base`,
+     `start-blocked-on-a-host-answer` and `evaluate-a-module-program`. On these two runs the quoted
+     `stepUnitRuns` rows sum to `steps` 79 and 285 EXACTLY, so every other row of that histogram is zero and
+     the start totals are TOTALS rather than floors: 6+6 = 12 and 8+7 = 15, not 6 and 8.
+     READ `deepest` AGAINST `rootPrograms` FOR COVERAGE, and the six rows only when the question is what a
+     start DID. RETIREMENT: this correction goes when no reading in this file derives a count of the
+     document's own programs from a step-unit row.
+     AND `finished` 0 IS THE SAME MISREADING ONE ROW OVER, MADE SINCE FROM THIS VERY LINE — a brief took it
+     for "no member ever finishes a program" and built a subject on it. solver/engine.h declares it as flows
+     that RAN TO THEIR END (`finishedFlows + finishedCands`), and solver/engine.c decides it only with every
+     rung of the ladder empty, which needs the member OUT OF PROGRAMS. A cursor advances only where a row is
+     LEFT, and `script-load-failed` is zero on both runs by that same exhaustive sum, so no member ever stood
+     past cursor 8 of a sequence at least 33 long. `finished: 0` is therefore ENTAILED by the rows already
+     quoted and is not a fourth independent zero — CLAUDE.md's evidence inflation, in an output whose rows a
+     reader counts.
+     THE ROWS THAT SAY A PROGRAM ENDED ARE `completed` — 3 and 7 here, the highest program run to its END —
+     and the frame-end step units `resume-ended-its-frame` / `start-ended-its-frame` /
+     `report-an-exception` / `start-reported-an-exception`, summing 5+6 = 11 and 9+7 = 16. Programs END on
+     this page in BOTH runs; what no member does is RETIRE, and those are different facts about different
+     populations — one about the document's sequence and one about the frontier.
+     RETIREMENT: this note goes when this driver prints a program-END count beside `finished`, because the
+     entailment is then visible in the output rather than argued here.
      THE TWO RUNS DISAGREE BY 1550x ON `flows` (4 against 6199) AND AGREE EXACTLY ON THE SUBTRACTION, which is
      the only reason one page's reading is worth stating: CLAUDE.md §Testing says a reach total is not
      comparable across two runs of a wall-denominated quantum, and an IDENTITY is. `epEmitted == epPreProgram`
