@@ -8,6 +8,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/document.h"
@@ -836,6 +837,17 @@ void user_activation_init(JSContext *ctx)
        once per document. */
     g_id_has_been_active = idl_getter_id_step(ctx, &UA_GET_DECL, UA_GET_STICKY);
     g_id_is_active = idl_getter_id_step(ctx, &UA_GET_DECL, UA_GET_TRANSIENT);
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The row is `element` and
+       NOT this file: HTML §6.4 is declared from html_form_declare, which
+       element_init reaches through html_element_init, so element_free is the release that reaches
+       this one, and a sub-component names the row that releases it. The slot is a CLASS ID —
+       core/realm.c's realm_value_declare mints one — taken inside core/platform.c's declare column
+       and named to no declaration, which is the direction that file's conservation identity aborts
+       on. */
+    agent_state_realm_slot("element", &g_slot,
+                           "HTML §6.4.1's per-realm user-activation timestamps slot");
+    agent_state_realm_slot("element", &g_obj_slot,
+                           "HTML §6.4.4's per-realm associated UserActivation slot");
     realm_declare_intrinsic(user_activation_install_realm);
 }
 
@@ -845,8 +857,13 @@ void user_activation_free(void)
        each is released with its context, and a UserActivation's own record goes with it through ua_finalizer.
        What the agent holds is the two slots, and a slot id is a class id in a runtime that is going away with
        it. */
-    g_slot = JS_INVALID_CLASS_ID;
-    g_obj_slot = JS_INVALID_CLASS_ID;
     g_id_has_been_active = -1;
     g_id_is_active = -1;
+    /* THE TWO SLOTS ARE NOT PUT BACK HERE ANY MORE. They are declared under `element`, whose release ends
+       in agent_state_undo — one reset, computed from the registry that already holds each one's address
+       and its kind. Lines here as well would be a SECOND resetter beside that one, which is the pair
+       core/agent_state.h's undo exists to stop being kept by hand. */
+    /* AND THE CASCADE REACHED THIS FILE — the claim that entitles element_free's last line to put this
+       file's slot back. See core/agent_state.h's agent_state_reached. */
+    agent_state_reached("element");
 }

@@ -42,6 +42,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/realm.h"
 #include "core/dom/document.h"
 #include "core/events/event.h"
@@ -986,6 +987,15 @@ void close_watcher_init(JSContext *ctx)
                        "second declaration would give every realm built after it a different slot from the "
                        "one every algorithm in this file reads");
     g_slot = realm_value_declare(ctx, "HTML §6.10.2 the Window's close watcher manager");
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The row is `element` and
+       NOT this file: HTML §6.10 is declared from html_form_declare, which
+       element_init reaches through html_element_init, so element_free is the release that reaches
+       this one, and a sub-component names the row that releases it. The slot is a CLASS ID —
+       core/realm.c's realm_value_declare mints one — taken inside core/platform.c's declare column
+       and named to no declaration, which is the direction that file's conservation identity aborts
+       on. */
+    agent_state_realm_slot("element", &g_slot,
+                           "HTML §6.10.2's per-realm close watcher manager slot");
     realm_declare_intrinsic(close_watcher_install_realm);
     /* §6.10.3's `CloseWatcher`, declared from here because §6.10 is one section with one declaration point and
        because the ORDER is a dependency: its per-realm install is added to core/realm.h's list AFTER the
@@ -1002,5 +1012,11 @@ void close_watcher_free(JSRuntime *rt)
     close_watcher_interface_free(rt);
     /* The MANAGERS are the realms' — each is released with its context. What the agent holds is the slot id,
        and a slot id is a class id in a runtime that is going away with it. */
-    g_slot = JS_INVALID_CLASS_ID;
+    /* THE SLOT IS NOT PUT BACK HERE ANY MORE. It is declared under `element`, whose release ends in
+       agent_state_undo — one reset, computed from the registry that already holds this slot's address
+       and its kind. A line here as well would be a SECOND resetter beside that one, which is the pair
+       core/agent_state.h's undo exists to stop being kept by hand. */
+    /* AND THE CASCADE REACHED THIS FILE — the claim that entitles element_free's last line to put this
+       file's slot back. See core/agent_state.h's agent_state_reached. */
+    agent_state_reached("element");
 }

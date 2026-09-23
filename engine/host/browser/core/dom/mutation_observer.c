@@ -38,6 +38,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/node.h"
@@ -1057,6 +1058,14 @@ void mutation_observer_init(JSContext *ctx)
     g_notify_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_mo_notify_def);
     CHECK(g_notify_stepid >= 0, "no step id for §4.3's notification driver");
     g_notify_slot = realm_value_declare(ctx, "§4.3 notifyMutationObservers");
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The row is `element` and
+       NOT this file: DOM §4.3 is declared from element_init, so element_free is the release that reaches this
+       one, and a sub-component names the row that releases it. The slot is a CLASS ID —
+       core/realm.c's realm_value_declare mints one — taken inside core/platform.c's declare column
+       and named to no declaration, which is the direction that file's conservation identity aborts
+       on. */
+    agent_state_realm_slot("element", &g_notify_slot,
+                           "DOM §4.3's per-realm notify-mutation-observers microtask slot");
 
     g_id_ctor = idl_method_id_step(ctx, CTOR_ARGS, 1, NULL, 0, &js_mo_ctor_decl, 0);
     g_id_observe = idl_method_id_dict(ctx, OBSERVE_ARGS, 2, INIT_MEMBERS,
@@ -1127,8 +1136,14 @@ void mutation_observer_free(JSRuntime *rt)
     /* TWO STATEMENTS: a chain gives every target the ONE value on its right, and the slot's
        pre-declaration value is JS_INVALID_CLASS_ID while the step id's is `-1`. */
     g_notify_stepid = -1;
-    g_notify_slot = JS_INVALID_CLASS_ID;
     g_id_observe = g_id_disconnect = g_id_take = g_id_ctor = -1;
     g_any_observer = false;
     g_ready = 0;
+    /* THE SLOT IS NOT PUT BACK HERE ANY MORE. It is declared under `element`, whose release ends in
+       agent_state_undo — one reset, computed from the registry that already holds this slot's address
+       and its kind. A line here as well would be a SECOND resetter beside that one, which is the pair
+       core/agent_state.h's undo exists to stop being kept by hand. */
+    /* AND THE CASCADE REACHED THIS FILE — the claim that entitles element_free's last line to put this
+       file's slot back. See core/agent_state.h's agent_state_reached. */
+    agent_state_reached("element");
 }
