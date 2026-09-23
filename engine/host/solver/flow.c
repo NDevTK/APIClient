@@ -5420,12 +5420,18 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
                         that is being argued about.
        AND `WORSE` IS THE COMPARATOR'S WORD AND NOT THE ARITHMETIC'S, WHICH THE SENTENCE ABOVE INVITES A
        READER TO FORGET. Both spellings approximate ONE real number — `N = k + K + carry` is an exact integer
-       identity, so in exact arithmetic the surrogate IS flow_weight — and BOTH round. A weight is a small
-       difference of large quantities (a reward ledger against an aging term that grows all run), so the
-       result is ILL-CONDITIONED in both spellings: measured against the exact rational over 120000 members
-       with the family notch swept to a 900 s run's worth of quanta, flow_weight's own value sits a MEAN
-       4.4e-14 from the real number it encodes — about fifty ulps of the weight — and the surrogate sits
-       2.8e-14 from it, closer on 36.9% of members against flow_weight's 13.9%. So a fire says the two
+       identity, so in exact arithmetic the surrogate IS flow_weight — and BOTH round. Measured against the
+       exact rational over 120000 members with the family notch swept to a 900 s run's worth of quanta, the
+       surrogate is strictly CLOSER to the real value on 36.9% of members and flow_weight on 13.9%, mean
+       absolute error 2.8e-14 against 4.4e-14. THE FIRST WRITING OF THIS RECORD CALLED THE WEIGHT
+       ILL-CONDITIONED AND PUT flow_weight's OWN ERROR AT `about fifty ulps`, AND BOTH WERE WRONG IN THE
+       SAME WAY — a MEAN ABSOLUTE error divided by the ulp of ONE weight, over a population whose weights
+       span orders of magnitude. Per member, flow_weight's error is a MEDIAN 0.5 ulp, 1.2 at the 90th
+       percentile and 2616 at the worst, and the conditioning `max(|reward|, aging) / |weight|` is a median
+       1.06 rising to 3.9e3 only in a tail. So both spellings are ordinarily correctly rounded and the
+       divergence is a TAIL phenomenon, which is why it took a 5123-member frontier to surface one. The
+       retired figures are written out rather than deleted because dividing a mean by an ulp is the natural
+       conversion and the next reader will make it. So a fire says the two
        spellings disagree; it does NOT say the surrogate named the lesser member. Over 3818 constructed
        STRICT disagreements the exact value put the surrogate's pick genuinely above the comparator's on
        65.5% of them and the comparator's above the surrogate's on 34.5%, so NEITHER spelling is the
