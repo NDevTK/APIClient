@@ -2042,6 +2042,7 @@ char *result_cold_json(void) {
     long awaiting_rows;   /* the awaited-rows gauge, read ONCE below and used by the assert and the row */
     /* what the emitted @H array is a fraction of, and what of it predates any program — endpoint.h */
     long ep_minted, ep_assets, ep_emitted, ep_pre_program;
+    long ep_asks, ep_ask_pre, ep_ask_sup, ep_ask_merged, ep_ask_minted;
 
     cold_census(&c);
     engine_step_unit_runs(&r);
@@ -2127,6 +2128,7 @@ char *result_cold_json(void) {
        had no way to tell a run that learned N endpoints from one that minted many and classified nearly all of
        them as files. endpoint.c asserts the two arms sum to the mint where all three are in one hand. */
     endpoint_surface_census(&ep_minted, &ep_assets, &ep_emitted, &ep_pre_program);
+    endpoint_ask_census(&ep_asks, &ep_ask_pre, &ep_ask_sup, &ep_ask_merged, &ep_ask_minted);
     /* AND IT IS A SUBSET OF THE REGISTERS IT IS COUNTED AGAINST, which is the only relation these two rows
        have and therefore the only one worth asserting. Every row standing as an external script has exactly
        one entry naming it by `dyn_id` on the SAME member's register — solver/engine.c pushes the two together
@@ -2545,7 +2547,9 @@ char *result_cold_json(void) {
                     reproduced across two engine revisions and across two different terminal events, which is
                     what a figure fixed before the search starts looks like. endpoint.h holds the contract,
                     the ceiling reading and the residual for a resumed timeline. */
-                 "\"epMinted\":%ld,\"epAssets\":%ld,\"epEmitted\":%ld,\"epPreProgram\":%ld}",
+                 "\"epMinted\":%ld,\"epAssets\":%ld,\"epEmitted\":%ld,\"epPreProgram\":%ld,"
+                 "\"epAsks\":%ld,\"epAskPreProgram\":%ld,\"epAskSuppressed\":%ld,"
+                 "\"epAskMerged\":%ld,\"epAskMinted\":%ld}",
                  c.flows, c.framed, c.blocked, flow_host_owed_count(),
                  e.finished, e.finished_flows, e.finished_cands,
                  e.deepest, e.completed, e.deepest_left,
@@ -2589,7 +2593,8 @@ char *result_cold_json(void) {
                  c.out_of_programs,
                  c.out_of_programs_unrun, c.out_of_programs_framed, c.out_of_programs_at_the_ladder,
                  ladder, hist, cursors,
-                 ep_minted, ep_assets, ep_emitted, ep_pre_program);
+                 ep_minted, ep_assets, ep_emitted, ep_pre_program,
+                 ep_asks, ep_ask_pre, ep_ask_sup, ep_ask_merged, ep_ask_minted);
     free(cursors);
     cold_census_release(&c);
     return out;
