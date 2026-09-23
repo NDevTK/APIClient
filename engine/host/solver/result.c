@@ -2621,10 +2621,11 @@ char *result_cold_json(void) {
                  (long long)r.instance_us,
                  (long long)r.loop_us, (long long)r.between_slices_us, r.slices,
                  (long long)r.slice_us, (long long)r.sched_us, (long long)r.slice_overruns, runs, over,
+                 (unsigned long long)r.slice_overrun_asks, r.slice_overrun_seamless,
                  r.classic_compiles, r.classic_compile_overruns,
                  r.unit_mid_program, r.unit_parked, r.unit_checkpoint_owed,
-                 c.out_of_programs,
                  r.unframed_steps,
+                 c.out_of_programs,
                  c.out_of_programs_unrun, c.out_of_programs_framed, c.out_of_programs_at_the_ladder,
                  ladder, hist, cursors,
                  ep_minted, ep_assets, ep_emitted, ep_pre_program,
@@ -2643,7 +2644,6 @@ char *result_cold_json(void) {
 
    `miscBytes`/`miscParts` ARE NAMED AFTER WHAT THEY COUNT AND WERE NOT. They were emitted as
    `realmBytes`/`realmParts` on the claim that quickjs's `memory_used_*` is a walk of the CONTEXT LIST, so a
-                 (unsigned long long)r.slice_overrun_asks, r.slice_overrun_seamless,
    reader asking "is the growth child realms?" read them and got an answer about something else:
    JS_ComputeMemoryUsage adds two entries per realm and then adds EVERY object's property array, every fast
    array's element vector, every var_ref, bound function, C-closure record and module entry to the same pair.

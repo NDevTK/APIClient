@@ -9419,6 +9419,17 @@ static long    g_slices;
    answer the question their own banner asks. Counted from the SAME two readings the slice arm is accumulated
    from, so a turn cannot be charged to one and counted by the other. */
 static int64_t g_slice_over;
+/* …AND WHETHER THE PATH THOSE TURNS TOOK OFFERED A SUSPEND POINT AT ALL — see solver/engine.h's
+   `slice_overrun_asks` for what the pair separates and why the arm histogram beside it cannot. The count is
+   `g_preempt_asked`'s own, bracketed across the STEP from the same `t_slice0` the row above is accumulated
+   from, so a consultation cannot be charged to a turn the overrun test did not judge.
+   IN EVERY BUILD, for the reason the increment it reads is: this is one LOAD of a static per turn, which is
+   strictly cheaper than that increment, and a release engine that could not say whether an overrunning turn
+   ever reached the interpreter would leave its own arm histogram's conclusion resting on nothing.
+   A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing branches on either. A per-turn count of suspend points
+   offered is exactly what a "this flow is not yielding, take the thread" watchdog would be built from. */
+static uint64_t g_over_asks;       /* suspend points offered, summed over the turns that met the slice */
+static long     g_over_seamless;   /* …and how many of those turns offered NOT ONE */
 /* …AND THE ONE PHASE INSIDE A STEP THAT IS O(A LENGTH THE PAGE CHOSE) AND OFFERS NO RAISE POINT AT ALL.
    `g_slice_over` says a turn met the slice and `g_step_unit_over` beside it says in which ARM. (This
    sentence said `the row above` until two rows were inserted between it and that one — a reference by
@@ -9432,17 +9443,6 @@ static int64_t g_slice_over;
    length; the parser's own banner at next_token states the other half, that every production is a state on
    js_parse_descent's explicit frame stack, so the span is flat C with one driving loop and no seam in it.
    Its size is `body_n`, which is the quantity solver/rest_unit.h's bound (1) names as the one that must never
-/* …AND WHETHER THE PATH THOSE TURNS TOOK OFFERED A SUSPEND POINT AT ALL — see solver/engine.h's
-   `slice_overrun_asks` for what the pair separates and why the arm histogram beside it cannot. The count is
-   `g_preempt_asked`'s own, bracketed across the STEP from the same `t_slice0` the row above is accumulated
-   from, so a consultation cannot be charged to a turn the overrun test did not judge.
-   IN EVERY BUILD, for the reason the increment it reads is: this is one LOAD of a static per turn, which is
-   strictly cheaper than that increment, and a release engine that could not say whether an overrunning turn
-   ever reached the interpreter would leave its own arm histogram's conclusion resting on nothing.
-   A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing branches on either. A per-turn count of suspend points
-   offered is exactly what a "this flow is not yielding, take the thread" watchdog would be built from. */
-static uint64_t g_over_asks;       /* suspend points offered, summed over the turns that met the slice */
-static long     g_over_seamless;   /* …and how many of those turns offered NOT ONE */
    appear in a step's cost — `the one the ATTACKER chooses`.
    WHY THIS IS NOT THE PER-ARM TIME solver/engine.h DECLINES. That paragraph refuses a time accumulator per arm
    because it answers WHERE THE RUN WENT, which is a question about MASS, where the arm histogram answers WHICH
@@ -11779,6 +11779,12 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
     out->classic_compiles         = g_classic_compiles;
     out->classic_compile_overruns = g_classic_compile_over;
     for (i = 0; i < STEP_UNIT_N; i++) out->over_arms[i] = g_step_unit_over[i];
+    /* …AND WHETHER THOSE TURNS OFFERED A SUSPEND POINT, TAKEN IN THE SAME READING AS THE POPULATION THEY
+       ARE A PROPERTY OF — for the compile pair's reason two lines up. Both are raised inside the overrun
+       branch itself, so a copy one call later would report a consultation total against an overrun count of
+       another instant and the equivalence below would be an assertion about two readings. */
+    out->slice_overrun_asks     = g_over_asks;
+    out->slice_overrun_seamless = g_over_seamless;
     /* AND THE UNIT BOUNDARY'S REFUSAL ARMS, TAKEN IN THE SAME READING AS THE `steps` THEY PARTITION — for
        `step_us`' reason one line up and with a sharper edge: these three are read against a denominator that
        the dispatch loop moves, so a copy taken one call later than `out->steps` would be a split of one
@@ -11797,12 +11803,6 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
             (long long)out->slice_overruns, (long long)out->steps);
     /* THE COMPILE PHASE'S OWN CONTAINMENT, for the reason directly above: a subset larger than its population
        is the one arithmetic tell this project names as free, and it is the only check a reader of these two
-    /* …AND WHETHER THOSE TURNS OFFERED A SUSPEND POINT, TAKEN IN THE SAME READING AS THE POPULATION THEY
-       ARE A PROPERTY OF — for the compile pair's reason two lines up. Both are raised inside the overrun
-       branch itself, so a copy one call later would report a consultation total against an overrun count of
-       another instant and the equivalence below would be an assertion about two readings. */
-    out->slice_overrun_asks     = g_over_asks;
-    out->slice_overrun_seamless = g_over_seamless;
        rows can make without re-deriving the mechanism behind them. */
     DCHECKF(out->classic_compile_overruns <= out->classic_compiles,
             "solver/engine.c: classic_compile_overruns %ld exceeds classic_compiles %ld — both are raised on "
@@ -13196,6 +13196,13 @@ static int engine_sched_slice(void) {
                the switch and the swap are finished. */
             int64_t t_slice0 = quantum_thread_us();
             g_sched_us += t_slice0 - now;
+            /* …AND THE SAME BRACKET IN THE OTHER CURRENCY, opened on the same line as the clock so the two
+               readings are of ONE span: the overrun test below compares `now - t_slice0` and this says how
+               many suspend points the path offered across that same interval. Taken HERE rather than at the
+               turn's own `t0` above deliberately — the pick, the switch and the delta swap are behind this
+               line and consult no policy, so counting from `t0` would be counting over a span the overrun
+               test is not about. It is a LOAD of a static in every build; see g_over_asks. */
+            uint64_t pa_slice0 = g_preempt_asked;
             int r = flow_step(ctx, cur);
             /* WHERE THE STEP'S ANSWER GOES ONTO THE FLOW — the ONE point every arm of flow_step converges on,
                so a new arm cannot forget to be recorded and there is no route to remember. What the arm
@@ -13231,13 +13238,6 @@ static int engine_sched_slice(void) {
                public entry a host may call at any point, and between the entry and the record it is off by
                one BY DESIGN. */
             DCHECKF(step_unit_runs_total() == g_steps,
-            /* …AND THE SAME BRACKET IN THE OTHER CURRENCY, opened on the same line as the clock so the two
-               readings are of ONE span: the overrun test below compares `now - t_slice0` and this says how
-               many suspend points the path offered across that same interval. Taken HERE rather than at the
-               turn's own `t0` above deliberately — the pick, the switch and the delta swap are behind this
-               line and consult no policy, so counting from `t0` would be counting over a span the overrun
-               test is not about. It is a LOAD of a static in every build; see g_over_asks. */
-            uint64_t pa_slice0 = g_preempt_asked;
                     "the lifetime step histogram does not account for every scheduler step (%ld arm counts "
                     "against %ld entries into flow_step) — the entry is counted where flow_step resets the "
                     "arm name and the arm is counted here, so a difference is a step that entered and did NOT "
@@ -13438,6 +13438,32 @@ static int engine_sched_slice(void) {
                         "`g_step_unit` having been rewritten between the two lines or an overrun counted "
                         "for a turn whose arm was never recorded",
                         (int)g_step_unit, g_step_unit_over[g_step_unit], g_step_unit_runs[g_step_unit]);
+                /* AND WHETHER THE PAGE'S CODE WAS RUNNING AT ALL IN THIS TURN, RAISED HERE BECAUSE HERE IS
+                   WHERE THE TURN IS KNOWN TO BE ONE OF THE POPULATION — see solver/engine.h's
+                   `slice_overrun_asks`. `pa_slice0` was read on the same line as `t_slice0`, so both operands
+                   of the subtraction bracket exactly the span the test above judged.
+                   THE TWO ROWS' EQUIVALENCE IS BY THE ORDER OF THESE TWO STATEMENTS AND NOT BY AGREEMENT: a
+                   turn adds to the sum precisely when it does not add to the seamless count, which is why
+                   `asks == 0` and `seamless == overruns` can be asserted against each other at the accessor.
+                   THE CONTAINMENT IS ASKED HERE, WHERE THE TURN THAT WOULD BREAK IT HAS JUST RETURNED: a
+                   consultation count cannot go backwards across a step, because `g_preempt_asked`'s only
+                   writer is preempt_hook's own increment. A negative delta is that counter having been reset
+                   or wrapped, and the symptom of the reset would be a sum that quietly stopped covering the
+                   turns this branch counts. */
+                DCHECKF(g_preempt_asked >= pa_slice0,
+                        "the preempt policy reports FEWER lifetime consultations after a step than before it "
+                        "(%llu against %llu) — the only writer is preempt_hook's own increment, so this is a "
+                        "second writer that resets it, and every `sliceOverrunAsks` reading taken since is a "
+                        "difference of two unrelated instants",
+                        (unsigned long long)g_preempt_asked, (unsigned long long)pa_slice0);
+                if (g_preempt_asked == pa_slice0) g_over_seamless++;
+                else                              g_over_asks += g_preempt_asked - pa_slice0;
+                DCHECKF(g_over_seamless <= g_slice_over,
+                        "more overrunning turns offered no suspend point (%ld) than overran at all (%lld) — "
+                        "both are raised inside this one branch from one turn, the total unconditionally and "
+                        "the subset under a test of that turn's own consultation delta, so a subset larger "
+                        "than its population is one of them being raised somewhere else",
+                        g_over_seamless, (long long)g_slice_over);
             }
             /* WHAT THIS TURN OF THE DISPATCH LOOP COST, ACCUMULATED FROM THE SAME DELTA THE CHARGE BILLS AND
                NOT FROM A SECOND READING — see g_step_us. It is written BEFORE the charge for the ordinary
@@ -13473,32 +13499,6 @@ static int engine_sched_slice(void) {
                The other half — "CPU-AGING so a monopolizer that burns CPU without emitting sinks below
                productive+unrun flows" — has a bound in flow_pick too, but that bound is DERIVED from
                flow_weight, so it can only catch an EDIT to the formula and says nothing about whether the term
-                /* AND WHETHER THE PAGE'S CODE WAS RUNNING AT ALL IN THIS TURN, RAISED HERE BECAUSE HERE IS
-                   WHERE THE TURN IS KNOWN TO BE ONE OF THE POPULATION — see solver/engine.h's
-                   `slice_overrun_asks`. `pa_slice0` was read on the same line as `t_slice0`, so both operands
-                   of the subtraction bracket exactly the span the test above judged.
-                   THE TWO ROWS' EQUIVALENCE IS BY THE ORDER OF THESE TWO STATEMENTS AND NOT BY AGREEMENT: a
-                   turn adds to the sum precisely when it does not add to the seamless count, which is why
-                   `asks == 0` and `seamless == overruns` can be asserted against each other at the accessor.
-                   THE CONTAINMENT IS ASKED HERE, WHERE THE TURN THAT WOULD BREAK IT HAS JUST RETURNED: a
-                   consultation count cannot go backwards across a step, because `g_preempt_asked`'s only
-                   writer is preempt_hook's own increment. A negative delta is that counter having been reset
-                   or wrapped, and the symptom of the reset would be a sum that quietly stopped covering the
-                   turns this branch counts. */
-                DCHECKF(g_preempt_asked >= pa_slice0,
-                        "the preempt policy reports FEWER lifetime consultations after a step than before it "
-                        "(%llu against %llu) — the only writer is preempt_hook's own increment, so this is a "
-                        "second writer that resets it, and every `sliceOverrunAsks` reading taken since is a "
-                        "difference of two unrelated instants",
-                        (unsigned long long)g_preempt_asked, (unsigned long long)pa_slice0);
-                if (g_preempt_asked == pa_slice0) g_over_seamless++;
-                else                              g_over_asks += g_preempt_asked - pa_slice0;
-                DCHECKF(g_over_seamless <= g_slice_over,
-                        "more overrunning turns offered no suspend point (%ld) than overran at all (%lld) — "
-                        "both are raised inside this one branch from one turn, the total unconditionally and "
-                        "the subset under a test of that turn's own consultation delta, so a subset larger "
-                        "than its population is one of them being raised somewhere else",
-                        g_over_seamless, (long long)g_slice_over);
                it is derived from can be OBSERVED. This is the observability, and it is a different claim: not
                how far a flow sinks, but whether consuming a slice of the thread moves its rank AT ALL at the
                granularity the thread is handed out in. The next statement of this loop is the pick.
