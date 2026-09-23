@@ -126,7 +126,10 @@ void    headers_init(JSContext *ctx);                       /* register the clas
    objects implementing interfaces" is given a realm and names no Document, and §5.1 is
    `[Exposed=(Window,Worker)]`, so the name is owed by a realm that reaches no per-document install. */
 void    headers_install_proto(JSContext *ctx);
-void    headers_free(JSContext *ctx);   /* the prototypes this component holds */
+/* THE AGENT'S half of §5.1, run from core/platform.c's RELEASE COLUMN — it takes no JSContext because it
+   reads none: the prototype and the interface object are the REALMS' and go with their contexts. See the
+   entry's own comment for what a host-teardown line cost this component. */
+void    headers_free(void);
 /* A Headers over an existing list; the object takes a COPY, because a header list a component owns outlives
    nothing the page can reach and a page must not be able to mutate a reply's headers through the copy it was
    handed. */

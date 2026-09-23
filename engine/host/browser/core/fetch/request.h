@@ -11,7 +11,9 @@ void request_init(JSContext *ctx);
    objects implementing interfaces" is given a realm and names no Document, and §5.4 is
    `[Exposed=(Window,Worker)]`, so the name is owed by a realm that reaches no per-document install. */
 void request_install_proto(JSContext *ctx);
-void request_free(JSContext *ctx);
+/* THE AGENT'S half of §5.4, run from core/platform.c's RELEASE COLUMN — it takes no JSContext because it
+   reads none: the prototype and the interface object are the REALMS' and go with their contexts. */
+void request_free(void);
 
 /* IS THIS VALUE A Request — the BRAND, which is what Web IDL's `RequestInfo = Request or USVString` union
    resolves on. A union member that is an interface type matches a PLATFORM OBJECT OF THAT INTERFACE and

@@ -31,6 +31,9 @@
 #include "core/workers/worker_global_scope.h"
 #include "core/events/report_exception.h"
 #include "core/fetch/fetch.h"
+#include "core/fetch/headers.h"
+#include "core/fetch/request.h"
+#include "core/fetch/response.h"
 #include "core/file/blob.h"
 #include "core/file/file_reader.h"
 #include "core/file/file_system.h"
@@ -247,6 +250,9 @@ static void d_visual_viewport(JSContext *c, const PlatformAgent *a) { (void)a; v
 static void d_scroll_events(JSContext *c, const PlatformAgent *a) { (void)a; scroll_events_init(c); }
 static void d_media_query_list(JSContext *c, const PlatformAgent *a) { (void)a; media_query_list_init(c); }
 static void d_rendering(JSContext *c, const PlatformAgent *a) { (void)a; rendering_init(c); }
+static void d_headers(JSContext *c, const PlatformAgent *a) { (void)a; headers_init(c); }
+static void d_response(JSContext *c, const PlatformAgent *a) { (void)a; response_init(c); }
+static void d_request(JSContext *c, const PlatformAgent *a) { (void)a; request_init(c); }
 static void d_fetch(JSContext *c, const PlatformAgent *a) { (void)a; fetch_init(c); }
 static void d_abort(JSContext *c, const PlatformAgent *a) { (void)a; abort_init(c); }
 static void d_observable(JSContext *c, const PlatformAgent *a) { (void)a; observable_init(c); }
@@ -380,6 +386,33 @@ static void r_file_reader(JSRuntime *rt) { file_reader_free(rt); }
    is the general one: a component released by nobody is what a THIRD copy of a hand-written list produces, and
    here there was no copy at all. */
 static void r_nav_destination(JSRuntime *rt) { navigation_destination_free(rt); }
+/* FETCH §5.1 "Headers class", §5.5 "Response class" AND §5.4 "Request class", AND THE THREE ARRIVE AS A GROUP
+   FOR THE REASON THE STREAMS GROUP DID. All three releases were hand-written lines in THREE host teardowns —
+   engine/host/main.c, engine/host/test_forced.c and engine/host/wpt_runner.c — running AFTER
+   platform_agent_free had already run this entire column, which is not merely a fourth copy of a list: it is
+   AFTER agent_state_check_released, so out there none of the three could declare a slot to core/agent_state.h
+   at all. A row with agent state and no release is what platform_check_agent_state fires on, and a release
+   that runs past the check is a release the check has already finished asking about.
+   WHAT THEY CARRIED WHILE THEY SAT OUT THERE. THREE CLASS IDS (§5.1's, §5.4's and §5.5's), §5.5's per-realm
+   %JSON.stringify% slot, §5.3's two Body-mixin handles, §5.1's six member declarations and its
+   `iterable<ByteString, ByteString>` pair handle, and §5.5's clone machine. A carried class id is not the
+   cautious half of a tie: a second agent's runtime restarts JS_NewClassID at JS_CLASS_INIT_COUNT, so the
+   number names a class in a runtime that is gone. AND THE CLASS IDS WERE READ AFTER THE RELEASE, WHICH IS THE
+   half core/agent_state.h's closing paragraph is about: §5.1's finalizer and §5.4's and §5.5's
+   finalizer-and-gc_mark pairs looked the record up by the id their own release had left set, and the collector
+   runs after this column either way. All five reach the record with JS_GetAnyOpaque now.
+   NONE OF THE THREE TAKES A JSContext ANY MORE, and none of them read the one it took: the prototypes, the
+   three interface objects and each realm's %JSON.stringify% are the REALMS' and go with their contexts, so
+   what is left is the AGENT's, which is this column's entry condition. The parameter was the last thing making
+   them look like per-realm components in the wrong column.
+   THEY ARE THEIR OWN ROWS AND NOT SUB-COMPONENTS OF `fetch`, which core/fetch/fetch.c's own release says in
+   its own words: fetch_free gives back §5.6's interned name and its three handles, and "freeing them from here
+   would make this component the owner of state it does not own". They sit ABOVE `fetch` so that each is
+   declared by its own row rather than by the latched call fetch_init still makes — the same shape
+   `readable_stream` has, which fetch_init also calls and which has had a row of its own all along. */
+static void r_headers(JSRuntime *rt) { (void)rt; headers_free(); }
+static void r_response(JSRuntime *rt) { (void)rt; response_free(); }
+static void r_request(JSRuntime *rt) { (void)rt; request_free(); }
 /* §5's four interned field names. fetch was one of the forty-three rows with a declare and an EMPTY third
    column, and the atom walk named all four on 118 files of an area that touches fetch only incidentally. */
 static void r_fetch(JSRuntime *rt) { fetch_free(rt); }
@@ -1166,6 +1199,32 @@ static const PlatformComponent PLATFORM[] = {
        interface object: `abort`, `timeout` and `any` are members OF that object, and one minted without them
        is an `AbortSignal` a page can feature-detect and not call. */
     { "abort",               d_abort,               NULL },
+    /* FETCH §5.4 "Request class", §5.5 "Response class" and §5.1 "Headers class", ABOVE `fetch` AND IN THE
+       ORDER THAT MAKES THE RELEASE READ HEADERS-RESPONSE-REQUEST. Reverse declaration order is what this
+       column gives the release, and that sequence is the one all three host teardowns already had these three
+       lines in, so nothing about their relative order changes — what changes is that they are on a column at
+       all. Each release was a hand-written line in engine/host/main.c, engine/host/test_forced.c and
+       engine/host/wpt_runner.c running AFTER platform_agent_free, which is after agent_state_check_released,
+       so none of the three could declare a slot of agent state to core/agent_state.h while it sat there. See
+       the three entries above r_fetch for what they carried.
+       `request` DEPENDS ON `abort` AND THAT IS WHY IT SITS BELOW IT: §5.4's RequestInit declares
+       `AbortSignal? signal`, and request_init states the class that member brands against AT THE DECLARATION,
+       reading abort_signal_class(). The row above this one is the one the comment there says was MOVED AHEAD
+       OF `fetch` for exactly that reason — the declaration it was moved ahead of is this one, which fetch_init
+       used to make on this component's behalf.
+       NO DOCUMENT HALF FOR ANY OF THE THREE. Fetch §5.1, §5.4 and §5.5 all declare `[Exposed=(Window,Worker)]`,
+       and Web IDL §3.8 Platform objects implementing interfaces is "To define the global property references
+       on target, given realm realm" whose step 1 is "Let interfaces be a list that contains every interface
+       that is exposed in realm" — a REALM, with no Document in the algorithm — so all three interface objects
+       are minted by each component's own per-realm intrinsic beside the prototype it already builds. The row
+       below keeps a third column for a MEMBER §3.8 does not define, which is `fetch` itself.
+       fetch_init STILL CALLS ALL THREE INITS AND THEY ARE NO-OPS HERE, which is not a leftover: §5.6 needs
+       §5.4's dictionary table and §5.3's stream reader, so the dependency is real and each init opens on its
+       own runtime latch. That is exactly the shape `readable_stream` has had all along — a row of its own,
+       and a latched call from fetch_init above it. */
+    { "request",             d_request,             NULL,        r_request },
+    { "response",            d_response,            NULL,        r_response },
+    { "headers",             d_headers,             NULL,        r_headers },
     /* THE DOCUMENT HALF SURVIVES HERE FOR ONE MEMBER AND NO INTERFACE OBJECT, which is why this row keeps a
        third column where `blob` and `file_reader` above lost theirs. Fetch §5.1 "Headers class", §5.4 "Request
        class" and §5.5 "Response class" all declare `[Exposed=(Window,Worker)]`, and Web IDL §3.8 Platform

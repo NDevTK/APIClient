@@ -18,6 +18,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "solver/cow.h"
 #include "core/fetch/fetch.h"
 #include "core/fetch/response.h"
@@ -102,9 +103,13 @@ enum { RESPONSE_TYPE_DEFAULT = 0, RESPONSE_TYPE_BASIC, RESPONSE_TYPE_CORS, RESPO
 static const char *const RESPONSE_TYPE_NAME[] = { "default", "basic", "cors", "error", "opaque",
                                                   "opaqueredirect" };
 
+/* THE COLLECTOR RUNS AFTER THE RELEASE COLUMN, so neither this nor the mark below may reach the record
+   through an id its own release has already given back — core/agent_state.h's closing paragraph. The class is
+   a fact the collector ALREADY HAS: it dispatched to these two THROUGH it. */
 static void response_finalizer(JSRuntime *rt, JSValue val)
 {
-    ResponseData *d = JS_GetOpaque(val, g_response_class);
+    JSClassID id;
+    ResponseData *d = JS_GetAnyOpaque(val, &id);
     if (d) {
         JS_FreeValueRT(rt, d->headers);
         JS_FreeValueRT(rt, d->url_list);
@@ -120,7 +125,8 @@ static void response_finalizer(JSRuntime *rt, JSValue val)
    reading the two together. */
 static void response_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    ResponseData *d = JS_GetOpaque(val, g_response_class);
+    JSClassID id;
+    ResponseData *d = JS_GetAnyOpaque(val, &id);
     if (d) JS_MarkValue(rt, d->headers, mark_func);
     if (d) JS_MarkValue(rt, d->url_list, mark_func);
     if (d) body_state_mark(rt, &d->body, mark_func);
@@ -875,6 +881,23 @@ void response_init(JSContext *ctx)
     idl_optional_from(1);   /* §5.5: `redirect(USVString url, optional unsigned short status = 302)` */
     g_json_stringify_slot = realm_value_declare(ctx, "%JSON.stringify% (Response.json)");
     realm_declare_intrinsic(response_install_proto);
+
+    /* EVERY STATIC ABOVE IS THIS AGENT'S, DECLARED BESIDE THE LINE THAT SETS IT (core/agent_state.h), AND THE
+       PER-REALM SLOT IS DECLARED BELOW THE LINE THAT ASSIGNS IT — realm_value_declare's body is JS_NewClassID
+       plus JS_NewClass over a local that starts at 0, so what it hands back IS a minted class id and a row
+       written above the assignment is counted against an allocator it never asked.
+       `response_free` reset the runtime latch and three of the five step ids and left the CLASS ID, §5.5's
+       clone machine, §5.3's body handle and the serializer slot exactly as this function had set them. */
+    agent_state_ptr("response", &g_response_rt, "the runtime §5.5's class and machines were declared in");
+    agent_state_class("response", &g_response_class, "Fetch §5.5 Response class's class");
+    agent_state_id("response", &g_body_handle, "§5.3's Body mixin handle for Response");
+    agent_state_id("response", &g_clone_stepid, "§5.5's clone() machine");
+    agent_state_id("response", &g_ctor_stepid, "§5.5's `constructor(optional BodyInit? body, optional ResponseInit init)` machine");
+    agent_state_id("response", &g_json_stepid, "§5.5's `static Response json(any data, optional ResponseInit init)` machine");
+    agent_state_id("response", &g_redirect_stepid,
+                   "§5.5's `static Response redirect(USVString url, optional unsigned short status)` declaration");
+    agent_state_realm_slot("response", &g_json_stringify_slot,
+                           "Fetch §5.5 Response class's per-realm %JSON.stringify%, the serializer Response.json runs");
 }
 
 /* FETCH §5.5 "Response class"' INTERFACE PROTOTYPE OBJECT, ITS SERIALIZER *AND* ITS INTERFACE OBJECT, FOR ONE
@@ -939,11 +962,26 @@ void response_install_proto(JSContext *ctx)
     }
 }
 
-void response_free(JSContext *ctx)
+/* FETCH §5.5's AGENT-LIFETIME STATE, GIVEN BACK — AND IT IS ON core/platform.h's RELEASE COLUMN NOW RATHER
+   THAN BEING A LINE IN THREE HOST TEARDOWNS. engine/host/main.c, engine/host/test_forced.c and
+   engine/host/wpt_runner.c each called this by hand AFTER platform_agent_free had already run that whole
+   column, so out there this component's state could not be declared to core/agent_state.h at all — a row with
+   agent state and no release is what platform_check_agent_state fires on — and the class id, §5.5's clone
+   machine, §5.3's body handle and the %JSON.stringify% realm slot were carried past the release by every
+   host.
+   THE GUARD IS NEW AND IS NOT DECORATION: the undo below ABORTS for a component that declared nothing, and
+   this entry had no latch test at all while the two components beside it did. A release reached before its
+   own init would have fired that abort naming this row rather than reporting the real state, which is that
+   §5.5 was never declared in this agent.
+   IT TAKES NO JSContext ANY MORE and it never read the one it took: the prototypes and each realm's
+   serializer are the REALMS', released with their contexts. THE UNDO IS THE ONE RESET AND IT IS LAST. */
+void response_free(void)
 {
-    /* the prototypes and this realm's serializer are the REALMS' — released with their contexts */
-    g_response_rt = NULL;
-    g_ctor_stepid = g_json_stepid = g_redirect_stepid = -1;
+    if (!g_response_rt)
+        return;
+    /* the prototypes and each realm's serializer are the REALMS' — released with their contexts, so this
+       component owns no reference and there is nothing to free here. Free, assert, then undo. */
+    agent_state_undo("response");
 }
 
 /* THE REPLY THE TRUSTED HOST FETCHED — headers the page may not write, which is the §5.5 "immutable" guard and

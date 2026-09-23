@@ -25,6 +25,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/fetch/headers.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -288,9 +289,16 @@ bool header_list_determine_nosniff(const HeaderList *l)
    the first refuses writes. So the class opaque is the pair. */
 typedef struct { HeaderList list; uint8_t guard; } HeadersObj;
 
+/* THE COLLECTOR RUNS AFTER THE RELEASE COLUMN, so this may not reach the record through an id its own
+   release has already given back — core/agent_state.h's closing paragraph, and the reason every one of
+   §5.1's slots below is declared. The class is a fact the collector ALREADY HAS: it dispatched to this
+   function through it, so `JS_GetOpaque(val, g_headers_class)` asks a question whose answer is `0` by the
+   time it is asked, and `JS_GetOpaque` against class 0 answers NULL for every live Headers — the whole list
+   leaked, silently, on any page that built one. */
 static void headers_finalizer(JSRuntime *rt, JSValue val)
 {
-    HeadersObj *h = JS_GetOpaque(val, g_headers_class);
+    JSClassID id;
+    HeadersObj *h = JS_GetAnyOpaque(val, &id);
     (void)rt;
     if (h) { header_list_free(&h->list); free(h); }
 }
@@ -1355,6 +1363,24 @@ void headers_init(JSContext *ctx)
        above, so the six members it defines exist once for every such interface rather than once per. */
     g_pair_handle = idl_pair_iter_declare(ctx, &HEADERS_PAIR_OPS);
     realm_declare_intrinsic(headers_install_proto);
+
+    /* EVERY STATIC ABOVE IS THIS AGENT'S, DECLARED BESIDE THE LINE THAT SETS IT (core/agent_state.h). This
+       component held ALL of them past its own release: `headers_free` reset the runtime latch and the
+       constructor's id and left the CLASS ID, the six member declarations and §5.1's pair-iterator handle
+       exactly as this function had set them. A carried class id is not the cautious half of a tie — the next
+       agent's runtime restarts JS_NewClassID at JS_CLASS_INIT_COUNT, so the number names a class in a runtime
+       that is gone, and the latch above returns before re-registering it. */
+    {
+        int i;
+
+        agent_state_ptr("headers", &g_headers_rt, "the runtime §5.1's class and machines were declared in");
+        agent_state_class("headers", &g_headers_class, "Fetch §5.1 Headers class's class");
+        for (i = 0; i < HDR_MEMBER_N; i++)
+            agent_state_id("headers", &g_id[i], "one of §5.1's six member declarations");
+        agent_state_id("headers", &g_ctor_stepid, "§5.1's `constructor(optional HeadersInit init)` machine");
+        agent_state_id("headers", &g_pair_handle,
+                       "§5.1's `iterable<ByteString, ByteString>` default-iterator handle");
+    }
 }
 
 /* FETCH §5.1 "Headers class"' INTERFACE PROTOTYPE OBJECT *AND* ITS INTERFACE OBJECT, FOR ONE REALM.
@@ -1403,13 +1429,28 @@ void headers_install_proto(JSContext *ctx)
 /* The prototype and the interned name are this component's for the runtime's life, so they are released WITH
    it. Without this the prototype is a GC object nobody drops and JS_FreeRuntime's gc_obj_list walk reports it —
    which is exactly how it was found, on the first run of this file. */
-void headers_free(JSContext *ctx)
+/* FETCH §5.1's AGENT-LIFETIME STATE, GIVEN BACK — AND IT IS ON core/platform.h's RELEASE COLUMN NOW RATHER
+   THAN BEING A LINE IN THREE HOST TEARDOWNS. engine/host/main.c, engine/host/test_forced.c and
+   engine/host/wpt_runner.c each called this by hand AFTER platform_agent_free had already run that whole
+   column, so out there NONE of this component's state could be declared to core/agent_state.h at all — a row
+   with agent state and no release is what platform_check_agent_state fires on, and a release that runs after
+   agent_state_check_released is not on the column in the sense that check means. The class id, the six member
+   declarations and the pair handle were therefore carried past the release by every host, and §5.1's
+   finalizer read the class id the release had not reset.
+   IT TAKES NO JSContext ANY MORE and it never read the one it took: the prototype and the interface object
+   are the REALMS', released with their contexts, so what is left here is the AGENT's, which is this column's
+   entry condition. The parameter was the last thing making this look like a per-realm component in the wrong
+   column — the same reading that moved §4's streams group and DOM §3.1/§3.2's pair.
+   THE UNDO IS THE ONE RESET AND IT IS LAST. Two hand-written lines stood here, kept in step with an init
+   three lines above by whoever remembered, and they were already short by five slots; a declaration added to
+   that init now owes this function nothing. */
+void headers_free(void)
 {
     if (!g_headers_rt)
         return;
-    /* the prototypes are the REALMS' — released with their contexts */
-    g_headers_rt = NULL;
-    g_ctor_stepid = -1;
+    /* the prototypes are the REALMS' — released with their contexts, so this component owns no reference and
+       there is nothing to free here. Free, assert, then undo. */
+    agent_state_undo("headers");
 }
 
 

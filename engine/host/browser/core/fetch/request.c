@@ -28,6 +28,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "solver/concolic.h"
 #include "core/dom/abort.h"
 #include "core/fetch/fetch.h"
@@ -65,9 +66,15 @@ static JSRuntime *g_request_rt;
 static int       g_request_ctor_stepid = -1;
 static int       g_request_body_handle = -1;
 
+/* THE COLLECTOR RUNS AFTER THE RELEASE COLUMN, so neither this nor the mark below may reach the record
+   through an id its own release has already given back — core/agent_state.h's closing paragraph. The class is
+   a fact the collector ALREADY HAS: it dispatched to these two THROUGH it. An unmarked child is the worse of
+   the pair, because it keeps the internal reference gc_decref subtracts, so gc_scan reads the record as rooted
+   from OUTSIDE the heap and it is never collected at all — silent. */
 static void request_finalizer(JSRuntime *rt, JSValue val)
 {
-    RequestData *d = JS_GetOpaque(val, g_request_class);
+    JSClassID id;
+    RequestData *d = JS_GetAnyOpaque(val, &id);
     if (!d) return;
     JS_FreeValueRT(rt, d->headers);
     JS_FreeValueRT(rt, d->blob_entry);
@@ -81,7 +88,8 @@ static void request_finalizer(JSRuntime *rt, JSValue val)
 /* The Headers a Request holds is a JSValue in the class opaque, which the collector cannot see through. */
 static void request_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    RequestData *d = JS_GetOpaque(val, g_request_class);
+    JSClassID id;
+    RequestData *d = JS_GetAnyOpaque(val, &id);
     if (d) {
         JS_MarkValue(rt, d->headers, mark_func);
         JS_MarkValue(rt, d->blob_entry, mark_func);
@@ -1266,6 +1274,17 @@ void request_init(JSContext *ctx)
     idl_optional_from(1);   /* §5.4: `optional RequestInit init = {}` */
     idl_iface_brand(abort_signal_class());   /* RequestInit's one interface-typed member */
     realm_declare_intrinsic(request_install_proto);
+
+    /* EVERY STATIC ABOVE IS THIS AGENT'S, DECLARED BESIDE THE LINE THAT SETS IT (core/agent_state.h). This
+       component held the CLASS ID and §5.3's body handle past its own release, and the class id doubles as
+       nothing here — the latch is the runtime pointer — which is precisely why the carry was silent: the next
+       agent re-registers a class under a number the live runtime never issued, and every `JS_GetOpaque` in
+       this file answers about whichever class did get it. */
+    agent_state_ptr("request", &g_request_rt, "the runtime §5.4's class and machines were declared in");
+    agent_state_class("request", &g_request_class, "Fetch §5.4 Request class's class");
+    agent_state_id("request", &g_request_body_handle, "§5.3's Body mixin handle for Request");
+    agent_state_id("request", &g_request_ctor_stepid,
+                   "§5.4's `constructor(RequestInfo input, optional RequestInit init)` machine");
 }
 
 /* FETCH §5.4 "Request class"' INTERFACE PROTOTYPE OBJECT *AND* ITS INTERFACE OBJECT, FOR ONE REALM — `url`
@@ -1320,11 +1339,19 @@ void request_install_proto(JSContext *ctx)
     JS_FreeValue(ctx, global);
 }
 
-void request_free(JSContext *ctx)
+/* FETCH §5.4's AGENT-LIFETIME STATE, GIVEN BACK — AND IT IS ON core/platform.h's RELEASE COLUMN NOW RATHER
+   THAN BEING A LINE IN THREE HOST TEARDOWNS. engine/host/main.c, engine/host/test_forced.c and
+   engine/host/wpt_runner.c each called this by hand AFTER platform_agent_free had already run that whole
+   column, so out there this component's state could not be declared to core/agent_state.h at all — a row with
+   agent state and no release is what platform_check_agent_state fires on. §5.4's finalizer and gc_mark run
+   after that column either way, which is why both now reach the record with JS_GetAnyOpaque.
+   IT TAKES NO JSContext ANY MORE and it never read the one it took: the prototype and the interface object
+   are the REALMS', released with their contexts. THE UNDO IS THE ONE RESET AND IT IS LAST. */
+void request_free(void)
 {
     if (!g_request_rt)
         return;
-    /* the prototypes are the REALMS' — released with their contexts */
-    g_request_rt = NULL;
-    g_request_ctor_stepid = -1;
+    /* the prototypes are the REALMS' — released with their contexts, so this component owns no reference and
+       there is nothing to free here. Free, assert, then undo. */
+    agent_state_undo("request");
 }

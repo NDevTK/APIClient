@@ -12,7 +12,9 @@ void    response_init(JSContext *ctx);   /* register the class, its prototype an
    and §5.5 is `[Exposed=(Window,Worker)]`, so the name is owed by a realm that reaches no per-document
    install. */
 void    response_install_proto(JSContext *ctx);
-void    response_free(JSContext *ctx);   /* the prototype this component holds */
+/* THE AGENT'S half of §5.5, run from core/platform.c's RELEASE COLUMN — it takes no JSContext because it
+   reads none: the prototypes and each realm's %JSON.stringify% are the REALMS' and go with their contexts. */
+void    response_free(void);
 /* §2.2.6's URL LIST, from the SERIALIZED URLs a host observed — "a list of zero or more URLs", of which only
    the FIRST and the LAST are ever exposed to script (the spec says so, and it is why atomic HTTP redirect
    handling holds). `n == 0` is « ». Every item must be an ABSOLUTE URL: `url` runs the URL parser back over
