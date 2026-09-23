@@ -6261,14 +6261,65 @@ if (platformDecided.length) {
 }
 
 /* PRINTED IN FULL FOR THE REASON THE TWO ABOVE ARE, and with the margin that decided each row, because this
-   is the arm that REMOVES receivers from the audit and a removal nobody can see is the concealment. */
+   is the arm that REMOVES receivers from the audit and a removal nobody can see is the concealment.
+
+   AND A MARGIN IS A DIFFERENCE OF TWO NUMERATORS OVER A DENOMINATOR THIS ROW DID NOT PRINT, WHICH IS THE ONE
+   QUANTITY A READER NEEDS TO DISAGREE WITH IT. The band's whole contract is the sentence above — the decision
+   goes somewhere a reader can dispute it — and `3 field(s) of A against 2 of B` is the same row whether the
+   receiver read five names or fifty. Those are not the same claim: a candidate explaining seven of seven reads
+   has identified the record, and one explaining three of fourteen has ranked two strangers. Both printed as a
+   margin of one. That is §a-fraction-whose-numerator-is-published landing on this file's own output, and it is
+   the reason the measurement below had to be taken with a probe instead of read off the report.
+   SO THE ROW CARRIES ITS DENOMINATOR AND THE BAND IS SORTED BY IT, weakest decision first, because the cap is
+   twenty of however many and insertion order is the walk's, not the reader's — the one row this rule was
+   written from sat at position 84 and did not print at all. Sorting changes no decision and no count; it
+   changes which rows a capped list shows, which is the only thing a cap decides.
+
+   WHAT THE SORT PUTS AT THE TOP IS A RECEIVER THIS FILE CANNOT IDENTIFY AND SAYS SO BY ARITHMETIC. A shape is
+   a NAME SET, so the anchor is a nearest-neighbour ranking over a candidate set that does not contain the
+   answer for most receivers — an npm package's parse tree, a CDP record, an ad-hoc local object. §the FOREIGN
+   receiver and §the PLATFORM receiver decide the ones a CONSTRUCT can name and this band is what is left, so
+   where neither candidate explains the receiver the winner is whichever unrelated party in the corpus happened
+   to share one more name. The EFFECT is still right — the row leaves the serialized seam either way — and the
+   ANSWER can be wrong, which is the state this file rates worse than an open question and which the
+   denominator is what makes visible.
+   FOUR REPAIRS WERE BUILT AS CLASSIFIERS AND RUN OVER THE POPULATION EACH WOULD TOUCH, AND ALL FOUR ARE
+   REFUSED, so the next reader does not spend a run rediscovering them. Every figure is from one frozen
+   snapshot of one revision, with this file's own selector reproduced exactly (84 of 84 corpus-local rows, same
+   shapes and same scores) before any breakdown of it was read.
+     (1) WEIGH THE NAMES BY HOW DISTINCTIVE THEY ARE, derived from the shapes rather than from a list. It
+         retires CORRECT anchors: `method`+`url`+`credentials`+`provenance`+`headers` is exactly
+         `xml_http_request.c`'s record and every one of those names is generic, because that is what an HTTP
+         request record is CALLED. At the loosest threshold it took three anchors and one field's last reader;
+         at the strictest, eight anchors and four. The engine's own seam records are MADE of generic names.
+     (2) REQUIRE THE WINNER TO EXPLAIN MORE OF THE RECEIVER THAN IT LEAVES UNEXPLAINED. Population of two, and
+         one of the two is a CORRECT decision — a host record read across a fragment, whose consumer reads ten
+         names of which the composer states four. A one-for-one trade of a wrong answer against a right one.
+     (3) THE PARAMETER ARM §the ORIGIN of a value's own residual names, plus the rule that an argument rooted
+         at the parameter under question contributes nothing. Measured over every receiver this walk leaves
+         undecided: 705 are a parameter of a corpus-declared function, the arm alone decides SIX of them and
+         the recursion rule adds THREE. It does not decide the row it was proposed for — that parameter's three
+         non-self arguments are a member path off another binding, a property of a loop variable and a computed
+         index, and this walk answers null for all three.
+     (4) A SELF-RECURSIVE PARAMETER IS NOT A SEAM RECORD. Thirty-eight of the decided receivers pass their own
+         name back into their function and nearly all are ordinary consumers of an emission — one at nineteen
+         of nineteen names, three at four of four. A tree walk and `fn(rec.part)` are one construct.
+   RETIREMENT: this record goes when no receiver reaches this comparison whose winning candidate explains fewer
+   of its reads than it leaves unexplained — which is a construct deciding those receivers upstream, not a
+   threshold here, since every threshold tried above cost a correct answer for each wrong one it took. */
 if (corpusDecided.length) {
   log(`── DECIDED CORPUS-LOCAL — ${corpusDecided.length} receiver(s) a record THIS CORPUS CONSTRUCTS explains ` +
       `better than any engine emission does. The producer is JavaScript, so the contract is not the serialized ` +
       `seam — decided, not passed. Each row would otherwise have anchored to the emission beside it on the ` +
-      `handful of field names every JS corpus shares (\`name\`, \`type\`, \`url\`, \`method\`, \`source\`) ──`);
-  for (const c of corpusDecided.slice(0, 20))
-    log(`  ${place(c)}  \`${c.recv}\` — ${c.jsN} field(s) of ${c.jsShape} against ${c.cN} of ${c.cShape}: ` +
+      `handful of field names every JS corpus shares (\`name\`, \`type\`, \`url\`, \`method\`, \`source\`). ` +
+      `SORTED WEAKEST FIRST — by how much of the receiver the WINNER explains, then by the margin — because a ` +
+      `capped list shows its first rows and the decision a reader most needs to dispute is the one whose ` +
+      `winner explains least ──`);
+  const weakestFirst = [...corpusDecided].sort((a, b) =>
+    (a.jsN / a.names.length) - (b.jsN / b.names.length) || (a.jsN - a.cN) - (b.jsN - b.cN));
+  for (const c of weakestFirst.slice(0, 20))
+    log(`  ${place(c)}  \`${c.recv}\` reads ${c.names.length} — ${c.jsN} explained by ${c.jsShape}, ` +
+        `${c.cN} by ${c.cShape}: ` +
         `${c.names.slice(0, 6).map((n) => `\`${n}\``).join(", ")}${c.names.length > 6 ? ` … (+${c.names.length - 6})` : ""}`);
   if (corpusDecided.length > 20) log(`  … and ${corpusDecided.length - 20} more`);
 }
