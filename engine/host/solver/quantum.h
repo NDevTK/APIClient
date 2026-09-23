@@ -83,10 +83,11 @@
  *         security boundary itself, not an incidental. MEASURED IN THAT REALM ON REAL CHROME: a shared
  *         WebAssembly.Memory CONSTRUCTS and grows there, and `new Worker` succeeds — what fails is handing the
  *         memory across, with `DataCloneError: SharedArrayBuffer transfer requires self.crossOriginIsolated`.
- *         AND THAT MESSAGE NAMES A SUFFICIENT GATE AS IF IT WERE THE NECESSARY ONE. This paragraph used to
- *         read it as a biconditional — `so the gate is the AGENT CLUSTER's cross-origin isolation` — and the
- *         retired sentence is kept because a reader who re-derives it from the same error text will write it
- *         again. MEASURED SINCE, in one browser at both COOP values (extension/renderer.html holds the method
+ *         AND THAT MESSAGE NAMES A SUFFICIENT GATE AS IF IT WERE THE NECESSARY ONE. The biconditional this
+ *         paragraph used to carry — kept for as long as a reader could re-derive it from that error text — is
+ *         RETIRED, its condition met: renderer.html's guard is written over the ACT now, so a reader meeting it
+ *         is answered by a measurement instead of by a getter and has nothing to re-derive the sentence from.
+ *         MEASURED, in one browser at both COOP values (extension/renderer.html holds the method
  *         and the readings): an EXTENSION-ORIGIN document reads `crossOriginIsolated === false` and transfers
  *         the memory ANYWAY at the value the manifest ships, while an ordinary http page equally false is
  *         REFUSED. The grant tracks the ORIGIN, so isolation is one of TWO routes to the transport and not
@@ -115,12 +116,21 @@
  *         names the STANDARD's gate, which is not the one the runtime keys on alone, and `typeof
  *         SharedArrayBuffer` names a CONSTRUCTOR, which is a different act from handing the memory across —
  *         so a test naming either reads correctly on every document where it and the runtime agree and
- *         silently wrongly on the one where they do not. renderer.html asserts BOTH tripwires and tells its
- *         reader to confirm with a real postMessage of a shared WebAssembly.Memory before building anything,
- *         so the day either opens the crash names the watchdog to build; quantum.c #errors if this branch is
- *         ever linked WITH shared memory. RETIREMENT: the retired `so the gate is the AGENT CLUSTER's
- *         cross-origin isolation` goes when a capability guard in this tree is written over the ACT rather
- *         than over a getter.
+ *         silently wrongly on the one where they do not. renderer.html PERFORMS the act once, outside any
+ *         assert, records what it answered, and asserts on THAT; the two getters survive as recorded
+ *         tripwires and are asserted in the ONE direction the standard guarantees, never in the direction a
+ *         sibling document is already observed taking. So the day the act succeeds the crash names the
+ *         watchdog to build; quantum.c #errors if this branch is ever linked WITH shared memory.
+ *         AND THE ACT IS SMALLER THAN THE SENTENCE HERE USED TO DEMAND, WHICH MATTERS BECAUSE THE OLD ONE IS
+ *         UNSPELLABLE IN HALF THE REALMS THAT WOULD RUN IT. This paragraph told its reader to confirm with a
+ *         real postMessage of a shared WebAssembly.Memory — a second agent, asynchrony, and a `Worker` a
+ *         non-web host does not have. HTML §2.7.3 "StructuredSerializeInternal ( value , forStorage [ ,
+ *         memory ] )" puts the gate on the SERIALIZING side: "If the current settings object's cross-origin
+ *         isolated capability is false, then throw a \"DataCloneError\" DOMException", with the standard's
+ *         own note that "This check is only needed when serializing (and not when deserializing)" — and
+ *         §2.7.10 "Structured cloning API" makes structuredClone's first step a serialization. So ONE
+ *         `structuredClone` of a shared WebAssembly.Memory's buffer is the whole act, with no peer and no
+ *         waiting, and a realm that cannot even attempt it records a stated unknown rather than a default.
  *         Until then the extension's raise sources are the interpreter's own (back-edge, call, fork) — the
  *         yield poll is at every dispatch, so the SUSPEND POINT is universal and only the RAISE is not — and
  *         this host's slice is bounded by the wall clock read at whichever of those the flow next reaches.
