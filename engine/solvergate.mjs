@@ -51,6 +51,7 @@
  * (`_routedDelivered`, `_routedRefused`, `_routedZeroDelivery`, `_routedTasksFired`,
  * `_routedTasksTargetOrigin`, `_routedTasksTargetGone`, `_routedTasksThrew`), the orphan census
  * (`_orphansDriven`, `_orphansAsked`), the placement census's fourteen lifetime counts (`_layout`), the
+ * cascade census's four lifetime counts (`_cascade`), the
  * four subsystem censuses (`_cold`, `_heap`, `_swap`, `_forkAt` — dropped as READINGS OF AN INSTANT rather
  * than as costs; see the row itself, and note that `_wfq` is deliberately NOT dropped because the terminal
  * document's frontier is empty under every schedule), and a parked search's `tried` and `turns`. `_switches` exists precisely BECAUSE it differs between an
@@ -1235,6 +1236,50 @@ const DROP = new Map([
                    box tree that paint reads — because a position is then a field of the box, this census has
                    no successor, and there is nothing left to classify. */
                 "_layout",
+                /* THE CASCADE CENSUS, FOUR COUNTS IN ONE NESTED OBJECT, AND IT LEAVES WHOLE FOR `_layout`'s
+                   REASON OVER ITS OWN SUBJECT: NOT ONE OF ITS ROWS IS A CASCADED VALUE. That is the question
+                   to ask of it, and it is the same question — a document's computed STYLE ought to agree
+                   under every schedule even where the AMOUNT OF CASCADE WORK does not, so a member that was a
+                   colour, a length or a keyword would belong on the compared side and this object would have
+                   to be split rather than waived. The answer is read off the producer and not off the name:
+                   core/css/css_cascade_pass.h declares the struct as four `long long`s, says "EVERY FIELD IS
+                   A LIFETIME COUNTER OF THIS AGENT", and spells that kind into each NAME rather than leaving
+                   it to this comment. The VALUES that component answers are the `char **out` of its ask entry
+                   and are emitted NOWHERE in this census, so there is no member to split out.
+                   WHAT EACH ROW COUNTS IS A QUESTION A RUNNING FLOW ASKED, which is `_layout`'s ground and
+                   the arrival census's exactly. The ask is raised whether or not a pass is open — that
+                   component's recording point is the QUESTION and never the outcome — so the magnitude is
+                   how many flows and how many candidate re-runs reached code that reads a computed style.
+                   Those are `_flows` and `_candidates`, names this list already accepts differ.
+                   ITS IDENTITY IS ALREADY ASSERTED WHERE IT LIVES — css_cascade_pass_census DCHECKs
+                   asksLife == servedLife + resolvedLife before it copies a byte — so a gate holding any ratio
+                   of these rows invariant would be the second, weaker copy of an assert that fires louder,
+                   which this file's header refuses by name.
+                   NOT ADDED TO `INSTANT_CENSUSES`, FOR `_layout`'s REASON AND WITH ITS PAYOFF. That list's
+                   other consumer is `snapshot`, which compares two composes at ONE boundary with no step
+                   between them; css_cascade_pass_census is a pure read that asserts and copies and raises
+                   nothing, and it is result.c's ONLY call into that component, so this object must be
+                   byte-identical across that pair. Holding it there is free and it is the only thing in this
+                   tree that checks the composition path has not acquired a CASCADE ask — if it ever reddens
+                   THERE, composing a result document has started reading computed style, which is a finding
+                   rather than a gate fault.
+                   BY CONSTRUCTION AND NOT FROM A MEASUREMENT, stated as what was READ, because this object's
+                   rows are all ZERO here and a reader is owed the reason rather than the coincidence.
+                   `css_cascade_pass_open` has exactly one caller, core/paint/document_paint.c, and nothing
+                   this driver invokes reaches it, so `passesLife` and `servedLife` are 0 under every schedule
+                   and `asksLife == resolvedLife` holds trivially; and NO document in engine/tests/solver
+                   names getComputedStyle, getPropertyValue, cssText or a `.style.` read, so `asksLife` is 0
+                   as well. NOBODY MAY READ THIS ROW AS EVIDENCE THAT A `_cascade` MISMATCH WAS EVER OBSERVED
+                   HERE, and nobody may read the zeros as evidence about the engine: it is a classification
+                   made for the mechanism, against a corpus that asks the cascade nothing. The run that makes
+                   these rows speak is a real bundle through testing/harness.js, where a page's own
+                   getComputedStyle raises `asksLife` while `passesLife` stays 0 — which is the residual in
+                   css_cascade_pass.h made measurable rather than argued.
+                   RETIREMENT: this row goes when css_cascade_pass.h's own retirement lands — the cascade
+                   PRODUCING a computed-style object that a render reads — because a cascaded value is then a
+                   field of that object rather than a function re-derived per ask, this census has no
+                   successor, and there is nothing left to classify. */
+                "_cascade",
                 /* THE ONE COST IN THIS SET THAT IS NOT A COUNT, AND IT IS DROPPED ON THE SPEC'S OWN GATING
                    RATHER THAN ON A MAGNITUDE. Every other name above is a total or a reading of an instant
                    whose SIZE the schedule chooses, and that reason does not reach a LIST OF MESSAGES — a

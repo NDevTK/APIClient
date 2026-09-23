@@ -26,6 +26,7 @@
    is the one that answers. §A-CAPABILITY-MATERIALIZED-PER-FLOW makes it a ceiling, and navigable.c's own OOM
    CHECK sends its reader to this number by name. */
 #include "core/frame/navigable.h"
+#include "core/css/css_cascade_pass.h"   /* what the run spent on css-cascade-5 §4.2's values — see the `_cascade` block */
 #include "core/layout/flow_placement.h"   /* what the render spent on CSS 2.1 §9.4.1's positions — see the `_layout` block */
 #include "core/frame/window_proxy.h"   /* the ASK behind the realm census — see window_proxy_destroy_releases */
 /* §8.1.4.6 "Runtime script errors"'s throw site — one component derives it, this one reports it. */
@@ -2743,8 +2744,15 @@ char *result_json(JSContext *ctx) {
            into a local, rather than five accessor calls spread down the argument list, so the three rows a
            reader divides cannot come from three moments. */
         FlowPlacementCensus place;
+        /* AND WHAT THE RUN SPENT ON THE CASCADE, read at the same instant and into a local for `place`'s
+           reason: four rows a reader divides must not come from four moments. This is the FIRST reader these
+           counters have ever had on a path the product takes — core/css/css_cascade_pass.h states what each
+           row is a count of and why the only other reader, an identity assert inside a close, never runs
+           here. */
+        CssCascadePassCensus casc;
 
         flow_placement_census(&place);
+        css_cascade_pass_census(&casc);
         world_segment_stats(&made, &segf);
         solve_arrival_census(&sinkReached, &sinkTainted, &sinkSuppressed);
         engine_routed_census(&routedDelivered, &routedRefused, &routedZeroDelivery);
@@ -2937,6 +2945,45 @@ char *result_json(JSContext *ctx) {
                              "\"originAsks\":%lld,\"originServed\":%lld,\"originDerived\":%lld,"
                              "\"boxAsks\":%lld,\"boxServed\":%lld,\"boxDerived\":%lld,"
                              "\"cbWidthAsks\":%lld,\"cbWidthServed\":%lld,\"cbWidthDerived\":%lld},"
+                             /* WHAT THE RUN SPENT ON css-cascade-5 §4.2 "Cascaded Values", WHICH IS THE
+                                MULTIPLIER THE BLOCK ABOVE MEASURES ONE LAYER DOWN. core/css/css_cascade_pass.h
+                                states the two shapes that compound — css-cascade-5 §7.2's inheritance makes a read of an
+                                inherited property CLIMB, and css-logical-1 §4 makes two inherited properties a
+                                PREREQUISITE of every margin, padding, border and inset cascade — so `asksLife`
+                                is how many times this run asked for one answer that is a function of the
+                                ELEMENT and the PROPERTY and of nothing about who asked.
+                                EVERY ROW IS A LIFETIME COUNT AND EVERY NAME SAYS SO, which is engine/build.mjs's
+                                @WFQ convention and is used here because a consumer reads the key and never the
+                                comment — this document already carries `_routedZeroDelivery`, a GAUGE, between
+                                two lifetime counts with only prose to say so, and that is the confusion the
+                                suffix removes. So all four may be differenced across two samples, and the
+                                record's LIVE size is deliberately not among them because it is the one
+                                quantity here that could not be.
+                                `asksLife == servedLife + resolvedLife` closes and css_cascade_pass_census
+                                asserts it BEFORE copying a byte, so a reader may divide. That assert is half
+                                the reason this block exists: the identical equality is asserted at the pass's
+                                CLOSE too, and the close runs only under a paint — which core/css/
+                                css_cascade_pass.h's residual records that nothing outside this process asks
+                                for — so until this call existed the check had a reader that never ran.
+                                `passesLife` IS WHAT MAKES `servedLife` READABLE AND IS NOT A REPEAT OF
+                                `_layout`'s `passes`. A zero in `servedLife` means either that no pass was ever
+                                opened, so this record was never consulted and what is missing is a CALLER, or
+                                that a pass opened and every ask was a genuine first ask, so the keys do not
+                                repeat and the record buys nothing — and those ask for opposite work. One
+                                function opens both passes today, so the two rows agree; that is a fact about
+                                one caller and not about either component, and the open question
+                                css_cascade_pass.h records is whether a second, non-paint opener belongs to the
+                                cascade alone. The day one lands the rows legitimately differ, and a reader who
+                                had been inferring this one from `_layout`'s would be reading the other
+                                component's spans.
+                                BY CONSTRUCTION AND NOT FROM A MEASUREMENT, stated as what was READ:
+                                css_cascade_pass_open has exactly one caller, core/paint/document_paint.c, so
+                                `passesLife` is 0 and `servedLife` is 0 and `asksLife == resolvedLife` on every
+                                path that does not paint — which is every path the shipped extension takes.
+                                Nobody may read a nonzero `servedLife` here as evidence about the product
+                                without saying which driver painted. */
+                             "\"_cascade\":{\"asksLife\":%lld,\"servedLife\":%lld,"
+                             "\"resolvedLife\":%lld,\"passesLife\":%lld},"
                              /* AND WHAT ALL OF THE ABOVE WERE DENOMINATED IN — the one nested object here that
                                 is neither a total nor a reading of an instant, but a property of the HOST that
                                 decides whether two of these documents may be compared at all. result.h and
@@ -2954,6 +3001,7 @@ char *result_json(JSContext *ctx) {
                      place.origin_asks, place.origin_served, place.origin_derived,
                      place.box_asks, place.box_served, place.box_derived,
                      place.cb_width_asks, place.cb_width_served, place.cb_width_derived,
+                     casc.asks_life, casc.served_life, casc.resolved_life, casc.passes_life,
                      quantum,
                      cold_park_json());
     }

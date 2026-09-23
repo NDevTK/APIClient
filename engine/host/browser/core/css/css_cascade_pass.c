@@ -38,13 +38,29 @@ static size_t    g_used;
 static bool      g_open;
 static uint64_t  g_ver;       /* the tree version this span is held to, read at open */
 
-/* THE CENSUS, READ BY THE IDENTITY BELOW AND BY NOTHING ELSE. It is deliberately not a published row: a
-   number nobody reads is the defect core/css/css_style_declaration.h names one level up, and an assert IS a
-   reader — `asks == served + resolved` is the one property of the pair that says the two outcomes were
-   counted at the same event, so a record path that returns without counting is what it catches. */
+/* THE CENSUS, AND IT IS NOW A PUBLISHED ROW — see `css_cascade_pass_census` at the foot of this file and the
+   declaration in the header for what each row is a count OF and why each name carries its kind.
+   THIS BLOCK USED TO SAY THE OPPOSITE AND IT IS REWRITTEN RATHER THAN DELETED, because the argument it made
+   is the one a reader re-derives: it read that the census was READ BY THE IDENTITY BELOW AND BY NOTHING ELSE,
+   that it was deliberately not a published row because a number nobody reads is the defect
+   core/css/css_style_declaration.h names one level up, and that an assert IS a reader. The last clause is
+   still true and it was not enough — the assert that was doing the reading sits inside
+   `css_cascade_pass_close`, and that function runs only under a paint, which this component's own residual
+   records that nothing outside this process asks for. So the reader existed and never ran, which reads
+   exactly like a reader and is not one; `an assert IS a reader` is sound only where the assert is on a path
+   somebody takes.
+   `asks == served + resolved` remains the one property of the three that says the outcomes were counted at
+   the same event, and it is asserted at BOTH events now rather than at one. Those are not two copies of one
+   check: the close fires at the end of a paint and the census fires when the shipped path composes its result
+   document, and today exactly one of those two happens. */
 static long long g_asks;
 static long long g_served;
 static long long g_resolved;
+/* HOW MANY WHOLE-TREE SPANS HAVE OPENED, WHICH IS WHAT MAKES A ZERO IN `g_served` MEAN ONE THING. Without it
+   a run that never opened a pass and a run whose every ask was a first ask publish the same number, and those
+   two ask for opposite work. Raised at open and never cleared — the close empties the TABLE and releases its
+   strings, and touches none of these four. */
+static long long g_passes;
 
 /* THE ONE INITIAL CAPACITY, AND IT IS NOT A BOUND ON ANYTHING. §NO BOUNDS forbids deciding that work will
    not happen; this decides only how many pairs fit before the table is rebuilt at twice the size, which is a
@@ -121,6 +137,7 @@ void css_cascade_pass_open(void)
            "which means some arm of the walk returned without it, and the next pass would answer out of a "
            "table taken against a document nobody has established is still the same one");
     g_open = true;
+    g_passes++;
     g_ver = dom_cow_version();
 }
 
@@ -235,4 +252,31 @@ void css_cascade_pass_record(lxb_dom_element_t *el, const char *name, const char
                                       "css-cascade-5 §4.2's record");
     }
     g_used++;
+}
+
+/* THE CENSUS, ASSERTING BEFORE IT COPIES — core/layout/flow_placement.c's `flow_placement_census` is the
+   arrangement and this is it over this component's four rows. The header states what each row counts,
+   why every one of them is a LIFETIME count and says so in its own name, and why the record's LIVE size is
+   deliberately not among them. */
+void css_cascade_pass_census(CssCascadePassCensus *out)
+{
+    DCHECK(out != NULL, "css-cascade-5 §4.2's cascaded-value census was asked for with nowhere to write it");
+    /* THE ONE PROPERTY OF THE THREE THAT SAYS THE OUTCOMES WERE COUNTED AT THE SAME EVENT, ASSERTED HERE AND
+       NOT ONLY AT THE CLOSE. The close asserts the identical equality and runs at the end of a paint; this
+       runs when the shipped path composes its result document, and today that is the only one of the two that
+       happens — so this is the call that ARMS the check rather than a second copy of it. A shortfall means
+       the ask at core/css/css_style_declaration.c returned between the ask and the record, and the ratio a
+       reader takes off these rows would then be a fact about which arms remembered to count rather than
+       about the render. */
+    DCHECKF(g_asks == g_served + g_resolved,
+            "css-cascade-5 §4.2's cascaded-value census does not close: %lld asks against %lld served and "
+            "%lld resolved. Every ask has exactly one outcome — this record answered it, or its one caller "
+            "ran the cascade and reported the answer immediately with no return between the two — so a gap "
+            "is an arm that took an answer without saying which outcome it was, and every share a reader "
+            "divides out of these rows is over a denominator that is not the population",
+            g_asks, g_served, g_resolved);
+    out->asks_life = g_asks;
+    out->served_life = g_served;
+    out->resolved_life = g_resolved;
+    out->passes_life = g_passes;
 }

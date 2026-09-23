@@ -118,14 +118,26 @@
  * many spans per run: it is EMPTY before a pass opens and EMPTY after it closes, and `passes` is a COUNT
  * rather than a flag. So the sentence foreclosed the only answer actually available to this record by citing
  * a rule that does not reach it, which is worse than leaving the question open.
- * WHAT THE NEXT DIFF ACTUALLY BUILDS IS A MEASUREMENT AND NOT A SPAN, AND THE ORDER IS NOT A PREFERENCE.
- * This record's three counters have exactly ONE reader — the identity DCHECK inside `css_cascade_pass_close`,
- * which never runs on a path the product takes — so the cost claimed above is unmeasured on the only path
- * that matters and cannot be measured from the product's own document at all. A census accessor beside
- * core/layout/flow_placement.h's `flow_placement_census`, read by solver/result.c into a `_cascade` block
- * beside its `_layout` one, is what turns the argument above into a number; it also ARMS that identity on
- * the product's path, where a miscounting arm is today caught by nothing. Only with that number in hand is
- * it worth asking whether a span belongs on an algorithm the product DOES run. The candidates are the ones
+ * THE MEASUREMENT THAT CLAUSE NAMED IS BUILT, AND THE CLAUSE IS REWRITTEN RATHER THAN DELETED BECAUSE IT WAS
+ * RIGHT AND A READER WHO RE-DERIVES IT WILL COMPOSE IT AGAIN. In its own wording: this record's three
+ * counters have exactly ONE reader — the identity DCHECK inside `css_cascade_pass_close`, which never runs on
+ * a path the product takes — so the cost claimed above is unmeasured on the only path that matters and cannot
+ * be measured from the product's own document at all; a census accessor beside core/layout/flow_placement.h's
+ * `flow_placement_census`, read by solver/result.c into a `_cascade` block beside its `_layout` one, is what
+ * turns the argument above into a number, and it also ARMS that identity on the product's path where a
+ * miscounting arm is caught by nothing. `css_cascade_pass_census` below is that accessor and result.c
+ * composes that block, so both halves are discharged: the number is published, and the identity is asserted
+ * at a call the shipped path makes rather than only at a close no shipped path reaches.
+ * AND THE SAME DIFF MADE A SENTENCE FOUR LINES ABOVE TRUE THAT WAS NOT TRUE WHEN IT WAS WRITTEN, which is
+ * recorded here because it is the kind of claim nothing mechanical checks. `passes` is a COUNT rather than a
+ * flag was written about THIS component, and this component held only `g_open`, a bool — the count it named
+ * did not exist, so a reader sent to read that row would have found nothing and had no way to tell an absent
+ * counter from a counter reading zero. It exists now as `passes_life`, and building it was the right repair
+ * rather than striking the sentence: the argument the sentence was making is correct and the component was
+ * what was short of it.
+ * WHAT THE NEXT DIFF BUILDS IS STILL A SPAN, IT IS STILL NOT PROPOSED HERE AS WORK, AND THE ORDER IS
+ * UNCHANGED: only with that number in hand is it worth asking whether a span belongs on an algorithm the
+ * product DOES run. The candidates are the ones
  * that ask this record about many elements with no author code inside them, which is the property a span
  * needs and not a list of sites: core/intersection_observer/'s per-target geometry, which rendering.c drives
  * at update-the-rendering step 19 under a note recording that those steps run NO author callbacks, and
@@ -141,9 +153,11 @@
  * level out, in a run of the shipped extension: no paint entry is asked, so no pass is opened, so every ask
  * is a miss.
  * THE ACT THAT RETIRES IT AND WHO MAY PERFORM IT, because a passive condition reads as merely pending: the
- * census named above is an ENGINE-ONLY diff any lane may write, and only the one role that builds may make
- * it live — which is a narrower act than the trusted-zone landing the old clause asked for, and it is owed
- * to a reader rather than to a renderer.
+ * census named above WAS an ENGINE-ONLY diff any lane may write, it is now written, and what is left is the
+ * one act only the role that builds may perform — the number is in this tree and is not yet in any artifact,
+ * so a reader who runs the product today still sees no `_cascade` block and that is a build and not a gap.
+ * It is a narrower act than the trusted-zone landing the old clause asked for, and it is owed to a reader
+ * rather than to a renderer.
  * RETIREMENT — IT NO LONGER GOES WITH qjs_abi.h's, AND THE UNCOUPLING IS THE CORRECTION RATHER THAN A
  * DETAIL: this record goes when `css_cascade_pass_open` has a caller on a path the shipped product runs,
  * whatever that caller turns out to be. Tying the condition to a PAINT is what made every reader of it,
@@ -189,10 +203,12 @@ bool css_cascade_pass_is_open(void);
 
 /* THE ASK, COUNTED WHETHER OR NOT A PASS IS OPEN — the recording point is the QUESTION and never the
    outcome, so a run that opens no pass at all still COUNTS how many cascaded values it was asked for.
-   WHAT IT DOES NOT YET DO IS REPORT THEM, WHICH THIS SENTENCE USED TO CLAIM AND WHICH IS THE ONE THING A
-   READER WOULD HAVE ACTED ON: the three counters have exactly one reader, the identity DCHECK inside
-   `css_cascade_pass_close`, and that function never runs on a path the product takes. The census accessor
-   that closes it is named in the residual above.
+   AND THEY ARE REPORTED, WHICH IS WHAT THIS SENTENCE NOW SAYS AND IS THE ONE THING A READER ACTS ON.
+   IT USED TO SAY THEY WERE NOT, AND THAT IS KEPT RATHER THAN STRUCK BECAUSE A READER WHO FINDS THE COUNTERS
+   AND NOT THE ACCESSOR WILL RE-DERIVE IT: the three counters had exactly one reader, the identity DCHECK
+   inside `css_cascade_pass_close`, and that function never runs on a path the product takes — so an ask
+   counted here reached nobody. `css_cascade_pass_census` is the second reader and solver/result.c is its one
+   caller, so the count taken at this line is published in the document the shipped path composes.
    Answers TRUE and writes `*out` when this record holds the pair; the value is an OWNED copy the caller
    frees exactly as it frees the cascade's own answer, and NULL is one of the values it can be — css-cascade-5
    §4.2 "Cascaded Values"' "if the output of the cascade is an empty list, there is no cascaded value" is a
@@ -206,5 +222,63 @@ bool css_cascade_pass_ask(lxb_dom_element_t *el, const char *name, char **out);
    when no pass is open, which is what keeps the cascade's own code free of a mode; the count is taken
    either way. */
 void css_cascade_pass_record(lxb_dom_element_t *el, const char *name, const char *value);
+
+/* THE CENSUS, in solver/result.c's vocabulary, and it is what gives the counters above a reader on a path the
+   product takes. Until it existed they had exactly ONE — the identity DCHECK inside `css_cascade_pass_close`,
+   which runs only under a paint, which the residual at the top of this file records that nothing outside this
+   process asks for. So the multiplier this whole component is justified by was COUNTED and never REPORTED,
+   which is core/css/css_style_declaration.h's write-with-no-reader defect one level up and is worse than an
+   absent number: a number nobody reads cannot be wrong, so the cost premise could be neither confirmed nor
+   refuted from the product's own document.
+
+   EVERY FIELD IS A LIFETIME COUNTER OF THIS AGENT, AND EACH SAYS SO IN ITS OWN NAME RATHER THAN ONLY HERE.
+   A GAUGE states what is true NOW and a LIFETIME COUNT states what has happened since this agent started, and
+   only the second may be differenced across two samples or accumulated — so a consumer that mixes them is
+   doing arithmetic on nothing while looking exactly like a measurement. The `Life` suffix is engine/build.mjs's
+   @WFQ convention, declared there and used here for its reason: that census names `brBornLife*`, `brUsLife*`
+   and `brRetiredUsLife` as LIFETIME against the unsuffixed rows beside them that are GAUGES, and it says the
+   kinds are taken from the declaration and not guessed. A CONSUMER READS THE KEY AND NEVER THE COMMENT, which
+   is not a general worry but a measured property of the document these rows land in: solver/result.c already
+   carries `_routedZeroDelivery`, a gauge, between two lifetime counts, with only prose to say so.
+
+   NOTHING HERE REPORTS THE RECORD'S LIVE SIZE, DELIBERATELY. That is this component's one genuine gauge, it
+   is zero at every instant no pass is open, and publishing it beside these four is the exact mixing the
+   suffix exists to prevent — so the omission is a decision and not a gap, and the day somebody wants it, it
+   is a row that must carry a name saying it is not one of these.
+
+   `asks_life` is how many times css-cascade-5 §4.2's cascaded value was asked for, `served_life` how many of
+   those this record answered out of a pass, and `resolved_life` how many ran the cascade. The two outcomes
+   are counted at the same event — the ask at the QUESTION and the resolution at the answer its one caller
+   brings back, with no return between them — so `asks_life == served_life + resolved_life` holds at every
+   instant, and it is ASSERTED HERE rather than left to a reader's arithmetic. That assert is the reason this
+   accessor is more than a getter: it is the one property of the three that says a shortfall is an arm that
+   took an answer without reporting which outcome it was, and the close already asserting it does not help,
+   because the close does not run where the product runs.
+
+   AND THEY ARE THIS AGENT'S AND NOT THIS PASS'S, which is flow_placement.h's distinction and is not pedantry
+   here either. Both counts are taken BEFORE the storage gate, so a cascade resolved with no pass open is
+   counted as a resolution and stores nothing; counting only the stored ones would put the ask in the
+   numerator and in neither denominator. A run that opens no pass therefore has `asks_life == resolved_life`
+   and `served_life` of zero, which is the correct reading of the shipped path and not an instrument that
+   failed to see one.
+
+   `passes_life` IS NOT DECORATION — IT IS WHAT MAKES A ZERO IN `served_life` READABLE AT ALL. That zero has
+   two readings and they take opposite work: no pass was ever opened, so this record was never consulted and
+   what is missing is a CALLER; or a pass opened and every ask was a genuine first ask, so the keys do not
+   repeat and the record buys nothing. One number covering both is the several-states-behind-one-answer shape
+   this project refuses, and `passes_life` is the discriminator. It is a COUNT and not a flag because this
+   component is empty before a pass opens and empty after it closes, so many spans per run are expected and a
+   flag could not say how many there were. It is NOT read out of `_layout`'s own `passes` even though one
+   function opens both passes today: that is a fact about one caller rather than about either component, and
+   the open question this file records is whether a SECOND, non-paint opener belongs here — the day one lands,
+   the two rows legitimately differ and a reader who had been inferring one from the other is reading a number
+   about the other component's spans. */
+typedef struct {
+    long long asks_life;
+    long long served_life;
+    long long resolved_life;
+    long long passes_life;
+} CssCascadePassCensus;
+void css_cascade_pass_census(CssCascadePassCensus *out);
 
 #endif /* ENGINE_HOST_BROWSER_CORE_CSS_CSS_CASCADE_PASS_H */
