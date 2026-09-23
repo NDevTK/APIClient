@@ -109,16 +109,19 @@ static const CowRecord AIT_REC = { sizeof(IdlAsyncIter), AIT_VALS, (int)(sizeof 
    fact they already have and must not look up.
    HERE THAT WAS NOT A HAZARD TO COME, IT WAS LIVE, and the escalation is one line of this file's own
    declaration: `agent_state_class(component, &f->class_id, ...)` makes every `class_id` in `g_async` a
-   SLOT_CLASS of the declaring row, and core/agent_state.c's undo writes 0 into one. Both hosts run
-   platform_agent_free — every undo — and only then JS_RunGC and JS_FreeRuntime, so at the moment either of
-   these ran, every entry's id was already 0 and `JS_GetOpaque(val, 0)` answers NULL for every object there is.
+   SLOT_CLASS of the declaring row, and core/agent_state.c's undo writes 0 into one. main.c, test_forced.c and
+   wpt_runner.c each run platform_agent_free — every undo — and only then JS_FreeRuntime, so at the moment
+   either of these ran, every entry's id was already 0 and `JS_GetOpaque(val, 0)` answers NULL for every object
+   there is. THE HOSTS ARE NAMED RATHER THAN COUNTED, and this sentence said "both" until the list was added
+   up: a digit beside an enumeration is the half nobody sums, and `git grep -l platform_agent_free -- '*.c'`
+   answers the question a number here would go stale about.
    The loop then fell off its end and the finalizer returned having freed NOTHING: §3.7.10.1's target, its
    ongoing promise, the component's own state and the js_mallocz'd record, for every iterator a page still held.
    THE gc_mark HALF WAS THE WORSE ONE, for the reason core/agent_state.h gives — an unmarked child keeps the
    internal reference gc_decref subtracts, so gc_scan reads it as rooted from outside the heap and the whole
    graph behind the target is never collected at all, silently.
    `g_async_n` IS NOT CONSULTED EITHER, ONE LEVEL OUT: idl_async_iter_free resets it, and it happens to run
-   after JS_FreeRuntime in both hosts today — so unlike the ids it was not the live half. Dropping it anyway is
+   after JS_FreeRuntime in all three today — so unlike the ids it was not the live half. Dropping it anyway is
    what stops either answer depending on a teardown ORDER at all, which is a fact about this file rather than
    about whichever host links it.
    NEITHER IS THE BRAND CHECK AND NEITHER MAY BE READ AS ONE. ait_of keeps the class-id comparison
