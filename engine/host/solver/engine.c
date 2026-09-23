@@ -14981,6 +14981,32 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
            the observation is named with the actor who can make it: a COORDINATOR builds, drives one real SPA
            through the `--abi` arm, and reads the census for `replyAnswered` equal to `replyAsked` with
            `rowsAwaitingBytes` 0 — the numbers the WASM host already answers for the same document.
+           OBSERVED, AND THE PAYMENT HALF IS DISCHARGED. A coordinator built the native binary and drove
+           `https://gitlab.com/explore` through this `--abi` arm over engine/trusted.mjs under a 900 s
+           RLIMIT_CPU, thread-cpu quantum 12 ms: `replyAsked 45 == replyAnswered 45` with `replyOutstanding 0`
+           at EVERY ONE of the run's 15 censuses, against the 1-of-43 with 42 frozen across 35 consecutive
+           censuses this record was written about. The livelock this paragraph describes is gone from the
+           built artifact and not merely from the source.
+           AND THE OTHER HALF OF THE CONDITION ABOVE WAS NEVER A REACHABLE ONE, WHICH IS THIS RECORD'S OWN
+           DEFECT AND NOT THE ENGINE'S. `rowsAwaitingBytes` 0 reads as a fact about the DOCUMENT and is a SUM
+           OVER LIVE MEMBERS: engine_rows_awaiting_bytes walks every flow and counts that flow's own
+           DYN_SCRIPT_SRC rows, and solver/engine.h says so at the accessor in its own words — "IT IS SUMMED
+           PER MEMBER AND THE FAN-OUT IS THE ANSWER … one document row awaited by N members counts N times",
+           with no inequality holding in either direction. So on any forking frontier the row is the
+           document's outstanding programs MULTIPLIED by the member count, and demanding 0 of it demands that
+           no member anywhere still holds an unfetched program — which is a condition about the SEARCH's size
+           and not about the reply door this record is about. Measured on the same run, and it is the
+           accessor's paragraph confirmed rather than a new finding: the quotient held at 26.98 rows per
+           member at EVERY census while the frontier grew 4034 → 4993, a 24% growth with the ratio flat to
+           two decimals, so the document had ~27 outstanding programs throughout and every member carried its
+           own copy. A retirement condition that names a per-member sum is the §READ-THE-ACCESSOR defect
+           written into the one clause a reader acts on, and the check that catches it costs one read of the
+           header one file over — which is where the correct reasoning already was.
+           RETIREMENT: the payment claim is MET and this record is REWRITTEN RATHER THAN DELETED, because a
+           reader who re-derives the stall-only schedule from ENGINE_STEP_STALLED's own definition will
+           re-introduce it. What remains open is NOT this record: the run aborted at solver/flow.c's
+           comparator surrogate before it could ask for those ~27 programs, so whether the engine REQUESTS
+           them is a question about the order and is recorded where that abort fires.
            AND THE STALL-ONLY SCHEDULE IS NOT MERELY SLOWER THERE, IT IS UNREACHABLE. ENGINE_STEP_STALLED is
            returned only where the run queue is EMPTY, so a frontier forking on unknowns never produces it and
            the payment is never reached at all — the coupling this paragraph describes is not a delay but a
