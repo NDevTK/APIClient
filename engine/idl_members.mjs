@@ -125,19 +125,39 @@ export async function loadIdl() {
   /* The member NAMES of one interface, flattened. §3.7.5's constants and the STATIC members count: a static
      lives on the interface object rather than the prototype, which changes where a component installs it and
      nothing about whether a page can read it. */
-  function members(name) {
+  /* WHICH MEMBER KINDS COUNT, ONCE. Two callers want the same answer over two different node lists — the
+     FLATTENED chain and one interface's OWN declarations — and spelling the kind filter twice is the second
+     copy of a rule that then drifts: a kind added here and not there would make an interface's own surface a
+     strict subset of its flattened one for a reason no reader could see. */
+  function memberNamesOf(nodes) {
     const out = [], seen = new Set();
     const add = (n) => { if (n && !seen.has(n)) { seen.add(n); out.push(n); } };
-    for (const m of flatten(name)) {
+    for (const m of nodes) {
       if (m.type === "attribute") add(m.name);
       else if (m.type === "operation") add(m.name);
       else if (m.type === "const") add(m.name);
     }
-    for (const m of flatten(name)) {
+    for (const m of nodes) {
       if (m.type === "iterable" || m.type === "maplike" || m.type === "setlike" || m.type === "async_iterable")
         for (const n of iterationMembers({ members: [m] })) add(n);
     }
     return out;
+  }
+  function members(name) { return memberNamesOf(flatten(name)); }
+  /* THE MEMBERS ONE INTERFACE DECLARES, WHICH IS NOT `members(I)` MINUS `members(I's base)`.
+     Web IDL §2.3 Interface mixins' includes statement makes a mixin's members members of the INCLUDING
+     interface — "Each member of M is considered to be a member of each interface I, J, K, … that includes M,
+     as if a copy of each member had been made" — and `byName` has already merged both the partials and the
+     included mixins into the node, so this node's member list is exactly that set and the base's is not.
+     SUBTRACTING BY NAME IS WHAT THIS EXISTS TO REPLACE. A derived interface may REDECLARE a name its base
+     also declares, and Web IDL §3.7.3 Interface prototype object then gives EACH of them its own property on
+     its own prototype — CSSNumericValue declares `parse(cssText)` where CSSStyleValue declares
+     `parse(property, cssText)`, two algorithms in two sections sharing four letters. A name-keyed
+     subtraction calls the derived one INHERITED and hands it back to the base, so the derived interface's
+     own declaration is in nobody's own-member set at all. */
+  function ownMembers(name) {
+    const node = byName.get(name);
+    return node ? memberNamesOf(node.members) : [];
   }
 
   /* §2.7's inherited dictionaries, LEAST DERIVED FIRST — "the set includes the dictionary E that D inherits
@@ -203,7 +223,7 @@ export async function loadIdl() {
     return dictionaryTypesIn(t.idlType, out);
   }
 
-  return { declarations, byName, inheritanceOf, flatten, members,
+  return { declarations, byName, inheritanceOf, flatten, members, ownMembers,
            dictByName, dictInheritanceOf, dictChain, dictMembers, dictionaryTypesIn };
 }
 

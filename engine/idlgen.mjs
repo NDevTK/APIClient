@@ -656,7 +656,8 @@ const INTERFACES = {
    that needs to know what the platform provides, so "is `redirected` a member of Response" and "which members
    of Response does the engine still owe" cannot come back as two different answers. */
 const idl = await loadIdl();
-const { byName, inheritanceOf, flatten, members, dictByName, dictMembers, dictionaryTypesIn } = idl;
+const { byName, inheritanceOf, flatten, members, ownMembers,
+        dictByName, dictMembers, dictionaryTypesIn } = idl;
 
 /* The install constructs of the WHOLE engine, read once. Whole-engine and not per-row because which objects are
    install targets is a fact about the program (a prototype handed from the file that tags it to the file that
@@ -971,12 +972,19 @@ for (const n of idl.declarations) {
    ONE DEFINITION, TWO CALLERS, because this file already had the notion and spelled it inline: the per-interface
    `ownSet` below is this set, and the [Global] attribution above needed it for an interface that is NOT the one
    being audited. Two spellings of one question is the shape that drifts. */
+/* AND IT WAS SPELLED AS A NAME SUBTRACTION, WHICH IS THE ONE SHAPE THAT CANNOT EXPRESS IT. `members(iface)`
+   minus `members(base)` is this set for every interface that redeclares NOTHING, and for one that REDECLARES a
+   name its base also declares it silently hands that member back to the base: Web IDL §3.7.3 Interface
+   prototype object gives each declaration its own property on its OWN prototype, so CSSNumericValue's
+   `parse(cssText)` and CSSStyleValue's `parse(property, cssText)` are two algorithms in two sections, and the
+   subtraction filed the derived one as INHERITED. The engine's own surface is read from `byName`, which has
+   already merged the partials and the included mixins and has NOT merged the base, so the set is that node's
+   member list and needs no subtraction at all — engine/idl_members.mjs's `ownMembers`, beside `members` and
+   sharing its member-KIND filter so the two cannot come to disagree about which kinds count. */
 const declaredByCache = new Map();
 const declaredBy = (iface) => {
   if (declaredByCache.has(iface)) return declaredByCache.get(iface);
-  const b = inheritanceOf.get(iface);
-  const inh = b ? new Set(members(b)) : new Set();
-  const out = new Set(members(iface).filter((n) => !inh.has(n)));
+  const out = new Set(ownMembers(iface));
   declaredByCache.set(iface, out);
   return out;
 };
@@ -1196,10 +1204,24 @@ for (const [iface, paths] of AUDITED) {
      nothing — the banned lazy stub the audit exists to expose), and an install whose member name cannot be
      decided statically is UNRESOLVED rather than assumed either way. */
   const chain = chainOf(iface);
+  const ownSet = declaredBy(iface);
+  /* AND THE CREDIT IS KEYED ON THE DECLARING INTERFACE BESIDE THE NAME, so one name on two interfaces cannot
+     answer for both. A base's install credits this interface because a member on a base prototype really is
+     reachable on a derived object — and that holds only while the derived prototype does not SHADOW it. Web
+     IDL §3.7.3 Interface prototype object defines the members OF INTERFACE on that interface's own prototype,
+     so where this interface DECLARES the name itself the base's property is not what a page reaches: its own
+     is, and if nothing installed one the page gets the base's ALGORITHM under this interface's name. The
+     subtraction was over bare names, so the base's `parse` answered for CSSNumericValue's, and a whole
+     algorithm read as built because a different algorithm spelled the same.
+     IT WITHHOLDS AND NEVER INVENTS. For a name this interface does not declare, every arm is byte-identical to
+     the union it replaces; for one it does, only an install attributed HERE counts, and an install this scan
+     could not attribute is still UNPROVEN rather than ABSENT by the join below. So the only direction it can
+     move a count is UP — a credit this audit was not entitled to, withdrawn. */
   const installed = new Set(), stubbed = new Set();
   for (const base of chain) {
-    for (const n of installedBy.get(base) || []) installed.add(n);
-    for (const n of stubbedBy.get(base) || []) stubbed.add(n);
+    const self = base === iface;
+    for (const n of installedBy.get(base) || []) if (self || !ownSet.has(n)) installed.add(n);
+    for (const n of stubbedBy.get(base) || []) if (self || !ownSet.has(n)) stubbed.add(n);
   }
   const inRow = (list) => list.filter((x) => present.includes(x.file));
   const unresolved = inRow(world.unresolved);
@@ -1359,7 +1381,6 @@ for (const [iface, paths] of AUDITED) {
       : r.candidates.some((n) => chain.includes(n));
     if (reaches && !maybeHere.has(r.name)) maybeHere.set(r.name, r);
   }
-  const ownSet = declaredBy(iface);
   const noop = spec.filter((n) => stubbed.has(n));
   /* A js_noop-STUB IS PRESENT ON THE OBJECT, SO IT IS NOT ABSENT — and it was counted in both, because
      `stubbed` and `installed` are the two halves of ONE split (idl_installed.mjs files each record under
