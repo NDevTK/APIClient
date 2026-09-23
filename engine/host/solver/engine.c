@@ -14892,10 +14892,25 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
            difference in findings between the two hosts should be a difference in the ENGINE, and a payment
            schedule is not one" — IS TRUE OF `run_scheduler` AND FALSE OF THE NATIVE BINARY, because that
            binary has TWO drivers and only this one was fixed. Its `--abi` arm is a host of the production
-           `qjs_*` entries and pays inside `if (step == ENGINE_STEP_STALLED)`, which is the schedule this
+           `qjs_*` entries and paid inside `if (step == ENGINE_STEP_STALLED)`, which is the schedule this
            paragraph's own first half names as the defect. It is rewritten rather than deleted because the
            reasoning is right and is what a reader re-derives: a driver repaired at ONE of two call sites
            reads as a host repaired, and nothing named the second.
+           THE `--abi` ARM NOW POLLS, IN SOURCE, AND THE COST OF THAT REPAIR WAS NOT WHAT THIS RECORD'S OWN
+           RETIREMENT CLAUSE IMPLIED. `pays on the same schedule` names an OUTCOME and reads as a one-line move
+           of `abi_pay` out of its stall branch, and that move alone HANGS: the channel is half-duplex at BOTH
+           ends, so `engine/trusted.mjs` writes to an instance only while it is `stalled` and the child blocks
+           in `getdelim` until `go`. Moving the read without the write would have had the child block forever
+           on a zone that had already decided not to speak to it. The repair is therefore a second VERB on the
+           one channel — `poll`, answered in the same turn with whatever is READY and never awaited — which
+           keeps the deadlock rule exactly as written (the zone writes only in answer to a line the child wrote
+           asking to read) and changes only which condition makes the child ask. Two files, two ends, one
+           commit; the JS half is additive, so a child that never writes `poll` is answered as it always was.
+           WHAT IS NOT ESTABLISHED IS THAT IT WORKS, and this record stays until somebody observes it. The
+           claim above is about the INSTALLED artifact, a build retires it and no amount of reading does, so
+           the observation is named with the actor who can make it: a COORDINATOR builds, drives one real SPA
+           through the `--abi` arm, and reads the census for `replyAnswered` equal to `replyAsked` with
+           `rowsAwaitingBytes` 0 — the numbers the WASM host already answers for the same document.
            AND THE STALL-ONLY SCHEDULE IS NOT MERELY SLOWER THERE, IT IS UNREACHABLE. ENGINE_STEP_STALLED is
            returned only where the run queue is EMPTY, so a frontier forking on unknowns never produces it and
            the payment is never reached at all — the coupling this paragraph describes is not a delay but a
@@ -14910,9 +14925,12 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
            SO A NATIVE `--abi` CENSUS AND A WASM ONE ARE NOT COMPARABLE ON ANY REPLY-CONSUMING ROW until
            `replyOutstanding` is read: a GAUGE standing at a positive value across a whole census series is
            this schedule, and it is not a delivery defect however much it reads like one.
-           RETIREMENT: this record goes when every host of the `qjs_*` entries in this tree pays on the same
-           schedule, because the sentence above is then true as originally written and no second driver exists
-           for it to be false of.
+           RETIREMENT: this record goes when a census taken from the `--abi` arm of a BUILT artifact reads
+           `replyAnswered == replyAsked` on a document the WASM host answers in full, because the sentence
+           above is then true as originally written and no second driver exists for it to be false of. The
+           SOURCE half of that condition is met and is deliberately not enough: every host of the `qjs_*`
+           entries now pays at a slice boundary rather than only at a stall, and this record is about what the
+           shipped binary does.
            WHY IT ABORTED WHEN IT WAS TRIED, and it was neither the provider nor the reply record. `pending_ready`
            answered YES for an ANSWERED HOSTREQ, so a synchronous answer arriving between two slices made the
            register look deliverable, flow_step called the reply delivery, and it swap-removed the rendezvous

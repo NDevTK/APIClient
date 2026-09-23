@@ -62,10 +62,23 @@
  * is one policy and neither host holds a copy of it.
  *
  * THE CHANNEL IS HALF-DUPLEX, WHICH IS WHAT KEEPS IT FROM DEADLOCKING. The child announces its bill whenever
- * the bill CHANGES and never reads back; it reads only after writing `stalled`, which is the one moment every
- * flow is parked and blocking denies nobody the thread. This zone therefore QUEUES its answers and writes them
- * only in reply to `stalled`. Two processes each filling the other's pipe while neither drains is a hang with
- * no symptom, and that one rule makes it impossible rather than unlikely.
+ * the bill CHANGES and never reads back unprompted; it reads only after writing a line that ASKS TO READ, and
+ * this zone QUEUES its answers and writes them only in reply to one. Two processes each filling the other's
+ * pipe while neither drains is a hang with no symptom, and that one rule makes it impossible rather than
+ * unlikely.
+ * THERE ARE TWO SUCH LINES AND THEY DIFFER IN WHAT A ZERO MEANS, NOT IN THE RULE. `stalled` says the frontier
+ * is out of work, so blocking denies nobody the thread and a round that pays nothing is this zone REFUSING —
+ * the one thing that ends a live session. `poll` says the frontier is RUNNING and owed something, so this zone
+ * answers in the same turn with whatever is READY and never waits for what is in flight; a round that pays
+ * nothing there is "not landed yet" and the child steps on.
+ * THIS PARAGRAPH USED TO NAME `stalled` AS THE RULE ITSELF and is rewritten rather than deleted, because the
+ * narrow form is what a reader re-derives: a stall really is the obvious moment at which a blocking read is
+ * free. It is also a SUFFICIENT condition stated as the necessary one, and the difference was the whole reply
+ * path — `ENGINE_STEP_STALLED` is returned only where the run queue is empty (solver/engine.c), so a child
+ * with any runnable member never wrote the one line that let this zone pay it. MEASURED over four archived
+ * `--abi` runs of one real SPA: `replyAnswered` 1 of `replyAsked` 43, frozen across 35 consecutive censuses
+ * while `forks` climbed to 6242, against 43 of 43 for the same document under the browser host, whose driver
+ * has always paid at every slice boundary.
  *
  * AND IT ROUTES, WHICH IS THE ZONE'S ONE OTHER FACT: which instance holds which document. An instance is an
  * ORIGIN-KEYED AGENT CLUSTER (SECURITY.md), so a CROSS-ORIGIN child is a second PROCESS of the same binary and
@@ -909,9 +922,12 @@ async function main() {
   };
 
   /* ── WRITING, WHICH IS THE ONE THING THIS ZONE DOES ON ITS OWN CLOCK ──────────────────────────────────────
-     THE CHANNEL IS HALF-DUPLEX PER INSTANCE: a child reads only after writing `stalled`, which is the one
-     moment every flow of that instance is parked and blocking denies nobody the thread. So a round is written
-     to an instance ONLY while it is stalled, and never otherwise.
+     THE CHANNEL IS HALF-DUPLEX PER INSTANCE: a child reads only after writing a line that asks to read, so a
+     round is written to an instance ONLY in answer to one and never otherwise. THIS FUNCTION ANSWERS `stalled`
+     AND `payRound` IS THE HALF THE TWO VERBS SHARE; `poll` is answered at its own arm in `onLine`, because
+     what differs between them is not the WRITE but whether an empty one is a refusal. A reader who changes
+     what a round contains changes `payRound` and reaches both; a reader who changes when one is SENT is
+     holding the only thing the two verbs disagree about.
      A ROUND THAT PAYS NOTHING IS A REFUSAL AND THE CHILD IS ENTITLED TO READ IT AS ONE, which is why a stalled
      instance with an empty queue is left UNWRITTEN rather than sent a bare `go`: what it is waiting for may be
      a program another instance is still running, and telling it "nothing" at that moment would end a live
@@ -922,18 +938,31 @@ async function main() {
      cannot supply what the frontier is waiting for, and it is the same test `engine_run` makes one level down
      (`r == ENGINE_STEP_STALLED && filled == 0`). It is not a bound and it truncates nothing — every flow keeps
      its snapshot, and the reason travels as the zone's own words rather than as a guess made by the child. */
+  /* ONE ROUND, WRITTEN TO A CHILD THAT IS STANDING IN THE READ. It is a free function and not a branch of
+     `flush` because BOTH verbs write exactly this and only one of them decides a session: sharing the write
+     is what keeps a record that goes out under `stalled` and the same record under `poll` from ever differing,
+     which is the drift a second spelling would have.
+     IT ALWAYS WRITES `go`, INCLUDING WHEN NOTHING WAS READY, and that is the whole of what a round is: the
+     child is blocked in `abi_pay` until the terminator, so an empty round is this zone saying "nothing yet"
+     and withholding one is this zone hanging the child. `flush` gates on `i.ready.length` BEFORE calling here
+     for a reason that belongs to `stalled` alone — a stalled child reads an empty round as a refusal — and
+     that gate is not this function's to keep, because `poll` must be answered whether or not anything landed.
+     AND THE PAIRS THIS WRITE PAID ARE OWED NO LONGER. The child re-announces its whole bill the moment it is
+     let go, so this is the first instant at which a fresh park on one of these addresses is a request this
+     zone has not answered — see `track`. It is drained WHOLE, exactly as `ready` is and in the same step,
+     because every key on it accompanies a record that has just gone out. */
+  const payRound = (i) => {
+    for (const rec of i.ready.splice(0, i.ready.length)) i.say(rec);
+    for (const key of i.releaseOnWrite.splice(0, i.releaseOnWrite.length)) i.answered.delete(key);
+    i.say('go');
+  };
+
   const flush = () => {
     let moved = false;
 
     for (const i of instances) {
       if (!i.live || !i.stalled || !i.ready.length) continue;
-      for (const rec of i.ready.splice(0, i.ready.length)) i.say(rec);
-      /* AND THE PAIRS THIS WRITE PAID ARE OWED NO LONGER. The child re-announces its whole bill the moment it
-         is let go, so this is the first instant at which a fresh park on one of these addresses is a request
-         this zone has not answered — see `track`. It is drained WHOLE, exactly as `ready` is and in the same
-         step, because every key on it accompanies a record that has just gone out. */
-      for (const key of i.releaseOnWrite.splice(0, i.releaseOnWrite.length)) i.answered.delete(key);
-      i.say('go');
+      payRound(i);
       i.stalled = false;
       moved = true;
     }
@@ -1439,6 +1468,27 @@ async function main() {
       }
     } else if (f[0] === 'notice') {
       await onNotice(e, line.slice('notice\t'.length));
+    } else if (line === 'poll') {
+      /* A RUNNING CHILD ASKING TO BE PAID, which is the round that carries the reply path on a document whose
+         frontier never empties. It is answered IN THIS TURN and with whatever is READY — see the header's
+         half-duplex paragraph for why that is the same rule `stalled` obeys and not a relaxation of it.
+         NOTHING IS AWAITED HERE, WHICH IS THE ONE DIFFERENCE THAT MATTERS AND IT IS DELIBERATE. The `stalled`
+         arm below settles every instance's outstanding work first, because at a stall there is no sibling the
+         wait stands in front of and a payment held back would be read as a refusal. At a poll there ARE
+         siblings — that is what `poll` means — so waiting for a fetch would stop a running frontier for the
+         duration of somebody else's network, which is exactly the cross-flow coupling the payment schedule
+         exists to remove. What is ready goes out; what is in flight goes out at the next poll.
+         `e.stalled` IS NOT SET AND MUST NOT BE. It is this zone's record of which children are out of work,
+         and the session-end arm in `flush` fires only when every live instance carries it; a polling child is
+         RUNNING, so setting it here would let a frontier that is busy exploring be told that nothing more is
+         coming for it. The flag answers "is this child waiting on me", and a poll is not that. */
+      if (fatal) throw fatal;
+      retryHeld();
+      payRound(e);
+      /* AND ANY SIBLING THAT IS GENUINELY STALLED IS PAID ON THE SAME PASS, because work this instance's
+         round completed may be exactly what another one is parked on. It cannot reach the session-end arm
+         from here: that arm requires every live instance to be stalled, and this one is not. */
+      flush();
     } else if (line === 'stalled') {
       e.stalled = true;
       /* EVERYTHING OUTSTANDING ACROSS EVERY INSTANCE IS SETTLED FIRST, not just this one's: a payment held

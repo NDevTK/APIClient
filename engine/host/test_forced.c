@@ -27452,8 +27452,16 @@ static void abi_say_lines(const char *s, const char *stop, const char *verb)
    read, which is exactly what `wpt_runner.c` calls out at its own park ("blocking the FLOW is the design;
    blocking the THREAD it shares with every other flow of the document was this host's own addition").
    AND THE CHANNEL IS HALF-DUPLEX BY RULE, WHICH IS WHAT KEEPS IT FROM DEADLOCKING: the zone may write only in
-   answer to `stalled`. Two processes each filling the other's pipe while neither drains is a hang with no
-   symptom, and this is the one line that makes it impossible rather than unlikely. */
+   answer to a line this host wrote ASKING TO READ. Two processes each filling the other's pipe while neither
+   drains is a hang with no symptom, and that one rule makes it impossible rather than unlikely.
+   THE RULE USED TO BE SPELLED AS AN ANSWER TO `stalled` ALONE, AND THAT NAMED A SUFFICIENT CONDITION
+   AS IF IT WERE THE NECESSARY ONE — which is why it is rewritten here rather than deleted: a reader who
+   re-derives the deadlock argument reaches the narrow form, because a stall is the obvious moment at which
+   blocking denies nobody the thread. What the argument actually needs is only that a WRITE IS ANSWERING A
+   READER THAT IS ALREADY STANDING IN THE READ, and `poll` (see the step loop) satisfies that exactly as
+   `stalled` does. The cost of the narrow spelling was the whole reply path: a stall is reachable only where
+   the run queue is empty, so this host read its channel once per session and 42 of 43 reply-door asks were
+   never paid. Two verbs, one rule, and the rule is unchanged. */
 static void abi_announce(void)
 {
     char *fetches = strdup(qjs_pending());
@@ -27510,10 +27518,21 @@ static void abi_declined(const char *reason)
     g_abi_declined = grown;
 }
 
-/* THE ROUND IN WHICH THIS HOST IS PAID. It runs only after `stalled`, which is the one moment blocking on the
-   channel denies nobody the thread: every member of the frontier is parked, so there is no sibling this read
-   is standing in front of. Answers how many payments landed — the caller reads zero as the zone declining,
-   which is a fact about the zone rather than about the engine. */
+/* THE ROUND IN WHICH THIS HOST IS PAID. It runs after `stalled` and after `poll`, and the difference between
+   those two is not in this function — it is in WHAT A ZERO MEANS, which is the caller's to read and is why
+   this one only counts.
+   AFTER `stalled`, every member of the frontier is parked, so there is no sibling this read is standing in
+   front of and a zero is the zone DECLINING: it answers a stall with whatever it has and with the reason it
+   has nothing, so nothing more is coming.
+   AFTER `poll`, members are RUNNABLE and this read is standing in front of them — bounded, because the zone
+   answers a poll in the same turn it receives one, with whatever is READY and without waiting for what is in
+   flight. A zero there is "your bytes have not landed yet", which every run passes through; the caller drops
+   it rather than testing it, and reading it as a refusal would end a live session at the first slice whose
+   fetch had not come back.
+   THIS COMMENT USED TO SAY IT RUNS ONLY AFTER `stalled`, and that sentence was true of this tree and was
+   the whole of why a running frontier was never paid. It is rewritten rather than deleted because the
+   reasoning under it is exactly right and is what a reader re-derives — blocking at a stall denies nobody the
+   thread — and because that reasoning is a claim about what is SAFE, never about what is sufficient. */
 static int abi_pay(void)
 {
     int paid = 0;
@@ -28651,9 +28670,43 @@ static int abi_main(int argc, char **argv)
            hours earlier — and the findings are recoverable by re-running without the flag, which is what makes
            the trade payable at all. */
         if (paint_dir != NULL) abi_paint(paint_dir, doc_id, url);
-        /* THE BILL GOES OUT ON EVERY ROUND AND IS READ BACK ON NONE OF THEM — see abi_announce for why the
-           announcement and the payment are separate halves and why the channel is half-duplex between them. */
+        /* THE BILL GOES OUT ON EVERY ROUND IT CHANGES, AND IS READ BACK ON EVERY ROUND SOMETHING IS OWED —
+           see abi_announce for why the announcement and the payment are separate halves and why the channel
+           stays half-duplex across both verbs. THIS LINE USED TO READ `IS READ BACK ON NONE OF THEM`, which
+           was accurate and was the defect: the announcement travelled every round and the payment waited for
+           a stall the run queue never reaches. */
         abi_announce();
+        /* AND THE ROUND IN WHICH A *RUNNING* FRONTIER IS PAID, WHICH IS THE HALF THIS LOOP DID NOT HAVE AND
+           WITHOUT WHICH THE ARM BELOW IS NOT MERELY LATE BUT UNREACHABLE. `ENGINE_STEP_STALLED` is returned
+           only where the run queue is EMPTY (solver/engine.c's two exits), so a frontier with any runnable
+           member never produces it and the stall arm below — the one place this host ever read its channel —
+           is never entered. The one payment that DOES land is the early stall before anything has forked, and
+           that payment is what starts the forking that prevents the next: MEASURED over four archived
+           `--abi` runs of one real SPA, `replyAnswered` reads 0 at the first two censuses and 1 at every one
+           of the 35 after it, while `forks` climbs 3 -> 435 across the same boundary and on to 6242. The
+           bytes of 42 of 43 reply-door asks were never handed over, and §Learning-from-replies makes that
+           reply path the product rather than a nicety.
+           IT IS A SECOND CONDITION ON THE SAME CHANNEL AND NOT A SECOND CHANNEL, which is what keeps
+           `abi_announce`'s deadlock argument true WORD FOR WORD rather than merely in spirit. The rule that
+           makes a hang impossible is not "the frontier is empty" — it is that THE ZONE WRITES ONLY IN ANSWER
+           TO A LINE THIS HOST WROTE ASKING TO READ, so neither end ever fills a pipe the other is not about
+           to drain. `poll` is such a line and `stalled` is such a line; what differs is the SENTENCE each one
+           makes, and only one of them is a question about whether the session is over.
+           SO A `poll` THAT PAYS NOTHING IS NOT A REFUSAL, and its count is dropped here deliberately rather
+           than tested as the stall arm tests it. The zone answers a poll with whatever is READY and does not
+           wait for what is in flight, so an empty round is "your bytes have not landed yet" — a state every
+           run passes through and which is not the zone declining anything. Reading it as one would end a live
+           session at the first slice whose fetch had not come back, which is the opposite defect and a worse
+           one. `abi_stalled`'s sentence stays where the frontier is genuinely out of work, which is the one
+           moment at which "nothing is coming" is a claim anybody can make.
+           ONLY WHEN SOMETHING IS OWED, so a host with an empty register pays for no round trip: the two
+           registers are the same pair `abi_announce` has just composed its bill from and the same pair the
+           referenced-instance arm below reads, asked here rather than remembered across the call. */
+        if (step != ENGINE_STEP_STALLED &&
+            (*qjs_pending() != '\0' || *qjs_host_requests() != '\0')) {
+            abi_say("poll");
+            (void)abi_pay();
+        }
         if (step == ENGINE_STEP_STALLED) {
             abi_say("stalled");
             /* A ROUND THAT PAID NOTHING IS THE ZONE DECLINING, which is the one thing that ends a live
