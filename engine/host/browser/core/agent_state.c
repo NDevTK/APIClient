@@ -14,6 +14,7 @@ typedef enum {
     SLOT_ATOM,   /* pre-init: JS_ATOM_NULL */
     SLOT_VALUE,  /* pre-init: JS_UNDEFINED */
     SLOT_PTR,    /* pre-init: NULL */
+    SLOT_ZEROED, /* pre-init: the zero bytes, over `size` of them */
 } SlotKind;
 
 typedef struct {
@@ -21,6 +22,9 @@ typedef struct {
     const char *what;        /* what the slot IS — the second half of the assert */
     const void *slot;        /* the static itself; a static outlives the agent, so reading one here is safe */
     SlotKind    kind;
+    /* HOW MANY BYTES THE PRE-INIT IMAGE COVERS — SLOT_ZEROED's alone, and 0 for every other kind, whose
+       extent is its slot's TYPE and is therefore not a thing a declaration may state a second time. */
+    size_t      size;
     /* WHERE THE DECLARATION WAS WRITTEN, captured by the macro at the caller — see agent_state.h. It is a
        string LITERAL's address and a line number, both of which outlive the agent exactly as `component` and
        `what` do, so this row owns none of the three and frees none of them. */
@@ -43,7 +47,7 @@ static AgentSlot *g_slots;
 static int        g_n, g_cap;
 
 static void slot_declare(const char *component, const void *slot, const char *what, SlotKind kind,
-                         const char *file, int line)
+                         size_t size, const char *file, int line)
 {
     int i;
 
@@ -85,6 +89,7 @@ static void slot_declare(const char *component, const void *slot, const char *wh
     g_slots[g_n].what = what;
     g_slots[g_n].slot = slot;
     g_slots[g_n].kind = kind;
+    g_slots[g_n].size = size;
     g_slots[g_n].file = file;
     g_slots[g_n].line = line;
     /* NOT `calloc`-CLEAN: the row above is `realloc`'d, so a slot's bytes are whatever the last agent left
@@ -93,7 +98,7 @@ static void slot_declare(const char *component, const void *slot, const char *wh
     g_n++;
 }
 
-void agent_state_id_at(const char *c, const int *slot, const char *what, const char *f, int l) { slot_declare(c, slot, what, SLOT_ID, f, l); }
+void agent_state_id_at(const char *c, const int *slot, const char *what, const char *f, int l) { slot_declare(c, slot, what, SLOT_ID, 0, f, l); }
 /* A PER-REALM VALUE SLOT — see agent_state.h for why it is its own kind and not an id. The ONE thing this
    entry does that agent_state_id could not is the assert: a realm slot is HANDED OUT BY core/realm.c's
    realm_value_declare, whose body is JS_NewClassID plus JS_NewClass and whose local starts at 0, so it always
@@ -123,13 +128,32 @@ void agent_state_realm_slot_at(const char *c, const JSClassID *slot, const char 
             "while the allocator was never asked for it",
             c ? c : "(unnamed)", what ? what : "(undescribed)", f ? f : "(no file)", l,
             slot ? *slot : (JSClassID)JS_INVALID_CLASS_ID);
-    slot_declare(c, slot, what, SLOT_REALM, f, l);
+    slot_declare(c, slot, what, SLOT_REALM, 0, f, l);
 }
-void agent_state_flag_at(const char *c, const int *slot, const char *what, const char *f, int l) { slot_declare(c, slot, what, SLOT_FLAG, f, l); }
-void agent_state_class_at(const char *c, const JSClassID *slot, const char *what, const char *f, int l) { slot_declare(c, slot, what, SLOT_CLASS, f, l); }
-void agent_state_atom_at(const char *c, const JSAtom *slot, const char *what, const char *f, int l) { slot_declare(c, slot, what, SLOT_ATOM, f, l); }
-void agent_state_value_at(const char *c, const JSValue *slot, const char *what, const char *f, int l) { slot_declare(c, slot, what, SLOT_VALUE, f, l); }
-void agent_state_ptr_at(const char *c, const void *slot, const char *what, const char *f, int l) { slot_declare(c, slot, what, SLOT_PTR, f, l); }
+void agent_state_flag_at(const char *c, const int *slot, const char *what, const char *f, int l) { slot_declare(c, slot, what, SLOT_FLAG, 0, f, l); }
+void agent_state_class_at(const char *c, const JSClassID *slot, const char *what, const char *f, int l) { slot_declare(c, slot, what, SLOT_CLASS, 0, f, l); }
+void agent_state_atom_at(const char *c, const JSAtom *slot, const char *what, const char *f, int l) { slot_declare(c, slot, what, SLOT_ATOM, 0, f, l); }
+void agent_state_value_at(const char *c, const JSValue *slot, const char *what, const char *f, int l) { slot_declare(c, slot, what, SLOT_VALUE, 0, f, l); }
+void agent_state_ptr_at(const char *c, const void *slot, const char *what, const char *f, int l) { slot_declare(c, slot, what, SLOT_PTR, 0, f, l); }
+/* AN AGGREGATE WHOSE C DECLARATION CARRIES NO INITIALISER — see agent_state.h for why the image is the zero
+   bytes, why that is a claim about the DECLARATION rather than about the type, and why an array of slots of an
+   existing kind is N declarations here rather than a length passed to this one.
+   THE EXTENT IS ASSERTED AND NOT TOLERATED, for the reason the site is: `sizeof` at the macro cannot answer 0
+   for any object there is, so a 0 arriving here is a hand-written call that bypassed that spelling — and a
+   zero extent would make both arms below no-ops, which is a declaration that reads as checked and undoes
+   nothing. The NULL is left to slot_declare, which refuses it in its own words. */
+void agent_state_zeroed_at(const char *c, const void *slot, size_t size, const char *what,
+                           const char *f, int l)
+{
+    DCHECKF(size > 0,
+            "`%s` declared an aggregate of agent state (%s) at %s:%d with an extent of zero — the size is "
+            "`sizeof` the object taken by the macro in core/agent_state.h at the CALL, which answers 0 for no "
+            "object, so this call reached the registry past it. Both the check and the undo read that extent, "
+            "and over zero bytes each is a no-op: the slot would be reported as given back on every release "
+            "and put back on none",
+            c ? c : "(unnamed)", what ? what : "(undescribed)", f ? f : "(no file)", l);
+    slot_declare(c, slot, what, SLOT_ZEROED, size, f, l);
+}
 
 int agent_state_count(const char *component)
 {
@@ -191,6 +215,18 @@ static int slot_is_pre_init(const AgentSlot *s)
     case SLOT_ATOM:  return *(const JSAtom *)s->slot == JS_ATOM_NULL;
     case SLOT_VALUE: return JS_IsUndefined(*(const JSValue *)s->slot);
     case SLOT_PTR:   { void *null = NULL; return memcmp(s->slot, &null, sizeof null) == 0; }
+    /* READ AS UNSIGNED CHARS AND NOT AGAINST A ZERO BLOCK SOMEBODY ALLOCATED: an aggregate has no bound
+       on its extent, so a comparison object would be a buffer this file would have to size, and the one
+       size it could pick is a cap on how much state a component may hold. Every object there is may be
+       read through `unsigned char`, which is the same legality the pointer arm above buys with memcmp. */
+    case SLOT_ZEROED: {
+        const unsigned char *b = s->slot;
+        size_t i;
+
+        for (i = 0; i < s->size; i++)
+            if (b[i] != 0) return 0;
+        return 1;
+    }
     }
     DFAIL("a slot of agent state has a kind this file does not have — every kind IS a pre-init value, so a "
           "kind with no case is a slot whose released state is undefined");
@@ -220,6 +256,7 @@ static void slot_set_pre_init(const AgentSlot *s)
     case SLOT_ATOM:  *(JSAtom *)p = JS_ATOM_NULL; break;
     case SLOT_VALUE: *(JSValue *)p = JS_UNDEFINED; break;
     case SLOT_PTR:   { void *null = NULL; memcpy(p, &null, sizeof null); break; }
+    case SLOT_ZEROED: memset(p, 0, s->size); break;
     default:
         DFAIL("a slot of agent state has a kind this file cannot undo — every kind IS a pre-init value, so a "
               "kind the write side has no case for is a slot whose release would silently do nothing");

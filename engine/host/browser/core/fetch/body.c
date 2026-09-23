@@ -1137,6 +1137,20 @@ int body_declare(JSContext *ctx, JSClassID class_id, BodyState *(*of)(JSValueCon
         agent_state_id("request", &g_body_text_stepid,
                        "Fetch §5.3 Body mixin's `textStream()` machine, declared once for both including "
                        "interfaces");
+        /* THE TABLE ITSELF, AND NOT ONLY THE COUNT — core/agent_state.h's agent_state_zeroed. The record at
+           `handle` is filled above, which is why this stands here: a declaration belongs below the line that
+           sets the slot. It is the one aggregate in this file and it takes the OBJECT rather than its
+           address, because `&` and `sizeof` are then two readings of one spelling.
+           WHY IT IS DECLARED AT ALL, GIVEN THE COUNT BESIDE IT ALREADY HIDES A STALE RECORD: the count is
+           what makes a carried record unREADABLE, and this is what makes the clearing CHECKED. Those are two
+           different obligations and only one of them had anything standing under it — the clearing was a
+           hand-written memset in body_agent_free, so it could be deleted and no run of this engine, at any
+           revision, would have reported the difference. A record holds a dead runtime's class id and a dead
+           agent's byte-reader handle; a dropped clearing is what §Offensive-programming's closing paragraph
+           calls silent, since neither of JS_FreeRuntime's censuses has anything to say about a number. */
+        agent_state_zeroed("request", g_body_iface,
+                           "Fetch §5.3 Body mixin's table of including interfaces — each record's class id, "
+                           "its three §5.4/§5.5 accessors and its byte-reader handle");
     } else {
         f->reader_handle = g_body_iface[0].reader_handle;
     }
@@ -1151,32 +1165,51 @@ int body_declare(JSContext *ctx, JSClassID class_id, BodyState *(*of)(JSValueCon
  * carrying the row's name, so an owner that dropped this call would have the mixin's handles put back by a
  * release that never reached it.
  *
- * THE TABLE IS CLEARED HERE AND NOT BY THE UNDO, because the undo resets HANDLES and never what a handle
- * names: g_body_iface is an ARRAY OF RECORDS and has no kind in that registry at all, so the count above is
- * the only part of this pair the registry can hold. Clearing it is what stops a record naming a dead
- * runtime's class id and a dead agent's byte-reader handle from outliving the count that hides it.
+ * THE TABLE IS CLEARED BY THE UNDO AND NOT HERE, AND THIS PARAGRAPH SAID THE OPPOSITE — it is rewritten
+ * rather than deleted, because its reasoning is what a reader re-derives. It read: the undo resets HANDLES
+ * and never what a handle names, g_body_iface is an ARRAY OF RECORDS and has no kind in that registry at all,
+ * so the count above is the only part of this pair the registry can hold. The first clause is still the rule
+ * and the second was a fact about the registry that a diff moved: a record holds no reference — a class id, a
+ * byte-reader handle and three function pointers into this file are each a NUMBER or an address of code, so
+ * there is nothing here to free and the whole of the reset is a handle reset, which is exactly what the undo
+ * is for. What the clearing stops is a record naming a dead runtime's class id and a dead agent's byte-reader
+ * handle from outliving the count that hides it.
  * NOTHING READS EITHER AFTER THIS: §5.4's and §5.5's finalizers and gc_marks run after core/platform.c's
  * release column and reach body_state_free and body_state_mark, which take the BodyState directly and
  * consult no static of this file's.
  *
- * NAMED RESIDUAL — THE MEMSET IS A HAND-WRITTEN RESET THAT NO REGISTRY HOLDS.
- *   NOT COVERED: core/agent_state.h has one kind per SCALAR slot and none for an AGGREGATE, so g_body_iface
- *     is declared to nothing and the line above is exactly the kind of second list that header's undo exists
- *     to end — correct today and unfalsifiable, since agent_state_check_released cannot report the day it is
- *     dropped. The COUNT beside it is checked; the records it counts are not.
- *   THE NEXT DIFF BUILDS: an aggregate kind taking the slot's address and its SIZE and reading it as BYTES
- *     against a zero block, which is what SLOT_PTR's memcmp/memcpy pair already does for the one existing
- *     kind whose value no C type can be read through — so the write side is slot_set_pre_init's memset arm
- *     and the read side is its memcmp arm, both over a length the declaration carries.
- *   HOW ITS ABSENCE WOULD SHOW: a release that clears an aggregate passes the end-of-column check with that
- *     clearing line deleted, so the check's own report is BYTE-IDENTICAL either way — there is no run of
- *     this engine, at any revision, in which a dropped aggregate reset is distinguishable from a kept one. */
+ * THE NAMED RESIDUAL THAT STOOD HERE IS RETIRED — THE KIND IS BUILT, AS core/agent_state.h's
+ * agent_state_zeroed, AND THE MEMSET IS GONE WITH IT. The reset is the undo's now, at request_free's last
+ * line, which is one call further on than this function and reads nothing in between.
+ * ITS NOT-COVERED AND ITS HOW-ITS-ABSENCE-WOULD-SHOW CLAUSES WERE BOTH EXACT, and the second is what the
+ * declaration above now answers: the clearing could be deleted and the end-of-column check's report was
+ * byte-identical either way.
+ * ITS NEXT-DIFF CLAUSE WAS WRONG IN ONE CLAUSE AND IS RECORDED RATHER THAN DELETED, because a next-diff
+ * clause is read ONCE, by somebody who has already decided to build it, so a wrong one is not caught — it is
+ * executed. It said to read the slot as BYTES AGAINST A ZERO BLOCK and to call the kind an AGGREGATE. That is
+ * exactly right for THIS table, whose C declaration carries no initialiser, and it is wrong for the general
+ * shape it named: core/dom/node.c declares three arrays of pool entries as `{ -1, … }`, and a zero image
+ * pointed at one of those is wrong in BOTH directions at once — the READ reports a release that put the array
+ * back at `-1` as one that never ran, and the WRITE puts an id at `0`, which every `>= 0` gate in this engine
+ * reads as a valid pool entry. The kind is therefore named for the property it ASSERTS (the object carries no
+ * initialiser) and not for the shape of the thing it takes.
+ * AND ITS SECOND HALF NAMED A GAP THAT WAS NOT ONE: an array of slots of an EXISTING kind needs no kind at
+ * all, because that registry is keyed on a slot's ADDRESS, so N declarations in a loop give each element the
+ * arms its own kind already carries and get an id's `-1` right by construction. What genuinely had no kind is
+ * the RECORD — a struct whose members share no kind between them — which is what this table is.
+ * THE TELL THE WRONG CLAUSE CARRIED IS THE ONE TO COPY: it generalised from the ONE subject in front of it to
+ * a POPULATION it had not enumerated, which is the shape CLAUDE.md rates as a hypothesis wearing a
+ * measurement's clothes. The subject was right and the population was a guess. */
 void body_agent_free(void)
 {
     DCHECK(g_body_iface_n > 0,
            "Fetch §5.3's Body mixin was released in an agent in which no interface included it — this runs "
            "from the release of the row its declarations name, and that release only runs if its init did");
-    memset(g_body_iface, 0, sizeof g_body_iface);
+    /* THE TABLE IS NOT CLEARED HERE ANY MORE. It is declared under `request`, whose release ends in
+       agent_state_undo — one reset, computed from the registry that already holds this table's address, its
+       kind and its extent. A memset here as well would be a SECOND resetter beside that one, which is the
+       pair core/agent_state.h's undo exists to stop being kept by hand. Nothing between this line and that
+       undo reads a record: this call is the LAST statement of request_free before it. */
     agent_state_reached("request");
 }
 

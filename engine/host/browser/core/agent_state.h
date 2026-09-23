@@ -115,6 +115,7 @@
 #define ENGINE_HOST_BROWSER_CORE_AGENT_STATE_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "quickjs.h"
 
@@ -165,6 +166,48 @@ void agent_state_value_at(const char *component, const JSValue *slot, const char
    was written about; memcmp reads unsigned chars and is legal for every object there is. */
 void agent_state_ptr_at(const char *component, const void *slot, const char *what,
                         const char *file, int line);
+/* AN AGGREGATE WHOSE C DECLARATION CARRIES NO INITIALISER — a table of RECORDS, whose pre-init exists only
+ * as a byte image because its members have no kind between them. `size` is `sizeof` the object, taken at the
+ * call, which is the one spelling that cannot disagree with what it measures.
+ *
+ * WHY IT IS BYTES AND NOT A REPEATED ELEMENT KIND, WHICH IS THE HALF A READER RE-DERIVES AND THE HALF THAT
+ * WOULD BE THE SECOND COPY. An array of slots of an EXISTING kind needs nothing new at all: this registry is
+ * keyed on a slot's ADDRESS, so `&a[0]` and `&a[1]` are two rows, and N declarations in a loop give each
+ * element the read and the write arm its own kind already carries — which gets an id's `-1` and a class id's
+ * `0` right BY CONSTRUCTION rather than by a length somebody passed. So an array of ids is N declarations and
+ * an array of class ids is N declarations, and neither is this. What has no kind at all is the RECORD: a
+ * struct holding a class id, three function pointers and a `const char *` is not N slots of one kind, and the
+ * only statement anybody can make about where a fresh process finds it is a statement about its BYTES.
+ *
+ * WHY THE IMAGE IS ZERO AND WHY THAT IS A CLAIM ABOUT THE DECLARATION RATHER THAN ABOUT THE TYPE. A static
+ * with no initialiser is zero-initialised, so its pre-init IS the zero bytes; a static WITH one is wherever
+ * its initialiser put it, and this engine has such aggregates — core/dom/node.c declares three arrays of pool
+ * entries as `{ -1, … }`, because `-1` is what an id's own gate reads as undeclared. Pointed at one of those,
+ * a zero image is wrong in BOTH directions at once and neither is quiet: the READ reports a release that put
+ * the array back at `-1` as a release that never ran, which is the accusing direction, and the WRITE puts an
+ * id at `0`, which every `>= 0` gate in this engine reads as a VALID pool entry and installs whatever member
+ * the next agent's pool has grown into that slot. So this entry is named for the property it ASSERTS — the
+ * object carries no initialiser — and not for the shape of the thing it takes.
+ *
+ * NAMED RESIDUAL — AN OBJECT WHOSE PRE-INIT IS NOT THE ZERO BYTES IS SEPARATED BY A NAME AND NOT BY A TYPE.
+ *   NOT COVERED: any object declared here is reset to the zero bytes and read against them, whatever its own
+ *     declaration says — an aggregate carrying an initialiser, and a SCALAR of a kind with its own entry
+ *     above, both reach this door and both compile. Everything crosses as an address and a size, so no
+ *     signature separates them; and no assert at the declaration can separate them either, because a
+ *     declaration stands BELOW the line its `_init` sets the slot with, so the pre-init the check would need
+ *     has already been overwritten by the time this entry is reached. The realm-slot entry's one-directional
+ *     assert does not transfer: its argument is a CONSERVATION IDENTITY over class ids, and there is no
+ *     identity over byte images for a second reading to come out short against.
+ *   THE NEXT DIFF BUILDS: a second entry taking the pre-init IMAGE as well as the slot — a `static const`
+ *     object the component declares beside the live one and initialises identically — so the two are written
+ *     once each, the compiler lays them out the same way, and the read and the write both go through the
+ *     image rather than through a constant this file chose. This entry then states the zero image as the
+ *     degenerate case of that one rather than as a kind of its own.
+ *   HOW ITS ABSENCE WOULD SHOW: agent_state_check_released naming a slot whose release is complete, in a
+ *     component whose aggregate carries an initialiser — the check accusing a correct release, with the
+ *     component's own next `_init` meanwhile reading an element the undo put at a value its gate accepts. */
+void agent_state_zeroed_at(const char *component, const void *slot, size_t size, const char *what,
+                           const char *file, int line);              /* pre-init: the zero bytes */
 /* A PER-REALM VALUE SLOT — core/realm.h's realm_value_declare handed this out, and it is A CLASS ID.
  *
  * WHY IT IS NOT AN id, WHICH IS WHAT IT WAS — AND THE HALF OF THAT ARGUMENT THAT IS NOW RE-DERIVABLE IS
@@ -262,6 +305,13 @@ void agent_state_realm_slot_at(const char *component, const JSClassID *slot, con
 #define agent_state_atom(component, slot, what)  agent_state_atom_at((component), (slot), (what), __FILE__, __LINE__)
 #define agent_state_value(component, slot, what) agent_state_value_at((component), (slot), (what), __FILE__, __LINE__)
 #define agent_state_ptr(component, slot, what)   agent_state_ptr_at((component), (slot), (what), __FILE__, __LINE__)
+/* THIS ONE TAKES THE OBJECT AND NOT ITS ADDRESS, WHICH IS THE OPPOSITE OF EVERY MACRO ABOVE AND IS WHAT
+   MAKES THE SIZE UNABLE TO DISAGREE WITH THE SLOT: `&` and `sizeof` are then two readings of ONE
+   spelling. A caller who writes the address anyway, as the other seven are written, does not get a
+   pointer's `sizeof` — `&(&g_x)` is the address of an rvalue and does not compile, so the one way to
+   spell this wrongly is a constraint violation rather than a memset over eight bytes. */
+#define agent_state_zeroed(component, slot, what) \
+    agent_state_zeroed_at((component), &(slot), sizeof (slot), (what), __FILE__, __LINE__)
 #define agent_state_realm_slot(component, slot, what) \
     agent_state_realm_slot_at((component), (slot), (what), __FILE__, __LINE__)
 
