@@ -1433,6 +1433,15 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "PerformanceObserver",   "performance_observer" },
     { "PerformanceObserverEntryList", "performance_observer" },
     { "PerformanceMark",       "user_timing" },
+    /* §2.3's interface object, beside §2.2's and owed by the same landing that put §2.3 on the global. It
+       was missing for a while, and WHY THAT WENT UNNOTICED is the part worth keeping: this list is an ORACLE
+       and not a total, so a name with no row is a missing WITNESS rather than an abort — an oracle with a
+       hole reports clean, on every run, for ever. The absent direction is what earns the row here as it does
+       above: a realm whose install did not run has no `PerformanceMeasure`, which is the state in which
+       `performance.measure(...)` is the TypeError this pair exists to stop a page meeting. Its IDL carries no
+       exposure condition this engine's two realm kinds can tell apart, so the row is unconditional like
+       §2.2's. */
+    { "PerformanceMeasure",    "user_timing" },
     { "postMessage",           "window_message" },
     { "structuredClone",       "structured_clone" },
     { "requestAnimationFrame", "animation_frame" },
