@@ -5870,6 +5870,19 @@ const derivedRead = new Map();   // field name -> the locator that answers for i
  * collection's own consumer in the holding file and states whether it REQUIRES or EXCLUDES, which turns the
  * band into a credit for one holder at a time. Its absence shows as a banded row whose holder a reader opens
  * and finds an exclusion list with no presence check anywhere over it. */
+/* WHICH EMISSION STATES A NAME — `shapes` inverted, once, because TWO answers below have to group by the
+   RECORD a name belongs to and neither may group by the line one key call happens to sit on. Derived from the
+   producer's own walk with the fragment fold already applied, so a body writing into a buffer it was handed is
+   not a key here, and a name that belongs to several records appears under each of them. */
+const shapesOfName = new Map();
+for (const [id, ns] of shapes) {
+  for (const n of ns) {
+    let a = shapesOfName.get(n);
+    if (!a) { a = []; shapesOfName.set(n, a); }
+    a.push(id);
+  }
+}
+const emissionOf = (n, e) => (shapesOfName.get(n) || []).join(" + ") || place(e.writes[0]);
 const NAMESPACE_HOLD_MIN = 3;
 const namespaceHolders = [];  // {file, of, n} — printed whole, because this is the band's own denominator
 const heldBy = new Map();     // field name -> the holder that names it
@@ -5906,14 +5919,6 @@ const heldBy = new Map();     // field name -> the holder that names it
      accusation for a named band.
      RETIREMENT: this note goes when no answer in this file keys a question about a RECORD on a field's own
      write site, because the confusion it records is then unspellable rather than merely not made. */
-  const shapesOfName = new Map();   // field name -> every emission (shape) id that states it
-  for (const [id, ns] of shapes) {
-    for (const n of ns) {
-      let a = shapesOfName.get(n);
-      if (!a) { a = []; shapesOfName.set(n, a); }
-      a.push(id);
-    }
-  }
   /* MATCHED ON `code`, where a comment is blank and a literal's own characters are intact — so a field name
      written in English prose is not a holder, and the bytes read are the bytes the program holds. */
   const HELD = /"([A-Za-z_$][\w$]*)"|'([A-Za-z_$][\w$]*)'/g;
@@ -6050,11 +6055,16 @@ if (writeNoReader.length) {
     const par = parentOf(n);
     if (par && accused.has(par)) { if (!entailed.has(par)) entailed.set(par, []); entailed.get(par).push(n); }
   }
+  /* GROUPED BY THE EMISSION AND NOT BY THE KEY CALL'S OWN LINE, for the reason the holder band above now
+     states: a producer writing one key per line has as many write-site lines as it has fields, so this header
+     called SIX names SIX emissions where they are rows of TWO records — and that sentence is what a reader
+     quotes onward. The per-name write site is printed under each group rather than being the group, because
+     the line is what a reader opens and the record is what prices the fix. */
   const bySite = new Map();
   for (const [n, e] of writeNoReader) {
     const par = parentOf(n);
     if (par && accused.has(par)) continue;
-    const k = place(e.writes[0]);
+    const k = emissionOf(n, e);
     if (!bySite.has(k)) bySite.set(k, []);
     bySite.get(k).push(n);
   }
@@ -6065,10 +6075,12 @@ if (writeNoReader.length) {
                        `fact and are named under them` : ``) + ` ──`);
   for (const [k, ns] of [...bySite].sort((a, b) => b[1].length - a[1].length)) {
     log(`  ${k}  ${ns.length} of the shape: ${ns.sort().join(" ")}`);
-    for (const n of ns.slice().sort())
+    for (const n of ns.slice().sort()) {
+      log(`      ${place(fields.get(n).writes[0])}  \`${n}\``);
       if (entailed.has(n))
         log(`      \`${n}\` is an OBJECT — its ${entailed.get(n).length} row(s) are reachable only through ` +
             `it and are one fact with it: ${entailed.get(n).slice().sort().join(" ")}`);
+    }
   }
 }
 
