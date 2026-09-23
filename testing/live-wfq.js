@@ -219,6 +219,46 @@ const COST = ["scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeig
 const KEYCHK = ["keyArmedLifetime", "keyStaleGenLifetime", "keyFirstSeenLifetime", "keyRunningLifetime",
                 "keyIndexAskedLifetime", "keyIndexDifferedLifetime"];
 
+/* WHAT THE ORDER IS MADE OF, WHICH EVERY ROW ABOVE PRESUPPOSES AND NONE OF THEM ASKS. The scopes above say
+   what the order DECIDED, what it COST and whether its key stands still.  These six say whether it can
+   separate anybody at all: `wTop - wMin` is the whole frontier's spread in the order's own points,
+   `nonrewardMax` is the bound every term except the reward is under, and `visMin`/`visMax` and `distMax` are
+   the spreads of two of those terms — the optimism denominator and the fitness reading.
+
+   EVERY ONE OF THEM IS READ BY `engine/build.mjs` AND BY NOTHING ELSE, which drives the SMOKE FIXTURE.  So
+   the question a tied frontier actually poses — what breaks the tie among fourteen thousand members standing
+   at one weight — was measurable only on a document whose fork factor and member count are its author's
+   design decisions.  That is the same defect as the minter triple and the cost scope, one scope over again.
+
+   WHY THESE SIX AND WHY AS A GROUP.  `neverPickedGap` above reads 0.000 on a real page and 73-93% of members
+   stand tied at the top, which is a statement that SOMETHING ELSE decided; it does not say what, and no row
+   above can.  A term with `min == max` across the frontier is a COMMON OFFSET and orders nobody, so the pair
+   is the reading and either half alone is not: `visMax - visMin` at zero says the optimism term separated
+   nothing, and `wTop - wMin` at zero says the whole order did.  A fork COPIES its parent's coordinates
+   verbatim (flow_fork_inherit), so a frontier grown by forking can carry one value for a term on every
+   member, which is the state that makes registry order the arbiter.
+
+   ALL SIX ARE GAUGES over the members standing NOW and may NOT be differenced — an extremum over a set that
+   grows and whose members are forked from one another moves for reasons that are not a rate.  They are
+   printed RAW with no spread composed here: result.c prescribes reading `wTop` against `wMin` and names
+   `nonrewardMax` as what bounds the non-reward terms, and a driver that subtracted them would be publishing
+   an arithmetic the contract states in points whose unit a reader has to hold separately. */
+const SPREAD = ["wTop", "wMin", "nonrewardMax", "visMin", "visMax", "distMax"];
+
+/* THE SAME TWO-WAY DERIVED CHECK, for the third time and for the reason it exists: a row named here that
+   result.c renames throws, and a spread row result.c ADDS that this file does not name throws too.  The
+   pattern is spelled from the six rather than from a prefix regex because this scope's names share no stem —
+   which is itself why they went unread: there was no shape to notice them by. */
+function spreadScope() {
+  const keys = wfqComposerKeys();
+  for (const k of SPREAD)
+    if (!keys.has(k))
+      throw new Error("[live-wfq] result_wfq_json no longer publishes `" + k + "` — this driver names it " +
+                      "from result.c's own composer, so a row that has gone is one the producer renamed or " +
+                      "dropped rather than one this file invented.");
+  return SPREAD;
+}
+
 /* THE SAME TWO-WAY CHECK AGAIN, AGAINST THE SAME COMPOSER AND FOR THE SAME REASON. */
 function keyScope() {
   const keys = wfqComposerKeys();
@@ -370,6 +410,7 @@ async function main() {
   const BR = branchScope();
   const COSTROWS = costScope();
   const KEYROWS = keyScope();
+  const SPREADROWS = spreadScope();
   console.log("# artifact " + JSON.stringify(artifactStamp()));
   console.log("# windowMs=" + WINDOW + " everyMs=" + EVERY +
               " — COUNTERS (may be differenced): " + COUNTERS.join(",") +
@@ -392,6 +433,13 @@ async function main() {
               "holds and by a walk that compared nothing. `keyArmedLifetime` is the comparisons actually " +
               "made; the other three are the exemptions that absorbed the rest. Raised under APICLIENT_DEV, " +
               "so four zeros are a question about the BUILD before they are a question about the run.");
+  console.log("# order-spread scope, derived from result_wfq_json (" + SPREADROWS.length + " rows) — ALL " +
+              "GAUGES, never differenced: " + SPREADROWS.join(",") + " | what the order is MADE OF, which " +
+              "every row above presupposes and none asks. A term whose min equals its max across the " +
+              "frontier is a COMMON OFFSET and orders nobody; `wTop`-`wMin` is the whole spread in the " +
+              "order's own points and `nonrewardMax` is the bound every term but the reward is under. Read " +
+              "beside `neverPickedGap`: a gap of 0.000 says something else decided, and these say whether " +
+              "anything could have.");
 
   const { browser, extId } = await connect();
   try {
@@ -467,6 +515,10 @@ async function main() {
            no fraction over them; the four are emitted together and are read together or not at all. */
         if (!("keyArmedLifetime" in w)) { out.keyAbsent = true; }
         else for (const k of KEYCHK) out[k] = (k in w) ? w[k] : null;
+        /* WHAT THE ORDER IS MADE OF — printed beside `neverPickedGap` and the tie rows above, because a
+           frontier standing at one weight is a statement that something else decided and these are what say
+           whether any term could have.  Absent is null, never 0. */
+        for (const k of SPREAD) out[k] = (k in w) ? w[k] : null;
         /* AN EMPTY FRONTIER PUBLISHES `{"members":0}` AND NO BRANCH ROW AT ALL, which is not the same fact
            as a branch scope reading zero — result.c composes that short form on its own path. Absent is
            said once, as a flag; filling twenty-three nulls would render an unasked question exactly like a

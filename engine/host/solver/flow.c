@@ -138,8 +138,16 @@ static int64_t g_unframed_picks_total = 0;
    engine_sibling_assemble COPIES the parent's frame, its `script_i`, its `last_compiled` and its delta (an
    O(1) shared base segment), so an IN-SESSION sibling does not re-run its prefix — that function's own DCHECK
    forbids the state in which it would, in the words "its first step would compile that program's row again
-   and replay every side effect the parent has already performed". Replay is what a COLD-TIER REBUILD does,
-   and this run reports `resumed` 0.
+   and replay every side effect the parent has already performed". Replay AS RE-EXECUTION is what a COLD-TIER
+   REBUILD does, and this run reports `resumed` 0 — WHICH IS THE CLAUSE THAT MAKES THIS SENTENCE SURVIVE BEING
+   MET ALONE, AND IT DID NOT CARRY ONE. Read as it stood, beside a `replayHits` of 3345, it forces one of two
+   false conclusions: that the sentence is wrong, or that a cold rebuild happened three thousand times. Neither
+   is the case and the argument above is untouched — `dec_replay` consumes a recorded ARM in session, for a
+   sibling taking the arm it was FORKED to take, and that is the ordinary state on every real page measured
+   here (`replayHits` 3345 and 3439 with `resumed` 0 in both). What a cold rebuild adds is the RE-EXECUTION,
+   and only `resumed` above zero says one happened. solver/decide.c states the pairing at the counter's own
+   declaration, where a reader of the row is standing; this clause exists so the two sites agree rather than
+   costing a reading to whoever meets this one first.
    WHAT THE ROW LICENSES IN ITS OWN UNIT IS LESS THAN EITHER READING, AND SAYING SO IS THE POINT: not every
    fork records a slot at all (decide_fork_same_path asks no predicate, and dec_fork_handoff "claims no replay
    slot"), so 10507 arms against 71451 forks is not a fraction of anything this document publishes. The row
