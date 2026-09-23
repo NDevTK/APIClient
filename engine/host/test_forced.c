@@ -11288,9 +11288,53 @@ static char *tf_park_load(const char *path) {
    row is unaskable exactly while the thing that would make it a statement has never happened, and the day it
    happens the row is a findings row again with no diff anywhere. A row whose `unaskable` is a literal is the
    shape to refuse in review. */
+/* AND WHICH OTHER ROW'S 0 THIS ROW'S 0 IS ENTAILED BY, WHICH IS THE ONE THING A READER COUNTING ZEROS NEEDS
+   AND THE ONE THING NO LINE OF THIS STREAM SAID. `ok` answers ANSWERED / NOT ANSWERED and `unaskable` answers
+   whether this HOST could put the question at all; neither says whether two 0s are two FACTS. Rows behind one
+   shut latch read 0 for ONE reason, so a reader who counts them counts that reason once per row — which is
+   not weak evidence, it is one observation under N names.
+   THE TELL THAT FINDS A DERIVED ROW DOES NOT FIND A GATED ONE, which is why this is a field and not a reading
+   convention. A row that is a FUNCTION of its neighbours prints as a bare digit with nothing to explain, so an
+   ABSENCE OF PROSE finds it. A row that is merely DOWNSTREAM of a latch has its own definition, its own
+   meaning and its own `why`, and reads 0 for the same reason as every other row behind that latch — so every
+   one of them SURVIVES that check, and the inflation is worse in the gated case for exactly that reason.
+   MEASURED: eleven rows of this table were relayed as eleven readings that a cold-tier park was broken, and
+   ten of them reduce to one fact.
+   IT NAMES A ROW AND NEVER A CONDITION, so there is nothing here to keep in step with anything: the gate is a
+   row of this same table, its value is read where this row's is, and the implication is ASSERTED over the
+   selection rather than described. A condition restated here would be a second copy of what the gate row
+   already computes, which is the shape that drifts.
+   AND IT IS NOT A TERM OF THE VERDICT. A gated row still enters the conjunction — its 0 is a real 0 and the
+   run is not right while it stands. What a gate changes is what a reader may COUNT, which is EVIDENCE and
+   never an answer; `unaskable` is the field that removes a term, and the two are different statements about
+   different things. A row may carry both.
+   RETIREMENT: this field goes when a row's entailment is derivable from the expressions that compute the rows
+   — when the table holds the PREDICATE rather than the boolean it evaluated to — because there is then
+   nothing for a declaration to be wrong about and nothing to assert. */
 typedef struct { const char *name; int ok; const char *key; unsigned char sess; const char *why;
-                 int unaskable; } Probe;
+                 int unaskable; const char *gate; } Probe;
 enum { SESS_EXPLORE = 0, SESS_PARK = 1, SESS_RESUME = 2 };
+
+/* WHERE A ROW'S GATE STANDS IN A TABLE, OR -1. SIDE-EFFECT-FREE, which is the whole reason it is a function
+   rather than a loop written out at each site: a DCHECK's condition may not have effects, and the two callers
+   need the same lookup over two different arrays — the whole table, where it asserts a DECLARATION, and this
+   run's selection, where it reads a VALUE.
+   MATCHED ON NAME AND SESSION TOGETHER, because a name is unique only within a session: `nwiso-park` and
+   `nwiso-resume` are one statement at two ends and carry one name apiece for that reason. A gate resolved
+   across that boundary would read its value off a row no run selected beside it.
+   `n` IS THE CALLER'S WINDOW AND NOT THE TABLE'S LENGTH, which is what lets the declaration check assert
+   ORDER and RESOLUTION in one condition: handed the rows BEFORE the one being checked, a -1 means either that
+   no row carries the name or that the one which does stands later, and both are the same repair — move the
+   gate above the row it gates. A total order over the declarations admits no cycle, and it is also this
+   table's own reading convention, which is that a ladder is written lowest rung first. */
+static int probe_gate_at(const Probe *t, int n, const char *gate, unsigned char sess) {
+    int i;
+
+    if (!gate) return -1;
+    for (i = 0; i < n; i++)
+        if (t[i].sess == sess && !strcmp(t[i].name, gate)) return i;
+    return -1;
+}
 
 /* THE FOLD, WITH THE NAME KEPT. `ok` is the assertion, `what` is what it is about, and the FIRST failure is the
    one kept: a fold is a conjunction, so the first 0 is where the run stopped being right and everything after
@@ -15951,7 +15995,21 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     cold_park_orphan    = g_sess == SESS_PARK && g_cp.orphans > 0;
     cold_res_orphan     = g_sess == SESS_RESUME && g_cr.orphans > 0;
     cold_res_orphan_met = g_sess == SESS_RESUME && orphan_met > 0;
-    cold_res_orphan_all = g_sess == SESS_RESUME && orphan_unmet == 0;
+    /* AND IT IS CONJOINED WITH THE REBUILD THAT MAKES IT A STATEMENT, because `orphan_unmet == 0` ALONE is
+       VACUOUSLY TRUE in exactly the session where every row beside it reads 0. The proof needs no run and is
+       already asserted one file over: solver/result.c's `resumed.orphans > 0 || (claims_met == 0 &&
+       claims_unmet == 0)` says a rebuild that carried no locator cannot have lost a claim — so a resume
+       handed NO residue read 1 here while `resumed`, `resumed-orphan` and `resumed-orphan-met` all read 0,
+       and that 1 read as a pass in the one state where it was a statement about nothing.
+       IT IS THE MIRROR OF THE ROWS AROUND IT AND SO THE ONE THIS TABLE COULD NOT SEE. A row whose sides
+       cannot disagree while its own precondition is shut is not a weak assertion, it is a NON-assertion
+       wearing a row's clothes, and it is invisible precisely because it is GREEN — every mechanism here for
+       a 0 read past it.
+       THE CONJUNCT MAKES IT SAY WHAT THE PARAGRAPH ABOVE SAYS IT SAYS — drives came back AND not one of them
+       finished without a body — and makes it GATEABLE on the row that says drives came back, so its 0 is
+       published as entailed rather than counted as a second finding. It changes no verdict: the state it
+       turns from 1 to 0 is one in which `resumed-orphan` is already 0 and the run already fails there. */
+    cold_res_orphan_all = g_sess == SESS_RESUME && g_cr.orphans > 0 && orphan_unmet == 0;
     /* AND THE QUESTION A PEER ASKED, HANDED BACK RATHER THAN CARRIED. `park-remoteop` is the row about the
        refusal that used to abort here: a park that MET a STARTED cross-agent operation — a program mid-run with
        the zone's rendezvous token on its row — and returned it. A 0 is not a flake and not a reason to soften
@@ -17336,24 +17394,31 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            `park-moment-*` rows between `park-residue` and `park-moment` are SIBLINGS: they are the facts the
            moment is a conjunction of, so none implies another and the ladder resumes at `park-moment`. */
         { "park-asked", cold_park_asked, "state.code", SESS_PARK, park_asked_why },
-        { "park-residue", cold_park_residue, "state.code", SESS_PARK, park_residue_why },
-        { "park-moment-deep", cold_park_mom_deep, "state.code", SESS_PARK, park_mom_deep_why },
-        { "park-moment-orphan", cold_park_mom_orphan, "state.code", SESS_PARK, park_mom_orphan_why },
-        { "park-moment-commit", cold_park_mom_commit, "state.code", SESS_PARK, park_mom_commit_why },
-        { "park-moment", cold_park_moment, "state.code", SESS_PARK, park_moment_why },
-        { "park-wrote", cold_park_wrote, "state.code", SESS_PARK },
-        { "park-deep", cold_park_deep, "state.code", SESS_PARK },
-        { "park-cand", cold_park_cand, "state.code", SESS_PARK },
+        { "park-residue", cold_park_residue, "state.code", SESS_PARK, park_residue_why,
+          .gate = "park-asked" },
+        { "park-moment-deep", cold_park_mom_deep, "state.code", SESS_PARK, park_mom_deep_why,
+          .gate = "park-asked" },
+        { "park-moment-orphan", cold_park_mom_orphan, "state.code", SESS_PARK, park_mom_orphan_why,
+          .gate = "park-asked" },
+        { "park-moment-commit", cold_park_mom_commit, "state.code", SESS_PARK, park_mom_commit_why,
+          .gate = "park-asked" },
+        { "park-moment", cold_park_moment, "state.code", SESS_PARK, park_moment_why,
+          .gate = "park-residue" },
+        { "park-wrote", cold_park_wrote, "state.code", SESS_PARK, .gate = "park-moment" },
+        { "park-deep", cold_park_deep, "state.code", SESS_PARK, .gate = "park-wrote" },
+        { "park-cand", cold_park_cand, "state.code", SESS_PARK, .gate = "park-wrote" },
         { "resumed", cold_resumed_any, "state.code", SESS_RESUME },
-        { "resumed-segs", cold_resumed_segs, "state.code", SESS_RESUME },
-        { "resumed-cand", cold_resumed_cand, "state.code", SESS_RESUME },
+        { "resumed-segs", cold_resumed_segs, "state.code", SESS_RESUME, .gate = "resumed" },
+        { "resumed-cand", cold_resumed_cand, "state.code", SESS_RESUME, .gate = "resumed" },
         { "resumed-fired", cold_fired, "state.code", SESS_RESUME },
         /* THE 'o' ARM AT BOTH ENDS. Keyed on the uncalled function itself, because a key is a substring of the
            PROGRAM and this row is a statement about that function and nothing else. */
-        { "park-orphan", cold_park_orphan, "coldOrphan", SESS_PARK },
-        { "resumed-orphan", cold_res_orphan, "coldOrphan", SESS_RESUME },
-        { "resumed-orphan-met", cold_res_orphan_met, "coldOrphan", SESS_RESUME },
-        { "resumed-orphan-all", cold_res_orphan_all, "coldOrphan", SESS_RESUME },
+        { "park-orphan", cold_park_orphan, "coldOrphan", SESS_PARK, .gate = "park-wrote" },
+        { "resumed-orphan", cold_res_orphan, "coldOrphan", SESS_RESUME, .gate = "resumed" },
+        { "resumed-orphan-met", cold_res_orphan_met, "coldOrphan", SESS_RESUME,
+          .gate = "resumed-orphan" },
+        { "resumed-orphan-all", cold_res_orphan_all, "coldOrphan", SESS_RESUME,
+          .gate = "resumed-orphan" },
         /* KEYED ON THE FORK, because that is the program text these two statements are about. A peer's question
            is asked by the host and no document contains it — but what makes the hand-back a mechanism rather
            than a single free() is that ONE question is held by MANY timelines, and this is the line that makes
@@ -17361,17 +17426,18 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         /* THE 'w' ARM AT BOTH ENDS. Keyed on the fork for the reason the two rows below it are: a peer's
            segment is carried by the TIMELINES of this document, so the line that makes this document have more
            than one is the statement these rows are about. */
-        { "park-world", cold_park_world, "cfg.admin", SESS_PARK },
-        { "resumed-world", cold_resumed_world, "cfg.admin", SESS_RESUME },
+        { "park-world", cold_park_world, "cfg.admin", SESS_PARK, .gate = "park-wrote" },
+        { "resumed-world", cold_resumed_world, "cfg.admin", SESS_RESUME, .gate = "resumed" },
         /* THE 'r' ARM AT BOTH ENDS, KEYED ON THE FORK for the 'w' pair's reason exactly: a commitment is
            carried by the TIMELINES of this document — engine_route attaches a peer's record to every one of
            them — so the line that makes this document have more than one is the statement these rows are
            about. */
-        { "park-commit", cold_park_commit, "cfg.admin", SESS_PARK },
-        { "resumed-commit", cold_resumed_commit, "cfg.admin", SESS_RESUME },
+        { "park-commit", cold_park_commit, "cfg.admin", SESS_PARK, .gate = "park-wrote" },
+        { "resumed-commit", cold_resumed_commit, "cfg.admin", SESS_RESUME, .gate = "resumed" },
         /* THE LADDER, LOWEST RUNG FIRST — read them in this order and the lowest 0 is the answer. */
         { "park-remoteop-asked", cold_park_remoteop_asked, "cfg.admin", SESS_PARK, remoteop_asked_why },
-        { "park-remoteop-many", cold_park_remoteop_many, "cfg.admin", SESS_PARK, remoteop_many_why },
+        { "park-remoteop-many", cold_park_remoteop_many, "cfg.admin", SESS_PARK, remoteop_many_why,
+          .gate = "park-remoteop-asked" },
         { "park-remoteop-once", cold_park_remoteop_once, "cfg.admin", SESS_PARK, remoteop_once_why },
         { "park-remoteop", cold_park_remoteop, "cfg.admin", SESS_PARK, remoteop_why,
           cold_park_remoteop_unaskable },
@@ -17396,6 +17462,21 @@ static int probes_eval(const char *js, Probe *out, int cap) {
                 "the probe `%s` names a statement no document in this fixture makes — its key `%s` is in "
                 "none of the four, so the row would be selected by no run and assert nothing, while the "
                 "table it sits in reads as complete", probes[pi].name, probes[pi].key);
+        /* AND A GATE NAMES AN EARLIER ROW OF THIS TABLE IN THE SAME SESSION — one condition, because the
+           three things it asserts are the three that make the entailment assertion in probes_report able to
+           run at all, and because the repair for every one of them is the same edit. A name no row carries
+           resolves to nothing; a name carried only in ANOTHER session resolves to a row no run selects
+           beside this one; and a name carried LATER admits a cycle, after which "the lowest 0 localises" is
+           a sentence about a graph with no bottom. Handing the search the rows BEFORE this one folds all
+           three into a -1. It is checked over the WHOLE table and not over the selection, so a typo in a row
+           this invocation does not select still aborts — the same reason the key check above is. */
+        DCHECKF(!probes[pi].gate ||
+                    probe_gate_at(probes, (int)pi, probes[pi].gate, probes[pi].sess) >= 0,
+                "the probe `%s` declares its 0 entailed by `%s`, and no EARLIER row of this table in the same "
+                "session carries that name. A gate is a row of this table whose value is read where this "
+                "row's is, so an unresolvable one publishes no grouping at all and an out-of-order one is a "
+                "declaration with a cycle in it. Fix the name, or move the gate above the row it gates",
+                probes[pi].name, probes[pi].gate);
         if (probes[pi].sess != g_sess) continue;
         if (!strstr(g_doc, probes[pi].key)) continue;
         DCHECK(n < cap, "more probes were selected than the caller has room for — the report would state a "
@@ -17526,6 +17607,74 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
             uat += nl;
         }
         if (unasked[0]) printf("@HUNASKED @%ld: %s\n", work_at, unasked);
+    }
+    /* AND THE ROWS WHOSE 0 IS ENTAILED BY ANOTHER ROW'S, GROUPED BY THE ROW THAT ENTAILS THEM — because the
+       one thing a reader does with a column of zeros is COUNT it, and rows behind one shut latch are ONE
+       reading however many names they carry. That is not a caution: eleven rows of this table were relayed as
+       eleven readings of a broken cold-tier park and ten of them were one fact, and every one of them
+       survived the check for a derived row, because a gated row has its own definition, its own meaning and
+       its own `why`.
+       ONE LINE PER GATE AND NEVER ONE PER ROW, which is the whole of what this block adds over the `gate`
+       field itself. The number a brief may carry away is the number of DISTINCT PRECONDITIONS, so that number
+       is made the number of LINES rather than something a reader has to derive by grouping a list — a reader
+       who has to do the grouping is the reader who did not.
+       ITS OWN MARKER AND NOT AN `@H ` LINE, for the reason `@HUNASKED` has one and stated again because the
+       hazard is a silent throw two components over: engine/rowsplit.mjs and engine/smokerows.mjs select on
+       the `@H ` prefix and then read every `name=<digits>` on the line, refusing any value outside {0,1}, so
+       prose under that prefix is prose those tools parse as a table. `@HWORK` established the convention.
+       BEFORE THE TABLE, NEVER AFTER IT, on this function's own rule: the LAST line of a killed run is its
+       verdict, and this file already carries the measurement of what appending sentences under it costs.
+       PRINTED ON EVERY SAMPLE THAT HAS ONE, RED DAY AND CLEAN DAY ALIKE, exactly as the unaskable list is: a
+       line that appears only on the bad day is a line nobody learns to look for.
+       AND THE ENTAILMENT IS ASSERTED HERE RATHER THAN DESCRIBED, which is what makes the grouping a CONTRACT
+       instead of a reading convention — and this is the one place both values are in one hand. */
+    for (i = 0; i < n; i++) {
+        int gi, j;
+
+        if (!rows[i].gate) continue;
+        gi = probe_gate_at(rows, n, rows[i].gate, rows[i].sess);
+        /* A CHECK AND NOT A DCHECK, because the index is dereferenced on the very next line in EVERY build:
+           the grouping below is a diagnostic this run prints in release too, so a dev-only guard over an
+           index a release build reads with would trade a named abort for an out-of-bounds read. The
+           promotion belongs to the line that added the dereference (CLAUDE.md §BUT-A-DIFF-THAT-MAKES-A-
+           DCHECKED-POINTER-LOAD-BEARING-IN-RELEASE) and not to a later decision. It cannot fire on a
+           declaration this table has not made — probes_eval aborts first on a gate that names no earlier row
+           — so what is left for it is the pair of KEYS coming apart: a gate whose key is in a document its
+           gated row's key is not, at which case this run publishes a 0 with no way to say whether it is its
+           own finding. */
+        CHECK(gi >= 0,
+              "a probe was selected and the row it names as its gate was not. A gate is a row of this table "
+              "whose value is read where this row's is, and both are selected by SESSION and by their key "
+              "being in this document, so the two keys have come apart and this run is about to publish a 0 "
+              "it cannot say is entailed");
+        /* THE TWO-SIDED HALF, WHICH IS THE ONLY THING THAT MAKES THE DECLARATION MORE THAN A LABEL. A gate
+           reading 0 beside a row reading 1 says the two are about facts that are not related — and every
+           line printed under that gate would then tell a reader to count rows together that do not belong
+           together, which is the defect this whole mechanism exists to end, re-created by the mechanism.
+           IT IS THE SAME SHAPE AS THE `unaskable` PRECONDITION'S OWN ASSERT one block up and is here for the
+           same reason: a precondition is two-sided or it is an excuse. */
+        DCHECKF(rows[gi].ok || !rows[i].ok,
+                "the probe `%s` reads 1 and the row it declares its 0 entailed by, `%s`, reads 0 — the "
+                "declaration says this row cannot be answered while that one is not, and it was. The two are "
+                "about different facts, so every reader this line tells to count them as ONE reading is "
+                "being told something false. Read the expression that computes `%s` against the one that "
+                "computes `%s`; one of them names a quantity the other does not bound",
+                rows[i].name, rows[i].gate, rows[i].name, rows[i].gate);
+        /* A SHUT GATE IS WHAT MAKES A GROUP WORTH PRINTING, and an OPEN one is what makes its rows scored on
+           their own merits — under an open gate each 0 is its own finding and grouping them would be the
+           inflation inverted. */
+        if (rows[gi].ok) continue;
+        /* AND THE LINE IS PRINTED AT THE GATE'S FIRST ROW, never once per row: a second walk over the rows
+           before this one is what makes this the first, and it is O(n) over a table this function already
+           walks several times rather than a set nobody would be able to size. */
+        for (j = 0; j < i; j++)
+            if (rows[j].gate && rows[j].sess == rows[i].sess && !strcmp(rows[j].gate, rows[i].gate)) break;
+        if (j < i) continue;
+        printf("@HGATED @%ld: %s=0 entails", work_at, rows[i].gate);
+        for (j = i; j < n; j++)
+            if (rows[j].gate && rows[j].sess == rows[i].sess && !strcmp(rows[j].gate, rows[i].gate))
+                printf(" %s", rows[j].name);
+        printf("\n");
     }
     /* HOW FAR THIS RUN HAD GOT WHEN THE TABLE BELOW WAS COMPOSED — the one fact that decides which of a 0
        row's TWO READINGS the WHOLE table has, and it was on no line of this stream.
