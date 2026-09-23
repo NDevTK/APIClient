@@ -725,10 +725,13 @@ static int cu_check(JSContext *ctx, JSValueConst c, bool writes, JSValue *ptx)
         return -1;
     }
     /* §4.9's `update` step 3 and `delete` step 3, which the three ITERATING members do not have — §4.9 puts
-       the two groups under different headings for exactly that reason ("the following methods throw a
-       ReadOnlyError if called within a read-only transaction"). It sits between the active check and the
-       deletion check because that is where the standard states it, and a page can tell: `cursor.update(v)` on
-       a read-only transaction whose store was also deleted reports the ReadOnlyError. */
+       the two groups under different headings for exactly that reason ("The following methods throw a
+       ReadOnlyError DOMException if called within a read-only transaction, and a TransactionInactiveError
+       DOMException if called when the transaction is not active" — the tail clause is the ACTIVE check
+       directly above, and quoting the sentence short read as though the standard stated the two apart).
+       It sits between the active check and the deletion check because that is where the standard states
+       it, and a page can tell: `cursor.update(v)` on a read-only transaction whose store was also deleted
+       reports the ReadOnlyError. */
     if (writes && idb_transaction_mode(ctx, tx) == IDB_TX_READONLY) {
         JS_FreeValue(ctx, tx);
         JS_ThrowDOMException(ctx, "ReadOnlyError", "the transaction is a read-only transaction");
@@ -1487,6 +1490,16 @@ void idb_cursor_init(JSContext *ctx)
     agent_state_ptr("idb_cursor", &g_cursor_rt, "the runtime §2.10's slot key was minted in");
     agent_state_value("idb_cursor", &g_key, "§2.10's internal-slot key");
     agent_state_id("idb_cursor", &g_iterate_stepid, "§6.7's iterate-a-cursor machine");
+    /* AND THE CLASS IDS — core/agent_state.h, which this component has told about every slot but
+       these two. §4.9 "The IDBCursor interface"'s classes are registered in THIS runtime, so an id
+       carried into the next agent names a class in a runtime that is gone, while that agent's
+       allocator restarts at JS_CLASS_INIT_COUNT and hands the same number to somebody else — and
+       because the id is also the handle every realm reaches the prototype through, nothing in this
+       file would re-register it. Both were minted inside the window core/platform.c's declare column
+       brackets and named to no declaration, which is the direction that file's conservation
+       identity aborts on. */
+    agent_state_class("idb_cursor", &g_cursor_class, "§4.9's IDBCursor class");
+    agent_state_class("idb_cursor", &g_cursor_wv_class, "§4.9's IDBCursorWithValue class");
     realm_declare_intrinsic(idb_cursor_install_realm);
 }
 
@@ -1497,8 +1510,12 @@ void idb_cursor_free(JSRuntime *rt)
     DCHECK(g_ready, "§2.10's cursor machinery was released in an agent that never declared it");
     DCHECK(rt == g_cursor_rt, "idb_cursor_free was given a runtime that is not the one it declared into");
     JS_FreeValueRT(rt, g_key);
-    g_key = JS_UNDEFINED;
-    g_cursor_rt = NULL;
-    g_iterate_stepid = -1;
-    g_ready = 0;
+    /* THE HAND-RESET LIST THAT STOOD HERE IS GONE RATHER THAN EXTENDED. agent_state_undo puts back
+       every slot carrying this row's name out of the registry that already holds each one's address
+       and its kind, so the list this function kept in step with idb_cursor_init's
+       declarations is COMPUTED rather than remembered — the class ids join it with no line here to
+       forget, as will whatever that init declares next. The JS_FreeValueRT call stays: the undo
+       resets HANDLES and never references, and freeing what a slot names is this component's own
+       work. It is the LAST line, because the DCHECKs in this function ask about slots it nulls. */
+    agent_state_undo("idb_cursor");
 }

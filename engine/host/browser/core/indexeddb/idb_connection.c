@@ -836,6 +836,15 @@ void idb_connection_init(JSContext *ctx)
     agent_state_flag("idb_connection", &g_ready, "the declaration latch");
     agent_state_ptr("idb_connection", &g_conn_rt, "the runtime §2.1.1's slot key was minted in");
     agent_state_value("idb_connection", &g_key, "§2.1.1's internal-slot key");
+    /* AND THE CLASS ID — core/agent_state.h, which this component has told about every slot but
+       this one. §4.4 "The IDBDatabase interface"'s class is registered in THIS runtime, so an id
+       carried into the next agent names a class in a runtime that is gone, while that agent's
+       allocator restarts at JS_CLASS_INIT_COUNT and hands the same number to somebody else — and
+       because the id is also the handle every realm reaches the prototype through, nothing in this
+       file would re-register it. It was minted inside the window core/platform.c's declare column
+       brackets and named to no declaration, which is the direction that file's conservation
+       identity aborts on. */
+    agent_state_class("idb_connection", &g_conn_class, "§4.4's IDBDatabase class");
     realm_declare_intrinsic(idb_connection_install_realm);
 }
 
@@ -845,7 +854,12 @@ void idb_connection_free(JSRuntime *rt)
     DCHECK(g_ready, "§2.1.1's connection machinery was released in an agent that never declared it");
     DCHECK(rt == g_conn_rt, "idb_connection_free was given a runtime that is not the one it declared into");
     JS_FreeValueRT(rt, g_key);
-    g_key = JS_UNDEFINED;
-    g_conn_rt = NULL;
-    g_ready = 0;
+    /* THE HAND-RESET LIST THAT STOOD HERE IS GONE RATHER THAN EXTENDED. agent_state_undo puts back
+       every slot carrying this row's name out of the registry that already holds each one's address
+       and its kind, so the list this function kept in step with idb_connection_init's
+       declarations is COMPUTED rather than remembered — the class id joins it with no line here to
+       forget, as will whatever that init declares next. The JS_FreeValueRT call stays: the undo
+       resets HANDLES and never references, and freeing what a slot names is this component's own
+       work. It is the LAST line, because the DCHECKs in this function ask about slots it nulls. */
+    agent_state_undo("idb_connection");
 }

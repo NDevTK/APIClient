@@ -305,6 +305,15 @@ void idb_version_change_event_init(JSContext *ctx)
     agent_state_flag("idb_version_change_event", &g_ready, "the declaration latch");
     agent_state_ptr("idb_version_change_event", &g_vce_rt, "the runtime §4.2's slot key was minted in");
     agent_state_value("idb_version_change_event", &g_key, "§4.2's internal-slot key");
+    /* AND THE CLASS ID — core/agent_state.h, which this component has told about every slot but
+       this one. The class §4.2 "Event interfaces" declares is registered in THIS runtime, so an
+       id carried into the next agent names a class in a runtime that is gone, while that agent's
+       allocator restarts at JS_CLASS_INIT_COUNT and hands the same number to somebody else — and
+       because the id is also the handle every realm reaches the prototype through, nothing in this
+       file would re-register it. It was minted inside the window core/platform.c's declare column
+       brackets and named to no declaration, which is the direction that file's conservation
+       identity aborts on. */
+    agent_state_class("idb_version_change_event", &g_vce_class, "§4.2's IDBVersionChangeEvent class");
     realm_declare_intrinsic(idb_version_change_event_install_realm);
 }
 
@@ -315,7 +324,12 @@ void idb_version_change_event_free(JSRuntime *rt)
     DCHECK(rt == g_vce_rt, "idb_version_change_event_free was given a runtime that is not the one it declared "
                            "into");
     JS_FreeValueRT(rt, g_key);
-    g_key = JS_UNDEFINED;
-    g_vce_rt = NULL;
-    g_ready = 0;
+    /* THE HAND-RESET LIST THAT STOOD HERE IS GONE RATHER THAN EXTENDED. agent_state_undo puts back
+       every slot carrying this row's name out of the registry that already holds each one's address
+       and its kind, so the list this function kept in step with idb_version_change_event_init's
+       declarations is COMPUTED rather than remembered — the class id joins it with no line here to
+       forget, as will whatever that init declares next. The JS_FreeValueRT call stays: the undo
+       resets HANDLES and never references, and freeing what a slot names is this component's own
+       work. It is the LAST line, because the DCHECKs in this function ask about slots it nulls. */
+    agent_state_undo("idb_version_change_event");
 }

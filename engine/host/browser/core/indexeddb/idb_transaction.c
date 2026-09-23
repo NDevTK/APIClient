@@ -1570,6 +1570,15 @@ void idb_transaction_init(JSContext *ctx)
     agent_state_value("idb_transaction", &g_key, "§2.7's internal-slot key");
     agent_state_value("idb_transaction", &g_live, "§2.7.2's set of live transactions");
     agent_state_value("idb_transaction", &g_cleanup, "§2.7.1's cleanup set");
+    /* AND THE CLASS ID — core/agent_state.h, which this component has told about every slot but
+       this one. §4.10 "The IDBTransaction interface"'s class is registered in THIS runtime, so an id
+       carried into the next agent names a class in a runtime that is gone, while that agent's
+       allocator restarts at JS_CLASS_INIT_COUNT and hands the same number to somebody else — and
+       because the id is also the handle every realm reaches the prototype through, nothing in this
+       file would re-register it. It was minted inside the window core/platform.c's declare column
+       brackets and named to no declaration, which is the direction that file's conservation
+       identity aborts on. */
+    agent_state_class("idb_transaction", &g_tx_class, "§4.10's IDBTransaction class");
     realm_declare_intrinsic(idb_transaction_install_realm);
 }
 
@@ -1590,9 +1599,12 @@ void idb_transaction_free(JSRuntime *rt)
     JS_FreeValueRT(rt, g_key);
     JS_FreeValueRT(rt, g_live);
     JS_FreeValueRT(rt, g_cleanup);
-    g_key = JS_UNDEFINED;
-    g_live = JS_UNDEFINED;
-    g_cleanup = JS_UNDEFINED;
-    g_tx_rt = NULL;
-    g_ready = 0;
+    /* THE HAND-RESET LIST THAT STOOD HERE IS GONE RATHER THAN EXTENDED. agent_state_undo puts back
+       every slot carrying this row's name out of the registry that already holds each one's address
+       and its kind, so the list this function kept in step with idb_transaction_init's
+       declarations is COMPUTED rather than remembered — the class id joins it with no line here to
+       forget, as will whatever that init declares next. The JS_FreeValueRT calls stay: the undo
+       resets HANDLES and never references, and freeing what a slot names is this component's own
+       work. It is the LAST line, because the DCHECKs in this function ask about slots it nulls. */
+    agent_state_undo("idb_transaction");
 }
