@@ -1478,7 +1478,27 @@ function scanC(file, src) {
      through check.h's APICLIENT_ASSERT_EMIT and `@WPTSTART` through a C string holding JS source, and a
      vocabulary of emission functions sees neither: both are the marker's own text, printed. The one thing
      that changes its role is the same fact that changes a built buffer's — a literal handed to a matcher is
-     being LOOKED FOR, not printed. */
+     being LOOKED FOR, not printed.
+     AND THE BREADTH IS FREE: EVERY NARROWING ANYONE HAS PROPOSED MOVES THE WRITE RECORDS ENORMOUSLY AND THE
+     VERDICT NOT AT ALL, because a marker's verdict is decided by the UNION of its writes and no marker in
+     this corpus is written ONLY in prose. The standing complaint about the loop below is that most of what
+     it records is an assert MESSAGE rather than an emission; the complaint is arithmetically right — that is
+     the majority of the records — and verdict-irrelevant. Measured over the whole namespace, four candidate
+     rules cut the write records by up to two thirds and not one of them RETIRES a finding. The only one that
+     moves anything moves it the wrong way: requiring the marker at the literal's first byte turns `@WPT`,
+     `@WPTDONE` and `@WPTSTART` into NAMED-with-no-writer together, since each has exactly ONE write and it
+     is the `print('@TAG ' + …)` inside wpt_runner.c's JS source.
+     THE `@WPTSTART` ABOVE IS ONE MEMBER OF THAT FAMILY AND THERE ARE THREE, and the fourth, `@WPTERR`,
+     survives only because it happens ALSO to be fprintf'd — an example naming one member of a family reads
+     as the whole population, and the survivor was an accident and not a distinction.
+     SO A NARROWING WOULD BUY A HAND-KEPT LIST OF ASSERT MACRO NAMES AND ARGUMENT INDICES for nothing — the
+     second copy the C_EMIT comment above records as having gone missing once already. RETIREMENT: this
+     record goes when some marker's EVERY write sits inside an assert message argument, because only then
+     does the question have an observable answer. THE DERIVATION, which is what to re-run rather than those
+     numbers: take an ADDITIVE copy of this file inside a frozen snapshot AT THIS SAME PATH — the corpus walk
+     excludes the RUNNING file by path, so a copy anywhere else adds a file to the population it measures —
+     dump every marker write with the enclosing call read off `struct` by paren balance, calibrate it by
+     reproducing this gate's own output line for line, and split each marker's writes by construct. */
   {
     const matched = new Set();
     for (const fn of C_MATCH)
