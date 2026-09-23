@@ -60,6 +60,19 @@ const GAUGES = ["members", "unrun", "neverPicked", "neverPickedGap", "neverPicke
                    exclusion for the jobs it counts. It does not say those jobs would have run — arms stand
                    above the checkpoint too. Gauges, like every row on this line. */
                 "jobsReadyTask", "jobsReadyMicro",
+                /* …AND WHAT A SUB-LINEAR ASK WOULD HAVE TO INDEX, which is the other half of the cost scope
+                   below and which no reader in this tree had: `silCarry` occurs in ONE file, result.c, which
+                   emits it, and `silPhases` in that file and the header that declares it. Both are the key
+                   the ask's own retirement clause names — solver/flow.c: "this pair goes when the ask no
+                   longer walks the frontier — at which point the index IS its reader" — so until this line
+                   the operands of the proposed index were published and measurable nowhere but a fixture.
+                   result.c: `silPhases` is how many DISTINCT remainders the frontier stands on and
+                   `silCarry` how many members are on the far side of the carry boundary; between two
+                   frontier generations the carry is the ONLY per-member quantity in the order that moves,
+                   and members sharing a remainder flip it together. GAUGES, both: `silCarry` FALLS as the
+                   boundary sweeps downward and every member resets at once when the family's remainder
+                   wraps, and neither may be differenced — which is why they are here and not in COUNTERS. */
+                "silPhases", "silCarry",
                 "delivReady", "delivFramed", "delivOwed", "valTop", "valMin", "valMax"];
 
 /* THE BRANCH SCOPE, WHICH THE TWO LISTS ABOVE DO NOT REACH AND WHICH IS THE ONE FAMILY A PAGE-SCALE
@@ -133,6 +146,63 @@ function branchScope() {
                     "it means, or the census grows a reader-less column again.");
   return named;
 }
+
+/* THE COST SCOPE — WHAT ASKING THIS ORDER COST, which every row in the two lists above is silent about
+   because every row above is about what the order DECIDED. result.c publishes nine rows here and states
+   what they are FOR in its own words: "the tail is not being reached" has two causes — "not enough thread
+   time for the members standing, or the thread spent asking the order rather than running it" — and no
+   other row on that line separates them.
+
+   THEY HAD NO LIVE-PAGE READER AT ALL, which is the same defect one scope over from the minter triple and
+   is why the check below is written the way `branchScope` is. `engine/build.mjs` reads all nine and
+   `engine/solvergate.mjs` reads three, and both of those drive the SMOKE FIXTURE — whose fork factor,
+   frontier growth and dispatch count are its author's design decisions rather than a document's. So the
+   one question a growing frontier poses about the ORDERING'S OWN COST — does a dispatch weigh a
+   constant number of members or all of them — was measurable only where the population was chosen.
+
+   THE KINDS, FROM result.c's OWN TEXT AND NOT FROM THE NAMES. All nine are LIFETIME COUNTS and may be
+   differenced: `preemptAsksLifetime` is stated as one outright ("solver/engine.c never resets it, so two
+   censuses carrying one `workDone` give a RATE over the interval between them, and that is the only
+   reading a wall-denominated quantum leaves quotable at all"), and the eight `scan*` rows are the same
+   kind by the same argument — they count WALKS AND WEIGHINGS PERFORMED, which nothing takes back. They
+   are COUNTS AND NOT CLOCKS on purpose: solver/flow.h's FLOW_SCANS says a duration here "would be a fact
+   about the machine and these are facts about what the engine did", and this host's quantum is
+   wall-denominated. */
+const COST = ["scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeights",
+              "scanOtherRuns", "scanOtherWeights", "scanCensusRuns", "scanCensusWeights",
+              "preemptAsksLifetime"];
+
+/* AND THE SAME TWO-WAY CHECK THE BRANCH SCOPE GETS, for the same reason and against the same composer.
+   A row named here that result.c has renamed throws naming the row; a cost-scope row result.c ADDS that
+   this file does not name throws too — because a published row with no reader is exactly what this whole
+   block exists to end, and a one-way check is how it recurs. */
+function costScope() {
+  const keys = wfqComposerKeys();
+  for (const k of COST)
+    if (!keys.has(k))
+      throw new Error("[live-wfq] result_wfq_json no longer publishes `" + k + "` — this driver names it " +
+                      "from result.c's own composer, so a row that has gone is one the producer renamed " +
+                      "or dropped rather than one this file invented, and every reading below it would " +
+                      "compare an absent field as undefined.");
+  const published = [...keys].filter((k) => /^(?:scan[A-Z]|preemptAsks)/.test(k));
+  const unread = published.filter((k) => !COST.includes(k));
+  if (unread.length)
+    throw new Error("[live-wfq] result_wfq_json publishes cost-scope row(s) no reader here names: " +
+                    unread.join(", ") + ". These rows had NO live-page reader at all until this list " +
+                    "existed — name the row and say what it means, or the scope goes back to being " +
+                    "measurable only on the fixture that chose its own frontier.");
+  return COST;
+}
+
+/* THE ONE COST IDENTITY result.c STATES AS CHECKABLE ON THIS DOCUMENT, in the same three-state shape the
+   branch identities use and for the same reason: it is a DCHECK in flow_wfq_census, which is compiled OUT
+   of the release build this driver samples, and result.c says in as many words that a break makes the
+   quotient "a fraction of some other population". It is COPIED from the engine rather than composed here
+   — an auditor derives its rule from the code that owns it, and a restated invariant is a second copy. */
+const COST_IDENTITIES = [
+  ["scanRivalRuns<=preemptAsksLifetime", ["scanRivalRuns", "preemptAsksLifetime"],
+   (w) => w.scanRivalRuns <= w.preemptAsksLifetime],
+];
 
 /* THE IDENTITIES result.c STATES AS CHECKABLE ON THIS DOCUMENT, checked rather than trusted — the same
    treatment `switchDelta` already gets below and for the same reason: a violated one means every other
@@ -234,6 +304,7 @@ async function main() {
   /* DERIVED BEFORE THE BROWSER IS TOUCHED, so a renamed or reader-less row fails here rather than after a
      window of samples has been spent on a census this driver cannot describe. */
   const BR = branchScope();
+  const COSTROWS = costScope();
   console.log("# artifact " + JSON.stringify(artifactStamp()));
   console.log("# windowMs=" + WINDOW + " everyMs=" + EVERY +
               " — COUNTERS (may be differenced): " + COUNTERS.join(",") +
@@ -243,6 +314,13 @@ async function main() {
               "samples; never difference): " + BR_INSTANT.join(","));
   console.log("# crowd is selected by brLiveMax (membership); minter by brBornLifeMax (mint). They are ONE " +
               "bucket only while nothing has departed — `selectorsAgree` says whether they are, on each row.");
+  console.log("# cost scope, derived from result_wfq_json (" + COSTROWS.length + " rows) — ALL LIFETIME " +
+              "COUNTS, all differenceable: " + COSTROWS.join(",") + " | what asking the order COST, which " +
+              "every row above is silent about because every row above is what it DECIDED. Read " +
+              "`scanNextWeights`/`scanNextRuns` against `members`: a dispatch scan that weighs a constant " +
+              "number of members and one that weighs the frontier are different costs and only the second " +
+              "grows with it. `scanNextWeights / steps` and `scanRivalRuns / forks` need @COLD's `steps` " +
+              "and `forks` and are NOT composed here.");
 
   const { browser, extId } = await connect();
   try {
@@ -278,6 +356,32 @@ async function main() {
            other row on this line is a number about nothing. */
         out.switchDelta = (typeof w.picksLifetime === "number" && typeof s.switches === "number")
                             ? w.picksLifetime - s.switches : null;
+        /* THE COST SCOPE, EMITTED BEFORE THE BRANCH BLOCK because that block returns early on an empty
+           frontier and these rows are absent on exactly the same path — result.c composes `{"members":0}`
+           with no term rows of any kind — so a reader meeting `costAbsent` is being told the short form
+           was published and not that a walk read zero. */
+        if (!("scanNextRuns" in w)) { out.costAbsent = true; }
+        else {
+          for (const k of COST) out[k] = (k in w) ? w[k] : null;
+          const cbroke = [], cunjudged = [];
+          for (const [name, operands, ok] of COST_IDENTITIES) {
+            if (operands.some((k) => typeof w[k] !== "number")) { cunjudged.push(name); continue; }
+            if (!ok(w)) cbroke.push(name);
+          }
+          out.costIdent = cbroke.length ? cbroke : null;
+          out.costUnjudged = cunjudged.length ? cunjudged : null;
+          /* THE THREE QUOTIENTS result.c PRESCRIBES AND WHOSE OPERANDS ARE BOTH ON THIS LINE, AND NO
+             OTHERS — the same rule the crowd/minter shares are printed under. result.c also names
+             `scanNextWeights / steps` against `members` and `scanRivalRuns` against `forks`; `steps` and
+             `forks` are on the @COLD line and the run record, not here, so those two are NOT composed
+             from this document and a reader wanting them joins the two censuses that share a `workDone`.
+             `scanNextRuns`/`scanNextWeights` are therefore printed RAW beside `members`, which is this
+             driver's standing rule: the columns go side by side and the reader does the division knowing
+             what is in it. A ZERO DENOMINATOR YIELDS null AND NEVER 0. */
+          out.censusMeanFrontier = share(w.scanCensusWeights, w.scanCensusRuns);
+          out.censusWeighShare   = share(w.scanCensusWeights, w.scanNextWeights);
+          out.rivalMissRate      = share(w.scanRivalRuns, w.preemptAsksLifetime);
+        }
         /* AN EMPTY FRONTIER PUBLISHES `{"members":0}` AND NO BRANCH ROW AT ALL, which is not the same fact
            as a branch scope reading zero — result.c composes that short form on its own path. Absent is
            said once, as a flag; filling twenty-three nulls would render an unasked question exactly like a
