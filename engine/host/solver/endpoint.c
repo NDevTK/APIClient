@@ -147,6 +147,45 @@ void endpoint_suppress(int on) { g_suppress = on ? 1 : 0; }
    not be a `?:` — `{}` is the unnameable hole path_scan mints nothing for, so a URL that had lost its display
    form would be emitted as a literal address with no param under it and read as a perfectly ordinary endpoint.
    That is the silent wrong answer this surface is most dangerous for, so it aborts at the read instead. */
+/* AND THIS `if` IS THE WHOLE OF WHAT DECIDES WHETHER ANY PARAM ON THIS RECORD CAN CARRY A DOMAIN, which is
+   not readable from anywhere on the path it feeds. A PATH param exists only where the string this returns
+   holds a nameable brace, and a QUERY param exists either way but carries a HOLE only where its VALUE does —
+   so `valueClass`, the four domain reads it gates, and everything the trusted zone builds on them are all
+   downstream of this one test. What can put a hole back is NOT the templated-path reconcile there, which
+   dissolves a concrete address INTO a template and cannot create one — it is lib/learn.js's live-traffic path
+   walk, which mints a `{path_*}` where TWO observed addresses of one record differ at one segment. That
+   producer needs a SECOND sighting and writes no `_astInferred`, so its hole carries no domain and cannot
+   become the drop-down these reads feed. The only hole a FIRST sighting can have is the one decided here.
+   SO "WHY DID THIS PAGE MINT NO HOLE" IS A QUESTION ABOUT HOW THE PAGE COMPOSED THE ADDRESS, and `concolic_is`
+   at this line is the whole answer. Three addresses reach the concrete branch and a reader must not read them
+   as one fact:
+     - COMPOSED OF LITERALS. A bundler's chunk and module addresses are the entire population of a run that
+       loaded a document and reached none of its API code, and no engine change mints a hole in one.
+     - COMPOSED OF THE DOCUMENT'S OWN ADDRESS. core/dom/document.c's DocAddress holds a plain JS string where
+       a response was fetched from it, and core/frame/location.c's loc_of_address returns early on a concrete
+       one — so HTML §7.2.4 "The Location interface"'s `origin`, `protocol`, `host`, `pathname` and `href` are
+       CONCRETE for the document this engine loaded, and concolic only after a route the run itself
+       computed out of an unknown.
+     - PINNED AND RE-READ. §Solver-half's concretize-on-pin makes a source a flow has proved re-mint as the
+       REAL value: concolic_new's and concolic_exotic_get's pin arms RETURN pin_of's result, and pin_mint
+       answers a plain primitive. So the true arm of `if (s.tier === 'silver') fetch('/api/' + s.tier)`
+       composes an ordinary string and is INDISTINGUISHABLE here from an address that was never symbolic.
+       That is CORRECT and is not a hole this surface lost: §@H emits a value the run DETERMINED, and spelling
+       a determined value as an unknown is the invention it calls a wrong report rather than a partial one.
+   AND A PIN ERASES A HOLE ONLY ON A RE-READ, WHICH IS THE CLAUSE BOTH READINGS OF THIS MECHANISM DROP. There
+   are two kinds of pin read and they have opposite RETURN TYPES: the two MINTS above hand back a primitive and
+   the value is gone, while concolic_example asks the same question of a value ALREADY IN HAND and leaves the
+   record untouched — so `var role = q("role"); if (role === "admin") fetch("...?role=" + role)` still holds
+   the concolic, this returns the SHAPE, the param IS minted, and the pinned bytes arrive as its EXAMPLE.
+   concolic.h states the split in its own last clause, which is the half a reader of that paragraph stops one
+   line short of: a pin reaches `a value the page materialised before the gate and therefore never re-minted`.
+   testing/corpus/control/gated-hole.js is SHAPED by the other half, putting its equality rung's fetch on the
+   `else` because the true arm would mint no hole to look a domain up under. Read either half alone and you get a rule that is exactly backwards for the other: measured, two
+   readers reached the two opposite wrong answers about this in one session. One equality, two spellings, two
+   different records, and which one a bundle writes is the bundle's choice and not the gate's.
+   RETIREMENT: this record goes when the concrete branch below can state whether the address it is spelling
+   ever held a determined unknown, because the three cases are then told apart at this line instead of
+   re-derived from the page that wrote it. */
 static char *url_display(JSContext *ctx, JSValueConst url) {
     if (concolic_is(url)) {
         const char *s = concolic_shape_c(url);
