@@ -44,6 +44,11 @@
  *     into it, together with a non-mark entry type, so that the first reader installed answers about a
  *     timeline rather than about marks. This file then changes by nothing at all: step 3 is inside §5.1's
  *     steps 9-12 rather than a second call from here.
+ *     WHICH non-mark entry type is answered at core/timing/performance_entry.h and the answer is §2.1.3
+ *     measure(), which is IN THIS FILE'S standard: its reader is §3.1 rather than a PERFORMANCE TIMELINE §2.1
+ *     member, so it is outside the plausible-datum argument that refuses those, and it needs no standard this
+ *     build does not already have a producer in. Read that site before reaching for Navigation Timing §5,
+ *     which the same paragraph prices at two further standards.
  *   HOW ITS ABSENCE WOULD SHOW. `performance.mark('a')` returns a real PerformanceMark whose four §3
  *     attributes and whose `detail` are all correct and delivers it to an observer, and
  *     `performance.getEntriesByName('a')` is a TypeError naming an operation this engine does not have —

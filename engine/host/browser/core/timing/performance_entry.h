@@ -52,7 +52,12 @@
  *   WHAT IS NOT COVERED. The buffer's remaining readers are §2.1.1 getEntries(), §2.1.2 getEntriesByType() and
  *     §2.1.3 getEntriesByName(), and all three are ABSENT from this build — so a buffer added now would be a
  *     write with no reader, which CLAUDE.md's §A-FIELD-A-CONSUMER-DEFAULTS rates as a broken contract in its
- *     own right. AND ADDING THOSE READERS WITH IT WOULD BE WORSE, not better: this build mints exactly one
+ *     own right. THAT SENTENCE NAMED A POPULATION WHERE IT MEANT A PROPERTY AND SO MISSED A FOURTH READER,
+ *     which is exactly the failure CLAUDE.md's §AND-THAT-GRADING-IS-BY-THE-WRONG-AXIS names for a NOT-COVERED
+ *     clause that is about THIS TREE rather than about a document: USER TIMING §3.1 "Convert a mark to a
+ *     timestamp" reads this same buffer and is on no §2.1 list. It is kept in its own words because the
+ *     enumeration reads as complete, and a reader who re-derives it from §2.1 alone will write it again.
+ *     AND ADDING THOSE READERS WITH IT WOULD BE WORSE, not better: this build mints exactly one
  *     entry type, so `performance.getEntries()` would hand a page a timeline containing marks and NOTHING
  *     ELSE, and a page cannot tell that from a page on which nothing else happened. core/timing/performance.h
  *     already states the shape of that defect for this exact surface, in its own words: an empty list is the
@@ -75,6 +80,25 @@
  *     starting, so the clause states what must exist afterward and now also what stands between.
  *     RETIREMENT: this goes when a fetch timing info is a struct this tree carries, because the cost it
  *     states is then not a cost.
+ *   AND THE COMPANION THAT IS NOT BLOCKED IS USER TIMING §2.1.3 "measure() method", WHICH THE CLAUSE ABOVE
+ *     COULD NOT SEE BECAUSE ITS READER LIST WAS A POPULATION. A `measure` is a non-mark entry type minted by
+ *     the standard this build ALREADY has a producer in, so it meets the requirement the clause states at a
+ *     fraction of Navigation Timing §5's price — and its reader is USER TIMING §3.1 rather than a §2.1 member,
+ *     which is what puts it OUTSIDE the plausible-datum objection this residual rests on rather than merely
+ *     cheaper than it. §3.1 reads PerformanceMark entries ONLY and reports an absent one by THROWING, never
+ *     by an empty list, so a marks-only buffer answers it EXACTLY and a page can always tell the two apart.
+ *     That is the same property core/timing/performance_observer.h gives as its reason an OBSERVER is
+ *     landable ahead of this buffer — naming the entry type you want — arriving through a conversion
+ *     algorithm instead of through §4.5, so the two components already agree and only this list did not.
+ *     ITS ONE REACH OUTSIDE USER TIMING IS MEASURED AND IT IS A CONSTANT. §3.1 leaves the standard only by its
+ *     PerformanceTiming-name arm, and USER TIMING §3.2 "Convert a name to a timestamp" answers
+ *     `navigationStart` with a constant before reading any navigation timing. Whether a corpus asks for
+ *     anything else is a fact about that corpus and moves, so the derivation and never the figure:
+ *       cd <corpus>/mirror && grep -rohE 'measure[[:space:]]*\([^)]{0,90}\)' . | grep -oE '"[a-z]+"' | sort -u
+ *     WHAT THIS DOES NOT RETIRE: §2.1.1-§2.1.3 stay refused by the argument above, because a timeline holding
+ *     only what the PAGE timed is still one a page cannot tell from a page on which nothing else happened.
+ *     RETIREMENT: this goes when this build mints an entry type other than `mark`, because the requirement
+ *     the clause states is then met and the question is which reader to install rather than which companion.
  *   HOW ITS ABSENCE WOULD SHOW: `performance.mark('a')` returns a real PerformanceMark and
  *     `performance.getEntriesByName('a')` is a TypeError naming the absent operation — which is the forcing
  *     function, and is what a page that stores marks and reads them back trips over.
