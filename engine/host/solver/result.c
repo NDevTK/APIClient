@@ -584,6 +584,17 @@ static char *errs_json_array(ErrsArray which) {
    OWN PROGRAMS — §8.1.4.4's clean-up step, one component away from anything this file orders. `jobsOwed` says
    the same for the host. So the pair is read BEFORE a zero is charged to the ordering, and a reader who has
    only the job count has not got the evidence to charge anything.
+   AND THEIR MAGNITUDE IS A FORK FACTOR AND NOT A DEPTH, WHICH IS THE READING TWO RELAYS HAVE NOW GOT WRONG
+   IN THE SAME DIRECTION. These three are counted over JOBS and a fork BYTE-COPIES its parent's queue, so a
+   frontier that has run none of them holds `jobsQueued` slots on every one of `members` — the row that says
+   how many queue operations the instance ever made is `_jobsQueued` on the work line, and it does not move
+   when a member forks. `jobsFramed` in the hundreds of thousands is therefore not a backlog of that depth; it
+   is a SMALL per-member depth times a large frontier, and the per-member figure is `(jobsReady + jobsFramed) /
+   members`, derivable here from rows already on this line. Read it before pricing the backlog: a reader who
+   takes the magnitude at face value is reading the document's fork factor as a queue and will go looking for
+   whatever queued a hundred thousand jobs. Measured on five drives of two real documents through the artifact
+   stamped d17472ff0ee24a38d6e2964ad530bcee8be23c7a: on the three that ran no job the per-member depth is 17
+   against `_jobsQueued` 17, EXACTLY, at frontiers of 8705, 13672 and 13142.
    AND `jobsReady` ITSELF HAS TWO POPULATIONS UNDER IT, WHICH IS WHERE THAT REFUSAL USED TO STOP. Having
    declined to charge the zero to the order, a reader is left with the LADDER — and flow_step has two job arms
    on opposite sides of the program sequence, so "the ladder is holding it" is two statements and the row that
@@ -1112,6 +1123,18 @@ char *result_wfq_json(void) {
                         `picksLifetime` and never alone — with no dispatch made at all this is 0 for a third
                         reason that is about neither. solver/flow.h carries the legend. */
                      "\"unframedPicksLifetime\":%lld,"
+                     /* …AND THE SUBSET OF THOSE DISPATCHES THAT REACHED A MEMBER HOLDING A RANK-READY JOB,
+                        which is what turns the row above from a BOUND on the job backlog into a MEASUREMENT of
+                        it. Read the three together — this, `unframedPicksLifetime`, and the run's `jobsRun` —
+                        because that triple is the only thing on this document that separates the two states a
+                        flat job count leaves: 0 here with the row above non-zero says the dispatch never
+                        reaches a job holder at all and sends the reader to flow_pick; above 0 with `jobsRun`
+                        flat says it does reach them and flow_step declines the job at an arm ABOVE the one
+                        that would run it, which sends the reader to the ladder and makes
+                        `jobsReadyTask`/`jobsReadyMicro` the next pair. Raised inside the unframed count's own
+                        `if` in flow_credit_pick under the ready arm's three conjuncts, so the containment is
+                        by construction; flow_wfq_census asserts it and solver/flow.h carries the legend. */
+                     "\"readyPicksLifetime\":%lld,"
                      "\"delivReady\":%ld,\"delivFramed\":%ld,\"delivOwed\":%ld,\"delivWGap\":%.3f,"
                      /* AND WHICH TERM THAT GAP IS, AT THE TWO MEMBERS IT IS BETWEEN — solver/flow.h states
                         why the OPTIMISM operand is the one of flow_weight's four summands that has no row
@@ -1395,6 +1418,7 @@ char *result_wfq_json(void) {
                      w.jobs_ready, w.jobs_framed, w.jobs_owed, w.job_w_gap,
                      w.jobs_ready_task, w.jobs_ready_micro,
                      w.mem_unframed, (long long)w.unframed_picks_lifetime,
+                     (long long)w.ready_picks_lifetime,
                      w.deliv_ready, w.deliv_framed, w.deliv_owed, w.deliv_w_gap,
                      (long long)w.deliv_w_gap_vis, (long long)w.w_top_vis,
                      w.cur_deep, w.cur_deep_live, w.cur_deep_w_gap,

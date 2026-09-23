@@ -71,6 +71,32 @@ static int64_t g_picks_total = 0;
    built from, and §NO BOUNDS forbids one: this is a REPORT, and the moment anything decides from it the
    question it exists to answer is no longer askable. */
 static int64_t g_unframed_picks_total = 0;
+/* …AND THE SUBSET OF *THOSE* THAT REACHED A MEMBER THE CENSUS'S READY ARM WOULD HAVE COUNTED — the row
+   flow.h's `unframed_picks_lifetime` residual named as its next diff, and the one that makes that counter a
+   MEASUREMENT of the job backlog rather than a BOUND on it.
+   IT IS A SECOND QUANTITY AND NOT A NARROWING. `g_unframed_picks_total`'s predicate is flow_stack_empty
+   ALONE, so it counts a dispatch to an unframed member holding NO job exactly as it counts one to a ready
+   holder; this restates the ready arm's own three conjuncts (`!flow_host_owed && flow_stack_empty &&
+   flow_job_pending > 0`), so its non-zero arm is decisive where the superset's is only a bound.
+   RAISED INSIDE THE SUPERSET'S OWN `if`, so the containment asserted at the end of flow_wfq_census holds by
+   CONSTRUCTION and not by two writers agreeing — and so flow_job_pending's property read is paid once per
+   UNFRAMED dispatch rather than once per dispatch: the two rows are `unframedPicksLifetime` and
+   `picksLifetime` on the census line, so the ratio it costs is derivable there and is not a figure here.
+   Nothing per pick that is not already inside this `if`, and nothing whatever per opcode.
+   THE IDENTITY THIS REPLACES MUST NOT BE RE-DERIVED. flow.h licensed reading the superset as the subset
+   wherever `jobs_ready == (jobs / members) * mem_unframed` held, on the ground that a fork byte-copies its
+   parent's queue so no unframed member holds zero. That is true of a frontier THAT HAS RUN NO JOB and of no
+   other, and both arms are now measured — five drives of two real documents through the artifact stamped
+   d17472ff0ee24a38d6e2964ad530bcee8be23c7a, terminal census of each. The identity is EXACT on the three whose
+   `jobsRun` is 0 (`jobsReady` 238 == 17*14, 102 == 17*6, 357 == 17*21 against `jobsQueued` 17 and
+   `memUnframed` 14, 6, 21) and FAILS by orders of magnitude on the two whose `jobsRun` is 118 and 138 — the
+   falsifier being exactly the first dispatch that ran a job, as the licence's own caveat predicted. A licence
+   whose precondition is the very state under investigation is one a reader will carry past it, which is why
+   the row exists instead.
+   IT DECIDES NOTHING AND IT MOVES NO RANK, for `g_unframed_picks_total`'s reason and under the same ban: a
+   count of dispatches that reached a job holder and ran no job is exactly the numerator §NO BOUNDS forbids a
+   watchdog being built from. */
+static int64_t g_ready_picks_total = 0;
 /* EVERY MEMBER THIS INSTANCE HAS EVER ADMITTED TO THE FRONTIER, AND EVERY ONE IT HAS EVER LET GO — the two
    LIFETIME counters that say whether the ORDER is deciding anything at all, which no row in this file could
    ask and which the one row that looks as though it could is not.
@@ -1989,7 +2015,14 @@ void flow_credit_pick(Flow *f) {
        engine.c credits this after flow_switch_in, and flow_switch_in writes the delta, the decision cursor,
        the pins and the ranked-at terms and touches neither `frame` nor the program cursor this predicate is
        made of. */
-    if (flow_stack_empty(f)) g_unframed_picks_total++;
+    if (flow_stack_empty(f)) {
+        g_unframed_picks_total++;
+        /* …AND THE READY ARM'S OWN THREE CONJUNCTS, ASKED HERE AND NOT AT THE CENSUS — see
+           `g_ready_picks_total`. The two cheap booleans stand in front of flow_job_pending's property read on
+           purpose: this block is already inside the unframed arm, so the read is paid per unframed dispatch
+           and not per dispatch. `flow_stack_empty` is the conjunct the enclosing `if` already answered. */
+        if (!flow_host_owed(f) && flow_job_pending(f) > 0) g_ready_picks_total++;
+    }
 }
 
 /* IS THIS FLOW'S JAVASCRIPT EXECUTION CONTEXT STACK EMPTY?
@@ -5814,6 +5847,10 @@ void flow_wfq_census(WfqCensus *out) {
        as on a full one. Publishing the two together is what makes the containment below checkable from
        outside this process on the document, where the DCHECK is compiled out. */
     out->unframed_picks_lifetime = g_unframed_picks_total;
+    /* …AND ITS READY SUBSET, ASSIGNED IN THE SAME BREATH FOR THE SAME REASON — a count of dispatches this
+       instance has made, not a reading of this walk, so publishing the three together is what makes both
+       containments checkable on the document where the DCHECKs are compiled out. */
+    out->ready_picks_lifetime = g_ready_picks_total;
     out->svc_max = out->svc_min = out->svc_fam_max = out->svc_fam_min = 0;
     /* …AND THE TWO ROWS THAT SAY WHAT THE NOTCH ABOVE COSTS TO ASK, cleared beside it because they are read
        over the same walk and off the same quantity (flow.c's flow_silence_phase). The residue map is cleared
@@ -6111,23 +6148,22 @@ void flow_wfq_census(WfqCensus *out) {
            this population offers, both taken through `flow_weight` and `w_top` taken from flow_best's own
            return — one function, one walk — so a gap of zero says the front of the order IS one of these
            members. It reads zero at EVERY census of both runs that has one, and `cur_deep_w_gap` reads zero
-           beside it. Two readings survive and they take opposite work: the order ranks this population at its
-           front and the dispatch does not take it, or `w_top` and `job_w_max` are not the quantities the
-           dispatch compares. Neither is established here, and naming one would be the wrong-narrowing move
-           this file refuses everywhere else. What IS established is that the reading `jobs_ready` publishes —
-           `waits on RANK ALONE` — is not an ordering problem the weight can be shown to have, because the
-           same census says these members are already at the front of it.
-           AND THE DICHOTOMY IS WRONG, RECORDED RATHER THAN CORRECTED AWAY BECAUSE THE PAIR IS WHAT A READER
-           RE-DERIVES FROM `job_w_gap` AND `jobs_ready` STANDING TOGETHER. `unframed_picks_lifetime` has been
-           read — solver/flow.h carries the measurement — and it refutes the FIRST reading's second half
-           outright: the dispatch DOES take these members. The second reading is untouched and still
-           unestablished. What the runs are actually in is a THIRD state this paragraph did not offer and its
-           own NOT COVERED clause above had already described: the member is picked, and flow_step's ladder
-           declines the job at an arm ABOVE the one that would run it, so the job is never what that step is
-           about. A two-way choice between a SCHEDULER fault and a COMPARATOR fault has no room for a LADDER
-           fault — and the clause naming the ladder was six lines up while the pair below it went on sending
-           the reader to flow_pick.
-           RETIREMENT: this correction goes when the dichotomy above is rewritten to three arms.
+           beside it. THREE readings survive and they take opposite work: the order ranks this population at
+           its front and the dispatch does not take it; the dispatch DOES take it and flow_step's LADDER
+           declines the job at an arm above the one that would run it; or `w_top` and `job_w_max` are not the
+           quantities the dispatch compares at all. The third is written into the enumeration rather than
+           corrected beneath it, which is what this paragraph's own retirement asked for: a two-way choice
+           between a SCHEDULER fault and a COMPARATOR fault had no room for a LADDER fault, and the NOT COVERED
+           clause naming the ladder was six lines up while the pair below it went on sending the reader to
+           flow_pick.
+           THE FIRST TWO ARE A ROW NOW AND NOT AN INFERENCE — `ready_picks_lifetime`, published beside
+           `unframed_picks_lifetime`, whose legend in flow.h states the triple: zero here with the superset
+           non-zero is the first, above zero with `_jobsRun` flat is the second. `unframed_picks_lifetime`
+           alone could only refute `never taken` for the SUPERSET, which is why naming one arm on the strength
+           of it would have been the wrong-narrowing move this file refuses everywhere else. What IS
+           established is that the reading `jobs_ready` publishes — `waits on RANK ALONE` — is not an ordering
+           problem the weight can be shown to have, because the same census says these members are already at
+           the front of it.
            HOW ITS ABSENCE SHOWS: a census publishing `jobsReady` above zero with `jobWGap` at zero, on a run
            whose LIFETIME `_jobsRun` never leaves zero — a backlog standing at the front of the order that the
            order cannot move, which is the pair this row exists to make impossible to say. IT HAS FIRED, on
@@ -6440,6 +6476,15 @@ void flow_wfq_census(WfqCensus *out) {
            "flow_credit_pick raises both in one statement block, the second conditionally on the first, so "
            "one of them now has a writer elsewhere and the row that separates `memUnframed`'s two readings "
            "is a fraction over the wrong denominator");
+    /* AND THE INNER ONE, WHICH IS WHAT MAKES THE NEW ROW A SUBSET RATHER THAN A SECOND OPINION. It is raised
+       inside the outer `if` of flow_credit_pick, so this can fail only on an edit that lifts it out — which is
+       precisely the edit that would make `readyPicksLifetime` a count over a population `unframedPicksLifetime`
+       is not drawn from, and the pair would then be two dispatch paths wearing one ratio. Two integers in hand. */
+    DCHECK(out->ready_picks_lifetime <= out->unframed_picks_lifetime,
+           "the scheduler has dispatched a READY JOB HOLDER more often than it has dispatched an UNFRAMED "
+           "member at all: the ready count is raised inside the unframed count's own `if` in flow_credit_pick, "
+           "so it has acquired a second writer and the row that turns `unframedPicksLifetime` from a bound "
+           "into a measurement of the job backlog is a fraction over the wrong denominator");
     /* THE FATTEST LIVE BUCKET'S OWN THREE NUMBERS, TAKEN FROM THE ONE NODE THE WALK RETAINED — see flow.h for
        the three states they separate and for why three extrema over a population cannot separate them. This
        is the SECOND reading of that bucket's membership pair: branch_take folded the first into a running

@@ -2789,32 +2789,14 @@ typedef struct {
      * 280 against 619 on the other, with `_jobsRun` 0, 0 and 8. "Ranked at the front and never taken" is
      * REFUTED. The order DOES hand the thread to these members, so the DISPATCH PATH is not the defect and the
      * reader goes to flow_step's ladder rather than to flow_pick.
-     * AND THE ASYMMETRY THE RESIDUAL BELOW NAMES AS THE PRICE WAS CLOSED BY MEASUREMENT ON THOSE RUNS, which
-     * is what makes the arm a MEASUREMENT of the ready holders there and not the bound it is in general. The
-     * uncovered population — an unframed member holding NO job — was EMPTY, because
-     * `jobs_ready == (jobs / members) * mem_unframed` held at 146 of 146 censuses: a fork DUPLICATES its
-     * parent's queue and nothing had consumed one, so every member held the same pending count and none held
-     * zero. READ THAT IDENTITY PER RUN AND NEVER ASSUME IT — it is a property of a frontier that has run no
-     * job, so the first dispatch a member makes falsifies it, and with it the licence to read this arm as
-     * anything narrower than the superset.
-     * RETIREMENT: this record goes when the second row the clause below names is published, because the ready
-     * subset is then counted directly and no identity has to hold for this arm to be read.
-     *
-     * NAMED RESIDUAL, AND IT IS THE PRICE OF THE PAIRING RATHER THAN AN OVERSIGHT.
-     * NOT COVERED: a dispatch to a member that is unframed and holds NO job is counted here exactly as one to
-     * a ready HOLDER is, because the predicate is flow_stack_empty alone. That is deliberate — it is the
-     * population `mem_unframed` is taken over, and a counter whose denominator is not on the line is the
-     * defect CLAUDE.md names for every count offered as a share of another — and it makes the two arms above
-     * ASYMMETRIC. The zero arm is decisive for the ready holders by the containment above; the non-zero arm
-     * is a bound and not a measurement of them, because this superset can be non-zero while the ready subset
-     * is still zero.
-     * WHAT THE NEXT DIFF BUILDS: the same count restricted to the arm's own three conjuncts
-     * (`!flow_host_owed && flow_stack_empty && flow_job_pending > 0`), which is a SECOND row and not a
-     * narrowing of this one, published beside `jobs_ready` as this is published beside `mem_unframed`, so
-     * each counter stands beside the gauge it is the lifetime half of.
-     * HOW ITS ABSENCE WOULD SHOW: a census reporting this row non-zero while `_jobsRun` never leaves zero over
-     * the same run — a reader may then conclude the dispatch reaches the job backlog, and nothing published
-     * anywhere contradicts them.
+     * AND THE ASYMMETRY THAT USED TO BE THE PRICE OF THE PAIRING IS COUNTED NOW RATHER THAN ARGUED — the
+     * residual that stood here asked for `ready_picks_lifetime` and it is published below, so this arm is a
+     * BOUND on the ready holders and the row beside it is the measurement. What is deleted with the residual
+     * is a LICENCE and not a fact: it said the uncovered population was empty wherever
+     * `jobs_ready == (jobs / members) * mem_unframed` held, because a fork byte-copies its parent's queue and
+     * nothing had consumed one. That identity is a property of a frontier THAT HAS RUN NO JOB, which is the
+     * state a reader holding a flat job count is investigating — so the licence was available exactly where it
+     * could not be checked, and flow.c's `g_ready_picks_total` carries both arms of it measured.
      *
      * WHAT WOULD MAKE IT UNTRUSTWORTHY, stated here because a row whose failure modes are not written down is
      * one a reader will rationalise after the fact. Three things, and each already has a check: the
@@ -2832,6 +2814,41 @@ typedef struct {
      * paragraph states the property this leans on: a quantity the ordering consumes stops being able to
      * answer the question it exists for. */
     int64_t unframed_picks_lifetime;
+
+    /* …AND HOW MANY OF THOSE DISPATCHES REACHED A MEMBER THE READY ARM WOULD HAVE COUNTED — the row that turns
+     * the counter above from a BOUND on the job backlog into a MEASUREMENT of it, and the one this census was
+     * missing when a run reporting `unframedPicksLifetime` in the tens beside `jobsRun: 0` was read as the
+     * dispatch reaching the backlog and finding nothing to run.
+     * THE PREDICATE IS THE READY ARM'S OWN THREE CONJUNCTS and not a fourth spelling of them: flow_credit_pick
+     * raises it under `!flow_host_owed && flow_stack_empty && flow_job_pending > 0`, which is the `if / else if
+     * / else` above restated as one condition, so a member counted here is one the job split would have put in
+     * `jobs_ready` at that instant.
+     * IT IS A LIFETIME COUNTER AND `jobs_ready` IS A GAUGE, which is the whole reason it is a second row: a
+     * ready holder that is dispatched and then FRAMES ITSELF by running leaves the gauge and stays in this, so
+     * the gauge cannot say whether the order has ever offered one of them the thread. Differencing this across
+     * two samples is arithmetic over dispatches; differencing `jobs_ready` is arithmetic over nothing.
+     * READ IT BESIDE `unframedPicksLifetime` AND `jobsRun`, WHICH IS THE ONE READING IT EXISTS FOR AND IT IS
+     * THREE-WAY:
+     *   0 with `unframedPicksLifetime` > 0   the dispatch reaches unframed members and NEVER one holding a job.
+     *                                        `jobsRun: 0` is then about WHO IS PICKED, and the reader goes to
+     *                                        flow_pick and to what the ready holders' weight is.
+     *   > 0 with `jobsRun` 0                 the dispatch DOES reach job holders and flow_step declines the job
+     *                                        at an arm above the one that would run it. The reader goes to the
+     *                                        LADDER, and `jobsReadyTask`/`jobsReadyMicro` say which arm.
+     *   0 with `picksLifetime` 0             the instance has dispatched nothing and this row is silent.
+     * The first two are the third state solver/flow.c's job-split residual had to add to its own dichotomy, and
+     * this is the row that decides between them instead of a reader inferring it from `jobWGap`.
+     * CONTAINED IN THE ROW ABOVE BY CONSTRUCTION — raised inside its `if` — and asserted at the end of
+     * flow_wfq_census, which is the arithmetic tell CLAUDE.md names for every count offered as a share of
+     * another: a subset exceeding the population it claims to be drawn from.
+     * THE CONTAINMENT IS DEV-ONLY UNTIL A READER OF THE DOCUMENT ASSERTS IT, WHICH IS AN ACT AND NOT A WAIT:
+     * the DCHECK is compiled out of the release build every real-page drive uses, so the check that makes
+     * this a counter rather than a digit is absent exactly where the row will be read. engine/build.mjs
+     * already re-asserts `unframedPicksLifetime <= picksLifetime` for that reason and is where the same
+     * line for this pair belongs; whoever owns that reader adds it. Until then a release census carries
+     * the pair unchecked, and a reader who meets them out of order is meeting an unasserted ratio.
+     * IT IS A REPORT AND NOT A BOUND, for `unframed_picks_lifetime`'s reason and under the same ban. */
+    int64_t ready_picks_lifetime;
 
     /* THE DELIVERY BACKLOG, SPLIT THE SAME WAY AND FOR THE SAME REASON — the missing twin of the four rows
      * above. The cold census says how many register entries are ANSWERED AND UNTAKEN (`pendReady`) and how
