@@ -297,7 +297,7 @@ typedef struct {
        names the STANDARD as well as the state, which is what that header asks of a SUB-COMPONENT: this file
        has no row, so the report a reader meets is headed by somebody else's. It is NOT put back by the
        release: the registry still points at it while agent_state_check_released runs. */
-    char      what[80];
+    char      what[144];
     JSClassID class_id;
     int       foreach_stepid;
     /* §3.7.9's THREE OPERATIONS (its step 2.1-2.3 `entries`, `keys` and `values`), declared with the interface rather than minted at each install. A pool entry
@@ -585,7 +585,14 @@ int idl_pair_iter_declare(JSContext *ctx, const char *component, const IdlPairIt
        core/platform.c brackets this column with against JS_ClassIDsMinted — so a zeroed declaration would be
        reset and checked like any other and would still leave that identity short by one per interface, which
        is the one reading it exists to get right. */
-    snprintf(f->what, sizeof f->what, "Web IDL §3.7.9.2's %s Iterator class", ops->iface);
+    /* IT NAMES BOTH ROLES, AND §3.7.9.1 FIRST, BECAUSE THE CLASS IS THE OBJECT'S AND NOT THE PROTOTYPE'S.
+       §3.7.9.2 is `Iterator prototype object` and this id merely CARRIES one, in the per-context slot
+       JS_SetClassProto fills; what it BRANDS is §3.7.9.1's `Default iterator objects`, which is what every
+       JS_GetOpaque against it is asking about. Naming the prototype alone would have aimed the one sentence a
+       teardown report shows at the half of the id that is not the reason it exists. */
+    snprintf(f->what, sizeof f->what,
+             "Web IDL §3.7.9.1's %s default iterator object class — its brand, and §3.7.9.2's per-realm "
+             "iterator prototype slot", ops->iface);
     agent_state_class(component, &f->class_id, f->what);
 
     f->foreach_stepid = JS_RegisterStepDef(rt, &foreach_def);
