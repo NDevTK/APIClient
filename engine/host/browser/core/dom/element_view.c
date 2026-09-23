@@ -113,20 +113,40 @@ static void ev_target_of_element(lxb_dom_element_t *el, EvTarget *t)
            "existence is defined over exactly that (element_view.h), so the two answers have come apart");
 }
 
-/* WEB IDL §3.7.6 Attributes' BRAND CHECK. `Element.prototype.clientWidth` read off a plain object is a
-   TypeError, and a
-   page tells that apart from `undefined` — a feature detector that probes the descriptor and applies the getter
-   reads the throw as "this is a real interface". Returns false with the TypeError pending. */
-static bool ev_target(JSContext *ctx, JSValueConst this_val, EvTarget *t)
+/* WEB IDL §3.7.6 "Attributes"' AND §3.7.7 "Operations"' RECEIVER TEST IS STATED AT EACH DECLARATION AND
+   PERFORMED BEFORE THIS RUNS, so this fills the four questions and decides nothing.
+
+   THIS FUNCTION USED TO BE THE BRAND CHECK, AND THE ARGUMENT IS KEPT BECAUSE A READER WILL RE-DERIVE IT. It
+   read: `Element.prototype.clientWidth` read off a plain object is a TypeError, and a page tells that apart
+   from `undefined` — a feature detector that probes the descriptor and applies the getter reads the throw as
+   "this is a real interface". Every clause of that is still true of the PLATFORM and none of it is this
+   file's to answer any more: the eight attributes are installed through core/idl_args.h's
+   idl_install_accessor_this and the six operations declare idl_this_iface, both naming core/dom/element.h's
+   own `element_is`, so Web IDL §3.7 Interfaces' implementation-check step 3 runs at ONE place for all
+   fourteen. Writing it again here would be the second answer to one question §A-FIX-OF-THE-FORM forbids.
+
+   AND THE ORDER IS WHAT THE MOVE BUYS, WHICH A BODY-SIDE TEST CANNOT HAVE. §3.7.7's try-list asks the
+   receiver at step 2.1.2.3, BEFORE step 2.1.4 computes the effective overload set, and §3.7.6's setter asks
+   it — Web IDL §3.7.6 "Attributes": "If validThis is false and attribute was not specified with the
+   [LegacyLenientThis] extended attribute, then throw a TypeError." — before it converts V. A test written
+   here ran after §3.6 had converted every argument, so `Element.prototype.scrollTo.call({}, {valueOf(){…}})`
+   ran the page's `valueOf` and only then refused, where a browser refuses with none of it having run.
+
+   IT MAY NOT COME BACK AS AN ASSERT. A receiver is PAGE-SUPPLIED INPUT, so a DCHECK on it is an abort switch
+   the page holds in dev and, in release where the DCHECK is compiled out, a dereference of the NULL the
+   assert was standing on. The refusal that replaces it is §3.7.6's TypeError and lives in both builds. */
+static void ev_target(JSValueConst this_val, EvTarget *t)
 {
     lxb_dom_element_t *el = element_of_value(this_val);
 
-    if (!el) {
-        JS_ThrowTypeError(ctx, "a CSSOM VIEW Element member was reached on something that is not an Element");
-        return false;
-    }
+    /* ON WHAT THE DECLARATION JUST READ, NEVER ON WHAT THE PAGE PASSED. `element_is` IS this read, so reaching
+       here with no element means the member was installed or declared without stating its receiver interface —
+       which is a fact about this file's own install block and not about the page. */
+    DCHECK(el != NULL,
+           "a CSSOM VIEW §6 Element member reached its body on a receiver that is not an Element — every one "
+           "of them states element_is at its install or its declaration, so reaching here means one member "
+           "was added without doing so");
     ev_target_of_element(el, t);
-    return true;
 }
 
 /* A member whose IDL type is `long`, handed a value that is ALREADY an integer number of CSS pixels — the
@@ -499,7 +519,7 @@ static JSValue js_ev_set(JSContext *ctx, JSValueConst this_val, JSValueConst val
     DCHECK(magic == EV_SCROLL_TOP || magic == EV_SCROLL_LEFT,
            "a CSSOM VIEW §6 setter was declared with a magic that is not one of the two members the IDL "
            "declares as a writable attribute");
-    if (!ev_target(ctx, this_val, &t)) return JS_EXCEPTION;
+    ev_target(this_val, &t);
     if (!req.unknown) {
         DCHECK(JS_IsNumber(val),
                "§6's scrollTop/scrollLeft setter was handed something that is not a number — its IDL type is "
@@ -646,7 +666,7 @@ static JSValue js_ev_scroll(JSContext *ctx, JSValueConst this_val, int argc, JSV
     DCHECK(magic == EV_SCROLL_ABSOLUTE || magic == EV_SCROLL_RELATIVE,
            "a CSSOM VIEW §6 scroll member was declared with a magic that is neither of the two algorithms — "
            "`scroll`/`scrollTo` is one and `scrollBy` is the other, and the magic IS which");
-    if (!ev_target(ctx, this_val, &t)) return JS_EXCEPTION;
+    ev_target(this_val, &t);
     /* Steps 1 and 2, whose ONLY difference is where `left` and `top` come from. Step 2's "let the left
        dictionary member of options have the value x" makes the two-argument form's arguments those very
        members, so they are read as such and the rest of the algorithm has one shape. */
@@ -825,7 +845,7 @@ static JSValue js_ev_scroll_into_view(JSContext *ctx, JSValueConst this_val, int
 
     (void)magic;
     CHECK(behavior != NULL, "§6's `scrollIntoView` could not hold its own default `behavior` keyword");
-    if (!ev_target(ctx, this_val, &t)) { free(behavior); return JS_EXCEPTION; }
+    ev_target(this_val, &t);
     DCHECK(argc == 1,
            "§6 declares `scrollIntoView(optional (boolean or ScrollIntoViewOptions) arg = {})` — one argument, "
            "with the default materialized by the argument machine — so a body seeing any other count is a "
@@ -1521,7 +1541,7 @@ static JSValue js_ev_client_rects(JSContext *ctx, JSValueConst this_val, int arg
     EvTarget t;
 
     (void)argc; (void)argv; (void)magic;
-    if (!ev_target(ctx, this_val, &t)) return JS_EXCEPTION;
+    ev_target(this_val, &t);
     return ev_client_rects(ctx, &t);
 }
 
@@ -1530,7 +1550,7 @@ static JSValue js_ev_bounding_rect(JSContext *ctx, JSValueConst this_val, int ar
     EvTarget t;
 
     (void)argc; (void)argv; (void)magic;
-    if (!ev_target(ctx, this_val, &t)) return JS_EXCEPTION;
+    ev_target(this_val, &t);
     return ev_bounding_rect(ctx, &t);
 }
 
@@ -1540,7 +1560,7 @@ static JSValue js_ev_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
     EvTarget t;
 
-    if (!ev_target(ctx, this_val, &t)) return JS_EXCEPTION;
+    ev_target(this_val, &t);
     switch ((ElementViewMember)magic) {
     case EV_SCROLL_TOP:     return ev_scroll_position(ctx, &t, true);
     case EV_SCROLL_LEFT:    return ev_scroll_position(ctx, &t, false);
@@ -1633,6 +1653,11 @@ static int ev_declare_scroll(JSContext *ctx, EvScrollKind kind)
        it stood before the optional index "for idl_returns_promise's own reason", and there is no such reason —
        see that function, whose ordering claim was false in both halves and is corrected there. */
     idl_returns_promise();
+    /* WEB IDL §3.7 Interfaces' implementation-check step 3, asked at step 2.1.2.3 of §3.7.7's try-list —
+       BEFORE step 2.1.4 computes the effective overload set, so `Element.prototype.scrollTo.call({}, x)`
+       refuses without converting x. §3.7.7's `Try` opens before this and closes after the method steps, so
+       the TypeError a foreign receiver gets is a REJECTED PROMISE for these two and not a throw. */
+    idl_this_iface(element_is, "Element");
     /* THE DICTIONARY ENTRY DECLARES POSITION 0 OPTIONAL (`optional ScrollToOptions options = {}`), so
        `el.scrollTo()` is a legal call… */
     idl_optional_from(0);
@@ -1654,9 +1679,19 @@ void element_view_init(JSContext *ctx)
        reachable at all: a plain `double` would reject NaN and the infinities at the boundary, and
        `el.scrollTop = NaN` is a scroll to 0 rather than a TypeError. */
     g_id_set_scroll_top  = idl_setter_id(ctx, IDL_UNRESTRICTED_DOUBLE, false, js_ev_set, EV_SCROLL_TOP);
+    /* §3.7.6's SETTER asks the receiver BEFORE it converts the value — Web IDL §3.7.6 "Attributes": "If
+       validThis is false and attribute was not specified with the [LegacyLenientThis] extended attribute,
+       then throw a TypeError", which stands above "Let idlValue be the result of converting V to an IDL value
+       of attribute's type". A test in js_ev_set ran after that conversion, so
+       `Element.prototype.scrollTop` set through a foreign receiver with `{valueOf(){…}}` ran the page's
+       `valueOf` first. Stated here, it does not. */
+    idl_this_iface(element_is, "Element");
     g_id_set_scroll_left = idl_setter_id(ctx, IDL_UNRESTRICTED_DOUBLE, false, js_ev_set, EV_SCROLL_LEFT);
+    idl_this_iface(element_is, "Element");
     g_id_client_rects    = idl_method_id(ctx, NULL, 0, js_ev_client_rects, 0);
+    idl_this_iface(element_is, "Element");
     g_id_bounding_rect   = idl_method_id(ctx, NULL, 0, js_ev_bounding_rect, 0);
+    idl_this_iface(element_is, "Element");
     g_id_scroll          = ev_declare_scroll(ctx, EV_SCROLL_ABSOLUTE);
     g_id_scroll_by       = ev_declare_scroll(ctx, EV_SCROLL_RELATIVE);
     g_id_scroll_into_view = idl_method_id_dict(ctx, EV_SCROLL_INTO_VIEW_ARGS, 1,
@@ -1664,6 +1699,10 @@ void element_view_init(JSContext *ctx)
                                                (int)(sizeof EV_SCROLL_INTO_VIEW_OPTIONS /
                                                      sizeof EV_SCROLL_INTO_VIEW_OPTIONS[0]),
                                                js_ev_scroll_into_view, 0);
+    /* §3.7 Interfaces' implementation-check step 3 for the LAST of §6's six operations — declared beside its
+       own type list rather than in ev_declare_scroll, because this member is not one of the two that helper
+       makes and idl_this_iface names the member declared LAST. */
+    idl_this_iface(element_is, "Element");
     /* §3.7.7's PROMISE RETURN TYPE — `Promise<undefined> scrollIntoView(...)`, so a conversion that throws
        (§3.2.18 refusing `{block: "middle"}`) is a REJECTED promise and not a throw, which is what a page
        wrapping the call in `.catch` relies on. Its position before the optional index is reading order and
@@ -1678,14 +1717,26 @@ void element_view_install(JSContext *ctx, JSValueConst proto)
     DCHECK(g_id_set_scroll_top >= 0,
            "§6's members were installed in a realm before element_view_init declared their setters — the "
            "component declares once per agent and installs from the cached ids");
-    idl_install_accessor(ctx, proto, "scrollTop",    js_ev_get, EV_SCROLL_TOP,    g_id_set_scroll_top);
-    idl_install_accessor(ctx, proto, "scrollLeft",   js_ev_get, EV_SCROLL_LEFT,   g_id_set_scroll_left);
-    idl_install_accessor(ctx, proto, "scrollWidth",  js_ev_get, EV_SCROLL_WIDTH,  -1);
-    idl_install_accessor(ctx, proto, "scrollHeight", js_ev_get, EV_SCROLL_HEIGHT, -1);
-    idl_install_accessor(ctx, proto, "clientTop",    js_ev_get, EV_CLIENT_TOP,    -1);
-    idl_install_accessor(ctx, proto, "clientLeft",   js_ev_get, EV_CLIENT_LEFT,   -1);
-    idl_install_accessor(ctx, proto, "clientWidth",  js_ev_get, EV_CLIENT_WIDTH,  -1);
-    idl_install_accessor(ctx, proto, "clientHeight", js_ev_get, EV_CLIENT_HEIGHT, -1);
+    /* WEB IDL §3.7.6 "Attributes"' RECEIVER TEST, STATED HERE AND PERFORMED BEFORE js_ev_get RUNS. §6's
+       members are a `partial interface Element`, so the interface the receiver must implement is Element and
+       the predicate is core/dom/element.h's own `element_is` — the same answer the six operations below
+       declare through idl_this_iface, so this file's attributes and its operations cannot come apart. */
+    idl_install_accessor_this(ctx, proto, "scrollTop",    js_ev_get, EV_SCROLL_TOP,    g_id_set_scroll_top,
+                              element_is, "Element");
+    idl_install_accessor_this(ctx, proto, "scrollLeft",   js_ev_get, EV_SCROLL_LEFT,   g_id_set_scroll_left,
+                              element_is, "Element");
+    idl_install_accessor_this(ctx, proto, "scrollWidth",  js_ev_get, EV_SCROLL_WIDTH,  -1,
+                              element_is, "Element");
+    idl_install_accessor_this(ctx, proto, "scrollHeight", js_ev_get, EV_SCROLL_HEIGHT, -1,
+                              element_is, "Element");
+    idl_install_accessor_this(ctx, proto, "clientTop",    js_ev_get, EV_CLIENT_TOP,    -1,
+                              element_is, "Element");
+    idl_install_accessor_this(ctx, proto, "clientLeft",   js_ev_get, EV_CLIENT_LEFT,   -1,
+                              element_is, "Element");
+    idl_install_accessor_this(ctx, proto, "clientWidth",  js_ev_get, EV_CLIENT_WIDTH,  -1,
+                              element_is, "Element");
+    idl_install_accessor_this(ctx, proto, "clientHeight", js_ev_get, EV_CLIENT_HEIGHT, -1,
+                              element_is, "Element");
     idl_install_method(ctx, proto, "getClientRects", g_id_client_rects);
     idl_install_method(ctx, proto, "getBoundingClientRect", g_id_bounding_rect);
     /* §3.7.7's `length` is §3.6's OWN NUMBER for an overloaded operation: the smallest argument-list length

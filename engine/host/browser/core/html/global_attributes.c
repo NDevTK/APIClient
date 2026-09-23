@@ -76,21 +76,38 @@ static bool local_name_is(lxb_dom_element_t *el, const char *name)
     return n && strlen(name) == len && memcmp(n, name, len) == 0;
 }
 
-/* WEB IDL §3.7.6 Attributes' brand check, a THROW and not an assert: every member below sits on
-   HTMLElement.prototype and
-   a page reaches an accessor off a prototype with `.call` on anything at all. */
-static lxb_dom_element_t *receiver(JSContext *ctx, JSValueConst this_val, const char *member)
-{
-    if (html_element_is(this_val)) {
-        lxb_dom_element_t *el = element_of_value(this_val);
+/* THE ELEMENT BEHIND A RECEIVER WEB IDL §3.7.6 "Attributes" HAS ALREADY BRANDED.
 
-        /* html_element_is already asked node_of for an ELEMENT node in the HTML namespace, so the two answers
-           cannot disagree — and a NULL here would return JS_EXCEPTION with no exception pending. */
-        DCHECK(el != NULL, "an HTML element wrapper had no element behind it");
-        return el;
-    }
-    JS_ThrowTypeError(ctx, "HTMLElement.%s was reached on something that is not an HTML element", member);
-    return NULL;
+   THIS FILE HELD ITS OWN `receiver`, AND THE ARGUMENT FOR IT IS KEPT BECAUSE A READER WILL RE-DERIVE IT. It
+   read: a brand check, a THROW and not an assert, because every member below sits on HTMLElement.prototype
+   and a page reaches an accessor off a prototype with `.call` on anything at all. Every clause of that is
+   still true of the PLATFORM and none of it is this file's to answer: the eight attributes are installed
+   through core/idl_args.h's idl_install_accessor_this and the seven setters declare idl_this_iface, both
+   naming core/html/html_element.h's own `html_element_is`, so §3.7 Interfaces' implementation-check step 3
+   runs at ONE place for all fifteen entry points and the getter half and the setter half cannot disagree.
+   Writing it again here would be the second answer to one question §A-FIX-OF-THE-FORM forbids.
+
+   THE ORDER IS WHAT THE MOVE BUYS. §3.7.6's setter asks the receiver — Web IDL §3.7.6 "Attributes": "If
+   validThis is false and attribute was not specified with the [LegacyLenientThis] extended attribute, then
+   throw a TypeError." — BEFORE "Let idlValue be the result of converting V to an IDL value of attribute's
+   type". A test in a setter body ran after that conversion, so `HTMLElement.prototype.autocapitalize`'s
+   setter applied to a foreign receiver with `{toString(){ window.ran = true; return "x"; }}` left
+   `window.ran` true and threw afterwards, where a browser throws with `window.ran` still undefined.
+
+   IT MAY NOT COME BACK AS AN ASSERT. A receiver is PAGE-SUPPLIED INPUT, so a DCHECK on it is an abort switch
+   the page holds in dev and, in release where the DCHECK is compiled out, a dereference of the NULL the
+   assert was standing on. The refusal that replaces it is §3.7.6's TypeError and lives in both builds. The
+   assert below is a different claim: it is about THIS FILE'S OWN install and declaration block, which either
+   states the interface for a member or does not. */
+static lxb_dom_element_t *receiver_element(JSValueConst this_val)
+{
+    lxb_dom_element_t *el = element_of_value(this_val);
+
+    DCHECK(el != NULL,
+           "an HTML enumerated-global-attribute member reached its body on a receiver that is not an element "
+           "— every one of them states html_element_is at its install or its declaration, so reaching here "
+           "means one member was added without doing so");
+    return el;
 }
 
 /* ---- HTML §3.2.6.3 The translate attribute ---------------------------------------------------------------- */
@@ -120,10 +137,9 @@ static bool translation_enabled(lxb_dom_element_t *el)
 
 static JSValue js_translate_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    lxb_dom_element_t *el = receiver(ctx, this_val, "translate");
+    lxb_dom_element_t *el = receiver_element(this_val);
 
     (void)magic;
-    if (!el) return JS_EXCEPTION;
     return JS_NewBool(ctx, translation_enabled(el));
 }
 
@@ -132,7 +148,6 @@ static JSValue js_translate_get(JSContext *ctx, JSValueConst this_val, int magic
 static JSValue js_translate_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     (void)magic;
-    if (!receiver(ctx, this_val, "translate")) return JS_EXCEPTION;
     element_attr_set(ctx, this_val, "translate", JS_ToBool(ctx, val) ? "yes" : "no");
     return JS_UNDEFINED;
 }
@@ -165,10 +180,9 @@ static bool spellcheck_enabled(lxb_dom_element_t *el)
 
 static JSValue js_spellcheck_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    lxb_dom_element_t *el = receiver(ctx, this_val, "spellcheck");
+    lxb_dom_element_t *el = receiver_element(this_val);
 
     (void)magic;
-    if (!el) return JS_EXCEPTION;
     return JS_NewBool(ctx, spellcheck_enabled(el));
 }
 
@@ -177,7 +191,6 @@ static JSValue js_spellcheck_get(JSContext *ctx, JSValueConst this_val, int magi
 static JSValue js_spellcheck_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     (void)magic;
-    if (!receiver(ctx, this_val, "spellcheck")) return JS_EXCEPTION;
     element_attr_set(ctx, this_val, "spellcheck", JS_ToBool(ctx, val) ? "true" : "false");
     return JS_UNDEFINED;
 }
@@ -206,10 +219,9 @@ static bool writing_suggestions_offered(lxb_dom_element_t *el)
    DOMString "true" or "false", not a boolean, which is what the IDL says and what a page compares against. */
 static JSValue js_writing_suggestions_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    lxb_dom_element_t *el = receiver(ctx, this_val, "writingSuggestions");
+    lxb_dom_element_t *el = receiver_element(this_val);
 
     (void)magic;
-    if (!el) return JS_EXCEPTION;
     return JS_NewString(ctx, writing_suggestions_offered(el) ? "true" : "false");
 }
 
@@ -221,7 +233,6 @@ static JSValue js_writing_suggestions_set(JSContext *ctx, JSValueConst this_val,
     const char *s;
 
     (void)magic;
-    if (!receiver(ctx, this_val, "writingSuggestions")) return JS_EXCEPTION;
     s = JS_ToCString(ctx, val);
     if (!s) return JS_EXCEPTION;
     element_attr_set(ctx, this_val, "writingsuggestions", s);
@@ -304,11 +315,10 @@ static int own_autocapitalization_hint(JSContext *ctx, JSValueConst wrap, lxb_do
    value answered itself where they answer "sentences". */
 static JSValue js_autocapitalize_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    lxb_dom_element_t *el = receiver(ctx, this_val, "autocapitalize");
+    lxb_dom_element_t *el = receiver_element(this_val);
     int state;
 
     (void)magic;
-    if (!el) return JS_EXCEPTION;
     state = own_autocapitalization_hint(ctx, this_val, el);
     if (state == AC_DEFAULT) return JS_NewStringLen(ctx, "", 0);
     if (state == AC_NONE) return JS_NewString(ctx, "none");
@@ -324,7 +334,6 @@ static JSValue js_autocapitalize_set(JSContext *ctx, JSValueConst this_val, JSVa
     const char *s;
 
     (void)magic;
-    if (!receiver(ctx, this_val, "autocapitalize")) return JS_EXCEPTION;
     s = JS_ToCString(ctx, val);
     if (!s) return JS_EXCEPTION;
     element_attr_set(ctx, this_val, "autocapitalize", s);
@@ -375,10 +384,9 @@ static bool autocorrect_on(JSContext *ctx, JSValueConst wrap, lxb_dom_element_t 
 
 static JSValue js_autocorrect_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    lxb_dom_element_t *el = receiver(ctx, this_val, "autocorrect");
+    lxb_dom_element_t *el = receiver_element(this_val);
 
     (void)magic;
-    if (!el) return JS_EXCEPTION;
     return JS_NewBool(ctx, autocorrect_on(ctx, this_val, el));
 }
 
@@ -387,7 +395,6 @@ static JSValue js_autocorrect_get(JSContext *ctx, JSValueConst this_val, int mag
 static JSValue js_autocorrect_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     (void)magic;
-    if (!receiver(ctx, this_val, "autocorrect")) return JS_EXCEPTION;
     element_attr_set(ctx, this_val, "autocorrect", JS_ToBool(ctx, val) ? "on" : "off");
     return JS_UNDEFINED;
 }
@@ -449,10 +456,9 @@ static bool is_editable(lxb_dom_element_t *el)
    False state, and `inherit` otherwise." */
 static JSValue js_content_editable_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    lxb_dom_element_t *el = receiver(ctx, this_val, "contentEditable");
+    lxb_dom_element_t *el = receiver_element(this_val);
 
     (void)magic;
-    if (!el) return JS_EXCEPTION;
     switch (content_editable_state(el)) {
     case CE_TRUE:           return JS_NewString(ctx, "true");
     case CE_PLAINTEXT_ONLY: return JS_NewString(ctx, "plaintext-only");
@@ -467,12 +473,11 @@ static JSValue js_content_editable_get(JSContext *ctx, JSValueConst this_val, in
 static JSValue js_content_editable_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     static const char *const KEEP[] = { "true", "plaintext-only", "false", NULL };
-    lxb_dom_element_t *el = receiver(ctx, this_val, "contentEditable");
+    lxb_dom_element_t *el = receiver_element(this_val);
     const char *s;
     int i;
 
     (void)magic;
-    if (!el) return JS_EXCEPTION;
     s = JS_ToCString(ctx, val);
     if (!s) return JS_EXCEPTION;
     if (enumerated_attribute_keyword_match("inherit", s, strlen(s))) {
@@ -496,10 +501,9 @@ static JSValue js_content_editable_set(JSContext *ctx, JSValueConst this_val, JS
    editing host or editable, and false otherwise." */
 static JSValue js_is_content_editable(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    lxb_dom_element_t *el = receiver(ctx, this_val, "isContentEditable");
+    lxb_dom_element_t *el = receiver_element(this_val);
 
     (void)magic;
-    if (!el) return JS_EXCEPTION;
     return JS_NewBool(ctx, is_editing_host(el) || is_editable(el));
 }
 
@@ -538,9 +542,13 @@ static bool draggable_true(lxb_dom_element_t *el)
     case DRAGGABLE_FALSE: return false;
     default:              break;   /* the Auto state */
     }
+    /* THE ARGUMENT THIS ASSERT RESTS ON MOVED AND THE ASSERT DID NOT. It used to name this file's own
+       `receiver()`; the refusal is now Web IDL §3.7.6 "Attributes"' TypeError, performed from the install's
+       stated `html_element_is` before this body runs, and that predicate IS the namespace test below — so the
+       two answers still cannot disagree and this still asserts only that the member stated its interface. */
     DCHECK(element_is_html(el),
-           "§6.11.7's draggable was computed for an element that is not an HTML element — the member sits on "
-           "HTMLElement.prototype and its receiver() brand check already refused everything else");
+           "§6.11.7's draggable was computed for an element that is not an HTML element — the member states "
+           "html_element_is at its install, so §3.7.6's receiver test has already refused everything else");
     if (local_name_is(el, "img")) return true;
     if (local_name_is(el, "a"))
         return lxb_dom_element_has_attribute(el, (const lxb_char_t *)"href", 4);
@@ -549,10 +557,9 @@ static bool draggable_true(lxb_dom_element_t *el)
 
 static JSValue js_draggable_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    lxb_dom_element_t *el = receiver(ctx, this_val, "draggable");
+    lxb_dom_element_t *el = receiver_element(this_val);
 
     (void)magic;
-    if (!el) return JS_EXCEPTION;
     return JS_NewBool(ctx, draggable_true(el));
 }
 
@@ -563,7 +570,6 @@ static JSValue js_draggable_get(JSContext *ctx, JSValueConst this_val, int magic
 static JSValue js_draggable_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     (void)magic;
-    if (!receiver(ctx, this_val, "draggable")) return JS_EXCEPTION;
     element_attr_set(ctx, this_val, "draggable", JS_ToBool(ctx, val) ? "true" : "false");
     return JS_UNDEFINED;
 }
@@ -573,28 +579,52 @@ static JSValue js_draggable_set(JSContext *ctx, JSValueConst this_val, JSValueCo
 void global_attributes_declare(JSContext *ctx)
 {
     DCHECK(!g_ready, "global_attributes_declare ran twice — the setters are declared once per AGENT");
+    /* WEB IDL §3.7 Interfaces' implementation-check step 3 AT EACH SETTER'S DECLARATION, which is where
+       §3.7.6's setter asks it: before the value is converted, so a foreign receiver is refused without the
+       page's `toString` having run. The interface is HTMLElement for all seven — six are declared in HTML's
+       own `interface HTMLElement` block and `contentEditable` arrives through `HTMLElement includes
+       ElementContentEditable`, which §2.3 "Interface mixins" makes an HTMLElement member ("all objects
+       implementing an interface I ... must additionally include the members of interface mixin M"). */
     g_id_set_translate = idl_setter_id(ctx, IDL_BOOLEAN, false, js_translate_set, 0);
+    idl_this_iface(html_element_is, "HTMLElement");
     g_id_set_spellcheck = idl_setter_id(ctx, IDL_BOOLEAN, false, js_spellcheck_set, 0);
+    idl_this_iface(html_element_is, "HTMLElement");
     g_id_set_writing_suggestions = idl_setter_id(ctx, IDL_DOMSTRING, false, js_writing_suggestions_set, 0);
+    idl_this_iface(html_element_is, "HTMLElement");
     g_id_set_autocapitalize = idl_setter_id(ctx, IDL_DOMSTRING, false, js_autocapitalize_set, 0);
+    idl_this_iface(html_element_is, "HTMLElement");
     g_id_set_autocorrect = idl_setter_id(ctx, IDL_BOOLEAN, false, js_autocorrect_set, 0);
+    idl_this_iface(html_element_is, "HTMLElement");
     g_id_set_content_editable = idl_setter_id(ctx, IDL_DOMSTRING, false, js_content_editable_set, 0);
+    idl_this_iface(html_element_is, "HTMLElement");
     g_id_set_draggable = idl_setter_id(ctx, IDL_BOOLEAN, false, js_draggable_set, 0);
+    idl_this_iface(html_element_is, "HTMLElement");
     g_ready = true;
 }
 
 void global_attributes_install(JSContext *ctx, JSValueConst proto)
 {
     DCHECK(g_ready, "HTML's enumerated global attributes were installed before they were declared");
-    idl_install_accessor(ctx, proto, "translate", js_translate_get, 0, g_id_set_translate);
-    idl_install_accessor(ctx, proto, "spellcheck", js_spellcheck_get, 0, g_id_set_spellcheck);
-    idl_install_accessor(ctx, proto, "writingSuggestions", js_writing_suggestions_get, 0,
-                         g_id_set_writing_suggestions);
-    idl_install_accessor(ctx, proto, "autocapitalize", js_autocapitalize_get, 0, g_id_set_autocapitalize);
-    idl_install_accessor(ctx, proto, "autocorrect", js_autocorrect_get, 0, g_id_set_autocorrect);
-    idl_install_accessor(ctx, proto, "contentEditable", js_content_editable_get, 0, g_id_set_content_editable);
-    idl_install_accessor(ctx, proto, "isContentEditable", js_is_content_editable, 0, -1);
-    idl_install_accessor(ctx, proto, "draggable", js_draggable_get, 0, g_id_set_draggable);
+    /* §3.7.6's RECEIVER TEST STATED HERE AND PERFORMED BEFORE EACH GETTER BODY, out of the same
+       html_element_is the setters above declare — so `HTMLElement.prototype.draggable` applied to an SVG
+       element, to a Document or to `{}` is the TypeError §3.7.6 names rather than a walk over a node that is
+       not there. */
+    idl_install_accessor_this(ctx, proto, "translate", js_translate_get, 0, g_id_set_translate,
+                              html_element_is, "HTMLElement");
+    idl_install_accessor_this(ctx, proto, "spellcheck", js_spellcheck_get, 0, g_id_set_spellcheck,
+                              html_element_is, "HTMLElement");
+    idl_install_accessor_this(ctx, proto, "writingSuggestions", js_writing_suggestions_get, 0,
+                              g_id_set_writing_suggestions, html_element_is, "HTMLElement");
+    idl_install_accessor_this(ctx, proto, "autocapitalize", js_autocapitalize_get, 0, g_id_set_autocapitalize,
+                              html_element_is, "HTMLElement");
+    idl_install_accessor_this(ctx, proto, "autocorrect", js_autocorrect_get, 0, g_id_set_autocorrect,
+                              html_element_is, "HTMLElement");
+    idl_install_accessor_this(ctx, proto, "contentEditable", js_content_editable_get, 0,
+                              g_id_set_content_editable, html_element_is, "HTMLElement");
+    idl_install_accessor_this(ctx, proto, "isContentEditable", js_is_content_editable, 0, -1,
+                              html_element_is, "HTMLElement");
+    idl_install_accessor_this(ctx, proto, "draggable", js_draggable_get, 0, g_id_set_draggable,
+                              html_element_is, "HTMLElement");
 }
 
 void global_attributes_free(void)

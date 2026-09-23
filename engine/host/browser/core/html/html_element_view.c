@@ -67,25 +67,31 @@ static void hev_target_of_element(lxb_dom_element_t *el, HevTarget *t)
            "rather than one");
 }
 
-/* WEB IDL §3.7.6 Attributes' BRAND CHECK, and it is over HTMLElement rather than over Element — which is the
-   whole reason
-   this section is a file of its own. `Object.getOwnPropertyDescriptor(HTMLElement.prototype,'offsetWidth').get
-   .call(svgEl)` is a TypeError in every user agent and `svgEl.offsetWidth` is `undefined`, and a page that
-   feature-detects by applying the getter tells the throw apart from both. A THROW and not an assert: the
-   receiver is the PAGE's input, and an abort there is this engine crashing on a line of ordinary JavaScript. */
-static bool hev_target(JSContext *ctx, JSValueConst this_val, const char *member, HevTarget *t)
-{
-    lxb_dom_element_t *el;
+/* THE FIVE QUESTIONS §7 ASKS OF ITS RECEIVER, FILLED ONCE THE BRAND HAS PASSED — which happens before this
+   runs and not in it.
 
-    if (!html_element_is(this_val)) {
-        JS_ThrowTypeError(ctx, "HTMLElement.%s was reached on something that is not an HTML element", member);
-        return false;
-    }
-    el = element_of_value(this_val);
-    DCHECK(el != NULL, "an HTML element wrapper had no element behind it — html_element_is has already asked "
-                       "node_of for an ELEMENT node in the HTML namespace, so the two answers cannot disagree");
+   THIS FUNCTION WAS THE BRAND CHECK, AND THE ARGUMENT IS KEPT BECAUSE IT IS THE REASON THIS SECTION IS A FILE
+   OF ITS OWN AND A READER WILL RE-DERIVE IT. It read: the check is over HTMLElement rather than over Element,
+   because `Object.getOwnPropertyDescriptor(HTMLElement.prototype,'offsetWidth').get.call(svgEl)` is a
+   TypeError in every user agent while `svgEl.offsetWidth` is `undefined`, and a page that feature-detects by
+   applying the getter tells the throw apart from both. Every clause of that is still true and the INTERFACE is
+   what the five installs now state: core/idl_args.h's idl_install_accessor_this, naming
+   core/html/html_element.h's own `html_element_is`, so Web IDL §3.7 Interfaces' implementation-check step 3 is
+   performed at one place for all five. §6's members on Element.prototype brand with `element_is` in
+   core/dom/element_view.c, which is the same split written as two declarations rather than as two bodies.
+
+   IT MAY NOT COME BACK AS AN ASSERT: the receiver is the PAGE's input, and an abort there is this engine
+   crashing on a line of ordinary JavaScript. The refusal that replaces it is §3.7.6's TypeError and lives in
+   both builds. The assert below is a different claim — it is about this file's own install block, which either
+   states the interface for a member or does not. */
+static void hev_target(JSValueConst this_val, HevTarget *t)
+{
+    lxb_dom_element_t *el = element_of_value(this_val);
+
+    DCHECK(el != NULL,
+           "a CSSOM VIEW §7 member reached its body on a receiver that is not an element — every one of the "
+           "five states html_element_is at its install, so reaching here means one was added without doing so");
     hev_target_of_element(el, t);
-    return true;
 }
 
 static bool hev_computed_is(lxb_dom_element_t *el, const char *name, const char *kw)
@@ -506,26 +512,18 @@ static JSValue hev_offset_extent(JSContext *ctx, const HevTarget *t, bool vertic
 
 /* ---- the members and the per-realm install --------------------------------------------------------------- */
 
-static const char *hev_member_name(int magic)
-{
-    switch ((HtmlElementViewMember)magic) {
-    case HEV_OFFSET_PARENT: return "offsetParent";
-    case HEV_OFFSET_TOP:    return "offsetTop";
-    case HEV_OFFSET_LEFT:   return "offsetLeft";
-    case HEV_OFFSET_WIDTH:  return "offsetWidth";
-    case HEV_OFFSET_HEIGHT: return "offsetHeight";
-    }
-    DFAIL("a CSSOM VIEW §7 member was named by a magic no member of this file declares — the magic IS the "
-          "member, so an unknown one means a name was installed without a case to answer it");
-    return "";
-}
+/* `hev_member_name` STOOD HERE AND HAD EXACTLY ONE CALLER: the brand check's TypeError, which named the
+   member it refused. §3.7.6's refusal is performed from the declaration now and names the member out of the
+   identifier the install passed, so nothing here has a member name to produce. It is DELETED rather than left
+   standing, because a function with no caller is a claim nobody checks; the unknown-magic crash it also
+   carried is not lost, being the same DFAIL js_hev_get's own switch ends with. */
 
 static JSValue js_hev_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
     HevTarget t;
     lxb_dom_element_t *op;
 
-    if (!hev_target(ctx, this_val, hev_member_name(magic), &t)) return JS_EXCEPTION;
+    hev_target(this_val, &t);
     /* THE CHAIN CHECK RUNS FOR EVERY MEMBER, INCLUDING THE TWO THAT DO NOT WALK — BUT NOT WITH THE SAME
        QUESTION, WHICH IS THE WHOLE OF WHAT THE ARGUMENT BELOW DECIDES. `offsetWidth` reads no ancestor, and
        CSS Viewport §4 still makes its UNSCALED value a function of every flat-tree ancestor's `zoom`, so the
@@ -554,9 +552,18 @@ static JSValue js_hev_get(JSContext *ctx, JSValueConst this_val, int magic)
 
 void html_element_view_install(JSContext *ctx, JSValueConst proto)
 {
-    idl_install_accessor(ctx, proto, "offsetParent", js_hev_get, HEV_OFFSET_PARENT, -1);
-    idl_install_accessor(ctx, proto, "offsetTop",    js_hev_get, HEV_OFFSET_TOP,    -1);
-    idl_install_accessor(ctx, proto, "offsetLeft",   js_hev_get, HEV_OFFSET_LEFT,   -1);
-    idl_install_accessor(ctx, proto, "offsetWidth",  js_hev_get, HEV_OFFSET_WIDTH,  -1);
-    idl_install_accessor(ctx, proto, "offsetHeight", js_hev_get, HEV_OFFSET_HEIGHT, -1);
+    /* WEB IDL §3.7.6 "Attributes"' RECEIVER TEST, STATED HERE AND PERFORMED BEFORE js_hev_get RUNS. §7's
+       members are a `partial interface HTMLElement`, so the interface is HTMLElement and the predicate is
+       core/html/html_element.h's own `html_element_is` — an ELEMENT node in the HTML namespace, which is what
+       makes `svgEl.offsetWidth` `undefined` and `HTMLElement.prototype`'s getter applied to it a TypeError. */
+    idl_install_accessor_this(ctx, proto, "offsetParent", js_hev_get, HEV_OFFSET_PARENT, -1,
+                              html_element_is, "HTMLElement");
+    idl_install_accessor_this(ctx, proto, "offsetTop",    js_hev_get, HEV_OFFSET_TOP,    -1,
+                              html_element_is, "HTMLElement");
+    idl_install_accessor_this(ctx, proto, "offsetLeft",   js_hev_get, HEV_OFFSET_LEFT,   -1,
+                              html_element_is, "HTMLElement");
+    idl_install_accessor_this(ctx, proto, "offsetWidth",  js_hev_get, HEV_OFFSET_WIDTH,  -1,
+                              html_element_is, "HTMLElement");
+    idl_install_accessor_this(ctx, proto, "offsetHeight", js_hev_get, HEV_OFFSET_HEIGHT, -1,
+                              html_element_is, "HTMLElement");
 }
