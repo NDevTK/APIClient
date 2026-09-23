@@ -139,8 +139,11 @@ static void range_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fun
 
 /* DOES THIS VALUE IMPLEMENT `Range` — Web IDL §3.7 "Interfaces"' implementation-check an object step 3, "If
    object does not implement interface, then throw a TypeError.", as the PREDICATE core/idl_args' idl_this_iface
-   takes. Web IDL §3.7.7 "Operations"' create an operation function asks it at step 2.1.2.3, BEFORE step 2.1.4
-   computes the effective overload set, so a member that states it at its DECLARATION refuses a foreign receiver
+   takes. Web IDL §3.7.7 "Operations"' create an operation function asks it in its TRY-LIST's step 2.1.2.3,
+   BEFORE that same list's step 2.1.4 computes the effective overload set. The list is NAMED rather than left
+   to the sub-number alone because Web IDL §3.7.7 step 2 holds TWO sibling lists — the try-list, and the
+   "And then, if an exception E was thrown" list — and both restart at .1, so a bare 2.1 names two different
+   steps. So a member that states it at its DECLARATION refuses a foreign receiver
    before Web IDL §3.6 "Overload resolution algorithm" converts an argument. That order is OBSERVABLE here and
    not a nicety: `setStart`'s second position is IDL_UNSIGNED_LONG and `createContextualFragment`'s only one is
    IDL_DOMSTRING, so a body test lets `Range.prototype.setStart.call({}, node, {valueOf(){ … }})` run the

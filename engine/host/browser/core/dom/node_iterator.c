@@ -120,8 +120,11 @@ static void ni_set_at(JSContext *ctx, IterData *it, JSValue *slot, JSValue v,
 
 /* DOES THIS VALUE IMPLEMENT `NodeIterator` — Web IDL §3.7 Interfaces' implementation-check an object step 3,
    "If object does not implement interface, then throw a TypeError.", as the PREDICATE core/idl_args'
-   idl_this_iface takes. §3.7.7 Operations' create an operation function asks it at step 2.1.2.3, BEFORE step
-   2.1.4 computes the effective overload set, so a member stating it at its DECLARATION refuses a foreign
+   idl_this_iface takes. §3.7.7 Operations' create an operation function asks it in its TRY-LIST's step
+   2.1.2.3, BEFORE that same list's step 2.1.4 computes the effective overload set. The list is NAMED rather
+   than left to the sub-number alone because Web IDL §3.7.7 step 2 holds TWO sibling lists — the try-list, and
+   the "And then, if an exception E was thrown" list — and both restart at .1, so a bare 2.1 names two
+   different steps. So a member stating it at its DECLARATION refuses a foreign
    receiver ahead of §3.6 Overload resolution algorithm's conversions — an order a body cannot reproduce.
    §6.1's three operations take no argument, so nothing of the page's runs between the two orders TODAY; the
    declaration is still where the brand belongs, because what keeps that true is the ARGUMENT LIST, which is

@@ -3897,9 +3897,15 @@ static int idl_buffer_source_refuse(JSContext *ctx, JSValueConst v, const char *
  * idl_set_global_ancestor_terms, where the SETTER's step was given as the getter's 1.1.2.3 — so the
  * defect to look for is a SIBLING ALGORITHM'S numbering, in either direction, and not a typo.)
  *
- * (§3.7.7 step 2 and §3.7.6's attribute-getter step 1 each hold TWO sibling lists — the try-list, and the "And
- * then, if an exception E was thrown" list that both restart at .1 — so the sub-numbers above are the try-list's;
- * the setter's step 4 holds exactly one list, so 4.5.2 is unambiguous.)
+ * (§3.7.7 step 2 and §3.7.6's attribute-getter step 1 each hold TWO sibling lists — the try-list, and the
+ * "And then, if an exception E was thrown" list, and both restart at .1, so a bare 2.1 names two steps.
+ * THE CONVENTION FOR THIS WHOLE FILE, STATED HERE ONCE: every §3.7.7 step 2 sub-number written anywhere in it
+ * is the TRY-LIST's, and every §3.7.6 attribute-getter step 1 sub-number is that getter's try-list's. It is
+ * stated by NAME rather than as "the sub-numbers above", which is a POSITION and therefore covered none of
+ * the three sub-numbers standing BELOW this parenthetical — 2.1.2.1 in the paragraph directly under it, and
+ * 2.1.2.1 and 2.1.2.4 in the SECOND named residual. The setter's step 4 holds one list, so 4.5.2 is
+ * unambiguous. The two-list structure is not recalled: it was counted off the fetched document with list
+ * depth tracked, and step 2's second list holds only 2.1 and 2.2 with no children of their own.)
  *
  * STEP 1's ToObject IS PERFORMED BY NOT ALLOCATING, and that is a claim about what it can be observed to do
  * rather than a shortcut. ToObject runs no user code — it has no [Symbol.toPrimitive] arm and no getter — so

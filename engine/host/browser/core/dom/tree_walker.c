@@ -81,8 +81,11 @@ static void tw_set_at(JSContext *ctx, WalkerData *w, JSValue *slot, JSValue v,
 
 /* DOES THIS VALUE IMPLEMENT `TreeWalker` — Web IDL §3.7 Interfaces' implementation-check an object step 3, "If
    object does not implement interface, then throw a TypeError.", as the PREDICATE core/idl_args' idl_this_iface
-   takes. §3.7.7 Operations' create an operation function asks it at step 2.1.2.3, BEFORE step 2.1.4 computes
-   the effective overload set, so a member stating it at its DECLARATION refuses a foreign receiver ahead of
+   takes. §3.7.7 Operations' create an operation function asks it in its TRY-LIST's step 2.1.2.3, BEFORE that
+   same list's step 2.1.4 computes the effective overload set. The list is NAMED rather than left to the
+   sub-number alone because Web IDL §3.7.7 step 2 holds TWO sibling lists — the try-list, and the
+   "And then, if an exception E was thrown" list — and both restart at .1, so a bare 2.1 names two different
+   steps. So a member stating it at its DECLARATION refuses a foreign receiver ahead of
    §3.6 Overload resolution algorithm's conversions — an order a body cannot reproduce, because a body runs
    AFTER every conversion. §3.7.6 Attributes' setter opening steps ask the same question at the same point,
    which is why `currentNode`'s setter states it too and no longer tests its receiver by hand.
