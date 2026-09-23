@@ -133,32 +133,39 @@ static bool iter_is(JSValueConst v)
     return JS_GetOpaque(v, g_iter_class) != NULL;
 }
 
-/* THE RECORD FOR A RECEIVER §3.7 HAS ALREADY ADMITTED — §6.1's three operations, whose declarations state the
-   interface above. Reaching a body means idl_implementation_check ran and passed, so the only condition left
-   for this to fire on is a member installed WITHOUT its brand: this engine's own routing, never page input. */
+/* THE RECORD FOR A RECEIVER §3.7 HAS ALREADY ADMITTED — EVERY MEMBER OF §6.1, operations and attributes
+   alike, each of whose declarations states the interface above. The two kinds reach it through two doors and
+   the door is the only thing that differs: an operation's brand is performed by core/idl_args.c's
+   idl_implementation_check off its POOL ENTRY, and an attribute's by that file's idl_this_attribute_get off
+   the interface idl_install_accessor_this took at the install. Both ask the one predicate above, so reaching
+   a body means one of them ran and passed, and the only condition left for this to fire on is a member
+   installed WITHOUT its brand: this engine's own routing, never page input. */
 static IterData *iter_receiver(JSValueConst v)
 {
     IterData *it = iter_of(v);
 
     DCHECK(it != NULL, "a §6.1 member reached its body on a receiver that is not a NodeIterator — its "
                        "declaration states Web IDL §3.7 Interfaces' implementation check, so reaching the body "
-                       "means idl_implementation_check did not run for it");
+                       "means neither idl_implementation_check nor idl_this_attribute_get ran for it");
     return it;
 }
 
-/* THE SAME QUESTION FOR THE MEMBERS THAT CANNOT STATE IT — §6.1's five ATTRIBUTE GETTERS, which
-   idl_install_accessor mints as plain JS_CFUNC_getter_magic functions with no pool entry, so they converge on
-   nothing that could ask §3.7 for them: the residual core/idl_args.c names at the site it would reach. ONE
-   ANSWER TO ONE QUESTION: this routes to the predicate above, so the two ways into a §6.1 member cannot drift.
-   When a plain getter gains a pool entry, this function goes with it. */
-static IterData *iter_here(JSContext *ctx, JSValueConst v)
-{
-    if (!iter_is(v)) {
-        JS_ThrowTypeError(ctx, "not a NodeIterator");
-        return NULL;
-    }
-    return iter_receiver(v);
-}
+/* THIS FILE USED TO HOLD AN `iter_here`, AND ITS ARGUMENT IS KEPT BECAUSE A READER WILL RE-DERIVE IT. It read:
+   §6.1's five ATTRIBUTE GETTERS cannot state their receiver interface, because idl_install_accessor mints them
+   as plain JS_CFUNC_getter_magic functions with no pool entry, so they converge on nothing that could ask
+   §3.7 for them — the residual core/idl_args.c names at the site it would reach — and this throws the
+   TypeError on their behalf, routing to the predicate above so the two ways into a §6.1 member cannot drift.
+   THE PREMISE WAS TRUE OF THE PLAIN INSTALL FORM AND IS FALSE OF THE ONE BELOW: core/idl_args.h's
+   idl_install_accessor_this takes the interface AT THE DECLARATION and performs the step at
+   idl_this_attribute_get, out of THIS FILE'S OWN iter_is — the same function the three operations' pool
+   entries take — so §6.1's five attributes now refuse a foreign receiver where its operations do, from one
+   answer, and there is nothing here to write or to keep in step. Writing it again would be the second answer
+   to one question §A-FIX-OF-THE-FORM forbids.
+   WHAT IT MUST NOT COME BACK AS IS AN ASSERT. A receiver is PAGE-SUPPLIED INPUT and
+   `NodeIterator.prototype.root` is one expression a page can evaluate, so a DCHECK there is an abort switch a
+   page holds in dev and, where the body then reads the record the assert was standing on, a dereference of
+   NULL in release. The refusal that replaces it is idl_this_attribute_get's THROW, which names the member and
+   the interface and is compiled into both builds. */
 
 static void iter_finalizer(JSRuntime *rt, JSValue val)
 {
@@ -393,9 +400,8 @@ static const IdlStepDecl NI_TRAVERSE = { ni_traverse_step, sizeof(NodeIterState)
 /* magic 0 = root, 1 = referenceNode, 2 = pointerBeforeReferenceNode, 3 = whatToShow, 4 = filter. */
 static JSValue js_iter_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    IterData *it = iter_here(ctx, this_val);
+    IterData *it = iter_receiver(this_val);
 
-    if (!it) return JS_EXCEPTION;
     switch (magic) {
     case 0: return JS_DupValue(ctx, it->t.root);
     case 1: return JS_DupValue(ctx, it->ref_node);
@@ -455,11 +461,16 @@ void node_iterator_install_proto(JSContext *ctx)
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "NodeIterator.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "NodeIterator");
-    idl_install_accessor(ctx, proto, "root", js_iter_get, 0, -1);
-    idl_install_accessor(ctx, proto, "referenceNode", js_iter_get, 1, -1);
-    idl_install_accessor(ctx, proto, "pointerBeforeReferenceNode", js_iter_get, 2, -1);
-    idl_install_accessor(ctx, proto, "whatToShow", js_iter_get, 3, -1);
-    idl_install_accessor(ctx, proto, "filter", js_iter_get, 4, -1);
+    /* EACH STATES ITS RECEIVER INTERFACE, out of the same iter_is the three operations declare above.
+       Web IDL §3.7.6 "Attributes"' create an attribute getter: "If jsValue does not implement target,
+       then:", whose second arm is "Otherwise, throw a TypeError." None of §6.1's five carries
+       [LegacyLenientThis], which is the only other arm that sentence has. */
+    idl_install_accessor_this(ctx, proto, "root", js_iter_get, 0, -1, iter_is, "NodeIterator");
+    idl_install_accessor_this(ctx, proto, "referenceNode", js_iter_get, 1, -1, iter_is, "NodeIterator");
+    idl_install_accessor_this(ctx, proto, "pointerBeforeReferenceNode", js_iter_get, 2, -1,
+                              iter_is, "NodeIterator");
+    idl_install_accessor_this(ctx, proto, "whatToShow", js_iter_get, 3, -1, iter_is, "NodeIterator");
+    idl_install_accessor_this(ctx, proto, "filter", js_iter_get, 4, -1, iter_is, "NodeIterator");
     idl_install_method(ctx, proto, "nextNode", g_id_next);
     idl_install_method(ctx, proto, "previousNode", g_id_prev);
     idl_install_method(ctx, proto, "detach", g_id_detach);

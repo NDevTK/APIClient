@@ -93,34 +93,42 @@ static bool walker_is(JSValueConst v)
     return JS_GetOpaque(v, g_walker_class) != NULL;
 }
 
-/* THE RECORD FOR A RECEIVER §3.7 HAS ALREADY ADMITTED — §6.2's seven operations and its `currentNode` setter,
-   whose declarations state the interface above. Reaching a body means idl_implementation_check ran and passed,
-   so the only condition left for this to fire on is a member installed WITHOUT its brand: this engine's own
-   routing being wrong, never a fact about page input. */
+/* THE RECORD FOR A RECEIVER §3.7 HAS ALREADY ADMITTED — EVERY MEMBER OF §6.2: its seven operations, its
+   `currentNode` setter and its four attribute getters, each of whose declarations states the interface above.
+   The kinds reach it through two doors and the door is the only thing that differs: a member with a POOL ENTRY
+   is branded by core/idl_args.c's idl_implementation_check, and a plain-C attribute getter by that file's
+   idl_this_attribute_get off the interface idl_install_accessor_this took at the install. Both ask the one
+   predicate above, so reaching a body means one of them ran and passed, and the only condition left for this
+   to fire on is a member installed WITHOUT its brand: this engine's own routing being wrong, never a fact
+   about page input. */
 static WalkerData *walker_receiver(JSValueConst v)
 {
     WalkerData *w = walker_of(v);
 
     DCHECK(w != NULL, "a §6.2 member reached its body on a receiver that is not a TreeWalker — its declaration "
-                      "states Web IDL §3.7 Interfaces' implementation check, so reaching the body means "
-                      "idl_implementation_check did not run for it");
+                      "states Web IDL §3.7 Interfaces' implementation check, so reaching the body means neither "
+                      "idl_implementation_check nor idl_this_attribute_get ran for it");
     return w;
 }
 
-/* THE SAME QUESTION FOR THE MEMBERS THAT CANNOT STATE IT — §6.2's four ATTRIBUTE GETTERS, which
-   idl_install_accessor mints as plain JS_CFUNC_getter_magic functions with no pool entry, so they converge on
-   nothing that could ask §3.7 for them: the residual core/idl_args.c names at the site it would reach. Note the
-   SPLIT at `currentNode`, whose SETTER has a pool entry and whose GETTER does not — the two halves of one
-   attribute are checked at two places until that residual closes. ONE ANSWER TO ONE QUESTION: this routes to
-   the predicate above, so they cannot disagree meanwhile. */
-static WalkerData *walker_here(JSContext *ctx, JSValueConst v)
-{
-    if (!walker_is(v)) {
-        JS_ThrowTypeError(ctx, "not a TreeWalker");
-        return NULL;
-    }
-    return walker_receiver(v);
-}
+/* THIS FILE USED TO HOLD A `walker_here`, AND ITS ARGUMENT IS KEPT BECAUSE A READER WILL RE-DERIVE IT. It
+   read: §6.2's four ATTRIBUTE GETTERS cannot state their receiver interface, because idl_install_accessor
+   mints them as plain JS_CFUNC_getter_magic functions with no pool entry, so they converge on nothing that
+   could ask §3.7 for them — the residual core/idl_args.c names at the site it would reach — and this throws
+   the TypeError on their behalf, routing to the predicate above so they cannot disagree with it meanwhile. It
+   went on to note the SPLIT at `currentNode`, whose SETTER has a pool entry and whose GETTER did not, so the
+   two halves of one attribute were checked at two places.
+   THE PREMISE WAS TRUE OF THE PLAIN INSTALL FORM AND IS FALSE OF THE ONE BELOW, AND THE SPLIT IS CLOSED WITH
+   IT: core/idl_args.h's idl_install_accessor_this takes the interface AT THE DECLARATION and performs the step
+   at idl_this_attribute_get, out of THIS FILE'S OWN walker_is — the same function every pool entry below
+   declares — so `currentNode`'s getter and its setter now ask ONE predicate at ONE kind of place, and so do
+   the other three attributes. Writing the helper again would be the second answer to one question
+   §A-FIX-OF-THE-FORM forbids.
+   WHAT IT MUST NOT COME BACK AS IS AN ASSERT. A receiver is PAGE-SUPPLIED INPUT and
+   `TreeWalker.prototype.currentNode` is one expression a page can evaluate, so a DCHECK there is an abort
+   switch a page holds in dev and, where the body then reads the record the assert was standing on, a
+   dereference of NULL in release. The refusal that replaces it is idl_this_attribute_get's THROW, which names
+   the member and the interface and is compiled into both builds. */
 
 static void walker_finalizer(JSRuntime *rt, JSValue val)
 {
@@ -580,9 +588,8 @@ static const IdlStepDecl TW_NEXT = { tw_next_step, sizeof(TreeWalkState), tw_vis
    one slot of the record — so they are ordinary C getters. */
 static JSValue js_walker_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    WalkerData *w = walker_here(ctx, this_val);
+    WalkerData *w = walker_receiver(this_val);
 
-    if (!w) return JS_EXCEPTION;
     switch (magic) {
     case 0: return JS_DupValue(ctx, w->t.root);
     case 1: return JS_NewUint32(ctx, w->t.what);
@@ -657,10 +664,17 @@ void tree_walker_install_proto(JSContext *ctx)
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "TreeWalker.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "TreeWalker");
-    idl_install_accessor(ctx, proto, "root", js_walker_get, 0, -1);
-    idl_install_accessor(ctx, proto, "whatToShow", js_walker_get, 1, -1);
-    idl_install_accessor(ctx, proto, "filter", js_walker_get, 2, -1);
-    idl_install_accessor(ctx, proto, "currentNode", js_walker_get, 3, g_id_set_current);
+    /* EACH STATES ITS RECEIVER INTERFACE, out of the same walker_is every pool entry above declares.
+       Web IDL §3.7.6 "Attributes"' create an attribute getter: "If jsValue does not implement target,
+       then:", whose second arm is "Otherwise, throw a TypeError." None of §6.2's four carries
+       [LegacyLenientThis], which is the only other arm that sentence has. `currentNode` states it on the
+       SAME line as its setter id, which is what makes the pair one fact: both halves of that attribute now
+       brand off walker_is. */
+    idl_install_accessor_this(ctx, proto, "root", js_walker_get, 0, -1, walker_is, "TreeWalker");
+    idl_install_accessor_this(ctx, proto, "whatToShow", js_walker_get, 1, -1, walker_is, "TreeWalker");
+    idl_install_accessor_this(ctx, proto, "filter", js_walker_get, 2, -1, walker_is, "TreeWalker");
+    idl_install_accessor_this(ctx, proto, "currentNode", js_walker_get, 3, g_id_set_current,
+                              walker_is, "TreeWalker");
     idl_install_method(ctx, proto, "parentNode", g_id_parent);
     idl_install_method(ctx, proto, "firstChild", g_id_first);
     idl_install_method(ctx, proto, "lastChild", g_id_last);
