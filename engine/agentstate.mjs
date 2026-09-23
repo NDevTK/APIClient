@@ -108,10 +108,24 @@
  *     derivation picks it up. A kind whose pre-init genuinely is not one token stays listed as unusable,
  *     which is the honest state and not a gap. The header is another lane's file, which is why this is a
  *     residual and not a diff.
- *   WHAT IT COSTS, MEASURED RATHER THAN ESTIMATED, at the revision this was written and as a record of a
- *     decision rather than a census: adding NULL to the alternation by hand moved `reset: UNDECLARED` by 58
- *     rows and `reset: declared` by 27. That is the size of what the missing annotation hides, and it is the
- *     reason this is a named residual rather than a shrug.
+ *   WHAT IT COSTS, MEASURED RATHER THAN ESTIMATED, as a record of a decision rather than a census: at
+ *     cfe07bc, simulating the annotation by adding NULL to the alternation moved `reset: UNDECLARED` 259 ->
+ *     317 and `reset: declared` 223 -> 251. That is the size of what the missing annotation hides, and it is
+ *     the reason this is a named residual rather than a shrug.
+ *     THAT PAIR WAS FIRST WRITTEN HERE AS `58 rows and 27`, AND THE SECOND FIGURE WAS WRONG -- it was measured
+ *     with an earlier type parser, before the `{` exclusion below was relaxed, so it is the count-that-
+ *     contradicts-its-own-list defect committed in the one paragraph claiming to have measured something. It
+ *     is corrected rather than quietly replaced because the method that produced it is the finding: a number
+ *     carried across a change to the instrument that produced it is not a measurement of the instrument that
+ *     ships.
+ *     AND THE SIMULATION SURFACED A SECOND FLOOR WORTH MORE THAN THE FIGURE: it banded one row as
+ *     `UNDECLARABLE, no kind takes RealmBuilder`, and navigable.h declares `typedef JSContext *(*RealmBuilder)
+ *     (...)`. A POINTER BEHIND A TYPEDEF HAS NO `*` AT ITS DECLARATION, so no text sweep can tell it from an
+ *     aggregate, and it bands as undeclarable when it is exactly the hook slot agent_state_ptr_at exists for
+ *     -- navigable.c's g_realm_builder, put back to NULL by its own release and declared to nobody. The kind
+ *     question for such a row is answerable only by a compiler, so this file states it as a floor rather than
+ *     guessing: an UNDECLARABLE band whose type is not a builtin is a type this sweep could not resolve, not
+ *     a type the registry refuses.
  *
  * NO EXPECTED TOTAL IS WRITTEN HERE. A number in this header would be status by CLAUDE.md's own opening: it
  * would be true when written, wrong as soon as anybody did the work, and its only reader is the person about
