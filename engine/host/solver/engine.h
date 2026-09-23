@@ -1545,22 +1545,74 @@ typedef struct {
      * instants collapse §Testing names. The containment `step_us <= instance_us` is asserted where both are
      * in one hand — every turn's charge is a sub-interval of the span this measures, so a violation is the
      * baseline having been taken after a turn, or the clock having stopped being monotone.
-     * NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: `instance_us - step_us` is ONE number over
-     * TWO populations that take opposite work — the thread the HOST held between slices (the provider, the
-     * census, the bridge, the parse) and the thread the engine held INSIDE the dispatch loop but outside a
-     * turn's own bracket (the loop's entry and exit, and anything between its last turn and its return). The
-     * first is a finding about the driver and the second about this scheduler, and this row sums them. WHAT
-     * THE NEXT DIFF BUILDS: a second accumulator raised from the readings `engine_sched_slice` already takes
-     * at its entry and at each of its returns, so the time inside the loop is its own row and the remainder
-     * is the host's by subtraction of two published halves rather than of one. HOW ITS ABSENCE WOULD SHOW: a
-     * run whose `step_us / instance_us` is small has, today, no row that says whether the engine was given
-     * the thread and spent it somewhere else or was never given it, and a reader is free to conclude either.
+     * THE RESIDUAL THAT STOOD HERE IS DISCHARGED BY `loop_us`/`between_slices_us` BELOW, AND IT IS REWRITTEN
+     * RATHER THAN DELETED BECAUSE ITS NEXT-DIFF CLAUSE NAMED A MECHANISM THIS FUNCTION DOES NOT HAVE AND THE
+     * NEXT READER WOULD RE-DERIVE IT THE SAME WAY. It said: build "a second accumulator raised from the
+     * readings `engine_sched_slice` already takes at its entry and at each of its returns". The SPLIT is
+     * right and both halves of that sentence about the tree are wrong. `engine_sched_slice` takes ONE reading
+     * at its entry and takes NO reading at ANY of its returns — the `now` a return leaves behind is the
+     * last POST-STEP reading, so a span closed on it would silently exclude the slice's tail, which is part
+     * of the very population the residual was about. And a charge written at each of those returns is the shape
+     * `engine_sched_step`'s own banner refuses for `quantum_end()`, in as many words: "A `quantum_end()` call
+     * before every return is the shape where one of them is eventually missing". The accumulators are
+     * therefore in the WRAPPER, where the bracket already is and where the body's exits cannot reach them.
+     * AND THE REMAINDER IS NOT THE HOST'S BY SUBTRACTION OF TWO PUBLISHED HALVES, WHICH IS THE SECOND THING
+     * THAT CLAUSE GOT WRONG AND THE ONE THAT WOULD HAVE COST A READING. `instance_us - loop_us` is the host's
+     * thread between slices PLUS the span from the last slice's return to the moment this census was
+     * composed — and a census is composed on the host's own thread at whatever moment a driver asks for it,
+     * so that trailing span can be the whole of a report build. It is charged into `between_slices_us` at the
+     * accessor, from the same clock reading `instance_us` closes on, so the two rows are a PARTITION and the
+     * reader adds rather than subtracts.
      * A REPORT AND NEVER A BOUND (§NO BOUNDS), for `step_us`' reason and with the same hazard — a measured
      * share of a thread is exactly what a throttle would be built from, and nothing reads this to decide
      * anything.
      * `int64_t` FOR `step_us`' REASON EXACTLY: a `long` of microseconds saturates in 35.8 minutes on wasm32
      * and INVERTS rather than going absent, and this one measures a span STRICTLY LONGER than that row. */
     int64_t instance_us;
+    /* …AND THE PARTITION OF IT THE ROW ABOVE COULD NOT MAKE, WHICH IS THE WHOLE OF WHY A SMALL
+     * `step_us / instance_us` HAS NEVER NAMED A COMPONENT. `loop_us` is the thread measure spent INSIDE
+     * `engine_sched_step`'s bracket, summed over every slice; `between_slices_us` is the thread measure that
+     * passed between one slice's return and the next one's entry, plus the span since the last return, which
+     * is the host's. THE TWO SUM TO `instance_us` EXACTLY and that is asserted where all three are in one
+     * hand, so a reader adds two published rows rather than subtracting one from a total and hoping the
+     * remainder is what they think it is.
+     * WHAT THEY SEPARATE, AND IT IS THE PAIR OF DIAGNOSES THE SHARE ABOVE SUMS. A run whose
+     * `step_us / instance_us` is small is one of two things and they take OPPOSITE work. If `loop_us` is
+     * small too, the engine was BARELY GIVEN THE THREAD: the remainder sits in `between_slices_us`, the
+     * question is the DRIVER — how often it steps, what it does between steps, what the provider and the
+     * parse cost — and no re-pricing of any weight term in this file reaches it. If `loop_us` is LARGE and
+     * `step_us` is still small, the engine had the thread and spent it inside the dispatch loop OUTSIDE a
+     * turn's own bracket, and the question is THIS SCHEDULER: the loop's entry and exit work, the park, the
+     * session close, and every slice that ran no turn at all. §solver/flow.c names the first being dispatched
+     * as the second; these two rows are what stops that being a matter of taste.
+     * AND A SLICE THAT TOOK NO TURN IS THE POPULATION THAT MAKES THAT SECOND ARM REACHABLE AT ALL, which is
+     * not obvious from `step_us`' own banner and is worth stating because it inverts what a reader expects.
+     * The turn charge TELESCOPES from the slice's entry reading, so for a slice that takes at least one turn
+     * the loop's entry work is already ON that first turn's bill and `loop_us - step_us` over it is only the
+     * tail. A slice that takes NO turn charges `step_us` NOTHING and charges `loop_us` its whole duration. So
+     * `loop_us - step_us` running large is, first of all, a statement about slices that answered without
+     * dispatching anybody — which `slices` against `steps` is the reading for.
+     * `slices` IS THE DENOMINATOR BOTH OF THEM WOULD OTHERWISE NOT HAVE, and it is the row `over_arms` names
+     * below as the one nothing raises. A per-slice total with no count of slices is a total whose denominator
+     * lives in another census or in nobody's hand, which is the collapse `step_us`' banner is about; with it,
+     * `loop_us / slices` is what a slice costs and `between_slices_us / slices` is what the host takes
+     * between two of them, both in the slice's own measure and both comparable against `ENGINE_QUANTUM_MS`.
+     * IT IS A COUNT AND NOT A MEAN OF ANYTHING, so it survives the run-to-run spread the way `steps` does
+     * not: quoted alone it is unquotable against another run, and as the denominator of a lifetime total of
+     * ONE run it is what makes the quotient quotable at all.
+     * RAISED IN `engine_sched_step` AND NOT IN `engine_sched_slice`, WHICH IS A CORRECTION TO `over_arms`'
+     * OWN CLAUSE AND NOT A CHOICE. That clause says to raise it "beside `quantum_begin()` in
+     * engine_sched_slice", and `quantum_begin()` is not in `engine_sched_slice` — it is in the WRAPPER, which
+     * is the whole reason the wrapper exists. A reader who obeys the clause literally finds no such line.
+     * A REPORT AND NEVER A BOUND (§NO BOUNDS), for `step_us`' reason and with a sharper hazard than any row
+     * above: a count of slices beside what each one cost is exactly the pair a "the engine is not getting
+     * enough thread, take more of it" policy would be built from. Nothing reads any of the three.
+     * `int64_t` FOR `step_us`' REASON EXACTLY on the two microsecond rows — a `long` of microseconds
+     * saturates in 35.8 minutes on wasm32 and INVERTS rather than going absent — and `long` on `slices`,
+     * which is a count of dispatch slices and shares `steps`' horizon and `steps`' type. */
+    int64_t loop_us;
+    int64_t between_slices_us;
+    long    slices;
     /* …AND THE PARTITION THE SPLIT ABOVE TURNED OUT TO NEED, WHICH IS THE READING AND NOT A SECOND OPINION.
      * `slice_us`' banner promises that `step_us / steps` against the slice answers whether the loop is
      * slice-bound. It does not, because that quotient is a LIFETIME MEAN over a turn population that is not
@@ -1675,19 +1727,26 @@ typedef struct {
      * delta is whatever was left of the budget when the edge fired — usually far under it, and therefore
      * not in this row at all. What this row counts is a turn that ALONE met the whole budget, which is the
      * transport question the paragraphs above are about and is a different population entirely.
-     * WHAT WOULD ANSWER THE OTHER QUESTION IS A COUNT OF SLICES, AND NOTHING RAISES ONE. NOT COVERED: how
-     * a turn in any arm — this row's included — came to end, which is one of three clauses and is
-     * unreadable at every arm today; the two that matter take OPPOSITE work, a quantum-ended turn saying
-     * the slice is short for the spans being run (a policy input this scheduler owns and may tune) and an
-     * OUTRANKED turn saying the order moved the thread to a better-ranked member, which is the WFQ doing
-     * what it is for and is not a thing to repair. NEXT DIFF: raise a slice count beside `quantum_begin()`
-     * in engine_sched_slice, carry it on this struct, and publish it in solver/result.c's census — both
-     * halves in ONE landing, because a field no composer reads is not a mechanism; the quantum-ended
-     * population is then bounded above by the slices and `steps - slices - <the blocked arms>` is a FLOOR
-     * on the outranked one. HOW ITS ABSENCE SHOWS: a reader meeting a low frame-clearing rate reaches for
-     * this row, finds it small, and concludes the slice is not what ends those turns — which this row
-     * cannot support in either direction, because the population it counts is not the one that question is
-     * about. */
+     * WHAT ANSWERS THE OTHER QUESTION IS A COUNT OF SLICES, AND `slices` ABOVE IS IT — THE CLAUSE THAT SAID
+     * NOTHING RAISES ONE IS RETIRED AND ITS COORDINATE WAS WRONG WHEN IT WAS WRITTEN, WHICH IS WORTH MORE
+     * THAN THE RETIREMENT. It said to "raise a slice count beside `quantum_begin()` in engine_sched_slice",
+     * and `quantum_begin()` has never been in `engine_sched_slice`: it is in `engine_sched_step`, whose own
+     * banner says why the bracket is a wrapper at all. The SPLIT was right, the MECHANISM was right, and the
+     * clause named a line that does not exist — which is what a next-diff clause is for and what it is worst
+     * at, because the one reader of it has already decided to do the work.
+     * WHAT THE COUNT BUYS, STATED AS THE BOUND IT IS AND NOT AS AN ANSWER: solver/quantum.c arms the edge
+     * once per slice and the dispatch loop ends the slice on the same expiry, so the quantum-ended
+     * population is bounded above by `slices`, and `steps - slices - <the blocked arms>` is a FLOOR on the
+     * outranked one. STILL NOT COVERED, and it is the same sentence as before with the bound subtracted from
+     * it: how a turn IN ANY GIVEN ARM came to end is still one of three clauses and is still unreadable at
+     * every arm, so the pair above is a statement about the RUN and never about a row. The two that matter
+     * take OPPOSITE work — a quantum-ended turn saying the slice is short for the spans being run (a policy
+     * input this scheduler owns and may tune) and an OUTRANKED turn saying the order moved the thread to a
+     * better-ranked member, which is the WFQ doing what it is for and is not a thing to repair.
+     * HOW ITS ABSENCE SHOWS, unchanged because the per-arm half is unchanged: a reader meeting a low
+     * frame-clearing rate reaches for this row, finds it small, and concludes the slice is not what ends
+     * those turns — which this row cannot support in either direction, because the population it counts is
+     * not the one that question is about. */
     long over_arms[STEP_UNIT_N];
     /* …AND THE ONE PHASE OF A START STEP THAT CANNOT REST AT ANY INPUT SIZE, which the two rows above can
      * locate to an ARM and never to a PHASE. A start is a COMPILE and then an EXECUTION, only the second runs

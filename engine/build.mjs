@@ -2715,10 +2715,20 @@ function stepCostReading(a, b, q) {
      the thread between slices for the provider, the census and the parse — it is the row that says the next
      question is about the HOST and not about the ordering, which is the distinction solver/flow.c names as a
      throughput problem being dispatched as an ordering one.
-     AND THE REMAINDER IS ONE NUMBER OVER TWO POPULATIONS, which is stated here rather than left to be read as
-     one: solver/engine.h's `instance_us` carries the named residual, and until its second half exists a small
-     share cannot say whether the engine was given the thread and spent it outside a turn's bracket or was
-     never given it. */
+     AND THE REMAINDER IS TWO POPULATIONS, WHICH IS WHY IT IS NOW SPLIT AND WHAT THIS PARAGRAPH USED TO SAY
+     INSTEAD. It read: "the remainder is the host's thread between slices AND the loop's own time outside a
+     turn's bracket, summed; see solver/engine.h's `instance_us` for why those are not yet two rows". They are
+     two rows. `loopUs` is the thread the engine held inside its own slice bracket and `betweenSlicesUs` is
+     the thread the host held between two slices, and they PARTITION `instanceUs` exactly — so the sentence is
+     rewritten rather than deleted, because a reader who re-derives the old one goes looking for a residual
+     that has been discharged.
+     THE SPLIT IS RENDERED AS THE TWO DIAGNOSES AND NOT AS TWO PERCENTAGES, because the two take OPPOSITE
+     work and a reader holding two numbers has to be told which is which: `loopUs` small is an engine that was
+     barely GIVEN the thread and sends the next question to the DRIVER, while `loopUs` large beside a small
+     `stepUs` is an engine that HAD the thread and spent it outside a turn, which is this scheduler's. `slices`
+     against `steps` is what separates the second further, because a slice that dispatched nobody charges
+     `loopUs` its whole duration and charges `stepUs` nothing at all.
+     IT STILL DECIDES NOTHING. No verdict below reads either half, and a share is not a threshold. */
   const reach =
     b.instanceUs === 0
       ? `. The instance has measured no span to be a share of, which is what a census composed before the ` +
@@ -2726,9 +2736,21 @@ function stepCostReading(a, b, q) {
       : `. Those turns sit inside ${b.instanceUs} unit(s) of the same measure since this instance's first ` +
         `slice, so ${(100 * b.stepUs / b.instanceUs).toFixed(1)}% of the engine's own thread reached a ` +
         `dispatch turn at all — the one fraction here whose denominator is not drawn from the turns ` +
-        `themselves, and therefore the only one that can fall because the loop was barely entered. The ` +
-        `remainder is the host's thread between slices AND the loop's own time outside a turn's bracket, ` +
-        `summed; see solver/engine.h's \`instance_us\` for why those are not yet two rows`;
+        `themselves, and therefore the only one that can fall because the loop was barely entered. Of that ` +
+        `span ${(100 * b.loopUs / b.instanceUs).toFixed(1)}% (${b.loopUs}) was inside the engine's own ` +
+        `slice bracket and ${(100 * b.betweenSlicesUs / b.instanceUs).toFixed(1)}% ` +
+        `(${b.betweenSlicesUs}) was the HOST's thread between slices, which partition it exactly` +
+        (b.slices === 0
+          ? `; no slice has returned, so there is no per-slice cost to quote`
+          : `, over ${b.slices} slice(s) — ${(b.loopUs / b.slices).toFixed(0)} per slice inside and ` +
+            `${(b.betweenSlicesUs / b.slices).toFixed(0)} between, both in the same measure as the ` +
+            `cooperative slice itself`) +
+        (b.loopUs === 0
+          ? `. The engine was given none of it, so every question this reading raises is about the DRIVER ` +
+            `and none of it is about the ordering`
+          : `. ${(100 * b.stepUs / b.loopUs).toFixed(1)}% of what the engine DID hold reached a dispatch ` +
+            `turn; the rest is the loop's entry and exit, the park, the session close, and every slice that ` +
+            `dispatched nobody — which is this scheduler's and not the host's`);
   /* AND THE PARTITION THAT MAKES THE VERDICT BELOW A READING RATHER THAN A MEAN — `stepUs`/`steps` is a
      lifetime average, and this loop's turns are not one population. Read as a SERIES rather than as a
      terminal value, the MARGINAL cost between consecutive censuses of ONE run spans four orders of magnitude

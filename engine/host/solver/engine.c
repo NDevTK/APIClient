@@ -9318,14 +9318,46 @@ static int64_t g_slice_us, g_sched_us;
    it would make "the loop has not run" and "the loop ran for no measurable time" one state. That is the
    several-states-behind-one-answer shape, and it would land on the one row a reader consults to decide
    whether the engine was given the thread at all.
-   SET AT ONE SITE FROM A READING THAT WAS ALREADY BEING TAKEN — engine_sched_slice's own entry — so this
-   costs no clock read and cannot be taken late by a caller that forgot. Every charge the arms above
-   accumulate is a sub-interval after it, which is what makes the containment below an identity rather than
-   an expectation.
+   SET AT ONE SITE FROM THE READING `engine_sched_step` TAKES AT ITS OWN FIRST LINE — which is the WRAPPER
+   and not the body, and that is a correction rather than a preference. It used to be opened from
+   engine_sched_slice's entry reading, which is one line LATER: the wrapper arms the quantum, restores the
+   flow stamp and the capture route, and asks a stray check before the body is entered at all, so a span
+   opened inside the body excluded work the engine had already done on its own thread. That was invisible
+   while this row had nothing to partition and is not invisible now — `g_loop_us` below is charged from the
+   wrapper's own two readings, so a baseline opened after the first of them would make the partition assert
+   at the accessor fire on the very first slice. One reading, one site, and every charge below is a
+   sub-interval after it.
    NOT RESET AT A SESSION BOUNDARY, for `g_step_us`' reason exactly: neither is on the session's ledger, and
    a park that resumes into the same instance resumes into the same thread and the same span. */
 static int64_t g_instance_us0;
 static int     g_instance_us0_set;
+/* …AND THE PARTITION OF THAT SPAN — see solver/engine.h's `loop_us` for what the pair separates and why a
+   small `stepUs/instanceUs` names no component without it. `g_loop_us` is the thread measure spent inside
+   engine_sched_step's bracket, summed over every slice; `g_between_us` is the measure that passed between one
+   slice's RETURN and the next one's ENTRY, which is the host's own time. Their sum plus the span since the
+   last return is `instance_us` exactly, and the accessor asserts it.
+   BOTH CHARGES ARE WRITTEN IN THE WRAPPER AND NOT AT engine_sched_slice's SEVEN RETURNS, which is the same
+   argument engine_sched_step's banner already makes for `quantum_end()`: a charge before every return is the
+   shape where one of them is eventually missing, and a missing one here would not crash — it would put a
+   slice's whole duration into neither row and quietly break the partition at the accessor instead. One
+   bracket around one call cannot be got wrong.
+   TWO EXTRA CLOCK READS PER SLICE AND NOT PER TURN, stated for `g_slice_us`' reason: `quantum_thread_us`
+   crosses into the embedder on the host that ships, so frequency is the whole of the price — and a slice holds
+   MANY turns, so this is strictly cheaper than the pair the dispatch loop already takes per dispatch.
+   `g_slice_exit_us` IS THE PREVIOUS SLICE'S CLOSING READING, CARRIED, so the gap is measured from a reading
+   that was already taken rather than from a third one; `g_slice_exit_set` is a separate flag for
+   `g_instance_us0_set`'s reason exactly, since 0 is a reading a thread clock legitimately returns and
+   reserving it would make "no slice has returned" and "a slice returned at measure zero" one state.
+   `g_slices` IS THEIR DENOMINATOR and is `long` because it counts slices, where the two above accumulate a
+   CLOCK — the same split `g_steps` and `g_step_us` are on one page up, for the same reason.
+   A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing reads any of the four. A count of slices beside what each
+   one cost is exactly the pair a "this engine is not getting enough thread" throttle would be built from, and
+   the gap row is what a host-side watchdog would read. */
+static int64_t g_loop_us;
+static int64_t g_between_us;
+static int64_t g_slice_exit_us;
+static int     g_slice_exit_set;
+static long    g_slices;
 /* THE PARTITION OF THE ABOVE — see solver/engine.h's `slice_overruns` for why a mean of the two arms cannot
    answer the question their own banner asks. Counted from the SAME two readings the slice arm is accumulated
    from, so a turn cannot be charged to one and counted by the other. */
@@ -9391,6 +9423,22 @@ _Static_assert(sizeof ((EngineStepUnitRuns *)0)->step_us >= sizeof g_step_us,
                "solver/engine.h: EngineStepUnitRuns' `step_us` is narrower than the accumulator it is copied "
                "from, so engine_step_unit_runs truncates the total on its way to solver/result.c's census — "
                "the same lost run as an overflow and with the same inverted reading behind it.");
+/* AND THE SAME PAIR FOR THE SPAN'S TWO HALVES, BECAUSE A NARROWING THERE IS WORSE THAN AT `step_us` AND NOT
+   BETTER. Each of these measures a span the dispatch total is only a PART of, so whichever of the three
+   overflows first it is never `g_step_us` — and the symptom is not a row that looks broken, it is the
+   partition assert at engine_step_unit_runs firing with a negative half, which reads as a clock that stopped
+   being monotone rather than as a type that was narrowed. Asserted for the accumulator AND for the field it
+   is copied into, for the reason the pair above is: narrowing either loses the same run, and the truncation
+   at the copy-out is silent in exactly the same direction. */
+_Static_assert(sizeof g_loop_us >= 8 && sizeof g_between_us >= 8 && sizeof g_slice_exit_us >= 8,
+               "solver/engine.c: the slice-span accumulators have been narrowed. On wasm32 `long` is 4 bytes, "
+               "so a 32-bit accumulator of the slice's own measure overflows after ~35.8 minutes — and these "
+               "measure spans STRICTLY LONGER than `g_step_us` does, so they invert first.");
+_Static_assert(sizeof ((EngineStepUnitRuns *)0)->loop_us >= sizeof g_loop_us &&
+               sizeof ((EngineStepUnitRuns *)0)->between_slices_us >= sizeof g_between_us,
+               "solver/engine.h: EngineStepUnitRuns' `loop_us`/`between_slices_us` are narrower than the "
+               "accumulators they are copied from, so engine_step_unit_runs truncates them on the way to "
+               "solver/result.c's census and the partition it asserts stops being about the run that happened.");
 /* THE HISTOGRAM'S SUM, for the one assertion that uses it — side-effect-free, as a DCHECK condition must be.
    NOT WRAPPED IN `#if APICLIENT_DEV`, and the reason is a trap worth stating rather than a preference: a
    release DCHECKF does not delete its condition, it makes it UNEVALUATED (`(void)sizeof(cond)`, and
@@ -11536,6 +11584,11 @@ int engine_switch_count(void) { return g_switches; }
 void engine_step_unit_runs(EngineStepUnitRuns *out)
 {
     int i;
+    /* THE ONE CLOCK READING THIS ACCESSOR TAKES, HELD — because `instance_us` and the open tail of
+       `between_slices_us` are two uses of ONE instant and two calls would be two. A partition composed from
+       two readings is a partition of no span: the second reading is strictly later, so the halves would
+       exceed the total by whatever ran between them and the assert below would fire on a correct engine. */
+    int64_t now = 0;
 
     DCHECK(out != NULL, "the lifetime step histogram was asked for into nothing — a reading that lands nowhere "
                         "is a reading whose caller cannot have taken it");
@@ -11560,7 +11613,19 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        crosses into the embedder on the host that ships, so frequency is the whole of the price — and this
        accessor is called once where the @COLD line is composed, which is the rarest read of that clock in
        this file. */
-    out->instance_us = g_instance_us0_set ? quantum_thread_us() - g_instance_us0 : 0;
+    if (g_instance_us0_set) now = quantum_thread_us();
+    out->instance_us = g_instance_us0_set ? now - g_instance_us0 : 0;
+    /* …AND ITS TWO HALVES, WHICH IS THE ROW ABOVE'S OWN RESIDUAL DISCHARGED — see solver/engine.h's
+       `loop_us`. `g_loop_us` is closed at each slice's return, so it is a completed sum and is copied. The
+       host's half has an OPEN interval at this instant — the span since the last slice returned, during which
+       this census is being composed — and it is closed HERE from the same reading `instance_us` closes on,
+       which is what makes the two a partition rather than one row and a remainder. It is closed into the
+       COPY and never back into `g_between_us`: an accessor that advanced its own accumulator would charge
+       that span again at the next census, and two censuses of one run would then sum to more thread than the
+       instance has had. */
+    out->loop_us           = g_loop_us;
+    out->between_slices_us = g_between_us + (g_slice_exit_set ? now - g_slice_exit_us : 0);
+    out->slices            = g_slices;
     /* AND THE CONTAINMENT, WHICH IS AN IDENTITY RATHER THAN AN EXPECTATION. `g_instance_us0` is opened at
        engine_sched_slice's entry from the same reading the first turn's `t0` is carried from, and every
        charge `g_step_us` accumulates is a sub-interval closed before this line reads the clock again — so a
@@ -11574,6 +11639,41 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
             "after a turn was charged or a measure that is no longer monotone, and `stepUs/instanceUs` is "
             "about to be published as a share above 1",
             (long long)out->step_us, (long long)out->instance_us);
+    /* THE PARTITION OF THAT SPAN, ASSERTED WHERE ALL THREE ARE IN ONE HAND — see solver/engine.h's `loop_us`
+       for why these are two rows and not a row and a subtraction. The four readings the two halves are built
+       from TELESCOPE: the wrapper's entry reading opens the baseline and each slice's closing reading is the
+       next gap's opening one, so their sum plus the open tail closed above is `now - g_instance_us0` BY
+       CONSTRUCTION. A difference is therefore not a rounding: it is a slice that returned without its span
+       being charged (an exit that escaped the wrapper), a second writer of one of the accumulators, or a
+       measure that has stopped being monotone — and the symptom a reader would otherwise meet is a `loopUs`
+       share of the thread that quietly stops adding up, which is the one reading this pair exists to make. */
+    DCHECKF(out->loop_us + out->between_slices_us == out->instance_us,
+            "solver/engine.c: the instance's span is not partitioned by its two halves (%lld inside the slice "
+            "bracket + %lld between slices against %lld measured since the first slice) — the readings "
+            "telescope from engine_sched_step's own pair, so a difference is a slice whose span was never "
+            "charged, a second writer of one accumulator, or a clock that is no longer monotone",
+            (long long)out->loop_us, (long long)out->between_slices_us, (long long)out->instance_us);
+    /* AND THE CONTAINMENT THAT MAKES THE SPLIT MEAN WHAT IT SAYS, which the total above cannot see. Every
+       turn's charge is taken inside the dispatch loop, which is inside the wrapper's bracket, so the turns
+       are a sub-interval of the slices they ran in. A violation is a turn charged outside a slice — a second
+       driver of flow_step, or a charge that survived past `quantum_end()` — and it would make `stepUs` look
+       like a share of a loop that never held it. */
+    DCHECKF(out->step_us <= out->loop_us,
+            "solver/engine.c: the dispatch turns cost %lld against %lld spent inside the slice bracket they "
+            "run in — every turn is charged between engine_sched_step's own two readings, so a total that "
+            "exceeds them is a turn charged outside a slice entirely",
+            (long long)out->step_us, (long long)out->loop_us);
+    /* AND THAT A TURN IMPLIES A SLICE, which is the routing half of the same claim and is the one check a
+       reader of `stepUs / slices` can make without re-deriving anything. flow_step's only caller is the
+       dispatch loop and the loop's only caller is the body this wrapper brackets, so steps without slices is
+       a step driven from outside that bracket — which is exactly the state that would make every per-slice
+       quotient on this census a fraction of the wrong population. */
+    DCHECKF(out->steps == 0 || out->slices > 0,
+            "solver/engine.c: %ld dispatch turn(s) were taken across ZERO slices — the count is raised in "
+            "engine_sched_step before the body runs and a turn can only be taken inside that body, so this is "
+            "a step driven from outside the slice bracket and every per-slice reading on this census is a "
+            "fraction of a population that did not produce it",
+            out->steps);
     /* …AND THE COMPILE PHASE, TAKEN IN THE SAME READING AS THE OVERRUN TOTAL IT IS CONTAINED IN — for
        `step_us`' reason below: the pair is read against rows the dispatch loop moves, so a copy taken one
        call later than `out->slice_overruns` would be a subset reported against a population of another
@@ -12652,12 +12752,17 @@ static int engine_sched_slice(void) {
        decision that a notch of quantisation already absorbs. Charging nothing at all — which is what a
        release build did — is the error that matters here, not which of two flows pays for a swap. */
     int64_t now = quantum_thread_us();
-    /* …AND THE SPAN EVERY COST THIS LOOP REPORTS IS A SHARE OF, OPENED FROM THE READING ABOVE RATHER THAN
-       FROM ONE OF ITS OWN. See `g_instance_us0`: the row it feeds is the denominator `stepUs` has never had,
-       and taking it here means it is opened BEFORE the first turn is charged, which is the whole of why the
-       containment asserted at engine_step_unit_runs is an identity. A second clock read would be a different
-       quantity wearing this one's name, which is the same objection `t_slice0` states one screen down. */
-    if (!g_instance_us0_set) { g_instance_us0 = now; g_instance_us0_set = 1; }
+    /* THE SPAN EVERY COST THIS LOOP REPORTS IS A SHARE OF IS NO LONGER OPENED HERE, AND THE LINE THAT DID IT
+       IS RECORDED RATHER THAN QUIETLY MOVED. It read `if (!g_instance_us0_set) { g_instance_us0 = now; ... }`,
+       with a paragraph saying that opening it from this reading put it BEFORE the first turn is charged,
+       which made the containment at engine_step_unit_runs an identity. Every word of that was true of the
+       only row that existed then. It is not sufficient for the PARTITION `loop_us`/`between_slices_us` adds:
+       those are charged from engine_sched_step's own two readings, and the wrapper's first reading is EARLIER
+       than this one — it precedes `quantum_begin()`, the flow-stamp restore and the capture route — so a
+       baseline opened here would sit inside the first slice's own span and the partition would exceed it by
+       the wrapper's entry work on the very first slice. The opening is one line up the call chain now, at
+       engine_sched_step's first statement, which is the earliest reading this engine takes on its own thread
+       and therefore the only one every charge below is a sub-interval of. */
     /* THE SESSION THE HOST STEPPED IS STILL OPEN — and the way this fires is a CALLER THAT TRANSFORMED THE
        PREVIOUS ANSWER. Two exits close the session and both answer ENGINE_STEP_DONE: the frontier draining, and
        the PARK that writes the residue to the cold tier. A wrapper that folded DONE into YIELD would send the
@@ -13798,14 +13903,59 @@ void engine_sched_end(void) {
     engine_session_close();
 }
 
-/* THE SLICE'S BRACKET, and it is a WRAPPER because the body has seven exits. Opening the budget is arming an
-   asynchronous edge (solver/quantum.h) and closing it is disarming that edge, so a return that forgot one would
-   leave a CPU timer running over the host's own time between two steps — the signal would land while the host
-   pumps its port, raise a request nothing is there to answer, and expire the NEXT slice at its first opcode.
-   Seven `quantum_end()` calls before seven returns is the shape where one of them is eventually missing; one
-   bracket around one call is the shape where it cannot be. */
+/* THE SLICE'S BRACKET, and it is a WRAPPER because the body has MANY exits — the count this sentence used to
+   state is dropped rather than corrected, and that is the point. It said SEVEN, and the enumeration one
+   paragraph down already records having been wrong once while "the count was right"; measured at this
+   revision, stripping comments and string literals from the body, `engine_sched_slice` has SIX `return`
+   statements (two DONE, two YIELD, two STALLED). A number in this sentence is a coordinate that goes stale
+   every time an exit is added or removed, it has now done so twice, and NOTHING about the argument depends on
+   it: the argument is that the body has more than one exit and a bracket at each of them is the shape where
+   one is eventually missing. Count them with a command if you need the number; do not read it here.
+   Opening the budget is arming an asynchronous edge (solver/quantum.h) and closing it is disarming that edge,
+   so a return that forgot one would leave a CPU timer running over the host's own time between two steps —
+   the signal would land while the host pumps its port, raise a request nothing is there to answer, and expire
+   the NEXT slice at its first opcode. A `quantum_end()` call before every return is the shape where one of
+   them is eventually missing; one bracket around one call is the shape where it cannot be — and the same
+   sentence is why the slice-span accumulators below are here and not at those returns. */
 int engine_sched_step(void) {
     int r;
+    /* THE EARLIEST READING THIS ENGINE TAKES ON ITS OWN THREAD, and it is the FIRST statement of the function
+       rather than a line inside the body for a reason that is arithmetic and not tidiness: everything between
+       here and `engine_sched_slice`'s own entry — arming the quantum, restoring the flow stamp and the
+       capture route, the stray check — is thread the engine spent, so a span opened past it would report that
+       work as the HOST's and the partition below would not sum. See solver/engine.h's `loop_us`. */
+    int64_t t_in = quantum_thread_us();
+
+    /* AND THE SPAN EVERY COST THIS ENGINE REPORTS IS A SHARE OF, OPENED FROM THAT SAME READING — see
+       `g_instance_us0`, which used to be opened one call deeper and is opened here now so that `g_loop_us`
+       below cannot start before it. */
+    if (!g_instance_us0_set) { g_instance_us0 = t_in; g_instance_us0_set = 1; }
+    /* THE HOST'S OWN THREAD BETWEEN TWO SLICES, CHARGED AT THE READING THAT CLOSES IT — never from a third
+       clock read, which would be a different quantity wearing this one's name. `g_slice_exit_us` is the
+       PREVIOUS slice's closing reading, carried, so this gap and that slice's own span meet at one number and
+       the two accumulators telescope to the whole of `instance_us`. Nothing is charged before the first slice
+       has returned, which is what the flag says and is why it is a flag rather than a reserved reading. */
+    if (g_slice_exit_set) {
+        DCHECKF(t_in >= g_slice_exit_us,
+                "solver/engine.c: this slice opened at %lld, BEFORE the previous one returned at %lld — the "
+                "two are readings of one thread clock taken in program order, so this is a measure that has "
+                "stopped being monotone and `betweenSlicesUs` is about to be charged a negative gap, which "
+                "reads as a host that gave the engine more thread than there was",
+                (long long)t_in, (long long)g_slice_exit_us);
+        DCHECK(t_in - g_slice_exit_us <= INT64_MAX - g_between_us,
+               "the host's between-slice total would overflow — its charges are non-negative and it only "
+               "climbs, so this is a slice measure that has stopped being microseconds or an accumulator "
+               "narrowed under solver/engine.h's `between_slices_us`; either way the partition at "
+               "engine_step_unit_runs would fail with a negative half and read as a broken clock");
+        g_between_us += t_in - g_slice_exit_us;
+    }
+    /* THE SLICE ITSELF, COUNTED WHERE ITS BUDGET IS ARMED — solver/engine.h's `slices`. It is the denominator
+       `loop_us` and `between_slices_us` would otherwise not have, and the bound the `over_arms` residual
+       names: the quantum arms once here and the dispatch loop ends the slice on that same expiry, so at most
+       one turn per slice can end on the cooperative clause. Raised BEFORE the body rather than after it
+       because the count is of slices ENTERED, which is the population both spans are over and which a body
+       that aborts cannot retroactively un-enter. */
+    g_slices++;
     quantum_begin();
     /* THE FLOW STAMP AND THE DOM CAPTURE ARE THE SLICE'S, NOT THE SESSION'S — and that is one correction, not
        two, because they are twins over the two halves of the same state (the JS heap and the Lexbor tree).
@@ -13818,11 +13968,16 @@ int engine_sched_step(void) {
        object by any of those flows was recorded nowhere and survived that flow's unapply. Silent, and
        refcounting kept it from ever crashing.
        IT IS THE WRAPPER THAT MAKES THIS SYMMETRIC, which is the same reason the wrapper exists for the
-       quantum: the body has seven exits (the park's DONE, three yields, STALLED twice — a reply the host owes
-       and a peer's question — and the exhausted path that closes the session), and a mark cleared at six of
-       them would look correct forever. One bracket around one call cannot be got wrong. The enumeration is
-       spelled out because it was WRONG while the count was right: it named a seeded-candidate yield that is
-       gone (the seeding is at the pick now) and neither of the two exits that had been added since.
+       quantum: the body has SEVERAL exits and a mark cleared at all but one of them would look correct
+       forever. One bracket around one call cannot be got wrong. THE ENUMERATION THAT STOOD HERE IS GONE AND
+       THE REASON IS THE SAME ONE IT GAVE FOR ITSELF. It listed "the park's DONE, three yields, STALLED twice
+       … and the exhausted path that closes the session" — SEVEN — and said it was "spelled out because it
+       was WRONG while the count was right", having named a seeded-candidate yield that had gone and missed
+       two exits added since. Measured at this revision, with comments and string literals stripped from the
+       body, there are SIX `return` statements: two DONE, two YIELD, two STALLED. So the count has now been
+       wrong in both directions, the list has been wrong once, and NOTHING here depends on either — the
+       argument is that there is more than one exit. A list of exits in a comment is a census of a function
+       that changes, which is what this file's own banner says a comment may not be.
        AND IT IS SUSPEND/RESTORE, NEVER CLEAR/RE-ENTER. The generation is monotonic — every delta's fork_gen is
        a point on that one line — so the next slice resumes at the number this one left, and a restart at 1
        would make a later object compare as older than an earlier fork. */
@@ -13874,6 +14029,30 @@ int engine_sched_step(void) {
     g_slice_delta = cow_current();
     cow_set_current(NULL);
     quantum_end();
+    /* WHAT THIS SLICE COST THE ENGINE'S OWN THREAD, CLOSED AFTER `quantum_end()` BECAUSE DISARMING THE EDGE
+       IS THE SLICE'S WORK AND NOT THE HOST'S — the same boundary the marks above are restored at. One
+       accumulate at one line, past every one of the body's returns, which is the property the wrapper is for:
+       a charge written at those returns would be missing from one of them eventually and the symptom would be
+       a slice's whole duration in neither row rather than a crash. */
+    {
+        int64_t t_out = quantum_thread_us();
+
+        DCHECKF(t_out >= t_in,
+                "solver/engine.c: this slice closed at %lld, BEFORE it opened at %lld — two readings of one "
+                "thread clock taken in program order, so this is a measure that has stopped being monotone "
+                "and `loopUs` is about to be charged a negative span",
+                (long long)t_out, (long long)t_in);
+        DCHECK(t_out - t_in <= INT64_MAX - g_loop_us,
+               "the dispatch loop's slice-span total would overflow — its charges are non-negative and it "
+               "only climbs, so this is a slice measure that has stopped being microseconds or an accumulator "
+               "narrowed under solver/engine.h's `loop_us`; the reading it feeds does not go absent, it "
+               "INVERTS, and a negative `loopUs` reads as an engine that was never given the thread");
+        g_loop_us += t_out - t_in;
+        /* CARRIED FOR THE NEXT SLICE'S GAP, so the host's time between two slices is measured from a reading
+           that was already taken rather than from a third. */
+        g_slice_exit_us  = t_out;
+        g_slice_exit_set = 1;
+    }
     return r;
 }
 

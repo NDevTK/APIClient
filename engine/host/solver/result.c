@@ -1589,8 +1589,14 @@ char *result_swap_json(void) {
      `orphanClaimsMet`/`orphanClaimsUnmet`, every `host*` row, and `pagedReqs`/`pagedAsks`/`pagedUnarmed`/
      `pagedFloor`. TWO OF ITS ROWS ARE NOT COUNTS AT ALL: `deepest` and `completed` are HIGH-WATER MARKS —
      monotone, a count of nothing, and a difference between two of them answers about no quantity.
-     From `engine_step_unit_runs` — LIFETIME COUNTS: `steps`, the `stepUnitRuns` histogram, and `stepUs`,
-     which is a MICROSECOND ACCUMULATOR rather than a count and is on this line as `steps`' denominator.
+     From `engine_step_unit_runs` — LIFETIME COUNTS: `steps`, `slices` and the `stepUnitRuns` histogram; and
+     `stepUs`, `sliceUs`, `schedUs`, `loopUs` and `betweenSlicesUs`, which are MICROSECOND ACCUMULATORS rather
+     than counts and are on this line as the denominators `steps` and `slices` have. `instanceUs` is on this
+     line and is NEITHER: it is a SPAN, read at the census as one subtraction of two clock readings rather
+     than accumulated, so two of them may be differenced exactly as the accumulators may and it is the one row
+     here whose value is not a sum of anything. The last three PARTITION it — `loopUs + betweenSlicesUs ==
+     instanceUs`, asserted in the engine — so those two may be differenced and may also be READ AGAINST EACH
+     OTHER at one census, which no other pair on this line can be.
      From `decide_replay_stats` — LIFETIME COUNTS in TWO UNITS, which is the half a key cannot carry:
      `replayHits` and `replayLeftArms` are ARMS (decision-vector slots) and `replayLeft` is EVENTS (one per
      divergence, whatever it abandoned), so the three may be differenced and only two of them may be compared.
@@ -2383,6 +2389,25 @@ char *result_cold_json(void) {
                     asserted at engine_step_unit_runs, where both are in one hand; see solver/engine.h's
                     `instance_us` for the named residual that says what the REMAINDER still cannot separate. */
                  "\"instanceUs\":%lld,"
+                 /* AND ITS TWO HALVES, WHICH IS THE ONLY WAY A SMALL `stepUs/instanceUs` NAMES A COMPONENT.
+                    The remainder of that share is one number over two populations that take OPPOSITE work:
+                    the thread the HOST held between slices, and the thread the engine held inside its own
+                    dispatch bracket outside a turn. `loopUs` is the second and `betweenSlicesUs` the first,
+                    and they PARTITION `instanceUs` exactly — the accessor closes the open tail (the span
+                    since the last slice returned, during which this document is being composed) into
+                    `betweenSlicesUs` from the same clock reading `instanceUs` closes on, so a reader ADDS two
+                    published rows instead of subtracting one from a total and inferring what is left. The
+                    identity is asserted at engine_step_unit_runs where all three are in one hand.
+                    READ AS A PAIR: `loopUs` small says the engine was barely GIVEN the thread and the next
+                    question is the DRIVER; `loopUs` large with `stepUs` small says it had the thread and
+                    spent it outside a turn, and the next question is this scheduler — starting with the
+                    slices that dispatched nobody, which is `slices` against `steps`.
+                    `slices` IS THE DENOMINATOR NEITHER SPAN WOULD OTHERWISE HAVE, and the two quotients it
+                    makes — what a slice costs, and what the host takes between two of them — are both in the
+                    slice's own measure and therefore comparable against the `@QUANTUM` line this run printed.
+                    It is `%ld` beside two `%lld` for `steps`' reason exactly: it counts slices where they
+                    accumulate a clock. See solver/engine.h's `loop_us`. */
+                 "\"loopUs\":%lld,\"betweenSlicesUs\":%lld,\"slices\":%ld,"
                  /* THE TWO PHASES `stepUs` IS THE SUM OF, WITHOUT WHICH A SLICE-BOUND TURN CANNOT SAY WHICH
                     HALF SPENT THE TIME — a step overrunning the slice is the quantum with no asynchronous
                     source to expire it, and a pick-and-swap that dominates is the ordering and the delta
@@ -2499,6 +2524,7 @@ char *result_cold_json(void) {
                  (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes + c.dyn_bytes) / 1024,
                  r.steps, (long long)r.step_us,
                  (long long)r.instance_us,
+                 (long long)r.loop_us, (long long)r.between_slices_us, r.slices,
                  (long long)r.slice_us, (long long)r.sched_us, (long long)r.slice_overruns, runs, over,
                  r.classic_compiles, r.classic_compile_overruns,
                  r.unit_mid_program, r.unit_parked, r.unit_checkpoint_owed,
