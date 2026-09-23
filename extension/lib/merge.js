@@ -877,10 +877,47 @@ function _foldEndpointRecordInto(into, from, key) {
     const y = _b.has(name) ? _b.get(name) : _NO_HOLE_POOLS;
     _folded.set(name, foldValuePools(x.valid, x.forced, y.valid, y.forced));
   }
+  /* THE FOLD DOES NOT TRUNCATE, AND `PATH_PARAM_EXAMPLE_CAP` DOES NOT BELONG HERE — the cap's own stated
+     defence has no instance at this seam. It reads, at its declaration, "a cap over what this record COPIES
+     per hole, never over work: the values themselves are the method parameter's, and dropping the tail of a
+     copy truncates no path the solver would have taken". That is exactly true at `_astPathParamPool`, whose
+     operand IS a live method parameter and whose record is being minted. It is true of NOTHING here: all
+     three callers of this function hand it two RECORDS — the upgraded-from row, a second @H row for one key,
+     and the moat's stored record — so the thing being sliced is the record's OWN ACCUMULATED STATE and there
+     is no method parameter behind it to still hold the tail.
+     WHAT THE SLICE ACTUALLY DID IS DELETE, AND THE LOOP AT THE BOTTOM OF THIS FILE DECLARES THE INVARIANT IT
+     BROKE: "the path-param union, so a later paramless re-emit never DROPS values a prior emit learned — the
+     moat is monotonic". `foldValuePools` promotes a value out of the forced pool by MOVING it: it splices the
+     value from `forced` and APPENDS it to `valid`. An append lands past the cap exactly when the offerable
+     pool is already full, so the projection then dropped it from `valid` having already lost it from
+     `forced`, and the record held the value in NEITHER pool afterwards. MEASURED on this function's own code
+     with `foldValuePools` verbatim: a stored record carrying 20 offerable values and a forced `f7`, met by a
+     document that computes `f7` UNFORCED, folds to `valid` 21 / `forced` 19 and projects to a record that
+     does not name `f7` at all — the promotion that judged it most-observed is what erased it. The same
+     ordering saturates: this fold's base is the STORED record and the incoming side is this document, so once
+     a hole reached 20 offerable values every value any later document learned for it was discarded, for that
+     address, permanently.
+     A CAP HERE IS THE SHAPE §NO BOUNDS NAMES, AND lib/persistence.js ALREADY RULES ON IT ONE MAP ALONG: "a
+     shed nobody can count is the silent truncation this whole section exists to end, and §NO BOUNDS is
+     explicit that discarding work 'with nothing to say so' is a cap however good the reason for discarding it
+     was". This had no count and no census, so neither this record nor any reader of it could tell a hole
+     whose pool RAN OUT from one that HAS NO MORE — the two questions the cap's own declaration says must not
+     share an appearance.
+     WHAT BOUNDS IT NOW IS THE ONE THING THAT MAY: a moat record is RE-DERIVABLE (`endpointRecordRecipe` is
+     its `pageUrl`), so its bytes are §OOM/paging's third category and their residency is the value-ordered
+     share, not a per-field slice nobody can see. The incoming side is still capped at 20 by
+     `_astPathParamPool`, so one document-visit adds at most that many values to a hole.
+     NAMED RESIDUAL — THE FOLD IS QUADRATIC IN THE POOL IT NO LONGER BOUNDS.
+       WHAT IS NOT COVERED: `foldValuePools` decides membership with `indexOf`, so folding a hole's pools is
+         O(n*m) in their lengths. The cap held n below 21 here and no longer does.
+       WHAT THE NEXT DIFF BUILDS: membership taken over a Set inside `foldValuePools`, which is that one
+         function and leaves its stated law — the one-way promotion, and the order it appends in — untouched.
+       HOW ITS ABSENCE WOULD SHOW: the moat-fold loop's own wall time rising with the square of a single
+         address's learned-value count, on a document that re-visits one templated address many times. */
   const _project = (side) => {
     const out = [];
     for (const [name, p] of _folded)
-      if (p[side].length) out.push({ name: name, values: p[side].slice(0, PATH_PARAM_EXAMPLE_CAP) });
+      if (p[side].length) out.push({ name: name, values: p[side].slice() });
     return out.length ? out : null;
   };
   into.pathParams = _project("valid");

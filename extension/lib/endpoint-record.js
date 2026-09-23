@@ -187,11 +187,26 @@ const ENDPOINT_ABSENT = Object.freeze({
    their `pageUrl` recipe instead of being read as a body-less request. The install retires the ARTIFACT half;
    the shed covers the STORE half; neither does the other's job, and a reader who retires one of them on the
    other's evidence has closed a question nobody answered. */
-/* HOW MANY EXAMPLES A HOLE CARRIES ON THE FLAT RECORD — one constant, because the two pools truncating at
-   different lengths would make "this pool ran out" and "this pool has no more" different questions with the
-   same appearance. It is a cap over what this record COPIES per hole, never over work: the values themselves
-   are the method parameter's, and dropping the tail of a copy truncates no path the solver would have taken.
-   It was the literal `20`, written twice in lib/merge.js. */
+/* HOW MANY EXAMPLES A HOLE CARRIES OFF A METHOD PARAMETER WHEN THIS RECORD IS MINTED — one constant, because
+   the two pools truncating at different lengths would make "this pool ran out" and "this pool has no more"
+   different questions with the same appearance. Both pools reach the record through `_astPathParamPool`, so
+   the one constant is what keeps that pair of questions apart. It is a cap over what this record COPIES per
+   hole, never over work: the values themselves are the method parameter's, and dropping the tail of a copy
+   truncates no path the solver would have taken. It was the literal `20`, written twice in lib/merge.js.
+
+   THE HEADLINE USED TO READ "ON THE FLAT RECORD" AND THE COUNT USED TO BE TWO, AND BOTH ARE REWRITTEN RATHER
+   THAN DELETED BECAUSE THE ARGUMENT ABOVE IS SOUND AND A READER WHO RE-DERIVES IT WILL RE-APPLY IT TOO WIDELY
+   — which is exactly what the second site was. The defence is about a COPY: it names the method parameter as
+   the thing that still holds the tail, so it holds wherever the operand IS one and nowhere else.
+   lib/merge.js's `_foldEndpointRecordInto` is not that. Its three callers each hand it two RECORDS, so the
+   slice it used to take was over the record's OWN ACCUMULATED STATE with no method parameter behind it, and a
+   value `foldValuePools` had PROMOTED — spliced out of the forced pool and appended past the cap in the
+   offerable one — was left in neither pool, which is a merge making the record know less than it did. That
+   fold's own comment carries the measurement and lib/persistence.js carries the rule it broke: discarding
+   work "with nothing to say so" is a cap however good the reason.
+   SO THE CAP IS A MINT-TIME COPY BOUND AND HAS EXACTLY ONE SITE. A second use of this constant is the claim
+   that its operand is a live method parameter — check that before writing one, because at every other operand
+   the defence above is a sentence about something that is not there. */
 const PATH_PARAM_EXAMPLE_CAP = 20;
 
 /* NO ABSENT VALUE. An endpoint with no address, no verb, no origin, no path, no service, no provenance or no
