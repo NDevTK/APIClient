@@ -4554,7 +4554,7 @@ static void mixin_declare(JSContext *ctx, const NodeMixinMember *tab, unsigned n
         DCHECK(tab[k].magic >= 0 && tab[k].magic < (int)(sizeof(g_mixin_id) / sizeof(g_mixin_id[0])),
                "a node mixin member's magic is outside the declaration table — the table is indexed BY magic so "
                "that one member is one declaration however many mixins include it");
-        if (g_mixin_id[tab[k].magic] < 0)
+        if (g_mixin_id[tab[k].magic] < 0) {
             /* TWO DECLARATIONS BECAUSE THE IDL WRITES TWO SIGNATURES — see NodeMixinMember. A member that
                declares no arguments converts none, so `remove`'s body is reached with the page's value
                untouched and unread, which is what §4.2.8's `remove()` means. */
@@ -4562,6 +4562,17 @@ static void mixin_declare(JSContext *ctx, const NodeMixinMember *tab, unsigned n
                 ? idl_method_id_ext(ctx, MIXIN_NODES, 1, /*variadic*/ true, node_class_id(),
                                     js_node_mixin, tab[k].magic)
                 : idl_method_id(ctx, NULL, 0, js_node_mixin, tab[k].magic);
+            /* THE SLOT THE LINE ABOVE JUST SET, DECLARED BESIDE IT — and INSIDE this guard rather than beside
+               it, which is the one placement that cannot abort. core/agent_state.c refuses a second
+               declaration of ONE address by name ("one static was declared as agent state twice"), and this
+               guard exists precisely so that a magic appearing in BOTH mixin tables is allocated once; the
+               two tables are disjoint today, so a declaration outside the guard would be correct today and
+               would abort on the first shared magic. One allocation is one declaration, by construction.
+               THE `what` IS THE TABLE'S OWN `name` RATHER THAN A STRING WRITTEN HERE. The registry stores the
+               pointer, and NodeMixinMember's tables are `static const`, so the member names it; a restated
+               table would be a second copy of what the mixin declares and would drift from it silently. */
+            agent_state_id("element", &g_mixin_id[tab[k].magic], tab[k].name);
+        }
     }
     g_mixin_declared = 1;
 }
@@ -5578,6 +5589,63 @@ void node_init(JSContext *ctx)
                        "DOM §4.2.3's children-changed-steps list — the hooks themselves");
     agent_state_zeroed("element", g_moving_hooks,
                        "DOM §4.2.3's moving-steps list — the hooks themselves");
+
+    /* THE POOL-ENTRY SLOTS, ONE ROW EACH. An array of slots of an EXISTING kind needs no kind of its own:
+       core/agent_state.h says so at agent_state_zeroed_at — this registry is keyed on a slot's ADDRESS, so
+       `&a[0]` and `&a[1]` are two rows — and this is that sentence used rather than restated.
+
+       THE KIND IS `id` AND NOT `zeroed`, AND THE REASON IS A LINE IN ANOTHER FILE RATHER THAN A PREFERENCE.
+       agent_state_id's pre-init is -1 and agent_state_zeroed's is the zero bytes, and the only reader these
+       slots have is idl_install_method_at's `DCHECK(stepid >= 0, "an IDL member was installed before it was
+       declared")`. -1 is that assert firing BY NAME at the site that would have installed the stale entry;
+       0 PASSES it, and idl_mint_step then mints whatever pool entry 0 grew into and installs it under this
+       member's name. So an undo that wrote the zero image would not undo the state, it would WRITE the
+       defect — and it would write it in the one direction nothing reports, since a page calling the member
+       reaches another member's body rather than a crash.
+
+       WHAT THIS DOES AND DOES NOT COVER, because the two windows have two different mechanisms and a reader
+       who collapses them will delete the wrong one. A declaration decides what the UNDO writes, so it covers
+       the window from element_free to the next node_init — where these slots otherwise keep AGENT ONE'S
+       POOL IDS, which are positive, which pass every assert above, and which install agent one's bodies into
+       agent two's realm. It does NOT cover the FIRST agent, because no undo has run: that window is the C
+       pre-init, and it is why g_mixin_id's fill loop in this function is NOT made redundant by these lines.
+       g_id_cd, g_id_pi_read and g_id_pi_write carry a `-1` initialiser and need no loop; g_mixin_id has 32
+       slots and carries none, and the fill derives its extent from `sizeof` — a hand-written list of 32
+       initialisers would be a second copy of that extent which zero-fills SILENTLY when the array grows,
+       which is the defect rather than the cure. A WHAT table drifts loudly instead: grow the enum and the
+       new entry is NULL, which slot_declare refuses by name.
+
+       WHY THESE ARE NOT BESIDE THE LINES THAT SET THEM, unlike core/agent_state.h's usual rule: the setting
+       lines are inside `{ }` blocks that hold the argument-type arrays, and this function's once-per-agent
+       latch is what entitles any of them to be declared exactly once. g_mixin_id is the exception and is
+       declared at its allocation, for the reason mixin_declare states. */
+    {
+        static const char *const CD_WHAT[5] = {
+            "DOM §4.10's `substringData` pool entry", "DOM §4.10's `appendData` pool entry",
+            "DOM §4.10's `insertData` pool entry",    "DOM §4.10's `deleteData` pool entry",
+            "DOM §4.10's `replaceData` pool entry",
+        };
+        static const char *const PI_READ_WHAT[4] = {
+            "DOM §4.13's `hasAttributes` pool entry", "DOM §4.13's `getAttributeNames` pool entry",
+            "DOM §4.13's `getAttribute` pool entry",  "DOM §4.13's `hasAttribute` pool entry",
+        };
+        static const char *const PI_WRITE_WHAT[3] = {
+            "DOM §4.13's `setAttribute` pool entry", "DOM §4.13's `removeAttribute` pool entry",
+            "DOM §4.13's `toggleAttribute` pool entry",
+        };
+
+        for (i = 0; i < (int)(sizeof(g_id_cd) / sizeof(g_id_cd[0])); i++)
+            agent_state_id("element", &g_id_cd[i], CD_WHAT[i]);
+        for (i = 0; i < (int)(sizeof(g_id_pi_read) / sizeof(g_id_pi_read[0])); i++)
+            agent_state_id("element", &g_id_pi_read[i], PI_READ_WHAT[i]);
+        for (i = 0; i < (int)(sizeof(g_id_pi_write) / sizeof(g_id_pi_write[0])); i++)
+            agent_state_id("element", &g_id_pi_write[i], PI_WRITE_WHAT[i]);
+    }
+    /* THE MIXIN DECLARATION LATCH. mixin_install's `DCHECK(g_mixin_declared, ...)` asks whether this agent
+       declared its mixin members, and the flag it reads was set by agent ONE and never given back — so on
+       agent two that assert answered about a previous agent and could not fire. It is the shape this file's
+       hook-list paragraph above is about, one latch further in. */
+    agent_state_flag("element", &g_mixin_declared, "the node-mixin declaration latch mixin_install reads");
 }
 
 /* §4.4's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM — Node, CharacterData, Text and Comment. */
