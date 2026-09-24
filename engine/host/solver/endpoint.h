@@ -53,6 +53,32 @@
  * claim about THIS TREE written by someone who had just read the SPEC, which is the half a reader cannot
  * check by fetching anything. WebSockets §3 is the diff after it and wants a transport this engine does not
  * have; its address is statable at the constructor long before its connection is.
+ * AND `STATABLE AT THE CONSTRUCTOR` IS A FACT ABOUT THE STANDARD AND NOT A LANDING UNIT, WHICH IS THE
+ * READING THAT SENTENCE INVITES AND THE ONE A MEASUREMENT REFUTES. WebSockets §3 "The WebSocket interface"
+ * settles the address at its constructor's step 10, "Set this's url to urlRecord", and runs the connection
+ * in parallel — so a constructor that records the address and connects to nothing reads as the cheap half
+ * of this clause. It is the half-landing §NO STUBS forbids, and the reason is one section further on:
+ * WebSockets §4 "Feedback from the protocol" is the ONLY writer of ready state past CONNECTING, while
+ * WebSockets §3 "The WebSocket interface"'s send() step 1 is "If this's ready state is CONNECTING, then
+ * throw an "InvalidStateError" DOMException" — so an object with no connection answers every send() with a
+ * throw, which is the whole of what a socket transport calls.
+ * AND THE COST IS MEASURED RATHER THAN ARGUED, ON A CHANNEL THE ABSENCE RANKING'S GUARD COLUMN DOES NOT
+ * COVER. browser/platform_names.h carries `WebSocket`, so solver/absent.c leaves the read alone and a
+ * bundle's presence test is answered by whether an interface object is installed; engine/js_guard_shape.mjs
+ * scopes itself to the USE channels, so a `fb=0 sil=0` for this name is SILENCE about the detect channels
+ * rather than evidence about them. Read those directly, over a corpus testing/corpus/fetch.mjs writes:
+ *   grep -rlE '(globalThis|window|self)\.WebSocket' <corpus>   # then open each file that answers
+ * Measured 2026-09-24T03:29Z over that driver's own corpus, every file that answered held a presence test
+ * SELECTING an arm — resolver chains ending in a polyfill call, a config-gated assignment, and a recorder
+ * that subclasses the global and reassigns it and whose own send() calls super.send(). Installing an
+ * interface object takes each of those OUT of the arm this engine runs today and INTO one whose send()
+ * throws, which is a regression in both directions and not a partial fix.
+ * SO THE UNIT IS WebSockets §3 "The WebSocket interface", §4 "Feedback from the protocol" and §6 "The
+ * CloseEvent interface" TOGETHER WITH A CONNECTION SOURCE, and that source is the open question rather
+ * than the diff: extension/lib/safe-fetch.js answers any non-http(s) address `blocked-scheme:` before it
+ * reaches the wire, and core/fetch/fetch.h's FETCH_MODE_WEBSOCKET has a producer and no consumer.
+ * RETIREMENT: this paragraph goes when WebSockets §4 "Feedback from the protocol" has a writer of ready
+ * state in this tree, because the half-landing it argues against is then unspellable rather than argued.
  * HOW ITS ABSENCE WOULD SHOW: a document whose API surface is carried over a socket emits a `@H` array that
  * is empty or holds only its subresource loads, while absent.c's census names the interface as owed — two
  * surfaces disagreeing about one document, with nothing joining them.
