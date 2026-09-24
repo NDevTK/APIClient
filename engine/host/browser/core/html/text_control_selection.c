@@ -755,7 +755,7 @@ static JSValue js_tcs_set_range_text(JSContext *ctx, JSValueConst this_val, int 
     if (!c.is_textarea && !tcs_offsets_apply(c.st))
         return JS_ThrowDOMException(ctx, "InvalidStateError",
                                     "`setRangeText()` does not apply to an `input` in this state");
-    /* WEB IDL §3.6 "Overload resolution" BY ARGUMENT COUNT, which is what HTML §4.10.20 "APIs for the text
+    /* WEB IDL §3.6 "Overload resolution algorithm" BY ARGUMENT COUNT, which is what HTML §4.10.20 "APIs for the text
        control selections"' step 3 then reads back ("If the method has only one argument..." — those words are
        HTML's, not Web IDL's, and the standard is stated on them for that reason). The IDL declares
        `setRangeText(DOMString replacement)` and

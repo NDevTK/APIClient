@@ -200,7 +200,7 @@ void performance_free(void);
 
 /* Web IDL §3.7 Interfaces' implementation-check an object, step 3 — "If object does not implement interface,
    then throw a TypeError" — for §7's two OPERATIONS, which state it at their declaration
-   (idl_args.h: idl_this_iface) so it is asked before §3.6 Overload resolution converts anything. */
+   (idl_args.h: idl_this_iface) so it is asked before §3.6 Overload resolution algorithm converts anything. */
 bool performance_is(JSValueConst v);
 
 /* THIS REALM'S `Performance.prototype` — the target a PARTIAL interface in another standard installs its

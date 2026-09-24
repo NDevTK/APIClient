@@ -13,12 +13,12 @@
  * rather than an omission. That asymmetry is why the dispatch is over the MEMBER'S MAGIC and not over the
  * document alone, and why a magic this file does not name aborts instead of picking one silently.
  *
- * THE SECOND WALK IS NOT WRITTEN HERE. Step 3's algorithm is DOM Parsing and Serialization §3.2.1 XML
+ * THE SECOND WALK IS NOT WRITTEN HERE. Step 3's algorithm is DOM Parsing and Serialization §5.2.1 XML
  * Serialization, which is core/xml/xml_serialize.h's embeddable machine — the same one HTML §8.5.8 The
  * XMLSerializer interface's `serializeToString(root)` reaches with require well-formed false. Its state is a
  * field of this one and its stages are expanded into this file's stage block with this member's own words in
  * front of them, so the two consumers park at labels that cannot resolve to each other on a cross-session
- * resume. Transcribing §3.2.1 a second time here is what the seam exists to prevent: two walks that disagree
+ * resume. Transcribing §5.2.1 a second time here is what the seam exists to prevent: two walks that disagree
  * about namespace prefixes, with one of them reachable only from a member nobody was testing.
  *
  * WHY IT IS A COMPONENT AND NOT A BLOCK OF element.c. §13.3 is the algorithm behind FOUR members across TWO
@@ -138,7 +138,7 @@ typedef struct {
     bool            serializable_shadow_roots;
     JSValue         shadow_roots;
     /* §8.5.4 STEP 3's MACHINE, EMBEDDED. The other arm of the one dispatch, and it is DOM Parsing and
-       Serialization §3.2.1 XML Serialization's own state rather than anything of this file's — see
+       Serialization §5.2.1 XML Serialization's own state rather than anything of this file's — see
        core/xml/xml_serialize.h. Zeroed with the rest of this state, so a run that takes step 2's HTML arm
        carries it untouched and js_frag_ser_visit's chain into it copies and discharges nothing. */
     XmlSerializeState xml;
@@ -413,12 +413,12 @@ static int js_frag_ser_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                    "creation steps and its §4.5 type cannot be asked");
             if (document_is_xml_of(context_document)) {
                 /* Step 3: "return the XML serialization of node given require well-formed", and this is the
-                   consumer that passes TRUE — so an ill-formed subtree throws §3.2.1 step 5's
+                   consumer that passes TRUE — so an ill-formed subtree throws §5.2.1 step 5's
                    "InvalidStateError" here where §8.5.8's serializeToString returns a string.
 
                    WHICH NODE, for §8.5.5: step 1 of its getter is "let element be a fictional node whose only
-                   child is this", and a fictional node has no interface for §3.2.1 step 5 to dispatch on. What
-                   it does have is exactly one child, so its serialization is §3.2.1.5 XML serializing a
+                   child is this", and a fictional node has no interface for §5.2.1 step 5 to dispatch on. What
+                   it does have is exactly one child, so its serialization is §5.2.1.6 XML serializing a
                    DocumentFragment node's concatenation over that one child — which is the XML serialization
                    of `this` itself, entered on the node. §8.5.4's own getters hand over the CHILDREN entry for
                    the reason core/xml/xml_serialize.h's XmlSerializeEntry gives. */
@@ -575,7 +575,7 @@ static int js_frag_ser_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     }
 
     /* §8.5.4 STEP 3's OWN STAGES, every one of them named so that a stage added to XML_SERIALIZE_ALGO_STAGES
-       does not compile until it has an arm here — the same reason core/html/xml_serializer.c names §3.2.1's
+       does not compile until it has an arm here — the same reason core/html/xml_serializer.c names §5.2.1's
        eight and core/dom/node.c names `clone a node`'s six. */
     STEP_ARM(FRAGSER_XML_DISPATCH);
     STEP_ARM(FRAGSER_XML_RECORD);
@@ -590,12 +590,12 @@ static int js_frag_ser_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     STEP_ARM(FRAGSER_XML_DONE);
     /* §8.5.4 step 3's value. NOT handed to data_block_wrap_text: that door is open because §13.3 appends a
        character-data child's value LITERALLY under a `script` parent, and DOM Parsing and Serialization
-       §3.2.1.4 XML serializing a Text node has no raw-text concept at all — it escapes "&", "<" and ">"
+       §5.2.1.5 XML serializing a Text node has no raw-text concept at all — it escapes "&", "<" and ">"
        unconditionally — so this string is a TRANSFORM of the block's child text content rather than that
        content. Handing it over would claim bytes the server wrote where the engine holds bytes it rewrote.
        NAMED RESIDUAL: a §4.12.1 The script element DATA BLOCK in an XML document, read through this arm,
        therefore does not mint the solver's triple, and its server-rendered fields reach an @H parameter with
-       no provenance on them. What the next diff builds: the same question asked here, with §3.2.1.4's escape
+       no provenance on them. What the next diff builds: the same question asked here, with §5.2.1.5's escape
        accounted for — the serialization IS the child text content exactly when the block holds none of "&",
        "<" and ">", and is a computable un-escape of it otherwise. How its absence shows: an XHTML page whose
        `<script type="application/json">` is read with `innerHTML` emits endpoint parameters whose values are
@@ -638,11 +638,11 @@ static void js_frag_ser_visit(JSContext *ctx, void *st, JSStepVisit *v)
 }
 
 static const IdlStepDecl FRAGMENT_SERIALIZER_STEP = {
-    /* No release: the accumulator, the level stack, `shadow_roots` and §3.2.1's own allocations are all
+    /* No release: the accumulator, the level stack, `shadow_roots` and §5.2.1's own allocations are all
        js_frag_ser_visit's, and the teardown discharges that one list. */
     js_frag_ser_step, sizeof(FragSerState), js_frag_ser_visit, NULL,
     "HTML §8.5.4 the fragment serializing algorithm steps, over HTML §13.3's HTML fragment serialization "
-    "algorithm and DOM Parsing and Serialization §3.2.1's XML serialization algorithm (§8.5.3 getHTML, "
+    "algorithm and DOM Parsing and Serialization §5.2.1's XML serialization algorithm (§8.5.3 getHTML, "
     "§8.5.4 innerHTML getter, §8.5.5 outerHTML getter)",
     FRAGSER_STEPS
 };

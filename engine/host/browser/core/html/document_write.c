@@ -348,8 +348,8 @@ static JSValue js_doc_close(JSContext *ctx, JSValueConst this_val, int argc, JSV
 
 /* ---- §8.4.1 open() -------------------------------------------------------------------------------------- */
 
-/* HTML §8.4.1 "Opening the input stream" declares TWO overloads, and Web IDL §3.6 "Overload resolution" tells
- * them apart by ARGUMENT COUNT alone — their type lists are two and three long, so an `argcount` of three
+/* HTML §8.4.1 "Opening the input stream" declares TWO overloads, and Web IDL §3.6 "Overload resolution algorithm"
+ * tells them apart by ARGUMENT COUNT alone — their type lists are two and three long, so an `argcount` of three
  * removes the first entry outright and anything less removes the second:
  *
  *     [CEReactions] Document open(optional DOMString unused1, optional DOMString unused2);
@@ -367,8 +367,8 @@ static JSValue js_doc_open(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     (void)argv; (void)magic;
     if (argc >= 3) {
         /* §3.6 step 4 has removed the two-argument entry, so this call IS `open(url, name, features)`. */
-        DFAIL("§8.4.1's THREE-ARGUMENT `open` was called — Web IDL §3.6 \"Overload resolution\" selects the "
-              "second entry by argument count, and that entry's method steps are \"if this is not fully "
+        DFAIL("§8.4.1's THREE-ARGUMENT `open` was called — Web IDL §3.6 \"Overload resolution algorithm\" selects "
+              "the second entry by argument count, and that entry's method steps are \"if this is not fully "
               "active, throw an \\\"InvalidAccessError\\\" DOMException; return the result of running the "
               "WINDOW OPEN STEPS with url, name and features\", which is HTML §7.2.2.1 \"Opening and closing "
               "windows\" and belongs to the Window component beside `window.open` (core/frame/navigable.c's "

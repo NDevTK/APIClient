@@ -2,17 +2,17 @@
  *
  * WHAT IT IS. Two members over one algorithm that lives somewhere else entirely: `new XMLSerializer()`, whose
  * "constructor steps are to do nothing", and `serializeToString(root)`, whose method steps are one sentence —
- * "Return the XML serialization of root given false". That algorithm is DOM Parsing and Serialization §3.2.1
+ * "Return the XML serialization of root given false". That algorithm is DOM Parsing and Serialization §5.2.1
  * XML Serialization and it is core/xml/xml_serialize.h's, for the reason that header gives: HTML §8.5.4 The
  * innerHTML property's fragment serializing algorithm steps reach the same algorithm with require well-formed
  * TRUE, so a copy owned by this member would be the second transcription of it.
  *
  * SO THIS FILE IS THE INTERFACE AND NOTHING ELSE, and that is the whole of its job: the class a receiver is
- * branded against, the constructor, the per-realm prototype, and the one member declared against §3.2.1's
+ * branded against, the constructor, the per-realm prototype, and the one member declared against §5.2.1's
  * machine. HTML §8.5.8's own note says why the interface is shaped this way at all — "The design of
  * XMLSerializer, as a class that needs to be constructed and then have its serializeToString() method called,
  * is an unfortunate historical artifact. If we were designing this functionality today it would be a
- * standalone function." Which is exactly what §3.2.1 is here, with this wrapper around it.
+ * standalone function." Which is exactly what §5.2.1 is here, with this wrapper around it.
  *
  * THE OBJECT CARRIES NO STATE, AND THAT IS THE STANDARD RATHER THAN AN OMISSION. §8.5.8's constructor steps do
  * nothing and its one member reads only its argument, so unlike core/html/domparser.c — whose §8.5.1 step 2
@@ -25,7 +25,7 @@
  * `XMLSerializer.prototype.serializeToString.call({}, node)` must be a TypeError rather than a serialization.
  * That is a THROW and not an assert, because the receiver is the PAGE's input.
  *
- * THE MEMBER IS A STEP MACHINE BECAUSE THE WALK IS OF THE PAGE'S SIZE. §3.2.1 recurses over the tree and loops
+ * THE MEMBER IS A STEP MACHINE BECAUSE THE WALK IS OF THE PAGE'S SIZE. §5.2.1 recurses over the tree and loops
  * over each element's attributes, and `new XMLSerializer().serializeToString(document)` on a real page is a
  * walk of the whole document; run inside one opcode it would hold the scheduler for all of it with every other
  * flow parked behind it. The machine rests once per node and once per attribute — core/xml/xml_serialize.h's
@@ -48,13 +48,13 @@ static JSClassID g_class;
 static int       g_ready;
 static int       g_id_ctor = -1, g_id_serialize = -1;
 
-/* WHERE §8.5.8's ONE MEMBER RESTS. Its own two stages bracket §3.2.1's, which are expanded here with this
+/* WHERE §8.5.8's ONE MEMBER RESTS. Its own two stages bracket §5.2.1's, which are expanded here with this
    member's own leading text — stage identity is the LABEL, so a second consumer of the same algorithm names
-   its own standard's step in front of §3.2.1's and the two never resolve to each other on a resume. */
+   its own standard's step in front of §5.2.1's and the two never resolve to each other on a resume. */
 #define XMLSER_STAGES(X) \
     X(XMLSER_ENTER,  "HTML §8.5.8 The XMLSerializer interface serializeToString(root): the Web IDL §3.7.7 " \
                      "Operations brand check on the receiver, and the entry into DOM Parsing and " \
-                     "Serialization §3.2.1 XML Serialization's steps 1-4") \
+                     "Serialization §5.2.1 XML Serialization's steps 1-4") \
     XML_SERIALIZE_ALGO_STAGES(X, XMLSER, "HTML §8.5.8 The XMLSerializer interface serializeToString(root)") \
     X(XMLSER_RETURN, "HTML §8.5.8 The XMLSerializer interface serializeToString(root): return the XML " \
                      "serialization of root given false")
@@ -114,7 +114,7 @@ static int js_xml_serializer_step(JSContext *ctx, JSStepHdr *hdr, void *st, int 
         return JS_STEP_YIELD;
     }
 
-    /* §3.2.1's OWN stages, every one of them named so that a stage added to XML_SERIALIZE_ALGO_STAGES does not
+    /* §5.2.1's OWN stages, every one of them named so that a stage added to XML_SERIALIZE_ALGO_STAGES does not
        compile until it has an arm here — the same reason core/dom/node.c names `clone a node`'s six. */
     STEP_ARM(XMLSER_DISPATCH);
     STEP_ARM(XMLSER_RECORD);
@@ -139,7 +139,7 @@ static void js_xml_serializer_visit(JSContext *ctx, void *st, JSStepVisit *v)
 static const IdlStepDecl XML_SERIALIZER_STEP = {
     /* No release: every allocation is xml_serialize_visit_state's, and the teardown discharges that one list. */
     js_xml_serializer_step, sizeof(XmlSerializeState), js_xml_serializer_visit, NULL,
-    "HTML §8.5.8 XMLSerializer.serializeToString (over DOM Parsing and Serialization §3.2.1's XML "
+    "HTML §8.5.8 XMLSerializer.serializeToString (over DOM Parsing and Serialization §5.2.1's XML "
     "serialization algorithm)",
     XMLSER_STEPS
 };

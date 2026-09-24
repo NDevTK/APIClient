@@ -126,7 +126,7 @@ static int script_err_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue
             s->ev = JS_UNDEFINED;
             STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
             /* NEITHER FLAG IS SET: the standard names the fire as "fire an event named error at el" and gives
-               no initialiser, so DOM §2.6 "Interface Event"'s defaults stand — it does not bubble and it is
+               no initialiser, so DOM §2.2 "Interface Event"'s defaults stand — it does not bubble and it is
                not cancelable. An `error` that bubbled would reach the Window's `onerror`, which is a
                DIFFERENT report (§8.1.4.4 "Calling scripts"' report an exception) about a different failure. */
             s->ev = event_new(ctx, "error", /*bubbles*/ false, /*cancelable*/ false);

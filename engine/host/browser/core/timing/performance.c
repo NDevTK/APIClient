@@ -71,7 +71,8 @@ static int g_id_tojson = -1;   /* §7.3 toJSON(), which is Web IDL §3.7.7.1.1's
  * agent, which is one heap. */
 typedef struct {
     JSContext *realm;    /* the environment settings object §7's members answer from. NOT a counted reference */
-    JSValue    global;   /* §7.1/§7.2's "this's relevant global object" — OWNED, and what holds `realm` up */
+    JSValue    global;   /* §7.1's "this's relevant global object", which §7.2 asks for as "the relevant
+                            global object of this" — OWNED, and what holds `realm` up */
 } Performance;
 
 /* THE ONE STATEMENT OF WHAT THE RECORD OWNS — the same list the finalizer frees and the gc_mark walks, which is
