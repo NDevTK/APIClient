@@ -17177,6 +17177,25 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            with `iter-iso` below. See its computation. */
         { "iter-cycle", itercyc_tt, "/api/itercycle", SESS_EXPLORE, itercyc_why },
         { "pending", pending_await, "/api/lazy", SESS_EXPLORE, pending_await_why },
+        /* THE RUN OF ZEROES THAT OPENS HERE IS A ROW KIND AND NOT A POSITION, AND THIS TABLE HAS ALREADY
+           CAUSED THAT MISREADING. `pending` directly above is the last row before it that answers, and its
+           statement is the document line directly above this one — so the run reads as the document having
+           STOPPED EXECUTING after /api/lazy. IT HAS NOT. Every row from here to `floc-iso` is a FORK_ROW, and
+           a FORK_ROW's own `why` on a 0 opens `the statement RAN`: the record EXISTS and what is missing is
+           the SECOND WORLD. Statements far below these answer in the same census, `/api/conshape` and
+           `/api/xkspki` among them, which is what says the document did not stop.
+           THE DISCRIMINATOR IS THE ROW'S KIND AND IT IS HANDED OVER AS A DERIVATION, because a count written
+           here rots: `grep -n 'FORK_ROW(js' test_forced.c` is the two-world set, and a terminal `@H` line
+           scored against that set separates those rows from the `fold_row`/`param_value_only` ones they are
+           INTERLEAVED with in DECLARATION order. The adjacency is what makes the interleaving look like a
+           boundary, and a reader who stops at `floc-iso` never sees the single-world rows below it answering.
+           AND ONE CENSUS CANNOT SAY WHETHER THE LOST WORLDS ARE A BUDGET FACT, WHICH IS EXACTLY WHAT
+           fork_row_impl's third state refuses to claim. That refusal is honest about ONE reading and the
+           question is a SERIES: score the two sets against `workDone` across several runs and read whether
+           they move together. No column here can make that comparison about itself, which is why it is named
+           rather than left to be inferred from a value.
+           RETIREMENT: this record goes when a 0 row's diagnostic carries its own KIND, so a reader scanning
+           the values line can tell a lost world from an unexecuted statement without this paragraph. */
         { "promise-state", promise_state, "/api/shared", SESS_EXPLORE, promise_state_why },
         { "delete-iso", delete_iso, "/api/tok", SESS_EXPLORE, delete_iso_why },
         { "global-delete", global_delete, "/api/gdel", SESS_EXPLORE, global_delete_why },
