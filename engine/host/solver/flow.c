@@ -3726,7 +3726,7 @@ static int job_pick_index(const Flow *f, int n) {
  * THE THREE REFUSALS ARE EACH A RULE OF THE STANDARD AND NOT A GUARD.
  *   - `flow_stack_empty` is HTML §8.1.4.4's "If the JavaScript execution context stack is now empty": a row
  *     the cursor names DYN_POS_IMMEDIATE is HTML §4.12.1.1 "Processing model"'s "immediately execute the script
- *     element, even if other scripts are already executing" — the synchronous tail of the program that queued
+ *     element el, even if other scripts are already executing" — the synchronous tail of the program that queued
  *     it — so no task may begin in front of it and its age is not the question.
  *   - a MICROTASK outstanding is the checkpoint's, and the checkpoint arm stands above this ladder. Answering
  *     yes here would put a task in front of it and fire the ladder's own assert one arm down.
