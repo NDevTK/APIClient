@@ -413,31 +413,36 @@ void reply_decode_learn(JSContext *ctx, const char *method, const char *url, JSV
     CHECK(essence, "reply_decode: OOM reading a reply's computed essence");
     mime_type_free(&computed);
 
-    /* NAMED RESIDUAL — A REPLY WHOSE ESSENCE IS A JAVASCRIPT MIME TYPE IS LEARNED FROM BY NOBODY.
-       WHAT IS NOT COVERED: this reader dispatches on ONE essence, so a body whose type `mime_type_is_javascript`
-       would answer for falls past every arm below and is freed unread. It is a property and not a population:
-       `is_asset` above does not claim JavaScript (it names image, audio/video, font, zip-based and archive), so
-       such a body really does reach this line rather than leaving at the asset arm. The engine still EXECUTES
-       JavaScript that arrives as a PROGRAM ROW — flow_deliver_one_reply's FLOW_PENDING_DOCSCRIPT,
-       FLOW_PENDING_SCRIPT and FLOW_PENDING_MODULE arms are the document's own `<script src>`, an injected one
-       and a dynamic `import()` — and what is uncovered is the reply that settles a page `fetch()`
-       (FLOW_PENDING_RESOLVE), which is executed only if the page's own code goes on to eval it. CLAUDE.md
-       §Learning-from-replies asks for more than that in as many words: a fetch whose body is JAVASCRIPT is
-       ALWAYS fetched AND EXECUTED, because a lazy chunk is the headline moat surface and a bundle that fetches
-       one without evaling it on the path taken is exactly the code no sniffer sees.
-       WHAT THE NEXT DIFF BUILDS: a second arm here, keyed on `mime_type_is_javascript` over the SAME computed
-       essence, which decodes the bytes as this one does and queues them as a program rather than parsing them
-       for addresses. Queuing is the part that does not exist yet and is not this file's to invent: the kinds a
-       row may carry are engine.c's DynKind, whose seven members are all either a program already in hand or a
-       row awaiting an address the host was asked for, and none of them is a body that arrived unasked. So the
-       ordered subproblems are (1) a DynKind for a program whose bytes arrived without a row having parked on
-       them, with its minting site and every closed switch over DynKind widened, and (2) this arm, which has no
-       reader until (1) exists and must not land before it.
-       HOW ITS ABSENCE WOULD SHOW: on a document that fetches a chunk and does not eval it on the path taken,
-       the reply door is paid in full and the census's `progStarts` does not move for that payment — a reply
-       counted as answered that buys no program. It is stated as an observation rather than as a member,
-       because whether any bundle in a corpus exhibits it today is one run of the instrument and this clause is
-       about the algorithm. */
+    /* AND A JAVASCRIPT BODY IS NOT READ HERE, WHICH IS A DECISION RATHER THAN THE GAP A RESIDUAL STOOD HERE
+       CLAIMING. `is_asset` above names image, audio/video, font, zip-based and archive and does not name
+       JavaScript, so such a reply really does fall past every arm below and is freed unread — and that is the
+       right answer twice over. Mining addresses out of a PROGRAM'S OWN TEXT is the recorded transform
+       expression CLAUDE.md §Re-execution forbids and the matching §RUN, DON'T MATCH bans; what a program is
+       owed is to be RUN, and this engine runs it one door over. solver/engine.c's FLOW_PENDING_RESOLVE
+       delivery reads the SAME `computedType` this file reads, through `mime_type_is_javascript`, decodes the
+       bytes with the reader both `<script src>` arms use and hands them to `engine_queue_fetched_script`,
+       which appends the program to the delivering flow's own sequence — on the timeline that made the fetch,
+       and ahead of the page's own reaction. That IS §Learning-from-replies' "a fetch whose body is JAVASCRIPT
+       is ALWAYS fetched + EXECUTED", built; a second arm here would be a second compile door beside a working
+       one, which is the dual-system rot §A-superseded-system-is-DELETED forbids.
+       THE RESIDUAL THAT STOOD HERE WAS FALSE AT BIRTH, AND ITS METHOD IS THE FINDING RATHER THAN ITS TEXT.
+       It said the reply settling a page `fetch()` "is executed only if the page's own code goes on to eval
+       it", and ordered two subproblems off that: a DynKind for a program whose bytes arrived unasked, then
+       the arm. `git show <the commit that wrote it>:engine/host/solver/engine.c` carries that delivery arm,
+       and so does its parent, and so does the graft commit beneath them — the clause described no revision of
+       this tree, so the failure is not drift and re-reading it against today's tree would have filed it as
+       drift. What produced it is an enumeration of the delivery arms BY WHAT THEIR KINDS ARE NAMED FOR: a
+       `fetch()` settles a promise, so it was taken not to start a program, and the arm that does was never
+       opened. Enumerate what a site DOES. The engine's own header says this outright at the park that reaches
+       that delivery — see `engine_pending_resource_url` in solver/engine.h, whose reason for existing is that
+       FLOW_PENDING_RESOLVE's delivery compiles a JavaScript-typed reply and a preloaded module chunk must not
+       be compiled.
+       RETIREMENT: this record goes when the census counts the programs the reply door QUEUED — a partition of
+       `progStartsOther`, which today sums a chunk that arrived over the network with the document's own seeded
+       rows — because a reader can then WATCH that door work instead of re-deriving from this file's silence
+       that it does not exist. That row is also the only reachability witness the door has: a run may pay
+       `replyAsked` in full and queue no program at all, and today that reads exactly like a run whose chunks
+       all executed. */
     if (!strcmp(essence, "text/x-component")) {
         /* AND THE TEXT OF IT, decoded HERE. A Flight stream is `text/x-component` — text, whose charset React
            does not label and whose default is therefore UTF-8 — so §6's UTF-8 decode is the algorithm this

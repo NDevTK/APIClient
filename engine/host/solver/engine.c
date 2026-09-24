@@ -399,7 +399,7 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
        THE GRADE IS THE PARK'S OWN AND IS READ RATHER THAN RECOMPUTED. `engine_prov_of_running_path` is what
        the neighbouring recorders call and it is the WRONG answer here twice over: solver/engine.h states in
        its own words that it can never answer `observed`, and `observed`'s first conjunct is HTML §4.12.1.1
-       "The script element"'s `parser document` — which is exactly what a document's own markup `<script src>`
+       "Processing model"'s `parser document` — which is exactly what a document's own markup `<script src>`
        has and what this
        register already composed one line before `pending_push` returned. Asking a second time would be two
        computations of one fact, free to disagree; reading PEND_PROV cannot. WHAT THAT ONE COMPUTATION IS
