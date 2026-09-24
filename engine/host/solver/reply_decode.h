@@ -21,11 +21,39 @@
  * case a second voice on a question decided one hop earlier by the side that could see the body. The Flight
  * parser is here, because a wire protocol's framing is what this component is for.
  *
- * WHERE IT IS CALLED FROM, AND WHY THERE. `engine_provide` is the ONE point every fetched reply crosses exactly
- * once — a URL two flows parked on is answered there once — so a reply is read for its content there and not
- * in the per-flow drain, where it would run once per waiter. What is learned is a
+ * WHERE IT IS CALLED FROM, AND WHY THERE. `engine_provide` is the ONE point a reply to an ADDRESS-KEYED park
+ * crosses exactly once — a URL two flows parked on is answered there once — so a reply is read for its content
+ * there and not in the per-flow drain, where it would run once per waiter. What is learned is a
  * fact about the SERVER and not about a flow's world, so it is not per-flow state and takes no COW capture,
  * exactly as the endpoint surface does not.
+ *
+ * IT USED TO SAY `EVERY FETCHED REPLY` AND THAT IS AN ABSOLUTE ONE GREP REFUTES, WHICH IS WHY IT IS NARROWED
+ * RATHER THAN DELETED: a reader re-deriving the dedup argument re-derives the word `every` with it, and the
+ * word is what makes the population below invisible. `engine_provide` walks solver/pending_index.h's
+ * (method, url) set, and solver/pending.c tracks every kind into that set BUT ONE —
+ * `if (kind != FLOW_PENDING_HOSTREQ) pending_index_track(e)` — so a synchronous host rendezvous is answered
+ * through `engine_host_answer` by REQUEST ID and never reaches this file at all.
+ *
+ * NAMED RESIDUAL — AN XMLHttpRequest'S REPLY BODY IS READ BY NOBODY. It is a residual and not a crash because
+ * the code here is CORRECT for the door it is on and narrower than §Learning-from-replies, which says a
+ * consumed reply is ALWAYS fetched to fill examples and calls the JS/JSON a server returns the richest source
+ * of real example values.
+ *   WHAT IS NOT COVERED: every reply to an XHR, which is a PROPERTY of that door rather than a population —
+ *     core/xhr/xml_http_request.c reaches the network through `engine_host_request` alone, and that park is
+ *     the one kind the address index excludes by construction. Its ADDRESS is on the @H surface (that
+ *     component calls `endpoint_record` for itself); its BODY is not read by anything. A JavaScript body
+ *     arriving that way is not compiled either, for the same reason: solver/engine.c's program arms are all
+ *     on the address-keyed delivery.
+ *   WHAT THE NEXT DIFF BUILDS — STATED AS WHAT MUST EXIST AFTERWARD, because the mechanism is not this file's
+ *     to choose and the address is the obstacle rather than the call: a HOSTREQ entry `names a REQUEST ID and
+ *     no address at all` (solver/pending.c says so at `pending_kind_is_program`), so there is no (method, url)
+ *     at `engine_host_answer` to hand this function, and that door answers ops that are not replies at all.
+ *     What must exist is ONE site holding the reply record AND the pair it answers, reached once per reply,
+ *     which is a question about where the XHR machine takes its answer and not about a second arm here.
+ *   HOW ITS ABSENCE WOULD SHOW: a document whose configuration and data arrive by XHR reports those addresses
+ *     on the @H surface with no example VALUES taken from any of their bodies, while a document fetching the
+ *     same data through `fetch()` reports the fields — one surface with two answers, decided by which API the
+ *     bundle happened to call.
  *
  * IT HOLDS NO STATE. Everything it learns goes straight into solver/endpoint.c, so there is no table to
  * initialise, none to free, and no line for it in engine.h's release column. A component that kept its own copy
