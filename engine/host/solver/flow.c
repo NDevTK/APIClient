@@ -6548,9 +6548,49 @@ void flow_wfq_census(WfqCensus *out) {
         if (f->visits == 0) out->vis_zero++;
         /* AND HOW MANY HOLD NO FRAME, taken HERE rather than off the cold line so that it and `members` are
            one sample from one walk — it is what separates `jobs_ready`'s two zeroes, and a count from another
-           instant cannot separate anything. Spelled with the same predicate the job arm below is written
-           against, which is the whole content of the assert at the end of this scan. */
-        if (f->frame == NULL) out->mem_unframed++;
+           instant cannot separate anything.
+           IT IS NOT THE JOB ARM'S PREDICATE AND HAS NOT BEEN SINCE THAT ARM WAS RE-SPELLED, WHICH IS WHY THIS
+           ROW'S OWN CLAIM IS REWRITTEN RATHER THAN DELETED. It read "spelled with the same predicate the job
+           arm below is written against, which is the whole content of the assert at the end of this scan",
+           and that was true only while the job split asked `frame` alone. The split asks flow_stack_empty now,
+           because HTML §8.1.4.4 "Calling scripts"' clean up after running script step 3 has a SECOND half — a
+           row at the cursor marked DYN_POS_IMMEDIATE — and this row still counts `frame == NULL`. The two are
+           a CONTAINMENT and never an identity, which the scan's tail already says in its own words; a reader
+           who re-derives the retired sentence re-spells one of them to match the other, and `memUnframed` then
+           stops being the upper bound the ready rows are published against.
+           SO THE CONTAINMENT IS ASSERTED PER MEMBER, WHICH IS THE ONE THING THE TAIL ASSERTS CANNOT DO. Those
+           two are written over TOTALS (`jobs_ready == 0 || mem_unframed > 0`) and their messages rest on the
+           words "by construction" — a claim that flow_stack_empty's FIRST LINE and THIS line agree, held by
+           convention across five thousand lines of one file. Their own paragraph states what they gave up:
+           "what the assert stopped being able to catch is a re-spelling of `mem_unframed`". This catches it,
+           because the assert and the count read ONE expression: re-spell the count and the assert follows the
+           re-spelling, so a predicate that stops containing flow_stack_empty's population fires at the member
+           that breaks it rather than reaching the published rows as a bound that is not one.
+           ONE-SIDED, AND THE CONVERSE IS FALSE BY DESIGN RATHER THAN MERELY UNASSERTED — which is the clause a
+           reader needs before reaching for `==`. A member holding no frame whose cursor names a
+           DYN_POS_IMMEDIATE row is HTML §4.12.1.1 "Processing model"'s "Otherwise, immediately execute the
+           script element el, even if other scripts are already executing": it is inside `mem_unframed` and
+           flow_stack_empty refuses it, so an equality here would fire on every document that injects a
+           script from a script.
+           IT CANNOT FAIL AT THIS REVISION AND THAT IS THE POINT — it is a design invariant and not a test, in
+           §Offensive-programming's sense. What makes it a check rather than a tautology is that its two
+           operands live in two functions five thousand lines apart and are independently editable, which is
+           exactly the drift the tail's paragraph names and declines to cover.
+           HOW ITS ABSENCE WOULD SHOW: `jobsReady` or `delivReady` above zero beside a `memUnframed` that no
+           ready member is inside — a state both tail asserts PASS, because a total above zero satisfies them
+           whatever population it was taken over. */
+        {
+            const int unframed = (f->frame == NULL);
+            DCHECK(!flow_stack_empty(f) || unframed,
+                   "a member whose JavaScript execution context stack is EMPTY was not counted as holding no "
+                   "frame — flow_stack_empty's first line is `if (f->frame) return 0;`, so every member it "
+                   "admits is inside `mem_unframed`, and the two ready-row asserts at the end of this scan "
+                   "state that containment as holding BY CONSTRUCTION. It does not hold: this row's predicate "
+                   "and that function's first conjunct are two spellings and one of them has moved. "
+                   "`memUnframed` is published as the upper bound `jobsReady` and `delivReady` are read "
+                   "against, so from here it is a bound over a population neither ready arm is inside");
+            if (unframed) out->mem_unframed++;
+        }
         /* THE JOB BACKLOG SPLIT BY WHAT IT IS WAITING ON — the three states flow.h names, decided by the two
            predicates the engine already asks and in the order it asks them. flow_pick refuses a host-owed
            member outright, so that question comes first; among the members the pick will consider, HTML
