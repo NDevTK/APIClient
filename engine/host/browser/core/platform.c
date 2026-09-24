@@ -1524,9 +1524,10 @@ static const PlatformComponent PLATFORM[] = {
     /* HTML §8.5.8's XMLSerializer, AFTER `element` and beside §8.5.1's DOMParser. After element because its
        declaration brands `serializeToString(Node root)` against the Node class, which element_init is what
        creates (through node_init) — a row above that one would hand the declaration a class id of zero. It
-       reads nothing of any Document's: DOM Parsing and Serialization §3.2.1's algorithm walks the tree it is
-       handed, so unlike DOMParser it does not depend on the component that MAKES documents. Its own prototype
-       chains to Object.prototype, so no earlier row is required for that half. */
+       reads nothing of any Document's: DOM Parsing and Serialization §5.2.1 "XML Serialization"'s
+       algorithm walks the tree it is handed, so unlike DOMParser it does not depend on the component that
+       MAKES documents. Its own prototype chains to Object.prototype, so no earlier row is required for that
+       half. */
     { "xml_serializer",      d_xml_serializer,      i_xml_serializer, r_xml_serializer },
     { "module_loader",       d_module_loader,       NULL,        r_module_loader },
 };
