@@ -110,6 +110,36 @@
  * ITS ABSENCE WOULD SHOW: a row whose `thr` is large while opening its sites finds the reads on a
  * one-letter receiver that some earlier line of the same file assigned the global object to.
  *
+ * A SPELLING THIS READER CANNOT SEE IS NOT A SMALLER TABLE, IT IS A FLOW-ENDER REPORTED WHERE THE PAGE
+ * HANDLES THE ABSENCE — AND THE BIAS ABOVE IS WHAT HIDES IT. The promoting bias makes an unrecognised test
+ * answer `throws`, which is the right default and is also why a missing SPELLING costs nothing visible: the
+ * row simply reads as more flow-ending than it is, in the one column a reader dispatches from, with the
+ * output identical to a site that really is unguarded. So the question "which spellings does this reader
+ * know" is not a tidy-up — it is the only thing standing between the promoting bias and a column that means
+ * what it says.
+ * TWO WERE MISSING AND BOTH ARE A MINIFIER'S ORDINARY OUTPUT RATHER THAN AN EXOTIC AUTHOR. The relational
+ * `typeof X<"u"` is what esbuild and terser emit for `typeof X !== "undefined"`, and a substitution-free
+ * TEMPLATE literal is what several bundles here emit for every string they contain. Their size was measured
+ * over the corpus rather than assumed, and the derivation is the command rather than the figure, because a
+ * corpus moves:
+ *     grep -rohE 'typeof +[A-Za-z_$][A-Za-z0-9_$]* *[<>]=? *("u"|`u`)' <corpus> | wc -l
+ * When it was taken it read 1707 occurrences over all identifiers, of which 469 carry the BACKTICK spelling,
+ * plus 399 written the other way round as `"u" > typeof X`; `<=` and `>=` read ZERO, which is why they are
+ * refused above rather than admitted on the same argument.
+ * ITS MEASURED PRICE, held to the standard this file's own landing was held to. It moves NO count, NO class
+ * and NO rank in the caller, which is a STRUCTURAL fact rather than a run: absentrank reads this reader's
+ * verdicts into `guardOf` and `guardOf` is consumed by the printed split columns and by the aggregate line
+ * and by nothing else, so no channel total, no band and no sort can depend on it. A before/after over one
+ * frozen corpus confirms it — every line of the caller's output identical except the five split columns of
+ * eight rows. What it MOVES is 22 of 318 use sites, ALL of them from a costlier verdict to a cheaper one and
+ * NONE in the other direction: 11 `throws` to `guarded-silent`, 6 `throws` to `guarded-fallback`, 4 `caught`
+ * to `guarded-fallback` (a guard INSIDE the try, which the innermost-ancestor rule then decides), and the
+ * aggregate goes 237/25/2/20/34 to 219/21/12/32/34. EVERY ONE OF THE 22 WAS OPENED AND READS AS ITS NEW
+ * VERDICT — they are `typeof ClipboardEvent<`u`?new ClipboardEvent(`paste`):null`, `typeof
+ * DOMException<"u"&&s instanceof DOMException`, `typeof ImageBitmap<"u"&&(...)` — which is the discipline
+ * this file's own DEMOTING verdicts were held to and is required because a demotion's error is the one
+ * nobody finds by acting on it.
+ *
  * ARMED IN BOTH DIRECTIONS ON EVERY CONSTRUCTION, AND THE NEGATIVES OUTNUMBER THE POSITIVES BECAUSE THE
  * DEMOTING VERDICTS ARE THE DANGEROUS ONES. A classifier whose guard recognition silently stopped working
  * would report every site `throws`, which is loud and promotes; one whose polarity inverted would report a
@@ -133,6 +163,18 @@ const isGlobalMember = (n, name) =>
   && GLOBAL_RECEIVERS.has(n.object.name)
   && ((!n.computed && n.property?.type === "Identifier" && n.property.name === name)
       || (n.computed && n.property?.type === "StringLiteral" && n.property.value === name));
+/* THE VALUE OF A STRING LITERAL IN EITHER SPELLING. A minifier is free to emit a substitution-free template
+   literal wherever the source wrote a quoted string, and several bundles in this corpus emit EVERY string
+   that way — so a reader that asks only for `StringLiteral` is blind to a whole emitter's output rather than
+   to an edge case, and the blindness is invisible because the shapes it can still see answer normally.
+   absentrank records the same class omitting the BACKTICK from its own `"X" in global` channel, and records
+   that its positive control missed it because the control was spelled with a double quote in the same
+   breath as the pattern. The controls below are therefore spelled in BOTH delimiters. */
+const stringValue = (n) =>
+  n?.type === "StringLiteral" ? n.value
+  : (n?.type === "TemplateLiteral" && n.expressions.length === 0 && n.quasis.length === 1
+     && typeof n.quasis[0]?.value?.cooked === "string") ? n.quasis[0].value.cooked
+  : null;
 const typeofOperandIsName = (n, name) =>
   (n?.type === "Identifier" && n.name === name) || isGlobalMember(n, name);
 
@@ -155,13 +197,44 @@ function presence(t, name) {
       if (t.operator === "in")
         return (t.left?.type === "StringLiteral" && t.left.value === name
                 && t.right?.type === "Identifier" && GLOBAL_RECEIVERS.has(t.right.name)) ? 1 : 0;
+      /* `typeof X < "u"` IS A PRESENCE TEST AND IS THE SPELLING A MINIFIER EMITS, NOT A CURIOSITY.
+         ECMAScript §13.10.1 "Runtime Semantics: Evaluation" sends `<` to the abstract operation
+         ECMAScript §7.2.12 "IsLessThan ( x, y, leftFirst )", which compares two Strings code unit by code
+         unit and answers true for the shorter when one is a prefix of the other — so "u" is less than
+         "undefined". ECMAScript §13.5.3 "The typeof Operator" fixes the operand's value set at exactly
+         EIGHT strings, and of those eight only "undefined" fails to sort before "u", every other one
+         beginning with b, f, n, o or s. So `typeof X < "u"` is `typeof X !== "undefined"` exactly, and
+         `typeof X > "u"` is `typeof X === "undefined"` exactly. The eight were ENUMERATED and compared
+         rather than reasoned about, which is the only way the next reader can check it; the controls below
+         carry both polarities.
+         THE OPERAND ORDER DECIDES THE POLARITY HERE WHERE IT DOES NOT FOR EQUALITY, so the side the
+         `typeof` was found on is carried out of the loop rather than discarded: `"u" > typeof X` means
+         DEFINED and `"u" < typeof X` means ABSENT, which is the pair an order-blind reader gets backwards
+         in the silencing direction.
+         `<=` AND `>=` ARE REFUSED although the same argument covers them, and the refusal is the measured
+         arm rather than the timid one: over the corpus this landed against, `typeof X <= "u"` and
+         `typeof X >= "u"` occur ZERO times in any spelling, so admitting them would be a rule with no site
+         to be right about, and a refusal answers `throws`, which this file's bias says is the direction to
+         err in. Every OTHER string is refused for a REAL reason and not for want of a measurement:
+         "undefined" is less than "v", so `typeof X < "v"` holds whether or not X is defined and entails
+         nothing at all. */
+      if (t.operator === "<" || t.operator === ">") {
+        for (const [a, b, typeofOnLeft] of [[t.left, t.right, true], [t.right, t.left, false]]) {
+          if (a?.type !== "UnaryExpression" || a.operator !== "typeof") continue;
+          if (!typeofOperandIsName(a.argument, name)) continue;
+          if (stringValue(b) !== "u") return 0;
+          return (typeofOnLeft ? t.operator === "<" : t.operator === ">") ? 1 : -1;
+        }
+        return 0;
+      }
       if (!["===", "==", "!==", "!="].includes(t.operator)) return 0;
       const eq = t.operator === "===" || t.operator === "==";
       for (const [a, b] of [[t.left, t.right], [t.right, t.left]]) {
         if (a?.type !== "UnaryExpression" || a.operator !== "typeof") continue;
         if (!typeofOperandIsName(a.argument, name)) continue;
-        if (b?.type !== "StringLiteral") return 0;
-        if (b.value === "undefined") return eq ? -1 : 1;
+        const bv = stringValue(b);
+        if (bv === null) return 0;
+        if (bv === "undefined") return eq ? -1 : 1;
         /* `typeof X === "function"` entails defined; `typeof X !== "function"` entails nothing, because an
            absent name and a defined non-function both satisfy it. The asymmetry is the point. */
         return eq ? 1 : 0;
@@ -318,6 +391,19 @@ const ARM = [
   ["if(typeof self.X!=='undefined'){new X(1)}",       "guarded-silent"],
   ["if(!(typeof X==='undefined')){new X(1)}",         "guarded-silent"],
   ["if(cond&&typeof X!=='undefined'){new X(1)}",      "guarded-silent"],
+  /* The relational spelling, in both polarities, both operand orders and both string delimiters. */
+  ["if(typeof X<'u'){new X(1)}",                      "guarded-silent"],
+  ["typeof X<'u'&&new X(1)",                          "guarded-silent"],
+  ["typeof X<`u`&&new X(1)",                          "guarded-silent"],
+  ["typeof X>'u'||new X(1)",                          "guarded-silent"],
+  ["typeof X<'u'?new X(1):fb()",                      "guarded-fallback"],
+  ["if(typeof X>'u'){fb()}else{new X(1)}",            "guarded-fallback"],
+  ["'u'>typeof X&&new X(1)",                          "guarded-silent"],
+  ["if('u'<typeof X){fb()}else{new X(1)}",            "guarded-fallback"],
+  ["if(typeof self.X<'u'){new X(1)}",                 "guarded-silent"],
+  /* The equality arm, in the delimiter it could not read before. */
+  ["if(typeof X!==`undefined`){new X(1)}",            "guarded-silent"],
+  ["if(typeof X===`function`){new X(1)}",             "guarded-silent"],
   /* --- and it refuses -------------------------------------------------------------------------------- */
   /* Polarity: the use sits in the arm taken when the name is ABSENT. Demoting either would delete a real
      flow-ender, which is the one error this classifier must not make. */
@@ -332,6 +418,21 @@ const ARM = [
   ["if('X' in opts){new X(1)}",                       "throws"],
   /* `!== "function"` is satisfied by an absent name as well as by a defined non-function. */
   ["if(typeof X!=='function'){new X(1)}",             "throws"],
+  /* The relational spelling with the polarity inverted — the use sits in the arm taken when X is ABSENT. */
+  ["if(typeof X>'u'){new X(1)}",                      "throws"],
+  ["typeof X<'u'||new X(1)",                          "throws"],
+  ["if('u'<typeof X){new X(1)}",                      "throws"],
+  /* A relational test against ANY other string decides nothing: "undefined" < "v" is true, so this holds
+     whether or not X is defined. A reader that keyed on the operator rather than on the operand would
+     demote a real flow-ender here. */
+  ["if(typeof X<'v'){new X(1)}",                      "throws"],
+  /* `<=` and `>=` are not read — measured at zero occurrences, so the rule would have no site to be right
+     about, and the refusal is the promoting direction. */
+  ["if(typeof X<='u'){new X(1)}",                     "throws"],
+  ["if(typeof X>='u'){new X(1)}",                     "throws"],
+  /* A template literal that is not a plain string is not one — its value is not known at parse time. */
+  ["if(typeof X<`${a}`){new X(1)}",                   "throws"],
+  ["if(typeof X!==`undefined${a}`){new X(1)}",        "throws"],
   /* A try whose throw is NOT caught here: no handler, or the occurrence in the handler / the finalizer. */
   ["try{new X(1)}finally{}",                          "throws"],
   ["try{}catch(e){new X(1)}",                         "throws"],
