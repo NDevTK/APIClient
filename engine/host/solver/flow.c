@@ -5554,6 +5554,22 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
                         and an index that took the single top key instead would get exactly this wrong.
          `sur_w >  bw`  is a STRICT disagreement, and only there is a re-composition of flow_weight the thing
                         that is being argued about.
+       AND THE TWO ARMS ARE NOT TWO DESIGNS, WHICH THE SPLIT ABOVE INVITES A READER TO CONCLUDE AND WHICH THE
+       BAND WALK BELOW REFUTES BY NOT READING THE MODE AT ALL. Scoping "a candidate set ... must therefore
+       carry a MARGIN" to the TIE arm reads as saying the margin design fails on the strict one, and its
+       containment proof never asks which arm fired: with `b` the comparator's pick and `m*` the surrogate's,
+       `S(b) >= W(b) - M(b) >= W(m*) - M(b) >= S(m*) - M(m*) - M(b)` uses only that `b` carries the extremum,
+       which is what makes it the extremum. A strict disagreement says the surrogate's SINGLE TOP KEY names a
+       member the comparator calls worse; it says nothing about whether the comparator's own member is inside
+       the band, and it is — by the same inequality and with the same margin. So the candidate set answers
+       BOTH fire modes and the abort below is silent on neither.
+       WHAT THAT LEAVES THE RE-COMPOSITION DECIDING IS THE THING THIS BANNER ALREADY NAMES TWO PARAGRAPHS
+       DOWN, AND IT IS NOT WHETHER AN INDEX IS BUILDABLE: it is TIE IDENTITY — which members share the
+       maximum, which on a frontier measured 73-93% tied at the top is most of what the order decides. The
+       two are therefore not alternatives to choose between, which is how the retirement clause below reads
+       them: the margin design needs no re-composition, and the re-composition question survives whether or
+       not anybody builds an index. Recorded here rather than only in a report, because this is the sentence
+       the next reader will scope their work from.
        AND `WORSE` IS THE COMPARATOR'S WORD AND NOT THE ARITHMETIC'S, WHICH THE SENTENCE ABOVE INVITES A
        READER TO FORGET. Both spellings approximate ONE real number — `N = k + K + carry` is an exact integer
        identity, so in exact arithmetic the surrogate IS flow_weight — and BOTH round. Measured against the
