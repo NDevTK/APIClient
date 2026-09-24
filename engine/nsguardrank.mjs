@@ -1,11 +1,21 @@
 /* WHICH MEMBERS A NAMESPACE'S FIRST LANDING MUST CARRY — the §NO-STUBS ordering question, made mechanical.
  *
  * engine/absentrank.mjs answers WHICH ABSENT NAME TO BUILD and bands each by what its absence costs: THROWS
- * (every use is unguarded), `mixed`, `detect-only`, `shadowed`. Its own header says of the middle band that it
- * is "the honest middle — some use and some guard exist and only reading the site [decides]". This reads the
- * site. It asks a DIFFERENT question of a name that is a NAMESPACE — a global whose MEMBERS a bundle reads —
- * and that question decides a landing order rather than a queue position, so the two instruments partition
- * rather than overlap: absentrank says build X, this says which members X may not arrive without.
+ * (every use is unguarded), `mixed`, `detect-only`, `shadowed`. Its own header calls the middle band "the
+ * honest middle — some use and some guard exist". This reads the site. It asks a DIFFERENT question of a name
+ * that is a NAMESPACE — a global whose MEMBERS a bundle reads — and that question decides a landing order
+ * rather than a queue position, so the two instruments partition rather than overlap: absentrank says build
+ * X, this says which members X may not arrive without.
+ *
+ * THAT QUOTATION USED TO END "and only reading the site [decides]", WHICH WAS TRUE OF THE TREE AND NOT OF THE
+ * QUESTION, AND IT IS REWRITTEN RATHER THAN DELETED BECAUSE THE PARTITION IT ARGUES FOR IS WHAT A READER WILL
+ * OTHERWISE RE-EXAMINE. absentrank now carries a guard-shape column that reads the site itself
+ * (engine/js_guard_shape.mjs), so a reader meeting the old words would find them absent from the source they
+ * name and could reasonably conclude this file's reason for existing had gone with them. IT HAS NOT, AND THE
+ * TWO STILL PARTITION ON THE SAME AXIS THEY ALWAYS DID: that column classifies a USE OF A GLOBAL NAME by what
+ * encloses it — does this site end the flow — and this file classifies a GUARD ON A NAMESPACE by which MEMBER
+ * its true branch goes on to reach. One answers whether a site is a cost; the other answers what a landing
+ * must carry so that a guard's true branch is survivable. Neither answer is derivable from the other.
  *
  * WHY THE QUESTION EXISTS. CLAUDE.md §NO-STUBS: an absent name leaves `typeof NS` false and the bundle runs a
  * FALLBACK this engine CAN execute, so installing the namespace object before the behaviour behind it exists

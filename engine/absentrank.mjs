@@ -163,6 +163,38 @@
  * about the corpus they were taken on and the run prints the command that re-takes any of them, because a
  * reading nobody can re-take is a claim competing with a command.
  *
+ * AND THE BAND IS A CORPUS-WIDE CLASS WHERE A DISPATCHER NEEDS A PER-SITE ONE, SO THE USE SITES CARRY THEIR
+ * OWN SPLIT AND IT ORDERS NOTHING. The cost bands answer whether ANY non-throwing read of this name appeared
+ * anywhere in the corpus, which is the most a CHANNEL can answer and is stated as such at the class. What a
+ * reader dispatches on is narrower — does THIS site end the flow — and the two come apart hardest on exactly
+ * the rows nobody will check by hand: a THROWS row's whole count IS its sites and stands at one to three,
+ * while a `mixed` row carries tens and sorts BELOW every one of them. engine/js_guard_shape.mjs asks a real
+ * parse what ENCLOSES each use occurrence THESE CHANNELS ALREADY FOUND — the population is not re-derived,
+ * so there is no second selector, and the per-file scan is asserted to reproduce the joined tally name for
+ * name and channel for channel.
+ * ITS MEASURED PRICE, by the standard the widenings above are held to: it moved NO count, NO class, NO rank
+ * and NO row — the diff is a pure addition beside the existing columns, which is the `down=` column's
+ * treatment and is chosen for the reason this file refused the GLOBAL-ALIAS widening, that every verdict but
+ * `throws` is a DEMOTION and a demotion's errors land in the silencing direction. What it BUYS is that the
+ * cost order and the flow-ending order DISAGREE AT THE HEAD, which is a finding and is the only reason to
+ * spend a column on it. Measured on the corpus it was landed against: the largest flow-ending row IN the
+ * THROWS band stood at THREE sites, while four `mixed` rows below it carried 48, 42, 40 and 27 — and one of
+ * those four is unguarded at EVERY site it has. In the other direction, TWO of the SIX THROWS rows carry no
+ * flow-ending site at all, both of their single occurrences sitting inside a `try` with a handler, which is
+ * the `USE WHOSE THROW IS CAUGHT` defeater measured rather than named. The verdicts that DEMOTE were opened
+ * and read before the column was believed: every `caught` and every `guarded-silent` site reads as its
+ * verdict, the `guarded-silent` ones being a socket transport that never opens, a web-vitals metric that
+ * never registers and a worker-vs-frame test that always answers frame — each of them a branch a real
+ * browser skips silently too, so what the absence costs is everything behind it rather than a crash.
+ * The figures are a fact about one fetched instant and the derivation is the run itself; the corpus drive
+ * that writes one is named at the `--corpus` argument below.
+ * ITS REFERENCE-POSITION TEST COST NOTHING HERE AND IS KEPT FOR WHAT IT ARMS. An offset that lands on a
+ * property key, a binding name or a PARAMETER reaches no verdict, and over this corpus that removed ZERO
+ * occurrences from ZERO rows. That is the same answer the `f(a,X)` channel's own discharge above records —
+ * "the `f(a,X)` channel retired ZERO occurrences of any ranked name" — reached by an independent mechanism
+ * and on a positional test rather than on a rename, so it is corroboration of an unexercised clause and not
+ * a new fact. The population is empty TODAY and not by construction, which is why the test stays armed.
+ *
  * AN IDENTIFIER PASSED AS AN ARGUMENT IS EVALUATED, AND EVERY CHANNEL ABOVE READS ONLY THE OPERATORS.
  * `new X(`, `instanceof X` and `X.member` are the three shapes that evaluate a binding, and they are all
  * OPERATOR shapes — so `Ue(a, ImageData)` names the interface, throws a ReferenceError when it is absent, and
@@ -268,6 +300,7 @@ import { loadEnvironment, installedMembers } from "./idl_installed.mjs";
 import { loadIdl } from "./idl_members.mjs";
 import { corpusPrograms } from "./corpus_programs.mjs";
 import { referenceReader, quotedKeyJudgeable, MARK as REF_MARK } from "./js_code_refs.mjs";
+import { guardShapeReader } from "./js_guard_shape.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argOf = (flag, dflt) => {
@@ -573,6 +606,16 @@ for (const [k, re] of Object.entries(CHANNELS)) {
   for (const bad of Array.isArray(neg) ? neg : [neg])
     if (got(bad).includes("AbsentRankNeg")) die(`channel ${k} matched its near miss ${JSON.stringify(bad)} — it is counting something else.`);
 }
+/* ARMED HERE RATHER THAN AT ITS USE, beside the channel arming and for the same reason: its construction
+   runs every one of its own controls and THROWS, and a reader that cannot speak must fail before a corpus
+   scan rather than after one. */
+const GUARD_SHAPE = guardShapeReader();
+for (const r of GUARD_SHAPE.receivers)
+  if (!(`${r}.X` in CHANNELS))
+    die(`engine/js_guard_shape.mjs treats \`${r}\` as the global and this file has no \`${r}.X\` channel — ` +
+        `the two disagree about which receivers ARE the global, and a guard spelled on one of them would be ` +
+        `read as a guard by one and as nothing by the other.`);
+
 const hits = new Map();          /* name -> channel -> occurrences */
 const perChannel = new Map();
 for (const [k, re] of Object.entries(CHANNELS)) {
@@ -1226,8 +1269,13 @@ const emptyWhy = (n) => {
    name in a position where absence is `undefined`, and a USE channel reads it in a position where absence
    THROWS (`new X(`, `X.member`, `x instanceof X` — every one of those evaluates X as a binding).
    The class is stated over the WHOLE corpus rather than per site. `mixed` is the honest middle — some use
-   and some guard exist and only reading the site says which covers which — and it is not promoted above
-   THROWS on the strength of a bigger number.
+   and some guard exist, and WHICH SITE IS WHICH is a question the CLASS does not answer and the guard-shape
+   column below now does; the class is still not promoted above THROWS on the strength of a bigger number.
+   THIS SENTENCE READ `only reading the site says which covers which`, AND THAT WAS THE STATE OF THE TREE
+   RATHER THAN A PROPERTY OF THE QUESTION. It is kept in its own words because it is what a reader
+   re-derives from the class alone, and because it is still true of the ONE thing the column does not do:
+   nothing here promotes a `mixed` row on the strength of its own split, so a reader who wants the ORDER
+   changed still reads the column and decides.
 
    THE SENTENCE THAT USED TO FOLLOW `per site` READ "which is what makes it sound in the direction it is
    read: a name with NO guard hit anywhere cannot have a guarded use, so THROWS is a claim the text supports
@@ -1260,17 +1308,33 @@ const emptyWhy = (n) => {
        `try` block is a SCOPE, so whether an occurrence is inside one is a question about what ENCLOSES the
        occurrence. THAT IS NOT THE QUESTION THE LANDED READING ANSWERS, which is worth saying because the
        sentence this replaces pointed at the code/not-code mask and that mask now exists: it answers whether
-       an occurrence is EVALUATED, one occurrence at a time, and a caught throw is evaluated. This defeater is
-       untouched by it.
+       an occurrence is EVALUATED, one occurrence at a time, and a caught throw is evaluated.
+       THIS ENTRY ENDED `This defeater is untouched by it` AND THAT HALF IS RETIRED BY THE GUARD-SHAPE
+       COLUMN BELOW, WHICH IS WRITTEN OUT RATHER THAN DELETED BECAUSE THE REASONING ABOVE IT IS STILL EXACTLY
+       WHY NO CHANNEL WILL EVER REACH IT. What was wrong was the step from `no channel can` to `nothing
+       does`: engine/js_guard_shape.mjs is not a channel and asks the enclosing question of a real parse at
+       the offset each channel already found. MEASURED on the corpus this landed against, and the figure is
+       the reason the entry is not merely reworded — TWO of the SIX rows in the THROWS band carried no
+       flow-ending site at all, their single use occurrence sitting inside a `try` with a handler. The band
+       was not slightly optimistic about them; it was wrong about them, and this defeater is why.
+       WHAT IS STILL TRUE OF THE BAND is that its CLASS does not read the column, so a row like those two
+       still sorts as THROWS — the column prints and ranks nothing, for the reason given at its own site.
    WHAT THE BAND MEANS IS THEREFORE NARROWER, AND IS STILL WORTH SORTING FIRST: no channel here saw a
    non-throwing read of this name ANYWHERE in the corpus. That is a reason to OPEN a row's sites, never a
    statement that those sites throw — and it is cheap to act on, because a row's whole count IS its number of
    sites, so a row standing at one occurrence is one site and reading it costs less than building an
    interface. What the band is good for is unchanged by any of this; what it does not support is dispatching
    from the row.
-   RETIREMENT: this paragraph goes when a THROWS row's own sites are tested for these shapes by the
-   instrument rather than by its reader, at which point the band states a per-site fact and the sentence it
-   replaced becomes true of it.
+   RETIREMENT — PARTLY MET AND THEREFORE NOT MET, WHICH IS SAID RATHER THAN QUIETLY BANKED. The condition
+   is that a THROWS row's own sites are tested for THESE SHAPES by the instrument rather than by its reader,
+   at which point the band states a per-site fact. ONE of the four is now tested at the occurrence (the
+   caught throw) and a second is narrowed (a use carried as data reaches no verdict, which is a second and
+   independent reading of the question engine/js_code_refs.mjs decides). The two that remain are the GLOBAL
+   ALIAS — the guard-shape reader anchors on the same three literal receivers every channel here does, so a
+   member read on a bound alias is as invisible to it as to them — and the SIBLING CAPABILITY, which is its
+   own residual below. The record stays whole until all four are asked at the occurrence, because a list of
+   the shapes that defeat a band is read by exactly the person about to dispatch from that band and a member
+   missing from it is a demotion nobody makes.
 
    NAMED RESIDUAL — A USE THAT A SIBLING CAPABILITY'S ABSENCE MAKES UNREACHABLE IS COUNTED AS A USE. WHAT IS
    NOT COVERED: a conjunction that tests one member and then evaluates another name behind it — the test
@@ -1463,9 +1527,149 @@ say(`   ${rankA.length} of ${ABSENT_GLOBAL.size} absent global name(s) are named
     `as this name, and ` +
     `${nBoth} only by the two together — none of those three is evidence about the platform name either ` +
     `way, and they print rather than vanishing.`);
+/* ---- WHAT ENCLOSES EACH USE SITE, WHICH THE BAND ABOVE STATES OVER THE WHOLE CORPUS -------------------- */
+/* THE BAND IS A CORPUS-WIDE CLASS AND A DISPATCHER NEEDS A PER-SITE ONE, AND THE GAP BETWEEN THEM IS THE
+   `mixed` ROWS. `THROWS` already means what it says and its rows are cheap to check, because a row's whole
+   count IS its number of sites and those rows stand at one to three. `mixed` is the honest middle by this
+   file's own words — "some use and some guard exist" and the class alone does not say which site is which — and
+   its rows carry TENS of occurrences, which nobody opens. So the row a reader most needs a verdict on is the
+   one the band is least able to give one for, and `mixed` sorts BELOW every THROWS row, which decides the
+   head of the queue by a class that cannot see the difference.
+   THE OPERAND IS THE ONE THE `USE WHOSE THROW IS CAUGHT` DEFEATER ABOVE SAYS NO CHANNEL CAN REACH: "a
+   channel matches one EXPRESSION and a `try` block is a SCOPE, so whether an occurrence is inside one is a
+   question about what ENCLOSES the occurrence". engine/js_guard_shape.mjs asks a real parse that question at
+   the offset of each occurrence THIS FILE'S OWN CHANNELS FOUND — so the population is not re-derived and
+   there is no second selector to drift, which is the failure §AND-WHERE-THE-SUBJECT-ALREADY-PUBLISHES-A-TOTAL
+   is about. The calibration is that the per-file scan REPRODUCES the concatenated tally exactly, per name and
+   per channel, and a mismatch THROWS.
+   IT ORDERS NOTHING, AND THAT IS THIS DIFF'S CHOICE RATHER THAN A PERMANENT ONE. Every verdict but `throws`
+   is a DEMOTION, and this file has already refused one guard widening on the ground that its errors "land in
+   the silencing direction, where an under-claim is not found by acting on it". A column that ranks nothing
+   cannot silence a row; what it can do is disagree with the sort, which is the same treatment and the same
+   reason the `alias`, `guard` and `down=` columns get.
+   RETIREMENT: this paragraph goes when the split has been checked against sites a reader opened — the
+   `down=` table's discipline — at which point it may band, and the `USE WHOSE THROW IS CAUGHT` defeater and
+   the corpus-wide wording of the band above go with it. */
+const GUARD_B = () => ({ "throws": 0, "caught": 0, "guarded-fallback": 0, "guarded-silent": 0, noverdict: 0 });
+const guardOf = new Map();
+let gSites = 0, gOcc = 0, gCoin = 0, gUnparsed = 0, gUnloc = 0;
+const gWhy = new Map();
+{
+  const ranked = new Set(rankA);
+  const useChannels = Object.entries(CHANNELS).filter(([k]) => USE_CH.has(k));
+  const perFile = new Map();     /* channel -> name -> occurrences, rebuilt from the files themselves */
+  for (const [k] of useChannels) perFile.set(k, new Map());
+  const bump = (n, key) => {
+    if (!guardOf.has(n)) guardOf.set(n, GUARD_B());
+    guardOf.get(n)[key]++;
+  };
+  parts.forEach((src) => {
+    const targets = new Map();
+    for (const [k, re] of useChannels) {
+      const t = perFile.get(k);
+      /* `d` gives the capture's own offset. Deriving it from the match text would be a second spelling of
+         the channel's own grouping, and `Foo.Foo` is the site where the obvious one (a search for the name
+         inside the match) lands on the property instead of on the receiver. */
+      for (const m of src.matchAll(new RegExp(re.source, "gd"))) {
+        if (!ranked.has(m[1])) continue;
+        t.set(m[1], (t.get(m[1]) || 0) + 1);
+        gOcc++;
+        const off = m.indices[1][0];
+        if (targets.has(off)) gCoin++; else targets.set(off, m[1]);
+      }
+    }
+    if (!targets.size) return;
+    gSites += targets.size;
+    const { parsed, why, verdicts } = GUARD_SHAPE.classify(src, targets);
+    if (!parsed) {
+      gUnparsed++;
+      gWhy.set(why, (gWhy.get(why) || 0) + 1);
+      for (const n of targets.values()) bump(n, "noverdict");
+      return;
+    }
+    for (const [off, n] of targets) {
+      const v = verdicts.get(off);
+      if (!v) { gUnloc++; bump(n, "noverdict"); continue; }
+      bump(n, v);
+    }
+  });
+  /* THE CALIBRATION: the per-file scan and the concatenated one must agree name for name and channel for
+     channel. They can legitimately differ — a pattern anchored on `^` sees each file's first byte per file
+     and only the corpus's first byte over the join — so this is asserted rather than assumed, and a channel
+     that grows one silently would give a site set this file never counted. */
+  for (const [k] of useChannels) {
+    const global_ = perChannel.get(k) || new Map(), local = perFile.get(k);
+    for (const n of ranked) {
+      const a = global_.get(n) || 0, b = local.get(n) || 0;
+      if (a !== b)
+        die(`the per-file scan of channel ${k} found ${b} occurrence(s) of ${n} where the scan over the ` +
+            `joined corpus found ${a}. The guard split is taken from the per-file offsets and the ranking ` +
+            `from the joined ones, so the two must be one population — a difference means the split is ` +
+            `about sites the ranking never counted.`);
+    }
+  }
+  /* A SITE IS A SITE AND AN OCCURRENCE IS A CHANNEL HIT, AND THE TWO ARE NOT THE SAME NUMBER. One
+     `x instanceof WebAssembly.Module` is matched by `instanceof X` AND by `X.member` at ONE offset, so it is
+     two occurrences and one site. Differencing the two without this identity is the defect
+     §AND-TWO-INSTRUMENTS-CAN-DISAGREE names — two rows counting different units. */
+  const parts_ = [...guardOf.values()].reduce((a, r) => a + Object.values(r).reduce((x, y) => x + y, 0), 0);
+  if (gOcc !== gSites + gCoin)
+    die(`${gOcc} channel occurrence(s) is not ${gSites} site(s) plus ${gCoin} coincident one(s).`);
+  if (parts_ !== gSites)
+    die(`the guard verdicts sum to ${parts_} and ${gSites} site(s) were classified — a verdict has gone ` +
+        `missing, and a shorter table reads as a cleaner one.`);
+}
+/* The three no-evidence classes get NO split, and that is a refusal rather than an omission. Their own class
+   word says this corpus offers no evidence about the PLATFORM name — a `shadowed` row's use occurrences are
+   the file's own binding read N times — so a per-site verdict about the platform at those sites would be a
+   claim the text does not support, printed in the one column a reader dispatches from and in the ACCUSING
+   direction. Measured when this landed: the two `shadowed` rows' raw use counts equalled their `shadow`
+   columns EXACTLY, so the suppressed population is entirely accounted for by a column already printed. */
+const NO_EVIDENCE = new Set(["shadowed", "not-code", "shadow+notcode"]);
+const gCol = (n) => {
+  const r = guardOf.get(n);
+  if (!r) return "";
+  const tot = Object.values(r).reduce((a, b) => a + b, 0);
+  if (NO_EVIDENCE.has(klass(n))) return `use=${String(tot).padStart(3)} [no-evidence class]`;
+  return `use=${String(tot).padStart(3)} thr=${String(r["throws"]).padStart(3)} cgt=${String(r["caught"]).padStart(2)}` +
+         ` fb=${String(r["guarded-fallback"]).padStart(2)} sil=${String(r["guarded-silent"]).padStart(2)}` +
+         ` ?=${String(r.noverdict).padStart(2)}`;
+};
+say(`   THE GUARD SHAPE OF EACH USE SITE, from a real parse (engine/js_guard_shape.mjs), ${GUARD_SHAPE.armed} ` +
+    `control(s) armed. use = this row's occurrences on the USE channels ONLY (${[...USE_CH].join(", ")}), ` +
+    `counted as SITES, and use = thr+cgt+fb+sil+?. thr = nothing encloses it, so the absence raises a ` +
+    `ReferenceError and the flow ends there — THE ONLY ONE OF THE FOUR THAT ENDS A FLOW. cgt = inside a ` +
+    `\`try\` that has a handler, so it raises and the catch arm runs. fb = a presence test of THIS name ` +
+    `selects the arm holding it AND the construct has an other arm, so something else runs. sil = the same ` +
+    `with NO other arm — the branch is skipped and NOTHING runs instead, which is the loss §NO-STUBS is ` +
+    `about and the row nothing else here can see. ? = no verdict: the offset did not land on a read of that ` +
+    `name (${gUnloc}) or its file did not parse (${gUnparsed} file(s)).`);
+say(`   IT ORDERS NOTHING — the sort is still class-first, so this column is free to DISAGREE with it, and ` +
+    `where it does that is the finding. A high \`thr\` on a \`mixed\` row is a flow-ender the band could not ` +
+    `report; a \`sil\` row is a branch a real browser skips silently too, so its cost is every endpoint and ` +
+    `every sink behind it rather than a crash. use is the RAW use count: \`shadow\` is the measured size of ` +
+    `what it over-counts and is printed beside it.`);
+say(`   TO RE-TAKE IT, or to read the sites behind any row: the derivation is this file's own USE channels, ` +
+    `so the command is the run itself over a corpus the fetch driver writes —`);
+say(`      NODE_USE_ENV_PROXY=1 SITES=apps.tsv node testing/corpus/fetch.mjs   # prints the --corpus path`);
+say(`      node engine/absentrank.mjs --corpus <that path> --top 300`);
+{
+  const T = GUARD_B();
+  for (const [n, r] of guardOf) if (!NO_EVIDENCE.has(klass(n))) for (const k of Object.keys(T)) T[k] += r[k];
+  const sup = [...guardOf.keys()].filter((n) => NO_EVIDENCE.has(klass(n)));
+  const supTot = sup.reduce((a, n) => a + Object.values(guardOf.get(n)).reduce((x, y) => x + y, 0), 0);
+  say(`   ${gSites} use site(s) over ${gOcc} channel occurrence(s) (${gCoin} occurrence(s) are a second ` +
+      `channel matching a site already counted): ${T["throws"]} thr, ${T["caught"]} cgt, ` +
+      `${T["guarded-fallback"]} fb, ${T["guarded-silent"]} sil, ${T.noverdict} no verdict — plus ${supTot} ` +
+      `at ${sup.length} no-evidence row(s), which are counted here and split nowhere.`);
+  if (gWhy.size)
+    say(`   ${gUnparsed} file(s) carrying a use site did not parse and NOTHING is claimed about their sites: ` +
+        [...gWhy].map(([w, c]) => `${c}x ${w}`).join("; ") + `.`);
+}
 for (const n of rankA.slice(0, TOP))
   say(`   ${klass(n).padStart(12)}  ${String(uses(n)).padStart(4)}  qjs=${String(qjsHits(n)).padStart(3)}  ` +
-      `shadow=${String(shadowed(n)).padStart(3)}  notcode=${String(ncAll(n)).padStart(4)}  ${n.padEnd(24)} ${shape(n) || emptyWhy(n)}`);
+      `shadow=${String(shadowed(n)).padStart(3)}  notcode=${String(ncAll(n)).padStart(4)}  ${n.padEnd(24)} ` +
+      `${gCol(n).padEnd(40)} ${shape(n) || emptyWhy(n)}`);
 /* AN INSTRUMENT THAT TRUNCATES SAYS SO, AND THIS ONE DID NOT — WHICH AMPUTATED A WHOLE CLASS RATHER THAN A
    TAIL. `--top` caps the rows PRINTED and the sort above is by CLASS FIRST, so the cut is not a random tail:
    it takes the lowest-ranked classes ENTIRELY. Measured on the run that found this, at the default 20: 65
