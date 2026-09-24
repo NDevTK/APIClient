@@ -1839,42 +1839,108 @@ function renderEngineRuns() {
         + `and a head whose first script runs before the parser reaches the link below it mints that link `
         + `post-program. A bucket named "(unstated)" is a row from an engine older than that key and is a `
         + `fact about the build, not about the page.`;
-    /* NAMED RESIDUAL — THE RAZOR STATED, WHICH THIS VIEW ALREADY PRINTS AND DOES NOT YET MAKE READABLE.
+    /* AND THE RAZOR ITSELF — CLAUDE.md §What-the-tool-produces' "what this engine reached that a markup
+       parser could not", read off `epReach` against its own denominator `epEmitted`. THE TWO HISTOGRAMS
+       ABOVE ARE ITS RAW MATERIAL AND NOT THE RAZOR: a door says WHICH MECHANISM composed an address and is
+       silent on whether a parse of the served bytes reaches that address for free, and the map between those
+       two is stated in exactly one place — the third column of solver/endpoint.h's `ENDPOINT_DOORS` — and
+       "no consumer of this surface can re-derive" it, in that header's own words.
+       SO THIS SENTENCE CARRIES NO DOOR NAME, exactly as the histograms above carry none: the map is APPLIED
+       by solver/endpoint.c, which owns it, and arrives here already applied. A copy of it in this file would
+       be the second table CLAUDE.md §AN-AUDITOR-DERIVES-THE-RULE is about, and endpoint.h records what the
+       first two copies cost — the same fact as prose in engine/build.mjs's verdict line naming five of twelve
+       doors, and a third way in testing/static_surface.mjs.
+       IT IS ONE FACT AT TWO GRAINS AND NOT TWO FACTS, which is why it is a SENTENCE and not a second
+       histogram beside the first. endpoint.h: every count here is the sum of the door row's counts for the
+       doors of that class, so "the two histograms do not corroborate each other and a reader holding both
+       holds ONE observation" — CLAUDE.md §EVIDENCE-INFLATION, and the reason this row is rendered as a
+       reading OF the row above rather than as a second row agreeing with it.
        AN EARLIER DRAFT OF THIS BLOCK SAID THE RAZOR "STOPS ONE HOP SHORT OF A PERSON", AND THAT WAS FALSE.
-       It is recorded rather than quietly deleted because it is exactly the conclusion a reader re-derives
-       from the two unread fields above, and it is wrong in the direction that manufactures work: it argues
-       for building a renderer that already exists. solver/result.c composes `epReach` — the door map APPLIED,
-       over `ENDPOINT_REACHES`' markup/either/beyond — into the @COLD census beside its own denominator
-       `epEmitted`; bridge.js relays that census WHOLE; and this view's `CENSUS` list renders `cold`
-       GENERICALLY, every key of it, with no filter at all. So the razor is on screen today.
-       WHAT IS NOT COVERED is therefore not its ABSENCE but its LEGIBILITY, and the gap is exact: it renders
-       as three bare buckets inside a run-on list of some forty census rows, with no sentence saying what they
-       are. The single reading that must never be published is precisely the one an unlabelled bucket invites
-       — `beyond 0` taken for a small number rather than for what endpoint.h says it is, a REFUSAL TO CLAIM
-       this capability on this document. Telling those two apart requires knowing endpoint.h's door taxonomy
-       by heart, and the reader who does not is the reader this panel exists for.
-       WHAT THE NEXT DIFF BUILDS: one sentence in this block reading `m.cold.epReach` against
-       `m.cold.epEmitted` as its denominator and naming the refusal in words — the map applied by the producer
-       that owns it, with no door vocabulary entering this file — and rendering an ABSENT `epReach` as the
-       stated absence of the razor rather than as a zero, for that same reason.
-       WHY IT IS NOT IN THIS DIFF: `m.cold.epReach` is an ENGINE field, and this zone is INTERPRETED FROM THE
-       TREE while the engine is live only after a build (CLAUDE.md §A-CROSS-BOUNDARY-DIFF). A reader of it
-       landed against an INSTALLED wasm predating the key gets `undefined`, and both honest arms for that — a
-       stated unknown, or a refusal — are claims about a build this zone cannot interrogate for itself. The
-       generic census row above is safe from exactly that because it names no key at all, and the two
-       histograms this arm renders need no such claim either: bridge.js computes them HERE, in the tree, from
-       a row key whose absence it already renders as its own bucket.
-       THE OBSERVATION THAT RETIRES IT, WHICH IS A CONTENT CHECK AND NEVER A TIMESTAMP: the string `epReach`
-       present in the INSTALLED wasm under extension/lib/qjs/, with an INVENTED key beside it that is ABSENT,
-       so that a zero means the key is not in those bytes rather than that the probe never reached the file;
-       and `epEmitted` beside both as a positive control that the cold census is in that artifact at all.
-       WHO CAN PERFORM THE ACT THAT CHANGES IT: the COORDINATOR, and only the coordinator. This project
-       forbids a lane to build, so what moves this observation is a build AND an install of the wasm, which no
-       reader of this file can do for themselves — and a retiring condition with no actor in it reads as
-       merely pending while nobody is able to discharge it.
-       HOW ITS ABSENCE SHOWS: a person reads the cold census row, meets `epReach markup 45, either 0, beyond
-       0` among forty other buckets, and takes it for a small number on a busy line rather than for this run's
-       statement that it reached nothing a markup scan would not have handed them for free. */
+       It is kept rather than deleted because it is exactly the conclusion a reader re-derives from a census
+       row nothing labels, and it is wrong in the direction that manufactures work: it argues for building a
+       renderer that already exists. The `CENSUS` list below renders `cold` GENERICALLY, every key of it, with
+       no filter at all — so `epReach` has been ON SCREEN the whole time, as three bare buckets inside a
+       run-on list of some forty rows with no sentence saying what they are. What was missing was never the
+       FIGURE. It was the one reading that must never be published, which an unlabelled bucket invites.
+       `beyond` 0 IS A REFUSAL TO CLAIM AND NEVER A SMALL NUMBER, and the producer says so at the composer in
+       words worth quoting rather than paraphrasing: "a `beyond` that is ABSENT and a `beyond` that read 0 are
+       the two things this row exists to keep apart … The first is the product's own razor answering and is a
+       REFUSAL TO CLAIM; the second is an instrument that stopped." Both are rendered below, in those terms,
+       and NEITHER of them is a zero.
+       THE FLOOR AND ITS BOUND ARE BOTH RENDERED, because endpoint.h publishes the razor as a FLOOR with the
+       undecidable population beside it rather than as one number: a mechanism "reached by a parser-inserted
+       element and by a script-created one alike" does not record which, and both guesses are wrong in a
+       direction that matters — calling them markup under-credits a router-built element, calling them beyond
+       over-credits a counted-back head, "which is the exact over-credit the retired `epEmitted -
+       epPreProgram` subtraction is recorded for". So a reader who wants one number is handed the two that
+       bound it, and neither half is quotable alone.
+       AND IT IS A DIAGNOSTIC AND NEVER A TARGET, in CLAUDE.md's own words and endpoint.h's: optimising
+       toward this figure optimises the instrument. It is an IDENTITY read WITHIN one run and is not
+       comparable with another run's — the quantum sentence further down states why in full, and this one
+       says it in the short form a person reading one panel needs.
+       ITS DENOMINATOR IS THE ENGINE'S OWN CENSUS FIGURE AND IS NAMED AS SUCH, NOT THE `learned surface`
+       NUMBER IN THE ROW ABOVE. `epEmitted` is a reading taken at an INSTANT and result.c declares it a GAUGE
+       that can FALL: an asset verdict "arrives with the REPLY while the record was minted at the REQUEST", so
+       a census composed between those two moments counts a row the next one does not. The figure above is the
+       LENGTH of the emitted @H array. They are one population read at two moments, this view cannot assert
+       they agree, and a share rendered against the wrong one would be a share of a population nobody holds
+       — so the share travels with the denominator it actually partitions
+       (CLAUDE.md §a-coverage-figure-states-what-it-is-a-fraction-of).
+       NO `DCHECK` STANDS ON ANY OF THESE KEYS, AND THAT IS THE WHOLE OF WHY THE STATED-ABSENCE ARM EXISTS.
+       This zone is INTERPRETED FROM THE TREE and the engine is live only after a build (CLAUDE.md
+       §A-CROSS-BOUNDARY-DIFF), so an installed wasm predating a key is the ORDINARY case here and an assert
+       on one would abort the trusted zone, on every document, for an engine doing exactly what the design
+       asks — which is the argument the block above makes for the `(unstated)` bucket, owed here for the same
+       reason. The absence is rendered as a POSITIVE STATED UNKNOWN instead, and never as `|| 0`, `?.` or
+       `?? 0`: those would turn "this build does not state the razor" into "this run reached nothing", which
+       are opposite facts about opposite things — one about the BUILD and one about the PAGE
+       (CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS).
+       IT SITS DIRECTLY UNDER THE SURFACE ROW IT IS A READING OF, AND THAT IS SAFE FOR THE EGRESS SENTENCE
+       BELOW, whose arm says "the surface above": this row is about that same surface and states its size in
+       figures, so the reference resolves to a statement about the same population either way — which is the
+       one thing an insertion between two rows has to be checked for. */
+    const _reach = m.cold.epReach;
+    const _emitted = m.cold.epEmitted;
+    /* THE ABSENCE IS ASKED IN TWO PARTS, BECAUSE IT HAS TWO CAUSES THAT ARE NOT THE SAME FACT: the census may
+       carry no such row at all (an engine older than the key), or carry it under class names this reader
+       cannot read (the producer's list moved under a consumer that is live on write). Both are facts about
+       the BUILD and both send a reader to extension/lib/qjs/qjs.mjs.build.json's `head`, and they are still
+       two — folding them into one number is the several-states-behind-one-answer shape landing at the one
+       place a person is being told what this tool found. */
+    const _reachStated = _reach !== null && typeof _reach === "object" && !Array.isArray(_reach)
+                       && typeof _emitted === "number";
+    const _beyond = _reachStated ? _reach.beyond : undefined;
+    const _either = _reachStated ? _reach.either : undefined;
+    const _razorStated = typeof _beyond === "number" && typeof _either === "number";
+    const _bound = !_razorStated || _either === 0
+      ? ``
+      : ` A FLOOR, not a total: ${esc(String(_either))} further address(es) came through a mechanism that is `
+        + `reached by a parser-inserted element and by a script-created one alike and does not record which, `
+        + `and the producer declines to guess rather than under-credit one or over-credit the other — so the `
+        + `true figure lies between the two and neither half is quotable alone.`;
+    const razor = !_reachStated
+      ? `razor — what this engine reached that a markup parse could not: NOT STATED BY THIS BUILD. The `
+        + `installed engine composes no such census row, so nothing here has claimed or refused anything. `
+        + `That is a fact about the BUILD and never about this page, and it is NOT a zero.`
+      : !_razorStated
+        ? `razor — what this engine reached that a markup parse could not: NOT READABLE FROM THIS BUILD. The `
+          + `census carries the partition under class names this reader does not know, so no floor can be `
+          + `read off it — again a fact about the BUILD, and again NOT a zero.`
+        : _emitted === 0
+          ? `razor — what this engine reached that a markup parse could not: this run emitted no address at `
+            + `all, so there is no surface to partition and the razor has no population here. A statement `
+            + `about this RUN, read WITH the surface row above and not against it.`
+          : _beyond === 0
+            ? `razor — what this engine reached that a markup parse could not: NONE of `
+              + `${esc(String(_emitted))} emitted address(es). That is this run's REFUSAL TO CLAIM the `
+              + `capability on this document and NOT a small number — every address on the surface above is `
+              + `one a parse of the served bytes hands a reader for free.${_bound} A DIAGNOSTIC AND NEVER A `
+              + `TARGET: an identity read WITHIN this run, not against another run's.`
+            : `razor — what this engine reached that a markup parse could not: `
+              + `${esc(String(_beyond))} of ${esc(String(_emitted))} emitted address(es) came through a `
+              + `mechanism NO parse of the served document reaches.${_bound} A DIAGNOSTIC AND NEVER A `
+              + `TARGET: an identity read WITHIN this run, not against another run's. The denominator is the `
+              + `engine's own census taken at that instant, and is not the array length in the row above.`;
     /* AND WHETHER THIS TOOL'S OWN EGRESS POLICY IS WHY THAT SURFACE IS THE SIZE IT IS — bridge.js's
        `egressAsked`/`egressDeclined`, written onto this record and, exactly like the two partitions above,
        read by nobody. They are not engine counters and are not in `FULL` or in `CENSUS`: bridge.js raises
@@ -2046,6 +2112,7 @@ function renderEngineRuns() {
     return `<div class="deep-row"><span class="deep-label">${where} — ${head}` + parts.join(" · ")
          + `</span><span class="deep-label">${orphan}</span>`
          + `<span class="deep-label">${surface}</span>`
+         + `<span class="deep-label">${razor}</span>`
          + `<span class="deep-label">${egress}</span>`
          + `<span class="deep-label">${order}</span>` + denom + censusRows.join("") + `</div>`;
   }).join("");
