@@ -601,6 +601,41 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
   "unframedStepsLifetime",
   "classicCompiles", "classicCompileOverruns",
   "rootPrograms", "deepest", "completed", "deepestLeft", "finished",
+  /* AND WHETHER A REPLY EVER BECAME A PROGRAM, WHICH IS CLAUDE.md §Learning-from-replies' HEADLINE MOAT
+     SURFACE AND WHICH NO ROW ABOVE CAN STATE. "A fetch whose body is JAVASCRIPT is ALWAYS fetched + EXECUTED
+     (a lazy chunk reveals real endpoints)" is built at TWO doors — solver/engine.c's FLOW_PENDING_RESOLVE
+     delivery and core/xhr/xml_http_request.c's `xhr_take_reply` — and both end in the one compile entry,
+     which queues a row of the SAME KIND the document's own seeded `<script>` rows carry. So `progStarts`
+     and its two arms sum a chunk that arrived over the network with the page's own bundle, and this driver
+     could print `rootPrograms 33 / deepest 4` all day without ever saying whether a single chunk had been
+     queued at all.
+     EACH DOOR IS A PAIR AND NEITHER HALF IS READABLE ALONE. `…AsksLife` is raised where the door HOLDS A
+     REPLY RECORD, upstream of the type gate, because both doors DECLINE correctly for a reply whose computed
+     type is not JavaScript — most replies are not programs — so an outcome census reports every correct
+     refusal as the door failing. `0/0` is a door this run never reached; `0/N` is a door reached N times
+     that queued nothing. Those take opposite work: the first is a page that issued no `fetch()` or sent no
+     XMLHttpRequest, and the second is a question about what those replies WERE.
+     THE FIVE ARE NOT FIVE INDEPENDENT READINGS AND THE PRODUCER SAYS SO. Each door's two rows share a
+     precondition — nothing is queued at a door nobody asked — so a pair at `0/0` is ONE fact about that door;
+     and `netProgQueuedLife` is the one compile entry's own total with `fetch + xhr <= total` asserted in the
+     engine, so a zero there entails both arms at zero. What IS independent is the two DOORS, which is why
+     both are carried: a bundle may send no `fetch()` and many XMLHttpRequests, since axios's browser adapter
+     IS one — the same reading the six `epXhr*` rows below exist for, asked of the program door instead of
+     the request door.
+     `netProgQueuedLife` IS NOT THE SUM OF THE TWO ARMS AND MUST NOT BE READ AS ONE. It is raised inside
+     `engine_queue_fetched_script`, whose third caller is `test_forced.c`'s `loadScript` host edge — a
+     `<script src>`-shaped door that cannot reach the delivery arm at all — so the residue is ZERO in the
+     shipped artifact this driver points at and is the fixture's own edge in that binary. Reading the residue
+     is what makes a FOURTH door visible in this output; the engine asserts only the direction that cannot be
+     innocent, an arm ABOVE the total.
+     ALL FIVE ARE LIFETIME COUNTS AND THE PRODUCER STATES IT — `Life` is spelled into the name for a reader
+     and the kind is declared at result.c's `@kinds-of cold` block for this driver, which composes its header
+     from that declaration rather than from a list here. An artifact older than these rows prints `-` for all
+     five, which is this driver's absent-versus-zero rule and is the honest answer: the run did not state
+     them. */
+  "netProgQueuedLife",
+  "netProgFetchAsksLife", "netProgFetchQueuedLife",
+  "netProgXhrAsksLife", "netProgXhrQueuedLife",
   /* AND THE @H SURFACE'S OWN DENOMINATOR, WHICH IS THE PAIR THIS DRIVER'S HEADLINE COLUMN CANNOT BE READ
      WITHOUT. `endpoints` in COUNTERS is the store's SIZE — a reach figure — and solver/result.c records what
      such a number has already been quoted as: "every row of a 43-row surface was one of that document's own

@@ -2267,6 +2267,8 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    @kind lifetime: epMinted epAssets
    @kind gauge: epEmitted epPreProgram epDoors epReach
    @kind lifetime: epAsks epAskPreProgram epAskSuppressed epAskMerged epAskMinted epAskMergedPreProgram
+   @kind lifetime: netProgQueuedLife netProgFetchAsksLife netProgFetchQueuedLife
+   @kind lifetime: netProgXhrAsksLife netProgXhrQueuedLife
    @kind constant: rootPrograms rootProgramsHeldAtSeed rootProgramsAwaitedAtSeed
    @kind maximum: deepest completed deepestLeft
 */
@@ -2706,6 +2708,43 @@ char *result_cold_json(void) {
                     returns both, which is worth knowing before either number is quoted as the other. */
                  "\"progStarts\":%ld,\"progStartsCand\":%ld,\"progStartsOther\":%ld,"
                  "\"progQueuedCand\":%ld,"
+                 /* AND WHETHER A REPLY EVER BECAME A PROGRAM, WHICH `progStartsOther` ONE ROW UP CANNOT SAY
+                    AND WHICH IS THE PRODUCT'S HEADLINE CAPABILITY. CLAUDE.md §Learning-from-replies makes "a
+                    fetch whose body is JAVASCRIPT is ALWAYS fetched + EXECUTED" the headline moat surface, and
+                    two doors build it — solver/engine.c's FLOW_PENDING_RESOLVE delivery and
+                    core/xhr/xml_http_request.c's `xhr_take_reply`. Both end in `engine_queue_fetched_script`,
+                    which queues a DYN_PAGE_SCRIPT, so the row's KIND is the same kind the document's own
+                    seeded `<script>` rows carry and `progStartsOther` sums a chunk that arrived over the
+                    network with the page's own bundle. NO ROW ANYWHERE SAID A PROGRAM HAD BEEN QUEUED FROM A
+                    REPLY AT ALL.
+                    EACH DOOR IS A PAIR AND NEITHER HALF IS READABLE ALONE, which is the whole reason there are
+                    five rows and not two. `…Asks` is raised where the door HOLDS A REPLY RECORD, upstream of
+                    the type gate — both doors DECLINE correctly for a reply whose computed type is not
+                    JavaScript, and a preload, a modulepreload and an image decode park a kind of their own
+                    precisely so a JavaScript-typed reply is NOT compiled — so a census of what landed reports
+                    every correct refusal as the door failing (§AN-INVARIANT-OVER-A-GATED-OPERATION). `0/0` is
+                    a door this run never reached; `0/N` is a door reached N times that queued nothing, and
+                    those take opposite work.
+                    THE TWO DENOMINATORS COUNT ONE POPULATION — reply RECORDS, not network errors — which is
+                    made true at the fetch door by a guard on the reply being a record rather than assumed,
+                    because the XHR door returns before its own program block for a reply with no body.
+                    `netProgQueuedLife` IS THE ONE ENTRY'S OWN TOTAL AND IS NOT THE SUM OF THE TWO ARMS. It is
+                    raised inside `engine_queue_fetched_script`, so every caller moves it, and a third caller
+                    exists on purpose — test_forced.c's `loadScript` host edge, which stands in for a
+                    `<script src>`-shaped door and says at its own site that it CANNOT exercise the delivery
+                    arm. So the relation is `fetch + xhr <= total`, asserted in the engine, and the residue is
+                    ZERO in the shipped program and the fixture's own edge in that binary. What the inequality
+                    catches is a door crediting itself with a program the compile entry never saw, which is the
+                    second compile door §A-superseded-system-is-DELETED forbids arriving as an observation.
+                    THE FIVE ARE NOT FIVE INDEPENDENT READINGS. Each door's two rows share a precondition —
+                    nothing can be queued at a door that was never asked — so a pair reading `0/0` is ONE fact
+                    about that door and not two, and the three queued rows are bound by the inequality above,
+                    so `netProgQueuedLife` reading 0 entails both arms at 0. What is genuinely independent is
+                    the two DOORS: a page may send no `fetch()` and many XMLHttpRequests, and axios's browser
+                    adapter IS one. */
+                 "\"netProgQueuedLife\":%ld,"
+                 "\"netProgFetchAsksLife\":%ld,\"netProgFetchQueuedLife\":%ld,"
+                 "\"netProgXhrAsksLife\":%ld,\"netProgXhrQueuedLife\":%ld,"
                  /* THE TWO COLD-TIER ROWS, WHICH ARE BOTH OUTCOME CENSUSES OVER GATES WITH LEGITIMATE
                     DECLINING ARMS AND HAD NO BANNER AT ALL — the only rows on this line that carried none,
                     while being the pair a reader reaches for to ask whether the ONE CONTINUOUS FRONTIER
@@ -3068,6 +3107,9 @@ char *result_cold_json(void) {
                  e.root_programs_held_at_seed, e.root_programs_awaited_at_seed,
                  awaiting_rows,
                  e.prog_starts, e.prog_starts_cand, e.prog_starts_other, e.prog_queued_cand,
+                 e.net_prog_queued,
+                 e.net_prog_fetch_asks, e.net_prog_fetch_queued,
+                 e.net_prog_xhr_asks, e.net_prog_xhr_queued,
                  e.sold, e.sold_flows, e.sold_cands, e.forks,
                  ran, resumed.segs, resumed.flows, resumed.cands, resumed.worlds,
                  rp_hits, rp_left, rp_left_arms,

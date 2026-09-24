@@ -1954,8 +1954,23 @@ static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
        refusal on it would have to refuse BOTH doors, which is a decision about the compile entry and not
        about this transport. */
     {
-        char *ct = fetch_reply_computed_type(ctx, reply);
+        char *ct;
         MimeType cm;
+
+        /* THIS DOOR WAS ASKED, RECORDED BEFORE ANY TYPE IS READ. It is the denominator the queue below is the
+           numerator of, and until both existed `no program was ever queued from an XMLHttpRequest reply` and
+           `this door was never reached` were one silence — which take opposite work, the first being a
+           question about what the replies were and the second about whether a page sends any. It is raised
+           HERE and not after the gate for CLAUDE.md §AN-INVARIANT-OVER-A-GATED-OPERATION's reason: the gate
+           below DECLINES CORRECTLY for every reply whose computed type is not JavaScript, which is most of
+           them, so a census of what landed reports each correct refusal as this door failing.
+           THE POPULATION IS `a reply RECORD this door examined for a program`, which is what the two early
+           returns above already leave: this function returns for anything that is not an object and for a
+           body that is absent or null, so a network error is not in it — and solver/engine.c's sibling door
+           guards its own raise on the reply being a record for exactly that reason, so the two rows are one
+           population rather than a ratio of two things. See solver/engine.h's `net_prog_*` block. */
+        engine_note_net_prog_xhr_ask();
+        ct = fetch_reply_computed_type(ctx, reply);
 
         /* THE TYPE IS THE HOST'S DECISION AND IS NEVER RE-SNIFFED HERE, exactly as the sibling door and
            solver/reply_decode.c both say at their own extracts: SECURITY.md puts sniffing in the trusted
@@ -1973,8 +1988,12 @@ static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
             CHECK(src != NULL && base != NULL,
                   "XMLHttpRequest: OOM reading a JavaScript reply's source text or its address — §8.1.4.2 "
                   "\"Fetching scripts\" needs both to make a program out of a response");
-            if (*base)
+            if (*base) {
                 engine_queue_fetched_script(document_doc(ctx), src, src_n, base);
+                /* …AND THIS DOOR QUEUED ONE. Beside the call rather than inside the entry, because that entry
+                   holds the bytes and the address and cannot see which transport carried them. */
+                engine_note_net_prog_xhr_queued();
+            }
             JS_FreeCString(ctx, base);
             JS_FreeCString(ctx, src);
             JS_FreeValue(ctx, txt);

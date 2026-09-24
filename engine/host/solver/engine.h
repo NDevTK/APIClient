@@ -2167,6 +2167,49 @@ typedef struct {
     long paged_asks;         /* times the allocator's refusal edge reached this engine (engine_reclaim_tail) */
     long paged_unarmed;      /* …declined because the reclaim safepoint was not armed (outside the flow step) */
     long paged_floor;        /* …answered at the frontier's floor: no member but the flow that is running */
+    /* ─── AND WHETHER A REPLY EVER BECAME A PROGRAM, PER DOOR, WITH THE DENOMINATOR EACH ONE IS A SHARE OF ──
+     *
+     * WHAT THE RUN COULD NOT SAY BEFORE. Two components turn a fetched reply into a program — solver/engine.c's
+     * FLOW_PENDING_RESOLVE delivery and core/xhr/xml_http_request.c's `xhr_take_reply` — and both end in
+     * `engine_queue_fetched_script`, which queues a DYN_PAGE_SCRIPT. The kind of the row is therefore the same
+     * kind the document's own seeded `<script>` rows carry, so `progStartsOther` sums a chunk that arrived
+     * over the network with the page's own bundle and NO ROW ANYWHERE SAID A PROGRAM HAD BEEN QUEUED FROM A
+     * REPLY AT ALL. CLAUDE.md §Learning-from-replies makes "a fetch whose body is JAVASCRIPT is ALWAYS fetched
+     * + EXECUTED" the headline moat surface, and the two doors that build it had no witness of their own.
+     *
+     * THE ASK IS RECORDED AT THE CALL AND NOT AT THE OUTCOME (CLAUDE.md §AN-INVARIANT-OVER-A-GATED-OPERATION).
+     * Both doors LEGITIMATELY decline: a reply whose computed type is not JavaScript is not a program, and a
+     * preload, a modulepreload and an image decode park a kind of their own PRECISELY so a JavaScript-typed
+     * reply is not compiled (see engine_pending_resource_url above). A census of what LANDED cannot tell a
+     * door that was never reached from one that correctly refused every reply it was shown, so each `…_asks`
+     * row is raised where the door HOLDS A REPLY RECORD, upstream of the type gate and of the address guard,
+     * and each `…_queued` row beside the queue call. `0/0` is a door the run never reached — for the fetch
+     * door that is a page that issued no `fetch()`, for the XHR door a page that sent no XMLHttpRequest;
+     * `0/N` is a door reached N times that queued nothing, which is either N correct refusals or the arm
+     * failing and is a question about the replies rather than about whether the door exists.
+     *
+     * THE TWO DENOMINATORS COUNT ONE POPULATION, WHICH IS THE PART THAT HAD TO BE MADE TRUE RATHER THAN
+     * ASSUMED (CLAUDE.md §AND-THE-DENOMINATOR-CAN-BE-THE-RIGHT-KIND). `xhr_take_reply` returns before its
+     * program block for a network error — a reply with no body — so the fetch door's raise is guarded on the
+     * reply being a RECORD for exactly that reason and not for a defensive one. Both rows are therefore
+     * "reply records this door examined for a program", and neither counts a network error.
+     *
+     * `net_prog_queued` IS RAISED AT THE ONE ENTRY AND IS NOT THE SUM OF THE TWO ARMS. It is written inside
+     * `engine_queue_fetched_script`, so every caller moves it, and the two door arms are written by the two
+     * doors. The relation is `fetch_queued + xhr_queued <= net_prog_queued` and it is asserted; it is an
+     * INEQUALITY rather than a partition because a third caller exists and is deliberate — `test_forced.c`'s
+     * `loadScript` host edge stands in for a `<script src>`-shaped door and says at its own site that it is
+     * the door which CANNOT exercise the delivery arm. So in the shipped program the residue is ZERO and a
+     * reader can check that from the rows; in that fixture it is the fixture's own edge. WHAT THE ASSERT
+     * CATCHES is the hazard CLAUDE.md §A-superseded-system-is-DELETED names: a door raising a queued arm
+     * WITHOUT going through the one compile entry, which is a second compile door wearing an observation.
+     *
+     * A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing reads them and no arm branches on one. */
+    long net_prog_queued;       /* programs queued at engine_queue_fetched_script — EVERY caller */
+    long net_prog_fetch_asks;   /* reply records the `fetch()` reply door examined for a program */
+    long net_prog_fetch_queued; /* …and how many of them it queued: `queued <= asks` is asserted */
+    long net_prog_xhr_asks;     /* reply records the XMLHttpRequest reply door examined for a program */
+    long net_prog_xhr_queued;   /* …and how many of them it queued: `queued <= asks` is asserted */
 } EngineFrontierCensus;
 void engine_frontier_census(EngineFrontierCensus *out);
 
@@ -2209,6 +2252,34 @@ long engine_rows_awaiting_bytes(void);
  * A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing branches on it, no request is refused because of it, and
  * the surface it feeds is a census row. */
 int engine_any_program_started(void);
+
+/* THE FOUR NOTES THE TWO REPLY DOORS WRITE — see EngineFrontierCensus's `net_prog_*` block for what they are
+ * FOR; this states why they are four entries and not one with a door argument.
+ *
+ * ONE ENTRY PER DOOR PER SIDE, WHICH IS THE SHAPE core/xhr AND core/fetch ALREADY REACH THIS HOST THROUGH
+ * (solver/endpoint.h's `endpoint_xhr_edge_began`/`…_placed`/`…_offered`). A single entry taking a door and a
+ * did-it-queue flag would be CLAUDE.md §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS written as an argument list:
+ * one call answering which door and whether the gate passed, decided at one site, with a caller free to state
+ * the first and forget the second. Four named statements cannot be half-made.
+ *
+ * AND THE DOOR IS NOT A PARAMETER OF `engine_queue_fetched_script`, WHICH IS THE SHAPE A READER REACHES FOR
+ * FIRST. That entry's own declaration says its task source and its script type are stated AT THE DEFINITION
+ * rather than taken as parameters because "this entry is one spec step, and a caller that reached it has a
+ * response in hand" — which transport carried those bytes is not a fact of that step, and a census-only
+ * argument on it would be the first parameter it holds that the row it builds does not carry. The cost of
+ * that choice is stated rather than hidden: the partition over the doors is an INEQUALITY against the entry's
+ * own total rather than an equality, and the residue is a published row.
+ *
+ * THE ASK IS RAISED WHERE THE DOOR HOLDS A REPLY RECORD AND BEFORE ANY TYPE IS READ, which is the whole of
+ * what makes the pair readable — a raise after the type gate would count only the replies that passed it and
+ * the denominator would be the numerator. A caller that raises `…_queued` without having raised `…_asks` on
+ * the same reply is caught at engine_frontier_census, where both are in one hand.
+ *
+ * THEY ARE VOID AND READ NOTHING BACK (§NO BOUNDS): a door's behaviour does not depend on having been counted. */
+void engine_note_net_prog_fetch_ask(void);
+void engine_note_net_prog_fetch_queued(void);
+void engine_note_net_prog_xhr_ask(void);
+void engine_note_net_prog_xhr_queued(void);
 
 /* THE ALLOCATOR UNDER THE JS HEAP, which is the one number quickjs's own accounting structurally cannot give.
  * `JS_ComputeMemoryUsage` walks the RUNTIME; Lexbor's document arenas, the per-flow COW deltas and every other

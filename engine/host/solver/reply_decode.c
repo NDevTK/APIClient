@@ -437,12 +437,18 @@ void reply_decode_learn(JSContext *ctx, const char *method, const char *url, JSV
        that delivery — see `engine_pending_resource_url` in solver/engine.h, whose reason for existing is that
        FLOW_PENDING_RESOLVE's delivery compiles a JavaScript-typed reply and a preloaded module chunk must not
        be compiled.
-       RETIREMENT: this record goes when the census counts the programs the reply door QUEUED — a partition of
-       `progStartsOther`, which today sums a chunk that arrived over the network with the document's own seeded
-       rows — because a reader can then WATCH that door work instead of re-deriving from this file's silence
-       that it does not exist. That row is also the only reachability witness the door has: a run may pay
-       `replyAsked` in full and queue no program at all, and today that reads exactly like a run whose chunks
-       all executed. */
+       RETIREMENT — MET, AND WHAT IS KEPT IS THE METHOD RATHER THAN THE CONDITION. The @COLD census carries
+       `netProgFetchAsksLife`/`netProgFetchQueuedLife` beside `netProgXhrAsksLife`/`netProgXhrQueuedLife`, so
+       the door's work is WATCHED rather than re-derived from this file's silence, and the reachability
+       witness it lacked exists: a run that pays `replyAsked` in full and queues no program reads `N/0` where
+       one whose chunks all executed reads `N/N`, which used to be one number. `progStartsOther` still sums a
+       network chunk with the document's own seeded rows and that is not a defect — the row it counts IS a
+       DYN_PAGE_SCRIPT either way — so the partition was built beside it rather than inside it.
+       WHAT DOES NOT RETIRE IS THE ENUMERATION LESSON, because it is what produced the clause: the delivery
+       arms were enumerated BY WHAT THEIR KINDS ARE NAMED FOR, a `fetch()` settles a promise so it was taken
+       not to start a program, and the arm that does was never opened. Enumerate what a site DOES.
+       RETIREMENT: this record goes when the arm this file declines to build is refused by a crash at the
+       site rather than by a paragraph, because a reader then meets the decision instead of reading it. */
     if (!strcmp(essence, "text/x-component")) {
         /* AND THE TEXT OF IT, decoded HERE. A Flight stream is `text/x-component` — text, whose charset React
            does not label and whose default is therefore UTF-8 — so §6's UTF-8 decode is the algorithm this

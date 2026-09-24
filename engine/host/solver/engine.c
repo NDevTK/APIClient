@@ -5465,8 +5465,19 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                reply_decode.c makes at its own extract. */
             {
                 uint32_t sdoc = (uint32_t)pending_get_int(p, PEND_DOC);
-                char *ct = fetch_reply_computed_type(ctx, pv);
+                char *ct;
                 MimeType cm;
+                /* THIS DOOR WAS ASKED, RECORDED BEFORE ANY TYPE IS READ — the denominator the queue below is
+                   the numerator of, and it is raised HERE rather than after the gate for
+                   §AN-INVARIANT-OVER-A-GATED-OPERATION's reason: this arm declines a reply whose computed
+                   type is not JavaScript and that refusal is correct, so a census of what landed reports
+                   every one of them as a door that failed. See solver/engine.h's `net_prog_*` block.
+                   IT IS GUARDED ON THE REPLY BEING A RECORD SO THE TWO DOORS' DENOMINATORS COUNT ONE
+                   POPULATION. `pv` is JS_NULL for a network error here, and the XHR door returns before its
+                   own program block for the same case (a reply with no body), so counting a network error on
+                   this side and not on that one would make the two rows a ratio of two things. */
+                if (JS_IsObject(pv)) engine_note_net_prog_fetch_ask();
+                ct = fetch_reply_computed_type(ctx, pv);
                 if (mime_type_extract(&cm, ct)) {
                     if (mime_type_is_javascript(&cm)) {
                         JSValue suv = pending_get(p, PEND_URL);
@@ -5497,6 +5508,9 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                                parked on one chunk address rather than with the number of distinct chunk
                                addresses a document loaded. */
                             engine_queue_fetched_script(sdoc, src, src_n, su);
+                            /* …AND THIS DOOR QUEUED ONE. Beside the call rather than inside the entry,
+                               because the entry cannot see which transport carried the bytes. */
+                            engine_note_net_prog_fetch_queued();
                             free(src);
                         }
                         if (su) JS_FreeCString(ctx, su);
@@ -8086,6 +8100,30 @@ static lxb_dom_element_t *flow_dyn_el(const Flow *f) {
     return f->dyn_el[f->script_i];
 }
 
+/* WHETHER A REPLY EVER BECAME A PROGRAM, PER DOOR, WITH THE DENOMINATOR EACH ARM IS A SHARE OF. See
+   solver/engine.h's `net_prog_*` block for the whole reading; what a reader of THESE lines needs is that the
+   two `…_asks` counters are raised where a door HOLDS A REPLY RECORD and before any type is read, because
+   both doors legitimately decline — a reply whose computed type is not JavaScript is not a program — and a
+   census of what LANDED cannot tell a door nobody reached from one that refused correctly
+   (CLAUDE.md §AN-INVARIANT-OVER-A-GATED-OPERATION).
+   THE TOTAL IS RAISED AT THE ONE ENTRY BELOW AND THE TWO ARMS AT THE DOORS, so the relation between them is
+   `fetch + xhr <= total` rather than a partition: a THIRD caller exists on purpose (test_forced.c's
+   `loadScript` host edge, which stands in for a `<script src>`-shaped door and cannot reach the delivery arm
+   at all), so an equality would fire on that fixture. The residue is a row a reader can read: zero in the
+   shipped program, the fixture's own edge in that binary. What the inequality catches is a door raising a
+   queued arm WITHOUT going through this entry, which is the second compile door
+   §A-superseded-system-is-DELETED forbids arriving as an observation.
+   A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing reads them and no arm branches on one. */
+static long g_net_prog_queued, g_net_prog_fetch_asks, g_net_prog_fetch_queued;
+static long g_net_prog_xhr_asks, g_net_prog_xhr_queued;
+
+/* See solver/engine.h for why these are four entries rather than one taking a door. Each is ONE statement and
+   none of them can be half-made; the `…_ask` pair is what gives the `…_queued` pair a denominator. */
+void engine_note_net_prog_fetch_ask(void)    { g_net_prog_fetch_asks++; }
+void engine_note_net_prog_fetch_queued(void) { g_net_prog_fetch_queued++; }
+void engine_note_net_prog_xhr_ask(void)      { g_net_prog_xhr_asks++; }
+void engine_note_net_prog_xhr_queued(void)   { g_net_prog_xhr_queued++; }
+
 /* THE ENTRY BELOW IS A TASK — so the tail IS its position and it cannot be asked for another (engine.h's
    DynPos) — and it is a CLASSIC SCRIPT, which is §8.1.4.4's answer for a program that has no `<script>`
    element behind it rather than a default it happens to pick. An entry that DOES have an element behind it
@@ -8112,6 +8150,13 @@ void engine_queue_fetched_script(uint32_t doc, const char *body, size_t body_n, 
            "script with the response's URL and §8.1.4.1 keeps it as the script's base URL, so a caller here "
            "with none has the bytes and has thrown away where they came from; nothing downstream can "
            "re-derive it, and the document's address is another script's answer rather than a weaker one");
+    /* THE TOTAL, RAISED AT THE ONE ENTRY A PROGRAM FROM A RESPONSE IS EVER BORN AT — the row it builds is a
+       DYN_PAGE_SCRIPT exactly as the document's own seeded rows are, so its KIND cannot carry this the way
+       DYN_CANDIDATE carries `g_prog_queued_cand`, and the entry is the only thing every such program shares.
+       It is here rather than at the two doors so that a caller is counted by CALLING rather than by its
+       author remembering to; which door it came through is the doors' own to say, and the two arms are
+       compared against this at engine_frontier_census. */
+    g_net_prog_queued++;
     engine_queue(doc, body, body_n, DYN_PAGE_SCRIPT, SCRIPT_TYPE_CLASSIC, url, TASK_SOURCE_NETWORKING,
                  DYN_POS_APPEND);
 }
@@ -13055,6 +13100,11 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
        g_prog_starts_other/g_prog_queued_cand are on it for that same second reason and are named for it: the
        first three partition against each other, so zeroing some of them would break the identity at the next
        census instead of at the line that did it, and the fourth is the ask the candidate arm is read against.
+       The five g_net_prog_* counters are on it for that reason too: three of them stand in two
+       relations asserted at engine_frontier_census (each door's queue inside its own ask, and both arms
+       inside the one entry's total), so resetting some and not the others would break an identity at the next
+       census rather than at the line that did it — and the doors they count are the HOST's, exactly as the
+       reply debt above is.
        AND THIS LINE IS WHY "A COUNTER SURVIVED A SESSION BOUNDARY" IS NOT A HYPOTHESIS THE CENSUS'S PAIRING
        ASSERT CAN BE ANSWERED WITH. All of them are on this list together, so a total carried into a second
        session carries every term of the inequality and preserves its ORDER; there is no reading of a survival
@@ -14804,6 +14854,11 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->prog_starts_cand  = g_prog_starts_cand;
     out->prog_starts_other = g_prog_starts_other;
     out->prog_queued_cand  = g_prog_queued_cand;
+    out->net_prog_queued       = g_net_prog_queued;
+    out->net_prog_fetch_asks   = g_net_prog_fetch_asks;
+    out->net_prog_fetch_queued = g_net_prog_fetch_queued;
+    out->net_prog_xhr_asks     = g_net_prog_xhr_asks;
+    out->net_prog_xhr_queued   = g_net_prog_xhr_queued;
     out->claims_met        = g_orphan_claims_met;
     out->claims_unmet      = g_orphan_claims_unmet;
     out->host_asked        = g_host_asked;
@@ -14910,6 +14965,37 @@ void engine_frontier_census(EngineFrontierCensus *out)
             "beside the total, so a difference is a second place a program can start that moved the total "
             "without saying which population it moved",
             out->prog_starts_cand, out->prog_starts_other, out->prog_starts);
+    /* AND THE TWO REPLY DOORS' OWN PAIRS, ASSERTED HERE BECAUSE THIS IS THE ONE PLACE ALL FIVE ROWS ARE READ
+       TOGETHER. Each door's queue is a SUBSET of the replies it examined — both raises happen in one
+       straight-line block for one reply, and nothing forks between them — so a queued count above its own ask
+       count is not a large number, it is the two counters having stopped describing one population, and it is
+       exactly what a door that raises its queued arm and forgot its ask looks like. That forgetting is the
+       one thing four separate entries cannot prevent by construction, so it is asserted instead. */
+    DCHECKF(out->net_prog_fetch_queued <= out->net_prog_fetch_asks,
+            "the fetch() reply door queued more programs than it was shown replies (%ld queued against %ld "
+            "asks) — both are raised in one straight-line block for one reply record, so the queue side is a "
+            "SUBSET by construction and a door that raises engine_note_net_prog_fetch_queued without having "
+            "raised the ask is about to publish a numerator with no denominator under it",
+            out->net_prog_fetch_queued, out->net_prog_fetch_asks);
+    DCHECKF(out->net_prog_xhr_queued <= out->net_prog_xhr_asks,
+            "the XMLHttpRequest reply door queued more programs than it was shown replies (%ld queued against "
+            "%ld asks) — both are raised in one straight-line block for one reply record, so the queue side "
+            "is a SUBSET by construction and a door that raises engine_note_net_prog_xhr_queued without "
+            "having raised the ask is about to publish a numerator with no denominator under it",
+            out->net_prog_xhr_queued, out->net_prog_xhr_asks);
+    /* AND THE TWO ARMS AGAINST THE ONE ENTRY, WHICH IS AN INEQUALITY AND SAYS SO. `engine_queue_fetched_script`
+       raises the total and has a THIRD caller on purpose — test_forced.c's `loadScript` host edge, which
+       stands in for a `<script src>`-shaped door — so an equality would fire on that fixture and the residue
+       is a quantity a reader READS rather than one this line requires to be zero. What it catches is the
+       direction that cannot be innocent: an arm above the total is a door that queued a program WITHOUT going
+       through the one compile entry, which is the second compile door §A-superseded-system-is-DELETED forbids
+       arriving as an observation rather than as a mechanism. */
+    DCHECKF(out->net_prog_fetch_queued + out->net_prog_xhr_queued <= out->net_prog_queued,
+            "the reply doors' queued arms exceed the programs the one compile entry built (%ld fetch + %ld "
+            "xhr against %ld at engine_queue_fetched_script) — a door crediting itself with a program that "
+            "entry never saw has queued it somewhere else, which is a SECOND compile door beside the working "
+            "one and is what these rows exist to make visible",
+            out->net_prog_fetch_queued, out->net_prog_xhr_queued, out->net_prog_queued);
     /* AND THE REFUSAL EDGE'S OWN PARTITION, which is the row that makes a zero `sold` READABLE. Every call to
        engine_reclaim_tail leaves by exactly one of three doors — declined because the safepoint is not armed,
        answered at the frontier's floor, or a sale that gives back exactly one flow — so the three arms are the

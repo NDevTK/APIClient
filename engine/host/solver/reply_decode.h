@@ -68,8 +68,17 @@
  * origin as a script source cannot execute these bytes by any route, and nothing in this tree reads a policy
  * before EITHER compile. Refusing on it would refuse `fetch()` with it, so it is a question about the compile
  * entry; it is stated at the XHR route and is not a reason this door differs.
- * RETIREMENT: this record goes when a census counts the programs each reply door QUEUED, because a reader can
- * then watch both doors work instead of re-deriving from this file's silence which of them exists.
+ * RETIREMENT — MET, AND THE RECORD IS REWRITTEN RATHER THAN DELETED BECAUSE WHAT A READER RE-DERIVES IS THE
+ * DESTINATION ARGUMENT AND NOT THE ROW. The @COLD census carries `netProgFetchAsksLife`/`netProgFetchQueuedLife`
+ * and `netProgXhrAsksLife`/`netProgXhrQueuedLife`, each door's queue beside the replies it examined, so a
+ * reader watches both doors work instead of deriving from this file's silence which of them exists — and a
+ * door that queues nothing is separated from a door nobody reached, which was the whole of what the silence
+ * cost. What stays is the reasoning: the doubt was put on the DESTINATION and that axis puts `fetch()` and
+ * `XMLHttpRequest` in ONE ROW, so it cannot be why one of them refuses, and the axis this engine does
+ * discriminate on is whether the PAGE'S OWN CODE receives the bytes.
+ * RETIREMENT: this record goes when the two doors reach the compile entry through one seam that states its
+ * own transport, because the destination question is then answered by construction at the one site rather
+ * than re-argued at each door.
  *
  * IT HOLDS NO STATE. Everything it learns goes straight into solver/endpoint.c, so there is no table to
  * initialise, none to free, and no line for it in engine.h's release column. A component that kept its own copy
