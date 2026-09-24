@@ -1758,6 +1758,160 @@ function renderEngineRuns() {
           + `succeeds, before the drive reaches the frontier, so whether the uncalled body EXECUTED is `
           + `answered by the endpoints learned above and never by this number; a seeded drive with no `
           + `endpoint of its own is displacement, and this pair cannot say of which kind.`;
+    /* AND WHICH MECHANISM COMPOSED EACH OF THE ADDRESSES THAT ROW COUNTS — CLAUDE.md
+       §What-the-tool-produces' razor's RAW MATERIAL, written onto this record by bridge.js and read by
+       nobody until this arm. It is the same defect the `sourceReads`/`sinkReached` comment in `FULL` records
+       a few lines up, one landing later and on the razor's own fields: bridge.js composes `endpointDoors`
+       and `endpointMintedAt` off the emitted @H array, asserts each of them PARTITIONS that array, and
+       writes both onto the record this view reads — and `FULL` names neither, so the only statement a person
+       ever got about forced execution's contribution was `endpoints`, a bare reach figure. solver/result.c
+       records what such a figure has already been quoted as: "every row of a 43-row surface was one of that
+       document's own <script src>, <link rel=stylesheet> or <link rel=preload> elements, so the number a
+       person reads as a learned API surface was the <head> counted back". A computed value with a writer and
+       no reader is not a mechanism.
+
+       IT IS THE RAZOR'S RAW MATERIAL AND IT IS NOT THE RAZOR, AND SAYING SO IS THE HONEST HALF.
+       solver/endpoint.h is exact about the difference: a door says WHICH MECHANISM composed an address and is
+       silent about whether a markup parse gets that address for free, so "a reader holding `epDoors` alone
+       holds the raw material of the razor and not the razor". What turns one into the other is the DOOR-TO-
+       REACH map — endpoint.h's `ENDPOINT_DOORS` third column, over `ENDPOINT_REACHES`' markup/either/beyond —
+       and this zone does not hold it and must not be handed a copy. bridge.js states the cost of a copy at
+       the point where it declines to make one: a door list GROWS, so "a door landed in the engine and
+       INSTALLED before a copy here was widened would abort the trusted zone, which is live on write, on every
+       endpoint of every document, for an engine doing exactly what the design asks". The razor STATED already
+       exists and is deferred below rather than re-derived here.
+
+       RENDERED GENERICALLY, WITH NO DOOR NAME LIST IN THIS FILE, for the reason `order` and the census rows
+       below give: the keys are the producer's own, so a door added to `ENDPOINT_DOORS` reaches this reader
+       unedited. THE UNSTATED BUCKET IS NOT SPELLED HERE EITHER, and that is deliberate rather than an
+       omission — it is bridge.js's sentinel for an @H row carrying no door key at all, spelled with
+       parentheses precisely "so it can never collide with a token the producer adds", and a literal copy of
+       it in this file would be a second spelling of a sentinel to keep in step for no gain. It renders as
+       itself and reads as what it is: a row from a wasm older than that key, which is a fact about the BUILD
+       and never about the page — and the ORDINARY case in a zone deployed on write beside an engine that is
+       live only after a build.
+
+       THE DENOMINATOR TRAVELS ON THE LINE AND NO COUNT HERE IS BARE. Each histogram sums to `endpoints`, the
+       figure in the row directly above, so every bucket is a share of a population this row names — which is
+       the whole of CLAUDE.md §a-coverage-figure-states-what-it-is-a-fraction-of.
+
+       AND IT IS A DIAGNOSTIC AND NEVER A TARGET, in CLAUDE.md's own words: a surface whose every row came
+       through a markup door is a REFUSAL TO CLAIM this capability on this document rather than a smaller
+       version of it, and optimising toward these buckets optimises the instrument.
+
+       IT SITS BELOW THE ORPHAN SENTENCE AND NOT BETWEEN IT AND THE COST ROW, WHICH IS A PLACEMENT CONSTRAINT
+       AND NOT A PREFERENCE. That sentence's last arm says the uncalled body's execution "is answered by the
+       endpoints learned above", and the block above carries its own comment requiring the two to be adjacent
+       — so an insertion between them would re-point a reference made BY POSITION at whatever now occupies
+       that position, which CLAUDE.md names as the one stale reference a grep for a symbol can never find. */
+    DCHECK(m.endpointDoors && typeof m.endpointDoors === "object" && !Array.isArray(m.endpointDoors) &&
+           m.endpointMintedAt && typeof m.endpointMintedAt === "object" &&
+           !Array.isArray(m.endpointMintedAt),
+           "an engine run record reached the popup without its endpoint partitions — bridge.js builds both " +
+           "off the same `fetchCallSites` array that the `endpoints` figure beside them is the LENGTH of, " +
+           "and writes them onto every non-crashed record, so their absence is that relay broken and the " +
+           "razor's raw material goes back to being a number no reader can partition");
+    /* THE PARTITION IS RE-ASSERTED HERE AND IT IS NOT A SECOND COPY OF BRIDGE.JS'S CHECK, because the two are
+       taken over different populations at different instants: bridge.js asserts the sum where it COMPOSES the
+       record, and this is the same claim after that record has crossed a message boundary and been
+       re-serialized. A relay that dropped a bucket, or a record built by a build of that zone this one did
+       not ship with, fails here and nowhere else — two halves that can disagree is the test, which is what
+       solver/result.c says of its own re-check one boundary further out. A share rendered off a histogram
+       that does not sum to the figure beside it is a share of a population nobody holds. */
+    for (const _p of [["endpointDoors", m.endpointDoors], ["endpointMintedAt", m.endpointMintedAt]]) {
+      let _n = 0;
+      for (const k of Object.keys(_p[1])) _n += _p[1][k];
+      DCHECK(_n === m.endpoints,
+             "this run's `" + _p[0] + "` partition reached the popup summing to " + _n + " over an emitted " +
+             "surface of " + m.endpoints + " row(s) — bridge.js builds the histogram and that figure off ONE " +
+             "array at ONE moment and asserts they agree there, so a difference here is the record having " +
+             "changed between that composition and this render, and every share below would be rendered as a " +
+             "statement about the surface a person is shown");
+    }
+    const histCells = (h) => Object.keys(h).map((k) => esc(k) + " " + esc(String(h[k]))).join(" · ");
+    const surface = m.endpoints === 0
+      ? `learned surface: no address at all, so there is nothing to partition — a statement about this RUN, `
+        + `read WITH the uncalled-code sentence above and not against it`
+      : `learned surface (${esc(String(m.endpoints))} address(es)) · composed by: `
+        + `${histCells(m.endpointDoors)}`
+        + ` · minted: ${histCells(m.endpointMintedAt)} — WHICH MECHANISM and WHEN, and neither implies the `
+        + `other: a link element a router created and one the markup declared arrive through the same door, `
+        + `and a head whose first script runs before the parser reaches the link below it mints that link `
+        + `post-program. A bucket named "(unstated)" is a row from an engine older than that key and is a `
+        + `fact about the build, not about the page.`;
+    /* NAMED RESIDUAL — THE RAZOR STATED, WHICH THIS VIEW ALREADY PRINTS AND DOES NOT YET MAKE READABLE.
+       AN EARLIER DRAFT OF THIS BLOCK SAID THE RAZOR "STOPS ONE HOP SHORT OF A PERSON", AND THAT WAS FALSE.
+       It is recorded rather than quietly deleted because it is exactly the conclusion a reader re-derives
+       from the two unread fields above, and it is wrong in the direction that manufactures work: it argues
+       for building a renderer that already exists. solver/result.c composes `epReach` — the door map APPLIED,
+       over `ENDPOINT_REACHES`' markup/either/beyond — into the @COLD census beside its own denominator
+       `epEmitted`; bridge.js relays that census WHOLE; and this view's `CENSUS` list renders `cold`
+       GENERICALLY, every key of it, with no filter at all. So the razor is on screen today.
+       WHAT IS NOT COVERED is therefore not its ABSENCE but its LEGIBILITY, and the gap is exact: it renders
+       as three bare buckets inside a run-on list of some forty census rows, with no sentence saying what they
+       are. The single reading that must never be published is precisely the one an unlabelled bucket invites
+       — `beyond 0` taken for a small number rather than for what endpoint.h says it is, a REFUSAL TO CLAIM
+       this capability on this document. Telling those two apart requires knowing endpoint.h's door taxonomy
+       by heart, and the reader who does not is the reader this panel exists for.
+       WHAT THE NEXT DIFF BUILDS: one sentence in this block reading `m.cold.epReach` against
+       `m.cold.epEmitted` as its denominator and naming the refusal in words — the map applied by the producer
+       that owns it, with no door vocabulary entering this file — and rendering an ABSENT `epReach` as the
+       stated absence of the razor rather than as a zero, for that same reason.
+       WHY IT IS NOT IN THIS DIFF: `m.cold.epReach` is an ENGINE field, and this zone is INTERPRETED FROM THE
+       TREE while the engine is live only after a build (CLAUDE.md §A-CROSS-BOUNDARY-DIFF). A reader of it
+       landed against an INSTALLED wasm predating the key gets `undefined`, and both honest arms for that — a
+       stated unknown, or a refusal — are claims about a build this zone cannot interrogate for itself. The
+       generic census row above is safe from exactly that because it names no key at all, and the two
+       histograms this arm renders need no such claim either: bridge.js computes them HERE, in the tree, from
+       a row key whose absence it already renders as its own bucket.
+       THE OBSERVATION THAT RETIRES IT, WHICH IS A CONTENT CHECK AND NEVER A TIMESTAMP: the string `epReach`
+       present in the INSTALLED wasm under extension/lib/qjs/, with an INVENTED key beside it that is ABSENT,
+       so that a zero means the key is not in those bytes rather than that the probe never reached the file;
+       and `epEmitted` beside both as a positive control that the cold census is in that artifact at all.
+       WHO CAN PERFORM THE ACT THAT CHANGES IT: the COORDINATOR, and only the coordinator. This project
+       forbids a lane to build, so what moves this observation is a build AND an install of the wasm, which no
+       reader of this file can do for themselves — and a retiring condition with no actor in it reads as
+       merely pending while nobody is able to discharge it.
+       HOW ITS ABSENCE SHOWS: a person reads the cold census row, meets `epReach markup 45, either 0, beyond
+       0` among forty other buckets, and takes it for a small number on a busy line rather than for this run's
+       statement that it reached nothing a markup scan would not have handed them for free. */
+    /* AND WHETHER THIS TOOL'S OWN EGRESS POLICY IS WHY THAT SURFACE IS THE SIZE IT IS — bridge.js's
+       `egressAsked`/`egressDeclined`, written onto this record and, exactly like the two partitions above,
+       read by nobody. They are not engine counters and are not in `FULL` or in `CENSUS`: bridge.js raises
+       both in engineServiceFetch's one loop, asserts their containment, writes them here, and no reader in
+       this zone has ever opened either. bridge.js states the reading in its own words at the site that
+       composes them — "a page with no API surface is either a page this engine never derived those requests
+       for, or a page whose requests THIS TOOL REFUSED, and those take opposite work — improve the driving, or
+       widen the origin". That is the sentence a person ACTS on, and it was published to no one.
+       THE PAIR IS RENDERED TOGETHER AND NEITHER HALF IS QUOTABLE ALONE, which is bridge.js's own rule for it
+       and CLAUDE.md §a-coverage-figure-states-what-it-is-a-fraction-of's: `asked` is the DENOMINATOR, so an
+       empty refusal map under a NONZERO one says the policy refused nothing, and the same empty map under a
+       ZERO one says this loop never ran. A bare "0 declined" folds two opposite facts into one number.
+       THE REASONS TRAVEL AS THE POLICY'S OWN STRINGS AND ARE NOT CLASSIFIED HERE, for the reason bridge.js
+       gives for keeping them apart: `blocked-signal:witness=pinned` names the row of a person's OWN control
+       that would let the request fire if they widened it, and `blocked-destructive:logout` names a refusal
+       nothing reopens. Collapsing those to one count is the several-states-behind-one-answer shape landing at
+       the one place a person has to act on it — so the keys are rendered as the producer wrote them, with no
+       reason vocabulary in this file, exactly as the door buckets above are. */
+    DCHECK(typeof m.egressAsked === "number" && Number.isInteger(m.egressAsked) && m.egressAsked >= 0 &&
+           m.egressDeclined && typeof m.egressDeclined === "object" && !Array.isArray(m.egressDeclined),
+           "an engine run record reached the popup without its egress census — bridge.js raises both halves " +
+           "in engineServiceFetch's one loop and asserts their containment before writing them onto every " +
+           "non-crashed record, so a missing or mistyped half is that relay broken, and whether this tool's " +
+           "own policy refused the requests behind an empty surface goes back to being unanswerable from " +
+           "the report a person reads");
+    let _decl = 0;
+    for (const k of Object.keys(m.egressDeclined)) _decl += m.egressDeclined[k];
+    const egress = m.egressAsked === 0
+      ? `egress: this run asked this tool's chokepoint for nothing, so its own policy refused nothing and is `
+        + `not what the surface figure above is measuring`
+      : _decl === 0
+        ? `egress: ${esc(String(m.egressAsked))} request(s) asked of this tool's chokepoint and NONE refused `
+          + `— so the surface above is what the driving reached, and widening an origin would not add to it`
+        : `egress: ${esc(String(_decl))} of ${esc(String(m.egressAsked))} request(s) REFUSED by this tool's `
+          + `own policy · ${histCells(m.egressDeclined)} — which is a different fact from a page this engine `
+          + `never derived the request for, and the two take opposite work: widen the origin, or improve the `
+          + `driving.`;
     /* AND WHAT THE ONE BFS WAS ORDERING ITS FLOWS BY — solver/result.c's `_wfq`, relayed whole by bridge.js.
        Until it rode the result document the scheduler's ordering was written ONLY by the smoke driver's own
        loop, which the extension's ABI never enters, so every ordering number this project had ever quoted was
@@ -1891,6 +2045,8 @@ function renderEngineRuns() {
        accounting. Its last arm points AT the endpoint number in the row above, so the two must be adjacent. */
     return `<div class="deep-row"><span class="deep-label">${where} — ${head}` + parts.join(" · ")
          + `</span><span class="deep-label">${orphan}</span>`
+         + `<span class="deep-label">${surface}</span>`
+         + `<span class="deep-label">${egress}</span>`
          + `<span class="deep-label">${order}</span>` + denom + censusRows.join("") + `</div>`;
   }).join("");
   const live = engineRuns.filter((m) => m.run === "partial").length;
