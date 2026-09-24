@@ -82,6 +82,8 @@
 #include "solver/cow.h"
 #include "solver/endpoint.h"   /* the @H surface — every request host-edge funnels one endpoint into it */
 #include "solver/engine.h"
+#include "solver/reply_decode.h"   /* what a reply BODY teaches — see xhr_take_reply, and that header
+                                      for why this door had to call it rather than be reached from one */
 #include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 #include "core/xml/xml_parse.h"        /* the ONE place an XML document is parsed — shared with §8.5.1 and §7.5.3 */
 
@@ -144,6 +146,18 @@ typedef struct {
     uint8_t  response_object_failure;   /* §3's response object being `failure` rather than an object */
     uint8_t  network_error;             /* the response IS §3's initial "network error" */
     uint8_t  aborted;                   /* the response's aborted flag */
+    /* WHAT §3.5.6 STEP 6'S REQUEST IS EVIDENCE OF, TAKEN ONCE WHERE THAT STEP RUNS — one of solver/pending.h's
+       PROV_*, or -1 before there is a request to grade. CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE makes the
+       grade a fact about the REQUEST, and §scheduler says an operation that becomes a work item takes its
+       inputs with it rather than reading them back off the object it acts on — which is exactly what an
+       XMLHttpRequest does: step 6 composes the request on one turn and the reply lands on another, with the
+       flow parked in between. So every consumer below reads THIS rather than asking the running path again,
+       and the three that used to ask separately (the trusted zone's record, the @H sighting, and the reply
+       this diff teaches the engine to learn from) cannot come apart.
+       -1 AND NOT ZERO, WHICH IS THE WHOLE REASON THE SENTINEL IS SIGNED: `calloc` leaves 0 and 0 is
+       PROV_OBSERVED, the STRONGEST of the three — so an ungraded request would report as one a real client
+       made, which is the fabrication §@H names. */
+    int8_t   request_prov;
 } XhrData;
 
 static JSClassID g_xhr_class;
@@ -606,6 +620,7 @@ static void xhr_reset_request(JSContext *ctx, XhrData *d)
     xhr_set(ctx, d, &d->author_headers, JS_NewArray(ctx));
     xhr_set(ctx, d, &d->request_body, JS_NULL);
     d->request_body_is_shape = 0;   /* the arm goes with the body it describes */
+    d->request_prov = -1;           /* …and the grade goes with the request it is about */
     d->upload_listener = 0;
     /* "Set this's response to a network error", which is the initial value of every response field. */
     d->network_error = 1;
@@ -1667,6 +1682,19 @@ static int xhr_handle_errors(XhrData *d)
 static const char *const XHR_ERR_EVENT[] = { NULL, "timeout", "abort", "error" };
 static const char *const XHR_ERR_EXC[] = { NULL, "TimeoutError", "AbortError", "NetworkError" };
 
+/* §3.5.6 STEP 6'S GRADE, READ BACK — see the `request_prov` field for why it is stored rather than re-asked.
+   The read is asserted and never defaulted for that field's own reason: the value a miss would supply is 0,
+   which is the strongest of the three. */
+static int xhr_request_prov(const XhrData *d)
+{
+    DCHECKF(d->request_prov >= 0,
+            "an XMLHttpRequest was asked what its request is evidence of before §3.5.6 \"The send() method\" "
+            "step 6 composed one — every reader of this field runs at or after that step, so a -1 here is a "
+            "route that reached the network, the @H surface or a reply without passing it. request_prov=%d",
+            (int)d->request_prov);
+    return d->request_prov;
+}
+
 /* Take the host's reply onto the record. A null reply — or none at all — leaves the response a network error,
    which is what §5.5's network error is on the Fetch side too. */
 static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
@@ -1756,6 +1784,44 @@ static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
         free(ser);
     }
     d->network_error = 0;
+    /* AND WHAT THE BODY TEACHES, WHICH NOTHING READ. CLAUDE.md §Learning-from-replies: "a consumed reply is
+       ALWAYS fetched to fill examples", and "the JS/JSON a server returns is the richest source of real
+       example values" — and solver/reply_decode.h carried, correctly, a residual saying that an
+       XMLHttpRequest's reply body is read by nobody. The reason was the TRANSPORT and not a policy: every
+       other request in this engine parks on a (method, url) pair and is answered at solver/engine.c's
+       `engine_provide`, which is where that file is called from; §3.5.6's send() is the one SYNCHRONOUS
+       rendezvous, keyed by a request id, and solver/pending.c excludes that kind from the address index BY
+       CONSTRUCTION — so there was no pair at `engine_host_answer` to learn under and the address stayed on
+       the @H surface with no example values from any of its bodies.
+       THIS IS THAT ONE SITE. It holds the reply record AND the pair it answers, and it is reached EXACTLY
+       once per reply: the two callers are the two arms of Fetch §4.1 main fetch — a request this agent
+       answered itself, and one the trusted host answered — and `xhr_main_fetch_local` returning true is what
+       clears `s->req`, so a send takes one of them and never both.
+       THE ADDRESS IS `url` AND NOT `response_url`, WHICH IS AN IDENTITY QUESTION RATHER THAN A SPEC ONE.
+       `reply_decode_learn` uses it twice: as the BASE a body's relative addresses resolve against, and as
+       half the key its asset verdict is filed under (`endpoint_mark_asset`). The second decides it — the pair
+       this request was owed under is the one `xhr_request_op` handed the trusted zone and the one
+       `xhr_record_endpoint` filed the @H sighting under, and a verdict naming a different string would
+       silently retract nothing while reading as a retraction. §3.6.1 The responseURL getter's fragment
+       exclusion is a fact about what a PAGE reads back, not about which record this reply answers.
+       NOT A SECOND LEARNING DOOR: it is the one entry, called from the one place this transport can reach it,
+       and it holds no state — everything it learns goes to solver/endpoint.c, which is global and takes no COW
+       capture for the reason that header gives (what a server said is not a fact about a flow's world). */
+    {
+        const char *lm = JS_ToCString(ctx, d->method), *lu = JS_ToCString(ctx, d->url);
+
+        /* BOTH HALVES OR NEITHER, AND NEITHER IS DEFAULTABLE. An UNKNOWN method never reaches here — both
+           arms answer one before a reply exists (`xhr_main_fetch_local` returns for a concolic method, and
+           `xhr_request_op` refuses one by name) — so a failure is OOM or this component holding something
+           §3.5.1 The open() method never wrote. */
+        CHECK(lm != NULL && lu != NULL,
+              "XMLHttpRequest: OOM reading back the (method, url) pair a reply answered — the reply register "
+              "is keyed on that pair, so a half-named one can only file what it learns under an endpoint "
+              "nobody requested");
+        reply_decode_learn(ctx, lm, lu, reply, xhr_request_prov(d));
+        JS_FreeCString(ctx, lm);
+        JS_FreeCString(ctx, lu);
+    }
     JS_FreeValue(ctx, st_v); JS_FreeValue(ctx, hs_v); JS_FreeValue(ctx, bd_v);
 }
 
@@ -1790,7 +1856,12 @@ static FetchCredentialsMode xhr_credentials_mode(const XhrData *d)
    that function's own header gives: one composition, in one place, for every request built by running code.
    It answers `derived` or `forced` and never `observed`, which is a fact about this act rather than a
    narrowing — `observed`'s first conjunct is HTML §4.12.1.1 "Processing model"'s `parser document`, and an
-   XMLHttpRequest has no parser behind it by construction. */
+   XMLHttpRequest has no parser behind it by construction.
+   IT IS NOW READ OFF THE RECORD RATHER THAN ASKED HERE, AND THAT IS THE SAME COMPOSITION AND NOT A SECOND
+   ONE: the ask moved to §3.5.6 step 6, where the request is created, and this line spells what that step
+   answered through the mapping that already owns the vocabulary. What it buys is the field's whole reason —
+   the REPLY is graded by what the request was FIRED at, so the grade the chokepoint made its firing decision
+   from and the grade the engine learns the body under cannot be two different readings of one path. */
 static char *xhr_request_op(JSContext *ctx, XhrData *d)
 {
     JsonBuf b = { 0 };
@@ -1823,7 +1894,7 @@ static char *xhr_request_op(JSContext *ctx, XhrData *d)
        the engine that could say a credentials mode at all and said it in a vocabulary of its own. */
     json_buf_str(&b, fetch_credentials_token(xhr_credentials_mode(d)));
     json_buf_raw(&b, ","); json_buf_key(&b, "provenance");
-    json_buf_str(&b, engine_provenance_of_running_path());
+    json_buf_str(&b, engine_provenance_token(xhr_request_prov(d)));
     json_buf_raw(&b, ","); json_buf_key(&b, "headers"); json_buf_raw(&b, "[");
     for (i = 0; i < n; i++) {
         JSValue pair = JS_GetPropertyUint32(ctx, d->author_headers, i);
@@ -1982,8 +2053,12 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
        question no send state can answer about itself. solver/endpoint.h states why that makes it a row of its
        own rather than the partition the other three rows are over. */
     endpoint_xhr_edge_offered();
+    /* …AND THE GRADE OF THE REQUEST THIS SIGHTING IS OF, off the record rather than asked again. It is the
+       SAME value — this runs in §3.5.6 step 6's own turn, where the ask was made — and reading it here made
+       the sighting, the trusted zone's record and the reply's learning three independent answers to one
+       question about one exchange. See the `request_prov` field. */
     endpoint_record(ctx, method, JS_IsNull(d->url_src) ? d->url : d->url_src, eh, (int)n, ebp,
-                    engine_prov_of_running_path(), EPD_XHR);
+                    xhr_request_prov(d), EPD_XHR);
     if (body) JS_FreeCString(ctx, body);
     free(body_ct);
     if (owned) {
@@ -2206,6 +2281,15 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         s->cb[0] = s->cb[1] = s->cb[2] = s->cb[3] = JS_UNDEFINED;
         s->transmitted = s->length = 0;
         if (mode == XHR_MODE_ERROR) { s->hdr.stage = XR_ERR_BEGIN; goto error_steps; }
+        /* §3.5.6 STEP 6 — "Let req be a new request, initialized as follows" — AND THE ONE FACT ABOUT THAT
+           REQUEST THIS ENGINE STATES THAT THE STANDARD'S ELEVEN MEMBERS DO NOT: what it is evidence of.
+           ASKED HERE, ONCE, BECAUSE THIS IS THE TURN THE REQUEST IS CREATED ON. `engine_prov_of_running_path`
+           reads the path that is STANDING, so it answers about this act only while this act is what is
+           happening — and the reply to this request lands on a LATER turn with the flow parked in between,
+           which is §scheduler's "an operation that becomes a work item takes its inputs with it; anything it
+           reads back off the object it acts on is read at the wrong TIME" with a network round trip in the
+           middle. Every consumer below takes it from the record. */
+        d->request_prov = (int8_t)engine_prov_of_running_path();
         /* §3.5.6 step 6's request record, onto the @H surface, before §4.1 chooses who answers it. */
         xhr_record_endpoint(ctx, d);
         /* Fetch §4.1: main fetch decides WHO answers. A request this agent answers itself — a port §2.9 blocks,
@@ -3020,6 +3104,7 @@ static int js_xhr_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     d->received = JS_NewArrayBufferCopy(ctx, (const uint8_t *)"", 0);
     d->state = XHR_UNSENT;
     d->network_error = 1;   /* §3: "response — a response, initially a network error" */
+    d->request_prov = -1;   /* no request has been composed — see the field */
     JS_SetOpaque(obj, d);
     *presult = obj;
     return 0;

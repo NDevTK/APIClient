@@ -26,34 +26,53 @@
  * there and not in the per-flow drain, where it would run once per waiter. What is learned is a
  * fact about the SERVER and not about a flow's world, so it is not per-flow state and takes no COW capture,
  * exactly as the endpoint surface does not.
+ * THE RULE IS ONCE PER REPLY AND IT WAS NEVER ONCE PER FILE, which is the distinction a second caller makes
+ * visible: core/xhr/xml_http_request.c's `xhr_take_reply` is the other one, and it is the same rule read on a
+ * transport that has no address index to dedup through. An XMLHttpRequest is one request with one waiter, so
+ * that site is crossed once per reply by construction — its two callers are the two arms of Fetch §4.1 main
+ * fetch and a send takes one of them. What a caller owes is that property; what it may NOT do is ask a second
+ * question here, which is why the Flight arm and the asset verdict below are shared rather than copied.
  *
  * IT USED TO SAY `EVERY FETCHED REPLY` AND THAT IS AN ABSOLUTE ONE GREP REFUTES, WHICH IS WHY IT IS NARROWED
  * RATHER THAN DELETED: a reader re-deriving the dedup argument re-derives the word `every` with it, and the
  * word is what makes the population below invisible. `engine_provide` walks solver/pending_index.h's
  * (method, url) set, and solver/pending.c tracks every kind into that set BUT ONE —
  * `if (kind != FLOW_PENDING_HOSTREQ) pending_index_track(e)` — so a synchronous host rendezvous is answered
- * through `engine_host_answer` by REQUEST ID and never reaches this file at all.
+ * through `engine_host_answer` by REQUEST ID and never reaches this file THROUGH THAT DOOR. That is still
+ * exactly true of the index and is no longer true of the population: §3.5.6 "The send() method"'s rendezvous
+ * now reaches this entry from the XHR machine itself, which holds the pair the index could not. The other
+ * HOSTREQ kinds are not replies at all — a cross-instance operation, a document name, a number — so what is
+ * still outside is a rendezvous that carries a BODY and has no caller here, and the honest form of `every` is
+ * a claim about CALLERS rather than about the index.
  *
- * NAMED RESIDUAL — AN XMLHttpRequest'S REPLY BODY IS READ BY NOBODY. It is a residual and not a crash because
- * the code here is CORRECT for the door it is on and narrower than §Learning-from-replies, which says a
- * consumed reply is ALWAYS fetched to fill examples and calls the JS/JSON a server returns the richest source
- * of real example values.
- *   WHAT IS NOT COVERED: every reply to an XHR, which is a PROPERTY of that door rather than a population —
- *     core/xhr/xml_http_request.c reaches the network through `engine_host_request` alone, and that park is
- *     the one kind the address index excludes by construction. Its ADDRESS is on the @H surface (that
- *     component calls `endpoint_record` for itself); its BODY is not read by anything. A JavaScript body
- *     arriving that way is not compiled either, for the same reason: solver/engine.c's program arms are all
- *     on the address-keyed delivery.
- *   WHAT THE NEXT DIFF BUILDS — STATED AS WHAT MUST EXIST AFTERWARD, because the mechanism is not this file's
- *     to choose and the address is the obstacle rather than the call: a HOSTREQ entry `names a REQUEST ID and
- *     no address at all` (solver/pending.c says so at `pending_kind_is_program`), so there is no (method, url)
- *     at `engine_host_answer` to hand this function, and that door answers ops that are not replies at all.
- *     What must exist is ONE site holding the reply record AND the pair it answers, reached once per reply,
- *     which is a question about where the XHR machine takes its answer and not about a second arm here.
- *   HOW ITS ABSENCE WOULD SHOW: a document whose configuration and data arrive by XHR reports those addresses
- *     on the @H surface with no example VALUES taken from any of their bodies, while a document fetching the
- *     same data through `fetch()` reports the fields — one surface with two answers, decided by which API the
- *     bundle happened to call.
+ * NAMED RESIDUAL — AN XMLHttpRequest'S JAVASCRIPT REPLY BODY IS NOT A PROGRAM THIS ENGINE RUNS. The LEARNING
+ * half of this residual is retired: `xhr_take_reply` calls this entry, so an XHR's fields become concrete
+ * examples like any other reply's. It is a residual and not a crash because what is left is a DECISION nobody
+ * has taken rather than a gap: the code is correct for the question it was asked.
+ *   WHAT IS NOT COVERED: a reply whose computed type is JavaScript, arriving by XHR, is freed unread — the
+ *     property being that no arm of this file compiles one and this transport reaches no arm that does.
+ *     Whether it SHOULD is a standards question and not an analogy: a `fetch()`-delivered program reaches
+ *     solver/engine.c's FLOW_PENDING_RESOLVE delivery, and CLAUDE.md §Learning-from-replies' "a fetch whose
+ *     body is JAVASCRIPT is ALWAYS fetched + EXECUTED" is what that arm is built to. WHAT THE STANDARDS SAY
+ *     AND DO NOT SAY, read rather than inferred: XHR §3.5.6 "The send() method" step 6 — "Let req be a new
+ *     request, initialized as follows" — states ELEVEN members and a destination is not one of them, so the
+ *     request keeps the one Fetch §2.2.5 "Requests" gives it by default ("A request has an associated
+ *     destination, which is destination type. Unless stated otherwise it is the empty string"), which is
+ *     outside that section's own `script-like` set. A `<script src>` is `script` and IS in it. So the two
+ *     differ on the one axis Fetch uses to say whether a reply may cause script execution, and no section of
+ *     either standard settles what a SOLVER should do with the difference — which is why this is a decision
+ *     to take and not a gap to fill.
+ *   WHAT THE NEXT DIFF BUILDS — STATED AS WHAT MUST EXIST AFTERWARD: one answer, derived from XHR §3.6.x and
+ *     Fetch rather than from what the RESOLVE arm happens to do, to whether a JavaScript-typed reply the page
+ *     asked for as data is a program this engine runs. Where it is, what must exist is a ROUTE from that
+ *     answer to `engine_queue_fetched_script` (declared in solver/engine.h; solver/engine.c's RESOLVE
+ *     delivery is its caller) — never a second arm in this file and never a second door beside it, which is
+ *     the dual-system rot CLAUDE.md §A-superseded-system-is-DELETED forbids. Where it is not, what must exist
+ *     is that reasoning written at the decision rather than this residual standing open.
+ *   HOW ITS ABSENCE WOULD SHOW: a bundle that loads a lazy chunk with `xhr.open("GET", chunkUrl)` and `eval`s
+ *     the text itself reports the chunk's own address and none of the addresses INSIDE it, while the same
+ *     bundle loading the same chunk through `fetch()` reports both — two answers on one surface, decided by
+ *     which API fetched the program.
  *
  * IT HOLDS NO STATE. Everything it learns goes straight into solver/endpoint.c, so there is no table to
  * initialise, none to free, and no line for it in engine.h's release column. A component that kept its own copy
@@ -93,11 +112,18 @@
    is the example that shapes the next endpoint". A chunk address mined out of a route reached only on a
    forced arm has bytes indistinguishable from one the document's own parser fetched, so an address emitted
    with its grade silent is read as the second, which is the fabrication performed on the @H surface.
-   IT IS A PARAMETER AND NEVER READ HERE. This file runs on the reply-delivery path, OUTSIDE any flow, so
-   `engine_prov_of_running_path` would answer about a path that is not standing — the grade belongs to the
-   REQUEST and travels with the operation (§scheduler: "an operation that becomes a work item takes its inputs
-   with it — anything it reads back off the object it acts on is read at the wrong TIME"). solver/engine.c's
-   `engine_provide` composes it by joining the records the reply answers; see the fold there for the rule. */
+   IT IS A PARAMETER AND NEVER READ HERE, AND THE REASON IS THE REQUEST RATHER THAN THE CALLER. The grade
+   belongs to the REQUEST and travels with the operation (§scheduler: "an operation that becomes a work item
+   takes its inputs with it — anything it reads back off the object it acts on is read at the wrong TIME"), so
+   a reply is evidence at the grade its request was FIRED at and never at whatever path happens to be standing
+   when the bytes land. That holds on both doors and is why this is a parameter on both: solver/engine.c's
+   `engine_provide` runs OUTSIDE any flow, where `engine_prov_of_running_path` would answer about a path that
+   is not standing at all, and composes the grade by joining the records the reply answers (see the fold there
+   for the rule); core/xhr/xml_http_request.c runs INSIDE the flow that sent, on a LATER turn than the one
+   §3.5.6 "The send() method" step 6 composed the request on, and carries the grade it took at that step on
+   its own record. A caller that asked the running path here would be the second answer that rule forbids —
+   and on the XHR door it would be a different one from the grade the trusted zone made its firing decision
+   from, which is one exchange graded twice. */
 void reply_decode_learn(JSContext *ctx, const char *method, const char *url, JSValueConst reply, int prov);
 
 #endif

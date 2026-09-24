@@ -387,9 +387,16 @@ char   *endpoint_reach_hist_json(void);
 
    EVERY PRODUCER STATES IT AND NOTHING HERE DERIVES IT. A request this engine builds by RUNNING the page's
    code states `engine_prov_of_running_path()` (solver/engine.h), read at the act because that is when the
-   path it is about is standing; a reply-learned address states the grade of the reply that named it
-   (solver/reply_decode.h), which no flow can answer because that path runs outside every flow. A default
-   here would be `observed` by the numbering, on a record nobody graded. */
+   path it is about is standing; a reply-learned address states the grade of the REPLY that named it
+   (solver/reply_decode.h), which is a fact about the REQUEST that reply answers and never about whoever is
+   standing when the bytes land. THAT REASON USED TO READ "which no flow can answer because that path runs
+   outside every flow", and it is rewritten rather than deleted because a reader who re-derives it from the
+   `engine_provide` door will re-derive the word `every`: that door does run outside every flow, and
+   core/xhr/xml_http_request.c's does not — it runs INSIDE the flow that sent, on a later turn than the one
+   §3.5.6 "The send() method" step 6 composed the request on, and carries the grade it took at that step
+   rather than asking the path it is standing on. The rule is the same at both and only the sharper half of
+   the reason was transport-specific. A default here would be `observed` by the numbering, on a record nobody
+   graded. */
 /* `door` IS WHICH MECHANISM COMPOSED THE ADDRESS — one of the EPD_* above, stated by the producer because
    it is the one fact about a sighting no consumer of this surface can re-derive. See the enum for why it is
    neither `prov` nor the program-state flag, and why it is not part of the endpoint's identity. */
@@ -784,9 +791,16 @@ char   *endpoint_fetch_edge_rows(void);
    stages, so one state holds both facts and the teardown can say which of them it had reached.
    XMLHttpRequest splits that across TWO machines: `send()` (XHR_SEND_DECL over SEND_STAGES) constructs, and
    the LIFECYCLE machine it mints at §3.5.6 step 12 or 13 (js_xhr_run_steps, XR_FETCH) is what records. The
-   send state is torn down BEFORE the asynchronous arm's task has run, so "did this state offer an address"
+   send state is torn down BEFORE the asynchronous arm's task has run, so `did this state offer an address`
    is a question it cannot answer about itself, and a census built over the partition the fetch edge uses
    would have to invent it.
+   IN BACKTICKS AND NOT IN QUOTATION MARKS, WHICH IS AN AUTHORING RULE AND NOT A TIDY-UP. That run is this
+   file's own phrasing of a question, and quotation marks put it in the citation auditor's QUOTATION channel,
+   where it is compared against whatever standard the nearest anchor names. It was never judged while this
+   header named no standard near it — the shielded form — and the §3.5.6 citation added one paragraph up in
+   the same diff that wrote this note UNSHIELDED it, so a sentence nobody had written as a spec quotation was
+   reported as diverging from XHR §3.5.6 "The send() method" at word one. A spelling being SHOWN goes outside
+   that channel by construction rather than by relying on no anchor being in range.
    SO THE PARTITION IS OVER THE PLACEMENT AND NOT OVER THE OFFER, and the `Placed` in the row names says so:
    a send state either reached §3.5.6 step 12/13 and handed the constructed request to the lifecycle machine,
    or it DIED, and where it died is the whole content of the census. That is the same question the fetch

@@ -3885,7 +3885,24 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
                 "relayed `perform` is held, with the flow SUSPENDED at the line the page wrote `send()` on — " +
                 "not answered, and not re-reported into a spin by qjs_host_requests");
       }
-      return { meta: { status: r.status, statusText: r.statusText, headers: Object.entries(r.headers) },
+      /* AND WHAT THIS ZONE COMPUTED THE RESOURCE TO BE, WHICH IT HAD ALREADY DECIDED AND WAS NOT SENDING.
+         `safeFetch` read the bytes and ran the sniff for this request exactly as it does for the one
+         `fetched` relays — the field is on `r` either way — and this return dropped it, so the renderer got
+         an XMLHttpRequest's reply with no type on it at all. SECURITY.md and CLAUDE.md §Architecture make
+         this zone the only one that may answer that question, so the engine could not fill the gap: a
+         renderer that re-derives a type from a raw header is a second voice on a decision taken one hop
+         earlier by the side that could see the body. It is the read-with-no-writer half of a broken contract
+         with the halves swapped — `fetch_reply_computed_type` is written, asserted and reachable, and this
+         producer simply never spoke — which is why nothing anywhere reported it.
+         ASSERTED HERE FOR `fetched`'s REASON, one function up: `""` is §5.1's "the supplied MIME type is
+         undefined" surviving the sniff, a POSITIVE answer, so `undefined` is a chokepoint that stopped
+         stamping and must not become a resource whose type is unknown. */
+      DCHECK(typeof r.computedType === "string",
+             "safeFetch answered an XHR with no computed content type — solver/reply_decode.c reads this " +
+             "field instead of re-deriving a type from the raw header, so an absent stamp is a producer " +
+             "that failed and never a resource whose type is unknown");
+      return { meta: { status: r.status, statusText: r.statusText, headers: Object.entries(r.headers),
+                       computedType: r.computedType },
                bytes: r.body };
     } catch (e) {
       /* §3.5.6's "handle errors": a THROWN fetch is the network error that becomes the page's `error` event.
