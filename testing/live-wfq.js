@@ -65,9 +65,32 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
    A LIFETIME COUNTER raised at the same line and under the same condition as its superset, so
    `starvedPicksIdle <= starvedPicks` is an identity of one evaluation; it is checked below rather than
    trusted, for the reason every other identity on this stream is. */
+/* `epochRebuildLifetime` AND `epochResetsLifetime` ARE COUNTERS AND THE READING THIS DRIVER CANNOT COMPOSE
+   FROM ONE SAMPLE.  They are the whole maintenance an index over solver/flow.c's `flow_index_key` would pay:
+   flow_credit_emit sends a family back to its epoch base by moving a generation with NO per-member write, so
+   such an index rebuilds exactly the members standing AWAY, and the first of these is that count summed at
+   every emission.  Read it against `scanNextWeights` on the COST scope — the lifetime sum over scans of the
+   members each one weighed, which is the walk an index would REPLACE — and against the second of these for
+   the average rebuild per emission.  Both are differenceable; the gauges below are NOT the cost and are not
+   a smaller version of it.
+   A ZERO IS READ AGAINST `epochResetsLifetime` FIRST and is three-state like every other absence here: zero
+   resets is a run that never emitted, so the pair is SILENT about the design rather than favourable to it,
+   and zero rebuild across non-zero resets is the strongest result available. */
 const COUNTERS = ["picksLifetime", "starvedPicks", "starvedPicksIdle", "workDone", "rankChanges",
-                  "topForgiven", "arrivals", "departures"];
+                  "topForgiven", "arrivals", "departures",
+                  "epochRebuildLifetime", "epochResetsLifetime"];
+/* `epochAwayLive` AND `epochAwayWalk` ARE GAUGES AND THEY ARE A CONSERVATION IDENTITY RATHER THAN TWO
+   READINGS — the first maintained incrementally at four sites in solver/flow.c and summed over distinct
+   families, the second that same census asking `flow_own_silence` of every member.  Two maintainers over one
+   instant, so a difference is a FIFTH transition site the incremental count does not have.  Checked below
+   rather than trusted, for the reason every other identity on this stream is: the engine's own DCHECK is
+   compiled OUT of the release build this driver samples.
+   THEY ARE NOT THE COST AND MUST NOT BE DIFFERENCED INTO ONE.  A census lands at an arbitrary point between
+   two emissions, so this population reads near zero just after one and at its peak just before — one sample
+   is a lottery and two of them measure where the samples fell.  `epochAwayLive / members` is worth reading
+   as how much of the frontier is off its base right now, and nothing else. */
 const GAUGES = ["members", "unrun", "neverPicked", "neverPickedGap", "neverPickedAtTop",
+                "epochAwayLive", "epochAwayWalk",
                 "picksLive", "picksMax", "families", "jobsReady", "jobsFramed", "jobsOwed",
                 /* …AND WHICH ARM OF flow_step CAN DISPATCH THE READY HALF, which `jobsReady` alone cannot
                    say: the checkpoint arm stands above the program sequence and the task arm below it, so
@@ -345,6 +368,15 @@ const COST_IDENTITIES = [
   ["rivalMissGen+rivalMissCur+rivalMissBoth==scanRivalRuns",
    ["rivalMissGen", "rivalMissCur", "rivalMissBoth", "scanRivalRuns"],
    (w) => w.rivalMissGen + w.rivalMissCur + w.rivalMissBoth === w.scanRivalRuns],
+  /* AND THE AWAY POPULATION'S, WHICH IS WHAT MAKES `epochRebuildLifetime` A MEASUREMENT RATHER THAN A
+     COUNTER WITH NOTHING UNDER IT.  The left side is maintained by four incremental statements in
+     solver/flow.c and the right side is walked by the census, so this is two maintainers compared at one
+     instant.  A break means a member crossed its family's epoch base at a site the incremental count does
+     not name, and the lifetime rebuild — which is this same quantity sampled at every emission — is then
+     wrong by however much this is.  It is filed with the COST identities and not the branch ones because
+     the quantity it guards is read against `scanNextWeights`, which is on this scope. */
+  ["epochAwayLive==epochAwayWalk", ["epochAwayLive", "epochAwayWalk"],
+   (w) => w.epochAwayLive === w.epochAwayWalk],
 ];
 
 /* THE IDENTITIES result.c STATES AS CHECKABLE ON THIS DOCUMENT, checked rather than trusted — the same

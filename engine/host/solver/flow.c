@@ -657,6 +657,25 @@ typedef struct FlowAcct {
        counted by the next one instead of inheriting a stale mark; the generation is bumped past zero on wrap
        for the same reason. It is written only by the census, which decides nothing. */
     unsigned census_gen;
+    /* HOW MANY LIVE MEMBERS OF THIS FAMILY STAND AWAY FROM ITS EPOCH BASE — a GAUGE, meaningful only where
+       `family == self`, and the one quantity that says whether an index over flow_index_key is a COST or a
+       BAR. flow_own_silence is `cpu_gen == family->emit_gen ? cpu : 0`, so a member is at its family's base
+       exactly when that reads zero, and flow_credit_emit sends a whole family there by moving `emit_gen` with
+       NO PER-MEMBER WRITE. An epoch-keyed index therefore rebuilds only the members standing AWAY, and this
+       is how many they are.
+       MAINTAINED INCREMENTALLY AT FOUR SITES AND NEVER WALKED, because the only instant its value is wanted
+       is the emission itself and a walk there would be an instrument changing the run it samples. The sites
+       are flow_age_running (a charge takes the running member away from base), flow_fork_inherit (a newborn
+       inherits its parent's silence and is born away), acct_depart (an away member leaves), and
+       flow_credit_emit (the bump takes the whole family back, and the emitter alone is re-stamped). The
+       arrival door is NOT among them: flow_arrive_at_virtual_time ASSERTS `cpu == 0 && cpu_gen == 0`, so a
+       from-baseline flow arrives at base by construction rather than by a transition anybody counts.
+       THE IDENTITY IS WHAT MAKES A MISSED SITE FIRE RATHER THAN LIE, and it is the point of the field rather
+       than a check on it: flow_wfq_census sums this over distinct families in the SAME walk that counts
+       members reading a non-zero flow_own_silence, and the two must agree. One is maintained by four
+       statements at four sites and the other is computed from the accessor, so a fifth transition nobody
+       found is a fire and not a quiet drift. */
+    long away_n;
     /* THE TOP-LEVEL ARM THIS NODE'S SUBTREE HANGS UNDER — the ACCOUNTING SCOPE BETWEEN the member and the
        family root, and the four fields below are what it accounts for. A root's is ITSELF; a node forked
        DIRECTLY off a root is ITSELF (it is a new arm of the family); anything deeper inherits its parent's. So
@@ -859,11 +878,24 @@ static void acct_compress_dead(FlowAcct *a) {
    compute that residual and is gone with it, and so is `acct_live_ancestor`'s answer to "who to charge": there
    is no per-arm charge left to route. What the departure still owes the tree is the compression above, which
    is retention and not accounting — see acct_compress_dead. */
+/* …AND THE SILENCE READING, FORWARD-DECLARED FOR THE ONE CALLER THAT STANDS ABOVE IT. acct_depart has to ask
+   whether a departing member was standing away from its family's base BEFORE it clears `f->acct` and
+   `f->family`, and this reader is stated once beside the window it is a reading of rather than moved up here
+   to suit its earliest caller. Not dev-only: the away count is maintained in every build. */
+static int64_t flow_own_silence(const Flow *f);
+
 static void acct_depart(Flow *f) {
     DCHECK(f->acct != NULL && f->acct->owner == f,
            "a flow departed without owning its own fork-tree node — either it never got one, or another flow's "
            "node is standing in for it, and the family this flow's arms are charged to is not its own");
     f->acct->owner = NULL;   /* it has left the frontier: a later compression walks past it */
+    /* …AND AN AWAY MEMBER TAKES ITS PLACE IN THE AWAY POPULATION WITH IT — see FlowAcct's `away_n`. FIRST in
+       this function, because every statement below it dismantles exactly what the reading needs: `f->acct`
+       is cleared, and `f->family` is cleared last of all, and flow_own_silence answers ZERO for a member
+       whose family pointer is gone. Asked after either, a departing member would read as having been at base
+       and the gauge would drift upward by one for every away member that ever leaves — which the census
+       identity would then report as a defect in the count rather than in this ordering. */
+    if (flow_own_silence(f) > 0) f->family->away_n--;
     /* …AND THE MEMBER LEAVES ITS BRANCH BUCKET, on the line that performs the departure and BEFORE the unref
        below, because the bucket may BE this node and this is the last instant it is certainly addressable.
        `sub_gone` and not a live decrement, for `g_departures`' reason: a gauge cannot say whether a bucket
@@ -1278,6 +1310,35 @@ int64_t flow_departures_teardown(void) { return g_departures_teardown; }
 static long g_starved_picks = 0;
 long flow_starved_picks(void) { return g_starved_picks; }
 
+/* THE WHOLE REBUILD AN EPOCH-KEYED INDEX WOULD PAY, SUMMED OVER A RUN — a LIFETIME counter and the one
+   reading that decides whether a sub-linear order over flow_index_key is buildable. At every emission the
+   members standing away from their family's base are exactly the ones such an index must move, so this adds
+   `away_n` at each bump and is therefore the total index-maintenance work the epoch costs.
+   IT IS A LIFETIME SUM AND NOT A GAUGE, DELIBERATELY, AND THE GAUGE IS THE WRONG INSTRUMENT. A census lands
+   at an arbitrary point between two emissions, so a gauge of the away population reads near zero just after
+   one and at its peak just before: a single sample is a lottery rather than a measurement, and the quantity
+   that decides the design is the rebuild SUMMED over the run. The gauge is published too, because the
+   identity needs it, and it is read as a shape and never as the cost.
+   THE DENOMINATOR IT IS READ AGAINST ALREADY SHIPS AND IS NAMED HERE SO NOBODY PUBLISHES A FRACTION WITH
+   ONLY ONE HALF OF IT: `scanNextWeights` is the lifetime sum over scans of the members each one weighed,
+   which is exactly the walk an index would REPLACE. Below it by a wide margin the epoch is a cost and the
+   index narrows; at or above it the rebuild is the walk moved rather than removed and the index buys
+   nothing. `epochResetsLifetime` beside it is the number of bumps, so the quotient is the average rebuild
+   per emission and a reader can tell a large total over many cheap emissions from a small one over few
+   expensive ones.
+   RELEASE-LIVE, unlike the key and index stamps, because the maintenance is four O(1) statements rather than
+   a per-member evaluation per scan — so this row can be read off a release artifact, which is where the
+   product actually runs. */
+static long g_epoch_rebuild = 0;
+long flow_epoch_rebuild(void) { return g_epoch_rebuild; }
+
+/* …AND HOW MANY TIMES THE EPOCH MOVED, WHICH IS THE COUNTER ABOVE'S OWN DENOMINATOR. A LIFETIME count of
+   emissions that reset a family's base. Raised on the same statement group as the sum and nowhere else, so
+   the two cannot describe two different populations, and a sum with no count beside it cannot be read as an
+   average by anybody. */
+static long g_epoch_resets = 0;
+long flow_epoch_resets(void) { return g_epoch_resets; }
+
 /* …AND THE SUBSET OF THOSE IN WHICH THE RE-DISPATCHED MEMBER HAD NOTHING TO CONTINUE, which is the whole of
    what the row above could not say and was claimed to. Three sites that DECLARE that counter described it as
    counting only the defect; a CONSUMER of it said the opposite, and the consumer was right — a member re-picked
@@ -1487,7 +1548,19 @@ void flow_credit_emit(double v) {
        current: a flow that emits twice with no charge in between holds a previous window's arithmetic in the
        field, and every reader is already answering ZERO for it. Reading the field would resurrect it. */
     own_us = flow_own_silence(g_running);
+    /* THE REBUILD THIS BUMP COSTS AN INDEX, TAKEN BEFORE IT HAPPENS AND SUMMED — see `g_epoch_rebuild`. The
+       members standing away from this family's base are exactly the ones an epoch-keyed index must move back,
+       and after the next statement there is nothing left to count: the bump takes the whole family to base by
+       moving a generation, which is the property that makes the reset O(1) and the reason the number has to
+       be read HERE or not at all. Raised together with its own denominator so no reader can average one
+       without the other. */
+    g_epoch_rebuild += g_running->family->away_n;
+    g_epoch_resets++;
     g_running->family->emit_gen++;
+    /* …AND THE GAUGE GOES WITH THE WINDOW IT COUNTED. Every member of this family now reads zero own silence
+       from the generation comparison alone, so the away population is empty for an instant — the emitter is
+       put back below, which is the one member this forgiveness deliberately does not reach. */
+    g_running->family->away_n = 0;
     /* …AND THE EMITTER CARRIES ITS OWN BURN ACROSS THE BUMP, WHICH IS THE ONE THING THIS FORGIVENESS MAY NOT
        DO FOR THE MEMBER THAT EARNED IT. The bump forgives the own half for every arm of the family at once,
        and that is right for every arm EXCEPT the one holding the thread: CLAUDE.md's rule is that the credit
@@ -1528,6 +1601,13 @@ void flow_credit_emit(double v) {
        between two findings, since a `fam_us` below FLOW_SERVICE_US still floors to a notch of zero. */
     g_running->cpu             = own_us;
     g_running->cpu_gen         = g_running->family->emit_gen;
+    /* …AND THE EMITTER IS THE WHOLE AWAY POPULATION AGAIN, WHICH IS THE TRANSITION THE ZERO ABOVE WOULD
+       OTHERWISE HAVE LOST. The two statements above re-stamp this member into the NEW window carrying
+       `own_us`, so if it burned anything at all it is standing away from a base every one of its siblings is
+       at — and an index would have exactly this one member to hold. Written as a test on `own_us` rather
+       than on the field, because `own_us` is what was just stored and reading flow_own_silence back would be
+       a second spelling of the same store. */
+    if (own_us > 0) g_running->family->away_n = 1;
     g_running->family->fam_us  = own_us;
     /* THE TWO HALVES ARE EQUAL FOR THE EMITTER AND ZERO FOR EVERY OTHER ARM, which is the relation stated at
        its strongest: the family's burn over the new window IS the emitter's, because the emitter is the only
@@ -1819,11 +1899,22 @@ void flow_age_running(int64_t us) {
        because this is a write site already; flow_own_silence stays read-only for the reason it states.
        NO `if` PAST A BROKEN INVARIANT: a stale generation is the ORDINARY state of every member of a family
        that has just emitted, so this is the normal path and not a repair. */
+    /* WHETHER THIS MEMBER WAS ALREADY AWAY FROM ITS FAMILY'S BASE, READ BEFORE THE NORMALISE AND BEFORE THE
+       CHARGE — see FlowAcct's `away_n`. It has to be taken here because both statements below can move it:
+       the normalise writes the field to what its readers already return (observationally a no-op, and zero),
+       and the charge then adds to it. */
+    int was_away = flow_own_silence(g_running) > 0;
     if (g_running->cpu_gen != g_running->family->emit_gen) {
         g_running->cpu = 0;
         g_running->cpu_gen = g_running->family->emit_gen;
     }
     g_running->cpu += us;
+    /* …AND THE ONE TRANSITION A CHARGE CAN MAKE. `cpu` only ever rises here and the normalise only ever fires
+       where flow_own_silence was ALREADY answering zero, so base→away is the only direction available and a
+       member already away stays away — which is why this is an increment under a test and not a difference
+       of two counts. A charge of zero microseconds against a member at base moves nothing, and the test says
+       so rather than assuming `us` is positive. */
+    if (!was_away && flow_own_silence(g_running) > 0) g_running->family->away_n++;
     /* …AND THE SAME MICROSECONDS ON THE FAMILY. Both are the AGING term's — it is their SUM — and they are not
        two copies of one number, because they answer two different comparisons over ONE window: `cpu` is what
        THIS FLOW has burned since the family last emitted, while `fam_us` is what the WHOLE family has burned
@@ -2335,6 +2426,13 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        `family` is the ACCOUNT. Collapsing them would mean walking the ancestry on every flow_weight, and
        flow_weight is evaluated inside DCHECK conditions where a walk that compresses is forbidden. */
     sib->family = parent->family;
+    /* …AND A NEWBORN THAT INHERITED A BURN IS BORN AWAY FROM ITS FAMILY'S BASE — see FlowAcct's `away_n`.
+       The copy of `cpu` and `cpu_gen` happened above and the family pointer is only now in place, so this is
+       the first instant flow_own_silence can be asked of this member at all; asked any earlier it would read
+       the sibling's own fresh node rather than the family whose epoch decides the answer. A fork off a parent
+       standing at base mints a member at base and moves nothing, which is why this is a test and not an
+       unconditional raise. */
+    if (flow_own_silence(sib) > 0) sib->family->away_n++;
     /* AND THE EDGE ITSELF — the one line that makes a fork chain an accounting unit rather than N unrelated
        flows. It belongs here for the same reason the two terms above do: this is where a newborn arm's place in
        the ranking is decided, and its place is UNDER the flow it branched from. */
@@ -6406,6 +6504,7 @@ void flow_wfq_census(WfqCensus *out) {
     out->sil_phases = out->sil_carry = 0;
     memset(g_phase_seen, 0, sizeof g_phase_seen);
     out->families = 0;
+    out->epoch_away_live = out->epoch_away_walk = 0;
     out->branches = 0;
     out->br_live_max = out->br_live_min = out->br_live_sum = 0;
     out->br_born_max = out->br_born_min = 0;
@@ -6469,6 +6568,14 @@ void flow_wfq_census(WfqCensus *out) {
     for (i = 0; i < g_flows_n; i++) {
         const Flow *f = g_flows[i];
         int64_t s = flow_service_notch(f);
+        /* …AND THE OTHER SIDE OF THE AWAY POPULATION'S IDENTITY, COMPUTED FROM THE ACCESSOR WHILE THE
+           MAINTAINED COUNT IS FOLDED A FEW LINES DOWN FROM THE FAMILY DOOR. This is the direct reading —
+           every member whose flow_own_silence is non-zero stands away from its family's epoch base — and it
+           is deliberately NOT the same route as `epoch_away_live`, which is four incremental statements at
+           four sites. Two maintainers, one walk, one instant: that is what makes the assertion at the end of
+           this function a check rather than a sum compared with its own summands, and what makes a fifth
+           transition site nobody found FIRE instead of drifting. */
+        if (flow_own_silence(f) > 0) out->epoch_away_walk++;
         /* THE SUM THE PICK USES, not only the terms it is made of — see flow.h for the reading that went wrong
            without it. One call per member, and this scan still decides nothing. */
         double w = flow_weight(f);
@@ -6895,6 +7002,11 @@ void flow_wfq_census(WfqCensus *out) {
             if (f->family && f->family->census_gen != g_wfq_census_gen) {
                 f->family->census_gen = g_wfq_census_gen;
                 out->families++;
+                /* …AND THIS FAMILY'S MAINTAINED AWAY COUNT, FOLDED AT THE ONE DOOR THAT VISITS EACH FAMILY
+                   EXACTLY ONCE. `census_gen` is what makes this a SUM over distinct families rather than a
+                   weighted count, and it is the mark this door already sets — so the fold costs nothing and
+                   cannot double-count a family however many of its members the walk reaches. */
+                out->epoch_away_live += f->family->away_n;
                 /* …AND THE ROOT'S OWN BRANCH BUCKET, OPENED HERE BECAUSE THIS IS WHERE THE ROOT IS ALREADY IN
                    HAND AND ALREADY GUARDED. A root's bucket holds exactly ONE member — the root flow itself,
                    since every arm it forks opens a bucket of its own — so the instant the root flow departs,
@@ -7577,6 +7689,28 @@ void flow_wfq_census(WfqCensus *out) {
        fold — and either leaves `brUsLifeMax / chargedUsLife`, which is the concentration reading these rows
        exist for, as a fraction of the wrong denominator. ALL THREE TERMS ARE PUBLISHED, so this is also
        checkable from outside the process on the emitted document, exactly as the arrival pair above is. */
+    /* THE AWAY POPULATION COUNTED TWO WAYS — the identity that makes `away_n` worth maintaining at all, and
+       the reason this row is not a counter with nothing under it. The left side is four incremental
+       statements at four sites summed over the frontier's distinct families; the right side is this walk
+       asking flow_own_silence of every member. They are two maintainers over one instant, so a difference is
+       a TRANSITION SITE THE INCREMENTAL SIDE DOES NOT HAVE — a fifth writer of `cpu`, `cpu_gen` or `family`
+       that moves a member across its family's base without telling the count — and never a disagreement
+       about what the population is.
+       IT IS THE ONE CHECK THAT CAN CATCH AN OMISSION RATHER THAN A MISCOUNT, which is why it is asserted and
+       not merely published: the four sites were enumerated by reading every writer of those three fields,
+       and an enumeration is exactly the artifact this project rates as unable to state its own completeness.
+       BOTH SIDES ARE PUBLISHED, so this is also checkable from outside the process on the emitted document,
+       exactly as the branch partition below it is. */
+    DCHECK(out->epoch_away_live == out->epoch_away_walk,
+           "the frontier's maintained away-from-base count disagrees with a direct reading of it — `away_n` "
+           "is raised at a charge that takes the running member off its family's base, at a fork whose "
+           "newborn inherits a burn, and lowered at a departure, and zeroed for a whole family at "
+           "flow_credit_emit's bump with the emitter alone put back. A difference is a FIFTH site moving a "
+           "member across that base without maintaining the count: a writer of `Flow.cpu`, of `Flow.cpu_gen` "
+           "or of `Flow.family` that this enumeration does not name, or one of the four raising the count on "
+           "the wrong family — acct_depart in particular must read BEFORE it clears either pointer, because "
+           "flow_own_silence answers zero for a member whose family is gone. `epochRebuildLifetime` is a sum "
+           "of exactly this quantity taken at every emission, so it is wrong by however much this is");
     DCHECK(out->br_live_sum == (long)out->members,
            "the frontier's branch buckets do not partition its members — a live member belongs to exactly one "
            "bucket and each bucket is opened once per census, so a sum below `members` is a member counted in "

@@ -1409,6 +1409,39 @@ char *result_wfq_json(void) {
                         parent's exact weight, so every quantum of every multi-quantum program is one of
                         these. `starvedPicksIdle` beside it is the separation, and the remainder — this minus
                         that — is what the frontier spends finishing programs. */
+                     /* THE AWAY-FROM-BASE POPULATION AND WHAT IT COSTS AN INDEX — four rows, and the two
+                        KINDS are in the keys because a reader who cannot name a quantity's kind from the
+                        output is not entitled to do arithmetic on it. The two `Live` rows are GAUGES at this
+                        instant; the two `Lifetime` rows are counters and are the only ones a reader may
+                        difference.
+                        THE PAIR OF GAUGES IS A CONSERVATION IDENTITY AND NOT TWO OPINIONS. `epochAwayLive`
+                        is maintained incrementally at four sites in solver/flow.c and summed over distinct
+                        families at the census's family door; `epochAwayWalk` is that same census asking
+                        flow_own_silence of every member. Two maintainers, one instant, so `epochAwayLive ==
+                        epochAwayWalk` is a check — asserted in flow_wfq_census and published here so it is
+                        checkable on this document from outside the process. A difference is a FIFTH
+                        transition site the incremental count does not have, never a disagreement about what
+                        the population is.
+                        `epochRebuildLifetime` IS THE READING AND THE GAUGE IS NOT. flow_credit_emit sends a
+                        whole family back to base by moving a generation with no per-member write, so an
+                        index over solver/flow.c's `flow_index_key` rebuilds exactly the members standing
+                        away — and this is that number summed AT EACH EMISSION, which is the whole
+                        maintenance such an index pays. The gauge cannot answer it: a census lands at an
+                        arbitrary point between two emissions, so it reads near zero just after one and at
+                        its peak just before, and one sample is a lottery.
+                        READ IT AGAINST `scanNextWeights`, WHICH IS ALREADY ON THIS LINE. That row is the
+                        lifetime sum over scans of the members each one weighed — exactly the walk an index
+                        would REPLACE — so well below it the epoch is a COST and an index narrows, and at or
+                        above it the rebuild is the walk moved rather than removed. `epochResetsLifetime` is
+                        the other denominator: the quotient is the average rebuild per emission, which tells
+                        a large total over many cheap emissions from a small one over few expensive ones.
+                        A ZERO IN `epochRebuildLifetime` IS READ AGAINST `epochResetsLifetime` FIRST. Zero
+                        resets is a run that never emitted, and the row is then silent about the design
+                        rather than favourable to it; zero rebuild across non-zero resets is the strongest
+                        result available and is reachable, because the population empties whenever nothing
+                        was charged since the last finding. */
+                     "\"epochAwayLive\":%ld,\"epochAwayWalk\":%ld,"
+                     "\"epochRebuildLifetime\":%ld,\"epochResetsLifetime\":%ld,"
                      "\"starvedPicks\":%ld,"
                      /* …AND THE SUBSET IN WHICH THE RE-DISPATCHED MEMBER HAD NOTHING TO CONTINUE, which is
                         the one of the two populations §scheduler's razor calls STARVES. A member with no live
@@ -1500,6 +1533,8 @@ char *result_wfq_json(void) {
                      kc.armed, kc.stale_gen, kc.first_seen, kc.running,
                      ic.index_asked, ic.index_differed,
                      ic.band_members, ic.band_weighed,
+                     w.epoch_away_live, w.epoch_away_walk,
+                     flow_epoch_rebuild(), flow_epoch_resets(),
                      flow_starved_picks(), flow_starved_picks_idle(),
                      (long long)w.arrivals, (long long)w.departures,
                      (long long)w.credit_calls, (long long)w.credit_paid, (long long)w.credit_dropped,

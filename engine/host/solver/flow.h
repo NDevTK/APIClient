@@ -2052,6 +2052,27 @@ typedef struct {
        level for now; `families > 1` with a floor far below the max is the term ordering, which is the state
        the family charge was added for. */
     long families;
+    /* THE MEMBERS STANDING AWAY FROM THEIR FAMILY'S EPOCH BASE, COUNTED TWO WAYS — two GAUGES and they say so
+       in their keys, because the pair IS the conservation identity and a reader who cannot tell which is
+       maintained and which is walked cannot tell what a difference between them means.
+       WHAT THE POPULATION IS. flow_own_silence is `cpu_gen == family->emit_gen ? cpu : 0`, so a member is at
+       its family's base exactly when that reads zero, and flow_credit_emit sends a whole family there by
+       moving `emit_gen` with NO PER-MEMBER WRITE. An index over flow_index_key is therefore rebuilt only for
+       the members standing AWAY, and these say how many.
+       `epochAwayLive` IS THE MAINTAINED SIDE — four incremental statements at four sites, summed over the
+       frontier's distinct families at the census's own family door. `epochAwayWalk` IS THE WALKED SIDE — this
+       scan asking the accessor of every member. Two maintainers, one instant, so their equality is a CHECK
+       and not a sum compared with its own summands; it is asserted at the end of flow_wfq_census and both are
+       published so it is checkable on the emitted document from outside the process.
+       READ THEM AS A SHAPE AND NEVER AS THE COST, which is the one way this row will be misread. A census
+       lands at an arbitrary point between two emissions, so a gauge of this population reads near zero just
+       after one and at its peak just before — a single sample is a LOTTERY, and differencing two of them
+       measures where the samples fell rather than anything about the design. The quantity that decides
+       whether an index here is a cost or a bar is `epochRebuildLifetime`, which is this gauge summed AT EACH
+       EMISSION, and it is a lifetime counter for exactly that reason. `epochAwayLive / members` is worth
+       reading as how much of the frontier is off its base right now, and nothing else. */
+    long epoch_away_live;
+    long epoch_away_walk;
 
     /* HOW MANY SUB-QUANTUM RESIDUES THE FRONTIER OCCUPIES — the count of DISTINCT values of
        flow_silence_phase over the members, and the one number that says whether asking the order has to walk
@@ -3406,6 +3427,31 @@ int64_t flow_departures_teardown(void);
    below is the separation; this row is the population it is a subset of, and kept because the REMAINDER — what a
    forking frontier spends finishing programs — is a reading in its own right. */
 long flow_starved_picks(void);
+
+/* THE WHOLE REBUILD AN EPOCH-KEYED INDEX OVER `flow_index_key` WOULD PAY, SUMMED OVER A RUN — a LIFETIME
+   counter, published as `epochRebuildLifetime`, and the reading that decides whether a sub-linear order over
+   this frontier is buildable at all. flow.c holds the derivation; the reading is this.
+   THE DENOMINATOR IS `scanNextWeights` AND IT ALREADY SHIPS, which is why no new one is owed and why it is
+   named here rather than left to be re-derived: that row is the lifetime sum over scans of the members each
+   one weighed, i.e. exactly the walk an index would REPLACE. Well below it, the epoch is a COST and an index
+   narrows; at or above it, the rebuild is the walk moved rather than removed and an index buys nothing.
+   `epochResetsLifetime` is its own denominator for the other question — the quotient is the average rebuild
+   per emission, which separates a large total over many cheap emissions from a small one over few expensive
+   ones, and those take different diffs.
+   A ZERO IS A CLAIM AND NOT A CLEAN BILL, so read it against `epochResetsLifetime` first: zero resets is a
+   run that never emitted, and the row is then silent about the design rather than favourable to it. Zero
+   rebuild across NON-ZERO resets is the strongest possible result — every emission found the whole family
+   already at base — and it is reachable, because the population empties whenever nothing has been charged
+   since the last finding.
+   RELEASE-LIVE, unlike the key and index stamps beside it: the maintenance is four O(1) statements rather
+   than a per-member evaluation per scan, so this is readable off the artifact the product actually ships. */
+long flow_epoch_rebuild(void);
+
+/* …AND HOW MANY EMISSIONS RESET A FAMILY'S BASE — a LIFETIME count, published as `epochResetsLifetime`, and
+   the denominator of the row above. Raised on the same statement group as that sum and nowhere else, so the
+   two cannot come to describe two different populations and no reader can take an average from one of them
+   alone. */
+long flow_epoch_resets(void);
 
 /* …AND THE SUBSET OF THOSE IN WHICH THE MEMBER RE-DISPATCHED HAD NOTHING TO CONTINUE — no live frame and no
    microtask checkpoint owed, which is the unit boundary HTML §8.1.4.4 "Calling scripts" step 3 of clean up
