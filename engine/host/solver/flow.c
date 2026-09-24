@@ -962,6 +962,14 @@ static void frontier_rank_changed(void);
    move behind it. Declared here beside the other three and not defined here, because the key is stated once,
    beside the terms it is made of. DEV-only in the declaration as in the use, for `Flow.key_last`'s reason. */
 static double flow_member_key(const Flow *f);
+
+/* …AND THE PER-MEMBER HALF OF THAT KEY, FORWARD-DECLARED FOR THE SAME ONE WRITER AND FOR A DIFFERENT CLAIM.
+   flow_member_key is the quantity that must STAND STILL between two frontier generations; this is the
+   quantity an index may be KEYED on, and flow_index_key's own banner is emphatic that the two are different
+   compositions of one sum ("ONE QUANTITY, TWO QUESTIONS, AND THE STRICTER ONE DECIDES THE COMPOSITION").
+   The stamp above asserts the SUM; the stamp this declares asserts the HALF, at the same seam, on the same
+   member, for the reason solver/flow.h's `ikey_last` gives. */
+static double flow_index_key(const Flow *f);
 #endif
 
 /* THE FRONTIER'S VIRTUAL TIME — SFQ's v(t), WHICH IS THE SERVICE TAG OF THE ITEM IN SERVICE AND NOT A QUANTITY
@@ -1888,6 +1896,13 @@ void flow_age_running(int64_t us) {
     g_running->key_last    = flow_member_key(g_running);
     g_running->key_gen     = g_gen;
     g_running->key_stamped = 1;
+    /* …AND THE PER-MEMBER HALF, ON THE SAME STATEMENT GROUP, BECAUSE THIS CHARGE MOVES IT BY THE SAME `k`.
+       flow_index_key reads flow_service_notch, which is the floor this line advances, so a charge that
+       crosses a quantum moves this stamp and the key stamp together and a charge inside one moves neither.
+       Stamping only the sum here would leave the half's check firing on exactly the member the charge IS
+       about — the state solver/flow.h's `phase_last` says the walk is not written for, arriving one
+       composition down. */
+    g_running->ikey_last   = flow_index_key(g_running);
     /* …AND THE PHASE, ON THE SAME STATEMENT GROUP AND FOR THE SAME REASON. This charge is the ONE writer of
        `own_silence` that does not raise the generation, so it is the one writer both stamps must survive —
        and the phase is the half the key cannot carry, because the key reads the FLOOR of the quantity this
@@ -4693,13 +4708,40 @@ long flow_branch_born(const Flow *f) {
    saying so is the point: the term now has a form in which a bucket is the operand, which is what flow_pick's
    banner means by "carried as a per-BUCKET OFFSET read at query time" and which nothing before it had.
    NOT COVERED: there is no candidate set, so flow_pick weighs every member and asks that offset once per
-   MEMBER — one read per member of a quantity that is now one number per ARM. Two things stand between that and
-   an ask that does not walk and neither is this function's. Nothing ENUMERATES the frontier's distinct
+   MEMBER — one read per member of a quantity that is now one number per ARM. THREE things stand between that and
+   an ask that does not walk and none of them is this function's; this clause said TWO and listed two, and the
+   third is the only one of them that decides what such an ask COSTS rather than how a bucket is SPELLED.
+   Nothing ENUMERATES the frontier's distinct
    buckets: every reader of one reaches it through a member (`f->acct->branch`, or `f->family` at the census's
    root door), and `branch_gen` de-duplicates a bucket WITHIN a member walk rather than replacing one. And
    `FlowAcct` is file-private to flow.c, so no holder outside this file can name a bucket at all — which is why
    flow_member_key's second equality is stated through `flow_branch_born`'s integer, the one spelling of this
    quantity that crosses the boundary.
+   AND THE THIRD IS `flow_own_silence` READ THROUGH THE FAMILY'S `emit_gen`, WHICH BULK-INVALIDATES THIS KEY
+   FOR A WHOLE FAMILY IN ONE STATEMENT AND IS THE ONLY SUMMAND HERE THAT MOVES FOR MANY MEMBERS AT ONCE. The
+   two blockers above are about REACHING a bucket; this one is about what the key is worth once reached, and
+   no amount of enumeration touches it. flow_credit_emit sends every member of a family to zero own silence
+   through the account's generation — no per-member write, which is the whole point of the epoch — so every
+   member's `k` and every member's phase go to zero together, and on a real page the whole frontier is ONE
+   family (flow_pick's `unrun` banner says so in its own words). An index keyed here is therefore rebuilt for
+   the entire frontier at every EMISSION, which is the event the scheduler exists to produce: the cheaper the
+   engine gets at its job, the more often the key it is ordered by is thrown away.
+   IT IS NOT FATAL AND THE REASON IS THE SAME EPOCH, WHICH IS WHY THIS IS A COST TO PRICE RATHER THAN A
+   REFUSAL. The reset is UNIFORM — every member lands at `k = 0` and phase 0 in the same statement — so the
+   post-emission state is one an epoch-keyed structure can express with no per-member write at all, exactly as
+   `flow_own_silence` already expresses it. What is NOT free is leaving that state, and the population that
+   does is bounded rather than general: flow_age_running charges ONE member per dispatch, and the two birth
+   doors copy a silence that is already in hand (flow_fork_inherit takes the parent's, flow_arrive_at_virtual_time
+   takes the running member's). So the set of members standing away from the epoch's base is bounded by
+   DISPATCHES PLUS FORKS since the family last emitted, and never by the size of the frontier — which is the
+   quantity that decides whether an index here is sub-linear, and which nothing in this engine counts.
+   HOW ITS ABSENCE SHOWS: a reader prices an index over this key against `members` and gets a figure that is
+   right between emissions and wrong across one, with no row anywhere reporting how many members stand away
+   from their family's epoch base — so the rebuild is invisible in every census this file publishes and in
+   every reading taken from them.
+   RETIREMENT: this clause goes when that population is counted — a row raised where a member's own silence
+   first leaves its family's epoch base and cleared where flow_credit_emit clears the epoch — because the
+   rebuild is then a number beside the walk's rather than an argument here.
    WHAT THE NEXT DIFF BUILDS: that enumeration — the distinct `branch` nodes of the live frontier, maintained
    where membership moves (flow_new opens one, the fork's join is the only thing that ever retires one from
    use, and acct_depart is where a bucket loses its last member), so one offset can be read for a whole arm
@@ -5488,6 +5530,10 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
         {
             Flow *m = g_flows[i];
             double mk = flow_member_key(m);
+            /* …AND THE HALF OF THAT KEY AN INDEX WOULD ACTUALLY BE BUILT ON, TAKEN ON THE SAME MEMBER THE
+               WALK IS ALREADY HOLDING. See solver/flow.h's `ikey_last` for why the sum standing still is
+               not the claim a candidate set rests on. */
+            double ik = flow_index_key(m);
             /* …AND THE REMAINDER THAT KEY THROWS AWAY, READ ON THE SAME MEMBER THE WALK IS ALREADY HOLDING.
                solver/flow.h's `phase_last` states why the key does not cover it and why an index needs it. */
             int64_t mp = flow_silence_phase(m);
@@ -5505,7 +5551,8 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
                        : m->key_gen != g_gen ? &g_key_checks.stale_gen
                        :                       &g_key_checks.armed;
             (*kind)++;
-            DCHECKF(kind != &g_key_checks.armed || (mk == m->key_last && mp == m->phase_last),
+            DCHECKF(kind != &g_key_checks.armed
+                        || (mk == m->key_last && mp == m->phase_last && ik == m->ikey_last),
                     "a member that is not holding the thread changed its own half of the WFQ's weight with "
                     "the frontier generation standing still — flow_silence_phase's decomposition says only "
                     "the family's common half and the carry bit may move between two generations, and every "
@@ -5522,10 +5569,21 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
                     "FLOW_SERVICE_US` and the phase reads `own_silence %% FLOW_SERVICE_US`, so a write "
                     "smaller than one quantum moves the phase and leaves the key standing — and the phase is "
                     "what an index over this frontier BUCKETS on, so that write re-buckets a member with "
-                    "nothing else in this engine able to say so. At generation %u the member half was %.17g "
-                    "and is now %.17g; the phase was %lld and is now %lld",
-                    g_gen, m->key_last, mk, (long long)m->phase_last, (long long)mp);
+                    "nothing else in this engine able to say so. AND THE THIRD OPERAND IS THE HALF "
+                    "WITHOUT THE BUCKET TERM, WHICH THE FIRST TWO CANNOT COVER BETWEEN THEM: the member "
+                    "half is `flow_index_key + flow_branch_bonus`, so a fork's `sub_born++` moving the "
+                    "bucket term DOWN while this member's own optimism, distance or service notch moves it "
+                    "UP by the same amount leaves the sum standing and re-keys the member — and the key an "
+                    "index is built on is the half, never the sum (flow_index_key's own banner: \"what an "
+                    "index may be KEYED on is flow_index_key, the bucket term EXCLUDED\"). A fire on the "
+                    "third operand alone is that compensation; a fire on the first and third together is an "
+                    "ordinary member-half move and the bucket term is not involved. At generation %u the "
+                    "member half was %.17g and is now %.17g; the phase was %lld and is now %lld; the index "
+                    "key was %.17g and is now %.17g",
+                    g_gen, m->key_last, mk, (long long)m->phase_last, (long long)mp,
+                    m->ikey_last, ik);
             m->key_last = mk; m->key_gen = g_gen; m->key_stamped = 1; m->phase_last = mp;
+            m->ikey_last = ik;
         }
 #endif
         if (g_flows[i]->visits == 0 && flow_silence_notch(g_flows[i]) == 0 && (!unrun || w > unrun_w)) {

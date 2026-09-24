@@ -1150,11 +1150,41 @@ typedef struct Flow {
        DEV-ONLY FOR `key_last`'s REASON EXACTLY: it is a fourth field on every member of a frontier that grows
        because forking is the point, and its stamp is a call, so paying it in the build the product ships
        would be an instrument changing the run it samples. */
+    /* …AND THE PER-MEMBER HALF OF THAT KEY WITHOUT THE BUCKET TERM, WHICH IS THE QUANTITY AN INDEX IS
+       KEYED ON AND WHICH THE SUM ABOVE DOES NOT ASSERT. flow.c states the composition in two functions over
+       ONE sum and says why: "what must STAND STILL between two generations is THIS, the bucket term
+       included, or flow_pick's walk goes blind to a fork re-ranking a whole arm at once; what an index may
+       be KEYED on is flow_index_key, the bucket term EXCLUDED, or that index pays O(live members of the
+       bucket) per fork". `key_last` stamps the FIRST of those two. Nothing stamped the second, so the
+       precondition every candidate set in this engine rests on was asserted only as a CONSEQUENCE of a
+       stronger-looking claim about a different quantity.
+       WHAT THE SUM CANNOT SEE, EXACTLY: `member_key = index_key + branch_bonus`, so any move that shifts
+       the two halves by equal and opposite amounts leaves `key_last` agreeing. The bucket term is
+       `1.0 / sub_born` over the arm's bucket and a fork's join raises `sub_born` for every live member of
+       that arm AT ONCE, with no generation bump of its own — flow.c calls that writer "correct only by
+       adjacency and the ONE writer here that is". So the one term in the sum that moves for MANY members
+       without a bump is precisely the one an index excludes, and the check that was supposed to cover the
+       index's key was covering it only while that compensation did not occur.
+       IT IS NOT A SECOND SPELLING OF `key_last` AND THE TWO ARE FOLDED INTO ONE COMPARISON. They are two
+       operands of one condition raising one bucket, for `phase_last`'s reason exactly: `key_checks_total()`
+       is asserted equal to the weighings one loop performed, so a second arming bucket would make that
+       partition disagree with the counter it is a partition of. One arming, one bucket, three operands.
+       THE PRICE, NAMED RATHER THAN LEFT TO BE REDISCOVERED: it is a fifth field on every member of a
+       frontier that grows because forking is the point, and its stamp is a CALL — one integer division and
+       two term reads — paid once per member per scan in the build that makes the check and in no other.
+       flow.c's own stamp block already prices the member half being evaluated twice there; this is a third
+       evaluation in the same class and it is the cheapest of the three, because flow_index_key is the
+       subexpression the other two are built from rather than a re-association of them.
+       DEV-ONLY FOR `key_last`'s REASON EXACTLY, in the field as in the check.
+       RETIREMENT: this field goes when flow_weight is composed so its member half is a SUBEXPRESSION of it
+       rather than a re-association — at which point the index's key is the order's own subexpression, one
+       stamp covers both claims by construction, and there is no second composition left to disagree. */
 #if APICLIENT_DEV
     double   key_last;
     unsigned key_gen;
     int      key_stamped;
     int64_t  phase_last;
+    double   ikey_last;
 #endif
 } Flow;
 
