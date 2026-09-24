@@ -617,8 +617,20 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      THE FIVE `epAsk*` ROWS ARE THE ASK SIDE OF THE SAME GATE — how many addresses were OFFERED, and what
      became of the ones that did not mint — without which every row above is an OUTCOME census over a gate
      with a legitimate declining arm. An artifact older than them prints `-` for each, which is this driver's
-     absent-versus-zero rule and is the honest answer: the run did not state them. All nine are lifetime
-     counts and may be differenced across two samples of ONE instance, like their neighbours on this list.
+     absent-versus-zero rule and is the honest answer: the run did not state them.
+     SEVEN OF THE NINE ARE LIFETIME COUNTS AND TWO ARE NOT, WHICH THIS SENTENCE USED TO GET WRONG — it read
+     "All nine are lifetime counts and may be differenced across two samples of ONE instance", and a declared
+     kind LICENSES arithmetic, so the wrong one is worse than a missing one. `epEmitted` and `epPreProgram`
+     are GAUGES: `endpoint_mark_asset` MARKS RATHER THAN DELETES and its verdict arrives with the REPLY while
+     the record was minted at the REQUEST, so a census taken between those two instants counts the record and
+     the next one does not — `epEmitted` FALLS by one with nothing wrong, and `epPreProgram` is raised inside
+     that same emitted arm. solver/result.c states the split and the reason at its own `@kinds-of` block, and
+     the header line above is composed from that declaration, so this driver prints the correction without
+     being told it. `epMinted` and `epAssets` are the monotone halves and stay lifetime.
+     THE TELL GENERALISES AND IS FREE: `epEmitted = epMinted - epAssets` with BOTH terms rising, and a
+     difference of two monotone counts is not monotone. CLAUDE.md §A-GAUGE-AND-A-LIFETIME-COUNTER's check —
+     the samples decreased — needs a SERIES, and a reader holding one census has none, so a kind of this shape
+     has to be read off the mechanism rather than waited for.
      MEASURED WITH THE ROWS, WHICH IS WHY THEY ARE HERE AND NOT ARGUED. `gitlab.com/explore`, TWO FRESH
      BROWSERS (one per case — the frontier is cross-session by design, so consecutive cases in one browser are
      not independent experiments), artifact stamped d18fa92658db25b9f64000ae7a16e10c9103f9da, one run each:
@@ -751,7 +763,24 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      zeroes — a host that installs no XMLHttpRequest runs no send machine and has no population — so `k in c`
      is false and this list yields `null`, with no arm anywhere that could turn that into a 0. */
   "epXhrAskBeganLife", "epXhrAskPlacedLife", "epXhrAskOfferedLife",
-  "epXhrOutFreedLife", "epXhrOutFreedPlacedLife", "epXhrOutDiedAtLife"];
+  "epXhrOutFreedLife", "epXhrOutFreedPlacedLife", "epXhrOutDiedAtLife",
+  /* AND CLAUDE.md §What-the-tool-produces' RAZOR, WHICH IS THE ONE ROW ON THIS WHOLE LIST THAT ANSWERS WHAT
+     THE RUN LEARNED RATHER THAN HOW FAR IT GOT. Every `ep*` row above is a TOTAL over the learned surface or
+     over the gate in front of it; this partitions that surface by WHAT A PARSE OF THE SERVED DOCUMENT WOULD
+     HAVE REACHED — `beyond` the addresses a `<script src>` scan does not already state, `markup` the `<head>`
+     counted back, `either` the doors that are reached by a parser-inserted element and a script-created one
+     alike and do not record which. solver/endpoint.h holds the map and states why there are three classes and
+     not two; the count is a FLOOR (`beyond`) with its undecidable population beside it rather than a single
+     number that would have to guess.
+     IT IS THE ONE OBJECT ON THIS LIST AND ITS KIND IS THE PRODUCER'S LIKE EVERY OTHER MEMBER'S. `census()`
+     copies it whole and the per-run line carries it as JSON; nothing here spreads it, because a range over
+     bucket names is not a quantity — which is `endpointDoors`' rule one array over.
+     A DIAGNOSTIC AND NEVER A TARGET, on §netdiff's own terms: `beyond` 0 against a nonzero `epEmitted` is a
+     REFUSAL TO CLAIM the capability on this document, not a smaller version of it, and it is an IDENTITY read
+     WITHIN one run rather than a total to compare across two. An artifact older than the row prints `null`,
+     which is this driver's absent-versus-zero rule and is a different fact from a surface with nothing
+     beyond the markup — the first is the run not stating it, the second is the razor answering. */
+  "epReach"];
 
 const COLD_ROWS = COLD_STEP_UNITS.concat(COLD_FRONTIER, COLD_SEED, COLD_COUNTERS);
 const WFQ_ROWS = ["members"].concat(WFQ_JOB_SPLIT, WFQ_PICKS);
@@ -766,11 +795,12 @@ function census(r) {
   o.forkAt = ("forkAt" in r) ? r.forkAt : null;
   const c = ("cold" in r) ? r.cold : null;
   for (const k of COLD_ROWS) o[k] = c && (k in c) ? c[k] : null;
-  /* AND THE RAZOR IS COMPUTED HERE RATHER THAN LEFT TO THE READER, BECAUSE A SUBTRACTION A READER MUST
-     PERFORM IS ONE NOBODY PERFORMS. Both halves are already rows above; this is the difference §What-the-tool-
-     produces names as the product's own razor — the addresses this run emitted MINUS the ones minted before it
-     started a program, which is the markup door counted back. A parser reaches the second set; only execution
-     reaches the first.
+  /* AND THE SUBTRACTION IS COMPUTED HERE RATHER THAN LEFT TO THE READER, BECAUSE ONE A READER MUST PERFORM IS
+     ONE NOBODY PERFORMS. Both halves are already rows above; this is the difference §What-the-tool-produces
+     names as the form the razor USED to take — the addresses this run emitted MINUS the ones minted before it
+     started a program, which is a PROXY for the markup door counted back. The sentence that stood here said a
+     parser reaches the second set and only execution reaches the first, and that is the over-credit the
+     paragraph below this one is about: it is true of the DOOR and only approximately true of the TIMING.
      IT IS ENTAILED BY THE TWO ROWS IT SITS BESIDE AND THEREFORE CARRIES ITS DERIVATION, which is the cure
      §EVIDENCE-INFLATION prescribes for a derived row: three rows here are TWO facts, and a reader counting
      zeroes must be able to see that from the output rather than by reading this file. The `Of` field is the
@@ -782,13 +812,24 @@ function census(r) {
      A DIAGNOSTIC AND NEVER A TARGET, on §netdiff's own terms: optimising toward a subtraction optimises the
      instrument. A zero here is a REFUSAL TO CLAIM the capability on this document, not a smaller version of
      it, and it is not comparable across two runs — it is an identity read WITHIN one. */
-  /* AND IT IS NO LONGER THE ONLY STATEMENT AVAILABLE, WHICH IS THAT RECORD'S OWN RETIREMENT CONDITION AND IS
-     THE FIRST THING A READER OF THIS NUMBER SHOULD BE TOLD. `endpointDoors`/`endpointMintedAt` on the spread
-     line partition the run's emitted rows BY ADDRESS, so "thirty rows beyond the markup" and "which thirty"
-     are now two questions with two answers rather than one number with none. They are composed from a
-     DIFFERENT DOCUMENT at a different instant — this from the engine's `_cold` census, those from the @H
-     array bridge.js holds at composition — so no identity between them is asserted anywhere and none may be
-     read: they are a CROSS-CHECK, and a disagreement is a lead rather than an arithmetic error. */
+  /* AND IT IS NO LONGER THE RAZOR, WHICH IS THE FIRST THING A READER OF THIS NUMBER SHOULD BE TOLD AND WHICH
+     THIS PARAGRAPH USED TO GET HALF RIGHT. It said the subtraction was no longer the ONLY statement available
+     and named `endpointDoors`/`endpointMintedAt` as the rows beside it; that is true and it is weaker than
+     what holds now. `epReach` on THIS census is CLAUDE.md §What-the-tool-produces' razor computed by the
+     producer from a map no consumer can re-derive — which door a parse of the served bytes reaches — so the
+     razor is a ROW and this line is a TIMING statement that was standing in for one.
+     THE TWO ARE NOT TWO ANSWERS TO ONE QUESTION AND THE DIFFERENCE IS THE READING. `epEmitted - epPreProgram`
+     counts rows minted AFTER the first program started, and solver/endpoint.h states why that is a proxy for
+     the markup door and not the door: a `<head>` whose first `<script src>` runs before the parser reaches
+     the `<link>` below it mints that link POST-program, so the subtraction credits a pure markup subresource
+     to forced execution — in the flattering direction, on the commonest document shape there is. `epReach`
+     asks WHICH DOOR and cannot make that mistake. So a nonzero `epBeyondMarkup` beside `epReach.beyond: 0` is
+     that over-credit VISIBLE, on one line, from ONE document at ONE instant, which is what makes the pair
+     worth carrying rather than one of them worth deleting.
+     `endpointDoors`/`endpointMintedAt` ON THE SPREAD LINE ARE STILL A DIFFERENT DOCUMENT — the @H array
+     bridge.js holds at composition, against this from the engine's `_cold` census — so no identity between
+     THOSE and this is asserted anywhere and none may be read. `epReach` is the one that shares a document
+     with the subtraction beside it. */
   o.epBeyondMarkup = (typeof o.epEmitted === "number" && typeof o.epPreProgram === "number")
     ? o.epEmitted - o.epPreProgram : null;
   o.epBeyondMarkupOf = (o.epBeyondMarkup === null) ? null : "epEmitted - epPreProgram";

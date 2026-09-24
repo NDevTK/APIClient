@@ -2206,6 +2206,21 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    from the site that raises it, until the undeclared count is zero and completeness can be REQUIRED here.
    HOW ITS ABSENCE SHOWS: a driver adding one of them to what it carries meets a throw naming that row.
 
+   THE @H SURFACE ROWS SPLIT ACROSS TWO KINDS AND USED TO BE DECLARED AS ONE, WHICH IS A CORRECTION AND NOT A
+   REFINEMENT — a declared kind LICENSES arithmetic, so the wrong one is worse than a missing one and this one
+   licensed differencing a quantity that falls. `endpoint_mark_asset` MARKS RATHER THAN DELETES: it sets
+   `is_asset` on a record that is already in `g_eps`, and the verdict arrives with the REPLY while the record
+   was minted at the REQUEST. So a census composed between those two instants counts the record in `epEmitted`
+   and the next one does not, and `epEmitted` FALLS by one with nothing wrong. `epPreProgram` is raised inside
+   that same emitted arm and falls with it; `epDoors` and `epReach` partition `epEmitted` and are that walk at
+   two grains, so all four are GAUGES. `epMinted` and `epAssets` are the monotone halves — records are never
+   removed and `is_asset` is never cleared — and they stay LIFETIME.
+   THE SHAPE IS `epEmitted = epMinted - epAssets` WITH BOTH TERMS RISING, which is the tell for any row of this
+   kind: a difference of two monotone counts is not monotone, and it reads exactly like a count until the day
+   an asset verdict lands between two samples. CLAUDE.md §A-GAUGE-AND-A-LIFETIME-COUNTER's free check — the
+   samples decreased — needs a series and a reader holding one census has none, so the kind has to be stated
+   from the MECHANISM rather than waited for.
+
    @kinds-of cold
    @kind gauge: stepUnits programCursors replyOutstanding rowsAwaitingBytes
    @kind lifetime: stepUnitRuns stepUnitOverruns
@@ -2214,7 +2229,8 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    @kind lifetime: steps sliceUs sliceOverruns sliceOverrunAsks sliceOverrunSeamless stepUs schedUs
    @kind lifetime: unitMidProgram unitParked unitCheckpointOwed unframedStepsLifetime
    @kind lifetime: classicCompiles classicCompileOverruns finished
-   @kind lifetime: epMinted epAssets epEmitted epPreProgram
+   @kind lifetime: epMinted epAssets
+   @kind gauge: epEmitted epPreProgram epDoors epReach
    @kind lifetime: epAsks epAskPreProgram epAskSuppressed epAskMerged epAskMinted epAskMergedPreProgram
    @kind constant: rootPrograms rootProgramsHeldAtSeed rootProgramsAwaitedAtSeed
    @kind maximum: deepest completed deepestLeft
@@ -2294,6 +2310,10 @@ char *result_cold_json(void) {
     /* …AND THE SAME SURFACE PARTITIONED BY THE MECHANISM THAT COMPOSED EACH ADDRESS — solver/endpoint.h
        states the contract and asserts the partition where both sides are in one hand. */
     char *doors;
+    /* …AND BY WHAT A PARSE OF THE DOCUMENT WOULD HAVE REACHED THROUGH EACH OF THOSE MECHANISMS, which is
+       the row above COARSENED BY A MAP and not a second observation of anything — solver/endpoint.h states
+       the map, why it has three classes and not two, and that the two histograms are ONE fact at two grains. */
+    char *reach;
 
     cold_census(&c);
     engine_step_unit_runs(&r);
@@ -2584,12 +2604,14 @@ char *result_cold_json(void) {
     edge = endpoint_fetch_edge_rows();
     xedge = endpoint_xhr_edge_rows();
     doors = endpoint_door_hist_json();
-    if (!cursors || !ahead || !edge || !xedge || !doors) {
+    reach = endpoint_reach_hist_json();
+    if (!cursors || !ahead || !edge || !xedge || !doors || !reach) {
         free(cursors);
         free(ahead);
         free(edge);
         free(xedge);
         free(doors);
+        free(reach);
         cold_census_release(&c);
         return NULL;
     }
@@ -2940,6 +2962,37 @@ char *result_cold_json(void) {
                     mints that link POST-program. Each emitted ROW carries both, so the pair is answerable per
                     address and these totals are the check on that rather than the only statement of it. */
                  "\"epDoors\":%s,"
+                 /* …AND WHICH OF THOSE MECHANISMS A PARSE OF THE SERVED DOCUMENT WOULD HAVE REACHED, which
+                    is CLAUDE.md §What-the-tool-produces' razor STATED rather than left to a reader who knows
+                    solver/endpoint.h's door taxonomy by heart. The row above is the razor's RAW MATERIAL: it
+                    says WHICH mechanism composed each address and is silent about whether a `<script src>`
+                    scan gets that address for free, so a reader holding `epDoors: {document-script: 28,
+                    link-element: 17}` and nothing else still has to supply the map before they can say that
+                    the razor read ZERO on that document — which is what a coordinator driving a real app had
+                    to do by hand, off the emitted @H array, with every histogram in this tree already
+                    published.
+                    THREE CLASSES BECAUSE TWO WOULD HAVE TO GUESS. `link-element`, `image-element` and
+                    `form-submit` are reached by a parser-inserted element and by a script-created one alike
+                    and the door does not record which, so `either` is the population NO door decides and
+                    `beyond` is a FLOOR under the razor rather than the razor's value. Folding `either` into
+                    `markup` under-credits a router-built `<link>`; folding it into `beyond` over-credits a
+                    `<head>`, which is the exact over-credit `epEmitted - epPreProgram` is retired for and in
+                    the same flattering direction.
+                    IT IS ENTAILED BY THE ROW ABOVE AND SAYS SO, because a reader counting zeroes across this
+                    line must be able to see that from the output: each class is the sum of the door counts of
+                    that class, so these three numbers and those twelve are ONE observation and never two
+                    (CLAUDE.md §EVIDENCE-INFLATION). What is NOT entailed — and is the reason it is published
+                    at all — is the MAP, which no consumer of this document can re-derive and which lived as
+                    incomplete prose in engine/build.mjs's verdict line and in testing/static_surface.mjs.
+                    A DIAGNOSTIC AND NEVER A TARGET, on §netdiff's own terms: `beyond` 0 against a nonzero
+                    `epEmitted` is a REFUSAL TO CLAIM the capability on this document rather than a smaller
+                    version of it, and optimising toward it optimises the instrument. It is an IDENTITY read
+                    WITHIN one run and is not comparable across two runs of a wall-denominated quantum.
+                    ITS DENOMINATOR IS `epEmitted` THREE ROWS UP AND TRAVELS ON THIS LINE, which is what makes
+                    a share read off it a share of the population it partitions; solver/endpoint.c asserts the
+                    sum where both halves are in one hand and engine/build.mjs re-checks it against the
+                    EMITTED document, which is the genuinely independent half. */
+                 "\"epReach\":%s,"
                  "\"epAsks\":%ld,\"epAskPreProgram\":%ld,\"epAskSuppressed\":%ld,"
                  /* AND THE ONE CUT INSIDE THE MERGED ARM — endpoint.h states what it is and what its four-state
                     zero can mean. It is NOT summed with the three arms beside it: they partition the door's
@@ -3018,7 +3071,7 @@ char *result_cold_json(void) {
                  c.out_of_programs,
                  c.out_of_programs_unrun, c.out_of_programs_framed, c.out_of_programs_at_the_ladder,
                  ladder, hist, cursors, ahead,
-                 ep_minted, ep_assets, ep_emitted, ep_pre_program, doors,
+                 ep_minted, ep_assets, ep_emitted, ep_pre_program, doors, reach,
                  ep_asks, ep_ask_pre, ep_ask_sup, ep_ask_merged, ep_ask_minted, ep_ask_merged_pre,
                  edge, xedge);
     free(cursors);
@@ -3026,6 +3079,7 @@ char *result_cold_json(void) {
     free(edge);
     free(xedge);
     free(doors);
+    free(reach);
     cold_census_release(&c);
     return out;
 }

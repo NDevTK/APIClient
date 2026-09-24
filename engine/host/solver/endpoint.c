@@ -114,7 +114,7 @@ typedef struct { char *method; char *path; Param *params; int np, pcap;
    arm that catches a producer who never stated a door has to be the one that ships. */
 const char *endpoint_door_token(int door) {
     switch (door) {
-#define ENDPOINT_DOOR_ARM(id, token) case id: return token;
+#define ENDPOINT_DOOR_ARM(id, token, reach) case id: return token;
     ENDPOINT_DOORS(ENDPOINT_DOOR_ARM)
 #undef ENDPOINT_DOOR_ARM
     }
@@ -123,6 +123,40 @@ const char *endpoint_door_token(int door) {
                 "when it is not, so this is a record that reached the surface in a release build with no "
                 "producer having said, and the word about to be published names a mechanism nothing ran",
                 door);
+}
+
+/* See endpoint.h. GENERATED FROM THE SAME LIST AS `endpoint_door_token`, so a door added without a reach does
+   not compile and a reach stated in a second place does not exist. That is the whole of why the reach is a
+   COLUMN and not a table beside the enum: `ep_loc_name` is the hand-kept form in this same file and needs a
+   `CHECK` at every subscript to say so.
+   THE FALLTHROUGH IS A `CHECK` FOR `endpoint_door_token`'s REASON AND WITH ITS SEVERITY — this runs once per
+   emitted @H record in the reach census, in EVERY build, and a release build reaching it would classify a
+   record under whatever the register held, which is a plausible razor reading rather than a missing one. */
+int endpoint_door_reach(int door) {
+    switch (door) {
+#define ENDPOINT_DOOR_REACH_ARM(id, token, reach) case id: return reach;
+    ENDPOINT_DOORS(ENDPOINT_DOOR_REACH_ARM)
+#undef ENDPOINT_DOOR_REACH_ARM
+    }
+    CHECK_FAILF("endpoint: an @H record states the door %d, which is none of endpoint.h's ENDPOINT_DOORS — "
+                "the reach census is asking what a markup parse would have reached through a mechanism "
+                "nothing named, and the class it is about to raise is at an index outside the partition it "
+                "is a member of",
+                door);
+}
+
+/* See endpoint.h. `endpoint_door_token`'s construct and its severity, one list over. */
+const char *endpoint_reach_token(int reach) {
+    switch (reach) {
+#define ENDPOINT_REACH_ARM(id, token) case id: return token;
+    ENDPOINT_REACHES(ENDPOINT_REACH_ARM)
+#undef ENDPOINT_REACH_ARM
+    }
+    CHECK_FAILF("endpoint: the @H reach census states the class %d, which is none of endpoint.h's "
+                "ENDPOINT_REACHES — every class comes off `endpoint_door_reach`, which is generated from the "
+                "door list's own third column, so this is a value no list produced and the key about to be "
+                "published names a razor reading nothing decided",
+                reach);
 }
 
 /* A value carrying a `{hole}` is a SHAPE — an unknown the code did not compute — and a hole-free one is the
@@ -2291,6 +2325,65 @@ char *endpoint_door_hist_json(void) {
             "skip, so a difference is one of those walks having stopped describing the population the other "
             "counts, and a reader taking a door's share of the surface would be taking a fraction of a "
             "number that is not its size", sum, emitted);
+    return json_buf_take(&b);
+}
+
+/* THE SAME SURFACE PARTITIONED BY WHAT A PARSE OF THE DOCUMENT WOULD HAVE REACHED — see endpoint.h for the
+   three classes, for why there are three and not two, and for why the map is a column of the door list rather
+   than a table anywhere. This is CLAUDE.md §What-the-tool-produces' razor STATED as a row: `beyond` is the
+   addresses a markup parse does not reach, `either` is the population no door can decide, and `markup` is the
+   `<head>` counted back.
+   IT IS A COARSENING OF THE ROW ABOVE AND NOT A SECOND OBSERVATION. Every count here is the sum of the door
+   counts of its class, so a reader holding both histograms holds ONE fact at two grains and two zeroes here
+   are one zero — CLAUDE.md §EVIDENCE-INFLATION, whose cure is that a derived row names its derivation where
+   the number is rather than leaving a reader to find it by reading the producer. WHAT IT CARRIES THAT THE
+   DOOR ROW DOES NOT is the map itself, which lived as incomplete prose in engine/build.mjs's verdict line and
+   in testing/static_surface.mjs and as data nowhere — so no output in this tree could state the razor at all,
+   and a coordinator who drove a real app had to read the emitted @H array by hand to find that it read ZERO.
+   A SECOND WALK AND NOT A SUM OVER `endpoint_door_hist_json`'s TABLE, which is deliberate and is this file's
+   existing rule: that census and `endpoint_surface_census` are already two walks over `g_eps` spelled with
+   the SAME `is_asset` skip precisely so that one of them drifting is a LOUD identity failure rather than a
+   quiet agreement, and a third walk of that shape earns the same check. Summing that table instead would
+   make this row true by construction of it and blind to the walk it is supposed to be checking.
+   THE SUBSCRIPT NEEDS NO RANGE ASSERT AND THAT IS NOT AN OMISSION. `endpoint_door_reach` is generated from the
+   door list and its fallthrough is a `CHECK` — fatal in EVERY build, unlike the mint's own `DCHECK` — so it
+   returns a member of `ENDPOINT_REACHES` or it does not return. An assert here could not fail, and CLAUDE.md
+   §AN-ASSERT-WHOSE-TWO-SIDES-CANNOT-DISAGREE rates a non-check wearing a check's syntax as worse than none:
+   it certifies what it never examined. `endpoint_door_hist_json` asserts its range because ITS subscript is
+   the raw `door` field off the record, which is a different operand with a different guard. */
+char *endpoint_reach_hist_json(void) {
+    JsonBuf b = { 0 };
+    long n[EPR_COUNT];
+    long minted, assets, emitted, pre_program, sum = 0;
+    int r, i;
+
+    memset(n, 0, sizeof n);
+    for (i = 0; i < g_eps_n; i++) {
+        if (g_eps[i].is_asset) continue;
+        n[endpoint_door_reach(g_eps[i].door)]++;
+    }
+    endpoint_surface_census(&minted, &assets, &emitted, &pre_program);
+
+    /* EVERY CLASS IS EMITTED INCLUDING THE ZEROES, for the door census's reason and with a sharper one here:
+       a `beyond` that is ABSENT and a `beyond` that read 0 are the two things this row exists to keep apart,
+       and a table listing only its non-empty classes renders a run that learned nothing beyond the markup
+       identically to a run whose composer stopped writing the class. The first is the product's own razor
+       answering and is a REFUSAL TO CLAIM; the second is an instrument that stopped. */
+    json_buf_raw(&b, "{");
+    for (r = 0; r < EPR_COUNT; r++) {
+        if (r) json_buf_raw(&b, ",");
+        json_buf_str(&b, endpoint_reach_token(r));
+        json_buf_raw(&b, ":");
+        edge_num(&b, n[r]);
+        sum += n[r];
+    }
+    json_buf_raw(&b, "}");
+    DCHECKF(sum == emitted,
+            "the @H surface's per-reach counts sum to %ld against the %ld rows it emits — the three classes "
+            "are a PARTITION of the emitted surface and this walk carries the same `is_asset` skip the census "
+            "beside it does, so a difference is one of those walks having stopped describing the population "
+            "the other counts, and the razor a reader reads off this row would be a share of a number that "
+            "is not the surface's size", sum, emitted);
     return json_buf_take(&b);
 }
 

@@ -263,7 +263,7 @@ let g_coldFields = null;
 const coldFields = () => (g_coldFields ??= censusRowSet(
   "solver/result.c", "char *result_cold_json(void)", "\n}\n",
   ["stepUnits", "stepUnitRuns", "stepUnitOverruns", "outOfProgramsAtTheLadderUnits", "programCursors",
-   "programsAhead", "epDoors"],
+   "programsAhead", "epDoors", "epReach"],
   "the @COLD reader states which rows it requires of the frontier census, and it takes that set from the " +
   "composer rather than from a list beside it"));
 /* THE POPULATION SPLITS ARE PARTITIONS AND THE PARTITION IS THE CONTRACT, checked here for the reason
@@ -2550,6 +2550,48 @@ function endpointDoorReading(b) {
       (used.length < rows.length ? `, ${rows.length - used.length} door(s) at 0` : "");
 }
 
+/* …AND THE ONE READING THAT ANSWERS CLAUDE.md §What-the-tool-produces' RAZOR RATHER THAN HANDING A READER
+   ITS RAW MATERIAL. The row above says WHICH MECHANISM composed each address; the razor is "what this engine
+   reached that A MARKUP PARSER COULD NOT", and turning the first into the second needs a map — which doors a
+   parse of the served bytes gets for free — that a reader of a door histogram does not have.
+   THE MAP USED TO LIVE IN THIS FILE, AS AN INCOMPLETE SENTENCE IN A COMMENT. The verdict line below said "a
+   surface whose every door is `link-element` and `document-script` is a `<head>` counted back, and one
+   carrying `fetch`, `xhr` or `module-import` rows is forced execution having reached a network call site" —
+   five of twelve doors, in prose, in a build script, beside a second incomplete copy in
+   testing/static_surface.mjs. It is now the third column of solver/endpoint.h's door list, a door added
+   without one does not compile, and this reads the engine's own partition instead of restating it. CLAUDE.md
+   §AN-AUDITOR-DERIVES-THE-RULE.
+   THREE CLASSES AND THE MIDDLE ONE IS THE POINT. `either` is the doors a parser-inserted element and a
+   script-created one reach alike — `link-element`, `image-element`, `form-submit` — which the engine's header
+   refuses to guess at, so `beyond` is a FLOOR under the razor and `beyond + either` is its ceiling. A single
+   number would be one of those two guesses, and both are wrong in a direction this project has already paid
+   for: the retired `epEmitted - epPreProgram` subtraction over-credited a `<head>` exactly this way.
+   THE DENOMINATOR IS ON THE LINE AND IS NOT OPTIONAL. `beyond: 0` says nothing without the surface it is 0
+   OF — CLAUDE.md §a-coverage-figure-states-what-it-is-a-fraction-of — and `censusHistRows` has already
+   checked that these three sum to `epEmitted`, so the fraction is over the population it partitions.
+   IT IS THE SAME OBSERVATION AS THE ROW ABOVE, COARSER, and a reader counting two zeroes on this line is
+   counting one. That is said here because it is where the numbers are (CLAUDE.md §EVIDENCE-INFLATION), and
+   what this row carries that the door row does not is the map and nothing else. */
+function endpointReachReading(b) {
+  const rows = censusHistRows(b, "epReach", "epEmitted", "endpoint.h's ENDPOINT_REACHES list");
+  const at = (k) => { const r = rows.find((x) => x[0] === k); return r ? r[1] : null; };
+  const beyond = at("beyond"), either = at("either"), markup = at("markup");
+  if (beyond === null || either === null || markup === null)
+    throw new Error(`[build] the @COLD census's \`epReach\` names [${rows.map((r) => r[0]).join(", ")}] and ` +
+                    "not the three classes endpoint.h's ENDPOINT_REACHES declares — this reading is the " +
+                    "product's own razor and it is composed of those three by name, so a renamed class would " +
+                    "be rendered as a 0 the engine never reported.");
+  const total = b.epEmitted;
+  /* AN EMPTY SURFACE IS A SENTENCE AND NOT A ZERO, for `endpointDoorReading`'s reason and with a sharper one:
+     `0 of 0 beyond the markup` reads as the razor ANSWERING when the run learned no address at all, and those
+     are the two facts CLAUDE.md §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES says must never render alike. */
+  if (total === 0) return `@H razor: the surface emitted no endpoint, so there is nothing to claim`;
+  return `@H razor: ${beyond} of ${total} address(es) beyond a markup parse` +
+         ` (${either} through a door that cannot say which, ${markup} markup)` +
+         ` — a DIAGNOSTIC and never a target; ${beyond === 0 ? "0 is a REFUSAL TO CLAIM the capability on " +
+         "this document, not a smaller version of it" : "read WITHIN this run, never across two"}`;
+}
+
 function stepUnitReading(b) {
   const rows = censusHistRows(b, "stepUnits", "live", STEP_UNIT_EXTENT);
   const live = rows.filter((r) => r[1] > 0).sort((x, y) => y[1] - x[1]);
@@ -4303,15 +4345,23 @@ function hungCauseCensus(out) {
                   sits below the block that starts the next row, so its precondition is this histogram's
                   bucket 0 and nothing else. */
                "; " + programsAheadReading(b) +
-               /* AND THE SIXTH IS NOT ABOUT THE FRONTIER AT ALL — it is about what the run LEARNED, spliced
-                  here because this is the span every arm agrees on and because the five above say how far the
-                  search got while saying nothing about what it came back with. `endpointDoorReading` is the
-                  only row on this line that answers CLAUDE.md §What-the-tool-produces' own question: a
+               /* AND `endpointDoorReading` IS NOT ABOUT THE FRONTIER AT ALL — it is about what the run
+                  LEARNED, spliced here because this is the span every arm agrees on and because the frontier
+                  readings above say how far the search got while saying nothing about what it came back with.
+                  It is the row on this line that answers CLAUDE.md §What-the-tool-produces' own question: a
                   surface whose every door is `link-element` and `document-script` is a `<head>` counted back,
                   and one carrying `fetch`, `xhr` or `module-import` rows is forced execution having reached a
                   network call site. Those two render as the SAME `endpoints: N` and as the same
-                  `epEmitted`. */
-               "; " + endpointDoorReading(b);
+                  `epEmitted`.
+                  THE SENTENCE ABOVE NAMED FIVE OF TWELVE DOORS AND WAS THIS TREE'S ONLY STATEMENT OF THE MAP,
+                  which is why `endpointReachReading` exists and why that map is now a column of
+                  solver/endpoint.h's door list rather than a clause here: a reader of `endpointDoorReading`
+                  alone still has to supply "which of these does a `<script src>` scan get for free" before
+                  the razor is a reading at all, and a coordinator driving a real app had to supply it by
+                  hand off the emitted @H array. `endpointReachReading` is that map applied, with the
+                  denominator on the line; it is the SAME observation coarsened and not a second one, so
+                  two zeroes here are one zero. */
+               "; " + endpointDoorReading(b) + "; " + endpointReachReading(b);
   /* AND WHICH OF THE STILL-0 ROWS WERE EVER ANYTHING ELSE, which is the distinction `flipped.length === 0`
      cannot draw and which decides what "still advancing" is worth. Measured across six builds: the rows that
      reached 1 in the last window were, every time, the ten members of ONE family (the @S search rows), while

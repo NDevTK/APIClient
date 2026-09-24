@@ -216,31 +216,44 @@ typedef struct { const char *mime, *bytes; size_t len; EndpointBodyKind kind;
    name added to the enum and not to the table is a row whose token comes off the end of a name array, which
    is the defect endpoint_json_array's `ep_loc_name` CHECK exists for one field over. */
 #define ENDPOINT_DOORS(X)                                                                                    \
-    /* HTML §4.12.1.1 "Processing model" — the document's OWN external script, its reply filling the row */ \
-    X(EPD_DOCUMENT_SCRIPT, "document-script")                                                                \
-    /* …a `<script src>` an insertion prepared, whose reply is queued as the running flow's next program */   \
-    X(EPD_INJECTED_SCRIPT, "injected-script")                                                                \
-    /* …and a dynamic `import()`, whose promise is settled with the SOURCE TEXT the compiler is handed */     \
-    X(EPD_MODULE_IMPORT,   "module-import")                                                                  \
-    /* a `<script src>` whose address running code ASSIGNED and this engine cannot fetch: the taint shadow  \
-       map holds an entry only where a script wrote the attribute, so this door is never parser-inserted */   \
-    X(EPD_SCRIPT_ELEMENT,  "script-element")                                                                 \
-    /* HTML §4.2.4.3 "Fetching and processing a resource from a link element", preloads included */           \
-    X(EPD_LINK_ELEMENT,    "link-element")                                                                   \
-    /* HTML §4.8.4.3.5 "Updating the image data", its source set and its undecided arm */                     \
-    X(EPD_IMAGE_ELEMENT,   "image-element")                                                                  \
-    X(EPD_FORM_SUBMIT,     "form-submit")                                                                    \
-    X(EPD_FETCH,           "fetch")                                                                          \
-    X(EPD_XHR,             "xhr")                                                                            \
-    X(EPD_BEACON,          "beacon")                                                                         \
-    /* a sub-request written INSIDE a multipart batch body the page composed */                               \
-    X(EPD_BATCH_PART,      "batch-part")                                                                     \
-    /* an address a REPLY named and no line of the page ever composed */                                      \
-    X(EPD_REPLY_CHUNK,     "reply-chunk")
+    /* HTML §4.12.1.1 "Processing model" — the document's OWN external script, its reply filling the row. \
+       PARSER-INSERTED BY DEFINITION — solver/engine.c reads this door off a park whose grade's first      \
+       conjunct IS §4.12.1.1's `parser document`, so the element is in the served bytes. */                 \
+    X(EPD_DOCUMENT_SCRIPT, "document-script", EPR_MARKUP)                                                    \
+    /* …a `<script src>` an insertion prepared, whose reply is queued as the running flow's next program — \
+       so running code put the element there and a parse of the served bytes never sees it. */               \
+    X(EPD_INJECTED_SCRIPT, "injected-script", EPR_BEYOND)                                                    \
+    /* …and a dynamic `import()`, whose promise is settled with the SOURCE TEXT the compiler is handed — \
+       no element at all, so there is nothing for a parse of the document to have found. */                  \
+    X(EPD_MODULE_IMPORT,   "module-import", EPR_BEYOND)                                                      \
+    /* a `<script src>` whose address running code ASSIGNED and this engine cannot fetch: the taint shadow   \
+       map holds an entry only where a script wrote the attribute, so this door is never parser-inserted — \
+       which is the same sentence read as a reach and is why this one is decidable where the two below       \
+       are not. */                                                                                           \
+    X(EPD_SCRIPT_ELEMENT,  "script-element", EPR_BEYOND)                                                     \
+    /* HTML §4.2.4.3 "Fetching and processing a resource from a link element", preloads included — and the \
+       door CANNOT SAY WHICH, which is this header's own sentence three paragraphs up: a `<link>` a router   \
+       created and one the markup declared reach this surface through it alike. */                           \
+    X(EPD_LINK_ELEMENT,    "link-element", EPR_EITHER)                                                       \
+    /* HTML §4.8.4.3.5 "Updating the image data", its source set and its undecided arm — `link-element`'s \
+       ambiguity exactly: an `<img src>` the parser built and one `new Image()` composed are one door. */    \
+    X(EPD_IMAGE_ELEMENT,   "image-element", EPR_EITHER)                                                      \
+    /* …and the third of the same kind: a `<form action>` in the served bytes and a form whose action a    \
+       script wrote reach core/html/html_form.c's one recording pair alike. */                               \
+    X(EPD_FORM_SUBMIT,     "form-submit", EPR_EITHER)                                                        \
+    X(EPD_FETCH,           "fetch", EPR_BEYOND)                                                              \
+    X(EPD_XHR,             "xhr", EPR_BEYOND)                                                                \
+    X(EPD_BEACON,          "beacon", EPR_BEYOND)                                                             \
+    /* a sub-request written INSIDE a multipart batch body the page composed */                              \
+    X(EPD_BATCH_PART,      "batch-part", EPR_BEYOND)                                                         \
+    /* an address a REPLY named and no line of the page ever composed — which is BEYOND a parse of the     \
+       DOCUMENT and is not a claim that the page's code composed it; the class is named for what a markup    \
+       parser reaches and never for who ran. */                                                              \
+    X(EPD_REPLY_CHUNK,     "reply-chunk", EPR_BEYOND)
 
 typedef enum {
     EPD_UNSTATED = 0,   /* nobody said; endpoint_record refuses it */
-#define ENDPOINT_DOOR_MEMBER(id, token) id,
+#define ENDPOINT_DOOR_MEMBER(id, token, reach) id,
     ENDPOINT_DOORS(ENDPOINT_DOOR_MEMBER)
 #undef ENDPOINT_DOOR_MEMBER
     EPD_COUNT           /* the list's own end — what the mint's range check and any census over it are bounded
@@ -255,11 +268,99 @@ typedef enum {
    `ep_loc_name` indexed out of range one field over. */
 const char *endpoint_door_token(int door);
 
+/* WHAT A PARSE OF THE SERVED DOCUMENT WOULD HAVE REACHED THROUGH A DOOR — the third column of
+   `ENDPOINT_DOORS`, and the one fact about CLAUDE.md §What-the-tool-produces' razor that no consumer of this
+   surface can re-derive. The razor is "what this engine reached that A MARKUP PARSER COULD NOT"; the door says WHICH
+   MECHANISM composed an address and is silent on whether a parser gets it for free, so a reader holding
+   `epDoors` alone holds the raw material of the razor and not the razor.
+   IT LIVED AS PROSE IN TWO FILES AND AS DATA IN NONE, which is why it is a column rather than a table
+   somewhere: engine/build.mjs's verdict line said "a surface whose every door is `link-element` and
+   `document-script` is a `<head>` counted back, and one carrying `fetch`, `xhr` or `module-import` rows is
+   forced execution having reached a network call site" — five of twelve doors, in a comment — and
+   testing/static_surface.mjs says the same thing a third way, by naming which ENGINE FILE records each door.
+   Two copies of a fact the producer owns, neither complete, and CLAUDE.md §AN-AUDITOR-DERIVES-THE-RULE is
+   exact about what that costs. A door added to `ENDPOINT_DOORS` without a reach does not compile.
+   THREE WORDS AND NOT TWO, AND THE THIRD IS THE WHOLE OF THE HONESTY. `link-element`, `image-element` and
+   `form-submit` are reached by a parser-inserted element AND by a script-created one, and the door does not
+   record which — this header says so itself about `link-element` and the same sentence is true of the other
+   two. A two-way split would have to guess, and both guesses are wrong in a direction that matters: calling
+   them markup UNDER-credits a router-built `<link>`, and calling them beyond OVER-credits a `<head>`, which is
+   the exact over-credit the retired `epEmitted - epPreProgram` subtraction is recorded for. So the razor is
+   published as a FLOOR (`beyond`) with the undecidable population beside it, and a reader who wants one
+   number has the two that bound it.
+   `beyond` IS NAMED FOR THE PARSE AND NEVER FOR WHO RAN, which is why `reply-chunk` is in it: no line of the
+   page composed that address either, and the question this class answers is what a markup parse recovers.
+   A TIMING FLAG IS NOT ONE OF THESE AND CANNOT BE MADE INTO ONE. `pre_program` is WHEN and is a proxy for the
+   markup door in the FLATTERING direction — a `<head>` whose first `<script src>` runs before the parser
+   reaches the `<link>` below it mints that link POST-program. This column is the fact that proxy was standing
+   in for, and the two stay two: see `endpoint_reach_hist_json`. */
+#define ENDPOINT_REACHES(X)                                                                                  \
+    /* a parse of the served bytes reaches every address through this door */                                \
+    X(EPR_MARKUP, "markup")                                                                                  \
+    /* the door is reached by a parser-inserted element and by a script-created one alike, and it does not    \
+       record which — so neither claim may be made about a row that came through it */                        \
+    X(EPR_EITHER, "either")                                                                                  \
+    /* no parse of the served document reaches any address through this door */                              \
+    X(EPR_BEYOND, "beyond")
+
+typedef enum {
+#define ENDPOINT_REACH_MEMBER(id, token) id,
+    ENDPOINT_REACHES(ENDPOINT_REACH_MEMBER)
+#undef ENDPOINT_REACH_MEMBER
+    EPR_COUNT           /* the list's own end — dense by construction, for `EPD_COUNT`'s reason. THERE IS NO
+                           UNSTATED MEMBER HERE and that is not an omission: a reach is a property of the DOOR
+                           and is stated in the list below, so there is no producer who could forget one and
+                           nothing for a zero to mean. A door with no reach column is a compile error, which
+                           is a stronger refusal than the runtime one `EPD_UNSTATED` exists to make. */
+} EndpointReach;
+
+/* THE ONE WIRE SPELLING OF A REACH, and `endpoint_door_token`'s severity for its reason: it runs once per
+   emitted census row in EVERY build, so a release build falling through would put whatever the register held
+   into a JSON key and publish a class name nothing decided. */
+const char *endpoint_reach_token(int reach);
+
+/* WHAT A PARSE WOULD HAVE REACHED THROUGH A GIVEN DOOR — the list above, read through the list below, with no
+   second table anywhere. A door outside the list is a `CHECK` for `endpoint_door_token`'s reason exactly. */
+int         endpoint_door_reach(int door);
+
 /* THE EMITTED SURFACE PARTITIONED BY DOOR, as a malloc'd JSON OBJECT (caller frees) — one row per member of
    `ENDPOINT_DOORS`, zeroes included, summing to the `emitted` figure endpoint_surface_census reports. It is
    what makes CLAUDE.md §What-the-tool-produces' razor a PARTITION rather than a subtraction of two totals;
    the identity that says so is asserted at the composer, where both sides are in one hand. */
 char   *endpoint_door_hist_json(void);
+
+/* …AND THE SAME SURFACE PARTITIONED BY WHAT A PARSE OF THE DOCUMENT WOULD HAVE REACHED, as a malloc'd JSON
+   OBJECT (caller frees) — one row per member of `ENDPOINT_REACHES`, zeroes included, summing to the same
+   `emitted` figure. This is CLAUDE.md §What-the-tool-produces' razor STATED, and
+   `endpoint_door_hist_json` is the raw material it is computed from.
+   IT IS ONE FACT AT TWO GRAINS AND NOT TWO FACTS, WHICH A READER COUNTING ZEROES MUST BE TOLD. Every count
+   here is the sum of `endpoint_door_hist_json`'s counts for the doors of that class, so the two histograms do
+   not corroborate each other and a reader holding both holds ONE observation — CLAUDE.md
+   §EVIDENCE-INFLATION, and the reason the derivation is named here rather than left to be noticed. What it CARRIES that the door row does not is the map: which
+   doors a markup parse reaches, which is stated in exactly one place (the third column of `ENDPOINT_DOORS`)
+   and which no consumer of the emitted surface can re-derive.
+   IT IS A DIAGNOSTIC AND NEVER A TARGET, on §netdiff's own terms and in CLAUDE.md's own words: a zero in
+   `beyond` is a REFUSAL TO CLAIM the capability on this document, not a smaller version of it. Optimising
+   toward it optimises the instrument. It is an IDENTITY read WITHIN one run — `beyond` 0 against a nonzero
+   `emitted` is the whole finding — and it is not comparable across two runs of a wall-denominated quantum.
+   THE DENOMINATOR TRAVELS WITH IT AND IS NOT THIS ROW'S TO OMIT: `epEmitted` is on the same census line and
+   the sum identity is asserted at the composer, so a share read off this row is over the population the row
+   is a partition of. A bare `beyond` count is the defect
+   CLAUDE.md §a-coverage-figure-states-what-it-is-a-fraction-of is about.
+   NAMED RESIDUAL. NOT COVERED: whether the element behind an `EPR_EITHER` door was put there by the PARSER or
+   by a script. The three doors that class holds are reached by both and record neither, so every row through
+   them lands in `either` and the razor is published as a FLOOR with a ceiling rather than as a value — which
+   is CORRECT and is NARROWER than the question, since a router-built `<link>` really is beyond a parse and
+   this cannot say so. WHAT THE NEXT DIFF BUILDS: the element's own insertion recorded ON THE RECORD at the
+   mint, the way `pre_program` already is, so `endpoint_door_reach` becomes a function of the door AND that
+   flag for those three and of the door alone for the other nine. It is a fact the three markup recorders have
+   in hand and do not carry — core/html/html_form.c's step-1 comment says outright that "this engine has no
+   parser-inserted association to" unset, and core/html/html_link.c's only parser metadata is the CSP constant
+   its fetch states rather than a record of how the element arrived. HOW ITS ABSENCE SHOWS: a run whose
+   `either` is a large share of `epEmitted`, where the razor's floor and its ceiling are far apart and no row
+   published anywhere narrows them — a reader can then say what the engine reached AT LEAST and cannot say
+   what it reached. RETIREMENT: this record goes when that flag reaches this classifier. */
+char   *endpoint_reach_hist_json(void);
 
 /* Record one learned endpoint (deduped by method+url). `url` may be concolic (shape) or concrete. Headers are
    MERGED into a same-identity endpoint: a header seen with a concrete value supersedes the same header seen
