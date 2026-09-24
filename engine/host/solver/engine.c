@@ -6837,6 +6837,38 @@ void engine_orphan_census(long *driven, long *asked) {
    the only direction it can be wrong (a 2^32 wrap) costs one redundant walk. */
 static uint32_t g_orphan_gen_seen;
 static int      g_orphan_gen_valid;
+/* WHAT EACH ASK DID, BECAUSE `asked` MINUS WHAT THE STEP-UNIT HISTOGRAM NAMES IS TWO STATES AND NOT ONE.
+   engine_orphan_seed has exactly FOUR exits past `g_orphan_asks++`, and solver/step_unit.h names only the two
+   that produce work: `seed-one-orphan-flow` and `hand-a-parked-drive-its-function` are written past a take,
+   so a reader subtracting them from the ask count is left with a residue that is the MEMO having answered for
+   an unchanged generation OR the walk having run and found the heap empty. Those take opposite work — the
+   first is a question about `js_closure2`'s generation bump and about how often this frontier asks between
+   two closures, the second is a fact about the HEAP and is what the named residual at the take is about (a
+   body whose only closure was already released has no live function object to be handed over) — and
+   engine/build.mjs's own verdict for a driveless span offers exactly those two as an alternation it cannot
+   choose between, in as many words. This is that alternation given rows.
+   THE PARTITION IS THE POINT AND THE ROWS ARE HOW IT IS CHECKED. `asks` is raised at the ENTRY past the
+   forking gate and each of these three at exactly one exit, so the equality asserted at
+   engine_step_unit_runs states that every ask reached one of the exits that names itself — which is
+   `sum(g_step_unit_runs) == g_steps`'s argument at a smaller scale, and is broken by precisely the thing that
+   would otherwise widen the unexplained residue in silence: an early return added between the ask and the
+   exits. A row incremented on the line beside the ask would be equal by construction and would assert
+   nothing.
+   PER-SESSION, LIKE THE PAIR THEY PARTITION AND UNLIKE `g_step_unit_runs`, which is released by nothing.
+   That is not a detail: it is the whole reason the take's own row is here rather than read off the histogram,
+   since an equality between a per-session total and a per-instance summand holds only on a host that opens
+   one session per instance and would go silently wrong on one that does not.
+   A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing in the engine reads these, no arm of the walk branches on
+   one, and "how many asks found nothing" is exactly the shape a no-progress detector would be built from.
+   NAMED RESIDUAL — WHAT IS NOT COVERED: the split is readable only from a DCHECK's message when the partition
+   breaks, because no census publishes it, so the alternation engine/build.mjs states stays undecidable for
+   every reader of a result document. WHAT THE NEXT DIFF BUILDS: the three rows beside `_orphansDriven`/
+   `_orphansAsked` in solver/result.c's census, which is a cross-boundary landing (extension/bridge.js's
+   forward list and extension/popup.js's reader are the other half and deploy on WRITE while this half is live
+   only after a build), so it is one diff and not this one. HOW ITS ABSENCE SHOWS: a reader holding a document
+   whose ask count exceeds the sum of its `seed-one-orphan-flow` and `hand-a-parked-drive-its-function` rows
+   can state the residue and cannot state which of the two mechanisms produced it. */
+static long g_orphan_asks_memo, g_orphan_asks_empty, g_orphan_asks_took;
 /* THE ROUND TRIP'S TWO NUMBERS. How many waits a take has SATISFIED, and how many waiting flows FINISHED
    without ever being handed a body. The third, how many were rebuilt, is the cold tier's own
    (cold_resumed().orphans) and is not restated here.
@@ -7068,7 +7100,7 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
        about the frontier — the same one-number-two-mechanisms defect solver/solve.h's arrival census exists
        to end, in the surface §What-the-tool-produces calls the headline. */
     g_orphan_asks++;
-    if (g_orphan_gen_valid && gen == g_orphan_gen_seen) return 0;
+    if (g_orphan_gen_valid && gen == g_orphan_gen_seen) { g_orphan_asks_memo++; return 0; }
     /* AN EMPTY WALK IS NOT THE SAME CLAIM AS "THIS BUNDLE SHIPS NO UNCALLED CODE", AND THE TAKE IS NARROWER
        THAN THE SURFACE §What-the-tool-produces NAMES — a NAMED RESIDUAL, because what is here is correct and
        what it covers is smaller than what the product promises.
@@ -7154,9 +7186,16 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
        for the session. It states exactly what it is: the generation at which a walk found NOTHING. */
     if (!JS_OrphanTakeOne(ctx, engine_orphan_record, &t)) {
         g_orphan_gen_seen = gen; g_orphan_gen_valid = 1;
+        g_orphan_asks_empty++;
         DCHECK(JS_IsUndefined(t.fn), "an orphan take that reported nothing still left a function on the record");
         return 0;
     }
+    /* AND THE OTHER SIDE OF THAT BRANCH, RAISED HERE RATHER THAN AT EITHER EXIT BELOW IT. A take that handed a
+       body over either routes it to a claimant or seeds a drive, and both of those are already named by
+       solver/step_unit.h; what this row is counting is the TAKE, which is the event the two exits share and
+       the one the partition needs, so raising it at the exits would make it a second spelling of the
+       histogram instead of a summand of the ask. */
+    g_orphan_asks_took++;
     DCHECK(t.n == 1 && !JS_IsUndefined(t.fn),
            "an orphan take reported success without handing over a function — the bit that made it an orphan "
            "is already consumed, so it can never be driven again in this session");
@@ -12076,6 +12115,27 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
             "flow_step's `if (!f->frame)` block, and both are counted per pass through that block, so an ask "
             "outside that containment is a second path to the seed rather than a fact about the frontier",
             g_orphan_asks, g_unframed_steps);
+    /* AND THE ASK'S OWN EXITS PARTITION IT, ASSERTED WHERE ALL FOUR ARE IN ONE HAND — see the rows' own
+       declaration for what the residue is two states of and why the take is counted at the branch rather than
+       at the two exits below it. engine_orphan_seed raises the total at its entry past the forking gate and
+       exactly one of these three at each of its exits, so an ask outside the sum is an exit that names itself
+       to nobody: an early return added between the ask and the take, a second caller reaching the walk, or the
+       memo branch having grown an arm. That is the one way the unexplained residue a reader computes against
+       solver/step_unit.h's two orphan arms can widen without anything saying so, and it is the shape
+       §a-bare-count-over-a-population-you-have-not-partitioned names — a total that cannot move without one of
+       its parts moving is a total you can reason from.
+       AN EQUALITY AND NOT A FLOOR, UNLIKE THE CONTAINMENT ABOVE IT, because all four are released together at
+       engine_session_close: the pair above compares a per-session count against a per-instance one and can
+       only be asserted in the direction a restart cannot break, and these four share one lifetime by
+       construction. */
+    DCHECKF(g_orphan_asks == g_orphan_asks_memo + g_orphan_asks_empty + g_orphan_asks_took,
+            "solver/engine.c: the orphan surface was asked %ld time(s) and its exits account for %ld (%ld "
+            "memo, %ld empty walk, %ld take) — the total is raised at engine_orphan_seed's entry past the "
+            "forking gate and each of the three at exactly one of its exits, so a difference is an exit that "
+            "records nothing, and the residue a reader computes against `seed-one-orphan-flow` and "
+            "`hand-a-parked-drive-its-function` has silently stopped being the memo and the empty walk",
+            g_orphan_asks, g_orphan_asks_memo + g_orphan_asks_empty + g_orphan_asks_took,
+            g_orphan_asks_memo, g_orphan_asks_empty, g_orphan_asks_took);
 }
 
 /* TWO FACTS THE SCHEDULER HAS AND HAS NEVER SAID, and both of them are questions that were being ANSWERED BY
@@ -15217,6 +15277,10 @@ void solver_agent_free(JSContext *ctx)
        count makes that read `asked > 0` for a session that never asked at all, which is the exact reading the
        pair exists to distinguish, inverted, in the direction that looks healthy. */
     g_orphans_driven = 0; g_orphan_asks = 0;
+    /* AND THE ASK'S OWN PARTITION WITH IT, for the sentence directly above: they sum to `g_orphan_asks` and a
+       summand a second session kept would report the previous session's asks under this one's total and break
+       the equality at the first census of a host that runs many sessions in one process. */
+    g_orphan_asks_memo = 0; g_orphan_asks_empty = 0; g_orphan_asks_took = 0;
     g_orphan_gen_seen = 0; g_orphan_gen_valid = 0;
     /* …AND THE ROUND TRIP'S THREE NUMBERS BESIDE THEM, for the same sentence: what an inherited drive did with
        its recipe is a fact about ONE session's residue, and the latch is a fact about ONE frontier's members.
