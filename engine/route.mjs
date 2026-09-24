@@ -1038,8 +1038,15 @@ if (!closedBy(resumedTag).length)
    the scheduler has not picked since is neither, and the pair read at an arbitrary stopping point splits a
    record's fate three ways while reporting two: delivered, refused by every timeline, and STILL QUEUED. The
    check below is a pigeonhole over the first two and is simply invalid while the third is non-empty.
-   THE STOPPING POINT WAS ARBITRARY. The phase-4 loop above breaks the instant the resumed sender reports
-   `w.closed`, which is a fact about the ASKER and says nothing about what the receivers have got through.
+   THE STOPPING POINT IS THE SENDER'S, WHICH SAYS NOTHING ABOUT THE RECEIVERS. The phase-4 loop above ends on
+   `a`'s own frontier draining or stalling on a bill this zone will not pay — a fact about the ASKER, and the
+   records it routed on its way there can still be attached to flows the receiving scheduler has not picked.
+   THAT SENTENCE USED TO READ `The phase-4 loop above breaks the instant the resumed sender reports
+   w.closed`, and it is rewritten rather than deleted because the ARGUMENT is unchanged and a reader who
+   re-derives it from the loop will re-derive it correctly: the loop's terminator moved from the sender's
+   first `/closed` report to the sender's frontier ending, which made that population a TOTAL and left this
+   one exactly as much a sample as it was — the asker ending says no more about the receivers than the
+   asker's first report did.
    Draining here makes the third state empty by construction instead of by luck — measured at 22605dc4 and
    332a0c50, every receiver answered STALLED on its FIRST step here and not one delivery count moved, which is
    the good outcome and is exactly what may not be assumed. `pumpUntil` with a predicate that never holds is
