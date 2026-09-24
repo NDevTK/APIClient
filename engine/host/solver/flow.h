@@ -2838,6 +2838,36 @@ typedef struct {
      *   0 with `picksLifetime` 0             the instance has dispatched nothing and this row is silent.
      * The first two are the third state solver/flow.c's job-split residual had to add to its own dichotomy, and
      * this is the row that decides between them instead of a reader inferring it from `jobWGap`.
+     * AND THE ZERO ARM'S CONCLUSION IS UNSOUND, WHICH IS A CORRECTION TO THIS LEGEND AND NOT TO THE ROW — IT
+     * NAMES THE WRONG COMPONENT, AND IT NAMES THE ONE THE PARAGRAPHS AROUND IT SPENT A SESSION MOVING A
+     * READER AWAY FROM. flow_credit_pick has exactly one caller and it is engine.c's `best != cur` block, so
+     * this counts DISPLACEMENTS and not dispatches: engine_sched_step calls flow_step on `cur` OUTSIDE that
+     * block, and flow_next_to_run DEFENDS THE INCUMBENT ON A TIE — flow_pick folds the seed back on `>=`, so
+     * the maximum is over {seed} union members with ties to the seed and then to registry order. A ready
+     * holder RETAINED as incumbent is therefore STEPPED for as long as it holds the top and is credited here
+     * NOT ONCE. A zero is consistent with "no ready holder was ever offered the thread" AND with "a ready
+     * holder held the thread continuously and the ladder declined its job at every step" — the ORDER reading
+     * and the LADDER reading, which is the one pair this row exists to separate.
+     * THE TRAP IS ALREADY WRITTEN DOWN FOR THE SUPERSET AND THIS ROW INHERITS IT BY CONSTRUCTION, being
+     * raised inside `unframed_picks_lifetime`'s own `if`: solver/engine.h's `unframed_steps` states that
+     * pairing the two by name IS the trap and records it measured on one live page at 3 against 75. A subset
+     * of a row that undercounts the descents by that factor cannot carry a reading whose whole content is a
+     * zero, and on a frontier standing at one weight — which is the state this engine's own measurements
+     * report for a real page — the retained incumbent is the dominant case rather than a corner.
+     * WHAT ANSWERS IT WITHOUT THE HOLE IS ALREADY PUBLISHED AND IS NOT ON THIS CENSUS. `unframedStepsLifetime`
+     * is raised at the line that ENTERS flow_step's `if (!f->frame)` ladder, on every pass rather than on
+     * every switch, so it is nonzero exactly when the ladder was descended; `stepUnitRuns` beside it says
+     * which arm took every descent, and `run-a-task` is the arm a ready job would have left in. Read that
+     * pair FIRST. This row is then a statement about displacements and is worth what a displacement count is
+     * worth.
+     * WHAT IS NOT WITHDRAWN IS THE `> 0` ARM, which is a REFUTATION and needs no completeness: a positive
+     * count is a dispatch that really did reach a ready holder, however many uncredited steps went with it.
+     * Only the arm whose whole content is an ABSENCE is affected — which is the under-claim asymmetry
+     * CLAUDE.md names, arriving inside a legend rather than inside a finding, and it is the direction nobody
+     * discovers by acting on it, because acting on it means going to flow_pick and finding nothing there.
+     * RETIREMENT: this correction goes when the count is raised where the STEP is entered rather than where
+     * the switch is credited, because a retained incumbent is then inside the population and the zero means
+     * what the arm above says it means.
      * CONTAINED IN THE ROW ABOVE BY CONSTRUCTION — raised inside its `if` — and asserted at the end of
      * flow_wfq_census, which is the arithmetic tell CLAUDE.md names for every count offered as a share of
      * another: a subset exceeding the population it claims to be drawn from.
