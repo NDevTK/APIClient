@@ -1987,6 +1987,13 @@ done:
    nothing. `url_display` is not among them because it is the identity on a concrete string and this address is
    one: a concolic's request carries its SHAPE to the host (core/fetch/fetch.c), so the string that comes back
    with the reply is already the display form this surface filed it under.
+   AND A COMPONENT THAT HANDS THE HOST A SERIALIZATION INSTEAD STILL OWES THIS CALL THE SHAPE, which is a
+   fact about the CALLER rather than a second rule here: XHR §3.5.1 The open() method parses, and URL Standard
+   §1.3 "Percent-encoded bytes" puts U+007B ({) and U+007D (}) in the path percent-encode set, so the
+   serialization of an unknown-input address spells its holes `%7B…%7D` and matches no record this file holds.
+   core/xhr/xml_http_request.c answers it through `xhr_request_address`, whose projection is this same display
+   form; the sentence that used to stand at that site instead asserted the two strings were one, and a verdict
+   for every unknown-input address it filed named nothing at all.
    IT MARKS RATHER THAN DELETES. The address may be recorded again by another call site in the same run, and
    what was learned is a fact about the RESOURCE, so a later sighting must stay suppressed — and the params of
    a record dropped mid-array would take their neighbours' indices with them.

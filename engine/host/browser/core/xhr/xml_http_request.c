@@ -264,6 +264,40 @@ static const char *xhr_arg_cstring(JSContext *ctx, JSValueConst v, size_t *plen)
     return r;
 }
 
+/* THE ADDRESS THIS OBJECT'S REQUEST IS FILED UNDER, WHICH IS NOT THE SAME QUESTION AS WHICH ORIGIN IT
+   REACHES — and §3.5.1 The open() method step 11.3, "Set this's request URL to parsedURL", answers only the
+   second. A URL built out of unknown external input reaches that parse as its display SHAPE (xhr_arg_cstring
+   above), and a parse is not an identity-preserving projection of one: URL Standard §1.3 "Percent-encoded
+   bytes" states that "The path percent-encode set is a percent-encode set consisting of the query
+   percent-encode set and U+003F (?), U+005E (^), U+0060 (`), U+007B ({), and U+007D (})", so `/api/{state}.id`
+   serializes back as `…/api/%7Bstate%7D.id` — an absolute address whose holes are spelled in a grammar nothing
+   downstream reads. core/fetch/fetch.c refuses exactly that on its own Fetch §5.4 "Request class"
+   edge, in its own words `A shape stays the shape`, and this component had no NAME for the distinction — so
+   the two facts it already holds were read by whichever spelling each caller happened to reach for.
+   WHAT ONE SPELLING FOR TWO QUESTIONS COST: the @H sighting was filed under the SHAPE and the reply's asset
+   verdict under the SERIALIZATION, and solver/endpoint.c recomputes that identity FROM THE SHAPE ALONE
+   (`path_scan`'s own banner says so, which is what makes an example-free recompute answer the same string) —
+   so a verdict for an unknown-input address named NO record, and a static file stayed on the learned API
+   surface as an endpoint with nothing anywhere saying a record's kind had gone undecided.
+   THE OTHER QUESTION KEEPS THE SERIALIZATION AND THAT IS THE SPLIT RATHER THAN AN OMISSION: which origin a
+   request reaches is what the chokepoint decides SOP, CORS and credentials from, and only the parse states it
+   — so `xhr_request_op` and Fetch §4.1's blocking read `url`, and everything that NAMES this request to the @H
+   surface reads this. Projected to bytes by `xhr_arg_cstring` and never by a coercion, which answers
+   byte-identically to the shape solver/endpoint.c's `url_display` takes: the two keys are ONE STRING by
+   construction rather than two that agree today. */
+static JSValueConst xhr_request_address(const XhrData *d)
+{
+    DCHECK(!JS_IsNull(d->url),
+           "an XMLHttpRequest was asked for the address its request is filed under before XHR §3.5.1 The "
+           "open() method step 11.3 stored one — every caller runs on an `opened` object, so an absent URL "
+           "here is a route that reached the @H surface or the reply register without one");
+    DCHECK(JS_IsNull(d->url_src) || concolic_is(d->url_src),
+           "an XMLHttpRequest holds a request-address argument that is not unknown external input — §3.5.1 "
+           "The open() method stores one ONLY where it carries something the serialization does not, and a "
+           "plain string here would make this identity a second copy of `url` that is free to drift from it");
+    return JS_IsNull(d->url_src) ? d->url : d->url_src;
+}
+
 static XhrData *xhr_of(JSValueConst v)
 {
     XhrData *d = JS_GetOpaque(v, g_xhr_class);
@@ -648,8 +682,10 @@ static void xhr_reset_request(JSContext *ctx, XhrData *d)
  * scalar values" never ran on `url`, `username` or `password`. The visible half was an ABORT: a page object
  * reached §7.1.19 ToString ( arg ) at the byte consumer below, from a C activation with no flow base under it,
  * so `xhr.open({toString(){…}}, {toString(){…}})` ended the document. Step 8's own comment two screens down
- * asserts the opposite of what the code did — "the declaration converts `USVString?` null and undefined to the
- * IDL null" — which is exactly true of `values` and false of `args`.
+ * asserts the opposite of what the code did — it says the declaration converts a `USVString?` null and
+ * undefined to the IDL null, which is exactly true of `values` and false of `args`. That sentence is THIS
+ * FILE'S and not §7.1.19's, so it is stated rather than quoted: a run of our own prose inside quotation marks
+ * beside a citation is read by the audit as a claim about the STANDARD, and the nearest one wins.
  *
  * Out of range reads undefined, for the reason step_arg's does: that is what an optional argument means at
  * this level, and §3.6's required-arity TypeError has already run, so positions 0 and 1 are always present. */
@@ -1810,18 +1846,29 @@ static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
        once per reply: the two callers are the two arms of Fetch §4.1 main fetch — a request this agent
        answered itself, and one the trusted host answered — and `xhr_main_fetch_local` returning true is what
        clears `s->req`, so a send takes one of them and never both.
-       THE ADDRESS IS `url` AND NOT `response_url`, WHICH IS AN IDENTITY QUESTION RATHER THAN A SPEC ONE.
-       `reply_decode_learn` uses it twice: as the BASE a body's relative addresses resolve against, and as
-       half the key its asset verdict is filed under (`endpoint_mark_asset`). The second decides it — the pair
-       this request was owed under is the one `xhr_request_op` handed the trusted zone and the one
-       `xhr_record_endpoint` filed the @H sighting under, and a verdict naming a different string would
-       silently retract nothing while reading as a retraction. §3.6.1 The responseURL getter's fragment
-       exclusion is a fact about what a PAGE reads back, not about which record this reply answers.
+       THE ADDRESS IS `xhr_request_address` AND NOT `response_url`, WHICH IS AN IDENTITY QUESTION RATHER THAN
+       A SPEC ONE. `reply_decode_learn` uses it twice: as the BASE a body's relative addresses resolve
+       against, and as half the key its asset verdict is filed under (`endpoint_mark_asset`). The second
+       decides it — a verdict naming a different string retracts nothing while reading as a retraction — and
+       the accessor is what makes this the string `xhr_record_endpoint` filed the @H sighting under rather
+       than one that merely agreed with it wherever the page wrote a literal address.
+       THIS NAMED `url` AND SAID THAT STRING WAS BOTH THE ONE `xhr_request_op` HANDS THE TRUSTED ZONE AND THE
+       ONE THE SIGHTING IS FILED UNDER. The first conjunct is still true and the second was FALSE for exactly
+       the addresses this tool exists to find — a request built out of unknown external input — and a sentence
+       asserting a guarantee is BUILT ON rather than checked, so the arm the guarantee excluded was never
+       written. It is rewritten rather than deleted because the identity is what a reader re-derives.
+       AND THE BASE IS UNCHANGED FOR A LITERAL ADDRESS AND IS NOW THE SHAPE FOR AN UNKNOWN ONE, which the URL
+       parser refuses where that shape is relative: no base at all is the honest answer for an address no run
+       computed, and resolving a body's chunk addresses against a serialization whose holes are spelled
+       `%7B…%7D` was resolving them against a directory the page never composed.
+       §3.6.1 The responseURL getter's fragment exclusion is a fact about what a PAGE reads back, not about
+       which record this reply answers.
        NOT A SECOND LEARNING DOOR: it is the one entry, called from the one place this transport can reach it,
        and it holds no state — everything it learns goes to solver/endpoint.c, which is global and takes no COW
        capture for the reason that header gives (what a server said is not a fact about a flow's world). */
     {
-        const char *lm = JS_ToCString(ctx, d->method), *lu = JS_ToCString(ctx, d->url);
+        const char *lm = JS_ToCString(ctx, d->method);
+        const char *lu = xhr_arg_cstring(ctx, xhr_request_address(d), NULL);
 
         /* BOTH HALVES OR NEITHER, AND NEITHER IS DEFAULTABLE. An UNKNOWN method never reaches here — both
            arms answer one before a reply exists (`xhr_main_fetch_local` returns for a concolic method, and
@@ -2170,7 +2217,7 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
        SAME value — this runs in §3.5.6 step 6's own turn, where the ask was made — and reading it here made
        the sighting, the trusted zone's record and the reply's learning three independent answers to one
        question about one exchange. See the `request_prov` field. */
-    endpoint_record(ctx, method, JS_IsNull(d->url_src) ? d->url : d->url_src, eh, (int)n, ebp,
+    endpoint_record(ctx, method, xhr_request_address(d), eh, (int)n, ebp,
                     xhr_request_prov(d), EPD_XHR);
     if (body) JS_FreeCString(ctx, body);
     free(body_ct);
@@ -3405,7 +3452,8 @@ static const char *const XHR_ABSENT[] = { "setPrivateToken" };
    they were placed from core/platform.c's per-document column, such a realm reaches no
    platform_document_install and got none of them.
    NOTHING THIS COMPONENT READS AT INSTALL TIME IS A DOCUMENT'S. XHR does hold per-document state — XHR §3.5.1
-   The open() method's steps 5-6 parse the URL "against the relevant settings object's API base URL", and
+   The open() method's steps 5-6 parse the URL — "Let parsedURL be the result of encoding-parsing a URL url",
+   relative to the relevant settings object — and
    XHR §3.5.4 The withCredentials getter and setter feeds §3.5.6 send()'s credentials mode — but every one of
    those is read from the RUNNING realm when the member is CALLED, not when the interface object is minted, so
    the move takes no input with it and strands none. The install ignored its `PlatformDocument` argument
