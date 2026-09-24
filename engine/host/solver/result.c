@@ -1341,6 +1341,11 @@ char *result_wfq_json(void) {
                         near one is an index that saves nothing and whose per-ask cost is the walk the order
                         already performs. That reading is a decision about whether to build one at all rather
                         than a defect to repair, and it is why the row exists.
+                        A LARGE SHARE IS EXPECTED AND IS NOT A WIDE MARGIN. solver/flow.h proves the band
+                        contains every member TIED with the maximum whatever the margin is, and flow.c
+                        records this frontier as "73-93% of members tied at the top" — so a band near that
+                        is the ORDER being tied, and shrinking the margin in response repairs the one thing
+                        that was not wrong. Read that banner before acting on this quotient.
                         BOTH ARE LIFETIME COUNTS SUMMED OVER ASKS, raised under APICLIENT_DEV, and may be
                         differenced; neither is a gauge and neither may be read against `members`.
                         `keyIndexAskedLifetime` is the reachability witness for both, exactly as it is for

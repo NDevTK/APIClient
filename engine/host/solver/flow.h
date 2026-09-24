@@ -3215,6 +3215,21 @@ FlowKeyChecks flow_key_checks(void);
    rather than a number over a denominator somebody supplied.  A SMALL share is an index that narrows.  A
    share near one is an index that saves nothing — and that is a finding about whether the surrogate is worth
    keeping, not a defect to repair.
+   A LARGE SHARE IS EXPECTED AND IS NOT A WIDE MARGIN, WHICH IS THE ONE WAY THIS ROW WILL BE MISREAD — and
+   the reason is a theorem rather than a measurement, so it is written here where the number is published
+   instead of being left for a reader to re-derive from a figure that surprised them.  THE BAND CONTAINS
+   EVERY MEMBER TIED WITH THE MAXIMUM, always: if `W(a)` equals the comparator's extremum then, with `M` the
+   derived margin and `m*` the surrogate's own pick, `S(m*) <= W(m*) + M <= W(a) + M` (because `a` carries
+   the extremum) and `S(a) >= W(a) - M`, so `S(m*) - S(a) <= 2M` and `a` is inside the edge.  The band's
+   share is therefore AT LEAST the share of the frontier standing at the top weight, whatever the margin is
+   — widen it and nothing changes, narrow it and the tie set is still in.  flow.c records this frontier as
+   "73-93% of members tied at the top", so a band near that is the ORDER being tied and not the bound being
+   loose, and a reader who responds to it by shrinking the margin has repaired the one thing that was not
+   wrong.  What such a reading DOES say is the thing the row exists for: an index cannot beat the tie, so a
+   candidate set on a tied frontier re-compares most of it and the walk is moved rather than removed.
+   THE MARGIN IS NOT THE DIAL, IN OTHER WORDS, AND THE SHARE IS A PROPERTY OF THE ORDER.  The only reading
+   that would indict the bound is a band much LARGER than the tie set — which needs the tie set measured
+   beside it and is a second question this pair does not answer.
    BOTH ARE LIFETIME COUNTS SUMMED OVER ASKS and may be differenced; neither is a gauge, neither is
    per-member, and neither may be read against `members`.  `index_asked` remains the reachability witness for
    all four: a zero band beside a zero ask is a fold that never ran.
