@@ -45,34 +45,31 @@
  * still outside is a rendezvous that carries a BODY and has no caller here, and the honest form of `every` is
  * a claim about CALLERS rather than about the index.
  *
- * NAMED RESIDUAL — AN XMLHttpRequest'S JAVASCRIPT REPLY BODY IS NOT A PROGRAM THIS ENGINE RUNS. The LEARNING
- * half of this residual is retired: `xhr_take_reply` calls this entry, so an XHR's fields become concrete
- * examples like any other reply's. It is a residual and not a crash because what is left is a DECISION nobody
- * has taken rather than a gap: the code is correct for the question it was asked.
- *   WHAT IS NOT COVERED: a reply whose computed type is JavaScript, arriving by XHR, is freed unread — the
- *     property being that no arm of this file compiles one and this transport reaches no arm that does.
- *     Whether it SHOULD is a standards question and not an analogy: a `fetch()`-delivered program reaches
- *     solver/engine.c's FLOW_PENDING_RESOLVE delivery, and CLAUDE.md §Learning-from-replies' "a fetch whose
- *     body is JAVASCRIPT is ALWAYS fetched + EXECUTED" is what that arm is built to. WHAT THE STANDARDS SAY
- *     AND DO NOT SAY, read rather than inferred: XHR §3.5.6 "The send() method" step 6 — "Let req be a new
- *     request, initialized as follows" — states ELEVEN members and a destination is not one of them, so the
- *     request keeps the one Fetch §2.2.5 "Requests" gives it by default ("A request has an associated
- *     destination, which is destination type. Unless stated otherwise it is the empty string"), which is
- *     outside that section's own `script-like` set. A `<script src>` is `script` and IS in it. So the two
- *     differ on the one axis Fetch uses to say whether a reply may cause script execution, and no section of
- *     either standard settles what a SOLVER should do with the difference — which is why this is a decision
- *     to take and not a gap to fill.
- *   WHAT THE NEXT DIFF BUILDS — STATED AS WHAT MUST EXIST AFTERWARD: one answer, derived from XHR §3.6.x and
- *     Fetch rather than from what the RESOLVE arm happens to do, to whether a JavaScript-typed reply the page
- *     asked for as data is a program this engine runs. Where it is, what must exist is a ROUTE from that
- *     answer to `engine_queue_fetched_script` (declared in solver/engine.h; solver/engine.c's RESOLVE
- *     delivery is its caller) — never a second arm in this file and never a second door beside it, which is
- *     the dual-system rot CLAUDE.md §A-superseded-system-is-DELETED forbids. Where it is not, what must exist
- *     is that reasoning written at the decision rather than this residual standing open.
- *   HOW ITS ABSENCE WOULD SHOW: a bundle that loads a lazy chunk with `xhr.open("GET", chunkUrl)` and `eval`s
- *     the text itself reports the chunk's own address and none of the addresses INSIDE it, while the same
- *     bundle loading the same chunk through `fetch()` reports both — two answers on one surface, decided by
- *     which API fetched the program.
+ * THE RESIDUAL THAT STOOD HERE IS RETIRED BY ITS OWN TERMS, AND THE ANSWER IS YES: AN XMLHttpRequest'S
+ * JAVASCRIPT REPLY BODY IS A PROGRAM THIS ENGINE RUNS. core/xhr/xml_http_request.c's `xhr_take_reply` reads
+ * the same `computedType` this file reads, decodes it with §3.6.6 "Response body"'s own final encoding, and
+ * hands it to `engine_queue_fetched_script` — the ONE compile entry, which solver/engine.c's
+ * FLOW_PENDING_RESOLVE delivery also calls, so there is no second door and no arm in this file.
+ *
+ * THE REASONING IS AT THAT SITE AND NOT HERE, because it is about a transport this file does not model. What
+ * is kept here is the SHAPE OF THE WRONG ANSWER, because a reader who re-derives the question re-derives it:
+ * the residual put the doubt on Fetch §2.2.5 "Requests"' DESTINATION — §3.5.6 "The send() method" step 6
+ * states eleven request members and names no destination, so an XMLHttpRequest keeps the empty string, which
+ * is outside that section's `script-like` set while a `<script src>`'s "script" is inside it. Every clause of
+ * that is true and it settles nothing, because THE DOOR THAT ALREADY COMPILES IS `fetch()` AND ITS
+ * DESTINATION IS THE EMPTY STRING TOO — §5.4 "Request class" only ever reads one back, §5.6 "Fetch methods"
+ * does not mention one, and §2.2.5's own table puts `fetch()` and `XMLHttpRequest` in ONE ROW against
+ * `<script>`'s. An axis on which two doors are identical cannot be why one of them refuses. The axis this
+ * engine does discriminate on is at `engine_pending_resource_url` (solver/engine.h) and it is whether the
+ * PAGE'S OWN CODE receives the bytes at all — preload, modulepreload and an image decode do not, and §3.6.10
+ * "The responseText getter" does.
+ *
+ * WHAT IS STILL OPEN IS NOT ABOUT THIS TRANSPORT: a page whose CSP admits neither `eval` nor this reply's
+ * origin as a script source cannot execute these bytes by any route, and nothing in this tree reads a policy
+ * before EITHER compile. Refusing on it would refuse `fetch()` with it, so it is a question about the compile
+ * entry; it is stated at the XHR route and is not a reason this door differs.
+ * RETIREMENT: this record goes when a census counts the programs each reply door QUEUED, because a reader can
+ * then watch both doors work instead of re-deriving from this file's silence which of them exists.
  *
  * IT HOLDS NO STATE. Everything it learns goes straight into solver/endpoint.c, so there is no table to
  * initialise, none to free, and no line for it in engine.h's release column. A component that kept its own copy

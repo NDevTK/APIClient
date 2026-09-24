@@ -1271,8 +1271,13 @@ static JSValue xhr_reply_content(JSContext *ctx, XhrData *d, JSValue value)
     return r;
 }
 
-/* §3.6.6 "get a text response": decode the received bytes with the final encoding, defaulting to UTF-8. */
-static JSValue xhr_text_response(JSContext *ctx, XhrData *d)
+/* §3.6.6 "get a text response": decode the received bytes with the final encoding, defaulting to UTF-8.
+   THE DECODE IS SPLIT FROM THE PROVENANCE WRAP BELOW BECAUSE IT HAS A SECOND READER AND THE WRAP MUST NOT.
+   `xhr_take_reply`'s program route wants §3.6.6's CHARACTERS — the source text a page that went on to
+   `eval(xhr.responseText)` would have compiled — and a concolic is not a program: handing the compiler one
+   would ask it to parse a DISPLAY SHAPE. The wrap belongs to the two members whose VALUE is the content,
+   which is what the paragraph above this pair is about, and a program is not one of them. */
+static JSValue xhr_decode_text(JSContext *ctx, XhrData *d)
 {
     const uint8_t *bytes;
     size_t len = 0;
@@ -1292,7 +1297,15 @@ static JSValue xhr_text_response(JSContext *ctx, XhrData *d)
     CHECK(dec != NULL, "XMLHttpRequest: OOM building the response decoder");
     out = enc_decoder_decode(ctx, dec, bytes, len, /*stream*/ false);
     enc_decoder_free(dec);
-    return xhr_reply_content(ctx, d, out);
+    return out;
+}
+
+/* …AND THE SAME CHARACTERS AS A VALUE THE PAGE READS, which is where the provenance question is asked and
+   the only place it may be: §3.6.9 The response getter's text arm and §3.6.10 The responseText getter are the
+   two readers whose result the page computes with. */
+static JSValue xhr_text_response(JSContext *ctx, XhrData *d)
+{
+    return xhr_reply_content(ctx, d, xhr_decode_text(ctx, d));
 }
 
 /* §3.6.6 "set a document response". The HTML arm is lexbor's parser over a document with NO browsing context —
@@ -1821,6 +1834,106 @@ static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
         reply_decode_learn(ctx, lm, lu, reply, xhr_request_prov(d));
         JS_FreeCString(ctx, lm);
         JS_FreeCString(ctx, lu);
+    }
+    /* …AND A REPLY WHOSE BYTES ARE JAVASCRIPT IS A PROGRAM HERE TOO. THAT IS A DECISION, AND THE AXIS IT WAS
+       DOUBTED ON DOES NOT SEPARATE THIS DOOR FROM THE ONE THAT ALREADY COMPILES.
+
+       solver/reply_decode.h carried a residual asking whether a JavaScript-typed reply arriving by XHR is a
+       program this engine runs, and it put the question on Fetch §2.2.5 "Requests"' DESTINATION: §3.5.6 "The
+       send() method" step 6 states ELEVEN members of its request and a destination is not one of them, so an
+       XMLHttpRequest keeps the default — "A request has an associated destination, which is destination type.
+       Unless stated otherwise it is the empty string" — which is outside that section's own `script-like` set
+       ("audioworklet", "paintworklet", "script", "serviceworker", "sharedworker", or "worker"), while a
+       `<script src>` is "script" and is inside it. Every clause of that is true and it settles nothing,
+       because the door this engine already compiles through is not the `<script src>` one. IT IS `fetch()`,
+       AND `fetch()`'S DESTINATION IS THE EMPTY STRING TOO: §5.4 "Request class" mentions a destination only as
+       an IDL attribute and its getter ("The destination getter are to return this's request's destination")
+       and never sets one, §5.6 "Fetch methods" does not contain the word, and §2.2.5's own destination table
+       puts `fetch()` and `XMLHttpRequest` in ONE ROW — destination "", CSP directive `connect-src`, against
+       "script"/`script-src` for HTML's `<script>`. So the destination axis separates BOTH of these doors
+       jointly from `<script src>`, and this engine decided that case when it built the arm in
+       solver/engine.c's FLOW_PENDING_RESOLVE delivery. A difference the two doors do not have cannot be the
+       reason one of them refuses.
+
+       WHAT THIS ENGINE ACTUALLY DISCRIMINATES ON IS WRITTEN AT `engine_pending_resource_url` (solver/engine.h)
+       AND IT IS NOT THE DESTINATION: HTML §4.6.8.20 Link type "preload", HTML §4.6.8.12 Link type
+       "modulepreload" and HTML §4.8.4.3.5 "Updating the image data" park a kind of their own PRECISELY so a
+       JavaScript-typed reply is NOT compiled, and the reason that entry gives is that "None of these standards
+       evaluates anything here" — modulepreload's own example calling the module "already ready (but not
+       evaluated) in the module map". What those three share is not a destination; it is that the PAGE'S OWN
+       CODE never receives the bytes. The RESOLVE arm's stated reason is the same fact read positively — "if
+       the page did not itself hand those bytes to a `<script>` element nothing ever compiled them" — which
+       presupposes the page HAS them and COULD have. §3.6.6 "Response body" hands them over: §3.6.10 "The
+       responseText getter" is the decoded text, and `xhr.responseText` into an `eval` is how a bundle loads a
+       lazy chunk without a `<script>`. So an XMLHttpRequest is on the same side of this engine's own line as
+       `fetch()`, and CLAUDE.md §Learning-from-replies' "a fetch whose body is JAVASCRIPT is ALWAYS fetched +
+       EXECUTED" is keyed on the BODY and the RESOURCE rather than on which API asked — solver/reply_decode.c
+       states the general form at its own decision: what a program is owed is to be RUN.
+
+       WHY THIS DOOR AND NOT solver/reply_decode.c, WHICH IS WHERE THE NEXT READER WILL REACH FIRST. That file
+       runs on the HOST's time, and the queue below reaches a row that requires a flow switched in; a yielded
+       flow keeps its stamp up deliberately, so asking there would write the program into an arbitrary
+       member's row table. This site is inside §3.5.6's own step machine — the flow that SENT, on a later turn
+       than step 6 — so the program lands on the timeline that asked for it, which is what §State-isolation
+       requires. It is also BEFORE §3.6's `readystatechange` and `load`, the position the RESOLVE arm takes
+       ahead of the page's own reaction: a chunk that arrives after the reaction waiting for it is a chunk
+       whose endpoints that reaction has already not seen. And it is not a second compile DOOR: there is one
+       entry, `engine_queue_fetched_script`, and this calls it.
+
+       THE DECODE IS §3.6.6'S AND NOT HTML §8.1.4.2 "Fetching scripts"', WHICH IS A CHOICE AND NOT A
+       CONVENIENCE. The two differ — §3.6.6 runs the FINAL encoding, which §3.6.7 "The overrideMimeType()
+       method" can set and which defaults to UTF-8 — and the bytes that matter here are the ones the page
+       would have compiled had it gone on to eval them, which are §3.6.6's by construction. Reaching for the
+       script decode would be answering a `<script src>`'s question on a transport that has none.
+
+       THE ADDRESS IS `response_url`, WHICH DISAGREES WITH THE CALL ABOVE FOR A REASON RATHER THAN BY
+       OVERSIGHT. That one is filed under the IDENTITY this request was owed under — whichever accessor states
+       it, which is that paragraph's to name and not this one's — because a verdict under a different string
+       retracts nothing while reading as a retraction. This asks a different question: HTML §8.1.4.2 creates
+       the script with the RESPONSE'S URL and §8.1.4.1 "Scripts" keeps it as the program's base URL, so a
+       chunk that redirected resolves its own relative addresses against where it came FROM. The two answers
+       are allowed to differ because they are two questions, and a program's base is never an identity.
+       THE GUARD IS THE RESOLVE ARM'S AND HAS ITS REASON: `engine_queue_fetched_script` refuses an
+       address-less program, and a reply whose URL did not serialize is a record that cannot say where its
+       bytes came from. It is guarded rather than asserted for that arm's reason too — the refusal is about a
+       record, not about this component's own logic.
+
+       WHAT IS NOT SETTLED, AND IT IS NOT SETTLED AT EITHER DOOR. A page under a CSP with no `'unsafe-eval'`
+       and a `script-src` that does not admit this reply's origin cannot execute these bytes by ANY route —
+       not `eval`, not an injected element — so compiling them explores a world that page cannot reach, which
+       is the one thing §Solver-half's "a BRANCH the page's own code could take, not an act no client
+       performs" rules out. That is true of `fetch()` identically and of this door no more, and nothing in
+       this tree reads a policy before either compile. It is named here rather than answered because a
+       refusal on it would have to refuse BOTH doors, which is a decision about the compile entry and not
+       about this transport. */
+    {
+        char *ct = fetch_reply_computed_type(ctx, reply);
+        MimeType cm;
+
+        /* THE TYPE IS THE HOST'S DECISION AND IS NEVER RE-SNIFFED HERE, exactly as the sibling door and
+           solver/reply_decode.c both say at their own extracts: SECURITY.md puts sniffing in the trusted
+           zone, `computedType` is what that zone stamped, and a record whose type does not parse is not a
+           program — there is no sniff this process may run to find out otherwise. */
+        if (mime_type_extract(&cm, ct) && mime_type_is_javascript(&cm)) {
+            JSValue txt = xhr_decode_text(ctx, d);
+            size_t src_n = 0;
+            const char *src = JS_ToCStringLen(ctx, &src_n, txt);
+            const char *base = JS_ToCString(ctx, d->response_url);
+
+            /* A `CHECK` FOR THE SAME REASON THE STATUS MESSAGE ABOVE IS ONE: both are dereferenced in every
+               build, and `src_n` is read rather than `strlen` because a decoded body may hold a U+0000 and a
+               browser runs the whole of it (the length the queue entry takes exists for that). */
+            CHECK(src != NULL && base != NULL,
+                  "XMLHttpRequest: OOM reading a JavaScript reply's source text or its address — §8.1.4.2 "
+                  "\"Fetching scripts\" needs both to make a program out of a response");
+            if (*base)
+                engine_queue_fetched_script(document_doc(ctx), src, src_n, base);
+            JS_FreeCString(ctx, base);
+            JS_FreeCString(ctx, src);
+            JS_FreeValue(ctx, txt);
+        }
+        mime_type_free(&cm);
+        free(ct);
     }
     JS_FreeValue(ctx, st_v); JS_FreeValue(ctx, hs_v); JS_FreeValue(ctx, bd_v);
 }
