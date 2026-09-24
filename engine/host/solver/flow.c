@@ -4739,9 +4739,31 @@ long flow_branch_born(const Flow *f) {
    right between emissions and wrong across one, with no row anywhere reporting how many members stand away
    from their family's epoch base — so the rebuild is invisible in every census this file publishes and in
    every reading taken from them.
-   RETIREMENT: this clause goes when that population is counted — a row raised where a member's own silence
-   first leaves its family's epoch base and cleared where flow_credit_emit clears the epoch — because the
-   rebuild is then a number beside the walk's rather than an argument here.
+   THE POPULATION IS EXACT AND IS READ OFF THE ACCESSOR RATHER THAN INFERRED FROM THIS PARAGRAPH:
+   flow_own_silence is `f->cpu_gen == f->family->emit_gen ? f->cpu : 0`, so a member stands away from its
+   family's epoch base exactly when `f->family && f->cpu_gen == f->family->emit_gen && f->cpu > 0`. That
+   spelling is what confirms the half this clause rests on — the reset needs NO per-member write, because
+   flow_credit_emit moves `emit_gen` and every member's silence reads zero from the comparison alone.
+   AND THE DENOMINATOR ALREADY SHIPS, WHICH IS WHY NO SECOND ONE IS OWED: the quantity an index here would
+   replace is the walk, and `scanNextWeights` is already the lifetime sum over scans of the members each one
+   weighed. So the reading is the lifetime sum of the away count SAMPLED AT EACH EMISSION — which is the whole
+   rebuild an epoch-keyed index pays — against that row. A gauge read at a census instant cannot answer it and
+   must not be offered as though it could: a census lands at an arbitrary point between two emissions, so the
+   gauge is near zero just after one and at its peak just before, and the sample is a lottery rather than a
+   measurement.
+   AND THE ROW IS A FOUR-FILE LANDING, WHICH IS NOT DERIVABLE FROM THIS FILE AND IS WHY IT IS WRITTEN HERE.
+   A census row becomes readable only where result.c emits it, field by field, into the report's format string
+   and argument list; computed here and not emitted there it is a write with no reader, which is the shape
+   this file refuses everywhere else. The precedent is the row that prices the SIBLING design: the
+   derived-margin candidate set's `band_members`/`band_weighed` landed as ONE commit over flow.c, flow.h,
+   result.c and testing/live-wfq.js. So this clause names work that CANNOT LAND EXCEPT TOGETHER, and a lane
+   scoped to flow.c and flow.h alone can only produce the half that nothing reads — the clause used to say
+   "a row" and left its reader to be discovered at the boundary, which is a residual reasoning from where its
+   author was standing rather than from where its consumer lives.
+   RETIREMENT: this clause goes when that population is counted — the maintained away count raised where a
+   member's own silence first leaves its family's epoch base, zeroed where flow_credit_emit clears the epoch,
+   summed INTO a lifetime row at that same statement, and emitted by result.c — because the rebuild is then a
+   number beside the walk's rather than an argument here.
    WHAT THE NEXT DIFF BUILDS: that enumeration — the distinct `branch` nodes of the live frontier, maintained
    where membership moves (flow_new opens one, the fork's join is the only thing that ever retires one from
    use, and acct_depart is where a bucket loses its last member), so one offset can be read for a whole arm
