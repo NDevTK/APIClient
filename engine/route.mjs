@@ -1012,6 +1012,15 @@ for (;;) {
   if (step === STEP_DONE || (step === STEP_STALLED && paid === 0)) { resumeEnd = step; break; }
   await routePending();
 }
+/* AND THE ENDING ROUND'S POSTS ARE ROUTED TOO, which the loop cannot do for itself because it breaks before
+   its own `routePending`. The checks at the bottom read `posts.length` as THE NUMBER OF RECORDS THIS ZONE
+   HANDED OVER — `delivered >= posts.length`, and the per-document shortfall beside it — so a record `a`
+   emitted on the step that ended its session and nobody routed is counted in that denominator and can never
+   appear in the numerator: a loss verdict about a record that was never offered to anybody. The receiver
+   drain below deliberately does not step the SENDER and says so; this is the other half of that sentence,
+   placed where the routing still happens. It is also the reason this is not a weakening of anything — an
+   unrouted record fails the pigeonhole either way, and routing it is what gives it a chance to be admitted. */
+await routePending();
 console.log(`phase 4: the resumed session ended ${resumeEnd === STEP_DONE ? 'DONE' : 'STALLED unpaid'} having ` +
             `read \`w.closed\` back ${closedBy(resumedTag).length} time(s)`);
 if (!closedBy(resumedTag).length && resumeEnd === STEP_DONE)
