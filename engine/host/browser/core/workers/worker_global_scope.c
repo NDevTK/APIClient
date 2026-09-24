@@ -696,7 +696,19 @@ void worker_global_scope_free(JSRuntime *rt)
  *     a flow, under two schedules, and asserts all seven.
  *     THE ORDERED REMAINDER IS HTML §10.2.4 Processing model's run a worker, IN THAT SECTION'S OWN ORDER, and
  *     it is SIX subproblems rather than one — the sentence above called it ONE, and a later reading of this
- *     list called it FIVE by folding §10.2.4's step 7 into nothing. Both are corrected here.
+ *     list called it FIVE by folding §10.2.4's step 7 into nothing. Both are corrected here. IT IS SEVEN, AND
+ *     THE SEVENTH WAS FOUND BY WALKING §10.2.4's OWN LISTS RATHER THAN BY READING THIS ONE: the eighteen-step
+ *     onComplete list carries an EVENT LOOP at its step 15 and no item here corresponded to it, so every
+ *     count this paragraph records — one, then five, then six — was taken by a reader enumerating what the
+ *     previous reader had written down. THE METHOD IS THE FINDING AND IT IS THE CHEAP ONE: a list of what an
+ *     algorithm still owes is checked against the ALGORITHM'S OWN STEPS, top-level items counted with list
+ *     depth tracked, and never against the last revision of the list.
+ *     AND EVERY REFERENCE BELOW CARRIES ITS ENTRY'S NAME BESIDE THE NUMERAL, because a roman numeral here is
+ *     an ORDINAL OVER A SET THIS LIST KEEPS GROWING — the insertion that added the event loop renumbered the
+ *     `Worker` entry from (vi) to (vii), and every bare "(vi)" elsewhere in this file would have gone on
+ *     resolving, silently, to a different subproblem than the one its sentence was written about. A numeral
+ *     that travels with a name cannot do that; one that does not is the positional reference CLAUDE.md's
+ *     §AND-THE-FORM-THAT-SURVIVES-EVERY-SWEEP names as the claim no grep can ask for.
  *     THE NUMBERING CONVENTION IS STATED ONCE BECAUSE STEP 12 HOLDS THREE LISTS AND A BARE SUB-NUMBER UNDER
  *     IT NAMES NOTHING. Counted with list depth tracked, run a worker is TWELVE top-level steps — step 10,
  *     "If is shared is true:", is ONE step holding five — and step 12 carries a switch on the options type,
@@ -767,12 +779,50 @@ void worker_global_scope_free(JSRuntime *rt)
  *             in inside settings's realm" and "Entangle outside port and inside port". HTML §9.2 exists in
  *             this build; what does not is an entanglement whose two ends are in two AGENTS — which, by (i),
  *             is two JSRuntimes of ONE instance rather than two instances.
- *       (vi)  HTML §10.2.6.3 Dedicated workers and the Worker interface's `Worker`, LAST — "Returns a new
+ *       (vi)  THE WORKER'S EVENT LOOP — step 12's onComplete list again, step 15 of its eighteen: "Event
+ *             loop: Run the responsible event loop specified by inside settings until it is destroyed."
+ *             THIS LIST DID NOT NAME IT, AND THE OMISSION IS THE KIND A READER EXECUTES RATHER THAN READS.
+ *             (i)-(v) build an agent, a settings object, a fetched script, ONE RUN of it and an entangled
+ *             pair; a lane that lands those five and then the constructor gets a `Worker` whose
+ *             `postMessage` reaches a queue nothing services and whose `terminate()` has no loop to stop —
+ *             so the list would have read complete at exactly the point the interface stops being a worker
+ *             and becomes a shape. The operand was already written down in this file: residual (5)(d) below
+ *             names "the WORKER's event loop" as what blocks §10.2.1.2's `close`, and nothing in the list a
+ *             lane builds from corresponded to it.
+ *             IT IS NOT (i) THE AGENT's RE-KEYING DISCHARGED, which is the reading to refuse because both
+ *             items name the same component. That repair gives a second agent its own event-loop STATE —
+ *             core/timing/event_loop.c holds `g_rec` and its interned names in file-scope statics declared
+ *             through core/agent_state.h, so there is one such record per PROCESS today. RUNNING one is a
+ *             different question and it is the SCHEDULER's: whether the ONE WFQ frontier interleaves a
+ *             second agent's task queues, which §THERE-IS-NO-GRIND requires be the same attention process
+ *             and not a second loop beside it. State is a fact about slots; servicing is a fact about the
+ *             frontier, and only the second makes a delivery arrive.
+ *       (vii) HTML §10.2.6.3 Dedicated workers and the Worker interface's `Worker`, LAST — "Returns a new
  *             Worker object. scriptURL will be fetched and executed in the background, creating a new global
  *             environment for which worker represents the communication channel". It is last because
- *             installing the interface object before (i)-(v) exist flips a bundle's `if (window.Worker)`
- *             guard TRUE and abandons the fallback branch that was working, which is worse than the absence in
- *             both arms — so the first five are not a decomposition OF (vi), they are its precondition.
+ *             installing the interface object before (i)-(vi) exist flips a bundle's `if (window.Worker)`
+ *             guard TRUE onto a branch nothing can complete — so the first six are not a decomposition OF
+ *             this entry, they are its precondition.
+ *             THE `abandons the fallback branch that was working` HALF OF THAT REASON IS THE WEAKER ONE FOR
+ *             THIS NAME, and it is corrected rather than deleted because it is what CLAUDE.md §NO-STUBS
+ *             states in general and a reader will re-derive it here. MEASURED over a 19-site corpus fetched
+ *             2026-09-24T03:30:43Z (735 files, 716 program), engine/absentrank.mjs puts `Worker` at
+ *             use=46 thr=40 cgt=3 fb=0 sil=3 — NOT ONE use site is a presence test of this name selecting an
+ *             arm that has another arm beside it, so at the occurrence there is no working fallback for an
+ *             install to abandon. That is a fact about where the occurrence SITS and never a claim that no
+ *             bundle degrades: one site degrades a scope OUT, clerk.tldraw.com opening
+ *             `if("undefined"==typeof Worker) return null;` around a `new Worker` the reader scores `caught`.
+ *             THE LOAD-BEARING REASON IS §NO-STUBS' SECOND ONE AND IT IS FAR LARGER HERE — "THE LOSS IS NOT
+ *             THE ONE LINE, IT IS EVERY ENDPOINT AND EVERY SINK BEHIND THE GUARD" — because a worker's
+ *             script is a SEPARATE PROGRAM. Of the 42 `new Worker(` sites in that corpus, 26 name a distinct
+ *             `.worker.js` or webpack chunk URL this engine has never fetched. So a constructor with no
+ *             §10.2.4 behind it does not merely fail to help: it trades a LOUD ReferenceError at the
+ *             construction line — §Offensive-programming's forcing function, and what every one of those 40
+ *             unguarded sites raises today — for the SILENT loss of a whole program's endpoint surface,
+ *             which is the surface §What-the-tool-produces exists to find.
+ *             TO RE-TAKE THOSE FIGURES, because a corpus number is a fact about one hour and about the sites
+ *             that answered in it: `NODE_USE_ENV_PROXY=1 SITES=apps.tsv node testing/corpus/fetch.mjs`, then
+ *             `node engine/absentrank.mjs --corpus <the path it prints> --top 300`.
  *     HOW ITS ABSENCE SHOWS: `Worker` is not a declared name in a Window realm, so a page's `new Worker(u)`
  *     throws ReferenceError on its first line and there is no object for any of this to be a member of.
  *     AND ONE ARM OF HTML §8.1.8.1 Event handlers STAYS UNEXERCISED FOR A THIRD REASON AGAIN, which is worth
@@ -905,8 +955,9 @@ void worker_global_scope_free(JSRuntime *rt)
  *           in that standard that fires the event is WEBRTC ENCODED TRANSFORM §5.2 "Constructor"'s
  *           "Fire an event named rtctransform using RTCTransformEvent with transformer set to transformer on transformer's relevant global object",
  *           and the constructor it is a step of is §5 "RTCRtpScriptTransform interface"'s `[Exposed=Window]`
- *           one, whose argument is a `Worker` — which is (4)'s ordered remainder (vi), the member that list
- *           orders LAST. So this member is strictly downstream of (vi), hence of (i)-(v), and it is the only
+ *           one, whose argument is a `Worker` — which is (4)'s ordered remainder (vii) HTML §10.2.6.3's `Worker`,
+ *           the member that list orders LAST. So this member is strictly downstream of that entry, hence of
+ *           (i)-(vi), and it is the only
  *           one on this arm whose ordering is decided outside HTML.
  *           NEXT DIFF: NOT THIS MEMBER, which is the whole content of the entry rather than a deferral inside
  *           it. Installing the handler ahead of its producer is what §NO STUBS and CLAUDE.md's
@@ -915,7 +966,8 @@ void worker_global_scope_free(JSRuntime *rt)
  *           in this build can fire, abandoning the branch that works for one that cannot — and §5's
  *           `RTCRtpScriptTransform` and §6's `RTCRtpScriptTransformer` are both outside idlgen's audited set
  *           entirely, so there is nothing for the true branch to reach. The diff that makes that branch
- *           survivable is those two interfaces, after (vi); this member is the LAST of it and not the first.
+ *           survivable is those two interfaces, after (vii) HTML §10.2.6.3's `Worker`; this member is the LAST of it
+ *           and not the first.
  *           HOW ITS ABSENCE SHOWS: in a worker realm `"onrtctransform" in self` is false where a browser
  *           answers true, and the name stands in engine/idlgen.mjs's ABSENT list for this interface — which is
  *           the only instrument in this tree that reads the partial at all, and is where it was found.
