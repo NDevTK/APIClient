@@ -298,15 +298,42 @@ typedef struct {
        MEMBER: the dispatch that wrote it ended the member's frame and returned (engine.c's END_FRAME tail is
        `f->frame = NULL; return 0;`, with no `continue`), so the first dispatch that could descend the ladder
        is one the member HAS NOT HAD. The orphan question therefore costs a member TWO dispatches — one to end
-       the frame it was born holding, one to ask — and a frontier that mints arms faster than it serves them
-       gives almost nobody the second.
+       the frame it was born holding, one to ask.
+       AND THOSE TWO DISPATCHES ARE TWO TURNS OF THE EVENT LOOP RATHER THAN A COST, WHICH THIS PARAGRAPH SAID
+       THE OPPOSITE OF AND IS CORRECTED HERE RATHER THAN DELETED, because the retired sentence is the one a
+       reader re-derives from the two dispatches and because it NAMED A REPAIR. It ended `and a frontier that
+       mints arms faster than it serves them gives almost nobody the second`, standing directly after the
+       clause that names the absent `continue` — so it reads as a defect whose fix is one at the frame-clearing
+       arms, and that `continue` is the one edit engine.c's flow_step was rewritten to remove. Its own header
+       records the retired design: `flow_step is a step, and it used to be a drain`, whose worked example is
+       `a completed script advanced to the next one and ran it` and whose verdict on it is that the flow ran
+       every program back to back with no return to the scheduler. A resume that ran a program to its end has
+       performed a task — HTML §8.1.7.3 "Processing model" step 2.6 — so every arm of this ladder is the next
+       iteration of that step and therefore the next step, which flow_step states at its own floor line. One
+       turn is one task; this member's first turn was spent on the task it INHERITED when the fork cloned its
+       parent's frame, so there is no cheaper number than two. It is asserted rather than described now:
+       engine.c raises `!framed_at_entry` on the line it raises `g_unframed_steps`, so the `continue` this
+       paragraph used to invite aborts in dev instead of being rediscovered from a census.
+       AND THE TWO NUMBERS BELOW ARE OF DIFFERENT KIND, WHICH DECIDES WHICH OF THEM THE FINDING RESTS ON — the
+       half a relay of this block got wrong. `live`, `framed`, `none` and `at_the_ladder` are GAUGES, as this
+       block says two rows down, so the 1318-of-1699 PROPORTION is a fact about the sample it was taken at and
+       moves with how far the run got; flow.h records that shape on a different document and warns in its own
+       words that early samples measure a frontier still filling. `asked` is a LIFETIME COUNTER — engine.c
+       raises `g_orphan_asks` once per walk and clears it only at engine_session_close — so `asked` 2 across
+       runs of 90, 297 and 609 snapshots is not reachable at ANY sample time by a session that had asked more,
+       and IT is what the finding stands on. Quote the frozen counter; never the proportion.
        THAT IS THE CLASS THE MEASUREMENT FORTY LINES UP LANDED IN, which is how this gap was found: 1318 of
        1699 members stepped EXACTLY ONCE through `resume-ended-its-frame` and standing here with `asked` 2,
        against a control on the same document made to drain that asks 387 times. Read under the binary, that
        mass has no true class — and the nearest reading a reader reaches for is the above-rung one, which
        reports the ladder's PRECONDITION as the cause and sends the next lane to flow_step's arms when the
-       answer is that these members are never dispatched again. Those take opposite work, which is the whole
-       reason this row exists.
+       answer is that these members were dispatched once and the pick has not come back to them. Those take
+       opposite work, which is the whole reason this row exists — and the half that is left after the turn
+       boundary is accounted for is the PICK, which is flow.c's order and its mint rate, not an arm of this
+       ladder and not the arm that returns into it.
+       RETIREMENT: this record goes when this census publishes, beside `at_the_ladder`, how many of those
+       members have been dispatched exactly once — because the pick's share of the answer is then read off the
+       instrument rather than argued here, and the proportion above stops being the only evidence for it.
        AND A FOURTH POSITION IS THE RUNG ITSELF, WHOSE NEAREST CLASS STATES THE OPPOSITE OF WHAT IT MEANS.
        `seed-one-orphan-flow`, `hand-a-parked-drive-its-function` and `resume-a-parked-orphan-drive` are the
        three arms engine_orphan_unit returns, and every one of its cases is a SUCCESS outcome: the seed

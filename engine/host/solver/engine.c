@@ -9950,6 +9950,14 @@ static int flow_step(JSContext *ctx, Flow *f) {
        own note). Nothing else in this function may set it: the flag is what the ONE task arm that continues
        declares about itself. */
     int turn_task_done = 0;
+    /* AND WHETHER THIS CALL BEGAN WITH A LIVE FRAME, read ONCE and before the loop because the question is
+       about the CALL and a per-pass reading could only ever answer about the pass. Its one consumer is the
+       `!framed_at_entry` assert beside `g_unframed_steps++`, which is what this reading is FOR. It is not a
+       second spelling of `f->frame`: the loop is entitled to move that field, and the two being able to
+       disagree is the whole of what makes that assert a check rather than a restatement. Dev-only in
+       effect — DCHECK's release arm is `((void)sizeof(cond))`, so the value is type-checked and never
+       read, and no unused-variable diagnostic has anything to say about it in either build. */
+    const int framed_at_entry = (f->frame != NULL);
     for (;;) {
         /* ONE ARM PER DISTINCT ANSWER, BEFORE ANYTHING ELSE THIS FLOW COULD DO — because everything else it
            could do consumes the very thing the arm is made of. A peer document's state IS its flows, so a
@@ -10050,6 +10058,34 @@ static int flow_step(JSContext *ctx, Flow *f) {
                this by construction and the containment is asserted where both are in hand
                (engine_step_unit_runs). See solver/engine.h's `unframed_steps`. */
             g_unframed_steps++;
+            /* AND THE CALL BEGAN UNFRAMED, WHICH IS THE TWO-DISPATCH STRUCTURE ASSERTED RATHER THAN
+               DESCRIBED. A member born holding a clone of its parent's frame cannot reach this ladder on
+               the dispatch that ENDS that frame: the four frame-clearing arms solver/step_unit.h names —
+               `resume-ended-its-frame`, `start-ended-its-frame`, `program-detached-its-base` and
+               `start-detached-its-base` — all RETURN, so the first dispatch that can descend this ladder is
+               the member's NEXT one. solver/cold.h reads that as a COST and names the absent `continue` at
+               those arms as the repair; this assert is what makes the answer un-re-derivable rather than
+               re-argued, because that `continue` is the drain this function was rewritten out of being —
+               `a completed script advanced to the next one and ran it` — and a resume that ran a program to
+               its end has already performed HTML §8.1.7.3 "Processing model" step 2.6's task, so every arm
+               below this line is the NEXT iteration of step 2 and therefore the next step. §Attention's
+               VALUE yield and its COOPERATIVE QUANTUM are consulted only where flow_step RETURNS, so a pass
+               that arrived here having cleared a frame has spent neither.
+               TWO-SIDED, WHICH IS WHAT STOPS IT BEING A RESTATEMENT: `framed_at_entry` is read before the
+               loop and `f->frame` is what the loop moves, so the two disagree the moment any path between
+               this function's entry and this line clears a frame and carries on. That is the derivation a
+               reader would otherwise have to run by hand (`continue;` inside flow_step, and what stands
+               above each one), and it is spent here instead as a crash that names what was re-created. */
+            DCHECKF(!framed_at_entry,
+                    "this call of flow_step began with a LIVE FRAME and has descended the unframed ladder "
+                    "anyway (step_unit=%d, orphan asks so far %ld) — a frame-clearing exit must RETURN, "
+                    "because the resume that cleared it performed HTML §8.1.7.3 \"Processing model\" step "
+                    "2.6's task and every arm below this line is the next iteration of step 2. Whatever "
+                    "added a `continue` at one of those exits has re-created the drive-to-completion this "
+                    "function was rewritten out of, and has taken the scheduler's value yield and its "
+                    "cooperative quantum with it, because both are consulted only where this function "
+                    "returns",
+                    (int)g_step_unit, g_orphan_asks);
             /* AND ITS LENGTH, WHICH THE BODY ALREADY KNOWS. Both compiles below took `strlen(body)`, which is
                a pass over every byte of the program each time one starts — on a real single-page app's module
                bundle that is 2.1 MB walked to learn a number the row was already holding (solver/dyn_body.h). */
