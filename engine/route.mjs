@@ -972,30 +972,57 @@ engines[0] = await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.te
 const resumedTag = engines[0].tag;
 console.log(`phase 4: resumed as [${resumedTag}] from the residue; [${engines[1].tag}] never left memory`);
 /* THE RESUMED SESSION, PUMPED WITH ITS OWN ROUTING INTERLEAVED — which is why this is not a `pumpUntil`: the
-   posts the replayed flows emit have to be routed to `b` between rounds, and pumpUntil steps one engine. The
-   three exits are the same three, spelled out because each is a different thing to say about the resume.
-   THE SUCCESS EXIT IS THE RESUMED SESSION'S OWN REPORT AND WAS THE WHOLE LIST, which is a stale read of shared
+   posts the replayed flows emit have to be routed to `b` between rounds, and pumpUntil steps one engine. Its
+   TWO exits are pumpUntil's own two, spelled out because each is a different thing to say about the resume;
+   the third — the emitted output — is no longer one of them, for the reason the second paragraph gives.
+   THE SUCCESS EXIT WAS THE RESUMED SESSION'S OWN REPORT AND WAS FIRST THE WHOLE LIST, a stale read of shared
    state rather than a terminator: an entry another session left behind is already there when this loop is
    entered, so the loop broke on its FIRST test and the resumed instance was never stepped once. It presented
    as the park having lost a flow — `[d1/s3] flows=15 switches=0` and every assertion below reading an engine
    that had not run — which is a diagnosis pointing at the cold tier for a driver's own bookkeeping. This is
    also the ONLY place that presence is asserted; the `if (!closedReports.length)` that used to stand after the
-   loop was unreachable in both shapes, since `fail` exits, so its sentence lives here where it fires. */
+   loop was unreachable in both shapes, since `fail` exits, so its sentence lives BELOW, where it fires.
+   AND NARROWING IT ENDED THE STALENESS AND LEFT A SECOND DEFECT STANDING: THE REPORT IS NOT ONE REPORT. `a`
+   reads `w.closed` once per ARM and each read is answered once per peer TIMELINE, so a healthy resume emits
+   SEVERAL `/closed` fetches — and `qjs_pending` is a listing rebuilt by every `qjs_step`, so two arms whose
+   fetches are pending in the SAME step are both recorded and two arms one step apart are not. Breaking on the
+   first one made `closedBy(resumedTag)` a SAMPLE whose size is decided by the cooperative quantum, which this
+   host measures on the wall clock, while the check at the bottom reads that list as a TOTAL and is on the
+   VALUE — and HTML §7.2.2.1 "Opening and closing windows" makes that value legitimately `true` in the peer's
+   timelines that ran close() and `false` in the ones that never received the message that runs it. So a run
+   whose `false` arm was pending one step ahead of its `true` arm FAILED, and the same run with those two
+   steps the other way round PASSED, on one binary at one revision. The check's own text said so in as many
+   words — `A count of 1 here is therefore the second reading and not this one` — while its predicate did not,
+   which is a DEFECT verdict returned for an observation that could not separate the defect from the
+   truncation. The quotation is BACKTICKED rather than quoted because it is a spelling being shown and this
+   paragraph names a standard: an unbackticked run after a citation is judged against that standard's text,
+   which is the manufactured fabrication finding the citation audit reported when it was written that way.
+   THE TERMINATOR IS THE RESUMED FRONTIER'S OWN TWO STATEMENTS — DONE, or a stall this zone will not pay —
+   which is what `pumpUntil` already documents, what the receiver drain below already uses, and what carries no
+   round count, because a cap here would be the bound §NO BOUNDS forbids standing in the one place that decides
+   whether a loss is real. The population the checks below read is then this session's whole output rather
+   than its first round's.
+   AND THE TWO FAILURES MOVE BELOW THE LOOP RATHER THAN OUT OF IT. Each says the session ended "without the
+   replayed flow ever reading `w.closed` back", which was true of DONE and of an unpaid stall while the loop
+   exited on the first report and is now the ORDINARY end of every run — so each is asked where its own
+   sentence is true, which is of an EMPTY list, and the value is left to the one reader that states it. */
+let resumeEnd = null;
 for (;;) {
-  if (closedBy(resumedTag).length) break;
   const { step, paid } = await service(engines[0]);
-  if (closedBy(resumedTag).length) break;
-  if (step === STEP_DONE)
-    fail('the RESUMED instance drained its frontier without the replayed flow ever reading `w.closed` back — ' +
-         'a recipe is a replay (solver/cold.h), so a session that finishes without re-issuing the read did ' +
-         'not replay to the point the parked flow was suspended at');
-  if (step === STEP_STALLED && paid === 0)
-    fail('the RESUMED instance STALLED owed something this zone did not supply, before `w.closed` came back: ' +
-         `${engines[0].str('qjs_pending').split('\n').filter(Boolean).join(' ; ') || '(no fetch)'} / ` +
-         `${engines[0].str('qjs_host_requests').split('\n').filter(Boolean).join(' ; ') || '(no request)'} — ` +
-         'the read is answered by relaying the peer\'s completion, so a stall here is that relay not happening');
+  if (step === STEP_DONE || (step === STEP_STALLED && paid === 0)) { resumeEnd = step; break; }
   await routePending();
 }
+console.log(`phase 4: the resumed session ended ${resumeEnd === STEP_DONE ? 'DONE' : 'STALLED unpaid'} having ` +
+            `read \`w.closed\` back ${closedBy(resumedTag).length} time(s)`);
+if (!closedBy(resumedTag).length && resumeEnd === STEP_DONE)
+  fail('the RESUMED instance drained its frontier without the replayed flow ever reading `w.closed` back — ' +
+       'a recipe is a replay (solver/cold.h), so a session that finishes without re-issuing the read did ' +
+       'not replay to the point the parked flow was suspended at');
+if (!closedBy(resumedTag).length)
+  fail('the RESUMED instance STALLED owed something this zone did not supply, before `w.closed` came back: ' +
+       `${engines[0].str('qjs_pending').split('\n').filter(Boolean).join(' ; ') || '(no fetch)'} / ` +
+       `${engines[0].str('qjs_host_requests').split('\n').filter(Boolean).join(' ; ') || '(no request)'} — ` +
+       'the read is answered by relaying the peer\'s completion, so a stall here is that relay not happening');
 /* EVERY RECEIVER IS DRAINED BEFORE ANYTHING IS COUNTED, and that is not tidiness — it is what makes the
    delivery count a COUNT rather than a sample. `_routedDelivered` and `_routedRefused` are raised where a
    receiving timeline CONSUMES an attachment (solver/engine.c's flow_deliver), so a record attached to a flow
@@ -1435,11 +1462,14 @@ if (!closedBy(resumedTag).some((r) => r.url.includes('v=boolean:true')))
        'The OTHER instance ran window.close(), and HTML §7.2.2.1 "Opening and closing windows" makes the ' +
        "getter's answer the OR of a null browsing context and the top-level traversable's `is closing`, which " +
        "close() sets in the agent that RUNS it — so an answer read out of this agent's own copy of that record " +
-       'is false about a window that has closed itself. AND READ THE COUNT ABOVE BEFORE ACTING ON THIS: `a` ' +
-       'reads the member once per ARM, so a healthy resume reports one URL per timeline and the loop above ' +
-       'exits on the first ROUND that reports any of them. A count of 1 here is therefore the second reading ' +
-       'and not this one — the arms landed in different rounds and this check saw one of them — while a count ' +
-       'above 1 with no `true` among them is the defect this check is named for.');
+       'is false about a window that has closed itself. THE LIST IS THIS SESSION\'S WHOLE OUTPUT and not its ' +
+       'first round\'s — the phase-4 loop runs the resumed frontier to DONE or to a stall this zone will not ' +
+       'pay — so `a` has made every read it is going to make and no `true` among them is the defect at any ' +
+       'count. THIS SENTENCE USED TO SAY THE OPPOSITE AND THE PREDICATE DID NOT AGREE WITH IT: the loop exited ' +
+       'on the first ROUND that reported any of them, `a` reads the member once per ARM and each read is ' +
+       'answered per peer TIMELINE, so the arms could land in different rounds and a count of 1 was whichever ' +
+       'arm happened to be pending first — the text said such a count was not the defect this check is named ' +
+       'for, and the check FAILED on it anyway.');
 
 /* ── THE PARK, WHICH IS THE PART OF THIS SEAM NOTHING HAD EVER EXERCISED ──────────────────────────────────
    The checks above are all about two instances that were both resident for the whole run. These four are about
