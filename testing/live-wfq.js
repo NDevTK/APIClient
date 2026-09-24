@@ -226,8 +226,22 @@ const COST = ["scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeig
    They are named here because result.c publishes them and `keyScope`'s derived check would throw otherwise —
    which is that check doing the one thing it exists for. An artifact older than these rows prints null for
    each, which is this stream's absent-versus-zero rule and is the honest answer: the run did not state them. */
+/* …AND THE THIRD PAIR AT THE SAME SCOPE, WHICH SCORES WHAT AN ANSWER TO THE SECOND WOULD COST. Where the
+   surrogate merely TIES with the comparator, the design that answers it takes a CANDIDATE SET within a
+   derived margin of the surrogate's extremum and re-compares the survivors through `flow_weight` — which
+   solver/flow.c proves returns the full scan's member pointer for pointer, so it is exact and needs no edit
+   to the order. `keyIndexBandMembersLifetime` over `keyIndexBandWeighedLifetime` is the SHARE OF THE
+   FRONTIER that set holds, which is the number that decides whether an index narrows anything: a small
+   share is an index worth building, and a share near one is one that saves nothing and whose per-ask cost is
+   the walk the order already performs.
+   READ THEM AS A FRACTION. The numerator alone is a count over a frontier whose size this stream publishes
+   separately and which GROWS, so a lifetime numerator against a terminal gauge under-reads by the factor the
+   frontier grew — the denominator is raised on the same walk over the same population precisely so nobody
+   has to construct one. Both are LIFETIME counts and may be differenced; `keyIndexAskedLifetime` is the
+   reachability witness for both. */
 const KEYCHK = ["keyArmedLifetime", "keyStaleGenLifetime", "keyFirstSeenLifetime", "keyRunningLifetime",
-                "keyIndexAskedLifetime", "keyIndexDifferedLifetime"];
+                "keyIndexAskedLifetime", "keyIndexDifferedLifetime",
+                "keyIndexBandMembersLifetime", "keyIndexBandWeighedLifetime"];
 
 /* WHAT THE ORDER IS MADE OF, WHICH EVERY ROW ABOVE PRESUPPOSES AND NONE OF THEM ASKS. The scopes above say
    what the order DECIDED, what it COST and whether its key stands still.  These six say whether it can

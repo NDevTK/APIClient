@@ -4698,6 +4698,78 @@ static double flow_index_surrogate(const Flow *f) {
     return acct_family_val(f) + flow_member_key(f)
            - (double)(flow_family_notch(f) + flow_silence_carry(f)) * FLOW_AGE_QUANTUM;
 }
+
+/* HOW FAR THAT RE-ASSOCIATION MAY STAND FROM THE COMPARATOR, DERIVED FROM THE TWO EXPRESSIONS AND NEVER
+   MEASURED — the one quantity that turns a key this file has already established is NOT bit-identical to the
+   order into a CANDIDATE SET the order can still decide inside. The banner above says the surrogate "may
+   differ from the comparator in the last bit"; this says by how much it may differ AT MOST, which is a
+   different claim and the only one an index can be built on.
+   WHAT IT IS FOR, AND IT IS NOT ACCURACY. A candidate set of every member within this margin of the
+   surrogate's extremum PROVABLY CONTAINS the comparator's own extremum (the proof is at flow_pick's band
+   walk), so re-comparing the survivors through flow_weight — with the same direction bit and the same
+   tie-break — returns the member the full scan returns, POINTER FOR POINTER. That is the design that answers
+   the surrogate's TIE mode with flow_weight untouched, no order change and no decision to escalate; the
+   assert at the band walk is what states it, and a fire there is that design being wrong rather than a
+   rounding difference reaching the last bit.
+   WHY A DERIVED BOUND AND NOT A CONSTANT SOMEBODY ROUNDED UP. A tolerance fitted to the populations anybody
+   happened to try is the softening §Offensive-programming forbids wearing a bound's clothes: it is correct
+   about the frontiers it was fitted on, says nothing about the next one, and the failure it permits is an
+   index returning a member the comparator calls worse with no assert able to see it. What follows is an upper
+   bound on |surrogate - weight| for EVERY member of EVERY frontier, and the DCHECK at flow_pick's fold asks it
+   of every member the order weighs, so a derivation that is wrong FIRES rather than being believed.
+
+   THE DERIVATION. Both spellings approximate ONE exact real. Write the weight's five terms as `V =
+   acct_family_val`, `P = N*Q` with `N = flow_silence_notch` and `Q = FLOW_AGE_QUANTUM`, `O = flow_optimism`,
+   `D = flow_distance`, `B = flow_branch_bonus`; the exact target is `R = V - P + O + D + B`.
+   THE FIVE LEAVES CANCEL OUT OF THE DIFFERENCE, which is what makes this bound small rather than a statement
+   about the whole weight: each of them is the SAME CALL on the same operands in both spellings, so whatever
+   rounding each carries is carried IDENTICALLY by both and subtracts away. What is being bounded is only the
+   arithmetic BETWEEN the leaves. `N = k + K + c` is an exact integer identity (flow_silence_phase), so
+   `k*Q + (K+c)*Q = N*Q` in the reals and the surrogate's target IS the comparator's.
+   COUNT THE ROUNDINGS. flow_weight computes one product (`N*Q`) and four sums (`+O`, `+D`, `+B`, `V+..`):
+   FIVE. The surrogate computes two products (`k*Q`, `(K+c)*Q`) and five sums (`+O`, `+D`, `+B`, `V+..`,
+   `-..`): SEVEN. The casts of the notches are exact — flow_silence_notch's own banner says its int64 count of
+   quanta "cannot overflow anything a session can reach", and 2^53 quanta is three million years of thread
+   time — and negation of a double is exact, so neither contributes.
+   BOUND EACH CHAIN. Let `L = |V| + P + O + D + B`. Every exact intermediate of either spelling is a signed
+   sub-sum of those five terms, so every one has magnitude at most `L`. Each rounding is `fl(a.b) =
+   (a.b)(1+d)` with `|d| <= u` and `u = 2^-53`; along a left-associated chain whose fresh operand is exact at
+   every step the accumulated error obeys `|e_j| <= |e_{j-1}|*(1+u) + u*L`, and each product contributes at
+   most `u*L` at its leaf. A spelling of `n` roundings therefore satisfies `|computed - R| <= n*u*L*(1+u)^n`,
+   giving `|weight - R| <= 5*u*L*(1+u)^5` and `|surrogate - R| <= 7*u*L*(1+u)^7`, hence by the triangle
+   inequality `|surrogate - weight| <= 12*u*L*(1+u)^7`.
+   THE CONSTANT IS THE NEXT POWER OF TWO ABOVE THAT, AND ITS SLACK IS ENUMERATED RATHER THAN ASSUMED: 12 -> 16,
+   and the remaining `4*u*L` absorbs, in order, (a) the `(1+u)^7` factor, under 8e-16 relative; (b) up to three
+   further roundings where a host's FLT_EVAL_METHOD is 2 and rounds at the returns from flow_index_key,
+   flow_member_key and flow_nonreward — flow_member_key's own guard is what catches that regime — taking the
+   derived figure to `15*u*L`; (c) the rounding of `L` itself, computed below in three operations, so what is
+   returned is at least `16*u*L*(1-4u)`, which still exceeds `15*u*L`; and (d) the single rounding of the band
+   EDGE at flow_pick, at most `u*L`, which is why the slack has to survive (a)-(c) at all rather than merely
+   exist.
+   `O`, `D` AND `B` ARE BOUNDED BY THE DECLARATION THE ORDER ALREADY OBEYS rather than by a `3.0` written
+   here. FLOW_NONREWARD_MAX's four summands are the optimism at zero visits, the distance at its top rung, the
+   branch term alone in its bucket, and the aging at ZERO silence — so that macro's VALUE is exactly the sum of
+   the three positive terms' maxima, which is what this uses it for, and flow_nonreward asserts the bound
+   against the quantity itself. A term added to the order is a term added there; it is ALSO one more rounding
+   in both spellings, which is the half no macro can state, and the fold's DCHECK is what says so.
+   IT IS NOT A TERM AND NOTHING RANKS BY IT, for flow_index_key's reason with nothing added: no summand of
+   flow_weight reads it, no fork carries it, no pick branches on it, and the member flow_pick RETURNS is the
+   comparator's extremum whether this is right or wrong. §EVERY-TERM-IS-CARRIED-BY-A-FORK is satisfied
+   trivially — this is RECOMPUTED per member per ask out of quantities a fork already carries — and the
+   two-instants test has nothing to ask of it: two arms forked at two instants may read DIFFERENT margins with
+   no rank moving at all, because the margin decides which members are COMPARED and flow_weight decides which
+   of them wins.
+   DEV-ONLY, and it raises no scan counter, for flow_index_surrogate's reason exactly. */
+#define FLOW_UNIT_ROUNDOFF (1.0 / 9007199254740992.0)  /* 2^-53: binary64 round-to-nearest unit roundoff */
+#define FLOW_INDEX_MARGIN_ULPS 16.0                    /* derived above: 12 roundings, next power of two up */
+static double flow_index_margin(const Flow *f) {
+    double v = acct_family_val(f);
+    if (v < 0.0) v = -v;  /* negation of a double is exact, so the bound loses nothing to this */
+    /* THE SCALE FACTOR IS A POWER OF TWO AND ITS PRODUCT IS THEREFORE EXACT, which is why the `(1-4u)` in
+       clause (c) above counts only the THREE operations of the sum beside it and the one that scales it. */
+    return (FLOW_INDEX_MARGIN_ULPS * FLOW_UNIT_ROUNDOFF)
+           * (v + (double)flow_silence_notch(f) * FLOW_AGE_QUANTUM + FLOW_NONREWARD_MAX);
+}
 #endif
 
 static double flow_nonreward(const Flow *f) {
@@ -5027,6 +5099,22 @@ long flow_scan_weights(FlowScan s) {
     return g_scan_weights[s];
 }
 
+/* THE THREE SKIPS THE ORDER'S WALK MAKES, WRITTEN ONCE BECAUSE THERE ARE NOW TWO WALKS — the dispatch scan
+   below and the dev-only band walk after it, which must weigh EXACTLY the population the scan weighed or the
+   count it publishes is a numerator over a denominator it does not have. Two copies of a three-armed
+   predicate is the drift shape §Architecture's auditor rule names one scope up: the day a fourth skip is
+   added, a copy that did not get it makes the band a share of the wrong set and nothing anywhere says so.
+   IT IS A PURE PREDICATE AND `seed_live` IS NOT PART OF IT, which is what makes it the same function as the
+   block it replaces rather than a tidying of that block. THAT BLOCK'S OWN COMMENT SAID `SEED BEFORE EXCLUDE,
+   WHICH PRESERVES WHAT THE OLD BLOCK DID RATHER THAN TIDYING IT`, and its point is kept rather than deleted
+   because a reader will re-derive it: the seed arm ran first so a pointer that was BOTH the seed and the
+   exclusion was marked live and folded in afterwards, and no caller passes both today. That is unchanged —
+   the caller sets the flag and then asks this — and the arms' ORDER was never observable in the first place,
+   because all three of them end in `continue`. */
+static int flow_pick_skipped(const Flow *m, const Flow *seed, const Flow *exclude, int runnable_only) {
+    return m == seed || m == exclude || (runnable_only && flow_host_owed(m));
+}
+
 static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only, int worst, FlowScan why) {
     Flow *best = NULL; double bw = 0.0;
     /* THE SCAN IS ABOUT TO HAPPEN, SO IT IS COUNTED HERE AND NOT AT ITS RETURN. Every exit of this function is
@@ -5172,6 +5260,12 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        maximum over exactly the same population and with exactly the same tie-break. See solver/flow.h's
        FlowIndexChecks for what the comparison licenses and why it is a reading rather than an argument. */
     const Flow *sur_best = NULL; double sur_w = 0.0;
+    /* …AND THE WIDEST MARGIN ANY MEMBER OF THIS SCAN CARRIES, which is what the band's edge is set from. It
+       is a MAXIMUM over the folded population and not a per-member reading, because the band has to admit the
+       comparator's own extremum and the two members that argument is about — the surrogate's pick and the
+       comparator's — are not known until the fold ends. See the band walk below for the proof it is what
+       makes that set exact. */
+    double sur_mmax = 0.0;
 #endif
     for (int i = 0; i < g_flows_n; i++) {
         double w;
@@ -5187,19 +5281,19 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
                "member on exactly one line and loses one on exactly one line, so the two writers of this "
                "relation have come apart, and flow_remove will swap-remove at the handle's slot and drop "
                "whichever member is standing there");
-        /* SEED BEFORE EXCLUDE, WHICH PRESERVES WHAT THE OLD BLOCK DID RATHER THAN TIDYING IT. flow_is_member
-           answered about MEMBERSHIP and knew nothing about `exclude`, so a pointer that was both would have
-           been folded in; no caller passes both today (the only caller with an exclusion passes no seed), and
-           writing the order the other way round would be a silent policy choice about a pair nothing makes. */
-        if (g_flows[i] == seed) { seed_live = 1; continue; }
-        if (g_flows[i] == exclude) continue;
-        /* NOT A DROP AND NOT A DEPRIORITISATION: the flow keeps its weight, its place and every work item it
-           holds, and it is picked again the moment anything could have answered it (flow_clear_host_owed). */
-        if (runnable_only && flow_host_owed(g_flows[i])) continue;
+        /* THE FLAG IS SET BEFORE THE SKIP RATHER THAN INSIDE IT, which is the whole of what moved: the three
+           arms are flow_pick_skipped's now, for the reason stated there — the band walk below has to weigh
+           this same population and a second copy of them would drift from it. The retired ordering argument
+           is kept at that function rather than here. */
+        if (g_flows[i] == seed) seed_live = 1;
+        /* NOT A DROP AND NOT A DEPRIORITISATION: a skipped flow keeps its weight, its place and every work
+           item it holds, and it is picked again the moment anything could have answered it
+           (flow_clear_host_owed). */
+        if (flow_pick_skipped(g_flows[i], seed, exclude, runnable_only)) continue;
         /* COUNTED WHERE THE WEIGHT IS TAKEN AND NOT AT THE TOP OF THE LOOP, which is the difference between
-           what the scan COSTS and how big the frontier is. The two `continue`s above skip the excluded member
-           and the host-owed ones without pricing them, so a trip count would charge this scan for members it
-           never weighed — and `members` on the same census already says how big the frontier was. */
+           what the scan COSTS and how big the frontier is. The skip above passes over the seed, the excluded
+           member and the host-owed ones without pricing them, so a trip count would charge this scan for
+           members it never weighed — and `members` on the same census already says how big the frontier was. */
         w = flow_weight(g_flows[i]); g_scan_weights[why]++;
         /* …AND THE PRECONDITION OF EVERY SUB-LINEAR ORDER, ASKED OF EVERY MEMBER RATHER THAN OF ONE.
            engine.c's preempt hook holds this over the ONE rival it caches across a frontier generation, and
@@ -5322,6 +5416,34 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
            not confuse — so the direction bit, the strictness and the empty-accumulator arm are the same. */
         {
             double s = flow_index_surrogate(g_flows[i]);
+            /* …AND THE DERIVED BOUND ASKED OF THE ONE MEMBER BOTH SPELLINGS ARE IN HAND FOR, WHICH COSTS NO
+               EXTRA EVALUATION OF EITHER. flow_index_margin states an upper bound on |surrogate - weight|
+               from the two expressions; this is where that derivation stops being prose. `w` is the weight
+               this loop already took and `s` is the surrogate it already folded, so the check is one
+               subtraction and a compare — and a derivation that is wrong about the roundings, about the
+               ranges it takes from FLOW_NONREWARD_MAX, or about a term somebody added to the order fires
+               HERE, on the member that refutes it, rather than being believed by whatever is built on it.
+               IT IS THE PRECONDITION OF THE BAND BELOW AND NOT A SECOND READING OF THE SAME THING: the band
+               walk's proof that a candidate set contains the comparator's extremum is derived from exactly
+               this inequality holding for every member of the fold. */
+            double mg = flow_index_margin(g_flows[i]);
+            double dv = s - w; if (dv < 0.0) dv = -dv;
+            DCHECKF(dv <= mg,
+                    "the index surrogate stands further from the comparator than the bound derived from the "
+                    "two expressions permits — flow_index_margin counts the roundings of each spelling and "
+                    "scales the sum of the terms' magnitudes by them, so a fire is that derivation being "
+                    "WRONG rather than the order being wrong: either a summand has been added to flow_weight "
+                    "(which is one more rounding in both spellings and a wider range the margin's "
+                    "FLOW_NONREWARD_MAX half does not know about), or a term's range is no longer what that "
+                    "macro's summands say, or this host evaluates doubles wider than binary64 at more return "
+                    "boundaries than the derivation's clause (b) allows. Every candidate set taken from this "
+                    "key rests on this inequality and on nothing else, so this is the line to repair before "
+                    "any of it. surrogate=%.17g weight=%.17g |difference|=%.17g margin=%.17g, over "
+                    "val=%.17g notch=%lld optimism=%.17g distance=%.17g branch=%.17g",
+                    s, w, dv, mg, acct_family_val(g_flows[i]),
+                    (long long)flow_silence_notch(g_flows[i]), flow_optimism(g_flows[i]),
+                    flow_distance(g_flows[i]), flow_branch_bonus(g_flows[i]));
+            if (mg > sur_mmax) sur_mmax = mg;
             if (!sur_best || (worst ? s < sur_w : s > sur_w)) { sur_best = g_flows[i]; sur_w = s; }
         }
 #endif
@@ -5385,6 +5507,20 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
            loop's winner on a tie would name a different member by TIE-BREAK and not by disagreement. */
         {
             double s = flow_index_surrogate(seed);
+            /* AND THE DERIVED BOUND IS ASKED OF THE SEED TOO, because the band's edge is set from the widest
+               margin over the WHOLE folded population and the seed is part of that population — a seed left
+               out of `sur_mmax` would narrow the edge by however much its own margin exceeded the loop's,
+               which is the one way a candidate set could exclude the member it is proved to contain. */
+            double mg = flow_index_margin(seed);
+            double dv = s - w; if (dv < 0.0) dv = -dv;
+            DCHECKF(dv <= mg,
+                    "the index surrogate stands further from the comparator than the derived bound permits, "
+                    "at the incumbent — see the same check inside the scan loop for what a fire means and "
+                    "what to repair. surrogate=%.17g weight=%.17g |difference|=%.17g margin=%.17g, over "
+                    "val=%.17g notch=%lld optimism=%.17g distance=%.17g branch=%.17g",
+                    s, w, dv, mg, acct_family_val(seed), (long long)flow_silence_notch(seed),
+                    flow_optimism(seed), flow_distance(seed), flow_branch_bonus(seed));
+            if (mg > sur_mmax) sur_mmax = mg;
             if (!sur_best || (worst ? s <= sur_w : s >= sur_w)) { sur_best = seed; sur_w = s; }
         }
 #endif
@@ -5449,6 +5585,131 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
     if (best && sur_best) {
         g_index_checks.index_asked++;
         if (sur_best != best) g_index_checks.index_differed++;
+        /* …AND THE CANDIDATE SET THAT ANSWERS THE TIE MODE, WALKED RATHER THAN ARGUED — the design the abort
+           below names in its own words ("a candidate set that carries a MARGIN and re-compares its survivors
+           through flow_weight"), built here so that what it COSTS is a row on the census instead of a
+           question nobody has asked. flow_weight is untouched, the order is untouched, the member this
+           function RETURNS is untouched, and the only new claim is an equality this walk asserts about
+           itself.
+
+           THE PROOF THAT THE SET IS EXACT, WHICH IS THE WHOLE OF ITS CORRECTNESS. Write `S` for the
+           surrogate, `W` for the comparator, `M(f)` for flow_index_margin — the derived bound satisfying
+           `|S(f) - W(f)| <= M(f)` for every member, which the fold above asserts of every member it weighs —
+           and `Mmax` for the largest margin over the folded population. Let `b` be the member this scan's
+           comparator returned and `m*` the member its surrogate fold returned, so `S(m*)` is `sur_w`. Taking
+           the maximising direction: `W(b) >= W(m*)` because `b` is the comparator's maximum over exactly that
+           population; `W(m*) >= S(m*) - M(m*)`; and `S(b) >= W(b) - M(b)`. Chaining them,
+           `S(b) >= S(m*) - M(m*) - M(b) >= sur_w - 2*Mmax`, so `b` IS IN THE BAND. The eviction direction is
+           the mirror of that with every inequality reversed, which is why the edge and both comparisons carry
+           the direction bit rather than assuming one.
+           AND THE RE-COMPARISON RETURNS `b` ITSELF AND NOT MERELY A MEMBER OF ITS WEIGHT, which is what makes
+           the assertion below a POINTER equality rather than the weaker one the abort beneath it makes. The
+           band is walked in registry order with the same STRICT comparison the scan used and the seed is
+           folded afterwards with the same non-strict one, so the comparator's own tie-break is reproduced
+           over a SUBSET that contains `b`: no band member can outweigh `b` (it would have outweighed it in
+           the scan), and no band member of equal weight can precede it (it would have taken the scan's
+           maximum first). So `cand` is `best`, bit for bit and pointer for pointer, on every frontier — which
+           is the test of whether this is built correctly and is why it is asserted rather than counted.
+
+           IT IS NOT A CAP AND §NO BOUNDS IS NOT VIOLATED, WHICH THE NEXT READER WILL ASK. A bound decides
+           that work will NOT HAPPEN; this decides which member runs NEXT, which is what the full scan decides
+           too and by the same comparator. Every member stays on the frontier, keeps its weight, its place,
+           its account and every work item it holds; nothing is dropped, deprioritised, deduplicated or
+           retired, and a member outside the band is outside it for this one ask and is weighed again at the
+           next. The set is a NARROWING OF WHO IS COMPARED and never of who exists — and it is a narrowing
+           whose answer is PROVED identical to comparing everybody, which is a stronger statement than any
+           §NO-BOUNDS argument has to make.
+
+           WHY TWO WALKS AND NOT ONE, WHICH IS A CORRECTNESS ARGUMENT RATHER THAN A COST ONE. The band is
+           defined against the surrogate's EXTREMUM, and that is not known until the fold ends — a member
+           admitted early against a running extremum falls out when a later member raises it. The obvious
+           single-pass spelling (count while within the running extremum, reset when it moves beyond the
+           band) OVERCOUNTS, by a set whose size depends on the order the registry happens to hold: the
+           sequence `0, w, 2w` at band width `w` counts three where the band holds two. A biased count of the
+           quantity that decides whether an index is worth building at all is worse than none, so this walks
+           the frontier a second time and gets the set the definition names.
+           WHAT THE SECOND WALK COSTS, PRICED RATHER THAN LEFT TO BE REDISCOVERED. It is one more
+           flow_index_surrogate per member weighed, and one flow_weight per member ADMITTED — the second of
+           which is exactly what the design being measured would pay at every ask, so only the first is
+           instrument overhead (an index would hold its key rather than recompute it). Both are dev-only, in
+           the same class as the per-member stamp above, and neither raises a scan counter: flow.h's
+           FLOW_SCANS banner says those rows count the flow_weight the SCAN performed and never the ones a
+           check below it makes.
+
+           WHAT THE TWO ROWS ARE AND WHY THEY ARE A PAIR. `band` is how many members the candidate set
+           admitted and `band_of` is how many the band test was applied to, raised together over the same
+           walk, so their quotient is the FRACTION OF THE FRONTIER an index would have to re-compare and the
+           numerator is never published without the denominator it is a fraction of. Both are LIFETIME counts
+           summed over asks and may be differenced; neither is a gauge and neither may be read against
+           `members`. THE READING IS THE DECISION: a band that is a small share of the frontier is an index
+           that narrows, and a band that is most of it is an index that saves nothing and whose per-ask cost
+           is the walk this loop already performs — which is a finding about whether the surrogate is worth
+           keeping at all, and a decision for the project owner rather than a diff here.
+           THE IDENTITY IS ASSERTED BECAUSE THE DENOMINATOR IS THE CLAIM. `band_of` and the scan's own weight
+           counter are maintained by two different statements over two different walks, and they must move by
+           the same number over one ask — which is what makes `flow_pick_skipped` a shared predicate rather
+           than a convenience, and what fires if the two walks ever stop weighing one population. */
+        {
+            /* THE EDGE, WITH THE DIRECTION BIT CARRIED THROUGH FOR THE REASON THE SEED FOLD ABOVE CARRIES IT:
+               `worst` cannot be set beside a seed today and that is a DEV-ONLY guard, so a band written for
+               one direction would make this walk answer about a different set than the scan it is checking.
+               `2.0 * sur_mmax` is exact (a power of two times a double) and the subtraction rounds once, by
+               at most `u` of its own magnitude — which is clause (d) of flow_index_margin's derivation and is
+               why the constant there carries slack beyond the roundings it counts. */
+            double edge = worst ? sur_w + 2.0 * sur_mmax : sur_w - 2.0 * sur_mmax;
+            const Flow *cand = NULL; double cand_w = 0.0;
+            long band = 0, band_of = 0;
+            for (int bi = 0; bi < g_flows_n; bi++) {
+                Flow *m = g_flows[bi];
+                double s, mw;
+                if (flow_pick_skipped(m, seed, exclude, runnable_only)) continue;
+                band_of++;
+                s = flow_index_surrogate(m);
+                if (worst ? s > edge : s < edge) continue;
+                band++;
+                mw = flow_weight(m);
+                if (!cand || (worst ? mw < cand_w : mw > cand_w)) { cand = m; cand_w = mw; }
+            }
+            /* THE SEED ENTERS THE BAND EXACTLY AS IT ENTERS THE SCAN — tested for membership like any other
+               member and folded with the NON-STRICT comparison, because the incumbent keeps the thread on a
+               tie and a candidate set that handed it away would be answering a different question than the
+               one it is checking. It is counted in the denominator whether or not the band admits it. */
+            if (seed_live && !(runnable_only && flow_host_owed(seed))) {
+                double s = flow_index_surrogate(seed);
+                band_of++;
+                if (!(worst ? s > edge : s < edge)) {
+                    double mw = flow_weight(seed);
+                    band++;
+                    if (!cand || (worst ? mw <= cand_w : mw >= cand_w)) { cand = seed; cand_w = mw; }
+                }
+            }
+            g_index_checks.band_members += band;
+            g_index_checks.band_weighed += band_of;
+            DCHECKF(band_of == g_scan_weights[why] - sw_before,
+                    "the band walk and the order's own scan weighed different populations — the two share "
+                    "flow_pick_skipped precisely so they cannot, and a difference is a `continue` introduced "
+                    "into one of the two walks or a skip arm that reached one of them and not the other. "
+                    "`keyIndexBandWeighedLifetime` is then a denominator over a set the order did not walk, "
+                    "and the band share published against it is a fraction of the wrong thing. The scan "
+                    "weighed %ld member(s) and the band walk tested %ld",
+                    g_scan_weights[why] - sw_before, band_of);
+            DCHECKF(cand == best,
+                    "a candidate set carrying the derived margin did not contain the member this comparator "
+                    "returned, or contained it and did not return it — and those are the only two ways this "
+                    "can fire. The first is the derivation at flow_index_margin being WRONG, and the fold "
+                    "above asserts the inequality it rests on for every member, so a fire here with that one "
+                    "silent means the band's EDGE is wrong rather than the margin: `2*Mmax` is the sum of "
+                    "two members' margins and `sur_mmax` must be the maximum over the WHOLE folded "
+                    "population, the seed included. The second is the TIE-BREAK: this walk visits the "
+                    "registry in the scan's order with the scan's strictness and folds the seed afterwards "
+                    "non-strictly, so a member of equal weight winning here and losing there is one of those "
+                    "three having come apart. It is NOT the surrogate disagreeing with the comparator — that "
+                    "is the abort below and it is a different claim. The band held %ld of %ld member(s) "
+                    "tested, edge=%.17g from sur_w=%.17g and 2*margin=%.17g; the band returned a member at "
+                    "registry slot %d weighing %.17g and the scan returned slot %d weighing %.17g",
+                    band, band_of, edge, sur_w, 2.0 * sur_mmax,
+                    cand ? cand->reg_i : -1, cand ? cand_w : 0.0, best->reg_i, bw);
+        }
         DCHECKF(flow_weight(sur_best) == bw,
                 "an index over the member key would have returned a member this comparator calls WORSE — the "
                 "surrogate is `acct_family_val + flow_member_key - (family notch + carry) * FLOW_AGE_QUANTUM`, "

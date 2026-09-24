@@ -3200,14 +3200,34 @@ FlowKeyChecks flow_key_checks(void);
    which the surrogate and the comparator named DIFFERENT MEMBERS and the assert still held, which is the
    ordinary state when two members tie — informative, not a defect, and the row that says the check is
    examining anything at all rather than comparing a pointer with itself.
-   BOTH ARE LIFETIME COUNTS, raised under APICLIENT_DEV, and neither decides anything: no term of flow_weight
-   reads either, no pick branches on them, nothing is bounded by them.
-   RETIREMENT: this pair goes when the ask no longer walks the frontier — the index is then the thing being
+   …AND THE PAIR BENEATH THEM IS WHAT THE ANSWER TO THAT QUESTION COSTS, WHICH IS A DIFFERENT QUESTION AGAIN
+   AND THE ONE THAT DECIDES WHETHER AN INDEX IS WORTH HAVING AT ALL.  The two rows above say whether the key
+   ORDERS.  Where it merely TIES — which flow.c's own abort separates by reading `sur_w` against `bw`, and
+   which is this frontier's ordinary state — the design that answers it needs no edit to flow_weight: take a
+   CANDIDATE SET of every member within a derived margin of the surrogate's extremum and re-compare the
+   survivors through flow_weight itself.  flow_index_margin derives that margin from the two expressions and
+   flow_pick's band walk proves the set contains the comparator's own extremum, so the answer is the full
+   scan's answer pointer for pointer.  What NOBODY had measured is HOW BIG THAT SET IS, and an index that has
+   to re-compare most of the frontier has moved the walk rather than removed it.
+   READ THEM AS A FRACTION AND NEVER THE NUMERATOR ALONE.  `band_members` is how many members the candidate
+   set admitted; `band_weighed` is how many the band test was applied to, raised on the same walk over the
+   same population, which is what makes their quotient the share of the frontier a re-compare would cost
+   rather than a number over a denominator somebody supplied.  A SMALL share is an index that narrows.  A
+   share near one is an index that saves nothing — and that is a finding about whether the surrogate is worth
+   keeping, not a defect to repair.
+   BOTH ARE LIFETIME COUNTS SUMMED OVER ASKS and may be differenced; neither is a gauge, neither is
+   per-member, and neither may be read against `members`.  `index_asked` remains the reachability witness for
+   all four: a zero band beside a zero ask is a fold that never ran.
+   ALL FOUR ARE LIFETIME COUNTS, raised under APICLIENT_DEV, and none decides anything: no term of flow_weight
+   reads any of them, no pick branches on them, nothing is bounded by them.
+   RETIREMENT: these rows go when the ask no longer walks the frontier — the index is then the thing being
    asked and its agreement with flow_weight is held at its own update site, so there is no fold left to
-   count. */
+   count and no band left to price. */
 typedef struct {
     long index_asked;      /* scans that folded the surrogate and had a maximum to compare it against */
     long index_differed;   /* …of those, the ones where the surrogate named a DIFFERENT member of equal weight */
+    long band_members;     /* members the derived-margin candidate set admitted, summed over those scans */
+    long band_weighed;     /* …and the members that set was tested over — the denominator of the row above */
 } FlowIndexChecks;
 FlowIndexChecks flow_index_checks(void);
 

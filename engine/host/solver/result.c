@@ -1325,6 +1325,28 @@ char *result_wfq_json(void) {
                         the BUILD before they are a question about the run — the same caveat the four rows
                         above carry and for the same reason. */
                      "\"keyIndexAskedLifetime\":%ld,\"keyIndexDifferedLifetime\":%ld,"
+                     /* …AND WHAT THE ANSWER TO THAT QUESTION WOULD COST, WHICH THE PAIR ABOVE CANNOT SAY.
+                        Where the surrogate merely TIES with the comparator rather than disagreeing with it,
+                        the design that answers it edits flow_weight not at all: a CANDIDATE SET of every
+                        member within a derived margin of the surrogate's extremum, whose survivors are
+                        re-compared through flow_weight itself. solver/flow.c proves that set contains the
+                        comparator's own extremum and asserts that re-comparing it returns the same member
+                        POINTER FOR POINTER, so the design is exact rather than approximate — and what
+                        nobody had measured is HOW BIG THE SET IS.
+                        THEY ARE A FRACTION AND THE NUMERATOR IS NEVER READ ALONE.
+                        `keyIndexBandMembersLifetime` is how many members the set admitted;
+                        `keyIndexBandWeighedLifetime` is how many the test was applied to, raised on the same
+                        walk over the same population. Their quotient is the share of the frontier an index
+                        would still have to re-compare: a SMALL share is an index that narrows, and a share
+                        near one is an index that saves nothing and whose per-ask cost is the walk the order
+                        already performs. That reading is a decision about whether to build one at all rather
+                        than a defect to repair, and it is why the row exists.
+                        BOTH ARE LIFETIME COUNTS SUMMED OVER ASKS, raised under APICLIENT_DEV, and may be
+                        differenced; neither is a gauge and neither may be read against `members`.
+                        `keyIndexAskedLifetime` is the reachability witness for both, exactly as it is for
+                        the row above — a zero band beside a zero ask is a fold that never ran, and two zeros
+                        are a question about the BUILD before they are a question about the run. */
+                     "\"keyIndexBandMembersLifetime\":%ld,\"keyIndexBandWeighedLifetime\":%ld,"
                      /* AND THE DENOMINATOR THE HOOK'S RESCAN COUNT HAS. `scanRivalRuns / scanNextRuns` is
                         a COST — scan work per step — and it was being read as the hook's cadence, which it
                         is not: the rescan fires on a rank change or an incumbent switch, so a step that
@@ -1472,6 +1494,7 @@ char *result_wfq_json(void) {
                      (unsigned long long)rm.gen, (unsigned long long)rm.cur, (unsigned long long)rm.both,
                      kc.armed, kc.stale_gen, kc.first_seen, kc.running,
                      ic.index_asked, ic.index_differed,
+                     ic.band_members, ic.band_weighed,
                      flow_starved_picks(), flow_starved_picks_idle(),
                      (long long)w.arrivals, (long long)w.departures,
                      (long long)w.credit_calls, (long long)w.credit_paid, (long long)w.credit_dropped,
