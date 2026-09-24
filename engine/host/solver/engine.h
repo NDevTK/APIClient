@@ -236,11 +236,25 @@ void engine_queue_candidate(const char *body, size_t body_n, DynPos pos);
    different section — so the enumeration is what had to exist first, and it now does: a source reaches a
    carrier iff a producer on that carrier names it, and a grep for this enumerator is the whole answer for
    `dyn`.
-   WHAT THE NEXT DIFF BUILDS is the same declaration on the OTHER carrier: a TaskSource carried by
-   JS_EnqueueCallTask to the host's job-enqueue hook and recorded on the job, exactly as that hook's `is_task`
-   already travels (quickjs.h declares both), so the split is an ASSERT at the two queueing points rather than
-   this paragraph, and so the repair — whichever carrier the source ends up on alone — has something that
-   fails while it is half done.
+   THE CLAUSE THAT STOOD HERE IS SPENT AND IS REWRITTEN RATHER THAN DELETED, BECAUSE A READER WHO RE-DERIVES
+   IT FROM THE PARAGRAPH ABOVE WILL GO AND BUILD IT AGAIN. It read: WHAT THE NEXT DIFF BUILDS is the same
+   declaration on the OTHER carrier — a TaskSource carried by JS_EnqueueCallTask to the host's job-enqueue hook
+   and recorded on the job, exactly as that hook's `is_task` already travels, so the split is an ASSERT at the
+   two queueing points rather than this paragraph. THE CARRIAGE AND THE ASSERT ARE BUILT: quickjs.h declares
+   `JSTaskSource` on both JS_EnqueueCallTask and JSJobEnqueueHook, and solver/engine.c's engine_enqueue_job
+   asserts it at the one site that takes ownership of a queued callback, exactly as engine_queue_into asserts
+   it at the one site that creates a row. So the enumeration this paragraph wanted is a grep for the
+   enumerator on BOTH carriers, and the answer is that NETWORKING and NAVIGATION_AND_TRAVERSAL each reach both.
+   THE REPAIR HALF IS SUPERSEDED RATHER THAN DONE, AND BY A WIDER ONE. `whichever carrier the source ends up on
+   alone` is core/timing/task_source.h's `a source is in ONE queue`, and moving a producer discharges
+   §8.1.7.1 "Definitions" for the ONE source moved while leaving the next author of a producer to get it right
+   again. What landed instead is one ARRIVAL CLOCK across the carriers (solver/flow.c's g_work_seq: a row's
+   stamp is its `dyn_id`, a queued callback's is written at flow_job_push), and flow_step's task ladder orders
+   by it — which discharges the rule for every source at once, including a source no producer has written yet,
+   because within one source arrival order IS queue order however each item is carried.
+   WHAT IS STILL OPEN IS THE THIRD CARRIER. A `pending` register entry carries no stamp, so the networking
+   task source's delivery arm stands ABOVE the arrival race rather than in it — that arm's own paragraph in
+   solver/engine.c states the NOT COVERED clause and what its absence looks like in a census.
    HOW ITS ABSENCE SHOWS, and it needs no assert to be seen: a flow that has queued a document load and a
    `javascript:` navigation in one turn runs them in an order fixed by which arm of flow_step stands above the
    other, so writing the two statements the other way round does not put the two effects the other way round.

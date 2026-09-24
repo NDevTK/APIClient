@@ -15,7 +15,25 @@
  *     A queued, then B      must run A then B
  *     B queued, then A      must run B then A
  * the same way round. That is not a scheduling preference to tune and it is not repaired by choosing which
- * array wins: it is the sentence quoted above, and the only repair is that a source is in ONE queue.
+ * array wins: it is the sentence quoted above.
+ *
+ * THIS LINE READ `the only repair is that a source is in ONE queue`, AND THAT ABSOLUTE IS WITHDRAWN — REWRITTEN
+ * RATHER THAN DELETED, BECAUSE THE REASONING ABOVE IT IS EXACT AND A READER WILL RE-DERIVE THE CONCLUSION FROM
+ * IT. One queue per source IS a repair and it is the NARROWER of the two available. What the two orderings
+ * above rule out is an order taken over the CARRIERS; an order taken over ARRIVAL satisfies both at once,
+ * because within one source arrival order IS queue order, so a source in two arrays comes out in the order it
+ * was queued whichever array holds each item. That is what solver/flow.c's g_work_seq is: ONE clock stamping
+ * both of a flow's carriers, read by solver/engine.c's task ladder.
+ * THE DIFFERENCE IS NOT TASTE AND IT IS WHY THE ABSOLUTE MATTERED. Moving a producer discharges §8.1.7.1 for
+ * the one source moved and leaves the NEXT author of a producer to get it right again — and this header's own
+ * next paragraph says why nobody can be relied on to: a producer added later states nothing, nothing notices,
+ * and the enumeration has to be re-derived by reading every call site. A shared clock discharges it for every
+ * source at once, including a source no producer has written yet, which is the population that argument is
+ * about. The declarations below stay exactly as load-bearing: they are what makes `is any source in two
+ * queues` a grep, and the audit is worth having whether or not the order needs the answer.
+ * AND THE ABSOLUTE WAS THE ONE PART OF THIS FILE A READER COULD ACT ON WRONGLY: it reads as a standing
+ * instruction to go and move a producer, which is a behaviour change to a spec algorithm's queueing point made
+ * to satisfy a scheduling property the scheduler can hold on its own.
  *
  * IT IS A VALUE AND NOT A COMMENT BECAUSE A COMMENT CANNOT BE ASKED. Every producer in this engine already
  * stated its source in prose beside its call — and prose is invisible to the thing it is queueing into, so a

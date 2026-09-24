@@ -970,11 +970,14 @@ typedef struct RootScript {
     lxb_dom_element_t *el;
 } RootScript;
 static RootScript *g_root_scripts;
-/* THE NAME THE NEXT ROW OF ANY FLOW'S SEQUENCE TAKES — see solver/flow.h's `dyn_id`. ONE counter for the
-   instance and not one per flow: sibling arms mint independently, so per-flow counters would give two
-   different rows the same name, and a register entry a fork SHARES would then resolve to a different row in
-   each arm. It starts at 1 so that 0 — the register field's own default — is a name no row can answer to. */
-static uint64_t g_dyn_row_id = 1;
+/* THE NAME THE NEXT ROW OF ANY FLOW'S SEQUENCE TAKES IS NO LONGER THIS FILE'S TO MINT, and the counter that
+   stood here is deleted rather than kept beside the one that replaced it. It said: ONE counter for the
+   instance and not one per flow, because sibling arms mint independently and a register entry a fork SHARES
+   would resolve to a different row in each arm; starting at 1 so that 0 — the register field's own default —
+   is a name no row can answer to. Every word of that is still the contract and is now solver/flow.c's
+   g_work_seq, which issues the same names to a flow's QUEUED CALLBACKS as well, so a row and a job of one
+   flow are comparable by when they were queued. Two counters would have made them incomparable again, which
+   is the whole thing the move is for. */
 static int g_root_n;
 /* AND THE PARTITION OF IT THAT DECIDES WHETHER THIS RUN EVER LEARNED AN ENDPOINT AT ALL. A seeded row either
    already HAS its source text — an inline `<script>`, or an external one whose response the host handed over
@@ -7784,8 +7787,15 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
     f->dyn_el[at] = el;
     f->dyn_doc[at] = doc;
     /* THE ROW IS NAMED AT ITS CREATION AND NEVER AGAIN — the shift above moved the names of every row it
-       moved, so no live row's name changes here and this mint is the only writer of a fresh one. */
-    f->dyn_id[at] = g_dyn_row_id++;
+       moved, so no live row's name changes here and this mint is the only writer of a fresh one.
+       AND THE NAME IS ALSO WHEN IT ARRIVED, which is what lets flow_step order this row against this flow's
+       queued callbacks instead of against the array that holds them (solver/flow.c's g_work_seq). The mint is
+       taken HERE — at the moment the row joins a sequence — and not at the moment the program's bytes were
+       asked for, because what the stamp orders is this flow's work and a row has no position in it until it
+       is in it. An INTERPOSED row (HTML §4.12.1.1 "Processing model"'s "immediately execute the script element")
+       is therefore younger than rows already below the cursor, which is correct and is never consulted: it is
+       DYN_POS_IMMEDIATE, so flow_stack_empty is false for it and no task may begin in front of it at all. */
+    f->dyn_id[at] = flow_work_seq_next();
     f->dyn_token[at] = token;   /* MOVED: one allocation from engine_perform to flow_answer_perform */
     /* THE POSITION IS KEPT, NOT CONSUMED. `at` says where the row went; this says WHY, and the microtask
        checkpoint reads it (flow_checkpoint_due) because §4.12.1.1's immediate program ran inside the causing
@@ -10476,8 +10486,56 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * the chain is asked on. `seq_compiles` is `a program of this flow's own sequence STARTS on this
              * step`, and a step that starts one has done its unit of work — HTML §8.1.7.3 "Processing model"
              * step 2 runs ONE task per iteration — so the arms below rightly do not also run. HOLDING a row
-             * the flow cannot run is not that, and it is the state the old condition could not tell apart. */
-            if (seq_compiles) {
+             * the flow cannot run is not that, and it is the state the old condition could not tell apart.
+             *
+             * AND THAT ARGUMENT IS ABOUT ONE STEP AND WAS BEING SPENT ON THE ORDER, WHICH IS THE CORRECTION
+             * THIS DIFF EXISTS FOR. "Step 2 runs ONE task per iteration" says a step that starts a program may
+             * not also run a task; it says NOTHING about which of the two a step should start, and the `else`
+             * chain was answering both — one construct, two questions, which is the shape that hides an
+             * exclusion. The one-unit-per-step half needs no `else` at all: every arm below RETURNS, so a step
+             * that runs a task cannot also compile. What the `else` was doing on its own account was fixing a
+             * total order, and a fixed order over a set the page EXTENDS is a permanent exclusion.
+             *
+             * SO THE CHAIN NOW BINDS TO ARRIVAL, WHICH IS §8.1.7.3 STEP 2.1's CHOICE MADE SO IT CANNOT STARVE.
+             * HTML §8.1.7.3 "Processing model" step 2.1 chooses a task queue "in an implementation-defined
+             * manner" among those with at least one runnable task, and HTML §8.1.7.1 "Definitions" says where
+             * that freedom stops in its own worked example: a user agent may prefer a source "three-quarters
+             * of the time, keeping the interface responsive but not starving other task queues". Both of
+             * this flow's carriers are extended by the other — a task runs page code and page code appends
+             * rows; a program enqueues tasks — so NEITHER strict order is free of permanent exclusion and
+             * picking the other one would have moved the defect rather than ended it. Arrival order is free of
+             * it by construction: a work item's stamp never changes, so the set of items in front of it is
+             * fixed at its birth and finite, and nothing the page appends afterwards can get ahead of it.
+             * Nothing here is capped, counted down or decided against, which is §NO BOUNDS' own line between an
+             * ORDER and a BOUND.
+             * THE STAMPS ARE ONE CLOCK'S (solver/flow.c's g_work_seq): a row's is its `dyn_id` and a queued
+             * callback's is written at flow_job_push. That also discharges §8.1.7.1's one-source-one-queue rule
+             * for a source that reaches BOTH carriers — NETWORKING and NAVIGATION_AND_TRAVERSAL do, which is a
+             * grep for the enumerator and not a claim here — because within one source arrival order IS queue
+             * order however each item is carried. core/timing/task_source.h states the repair as "a source is
+             * in ONE queue"; that is one repair, it is narrower than this one, and its own text is where the
+             * difference is recorded.
+             *
+             * WHAT THIS DOES NOT REACH IS THE ARM ABOVE THE SEQUENCE, AND SAYING SO IS PART OF LANDING IT. The
+             * networking task source's delivery arm stands above this whole ladder and is not in the arrival
+             * race: a reply register entry carries no stamp, so a delivery still precedes every row and every
+             * job of the flow whatever their ages. That arm's own paragraph argues its position from a bound —
+             * the answered set grows only when this flow issues requests, and every delivery CONSUMES one — and
+             * that bound is about the SEQUENCE and says nothing about the job queue, which a delivery EXTENDS
+             * (a `load` fire, a settle's reactions). NOT COVERED: a flow whose reply register is never empty
+             * runs no task and starts no program of its own however old either is. WHAT THE NEXT DIFF BUILDS is
+             * the same stamp on a `pending` entry at the push (solver/pending.h), so all three carriers are one
+             * arrival order and the delivery arm folds into this chain instead of standing above it. HOW ITS
+             * ABSENCE SHOWS: a census whose `deliver-one-reply` row is most of a member's steps while
+             * `jobsReadyTask` climbs and `run-a-task` stays at zero — the delivery arm consuming the step
+             * before the choice below is reached. */
+            /* WHICH OF THE TWO CARRIERS HOLDS THE OLDER WORK ITEM, asked ONCE and only where there is a row to
+               compare against: `seq_compiles` is what established that the cursor names a row this step could
+               start, and it is the caller's to establish because flow_task_precedes has no way to know that a
+               row the flow is merely HOLDING is not one it can run. Every refusal inside that predicate is a
+               rule of the standard rather than a guard, and each is argued at its definition. */
+            int job_precedes = seq_compiles && flow_task_precedes(f, f->dyn_id[f->script_i]);
+            if (seq_compiles && !job_precedes) {
                 /* NOTHING HERE, AND THE EMPTINESS IS THE FALL-THROUGH MADE EXPLICIT. This arm's work is the
                    compile ~200 lines below; its body is empty because the only thing it has to do is decline
                    every arm beneath it and let control reach that compile. It used to be spelled as the
@@ -10514,10 +10572,14 @@ static int flow_step(JSContext *ctx, Flow *f) {
                  * chain now binds to `seq_compiles` — `a program STARTS on this step` — so the exclusion
                  * survives only for the step that actually runs one, which is HTML §8.1.7.3 step 2's one task per
                  * iteration and not a precondition at all.
-                 * WHAT THAT DOES NOT SETTLE IS THIS ARM'S POSITION, WHICH IS THE PARAGRAPH BELOW AND IS
-                 * UNCHANGED. A page that keeps appending rows the flow CAN run still takes this arm's turn
-                 * every step, because the sequence arm stands above it; that is a preference between two
-                 * carriers and it is the thing one queue per source fixes, not the `else`.
+                 * WHAT THAT DID NOT SETTLE WAS THIS ARM'S POSITION, AND THE PARAGRAPHS BELOW ARE REWRITTEN
+                 * RATHER THAN DELETED FOR IT — the sentence that stood here said a page which keeps appending
+                 * rows the flow CAN run still takes this arm's turn every step, because the sequence arm
+                 * stands above it, and called that a preference between two carriers that one queue per
+                 * source fixes. The first half was exactly right and was MEASURED right; the second named the
+                 * wrong repair. The chain binds to ARRIVAL now (see its head), so the sequence arm is above
+                 * this one only for a row that was QUEUED FIRST, and a row the page appends later cannot get
+                 * in front of a task already waiting.
                  *
                  * THE ARGUMENT THAT DECIDED THE REPLY CASE DOES NOT TRANSFER, AND SAYING SO IS THE POINT. There
                  * the two sides were ASYMMETRIC: the answered set grows only when the flow issues requests, and
@@ -10563,22 +10625,30 @@ static int flow_step(JSContext *ctx, Flow *f) {
                  * orderings above with `iframe.src =` and `location.href = "javascript:…"` in place of the two
                  * timers. So this arm's order is STILL not the thing to decide first, and the reason has
                  * changed from "nobody has established the enumeration" to a named, greppable second split.
-                 * WHAT REMAINS OPEN IS THIS ARM'S POSITION, AND ONLY THAT. The reachability half of this
-                 * paragraph is discharged above — the chain binds to `seq_compiles`, so a flow parked on an
-                 * external row runs its queued tasks instead of standing still — and what is left is the
-                 * ordering: a page that keeps appending rows the flow CAN run still takes this arm's turn on
-                 * every step, because the sequence arm is above it. That is the same two-carriers-one-source
-                 * defect the paragraphs above name, it needs one queue per source, and that needs the source
-                 * on a `jobs` entry as it is now on a row — solver/engine.h's engine_queue_javascript_url
-                 * states what that is and how its absence shows.
-                 * AND THE OPEN POSITION IS NOT AN OCCASIONAL PREFERENCE, IT IS THE ORDINARY STATE OF A REAL
-                 * DOCUMENT, WHICH IS MEASURED RATHER THAN ARGUED. Three runs of two real pages through one
-                 * artifact stamped 18550a41 with a clean cone, 146 censuses: `run-a-task` is 0 over 78, 78 and
-                 * 736 steps, so THIS ARM HAS NEVER ONCE BEEN ENTERED, while the same runs carry jobs pending
-                 * at every census and hand the thread to a member holding them (`unframedPicksLifetime` 4, 5
-                 * and 280 against `picksLifetime` 9, 10 and 619). The sequence arm took every such step. What
-                 * the paragraph above calls a preference between two carriers is what a page with a non-empty
-                 * row list always gets, and the bound it says holds but does not bind is the reason.
+                 * THE POSITION IS SETTLED AND IT IS NOT BY A QUEUE PER SOURCE, WHICH IS A CORRECTION TO THE
+                 * CLAUSE THAT STOOD HERE RATHER THAN TO ITS EVIDENCE. It read: what is left is the ordering, a
+                 * page that keeps appending rows the flow CAN run still takes this arm's turn on every step
+                 * because the sequence arm is above it, that is the same two-carriers-one-source defect, it
+                 * needs one queue per source, and that needs the source on a `jobs` entry as it is now on a
+                 * row. The DIAGNOSIS was exact. The REMEDY was one repair of two and the narrower one: moving
+                 * a producer so a source is in one queue discharges §8.1.7.1 "Definitions" for THAT source and
+                 * leaves the next author of a producer to get it right again, and it does not touch the
+                 * starvation at all — two queues, one source each, still leave whichever arm is above feeding
+                 * on a set the page extends. What the chain binds to now is ARRIVAL, which discharges both at
+                 * once: within one source arrival order IS queue order, and across sources the set of items in
+                 * front of any one item is fixed at its birth. The `jobs` entry does carry a stamp now
+                 * (flow.h's job-record bullet), so the plumbing half of the old clause is built and the
+                 * per-source-queue half is superseded rather than done.
+                 * AND THE EXCLUSION WAS NOT AN OCCASIONAL PREFERENCE, IT WAS THE ORDINARY STATE OF A REAL
+                 * DOCUMENT, WHICH WAS MEASURED RATHER THAN ARGUED AND IS WHY THE DIAGNOSIS ABOVE IS KEPT.
+                 * Three runs of two real pages through one artifact stamped 18550a41 with a clean cone, 146
+                 * censuses: `run-a-task` is 0 over 78, 78 and 736 steps, so THIS ARM HAD NEVER ONCE BEEN
+                 * ENTERED, while the same runs carried jobs pending at every census and handed the thread to a
+                 * member holding them (`unframedPicksLifetime` 4, 5 and 280 against `picksLifetime` 9, 10 and
+                 * 619). The sequence arm took every such step. A later drive of a real application named the
+                 * same shape one row more precisely — `readyPicksLifetime` 243 against `_jobsRun` 0,
+                 * `jobsReadyTask` 104 and `run-a-task` 0 — which is the reading flow.c's `ready_picks_lifetime`
+                 * enumeration calls the LADDER's rather than the order's, and is what this diff is built to.
                  * AND THE TWO KINDS OF JOB ARE ON OPPOSITE SIDES OF THE SEQUENCE, which is the half a reader
                  * of `jobsReady` cannot see. A MICROTASK is taken by the checkpoint arm, which stands ABOVE
                  * the sequence, so it runs on the holder's next step; a TASK is THIS arm, so it runs only on a
@@ -10595,13 +10665,20 @@ static int flow_step(JSContext *ctx, Flow *f) {
                  * it once cost a lifetime step histogram and an inference; it is now one comparison, and the
                  * legend for it is at `jobs_ready_task` in solver/flow.h rather than here, beside the gauge,
                  * where a reader holding the digit will be. WHAT THE PAIR DOES NOT DECIDE IS THIS ARM'S
-                 * POSITION, which is the open question the paragraphs above state and which no census answers.
+                 * POSITION — a census names WHICH ARM declined and never WHAT THE ORDER SHOULD BE, which is a
+                 * question about the standard and was settled from it (the chain's head).
                  * AND THE NAIVE REPAIR IS STILL WIRED TO FIRE: the DCHECK below is what catches it. Hoisted
                  * above the sequence, this arm becomes reachable with a DYN_POS_IMMEDIATE row at the cursor —
                  * the one row flow_stack_empty holds the checkpoint off for — so the flow arrives here holding
                  * a microtask and the assert says so. The reorder cannot be made silently, and the `seq_compiles`
                  * change is not that reorder: an IMMEDIATE row sets `seq_compiles`, so it takes the arm above
-                 * this one exactly as it always did. */
+                 * this one exactly as it always did.
+                 * NOR IS THE ARRIVAL CHANGE, AND IT IS WORTH SAYING BECAUSE IT IS THE ONE THAT MAKES THIS ARM
+                 * REACHABLE WITH A ROW AT THE CURSOR. flow_task_precedes answers 0 outright when
+                 * flow_stack_empty is false and again when the flow holds a microtask — the same two facts
+                 * this assert is about, asked through the same predicates the checkpoint arm calls, so the arm
+                 * is still unreachable in exactly the states that would fire it. The assert therefore stays
+                 * armed against the hoist rather than being satisfied by an accident of the new condition. */
                 DCHECK(!flow_job_microtask(f),
                        "a task was about to begin while this flow still held a microtask — the checkpoint runs "
                        "before every program in the sequence, so reaching a task with one outstanding means a "

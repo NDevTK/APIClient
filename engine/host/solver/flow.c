@@ -97,6 +97,48 @@ static int64_t g_unframed_picks_total = 0;
    count of dispatches that reached a job holder and ran no job is exactly the numerator §NO BOUNDS forbids a
    watchdog being built from. */
 static int64_t g_ready_picks_total = 0;
+/* THE ONE CLOCK BOTH OF A FLOW'S TASK CARRIERS ARE STAMPED FROM — HTML §8.1.7.1 "Definitions"' ordering rule
+   made answerable, and the whole of what lets flow_step choose between them without a preference.
+   HTML §8.1.7.1 "Definitions" partitions work by SOURCE ("For each event loop, every task source must be
+   associated with a specific task queue") and a flow's arrays partition it by CARRIER — a PROGRAM (`dyn`),
+   a queued C callback (`jobs`). core/timing/task_source.h states what that costs and states the repair as "a
+   source is in ONE queue"; that is ONE repair and it is not the only one, and it is the weaker of the two. A
+   source on two carriers is unorderable only while the order is taken over the CARRIERS: over ARRIVAL it is
+   ordered exactly, because within one source arrival order IS queue order, so
+       A queued, then B      runs A then B
+       B queued, then A      runs B then A
+   both come out right however the two items are carried. One clock therefore discharges §8.1.7.1 for every
+   source at once — including a source no producer has written yet — where moving a producer discharges it for
+   one and leaves the next author of a producer to get it right again.
+   AND IT IS WHAT MAKES NON-STARVATION STRUCTURAL RATHER THAN A POLICY. HTML §8.1.7.3 "Processing model"
+   step 2.1 leaves the choice of queue "implementation-defined", and HTML §8.1.7.1 "Definitions"' own worked example
+   says what that freedom is not: a user agent may prefer a source "three-quarters of the time, keeping the
+   interface responsive but not starving other task queues". A fixed arm order starves whenever the arm above it
+   is fed by a set the page extends, which is both of these. Arrival order cannot: a work item's stamp never
+   changes and the set of items older than it is FINITE AND FIXED AT ITS BIRTH, so every item is reached after a
+   bounded amount of work that already existed when it was queued. Nothing is capped, nothing is counted down,
+   nothing decides that work will not happen — which is the line §NO BOUNDS draws and the reason the repair is
+   an order rather than a budget.
+   IT STARTS AT 1 so that 0 — the `dyn_id` register field's own default — is a name no work item answers to,
+   which is the contract `dyn_id` already had and which this counter inherits whole.
+   IT IS NOT PARKED, for `dyn_id`'s reason exactly: the cold tier stores a RECIPE and replays the document, so
+   a resumed flow's rows and its queued callbacks are both rebuilt and take fresh stamps together. There is no
+   revision at which an item from before a park is compared with one from after it. */
+static uint64_t g_work_seq = 1;
+
+uint64_t flow_work_seq_next(void) {
+    /* THE STAMP IS CARRIED AS A JS NUMBER ON THE JOB RECORD, so it is only a name while it round-trips — the
+       same ceiling js_task_handle_new asserts at the issuing end for the handle, asserted here for the same
+       reason and with the opposite consequence: a handle that stopped round-tripping names another task, and a
+       stamp that stopped round-tripping silently ORDERS two work items by a number that is not either one's.
+       A dev abort rather than a fatal check because the state is this engine's own arithmetic and not a
+       production invariant (§Offensive-programming's rule for which macro). */
+    DCHECK(g_work_seq < 9007199254740992ull,
+           "this instance has queued more work items than a JS number names exactly — the stamp is stored on "
+           "the job record as a number and read back to order it against a program row, so past this point two "
+           "items compare by a value that is neither one's arrival");
+    return g_work_seq++;
+}
 /* EVERY MEMBER THIS INSTANCE HAS EVER ADMITTED TO THE FRONTIER, AND EVERY ONE IT HAS EVER LET GO — the two
    LIFETIME counters that say whether the ORDER is deciding anything at all, which no row in this file could
    ask and which the one row that looks as though it could is not.
@@ -3453,7 +3495,7 @@ static int job_fn_id(JSJobFunc *fn) {
 
 /* THE RECORD'S LAYOUT, stated once. The header is fixed-width and the arguments follow it, so `argc` is a
    length subtraction and never a stored count that can disagree with what is there. */
-enum { JOB_FN = 0, JOB_TASK, JOB_EXTERNAL, JOB_GLOBAL, JOB_HANDLE, JOB_HDR };
+enum { JOB_FN = 0, JOB_TASK, JOB_EXTERNAL, JOB_GLOBAL, JOB_HANDLE, JOB_SEQ, JOB_HDR };
 
 /* THE PROVENANCE BRACKET — see flow.h. A static rather than a field on the flow because it is a property of
    the CONVERSION in flight, not of the timeline: exactly one can be open, which is what the asserts say. */
@@ -3508,34 +3550,39 @@ static int job_field_int(JSValueConst e, int field) {
     return n;
 }
 
-/* THE HANDLE FIELD, READ BACK — a SECOND accessor rather than a widened job_field_int, because the two fields
-   have different shapes and the assert is the point: a header int is a small integer and must be one, while a
-   handle is an integer VALUE that leaves the small-integer tag behind at 2^31 and is still exact. Both tags are
-   accepted and integrality is what is asserted, so a handle that failed to round-trip crashes here rather than
-   naming a different queued task at the removal. That is the same silent wrong answer js_task_handle_new's
-   ceiling assert refuses at the issuing end, asserted again at this end, which is the one that USES it. */
-static JSTaskHandle job_field_handle(JSValueConst e, int field) {
+/* A WIDE HEADER FIELD, READ BACK — a SECOND accessor rather than a widened job_field_int, because the two
+   shapes are different and the assert is the point: a header int is a small integer and must be one, while a
+   HANDLE and an ARRIVAL STAMP are integer VALUES that leave the small-integer tag behind at 2^31 and are still
+   exact. Both tags are accepted and integrality is what is asserted, so a field that failed to round-trip
+   crashes here rather than answering a wrong number. That is the same silent wrong answer js_task_handle_new's
+   ceiling assert refuses at the issuing end, asserted again at this end, which is the one that USES it.
+   IT TAKES THE CONSEQUENCE AS A STRING RATHER THAN BEING COPIED PER FIELD. The two fields' shapes are one
+   question and their CONSEQUENCES are two — a handle that stopped round-tripping names another timeline's
+   task, a stamp that stopped round-tripping orders two work items by a number that is neither one's — and a
+   crash a reader cannot act on is what §AN-ASSERT-THAT-NAMES-A-REMEDY is about. One reader, two remedies,
+   rather than two readers that can come to disagree about what an exact integer is. */
+static uint64_t job_field_u64(JSValueConst e, int field, const char *cost) {
     JSValue v = JS_GetPropertyUint32(pending_ctx(), e, (uint32_t)field);
-    JSTaskHandle h;
+    uint64_t h;
 
     if (JS_VALUE_GET_TAG(v) == JS_TAG_INT) {
         int n = JS_VALUE_GET_INT(v);
 
-        DCHECK(n >= 0, "a job record's handle is negative — handles come from one monotone runtime counter "
-                       "that starts at 1, so this record was written by something other than flow_job_push");
-        h = (JSTaskHandle)n;
+        DCHECKF(n >= 0, "a job record's wide header field is negative — both come from monotone counters that "
+                        "start at 1, so this record was written by something other than flow_job_push (%s)",
+                cost);
+        h = (uint64_t)n;
     } else {
         double d;
 
-        DCHECK(JS_TAG_IS_FLOAT64(JS_VALUE_GET_TAG(v)),
-               "a job record's handle is not a number — the header is written whole at the push, so one that "
-               "is not there is a record something other than this file built");
+        DCHECKF(JS_TAG_IS_FLOAT64(JS_VALUE_GET_TAG(v)),
+                "a job record's wide header field is not a number — the header is written whole at the push, "
+                "so one that is not there is a record something other than this file built (%s)", cost);
         d = JS_VALUE_GET_FLOAT64(v);
-        DCHECK(d >= 0 && d < 9007199254740992.0 && d == (double)(uint64_t)d,
-               "a job record's handle is not an exact integer below 2^53 — a handle names at most one queued "
-               "callback and that is only true while the number round-trips, so a removal made with this one "
-               "would take some other timeline's task off the queue instead of finding none");
-        h = (JSTaskHandle)d;
+        DCHECKF(d >= 0 && d < 9007199254740992.0 && d == (double)(uint64_t)d,
+                "a job record's wide header field is not an exact integer below 2^53 — the value is only a "
+                "name while the number round-trips (%s)", cost);
+        h = (uint64_t)d;
     }
     JS_FreeValue(pending_ctx(), v);
     return h;
@@ -3605,6 +3652,18 @@ void flow_job_push(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueCons
        word pair. JS_NewInt64 keeps the small-integer tag for the first 2^31 handles and widens to a float64
        past it; both are exact below 2^53, which js_task_handle_new asserts is the whole range. */
     JS_SetPropertyUint32(ctx, e, JOB_HANDLE, JS_NewInt64(ctx, (int64_t)handle));
+    /* AND WHEN IT ARRIVED, ON THE CLOCK THE PROGRAM SEQUENCE IS NAMED BY — see g_work_seq. This is the field
+       that makes §8.1.7.1 "Definitions"' one-source-one-queue rule ANSWERABLE for a flow whose work is split
+       across two carriers: the sequence's rows carry the same clock in `dyn_id`, so flow_step compares two
+       work items by WHEN THEY WERE QUEUED instead of by WHICH ARRAY HOLDS THEM.
+       IT IS TAKEN HERE AND NOT AT THE RUNTIME'S ENQUEUE, which is deliberate and is the same choice `handle`
+       makes in the other direction. A handle must be minted by the runtime because the runtime's own two
+       queues and its baseline list issue callbacks this file never sees; a stamp must be minted HERE because
+       what it orders is this flow's `jobs` against this flow's `dyn`, and `dyn` is the host's alone. The
+       baseline handover therefore stamps a task at the moment a flow ADOPTS it rather than at the moment the
+       user agent queued it — which is the honest answer for a task that had no timeline to be ordered within
+       until then, and the only one available, since nothing orders it against a row before it has a flow. */
+    JS_SetPropertyUint32(ctx, e, JOB_SEQ, JS_NewInt64(ctx, (int64_t)flow_work_seq_next()));
     for (i = 0; i < argc; i++)
         JS_SetPropertyUint32(ctx, e, (uint32_t)(JOB_HDR + i), JS_DupValue(ctx, argv[i]));
     if (!JS_IsObject(f->jobs)) {
@@ -3616,23 +3675,91 @@ void flow_job_push(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueCons
     cow_engine_write_end();
 }
 
-JSValue flow_job_take(JSContext *ctx, Flow *f) {
-    int n = flow_job_pending(f), pick = 0, i;
-    JSValue e;
+/* WHICH ENTRY THE NEXT PICK WOULD TAKE, WITHOUT TAKING IT — factored out of flow_job_take rather than written
+   again at the one other site that needs the answer (flow_task_precedes below). Two right answers to one
+   question is the shape that drifts, and this particular question has a rule in it that a second spelling
+   would lose: the ORDER IS NOT A FIFO POP. Within a kind the order is arrival order; ACROSS the two kinds a
+   task may not begin while this flow still holds a microtask, which is HTML §8.1.4.4 "Calling scripts"' clean
+   up after running script step 3. A caller that reached for index 0 would be right exactly when the queue
+   holds no microtask and wrong in the case the rule exists for. */
+static int job_pick_index(const Flow *f, int n) {
+    int pick = 0;
 
-    DCHECK(n > 0, "a job was taken from a flow whose queue is empty — the caller tested the queue to get here, "
-                  "so the two reads have come apart");
-    /* THE CHECKPOINT RULE, and it is the whole reason this is not a FIFO pop. Within a queue the order is
-       arrival order; ACROSS the two, a task may not begin while this flow still holds a microtask. */
     while (pick < n) {
         JSValue c = job_entry(f, pick);
         int task = job_field_int(c, JOB_TASK);
 
-        JS_FreeValue(ctx, c);
+        JS_FreeValue(pending_ctx(), c);
         if (!task) break;
         pick++;
     }
     if (pick == n) pick = 0;   /* nothing but tasks: the checkpoint is done, run the earliest task */
+    return pick;
+}
+
+/* DOES THIS FLOW HOLD A TASK THAT WAS QUEUED BEFORE THE ROW AT ITS CURSOR — HTML §8.1.7.3 "Processing model"
+ * step 2.1's choice of queue, made so that it cannot starve either side.
+ *
+ * WHAT IT REPLACES IS A FIXED ARM ORDER, AND A FIXED ARM ORDER IS WHAT HTML §8.1.7.1 "Definitions"' OWN
+ * WORKED EXAMPLE RULES OUT. HTML §8.1.7.3 "Processing model" step 2.1 chooses a queue "in an
+ * implementation-defined manner" among those with at least one runnable task, and HTML §8.1.7.1 "Definitions"
+ * says what that freedom is for and where it stops: a user agent may give a source preference
+ * "three-quarters of the time, keeping the interface responsive but not starving other task queues".
+ * flow_step's ladder took the program sequence first and unconditionally, and a page's own programs
+ * EXTEND that sequence (a lazy chunk, an injected `<script>`, a `javascript:` URL, a response that is a
+ * program), so the queue below it was excluded for as long as the page kept appending — §scheduler's razor,
+ * "drops, starves, skips, reorders, or forgets ANY flow — it is a CAP, banned".
+ *
+ * AND THE MIRROR IS EQUALLY BANNED, WHICH IS WHY THE ANSWER IS NOT THE OTHER ARM ORDER. A task runs page code
+ * and page code appends rows; a program enqueues tasks. Both sides are extended by the other, so neither
+ * strict order is free of permanent exclusion and choosing one would move the defect rather than end it.
+ *
+ * ARRIVAL ORDER IS FREE OF IT BY CONSTRUCTION AND NOT BY POLICY. A work item's stamp never changes, so the set
+ * of items that outrank it is FIXED AT ITS BIRTH and finite: whatever the page appends afterwards is younger
+ * and cannot get in front. Every item is therefore reached, and nothing is capped, counted down or decided
+ * against — which is the line §NO BOUNDS draws between an ORDER and a BOUND, and the reason there is no
+ * constant here to tune and no budget to spend.
+ * IT ALSO DISCHARGES §8.1.7.1's ORDERING RULE FOR A SOURCE THAT IS ON BOTH CARRIERS, which is the separate
+ * defect core/timing/task_source.h is about: within one source arrival order IS queue order, so a source in
+ * two arrays comes out in the order it was queued whichever array holds each item.
+ *
+ * THE THREE REFUSALS ARE EACH A RULE OF THE STANDARD AND NOT A GUARD.
+ *   - `flow_stack_empty` is HTML §8.1.4.4's "If the JavaScript execution context stack is now empty": a row
+ *     the cursor names DYN_POS_IMMEDIATE is HTML §4.12.1.1 "Processing model"'s "immediately execute the script
+ *     element, even if other scripts are already executing" — the synchronous tail of the program that queued
+ *     it — so no task may begin in front of it and its age is not the question.
+ *   - a MICROTASK outstanding is the checkpoint's, and the checkpoint arm stands above this ladder. Answering
+ *     yes here would put a task in front of it and fire the ladder's own assert one arm down.
+ *   - an empty queue has nothing to compare.
+ * A caller reaching this with `seq_compiles` false has no row to compare against and must not ask. */
+int flow_task_precedes(const Flow *f, uint64_t row_seq) {
+    int n;
+    JSValue e;
+    uint64_t s;
+
+    DCHECK(f != NULL, "the ladder asked which of two carriers holds the older work item of no flow");
+    if (!flow_stack_empty(f)) return 0;
+    n = flow_job_pending(f);
+    if (n <= 0) return 0;
+    if (flow_job_microtask(f)) return 0;
+    e = job_entry(f, job_pick_index(f, n));
+    s = job_field_u64(e, JOB_SEQ,
+                      "a task would be ordered against this flow's program sequence by a number that is not "
+                      "its arrival, so the page's own programs and its queued callbacks would run in an order "
+                      "no clock states");
+    JS_FreeValue(pending_ctx(), e);
+    /* STRICTLY OLDER, WHICH IS NOT A TIE-BREAK BUT THE ABSENCE OF A TIE. One clock issues every stamp and
+       never reuses one (g_work_seq), so two work items of one flow cannot share a number and `<` is total. */
+    return s < row_seq;
+}
+
+JSValue flow_job_take(JSContext *ctx, Flow *f) {
+    int n = flow_job_pending(f), pick, i;
+    JSValue e;
+
+    DCHECK(n > 0, "a job was taken from a flow whose queue is empty — the caller tested the queue to get here, "
+                  "so the two reads have come apart");
+    pick = job_pick_index(f, n);
     e = job_entry(f, pick);
     cow_engine_write_begin();
     for (i = pick + 1; i < n; i++)
@@ -3743,7 +3870,9 @@ int flow_job_remove(Flow *f, JSTaskHandle handle) {
         JSValue e = job_entry(f, i);
 
         /* EVERY entry is compared, including after a hit, because the count is what the assert is made of. */
-        if (job_field_handle(e, JOB_HANDLE) == handle) {
+        if (job_field_u64(e, JOB_HANDLE,
+                          "a removal made with it would take some other timeline's task off the queue "
+                          "instead of finding none") == (uint64_t)handle) {
             /* AND THE OTHER REMOVAL MAY NOT TAKE A ROUTED DELIVERY AT ALL, which is a different statement from
                §7.5.10 step 7's above rather than the same one twice. That walk removes the tasks OF A DOCUMENT
                THAT IS GONE, so the delivery it takes has no page left to receive it; this one is a tracker
@@ -6468,19 +6597,45 @@ void flow_wfq_census(WfqCensus *out) {
            not stop the population being reported as rank-ready — and what it buys is that the two halves of
            this row's error are separable: the microtask half is exact, and the task half is exactly
            `jobs_ready_task`.
-           NEXT DIFF: REWRITTEN RATHER THAN DELETED, BECAUSE THE CLAUSE THAT STOOD HERE IS THE ONE A READER
-           RE-DERIVES FROM THE SENTENCE ABOVE IT AND IT IS REFUTED. It read: the per-source task queue that
-           arm's own residual names — a source on a `jobs` entry as it is now on a row — after which the arm's
-           reachability stops depending on the cursor at all and the ready/framed line is exact for both kinds.
-           It is a claim about the LADDER, it is true about the ladder, and it moves no number: it decides
-           WHICH ARM RUNS FOR A MEMBER THAT IS PICKED, and this population is not being picked at all. Measured
-           on both runs, by the four-bucket step partition rather than by inference — `units + midProgram +
-           parked + checkpointOwed == steps` is asserted at engine_frontier_census, and every bucket an
-           unframed member's step could land in is held flat over the interval (`progStarts` frozen, `jobsRun`
-           0, `run-a-task` 0, `microtask-checkpoint` 0, `unitParked` 0, `unitCheckpointOwed` 0,
-           `deliver-one-reply` flat at the reply count) — so the population received ZERO of 21983 and 3554
-           dispatches while growing to 273 and 124 members. A lane sent to build the named thing would have
-           landed it correctly and watched `_jobsRun` stay at zero, and this clause is what would have sent it.
+           NEXT DIFF: REWRITTEN TWICE NOW, AND THE SECOND REWRITE IS THE ONE WORTH READING, BECAUSE THE CLAUSE
+           THAT REPLACED THE FIRST WAS ITSELF REFUTED — BY THE ROW THE SAME PARAGRAPH ASKED FOR.
+           THE FIRST CLAUSE read: the per-source task queue that arm's own residual names — a source on a
+           `jobs` entry as it is now on a row — after which the arm's reachability stops depending on the
+           cursor at all and the ready/framed line is exact for both kinds.
+           THE SECOND CLAUSE said that one moves no number: `it decides WHICH ARM RUNS FOR A MEMBER THAT IS
+           PICKED, and this population is not being picked at all`, measured on two runs by the four-bucket
+           step partition — `units + midProgram + parked + checkpointOwed == steps` is asserted at
+           engine_frontier_census, and every bucket an unframed member's step could land in was held flat over
+           the interval (`progStarts` frozen, `jobsRun` 0, `run-a-task` 0, `microtask-checkpoint` 0,
+           `unitParked` 0, `unitCheckpointOwed` 0, `deliver-one-reply` flat at the reply count) — so the
+           population received ZERO of 21983 and 3554 dispatches while growing to 273 and 124 members.
+           THE PREMISE OF THE SECOND IS FALSE AND `ready_picks_lifetime` IS WHAT FALSIFIED IT, which is the
+           enumeration four paragraphs down working exactly as written: it names three readings, says `above
+           zero with _jobsRun flat` is the second of them — `the dispatch DOES take it and flow_step's LADDER
+           declines the job at an arm above the one that would run it` — and a real-application drive answered
+           `readyPicksLifetime 243` against `_jobsRun 0`, `jobsReadyTask 104` and `run-a-task 0`. The
+           population IS being picked. So the clause was not stale: it was an inference from a SUPERSET row
+           (`unframed_picks_lifetime`) standing in for a subset the tree could not then measure, and the very
+           row this paragraph asked for is the one that took it apart.
+           WHAT THAT COST AND WHAT IT DID NOT. Nothing was built to it, because the row landed first — which is
+           the mechanism working rather than luck, and is the whole argument for publishing a row instead of
+           an inference. What it WOULD have cost is exact and is worth stating, because the clause reads as a
+           refusal: a lane holding it declines the ladder fix and goes to flow_pick, which the same census
+           exonerates (`jobWGap` 0 at every census that has one — the order already ranks this population at
+           its front).
+           THE METHOD IS THE FINDING AND NOT THE SENTENCE. Both clauses were written from a step partition
+           whose buckets are counted over WHOLE RUNS and read as though they were counted over the population
+           in question; a bucket held flat says the population ran nothing, and `nothing was picked` and `what
+           was picked declined at an arm` produce the identical flat bucket. A reading that cannot separate
+           two states may not be spent naming one of them, which is this file's own three-states rule met on
+           the inside. The row that CAN separate them was already named here as the next diff; the clause
+           should have said `unknown until that row exists` and said `moves no number` instead.
+           THE LADDER FIX HAS NOW LANDED (engine.c's task ladder binds to ARRIVAL rather than to the carrier),
+           and it is NOT the first clause either: that one said one queue per source, and what the ladder
+           needed was one CLOCK across the carriers — strictly wider, since it orders a source no producer has
+           written yet. The `jobs` entry does carry a stamp now (flow.h's job-record bullet), so the half of
+           the first clause that was about plumbing is built and the half that was about per-source queues is
+           superseded rather than done.
            WHAT IS UPSTREAM OF THE ARM ORDER IS THEREFORE THE QUESTION, AND THIS ROW'S OWN PAIR STATES IT AS AN
            IMPOSSIBILITY RATHER THAN A MECHANISM. `job_w_gap` is `w_top` minus the best weight any member of
            this population offers, both taken through `flow_weight` and `w_top` taken from flow_best's own
