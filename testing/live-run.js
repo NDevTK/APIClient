@@ -1089,6 +1089,27 @@ async function oneRun(browser, pg, url, budgetMs, engineErrs) {
            : schedBefore.driving === true && !mine.length
              ? "scheduler-busy-before-this-run(queued behind a round still in flight; NOT a sample of this site)"
            : typeof nav !== "number" ? "no-navigation"
+           /* AN HTTP REFUSAL IS A NUMBER, SO IT FELL PAST EVERY RUNG AND LANDED ON A VERDICT THAT MEANS THE
+              OPPOSITE. `no-navigation` is reached only when `nav` is NOT a number, which catches a navigation
+              that threw and one that created no Document; a 403 IS a number, so it used to arrive at
+              `budget-elapsed(no-row)`, whose own comment two hundred lines up says it means "a document that
+              was admitted and never provisioned an engine". THE SITE WOULD NOT SERVE US and THE SITE SERVED US
+              AND THE ENGINE NEVER RAN are opposite facts, and only the second is a finding about this engine.
+              IT IS NOT A LABELLING NICETY, BECAUSE THE COUNT BELOW IS A NEGATIVE FILTER. `runsThatWereSamples`
+              excludes a verdict carrying "NOT a sample of this site" and counts everything else AS a sample, so
+              a refusal was being tallied as a measurement of the site -- the several-nothings-behind-one-answer
+              shape this ladder exists to prevent, arriving through the one nothing it did not separate. The
+              suffix is what both consumers key on, which is why the token carries it rather than being a word
+              of its own.
+              MEASURED: a corpus drive reported `replit` as `budget-elapsed(no-row)` with the scheduler alive
+              and not driving at both ends and `kicksRefusedDelta` 0 -- a row that reads as an engine defect and
+              was an HTTP 403. The same drive had also been told by a `curl` carrying a browser user-agent that
+              the site answered 200, which is a different client and is why the browser is the one that decides.
+              THE RANGE IS 2xx AND 3xx ONLY. A final `nav` outside that is not a document this engine was given,
+              and `testing/live-requests.js` carries the same rung for the same reason -- its ladder fell through
+              a refusal to the literal "sample", which its own positive filter then counted. */
+           : (nav < 200 || nav >= 400)
+             ? "http-refused(" + nav + ")(NOT a sample of this site)"
            : terminal ? "terminal"
            : (mine.length ? "budget-elapsed(partial)" : "budget-elapsed(no-row)"),
     /* CARRIED ON EVERY ROW, not only the refused ones: a run whose scheduler was alive before and dead after

@@ -171,6 +171,14 @@ async function oneRun(browser, pg, url, budgetMs) {
        as an empty counter set and must not collapse them. */
     verdict: schedBefore.alive === false ? "scheduler-dead-before-this-run(NOT a sample of this site)"
            : typeof nav !== "number" ? "no-navigation"
+           /* THE SAME RUNG AS testing/live-run.js's, FOR THE SAME REASON, AND ITS FILTER DOES NOT SAVE IT. A
+              403 is a number, so it fell past `no-navigation` and past the unreadable-tab arm and landed on the
+              literal "sample" -- which `runsThatWereSamples` below counts by exact match, so a site refusing us
+              was counted as a measurement of it. A positive filter looks safer than live-run.js's negative one
+              and is not: what decides the question is whether a refusal REACHES the sample token, and here it
+              did. */
+           : (nav < 200 || nav >= 400)
+             ? "http-refused(" + nav + ")(NOT a sample of this site)"
            : markup.EVAL_THREW ? "tab-unreadable(" + markup.EVAL_THREW + ")"
            : "sample",
     scheduler: { before: schedBefore, after: schedAfter },
