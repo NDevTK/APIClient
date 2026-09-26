@@ -169,6 +169,35 @@ const die = (s) => { throw new Error(`[${TAG}] ${s}`); };
    THE MATCH IS ON THE PLATFORM NAME AND NEVER ON A RECEIVER. `engine/js_code_refs.mjs` records that a
    receiver's spelling carries no information about the thing being asked, and a minifier renames every local
    while leaving `fetch`, `XMLHttpRequest`, `open` and `sendBeacon` alone because they are the platform's.
+   THE GLOBAL OBJECT IS NOT A RECEIVER IN THAT SENTENCE'S SENSE, AND READING IT AS ONE COST THIS FILE
+   FOURTEEN SITES. THE MATCH IS ON THE PLATFORM NAME AND NEVER ON A RECEIVER is right and it is about a
+   receiver that CARRIES INFORMATION —
+   `api.fetch`, `this.fetch`, `mk().fetch`, where the name to the left is a minifier's local and says
+   nothing about what is being asked. A reference to the GLOBAL OBJECT is the opposite of that: `fetch(u)`
+   and `window.fetch(u)` are ONE platform name reached two ways, and what stands to the left is a spelling
+   of the global scope rather than an object whose identity is in question. So a member call whose object is
+   PROVABLY the global object is looked up in the `callee-global` and `new` rows exactly as if the object had
+   not been written, and the same holds for `new self.Worker`.
+   PROVABLY IS THE LOAD-BEARING WORD AND IT IS THE SAME DISCIPLINE `collectBinds` ALREADY APPLIES TO NAMES.
+   A name bound ZERO times in the whole file and assigned never cannot be anything but the global; a file
+   that BINDS it can mean something else by it, and the UMD wrapper `(function(window){ ... })(window)` and
+   the transpiler idiom `var self = this` both do. Such a site is REFUSED and the refusal carries a size
+   rather than a sentence, which is what `xhrOpenSkippedNonLiteralMethod` already does for the xhr.open
+   method exclusion. The
+   bound-once fold is sound because a name bound once cannot be shadowed; this is that argument one step
+   weaker in its premise and therefore one step stronger in its conclusion.
+   THE THREE NUMBERS THAT PRICE THIS ARE PRINTED ON EVERY RUN AND NONE OF THEM IS ASSERTED HERE, because a
+   widening that buys recall is only honest beside what it declines, and a figure over a corpus this
+   repository does not carry cannot be checked by a reader who re-derives it. `globalDoor` reports what was
+   ADMITTED through the global spelling, what was REFUSED for a bound global name, and how many member calls
+   and constructions naming a platform door were DECLINED for a receiver that is not the global object at
+   all — which is the library-wrapper population WHAT IS NOT HERE AND WHY turns away, counted instead of
+   described. A widening whose precision cost is unmeasured is a trade nobody made.
+   THE DIRECTION THIS WIDENS IN IS THE ONE THAT COSTS THIS PROJECT, WHICH IS THE WHOLE REASON IT BELONGS IN
+   A CONTROL. A recall hole here makes the BASELINE look weak, a weak baseline makes the engine look strong,
+   and this file's own opening says that is the one result it must not manufacture. So a site the parse can
+   reach and this file was missing is a defect in this file however small the count, and the count moving an
+   existing total is a fact to report as MOVED rather than a reason to leave the hole open.
    WHAT IS NOT HERE AND WHY, because a floor that does not say what it excludes is read as a total: a library
    wrapper (`axios.get`, `$.ajax`, an SDK's `request()`) is NOT matched. `.get(` and `.post(` are ordinary
    method names on Map, URLSearchParams, Headers and every model object in a bundle, so keying on them would
@@ -205,6 +234,20 @@ for (const d of DOORS) {
   const k = d.kind + ":" + d.name;
   if (DOOR_BY_NAME.has(k)) die(`two DOORS rows share ${k}`);
   DOOR_BY_NAME.set(k, d);
+}
+/* THE GLOBAL OBJECT'S OWN NAMES. `global` is node's and is here because a bundle ships one build for both. */
+const GLOBAL_OBJECTS = new Set(["window", "self", "globalThis", "global"]);
+/* A PROPERTY NAME MAY NOT BE BOTH A `member-call` DOOR AND A GLOBAL-REACHED ONE, ASSERTED RATHER THAN
+   BELIEVED. `window.fetch` is resolved by looking the PROPERTY up among the `callee-global` rows, so a door
+   added later that names `fetch` or `importScripts` as a `member-call` would make one site match two rows
+   and the order of two `if`s would decide which — the kind of silent double-count no total can reveal. The
+   two families are disjoint today (`open`/`sendBeacon` against `fetch`/`importScripts`) and this is what
+   keeps them so. */
+for (const d of DOORS) {
+  if (d.kind !== "member-call") continue;
+  if (DOOR_BY_NAME.has("callee-global:" + d.name) || DOOR_BY_NAME.has("new:" + d.name))
+    die(`DOORS names ${d.name} as a member-call AND as a global-reachable door, so a call through the ` +
+        `global object would match two rows and be counted under whichever is tested first.`);
 }
 
 /* ── FOLDING ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -358,7 +401,10 @@ function collectBinds(ast) {
   const binds = new Map();
   for (const [name, c] of count)
     if (c === 1 && !assigned.has(name) && init.has(name)) binds.set(name, { node: init.get(name) });
-  return { binds, count };
+  /* `assigned` LEAVES WITH THE OTHER TWO because the global-object test needs it and cannot recompute it
+     without walking the file again: a name this file never BINDS but somewhere ASSIGNS is a name whose value
+     at the call site this pass has no claim on, global or not. */
+  return { binds, count, assigned };
 }
 
 /* GUARD DEPTH IS PROVENANCE AND NOT DECORATION. CLAUDE.md §What-the-tool-produces' proposition is "what the
@@ -374,13 +420,20 @@ function readFile(src, filename) {
     try { ast = parse(src, { sourceType, errorRecovery: false, plugins: [] }); err = null; break; }
     catch (e) { err = e; }
   }
-  if (!ast) return { parsed: false, error: String(err && err.message || err).slice(0, 160), sites: [], pathish: new Set(), blind: [], xhrOpenSkippedNonLiteralMethod: 0 };
+  if (!ast) return { parsed: false, error: String(err && err.message || err).slice(0, 160), sites: [], pathish: new Set(), blind: [], xhrOpenSkippedNonLiteralMethod: 0,
+                     globalDoor: { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 } };
 
-  const { binds, count: bindCount } = collectBinds(ast);
+  const { binds, count: bindCount, assigned: bindAssigned } = collectBinds(ast);
   const sites = [];
   const pathish = new Set();
   const blind = [];
   let xhrOpenSkippedNonLiteralMethod = 0;
+  /* THE GLOBAL-REACHED DOOR'S OWN THREE NUMBERS, so the widening is read beside its price on every run. */
+  const globalDoor = { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 };
+  /* A NAME IS THE GLOBAL OBJECT ONLY IF THIS FILE NEVER BINDS IT AND NEVER ASSIGNS IT. Anything else and
+     the object to the left is a value this pass cannot name, which is the case the DOORS comment refuses. */
+  const provenGlobal = (o) => !!o && o.type === "Identifier" && GLOBAL_OBJECTS.has(o.name) &&
+                              !(bindCount.get(o.name) > 0) && !bindAssigned.has(o.name);
   const attached = new Set();          // node identity of URL args, so a door's own literal is not double-counted
   let guard = 0;
   const guardStack = [];
@@ -389,6 +442,18 @@ function readFile(src, filename) {
     if (GUARDS.has(n.type)) { guardStack.push(n); guard++; }
     else if (n.type === "LogicalExpression") { guardStack.push(n); guard++; }
 
+    /* ONE HELPER FOR BOTH SHAPES, because `window.fetch(u)` and `new self.Worker(u)` pose the identical
+       question — is the thing to the left the global object — and two copies of the answer would be free to
+       disagree about it. `family` is the door family the PROPERTY is looked up in, which is why a
+       `member-call` door can never arrive here: the assert under DOORS keeps the two families disjoint. */
+    const globalReached = (obj, prop, family) => {
+      if (!DOOR_BY_NAME.has(family + ":" + prop)) return null;
+      if (provenGlobal(obj)) { globalDoor.admitted++; return DOOR_BY_NAME.get(family + ":" + prop); }
+      if (obj && obj.type === "Identifier" && GLOBAL_OBJECTS.has(obj.name)) globalDoor.refusedBoundName++;
+      else globalDoor.declinedNonGlobalReceiver++;
+      return null;
+    };
+
     let door = null, args = null;
     if (n.type === "CallExpression" || n.type === "OptionalCallExpression") {
       const c = n.callee;
@@ -396,10 +461,14 @@ function readFile(src, filename) {
       else if (c && c.type === "Import")             door = DOOR_BY_NAME.get("dynamic-import:import");
       else if (c && (c.type === "MemberExpression" || c.type === "OptionalMemberExpression") &&
                !c.computed && c.property.type === "Identifier")
-                                                     door = DOOR_BY_NAME.get("member-call:" + c.property.name);
+                                                     door = DOOR_BY_NAME.get("member-call:" + c.property.name) ||
+                                                            globalReached(c.object, c.property.name, "callee-global");
       args = n.arguments;
-    } else if (n.type === "NewExpression" && n.callee && n.callee.type === "Identifier") {
-      door = DOOR_BY_NAME.get("new:" + n.callee.name);
+    } else if (n.type === "NewExpression" && n.callee) {
+      if (n.callee.type === "Identifier") door = DOOR_BY_NAME.get("new:" + n.callee.name);
+      else if ((n.callee.type === "MemberExpression" || n.callee.type === "OptionalMemberExpression") &&
+               !n.callee.computed && n.callee.property.type === "Identifier")
+        door = globalReached(n.callee.object, n.callee.property.name, "new");
       args = n.arguments;
     }
 
@@ -488,7 +557,7 @@ function readFile(src, filename) {
     if (/^https?:\/\/[^\s]+$/.test(v) || /^\/[A-Za-z0-9_][^\s"'<>]*$/.test(v)) pathish.add(v);
   });
 
-  return { parsed: true, error: null, sites, pathish, blind, xhrOpenSkippedNonLiteralMethod };
+  return { parsed: true, error: null, sites, pathish, blind, xhrOpenSkippedNonLiteralMethod, globalDoor };
 }
 
 /* ── THE ARMED CONTROL ────────────────────────────────────────────────────────────────────────────────────
@@ -518,6 +587,14 @@ const SELFTEST = [
   [`new Worker("/w.js")`,                                   ["new Worker|program|literal|/w.js"]],
   [`new WebSocket("wss://h/s")`,                            ["new WebSocket|data|literal|wss://h/s"]],
   [`if(a){fetch("/g")}`,                                    ["fetch|data|literal|/g"]],
+  // THE GLOBAL OBJECT REACHING A PLATFORM DOOR. `fetch(u)` and `window.fetch(u)` are one platform name and
+  // must classify identically; a row here that stopped matching would shrink the baseline, which is the
+  // flattering direction and the one this control exists to make impossible to mistake for a finding.
+  [`window.fetch("/api/a")`,                                ["fetch|data|literal|/api/a"]],
+  [`self.fetch(u)`,                                         ["fetch|data|opaque|{?}"]],
+  [`new self.Worker("/w.js")`,                              ["new Worker|program|literal|/w.js"]],
+  [`new globalThis.WebSocket("wss://h/s")`,                 ["new WebSocket|data|literal|wss://h/s"]],
+  [`globalThis.fetch("/api/"+r)`,                           ["fetch|data|shape|/api/{?}"]],
   // NEGATIVES — a classifier that reports any of these is over-counting, which is the direction that would
   // make the parse look stronger than it is and the engine's contribution smaller than it is.
   [`window.open("/x","_blank")`,                            []],
@@ -525,6 +602,16 @@ const SELFTEST = [
   [`m.get("/api/x")`,                                       []],
   [`const s="/api/looks-like-an-endpoint"`,                 []],
   [`x.open(method,"/t")`,                                   []],
+  // A RECEIVER THAT CARRIES INFORMATION IS STILL REFUSED, which is the precision half of the widening above
+  // and is the larger population by an order of magnitude: admitting any of these would put library-wrapper
+  // method calls on the static side of a comparison the engine never answered for.
+  [`api.fetch("/x")`,                                       []],
+  [`this.fetch("/x")`,                                      []],
+  [`mk().fetch("/x")`,                                      []],
+  [`new p.Worker("/w.js")`,                                 []],
+  // A GLOBAL NAME THIS FILE BINDS IS NOT THE GLOBAL OBJECT — the UMD wrapper, and every `var self=this`.
+  [`function f(window){return window.fetch("/x")}`,         []],
+  [`var self=this;self.fetch("/x")`,                        []],
   // SHADOWING — the fold must REFUSE a name the file binds twice, because a wrong fold INVENTS an address.
   [`const B="/a";function f(){const B="/b";return fetch(B)}`, ["fetch|data|opaque|{?}"]],
 ];
@@ -600,6 +687,31 @@ function selftest() {
   for (const p of ["src", "href"])
     if (!seenBlindProp.has(p)) die(`SELF-TEST FAILED: no control exercises the ${p} blind-spot property.`);
   if (blindSpoke < 5) die(`SELF-TEST FAILED: only ${blindSpoke} blind-spot row(s) from the positive controls.`);
+  /* THE GLOBAL-REACHED DOOR'S THREE COUNTERS ARE ARMED ONE AT A TIME AND EACH IS SHOWN RISING, because a
+     counter whose zero nobody has ever seen move cannot tell "the corpus has none of these" from "this
+     channel stopped counting" — and the three are the whole price of the widening, so a dead one turns a
+     measured trade back into an assertion. Each row also asserts the OTHER two stay at zero, which is what
+     stops one input being read as evidence for a counter it never touched. */
+  const gd = (src) => readFile(src, "<selftest>").globalDoor;
+  const gdWant = [
+    [`window.fetch("/api/a")`,                        { admitted: 1, refusedBoundName: 0, declinedNonGlobalReceiver: 0 }],
+    [`new self.Worker("/w.js")`,                      { admitted: 1, refusedBoundName: 0, declinedNonGlobalReceiver: 0 }],
+    [`function f(window){return window.fetch("/x")}`, { admitted: 0, refusedBoundName: 1, declinedNonGlobalReceiver: 0 }],
+    [`api.fetch("/x")`,                               { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 1 }],
+    [`new p.Worker("/w.js")`,                         { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 1 }],
+    /* A PROPERTY NAMING NO DOOR MUST TOUCH NO COUNTER AT ALL, or the declined figure becomes a count of
+       every member call in the corpus and the precision it is printed as pricing is unreadable. */
+    [`api.load("/x")`,                                { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 }],
+    [`window.open("/x","_blank")`,                    { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 }],
+  ];
+  for (const [src, want] of gdWant) {
+    const got = gd(src);
+    for (const k of Object.keys(want))
+      if (got[k] !== want[k])
+        die(`SELF-TEST FAILED: globalDoor.${k} is ${got[k]} and not ${want[k]} for \`${src}\`. The three ` +
+            `numbers that price the global-reached door against what it declines are measuring something ` +
+            `other than what they are printed as meaning.`);
+  }
   /* THE xhr.open EXCLUSION IS A DECLARED FLOOR AND CARRIES A SIZE FOR THE SAME REASON. */
   if (readFile(`x.open(method,"/t")`, "<selftest>").xhrOpenSkippedNonLiteralMethod !== 1)
     die(`SELF-TEST FAILED: the xhr.open non-literal-method exclusion is not counted, so the floor this ` +
@@ -670,6 +782,7 @@ function main(argv) {
       data: kindTally(), program: kindTally(),
       argShape: {}, bindBuckets: { "1": 0, "2-5": 0, "6-20": 0, "21-100": 0, "101+": 0, "0": 0 }, oneCharNames: 0,
       blind: { sites: 0, literal: 0, folded: 0, shape: 0, opaque: 0, src: 0, href: 0 }, blindUrls: new Set(), xhrOpenSkipped: 0,
+      globalDoor: { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 },
     });
     return perSite.get(id);
   };
@@ -698,6 +811,7 @@ function main(argv) {
     b.parsed++;
     for (const v of r.pathish) b.pathish.add(v);
     b.xhrOpenSkipped += r.xhrOpenSkippedNonLiteralMethod;
+    for (const k of Object.keys(b.globalDoor)) b.globalDoor[k] += r.globalDoor[k];
     for (const s of r.blind) {
       b.blind.sites++; b.blind[s.kind]++; b.blind[s.prop]++;
       if (s.kind !== "opaque") b.blindUrls.add(s.url);
@@ -753,6 +867,7 @@ function main(argv) {
     engineDoorSites: 0, nonEngineDoorSites: 0, byDoor: {}, distinctUrls: 0, pathish: 0,
     argShape: {}, bindBuckets: { "1": 0, "2-5": 0, "6-20": 0, "21-100": 0, "101+": 0, "0": 0 }, oneCharNames: 0,
     blind: { sites: 0, literal: 0, folded: 0, shape: 0, opaque: 0, src: 0, href: 0 }, blindDistinctUrls: 0, xhrOpenSkipped: 0,
+    globalDoor: { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 },
   };
   const allUrls = new Set(), allPathish = new Set(), allBlindUrls = new Set();
   const clsUrls = { data: new Set(), program: new Set() };
@@ -772,6 +887,7 @@ function main(argv) {
     for (const p of b.pathish) allPathish.add(p);
     for (const k of Object.keys(tot.blind)) tot.blind[k] += b.blind[k];
     tot.xhrOpenSkipped += b.xhrOpenSkipped;
+    for (const k of Object.keys(tot.globalDoor)) tot.globalDoor[k] += b.globalDoor[k];
     for (const u of b.blindUrls) allBlindUrls.add(u);
   }
   tot.blindDistinctUrls = allBlindUrls.size;
@@ -808,6 +924,7 @@ function main(argv) {
       data: { ...b.data, urls: undefined, distinctUrls: b.data.urls.size },
       program: { ...b.program, urls: undefined, distinctUrls: b.program.urls.size },
       blind: { ...b.blind, distinctUrls: b.blindUrls.size }, xhrOpenSkipped: b.xhrOpenSkipped,
+      globalDoor: b.globalDoor,
     })),
     parseFailures: parseFail,
     examples: nExamples ? [...perSite.values()].flatMap((b) => b.rows.slice(0, nExamples)) : undefined,
@@ -861,6 +978,15 @@ function main(argv) {
               `opaque ${tot.blind.opaque} (${pct(tot.blind.opaque, tot.blind.sites)})`);
   console.log(`  ${tot.xhrOpenSkipped} further xhr.open call(s) were skipped for a non-literal first argument —`);
   console.log(`  the floor the DOORS comment names, carrying a size rather than a sentence.`);
+  console.log(``);
+  console.log(`THE GLOBAL-REACHED DOOR AND ITS PRICE — \`window.fetch(u)\` and \`new self.Worker(u)\` reach a`);
+  console.log(`  platform name through the global object, and the door set reads them as the bare name because`);
+  console.log(`  they ARE the bare name. These three are one trade and are printed together: a recall figure`);
+  console.log(`  alone would be a widening whose precision cost nobody measured.`);
+  console.log(`  admitted ${tot.globalDoor.admitted}   already counted inside the DATA and PROGRAM totals above, not added to them`);
+  console.log(`  refused  ${tot.globalDoor.refusedBoundName}   the file BINDS or ASSIGNS that global name, so this pass cannot prove what it is`);
+  console.log(`  declined ${tot.globalDoor.declinedNonGlobalReceiver}   a platform door name on a receiver that is not the global object — the library`);
+  console.log(`           wrapper population the DOORS comment turns away, counted rather than described`);
   console.log(``);
   console.log(`BOTH CLASSES ${tot.sites} sites, ${tot.distinctUrls} distinct addresses — printed last and`);
   console.log(`  never first, because ${pct(tot.program.sites, tot.sites)} of it is chunk loading.`);
