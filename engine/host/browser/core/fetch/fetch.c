@@ -787,14 +787,49 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
     }
     CHECK(JS_DefinePropertyValueStr(ctx, o, "headers", h, JS_PROP_C_W_E) >= 0,
           "fetch: a reply record refused its header list");
-    /* AND WHAT THE HOST DECIDED THIS RESOURCE IS (fetch.h). Asserted rather than defaulted at the WRITE, so a
-       host that has not run the sniff aborts here — where the omission is — instead of at the reader, which
-       would only be able to say that some producer somewhere left the field off. */
-    DCHECK(computed_type != NULL,
-           "a host built a reply without stating what it computed the resource to be — the sniff belongs to "
-           "whoever read the bytes, and a host that has not decided is not finished building this record; a "
-           "server that named nothing and bytes that named nothing is the EMPTY string, which is a value");
-    v = JS_NewString(ctx, computed_type ? computed_type : "");
+    /* AND WHAT THE HOST DECIDED THIS RESOURCE IS (fetch.h). THE COMMENT THAT STOOD HERE SAID "Asserted rather
+       than defaulted at the WRITE" AND THE NEXT LINE DEFAULTED: `computed_type ? computed_type : ""` is the
+       `?:`-past-a-broken-invariant §Offensive-programming bans by name, standing under the very assert that
+       forbids it — and a DCHECK's condition is not evaluated at all in release, so a host that had not sniffed
+       shipped a record POSITIVELY STATING that neither the server nor the bytes named this resource. The
+       default did not lose a decision; it fabricated one.
+       WHY THE `statusText` DEFAULT IN THIS SAME FUNCTION IS RIGHT AND THIS ONE WAS NOT — the asymmetry is in
+       the standards rather than in the fields. Fetch §2.2.6 "Responses" gives that field a default ITSELF:
+       "A response has an associated status message", and "Unless stated otherwise it is the empty byte
+       sequence." A computed type has none. MIME Sniffing §5.1 "Interpreting the resource metadata" spends its
+       `undefined` on the SUPPLIED type — "If supplied type is not a MIME type, the supplied MIME type is
+       undefined" — and MIME Sniffing §7 "Determining the computed MIME type of a resource" assigns on every
+       arm it can take, ending unconditionally with "The computed MIME type is the supplied MIME type". So ""
+       here is THE SNIFF HAVING RUN and answering an undefined supplied type, which is exactly the fact a host that
+       never ran it has not established. It is a value the HOST states, never one this entry may state for it.
+       IT IS A `CHECK` BECAUSE REMOVING THE `?:` MAKES THE POINTER LOAD-BEARING IN RELEASE, which
+       §Offensive-programming makes the promotion's own mechanical trigger — a dev abort traded for a release
+       segfault is not a repair — and because continuing means stamping a sniff result no host computed onto the
+       one field `solver/engine.c` reads to decide whether a reply's bytes are QUEUED AS A PROGRAM. That is
+       `fetch_reply_status_text`'s own argument about this record ("continuing means answering
+       `response.statusText` with a phrase no producer wrote") arriving at the field where the fabrication is
+       CORB-adjacent. IT FIRES FOR NOBODY TODAY: every producer passes a literal, a CHECKed essence, or its own
+       deliberate "" — wpt_runner.c's `wpt_computed_type` mallocs an empty string rather than answering NULL —
+       so this makes an already impossible state unspellable rather than reporting a live one.
+       NAMED RESIDUAL — ONE VALUE STILL CARRIES TWO FACTS, AND THE SECOND HAS NO PRODUCER.
+         NOT COVERED: the sniff is an algorithm over a WHOLE resource, so a head built before its body is complete has
+         no computed type at all, and that is a different fact from the sniff having run and answered an undefined
+         supplied type. Both are "".
+         WHAT THE NEXT DIFF BUILDS: nothing here. A value for the unrun state is minted by whichever diff
+         builds a producer that can BE in it, because one stated now would have no writer and no reader —
+         every consumer already refuses "", `mime_type_extract` failing on it because MIME Sniffing §4.4
+         "Parsing a MIME type" admits no empty token, so neither compile door reaches `mime_type_is_javascript`.
+         HOW ITS ABSENCE WOULD SHOW: a reply whose header list names a parseable `Content-Type` while its
+         `computedType` is empty — a pair the sniff's final arm cannot produce, and the first thing a head-before-body
+         producer would emit.
+       RETIREMENT: this record goes when a computed type reaches this entry as a value that cannot be spelled
+       absent — the state and the string in one — because a default is then unwritable rather than forbidden. */
+    CHECK(computed_type != NULL,
+          "a host built a reply without stating what it computed the resource to be — the sniff belongs to "
+          "whoever read the bytes, and a host that has not decided is not finished building this record; a "
+          "server that named nothing and bytes that named nothing is the EMPTY string, which is a value the "
+          "HOST states and never one this entry may supply on its behalf");
+    v = JS_NewString(ctx, computed_type);
     CHECK(!JS_IsException(v), "fetch: OOM allocating a reply's computed MIME type");
     CHECK(JS_DefinePropertyValueStr(ctx, o, "computedType", v, JS_PROP_C_W_E) >= 0,
           "fetch: a reply record refused its computed MIME type");

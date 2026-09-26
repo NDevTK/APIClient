@@ -423,7 +423,12 @@ bool fetch_parse_url(JSContext *ctx, UrlRecord *rec, const char *url, size_t len
    evidence. In the extension the host is `extension/lib/safe-fetch.js`, whose `computedType` this is; a C host
    states what it served. The EMPTY string is §5.1's "the supplied MIME type is undefined" surviving the sniff
    — the server named nothing and the bytes named nothing either, a positive answer — and NULL is not allowed:
-   a host that has not decided has not finished building the record. */
+   a host that has not decided has not finished building the record. THAT REFUSAL IS A `CHECK` AND SO REFUSES IN
+   RELEASE TOO, which is a statement about the FAILURE MODE a producer gets rather than a second rule: the
+   entry used to answer a NULL with `?:` and "" — the sniff's own positive answer, fabricated on behalf of a host that
+   had run no sniff — and the abort names that at the omission instead. fetch.c's own site carries the
+   asymmetry in full, and the one fact this record still cannot state: a head built before its body is
+   complete has no computed type, and "" is not it. */
 JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, const HeaderList *headers,
                         const char *body, size_t body_len, const char *const *url_list, int url_list_n,
                         const char *computed_type);
