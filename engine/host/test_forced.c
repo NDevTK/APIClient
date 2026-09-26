@@ -377,7 +377,7 @@ static int  fixture_cold_moment_met(void);
 static void fixture_ask_remote_op(JSContext *ctx);
 static void fixture_route_peer_post(JSContext *ctx);
 
-/* ─── THE TWO ADDRESSES THIS HOST SERVES AS SOMETHING OTHER THAN JSON, AND WHY THEY ARE A PAIR ───────────
+/* ─── THE ADDRESSES THIS HOST SERVES AS SOMETHING OTHER THAN JSON: A PAIR, AND A THIRD AT ANOTHER DOOR ───
  *
  * §Solver's trust boundary states the requirement: "a fetch whose body is JAVASCRIPT is ALWAYS fetched +
  * EXECUTED (a lazy chunk reveals real endpoints — the headline moat surface)". The engine answers it at the
@@ -408,14 +408,45 @@ static void fixture_route_peer_post(JSContext *ctx);
  * content-type, not URL suffix", so an address that LOOKS like a program and is served as DATA is the one
  * that says which of the two the engine keyed on; one ending in `.json` would agree with both answers.
  *
- * NEITHER ADDRESS IS IN `TF_CHUNKS` AND NEITHER IS EVER PASSED TO `loadScript`. That table is the
- * `<script src>`-shaped door, and its host edge calls engine_queue_fetched_script DIRECTLY — which is exactly
- * the door that CANNOT exercise the delivery arm, because it parks no request and takes no reply. These two
- * go through `fetch()` and through nothing else. */
+ * NO ADDRESS IN THIS TABLE IS IN `TF_CHUNKS` AND NONE IS EVER PASSED TO `loadScript`. That table is the
+ * `loadScript`-shaped door, and its host edge calls engine_queue_fetched_script DIRECTLY — which is exactly
+ * the door that CANNOT exercise the delivery arm, because it parks no request and takes no reply. The FIRST
+ * TWO rows below go through `fetch()` and through nothing else.
+ *
+ * ─── AND THE THIRD IS THE SAME DELIVERY REACHED THROUGH A DIFFERENT PARK, WHICH IS WHY IT IS IN THIS TABLE
+ * AND NOT IN `TF_CHUNKS` ───
+ *
+ * `injsrc.js` is answered to a `FLOW_PENDING_SCRIPT` park — HTML §4.12.1.1 "Processing model"'s fetch for a
+ * CONNECTED `<script src>` — and not to a `fetch()`. It is in THIS table rather than the chunk table because
+ * `loadScript` is this file's own host edge and parks nothing: an address reachable from both doors would let
+ * one row's record answer the other's, and then no row could say which door the bytes came through.
+ *
+ * IT MUST BE SERVED AS A PROGRAM AND THE REASON IS ALREADY WRITTEN ONE FUNCTION DOWN. `fixture_provide`'s
+ * `/api/cold/held.js` branch states it in as many words: a `<script src>` whose destination is `script` and
+ * whose address this table does not hold is handed the JSON every other address gets, "and whether that ends
+ * in a CORB refusal or in a compile of `{\"region\":\"us-west-2\"}` is a question this file would then be
+ * asking by accident". Serving it `text/javascript` asks nothing by accident — and CORB is the TRUSTED ZONE's
+ * (solver/engine.h), so nothing in the engine would have refused those bytes on this side of the seam.
+ *
+ * ITS BODY READS §3.1.7 "DOM tree accessors"' `currentScript` AND THAT IS THE HALF NO HOST EDGE CAN BUY. A
+ * chunk queued by `loadScript` or by the `fetch()` delivery arm has NO ELEMENT behind it, so `currentScript`
+ * is null while it runs; a park carries the element (solver/pending.h's `scriptEl`) and §4.12.1.1's classic
+ * arm sets the slot to it. A bundler's own public-path preamble reads exactly that member, so an engine that
+ * answers null there computes every lazy-chunk URL wrong — the moat surface and not a nicety.
+ *
+ * THE PATH IS A CONSTANT AND ONLY THE PARAM IS DERIVED, on this file's own rule for a witness: a payload
+ * composed from something the engine COMPUTED can itself be concolic, at which case the request is never a
+ * concrete string and a run in which everything worked reads exactly like one in which nothing did. The
+ * record is the arrival; the `el` param is the claim. `injnull` is the marker for an EMPTY slot rather than a
+ * silence, so a row can tell "no arm ran this program" from "an arm ran it with no element" — two facts that
+ * an absent param cannot separate. */
 typedef struct { const char *at; const char *type; const char *body; } TfServed;
 static const TfServed TF_SERVED[] = {
     { "https://x.test/chunk/replyprog.js", "text/javascript",  "fetch('/api/progran');" },
     { "https://x.test/chunk/replyctl.js",  "application/json", "fetch('/api/ctlran');" },
+    { "https://x.test/chunk/injsrc.js",    "text/javascript",
+      "fetch('/api/injran?el=' + (document.currentScript === null ? 'injnull'"
+      " : document.currentScript.getAttribute('id')));" },
 };
 
 /* …ASKED OF THE ABSOLUTE SERIALIZED ADDRESS, which is what a park carries and what the caller holds by the
@@ -522,8 +553,9 @@ static int fixture_provide(JSContext *ctx) {
                                      "at this address, so the act is derived and reported and not spent");
         } else {
             HeaderList eh = { 0 };
-            /* WHAT THIS PARTICULAR ADDRESS IS SERVED AS, which for every address but two is the JSON above.
-               See TF_SERVED for the two and for why one of them is the other's control. */
+            /* WHAT THIS PARTICULAR ADDRESS IS SERVED AS, which for every address this table does not hold
+               is the JSON above. See TF_SERVED for its rows: a `fetch()` pair of which one is the other's
+               control, and a third answered to a `<script src>` park rather than to a `fetch()` at all. */
             const TfServed *sv = tf_served_at(abs);
             const char *rbody = sv ? sv->body : "{\"region\":\"us-west-2\"}";
             const char *rtype = sv ? sv->type : "application/json";
@@ -539,7 +571,7 @@ static int fixture_provide(JSContext *ctx) {
                and not a header (core/fetch/fetch.h), so no page can see it, and without the readback a probe
                row reading 0 could not tell "the delivery arm did not run" from "this host never served a
                program at all". Those take opposite work and one of them is a defect in this file.
-               IT IS APPENDED FOR THOSE TWO ONLY. Every other reply here has always carried no `Content-Type`,
+               IT IS APPENDED FOR THIS TABLE'S ROWS ONLY. Every other reply here has always carried none,
                and giving them all one would change what several statements that read `r.headers` observe — a
                change to rows under test, made in passing, to tidy a reply nobody is asking about. */
             if (sv) header_list_append(&eh, "content-type", rtype);
@@ -4313,12 +4345,15 @@ static const char *HTML =
        shows: a reader holding a non-zero `deliver-one-reply` beside six zeroed reply-consuming rows and
        no way to tell a delivery that could have answered them from one that never could.
        AND TWO OF THOSE FOUR ARE EXCLUDED BY THIS DOCUMENT'S OWN SOURCE, WHICH NARROWS THE RESIDUAL WITHOUT
-       BUILDING ANYTHING. Every one of the thirteen static programs above is INLINE, so THIS document's own
-       script slots cannot produce a reply record, and it holds no dynamic `import()`, so that kind cannot
-       arise either.
+       BUILDING ANYTHING. Every one of the static programs above was INLINE when this was written, so THIS
+       document's own script slots could not produce a reply record, and it holds no dynamic `import()`, so
+       that kind cannot arise either. THE COUNT IS A DERIVATION AND NOT A NUMBER, because this document gains
+       statements and any figure written here is one a later lane spends without meaning to: the run's own
+       `@COLD` line publishes `rootPrograms`, which is what the document actually ships, and the `<script`
+       openers of this literal minus the data blocks is the same set read off the source.
        What is left is FLOW_PENDING_RESOLVE
-       (a `fetch()`, of which the document holds 348 call sites) and FLOW_PENDING_SCRIPT (an INJECTED
-       `<script src>`, of which it holds five: four `loadScript` and one `.src` assignment).
+       (a `fetch()`, of which this document holds hundreds of call sites) and FLOW_PENDING_SCRIPT (an INJECTED
+       `<script src>`).
        AND THAT SECOND HALF IS FALSE, SO THE RESIDUE IS ONE KIND AND NOT TWO: THE ENUMERATION NAMED INPUTS
        AND NEITHER INPUT REACHES THE PRODUCER. `FLOW_PENDING_SCRIPT` has exactly one, and it is reached from
        HTML §4.12.1.1 "Processing model"'s `prepare the script element` over an element carrying a `src`
@@ -4336,23 +4371,43 @@ static const char *HTML =
        gate is a step EARLIER than the park. This one clause has now been wrong in both directions — too
        narrow before, too wide here — and both readings were taken by surveying this document's TEXT for a
        shape instead of asking which producer that shape reaches.
-       WHAT THE NEXT DIFF BUILDS: a CONNECTED `<script src>` in this document — created, appended, and its
-       address served — which is the door every webpack runtime in a real corpus uses to load a chunk and the
-       only shape that reaches that producer from page code. It also buys the one thing the host edge
-       structurally cannot: a chunk program with an ELEMENT behind it, so §3.1.7's `currentScript` is that
-       element while the chunk runs rather than null, which is what a bundler's own public-path preamble
-       reads. HOW ITS ABSENCE SHOWS: an injected-script arm of `pending_count_kind` that reads zero in every
-       run of this fixture, with no way to tell a kind this document cannot produce from a delivery
-       mechanism that does not work.
-       RETIREMENT: this record goes when this document holds a connected `<script src>`, because the
-       enumeration is then true of the tree rather than of a reading of it.
+       WHAT THE NEXT DIFF BUILT, AND IT IS LANDED: a CONNECTED `<script src>` in this document — created, its
+       `src` set, APPENDED so it is connected, and its address served by TF_SERVED — which is the door every
+       webpack runtime in a real corpus uses to load a chunk and the only shape that reaches that producer
+       from page code. See the `injhost` statement at the tail of this literal and the `injected-script`
+       row pair. It also buys the one thing the host edge structurally cannot: a chunk program with an
+       ELEMENT behind it, so §3.1.7's `currentScript` is that element while the chunk runs rather than null,
+       which is what a bundler's own public-path preamble reads.
+       RETIREMENT — MET, AND THE RECORD IS REWRITTEN RATHER THAN DELETED BECAUSE WHAT A READER RE-DERIVES IS
+       THE METHOD AND NOT THE ENUMERATION. The stated condition was that this document hold a connected
+       `<script src>`, and it does. What must not be re-derived is the way BOTH wrong readings were reached:
+       by surveying this document's TEXT for a shape instead of asking which producer that shape reaches, and
+       by checking a NOT-COVERED clause against the PARK rather than against the PIPELINE. Delete the record
+       and the next reader re-enumerates `<script src>`-shaped statements and re-reaches one of the two.
+       AND THE ENUMERATION IS STILL NOT A COUNT, WHICH IS THE PART THAT SURVIVES THE LANDING. `loadScript`'s
+       sites and the detached `isc.src` assignment reach no producer TODAY for exactly the reasons above, and
+       a later lane that connects `isc` or that parks from the host edge changes that without touching this
+       comment — so the population is derived from the door (grep `engine_pending_script_url`'s callers) and
+       never surveyed off this literal.
+       AND ONE PRODUCER-SIDE DOOR IS STILL UNEXERCISED FROM PAGE CODE — NAMED RESIDUAL. Not covered:
+       §4.12.1.1's `src` ATTRIBUTE CHANGE STEPS — "If localName is src, value is not null, and element is
+       connected, then run the script HTML element post-connection steps, given element" — which is the
+       `appendChild(s); s.src = u` idiom core/html/html_script.c's own banner names as the second of the two
+       lazy-loader shapes it wired. The `injhost` statement takes the INSERTION door instead (its `src` is set
+       while the element is detached, so the attribute-change steps return at their own connectedness test and
+       the append is what prepares), which is the real-world order and the one a bundler writes. What the next
+       diff builds: a second statement in this document appending FIRST and assigning `src` afterwards, whose
+       arrival is its own address in TF_SERVED — not a param on `injsrc.js`, because two doors sharing one
+       address would let one door's record answer the other's row. How its absence shows: a reader who repairs
+       the insertion door and sees every injected-script row go green while the attribute-change door is
+       reached by nothing, so a regression in it moves no row of this fixture at all.
        THE NARROWING IS THIS DOCUMENT'S AND NOT THE FIXTURE'S, WHICH IS A CORRECTION AND NOT A HEDGE. The
        clause here read ``the fixture ships no `<script src>` at all`` — true of every document in this file
        when it was written, and false of one since: HTML_COLD ends in a parser-inserted external script,
        appended for `park-remoteop`'s first half, so the two COLD sessions DO reach the document-script
        kind and this file now holds all four of the sharing kinds rather than two.
        A RESIDUAL NARROWED BY A SURVEY OF THE FIXTURE GOES STALE THE FIRST TIME ANY DOCUMENT GAINS THE
-       SHAPE IT SURVEYED FOR, and one narrowed by THIS document's own thirteen inline programs cannot —
+       SHAPE IT SURVEYED FOR, and one narrowed by THIS document's own inline programs cannot —
        which is the only reason the sentence above survives the change rather than going with it. The two
        readings were indistinguishable while every document agreed; the diff that ended that agreement is
        what told them apart, and it was found by grepping for the ARGUMENT retired rather than for the
@@ -4689,6 +4744,69 @@ static const char *HTML =
     " try { await crypto.subtle.exportKey('spki', _xk); fetch('/api/xkspki?d=resolved'); }"
     " catch (_e) { fetch('/api/xkspki?d=' + _e.name); }"
     "})();"
+    "</script>"
+
+    /* HTML §4.12.1.1 "Processing model" OVER A CONNECTED `<script src>` — THE ONE PRODUCER OF AN
+       INJECTED-SCRIPT PARK, REACHED FROM PAGE CODE. `FLOW_PENDING_SCRIPT` has exactly one producer
+       (solver/engine.c's `engine_pending_script_url`) and it is reached from §4.12.1.1's `prepare the script
+       element` over an element carrying a `src`. Neither of the two `<script src>`-shaped things this document
+       held before reached it: the `loadScript` sites are THIS FILE'S OWN HOST EDGE, whose
+       `engine_queue_fetched_script` appends a program row and parks nothing, and `isc.src` is set on an element
+       this document CREATES AND NEVER INSERTS — §4.12.1.1's own step 7, "If el is not connected, then return",
+       and the note that "The HTML element post-connection steps only run when the inserted element is still
+       connected". So the kind stood with a producer no run of this fixture had ever reached, and its census arm
+       read zero for a reason that was about this document rather than about the engine.
+       THE ORDER IS `src` THEN APPEND AND IT IS NOT INTERCHANGEABLE WITH ITS MIRROR. Setting `src` on a detached
+       element reaches §4.12.1.1's `src` attribute change steps, whose own test is "If localName is src, value
+       is not null, and element is CONNECTED" — so that call returns and the APPEND is what prepares, through
+       core/dom/element.c's insertion walk. That is the order a bundler writes. The mirror
+       (`appendChild(s); s.src = u`) is the OTHER door and is a named residual at the §4.12.1.1 record above;
+       it is not written here, because two doors sharing one served address would let one door's record answer
+       the other's row.
+       NOTHING SETS `async`, AND THAT IS WHAT CHOOSES THE DESTINATION. §4.12.1.1: "A script element has a force
+       async boolean, initially true. It is set to false by the HTML parser and the XML parser on script elements
+       they insert, and when the element gets an async content attribute added." A `createElement`'d element is
+       touched by neither, so the scheduling step takes its FIRST arm — "If el has an async attribute or el's
+       force async is true: Let scripts be el's preparation-time document's set of scripts that will execute as
+       soon as possible" — which is `SCRIPT_SCHED_ASAP` and the one destination that reaches this park. Writing
+       `s.async = false` would run the async SETTER, whose step 1 clears force async, and the element would take
+       the in-order list instead: a DIFFERENT kind (`FLOW_PENDING_DOCSCRIPT`) that HTML_COLD's parser-inserted
+       external script already reaches. So the absence of that line is load-bearing.
+       THE ADDRESS IS SERVED AS A PROGRAM BY TF_SERVED AND NOT BY TF_CHUNKS, for the reason stated at that
+       table: the chunk table is `loadScript`'s and parks nothing, and an address this host does not hold is
+       answered the JSON every other address gets — which for a destination of `script` is the question
+       `fixture_provide`'s `/api/cold/held.js` branch refuses to ask by accident.
+       EVERY PAYLOAD PATH HERE IS A CONSTANT. §A-WITNESS-MAY-NOT-BE-COMPOSED-FROM-A-VALUE-THE-SUBJECT-CAN-MAKE
+       -UNKNOWN: in an engine whose purpose is to make values unknown, a request path composed from something
+       the engine COMPUTED can itself be concolic, and then the act is never performed and an arm that RAN
+       reads exactly like one that aborted. `/api/injmade` is a literal and its one derived value — the `src`
+       readback — rides a QUERY PARAM, so a shape there costs the param and never the record.
+       THE READBACK IS NOT DECORATION: IT SPLITS THE ONE FAILURE THAT IS THIS FIXTURE'S. If the `src` IDL
+       setter did not reflect to the content attribute, `prepare` would see no `src`, take the no-source arm
+       and park nothing — and every row below would read zero for a defect in this line rather than in the
+       engine. `d=ok` says the attribute is there before the append, which is the state §4.12.1.1 reads.
+       APPENDED IN FRONT OF `</body></html>` AND NOT INSERTED, for the reason the module statement and the
+       three operand-shape statements above state: this document is ONE LINE, so a `@WHY` frame's COLUMN is the
+       only coordinate a reader has into it and an insertion re-points every column after it.
+       AND ITS REACHABILITY IS A MEASUREMENT AND NOT AN ASSUMPTION, WHICH THE COMMENT AT THE §4.12.1.1 RECORD
+       ABOVE WOULD HAVE ARGUED AGAINST. A statement at the TAIL of this document is only worth adding if the
+       run reaches the tail, and two comments in this file record `deepest` — the highest program index this
+       document has ever COMPILED — as reading 5 at every census of every run, which would put a program
+       appended here permanently out of reach. That is STALE rather than wrong: it was measured at the artifact
+       stamped 1d666bda, and at 74adde9 the TERMINAL census of both the native and the wasm smoke reads
+       `deepest 19, completed 19` against `rootPrograms 15` — every static program of this document started and
+       finished, plus the chunk rows queued after them. The 5s in those same logs are EARLY censuses of the
+       same runs, which is the reading §Testing already prescribes: read a run's TERMINAL census, never its
+       first. Re-derive before trusting either figure rather than quoting this one: the derivation is
+       `grep -oE 'deepest.:[0-9]+,.completed.:[0-9]+' <a build log>`, which prints the pairing at every census
+       of the run, and the reading that decides whether THIS statement ran is `completed` at or above its own
+       index — which `rootPrograms` on the same line bounds. */
+    "<script id=injhost>"
+    "(function(){ var s = document.createElement('script');"
+    " s.setAttribute('id', 'injel');"
+    " s.src = '/chunk/injsrc.js';"
+    " fetch('/api/injmade?d=' + (s.getAttribute('src') === '/chunk/injsrc.js' ? 'ok' : 'wrong'));"
+    " document.body.appendChild(s); })();"
     "</script>"
     TF_CANVAS_INK
     "</body></html>";
@@ -17059,6 +17177,88 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "not in MIME Sniffing §4.6's JavaScript group — the type gate is not a gate, and `reply-program` "
              "above is therefore not evidence that a TYPE decided anything");
 
+    /* ─── HTML §4.12.1.1's PARK FOR A CONNECTED `<script src>`, AND THE PROGRAM ITS REPLY BECOMES ──────────
+       FOUR CLAUSES IN THE ORDER THE FACT IS BUILT, so a 0 names which of four things happened — and they are
+       four different repairs. (1) the injecting statement RAN at all, which is the SCHEDULE. (2) the `src` IDL
+       setter reflected to the content attribute, which is the one failure that is THIS FIXTURE's: with no `src`
+       on the element §4.12.1.1 takes its no-source arm and parks nothing, and every clause below would then
+       read zero for a defect in the document rather than in the engine. (3) the PARK happened — the endpoint
+       record for the served address is emitted by `pending_park_request` at the one park door, so its presence
+       says the post-connection steps ran over a CONNECTED element, `prepare` reached the as-soon-as-possible
+       destination, and `engine_pending_script_url` pushed the only `FLOW_PENDING_SCRIPT` record there is. (4)
+       the reply was DELIVERED and its bytes became a program of this flow.
+       CLAUSE 3 ASKS THE ABSOLUTE ADDRESS AND THAT IS THE WHOLE POINT OF THE SPELLING. The park carries the
+       result of §4.12.1.1's "encoding-parsing a URL given src, relative to el's node document", so the record
+       the door emits names `https://x.test/chunk/injsrc.js` and never the relative reference this document
+       wrote — a row asking the relative spelling would be asking for a string no park has ever held.
+       A 0 AT CLAUSE 4 HAS TWO READINGS AND THE RUN'S OWN STREAM SEPARATES THEM, which is why the text names
+       the command rather than a conclusion. Either this host served the address as DATA — `tf_served_at` did
+       not match, and the delivery compiled `{"region":"us-west-2"}`, which is not a Script — or the delivery
+       arm did not compile a JavaScript-typed reply at all. The first raises an UNCAUGHT page error at an
+       address this fixture declares nothing for, so it prints `@PAGEERR at=https://x.test/chunk/injsrc.js` in
+       the run's own stream and appears in no `@PAGEERR-STAGED` line; the second prints nothing. That is the
+       discriminator, and it is in the log rather than in the result document, which is why no clause here can
+       ask it: a clause over `pageErrors` would have to match the address inside a message this reader has
+       never been shown, and a clause that cannot fail is not a check. */
+    const char *injsrc_why = NULL; int injsrc_tt = 1;
+    fold_row(&injsrc_tt, &injsrc_why, !!strstr(js, "\"/api/injmade\""),
+             "NOT REACHED: there is no /api/injmade record at all, so the statement that creates and appends "
+             "the `<script src>` never ran. That is the SCHEDULE, and it says nothing whatever about whether "
+             "§4.12.1.1's prepare reaches this engine's one injected-script park. Read `completed` on the "
+             "@COLD line beside it: this program stands at the TAIL of the document, so a `completed` below "
+             "its own index is this row not having been asked");
+    fold_row(&injsrc_tt, &injsrc_why, param_value_is(js, "/api/injmade", "d", "ok"),
+             "the statement RAN and `s.src = ...` did not reflect to the content attribute: /api/injmade's "
+             "`d` is `wrong`, so `s.getAttribute('src')` was not the address this line assigned. §4.12.1.1 "
+             "reads the ATTRIBUTE, so prepare would take the no-source arm and park nothing — THAT IS A "
+             "DEFECT IN THIS FIXTURE OR IN THE `src` REFLECTION AND NOT IN THE PARK, and it is its own clause "
+             "for exactly that reason");
+    fold_row(&injsrc_tt, &injsrc_why, !!strstr(js, "\"https://x.test/chunk/injsrc.js\""),
+             "THE ELEMENT WAS CONNECTED WITH A `src` AND NO PARK WAS TAKEN. The two clauses above say the "
+             "statement ran and the attribute was there before the append, so §4.12.1.1's post-connection "
+             "steps either did not run over this element or `prepare` did not reach the as-soon-as-possible "
+             "destination. The endpoint record is emitted by solver/engine.c's one park door, so its absence "
+             "is the absence of the park itself and not of a reply — read core/dom/element.c's insertion walk "
+             "and `script_block_schedule`, whose FIRST arm this element takes because `force async` is "
+             "initially true and nothing here writes `async`");
+    fold_row(&injsrc_tt, &injsrc_why, !!strstr(js, "\"/api/injran\""),
+             "AN INJECTED `<script src>` PARKED AND ITS REPLY DID NOT BECOME A PROGRAM. The clause above says "
+             "the park was taken, so either this host served the address as DATA (`tf_served_at` did not "
+             "match, and the delivery compiled `{\"region\":\"us-west-2\"}`, which is not a Script) or "
+             "solver/engine.c's FLOW_PENDING_SCRIPT delivery arm did not queue the bytes. THE RUN'S OWN "
+             "STREAM SAYS WHICH: the first raises an undeclared page error, so `@PAGEERR "
+             "at=https://x.test/chunk/injsrc.js` is printed and matches no `@PAGEERR-STAGED` line, and the "
+             "second prints nothing. `/api/injran` is emitted by the served body alone and by no statement of "
+             "any document here");
+
+    /* …AND §3.1.7 "DOM tree accessors"' `currentScript` FOR A PROGRAM THAT CAME OFF THE WIRE, WHICH IS THE ONE
+       THING NO HOST EDGE CAN BUY. A chunk queued by `loadScript` or by the `fetch()` delivery arm has no
+       element behind it, so the slot is null while it runs; this park carries the element (solver/pending.h's
+       `scriptEl`) and §4.12.1.1's classic arm sets the slot to it. A bundler's public-path preamble reads
+       exactly that member, so an engine answering null there computes every lazy-chunk URL wrong.
+       GATED ON THE ROW ABOVE AND THE ENTAILMENT IS BY PROGRAM ORDER, not by assertion: `/api/injran` is the
+       only record either clause here can be answered by, and nothing emits it but the served program — so a 0
+       up there is a 0 down here in every one of its four readings.
+       TWO CLAUSES, BECAUSE A WRONG ELEMENT AND AN EMPTY SLOT ARE DIFFERENT DEFECTS. The first is a slot that
+       answered the wrong element — `injhost` is the near-miss and is the program that INJECTED this one, which
+       is what a slot written by the injecting program rather than by the running one gives. The second is the
+       slot standing EMPTY, asked as an ABSENCE over the whole document for `current-script-restore`'s reason:
+       the served body emits `injnull` in place of an id when the slot is null, so the marker is a POSITIVE
+       statement about an empty slot and not the silence an absent param would be. It is armed by the clause
+       above it, which establishes that the observer ran at all. */
+    const char *injel_why = NULL; int injel_tt = 1;
+    fold_row(&injel_tt, &injel_why, param_value_is(js, "/api/injran", "el", "injel"),
+             "§4.12.1.1's classic arm did not answer §3.1.7's `currentScript` for a program fetched off an "
+             "injected `<script src>`: /api/injran's `el` is not `injel`. `injhost` is the near-miss and names "
+             "the defect — that is the program which INJECTED this one, so the slot was written by the "
+             "injecting program rather than by the running one");
+    fold_row(&injel_tt, &injel_why, !strstr(js, "\"injnull\""),
+             "§4.12.1.1's classic arm left `currentScript` EMPTY for an injected program that ran: some arm "
+             "reached the served body with a null slot, which the body reports as `injnull` rather than as a "
+             "missing param. Asked of the WHOLE document deliberately — one arm seeing an empty slot is the "
+             "finding, and an absence is the only thing that can prove this half — and ARMED by the clause "
+             "above, which says the observer ran");
+
     /* WEB CRYPTOGRAPHY §29.4.5 AES-GCM EXPORT KEY'S THREE ARMS, AND THE ROW THAT SAYS WHETHER ANY OF THEM RAN.
        `xk-reach` stands FIRST for `td-reach`'s and `bs-reach`'s reason, and here it carries MORE than those
        two do: it is emitted after §14.3.6 generateKey RESOLVES, so it is simultaneously the reachability
@@ -17160,6 +17360,16 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            body this host serves and in no document at all, and `/api/progseen` is composed by a reaction. */
         { "reply-program", replyprog_tt, "/chunk/replyprog.js", SESS_EXPLORE, replyprog_why },
         { "reply-program-typed", replyctl_tt, "/chunk/replyctl.js", SESS_EXPLORE, replyctl_why },
+        /* THE SAME DELIVERY AT THE THIRD DOOR, and the KEY is this statement's own spelling for `lazy`'s
+           reason exactly: `/api/injran` is in a body this host serves and in no document at all, and
+           `/api/injmade` is composed by the statement rather than being its name. `/chunk/injsrc.js` is what
+           a reader greps for to find the `injhost` statement these two rows are about.
+           `injected-script-el` IS GATED ON `injected-script` because its only answerable record is the one
+           that row's last clause asserts: a 0 above it is a 0 here under every reading, and the declaration
+           is what stops a reader counting the pair as two independent findings. */
+        { "injected-script", injsrc_tt, "/chunk/injsrc.js", SESS_EXPLORE, injsrc_why },
+        { "injected-script-el", injel_tt, "/chunk/injsrc.js", SESS_EXPLORE, injel_why,
+          .gate = "injected-script" },
         /* EACH CARRIES ITS OWN `why` NOW — a 0 on any of the three names the clause it stopped at, so a reader
            can tell an unscheduled sibling from a lost DOM delta without inferring one from the other.
            `dom-tt` IS GONE and is not replaced: it was `dom_attr && dom_node`, the AND of the two rows either
