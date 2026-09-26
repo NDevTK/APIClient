@@ -57,6 +57,38 @@
  *            only that a request happens here. Same reading as SHAPE and stronger.
  * A high LITERAL+FOLDED share is a finding AGAINST the browser on paths and must be reported as one.
  *
+ * AND A SECOND AXIS, BECAUSE THE FOUR KINDS ABOVE ARE ABOUT THE ADDRESS AND SAY NOTHING ABOUT WHETHER A RUN
+ * EVER REACHES THE CALL. The kinds answer "could a parse have had this value"; the REACH band answers "what
+ * has to be CALLED for this line to run", which is the only axis on which a door a run rings and a door it
+ * does not come apart. A parse reads a call whether or not anything invokes its enclosing function, so this
+ * band costs the parse nothing and is not a concession — it is what makes a door's ZERO IN A RUN readable,
+ * which no column here could do before. Three arms, an exact partition of each class's own `sites`:
+ *   TOP-LEVEL   function depth 0 — the module or script body performs the call, so evaluating the program
+ *               reaches it and nothing else has to happen.
+ *   ASYNC FN    the INNERMOST enclosing function is `async`. It runs only once something invokes that body,
+ *               and in a real application the invoker is an effect flushed after a render commit, an event
+ *               handler, a `setTimeout` or an idle callback — none of which is program evaluation.
+ *   SYNC FN     the innermost enclosing function is an ordinary one. It also needs an invoker.
+ * THE PARTITION IS ASSERTED against `sites` for both classes, so no row can fall out of all three and make a
+ * class read as having fewer async sites than it has — the flattering direction for the DATA door, whose zero
+ * in a run is the thing this band exists to make readable.
+ * IT IS A FLOOR IN ONE DIRECTION ONLY AND THE ASYMMETRY IS THE WHOLE OF HOW TO READ IT. `innerSync`
+ * OVER-states reachability, because a sync function nothing calls is exactly as unreached as an async one;
+ * `innerAsync` cannot over-state it, because an async body needs an invoker by construction. So a high
+ * `innerAsync` share IS evidence a class needs an invoker, and a high `innerSync` share is NOT evidence that
+ * it does not. Reading the second as a clean bill is the one reading this band must not be used for.
+ * WHAT IT DOES NOT ANSWER, STATED HERE BECAUSE THE BAND IS ONE HOP SHORT OF THE QUESTION A READER WANTS: it
+ * says a call needs an invoker and never WHETHER THAT INVOKER IS ITSELF REACHED. A sync function called from
+ * top level is reached and a sync function called only from an async one is not, and both land in `innerSync`.
+ * The call graph is what separates them, this file builds none, and a bound-once fold is not one — so the
+ * band is a NECESSARY-CONDITION reading and never a sufficient one. HOW ITS ABSENCE WOULD SHOW: a corpus
+ * whose DATA door is almost all `innerSync` would read as needing no invoker while every one of those
+ * functions sat behind an async caller. WHAT THE NEXT DIFF BUILDS: a reachability closure over the call graph
+ * this file can already name — the bound-once function declarations it folds through — so `innerSync` splits
+ * into "called from a body the program evaluates" and "called only from somewhere that itself needs an
+ * invoker", which is the same fold already built for the chunk manifest pointed at callers instead of at
+ * addresses.
+ *
  * FOLDING IS DELIBERATELY CONSERVATIVE AND THE NUMBER IS THEREFORE A FLOOR FOR THE PARSE, WHICH IS THE
  * DIRECTION THAT COSTS THIS PROJECT RATHER THAN FLATTERS IT. An identifier is folded only where its name is
  * bound EXACTLY ONCE in the whole file and never assigned again, so no shadowing can make a fold wrong. A
@@ -774,6 +806,19 @@ function scanManifest(ast, binds, base, filename) {
    conceded or assumed. The depth is the number of enclosing tests a runtime would have to satisfy: an `if`
    or `switch` body, a `?:` arm, the right-hand side of `&&`/`||`/`??`, and a `catch`. */
 const GUARDS = new Set(["IfStatement", "ConditionalExpression", "SwitchCase", "CatchClause"]);
+/* EVERY NODE THAT OPENS A FUNCTION SCOPE — the population `fnDepth` counts. A class STATIC BLOCK and a
+   getter/setter are in it for the same reason an ordinary method is: each is a body something has to invoke.
+   A `Program` is deliberately NOT in it, because depth 0 is exactly "the module body runs this". The list is
+   asserted against @babel/types rather than trusted, one line down, so a Babel release that renames a node
+   kind fails loudly instead of silently reporting every call in that shape at depth 0 — which is the
+   flattering direction and the one that would make a door look reachable. */
+const FN_SCOPES = new Set(["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression",
+                           "ObjectMethod", "ClassMethod", "ClassPrivateMethod", "StaticBlock"]);
+for (const t of FN_SCOPES)
+  if (!(t in VISITOR_KEYS))
+    die(`FN_SCOPES names the node kind ${t}, which this @babel/types does not have — the reach column would ` +
+        `report every call inside one at function depth 0, which reads as "the module body runs this" and is ` +
+        `the direction that makes a door look reachable when it is not.`);
 
 function readFile(src, filename) {
   let ast = null, err = null;
@@ -803,10 +848,18 @@ function readFile(src, filename) {
   const attached = new Set();          // node identity of URL args, so a door's own literal is not double-counted
   let guard = 0;
   const guardStack = [];
+  /* WHAT ENCLOSES THE CALL — the REACH axis, kept on its own stack for the reason the guard stack is: a
+     depth read off the node afterwards would need a parent chain this walker deliberately does not carry.
+     It answers a different question from `guard` and the two are not substitutes. `guard` says whether a
+     TEST stands in front of the call, which a parse reads whether the gate is taken or not; this says what
+     has to be CALLED for the call to happen at all, which is the only thing that separates a door the
+     engine rings from one it does not. */
+  const fnStack = [];
 
   walk(ast, (n) => {
     if (GUARDS.has(n.type)) { guardStack.push(n); guard++; }
     else if (n.type === "LogicalExpression") { guardStack.push(n); guard++; }
+    if (FN_SCOPES.has(n.type)) fnStack.push(n);
 
     /* ONE HELPER FOR BOTH SHAPES, because `window.fetch(u)` and `new self.Worker(u)` pose the identical
        question — is the thing to the left the global object — and two copies of the answer would be free to
@@ -886,12 +939,21 @@ function readFile(src, filename) {
         argShape, argBinds, argNameLen: (a && a.type === "Identifier") ? a.name.length : null,
         door: door.id, cls: door.cls, engineDoor: door.engine !== null, kind, holes: r.holes,
         url: r.text, alt: r.alt || null, guard,
+        /* THE REACH PAIR. `fnDepth` 0 is a call the module body itself performs, so evaluating the program
+           reaches it; anything above 0 needs its enclosing function CALLED. `innerAsync` is whether the
+           INNERMOST enclosing function is an async one, which is the axis the two door classes come apart
+           on: a call inside an `async` body runs only once something invokes that body, and in a real SPA
+           the invoker is an effect flushed after a render commit, an event handler, a timer or an idle
+           callback. Both are properties of the TEXT and neither is a claim about any engine. */
+        fnDepth: fnStack.length,
+        innerAsync: fnStack.length > 0 ? !!fnStack[fnStack.length - 1].async : false,
         method: door.arg0Method ? args[0].value.toUpperCase() : (door.id === "sendBeacon" ? "POST" : "GET"),
         line: n.loc ? n.loc.start.line : 0, file: filename,
       });
     }
   }, (n) => {
     if (GUARDS.has(n.type) || n.type === "LogicalExpression") { guardStack.pop(); guard--; }
+    if (FN_SCOPES.has(n.type)) fnStack.pop();
   });
 
   /* THE BASE RATE. Every string literal in this program that looks like an address and is NOT the URL
@@ -984,8 +1046,28 @@ const SELFTEST = [
   [`var self=this;self.fetch("/x")`,                        []],
   // SHADOWING — the fold must REFUSE a name the file binds twice, because a wrong fold INVENTS an address.
   [`const B="/a";function f(){const B="/b";return fetch(B)}`, ["fetch|data|opaque|{?}"]],
+  // THE REACH BAND, ARMED IN ALL THREE ARMS. Each of these has to CLASSIFY as an ordinary row too, so they
+  // sit in this table rather than in a set of their own: a reach control that stopped being a door row would
+  // silently leave the band measuring a smaller population.
+  [`async function f(){return fetch("/ra")}`,               ["fetch|data|literal|/ra"]],
+  [`function f(){return fetch("/rs")}`,                     ["fetch|data|literal|/rs"]],
+  [`const g=async()=>fetch("/rq")`,                         ["fetch|data|literal|/rq"]],
+  [`async function o(){return function(){return fetch("/rn")}}`, ["fetch|data|literal|/rn"]],
 ];
 const SELFTEST_GUARDED = new Set([`if(a){fetch("/g")}`]);
+/* THE REACH BAND'S OWN CONTROLS — source to the pair the row must carry. It is armed in BOTH directions and
+   at BOTH ends, which is the discipline CLAUDE.md §A-CONTROL-ARMS-ONLY-ON-A-SITE-THE-INSTRUMENT-CAN-JUDGE
+   asks for: a band whose only control is a positive one cannot tell "this corpus has no async sites" from
+   "the async test is stuck on". The fourth row is the one that matters most and is the easiest to get wrong
+   — an async function enclosing a SYNC one — because `innerAsync` names the INNERMOST enclosing function and
+   a walker that read the OUTERMOST would pass the first three and fail only here. */
+const SELFTEST_REACH = new Map([
+  [`fetch("/api/users")`,                                   { fnDepth: 0, innerAsync: false }],
+  [`async function f(){return fetch("/ra")}`,                { fnDepth: 1, innerAsync: true }],
+  [`function f(){return fetch("/rs")}`,                      { fnDepth: 1, innerAsync: false }],
+  [`const g=async()=>fetch("/rq")`,                          { fnDepth: 1, innerAsync: true }],
+  [`async function o(){return function(){return fetch("/rn")}}`, { fnDepth: 2, innerAsync: false }],
+]);
 
 /* THE BLIND-SPOT CHANNEL IS ARMED SEPARATELY AND IN BOTH DIRECTIONS. Its whole job is to be the number a
    PROGRAM-door zero is read against, so a channel that silently stopped counting would make every such zero
@@ -1058,7 +1140,7 @@ const SELFTEST_MANIFEST_TWO = `var p={};p.u=e=>1===e?"/a/1.js":"/b";p.v=e=>2===e
 
 function selftest() {
   const seenKind = new Set(), seenCls = new Set();
-  let spoke = 0;
+  let spoke = 0, reachSpoke = 0;
   for (const [src, want] of SELFTEST) {
     const r = readFile(src, "<selftest>");
     if (!r.parsed) die(`SELF-TEST: the parser refused \`${src}\` — ${r.error}`);
@@ -1079,6 +1161,15 @@ function selftest() {
     if (SELFTEST_GUARDED.has(src) && !(r.sites[0] && r.sites[0].guard > 0))
       die(`SELF-TEST FAILED: a call under an \`if\` was recorded at guard depth 0, so the guard column is ` +
           `measuring nothing.`);
+    if (SELFTEST_REACH.has(src)) {
+      const want = SELFTEST_REACH.get(src), got = r.sites[0];
+      if (!got || got.fnDepth !== want.fnDepth || got.innerAsync !== want.innerAsync)
+        die(`SELF-TEST FAILED on the REACH band for \`${src}\`\n  want ${JSON.stringify(want)}\n` +
+            `  got  ${JSON.stringify(got && { fnDepth: got.fnDepth, innerAsync: got.innerAsync })}\n` +
+            `The band that says whether a door's calls sit in a body something has to CALL is measuring ` +
+            `something other than what it prints, so nothing below is printed.`);
+      reachSpoke++;
+    }
     if (src.startsWith(`const s=`) ) {
       /* THE BASE-RATE CHANNEL IS ARMED TOO. Its whole job is to be the thing a zero above is read against,
          so a base rate that silently stopped counting would leave every zero unreadable. */
@@ -1186,8 +1277,12 @@ function selftest() {
     if (!seenCls.has(c)) die(`SELF-TEST FAILED: no control exercises the ${c} destination class.`);
   /* A CONTROL THAT NEVER SPOKE IS NOT A CONTROL. */
   if (spoke < 10) die(`SELF-TEST FAILED: only ${spoke} row(s) were produced by the positive controls.`);
+  if (reachSpoke !== SELFTEST_REACH.size)
+    die(`SELF-TEST FAILED: ${reachSpoke} of ${SELFTEST_REACH.size} REACH controls were judged — a control ` +
+        `whose source stopped producing a door row is a control that certifies nothing.`);
   return { rows: SELFTEST.length, produced: spoke, blindRows: SELFTEST_BLIND.length, blindProduced: blindSpoke,
-           manifestRows: SELFTEST_MANIFEST.length + 1, manifestProduced: manifestSpoke, manifestAddrs };
+           manifestRows: SELFTEST_MANIFEST.length + 1, manifestProduced: manifestSpoke, manifestAddrs,
+           reachRows: SELFTEST_REACH.size };
 }
 
 /* ── THE RUN ──────────────────────────────────────────────────────────────────────────────────────────── */
@@ -1236,7 +1331,11 @@ function main(argv) {
   const sha = (b) => createHash("sha256").update(b).digest("hex");
   /* ONE TALLY SHAPE FOR BOTH CLASSES, so the two can only ever be printed the same way and a reader
      comparing them is comparing like with like. */
-  const kindTally = () => ({ sites: 0, literal: 0, folded: 0, shape: 0, opaque: 0, guarded: 0, urls: new Set() });
+  const kindTally = () => ({ sites: 0, literal: 0, folded: 0, shape: 0, opaque: 0, guarded: 0,
+                            /* THE REACH BAND, PER CLASS, so the two door classes are comparable on it —
+                               which is the whole point: the question is not how deep a call sits but
+                               whether the two classes sit in the SAME KIND of body. */
+                            topLevel: 0, innerAsync: 0, innerSync: 0, urls: new Set() });
   const perSite = new Map();
   const bucket = (id) => {
     if (!perSite.has(id)) perSite.set(id, {
@@ -1302,6 +1401,11 @@ function main(argv) {
       b.byDoor[s.door] = (b.byDoor[s.door] || 0) + 1;
       const c = b[s.cls];
       c.sites++; c[s.kind]++; if (s.guard > 0) c.guarded++;
+      /* AN EXACT PARTITION OF `c.sites` AND NOT THREE INDEPENDENT COUNTS, asserted below at the one place
+         all four are in one hand: a row is at depth 0 or it is not, and if it is not its innermost
+         enclosing function is async or it is not. A reader differencing two of the three would otherwise be
+         differencing quantities nothing holds together. */
+      if (s.fnDepth === 0) c.topLevel++; else if (s.innerAsync) c.innerAsync++; else c.innerSync++;
       /* THE CEILING COLUMNS ARE DATA-DOOR ONLY AND ONLY OVER ROWS THE FOLD DID NOT SETTLE, because that is
          the population the "a better parser would get these" objection is about; counting settled rows in
          it would answer a question nobody asked. */
@@ -1358,7 +1462,8 @@ function main(argv) {
     for (const k of Object.keys(tot.bindBuckets)) tot.bindBuckets[k] += b.bindBuckets[k];
     tot.oneCharNames += b.oneCharNames;
     for (const cls of ["data", "program"]) {
-      for (const k of ["sites", "literal", "folded", "shape", "opaque", "guarded"]) tot[cls][k] += b[cls][k];
+      for (const k of ["sites", "literal", "folded", "shape", "opaque", "guarded",
+                       "topLevel", "innerAsync", "innerSync"]) tot[cls][k] += b[cls][k];
       for (const u of b[cls].urls) clsUrls[cls].add(u);
     }
     for (const u of b.urls) allUrls.add(u);
@@ -1388,6 +1493,15 @@ function main(argv) {
   for (const cls of ["data", "program"])
     if (tot[cls].literal + tot[cls].folded + tot[cls].shape + tot[cls].opaque !== tot[cls].sites)
       die(`the ${cls} kind partition does not sum against ${tot[cls].sites}`);
+  /* AND THE REACH BAND IS A PARTITION OF THE SAME `sites`, WHICH IS WHAT MAKES IT DIFFERENCEABLE. Without
+     this a reader comparing `innerAsync` across the two classes would be comparing two numbers nothing
+     holds to one denominator, and a row silently dropped out of all three would read as a class with
+     fewer async sites — the flattering direction for the DATA door and the one that would make its zero in
+     a run look explained. */
+  for (const cls of ["data", "program"])
+    if (tot[cls].topLevel + tot[cls].innerAsync + tot[cls].innerSync !== tot[cls].sites)
+      die(`the ${cls} reach partition does not sum: ${tot[cls].topLevel}+${tot[cls].innerAsync}+` +
+          `${tot[cls].innerSync} != ${tot[cls].sites}`);
   if (tot.blind.literal + tot.blind.folded + tot.blind.shape + tot.blind.opaque !== tot.blind.sites)
     die(`the blind-spot kind partition does not sum against ${tot.blind.sites}`);
   if (tot.blind.src + tot.blind.href !== tot.blind.sites)
@@ -1425,6 +1539,8 @@ function main(argv) {
               `asserted to enter NO door total`);
   console.log(`         plus ${st.manifestRows} chunk-manifest controls: ${st.manifestProduced} enumerated ` +
               `${st.manifestAddrs} address(es), the rest refused for a stated reason`);
+  console.log(`         plus ${st.reachRows} REACH controls, each asserted for BOTH its function depth and ` +
+              `whether its innermost enclosing function is async`);
   console.log(`corpus   ${corpusDir}`);
   console.log(`fetched  ${fetchedFrom} .. ${fetchedTo}   read ${tot.readAt}   parse ${ms} ms`);
   console.log(`corpusPrograms: ${cp.onDisk} on disk = ${cp.nProgram} program + ${cp.nDocument} document + ` +
@@ -1447,11 +1563,30 @@ function main(argv) {
     console.log(`  --> complete address from the text at ${pct(k.literal + k.folded, k.sites)}; ` +
                 `${k.shape + k.opaque} site(s) (${pct(k.shape + k.opaque, k.sites)}) need a VALUE only a run has.`);
     console.log(`  guarded ${k.guarded} (${pct(k.guarded, k.sites)}) under >=1 test — read by the parse whether the gate is taken or not`);
+    console.log(`  reach: top-level ${k.topLevel} (${pct(k.topLevel, k.sites)})   ` +
+                `inside an async fn ${k.innerAsync} (${pct(k.innerAsync, k.sites)})   ` +
+                `inside a sync fn ${k.innerSync} (${pct(k.innerSync, k.sites)})`);
   };
   block(`DATA DOOR (fetch / XMLHttpRequest / sendBeacon / WebSocket / EventSource)`, tot.data,
         `Fetch §2.2.5 destinations whose reply becomes a VALUE. THIS IS THE @H PRODUCT SURFACE.`);
   block(`PROGRAM DOOR (import() / Worker / SharedWorker / importScripts)`, tot.program,
         `replies that become a PROGRAM — the page loading itself. Reported apart and never summed in.`);
+  console.log(``);
+  console.log(`WHAT HAS TO BE CALLED FOR A DOOR TO BE REACHED — the two classes compared on the ONE axis they`);
+  console.log(`  differ on, which is NOT how deep they sit. A parse reads a call whether anything invokes its`);
+  console.log(`  enclosing function or not; a RUN reaches it only if something does. So a door class whose`);
+  console.log(`  calls sit at top level is reached by evaluating the program, and one whose calls sit inside an`);
+  console.log(`  \`async\` body is reached only once something INVOKES that body — which in a real app is an`);
+  console.log(`  effect flushed after a render commit, an event handler, a timer or an idle callback, and is a`);
+  console.log(`  different question from whether the program ran at all. THE NUMBERS ARE IN THE TWO BLOCKS`);
+  console.log(`  ABOVE, one \`reach:\` line each, so the comparison is read where each class's own denominator`);
+  console.log(`  is. This paragraph states what the comparison MEANS and asserts nothing about any engine:`);
+  console.log(`  both columns are properties of the TEXT and a run is what decides whether the invoker fires.`);
+  console.log(`  IT IS A FLOOR IN ONE DIRECTION ONLY, AND THE DIRECTION IS STATED BECAUSE IT IS NOT SYMMETRIC:`);
+  console.log(`  \`innerSync\` over-states reachability (a sync function nothing calls is as unreached as an`);
+  console.log(`  async one) while \`innerAsync\` cannot — an async body needs an invoker by construction. So a`);
+  console.log(`  high \`innerAsync\` share is evidence the class needs an invoker; a high \`innerSync\` share is`);
+  console.log(`  NOT evidence that it does not, and reading it as one is the reading this note exists to stop.`);
   console.log(``);
   console.log(`THE DOOR SET'S OWN BLIND SPOT, MEASURED — \`el.src =\` / \`el.href =\`, which html_script.c and`);
   console.log(`  html_link.c DO record and no door above reads. NOT sites and summed into no total; this is the`);
@@ -1517,13 +1652,18 @@ function main(argv) {
   console.log(`  this one does not. A zero above would have to be read against this number.`);
   console.log(``);
   console.log(``);
-  console.log(`PER SITE — the DATA door only; the program door is in --json.`);
-  console.log(`site             programs   data  literal folded  shape opaque guarded   urls  pathish`);
+  console.log(`PER SITE — the DATA door only; the program door is in --json. The last three columns are the`);
+  console.log(`  REACH partition of \`data\` (top-level / inside an async fn / inside a sync fn), printed here`);
+  console.log(`  because per-site is where it answers: a site's data-door count and how much of it needs an`);
+  console.log(`  invoker are one reading and two numbers.`);
+  console.log(`site             programs   data  literal folded  shape opaque guarded   urls  pathish   top  async   sync`);
   for (const s of out.perSite)
     console.log(`  ${s.site.padEnd(14)} ${String(s.programs).padStart(8)} ${String(s.data.sites).padStart(6)} ` +
                 `${String(s.data.literal).padStart(8)} ${String(s.data.folded).padStart(6)} ${String(s.data.shape).padStart(6)} ` +
                 `${String(s.data.opaque).padStart(6)} ${String(s.data.guarded).padStart(7)} ` +
-                `${String(s.data.distinctUrls).padStart(6)} ${String(s.pathish).padStart(8)}`);
+                `${String(s.data.distinctUrls).padStart(6)} ${String(s.pathish).padStart(8)} ` +
+                `${String(s.data.topLevel).padStart(5)} ${String(s.data.innerAsync).padStart(6)} ` +
+                `${String(s.data.innerSync).padStart(6)}`);
   console.log(``);
   /* PER SITE, THE PROGRAM DOOR BESIDE THE BLIND SPOT, WHICH IS THE ONLY PLACE THE TWO CAN BE READ TOGETHER.
      A site whose program door reads 0 has either shipped no chunk loader or loaded its chunks through the
