@@ -4319,8 +4319,35 @@ static const char *HTML =
        What is left is FLOW_PENDING_RESOLVE
        (a `fetch()`, of which the document holds 348 call sites) and FLOW_PENDING_SCRIPT (an INJECTED
        `<script src>`, of which it holds five: four `loadScript` and one `.src` assignment).
+       AND THAT SECOND HALF IS FALSE, SO THE RESIDUE IS ONE KIND AND NOT TWO: THE ENUMERATION NAMED INPUTS
+       AND NEITHER INPUT REACHES THE PRODUCER. `FLOW_PENDING_SCRIPT` has exactly one, and it is reached from
+       HTML §4.12.1.1 "Processing model"'s `prepare the script element` over an element carrying a `src`
+       (solver/engine.c's only `pending_push` of that kind, which asserts it was given that element). The
+       four `loadScript` sites are THIS FILE'S OWN HOST EDGE, whose `engine_queue_fetched_script` appends a
+       program row and pushes no pending record at all — TF_SERVED's banner above already says it in as many
+       words, that the edge "parks no request and takes no reply". The one `.src` assignment is
+       `isc.src = '/chunk/iface.js'`, on an element this document CREATES AND NEVER INSERTS: §4.12.1.1 states
+       "The HTML element post-connection steps only run when the inserted element is still connected", and
+       core/html/html_script.c's `script_post_connection` returns on exactly that test, so no prepare runs
+       and no park is taken. `/chunk/iface.js` is in neither serving table either, so the site could not have
+       been answered had it prepared.
+       THE CLAUSE WAS CHECKED AGAINST THE PARK AND NOT AGAINST THE PIPELINE, which is the whole of what a
+       NOT-COVERED clause naming INPUTS owes: ask which step FIRST sees each input, and the connectedness
+       gate is a step EARLIER than the park. This one clause has now been wrong in both directions — too
+       narrow before, too wide here — and both readings were taken by surveying this document's TEXT for a
+       shape instead of asking which producer that shape reaches.
+       WHAT THE NEXT DIFF BUILDS: a CONNECTED `<script src>` in this document — created, appended, and its
+       address served — which is the door every webpack runtime in a real corpus uses to load a chunk and the
+       only shape that reaches that producer from page code. It also buys the one thing the host edge
+       structurally cannot: a chunk program with an ELEMENT behind it, so §3.1.7's `currentScript` is that
+       element while the chunk runs rather than null, which is what a bundler's own public-path preamble
+       reads. HOW ITS ABSENCE SHOWS: an injected-script arm of `pending_count_kind` that reads zero in every
+       run of this fixture, with no way to tell a kind this document cannot produce from a delivery
+       mechanism that does not work.
+       RETIREMENT: this record goes when this document holds a connected `<script src>`, because the
+       enumeration is then true of the tree rather than of a reading of it.
        THE NARROWING IS THIS DOCUMENT'S AND NOT THE FIXTURE'S, WHICH IS A CORRECTION AND NOT A HEDGE. The
-       clause here read "the fixture ships no `<script src>` at all" — true of every document in this file
+       clause here read ``the fixture ships no `<script src>` at all`` — true of every document in this file
        when it was written, and false of one since: HTML_COLD ends in a parser-inserted external script,
        appended for `park-remoteop`'s first half, so the two COLD sessions DO reach the document-script
        kind and this file now holds all four of the sharing kinds rather than two.
