@@ -5888,12 +5888,25 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        the surrogate can only read `best` at `sur_w` or on the losing side of it — TIE or STRICT, with no
        third arm — and a fold that dropped `best` from one of the two walks makes that false and fires.
        WHAT EVERY FIRE ON RECORD HAS IN COMMON IS THE PART NO MODE READING REACHES, AND IT IS ARITHMETIC
-       RATHER THAN A PROPERTY OF ANY FRONTIER: in all four the two members' weights stand exactly ONE ULP
-       apart, and flow_index_margin's own derived bound over those same members is 13.6 to 20.9 ulps of the
-       same scale. The surrogate is DECLARED free to stand that far from the comparator; the equality below
-       asks it to resolve a gap fourteen to twenty-one times smaller than its own licence. No frontier makes
-       that hold, so a fire here is the declared margin reaching the ANSWER and never a defect in either
-       spelling — which is what the paragraphs above say in words and what this says as a number.
+       RATHER THAN A PROPERTY OF ANY FRONTIER. The surrogate is DECLARED free to stand flow_index_margin from
+       the comparator and the equality below asks it to resolve a gap orders of magnitude smaller than that
+       licence, so no frontier makes this hold and a fire is the declared margin reaching the ANSWER rather
+       than a defect in either spelling. THIS PARAGRAPH PUT THOSE TWO QUANTITIES AT `exactly ONE ULP` AND
+       `13.6 to 20.9 ulps` AND THEY ARE REWRITTEN RATHER THAN DELETED BECAUSE THE ABORT NOW PRINTS BOTH: a
+       reader re-derives them from ONE LINE, and a reader who instead re-derives them from a count of fires
+       writes a count again. Measured over four real-page fires the weights stand 1, 2, 2 and 4 ulps apart,
+       so `exactly ONE ULP` was a property of the fires then on record and not of the mechanism.
+       AND THE MECHANISM IS COMMENSURABILITY, WHICH IS EXACT AND IS WHY FRONTIER SIZE IS NOT THE VARIABLE:
+       FLOW_AGE_QUANTUM is 3/250, flow_branch_bonus is `1/sub_born` and flow_optimism is `1/(1+visits)`, so a
+       member silent `d` quanta longer than a sibling whose bonus terms exceed it by `d * FLOW_AGE_QUANTUM`
+       is TIED WITH IT IN THE REALS. Over those four fires `silence_notch * Q` and `branch + optimism` cancel
+       to between 6.5e-19 and 1.7e-17, leaving an exact-real gap of 0.0004 to 0.031 ULP — and jsoncrack's
+       pair is the clean case, buckets of 75 and 750 members giving `1/75 - 1/750 = 3/250` EXACTLY, one
+       quantum of silence apart. So both spellings round a tie THE ORDER MEANT TO HAVE, at 950, 1571, 2469
+       and 4758 members, and the COMPARATOR's own verdict contradicts the exact reals on three of the four.
+       RETIREMENT: this record goes when the order stops resolving below the step it can express — a tie
+       predicate at FLOW_AGE_QUANTUM instead of `>` on a raw double, which is an ORDER change and the
+       owner's — because there is then no sub-quantum verdict for either spelling to disagree about.
        AND THE FIXTURE AND THE REAL PAGE FIRE ON DIFFERENT HALVES OF THE SURROGATE'S OWN CLAIM, WHICH IS WHY
        A DIAGNOSIS TAKEN FROM THE SMOKE ALONE IS TAKEN FROM THE WEAKER ONE. flow.h states the surrogate's
        soundness WITHIN one account — there the reward and the family notch are common, so ordering by the
@@ -5904,8 +5917,9 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        BRANCH BUCKET. So the real page refutes the surrogate at the exact point its own argument is made and
        the fixture does not reach that point at all, which is §A-FIXTURE-BUILT-TO-EXERCISE-EVERY-MECHANISM
        arriving in this check: the two documents exercise two claims and only one of them is the claim.
-       RETIREMENT: this record goes when the line printed at a fire says whether the two members share an
-       account, because the reader then reads which claim fired instead of inferring it from two `val` fields.
+       RETIREMENT — MET, AND THE RECORD IS REWRITTEN RATHER THAN DELETED BECAUSE THE TWO-DOCUMENT SPLIT IS
+       WHAT A READER RE-DERIVES AND A PRINTED BIT CANNOT RE-CLASSIFY A FIRE ALREADY ON RECORD: the abort below
+       prints `sameFamily`, so no LATER fire is classified by inferring a shared account from two `val` fields.
        RETIREMENT: this record goes when the two modes are counted over a run rather than read off the one
        fire that ends it — a partition of `index_differed` into the surrogate's TIE and STRICT arms, summing
        to it — because the anti-correlation above is then a row anybody can re-derive instead of a
@@ -6136,7 +6150,13 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
                 "fam_notch=%lld carry=%d silence_notch=%lld optimism=%.17g distance=%.17g "
                 "branch=%.17g — the notches are EXACT integers, so a divergence is in how the price "
                 "FLOW_AGE_QUANTUM was applied to them and where the reward was folded in, never in "
-                "the quantities themselves",
+                "the quantities themselves. AND THE THREE FIGURES THAT DECIDE WHETHER THIS FIRE IS "
+                "AN ORDER DISAGREEMENT AT ALL, WHICH THE BANNER CARRIED AS A MEASUREMENT INSTEAD OF "
+                "PRINTING: the two weights differ by %.17g and flow_index_margin DECLARES the "
+                "surrogate free to stand %.17g (sur_best) and %.17g (best) away, so a gap under "
+                "either is that licence reaching the ANSWER and a gap over BOTH is the one fire "
+                "here that is a DIFF. sameFamily=%d — flow.h states the surrogate's soundness "
+                "WITHIN a family account, so a 1 refutes it where its own argument is made",
                 flow_weight(sur_best), bw, g_flows_n, sur_w, sur_of_best,
                 sur_w == sur_of_best ? "a surrogate TIE" : "a STRICT surrogate disagreement",
                 acct_family_val(sur_best), (long long)flow_service_notch(sur_best),
@@ -6146,7 +6166,9 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
                 acct_family_val(best), (long long)flow_service_notch(best),
                 (long long)flow_family_notch(best), flow_silence_carry(best),
                 (long long)flow_silence_notch(best), flow_optimism(best),
-                flow_distance(best), flow_branch_bonus(best));
+                flow_distance(best), flow_branch_bonus(best),
+                flow_weight(sur_best) - bw, flow_index_margin(sur_best),
+                flow_index_margin(best), (int)(sur_best->family == best->family));
     }
 #endif
     /* §scheduler'S SENTENCE, ASSERTED WHERE THE CHOICE IS MADE — "CPU-AGING so a monopolizer that burns CPU
