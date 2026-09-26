@@ -2271,11 +2271,18 @@ QJS_EXPORT void qjs_teardown(void)
  * run to completion over the hole and the result would look finished. */
 
 /* WHAT THE TRUSTED ZONE STILL OWES THE FRONTIER, as `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>
-   URL` lines — the same grammar qjs_host_requests answers in, and the method is there because it is half the
-   request's IDENTITY. This list was addresses alone and the reply edge matched on one, so a page issuing a GET
-   and a POST to one address had both promises settled with whichever the zone fetched first (solver/engine.h
-   states the whole of it). The zone must issue each line with the method it names and hand BOTH halves back to
-   qjs_provide.
+   PINNED<TAB>CREDENTIALS<TAB>URL` lines — the same grammar qjs_host_requests answers in, and the method is
+   there because it is half the request's IDENTITY. This list was addresses alone and the reply edge matched on
+   one, so a page issuing a GET and a POST to one address had both promises settled with whichever the zone
+   fetched first (solver/engine.h states the whole of it). The zone must issue each line with the method it
+   names and hand BOTH halves back to qjs_provide.
+   THIS SENTENCE NAMED FIVE OF THE SEVEN, AND THE GRAMMAR HAS ONLY EVER GROWN. Each field that arrived rewrote
+   the CHECKs that SPLIT the line — engine_pending_split is the authority and names every grammar it
+   supersedes — and left the prose that INTRODUCES it, so the short copy was the one standing where a host
+   author reads the shape while two correct statements of it sat below in this same file. A host that splits
+   short lands `pinned` in the address and the flow parked on the real URL waits on a reply keyed on nothing.
+   RETIREMENT: this record goes when the field list is stated in one place this comment and that splitter both
+   derive from, so no copy of it can be short.
    AND THE DESTINATION IS WHY THIS ENTRY NO LONGER HAS A SECOND LIST BESIDE IT. `qjs_chunks` answered the CORB
    class out of the module loader's own register of specifiers, so it classified dynamic `import()` and nothing
    else: a document's own `<script src>` reached the chokepoint with no class at all and a cross-origin HTML or
