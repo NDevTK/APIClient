@@ -879,11 +879,20 @@ typedef struct Flow {
        shared register entry be delivered correctly into either arm.
        IT IS NOT PARKED. The cold tier stores a recipe and replays the document from its first script, so a
        resumed flow's rows are rebuilt and take fresh names — the same reason `dyn_el` may never be parked.
-       IT USED TO BE THE ROW'S ARRIVAL STAMP AS WELL, AND THAT SENTENCE IS RETIRED RATHER THAN DELETED
-       BECAUSE ITS ARGUMENT IS THE ONE A READER RE-DERIVES. It read: "The two jobs do not fight: a NAME must be
-       unique and never reused, and an ARRIVAL STAMP must be unique, never reused and MONOTONE IN ISSUE ORDER,
-       and the second is strictly the first plus a property the mint already had." Every clause of that is true
-       of the MINT and the conclusion is false, because it never asks WHEN the arrival of a work item is. A
+       IT USED TO BE THE ROW'S ARRIVAL STAMP AS WELL, AND THAT ARGUMENT IS RETIRED RATHER THAN DELETED
+       BECAUSE IT IS THE ONE A READER RE-DERIVES. It held that the two jobs do not fight, on the ground that a
+       NAME must be unique and never reused, that an ARRIVAL STAMP must be unique, never reused and monotone in
+       issue order, and that the second is therefore strictly the first plus a property the mint already had.
+       THE RETIRED TEXT IS RENDERED AS INDIRECT SPEECH AND NOT IN QUOTATION MARKS, WHICH IS AN AUTHORING RULE
+       AND NOT A STYLE CHOICE. Quoted, it is a double-quoted run of more than the word floor, so the checker
+       anchors it to the nearest preceding citation and reports this tree's own prose as a fabricated spec
+       quotation — which is what it did here, and what it has now done to three lanes in one day. Backticks do
+       not fix it: CODE_SPAN's double form crosses no newline and its single form admits EXACTLY ONE (read off
+       the pattern rather than off the prose above it), and a retired argument is longer than that. Indirect
+       speech leaves the quotation channel BY CONSTRUCTION, which is the only repair that does not depend on a
+       mask reaching far enough.
+       Every clause of the retired argument is true of the MINT and its conclusion is false, because it never
+       asks WHEN the arrival of a work item is. A
        name's moment is fixed by what a name is for — the register names a row and a name may not move, so it
        is minted at CREATION. An arrival stamp's moment is fixed by what the order is for: a work item arrives
        when it becomes RUNNABLE, and a DYN_SCRIPT_SRC row is created at parse and becomes runnable when its
@@ -909,7 +918,10 @@ typedef struct Flow {
        `dyn_id` is load-bearing as an IDENTITY: the pending register names a row by it (PEND_SCRIPT_ROW), and
        re-stamping it at a delivery would orphan every entry naming it, on every arm of a fork, at the one
        moment the delivery is looking that row up by that name.
-       THE MOMENT IS THE STANDARD'S AND NOT A PREFERENCE, AND THE STANDARD RESUMES A BLOCKED PARSE WITH A TASK.
+       THE MOMENT IS THE STANDARD'S AND NOT A PREFERENCE, AND THE WHOLE DEFECT IS ONE SENTENCE: A SCRIPT
+       ELEMENT'S PLACE IN THE DOCUMENT IS FIXED AT PARSE, AND ITS PLACE IN THE EVENT LOOP IS FIXED WHEN ITS
+       BYTES MADE IT READY. Those are two different instants and this table used to hold one number for both.
+       THE STANDARD RESUMES A BLOCKED PARSE WITH A TASK, WHICH IS WHERE THE SECOND INSTANT COMES FROM.
        HTML §13.2.6.4.8 The "text" insertion mode blocks only the TOKENIZER while a parser-blocking script is
        outstanding — "Block the tokenizer for this instance of the HTML parser, such that the event loop will
        not run tasks that invoke the tokenizer" — and then "spin the event loop until the parser's Document has
