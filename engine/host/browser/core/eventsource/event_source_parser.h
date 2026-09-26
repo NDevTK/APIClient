@@ -158,14 +158,42 @@ typedef struct {
  * algorithm" through the last line the bytes terminate.
  *
  * IT TAKES THE WHOLE BODY IN ONE CALL BECAUSE THAT IS WHAT THE TRANSPORT DELIVERS, AND THAT IS A STATEMENT
- * ABOUT THE TRANSPORT RATHER THAN ABOUT THE FORMAT. SECURITY.md makes `extension/lib/safe-fetch.js` the only
- * door onto the network, and it reads a reply with one `await resp.arrayBuffer()`, so a reply reaches this
- * engine whole or not at all; core/fetch/fetch.h's `fetch_owe` hands a component one reply record with one
- * body. A one-shot entry is therefore the honest shape today, and it is also what makes this component's
- * buffers correct as plain C rather than as the JS values CLAUDE.md requires of anything a flow QUEUES: they
- * are created, filled and released inside this one call, they cross no suspend point, and there is no park for
- * them to survive. The moment a chunked delivery exists they would have to survive one, and that is the
- * residual event_source_parser.c names.
+ * ABOUT THE TRANSPORT RATHER THAN ABOUT THE FORMAT. A one-shot entry is the honest shape today, and it is
+ * also what makes this component's buffers correct as plain C rather than as the JS values CLAUDE.md requires
+ * of anything a flow QUEUES: they are created, filled and released inside this one call, they cross no
+ * suspend point, and there is no park for them to survive. The moment a chunked delivery exists they would
+ * have to survive one, and that is the residual event_source_parser.c names.
+ *
+ * THE CLAUSE IS UNCHANGED AND ITS REASON HAS MOVED, WHICH MATTERS BECAUSE THE REASON IS THE HALF A READER
+ * ACTS ON. It read that SECURITY.md's one door onto the network `reads a reply with one` arrayBuffer await,
+ * `so a reply reaches this engine whole or not at all`, and that core/fetch/fetch.h's `fetch_owe` hands one
+ * reply record with one body. A reader re-deriving from that goes to the CHOKEPOINT, and it is the wrong file
+ * twice over. That zone's `_readBody(resp, sink, gated)` already takes a PER-CHUNK SINK, its own comment names
+ * an event stream that never ends as the case it exists for, and its entry REFUSES a body-gated request that
+ * asked for one — `blocked-stream-body-gated:` — rather than answering it whole, which is the refusal and not
+ * a flag. All of that is landed, and NOTHING passes that sink. What is absent is downstream of it:
+ * qjs_abi.h's `qjs_provide` is `ONE delivery for every parked request`, build.mjs's ABI list carries no chunk
+ * entry, and neither solver/engine.c nor solver/pending.c has a receiver for a delivery that RESUMES a park
+ * without RETIRING it. The door is open; the ABI and the pending register are not.
+ *   AND THE `fetch_owe` HALF NAMED A DOOR THIS COMPONENT'S CALLER WILL NOT TAKE. Its only call is
+ * core/fetch/fetch.c's `js_fetch_step`, the `fetch()` builtin. The three elements solver/endpoint.h names as
+ * the pattern the constructor follows do not use it: core/html/html_image.c and core/html/html_link.c each say
+ * at their own park that this is `WHAT fetch_owe COULD NOT`, and solver/engine.c records that
+ * `The two elements USED to come through fetch_owe`. A browser algorithm's own subresource takes
+ * `pending_park_request`, and a scope drawn from the retired clause prices the wrong seam.
+ * RETIREMENT: this record goes when an ABI entry delivers a partial body, because the clause above is then
+ * false by construction rather than reasoned about.
+ *
+ * AND THE CONSUMER THAT SEAM ALREADY HAS IS NOT THIS COMPONENT, WHICH IS THE ORDERING FACT A LANE SCOPING THE
+ * LANDING ABOVE MOST NEEDS AND WHICH IS STATED NOWHERE ELSE. The paragraphs above make HTML §9.2.2 "The
+ * EventSource interface"' constructor ONE landing and leave a reader believing it is the FIRST one. It is not:
+ * core/xhr/xml_http_request.c's run machine carries XR_LOADING, XR_RSC_LOADING and XR_PROGRESS — whose own
+ * stage labels spell the standard's step — as LANDED stages that run EXACTLY ONCE, and the comment at the
+ * first of them says why: `The whole body arrives as one chunk`. That is a call site that EXISTS, so the
+ * incremental-delivery landing has a reader with or without this file, while §9.2.2 has none until a page
+ * constructs one and §NO STUBS forbids installing the object before the connection can complete. A lane sent
+ * at this component therefore lands the transport UNDER XHR first and reaches this file second.
+ * RETIREMENT: this record goes when this component has a caller, because the ordering is then spent.
  *
  * `bytes`/`n` are the reply's BODY BYTES, undecoded — this runs §9.2.6's decode itself, because "The UTF-8
  * decode algorithm strips one leading UTF-8 Byte Order Mark (BOM), if any" is a step of THIS algorithm and a
