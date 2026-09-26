@@ -101,25 +101,38 @@
  *     one whose bundler compiled `import()` away into a chunk-id map plus a `<script>` injection scores
  *     ZERO there. The address is then composed through a CALL (`script.src = R.tu(R.p + R.u(id))`), so a
  *     `.src` door would add one OPAQUE row per runtime and recover NO address — recall bought for nothing,
- *     and precision spent. What would recover those addresses is interprocedural folding through the
- *     chunk-URL function, which is a different subproblem and is named as one below.
+ *     and precision spent. What recovers those addresses is interprocedural folding through the chunk-URL
+ *     function, which is a different subproblem and is the CHUNK MANIFEST channel — built, and reported as
+ *     its own band rather than as a door, for the same reason this exclusion stands.
  *   - a library wrapper (`axios.get`, `$.ajax`, an SDK `request()`), for the reason the DOORS table gives.
  *   - anything a bundle reaches through a member call this file cannot name, which is unbounded and is why
  *     the site count here is stated as a floor everywhere it is stated at all.
  *
- * NAMED RESIDUAL — THE CHUNK MANIFEST. WHAT IS NOT COVERED: a program address a bundler emits as a MAP
- * (`R.u = id => 9016===id ? "static/chunks/a.js" : ...`, or `"p/"+({id:"hash"})[id]+".js"`) composed with a
- * public-path literal and delivered to `script.src`. A parse has every one of those addresses in plain
- * literal text and this file recovers none of them, because the fold is per-argument and the composition
- * crosses a function boundary. WHAT THE NEXT DIFF BUILDS: a fold that resolves a PROPERTY assigned exactly
- * once in the file (the same bound-once-never-reassigned discipline `collectBinds` already applies to
- * names, which is what makes it sound) and that inlines a single-parameter function whose body folds,
- * ENUMERATING a ternary chain or a computed member on an object literal into the set of addresses it can
- * return — a 1-site-to-N-addresses relation this file's row shape does not yet have. It may NOT be keyed
- * on a bundler: CLAUDE.md §RUN-DON'T-MATCH bans bundler recognition by name, so the rule has to be about
- * the EXPRESSION and never about whose runtime emitted it. HOW ITS ABSENCE WOULD SHOW: a site whose
- * PROGRAM-door row reads 0 while the blind-spot row beside it reads a nonzero OPAQUE count — read those
- * two columns together in the per-site PROGRAM block, which is the reason that block prints them adjacent.
+ * THE CHUNK-MANIFEST RESIDUAL IS BUILT AND WHAT REPLACES IT IS NARROWER AND NAMES A DIFFERENT MECHANISM.
+ * It asked for a fold that resolves a PROPERTY assigned exactly once in the file, inlines a single-parameter
+ * function, and ENUMERATES a ternary chain or a computed member into the set of addresses it can return.
+ * That is what the CHUNK MANIFEST channel is, it is keyed on the expression and on no runtime's name, and
+ * the two forms it was written from both answer: a ternary chain over a public-path literal, and two object
+ * literals joined at one key. It found a PRECISION half its own clause did not anticipate and that is worth
+ * keeping, because the clause would otherwise be read as finished: the shape it describes is also the shape
+ * of an i18n table, an enum and a label map, so before an address test was added the channel reported
+ * `session`, `Users` and `0.001` as addresses and its figure was roughly double.
+ * WHAT IS NOT COVERED NOW: a runtime whose chunk-URL FUNCTION or public-path OBJECT is named by an
+ * identifier the FILE binds more than once. The bound-once discipline refuses those by design and is right
+ * to, because without a scope graph a name bound twice could be folded across a shadow and a wrong fold
+ * INVENTS an address. But the second binding is very often in a NESTED function that encloses neither the
+ * write nor the read, so the refusal is stricter than the hazard: measured on one webpack-4 runtime, the
+ * object and the chunk-URL function are each bound twice — once as a declaration at the runtime's own scope
+ * and once as a `var` inside a nested function — and both uses sit at the outer scope, where a scope-correct
+ * reader would settle them. WHAT THE NEXT DIFF BUILDS: one scope pre-pass producing the BINDER of every
+ * Identifier by node identity, so the slot map and the function-declaration lookup key on (binder, name)
+ * rather than on name. Node identity is what makes it cheap — the fold already receives the AST node, so
+ * nothing has to be threaded through it — and it is strictly BOTH more precise and wider than the file-wide
+ * count it replaces. HOW ITS ABSENCE WOULD SHOW: a site whose PROGRAM-door row reads 0, whose blind-spot
+ * OPAQUE count beside it is nonzero, AND whose manifest column reads 0 — three columns the per-site PROGRAM
+ * block prints adjacent for exactly this reading. Two sites on the corpus this ran against read that way
+ * for the reason just measured; two more read that way and their cause is NOT established, which is stated
+ * rather than guessed at.
  *
  * WHAT COMPLETES THE COMPARISON, NAMED SO IT CAN BE RUN RATHER THAN RE-DERIVED. This file is one half. The
  * other half is not "the engine's endpoint count", which answers a different question: `solver/result.c`
@@ -258,9 +271,52 @@ for (const d of DOORS) {
    PARSE beats a RUN: execution takes one arm unless it forks, and the text carries both. */
 const MAX_DEPTH = 24;
 
-function fold(node, binds, depth) {
+/* ── THE ENUMERATING FOLD: ONE FOLDER, A SECOND MODE, AND NO SECOND COPY ──────────────────────────────────
+   `fold` takes an optional `env`. With `env` NULL it is the folder every existing row is classified by and
+   not one of its answers moves — that is asserted rather than hoped for, by an A/B whose door totals and
+   whose judged population are byte-identical across this diff. With an `env` it may additionally resolve a
+   PARAMETER to a candidate value, decide an equality, index an object literal with a literal key, take the
+   right arm of `||` past a missing key, and INLINE a single-parameter function. Two folders would have been
+   free to disagree about what a `+` does; one folder with a mode cannot.
+   WHY A MODE AND NOT A WIDER DEFAULT: an equality this file can decide is a fold the ordinary channel could
+   legitimately have too, and enabling it there would MOVE numbers other lanes are pricing against. The mode
+   keeps the chunk-manifest channel additive to every total that already exists, which is what makes its own
+   number readable on the run it lands in.
+   A MISS IS NOT AN EMPTY STRING AND THE DIFFERENCE IS THE WHOLE SOUNDNESS OF THE ENUMERATION. Indexing an
+   object literal with a key it does not carry yields `undefined` in the language, and a bundler's chunk-URL
+   function relies on exactly that — `({names}[id] || id)` falls through to the id. Folding a miss to `""`
+   would silently INVENT an address with a segment deleted from it, so a miss carries a HOLE as well as its
+   marker: read past `||` it disappears, and read anywhere else it drops the candidate. */
+const MISS = () => ({ text: "{?}", holes: 1, miss: true });
+
+/* ── WHAT AN ADDRESS LOOKS LIKE, IN ONE PLACE ─────────────────────────────────────────────────────────────
+   The base rate and the chunk manifest both have to decide whether a recovered string is an address, and two
+   copies of that decision would be free to drift into reporting one population under two definitions. The
+   first two alternatives are the base rate's own, unchanged, so its number cannot move by this being
+   factored out; the third is added for the manifest, because a bundler that emits `./chunk.HASH.js` has
+   written an address and the base rate never had to read one.
+   A FRAGMENT IS REFUSED AND THAT IS THE POINT RATHER THAN A LIMITATION. A composition that recovers a chunk
+   NAME without the public path in front of it — `grafana.geomapPanel.HASH.css`, `chunk.123.js` — has
+   recovered part of an address, and emitting a part as a whole would be this channel INVENTING one. Such a
+   fold is counted as a FRAGMENT and reported apart: the count says a manifest is present and that the
+   composition this file reached did not include its public path, which is a floor stated with a size.
+   IT IS ALSO THE PRECISION HALF OF THE MANIFEST CHANNEL AND IT WAS MEASURED, NOT ASSUMED. Without it the
+   channel reported `session`, `Users`, `usdc-usdt-n` and `0.001` as addresses — a one-parameter function
+   indexing a string table is an i18n table, an enum or a label map at least as often as it is a chunk
+   manifest, and nothing about the SHAPE of the code tells them apart. What tells them apart is what comes
+   out, which is the only axis that does not require knowing whose runtime wrote it. Ground truth for the
+   direction: of the addresses recovered at one site, fifteen name files the fetcher independently mirrored. */
+const looksLikeAddress = (v) => /^https?:\/\/[^\s]+$/.test(v) ||
+                                /^\/[A-Za-z0-9_][^\s"'<>]*$/.test(v) ||
+                                /^\.{1,2}\/[^\s"'<>]+$/.test(v);
+
+function fold(node, binds, depth, env) {
   if (node == null) return { text: "{?}", holes: 1 };
   if (depth > MAX_DEPTH) return { text: "{?}", holes: 1 };
+  if (env) {
+    const r = foldEnvOnly(node, binds, depth, env);
+    if (r) return r;
+  }
   switch (node.type) {
     case "StringLiteral":
       return { text: node.value, holes: 0 };
@@ -271,7 +327,7 @@ function fold(node, binds, depth) {
       for (let i = 0; i < node.quasis.length; i++) {
         t += node.quasis[i].value.cooked ?? node.quasis[i].value.raw ?? "";
         if (i < node.expressions.length) {
-          const r = fold(node.expressions[i], binds, depth + 1);
+          const r = fold(node.expressions[i], binds, depth + 1, env);
           t += r.holes ? r.text : r.text;
           h += r.holes;
         }
@@ -280,12 +336,12 @@ function fold(node, binds, depth) {
     }
     case "BinaryExpression": {
       if (node.operator !== "+") return { text: "{?}", holes: 1 };
-      const a = fold(node.left, binds, depth + 1), b = fold(node.right, binds, depth + 1);
+      const a = fold(node.left, binds, depth + 1, env), b = fold(node.right, binds, depth + 1, env);
       return { text: a.text + b.text, holes: a.holes + b.holes };
     }
     case "Identifier": {
       const b = binds.get(node.name);
-      if (b && b.node) return fold(b.node, binds, depth + 1);
+      if (b && b.node) return fold(b.node, binds, depth + 1, env);
       return { text: "{?}", holes: 1 };
     }
     case "MemberExpression": {
@@ -297,21 +353,157 @@ function fold(node, binds, depth) {
       for (const p of b.node.properties) {
         if (p.type !== "ObjectProperty" || p.computed) continue;
         const k = p.key.type === "Identifier" ? p.key.name : (p.key.type === "StringLiteral" ? p.key.value : null);
-        if (k === node.property.name) return fold(p.value, binds, depth + 1);
+        if (k === node.property.name) return fold(p.value, binds, depth + 1, env);
       }
       return { text: "{?}", holes: 1 };
     }
     case "ConditionalExpression": {
-      const a = fold(node.consequent, binds, depth + 1), b = fold(node.alternate, binds, depth + 1);
+      const a = fold(node.consequent, binds, depth + 1, env), b = fold(node.alternate, binds, depth + 1, env);
       if (a.holes === 0 && b.holes === 0) return { text: a.text, holes: 0, alt: b.text };
       return { text: "{?}", holes: 1 };
     }
     case "TSAsExpression":
     case "TSNonNullExpression":
     case "ParenthesizedExpression":
-      return fold(node.expression, binds, depth + 1);
+      return fold(node.expression, binds, depth + 1, env);
     default:
       return { text: "{?}", holes: 1 };
+  }
+}
+
+/* `obj.prop` AS ONE KEY, so a write and a read of the same slot are the same string and cannot drift. */
+function memberKey(node) {
+  if (!node || (node.type !== "MemberExpression" && node.type !== "OptionalMemberExpression")) return null;
+  if (node.computed || node.object.type !== "Identifier" || node.property.type !== "Identifier") return null;
+  return node.object.name + "." + node.property.name;
+}
+
+/* AN OBJECT LITERAL, HOWEVER THE FILE SPELLS THE WAY TO IT: written inline, which is what a minified chunk
+   table is; bound once to a name; or assigned once to a property. */
+function objectLiteralOf(node, binds, env) {
+  if (!node) return null;
+  if (node.type === "ObjectExpression") return node;
+  if (node.type === "Identifier") {
+    const b = binds.get(node.name);
+    return b && b.node && b.node.type === "ObjectExpression" ? b.node : null;
+  }
+  if (env) {
+    const m = env.memberOnce.get(memberKey(node));
+    if (m && m.type === "ObjectExpression") return m;
+  }
+  return null;
+}
+
+/* A SINGLE-PARAMETER FUNCTION WHOSE WHOLE BODY IS ONE RETURNED EXPRESSION, which is the only shape that can
+   be inlined without reasoning about statements. A function with more than one statement is REFUSED rather
+   than approximated by its last return: the statements before it may narrow the parameter, and a fold that
+   ignored them would enumerate addresses the function cannot actually return. */
+function singleParamFn(node, binds, env) {
+  let fn = null;
+  if (!node) return null;
+  if (node.type === "Identifier") {
+    const b = binds.get(node.name);
+    if (b && b.node) fn = b.node;
+    /* A FUNCTION DECLARATION IS ONE FUNCTION ONLY IF ITS NAME IS BOUND ONCE, and `binds` cannot answer for
+       it: a declaration has no initializer, so `collectBinds` files it under the same "not foldable" set as
+       a parameter. Minified code reuses one letter for a dozen declarations and a dozen parameters, so
+       taking whichever declaration was recorded last would inline a DIFFERENT function and enumerate
+       addresses no call site can produce. The count is the same test `binds` makes, asked separately. */
+    else if (env && env.fnDecl.has(node.name) &&
+             env.count.get(node.name) === 1 && !env.reassigned.has(node.name)) fn = env.fnDecl.get(node.name);
+  } else if (env) {
+    const m = env.memberOnce.get(memberKey(node));
+    if (m) fn = m;
+  }
+  if (!fn) return null;
+  if (fn.type !== "FunctionDeclaration" && fn.type !== "FunctionExpression" &&
+      fn.type !== "ArrowFunctionExpression") return null;
+  if (!fn.params || fn.params.length !== 1 || fn.params[0].type !== "Identifier") return null;
+  if (fn.body.type === "BlockStatement") {
+    if (fn.body.body.length !== 1) return null;
+    const st = fn.body.body[0];
+    if (st.type !== "ReturnStatement" || !st.argument) return null;
+  }
+  return fn;
+}
+
+/* EVERYTHING THE ORDINARY CHANNEL MAY NOT DO, IN ONE PLACE, REACHED ONLY WITH AN `env`. Returning null hands
+   the node back to the folder's own switch, so a node this mode has nothing to say about is folded exactly as
+   it is folded with no env at all. */
+function foldEnvOnly(node, binds, depth, env) {
+  switch (node.type) {
+    case "Identifier":
+      /* THE ENUMERATED PARAMETER. Its value is a candidate drawn from the function's OWN body, so the text
+         this returns is a value the bundler really can be called with rather than one invented here. */
+      if (env.vars.has(node.name)) return { text: env.vars.get(node.name), holes: 0 };
+      return null;
+    case "MemberExpression":
+    case "OptionalMemberExpression": {
+      /* `MAP[id]` WITH A LITERAL KEY. The object is either written inline — which is what a minified chunk
+         table is — or is a name this file already trusts to be one thing. */
+      if (!node.computed) {
+        /* A PROPERTY ASSIGNED EXACTLY ONCE IN THE FILE, which is where a bundler keeps its public path and
+           its chunk-URL function: `o.p="/assets/webpack/"`, `p.u=id=>...`. The once-ness is the same argument
+           that makes a bound-once NAME foldable — a slot written in one place cannot be two things — and it
+           additionally requires the OBJECT to be a name this file binds once, because a property of an
+           object nobody can identify names nothing. */
+        const m = env.memberOnce.get(memberKey(node));
+        if (m) return fold(m, binds, depth + 1, env);
+        return null;
+      }
+      const key = fold(node.property, binds, depth + 1, env);
+      if (key.holes !== 0) return null;
+      const obj = objectLiteralOf(node.object, binds, env);
+      if (!obj) return null;
+      for (const q of obj.properties) {
+        if (q.type !== "ObjectProperty" || q.computed) continue;
+        const k = q.key.type === "Identifier" ? q.key.name
+                : q.key.type === "StringLiteral" ? q.key.value
+                : q.key.type === "NumericLiteral" ? String(q.key.value) : null;
+        if (k === key.text) return fold(q.value, binds, depth + 1, env);
+      }
+      return MISS();
+    }
+    case "LogicalExpression": {
+      /* ONLY PAST A MISS, which is the one case a static reader can settle without knowing a runtime value:
+         `undefined || x` IS `x` in every execution, so this decides nothing the program had a choice about. */
+      if (node.operator !== "||") return null;
+      const l = fold(node.left, binds, depth + 1, env);
+      if (l.miss) return fold(node.right, binds, depth + 1, env);
+      if (l.holes === 0 && l.text !== "") return l;
+      return null;
+    }
+    case "BinaryExpression": {
+      /* AN EQUALITY BETWEEN TWO SETTLED OPERANDS, so the ternary chain a bundler writes its manifest as can
+         be DECIDED per candidate instead of collapsing to a hole. Compared as TEXT because that is what the
+         fold produces, and `9016===e` with the candidate `9016` is the only shape this has to answer. */
+      if (node.operator !== "===" && node.operator !== "==" &&
+          node.operator !== "!==" && node.operator !== "!=") return null;
+      const a = fold(node.left, binds, depth + 1, env), b = fold(node.right, binds, depth + 1, env);
+      if (a.holes !== 0 || b.holes !== 0) return null;
+      const eq = a.text === b.text;
+      return { text: "", holes: 0, cmp: node.operator[0] === "!" ? !eq : eq };
+    }
+    case "ConditionalExpression": {
+      const t = fold(node.test, binds, depth + 1, env);
+      if (t.cmp === undefined) return null;
+      return fold(t.cmp ? node.consequent : node.alternate, binds, depth + 1, env);
+    }
+    case "CallExpression":
+    case "OptionalCallExpression": {
+      /* INLINING THE ONE APPLICATION THIS ROW IS ABOUT. `env.app` is that call node and there is exactly one
+         of it per row — a composition holding two applications is REFUSED by the scanner rather than guessed
+         at, because two unknown parameters make the address set a product of two domains and nothing here
+         has established the two are ever indexed together. */
+      if (node !== env.app) return null;
+      const fn = env.fn;
+      const inner = new Map(env.vars);
+      inner.set(fn.params[0].name, env.candidate);
+      return fold(fn.body.type === "BlockStatement" ? fn.body.body[0].argument : fn.body,
+                  binds, depth + 1, { ...env, vars: inner });
+    }
+    default:
+      return null;
   }
 }
 
@@ -351,6 +543,17 @@ function collectBinds(ast) {
   const count = new Map();   // name -> number of binding occurrences anywhere in the file
   const init = new Map();    // name -> initializer node of its (single) binding
   const assigned = new Set();
+  const fnDecls = new Map(); // name -> its FunctionDeclaration node
+  /* `assigned` IS NOT A SET OF ASSIGNMENTS AND THE NAME IS OLDER THAN THIS COMMENT. `bind` puts a name there
+     whenever it has NO initializer, so every function declaration and every parameter is in it — which is
+     right for `binds`, whose question is "may this name be folded", and WRONG for any question of the form
+     "does this name still mean what it was bound to". The webpack runtime is a FunctionDeclaration with its
+     public path assigned to a property of itself, so a slot test keyed on `assigned` refuses every real
+     instance of the shape it exists to read. `reassigned` is the narrow set: written by an assignment or an
+     update, and by nothing else. */
+  const reassigned = new Set();
+  const memberWrites = new Map(); // "obj.prop" -> { n, node }  every assignment to that slot
+  const memberOther = new Set();  // "obj.prop" slots reached some way this pass cannot account for
 
   const bind = (id, valueNode) => {
     if (!id || id.type !== "Identifier") return;
@@ -372,6 +575,7 @@ function collectBinds(ast) {
       case "FunctionDeclaration":
       case "ClassDeclaration":
         if (n.id) bind(n.id, null);
+        if (n.type === "FunctionDeclaration" && n.id) fnDecls.set(n.id.name, n);
         for (const p of n.params || []) bindPattern(p);
         break;
       case "FunctionExpression":
@@ -388,11 +592,29 @@ function collectBinds(ast) {
       case "ImportNamespaceSpecifier":
         bind(n.local, null);
         break;
-      case "AssignmentExpression":
-        if (n.left.type === "Identifier") assigned.add(n.left.name);
+      case "AssignmentExpression": {
+        if (n.left.type === "Identifier") { assigned.add(n.left.name); reassigned.add(n.left.name); }
+        /* EVERY WRITE TO AN `obj.prop` SLOT IS TALLIED, INCLUDING THE ONES THAT DISQUALIFY IT. A slot written
+           by `+=`, or through a COMPUTED property (`obj[k]=v`, which may be this very slot and this pass
+           cannot tell), is one whose single-assignment claim cannot be made — so it is poisoned by name
+           rather than left looking clean, which is the direction that refuses a fold instead of inventing
+           an address. */
+        const k = memberKey(n.left);
+        if (k) {
+          if (n.operator !== "=") memberOther.add(k);
+          else {
+            const cur = memberWrites.get(k);
+            if (cur) cur.n++; else memberWrites.set(k, { n: 1, node: n.right });
+          }
+        } else if (n.left.type === "MemberExpression" && n.left.computed &&
+                   n.left.object.type === "Identifier") {
+          memberOther.add(n.left.object.name + ".*");
+        }
         break;
+      }
       case "UpdateExpression":
-        if (n.argument.type === "Identifier") assigned.add(n.argument.name);
+        if (n.argument.type === "Identifier") { assigned.add(n.argument.name); reassigned.add(n.argument.name); }
+        if (memberKey(n.argument)) memberOther.add(memberKey(n.argument));
         break;
       default: break;
     }
@@ -401,10 +623,149 @@ function collectBinds(ast) {
   const binds = new Map();
   for (const [name, c] of count)
     if (c === 1 && !assigned.has(name) && init.has(name)) binds.set(name, { node: init.get(name) });
+  /* THE SLOTS A SINGLE ASSIGNMENT SETTLES. Three conditions and each one refuses a real corpus shape: the
+     slot is written exactly once with a plain `=`; the OBJECT is a name this file binds exactly once and
+     never reassigns, so the slot belongs to one object; and nothing in the file writes that object through a
+     COMPUTED property, which could be this slot under another spelling. */
+  const memberOnce = new Map();
+  for (const [k, v] of memberWrites) {
+    if (v.n !== 1) continue;
+    if (memberOther.has(k)) continue;
+    const objName = k.slice(0, k.indexOf("."));
+    if (count.get(objName) !== 1 || reassigned.has(objName)) continue;
+    if (memberOther.has(objName + ".*")) continue;
+    memberOnce.set(k, v.node);
+  }
   /* `assigned` LEAVES WITH THE OTHER TWO because the global-object test needs it and cannot recompute it
      without walking the file again: a name this file never BINDS but somewhere ASSIGNS is a name whose value
      at the call site this pass has no claim on, global or not. */
-  return { binds, count, assigned };
+  return { binds, count, assigned, reassigned, fnDecl: fnDecls, memberOnce };
+}
+
+/* ── THE CHUNK MANIFEST ───────────────────────────────────────────────────────────────────────────────────
+   WHAT THIS ANSWERS AND WHY IT IS A BAND AND NOT A DOOR. A bundler that compiled `import()` away emits its
+   chunk addresses as a MAP and a PUBLIC-PATH literal, composes them in a one-parameter function, and hands
+   the result to an injected `<script>`. Every one of those addresses is in the file as plain literal text, so
+   a PARSE has them and the site channel recovered NONE of them — the composition crosses a function boundary
+   and the per-argument fold stops at the call. That was this file's own named residual and this is it built.
+   IT IS NOT A REQUEST COUNT AND MUST NEVER BE QUOTED AS ONE. A manifest names every chunk the bundle COULD
+   load; one run loads a few. So these rows are ADDRESSES RECOVERED FROM THE TEXT, reported beside the door
+   totals and summed into none of them, in the same relationship the blind-spot band already has to a door.
+   THE ENUMERATION IS OVER A DOMAIN THE FUNCTION ITSELF NAMES, WHICH IS WHAT KEEPS IT FROM INVENTING. The
+   candidates are the KEYS of the object literals the body indexes with its own parameter and the LITERALS the
+   body compares that parameter against — nothing else. For each candidate the whole composition is folded
+   with the parameter bound to it, and a candidate whose fold leaves a hole is DROPPED. So every address
+   emitted is one the function demonstrably returns for an input the function itself mentions; the set is the
+   image of the enumerated domain and never a guess about the domain's extent.
+   THE CORRELATION IS THE PART THAT WOULD BE WRONG IF IT WERE DONE THE OBVIOUS WAY. A chunk-URL function
+   indexes TWO maps with ONE parameter — a name map and a hash map — so enumerating each map independently
+   would emit the product of two domains and nearly every member of it would be an address that does not
+   exist. Binding the parameter ONCE per candidate and folding the whole expression is what keeps the two
+   lookups at the same point of the domain.
+   IT IS KEYED ON THE EXPRESSION AND ON NO BUNDLER'S NAME, which CLAUDE.md's RUN-DON'T-MATCH rule requires:
+   nothing here reads a runtime's identifier, a chunk-file naming convention or a public-path spelling. What
+   it keys on is a single-parameter function applied to something, indexed by its own parameter — a shape,
+   which is why it finds the webpack-4 and the webpack-5 form with one rule and would find a third. */
+/* WHAT A COMPOSITION ROOT IS, AND WHY A CALL IS NOT ONE UNLESS IT IS THE APPLICATION ITSELF. A minified
+   bundle is ONE top-level call — `!function(e){...}([...])` — so a rule that treated any CallExpression
+   CONTAINING an application as a composition made the whole FILE the first candidate, found dozens of
+   applications in it, refused it for holding two, and descended no further. Measured before the fix: 1383
+   refusals and ZERO rows at every runtime this channel was built for. A string composition is a `+` or a
+   template; a call is a root only when it IS the one application, which is the `el.src = t(id)` shape. */
+const isStringComposer = (n) => (n.type === "BinaryExpression" && n.operator === "+") ||
+                                n.type === "TemplateLiteral";
+
+function applicationsIn(node, binds, env, out) {
+  if (!node || typeof node.type !== "string") return;
+  if ((node.type === "CallExpression" || node.type === "OptionalCallExpression") &&
+      node.arguments.length === 1) {
+    const fn = singleParamFn(node.callee, binds, env);
+    if (fn) out.push({ app: node, fn });
+  }
+  for (const k of VISITOR_KEYS[node.type] || []) {
+    const v = node[k];
+    if (Array.isArray(v)) { for (const c of v) applicationsIn(c, binds, env, out); }
+    else applicationsIn(v, binds, env, out);
+  }
+}
+
+/* THE CANDIDATE DOMAIN, READ OUT OF THE FUNCTION'S OWN BODY AND NOWHERE ELSE. */
+function candidateDomain(fn, binds, env) {
+  const param = fn.params[0].name;
+  const body = fn.body.type === "BlockStatement" ? fn.body.body[0].argument : fn.body;
+  const out = new Set();
+  const lit = (n) => n && (n.type === "StringLiteral" ? n.value
+                         : n.type === "NumericLiteral" ? String(n.value) : null);
+  const visit = (n) => {
+    if (!n || typeof n.type !== "string") return;
+    if ((n.type === "MemberExpression" || n.type === "OptionalMemberExpression") && n.computed &&
+        n.property.type === "Identifier" && n.property.name === param) {
+      const obj = objectLiteralOf(n.object, binds, env);
+      if (obj) for (const q of obj.properties) {
+        if (q.type !== "ObjectProperty" || q.computed) continue;
+        const k = q.key.type === "Identifier" ? q.key.name
+                : q.key.type === "StringLiteral" ? q.key.value
+                : q.key.type === "NumericLiteral" ? String(q.key.value) : null;
+        if (k !== null) out.add(k);
+      }
+    }
+    if (n.type === "BinaryExpression" && (n.operator === "===" || n.operator === "==")) {
+      if (n.left.type === "Identifier" && n.left.name === param) { const v = lit(n.right); if (v !== null) out.add(v); }
+      if (n.right.type === "Identifier" && n.right.name === param) { const v = lit(n.left); if (v !== null) out.add(v); }
+    }
+    for (const k of VISITOR_KEYS[n.type] || []) {
+      const v = n[k];
+      if (Array.isArray(v)) { for (const c of v) visit(c); } else visit(v);
+    }
+  };
+  visit(body);
+  return { param, out };
+}
+
+function scanManifest(ast, binds, base, filename) {
+  const rows = [];
+  let refusedTwoApplications = 0;
+  const descend = (node) => {
+    if (!node || typeof node.type !== "string") return;
+    const bare = (node.type === "CallExpression" || node.type === "OptionalCallExpression") &&
+                 node.arguments.length === 1 ? singleParamFn(node.callee, binds, base) : null;
+    if (isStringComposer(node) || bare) {
+      const apps = [];
+      if (bare) apps.push({ app: node, fn: bare });
+      else applicationsIn(node, binds, base, apps);
+      if (apps.length === 1) {
+        const { app, fn } = apps[0];
+        const dom = candidateDomain(fn, binds, base);
+        if (dom.out.size) {
+          const addrs = new Set(), frags = new Set();
+          let dropped = 0;
+          for (const cand of dom.out) {
+            const r = fold(node, binds, 0, { ...base, vars: new Map(), app, fn, candidate: cand });
+            if (r.holes !== 0 || r.text === "") { dropped++; continue; }
+            if (looksLikeAddress(r.text)) addrs.add(r.text); else frags.add(r.text);
+          }
+          if (addrs.size || frags.size) {
+            rows.push({ file: filename, line: node.loc ? node.loc.start.line : 0,
+                        candidates: dom.out.size, dropped, addresses: [...addrs], fragments: frags.size });
+            return;   /* the OUTERMOST composition owns the row; an inner one would re-report it shorter */
+          }
+        }
+      } else if (apps.length > 1) {
+        /* AND THE REFUSAL DOES NOT DESCEND, which is the half a counter alone would have got wrong. Walking
+           into a refused composition finds one of its applications on its own and enumerates THAT — yielding
+           an address with the other application's whole contribution missing from it, which is not a shorter
+           answer but a fabricated one. The control that removes this `return` reports such a row. */
+        refusedTwoApplications++;
+        return;
+      }
+    }
+    for (const k of VISITOR_KEYS[node.type] || []) {
+      const v = node[k];
+      if (Array.isArray(v)) { for (const c of v) descend(c); } else descend(v);
+    }
+  };
+  descend(ast);
+  return { rows, refusedTwoApplications };
 }
 
 /* GUARD DEPTH IS PROVENANCE AND NOT DECORATION. CLAUDE.md §What-the-tool-produces' proposition is "what the
@@ -421,9 +782,14 @@ function readFile(src, filename) {
     catch (e) { err = e; }
   }
   if (!ast) return { parsed: false, error: String(err && err.message || err).slice(0, 160), sites: [], pathish: new Set(), blind: [], xhrOpenSkippedNonLiteralMethod: 0,
-                     globalDoor: { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 } };
+                     globalDoor: { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 },
+                     manifest: { rows: [], refusedTwoApplications: 0 } };
 
-  const { binds, count: bindCount, assigned: bindAssigned } = collectBinds(ast);
+  const { binds, count: bindCount, assigned: bindAssigned, reassigned, fnDecl, memberOnce } = collectBinds(ast);
+  /* THE ENUMERATING FOLD'S FIXED HALF, built once per file: what a name and a slot resolve to. The per-row
+     half — which application, which candidate — is added at the row. */
+  const envBase = { memberOnce, fnDecl, count: bindCount, reassigned };
+  const manifest = scanManifest(ast, binds, envBase, filename);
   const sites = [];
   const pathish = new Set();
   const blind = [];
@@ -554,10 +920,14 @@ function readFile(src, filename) {
     if (n.type !== "StringLiteral" || attached.has(n)) return;
     const v = n.value;
     if (v.length < 2 || v.length > 512) return;
+    /* THE BASE RATE KEEPS ITS OWN TWO ALTERNATIVES. `looksLikeAddress` adds a third for the manifest, and a
+       relative `./x` counted here would move a number other lanes price against, so this asks for the two
+       it always asked for. The shared helper is what stops the two channels disagreeing about the two. */
     if (/^https?:\/\/[^\s]+$/.test(v) || /^\/[A-Za-z0-9_][^\s"'<>]*$/.test(v)) pathish.add(v);
   });
 
-  return { parsed: true, error: null, sites, pathish, blind, xhrOpenSkippedNonLiteralMethod, globalDoor };
+  return { parsed: true, error: null, sites, pathish, blind, xhrOpenSkippedNonLiteralMethod, globalDoor,
+           manifest };
 }
 
 /* ── THE ARMED CONTROL ────────────────────────────────────────────────────────────────────────────────────
@@ -636,6 +1006,56 @@ const SELFTEST_BLIND = [
   [`fetch("/api/x")`,               []],
 ];
 
+/* THE CHUNK-MANIFEST CHANNEL IS ARMED ON BOTH SHAPES AND ON EVERY REFUSAL IT CLAIMS TO MAKE. Its number is
+   an ADDRESS SET, so a row that silently stopped enumerating would report a smaller manifest — and a smaller
+   manifest reads as "a parse cannot reach these after all", which is the flattering direction and exactly the
+   answer this file must not manufacture. Each row states the addresses, how many candidates were drawn, and
+   how many were DROPPED for a hole: the dropped figure is what arms the rule that a missing map key is not an
+   empty string, and without it a candidate absent from the hash map would emit an address with a segment
+   deleted from it. */
+const SELFTEST_MANIFEST = [
+  /* THE TERNARY-CHAIN FORM: a public path assigned to a slot, a chain assigned to another, composed. */
+  [`var p={};p.u=e=>1===e?"a/1.js":2===e?"a/2.js":"a/x.js";p.p="/pub/";var b=p.p+p.u(e)`,
+   { addresses: ["/pub/a/1.js", "/pub/a/2.js"], candidates: 2, dropped: 0 }],
+  /* THE TWO-MAP FORM, WHICH IS THE ONE THE CORRELATION MATTERS FOR. `c` is in the name map and not the hash
+     map, so it DROPS; `b` is in the hash map and not the name map, so `||` falls through to the key itself. */
+  [`function t(e){return o.p+""+({a:"A",c:"C"}[e]||e)+"."+{a:"h",b:"g"}[e]+".chunk.js"}function o(){}o.p="/w/";s.src=t(e)`,
+   { addresses: ["/w/A.h.chunk.js", "/w/b.g.chunk.js"], candidates: 3, dropped: 1 }],
+  /* THE CORRELATION, ASSERTED AS AN EXACT LIST, WHICH IS THE ONLY CONTROL ON THE WHOLE DESIGN THAT MATTERS.
+     Two maps are indexed by ONE parameter, so the answer is two addresses and not four: `na` pairs with `ha`
+     and `nb` with `hb`, and the crossed pairs `./na.hb.js` and `./nb.ha.js` name nothing that exists. The
+     `want` list is compared exactly, so a fold that enumerated the maps INDEPENDENTLY fails here — and it
+     would fail loudly, because a cross-product grows as the square. Measured on one real runtime: 394
+     addresses recovered where crossing the two maps would have emitted up to 155236. */
+  [`function t(e){return "./"+{a:"na",b:"nb"}[e]+"."+{a:"ha",b:"hb"}[e]+".js"}var b=t(e)`,
+   { addresses: ["./na.ha.js", "./nb.hb.js"], candidates: 2, dropped: 0, fragments: 0 }],
+  /* A LABEL TABLE IS THE SAME SHAPE AS A CHUNK MANIFEST AND MUST RECOVER NO ADDRESS. This is the precision
+     control and it is the one the channel was measured failing before the shape test existed. */
+  [`function t(e){return {a:"session",b:"Users"}[e]}var b=t(e)`,
+   { addresses: [], candidates: 2, dropped: 0, fragments: 2 }],
+  /* A CHUNK NAME WITH NO PUBLIC PATH IS A FRAGMENT, not a shorter address. */
+  [`function t(e){return {a:"app.HASH.css"}[e]}var b=t(e)`,
+   { addresses: [], candidates: 1, dropped: 0, fragments: 1 }],
+  /* A RELATIVE ADDRESS IS ONE, which is the third alternative the shape test adds for this channel. */
+  [`function t(e){return "./chunks/"+{a:"a.HASH.js"}[e]}var b=t(e)`,
+   { addresses: ["./chunks/a.HASH.js"], candidates: 1, dropped: 0, fragments: 0 }],
+  /* NEGATIVES — each one a shape whose fold would INVENT an address, and each refused for a stated reason. */
+  //  a slot written twice is not a slot this pass can read
+  [`var p={};p.u=e=>1===e?"/a":"/b";p.u=e=>"/z";var b=p.p+p.u(e)`,                     null],
+  //  a computed write to the object could be this very slot under another spelling
+  [`var p={};p.u=e=>1===e?"/a/1.js":"/b";p[k]=1;var b=p.u(e)`,                         null],
+  //  a body with a statement before its return may narrow the parameter
+  [`function t(e){var z=1;return "/x/"+{a:"A"}[e]}var b=t(e)`,                         null],
+  //  an object bound more than once is not one object
+  [`var p={};var p={};p.u=e=>1===e?"/a/1.js":"/b";var b=p.u(e)`,                       null],
+  //  a function whose body names no candidate for its parameter enumerates nothing
+  [`var p={};p.u=e=>"/static/"+e;p.p="/x/";var b=p.p+p.u(e)`,                          null],
+];
+/* A COMPOSITION HOLDING TWO APPLICATIONS IS REFUSED AND THE REFUSAL IS COUNTED, asserted apart because the
+   expected row list is empty either way and an uncounted refusal is indistinguishable from a shape the
+   scanner never saw. */
+const SELFTEST_MANIFEST_TWO = `var p={};p.u=e=>1===e?"/a/1.js":"/b";p.v=e=>2===e?"/c/2.js":"/d";var b=p.u(e)+p.v(e)`;
+
 function selftest() {
   const seenKind = new Set(), seenCls = new Set();
   let spoke = 0;
@@ -687,6 +1107,49 @@ function selftest() {
   for (const p of ["src", "href"])
     if (!seenBlindProp.has(p)) die(`SELF-TEST FAILED: no control exercises the ${p} blind-spot property.`);
   if (blindSpoke < 5) die(`SELF-TEST FAILED: only ${blindSpoke} blind-spot row(s) from the positive controls.`);
+  /* THE MANIFEST CHANNEL, SHAPE BY SHAPE AND REFUSAL BY REFUSAL. */
+  let manifestSpoke = 0, manifestAddrs = 0, manifestFrags = 0;
+  for (const [src, want] of SELFTEST_MANIFEST) {
+    const r = readFile(src, "<selftest-manifest>");
+    if (!r.parsed) die(`SELF-TEST: the parser refused \`${src}\` — ${r.error}`);
+    const rows = r.manifest.rows;
+    if (!want) {
+      if (rows.length)
+        die(`SELF-TEST FAILED: \`${src}\` produced ${rows.length} manifest row(s) naming ` +
+            `${JSON.stringify(rows[0].addresses)}. This shape cannot be folded soundly, so every address ` +
+            `above is one this file INVENTED — the single failure the enumeration may not have.`);
+      continue;
+    }
+    if (rows.length !== 1)
+      die(`SELF-TEST FAILED: \`${src}\` produced ${rows.length} manifest row(s) and not 1.`);
+    const got = { addresses: [...rows[0].addresses].sort(), candidates: rows[0].candidates,
+                  dropped: rows[0].dropped, fragments: rows[0].fragments };
+    const wantSorted = { ...want, addresses: [...want.addresses].sort(), fragments: want.fragments || 0 };
+    if (JSON.stringify(got) !== JSON.stringify(wantSorted))
+      die(`SELF-TEST FAILED on the manifest channel for \`${src}\`\n  want ${JSON.stringify(wantSorted)}\n` +
+          `  got  ${JSON.stringify(got)}\nThe address set this file reports as what a PARSE recovers is not ` +
+          `what its own controls say it is, so nothing is printed.`);
+    if (r.sites.length)
+      die(`SELF-TEST FAILED: \`${src}\` produced ${r.sites.length} SITE row(s). A manifest row must never ` +
+          `enter the door totals — it is an ADDRESS a parse recovers, not a request site.`);
+    if (rows[0].addresses.length) manifestSpoke++;
+    manifestAddrs += rows[0].addresses.length;
+    if (rows[0].fragments) manifestFrags += rows[0].fragments;
+  }
+  if (manifestSpoke < 2) die(`SELF-TEST FAILED: only ${manifestSpoke} manifest control(s) recovered an address.`);
+  if (manifestFrags < 3)
+    die(`SELF-TEST FAILED: the FRAGMENT channel counted ${manifestFrags}. It is what separates a chunk ` +
+        `manifest from a label table, so a zero it has never been seen to move cannot be read at all.`);
+  if (manifestAddrs < 4) die(`SELF-TEST FAILED: the manifest controls enumerated only ${manifestAddrs} address(es).`);
+  {
+    const r = readFile(SELFTEST_MANIFEST_TWO, "<selftest-manifest>");
+    if (r.manifest.rows.length)
+      die(`SELF-TEST FAILED: a composition holding TWO applications produced a manifest row. Two unknown ` +
+          `parameters make the address set a product of two domains and most of that product does not exist.`);
+    if (r.manifest.refusedTwoApplications < 1)
+      die(`SELF-TEST FAILED: the two-application refusal is not counted, so its zero over the corpus cannot ` +
+          `be told from a shape the scanner never met.`);
+  }
   /* THE GLOBAL-REACHED DOOR'S THREE COUNTERS ARE ARMED ONE AT A TIME AND EACH IS SHOWN RISING, because a
      counter whose zero nobody has ever seen move cannot tell "the corpus has none of these" from "this
      channel stopped counting" — and the three are the whole price of the widening, so a dead one turns a
@@ -723,7 +1186,8 @@ function selftest() {
     if (!seenCls.has(c)) die(`SELF-TEST FAILED: no control exercises the ${c} destination class.`);
   /* A CONTROL THAT NEVER SPOKE IS NOT A CONTROL. */
   if (spoke < 10) die(`SELF-TEST FAILED: only ${spoke} row(s) were produced by the positive controls.`);
-  return { rows: SELFTEST.length, produced: spoke, blindRows: SELFTEST_BLIND.length, blindProduced: blindSpoke };
+  return { rows: SELFTEST.length, produced: spoke, blindRows: SELFTEST_BLIND.length, blindProduced: blindSpoke,
+           manifestRows: SELFTEST_MANIFEST.length + 1, manifestProduced: manifestSpoke, manifestAddrs };
 }
 
 /* ── THE RUN ──────────────────────────────────────────────────────────────────────────────────────────── */
@@ -783,6 +1247,8 @@ function main(argv) {
       argShape: {}, bindBuckets: { "1": 0, "2-5": 0, "6-20": 0, "21-100": 0, "101+": 0, "0": 0 }, oneCharNames: 0,
       blind: { sites: 0, literal: 0, folded: 0, shape: 0, opaque: 0, src: 0, href: 0 }, blindUrls: new Set(), xhrOpenSkipped: 0,
       globalDoor: { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 },
+      manifest: { sites: 0, addressSites: 0, candidates: 0, dropped: 0, fragments: 0, refusedTwoApplications: 0, multi: 0 },
+      manifestUrls: new Set(), manifestRows: [],
     });
     return perSite.get(id);
   };
@@ -812,6 +1278,17 @@ function main(argv) {
     for (const v of r.pathish) b.pathish.add(v);
     b.xhrOpenSkipped += r.xhrOpenSkippedNonLiteralMethod;
     for (const k of Object.keys(b.globalDoor)) b.globalDoor[k] += r.globalDoor[k];
+    b.manifest.refusedTwoApplications += r.manifest.refusedTwoApplications;
+    for (const m of r.manifest.rows) {
+      b.manifest.sites++;
+      if (m.addresses.length) b.manifest.addressSites++;
+      b.manifest.candidates += m.candidates;
+      b.manifest.dropped += m.dropped;
+      b.manifest.fragments += m.fragments;
+      if (m.addresses.length > 1) b.manifest.multi++;
+      for (const u of m.addresses) b.manifestUrls.add(u);
+      if (nExamples) b.manifestRows.push(m);
+    }
     for (const s of r.blind) {
       b.blind.sites++; b.blind[s.kind]++; b.blind[s.prop]++;
       if (s.kind !== "opaque") b.blindUrls.add(s.url);
@@ -868,8 +1345,9 @@ function main(argv) {
     argShape: {}, bindBuckets: { "1": 0, "2-5": 0, "6-20": 0, "21-100": 0, "101+": 0, "0": 0 }, oneCharNames: 0,
     blind: { sites: 0, literal: 0, folded: 0, shape: 0, opaque: 0, src: 0, href: 0 }, blindDistinctUrls: 0, xhrOpenSkipped: 0,
     globalDoor: { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 },
+    manifest: { sites: 0, addressSites: 0, candidates: 0, dropped: 0, fragments: 0, refusedTwoApplications: 0, multi: 0 }, manifestDistinctUrls: 0,
   };
-  const allUrls = new Set(), allPathish = new Set(), allBlindUrls = new Set();
+  const allUrls = new Set(), allPathish = new Set(), allBlindUrls = new Set(), allManifestUrls = new Set();
   const clsUrls = { data: new Set(), program: new Set() };
   tot.data = kindTally(); tot.program = kindTally();
   for (const b of perSite.values()) {
@@ -888,9 +1366,12 @@ function main(argv) {
     for (const k of Object.keys(tot.blind)) tot.blind[k] += b.blind[k];
     tot.xhrOpenSkipped += b.xhrOpenSkipped;
     for (const k of Object.keys(tot.globalDoor)) tot.globalDoor[k] += b.globalDoor[k];
+    for (const k of Object.keys(tot.manifest)) tot.manifest[k] += b.manifest[k];
+    for (const u of b.manifestUrls) allManifestUrls.add(u);
     for (const u of b.blindUrls) allBlindUrls.add(u);
   }
   tot.blindDistinctUrls = allBlindUrls.size;
+  tot.manifestDistinctUrls = allManifestUrls.size;
   tot.distinctUrls = allUrls.size; tot.pathish = allPathish.size;
   tot.data.distinctUrls = clsUrls.data.size; tot.program.distinctUrls = clsUrls.program.size;
   delete tot.data.urls; delete tot.program.urls;
@@ -925,9 +1406,13 @@ function main(argv) {
       program: { ...b.program, urls: undefined, distinctUrls: b.program.urls.size },
       blind: { ...b.blind, distinctUrls: b.blindUrls.size }, xhrOpenSkipped: b.xhrOpenSkipped,
       globalDoor: b.globalDoor,
+      manifest: { ...b.manifest, distinctUrls: b.manifestUrls.size },
+      manifestAddresses: nExamples ? [...b.manifestUrls].sort() : undefined,
     })),
     parseFailures: parseFail,
     examples: nExamples ? [...perSite.values()].flatMap((b) => b.rows.slice(0, nExamples)) : undefined,
+    manifestExamples: nExamples ? [...perSite.values()].flatMap((b) => b.manifestRows.slice(0, 2).map((m) =>
+      ({ ...m, addresses: m.addresses.slice(0, nExamples) }))) : undefined,
   };
 
   if (wantJson) { console.log(JSON.stringify(out, null, 1)); return; }
@@ -938,6 +1423,8 @@ function main(argv) {
               `both destination classes exercised`);
   console.log(`         plus ${st.blindRows} blind-spot controls producing ${st.blindProduced} row(s), each ` +
               `asserted to enter NO door total`);
+  console.log(`         plus ${st.manifestRows} chunk-manifest controls: ${st.manifestProduced} enumerated ` +
+              `${st.manifestAddrs} address(es), the rest refused for a stated reason`);
   console.log(`corpus   ${corpusDir}`);
   console.log(`fetched  ${fetchedFrom} .. ${fetchedTo}   read ${tot.readAt}   parse ${ms} ms`);
   console.log(`corpusPrograms: ${cp.onDisk} on disk = ${cp.nProgram} program + ${cp.nDocument} document + ` +
@@ -988,6 +1475,25 @@ function main(argv) {
   console.log(`  declined ${tot.globalDoor.declinedNonGlobalReceiver}   a platform door name on a receiver that is not the global object — the library`);
   console.log(`           wrapper population the DOORS comment turns away, counted rather than described`);
   console.log(``);
+  console.log(`THE CHUNK MANIFEST, RECOVERED — addresses a bundler emits as a MAP plus a public-path literal,`);
+  console.log(`  composed in a one-parameter function and handed to an injected <script>. Every one is plain`);
+  console.log(`  literal text in the file, so a PARSE has them; the door channel recovers none, because the`);
+  console.log(`  composition crosses a function boundary. NOT request sites, summed into NO door total, and`);
+  console.log(`  never quotable as endpoints: a manifest names every chunk the bundle COULD load and one run`);
+  console.log(`  loads a few. This is the number the PROGRAM-door zeros in the table below are explained by.`);
+  console.log(`  compositions ${tot.manifest.sites}, of which ${tot.manifest.addressSites} recovered an ADDRESS   ` +
+              `distinct addresses ${tot.manifestDistinctUrls}   ${tot.manifest.multi} enumerate more than one`);
+  console.log(`  ${tot.manifest.candidates} candidate key(s) were drawn from the functions' own bodies; ` +
+              `${tot.manifest.dropped} dropped for a hole and`);
+  console.log(`  ${tot.manifest.fragments} folded to a FRAGMENT — a chunk name with no public path in front of`);
+  console.log(`  it, which is part of an address and is refused rather than emitted as a whole. This is also`);
+  console.log(`  the precision half: without the shape test the channel called \`session\`, \`Users\` and`);
+  console.log(`  \`0.001\` addresses, because indexing a string table is an i18n or enum lookup as often as`);
+  console.log(`  it is a chunk manifest and nothing about the code's SHAPE tells the two apart.`);
+  console.log(`  ${tot.manifest.refusedTwoApplications} composition(s) were REFUSED for holding two ` +
+              `applications: two unknown parameters make the`);
+  console.log(`  address set a product of two domains, and nothing here has established the two are indexed together.`);
+  console.log(``);
   console.log(`BOTH CLASSES ${tot.sites} sites, ${tot.distinctUrls} distinct addresses — printed last and`);
   console.log(`  never first, because ${pct(tot.program.sites, tot.sites)} of it is chunk loading.`);
   console.log(`  literal ${tot.literal}  folded ${tot.folded}  shape ${tot.shape}  opaque ${tot.opaque}  guarded ${tot.guarded}`);
@@ -1026,19 +1532,27 @@ function main(argv) {
      `import()` scores in the door, and one whose bundler compiled `import()` away into a chunk-id map plus
      a `<script>` injection scores ZERO there and scores here instead. Neither zero is a statement about how
      much the site loads. */
-  console.log(`PER SITE — the PROGRAM door against the blind spot it can be lost in.`);
-  console.log(`site             programs  prog  p.lit p.fold p.urls | blind  b.lit b.fold b.shape b.opaq  b.urls`);
+  console.log(`PER SITE — the PROGRAM door against the blind spot it can be lost in, and the manifest it was`);
+  console.log(`  lost INTO. A program-door 0 beside a nonzero b.opaq used to be the whole reading; m.urls is`);
+  console.log(`  the addresses those opaque assignments were carrying, so the three columns answer together.`);
+  console.log(`site             programs  prog  p.lit p.fold p.urls | blind  b.lit b.fold b.shape b.opaq  b.urls | m.sites m.urls`);
   for (const s of [...out.perSite].sort((a, b) => b.blind.sites - a.blind.sites || b.program.sites - a.program.sites))
     console.log(`  ${s.site.padEnd(14)} ${String(s.programs).padStart(8)} ${String(s.program.sites).padStart(5)} ` +
                 `${String(s.program.literal).padStart(6)} ${String(s.program.folded).padStart(6)} ` +
                 `${String(s.program.distinctUrls).padStart(6)} | ${String(s.blind.sites).padStart(5)} ` +
                 `${String(s.blind.literal).padStart(6)} ${String(s.blind.folded).padStart(6)} ` +
                 `${String(s.blind.shape).padStart(7)} ${String(s.blind.opaque).padStart(6)} ` +
-                `${String(s.blind.distinctUrls).padStart(7)}`);
+                `${String(s.blind.distinctUrls).padStart(7)} | ${String(s.manifest.sites).padStart(7)} ` +
+                `${String(s.manifest.distinctUrls).padStart(6)}`);
   if (parseFail.length) { console.log(``); console.log(`PARSE REFUSED (${parseFail.length}):`); for (const p of parseFail.slice(0, 10)) console.log(`  ${p}`); }
   if (nExamples) {
     console.log(``); console.log(`EXAMPLES:`);
     for (const r of out.examples) console.log(`  [${r.kind}/${r.door}/g${r.guard}] ${r.method} ${r.url.slice(0, 120)}${r.alt ? `   (alt ${r.alt.slice(0, 60)})` : ""}   ${r.file}:${r.line}`);
+    console.log(``); console.log(`MANIFEST EXAMPLES (one composition, its first addresses):`);
+    for (const m of out.manifestExamples) {
+      console.log(`  ${m.file}:${m.line}  ${m.candidates} candidate(s), ${m.dropped} dropped, ${m.fragments} fragment(s)`);
+      for (const a of m.addresses) console.log(`      ${a.slice(0, 140)}`);
+    }
   }
 }
 
