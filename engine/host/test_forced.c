@@ -9095,6 +9095,12 @@ static TfErrEdges g_tf_err_edges[] = {
    `https://x.test/p` is already a literal at several sites and one of their comments complains about it, so a
    fresh copy here would be a seventh answer to `where is this document` that could drift from the one the
    agent was actually built with. Written at tf_agent_init and read only by the edge counter below. */
+/* THIS FIXTURE'S DOCUMENT, NAMED ONCE. `g_tf_doc_url` below exists because deriving the address from the
+   argument the agent is built with "is what stops it becoming another copy of the literal" (tf_agent_init);
+   a SECOND agent brought up at the same principal needs both facts, and spelling either of them twice would
+   be the copy that sentence refuses. The origin has no `g_` twin because nothing reads it back. */
+static const char *const TF_ORIGIN  = "https://x.test";
+static const char *const TF_TOP_URL = "https://x.test/p";
 static const char *g_tf_doc_url;
 
 /* THE ROW FOR ONE TOKEN, ASSERTED PRESENT: a probe that asked about a token no edge is counted for would read
@@ -29131,6 +29137,92 @@ static int abi_main(int argc, char **argv)
     return 0;
 }
 
+/* HTML §10.2.4 "Processing model"'s run a worker, step 4 of its twelve top-level steps — "Let agent be the
+ * result of obtaining a dedicated/shared worker agent given outside settings and is shared" — IN ITS
+ * SEQUENTIAL ARM, which is the arm nothing in this build already answers.
+ *
+ * WHY THE SEQUENTIAL ARM AND NOT §10.2.4's OWN. That step's agent is CONCURRENT with its owner, and
+ * core/platform.c already refuses a concurrent one BY NAME — `DCHECK(g_declared_in == NULL, "a second agent
+ * tried to declare the platform while one is already live")` — under a three-clause residual that states what
+ * the next diff builds (agent-state slots reached through the runtime that declared them rather than through
+ * a file-scope static) and predicts, correctly, that the day a host brings one up it fires THERE. Provisioning
+ * that arm would spend a build re-reading a comment. What no comment answers is whether a second agent works
+ * AFTER the first is released: `platform_agent_free` clears `g_declared_in`, so such an agent passes that
+ * guard and reaches every component's `_init` reading the statics its own `_free` was meant to put back. That
+ * is precisely what core/agent_state.h's pre-init discipline exists for, and that header says of the numbers a
+ * forgetful release leaves behind that "the only reader of that number is the component's own next `_init`,
+ * and by the time it reads one the agent that wrote it is gone". Nothing in this project has ever read one.
+ *
+ * WHAT IT OMITS, SO A FAILURE LOCALISES TO THE PLATFORM'S OWN COLUMN. It brings up no solver: `concolic_init`,
+ * `flow_registry_init`, `dom_cow_set_ctx`, `endpoint_init` and `solve_init` are this HOST's per-process
+ * bring-up rather than rows on core/platform.h's agent column, and main released them above. So no program is
+ * compiled here and no flow is created — the question is whether a second agent can be DECLARED at all, and a
+ * frontier re-entry between the question and its answer would be a second unknown wearing the first one's
+ * abort. A compiled program in this realm is the diff AFTER this one and is named in the report, not smuggled
+ * in here. For the same reason the teardown below mirrors only the lines that apply: copying main's whole tail
+ * would be the hand-copied host sequence core/platform.h and core/realm.h exist to abolish, and if this
+ * teardown aborts on an ordering that tail supplies, THAT is this fixture's first honest answer.
+ *
+ * ITS WITNESS IS THREE CONSTANT MARKERS. An absent abort is worthless alone — a run that never reached this
+ * block and a run whose second agent came up perfectly are the same silence. `@A2ENTER` says a second
+ * JSRuntime exists and is the positive control for everything below it; `@A2REALM` says a
+ * DedicatedWorkerGlobalScope realm was built IN THAT AGENT and its `self` accessor body ran; `@A2OK` says the
+ * agent was released and its runtime freed. Each is a literal, because a payload composed from anything this
+ * engine computed could itself be concolic and would go silent exactly when the engine is working. */
+static void second_agent_selftest(const char *origin, const char *top_level_url)
+{
+    JSRuntime *rt2;
+    JSContext *ctx2, *worker;
+    JSValue g, self_v;
+
+    printf("@A2ENTER\n");
+    rt2 = JS_NewRuntime();
+    CHECK(rt2 != NULL, "a second agent's JSRuntime could not be created");
+    JS_SetMaxStackSize(rt2, 4 * 1024 * 1024);   /* the value this host gives its first runtime */
+    ctx2 = JS_NewContext(rt2);
+    CHECK(ctx2 != NULL, "a second agent's first realm could not be created");
+    CHECK(JS_AddIntrinsicDOMException(ctx2) == 0,
+          "the DOMException intrinsic failed to install in a second agent's first realm");
+
+    /* THE OWNER'S PRINCIPAL AND THE OWNER'S ADDRESS, because §8.1.2.2's obtain-a-worker/worklet-agent takes
+       the isTopLevel=false arm for a DEDICATED worker and reads `ownerAgent` out of the outside settings
+       object's realm — so this agent is the owner's cluster's, not a new origin's. The two booleans are
+       tf_agent_init's own answers and for its reason: this fixture's document comes from no response, so
+       there is no `Origin-Agent-Cluster` header to have sent and §7.1.3's initial opener policy applies. */
+    platform_agent_init(ctx2, origin, top_level_url, false, OPENER_POLICY_UNSAFE_NONE);
+
+    /* §10.2.4 step 5's customization — "create a new DedicatedWorkerGlobalScope object" — through the one
+       call every realm goes through, with the arguments §10.2.6.2 "Script settings for workers" states: the
+       top-level creation URL is null for a worker environment, and the fourth argument is §8.1.3.5 step
+       1.2.1's operand read off the OWNER rather than restated as a constant. */
+    worker = JS_NewContext(rt2);
+    CHECK(worker != NULL, "a second agent's WorkerGlobalScope realm could not be created");
+    CHECK(JS_AddIntrinsicDOMException(worker) == 0,
+          "the DOMException intrinsic failed to install in a second agent's worker realm");
+    realm_install_intrinsics(worker, NULL, "DedicatedWorkerGlobalScope", secure_context_is(ctx2));
+
+    /* §10.2.1.1's `self`, READ — a member BODY and not a descriptor, which is the only thing that says this
+       agent's realm ANSWERS rather than merely carrying the right property names. */
+    g = JS_GetGlobalObject(worker);
+    self_v = JS_GetPropertyStr(worker, g, "self");
+    CHECK(!JS_IsException(self_v) && !JS_IsUndefined(self_v),
+          "a second agent's DedicatedWorkerGlobalScope realm answered no `self` — HTML §10.2.1.1 declares it "
+          "and core/workers/worker_global_scope.c installs it through the same realm intrinsic the first "
+          "agent's realms go through, so either that column did not run in this agent or its accessor body "
+          "cannot answer in one that is not the first this process brought up");
+    JS_FreeValue(worker, self_v);
+    JS_FreeValue(worker, g);
+    printf("@A2REALM\n");
+
+    JS_FreeContext(worker);
+    platform_agent_free();
+    idl_args_free(ctx2);   /* the per-realm half, in main's own order relative to the context free */
+    JS_RunGC(rt2);
+    JS_FreeContext(ctx2);
+    JS_FreeRuntime(rt2);
+    printf("@A2OK\n");
+}
+
 int main(int argc, char **argv) {
     JSRuntime *rt;
     /* THE ABI ARM IS TAKEN FIRST, BEFORE ANY OF THE FIXTURE'S OWN STATE EXISTS. `qjs_init` roots an agent —
@@ -29275,7 +29367,7 @@ int main(int argc, char **argv) {
        THIS FIXTURE'S DOCUMENT IS ITS OWN TOP-LEVEL TRAVERSABLE, so §8.1.3.1's top-level creation URL is the
        address it is installed at below — and `https:` makes it a SECURE CONTEXT, which is what a real bundle
        runs in and therefore what the fixture must exercise. */
-    tf_agent_init(ctx, "https://x.test", "https://x.test/p");
+    tf_agent_init(ctx, TF_ORIGIN, TF_TOP_URL);
     navigable_set_realm_builder(tf_child_realm);
     int min_doc = arg_has(argc, argv, "--min");   /* fast per-change memory gate: the minimal clone/COW doc */
     /* THE CLOSE-REQUEST DOCUMENT, which is a document and not a flag on another one: its whole verdict is an
@@ -29863,6 +29955,11 @@ int main(int argc, char **argv) {
     JS_RunGC(rt);   /* collect flow-local garbage from the runs before teardown */
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
+    /* AND THEN A SECOND AGENT, HERE AND NOWHERE ELSE IN THIS FUNCTION. It is after `JS_FreeRuntime(rt)`
+       because the first agent must be GONE for this to be the sequential arm at all, and before
+       `idl_args_pool_free` because the declare column it runs allocates out of that pool — the two lines
+       either side of this call are the whole of what decides which question it asks. */
+    second_agent_selftest(TF_ORIGIN, TF_TOP_URL);
     /* AFTER JS_FreeRuntime, and it is the one teardown line whose ORDER is part of its meaning: what
        this releases is part of a step DEFINITION, which JS_RegisterStepDef borrows and requires to
        outlive the runtime — JS_FreeRuntime's own [stepleak] report reads `def->steps` to name each
