@@ -66152,9 +66152,17 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
                      · resolve_scope_var selects OP_get_var_ref / OP_put_var_ref where a lexical binding takes
                        the _check forms, so no read of this binding can ever observe its own dead zone.
                      · define_var's JS_VAR_DEF_VAR arm refuses a module redefinition only `if (hf->is_lexical)`,
-                       so §16.2.1.6.1's early error — "It is a Syntax Error if any element of the
-                       LexicallyDeclaredNames of ModuleItemList also occurs in the VarDeclaredNames of
-                       ModuleItemList" — fired in ONE direction. MEASURED with all four controls speaking:
+                       so the early error of §16.2.1.1 "Static Semantics: Early Errors" — "It is a Syntax Error
+                       if any element of the LexicallyDeclaredNames of ModuleItemList also occurs in the
+                       VarDeclaredNames of ModuleItemList" — fired in ONE direction. THAT NUMBER WAS FIRST
+                       WRITTEN HERE AS §16.2.1.6.1, WHICH IS A REAL SECTION TITLED "Implementation of Module
+                       Record Abstract Methods" AND HOLDS NO EARLY ERROR AT ALL — recorded rather than quietly
+                       corrected, because a mis-aimed citation is the one defect this tree's citation auditor is
+                       blind to by construction (it resolves the number and matches the quotation, and both
+                       succeeded) and because the way it was produced is the finding: the quotation was verified
+                       against the fetched document and the NUMBER was recalled from the neighbouring Cyclic
+                       Module Record algorithms this file cites forty times. Fetch the heading list, not the
+                       sentence. MEASURED with all four controls speaking:
                        `function f(){} let f=2;` is refused, `var f; function f(){}` is refused by the module
                        check at js_parse_function_decl2's head, a plain declaration is accepted — and
                        `function f(){} var f;` was ACCEPTED with `typeof f === "function"`.
