@@ -4884,10 +4884,13 @@ function identityOfBinding(t, off, scan, s) {
 /* A PARAMETER OF A CORPUS-DECLARED FUNCTION IS A ROUTE THIS WALK DOES NOT HAVE AND `ifaceOfExpr` DOES, AND
  * THE ASYMMETRY IS REAL — measured, `scan.localParamSlot` and `scan.callArgsOf` resolve here exactly as they
  * do there. What is recorded is that building the mirror arm would NOT have moved the row it was proposed
- * for, so a reader is not sent to spend a diff finding that out: at testing/static_surface.mjs:190 the
- * receiver is `fold`'s first parameter, `callArgsOf` finds NINE call sites, and `originOfExpr` answers null
- * for all nine — eight because a self-recursive walker passes paths rooted at its own parameter, which this
- * walk's cycle guard declines by construction, and the ninth (`a` at :390) because it is a computed index
+ * for, so a reader is not sent to spend a diff finding that out: at `fold`'s own `switch (node.type)` in
+ * testing/static_surface.mjs (:221 today, :190 when this was written — the file has since grown a
+ * blind-spot band above it, which is why this reference now carries the CONSTRUCT and not only the line)
+ * the receiver is `fold`'s first parameter, `callArgsOf` finds NINE call sites, and `originOfExpr` answers
+ * null for all nine — eight because a self-recursive walker passes paths rooted at its own parameter, which
+ * this walk's cycle guard declines by construction, and the ninth (`a`, the door's URL argument at
+ * `const r = a ? fold(a, binds, 0)`, :424 today and :390 then) because it is a computed index
  * over a binding written from another corpus callback's parameter, which no arm here reads either. Under
  * `agreeOrigin` one null is the whole answer. A widening would therefore need BOTH the parameter arm and a
  * rule that an argument rooted at the parameter under question contributes the answer being computed — which
