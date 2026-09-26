@@ -509,6 +509,26 @@ const WFQ_JOB_SPLIT = ["jobsReady", "jobsFramed", "jobsOwed", "jobWGap", "jobsRe
    composes `{members: 0}` with NO term rows at all: on an empty frontier the row is absent from the document
    and `null` is the honest answer, never 0. */
 const WFQ_PICKS = ["unframedPicksLifetime"];
+/* …AND WHAT THE LADDER DID WITH THOSE DISPATCHES, WHICH IS THE ANSWER THE ROW ABOVE HANDS OFF AND THIS DRIVER
+   HAS NEVER CARRIED. `unframedPicksLifetime` establishes that the order DOES hand the thread to a member with
+   an empty execution context stack; `jobsReadyTask` beside it establishes that such members are holding tasks.
+   Between those two and a `run-a-task` that is a few per cent of a document's steps there was exactly one
+   unmeasured step, and it is the one that decides the diff: WHICH ARM took the step instead. These four are
+   that, raised at the two arms of flow_step that stand above the task arm and can be reached with a task
+   runnable, plus the task arm's own two reasons — solver/engine.h states which repair each of the four sizes.
+   A SEPARATE SET FROM `WFQ_PICKS` FOR THE REASON THAT ONE IS SEPARATE FROM `WFQ_JOB_SPLIT`: one group per
+   question, and the question here is not who waits or who was dispatched but what the ladder declined. They
+   are LIFETIME counts like their neighbour and are filed with it rather than with the gauges above, so a
+   series of one that decreases is the free tell that the filing is wrong.
+   THE READING NEEDS `run-a-task` FROM THE @COLD LINE, which this driver already carries in `stepUnitRuns`, and
+   the last two of these PARTITION it — solver/engine.c asserts that sum where both halves and the histogram
+   are in one hand, so a reader who finds them not adding up on this document has found a second writer rather
+   than a scheduler fact. MEASURED before they existed, which is why they are here: one real application page
+   read `jobsReadyTask` 36169 with `jobsReadyMicro` 0 and `run-a-task` 163 of 6673 steps, and nothing in the
+   emitted record could say whether the queue was behind the program sequence or behind the reply-delivery arm
+   — two mechanisms, opposite diffs, one number. */
+const WFQ_LADDER = ["taskHeldDelivLifetime", "taskHeldSeqLifetime",
+                    "taskArmOlderLifetime", "taskArmNoRowLifetime"];
 /* THE OWED-GLOBALS PAIR, NAMED HERE SO THE KIND LINE CANNOT DRIFT FROM THE ROWS. Both are LIFETIME
    counts over the agent's life — solver/absent.c raises them per read and zeroes them only when the
    agent goes — so they are differenceable, unlike the gauges beside them. The names are this list and
@@ -916,7 +936,7 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
   "epAddressClass"];
 
 const COLD_ROWS = COLD_STEP_UNITS.concat(COLD_FRONTIER, COLD_SEED, COLD_COUNTERS);
-const WFQ_ROWS = ["members"].concat(WFQ_JOB_SPLIT, WFQ_PICKS);
+const WFQ_ROWS = ["members"].concat(WFQ_JOB_SPLIT, WFQ_PICKS, WFQ_LADDER);
 const OUT_NAME = { members: "wfqMembers" };
 
 /* WHERE THE FRONTIER STOOD, WHAT ITS STEPS DID, AND WHAT GREW IT — read off the row bridge.js wrote, never

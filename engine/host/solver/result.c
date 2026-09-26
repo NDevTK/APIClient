@@ -732,6 +732,7 @@ static char *errs_json_array(ErrsArray which) {
    @kinds-of wfq
    @kind gauge: members jobsReady jobsFramed jobsOwed jobWGap jobsReadyTask jobsReadyMicro memUnframed visZero
    @kind lifetime: picksLifetime unframedPicksLifetime readyPicksLifetime
+   @kind lifetime: taskHeldDelivLifetime taskHeldSeqLifetime taskArmOlderLifetime taskArmNoRowLifetime
 */
 char *result_wfq_json(void) {
     WfqCensus w;
@@ -749,6 +750,14 @@ char *result_wfq_json(void) {
     /* AND THE PARTITION OF THE PREEMPT HOOK'S CACHE MISSES, IN ONE READ, for the two reads above's reason —
        solver/engine.h states why it is a struct and what the three rows separate. */
     EngineRivalMiss rm = engine_rival_miss();
+    /* AND WHICH ARM OF flow_step TOOK THE STEP OF A MEMBER THAT HELD A RUNNABLE TASK, in one read for the
+       reason every struct above is one — solver/engine.h states the four rows, the identity between two of
+       them and `run-a-task`, and the two populations they do not reach. It is the other half of
+       `readyPicksLifetime`'s question: that row says the dispatch REACHES a job holder, and these say what the
+       ladder did with it when it got there. */
+    EngineLadderTaskCensus lt;
+
+    engine_ladder_task_census(&lt);
     /* THE ONE CLAIM ABOUT THE PARTITION THAT HOLDS IN BOTH BUILDS. Every bucket is raised on the statement
        after a scan's own `g_scan_weights[why]++`, so a classification without a weighing is impossible and the
        four can never sum above the weighings this instance performed. The EQUALITY is not asserted here and
@@ -1177,6 +1186,24 @@ char *result_wfq_json(void) {
                         `if` in flow_credit_pick under the ready arm's three conjuncts, so the containment is
                         by construction; flow_wfq_census asserts it and solver/flow.h carries the legend. */
                      "\"readyPicksLifetime\":%lld,"
+                     /* …AND WHAT THE LADDER DID WITH THOSE DISPATCHES, WHICH THE ROW ABOVE HANDS OFF AND
+                        COULD NOT ANSWER. Its own legend ends "above 0 with `jobsRun` flat says it does reach
+                        them and flow_step declines the job at an arm ABOVE the one that would run it, which
+                        sends the reader to the ladder" — these four are what the ladder says when the reader
+                        arrives, and until they existed that sentence was where the trail stopped.
+                        READ THEM AS A SET AND AGAINST `run-a-task` ON THE @COLD LINE. The first two are the
+                        two arms above the task arm that can be reached with a task runnable; the last two
+                        PARTITION the task arm's own step count, and solver/engine.c asserts that sum where
+                        both halves and the histogram are in one hand. solver/engine.h states which diff each
+                        of the four sizes, and names the two things none of them reaches: the three arms above
+                        the delivery one, and the DEPTH of the member's own queue — the pick is the oldest
+                        entry within the kind rules, so an arm reached freely can still never reach one
+                        particular task.
+                        LIFETIME COUNTS beside a line of gauges, which is why the names carry the suffix: a
+                        `jobsReadyTask` that FALLS between two samples is the backlog draining and one of these
+                        falling is a counter with a second writer. */
+                     "\"taskHeldDelivLifetime\":%ld,\"taskHeldSeqLifetime\":%ld,"
+                     "\"taskArmOlderLifetime\":%ld,\"taskArmNoRowLifetime\":%ld,"
                      "\"delivReady\":%ld,\"delivFramed\":%ld,\"delivOwed\":%ld,\"delivWGap\":%.3f,"
                      /* AND WHICH TERM THAT GAP IS, AT THE TWO MEMBERS IT IS BETWEEN — solver/flow.h states
                         why the OPTIMISM operand is the one of flow_weight's four summands that has no row
@@ -1521,6 +1548,7 @@ char *result_wfq_json(void) {
                      w.jobs_ready_task, w.jobs_ready_micro,
                      w.mem_unframed, (long long)w.unframed_picks_lifetime,
                      (long long)w.ready_picks_lifetime,
+                     lt.task_held_deliv, lt.task_held_seq, lt.task_arm_older, lt.task_arm_no_row,
                      w.deliv_ready, w.deliv_framed, w.deliv_owed, w.deliv_w_gap,
                      (long long)w.deliv_w_gap_vis, (long long)w.w_top_vis,
                      w.cur_deep, w.cur_deep_live, w.cur_deep_w_gap,

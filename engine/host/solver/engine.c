@@ -9257,6 +9257,17 @@ static int turn_continues(void) {
 static long g_jobs_q, g_jobs_run;
 long engine_jobs_queued(void) { return g_jobs_q; }
 long engine_jobs_run(void) { return g_jobs_run; }
+/* NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: neither of those two totals is split by the
+   queue's KIND, and the two kinds are dispatched from opposite sides of one ladder, so no share can be taken
+   over either. The RUN side is split in effect — a step named `run-a-task` runs exactly one TASK and one named
+   `microtask-checkpoint` runs only microtasks, because job_pick_index takes the first non-task entry and the
+   checkpoint arm is due only while one exists — so `run-a-task` IS the task-run count and `jobsRun` minus it is
+   the microtask one. The QUEUED side has no such split at all, and `is_task` is in hand on the line that raises
+   `g_jobs_q`. WHAT THE NEXT DIFF BUILDS: that one discriminator, as `jobsQueuedTask`/`jobsQueuedMicro` beside
+   `_jobsQueued` on the work line, whose sum is `_jobsQueued` and is asserted where all three are in one hand.
+   HOW ITS ABSENCE WOULD SHOW: a reader holding a document's `run-a-task` count and unable to say whether it is
+   most of the tasks the page queued or a fraction of a per cent of them — which is §a-coverage-figure-states-
+   what-it-is-a-fraction-of over the one carrier every platform edge that becomes a work item lands on. */
 /* …AND THE PRECONDITION FOR RUNNING ONE, WHICH IS WHY `jobsRun: 0` NEEDED A SECOND NUMBER BESIDE IT. Every job
    arm of flow_step is under `frame == NULL` — HTML §8.1.4.4 "Calling scripts" step 3 of clean up after running
    script, "if the JavaScript execution context stack is now empty" — so a run with jobs queued and none run has
@@ -9581,6 +9592,56 @@ static long g_steps;
    is counted on one basis and the containment between them is exact.
    A REPORT AND NEVER A BOUND (§NO BOUNDS) — nothing reads it to decide anything. */
 static long g_unframed_steps;
+/* …AND WHICH ARM TOOK THE STEP OF A MEMBER THAT WAS HOLDING A RUNNABLE TASK. These four turn
+   `readyPicksLifetime`'s second reading from a hand-off into a count: that legend ends "flow_step declines the
+   job at an arm ABOVE the one that would run it, which sends the reader to the ladder", and these are what the
+   ladder answers when a reader gets there. Until they existed the answer was an inference over
+   `g_step_unit_runs`, which is a histogram over EVERY step and therefore cannot say that the member whose step
+   an arm took was holding a task at all — two documents with the same arm histogram and opposite job backlogs
+   are one row there.
+
+   A TASK AND NOT A JOB, AND IT IS ASSERTED RATHER THAN NAMED. Both raise sites stand BELOW the checkpoint arm,
+   whose guard is `flow_job_microtask && flow_stack_empty`, and at both `flow_stack_empty(f)` is true — so a
+   non-empty queue there holds no microtask, and `flow_job_pending(f) > 0` IS "a task is runnable". A DCHECK at
+   each site is what makes that true by construction rather than by this paragraph.
+
+     `g_task_held_deliv`  — the REPLY-DELIVERY arm took the step. That arm stands above the whole arrival chain
+       and is not in it: a reply register entry carries no stamp, so a delivery precedes every row and every
+       queued callback of the flow whatever their ages. The chain's own header states that as its NOT COVERED
+       clause ("a flow whose reply register is never empty runs no task and starts no program of its own however
+       old either is") and could not size it; this row is its size.
+     `g_task_held_seq`    — the PROGRAM-SEQUENCE arm took it (`seq_compiles && !job_precedes`) with a task
+       runnable, which is the arrival comparison answering NO: the queued task is YOUNGER than the row at the
+       cursor. It is the only row that says so, because flow_task_precedes' answer is a local nothing else reads.
+     `g_task_arm_older`   — the TASK arm ran because that comparison answered YES. The mechanism working.
+     `g_task_arm_no_row`  — the TASK arm ran with no program to start at all (`seq_compiles` 0), so the
+       comparison was never made. A member standing past the last row of its own sequence is in this arm at
+       every step, and `programCursors`' top bucket is how many members that is.
+
+   THE IDENTITY IS `g_task_arm_older + g_task_arm_no_row == g_step_unit_runs[STEP_UNIT_RUN_TASK]`, and it can
+   fail: the two halves are raised INSIDE the arm at the choice, and the total is raised at the convergence
+   point after flow_step has RETURNED, so a second writer of that arm or a return added between the choice and
+   that point breaks it. Asserted at the accessor, where all three are in one hand.
+
+   WHAT THEY DO NOT COVER. Three arms stand above the delivery one — link-connected time, a routed delivery and
+   a peer's parked operation — and a step one of those took while a task was runnable is in no row here. The
+   checkpoint arm is not counted and CANNOT be: a checkpoint is due only while a microtask is held, so "a task
+   is runnable" is false there by the same reasoning that makes it true below, and the row that sizes that
+   population is `jobsReadyMicro` on the same census line. HOW THAT ABSENCE SHOWS: `run-a-task` plus these four
+   failing to account for a document's unframed steps while `jobsReadyTask` stands above zero throughout.
+   AND NO ROW HERE REACHES THE QUEUE'S OWN DEPTH, which is the second half of why one particular task never
+   runs. job_pick_index takes the OLDEST entry within the kind rules, so a task enqueued late stands behind
+   every task its flow queued earlier; these four say which arm took a step and never how many steps that
+   member's queue still needs. A document whose task arm is reached freely can still never reach one task.
+
+   LIFETIME COUNTS over the instance, released by nothing, so they may be differenced — and none is a gauge: an
+   arm taken is an event and the member it was taken from may leave. A REPORT AND NEVER A BOUND (§NO BOUNDS):
+   nothing branches on one, no arm is narrowed by one, and "how often this arm declined a task" is precisely
+   the shape a fairness cap would be built out of.
+   RETIREMENT: this record goes when the delivery arm is IN the arrival chain — a stamp on a `pending` entry at
+   its push, which is what the chain's own next-diff clause names — because `g_task_held_deliv` is then a count
+   of an ordering that cannot happen. */
+static long g_task_held_deliv, g_task_held_seq, g_task_arm_older, g_task_arm_no_row;
 /* …AND WHY A TURN DID NOT END A UNIT OF WORK, WHICH IS THE THREE-STATE ANSWER BEHIND `g_units_done`'s
    ONE-STATE ZERO. The unit boundary in the dispatch loop is a CONJUNCTION of three clauses — no live frame, no
    parked continuation on the runtime, no microtask checkpoint still owed — and `g_units_done` counts only the
@@ -10456,6 +10517,19 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * every arm, and a register whose length exceeds a member's whole lifetime dispatch count defers
              * the sequence for that member's entire life. The bound holds and does not bind. */
             if (flow_stack_empty(f) && flow_pending_ready(f)) {
+                /* …AND WHETHER THIS ARM JUST TOOK A STEP THE FLOW'S OWN TASK QUEUE COULD HAVE HAD — see
+                   `g_task_held_deliv`, whose block states why a non-empty queue at this line is a TASK and
+                   what the row is the size of. RAISED BEFORE THE DELIVERY, because the settle below enqueues
+                   this reply's reactions and a read taken after it would count a queue this arm had just
+                   lengthened. The microtask half is ASSERTED and not assumed: the checkpoint arm's guard is
+                   exactly `flow_job_microtask && flow_stack_empty` and it stands above this line, so with the
+                   stack empty here a queued job is a task. */
+                DCHECK(!flow_job_microtask(f),
+                       "the reply-delivery arm was reached with an empty execution context stack and a "
+                       "microtask outstanding — the checkpoint arm's guard is exactly those two facts and it "
+                       "stands above this line, so a task source has run in front of the checkpoint HTML "
+                       "§8.1.4.4 \"Calling scripts\"' clean up after running script step 3 owes");
+                if (flow_job_pending(f) > 0) g_task_held_deliv++;
                 g_step_unit = STEP_UNIT_DELIVER_REPLY;
                 flow_deliver_one_reply(ctx, f);   /* §8.1.7.3 step 2.6 */
                 /* …AND ITS CHECKPOINT, IN THE SAME TURN. The settle enqueued this reply's reaction jobs, which
@@ -10749,14 +10823,24 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    "and this step would order a program against this flow's queued callbacks by a number no "
                    "clock issued");
             int job_precedes = seq_compiles && flow_task_precedes(f, f->dyn_run[f->script_i]);
+            /* THE QUEUE'S LENGTH, READ ONCE FOR BOTH ARMS OF THE CHOICE — see `g_task_held_seq`. Read here
+               rather than inside either arm because BOTH read it, and two reads of one queue across a choice
+               is the shape that lets a raise and the dispatch it is about talk about different states. Nothing
+               between this line and the arms below touches the queue. */
+            int jobs_here = flow_job_pending(f);
             if (seq_compiles && !job_precedes) {
-                /* NOTHING HERE, AND THE EMPTINESS IS THE FALL-THROUGH MADE EXPLICIT. This arm's work is the
-                   compile ~200 lines below; its body is empty because the only thing it has to do is decline
-                   every arm beneath it and let control reach that compile. It used to be spelled as the
+                /* NO WORK HERE, AND THE ABSENCE OF IT IS THE FALL-THROUGH MADE EXPLICIT. This arm's work is the
+                   compile ~200 lines below; its body performs none because the only thing it has to do is
+                   decline every arm beneath it and let control reach that compile. It used to be spelled as the
                    absence of a `return` at the bottom of a two-hundred-line block, which is the same fact and
-                   is invisible to a reader who does not walk the block. There is still exactly ONE compile. */
+                   is invisible to a reader who does not walk the block. There is still exactly ONE compile.
+                   THE ONE STATEMENT IT DOES HOLD IS A REPORT AND NOT WORK — see `g_task_held_seq`. This is the
+                   arm on which the arrival comparison answered NO, so a task standing on the queue here is one
+                   the sequence just went in front of, and that is the whole of what the row counts. Nothing
+                   branches on it. */
+                if (jobs_here > 0) g_task_held_seq++;
             }
-            else if (flow_job_pending(f) > 0) {
+            else if (jobs_here > 0) {
                 /* WHAT IS LEFT ON THE QUEUE HERE IS A TASK — HTML §8.1.7.3 "Processing model" step 2, whose
                    2.3 takes "the first runnable task in taskQueue" and whose 2.6 performs its steps. (Step 1
                    stood here and is the one that initialises oldestTask to null; the same section's step 2.1
@@ -10897,6 +10981,12 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        "a task was about to begin while this flow still held a microtask — the checkpoint runs "
                        "before every program in the sequence, so reaching a task with one outstanding means a "
                        "program ran in front of the checkpoint it owed");
+                /* …AND WHICH OF THE ARM'S TWO REASONS THIS STEP TOOK IT FOR — see `g_task_arm_older`. The
+                   two are not shades of one fact: `job_precedes` is the arrival comparison answering YES,
+                   which is a document whose remaining rows are YOUNGER than what its own code queued, and
+                   `seq_compiles` 0 is a member with no row left at all, which is a different population and a
+                   different diff. Their sum is asserted against this arm's own step count at the accessor. */
+                if (job_precedes) g_task_arm_older++; else g_task_arm_no_row++;
                 g_step_unit = STEP_UNIT_RUN_TASK;
                 flow_run_one_job(ctx, f);
                 return flow_blocked(f) ? FLOW_STEP_OWED : 0;
@@ -12158,6 +12248,34 @@ int engine_switch_count(void) { return g_switches; }
    is a public entry a host may call wherever its own thread is; asserting it here would fire on a caller that
    is correct. It is asserted where it IS exact and where the step that broke it is the step that just returned
    — engine_sched_slice's convergence point. */
+/* THE FOUR LADDER ROWS IN ONE READ, AND THE IDENTITY THAT MAKES TWO OF THEM CHECKABLE — see their declaration
+   for what each counts and for the pair of readings they exist to separate. ONE CALL and not four accessors,
+   because the assert below is between three counters and the histogram: a caller composing it out of four
+   entries would be checking a partition of four instants. Nothing here is reset with a session, for
+   `g_step_unit_runs`' reason exactly — the host wants the INSTANCE's ladder. */
+void engine_ladder_task_census(EngineLadderTaskCensus *out)
+{
+    DCHECK(out != NULL, "the ladder's task-arm census was asked for into nothing — a reading that lands nowhere "
+                        "is a reading whose caller cannot have taken it");
+    out->task_held_deliv = g_task_held_deliv;
+    out->task_held_seq   = g_task_held_seq;
+    out->task_arm_older  = g_task_arm_older;
+    out->task_arm_no_row = g_task_arm_no_row;
+    /* THE TASK ARM'S OWN STEP COUNT, PARTITIONED BY THE REASON THE ARM WAS REACHED, asserted where all three
+       are in one hand. It is a real check and not a tautology: the two halves are raised INSIDE the arm at the
+       choice and the total is raised at the convergence point AFTER flow_step returned, so the two sides have
+       different writers. A second assignment of STEP_UNIT_RUN_TASK anywhere, or a return added between the
+       choice and that convergence point, is what breaks it — which is the one way this pair can come to
+       describe an arm other than the one it names. */
+    DCHECKF(out->task_arm_older + out->task_arm_no_row == g_step_unit_runs[STEP_UNIT_RUN_TASK],
+            "the task arm ran %ld times and its two reasons account for %ld — the arm is reached either because "
+            "the queued task is strictly OLDER than the row at this flow's cursor or because there is NO row to "
+            "compare against, so a step the histogram counted and neither reason claims is a second writer of "
+            "STEP_UNIT_RUN_TASK or a return added between the choice that raises these and the point that "
+            "records the arm",
+            g_step_unit_runs[STEP_UNIT_RUN_TASK], out->task_arm_older + out->task_arm_no_row);
+}
+
 void engine_step_unit_runs(EngineStepUnitRuns *out)
 {
     int i;

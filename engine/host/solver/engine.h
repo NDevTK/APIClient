@@ -2005,6 +2005,38 @@ typedef struct {
 } EngineStepUnitRuns;
 void engine_step_unit_runs(EngineStepUnitRuns *out);
 
+/* ---- WHICH ARM TOOK THE STEP OF A MEMBER HOLDING A RUNNABLE TASK ----------------------------------------
+ *
+ * THE HISTOGRAM ABOVE CANNOT BE ASKED THIS. `step_unit_runs` is over EVERY step, so an arm cannot be
+ * attributed to the members that had a task standing on their own queue — two documents with the same arm
+ * histogram and opposite job backlogs are one reading there. These four are raised at the two arms of
+ * flow_step that stand above the task arm and CAN be reached with a task runnable, plus the task arm's own two
+ * reasons, so a reader holding them can say which arm the backlog is behind instead of inferring it.
+ *
+ * READ THEM AGAINST `jobsReadyTask` AND `run-a-task` AND NOT ALONE. `jobsReadyTask` is a GAUGE of what waits
+ * and these are LIFETIME counts of what was taken instead; `run-a-task` on the @COLD line is the arm's own
+ * step count and the last two of these partition it. The four sizes:
+ *   a large `taskHeldDelivLifetime` says the networking delivery arm — which is NOT in the arrival order, by
+ *     its own header's NOT COVERED clause — is what stands in front of the queue, and the diff is the stamp
+ *     that folds it into that order.
+ *   a large `taskHeldSeqLifetime` says the arrival comparison is answering NO: the document's remaining rows
+ *     are OLDER than what its own code queued, so the sequence goes first. The diff is at that comparison.
+ *   `taskArmOlderLifetime` above zero REFUTES both for the steps it counts — the comparison does hand the
+ *     queue the thread ahead of a startable row.
+ *   `taskArmNoRowLifetime` is the arm reached with no row at all, which on a real page is most of it, and it
+ *     is the row that says the sequence is not what excludes those members.
+ * ITS IDENTITY is `taskArmOlderLifetime + taskArmNoRowLifetime == run-a-task`, asserted in
+ * engine_ladder_task_census where both halves and the histogram are in one hand.
+ * LIFETIME, all four, released by nothing. A REPORT AND NEVER A BOUND (§NO BOUNDS) — solver/engine.c states
+ * the rest at the counters, including the two populations no row here reaches. */
+typedef struct {
+    long task_held_deliv;   /* the reply-delivery arm took a step with a task runnable on the member's queue */
+    long task_held_seq;     /* the program-sequence arm took it: `seq_compiles && !job_precedes`, task runnable */
+    long task_arm_older;    /* the task arm ran because the queued task was strictly older than the cursor's row */
+    long task_arm_no_row;   /* …and because there was no row to compare against at all (`seq_compiles` 0) */
+} EngineLadderTaskCensus;
+void engine_ladder_task_census(EngineLadderTaskCensus *out);
+
 /* ---- THE FRONTIER'S OWN NUMBERS, AS ONE READING ----------------------------------------------------------
  *
  * Every row here is a static of engine.c that had EXACTLY ONE consumer — the `@COLD`/`@PROGRESS` printfs in
