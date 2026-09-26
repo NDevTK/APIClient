@@ -2281,8 +2281,11 @@ QJS_EXPORT void qjs_teardown(void)
    supersedes — and left the prose that INTRODUCES it, so the short copy was the one standing where a host
    author reads the shape while two correct statements of it sat below in this same file. A host that splits
    short lands `pinned` in the address and the flow parked on the real URL waits on a reply keyed on nothing.
+   HOW MANY COPIES THERE ARE IS A COMMAND AND NOT A NUMBER, because the run WRAPS and is concatenated in three
+   languages: a count that does not strip quotes, backticks and `+` before matching is a FLOOR, and two such
+   counts AGREEING means they shared that blind spot rather than that either was right.
    RETIREMENT: this record goes when the field list is stated in one place this comment and that splitter both
-   derive from, so no copy of it can be short.
+   derive from, so no copy of it can be short and none has to be counted.
    AND THE DESTINATION IS WHY THIS ENTRY NO LONGER HAS A SECOND LIST BESIDE IT. `qjs_chunks` answered the CORB
    class out of the module loader's own register of specifiers, so it classified dynamic `import()` and nothing
    else: a document's own `<script src>` reached the chokepoint with no class at all and a cross-origin HTML or
