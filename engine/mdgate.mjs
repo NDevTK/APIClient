@@ -100,6 +100,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { publicationBase } from "./gate_revision.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
@@ -114,7 +115,19 @@ const argOf = (name, dflt) => {
 };
 const MD_PATH = argOf("--md", "CLAUDE.md");
 const SUBJECT = argOf("--subject", join(ROOT, MD_PATH));
-const BASE_REV = argOf("--base", "origin/main");
+/* THE BASE IS RECOVERED, NEVER SPELLED — see engine/gate_revision.mjs's publicationBase for why the obvious
+   spelling is wrong wherever this gate is most likely to run. `origin/main` stood here as the default and it
+   is a claim about the PUBLICATION TIP only in a checkout whose origin is the real remote; inside the frozen
+   snapshot this project's own testing rule mandates, that ref was rebuilt by `git clone` out of the source's
+   LOCAL branches, so it named a branch nobody advances and the base was 499 commits stale. This gate PRINTED
+   the resolved sha every run and nobody read it, which is the chronic-red shape one level up: the stage was
+   the deciding one, it was red on every frozen build, and its own text told the reader that everything it
+   listed was in work this checkout had not published — an accusation aimed at whoever was holding the tree.
+   AN EXPLICIT --base STILL WINS AND IS RESOLVED HERE, because a caller who names a revision is stating one;
+   what is removed is the DEFAULT, which is the half that could be silently wrong. */
+const BASE_ARG = argOf("--base", null);
+const BASE = BASE_ARG ? { sha: null, repo: ROOT, hops: [], why: null } : publicationBase(ROOT, "main");
+const BASE_REV = BASE_ARG ?? `origin/main`;
 
 const log = (s) => console.log(`[md-gate] ${s}`);
 const bad = (s) => console.error(`[md-gate] ${s}`);
@@ -201,8 +214,13 @@ const readFile = (text) => text.split("\n").map((line, i) => ({ n: i + 1, line, 
    whose CLAUDE.md is read, the introduced set is a difference over its CONTENT, and the resolved SHA is
    printed beside every verdict. Where the base cannot be read, every scoped channel reports NOT ASKED rather
    than treating an unreadable base as an empty one — which would report the whole file as landing today. */
-function readBase(rev, path) {
-  const git = (args) => execFileSync("git", args, { cwd: ROOT, encoding: "utf8", maxBuffer: 1 << 30,
+/* AND IT IS READ IN THE REPOSITORY THAT HAS THE OBJECT, WHICH IS NOT ALWAYS THIS ONE. Resolving the base sha
+   is half the job: measured on this box, no snapshot carries an objects/info/alternates file and a clone
+   brings only what the source's local heads reach, so a snapshot cannot name a commit that landed in its
+   source after it was made — a perfectly real base sha, unreadable here. publicationBase returns the
+   repository alongside the sha for exactly that reason, and this read is put to it. */
+function readBase(rev, path, repo) {
+  const git = (args) => execFileSync("git", args, { cwd: repo, encoding: "utf8", maxBuffer: 1 << 30,
                                                     stdio: ["ignore", "pipe", "ignore"] });
   try {
     const sha = git(["rev-parse", "--verify", `${rev}^{commit}`]).trim();
@@ -213,7 +231,9 @@ function readBase(rev, path) {
 /* ── THE RUN ──────────────────────────────────────────────────────────────────────────────────────────────*/
 const subjectText = readFileSync(SUBJECT, "utf8");
 const subject = readFile(subjectText);
-const base = readBase(BASE_REV, MD_PATH);
+const base = (BASE_ARG || BASE.sha)
+  ? readBase(BASE_ARG ?? BASE.sha, MD_PATH, BASE.repo ?? ROOT)
+  : { sha: null, text: null, why: BASE.why };
 const baseParas = base.text === null ? null : readFile(base.text);
 const scoped = baseParas !== null;
 
@@ -223,7 +243,17 @@ const retOccurrences = subject.reduce((a, p) => a + (maskSpans(p.line).match(RET
 const retParagraphs = subject.filter((p) => RETIREMENT.test(maskSpans(p.line))).length;
 
 log(`subject ${SUBJECT}`);
+/* THE BASE LINE NAMES WHERE IT WAS READ, NOT ONLY WHAT IT RESOLVED TO. A sha alone is what this gate printed
+   while it was reading a branch nobody advances: a real commit, with a real date, about the wrong tree. The
+   repository and the hop count are the two facts that distinguish a publication tip from a ref a clone
+   manufactured, and they are the ones a reader needs to disbelieve the number above them. */
 log(`base    ${BASE_REV} → ${base.sha ?? "UNRESOLVED"}${base.sha ? "" : ` (${base.why})`}`);
+log(`        read in ${BASE.repo ?? ROOT}` +
+    (BASE_ARG ? ` (named by --base, resolved in this tree)`
+     : BASE.hops.length ? ` — this tree is a clone ${BASE.hops.length} hop(s) down, so ITS OWN origin/main is `
+                          + `a ref \`git clone\` rebuilt from that repository's local branches and is not a `
+                          + `publication tip`
+     : ` — origin is a remote, so this tree's own origin/main is the publication tip`));
 
 /* WHAT THIS RUN READ, WHICH IS THE DENOMINATOR EVERY NUMBER BELOW IS A FRACTION OF. CLAUDE.md: "a coverage
    figure states WHAT IT IS A FRACTION OF, in the same line, or it is not a coverage figure." These count what
@@ -318,6 +348,23 @@ log(`  NOT COUNTED BY DESIGN: how many records already carry no condition. CLAUD
     `that does not rot is this: with it standing, that population is FROZEN and can only shrink.`);
 
 log("");
+/* AN UNASKABLE QUESTION MAY NOT REPORT A PASS, AND THIS GATE'S OWN BLIND-SPOT LINE IS WHAT SAYS SO — it reads
+   AN UNREADABLE BASE IS NOT AN EMPTY ONE, and the exit code then said it was: with no base, nothing lands in
+   the scoped channels, the terminal line claimed this checkout had landed no record without a condition, and
+   the process exited 0. That is a claim made on no evidence at the one place a reader stops, and it is the
+   defaulted-field defect performed on a verdict — absent rendered as clean. It is also the flattering
+   direction, so nothing downstream ever contradicts it.
+   IT IS A REFUSAL AND NOT A FINDING, so it is worded and counted as one: the findings ARE the disagreement,
+   and a base that could not be read is a disagreement with nothing. The remedy is named because the caller
+   can always supply one. */
+if (!scoped) {
+  bad(`FAILED (no base) — ${BASE_REV} could not be read, so the introduced set is UNKNOWN and this gate has ` +
+      `no answer to give. ${base.why ?? "no reason was recorded"}. It does not pass: a verdict that cannot ` +
+      `be reached is not a clean one, and reporting it as clean is how an unasked question becomes a green ` +
+      `stage. Name a revision with \`--base <rev>\` — one this gate can READ, which for a checkout cloned ` +
+      `from another repository means a revision that repository still has.`);
+  process.exit(1);
+}
 if (!introducedMarkers.length && !recordFindings.length) {
   log(`PASS (findings) — this checkout landed no emphasised record into ${MD_PATH} without a retirement ` +
       `condition, and broke no paragraph's emphasis. That verdict covers the ${readable} paragraph(s) this ` +

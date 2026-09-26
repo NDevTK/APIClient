@@ -379,6 +379,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative } from "node:path";
+import { publicationBase } from "./gate_revision.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = dirname(HERE);
@@ -9184,8 +9185,44 @@ if (badFlags.length) {
 }
 const sinceAt = argv.indexOf("--since");
 if (sinceAt >= 0) {
-  const ref = argv[sinceAt + 1] && !argv[sinceAt + 1].startsWith("--") ? argv[sinceAt + 1] : "origin/main";
-  since(ref, argv.filter((a) => a !== "--since" && a !== ref));
+  const given = argv[sinceAt + 1] && !argv[sinceAt + 1].startsWith("--") ? argv[sinceAt + 1] : null;
+  /* THE DEFAULT REFUSES INSIDE A CLONE RATHER THAN NAMING A REF THE CLONE MANUFACTURED. `origin/main` is a
+     claim about the publication tip only where origin is the real remote; `git clone` rebuilds
+     refs/remotes/origin/* out of the SOURCE's local branches, so inside the frozen snapshot this project's
+     testing rule mandates it names a branch nobody advances. Measured in the checkout this was written in:
+     that branch was 499 commits and 1302 differing files behind the tip, and this mode takes its population
+     from `git diff --name-only <base>` and reads each file's base copy at <base> — so every finding landed in
+     that window would be reported as INTRODUCED BY THIS DIFF, at lines the diff does not touch, against
+     whoever is holding the tree. That is the accusing direction with a clean transcript, which this mode's
+     own rev-parse guard two dozen lines up exists to end for the RANGE spelling and cannot see here, because
+     the stale ref resolves perfectly.
+     IT REFUSES RATHER THAN SUBSTITUTING THE RECOVERED SHA, AND THE REASON IS THE POPULATION QUERY. The base
+     is recoverable — publicationBase walks the clone chain and reads the ref where it is true — but this
+     mode then runs `git diff --name-only <base>` and `git show <base>:<path>` IN THIS TREE, and a snapshot
+     cannot name a commit that landed in its source after it was made: measured, no snapshot on this box
+     carries an objects/info/alternates file. So the recovered sha is printed as the remedy and the caller
+     decides, instead of this mode failing one command later with the base already chosen for them.
+     NAMED RESIDUAL — what is NOT covered: a lane inside a snapshot still cannot run this mode unless the
+     recovered base's object is present locally, which it is whenever the base is at or behind what the clone
+     brought. What the NEXT DIFF builds: the population query and the base read split, so the changed set is
+     derived against a base read in the repository that has it rather than against one this tree must hold.
+     How its ABSENCE would SHOW: this refusal printing a sha, and `--since <that sha>` then failing on
+     `git diff --name-only` with a bad-object error. */
+  let ref = given;
+  if (!ref) {
+    const b = publicationBase(ROOT, "main");
+    if (b.hops.length) {
+      console.log(`--since has no default in this checkout: it was cloned from ${b.repo}, so the ref named `
+        + `origin/main here was rebuilt by \`git clone\` from THAT repository's local branches and is not a `
+        + `publication tip. Reading it would report every finding landed since that branch last moved as `
+        + `INTRODUCED BY THIS DIFF. The publication tip is ${b.sha ?? "UNRESOLVED — " + b.why}`
+        + `${b.sha ? `, so \`--since ${b.sha.slice(0, 12)}\` is the run you meant — it needs that object in `
+                   + `THIS tree, which a clone made before that commit landed does not have.` : `.`}`);
+      process.exitCode = 1;
+      ref = null;
+    } else ref = "origin/main";
+  }
+  if (ref) since(ref, argv.filter((a) => a !== "--since" && a !== ref));
 }
 else if (argv.includes("--regen")) regen(argv.filter((a) => !a.startsWith("--")));
 else audit(argv);

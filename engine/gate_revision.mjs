@@ -120,6 +120,96 @@ function ask(cwd, ...a) {
    against a sha, is how "could not ask" gets published as "differs". */
 const answered = (v) => typeof v === "string" && v !== "" && !v.startsWith("<git ");
 
+/* WHAT THIS TREE IS LANDING ON TOP OF — ONE PLACE, EVERY GATE, BECAUSE A CLONE MANUFACTURES A REF THAT LOOKS
+   LIKE THE ANSWER AND IS NOT ONE. A gate scoped to what a checkout INTRODUCED needs a base, and every tool
+   here reached for the same spelling: origin/main. That spelling is a claim about the PUBLICATION TIP, and it
+   is only such a claim in a checkout whose origin is the real remote. `git clone` builds refs/remotes/origin/*
+   from the SOURCE REPOSITORY's refs/heads/*, so inside a clone origin/main means THE SOURCE'S LOCAL BRANCH
+   main — and in a workflow where lanes commit on a lane branch and publish by sha, nobody ever advances that
+   branch, so it is frozen at whenever it was last touched and the ref goes on resolving cleanly for ever.
+
+   MEASURED, AND IT IS NOT A CORNER: the frozen-snapshot recipe this project mandates is exactly this clone, so
+   EVERY gate run from a snapshot took its base from a branch nothing advances. In the checkout this was
+   written in, origin/main and the stale local main were 499 commits and 1302 differing files apart, and the
+   snapshot on disk resolved its origin/main to the stale one. The failure is silent and it is the ACCUSING
+   direction: a stale base makes pre-existing work read as INTRODUCED BY THIS CHECKOUT, which lands as a
+   finding against whoever is holding the tree. Nothing in the output says so, because the resolved sha it
+   prints is a real commit with a real date.
+
+   NO ANCESTRY IS ASKED AND NONE CAN BE. This repository is shallow, so the graft makes parent and child read
+   as diverged and a divergence count answers the clone depth; the base is a REVISION whose file is read by
+   CONTENT, which is the same commitment the record gate above it already makes.
+
+   THE BASE IS RECOVERED RATHER THAN GUESSED, AND THE CLONE RECORDS WHERE FROM. remote.origin.url in a snapshot
+   is a local path to the repository that still has the true ref, so the chain is walked until it reaches a
+   checkout whose origin is NOT a local repository — that one's origin/<branch> is a publication claim and
+   every earlier one's is not.
+
+   AND THE REPOSITORY THAT CAN READ THE OBJECT IS RETURNED WITH THE SHA, because resolving it is not enough.
+   Measured on this box: ZERO of 58 snapshots carries an objects/info/alternates file, and a snapshot cloned
+   after a commit landed in its source cannot name that commit at all — so a base read put to the CLONE fails
+   for a sha that is perfectly real. The read belongs to `repo`.
+
+   A FETCH IS NOT AN OPTION AND NEITHER IS ls-remote. A gate that fetched would move a ref every other lane in
+   a shared checkout is reading, and a network ask would make a deciding stage's verdict a function of the
+   hour rather than of the revision — which is the whole of what the freeze exists to prevent.
+
+   THE FAILURE IS KEPT AS THE IDENTITY, per this file's own header: a base that could not be resolved returns
+   a null sha beside the reason, never a plausible one, because a consumer that defaults here turns cannot-ask
+   into clean.
+
+   NAMED RESIDUAL — THE BASE IS THE TIP AT RUN TIME AND NOT AT FREEZE TIME. What is NOT covered: a snapshot is
+   frozen so its SUBJECT belongs to one revision, and this resolver reads the source repository's ref when it
+   is asked, so the BASE tracks the source instead. Two runs of one snapshot days apart therefore compare the
+   same subject against different bases, and a finding can retire because somebody else published rather than
+   because anything in the snapshot changed. That is correct for the question — what is published is a fact
+   about the remote, and the freeze exists to fix the subject — and it is narrower than a frozen pair.
+   What the NEXT DIFF builds: frozen_snapshot.sh resolves this in the parent at clone time, brings the object
+   into the clone as a ref of its own, and records it where this resolver prefers it over the live ask. How
+   its ABSENCE would SHOW: two runs of one snapshot printing the same subject line and different resolved base
+   shas. RETIREMENT: this residual goes when a snapshot carries its own recorded base, because the resolver
+   then reads a fact the freeze wrote rather than one the source currently holds. */
+function remoteOriginUrl(cwd) {
+  const r = spawnSync("git", ["config", "--get", "remote.origin.url"], { cwd, encoding: "utf8" });
+  return r.status === 0 ? r.stdout.trim() : "";
+}
+/* THE SOURCE REPOSITORY THIS CHECKOUT WAS CLONED FROM, or null when origin is a real remote. A url carrying a
+   scheme or an scp-like host is a remote and is NOT walked; file:// is the one scheme that names a path, so it
+   is stripped rather than rejected. A path that exists and is not a repository ROOT is also null — the same
+   precision `ask` states: git walks upward, so a question put to a non-root is answered about another tree. */
+function localCloneSource(cwd) {
+  let url = remoteOriginUrl(cwd);
+  if (!url) return null;
+  if (url.startsWith("file://")) url = url.slice("file://".length);
+  else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url) || /^[^/\\]+@[^/\\]+:/.test(url)) return null;
+  let p;
+  try { p = realpathSync(url.startsWith("/") ? url : join(cwd, url)); } catch { return null; }
+  return isRepoRoot(p) ? p : null;
+}
+export function publicationBase(treeRoot = ROOT, branch = "main") {
+  const hops = [], seen = new Set();
+  let repo = treeRoot;
+  for (;;) {
+    let real; try { real = realpathSync(repo); } catch { real = repo; }
+    if (seen.has(real))
+      return { sha: null, repo: null, hops, branch,
+               why: `<the clone chain from ${treeRoot} revisits ${real}, so no checkout in it owns a ` +
+                    `publication tip and the base cannot be recovered from inside>` };
+    seen.add(real);
+    if (!isRepoRoot(repo))
+      return { sha: null, repo: null, hops, branch,
+               why: `<${repo} is not a git repository of its own, so origin/${branch} there would be ` +
+                    `answered by whichever repository contains it, about a different tree>` };
+    const src = localCloneSource(repo);
+    if (!src) break;
+    hops.push(src);
+    repo = src;
+  }
+  const sha = ask(repo, "rev-parse", "--verify", `refs/remotes/origin/${branch}^{commit}`);
+  if (!answered(sha)) return { sha: null, repo, hops, branch, why: sha };
+  return { sha, repo, hops, branch, why: null };
+}
+
 /* THE SAME CONTRACT AS `ask`, FOR A QUESTION PUT TO THE BUILD RATHER THAN TO GIT — the answer or the failure,
    never neither, and never a remembered answer standing in for a failed one. The build is asked because it is
    the only thing that knows what it hands the compiler; a parse error or a non-zero exit is returned as the
