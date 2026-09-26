@@ -194,9 +194,10 @@
  *   node testing/static_surface.mjs --site excalidraw --examples 20     # ... and look at the rows
  */
 
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { relative, resolve } from "node:path";
+import { relative, resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parse } from "@babel/parser";
 import { VISITOR_KEYS } from "@babel/types";
 import { corpusPrograms, PROGRAM, DOCUMENT, essenceOf } from "../engine/corpus_programs.mjs";
@@ -282,6 +283,110 @@ for (const d of DOORS) {
 }
 /* THE GLOBAL OBJECT'S OWN NAMES. `global` is node's and is here because a bundle ships one build for both. */
 const GLOBAL_OBJECTS = new Set(["window", "self", "globalThis", "global"]);
+/* WHERE THE ENGINE IS, so a name this file measures is read out of the declaration that owns it. */
+const ENGINE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "engine");
+
+/* ── THE DECLARED ENTRY NAMES, AND WHY THIS FILE IS WHERE THEY GET PRICED ─────────────────────────────────
+   Two components in the engine raise a census row when THE COMPILER resolves a free identifier against the
+   global object, and both record the same named residual at their own declaration: the row sees ONE
+   SPELLING, the bare identifier, so a program that reaches the same platform name through a property of the
+   global object raises nothing. Both name the same next diff, a member-name channel at the field-get
+   emitter, and both say the floor is in the direction that WITHHOLDS a finding.
+   THE QUESTION THAT DIFF HAS TO BE PRICED AGAINST IS A PROPERTY OF REAL BUNDLES AND NOT OF THE ENGINE, which
+   is why it is answered here and not there. Those rows are read as a BIT — zero against nonzero — and their
+   own header says so in as many words, so the floor costs a READING only where a bundle spells a name
+   EXCLUSIVELY as a property. A program that writes `window.requestAnimationFrame` once and the bare name
+   anywhere else still raises the row, and for a bit that is the whole of what is asked of it. So the
+   decisive column below is not how often the property spelling occurs; it is HOW MANY SITES SPELL A NAME
+   ONLY THAT WAY, because that is the only population on which the landed denominator answers zero about a
+   program that does hang work off the rung.
+   THE NAMES ARE DERIVED FROM THE ENGINE AND NEVER TYPED HERE, for the reason the DOORS table gives at
+   length: a list of platform names in this file would be a second copy of a fact the engine's own
+   declarations already state, and the copy anyone writes first is the one that drops a name. A dropped name
+   is measured as a smaller population, which is the flattering direction for the diff being priced. Each
+   rung declares a NULL-terminated table at its per-realm install and each request edge declares its entry
+   name as a string, so both are read out of the sources that own them and every unresolved element THROWS.
+   THERE IS NO EXPECTED COUNT ASSERTED, because a count would be a bound that goes stale on the day a fourth
+   rung lands: what is asserted instead is that every declaration site found resolved to at least one name,
+   which grows with the tree and still fails loudly on a shape change. */
+/* ONE SOURCE'S DECLARATIONS, AS A PURE FUNCTION OF ITS TEXT, SO EVERY REFUSAL BELOW CAN BE SHOWN FIRING.
+   The walk that finds the files cannot be armed without a second engine tree to break; this can be armed with
+   a string, and the refusals are the whole reason the population may be trusted — a shape change that went
+   through quietly would report fewer declared names, and fewer names is a smaller population, which is the
+   flattering direction for the diff this band exists to price. It THROWS rather than returning a short answer
+   for exactly that reason. */
+function entryNamesFromSource(src, where, add) {
+  let rung = 0, edge = 0;
+  for (const m of src.matchAll(/\brung_entry_declare\s*\(\s*([A-Z][A-Z_0-9]*)\s*,\s*([A-Za-z_][A-Za-z_0-9]*)\s*\)/g)) {
+    rung++;
+    const unit = m[1], table = m[2];
+    const t = new RegExp(`static\\s+const\\s+char\\s*\\*\\s*const\\s+${table}\\s*\\[\\s*\\]\\s*=\\s*\\{([^}]*)\\}`).exec(src);
+    if (!t) die(`${table} is declared to a rung at ${where} and this pass cannot find its table, so the ` +
+                `names that rung counts would go unmeasured and the population would read smaller than it is.`);
+    let got = 0;
+    for (const raw of t[1].split(",").map((s) => s.trim())) {
+      if (!raw || raw === "NULL") continue;
+      const q = /^"(.*)"$/.exec(raw);
+      if (q) { add(q[1], unit); got++; continue; }
+      const lit = new RegExp(`static\\s+const\\s+char\\s+${raw}\\s*\\[\\s*\\]\\s*=\\s*"([^"]*)"`).exec(src);
+      if (!lit) die(`${table}'s element ${raw} at ${where} resolves to no string literal in its own file, so ` +
+                    `one declared name would be silently missing from this channel.`);
+      add(lit[1], unit); got++;
+    }
+    if (!got) die(`${table} at ${where} resolved to no names at all.`);
+  }
+  for (const m of src.matchAll(/\bendpoint_([a-z_]+)_edge_declare\s*\(\s*"([^"]+)"/g)) {
+    edge++; add(m[2], "edge:" + m[1]);
+  }
+  return { rung, edge };
+}
+function declaredEntryNames() {
+  const host = resolve(ENGINE_DIR, "host");
+  const files = [];
+  const walkDir = (d) => {
+    let names;
+    try { names = readdirSync(d); } catch { return; }
+    for (const e of names) {
+      const p = resolve(d, e);
+      let st; try { st = statSync(p); } catch { continue; }
+      if (st.isDirectory()) walkDir(p);
+      else if (/\.c$/.test(e)) files.push(p);
+    }
+  };
+  walkDir(host);
+  if (!files.length) die(`no engine source under ${host}, so the declared entry names cannot be derived and ` +
+                         `a hand-typed list is the one thing this channel may not fall back to.`);
+  const out = new Map();          // name -> the declaration(s) that named it
+  const add = (n, who) => { if (!out.has(n)) out.set(n, []); out.get(n).push(who); };
+  let rungSites = 0, edgeSites = 0, resolvedRung = 0, resolvedEdge = 0;
+  for (const f of files) {
+    const n = entryNamesFromSource(readFileSync(f, "utf8"), relative(ENGINE_DIR, f), add);
+    rungSites += n.rung; edgeSites += n.edge; resolvedRung += n.rung; resolvedEdge += n.edge;
+  }
+  if (!rungSites || !edgeSites)
+    die(`the declared entry names were derived from ${rungSites} rung declaration(s) and ${edgeSites} edge ` +
+        `declaration(s); a zero on either side means this pass stopped matching a shape the engine still ` +
+        `uses, and a channel measuring none of a population reports the smallest possible floor.`);
+  if (resolvedRung !== rungSites || resolvedEdge !== edgeSites)
+    die(`only ${resolvedRung}/${rungSites} rung and ${resolvedEdge}/${edgeSites} edge declaration(s) resolved.`);
+  return out;
+}
+const ENTRY_DECL = declaredEntryNames();
+const ENTRY_NAMES = new Set(ENTRY_DECL.keys());
+/* THE SPELLINGS, EACH A PARTITION MEMBER EXCEPT THE LAST. `bareFree` is the one the landed rows already see;
+   `bareBoundName` is a bare reference in a file that also binds the name somewhere, which the engine's
+   scope-correct resolver very probably DOES see and this file-wide pass cannot prove, so it is counted apart
+   rather than folded into either answer. `typeofBare` is not a partition member and is not summed: it says
+   which of the two reads the landed row would have recorded, and every one of them is already inside
+   `bareFree` or `bareBoundName`. */
+const SPELLINGS = ["bareFree", "bareBoundName", "qualified", "qualifiedBoundGlobal", "computedLiteral",
+                   "instanceMember", "instanceMemberComputed", "destructuredFromGlobal"];
+const spellTally = () => {
+  const t = {};
+  for (const k of SPELLINGS) t[k] = 0;
+  t.typeofBare = 0;
+  return t;
+};
 /* A PROPERTY NAME MAY NOT BE BOTH A `member-call` DOOR AND A GLOBAL-REACHED ONE, ASSERTED RATHER THAN
    BELIEVED. `window.fetch` is resolved by looking the PROPERTY up among the `callee-global` rows, so a door
    added later that names `fetch` or `importScripts` as a `member-call` would make one site match two rows
@@ -828,7 +933,8 @@ function readFile(src, filename) {
   }
   if (!ast) return { parsed: false, error: String(err && err.message || err).slice(0, 160), sites: [], pathish: new Set(), blind: [], xhrOpenSkippedNonLiteralMethod: 0,
                      globalDoor: { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 },
-                     manifest: { rows: [], refusedTwoApplications: 0 } };
+                     manifest: { rows: [], refusedTwoApplications: 0 },
+                     spell: new Map(), spellOther: { globalComputedDynamic: 0 } };
 
   const { binds, count: bindCount, assigned: bindAssigned, reassigned, fnDecl, memberOnce } = collectBinds(ast);
   /* THE ENUMERATING FOLD'S FIXED HALF, built once per file: what a name and a slot resolve to. The per-row
@@ -956,6 +1062,159 @@ function readFile(src, filename) {
     if (FN_SCOPES.has(n.type)) fnStack.pop();
   });
 
+
+  /* ── HOW THIS PROGRAM SPELLS THE DECLARED ENTRY NAMES ───────────────────────────────────────────────────
+     A SEPARATE WALK, DELIBERATELY, AND THE REASON IS CALIBRATION RATHER THAN CLARITY. Folding this into the
+     door walk above would have put a new branch inside the classifier every existing number is produced by,
+     and the whole worth of a figure added to this file is that the figures already here did not move. A
+     third traversal costs a fraction of the parse it rides on and buys an A/B nobody has to argue about.
+     WHAT IS NOT A REFERENCE IS MARKED BY ITS PARENT ON THE WAY DOWN, which needs no parent chain: this
+     walker enters a node strictly before its children, so a property name, an object key, a declaration id,
+     a parameter and an import local are all struck from the reference population by the node that owns them
+     before the identifier itself is reached. Without that, an object literal carrying a `fetch` key would
+     read as a program naming the platform's fetch, which is the precision failure that makes the bare count
+     useless in the direction that hides the floor.
+     AN ALIAS IS NOT A SPELLING OF ITS OWN AND IS DELIBERATELY NOT A COLUMN. `const f = fetch` reaches the
+     name by the bare spelling and `const f = window.fetch` by the property spelling, so both are already
+     attributed where they happen; a further column would double-count one occurrence under two headings.
+     DESTRUCTURING IS THE ONE EXCEPTION, because there the name appears only as a PATTERN KEY and in no
+     reference position at all, so nothing else would see it. */
+  const spell = new Map();                                  // declared name -> its spelling tally
+  const spellOther = { globalComputedDynamic: 0 };
+  const spellHit = (nm, k) => {
+    let t = spell.get(nm);
+    if (!t) { t = spellTally(); spell.set(nm, t); }
+    t[k]++;
+  };
+  const notRef = new Set();
+  /* THIS BAND KEEPS ITS OWN BINDER SET AND DOES NOT REUSE `collectBinds`, AND THE REASON IS A DIRECTION RATHER
+     THAN A PREFERENCE. `collectBinds` walks EVERY identifier under a pattern and binds it, which is right for
+     its own question — may this name be folded — because over-binding there REFUSES a fold. Asked this
+     question it over-binds in the direction that hides the floor: `function f(a = fetch())` binds `a` and
+     REFERENCES fetch, and counting that reference as a bound name moves it out of the column the landed row
+     already sees and into the column this pass cannot decide, which reports the property spelling as more
+     necessary than it is. THE SELF-TEST ROW FOR THAT SHAPE IS WHAT CAUGHT IT and is why it is a control.
+     A BINDING POSITION FEEDS BOTH SETS AND A PROPERTY NAME FEEDS ONLY ONE, which is the whole of why they are
+     two sets: an object key and a member's property name are struck from the reference population and bind
+     nothing, so folding them into a binder set would make every file that carries a `fetch` KEY read as a
+     file that shadows fetch. */
+  const spellBound = new Set();
+  const bindName = (id) => { if (id && id.type === "Identifier") { notRef.add(id); spellBound.add(id.name); } };
+  const markPattern = (p) => {
+    if (!p) return;
+    switch (p.type) {
+      case "Identifier": bindName(p); return;
+      case "AssignmentPattern": markPattern(p.left); return;
+      case "RestElement": markPattern(p.argument); return;
+      case "ArrayPattern": for (const e of p.elements || []) markPattern(e); return;
+      case "ObjectPattern":
+        for (const q of p.properties || []) {
+          if (q.type === "ObjectProperty") { if (!q.computed && q.key) notRef.add(q.key); markPattern(q.value); }
+          else if (q.type === "RestElement") markPattern(q.argument);
+        }
+        return;
+      default: return;
+    }
+  };
+  walk(ast, (n) => {
+    switch (n.type) {
+      case "MemberExpression":
+      case "OptionalMemberExpression": {
+        if (!n.computed && n.property && n.property.type === "Identifier") {
+          notRef.add(n.property);
+          const nm = n.property.name;
+          if (ENTRY_NAMES.has(nm)) {
+            if (provenGlobal(n.object)) spellHit(nm, "qualified");
+            else if (n.object && n.object.type === "Identifier" && GLOBAL_OBJECTS.has(n.object.name))
+              spellHit(nm, "qualifiedBoundGlobal");
+            else spellHit(nm, "instanceMember");
+          }
+        } else if (n.computed && n.property) {
+          const k = n.property;
+          if (k.type === "StringLiteral" && ENTRY_NAMES.has(k.value))
+            spellHit(k.value, provenGlobal(n.object) ? "computedLiteral" : "instanceMemberComputed");
+          /* A COMPUTED KEY THIS PASS CANNOT READ BELONGS TO NO NAME AND IS COUNTED APART. `self[n]` may be
+             any member of the global object, so attributing it to one would invent a population; leaving it
+             out entirely would let a corpus that reaches everything dynamically read as reaching nothing. */
+          else if (k.type !== "StringLiteral" && provenGlobal(n.object)) spellOther.globalComputedDynamic++;
+        }
+        break;
+      }
+      case "ObjectProperty":
+      case "ObjectMethod":
+      case "ClassMethod":
+      case "ClassPrivateMethod":
+      case "ClassProperty":
+        if (!n.computed && n.key) notRef.add(n.key);
+        break;
+      case "VariableDeclarator": {
+        if (n.id && n.id.type === "Identifier") bindName(n.id);
+        else markPattern(n.id);
+        /* THE ONE SHAPE NO REFERENCE POSITION WOULD SHOW. */
+        if (n.id && n.id.type === "ObjectPattern" && provenGlobal(n.init)) {
+          for (const p of n.id.properties || []) {
+            if (p.type !== "ObjectProperty" || p.computed) continue;
+            const k = p.key;
+            const nm = k && (k.type === "Identifier" ? k.name : k.type === "StringLiteral" ? k.value : null);
+            if (nm && ENTRY_NAMES.has(nm)) spellHit(nm, "destructuredFromGlobal");
+          }
+        }
+        break;
+      }
+      case "FunctionDeclaration":
+      case "FunctionExpression":
+      case "ClassDeclaration":
+      case "ClassExpression":
+      case "ArrowFunctionExpression":
+        if (n.id) bindName(n.id);
+        for (const p of n.params || []) markPattern(p);
+        break;
+      case "CatchClause":
+        markPattern(n.param);
+        break;
+      /* AN ASSIGNMENT IS NOT A BINDING AND IS STILL DISQUALIFYING, for `provenGlobal`'s own reason: a name the
+         file WRITES may mean something other than the platform's by the time it is read. */
+      case "AssignmentExpression":
+        if (n.left && n.left.type === "Identifier") spellBound.add(n.left.name);
+        break;
+      case "UpdateExpression":
+        if (n.argument && n.argument.type === "Identifier") spellBound.add(n.argument.name);
+        break;
+      case "ImportSpecifier":
+      case "ImportDefaultSpecifier":
+      case "ImportNamespaceSpecifier":
+        if (n.local) bindName(n.local);
+        if (n.imported) notRef.add(n.imported);
+        break;
+      case "ExportSpecifier":
+        if (n.local) notRef.add(n.local);
+        if (n.exported) notRef.add(n.exported);
+        break;
+      case "LabeledStatement":
+      case "BreakStatement":
+      case "ContinueStatement":
+        if (n.label) notRef.add(n.label);
+        break;
+      case "UnaryExpression":
+        /* WHICH OF THE TWO READS THE LANDED ROW WOULD HAVE RECORDED. The non-throwing form the unary parser
+           patches in for `typeof` is the one a feature test uses, so a name reached only that way is a
+           program PROBING for a capability rather than using it — a distinction the engine's own row carries
+           in its second argument and this column exists to be read against. */
+        if (n.operator === "typeof" && n.argument && n.argument.type === "Identifier" &&
+            ENTRY_NAMES.has(n.argument.name)) spellHit(n.argument.name, "typeofBare");
+        break;
+      default: break;
+    }
+  });
+  /* A SECOND PASS FOR THE BARE COLUMN, BECAUSE A REFERENCE MAY PRECEDE ITS OWN BINDING. A hoisted declaration
+     and a function body that runs before the `var` below it both put the reference first in source order, so
+     classifying a bare name during the marking pass would read the same program two ways depending on where
+     its binding happened to be written. */
+  walk(ast, (n) => {
+    if (n.type !== "Identifier" || notRef.has(n) || !ENTRY_NAMES.has(n.name)) return;
+    spellHit(n.name, spellBound.has(n.name) ? "bareBoundName" : "bareFree");
+  });
+
   /* THE BASE RATE. Every string literal in this program that looks like an address and is NOT the URL
      argument of a door — what a naive extractor would report and what this one deliberately does not. */
   walk(ast, (n) => {
@@ -989,7 +1248,7 @@ function readFile(src, filename) {
   });
 
   return { parsed: true, error: null, sites, pathish, blind, xhrOpenSkippedNonLiteralMethod, globalDoor,
-           manifest };
+           manifest, spell, spellOther };
 }
 
 /* ── THE ARMED CONTROL ────────────────────────────────────────────────────────────────────────────────────
@@ -1266,6 +1525,104 @@ function selftest() {
             `numbers that price the global-reached door against what it declines are measuring something ` +
             `other than what they are printed as meaning.`);
   }
+  /* THE SPELLING BAND IS ARMED ONE COLUMN AT A TIME, AND THE NEGATIVE ROWS ARE THE HALF THAT MATTERS. A
+     probe whose expected output is silence, with no run in which the same probe shape SPOKE, has calibrated
+     nothing — and here the silence has to be shown in BOTH directions, because the column that decides the
+     verdict is a count of sites where a bare reference is ABSENT. A classifier that quietly counted an object
+     key or a parameter as a bare reference would report the property spelling as harmless; one that quietly
+     missed a bare reference would report it as critical. Each row therefore states the WHOLE tally, so a
+     column rising that should not have is a failure exactly as a column staying flat is. */
+  const sp = (src) => {
+    const r = readFile(src, "<selftest>");
+    const flat = spellTally();
+    for (const t of r.spell.values()) for (const k of Object.keys(t)) flat[k] += t[k];
+    flat.globalComputedDynamic = r.spellOther.globalComputedDynamic;
+    return flat;
+  };
+  const spWant = [
+    [`fetch("/a")`,                             { bareFree: 1 }],
+    [`typeof requestAnimationFrame`,            { bareFree: 1, typeofBare: 1 }],
+    [`setTimeout(f,0);setInterval(g,1)`,        { bareFree: 2 }],
+    [`window.fetch("/a")`,                      { qualified: 1 }],
+    [`self.requestIdleCallback(f)`,             { qualified: 1 }],
+    [`window["fetch"]("/a")`,                   { computedLiteral: 1 }],
+    [`var {fetch} = window`,                    { destructuredFromGlobal: 1 }],
+    [`var fetch = 1; fetch("/a")`,              { bareBoundName: 1 }],
+    [`function f(window){return window.fetch()}`, { qualifiedBoundGlobal: 1 }],
+    [`api.fetch("/a")`,                         { instanceMember: 1 }],
+    [`api["setTimeout"](f)`,                    { instanceMemberComputed: 1 }],
+    [`self[k]()`,                               { globalComputedDynamic: 1 }],
+    /* AND THE SILENCES. An object key, a shorthand property, a parameter, a declared function's own name and
+       a default value's binding are not references to the platform, and a channel that counted one would
+       report the bare spelling as commoner than it is — which reads as "the floor is harmless". */
+    [`({fetch: 1, setTimeout: 2})`,             {}],
+    [`function f(fetch, setInterval){}`,        {}],
+    [`function setTimeout(){}`,                 {}],
+    [`class C { fetch(){} }`,                   {}],
+    [`x.notADeclaredName(1)`,                   {}],
+    /* A DEFAULT VALUE IS AN ORDINARY EXPRESSION AND THE PARAMETER BESIDE IT IS A BINDING, which is the one
+       pattern position a blanket mark would have struck out. */
+    [`function f(a = fetch()){}`,               { bareFree: 1 }],
+  ];
+  let spSpoke = 0;
+  for (const [src, want] of spWant) {
+    const got = sp(src);
+    for (const k of Object.keys(got)) {
+      const w = want[k] || 0;
+      if (got[k] !== w)
+        die(`SELF-TEST FAILED: the spelling band's ${k} is ${got[k]} and not ${w} for \`${src}\`. The column ` +
+            `that decides whether a member-name channel is on the critical path is a count of sites with NO ` +
+            `bare reference, so a miscount in either direction inverts the verdict this band exists to give.`);
+      if (got[k]) spSpoke++;
+    }
+  }
+  if (spSpoke < SPELLINGS.length + 2)
+    die(`SELF-TEST FAILED: only ${spSpoke} spelling column(s) were seen to rise; every one of the ` +
+        `${SPELLINGS.length} spellings plus typeof and the unattributable computed read must be shown moving, ` +
+        `or its zero over the corpus cannot be told from a column that stopped counting.`);
+  for (const k of [...SPELLINGS, "typeofBare"]) {
+    let rose = false;
+    for (const [src] of spWant) if (sp(src)[k]) { rose = true; break; }
+    if (!rose) die(`SELF-TEST FAILED: no control makes the spelling band's ${k} rise, so it is unarmed.`);
+  }
+  /* THE DERIVATION ITSELF IS ARMED, POSITIVE ROW FIRST AND THEN EVERY REFUSAL, because a name the engine
+     declares and this pass failed to resolve would leave the population smaller than it is — the flattering
+     direction for the diff being priced — and a refusal nobody has seen fire cannot be told from a shape the
+     reader never met. The engine tree cannot be broken to test the walk, so the per-source reader is a pure
+     function of its text and these are strings. */
+  {
+    const got = new Map();
+    const n = entryNamesFromSource(
+      `static const char A_NAME[] = "setTimeout";\n` +
+      `static const char *const T_NAMES[] = { A_NAME, "requestIdleCallback", NULL };\n` +
+      `rung_entry_declare(STEP_UNIT_TIMER, T_NAMES);\n` +
+      `endpoint_fetch_edge_declare("fetch", steps, IDL_STEP_FIRST);\n`,
+      "<selftest>", (nm, who) => got.set(nm, who));
+    if (n.rung !== 1 || n.edge !== 1 || got.size !== 3 || !got.has("setTimeout") ||
+        !got.has("requestIdleCallback") || !got.has("fetch"))
+      die(`SELF-TEST FAILED: the entry-name derivation read ${got.size} name(s) from ${n.rung} rung and ` +
+          `${n.edge} edge declaration(s) in a source carrying three, so the population this band measures is ` +
+          `assembled by something other than what it is printed as reading.`);
+    const refusals = [
+      [`rung_entry_declare(STEP_UNIT_TIMER, NO_SUCH_TABLE);`, "a table with no declaration"],
+      [`static const char *const T[] = { MISSING_ELEM, NULL };\nrung_entry_declare(STEP_UNIT_TIMER, T);`,
+       "an element resolving to no literal"],
+      [`static const char *const T[] = { NULL };\nrung_entry_declare(STEP_UNIT_TIMER, T);`, "an empty table"],
+    ];
+    for (const [bad, what] of refusals) {
+      let threw = false;
+      try { entryNamesFromSource(bad, "<selftest>", () => {}); } catch { threw = true; }
+      if (!threw)
+        die(`SELF-TEST FAILED: the entry-name derivation accepted ${what} without throwing. A shape change ` +
+            `would then reduce the measured population silently, and a smaller population reads as a smaller ` +
+            `floor under the very row this band is here to price.`);
+    }
+  }
+  if (!ENTRY_NAMES.size) die(`SELF-TEST FAILED: no declared entry name was derived from the engine.`);
+  for (const nm of ENTRY_NAMES)
+    if (!sp(`${nm}(f)`).bareFree && !sp(`window.${nm}(f)`).qualified)
+      die(`SELF-TEST FAILED: the declared name ${nm} is matched by neither spelling, so it is in the ` +
+          `population and outside the channel.`);
   /* THE xhr.open EXCLUSION IS A DECLARED FLOOR AND CARRIES A SIZE FOR THE SAME REASON. */
   if (readFile(`x.open(method,"/t")`, "<selftest>").xhrOpenSkippedNonLiteralMethod !== 1)
     die(`SELF-TEST FAILED: the xhr.open non-literal-method exclusion is not counted, so the floor this ` +
@@ -1282,7 +1639,8 @@ function selftest() {
         `whose source stopped producing a door row is a control that certifies nothing.`);
   return { rows: SELFTEST.length, produced: spoke, blindRows: SELFTEST_BLIND.length, blindProduced: blindSpoke,
            manifestRows: SELFTEST_MANIFEST.length + 1, manifestProduced: manifestSpoke, manifestAddrs,
-           reachRows: SELFTEST_REACH.size };
+           reachRows: SELFTEST_REACH.size, spellRows: spWant.length, spellColumns: SPELLINGS.length + 2,
+           spellNames: ENTRY_NAMES.size, derivationRefusals: 3 };
 }
 
 /* ── THE RUN ──────────────────────────────────────────────────────────────────────────────────────────── */
@@ -1348,6 +1706,7 @@ function main(argv) {
       globalDoor: { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 },
       manifest: { sites: 0, addressSites: 0, candidates: 0, dropped: 0, fragments: 0, refusedTwoApplications: 0, multi: 0 },
       manifestUrls: new Set(), manifestRows: [],
+      spell: {}, spellOther: { globalComputedDynamic: 0 },
     });
     return perSite.get(id);
   };
@@ -1377,6 +1736,11 @@ function main(argv) {
     for (const v of r.pathish) b.pathish.add(v);
     b.xhrOpenSkipped += r.xhrOpenSkippedNonLiteralMethod;
     for (const k of Object.keys(b.globalDoor)) b.globalDoor[k] += r.globalDoor[k];
+    b.spellOther.globalComputedDynamic += r.spellOther.globalComputedDynamic;
+    for (const [nm, t] of r.spell) {
+      if (!b.spell[nm]) b.spell[nm] = spellTally();
+      for (const k of Object.keys(t)) b.spell[nm][k] += t[k];
+    }
     b.manifest.refusedTwoApplications += r.manifest.refusedTwoApplications;
     for (const m of r.manifest.rows) {
       b.manifest.sites++;
@@ -1450,6 +1814,10 @@ function main(argv) {
     blind: { sites: 0, literal: 0, folded: 0, shape: 0, opaque: 0, src: 0, href: 0 }, blindDistinctUrls: 0, xhrOpenSkipped: 0,
     globalDoor: { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 },
     manifest: { sites: 0, addressSites: 0, candidates: 0, dropped: 0, fragments: 0, refusedTwoApplications: 0, multi: 0 }, manifestDistinctUrls: 0,
+    /* THE SPELLING BAND'S OWN TOTALS. `spellSites` is a presence count over SITES and never a sum of
+       occurrences, because the landed rows it prices are read as a bit and a site is the unit at which one
+       of them is zero. */
+    spell: {}, spellOther: { globalComputedDynamic: 0 }, spellSites: {},
   };
   const allUrls = new Set(), allPathish = new Set(), allBlindUrls = new Set(), allManifestUrls = new Set();
   const clsUrls = { data: new Set(), program: new Set() };
@@ -1471,6 +1839,30 @@ function main(argv) {
     for (const k of Object.keys(tot.blind)) tot.blind[k] += b.blind[k];
     tot.xhrOpenSkipped += b.xhrOpenSkipped;
     for (const k of Object.keys(tot.globalDoor)) tot.globalDoor[k] += b.globalDoor[k];
+    tot.spellOther.globalComputedDynamic += b.spellOther.globalComputedDynamic;
+    for (const nm of ENTRY_NAMES) {
+      const t = b.spell[nm];
+      if (!tot.spell[nm]) tot.spell[nm] = spellTally();
+      if (!tot.spellSites[nm])
+        tot.spellSites[nm] = { any: 0, bareFree: 0, bareAny: 0, propertyAny: 0,
+                               propertyOnlyTight: 0, propertyOnlyLoose: 0, wrapperOnly: 0 };
+      if (!t) continue;
+      for (const k of Object.keys(t)) tot.spell[nm][k] += t[k];
+      /* THE PLATFORM-NAME POPULATION IS THE GLOBAL SPELLINGS AND EXCLUDES A WRAPPER'S OWN MEMBER. `api.fetch`
+         names a receiver whose identity is in question, which the DOORS comment turns away and which no
+         global-resolution channel of any spelling would ever raise — counting it here would inflate the
+         population the member channel is being priced against with rows that channel cannot rescue. */
+      const bareAny = t.bareFree + t.bareBoundName;
+      const propAny = t.qualified + t.qualifiedBoundGlobal + t.computedLiteral + t.destructuredFromGlobal;
+      const s = tot.spellSites[nm];
+      if (bareAny || propAny) s.any++;
+      if (bareAny) s.bareAny++;
+      if (t.bareFree) s.bareFree++;
+      if (propAny) s.propertyAny++;
+      if (propAny && !bareAny) s.propertyOnlyTight++;
+      if (propAny && !t.bareFree) s.propertyOnlyLoose++;
+      if (!bareAny && !propAny && (t.instanceMember + t.instanceMemberComputed)) s.wrapperOnly++;
+    }
     for (const k of Object.keys(tot.manifest)) tot.manifest[k] += b.manifest[k];
     for (const u of b.manifestUrls) allManifestUrls.add(u);
     for (const u of b.blindUrls) allBlindUrls.add(u);
@@ -1520,6 +1912,7 @@ function main(argv) {
       program: { ...b.program, urls: undefined, distinctUrls: b.program.urls.size },
       blind: { ...b.blind, distinctUrls: b.blindUrls.size }, xhrOpenSkipped: b.xhrOpenSkipped,
       globalDoor: b.globalDoor,
+      spell: b.spell, spellOther: b.spellOther,
       manifest: { ...b.manifest, distinctUrls: b.manifestUrls.size },
       manifestAddresses: nExamples ? [...b.manifestUrls].sort() : undefined,
     })),
@@ -1541,6 +1934,10 @@ function main(argv) {
               `${st.manifestAddrs} address(es), the rest refused for a stated reason`);
   console.log(`         plus ${st.reachRows} REACH controls, each asserted for BOTH its function depth and ` +
               `whether its innermost enclosing function is async`);
+  console.log(`         plus ${st.spellRows} SPELLING controls over ${st.spellNames} name(s) derived from the ` +
+              `engine, every one of ${st.spellColumns} column(s) shown rising and every silence asserted`);
+  console.log(`         plus the derivation itself: 1 positive row and ${st.derivationRefusals} refusal(s) ` +
+              `shown THROWING, so a shape change cannot quietly report a smaller population`);
   console.log(`corpus   ${corpusDir}`);
   console.log(`fetched  ${fetchedFrom} .. ${fetchedTo}   read ${tot.readAt}   parse ${ms} ms`);
   console.log(`corpusPrograms: ${cp.onDisk} on disk = ${cp.nProgram} program + ${cp.nDocument} document + ` +
@@ -1609,6 +2006,75 @@ function main(argv) {
   console.log(`  refused  ${tot.globalDoor.refusedBoundName}   the file BINDS or ASSIGNS that global name, so this pass cannot prove what it is`);
   console.log(`  declined ${tot.globalDoor.declinedNonGlobalReceiver}   a platform door name on a receiver that is not the global object — the library`);
   console.log(`           wrapper population the DOORS comment turns away, counted rather than described`);
+  console.log(``);
+  console.log(`HOW A REAL BUNDLE SPELLS THE NAMES THE ENGINE'S COMPILER-SIDE ROWS COUNT — the population a`);
+  console.log(`  MEMBER-NAME CHANNEL would add, measured before it is built. Two engine components raise a row`);
+  console.log(`  when the compiler resolves a FREE IDENTIFIER against the global object, and both record the same`);
+  console.log(`  residual: the row sees that ONE spelling, so a name reached as a property of the global object`);
+  console.log(`  raises nothing. Those rows are read as a BIT, so the floor costs a READING only at a site that`);
+  console.log(`  spells a name ONLY as a property — which is the column to read and is the last one here.`);
+  console.log(`  NOT sites, NOT endpoints, summed into no door total: these are NAME OCCURRENCES in the text.`);
+  console.log(`  names derived from ${ENTRY_DECL.size} engine declaration(s), never typed here:`);
+  for (const nm of [...ENTRY_NAMES].sort())
+    console.log(`    ${nm.padEnd(22)} ${[...new Set(ENTRY_DECL.get(nm))].join(" ")}`);
+  console.log(``);
+  console.log(`  occurrences by spelling            what the landed row sees |  what a member channel would add  | wrapper`);
+  console.log(`  name                     bareFree boundName typeof | qualif boundGl compLit destr | instMem instComp`);
+  for (const nm of [...ENTRY_NAMES].sort()) {
+    const t = tot.spell[nm] || spellTally();
+    console.log(`  ${nm.padEnd(22)} ${String(t.bareFree).padStart(8)} ${String(t.bareBoundName).padStart(9)} ` +
+                `${String(t.typeofBare).padStart(6)} | ${String(t.qualified).padStart(6)} ` +
+                `${String(t.qualifiedBoundGlobal).padStart(7)} ${String(t.computedLiteral).padStart(7)} ` +
+                `${String(t.destructuredFromGlobal).padStart(5)} | ${String(t.instanceMember).padStart(7)} ` +
+                `${String(t.instanceMemberComputed).padStart(8)}`);
+  }
+  console.log(`  a bare reference in a file that also BINDS the name is boundName and is counted apart: the`);
+  console.log(`  engine's resolver is scope-correct and very probably DOES see it, and this file-wide pass`);
+  console.log(`  cannot prove which, so neither answer below is allowed to assume it. typeof is NOT a`);
+  console.log(`  partition member and is not summed — every one of those is already inside one of the two bare`);
+  console.log(`  columns, and it says the name was PROBED for rather than used. An alias is not a column at all:`);
+  console.log(`  \`const f = fetch\` and \`const f = window.fetch\` are already counted at the spelling each used.`);
+  console.log(``);
+  console.log(`  AND THE SAME THING PER SITE, WHICH IS THE UNIT THE LANDED ROW IS ZERO AT. \`any\` is the sites`);
+  console.log(`  whose text reaches the platform name by ANY global spelling; a wrapper's own member is excluded`);
+  console.log(`  from it, because no global-resolution channel of any spelling would raise one.`);
+  console.log(`  name                     sites:any  bareFree  bareAny  propAny  PROP-ONLY(tight)  (loose)  wrapperOnly`);
+  for (const nm of [...ENTRY_NAMES].sort()) {
+    const s = tot.spellSites[nm] || { any: 0, bareFree: 0, bareAny: 0, propertyAny: 0, propertyOnlyTight: 0, propertyOnlyLoose: 0, wrapperOnly: 0 };
+    console.log(`  ${nm.padEnd(22)} ${String(s.any).padStart(9)} ${String(s.bareFree).padStart(9)} ` +
+                `${String(s.bareAny).padStart(8)} ${String(s.propertyAny).padStart(8)} ` +
+                `${String(s.propertyOnlyTight).padStart(17)} ${String(s.propertyOnlyLoose).padStart(8)} ` +
+                `${String(s.wrapperOnly).padStart(12)}`);
+  }
+  console.log(`  PROP-ONLY(tight) is the population the member channel RESCUES: a site whose text spells the`);
+  console.log(`  name as a property of the global object and never as a bare identifier at all, so the landed`);
+  console.log(`  row reads 0 about a program that does name the entry. (loose) counts a site whose only bare`);
+  console.log(`  reference sits in a file that binds the name, and is an OVER-count of the same thing — the two`);
+  console.log(`  bracket it, and the spread between them is what this pass cannot decide without a scope graph.`);
+  console.log(`  ${tot.spellOther.globalComputedDynamic} further read(s) of a COMPUTED member of the global object`);
+  console.log(`  belong to no name at all (\`self[n]\`) and are attributed to none: a channel keyed on a property`);
+  console.log(`  NAME cannot recover one either, so this is a floor under BOTH columns and not under one.`);
+  {
+    /* AND WHAT SUCH A CHANNEL WOULD COST, WHICH IS THE HALF A RECALL FIGURE ALONE WOULD NOT PRICE. A field-get
+       emitter sees the PROPERTY NAME and, unless it also tests the receiver, cannot tell the global object's
+       own member from a wrapper's or a bundler's re-export shim — and the two are not close in this corpus.
+       THE ENGINE CAN MAKE THAT TEST AND THIS PASS CANNOT, which is the one place the comparison runs the other
+       way: at a field get the engine holds the receiver OBJECT and can ask whether it is the realm's global,
+       while a parse has only a name it must refuse to guess about. So this number is not an argument against
+       the channel; it is the size of the thing the channel has to get right to be a refinement of the row
+       rather than a louder and different one. */
+    let g = 0, w = 0;
+    for (const nm of ENTRY_NAMES) {
+      const t = tot.spell[nm]; if (!t) continue;
+      g += t.qualified + t.qualifiedBoundGlobal + t.computedLiteral + t.destructuredFromGlobal;
+      w += t.instanceMember + t.instanceMemberComputed;
+    }
+    console.log(`  AND ITS PRICE: of ${g + w} property read(s) of a declared name, ${g} are on the global object`);
+    console.log(`  and ${w} are on a receiver that is not it. A field-get channel that does not TEST the receiver`);
+    console.log(`  raises both, so it would not refine the landed row — it would be a different and louder one.`);
+    console.log(`  The engine can make that test where this pass cannot: at a field get it holds the receiver`);
+    console.log(`  OBJECT and can ask whether it is the realm's global, and a parse holds only a name.`);
+  }
   console.log(``);
   console.log(`THE CHUNK MANIFEST, RECOVERED — addresses a bundler emits as a MAP plus a public-path literal,`);
   console.log(`  composed in a one-parameter function and handed to an injected <script>. Every one is plain`);
