@@ -1901,15 +1901,19 @@ for (const doc of docs) {
      COMPARED: it is a count of boundaries, which is the schedule's to choose, on `_switches`' own ground. */
   const midrun = new Map();
   /* THE VERDICT WORD ON THIS DOCUMENT'S ROW IS DERIVED FROM `bad` ITSELF, which is the counter the exit code
-     is, so a failure path cannot raise one without the other. It used to be `doc_bad || docBad`, and those
-     two are raised at THREE sites between them — a MISMATCH row, a STREAM-SKEW row and a document with no
-     subject — while SIX OTHER paths in the schedule loop raise `bad` and never touch either: a child that
+     is, so a failure path cannot raise one without the other. It used to be `doc_bad || docBad`, two
+     per-document counters raised at THREE sites between them — a MISMATCH row, a STREAM-SKEW row and a
+     document with no subject — while SIX OTHER paths in the schedule loop raised `bad` and touched neither:
+     a child that
      produced no result at all, a `park` run whose residue rebuilt nothing, `checkCoverage` on the returned
      document, `checkCoverage` on the streamed one, and the partial-declaration disagreement. The STREAM-SKEW
      site's own comment states the rule this line was built on — "Counted in `docBad` so the verdict word
      cannot read `ok` over it" — and that rule was applied at that site and nowhere else, which is why an
      enumeration was the wrong shape for it: every path added since had to remember a variable whose only
-     other consumer suppresses a duplicate message.
+     other consumer suppresses a duplicate message. BOTH ARE DELETED RATHER THAN LEFT INCREMENTED, because a
+     name written everywhere and read nowhere is the broken half of a contract a reader has to grep to
+     discover — and this file's own `reportStaleExclusions` makes that argument about an exclusion standing
+     over nothing. Every site that raised one still raises `bad`.
      MEASURED, AND IT IS THE STATE THIS CORPUS IS ACTUALLY IN rather than an edge case. Against the build
      stamped 17bcb418, flag_fork.html and captured_var_fork.html each FAILED both streaming schedules at the
      `qjs_emit_partial` row above and each printed `ok` on this line, over a cost list carrying five
@@ -1925,7 +1929,7 @@ for (const doc of docs) {
      as its argument, so no counter at all is read across the loop body and the run-level finding has a row
      of its own to be attributed to. */
   const badAtDocStart = bad;
-  let broke = false, docBad = 0;
+  let broke = false;
   for (const sched of SCHEDULES) {
     const r = runChild(doc, sched);
     if (!r.ok) {
@@ -1981,7 +1985,7 @@ for (const doc of docs) {
         const onlyReturned = a.filter((x) => !b.includes(x));
         const onlyStreamed = b.filter((x) => !a.includes(x));
         if (!onlyReturned.length && !onlyStreamed.length) continue;
-        bad++; docBad++;
+        bad++;
         console.log(`  STREAM-SKEW ${doc} [${sched}]  ${surface}: qjs_result has ${a.length}, the ` +
                     `qjs_emit_partial snapshot taken one instant earlier has ${b.length}` +
                     "\n           Both are solver/result.c's `result_json(g_ctx)` over a TERMINAL frontier with " +
@@ -1996,8 +2000,12 @@ for (const doc of docs) {
          dropping the run would answer the second one by not asking it. `qjs_result`'s document is what every
          other schedule is compared against and it is unaffected by whether the STREAM of it agreed; a skew
          suppressed here would take a real cross-schedule cap out of the table along with it, which is the
-         three-states-behind-one-answer shape this file argues about everywhere else. Counted in
-         `docBad` so the verdict word cannot read `ok` over it. */
+         three-states-behind-one-answer shape this file argues about everywhere else. THE CLAUSE THAT
+         STOOD HERE SAID "Counted in `docBad` so the verdict word cannot read `ok` over it", and that is
+         discharged by construction rather than by a counter: the word is derived from `bad`, which the
+         `bad++` above raises, so there is nothing here to remember. It is rewritten instead of deleted
+         because the rule it states is the one that was right and the enumeration it named is what went
+         short — at every OTHER failure path in this loop, none of which had thought to raise it. */
     }
     runs.set(sched, r.result);
     midrun.set(sched, r.snapshots);
@@ -2037,7 +2045,7 @@ for (const doc of docs) {
      something is already a MISMATCH row with the findings named in it, and asking this per schedule would
      report that same defect twice under two different sentences. */
   if (!SURFACES_ACCUMULATING.some((s) => surfaceSet(ref, s).length !== 0)) {
-    bad++; docBad++;
+    bad++;
     console.log(`  FAILED ${doc} — the reference run emitted NOTHING on any of ${SURFACES_ACCUMULATING.join(", ")}, ` +
                 "so every comparison this gate makes for this document is `[]` against `[]` and cannot fail. " +
                 "That is not a document that was explored and found clean: it is a document with no subject, " +
@@ -2114,7 +2122,6 @@ for (const doc of docs) {
     }
   }
   detTally[det]++;
-  let doc_bad = 0;
   for (const [sched, result] of runs) {
     if (sched === REFERENCE) continue;
     /* THE ROWS ARE COLLECTED BEFORE ANY IS PRINTED, because the sentence each one carries depends on a
@@ -2176,7 +2183,7 @@ for (const doc of docs) {
     }
 
     for (const { surface, a, b, onlyRef, onlyThis } of rows) {
-      doc_bad++; bad++;
+      bad++;
       console.log(`  MISMATCH ${doc}  ${surface}: \`${REFERENCE}\` has ${a.length}, \`${sched}\` has ${b.length}` +
                   "\n           The finding set is a function of the DOCUMENT alone (CLAUDE.md §scheduler: only " +
                   "WHICH flow runs next is value-reranked), so a difference here is a flow that one of these " +
