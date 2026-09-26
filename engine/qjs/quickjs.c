@@ -4390,9 +4390,30 @@ void JS_FreeRuntime(JSRuntime *rt)
            other user of quickjs's dump infra writes, so it is flushed and labelled rather than redirected. */
         gc_decref(rt);
         printf("[gcroot] the GC objects still held from OUTSIDE the heap, one line each:\n");
+        /* EVERY LINE OF THIS REPORT CARRIES THE TAG, INCLUDING THE DUMP'S — and that is not cosmetic, it is
+           the difference between this report being read and being read PAST. The dump above me says each root
+           is named rather than counted, and it was: `JS_DumpObjectHeader` and `JS_DumpGCObject` are plain
+           printfs behind no flag, and they print an address, a refcount, a prototype, a class and the own
+           property names. They printed none of the `[gcroot]` PREFIX, because they are quickjs's own general
+           dumpers and belong to every other caller too — so a reader who greps `[gcroot]`, which is the
+           obvious and correct way to find this report in a log of tens of thousands of lines, gets the banner
+           and the per-class CENSUS and misses the only lines that name a culprit.
+           MEASURED: a reader did exactly that, and reported this instrument as emitting a class name and a
+           count with no path and no identity — concluding that every leak in this project is diagnosed by
+           guessing. The line their grep dropped read `Array [  ] { length: 0 }` with its address and its
+           refcount, and an EMPTY array of refcount 1 is a short enough list of candidates to find by hand in
+           one pass. The information was emitted and could not be found, which is the same defect as not
+           emitting it and is harder to notice, because the report looks present and impoverished rather than
+           absent.
+           THE TAG IS PRINTED HERE AND NOT INSIDE THE DUMPERS, because those are shared: tagging them would
+           put this report's prefix on every other dump in the engine. Prefixing the header and each row
+           identically keeps their columns aligned with each other, which is what makes them a table. */
+        printf("[gcroot] ");
         JS_DumpObjectHeader(rt);
-        list_for_each(el, &rt->gc_obj_list)
+        list_for_each(el, &rt->gc_obj_list) {
+            printf("[gcroot] ");
             JS_DumpGCObject(rt, list_entry(el, JSGCObjectHeader, link));
+        }
         fflush(stdout);
         js_gc_object_census(rt, "gcroot");
         gc_scan(rt);

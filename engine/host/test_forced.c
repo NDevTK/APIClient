@@ -29160,8 +29160,8 @@ static int abi_main(int argc, char **argv)
  * compiled here and no flow is created — the question is whether a second agent can be DECLARED at all, and a
  * frontier re-entry between the question and its answer would be a second unknown wearing the first one's
  * abort. A compiled program in this realm is the diff AFTER this one and is named in the report, not smuggled
- * in here. The teardown below is this agent's platform column, its realm half and its DECLARATION
- * CYCLE, and nothing else: copying main's whole tail
+ * in here. The teardown below is this agent's platform column, the three agent-level releases that
+ * column does NOT reach, its realm half and its DECLARATION CYCLE: copying main's whole tail
  * would be the hand-copied host sequence core/platform.h and core/realm.h exist to abolish, and if this
  * teardown aborts on an ordering that tail supplies, THAT is this fixture's first honest answer.
  *
@@ -29269,6 +29269,37 @@ static void second_agent_selftest(const char *origin, const char *top_level_url)
 
     JS_FreeContext(worker);
     platform_agent_free();
+    /* AND THE THREE AGENT-LEVEL RELEASES THAT ARE NOT ON core/platform.h's COLUMN, in main's own order.
+       THESE WERE OMITTED AND THE OMISSION LEAKED A REALM, which is the boundary the comment on this teardown
+       already named — "if this teardown aborts on an ordering main's tail supplies, THAT is this fixture's
+       first honest answer". It did, and this is the answer, recorded rather than quietly repaired because the
+       reasoning that omitted them is the reasoning a reader repeats: platform_agent_free runs the release
+       COLUMN, and a reader who has just read core/platform.h takes that for the whole of an agent's teardown.
+       It is not. `navigable_free` appears in core/platform.c only in a COMMENT about the hosts calling it, so
+       the column never reaches it — and core/frame/navigable.c mints `g_group = JS_NewArray(ctx)` in its
+       DECLARE, deliberately, so that the browsing context group's list belongs to the pre-boot baseline and a
+       flow that opens a window has its write captured by that flow's delta alone. So the second agent's
+       declare column minted an Array held by a counted reference from a C static, and nothing here gave it
+       back: the runtime went down with a REALM still live, and everything that realm reaches — its global,
+       its interface prototypes, its intrinsics — leaked behind it.
+       THE DIAGNOSTIC NAMED IT EXACTLY AND THE FIRST READING MISSED IT, which is why the fix at
+       engine/qjs/quickjs.c's `[gcroot]` block rides with this one: the culprit line read
+       `Array [  ] { length: 0 }` with its address and a refcount of 1, and an EMPTY array minted at init and
+       held by one C static is a short list. It was invisible to a grep for the report's own tag.
+       THE FIRST AGENT IS THE ARMED CONTROL AND IT IS IN THE SAME LOG: main's tail calls all three, its
+       JS_FreeRuntime raised nothing, and `@A2ENTER` printed after it — so the leak is this agent's and not a
+       standing one this fixture merely became the first to reach.
+       `document_free` IS CALLED THOUGH THIS AGENT INSTALLED NO DOCUMENT, and that is safe rather than
+       hopeful: its first line is an early return for "a realm that never had a document", naming this case.
+       Calling it is what keeps this teardown symmetric with main's instead of resting on an assumption about
+       what this agent did — which is the assumption that produced the leak above. */
+    document_free(ctx2);
+    realm_intrinsics_free();
+    navigable_free(ctx2);
+    /* `solver_agent_free` IS THE ONE MAIN CALLS AND THIS DOES NOT, and it is omitted rather than forgotten:
+       this agent brings up no solver at all (see the banner), so there is nothing of its to release and the
+       call would be a claim about state that was never created. If a later build aborts naming solver state,
+       THAT assumption is what was wrong and this is the line to change. */
     idl_args_free(ctx2);   /* the per-realm half, in main's own order relative to the context free */
     JS_RunGC(rt2);
     JS_FreeContext(ctx2);
