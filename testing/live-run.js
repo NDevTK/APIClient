@@ -70,6 +70,58 @@ async function offscreenPage(browser, extId) {
   throw new Error("no offscreen document — is the extension loaded?");
 }
 
+/* THE ENGINE'S OWN RECORD OF WHAT THE PAGE THREW, WHICH IS A THIRD CHANNEL AND NOT A SECOND COPY OF EITHER
+   OF THE TWO THIS DRIVER ALREADY HAS. `pageConsole` in oneRun is the TAB's own errors, and bridge.js's comment
+   at the seam says conflating those with the engine's "would report a site's own console noise as engine
+   output"; `counters[].err` is the CRASH ARM's cause and exists only when the renderer died. This is the
+   engine's `pageErrors` — offscreen-brain.js's `_recordEnginePageErrors` writes every row of it to the
+   offscreen console as `[AST:page-error] <context>: <message>`, and until this line no driver collected it,
+   so the surface CLAUDE.md §NO-STUBS calls the forcing function was emitted on every run and read on none.
+
+   IT IS READ OFF THE CONSOLE RATHER THAN OFF THE RESULT DOCUMENT BECAUSE OF WHICH RUNS HAVE ONE. A crashed run
+   carries no result document at all, so its `resolverErrors` array does not exist — and that is exactly the
+   run whose errors a reader most needs. `_recordEnginePageErrors` runs on EVERY relay including the crash
+   arm's, so the console is the one surface that speaks for both outcomes. This is the offscreen document's
+   own console and not the renderer's stdout, which §Testing correctly says is not teed and is the wrong
+   surface by construction.
+
+   ABSENT, ZERO AND TRUNCATED ARE THREE FACTS. A listener that could not attach yields `null` and prints `-`
+   (this driver could not ask); an attached listener that saw nothing yields `[]` (the engine recorded no page
+   error, which is a finding about the page); and a buffer at its cap says so in its own token rather than
+   reporting a floor as a total. The cap exists because this handler runs on EVERY offscreen console message
+   and §Testing's instrument-cost rule applies to a driver as much as to an engine — the substring test is the
+   first thing it does, so a message this driver does not want costs one `indexOf`. */
+const ENGINE_ERR_TAG = "[AST:page-error]";
+const ENGINE_ERR_CAP = 500;
+function attachEnginePageErrors(pg) {
+  const buf = [];
+  try {
+    pg.on("console", (m) => {
+      let t;
+      try { t = m.text(); } catch (e) { return; }
+      if (!t || t.indexOf(ENGINE_ERR_TAG) < 0) return;
+      if (buf.length >= ENGINE_ERR_CAP) { buf.truncated = true; return; }
+      /* The producer calls console.debug with a `%s: %s` format and two args; a transport that does not
+         interpolate hands back the format and the args together, so the marker and an uninterpolated
+         specifier pair are both stripped and what is left is the row either way. */
+      buf.push(t.slice(t.indexOf(ENGINE_ERR_TAG) + ENGINE_ERR_TAG.length)
+                .replace(/^\s*(%s:\s*%s)?\s*/, ""));
+    });
+  } catch (e) { return null; }      // absent: this driver could not ask, which is not "no errors"
+  return buf;
+}
+
+/* COLLAPSED TO DISTINCT MESSAGES WITH A COUNT, because ONE event is relayed more than once: a renderer death
+   arrives as the root `@WHY`'s own reason AND as the `engine-crash` envelope that quotes it, so a reader
+   counting EMISSIONS double-counts a single abort. The count is kept beside each message rather than dropped,
+   since "this page threw the same thing forty times" and "this page threw it once" are different facts. */
+function distinctEngineErrors(rows) {
+  if (rows === null) return null;
+  const m = new Map();
+  for (const r of rows) m.set(r, (m.get(r) || 0) + 1);
+  return [...m.entries()].map(([msg, n]) => ({ n, msg }));
+}
+
 // The offscreen's own view of this run. `rows` is bridge.js's per-run log; the store
 // sizes are the cumulative moat, which is why the driver diffs them across the run
 // rather than reporting the total (a total is every site this browser has ever seen).
@@ -917,9 +969,13 @@ function census(r) {
   return o;
 }
 
-async function oneRun(browser, pg, url, budgetMs) {
+async function oneRun(browser, pg, url, budgetMs, engineErrs) {
   const before = await snapshot(pg);
   const baseRows = before.rows.length;
+  /* WHERE THIS RUN'S SLICE OF THE ENGINE'S PAGE ERRORS BEGINS. The buffer is the whole session's, for the
+     same reason `baseRows` exists: a driver that cleared it per run could not tell a run that recorded
+     nothing from a run whose errors arrived after its poll loop gave up. */
+  const baseErrs = engineErrs === null ? 0 : engineErrs.length;
   /* READ BEFORE THE NAVIGATION, because "the scheduler was already dead when this URL arrived" is the only
      reading under which this row is not about this URL at all. */
   const schedBefore = await scheduler(pg);
@@ -1070,6 +1126,9 @@ async function oneRun(browser, pg, url, budgetMs) {
     storeFindingsDelta: (last.findings === null || before.findings === null)
       ? null : last.findings - before.findings,
     pageConsole: pageConsole.slice(0, 8),
+    /* THE ENGINE'S OWN PAGE ERRORS FOR THIS RUN, beside the tab's and never merged with them. */
+    enginePageErrors: engineErrs === null ? null : distinctEngineErrors(engineErrs.slice(baseErrs)),
+    enginePageErrorsTruncated: engineErrs === null ? null : (engineErrs.truncated === true),
   };
 }
 
@@ -1153,6 +1212,10 @@ async function main() {
   const { browser, extId } = await connect();
   try {
     const pg = await offscreenPage(browser, extId);
+    const engineErrs = attachEnginePageErrors(pg);
+    if (engineErrs === null)
+      console.log("# enginePageErrors: ABSENT on every row — this driver could not attach to the offscreen " +
+                  "console, so a `-` below is that failure and NOT a page that recorded no error.");
     const bySite = new Map();
     for (const url of urls) bySite.set(url, []);
     // Interleave the runs rather than repeating one site N times back to back: a site's
@@ -1167,7 +1230,7 @@ async function main() {
     let announcedDead = false;
     for (let i = 0; i < runs; i++) {
       for (const url of urls) {
-        const r = await oneRun(browser, pg, url, budgetMs);
+        const r = await oneRun(browser, pg, url, budgetMs, engineErrs);
         bySite.get(url).push(r);
         console.log(JSON.stringify(Object.assign({ runIndex: i }, r)));
         if (!announcedDead && r.scheduler.after.alive === false) {
