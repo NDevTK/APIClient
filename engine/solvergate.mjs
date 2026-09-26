@@ -1900,6 +1900,31 @@ for (const doc of docs) {
      without this number that row and a row with twenty-five mid-run asks read identically. PRINTED, NEVER
      COMPARED: it is a count of boundaries, which is the schedule's to choose, on `_switches`' own ground. */
   const midrun = new Map();
+  /* THE VERDICT WORD ON THIS DOCUMENT'S ROW IS DERIVED FROM `bad` ITSELF, which is the counter the exit code
+     is, so a failure path cannot raise one without the other. It used to be `doc_bad || docBad`, and those
+     two are raised at THREE sites between them — a MISMATCH row, a STREAM-SKEW row and a document with no
+     subject — while SIX OTHER paths in the schedule loop raise `bad` and never touch either: a child that
+     produced no result at all, a `park` run whose residue rebuilt nothing, `checkCoverage` on the returned
+     document, `checkCoverage` on the streamed one, and the partial-declaration disagreement. The STREAM-SKEW
+     site's own comment states the rule this line was built on — "Counted in `docBad` so the verdict word
+     cannot read `ok` over it" — and that rule was applied at that site and nowhere else, which is why an
+     enumeration was the wrong shape for it: every path added since had to remember a variable whose only
+     other consumer suppresses a duplicate message.
+     MEASURED, AND IT IS THE STATE THIS CORPUS IS ACTUALLY IN rather than an edge case. Against the build
+     stamped 17bcb418, flag_fork.html and captured_var_fork.html each FAILED both streaming schedules at the
+     `qjs_emit_partial` row above and each printed `ok` on this line, over a cost list carrying five
+     schedules of seven with nothing saying two were absent. The run's exit code was 1 both times, so the
+     GATE's verdict was never wrong: what was wrong is the one line a reader scans, and a reader grepping
+     this output for FAIL found nothing while the failures sat two rows above.
+     WHAT THE DELTA CANNOT SEPARATE, said out loud rather than left to be discovered: `reportStaleExclusions`
+     also raises `bad` and is a RUN-level finding about this gate's own exclusion list, asked once and
+     latched, so the first document's row carries it. That over-reports on exactly one row of one run and it
+     over-reports in the direction that sends a reader to a FAILED line printed immediately above the row —
+     the alternative, an enumeration that goes short the next time a path is added, under-reports silently.
+     RETIREMENT: this record goes when the row is emitted by a helper that takes the document's own findings
+     as its argument, so no counter at all is read across the loop body and the run-level finding has a row
+     of its own to be attributed to. */
+  const badAtDocStart = bad;
   let broke = false, docBad = 0;
   for (const sched of SCHEDULES) {
     const r = runChild(doc, sched);
@@ -2185,11 +2210,15 @@ for (const doc of docs) {
   const cost = [...runs.entries()]
     .map(([s, r]) => `${policyLabel(s)}:${r._switches}sw/${r._flows}fl` +
                      (POLICY.get(s).partial ? `/${midrun.get(s)}snap` : "")).join("  ");
-  console.log(`  ${doc_bad || docBad ? "FAIL" : "ok  "} ${doc.padEnd(24)} ` +
+  /* AND HOW MANY SCHEDULES THE COST LIST IS OF, printed only when it is short. A schedule that failed
+     never enters `runs`, so the list silently carries five of seven and reads as the whole set — the
+     denominator this gate demands of every other figure it prints, owed to its own summary line. */
+  const missing = SCHEDULES.length - runs.size;
+  console.log(`  ${bad !== badAtDocStart ? "FAIL" : "ok  "} ${doc.padEnd(24)} ` +
               `@H ${String(ref.fetchCallSites.length).padStart(3)}  ` +
               `@S ${String(ref.securitySinks.length).padStart(3)}  ` +
               `err ${String(ref.pageErrors.length).padStart(2)}  det ${det.padEnd(20)} ` +
-              `${cost}${repeatCost ? "  " + repeatCost : ""}`);
+              `${cost}${repeatCost ? "  " + repeatCost : ""}` + (missing ? `  [${runs.size} of ${SCHEDULES.length} schedules; ${missing} produced no result]` : ""));
   /* THE PAGE'S OWN ERRORS, PRINTED. A page error is the forcing function naming an unbuilt capability
      (result.h), and a corpus document that throws is exploring less than it looks like it is — the gate would
      still be measuring invariance, over a run that stopped early. Never a failure here (the two halves are
