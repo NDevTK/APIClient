@@ -1100,6 +1100,25 @@ async function oneRun(browser, pg, url, budgetMs, engineErrs) {
                      ? schedAfter.kicksRefused - schedBefore.kicksRefused : null },
     rows: mine.length,
     outcomes: mine.map((r) => r.run),
+    /* WHICH DOCUMENT EACH ROW IS ABOUT, WHICH THE PRODUCER WRITES AND NO CONSUMER READ. A run carries ONE row
+       per engine `bridge.js` logged, and on a browser whose profile survived a restart it carries SEVERAL --
+       because `harness.js restart` clears IndexedDB and the code cache and does NOT clear Chrome's
+       session-restore state, so the previous tab re-opens and its engine reports beside this one's. Every
+       other field below is then a per-row array with nothing anywhere naming the row's subject, so a run's
+       output is UNATTRIBUTABLE FROM ITSELF: two documents' door histograms sit side by side and read as two
+       samples of one site.
+       IT IS THE READ-WITH-NO-WRITER DEFECT INVERTED, on the axis that decides what a razor figure is about.
+       `url` is on the engine row already -- a crash row prints it -- so this was a written field with no
+       reader, and CLAUDE.md's rule about that pair is exact: a name READ somewhere and WRITTEN nowhere is a
+       broken contract, and so is its mirror. The cost was measured rather than imagined: a per-site pass
+       whose profile was reused reported a door histogram containing `document-script:1` for a document that
+       ships ZERO `<script src>` elements, and a `beyond` of 3 for a site that on an isolated browser CRASHES
+       -- a crashed run's razor is UNSCORED, not small, and the reused profile hid that behind a plausible
+       number. Nothing in the emitted run could have said so.
+       null RATHER THAN A GUESS where the row does not carry one, per this file's absent-versus-zero rule: a
+       row from an artifact that predates the field is a row this driver cannot attribute, which is a
+       different fact from a row about a document with no address. */
+    rowUrls: mine.map((r) => ("url" in r) ? r.url : null),
     counters: mine.map((r) => {
       const o = { run: r.run };
       for (const k of COUNTERS) o[k] = (k in r) ? r[k] : null;   // null = the crash arm carries none
