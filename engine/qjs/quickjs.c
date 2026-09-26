@@ -66132,6 +66132,39 @@ static __exception int js_parse_drive(JSParseState *s, int entry, int level,
                 if (!hf)
                     goto fd2_fail;
                 hf->cpool_idx = idx;
+                /* A MODULE'S TOP-LEVEL FUNCTION DECLARATION IS A *LEXICAL* DECLARATION, AND THIS ENGINE MADE IT
+                   A VAR. ECMAScript §16.2.1.7.3.1 "InitializeEnvironment ( )" instantiates it in the LEXICAL
+                   pass — "If lexicalDecl is either a FunctionDeclaration, a GeneratorDeclaration, an
+                   AsyncFunctionDeclaration, or an AsyncGeneratorDeclaration, then Let funcObj be
+                   InstantiateFunctionObject of lexicalDecl with arguments envRecord and privateEnv. Perform !
+                   envRecord.InitializeBinding(name, funcObj)." — and a Module Environment Record's binding that
+                   has been CREATED and not yet INITIALIZED is in a temporal dead zone. `add_global_var` leaves
+                   `is_lexical` false, and that one bit is read by three places that each then answer as though
+                   the binding were a `var`:
+                     · js_create_module_var(ctx, cv->is_lexical) births the cell JS_UNDEFINED where a lexical
+                       binding is born JS_UNINITIALIZED, so a binding whose initialization is lost or reordered
+                       reads as a PLAUSIBLE `undefined` at a call site arbitrarily far from the cause — measured
+                       on a real bundle as `_ is not a function (it is undefined)` two closure levels inside a
+                       lazily-invoked UMD factory, where the cause is the module environment and the frame the
+                       page is shown is the call. A JS_UNINITIALIZED cell makes that same loss a ReferenceError
+                       NAMING the binding at the read, which is §Offensive-programming's whole position: the
+                       silent wrong value is what must be made impossible, not merely reported on.
+                     · resolve_scope_var selects OP_get_var_ref / OP_put_var_ref where a lexical binding takes
+                       the _check forms, so no read of this binding can ever observe its own dead zone.
+                     · define_var's JS_VAR_DEF_VAR arm refuses a module redefinition only `if (hf->is_lexical)`,
+                       so §16.2.1.6.1's early error — "It is a Syntax Error if any element of the
+                       LexicallyDeclaredNames of ModuleItemList also occurs in the VarDeclaredNames of
+                       ModuleItemList" — fired in ONE direction. MEASURED with all four controls speaking:
+                       `function f(){} let f=2;` is refused, `var f; function f(){}` is refused by the module
+                       check at js_parse_function_decl2's head, a plain declaration is accepted — and
+                       `function f(){} var f;` was ACCEPTED with `typeof f === "function"`.
+                   GLOBAL AND EVAL CODE ARE NOT TOUCHED AND MUST NOT BE: §16.1.7 GlobalDeclarationInstantiation
+                   puts a script's top-level function declaration in the VARIABLE environment and creates it
+                   with CreateGlobalFunctionBinding, which is a var-shaped binding on the global object and is
+                   what `!hf->is_lexical` selects in instantiate_hoisted_definitions' OP_define_func arm. Only
+                   the MODULE arm is a lexical declaration, so only the module arm is marked. */
+                if (s->cur_func->eval_type == JS_EVAL_TYPE_MODULE)
+                    hf->is_lexical = true;
                 if (f->st_mask != JS_PARSE_EXPORT_NONE) {
                     if (!add_export_entry(s, s->cur_func->module, func_var_name,
                                           f->st_mask == JS_PARSE_EXPORT_NAMED ? func_var_name : JS_ATOM_default, JS_EXPORT_TYPE_LOCAL))
@@ -73092,6 +73125,25 @@ static void instantiate_hoisted_definitions(JSContext *ctx, JSFunctionDef *s, Dy
         JSGlobalVar *hf = &s->global_vars[i];
         int has_closure = 0;
         bool force_init = hf->force_init;
+        /* §16.2.1.7.3.1 "InitializeEnvironment ( )" AT ITS ORIGIN, WHICH IS THIS LINE. A `cpool_idx` on a
+           program-level JSGlobalVar means exactly one thing — this entry is a FUNCTION DECLARATION, and the
+           two opcodes below are its InstantiateFunctionObject plus its InitializeBinding. In a MODULE that is
+           a member of `lexDeclarations`, so the binding it initializes must have been CREATED lexical: a cell
+           born JS_UNDEFINED instead of JS_UNINITIALIZED turns a lost initialization into a plausible value
+           reaching a call rather than a ReferenceError naming the binding, and nothing downstream of here can
+           tell the two apart. This is the one place both facts are in hand, which is why the check is here and
+           not at js_create_module_var (which sees `cv->is_lexical` and never the cpool slot that says the
+           entry is a function) nor at js_parse_function_decl2 (which sets the bit and does not emit the
+           initialization). It is NOT vacuous and the global arm is exactly why: a SCRIPT's top-level function
+           declaration reaches this same line with cpool_idx >= 0 and is_lexical FALSE, which §16.1.7
+           GlobalDeclarationInstantiation requires, so the condition can and does take both values. */
+        DCHECK(!s->module || hf->cpool_idx < 0 || hf->is_lexical,
+               "16.2.1.7.3.1 InitializeEnvironment: a module's top-level FUNCTION DECLARATION is about to be "
+               "instantiated into a binding that was created as a VAR. It is a member of lexDeclarations, so "
+               "its cell is born JS_UNINITIALIZED and its reads take the _check opcodes — born JS_UNDEFINED, "
+               "an initialization this prologue loses or reorders is read by the page as the value `undefined` "
+               "at whatever call it reaches, which is a plausible datum where a ReferenceError naming the "
+               "binding is the only honest answer");
         /* we are in an eval, so the closure contains all the
            enclosing variables */
         /* If the outer function has a variable environment,

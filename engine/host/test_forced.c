@@ -4824,6 +4824,48 @@ static const char *HTML =
     " document.body.appendChild(s); })();"
     "</script>"
     TF_CANVAS_INK
+    /* ─── §16.2.1.7.3.1 "InitializeEnvironment ( )" — A MODULE'S TOP-LEVEL FUNCTION DECLARATION, READ FROM
+       INSIDE TWO NESTED CLOSURES OF A LAZILY-INVOKED FACTORY ───────────────────────────────────────────────
+       THE SHAPE IS A REAL BUNDLE'S AND NOT AN INVENTED ONE. Every rolldown/esbuild ESM chunk that carries an
+       `@swc/helpers` shim has exactly this: a module top-level `function` beside a `var y = lazy(function(a,b){
+       (function(c,d){ … })(a, function(){ … the helper … }) })`, so the helper is named two FunctionExpression
+       levels below the module body and read only when the thunk is called. That is the population this row is
+       about, and it is the one no other statement in this document exercises: the module statement above it
+       reads no module-scope binding from a nested closure at all.
+       WHAT THE ROWS ASSERT, WHICH IS A BINDING'S VALUE AND NOT A COUNT. §16.2.1.7.3.1's lexical pass runs
+       InstantiateFunctionObject and InitializeBinding for a FunctionDeclaration BEFORE §16.2.1.7.3.2
+       ExecuteModule, so the binding can never be observed holding a pre-instantiation value at any point
+       during or after the module's evaluation — not at the top, and not through a closure chain that reaches
+       the module environment from any depth. `d=Fok` is that sentence as an observation: the nested read got
+       the FUNCTION and calling it returned what the declaration computes.
+       THE PAYLOADS ARE CONSTANTS, which §A-WITNESS-MAY-NOT-BE-COMPOSED-FROM-A-VALUE-THE-SUBJECT-CAN-MAKE-
+       UNKNOWN requires and which this engine's purpose makes load-bearing: `mfd('ok')` runs a page function
+       over a STRING LITERAL, so its result is concrete however much of the rest of this document is unknown,
+       and an arm that ran can never read as an arm that aborted.
+       THE `typeof` ARM IS DELIBERATE AND IS THE WHOLE INFORMATION THE REAL INCIDENT LACKED. A binding born
+       var-shaped answers the string `undefined` here and emits `d=undefined`, which NAMES the state; a binding
+       born lexical throws a ReferenceError at the `typeof`… no: §13.5.3 "The typeof Operator" step 2.a answers
+       for an unresolvable Reference and NOT for an uninitialized binding, so a dead-zone read throws and this
+       statement emits nothing at all — at which point `mfd-top` is what says whether the statement ran. Three
+       states, and the pair below separates the two that matter.
+       TWO ROWS AND THEY ARE ENTAILED, SO THE LOWEST 0 IS THE LOCALISATION. `mfd-top` is the same binding read
+       at the module body's own level and is emitted BEFORE the thunk is called, so it is this statement's
+       REACHABILITY WITNESS: `mfd-nest` at 0 with `mfd-top` at 0 says the statement never ran and is not a
+       finding about the closure chain, while `mfd-nest` at 0 with `mfd-top` at 1 says the module environment
+       is reachable from the body and not from a closure over it — which is one component (the closure-variable
+       chain get_closure_var builds down to the use) and not the other (the prologue that initializes the cell).
+       APPENDED IN FRONT OF `</body></html>` AND NOT INSERTED, for the reason the module, crypto and
+       operand-shape statements above each state: this document is ONE LINE, so a `@WHY` frame's COLUMN is the
+       only coordinate a reader has into it and an insertion re-points every column after it. */
+    "<script type=module>"
+    " function mfd(x){ return 'F' + x; }"
+    " fetch('/api/mfdtop?d=' + (typeof mfd === 'function' ? 'ok' : typeof mfd));"
+    " var mfdlazy = (function(fac){ return fac; })(function(a, b){"
+    "   (function(c, d){ d(); })(b, function(){"
+    "     fetch('/api/mfdnest?d=' + (typeof mfd === 'function' ? mfd('ok') : typeof mfd)); });"
+    " });"
+    " mfdlazy(1, 2);"
+    "</script>"
     "</body></html>";
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
@@ -15352,6 +15394,32 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "JS_ResumeParkedFlow drains at the top of the scheduler loop, so a continuation that never "
              "resumed is the park seam dropping a module's frame where it carries every other flow's — and "
              "a module whose evaluation never completes leaves its promise pending for ever");
+    /* §16.2.1.7.3.1 InitializeEnvironment's BINDING, asked at the module body's own level and again from two
+       closures down. The pair is entailed — the nested read cannot be reported on while the statement has not
+       run — and the statement that answers them names WHICH of two opposite repairs a 0 is: the prologue that
+       initializes the cell, or the closure-variable chain that reaches it. */
+    const char *mfdtop_why = NULL; int mfdtop_tt = 1;
+    fold_row(&mfdtop_tt, &mfdtop_why, param_value_is(js, "/api/mfdtop", "d", "ok"),
+             "the module's top-level FUNCTION DECLARATION is not a function at the module body's own level. "
+             "§16.2.1.7.3.1's lexical pass runs InstantiateFunctionObject and InitializeBinding for it BEFORE "
+             "§16.2.1.7.3.2 ExecuteModule, so no point in this body can observe a pre-instantiation value — "
+             "read the `d` param: `undefined` is the binding born VAR-shaped and read as a plausible datum, "
+             "and an ABSENT record is the statement not having run at all, which this row cannot tell from a "
+             "document whose tail no program reached");
+    const char *mfdnest_why = NULL; int mfdnest_tt = 1;
+    fold_row(&mfdnest_tt, &mfdnest_why, !!strstr(js, "\"/api/mfdtop\""),
+             "NOT REACHED: there is no /api/mfdtop record at all, so the module statement this row is about "
+             "never ran and the closure chain below it was never exercised. That is `mfd-top`'s finding, not "
+             "this row's");
+    fold_row(&mfdnest_tt, &mfdnest_why, param_value_is(js, "/api/mfdnest", "d", "Fok"),
+             "the module's top-level FUNCTION DECLARATION resolved at the module body's own level and NOT from "
+             "two FunctionExpression levels below it: /api/mfdtop carries `ok` and /api/mfdnest does not carry "
+             "`Fok`. The binding is one Module Environment Record cell either way, so the two reads cannot "
+             "disagree about §16.2.1.7.3.1 — what differs is the CHAIN get_closure_var builds from the use "
+             "down through each nesting level, which is where a lost or mis-indexed closure variable makes a "
+             "correctly-initialized cell read as `undefined` at a call the page then reports as `not a "
+             "function` arbitrarily far from the module. This is the shape a real ESM chunk's `@swc/helpers` "
+             "shim has, so a 0 here is a whole bundle's endpoints lost on line 1");
     /* The §4.4 algorithms, each proved by its own endpoint carrying a token only the right answer produces.
        READ INSIDE THE ENDPOINT'S OWN RECORD, which is what the address column is for and is the whole reason
        it is no longer written quoted. Spelled as two whole-document `strstr`s this was a hundred-odd
@@ -17444,6 +17512,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "xk-spki", xk_spki, "/api/xkspki", SESS_EXPLORE, xkspki_why },
         { "module-entry", modentry_tt, "/api/modreach", SESS_EXPLORE, modentry_why },
         { "module-tla", modtla_tt, "/api/modtla", SESS_EXPLORE, modtla_why },
+        /* §16.2.1.7.3.1's BINDING. `mfd-top` stands first because it is what says whether the row below it is
+           about the closure chain or about how far the run got. */
+        { "mfd-top", mfdtop_tt, "/api/mfdtop", SESS_EXPLORE, mfdtop_why },
+        { "mfd-nest", mfdnest_tt, "/api/mfdnest", SESS_EXPLORE, mfdnest_why },
         { "frame-ctl", frame_ctl, "/api/framectl", SESS_EXPLORE, frame_ctl_why },
         { "fetch", fetch_await, "/api/config", SESS_EXPLORE, fetch_await_why },
         { "then-chain", then_chain, "at=chain1", SESS_EXPLORE },
