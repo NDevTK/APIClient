@@ -364,6 +364,100 @@ const char *endpoint_reach_token(int reach);
    second table anywhere. A door outside the list is a `CHECK` for `endpoint_door_token`'s reason exactly. */
 int         endpoint_door_reach(int door);
 
+/* WHETHER THE RUN COMPOSED THIS ADDRESS OUT OF A VALUE IT HAD NOT DETERMINED — the fourth fact about a
+   sighting, and the one CLAUDE.md §What-the-tool-produces' HARD BAR is a claim about. That bar is "an
+   address, a key or a value that NO PARSE of the served bytes can state, because it exists only at run
+   time", and the three facts already on a record cannot answer it at any grain: `door` is WHICH MECHANISM,
+   `mintedAt` is WHEN, and `EPR_BEYOND` is a property of the DOOR — so a literal chunk URL delivered through
+   `module-import` is `beyond` and clears NOTHING at this bar, while `/api/{location.hash}` through `fetch`
+   clears it outright. Two addresses through ONE door differ on exactly this, and no count of doors can ever
+   say which.
+   IT IS READ OFF THE ADDRESS VALUE'S OWN CONCOLIC PROVENANCE AND NOTHING ELSE. §Every-value-is-CONCOLIC: the
+   triple RIDES the value the interpreter computed, so the fact is standing in `endpoint_record`'s own `url`
+   argument and needs no producer to carry it, no parser to be consulted, and no second implementation of
+   `what a static reader could reach` — which is the auditor CLAUDE.md §AN-AUDITOR-DERIVES-THE-RULE forbids
+   and which would additionally be a JS-layer dependency §Architecture forbids the engine having.
+   SO IT IS THE ONLY ONE OF THE FOUR WITH NO `UNSTATED` MEMBER, for `ENDPOINT_REACHES`' reason exactly: a
+   door and a grade are stated BY A PRODUCER and a producer can forget, while this is DERIVED at the one door
+   every HTTP-shaped edge passes through, so there is nobody to forget and nothing for a zero to mean.
+   IT IS A FLOOR AND IT IS NOT A BOOLEAN ABOUT PARSES, which is the whole of its honesty and the half a
+   reader must not drop. `unknown` is a POSITIVE statement — the run reached this address holding a value it
+   had not determined, which entered the program at a source (core/frame/location.c's fragment, an absent
+   server-injected global, a reply field, a device reading, a driven orphan's own argument) and which is
+   therefore in no served byte — so such a row DEFINITELY clears the hard bar. `concrete` is the other
+   POSITIVE statement and claims nothing whatever about a parse: the run had determined this address by the
+   time it recorded it. WHETHER A PARSE COULD HAVE STATED IT IS NOT DECIDABLE BY ANYBODY — a bundler's chunk
+   manifest needs a scope pass to resolve, so what a static reader reaches is a moving frontier rather than a
+   property — and this list deliberately does not pretend otherwise. Neither word may be read as its
+   complement over parses.
+   WHAT A `concrete` ROW HIDES IS NAMED HERE RATHER THAN LEFT TO BE RE-DERIVED, because it is three
+   populations and `url_display`'s own banner enumerates them: an address composed OF LITERALS (a bundler's
+   module graph, the whole surface of a run that reached no API code); one composed of THE DOCUMENT'S OWN
+   ADDRESS, which is concrete for the document this engine loaded; and one PINNED AND RE-READ, where
+   §Solver-half's concretize-on-pin re-mints a proved source as the REAL value so the true arm of
+   `if (s.tier === 'silver') fetch('/api/' + s.tier)` composes an ordinary string. The third really did derive
+   from an unknown and this cannot say so, which is why the field is a floor.
+   AND THE SECOND THING IT CANNOT ANSWER IS AN ADDRESS WHOSE RUNTIME-NESS THE *DOOR* CARRIES. `reply-chunk`
+   is the sharpest: solver/reply_decode.c hands this surface a plain string it read out of a REPLY, so the
+   value is `concrete` while no parse of the DOCUMENT reaches that address at all. `batch-part` and the three
+   program doors are the same shape — each records an address already resolved to a `char *`, because a park's
+   URL is what the reply seam is keyed on. So the hard bar's floor over a whole surface is the UNION of this
+   column's `unknown` rows and the doors whose mechanism is itself beyond a parse, and neither is the other's
+   better answer: a consumer holding `door` and `addressClass` holds both halves and this file composes
+   neither into a verdict, for the reason `endpoint_reach_hist_json` declines to fold `either` into a guess.
+   ITS MERGE IS A UNION, which is `valueClass`'s rule one grain out and holds for its reason: the four
+   domain reads are claims about a VALUE that a path reaching the request without obeying them disproves,
+   and this is a fact about whether SOME observed path composed the address out of an unknown, which a later
+   determined sighting cannot take back. Intersecting would answer `concrete` for an address one path built
+   out of a hole and make the floor read LOWER than what the run established. It is deliberately NOT the
+   door's never-re-armed rule: the door asks which mechanism composed the record's FIRST sighting, and this
+   asks what any sighting proved about the address.
+   A LIST AND NOT TWO `#define`s, for `ENDPOINT_DOORS`' reason: the enum, the token table and the census over
+   it are ONE list, so a class added to the enum and not to the table cannot come off the end of a name
+   array. THE FIRST MEMBER IS THE CONSERVATIVE ONE AND ITS VALUE IS ZERO BY CONSTRUCTION — the mint writes
+   this field unconditionally one line after `door`, so nothing depends on the memset, and the ordering is
+   what makes a field some later diff forgot read as the claim that PROVES NOTHING rather than as the claim
+   that clears the product's own bar. */
+#define ENDPOINT_ADDRESS_CLASSES(X)                                                                          \
+    /* the run had DETERMINED this address by the time it recorded it. It claims nothing about a parse: see  \
+       the three populations named above, of which one really did derive from an unknown. */                  \
+    X(EPA_CONCRETE, "concrete")                                                                              \
+    /* the run reached this address holding a value it had NOT determined — some segment of it entered the   \
+       program at a source, so no parse of the served bytes can state it and this row clears the hard bar.   \
+       It includes the value this engine could not attribute to a source at all (concolic.h's NULL root),    \
+       which is a weaker claim about WHERE the bytes came from and the same claim about the run not having   \
+       determined them. */                                                                                   \
+    X(EPA_UNKNOWN,  "unknown")
+
+typedef enum {
+#define ENDPOINT_ADDRESS_CLASS_MEMBER(id, token) id,
+    ENDPOINT_ADDRESS_CLASSES(ENDPOINT_ADDRESS_CLASS_MEMBER)
+#undef ENDPOINT_ADDRESS_CLASS_MEMBER
+    EPA_COUNT           /* the list's own end — dense by construction, for `EPR_COUNT`'s reason */
+} EndpointAddressClass;
+
+/* THE ONE WIRE SPELLING OF AN ADDRESS CLASS, and `endpoint_reach_token`'s severity for its reason: it runs
+   once per emitted ROW and once per census row in EVERY build, so a release build falling through would put
+   whatever the register held into a JSON string and publish a class name nothing decided. */
+const char *endpoint_address_class_token(int cls);
+
+/* THE EMITTED SURFACE PARTITIONED BY THAT CLASS, as a malloc'd JSON OBJECT (caller frees) — one row per
+   member of `ENDPOINT_ADDRESS_CLASSES`, zeroes included, summing to the same `emitted` figure
+   endpoint_surface_census reports, with the identity asserted at the composer where both sides are in one
+   hand.
+   THIS IS THE ONE ROW THE HARD BAR CAN BE SCORED OFF, and it is a SECOND OBSERVATION rather than a
+   coarsening of either histogram beside it — which `endpoint_reach_hist_json` is not, and says so. The
+   door and the reach classes are one fact at two grains; this is keyed on a property of the ADDRESS VALUE
+   that no door implies in either direction, so a reader holding all three holds two observations and not
+   three (CLAUDE.md §EVIDENCE-INFLATION, and the reason the derivation is named here rather than left to be
+   noticed).
+   IT IS A DIAGNOSTIC AND NEVER A TARGET, on §netdiff's terms and in the words `endpoint_reach_hist_json`
+   already carries: `unknown` 0 against a nonzero `emitted` is a REFUSAL TO CLAIM the hard bar on this
+   document, not a smaller version of it, and it is an identity read WITHIN one run rather than across two of
+   a wall-denominated quantum. Its DENOMINATOR is `epEmitted` on the same census line and is not this row's
+   to omit. */
+char   *endpoint_address_hist_json(void);
+
 /* THE EMITTED SURFACE PARTITIONED BY DOOR, as a malloc'd JSON OBJECT (caller frees) — one row per member of
    `ENDPOINT_DOORS`, zeroes included, summing to the `emitted` figure endpoint_surface_census reports. It is
    what makes CLAUDE.md §What-the-tool-produces' razor a PARTITION rather than a subtraction of two totals;
@@ -448,10 +542,25 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
    JS-object round-trip.
    `[ {"method":..,"url":..,"provenance":"observed"|"derived"|"forced",
       "door":"document-script"|…|"reply-chunk","mintedAt":"pre-program"|"post-program",
+      "addressClass":"concrete"|"unknown",
       "params":[{"name":..,"location":..,"valueClass":"unknown"|"concrete","validValues":[..],"excludes":[..],
       "bounds":{"minimum"|"exclusiveMinimum":N,"maximum"|"exclusiveMaximum":N},
       "predicates":[{"method":..,"arguments":[..],"holds":true|false}],
       "looselyEquals":[{"value":..,"type":..}]}]}, ... ]`.
+   `addressClass` IS WHETHER THE RUN HAD DETERMINED THIS ADDRESS WHEN IT RECORDED IT, and it is the one field
+   on this record that answers CLAUDE.md §What-the-tool-produces' HARD BAR at the grain the bar is stated at.
+   It is ALWAYS PRESENT for `provenance`'s reason and `valueClass`'s: the two words are exhaustive over the
+   states this engine can be in about an address value, so there is no absence to read as a statement. See
+   `ENDPOINT_ADDRESS_CLASSES` for what each word claims, for the three populations `concrete` hides, and for
+   why the honest field is a FLOOR under the bar rather than a boolean about what a parse could reach — a
+   consumer that read `concrete` as `a static reader gets this for free` would be making a claim no producer
+   here makes. IT IS THE SAME VOCABULARY AS `valueClass` ONE GRAIN OUT and that is deliberate: a param is
+   "unknown" where some observed path minted it from a value the code did not compute, and this is the
+   identical question asked of the ADDRESS, so one pair of words means one thing at two grains.
+   A CONSUMER CANNOT RE-DERIVE IT FROM `url`, which is why it is carried. A concolic address is printed as
+   its SHAPE, so a brace in `url` looks like the evidence — and extension/lib/learn.js's live-traffic path
+   walk mints a `{path_*}` hole into a URL from two observed addresses that differ at one segment, which is a
+   brace no concolic put there and which arrives on rows this key reads `concrete` for.
    Every param states WHERE IT LANDED — "path", "query" or "body" — because that is what the reviewer replays
    it with, and because a consumer that has to default the field cannot tell an unknown from a query param.
    AND EVERY PARAM STATES WHETHER ITS VALUE EVER NAMED A HOLE. `valueClass` is "unknown" where some observed

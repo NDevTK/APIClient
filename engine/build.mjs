@@ -263,7 +263,7 @@ let g_coldFields = null;
 const coldFields = () => (g_coldFields ??= censusRowSet(
   "solver/result.c", "char *result_cold_json(void)", "\n}\n",
   ["stepUnits", "stepUnitRuns", "stepUnitOverruns", "outOfProgramsAtTheLadderUnits", "programCursors",
-   "programsAhead", "epDoors", "epReach"],
+   "programsAhead", "epDoors", "epReach", "epAddressClass"],
   "the @COLD reader states which rows it requires of the frontier census, and it takes that set from the " +
   "composer rather than from a list beside it"));
 /* THE POPULATION SPLITS ARE PARTITIONS AND THE PARTITION IS THE CONTRACT, checked here for the reason
@@ -2592,6 +2592,46 @@ function endpointReachReading(b) {
          "this document, not a smaller version of it" : "read WITHIN this run, never across two"}`;
 }
 
+/* …AND THE ONE READING THAT ANSWERS THE HARD BAR RATHER THAN THE MARKUP ONE. The row above is CLAUDE.md
+   §What-the-tool-produces' razor read against a MARKUP PARSE, and the project owner has since chosen the
+   harder statement: the razor is "an address, a key or a value that NO PARSE of the served bytes can state,
+   because it exists only at run time". Those are different questions and `epReach` cannot be coarsened into
+   this one in either direction — a literal chunk URL delivered through `module-import` is `beyond` a markup
+   parse and clears NOTHING at the hard bar, while `/api/{location.hash}` through `fetch` clears it outright.
+   Two addresses through ONE door differ on exactly this, which is why a 19-site census could close with a
+   full `epDoors` table and leave the bar unscorable.
+   IT IS A FLOOR AND THE SENTENCE SAYS SO, because "a parse could state this" is not decidable by anybody: a
+   bundler's chunk manifest needs a scope pass to resolve, so what a static reader reaches is a moving
+   frontier rather than a property. What the engine CAN answer is the inverse — whether the run reached the
+   address holding a value it had not determined, which solver/endpoint.c reads off the address value's own
+   concolic provenance at the recording door. `unknown` rows DEFINITELY clear the bar; `concrete` rows may or
+   may not, and this line refuses to say which.
+   IT IS A SECOND OBSERVATION AND NOT A THIRD GRAIN OF THE TWO ABOVE, which is where it differs from
+   `endpointReachReading` and is why it is rendered beside it rather than folded in. `epReach` is `epDoors`
+   summed by class and says so; this is keyed on a property of the ADDRESS that no door implies, so a reader
+   of this line holds TWO observations over three rows (CLAUDE.md §EVIDENCE-INFLATION).
+   THE DENOMINATOR IS ON THE LINE AND `censusHistRows` HAS ALREADY CHECKED IT, so the fraction is over the
+   population these two classes partition — and an EMPTY SURFACE is a sentence rather than `0 of 0`, for
+   `endpointReachReading`'s reason exactly: the second reads as the bar ANSWERING when the run learned no
+   address at all. */
+function endpointAddressClassReading(b) {
+  const rows = censusHistRows(b, "epAddressClass", "epEmitted", "endpoint.h's ENDPOINT_ADDRESS_CLASSES list");
+  const at = (k) => { const r = rows.find((x) => x[0] === k); return r ? r[1] : null; };
+  const unknown = at("unknown"), concrete = at("concrete");
+  if (unknown === null || concrete === null)
+    throw new Error(`[build] the @COLD census's \`epAddressClass\` names [${rows.map((r) => r[0]).join(", ")}] ` +
+                    "and not the two classes endpoint.h's ENDPOINT_ADDRESS_CLASSES declares — this reading is " +
+                    "the product's HARD BAR and is composed of those two by name, so a renamed class would be " +
+                    "rendered as a 0 the engine never reported.");
+  const total = b.epEmitted;
+  if (total === 0) return `@H hard bar: the surface emitted no endpoint, so there is nothing to claim`;
+  return `@H hard bar: ${unknown} of ${total} address(es) the run had NOT determined` +
+         ` (${concrete} it had) — a FLOOR under "no parse of the served bytes can state this" and never its` +
+         ` value: a determined address may still be one no parse reaches (a pinned source re-read, a reply's` +
+         ` own chunk address), and this line will not guess. ${unknown === 0 ? "0 is a REFUSAL TO CLAIM the " +
+         "bar on this document, not a smaller version of it" : "read WITHIN this run, never across two"}`;
+}
+
 function stepUnitReading(b) {
   const rows = censusHistRows(b, "stepUnits", "live", STEP_UNIT_EXTENT);
   const live = rows.filter((r) => r[1] > 0).sort((x, y) => y[1] - x[1]);
@@ -4361,7 +4401,11 @@ function hungCauseCensus(out) {
                   hand off the emitted @H array. `endpointReachReading` is that map applied, with the
                   denominator on the line; it is the SAME observation coarsened and not a second one, so
                   two zeroes here are one zero. */
-               "; " + endpointDoorReading(b) + "; " + endpointReachReading(b);
+               "; " + endpointDoorReading(b) + "; " + endpointReachReading(b) +
+               /* AND THE HARD BAR BESIDE THE MARKUP ONE, WHICH IS A SECOND OBSERVATION AND NOT
+                  A COARSENING OF EITHER ROW ABOVE — see `endpointAddressClassReading` for why
+                  no door implies it and for why it is published as a FLOOR. */
+               "; " + endpointAddressClassReading(b);
   /* AND WHICH OF THE STILL-0 ROWS WERE EVER ANYTHING ELSE, which is the distinction `flipped.length === 0`
      cannot draw and which decides what "still advancing" is worth. Measured across six builds: the rows that
      reached 1 in the last window were, every time, the ten members of ONE family (the @S search rows), while

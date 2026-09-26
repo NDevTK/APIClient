@@ -85,6 +85,16 @@ typedef struct { char *name; char *value; } EpHeader;   /* the transport half: w
    re-armed on every merge would answer a different question and would answer it about the last sighting. */
 typedef struct { char *method; char *path; Param *params; int np, pcap;
                  EpHeader *hdrs; int nh, hcap; int is_asset; int prov; int pre_program; int door;
+                 /* `addr_class` IS WHETHER THE RUN HAD DETERMINED THE ADDRESS WHEN IT RECORDED IT — see
+                    endpoint.h's ENDPOINT_ADDRESS_CLASSES for what each word claims and for why it is a
+                    FLOOR under the hard bar rather than a boolean about parses. It is the ONE field on
+                    this record no producer states: it is read off the `url` VALUE's own concolic
+                    provenance at the door, so there is nobody to forget it. AND IT IS UNIONED ON A
+                    MERGE, unlike `door` and `pre_program` one field back, which are properties of the
+                    MINT and are never re-armed — this is a fact about whether SOME observed path
+                    composed the address out of a value it had not determined, and a later determined
+                    sighting cannot take that back. It is `has_hole`'s rule one grain out. */
+                 int addr_class;
                  /* THE BODY THIS ENGINE HAD NO FIELD READER FOR — see endpoint.h. Set only where
                     `body_params` named NOTHING, so it is never a second spelling of fields already on
                     `params`, and never overwritten once set: a request body is ONE example, not a set.
@@ -157,6 +167,26 @@ const char *endpoint_reach_token(int reach) {
                 "door list's own third column, so this is a value no list produced and the key about to be "
                 "published names a razor reading nothing decided",
                 reach);
+}
+
+/* See endpoint.h. `endpoint_reach_token`'s construct and its severity, one list over — and with a sharper
+   reason for the severity here than either of those two have: this runs once per EMITTED ROW as well as once
+   per census row, so a release build falling through would write whatever the register held into the one key
+   on an @H record that states the product's own hard bar, which is a plausible verdict rather than a missing
+   one. There is no `EPA_UNSTATED` arm to catch because there is no producer who could forget: the class is
+   derived at the door from the address value itself (see `address_class_of`). */
+const char *endpoint_address_class_token(int cls) {
+    switch (cls) {
+#define ENDPOINT_ADDRESS_CLASS_ARM(id, token) case id: return token;
+    ENDPOINT_ADDRESS_CLASSES(ENDPOINT_ADDRESS_CLASS_ARM)
+#undef ENDPOINT_ADDRESS_CLASS_ARM
+    }
+    CHECK_FAILF("endpoint: an @H record states the address class %d, which is none of endpoint.h's "
+                "ENDPOINT_ADDRESS_CLASSES — every value comes off `address_class_of`, which returns one of "
+                "exactly two members of that list, so this is a field nothing in this file wrote and the word "
+                "about to be published is a claim about CLAUDE.md §What-the-tool-produces' hard bar that no "
+                "measurement made",
+                cls);
 }
 
 /* A value carrying a `{hole}` is a SHAPE — an unknown the code did not compute — and a hole-free one is the
@@ -460,6 +490,33 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
     char *r = strdup(s ? s : "?");
     if (s) JS_FreeCString(ctx, s);
     return r;
+}
+
+/* WHETHER THE RUN HAD DETERMINED THIS ADDRESS — CLAUDE.md §What-the-tool-produces' HARD BAR, read off the one
+   test `url_display` above already makes and NOT off a second question. §Every-value-is-CONCOLIC: the triple
+   rides the value the interpreter computed, so a concolic `url` at this line IS an address some segment of
+   which entered the program at a source and which therefore stands in no served byte. That is the whole
+   derivation; there is no parser consulted, no table of statable shapes, and nothing about this address's TEXT
+   examined.
+   IT IS DELIBERATELY THE SAME PREDICATE AS `url_display`'s AND NOT A REFINEMENT OF IT, which is the point
+   rather than an economy. That function's own banner is the enumeration of what its concrete branch hides —
+   literals, the document's own address, and a source this flow PINNED and re-read — and this classifier
+   publishes exactly that branch as a word, so the two cannot disagree about which addresses are undetermined.
+   Refining it here (a root test, a brace test, a shape test) would be two answers to one question in one file,
+   which is the shape §Fix-the-ROOT names, and the second answer would be the one nothing downstream reads.
+   THE ROOT IS NOT ASKED AND THAT IS NOT AN OMISSION. concolic.h's `concolic_root_c` names WHICH SOURCE
+   physically carried the bytes in, and `concolic_alloc` already DCHECKs that a value with a provenance HAS
+   one — so a root test here would narrow this class by a population that mint has refused, which is a
+   conjunct that cannot change an answer. A value this engine could not attribute to any source (a NULL root,
+   which concolic.c mints only for a `{cmp}` boolean) is still a value this run did not determine, and
+   `unknown` is the true word for it; endpoint.h's list says so at the member.
+   AND NOTHING IS ASSERTED ABOUT THIS OPERAND, WHICH IS A RULE AND NOT A GAP. The address is composed of bytes
+   a PAGE wrote — §WHOSE-BYTES-STATE-THE-VALUE — so a DCHECK over its shape, its root or its class would hand
+   any document an abort switch on the engine by writing an address the guard did not expect. What IS this
+   codebase's own is the threading of provenance through a derivation, and that is asserted where both halves
+   are in one hand (concolic_alloc) rather than restated here over a value a page handed us. */
+static int address_class_of(JSValueConst url) {
+    return concolic_is(url) ? EPA_UNKNOWN : EPA_CONCRETE;
 }
 
 /* THE PARAMS OF ONE OBSERVED REQUEST, in the order a reviewer meets them: path, then query, then body. Owned
@@ -1861,6 +1918,12 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     g_asks++;
     if (ask_pre_program) g_asks_pre_program++;
     if (g_suppress) { g_ask_suppressed++; return; }   /* candidate/verify run -> not a real @H endpoint */
+    /* WHETHER THIS SIGHTING'S ADDRESS WAS ONE THE RUN HAD DETERMINED — read HERE, once, from the same value
+       the display spelling above is taken from, because both the merge arm and the mint below need it and a
+       second call would be a second reading of a value that is borrowed for the length of this call. It is
+       read BEFORE any of the scans, for §scheduler's `an operation takes its inputs with it` at the smallest
+       scale there is: nothing below this line holds the JSValue. */
+    int acls = address_class_of(url);
     char *disp = url_display(ctx, url);
     char *ex = url_example(ctx, url);
     char *shape_path = url_path_of(disp);
@@ -1926,6 +1989,17 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                (provenance is part of `same_identity`), so this cannot silently mix a forced body into an
                observed one. */
             body_store(&g_eps[i], body, body_named);
+            /* THE RECORD-LEVEL UNION, AND THE ONLY FIELD ON THIS RECORD THAT HAS ONE. `door` and
+               `pre_program` are properties of the MINT and are deliberately never re-armed (see the struct);
+               this is a claim about whether ANY observed path composed the address out of a value it had not
+               determined, which a later determined sighting cannot take back — `has_hole`'s rule one grain
+               out, and endpoint.h's list states why intersecting would make the hard bar's floor read lower
+               than what the run established.
+               `same_identity` COMPARES THE DISPLAY SPELLING, so the two sightings reaching here are free to
+               disagree about this exactly as they are about a param's hole: the spelling of a concolic address
+               is its SHAPE and a determined one's is its bytes, so agreement here is not something the
+               identity has already forced and is not something this line may assume. */
+            if (acls == EPA_UNKNOWN) g_eps[i].addr_class = EPA_UNKNOWN;
             if (endpoint_merge_headers(&g_eps[i], hdrs, nhdrs) > 0)
                 flow_credit_emit(1.0);
             /* THE ARM THE SURFACE HAS NO ROW FOR. A sighting that merges teaches the record structure and
@@ -1957,6 +2031,11 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        re-armed on every merge would answer about the last sighting, and the emitted row would then say that a
        `<head>`'s own `<link>` was composed by a `fetch()` that merely asked for it again. */
     e->door = door;
+    /* …AND WHETHER THE RUN HAD DETERMINED THE ADDRESS, written UNCONDITIONALLY so nothing on this record
+       depends on the `memset` above having left the conservative member at zero. It is the union's identity
+       element: a first sighting's class IS the record's class, and every later one can only raise it to
+       `EPA_UNKNOWN`. */
+    e->addr_class = acls;
     /* AND THAT THE ASK AND THE MINT ARE ONE INSTANT. The bit is monotone and `++`-only at engine.c's single
        program-start line, so the only way these can differ is a program having started between this function's
        entry and this line — which would mean something on the path above (a display spelling, a path scan, a
@@ -2431,6 +2510,70 @@ char *endpoint_reach_hist_json(void) {
     return json_buf_take(&b);
 }
 
+/* THE SAME SURFACE PARTITIONED BY WHETHER THE RUN HAD DETERMINED THE ADDRESS — see endpoint.h for the two
+   classes, for why there is no unstated member, and for why the honest field is a FLOOR under CLAUDE.md
+   §What-the-tool-produces' HARD BAR rather than a boolean about what a parse could reach. `unknown` is the
+   addresses this run reached holding a value it had not determined, which is the one figure the hard bar can
+   be scored off; `concrete` is the rest, and it claims nothing whatever about a parse.
+   IT IS A SECOND OBSERVATION AND NOT A COARSENING, WHICH IS WHERE IT DIFFERS FROM THE ROW ABOVE AND IS WHY IT
+   EARNS ITS OWN WALK. `endpoint_reach_hist_json` is the door census summed by class and says so, so a reader
+   holding both of those holds ONE fact at two grains. This is keyed on a property of the ADDRESS VALUE that
+   no door implies in either direction — `link-element` is reached by a determined address and by a tainted
+   one alike, and `reply-chunk` is `beyond` a parse with a determined address every time — so a reader holding
+   all three histograms holds TWO observations, and CLAUDE.md §EVIDENCE-INFLATION is why that is said here,
+   where the numbers are, rather than left to be worked out from the producers.
+   A THIRD WALK OVER `g_eps` AND NOT A SUM OVER EITHER TABLE, which is this file's existing rule for the same
+   reason it gave for the second: the walks are spelled with the SAME `is_asset` skip precisely so that one of
+   them drifting is a LOUD identity failure rather than a quiet agreement, and a table summed from another is
+   true by construction of it and blind to the walk it is supposed to be checking.
+   THE SUBSCRIPT IS RE-ASSERTED AND THAT IS NOT REDUNDANT WITH THE TOKEN SPELLER. `endpoint_address_class_token`
+   is a `CHECK` in every build, so the EMIT cannot publish a fabricated word — and this line indexes an array
+   before any speller runs, which is `endpoint_door_hist_json`'s own reason for asserting its range: what the
+   assert adds is that nothing corrupts the frame on the way to the refusal. BOTH SIDES ARE THIS CODEBASE'S
+   OWN (a field this file wrote from a predicate this file spells), which is what makes it a DCHECK rather
+   than a refusal about page bytes. */
+char *endpoint_address_hist_json(void) {
+    JsonBuf b = { 0 };
+    long n[EPA_COUNT];
+    long minted, assets, emitted, pre_program, sum = 0;
+    int c, i;
+
+    memset(n, 0, sizeof n);
+    for (i = 0; i < g_eps_n; i++) {
+        if (g_eps[i].is_asset) continue;
+        DCHECKF(g_eps[i].addr_class >= 0 && g_eps[i].addr_class < EPA_COUNT,
+                "an @H record reached the address-class census carrying the class %d, which is none of "
+                "endpoint.h's ENDPOINT_ADDRESS_CLASSES — the mint writes this field unconditionally from "
+                "`address_class_of`, which returns one of exactly two members, so this is a record minted by "
+                "something that is not that line, and the count about to be raised is at an index outside the "
+                "table this census is a partition of", g_eps[i].addr_class);
+        n[g_eps[i].addr_class]++;
+    }
+    endpoint_surface_census(&minted, &assets, &emitted, &pre_program);
+
+    /* EVERY CLASS IS EMITTED INCLUDING THE ZEROES, for the reach census's reason and with the same sharper
+       one at the class that matters: an `unknown` that is ABSENT and an `unknown` that read 0 are the two
+       things this row exists to keep apart. The first is an instrument that stopped writing the class; the
+       second is the product's own hard bar answering, and it is a REFUSAL TO CLAIM the capability on this
+       document rather than a smaller version of it. */
+    json_buf_raw(&b, "{");
+    for (c = 0; c < EPA_COUNT; c++) {
+        if (c) json_buf_raw(&b, ",");
+        json_buf_str(&b, endpoint_address_class_token(c));
+        json_buf_raw(&b, ":");
+        edge_num(&b, n[c]);
+        sum += n[c];
+    }
+    json_buf_raw(&b, "}");
+    DCHECKF(sum == emitted,
+            "the @H surface's per-address-class counts sum to %ld against the %ld rows it emits — the two "
+            "classes are a PARTITION of the emitted surface and this walk carries the same `is_asset` skip "
+            "the census beside it does, so a difference is one of those walks having stopped describing the "
+            "population the other counts, and the hard bar a reader reads off this row would be a share of a "
+            "number that is not the surface's size", sum, emitted);
+    return json_buf_take(&b);
+}
+
 /* THE STAGE ARMS THE PARTITION IS MADE OF, SUMMED ONCE FOR THE IDENTITY AND WRITTEN ONCE FOR THE DOCUMENT —
    two edges, one walk each, and the arithmetic in one place. */
 static long edge_stage_sum(const EndpointEdge *e) {
@@ -2842,6 +2985,17 @@ char *endpoint_json_array(void) {
         json_buf_str(&b, endpoint_door_token(e->door));
         json_buf_raw(&b, ","); json_buf_key(&b, "mintedAt");
         json_buf_str(&b, e->pre_program ? "pre-program" : "post-program");
+        /* …AND THE THIRD FACT ABOUT THE SIGHTING, WHICH IS NEITHER OF THOSE TWO AND WHICH NEITHER IMPLIES.
+           The door is WHICH MECHANISM, the mint state is WHEN, and this is WHETHER THE RUN HAD DETERMINED THE
+           ADDRESS — CLAUDE.md §What-the-tool-produces' HARD BAR at the grain the bar is stated at, which no
+           count of doors can reach: a literal chunk URL through `module-import` and `/api/{location.hash}`
+           through `fetch` are both `beyond` a markup parse and only the second clears this bar. Written
+           UNCONDITIONALLY on every row in every build, exactly as the two above are, so the `(unstated)`
+           bucket a consumer keeps for a row from an artifact older than the key stays a fact about the BUILD
+           and never about an address (see endpoint.h for that contract and for who may retire the
+           tolerance). */
+        json_buf_raw(&b, ","); json_buf_key(&b, "addressClass");
+        json_buf_str(&b, endpoint_address_class_token(e->addr_class));
         json_buf_raw(&b, ","); json_buf_key(&b, "params"); json_buf_raw(&b, "[");
         for (int j = 0; j < e->np; j++) {
             if (j) json_buf_raw(&b, ",");

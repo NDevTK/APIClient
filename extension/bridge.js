@@ -808,6 +808,28 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            partitions the same array, each therefore sums to `endpoints`, and neither is quotable alone. */
         endpointDoors: endpointFactHistogram(result.fetchCallSites, "door"),
         endpointMintedAt: endpointFactHistogram(result.fetchCallSites, "mintedAt"),
+        /* AND THE THIRD, WHICH IS THE ONLY ONE OF THE THREE THAT ANSWERS CLAUDE.md
+           §What-the-tool-produces' HARD BAR. The owner's statement of the razor is "an address, a key or a
+           value that NO PARSE of the served bytes can state, because it exists only at run time", and
+           NEITHER of the two rows above can be coarsened into it: a literal chunk URL delivered through
+           `module-import` is beyond a MARKUP parse and clears nothing at this bar, while
+           `/api/{location.hash}` through `fetch` clears it outright — two addresses through ONE door,
+           differing on exactly this. So the three histograms are TWO observations and not three, which is
+           said here because here is where the numbers are (CLAUDE.md §EVIDENCE-INFLATION).
+           IT IS A FLOOR AND THIS ZONE MAY NOT READ IT AS A VERDICT. `unknown` is the engine's positive
+           statement that the run reached that address holding a value it had not determined, so those rows
+           DEFINITELY clear the bar; `concrete` claims nothing whatever about a parse, because whether a
+           static reader could have stated an address is not decidable — a bundler's chunk manifest needs a
+           scope pass to resolve. solver/endpoint.h enumerates what `concrete` hides (a literal, the
+           document's own address, a source a flow PINNED and re-read) and this zone holds no copy of that
+           reasoning for the same reason it holds no copy of the door-to-reach map: a classification that
+           grows in the engine and is duplicated here would abort a zone that is live on WRITE the day the
+           engine ships one more class.
+           RENDERED AND ASSERTED GENERICALLY, so a class added to `ENDPOINT_ADDRESS_CLASSES` reaches this
+           reader unedited, and a row from a wasm older than the key lands in the `(unstated)` bucket — a
+           fact about the BUILD and never about an address, which is the ordinary case in a zone deployed on
+           write beside an engine that is live only after a build. */
+        endpointAddressClass: endpointFactHistogram(result.fetchCallSites, "addressClass"),
         park: result._park.length, resumed: resumed,
         coldLookup: cold.lookup, coldOther: cold.other, bundleId: cold.bundle,
         url: (msg && msg.sourceUrl) || "" }
@@ -860,7 +882,7 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            "request(s) asked of it — the two are raised in one loop, one `asked` per delivered pending line " +
            "and at most one refusal inside that same iteration, so a sum above the denominator is a second " +
            "site raising one of them and every share read off this pair is over a population that never ran");
-    /* AND THE TWO ENDPOINT PARTITIONS ARE PARTITIONS, ASSERTED WHERE EVERY SIDE IS IN ONE HAND. Two claims,
+    /* AND THE THREE ENDPOINT PARTITIONS ARE PARTITIONS, ASSERTED WHERE EVERY SIDE IS IN ONE HAND. Two claims,
        and only the second can fail against today's producer. (a) Each histogram SUMS to `endpoints` — one row,
        one bucket, one array — which is asserted for the reason the egress containment above is: the edit that
        breaks it is precisely the one the residual this landing retires proposed, a histogram built over a
@@ -869,7 +891,8 @@ function linesToAnalysis(lines, msg, outcome, eng) {
        disagree: one instance emits one document shape, so a run stating a door for some rows and not others
        is that emit having become conditional — and a half-unstated histogram says "this artifact predates the
        key" about part of one array, which is true of no build. */
-    for (const _p of [["endpointDoors", m.endpointDoors], ["endpointMintedAt", m.endpointMintedAt]]) {
+    for (const _p of [["endpointDoors", m.endpointDoors], ["endpointMintedAt", m.endpointMintedAt],
+                      ["endpointAddressClass", m.endpointAddressClass]]) {
       let _n = 0;
       for (const k of Object.keys(_p[1])) _n += _p[1][k];
       DCHECK(_n === m.endpoints,
@@ -880,9 +903,10 @@ function linesToAnalysis(lines, msg, outcome, eng) {
       const _u = _p[1][ENDPOINT_FACT_UNSTATED] === undefined ? 0 : _p[1][ENDPOINT_FACT_UNSTATED];
       DCHECK(_u === 0 || _u === m.endpoints,
              "this run's `" + _p[0] + "` partition states the fact for some rows and not others (" + _u +
-             " unstated of " + m.endpoints + ") — solver/endpoint.c writes both keys unconditionally in one " +
-             "loop over one array, so a mixed run is that emit having become conditional, and the bucket " +
-             "that means 'this artifact predates the key' would be read as a property of some addresses");
+             " unstated of " + m.endpoints + ") — solver/endpoint.c writes all three keys unconditionally in " +
+             "one loop over one array, so a mixed run is that emit having become conditional, and the " +
+             "bucket that means 'this artifact predates the key' would be read as a property of some " +
+             "addresses");
     }
   }
   DCHECK(outcome !== "crashed" || (typeof crashErr === "string" && crashErr !== ""),

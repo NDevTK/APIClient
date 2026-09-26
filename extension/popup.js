@@ -1804,12 +1804,20 @@ function renderEngineRuns() {
        endpoints learned above", and the block above carries its own comment requiring the two to be adjacent
        — so an insertion between them would re-point a reference made BY POSITION at whatever now occupies
        that position, which CLAUDE.md names as the one stale reference a grep for a symbol can never find. */
+    /* ALL THREE ARE ASSERTED AND NOT TWO, AND THE THIRD IS SAFE TO ASSERT FOR A REASON THE COLD KEYS BELOW
+       ARE NOT: these are bridge.js's OWN compositions over the emitted array, written unconditionally onto
+       every non-crashed record by the same zone this file ships with, so an installed wasm older than the
+       engine key does not make one absent — it makes one BUCKET read `(unstated)`, which is the handled case
+       and a fact about the build. `m.cold.epAddressClass` further down is the engine's own row and carries no
+       assert for exactly that difference (CLAUDE.md §A-CROSS-BOUNDARY-DIFF). */
     DCHECK(m.endpointDoors && typeof m.endpointDoors === "object" && !Array.isArray(m.endpointDoors) &&
            m.endpointMintedAt && typeof m.endpointMintedAt === "object" &&
-           !Array.isArray(m.endpointMintedAt),
-           "an engine run record reached the popup without its endpoint partitions — bridge.js builds both " +
-           "off the same `fetchCallSites` array that the `endpoints` figure beside them is the LENGTH of, " +
-           "and writes them onto every non-crashed record, so their absence is that relay broken and the " +
+           !Array.isArray(m.endpointMintedAt) &&
+           m.endpointAddressClass && typeof m.endpointAddressClass === "object" &&
+           !Array.isArray(m.endpointAddressClass),
+           "an engine run record reached the popup without its endpoint partitions — bridge.js builds all " +
+           "three off the same `fetchCallSites` array that the `endpoints` figure beside them is the LENGTH " +
+           "of, and writes them onto every non-crashed record, so their absence is that relay broken and the " +
            "razor's raw material goes back to being a number no reader can partition");
     /* THE PARTITION IS RE-ASSERTED HERE AND IT IS NOT A SECOND COPY OF BRIDGE.JS'S CHECK, because the two are
        taken over different populations at different instants: bridge.js asserts the sum where it COMPOSES the
@@ -1818,7 +1826,8 @@ function renderEngineRuns() {
        not ship with, fails here and nowhere else — two halves that can disagree is the test, which is what
        solver/result.c says of its own re-check one boundary further out. A share rendered off a histogram
        that does not sum to the figure beside it is a share of a population nobody holds. */
-    for (const _p of [["endpointDoors", m.endpointDoors], ["endpointMintedAt", m.endpointMintedAt]]) {
+    for (const _p of [["endpointDoors", m.endpointDoors], ["endpointMintedAt", m.endpointMintedAt],
+                      ["endpointAddressClass", m.endpointAddressClass]]) {
       let _n = 0;
       for (const k of Object.keys(_p[1])) _n += _p[1][k];
       DCHECK(_n === m.endpoints,
@@ -1834,11 +1843,16 @@ function renderEngineRuns() {
         + `read WITH the uncalled-code sentence above and not against it`
       : `learned surface (${esc(String(m.endpoints))} address(es)) · composed by: `
         + `${histCells(m.endpointDoors)}`
-        + ` · minted: ${histCells(m.endpointMintedAt)} — WHICH MECHANISM and WHEN, and neither implies the `
-        + `other: a link element a router created and one the markup declared arrive through the same door, `
-        + `and a head whose first script runs before the parser reaches the link below it mints that link `
-        + `post-program. A bucket named "(unstated)" is a row from an engine older than that key and is a `
-        + `fact about the build, not about the page.`;
+        + ` · minted: ${histCells(m.endpointMintedAt)}`
+        + ` · address: ${histCells(m.endpointAddressClass)} — WHICH MECHANISM, WHEN, and WHETHER THE RUN HAD `
+        + `DETERMINED THE ADDRESS, and no one of the three implies another: a link element a router created `
+        + `and one the markup declared arrive through the same door, a head whose first script runs before `
+        + `the parser reaches the link below it mints that link post-program, and a literal chunk URL and one `
+        + `built out of the fragment arrive through the same door as each other. "unknown" is the engine `
+        + `stating it had NOT determined that address, which is the only one of these buckets that is a `
+        + `FLOOR under the hard bar below; "concrete" claims nothing at all about what a parse could reach. `
+        + `A bucket named "(unstated)" is a row from an engine older than that key and is a fact about the `
+        + `build, not about the page.`;
     /* AND THE RAZOR ITSELF — CLAUDE.md §What-the-tool-produces' "what this engine reached that a markup
        parser could not", read off `epReach` against its own denominator `epEmitted`. THE TWO HISTOGRAMS
        ABOVE ARE ITS RAW MATERIAL AND NOT THE RAZOR: a door says WHICH MECHANISM composed an address and is
@@ -1941,6 +1955,80 @@ function renderEngineRuns() {
               + `mechanism NO parse of the served document reaches.${_bound} A DIAGNOSTIC AND NEVER A `
               + `TARGET: an identity read WITHIN this run, not against another run's. The denominator is the `
               + `engine's own census taken at that instant, and is not the array length in the row above.`;
+    /* AND THE HARD BAR BESIDE IT — the same razor read against THE OWNER'S OWN STATEMENT OF IT rather than
+       against a markup parse: "an address, a key or a value that NO PARSE of the served bytes can state,
+       because it exists only at run time". The row above answers a NARROWER question and cannot be coarsened
+       into this one in either direction, which is why both are rendered: a literal chunk URL delivered
+       through a dynamic `import()` is `beyond` a markup parse and clears NOTHING at this bar, while an
+       address built out of the document's fragment clears it outright. Two addresses through ONE door differ
+       on exactly this, so no count of doors ever answers it — and a 19-site census closed with a full door
+       table and left the product's own bar unscorable.
+       IT IS A FLOOR AND THIS SENTENCE SAYS SO IN BOTH DIRECTIONS. `unknown` is the engine's POSITIVE
+       statement that the run reached that address holding a value it had not determined, so those rows
+       DEFINITELY clear the bar. `concrete` is the other positive statement — the run HAD determined it — and
+       claims nothing whatever about a parse, because whether a static reader could have stated an address is
+       not decidable by anybody: a bundler's chunk manifest needs a scope pass to resolve, so what a parse
+       reaches is a moving frontier and not a property. solver/endpoint.h enumerates what `concrete` hides (a
+       literal, the document's own address, and a source a flow PINNED and re-read, which really did derive
+       from an unknown) and this file holds no copy of that reasoning, for the reason it holds no copy of the
+       door-to-reach map.
+       AND IT DOES NOT ADD THE TWO FLOORS TOGETHER, which is the one arithmetic a reader will reach for. The
+       bar's floor over a whole surface is the UNION of these `unknown` rows and the `beyond` rows whose
+       MECHANISM is itself past a parse — solver/reply_decode.c hands the surface a plain string it read out
+       of a reply, so that row is `concrete` and beyond every parse of the document at once — and a union is
+       not a sum, because a row can be in both. Neither producer composes the union and neither does this: a
+       person is handed the two halves and told they overlap, which is the honest shape and is the same
+       refusal endpoint.h makes about folding `either` into a guess.
+       IT IS A SECOND OBSERVATION AND NOT A THIRD GRAIN, which is where it differs from the row above it.
+       `epReach` is `epDoors` summed by a map and says so, so those two are ONE fact; this is keyed on a
+       property of the ADDRESS VALUE that no door implies, so a reader of these two sentences holds TWO
+       observations (CLAUDE.md §EVIDENCE-INFLATION).
+       NO `DCHECK` STANDS ON THIS KEY EITHER, for the razor block's reason exactly and with the same
+       two-part stated absence: this zone is INTERPRETED FROM THE TREE while the engine is live only after a
+       build, so an installed wasm predating the row is the ORDINARY case and an assert on it would abort the
+       trusted zone on every document for an engine doing what the design asks. The absence is a POSITIVE
+       STATED UNKNOWN and never a `|| 0`, which would turn `this build does not state the bar` into `this run
+       cleared nothing` — opposite facts about opposite things, one about the BUILD and one about the PAGE.
+       ITS DENOMINATOR IS `epEmitted` AND NOT THE ARRAY LENGTH ABOVE, for the razor's reason: that figure is a
+       GAUGE that can FALL when an asset verdict lands between two censuses, so the share travels with the
+       population it actually partitions. It is READ off the local the razor block above already took, not
+       re-read from `m.cold`, so the two sentences are a share of ONE instant rather than of two.
+       IT SITS BETWEEN THE RAZOR AND THE EGRESS SENTENCE, WHICH IS CHECKED AND NOT ASSUMED. That sentence's
+       arms point at "the surface above" and at "the surface figure above", and this row is about that SAME
+       surface and states its size in figures — so the reference resolves to a statement about the same
+       population either way, which is the one thing an insertion between two rows has to be checked for
+       (CLAUDE.md §AND-THE-FORM-THAT-SURVIVES-EVERY-SWEEP-ABOVE-IS-A-POSITIONAL-REFERENCE). */
+    const _acls = m.cold.epAddressClass;
+    const _aclsStated = _acls !== null && typeof _acls === "object" && !Array.isArray(_acls)
+                      && typeof _emitted === "number";
+    const _undet = _aclsStated ? _acls.unknown : undefined;
+    const _barStated = typeof _undet === "number";
+    const hardBar = !_aclsStated
+      ? `hard bar — addresses NO parse of the served bytes can state: NOT STATED BY THIS BUILD. The installed `
+        + `engine composes no such census row, so nothing here has claimed or refused anything. That is a `
+        + `fact about the BUILD and never about this page, and it is NOT a zero.`
+      : !_barStated
+        ? `hard bar — addresses NO parse of the served bytes can state: NOT READABLE FROM THIS BUILD. The `
+          + `census carries the partition under class names this reader does not know, so no floor can be `
+          + `read off it — again a fact about the BUILD, and again NOT a zero.`
+        : _emitted === 0
+          ? `hard bar — addresses NO parse of the served bytes can state: this run emitted no address at all, `
+            + `so there is no surface to partition and the bar has no population here. A statement about this `
+            + `RUN, read WITH the surface row above and not against it.`
+          : _undet === 0
+            ? `hard bar — addresses NO parse of the served bytes can state: NONE of `
+              + `${esc(String(_emitted))} emitted address(es) was one this run had not determined. That is a `
+              + `REFUSAL TO CLAIM the bar on this document and NOT a small number. It is a FLOOR and not a `
+              + `verdict: a determined address may still be past every parse — one a flow PINNED and re-read, `
+              + `or one a REPLY named — and this engine cannot say which, so the floor here and the razor `
+              + `above OVERLAP and may not be added. A DIAGNOSTIC AND NEVER A TARGET, read WITHIN this run.`
+            : `hard bar — addresses NO parse of the served bytes can state: at least `
+              + `${esc(String(_undet))} of ${esc(String(_emitted))} emitted address(es) — the run reached `
+              + `each of those holding a value it had NOT determined, which entered the program at a source `
+              + `and stands in no served byte. A FLOOR and not a verdict: some of the remaining `
+              + `${esc(String(_emitted - _undet))} may be past a parse too (a pinned source re-read, an `
+              + `address a reply named) and nothing here guesses which, so this floor and the razor above `
+              + `OVERLAP and may not be added. A DIAGNOSTIC AND NEVER A TARGET, read WITHIN this run.`;
     /* AND WHETHER THIS TOOL'S OWN EGRESS POLICY IS WHY THAT SURFACE IS THE SIZE IT IS — bridge.js's
        `egressAsked`/`egressDeclined`, written onto this record and, exactly like the two partitions above,
        read by nobody. They are not engine counters and are not in `FULL` or in `CENSUS`: bridge.js raises
@@ -2113,6 +2201,7 @@ function renderEngineRuns() {
          + `</span><span class="deep-label">${orphan}</span>`
          + `<span class="deep-label">${surface}</span>`
          + `<span class="deep-label">${razor}</span>`
+         + `<span class="deep-label">${hardBar}</span>`
          + `<span class="deep-label">${egress}</span>`
          + `<span class="deep-label">${order}</span>` + denom + censusRows.join("") + `</div>`;
   }).join("");

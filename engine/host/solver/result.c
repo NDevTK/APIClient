@@ -2247,8 +2247,9 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    `is_asset` on a record that is already in `g_eps`, and the verdict arrives with the REPLY while the record
    was minted at the REQUEST. So a census composed between those two instants counts the record in `epEmitted`
    and the next one does not, and `epEmitted` FALLS by one with nothing wrong. `epPreProgram` is raised inside
-   that same emitted arm and falls with it; `epDoors` and `epReach` partition `epEmitted` and are that walk at
-   two grains, so all four are GAUGES. `epMinted` and `epAssets` are the monotone halves — records are never
+   that same emitted arm and falls with it; `epDoors`, `epReach` and `epAddressClass` partition `epEmitted` —
+   the first two are that walk at two grains and the third is a second walk over the same skip — so all five
+   are GAUGES. `epMinted` and `epAssets` are the monotone halves — records are never
    removed and `is_asset` is never cleared — and they stay LIFETIME.
    THE SHAPE IS `epEmitted = epMinted - epAssets` WITH BOTH TERMS RISING, which is the tell for any row of this
    kind: a difference of two monotone counts is not monotone, and it reads exactly like a count until the day
@@ -2265,7 +2266,7 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    @kind lifetime: unitMidProgram unitParked unitCheckpointOwed unframedStepsLifetime
    @kind lifetime: classicCompiles classicCompileOverruns finished
    @kind lifetime: epMinted epAssets
-   @kind gauge: epEmitted epPreProgram epDoors epReach
+   @kind gauge: epEmitted epPreProgram epDoors epReach epAddressClass
    @kind lifetime: epAsks epAskPreProgram epAskSuppressed epAskMerged epAskMinted epAskMergedPreProgram
    @kind lifetime: netProgQueuedLife netProgFetchAsksLife netProgFetchQueuedLife
    @kind lifetime: netProgXhrAsksLife netProgXhrQueuedLife
@@ -2351,6 +2352,12 @@ char *result_cold_json(void) {
        the row above COARSENED BY A MAP and not a second observation of anything — solver/endpoint.h states
        the map, why it has three classes and not two, and that the two histograms are ONE fact at two grains. */
     char *reach;
+    /* …AND BY WHETHER THE RUN HAD DETERMINED EACH ADDRESS AT ALL, which is CLAUDE.md
+       §What-the-tool-produces' HARD BAR and is a SECOND OBSERVATION rather than a third grain of the two
+       above: no door implies it in either direction, so a literal chunk URL through `module-import` is
+       `beyond` a parse and clears nothing at this bar. solver/endpoint.h states what each class claims, why
+       the honest field is a FLOOR under the bar, and the identity it is asserted against. */
+    char *acls;
 
     cold_census(&c);
     engine_step_unit_runs(&r);
@@ -2642,13 +2649,15 @@ char *result_cold_json(void) {
     xedge = endpoint_xhr_edge_rows();
     doors = endpoint_door_hist_json();
     reach = endpoint_reach_hist_json();
-    if (!cursors || !ahead || !edge || !xedge || !doors || !reach) {
+    acls  = endpoint_address_hist_json();
+    if (!cursors || !ahead || !edge || !xedge || !doors || !reach || !acls) {
         free(cursors);
         free(ahead);
         free(edge);
         free(xedge);
         free(doors);
         free(reach);
+        free(acls);
         cold_census_release(&c);
         return NULL;
     }
@@ -3067,6 +3076,33 @@ char *result_cold_json(void) {
                     sum where both halves are in one hand and engine/build.mjs re-checks it against the
                     EMITTED document, which is the genuinely independent half. */
                  "\"epReach\":%s,"
+                 /* …AND THE ONE ROW CLAUDE.md §What-the-tool-produces' HARD BAR CAN BE SCORED OFF, which the
+                    two above cannot reach at any grain. That bar is "an address, a key or a value that NO
+                    PARSE of the served bytes can state, because it exists only at run time", and it is a
+                    property of the ADDRESS rather than of the mechanism: a literal chunk URL delivered
+                    through `module-import` is `beyond` a markup parse and clears NOTHING here, while
+                    `/api/{location.hash}` through `fetch` clears it outright. Two addresses through ONE door
+                    differ on exactly this, so no count of doors ever answers it — which is why a 19-site
+                    census could close with a full `epDoors` table and leave the product's own bar
+                    unscorable.
+                    IT IS A SECOND OBSERVATION AND NOT A THIRD GRAIN. `epReach` says so of itself — it is
+                    `epDoors` summed by class — and this is read off the address VALUE's own concolic
+                    provenance at solver/endpoint.c's door, which no door implies in either direction. So a
+                    reader holding all three of these rows holds TWO observations and not three, which is
+                    said here because here is where the numbers are (CLAUDE.md §EVIDENCE-INFLATION).
+                    IT IS A FLOOR AND NOT A VERDICT, AND THE HALF IT CANNOT SEE IS NAMED AT THE PRODUCER.
+                    `unknown` is a POSITIVE statement that the run reached that address holding a value it had
+                    not determined, so such a row DEFINITELY clears the bar; `concrete` claims nothing
+                    whatever about a parse, because whether a static reader could have stated an address is
+                    not decidable by anybody — a bundler's chunk manifest needs a scope pass to resolve. What
+                    `concrete` hides is enumerated at solver/endpoint.h's list: a determined address can be a
+                    literal, the document's own address, or a source this flow PINNED and re-read, and the
+                    third really did derive from an unknown.
+                    A DIAGNOSTIC AND NEVER A TARGET, on §netdiff's own terms: `unknown` 0 against a nonzero
+                    `epEmitted` is a REFUSAL TO CLAIM the hard bar on this document rather than a smaller
+                    version of it. Its denominator is `epEmitted` four rows up and travels on this line, and
+                    solver/endpoint.c asserts the sum where both halves are in one hand. */
+                 "\"epAddressClass\":%s,"
                  "\"epAsks\":%ld,\"epAskPreProgram\":%ld,\"epAskSuppressed\":%ld,"
                  /* AND THE ONE CUT INSIDE THE MERGED ARM — endpoint.h states what it is and what its four-state
                     zero can mean. It is NOT summed with the three arms beside it: they partition the door's
@@ -3148,7 +3184,7 @@ char *result_cold_json(void) {
                  c.out_of_programs,
                  c.out_of_programs_unrun, c.out_of_programs_framed, c.out_of_programs_at_the_ladder,
                  ladder, hist, cursors, ahead,
-                 ep_minted, ep_assets, ep_emitted, ep_pre_program, doors, reach,
+                 ep_minted, ep_assets, ep_emitted, ep_pre_program, doors, reach, acls,
                  ep_asks, ep_ask_pre, ep_ask_sup, ep_ask_merged, ep_ask_minted, ep_ask_merged_pre,
                  edge, xedge);
     free(cursors);
@@ -3157,6 +3193,7 @@ char *result_cold_json(void) {
     free(xedge);
     free(doors);
     free(reach);
+    free(acls);
     cold_census_release(&c);
     return out;
 }

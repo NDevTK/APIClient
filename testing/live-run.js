@@ -889,7 +889,31 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      WITHIN one run rather than a total to compare across two. An artifact older than the row prints `null`,
      which is this driver's absent-versus-zero rule and is a different fact from a surface with nothing
      beyond the markup — the first is the run not stating it, the second is the razor answering. */
-  "epReach"];
+  "epReach",
+  /* …AND THE SAME RAZOR READ AGAINST THE OWNER'S HARD BAR RATHER THAN AGAINST A MARKUP PARSE, WHICH IS THE
+     ROW THAT MAKES THAT BAR SCORABLE OVER A CORPUS AT ALL. The bar is "an address, a key or a value that NO
+     PARSE of the served bytes can state, because it exists only at run time", and `epReach` cannot be
+     coarsened into it in either direction: a literal chunk URL delivered through `module-import` is `beyond`
+     a markup parse and clears NOTHING at this bar, while `/api/{location.hash}` through `fetch` clears it
+     outright. Two addresses through ONE door differ on exactly this — which is why a 19-site census of this
+     driver could close with a full `epDoors` table, `epReach` in hand, and no way to say whether any of its
+     119 code-door addresses cleared the bar.
+     IT IS A SECOND OBSERVATION AND NOT A THIRD GRAIN, which is where it differs from the row above it.
+     `epReach` is `epDoors` summed by a map and says so; this is keyed on a property of the ADDRESS VALUE —
+     whether the run had DETERMINED it — which solver/endpoint.c reads off that value's own concolic
+     provenance at the recording door. No door implies it either way, so a reader holding all three of these
+     rows holds TWO observations (CLAUDE.md §EVIDENCE-INFLATION).
+     IT IS A FLOOR AND THE TWO FLOORS OVERLAP AND MAY NOT BE SUMMED. `unknown` rows DEFINITELY clear the bar;
+     `concrete` claims nothing whatever about a parse, because whether a static reader could have stated an
+     address is not decidable by anybody — a bundler's chunk manifest needs a scope pass to resolve. And an
+     address a REPLY named is `concrete` here and past every parse of the document at once, so the bar's floor
+     over a surface is the UNION of this row's `unknown` and `epReach`'s `beyond`; a union is not a sum,
+     because a row can be in both, and nothing in this driver composes one.
+     ITS KIND AND ITS ABSENCE FOLLOW `epReach`'s EXACTLY: an object copied whole and never spread, and an
+     artifact older than the row prints `null`, which is a different fact from a surface every address of
+     which the run had determined — the first is the run not stating the bar, the second is the bar answering
+     and refusing to claim it. */
+  "epAddressClass"];
 
 const COLD_ROWS = COLD_STEP_UNITS.concat(COLD_FRONTIER, COLD_SEED, COLD_COUNTERS);
 const WFQ_ROWS = ["members"].concat(WFQ_JOB_SPLIT, WFQ_PICKS);
@@ -1181,7 +1205,16 @@ async function oneRun(browser, pg, url, budgetMs, engineErrs) {
        was empty — the first is this driver reading an older relay, the second is a finding about the page —
        so the formatter below spells them `-` and `{}` and never folds either into the other. */
     doors: mine.map((r) => ({ doors: ("endpointDoors" in r) ? r.endpointDoors : undefined,
-                              mintedAt: ("endpointMintedAt" in r) ? r.endpointMintedAt : undefined })),
+                              mintedAt: ("endpointMintedAt" in r) ? r.endpointMintedAt : undefined,
+                              /* …AND THE THIRD, WHICH IS THE ONLY ONE OF THE THREE THAT ANSWERS THE OWNER'S
+                                 HARD BAR: whether the run had DETERMINED each address, per address, off the
+                                 emitted array. The two beside it are WHICH MECHANISM and WHEN, and neither
+                                 reaches the bar — a literal chunk URL through `module-import` and one built
+                                 out of the fragment come through the same door as each other. `undefined` is
+                                 a relay predating the field and is a different fact from a surface whose
+                                 every address the run had determined, for the two rows above's reason. */
+                              addressClass: ("endpointAddressClass" in r)
+                                ? r.endpointAddressClass : undefined })),
     frontier: mine.map(census),
     storeEndpointsDelta: (last.endpoints === null || before.endpoints === null)
       ? null : last.endpoints - before.endpoints,
@@ -1344,6 +1377,13 @@ async function main() {
            to reconcile. */
         endpointDoors: rs.map((r) => r.doors.map((d) => hist(d.doors)).join("|") || "no-row"),
         endpointMintedAt: rs.map((r) => r.doors.map((d) => hist(d.mintedAt)).join("|") || "no-row"),
+        /* AND THE HARD BAR PER ADDRESS, BESIDE THE TWO ROWS THAT CANNOT STATE IT. Read WITH `epAddressClass`
+           in `frontier` and not instead of it: that row is composed from the ENGINE's own census and this
+           from the emitted array, so they are two documents at two instants and this driver asserts no
+           identity between them — they are a CROSS-CHECK, and an `unknown: 0` here beside a nonzero one
+           there is a disagreement worth opening rather than a pair to reconcile. It is the same relationship
+           `endpointDoors` has with `epReach` one row up. */
+        endpointAddressClass: rs.map((r) => r.doors.map((d) => hist(d.addressClass)).join("|") || "no-row"),
         sinks: spread(rs, first("sinks")),
         candidates: spread(rs, first("candidates")),
         flows: spread(rs, first("flows")),
