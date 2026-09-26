@@ -100,6 +100,7 @@
 #include "core/events/event_target.h"
 #include "core/platform.h"
 #include "core/realm.h"
+#include "core/workers/worker_global_scope.h"   /* §10.2.1.1's prototype, for the shape read below */
 #include "core/fetch/response.h"
 #include "core/fetch/request.h"
 #include "core/url/url.h"
@@ -29169,12 +29170,28 @@ static int abi_main(int argc, char **argv)
  * JSRuntime exists and is the positive control for everything below it; `@A2REALM` says a
  * DedicatedWorkerGlobalScope realm was built IN THAT AGENT and its `self` accessor body ran; `@A2OK` says the
  * agent was released and its runtime freed. Each is a literal, because a payload composed from anything this
- * engine computed could itself be concolic and would go silent exactly when the engine is working. */
+ * engine computed could itself be concolic and would go silent exactly when the engine is working.
+ * AND THE SCORING RULE THOSE MARKERS WERE HANDED OVER WITH WAS REFUTED BY A RUN, SO IT IS RECORDED HERE
+ * RATHER THAN LEFT FOR THE NEXT READER TO INHERIT. The rule was: no `@A2ENTER` means the run died BEFORE
+ * this block and says nothing about a second agent. A build has now printed none of the three and aborted
+ * EIGHT LINES PAST the first marker, inside this function, having built the second agent and its realm. The
+ * payload axis was not what failed — the markers are literals and that was right. The CHANNEL was: stdout is
+ * buffered, and engine/qjs's DFAIL did not flush it before aborting where engine/host's always has, so
+ * WHICH HALF OF THE TREE ABORTED decided whether these lines survived. That is fixed at the emitter
+ * (engine/qjs/quickjs-check.h) and not here, because it was never this fixture's defect: every stdout
+ * diagnostic in this project had it.
+ * SO AN ABSENT MARKER IS READ AS `THE CHANNEL OR THE BLOCK` AND NEVER AS `THE BLOCK` ALONE, and the
+ * discriminator is the abort's own `at` — a file:line inside this function means the block ran whatever the
+ * markers say. A witness establishes reachability only while something guarantees its channel outlives the
+ * thing being witnessed. */
 static void second_agent_selftest(const char *origin, const char *top_level_url)
 {
     JSRuntime *rt2;
     JSContext *ctx2, *worker;
-    JSValue g, self_v;
+    JSValue proto;
+    JSPropertyDescriptor self_desc;
+    JSAtom self_atom;
+    int has_self;
 
     printf("@A2ENTER\n");
     rt2 = JS_NewRuntime();
@@ -29202,17 +29219,52 @@ static void second_agent_selftest(const char *origin, const char *top_level_url)
           "the DOMException intrinsic failed to install in a second agent's worker realm");
     realm_install_intrinsics(worker, NULL, "DedicatedWorkerGlobalScope", secure_context_is(ctx2));
 
-    /* §10.2.1.1's `self`, READ — a member BODY and not a descriptor, which is the only thing that says this
-       agent's realm ANSWERS rather than merely carrying the right property names. */
-    g = JS_GetGlobalObject(worker);
-    self_v = JS_GetPropertyStr(worker, g, "self");
-    CHECK(!JS_IsException(self_v) && !JS_IsUndefined(self_v),
-          "a second agent's DedicatedWorkerGlobalScope realm answered no `self` — HTML §10.2.1.1 declares it "
-          "and core/workers/worker_global_scope.c installs it through the same realm intrinsic the first "
-          "agent's realms go through, so either that column did not run in this agent or its accessor body "
-          "cannot answer in one that is not the first this process brought up");
-    JS_FreeValue(worker, self_v);
-    JS_FreeValue(worker, g);
+    /* §10.2.1.1's `self`, READ OFF THE SHAPE AND NEVER THROUGH A `[[Get]]`.
+       THIS WAS A `JS_GetPropertyStr` AND THE CLAIM BESIDE IT WAS THAT A MEMBER BODY ANSWERING IS "the only
+       thing that says this agent's realm ANSWERS rather than merely carrying the right property names".
+       That claim is retired rather than deleted, because it is the reason a reader re-reaches for the call.
+       It is wrong twice. It is wrong about THIS FIXTURE'S QUESTION: this function asks whether a second
+       AGENT can be declared, and whether a member BODY runs is a later and separate question that needs a
+       flow — which this function deliberately does not bring up. And it is wrong about what C may do:
+       §10.1.8.1 OrdinaryGet step 7 is `Return ? Call(getter, receiver)`, and a C activation has no flow
+       base under it, so a getter invoked from here drives to completion instead of parking. The engine
+       refuses it by name and rates the two repairs, putting first the one this site takes: a HOST
+       DIAGNOSTIC must reach no page code at all, so it reads the slot off the shape.
+       THE OTHER REPAIR IS UNAVAILABLE HERE RATHER THAN REJECTED. Routing the read needs a step machine
+       already on the chain to issue the keyed request, and this agent has no frontier and no flow, so
+       there is no chain to issue it from. Giving the second agent a flow is the diff AFTER this one and is
+       what would restore the body claim.
+       WHAT THE SHAPE READ ESTABLISHES, stated so it is not read as more: §3.7.3's not-[Global] arm placed
+       `self` as an ACCESSOR on THIS realm's WorkerGlobalScope.prototype, in an agent that is not the first
+       this process brought up. That is the declare column and the realm-intrinsic column both having run
+       in a second agent, which is this function's whole subject. It does NOT establish that the getter
+       answers, and `@A2REALM` may not be quoted as saying so.
+       IT ASKS THE PROTOTYPE AND NOT THE GLOBAL because that is where the member is: `WorkerGlobalScope` is
+       `[Exposed=Worker]` and NOT [Global], so §3.7.3's not-[Global] arm puts its members on the prototype,
+       and `JS_GetOwnSlotDesc` of the GLOBAL would answer 0 for a member that is correctly installed.
+       worker_global_scope_proto also answers JS_UNDEFINED for a realm whose [Global] names are not a
+       worker's, so asking it is itself the statement that this realm is one. */
+    proto = worker_global_scope_proto(worker);
+    CHECK(!JS_IsUndefined(proto),
+          "a second agent's realm was built as a DedicatedWorkerGlobalScope one and has no "
+          "WorkerGlobalScope.prototype — the realm intrinsic that builds it is declared once per agent, so "
+          "either that declaration did not happen in this agent or this realm's [Global] names are not a "
+          "worker's after being built with a worker's");
+    self_atom = JS_NewAtom(worker, "self");
+    has_self = JS_GetOwnSlotDesc(worker, &self_desc, proto, self_atom);
+    JS_FreeAtom(worker, self_atom);
+    CHECK(has_self == 1,
+          "§10.2.1.1's `self` is not an own property of a second agent's WorkerGlobalScope.prototype — the "
+          "realm intrinsic installs it, so a prototype that exists without it is one this agent built "
+          "through a column that stopped part way");
+    CHECK((self_desc.flags & JS_PROP_GETSET) != 0,
+          "§10.2.1.1's `self` arrived on a second agent's WorkerGlobalScope.prototype as a DATA property — "
+          "Web IDL §3.7.6 makes a readonly attribute an ACCESSOR, and a data property there is a member "
+          "installed through something other than the attribute mint");
+    JS_FreeValue(worker, self_desc.value);
+    JS_FreeValue(worker, self_desc.getter);
+    JS_FreeValue(worker, self_desc.setter);
+    JS_FreeValue(worker, proto);
     printf("@A2REALM\n");
 
     JS_FreeContext(worker);

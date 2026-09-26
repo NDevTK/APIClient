@@ -115,7 +115,25 @@ static inline void apiclient_qjs_reason_mark(char *r, int n)
 #define DCHECK(cond, msg)  ((void)0)
 #define DCHECKF(cond, ...) do { (void)sizeof(cond); APICLIENT_QJS_FMT_UNUSED(__VA_ARGS__); } while (0)
 #else
-#define DFAIL(msg)         do { fprintf(stderr, "@WHY %s (%s:%d)\n", (msg), __FILE__, __LINE__); abort(); } while (0)
+/* THE HOST'S BUFFERED STDOUT IS FLUSHED FIRST, AND THAT IS THE WHOLE OF WHY THIS LINE IS NOT JUST AN
+   fprintf. This record goes to stderr and unbuffered; every diagnostic the rest of this project emits —
+   `@H`, `@HWORK`, `@RESULT`, `@PAGEERR`, `@COLDPARK`, a fixture's own markers — goes to STDOUT and is
+   BUFFERED, so an `abort()` here discards whatever the run wrote and had not yet flushed. engine/host's own
+   DFAIL has flushed stdout since its record became one `write(2)`; this one had not, so WHICH HALF OF THE
+   TREE ABORTS decided whether a run's stdout record survived it. That is not a small asymmetry: it is every
+   number a run had produced, lost precisely when the engine refuses something, which is the moment the
+   numbers are wanted.
+   MEASURED, over three builds of one fixture whose first act is a printf: the two that aborted in
+   engine/host kept that marker in their stage logs and the one that aborted HERE did not, with `@COLDPARK`
+   at 1 in the same file as the armed control. The reading that absence invites is that the code never ran,
+   and it had run — eight lines further on, which is where this abort fired. A witness whose channel the
+   subject can discard goes silent exactly when the subject does something.
+   IT IS `stdout` AND NOT `NULL` to match engine/host/check.h, which is the other emitter a reader compares
+   this one against; flushing every stream would also touch whatever the host has open and is a wider claim
+   than this record needs to make. */
+#define DFAIL(msg)         do { fflush(stdout); \
+                                fprintf(stderr, "@WHY %s (%s:%d)\n", (msg), __FILE__, __LINE__); \
+                                abort(); } while (0)
 #define DCHECK(cond, msg)  do { if (!(cond)) DFAIL(msg); } while (0)
 /* Composed into ONE buffer and emitted as ONE line, never as three fprintf calls: the harness reads
    `@WHY <reason> (<file>:<line>)` as a record, and a reason split across writes is a record another thread's
@@ -145,7 +163,15 @@ static inline void apiclient_qjs_reason_mark(char *r, int n)
    blind to precisely the sites this residual is about; and a `@WHY` from one of them ends mid-sentence with no
    marker, which is indistinguishable from an author who wrote no remedy. */
 #endif
-#define CHECK_FAIL(msg)    do { fprintf(stderr, "@E %s (%s:%d)\n", (msg), __FILE__, __LINE__); abort(); } while (0)
+/* STDOUT FIRST, for the reason given at DFAIL above — AND THIS IS THE SHARPER HALF OF THE TWO. DFAIL is
+   dev-only, so its lost stdout costs a dev run's record; this one is ALWAYS FATAL and is therefore the ONLY
+   abort path the engine half has in a RELEASE build, where every DFAIL is compiled out. So in the build that
+   ships, an unflushed stdout here discarded the whole of whatever a run had emitted, every time the engine
+   refused something — which is §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES exactly: the path that matters is the
+   one nothing was watching. */
+#define CHECK_FAIL(msg)    do { fflush(stdout); \
+                                fprintf(stderr, "@E %s (%s:%d)\n", (msg), __FILE__, __LINE__); \
+                                abort(); } while (0)
 #define CHECK(cond, msg)   do { if (!(cond)) CHECK_FAIL(msg); } while (0)
 
 #endif /* QUICKJS_CHECK_H */
