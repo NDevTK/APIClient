@@ -106,6 +106,17 @@ int  solver_decide_restartable(JSContext *ctx, JSValueConst cond, int nonforking
    and one that cannot is a migration and not a widening. RETIREMENT: this record goes when a completion is
    keyed by a name its machine spells rather than by its position, because an insert is then
    indistinguishable from an append and there is nothing left to get wrong.
+   AND MIGRATION-SAFE IS NOT A LICENCE TO WIDEN, WHICH IS THE READING THE PARAGRAPH ABOVE INVITES AND HAS TO
+   REFUSE. Safety here is a claim about the RECORDING and says nothing whatever about whether a machine
+   SHOULD gain that completion. A machine's completions are the outcomes of ONE algorithm at ONE moment, so
+   an arm asked by a DIFFERENT algorithm at a different moment is one fork answering two questions — the
+   defect a second predicate over one operand exists to avoid — and appending it is migration-safe while
+   being wrong. A lane caught this one arm short of landing: a safe-method arm welded onto a fork whose
+   three completions are the outcomes of an XHR open() step, to answer a question the fetch algorithm
+   asks at a later moment in a different machine. So ask WHOSE STEP the new arm is before asking where in
+   the order it goes, and if no standard takes that step the answer is not a position in this machine.
+   The section numbers are deliberately absent: they belong at the sites that IMPLEMENT those steps, and
+   a cross-standard number dropped into a solver header re-anchors every quotation beneath it.
    `real` IS THE ASKING MACHINE'S DECLARATION, AND IT IS THE OUTCOME SEAM'S ANSWER TO WHAT decide_real_arm
    COMPUTES FOR A BRANCH — "which completion does a session carrying real values reach". It is a PARAMETER for
    the same reason `nonforking` above is: the answer belongs to the site and to no two sites alike, and this
