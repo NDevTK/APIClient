@@ -865,7 +865,6 @@ static void i_navigable(JSContext *c, JSValueConst g, const PlatformDocument *d)
 static void i_timer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; timer_install(c, g); }
 static void i_window_message(JSContext *c, JSValueConst g, const PlatformDocument *d) { window_message_install(c, g, d->origin); }
 static void d_structured_clone(JSContext *c, const PlatformAgent *a) { (void)a; structured_clone_init(c); }
-static void i_structured_clone(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; structured_clone_install(c, g); }
 static void i_animation_frame(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; animation_frame_install(c, g); }
 static void i_idle_callback(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; idle_callback_install(c, g); }
 static void i_page_reveal(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; page_reveal_install(c, g); }
@@ -1275,7 +1274,13 @@ static const PlatformComponent PLATFORM[] = {
        browsing contexts' interface object is placed by this component's own realm intrinsic beside the
        prototype it already built there, so a realm that reaches no platform_document_install gets it. */
     { "broadcast_channel",   d_broadcast_channel,   NULL,        r_broadcast_channel },
-    { "structured_clone",    d_structured_clone,    i_structured_clone, r_structured_clone },
+    /* HTML §2.7.10 "Structured cloning API"'s member has NO INSTALL COLUMN, which is Web IDL §3.7.3
+       "Interface prototype object" and not a component that installs nothing: it is declared on a mixin
+       `WorkerGlobalScope` includes as well as `Window`, so which object it lands on differs per REALM and this
+       column — whose own DCHECK below refuses any realm whose §3.3.8 [Global] names are not `Window` — could
+       only ever have served one of the two. The component registers a per-realm intrinsic instead, as the
+       `crypto`, `indexed_db` and `performance` rows above already do for their own §8.2 members. */
+    { "structured_clone",    d_structured_clone,    NULL,        r_structured_clone },
     /* NO DOCUMENT HALF. HTML §8.1.4.7 Unhandled promise rejections declares `PromiseRejectionEvent`
        `[Exposed=*]`, so Web IDL §3.3.7 [Exposed] step 1 returns before it looks at the realm and EVERY realm
        owes the name; Web IDL §3.8 Platform objects implementing interfaces is "To define the global property

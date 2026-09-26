@@ -1006,6 +1006,42 @@ void worker_global_scope_free(JSRuntime *rt)
  *     readonly attribute and `idl_install_replaceable_member(ctx, global, "<member>", …)` for a
  *     [Replaceable] one, the second resolving §3.7.6's `target` from the same registration that supplied the
  *     object. So what each member of this residual owes is one line in its own component and nothing here.
+ *     AND THAT LAST SENTENCE IS FALSE OF EVERY MEMBER THIS RESIDUAL STILL OWES, WHICH IS A CORRECTION AND NOT
+ *     A REFINEMENT — it is kept rather than deleted because it is TRUE of the three that are done and a
+ *     reader who re-derives the remedy from them will write it again. One line is what a member costs when its
+ *     component ALREADY HAS a per-realm install column: `crypto`, `indexed_db` and `performance` each register
+ *     a realm intrinsic through core/realm.h, so the only thing their conversion changed was the TARGET of an
+ *     install that already ran in every realm. Every remaining member's component has no such column — its
+ *     install is a thunk in core/platform.c's per-DOCUMENT one, which asserts its realm's Web IDL §3.3.8
+ *     [Global] global names are `Window` and which a worker realm therefore NEVER REACHES. So the target was
+ *     never the thing that was wrong: THERE WAS NO CALL. A reader who obeys the sentence above and edits the
+ *     target alone has written a line that does not execute in the realm this entry is about, and nothing
+ *     says so. Derive the split rather than trusting either sentence:
+ *       `git grep -n realm_declare_intrinsic -- '*<component>.c'`
+ *     answers for the component that owns the member; an empty answer means the conversion is a COLUMN MOVE
+ *     (register the intrinsic, route the install through idl_global_member_target, delete the per-document
+ *     thunk AND the row's install entry) and not a one-line edit. core/structured_clone.c is the worked
+ *     example and HTML §2.7.10 "Structured cloning API"'s `structuredClone` is the first member to take it.
+ *     AND THE MOVE IS NOT AVAILABLE TO EVERY MEMBER EITHER, WHICH IS THE SECOND HALF THE SENTENCE HID: it is
+ *     available exactly where the member's value is computable in a realm that has no Document. `fetch` is
+ *     the one to read before believing any of these are cheap — core/fetch/fetch.c resolves a relative input
+ *     against `document_base_url`, which is HTML §2.4.3 "Document base URLs" over a Document a worker realm
+ *     has none of, so what it owes is not a column move but §10.2.6.2 "Script settings for workers"' creation
+ *     URL, which is the WorkerGlobalScope's own §10.2.1.1 `url` and is the same absent operand entry (1)
+ *     names. `origin` is that operand again. `isSecureContext` HAS its operand — core/realm.h answers
+ *     §8.1.3.5 "Secure contexts" step 1.2.1 for a worker realm — and its GETTER does not: core/frame/window.c's
+ *     resolves a receiver through core/frame/window_proxy.c's navigable and asserts it is this realm's, which
+ *     a worker has none of, so that member owes a getter before it owes a column. `crossOriginIsolated` owes
+ *     NEITHER: core/frame/agent_cluster.c's getter ignores its receiver entirely and reads the cluster off the
+ *     realm, so it is a column move like `structuredClone`'s — with one extra step, because the function that
+ *     installs it installs HTML §7.1.2's `originAgentCluster` beside it, which browser/idl_exposure.h states
+ *     as `Window` alone. Routing BOTH through idl_global_member_target is what separates them and needs no
+ *     realm test: §3.3.7 [Exposed] step 1 refuses the Window-only member at the door in a worker realm and
+ *     sends the other to §3.7.3's prototype. (Read the getter before believing either half of this sentence;
+ *     the pair was first written here with BOTH getters called receiver-bound and one of them is not.)
+ *     `reportError`,
+ *     `btoa`, `atob`, `createImageBitmap`, `scheduler`, `caches`, `trustedTypes` and `fonts` are installed for
+ *     NO realm today, so they are ordinary absences and owe this entry nothing at all.
  *     ABSENCE SHOWS AS: `typeof setTimeout` is `"undefined"` in a worker realm, so the very first line of most
  *     bundled worker code throws — and, in the auditor rather than the engine, as the ABSENT counts idlgen
  *     prints against these two interfaces, which were ZERO before this component existed because an interface

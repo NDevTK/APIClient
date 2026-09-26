@@ -9649,6 +9649,24 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
         /* Fetch §5.3 "Body mixin" — a MIXIN that BOTH `Request` and `Response` include, so no Web IDL §3.8
            property reference exists for it anywhere */
         { "Body",                             false, false },
+        /* HTML §2.7.10 "Structured cloning API"'s MEMBER, WHICH IS `fetch`'S ROW WITH THE MOVE MADE — and the
+           pair is what makes either of them legible, which is why this row sits here and not with the HTML
+           groups above. Both are members HTML §8.2 "The WindowOrWorkerGlobalScope mixin" brings into
+           `WorkerGlobalScope` as well as into `Window`; both had their install in core/platform.c's
+           per-DOCUMENT column, which a realm whose global implements `DedicatedWorkerGlobalScope` never
+           reaches; and core/workers/worker_global_scope.c's item (7) names both. `fetch` still cannot move —
+           core/fetch/fetch.c resolves a relative input against `document_base_url`, which is HTML §2.4.3
+           "Document base URLs" over a Document a worker realm has none of — and this one can, because §2.7.10's
+           steps read nothing but the value and this realm.
+           IT IS A CALIBRATION ROW IN BOTH ARMS AND THE ONLY ONE IN THIS TABLE THAT IS: at the parent revision
+           it reads FALSE in BOTH, the Window arm because this fixture's Window realm runs the per-realm column
+           alone and the worker arm because no column reached it at all, and it reads TRUE in both here. A
+           conversion that moved the install and got §3.7.3's arm backwards — onto the worker GLOBAL rather
+           than onto `WorkerGlobalScope.prototype` — passes this row, because [[HasProperty]] walks the chain
+           and sees a NAME and never an OBJECT. That half is asserted where the object is in hand, by
+           core/idl_args.c's idl_global_member_target against core/realm.h's own §3.7.3 census, and it is
+           DEV-ONLY — so this row is the release-observable half and that one is the placement half. */
+        { "structuredClone",                  true,  true  },
         /* THE STREAMS STANDARD'S THIRTEEN, WHICH IS EVERY INTERFACE IT DECLARES, AND THE MIXIN THAT IS NOT
            ONE OF THEM. §4.2 "The ReadableStream class", §4.4 "The ReadableStreamDefaultReader class", §4.5
            "The ReadableStreamBYOBReader class", §4.6 "The ReadableStreamDefaultController class", §4.7 "The

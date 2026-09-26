@@ -11,7 +11,14 @@
    file. This used to be a bare JS_NewCFunction with no declaration at all — the only component in PLATFORM
    whose declare column was NULL — and its body read `options.transfer` with JS_GetPropertyStr from C. */
 void structured_clone_init(JSContext *ctx);
-void structured_clone_install(JSContext *ctx, JSValueConst global);
+/* THE INSTALL IS NOT DECLARED HERE AND THAT IS THE POINT, not an omission. §2.7.10 declares the member on
+   `partial interface mixin WindowOrWorkerGlobalScope`, so Web IDL §3.7.3 "Interface prototype object" decides
+   which of TWO objects it lands on, and the answer differs per REALM — which means no caller outside this file
+   can be handed the target. The install is therefore a per-realm intrinsic this file registers at
+   structured_clone_init (core/realm.h), exactly as core/crypto/crypto.c, core/indexeddb/indexed_db.c and
+   core/timing/performance.c register theirs, and core/platform.c's row keeps only its DECLARE and RELEASE
+   halves. A re-exported `structured_clone_install(ctx, global)` would be an install whose caller has already
+   decided the object, which is the question §3.7.3 exists to ask. */
 /* Agent teardown — core/platform.h's release column. It gives back §2.7.10's pool entry and the registry of
    transferable interfaces below, which is the AGENT's: a count carried into a second agent is a platform that
    reports interfaces registered by a runtime that no longer exists. */

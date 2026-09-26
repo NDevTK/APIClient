@@ -40,6 +40,7 @@
 #include "quickjs.h"
 #include "core/agent_state.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "core/structured_clone.h"
 #include "solver/concolic.h"
 
@@ -699,6 +700,41 @@ static JSValue js_structured_clone(JSContext *ctx, JSValueConst this_val, int ar
    which is why the id is a file static and the install below only names it. */
 static int g_id_clone = -1;
 
+/* HTML §2.7.10 "Structured cloning API"'s `structuredClone`, ON THE OBJECT WEB IDL §3.7.3 PUTS IT ON — a
+   PER-REALM intrinsic, because the member is declared on a mixin whose two including interfaces are not the
+   same kind of object and only one of the two realms has a Document at all.
+   §2.7.10 declares it on `partial interface mixin WindowOrWorkerGlobalScope`, and Web IDL §2.3 "Interface
+   mixins" makes a mixin's members the INCLUDING interface's own — so HTML §8.2 "The WindowOrWorkerGlobalScope
+   mixin"'s two includes make this a `Window` member in a Window realm and a `WorkerGlobalScope` member in a
+   worker one. `Window` IS [Global] and `WorkerGlobalScope` is NOT, so §3.7.3 "Interface prototype object"
+   sends it to the global in the first and to `WorkerGlobalScope.prototype` in the second, and a page reads the
+   difference as `globalThis.hasOwnProperty("structuredClone")`.
+   IT IS §3.7.3's OPERATIONS CLAUSE AND NOT ITS ATTRIBUTES ONE, which is the half a reader copying
+   core/crypto/crypto.c, core/indexeddb/indexed_db.c or core/timing/performance.c gets for free and should not
+   assume: those three are ATTRIBUTES and this is the first OPERATION to take the arm. The clause is one line
+   below theirs in the same conditional — "Define the regular operations of interface on interfaceProtoObj,
+   given realm" — and it decides the same object, which is why one resolver answers for both.
+   WHICH OBJECT IS NOT ASKED HERE AND MUST NOT BE. `idl_global_member_target` asks §3.7.3's conditional of
+   browser/idl_exposure.h's generated band, so the answer tracks the harvested IDL rather than a realm kind
+   this component would have to enumerate — which is the hand-picked list core/indexeddb/indexed_db.c retired
+   by name, and which would install onto the GLOBAL of every ServiceWorker, SharedWorker and Worklet realm that
+   header has a row for.
+   IT RAN FROM THE PER-DOCUMENT COLUMN UNTIL NOW, AND THAT IS WHY A WORKER REALM HAD NO `structuredClone` AT
+   ALL — not a wrong target but no call: core/platform.c's per-document column asserts its realm's Web IDL
+   §3.3.8 [Global] global names are `Window`, and its own abort names this move as the remedy. The row keeps its
+   DECLARE and RELEASE halves and gives up its install column; nothing else about the member changed, and in a
+   Window realm the target this resolver answers is the same global the deleted thunk was handed. */
+static void structured_clone_install_realm(JSContext *ctx)
+{
+    JSValue global = JS_GetGlobalObject(ctx), target;
+
+    DCHECK(g_id_clone >= 0, "structuredClone was installed before structured_clone_init declared it");
+    target = idl_global_member_target(ctx, global, "structuredClone");
+    idl_install_method(ctx, target, "structuredClone", g_id_clone);
+    JS_FreeValue(ctx, target);
+    JS_FreeValue(ctx, global);
+}
+
 void structured_clone_init(JSContext *ctx)
 {
     static const IdlArgType CLONE_ARGS[2] = { IDL_ANY, IDL_DICT };
@@ -714,6 +750,13 @@ void structured_clone_init(JSContext *ctx)
     agent_state_id("structured_clone", &g_id_clone, "§2.7.10's structuredClone declaration");
     agent_state_flag("structured_clone", &g_transferable_n, "the platform's transferable-interface registry");
     agent_state_flag("structured_clone", &g_serializable_n, "the platform's serializable-interface registry");
+    /* THE ROW MUST STAND AFTER `worker_global_scope` IN core/platform.c's LIST, because core/realm.h runs the
+       per-realm intrinsics in DECLARATION order and §3.7.3's arm above reads an object that component builds.
+       Derive the order rather than trusting this sentence — the rows move:
+         `git grep -nE '^ *\{ "(worker_global_scope|structured_clone)",' -- '*core/platform.c'`
+       A row that drifts back past it does not go quiet: worker_global_scope_proto's own DCHECK fires, naming
+       the drift and this component's ask. */
+    realm_declare_intrinsic(structured_clone_install_realm);
 }
 
 void structured_clone_free(JSRuntime *rt)
@@ -731,8 +774,3 @@ void structured_clone_free(JSRuntime *rt)
     g_id_clone = -1;
 }
 
-void structured_clone_install(JSContext *ctx, JSValueConst global)
-{
-    DCHECK(g_id_clone >= 0, "structuredClone was installed before structured_clone_init declared it");
-    idl_install_method(ctx, global, "structuredClone", g_id_clone);
-}
