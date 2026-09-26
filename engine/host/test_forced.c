@@ -29159,7 +29159,8 @@ static int abi_main(int argc, char **argv)
  * compiled here and no flow is created — the question is whether a second agent can be DECLARED at all, and a
  * frontier re-entry between the question and its answer would be a second unknown wearing the first one's
  * abort. A compiled program in this realm is the diff AFTER this one and is named in the report, not smuggled
- * in here. For the same reason the teardown below mirrors only the lines that apply: copying main's whole tail
+ * in here. The teardown below is this agent's platform column, its realm half and its DECLARATION
+ * CYCLE, and nothing else: copying main's whole tail
  * would be the hand-copied host sequence core/platform.h and core/realm.h exist to abolish, and if this
  * teardown aborts on an ordering that tail supplies, THAT is this fixture's first honest answer.
  *
@@ -29220,6 +29221,15 @@ static void second_agent_selftest(const char *origin, const char *top_level_url)
     JS_RunGC(rt2);
     JS_FreeContext(ctx2);
     JS_FreeRuntime(rt2);
+    /* AND THIS AGENT'S OWN DECLARATION CYCLE, ENDED BY THE TWO ENTRIES THAT END ONE — neither of which is
+       the platform's agent column or a realm's. This agent ran a declare column, so it owes both, and both
+       were written for a successor: idl_args_pool_free gives back the step-id map because "a next agent in
+       this process would have read the previous one's member indices out of it", and idl_async_iter_free
+       zeroes its end-of-iteration class id because that "is what makes the NEXT agent's first declaration
+       mint and REGISTER one again". They are after JS_FreeRuntime for the reason main states at its own
+       pair: each block holds a step definition the runtime borrowed. */
+    idl_args_pool_free();
+    idl_async_iter_free();
     printf("@A2OK\n");
 }
 
@@ -29955,11 +29965,6 @@ int main(int argc, char **argv) {
     JS_RunGC(rt);   /* collect flow-local garbage from the runs before teardown */
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
-    /* AND THEN A SECOND AGENT, HERE AND NOWHERE ELSE IN THIS FUNCTION. It is after `JS_FreeRuntime(rt)`
-       because the first agent must be GONE for this to be the sequential arm at all, and before
-       `idl_args_pool_free` because the declare column it runs allocates out of that pool — the two lines
-       either side of this call are the whole of what decides which question it asks. */
-    second_agent_selftest(TF_ORIGIN, TF_TOP_URL);
     /* AFTER JS_FreeRuntime, and it is the one teardown line whose ORDER is part of its meaning: what
        this releases is part of a step DEFINITION, which JS_RegisterStepDef borrows and requires to
        outlive the runtime — JS_FreeRuntime's own [stepleak] report reads `def->steps` to name each
@@ -29974,6 +29979,27 @@ int main(int argc, char **argv) {
        here the frontier's deltas are released, the realm's record has been released (and cleared this tree's
        back pointer on its way out), and the runtime is gone. */
     dom_document_destroy(dom);
+    /* AND THEN A SECOND AGENT, AFTER EVERY LINE ABOVE AND NOT BEFORE THEM.
+       THIS CALL STOOD ABOVE `idl_args_pool_free`, AND THE REASON GIVEN WAS THAT THE DECLARE COLUMN IT RUNS
+       ALLOCATES OUT OF THAT POOL. That is right about the ALLOCATION and wrong about the LIFETIME, and it is
+       retired here rather than deleted because it is what a reader re-derives: a second declare column
+       allocates a FRESH pool, and `idl_args_pool_free` is not a free in the sense that mattered — it is the
+       END OF A DECLARATION CYCLE, which IS the pre-init state a second cycle needs. Both entries above say so
+       about a successor in their own words. Placed before them, this fixture met idl_args.c's `!g_sealed`
+       with the FIRST host's seal still up; and that abort's own remedy — state it where the member is
+       declared — is right for the population that assert was written against and WRONG here, because nothing
+       was being described from outside a declaration: a whole legitimate declare column was running inside
+       another cycle's seal. Obeying the remedy would have sent a reader to rewrite a correct declaration.
+       THE SEAL IS THE HOST'S STATEMENT AND NOT THE AGENT'S, which is what decides this position rather than
+       any judgement about it: `idl_args_seal` has three callers and every one is a HOST's own line,
+       `platform_agent_init` makes none of them, and `platform_agent_free` clears nothing of it. So a second
+       agent is bracketed by a second DECLARATION CYCLE and not by a second platform column — which is also
+       why `g_sealed` is NOT agent state and must not be declared into core/agent_state.h: at
+       `platform_agent_free` it is legitimately true, and that header refuses a slot which is.
+       RETIREMENT: this record goes when a host cannot BEGIN a declaration cycle while one is sealed — an
+       assert at the first declaration after a seal, which would have named this placement at the line that
+       chose it instead of forty declarations later at a member that was stated correctly. */
+    second_agent_selftest(TF_ORIGIN, TF_TOP_URL);
     /* A HOLE IS NON-ZERO LIKE EVERY OTHER NON-PASS — see the verdict sentence above for why, and note that
        `h_ok` alone is no longer the whole answer: it is now the conjunction over the rows this run could ask,
        so a run with an unaskable row reaches here with `h_ok` TRUE and has not passed. */
