@@ -23,6 +23,7 @@
 #include "core/agent_state.h"
 #include "core/css/css_cascade_pass.h"   /* the render record a cascade-input write may not land inside */
 #include "core/css/css_at_rule_prelude.h"
+#include "core/css/css_font_feature_values.h"
 #include "core/css/css_nesting.h"
 #include "core/css/css_page.h"
 #include "core/css/css_property_syntax.h"
@@ -1665,6 +1666,33 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
        at-rule no specification defines, which CSS Syntax drops — so it is dropped here rather than reaching
        the crash below, which would name a capability that is already built. */
     if (pr->at_name && css_page_margin_at_rule(pr->at_name)) return JS_UNDEFINED;
+    /* AND THE SAME MIRROR FOR CSS Fonts 4 §6.9.1 "Basic syntax"'s SEVEN FEATURE VALUE BLOCKS, which are
+       subsidiary at-rules of `@font-feature-values` in that section's own words — an `@font-feature-values`
+       prelude is followed by "a block containing multiple feature value blocks, a special type of subsidiary
+       at-rule", and the enclosing block's contents are "at-rules named by one of the <font-feature-value-type>
+       at-keyword tokens" or CSS Fonts 4 §4.9.1 "Controlling Font Display Per Font-Family via
+       @font-feature-values"' `font-display` descriptor. So `@swash { pretty: 1 }` at a style sheet's top level,
+       or inside an `@media`, is an at-rule that is invalid IN THAT CONTEXT, which CSS Syntax 3 §8 "CSS
+       stylesheets" DISCARDS — the same sentence and the same JS_UNDEFINED the margin at-rules get one line up,
+       and dropped here for the same reason they are: reaching the crash below would name a CSSOM interface to
+       build for a rule no user agent represents in that position.
+       IT IS THE CONTEXT HALF OF CSS Syntax 3 §8'S SENTENCE AND NOT THE RECOGNITION HALF, and the two are
+       separate questions this file deliberately answers from separate places. All seven ARE in
+       `at_rule_defined`'s registry — a CSS specification defines each of them — so that predicate answers yes
+       and must; what decides them here is WHERE they were written. Reading the seven as unrecognized instead
+       would have been the shape-of-the-name inference `at_rule_dropped`'s own note records as spec-wrong.
+       THEY HAD SEVEN ROWS IN THE UNBUILT-INTERFACE TABLE BELOW AND THE ROWS WERE NOT WRONG — every one named
+       CSS Fonts 4 §12.2 "The CSSFontFeatureValuesRule interface" correctly, because inside a
+       `@font-feature-values` block each of the seven IS that interface's content. What they could not express is
+       that the interface is not the answer to the rule the PAGE wrote when it wrote one of them somewhere else:
+       the crash told its reader to build CSSFontFeatureValuesRule for a `@swash` at a sheet's top level, where
+       building it changes nothing, because a browser has no object there either. The rows come off with this
+       arm, which is the same diff the table's second assert demands.
+       CSS Fonts 4 §6.9.1 ALSO SAYS WHAT HAPPENS TO A NAME THAT IS NOT ONE OF THE SEVEN — "an unknown at-rule
+       within a @font-feature-values block (not using one of the predefined list of allowed at-keywords) makes
+       that at-rule invalid and ignored, but does not invalidate the @font-feature-values rule" — and that is a
+       sentence about the ENCLOSING rule's own body, so it belongs with the arm that builds it and not here. */
+    if (pr->at_name && css_font_feature_value_at_rule(pr->at_name)) return JS_UNDEFINED;
     /* A QUALIFIED RULE INSIDE A STYLE RULE IS CSS NESTING CSS Nesting 1 §3's NESTED STYLE RULE, and it differs from
        the one below in exactly the way CSS Nesting 1 §3.1 "Syntax" says it does: "A nested style rule accepts a
        <relative-selector-list> as its prelude (rather than just a <selector-list>)". This engine's selector parser
@@ -1868,9 +1896,19 @@ static void *rule_built(void *ud, void *parent, const CssomRule *pr)
     return build_push(b, rule);
 }
 
-/* WHAT CSSOM §6.4 DECLARES FOR AN AT-RULE THIS BUILD HAS NO ARM FOR — one row per at-keyword in `at_rule_defined`'s
- * registry that `rule_from_parse` does not mint, and the reason the crash below is a LOOKUP rather than a
- * paragraph.
+/* WHAT CSSOM §6.4 DECLARES FOR AN AT-RULE THIS BUILD HAS NO ARM FOR — one row per at-keyword that REACHES the
+ * crash below, and the reason that crash is a LOOKUP rather than a paragraph.
+ *
+ * REACHING IT IS A NARROWER SET THAN `at_rule_defined`'s REGISTRY MINUS WHAT `rule_from_parse` MINTS, and the
+ * difference is a CONTEXT rather than a missing interface. This sentence used to draw the set the wider way, and
+ * it is corrected rather than deleted because the wider reading is the one a reader arrives at from the second
+ * assert below and would send them to add a row for every one of them: `@top-left` and CSS Fonts 4 §6.9.1
+ * "Basic syntax"'s seven feature value blocks are all in the registry and none of them is minted, and every one
+ * is DROPPED by an arm above — a margin at-rule is only a rule inside an `@page` and a feature value block only
+ * inside a `@font-feature-values`, so outside those they are invalid IN CONTEXT and CSS Syntax 3 §8 "CSS
+ * stylesheets" discards them. A row for one of those would be a row for a rule that never arrives, which is the
+ * state the second assert below calls a recollection rather than a reading. What the two assertions bracket is
+ * therefore exactly this: a row must name a registry at-keyword, and a name that gets here must have a row.
  *
  * THE PARAGRAPH WAS A CLAIM AND IT HAD ALREADY BEEN WRONG IN THE DIRECTION THAT COSTS MOST — TWICE. It once
  * named four interfaces and omitted the one that fires: a single `@property --x { … }` in a shipping site's
@@ -1907,15 +1945,9 @@ static const struct {
     const char *where;       /* that declaration's spec, section NUMBER and section TITLE */
 } RULE_UNBUILT[] = {
     /* SORTED BY at-keyword (ASCII), which the DCHECK below re-establishes on every crash. */
-    { "annotation",         "CSSFontFeatureValuesRule",
-      "CSS Fonts 4 §12.2 \"The CSSFontFeatureValuesRule interface\" — `@annotation` is NOT a rule of its own: "
-      "it is one of that interface's seven CSSFontFeatureValuesMap attributes, so building CSS Fonts 4 §12.2 "
-      "builds this" },
     { "apply",              "CSSApplyBlockRule / CSSApplyStatementRule",
       "CSS Mixins 1 §7.4 \"The CSSApplyBlockRule Interface\" and §7.5 \"The CSSApplyStatementRule Interface\" — "
       "TWO interfaces, chosen by whether the `@apply` the page wrote has a block" },
-    { "character-variant",  "CSSFontFeatureValuesRule",
-      "CSS Fonts 4 §12.2 \"The CSSFontFeatureValuesRule interface\" — its `characterVariant` map attribute" },
     { "color-profile",      "CSSColorProfileRule",
       "CSS Color 5 §12.1 \"The CSSColorProfileRule interface\"" },
     { "contents",           "CSSContentsBlockRule / CSSContentsStatementRule",
@@ -1935,15 +1967,20 @@ static const struct {
       "\"APIs\" declares CSSContainerRule and CSSSupportsConditionRule and NOTHING for `@else`" },
     { "font-feature-values","CSSFontFeatureValuesRule",
       "CSS Fonts 4 §12.2 \"The CSSFontFeatureValuesRule interface\" — the other row whose CSSOM §6.4.2 type number is "
-      "declared ahead of it (FONT_FEATURE_VALUES_RULE = 14). Its seven inner at-rules are its map attributes, "
-      "so this one interface answers all eight registry rows" },
+      "declared ahead of it (FONT_FEATURE_VALUES_RULE = 14). CSS Fonts 4 §6.9.1 \"Basic syntax\"'s SEVEN "
+      "feature value blocks are this interface's map attributes and have no rows of their own: they are "
+      "subsidiary at-rules of THIS rule, so `rule_from_parse` drops each of them wherever it is not inside one "
+      "and none of them reaches this table. This row used to end \"so this one interface answers all eight "
+      "registry rows\", which was true of a table that HELD those seven and is rewritten rather than deleted "
+      "because a reader who re-derives it from CSS Fonts 4 §12.2's IDL will re-add them — the interface really "
+      "does answer all eight at-keywords, and seven of the eight are answered by not being rules at that "
+      "position at all. The BODY is what this row is now about: its contents are the seven, consumed into the "
+      "maps rather than listed as children" },
     { "font-palette-values","CSSFontPaletteValuesRule",
       "CSS Fonts 4 §12.3 \"The CSSFontPaletteValuesRule interface\"" },
     { "function",           "CSSFunctionRule",
       "CSS Mixins 1 §7.1 \"The CSSFunctionRule Interface\" — and its body's declarations are CSS Mixins 1 §7.2 \"The "
       "CSSFunctionDeclarations Interface\", which is a second object this one has to mint" },
-    { "historical-forms",   "CSSFontFeatureValuesRule",
-      "CSS Fonts 4 §12.2 \"The CSSFontFeatureValuesRule interface\" — its `historicalForms` map attribute" },
     { "location",           NULL,
       "CSS Navigation 1 §1.2 \"Declaring named URL patterns: the @location rule\" defines the rule; that "
       "specification declares no IDL whatever" },
@@ -1952,8 +1989,6 @@ static const struct {
     { "navigation",         NULL,
       "CSS Navigation 1 §3.1 \"Navigation queries: the @navigation rule\" defines the rule; that specification "
       "declares no IDL whatever" },
-    { "ornaments",          "CSSFontFeatureValuesRule",
-      "CSS Fonts 4 §12.2 \"The CSSFontFeatureValuesRule interface\" — its `ornaments` map attribute" },
     { "position-try",       "CSSPositionTryRule",
       "CSS Anchor Positioning 1 §8.1 \"The CSSPositionTryRule interface\" — whose descriptors are that same "
       "section's CSSPositionTryDescriptors" },
@@ -1963,14 +1998,8 @@ static const struct {
     { "scope",              "CSSScopeRule",
       "CSS Cascade 6 §4.1 \"The CSSScopeRule interface\" — no CSSOM §6.4.2 type number at all (that table is frozen, "
       "so its `type` is 0, like the CSSLayer*, CSSProperty and CSSContainer rules already built)" },
-    { "styleset",           "CSSFontFeatureValuesRule",
-      "CSS Fonts 4 §12.2 \"The CSSFontFeatureValuesRule interface\" — its `styleset` map attribute" },
-    { "stylistic",          "CSSFontFeatureValuesRule",
-      "CSS Fonts 4 §12.2 \"The CSSFontFeatureValuesRule interface\" — its `stylistic` map attribute" },
     { "supports-condition", "CSSSupportsConditionRule",
       "CSS Conditional 5 §9.2 \"The CSSSupportsConditionRule interface\"" },
-    { "swash",              "CSSFontFeatureValuesRule",
-      "CSS Fonts 4 §12.2 \"The CSSFontFeatureValuesRule interface\" — its `swash` map attribute" },
     { "view-transition",    "CSSViewTransitionRule",
       "CSS View Transitions 2 §8.3.3 \"Accessing the @view-transition rule using CSSOM\"" },
     { "when",               NULL,
