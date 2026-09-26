@@ -559,6 +559,15 @@ struct JSClass {
     JSClassCall *call;
     /* pointers for exotic behavior, can be NULL if none are present */
     const JSClassExoticMethods *exotic;
+    /* THIS ENTRY IS A PER-REALM VALUE SLOT AND NOT A CLASS — see JS_NewRealmValueSlotClass. A host that wants
+       one per-realm store per concept mints a class id for the slot `ctx->class_proto[id]` already is and
+       constructs nothing with it, so this entry's `class_proto` holds a value THAT IS NOT A PROTOTYPE and its
+       `class_name` is a DESCRIPTION for a dump rather than the brand §20.1.3.6 Object.prototype.toString
+       prints. Both halves of that break a reader that assumes every registry entry is a class, which is why
+       the fact is recorded here rather than left to be inferred from the shape of the def: every field a value
+       slot leaves NULL is also NULL for the many legitimate classes that exist only to hold a prototype, so
+       there is nothing in a `JSClassDef` to tell the two apart. */
+    bool is_realm_value_slot;
 };
 
 typedef struct JSStackFrame {
@@ -6567,6 +6576,11 @@ static int JS_NewClass1(JSRuntime *rt, JSClassID class_id,
     cl->gc_mark = class_def->gc_mark;
     cl->call = class_def->call;
     cl->exotic = class_def->exotic;
+    /* A CLASS, UNTIL A CALLER SAYS OTHERWISE — written here beside every other field rather than left to the
+       `memset` that zeroes a grown entry, because those are two different guarantees: the memset covers an
+       entry this call GREW INTO and says nothing about one that was already inside `class_count`. Registering
+       is the moment the entry's kind is decided, so it is decided at one line. */
+    cl->is_realm_value_slot = false;
     return 0;
 }
 
@@ -6585,6 +6599,32 @@ int JS_NewClass(JSRuntime *rt, JSClassID class_id, const JSClassDef *class_def)
     }
     ret = JS_NewClass1(rt, class_id, class_def, name);
     JS_FreeAtomRT(rt, name);
+    return ret;
+}
+
+/* A PER-REALM VALUE SLOT — see quickjs.h for what one is and why it is minted as a class at all. The FLAG IS
+   SET BY THE SAME CALL THAT REGISTERS, which is the whole reason this is an entry point rather than a setter
+   beside JS_NewClass: a `JS_NewClass` plus a `JS_MarkClassAsValueSlot` is a two-step contract, and the slot
+   that forgets the second step is indistinguishable from a class for as long as nobody reads its name — which
+   for a name that is only ever printed in a dump is indefinitely. One call cannot be half-performed.
+   `what` IS A CLASS NAME AND CARRIES THAT FIELD'S CONTRACT (JSClassDef: "pure ASCII only!"): JS_NewClass
+   interns it as raw 8-bit, so a UTF-8 byte becomes two latin-1 code points and a dump prints mojibake. That is
+   NOT asserted here, and the reason is a measurement rather than an oversight: 65 of the 97 names this engine
+   declares through this door are non-ASCII today, so an assert would abort every dev realm at init and the
+   sweep it demands is a separate diff over prose this file cannot read. ITS ABSENCE SHOWS as a `Â§` where a
+   `§` was written, in a heap dump's class name and nowhere else — no name a value slot carries reaches a
+   constraint key any more, which is what this function exists to make true. */
+int JS_NewRealmValueSlotClass(JSRuntime *rt, JSClassID class_id, const char *what)
+{
+    JSClassDef d = { what };
+    int ret = JS_NewClass(rt, class_id, &d);
+
+    if (ret == 0) {
+        DCHECK(class_id < rt->class_count && rt->class_array[class_id].class_id == class_id,
+               "JS_NewClass reported a per-realm value slot registered and the runtime's class array does not "
+               "hold it at that id — the flag below would then mark a different entry, or none");
+        rt->class_array[class_id].is_realm_value_slot = true;
+    }
     return ret;
 }
 
@@ -112304,8 +112344,40 @@ int JS_IntrinsicName(JSContext *ctx, JSValueConst v, char *buf, size_t buf_size)
     if (!ctx->class_proto || !ctx->class_ctor) return -1;
     /* THE FIRST SLOT HOLDING THIS OBJECT, and "first" is a canonical choice rather than an arbitrary one: the
        class enum is fixed at its own definition, so several slots holding ONE object always yield ONE name.
-       That direction is safe. The dangerous direction is the other one and it is checked below. */
+       That direction is safe. The dangerous direction is the other one and it is checked below.
+       A PER-REALM VALUE SLOT IS NOT A SLOT OF THIS REGISTRY FOR NAMING PURPOSES, and skipping it is the ROOT
+       of what the abort below used to fire on rather than a narrowing of the answer. This array holds two kinds
+       of entry (see struct JSClass) and only one of them is a class: a value slot's `class_proto` holds a
+       VALUE, so composing `%X.prototype%` out of it asserts that the object is the prototype of a class X, of
+       which BOTH HALVES ARE FALSE — the object is not a prototype and X is a description. That is a wrong name
+       before it is a colliding one, and a wrong name is the identity failure this whole mechanism exists to
+       prevent, so the entry is passed over here rather than caught at the separator check further down.
+       MEASURED over every name this engine registers, derived from the two constructs that produce one
+       (`realm_value_declare`'s argument and a `JSClassDef` initialiser, with file-local `char X[]` constants
+       and string tables resolved — a literal-only grep is a FLOOR that cannot see the very site the abort
+       fired on): 171 `JSClassDef` names, of which 0 carry a dot and 0 carry a non-ASCII byte; 97 value-slot
+       names, of which 89 carry a dot and 65 are non-ASCII. So this skip costs NO NAME THAT WORKED — the 89
+       aborted and the other 8 composed a whole English sentence with `.prototype%` glued onto it — and it
+       leaves the check below standing over exactly the population it is true of.
+       NAMED RESIDUAL, and it is where the naming VALUE of this skip is recovered rather than a gap it opens.
+       Some value slots are per-realm PROTOTYPE HOLDERS for an interface whose prototype cannot live in a class
+       slot, and their declarations say so in their own text — the list, rather than a count of it, because a
+       count beside its own list is the one arithmetic a reader never performs: `CSSOM §6.6.1
+       CSSStyleDeclaration.prototype`, `CSS Fonts 5 §9.1 CSSFontFaceDescriptors.prototype`, `CSSOM §6.4.7
+       CSSPageDescriptors.prototype`, `CSSOM §6.1.1 StyleSheet.prototype`, `ReadableStreamBYOBReader.prototype`.
+       Those objects ARE intrinsics of their realm, a page reaches them through the `[[Prototype]]` chain of
+       `el.style` and of a stylesheet, and after this diff they answer NO NAME. What the next diff builds is
+       their conversion from a value slot to an ordinary CLASS NAMED AFTER THE INTERFACE, after which the namer
+       composes ECMAScript §6.1.7.4 Well-Known Intrinsic Objects' own spelling — `%CSSStyleDeclaration.prototype%`,
+       which is what the author of each description was reaching for when they wrote the suffix by hand.
+       THE PRECEDENT IS ALREADY IN THIS TREE AND IS WHY THAT DIFF IS A CONVERSION RATHER THAN A DESIGN:
+       core/timing/user_timing.c mints `PerformanceMark` and `PerformanceMeasure` as plain classes for exactly
+       this purpose — no object wears either, they exist so the per-context slot can hold §2.2's prototype per
+       realm — so those two answer `%PerformanceMark.prototype%` CORRECTLY today and are the shape to copy.
+       ITS ABSENCE SHOWS as a fork census whose heavy `~?[…]` site rows are computed property reads on a style
+       declaration or a stylesheet. */
     for (i = 0; i < rt->class_count; i++) {
+        if (rt->class_array[i].is_realm_value_slot) continue;
         if (JS_VALUE_GET_TAG(ctx->class_proto[i]) == JS_TAG_OBJECT &&
             JS_VALUE_GET_OBJ(ctx->class_proto[i]) == p) { want_proto = true; break; }
         if (JS_VALUE_GET_TAG(ctx->class_ctor[i]) == JS_TAG_OBJECT &&
@@ -112343,6 +112415,10 @@ int JS_IntrinsicName(JSContext *ctx, JSValueConst v, char *buf, size_t buf_size)
     cname = rt->class_array[i].class_name;
     for (j = 0; j < i; j++) {
         JSValueConst other = want_proto ? ctx->class_proto[j] : ctx->class_ctor[j];
+        /* SKIPPED ON THE SAME GROUND AS THE WALK ABOVE, and not merely for symmetry: a value slot is outside
+           this name space entirely, so one whose description happened to start with a class's brand would
+           otherwise refuse that class its name — the CONSPICUOUS direction of the same confusion. */
+        if (rt->class_array[j].is_realm_value_slot) continue;
         if (rt->class_array[j].class_name != cname) continue;
         /* A LOWER SLOT HOLDING AN OBJECT HAS ALREADY TAKEN THIS NAME — and it necessarily holds a DIFFERENT
            object, because the walk above breaks at the first slot holding this one, so reaching here means
@@ -112371,6 +112447,17 @@ int JS_IntrinsicName(JSContext *ctx, JSValueConst v, char *buf, size_t buf_size)
        eight-frame chain both times (`concolic_key_read_hook` -> `ident_of_operand` -> `intrinsic_name`), and
        the reader could not say WHICH class from it — no static `JSClassDef` in either tree carries a dotted
        literal, so the name is an ATOM and the slot is the only thing that identifies it.
+       AND THAT LAST CLAUSE WAS EXACTLY TRUE AND STOPPED ONE QUESTION SHORT, WHICH IS WORTH MORE THAN THE
+       INCIDENT: "no `JSClassDef` in either tree is dotted" is a measurement (0 of 171, re-derived at the walk
+       above), and the inference drawn from it was that the name must be an ATOM AND THEREFORE THAT THE SLOT
+       MUST BE PRINTED. That conclusion is right and the question it skipped is the one that ends this: if no
+       class def is dotted, THEN WHAT REGISTERED A DOTTED NAME? The answer is a caller that is not a class def
+       site at all — core/realm.c's `realm_value_declare`, which mints a class purely for its per-realm slot —
+       so the operand was never a class and the abort was the MESSENGER rather than the finding. The general
+       shape is that a measurement over the population you ASSUMED is not a measurement over the population
+       that produced the operand, and the tell is grammatical and free: the abort names a class and your
+       evidence is about class DEFINITIONS. The id printing stays, unchanged and now guarding only classes,
+       because a brand is deliberately many-to-one and a name still does not name a slot.
        THE CLASS ID IS PRINTED AS WELL AS THE NAME because the name is a BRAND and this file says so forty
        lines up: several slots deliberately share one (six are `Object`, five `Function`), so a name alone
        does not name a slot and the id does. RETIRES when the message can no longer be read without the

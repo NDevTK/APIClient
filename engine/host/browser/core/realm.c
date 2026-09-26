@@ -748,16 +748,28 @@ void realm_intrinsics_free(void)
 
 /* A slot IS a class id whose per-context prototype slot holds something that is not a prototype. Nothing is
    ever constructed with the class — it exists for the SLOT, which is the per-realm store quickjs already keeps
-   and already frees with the context. The `what` string is the class name, so a heap dump names the slot. */
+   and already frees with the context. The `what` string is the class name, so a heap dump names the slot.
+   AND THE ENGINE IS TOLD THAT THIS ENTRY IS A SLOT, WHICH USED TO BE A PLAIN `JS_NewClass` AND IS THE ROOT OF
+   A CRASH ON EVERY REAL APPLICATION PAGE. Registering it as an ordinary class put a free-form DESCRIPTION into
+   a field whose readers take it for a class BRAND, and quickjs's intrinsic namer is one of those readers: it
+   walks `ctx->class_proto` for the object it was asked about, finds it in a slot, and composes
+   `%<that description>.prototype%` as the object's CONSTRAINT KEY. Every part of that is wrong at once — the
+   object is not a prototype, the description is not a class name, and a description carrying a `.` collides
+   with the very `X.prototype` spelling the namer's separator is. Measured: 89 of the 97 names declared through
+   this door carry a dot, and `CSSOM §6.6.1 CSSStyleDeclaration.prototype` aborted a real page 2 of 2 drives.
+   THE FIX IS THE KIND AND NEVER THE SPELLING. Shortening these descriptions to dotless tokens would repair the
+   collision and leave the wrong claim standing — the namer would go on reporting a per-realm map as some
+   class's prototype — and it would be a sweep over prose that is deliberate and argued for at each site. So
+   the slot says what it IS, once, at the one door that mints one, and the namer passes it over; §NO BOUNDS is
+   untouched because nothing was hashed, escaped or truncated, and no name became ambiguous. */
 JSClassID realm_value_declare(JSContext *ctx, const char *what)
 {
     JSClassID id = 0;
-    JSClassDef d;
 
     DCHECK(what != NULL && *what, "a per-realm value was declared with no name — a dump would not say whose");
-    d = (JSClassDef){ what };
     JS_NewClassID(JS_GetRuntime(ctx), &id);
-    CHECK(JS_NewClass(JS_GetRuntime(ctx), id, &d) == 0, "realm: a per-realm value slot could not be declared");
+    CHECK(JS_NewRealmValueSlotClass(JS_GetRuntime(ctx), id, what) == 0,
+          "realm: a per-realm value slot could not be declared");
     return id;
 }
 

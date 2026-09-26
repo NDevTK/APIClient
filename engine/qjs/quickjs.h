@@ -1053,6 +1053,25 @@ JS_EXTERN JSClassID JS_NewClassID(JSRuntime *rt, JSClassID *pclass_id);
 /* Returns the class ID if `v` is an object, otherwise returns JS_INVALID_CLASS_ID. */
 JS_EXTERN JSClassID JS_GetClassID(JSValueConst v);
 JS_EXTERN int JS_NewClass(JSRuntime *rt, JSClassID class_id, const JSClassDef *class_def);
+/* REGISTER A CLASS ID AS A PER-REALM VALUE SLOT RATHER THAN AS A CLASS.
+ *
+ * A host that wants one store per realm per concept has one already: `ctx->class_proto[id]` is a per-realm
+ * JSValue the context creates, grows and frees, reached by JS_GetClassProto/JS_SetClassProto. Minting a class
+ * id to USE that slot is therefore the right primitive and not a hack — but the entry it leaves in the class
+ * registry is NOT A CLASS, and two of its fields then mean something other than what every reader assumes:
+ * its `class_proto` holds a VALUE THAT IS NOT A PROTOTYPE, and its `class_name` is a DESCRIPTION for a heap
+ * dump rather than the brand §20.1.3.6 Object.prototype.toString prints. Nothing is ever constructed with it.
+ *
+ * SO THE KIND IS DECLARED AND NOT INFERRED. There is nothing in a `JSClassDef` to infer it from: a value slot
+ * leaves finalizer, gc_mark, call and exotic NULL, and so does every legitimate class that exists only to hold
+ * a prototype. A reader that guesses gets a WRONG NAME rather than no name, and a wrong name is an identity
+ * failure — two objects under one constraint key make one flow's narrowing refine the other's branch, so arms
+ * are LOST rather than duplicated. JS_IntrinsicName is that reader and it passes these entries over.
+ *
+ * `what` IS THE CLASS NAME and carries that field's contract — see JSClassDef's "pure ASCII only!", which
+ * JS_NewClass restates: the bytes are interned raw 8-bit, so a UTF-8 sequence becomes one latin-1 code point
+ * per byte and a dump prints mojibake. Returns 0, or -1 as JS_NewClass does. */
+JS_EXTERN int JS_NewRealmValueSlotClass(JSRuntime *rt, JSClassID class_id, const char *what);
 
 /* GIVE THE GLOBAL OBJECT A CLASS, so it can have EXOTIC own-property behaviour.
  *
