@@ -5893,6 +5893,18 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        asks it to resolve a gap fourteen to twenty-one times smaller than its own licence. No frontier makes
        that hold, so a fire here is the declared margin reaching the ANSWER and never a defect in either
        spelling — which is what the paragraphs above say in words and what this says as a number.
+       AND THE FIXTURE AND THE REAL PAGE FIRE ON DIFFERENT HALVES OF THE SURROGATE'S OWN CLAIM, WHICH IS WHY
+       A DIAGNOSIS TAKEN FROM THE SMOKE ALONE IS TAKEN FROM THE WEAKER ONE. flow.h states the surrogate's
+       soundness WITHIN one account — there the reward and the family notch are common, so ordering by the
+       member key less the carry IS ordering by flow_weight — and all three fixture fires on record are
+       CROSS-account pairs (`val` 22 against 21, 28 against 21, 22 against 21, with three different family
+       notches), which that argument never covered. The one real-application fire is the WITHIN-account case:
+       identical `val` and identical family notch, the two members differing only in own notch and in their
+       BRANCH BUCKET. So the real page refutes the surrogate at the exact point its own argument is made and
+       the fixture does not reach that point at all, which is §A-FIXTURE-BUILT-TO-EXERCISE-EVERY-MECHANISM
+       arriving in this check: the two documents exercise two claims and only one of them is the claim.
+       RETIREMENT: this record goes when the line printed at a fire says whether the two members share an
+       account, because the reader then reads which claim fired instead of inferring it from two `val` fields.
        RETIREMENT: this record goes when the two modes are counted over a run rather than read off the one
        fire that ends it — a partition of `index_differed` into the surrogate's TIE and STRICT arms, summing
        to it — because the anti-correlation above is then a row anybody can re-derive instead of a
