@@ -11656,21 +11656,59 @@ static void fold_row(int *row, const char **why, int ok, const char *what) {
     *row = 0;
     if (!*why) *why = what;
 }
-/* THE CALLER'S ROOM FOR THE SELECTED ROWS — a buffer size with an abort behind it (probes_eval's `n < cap`),
-   never a limit on how many statements a document may make. NOT a number derived from the table's current
-   length: the full document selects nearly all of the rows, so a cap sized to fit today is a cap the next lane
-   to add a row spends without meaning to — which is what the old 128 was, and what 192 had quietly become by
-   the time the derived searches' middle rungs were added (the table stood at 191 rows against it, one clear).
-   That is the shape this comment claimed to have ruled out, so the number is raised again AND the claim is
-   stated as something a reader can check rather than trust: the room is meant to sit far enough above the
-   table that adding a statement is an edit to the table alone, and the abort behind it is what says so the day
-   that stops being true. */
-#define PROBE_MAX 320
+/* THE CALLER'S ROOM FOR THE SELECTED ROWS — never a limit on how many statements a document may make. NOT a
+   number derived from the table's current length: the full document selects nearly all of the rows, so a cap
+   sized to fit today is a cap the next lane to add a row spends without meaning to — which is what the old 128
+   was, and what 192 had quietly become by the time the derived searches' middle rungs were added (the table
+   stood at 191 rows against it, one clear).
+   THIS COMMENT USED TO CALL `probes_eval`'s `n < cap` the thing that says so — in its own words,
+   `the abort behind it is what says so the day that stops being true` — AND THAT ABORT CANNOT SAY IT: it bounds
+   the SELECTION, and the thing a lane grows is the TABLE.
+   The sentence is rewritten rather than dropped because a reader who re-derives it from the DCHECK's message
+   will re-add it. `n` counts the rows of ONE SESSION whose key is in ONE document, so the largest selection any
+   run can make is strictly smaller than the declaration — and the gap is not a rounding error. What the commit
+   that landed the assertion below MEASURED, stated as the incident rather than as the state, because both halves
+   move the next time a lane adds a row: the table declared 311 rows and the biggest per-session selection was
+   284, so the table could have grown THIRTY-SIX rows past the 320 this constant then held with every dev run
+   green, every gate passing, and a release build's `out[n++]` in bounds only because `n` never reached it. It is
+   also DEV-ONLY, so on the day a selection did exceed the cap the release build would not abort — it would write
+   past the end of `probes_report`'s stack array, which is worse than the truncation a reader of
+   `a buffer size with an abort behind it` would expect.
+   THE DERIVATION AND NOT THE FIGURES, so the next reader gets today's answer: the table's own length is read off
+   the ARRAY by the compiler rather than counted out of the text — put `_Static_assert(COUNTOF(probes) == 0, "");`
+   after the table and the diagnostic prints it — and the per-session maxima are the three `SESS_` counts of the
+   row openers inside the same array, which must sum to that length or the partition is about something else.
+   SO THE RELATIONSHIP IS ASSERTED WHERE BOTH FACTS ARE IN HAND, at the table rather than here, and the abort is
+   no longer load-bearing: that site states the whole argument and this one does not restate it.
+   THE CAPACITY IS NOT DERIVED FROM THE TABLE, AND THE REASON IS STRUCTURAL RATHER THAN A PREFERENCE: the table
+   is a LOCAL of probes_eval and its initializers name that function's OWN locals — read any row and the boolean
+   and the `why` it carries are both locals folded a few lines above it — so it cannot move to file scope, and
+   `probes_report`, which must size a stack array at compile time, cannot see its length. A constant is therefore
+   necessary and the assertion is what makes the two unable to disagree.
+   THE NUMBER IS RAISED BECAUSE THE INTENT IS REAL: the room is meant to sit far enough above the table that
+   adding a statement is an edit to the table alone, and the NINE rows the 320 had left was not that. It costs a
+   frame rather than an argument, which is why the raise is generous rather than the next round number up:
+   `sizeof(Probe)` was 56 at that revision, so `Probe rows[PROBE_MAX]` went 17920 bytes to 28672 and the two
+   `char[PROBE_UNANSWERED_MAX]` buffers in each caller went 20480 to 32768 — about 23 KB more against the link's
+   `-sSTACK_SIZE=8388608`, which is three thousandths of the stack.
+   RETIREMENT: this record goes when the caller's room is derived from the table rather than declared beside it,
+   because the two are then unable to disagree and there is no relationship left for a reader to re-argue. */
+#define PROBE_MAX 512
 /* AND THE ROOM FOR THE NAMES OF THE ROWS THAT ARE 0, which is what the run's verdict SENTENCE is composed of.
    DERIVED FROM THE TABLE'S OWN CAP rather than typed, for the reason the cap above is not typed against the
    table's current length: a number sized to today's names is a number the next lane to add a longer one spends
    without meaning to. Thirty-two bytes a row is not a claim that every name fits in thirty-two — the CHECK in
-   probes_report is what says so, and it names this constant when it fires. */
+   probes_report is what says so, and it names this constant when it fires.
+   IT IS A TOTAL AND NOT A PER-ROW ALLOTMENT, said plainly because the `* 32` invites the other reading and a
+   reader has already taken it: a single name longer than thirty-two bytes neither truncates nor aborts, because
+   the two consumers check the CUMULATIVE list — names, one separator apiece, one NUL — against the whole buffer,
+   so the budget is amortised over the rows that are 0 and the mean name is a small fraction of it. Nothing here
+   truncates in either regime: both consumers are CHECK rather than DCHECK and they REFUSE before the write, for
+   the reason each states at its own site. The derivation, because the figure would rot the next time a row is
+   added: sum the byte lengths of the table's names, add one separator per row beyond the first and one NUL, and
+   compare that with PROBE_MAX * 32.
+   RETIREMENT: this record goes when the cumulative fit is asserted rather than described — which needs the
+   names' lengths in a constant expression, so it needs the table to stop being a local with locals in it. */
 #define PROBE_UNANSWERED_MAX (PROBE_MAX * 32)
 
 /* WHAT THIS INVOCATION IS: the document whose statements are being answered, which of the three sessions it is,
@@ -18017,6 +18055,31 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "nwiso-park", nwiso_iso, "nwisoel", SESS_PARK, nwiso_why },
         { "nwiso-resume", nwiso_iso, "nwisoel", SESS_RESUME, nwiso_why },
     };
+    /* THE DECLARATION FITS THE CALLER'S BUFFER, ASSERTED WHERE BOTH FACTS ARE IN HAND. This is the one place in
+       the translation unit that can see the table's length AND the constant its rows are copied into, which is
+       why it expands here and not in a checker: `probes_report` sizes `Probe rows[PROBE_MAX]` at compile time
+       and cannot see this array at all, for the structural reason PROBE_MAX's own comment gives: the array is a
+       LOCAL whose initializers name this function's own locals, so it cannot move to file scope.
+       IT IS A COMPILE-TIME CHECK AND THEREFORE NOT A DCHECK, on check.h's own argument for COUNTOF: it costs
+       nothing at runtime, it reads identically in dev and release, and there is no build in which it is
+       compiled out. That distinction is the whole point here. The runtime guard below bounds the SELECTION —
+       `n` is the rows of ONE session whose key is in ONE document — and what a lane grows is the TABLE, so it
+       fires only on a document that selects more rows than the cap, which is strictly later than the day this
+       declaration outgrows it and later by however far the biggest session sits below the table. It is also
+       DEV-ONLY: at `-DAPICLIENT_DEV=0` it is not in the program, so the overflow it names would be an
+       out-of-bounds write into the caller's stack array rather than an abort. This assertion makes
+       `n <= COUNTOF(probes) <= PROBE_MAX` a property of the unit, so that write is unreachable by construction
+       and the guard below is the invariant it always read as rather than a bound release has lost.
+       `COUNTOF` AND NOT THE NAKED `sizeof/sizeof`, because check.h's version REFUSES at compile time to be
+       applied to a pointer — the naked idiom answers 1 rather than failing — and a table is exactly the operand
+       that decays. `<=` AND NOT `<`: the i-th selected row is written at index i and the guard asserts i < cap,
+       so a full selection of COUNTOF(probes) rows needs COUNTOF(probes) <= PROBE_MAX and no more.
+       RETIREMENT: this record goes when the caller's room is derived from this table, because the assertion is
+       then a tautology and the reasoning for why a constant was necessary has nothing left to be about. */
+    _Static_assert(COUNTOF(probes) <= PROBE_MAX,
+                   "the probe table declares more rows than PROBE_MAX, which is the room probes_report's stack "
+                   "array gives them — a run selecting them all would write past the end of that array, and in "
+                   "release the guard that would have named it is compiled out. Raise PROBE_MAX");
     /* WHICH ROWS THIS INVOCATION CARRIES — its SESSION, and whether its document contains the statement. */
     int n = 0;
     for (unsigned pi = 0; pi < sizeof(probes) / sizeof(probes[0]); pi++) {
@@ -18046,8 +18109,17 @@ static int probes_eval(const char *js, Probe *out, int cap) {
                 probes[pi].name, probes[pi].gate);
         if (probes[pi].sess != g_sess) continue;
         if (!strstr(g_doc, probes[pi].key)) continue;
+        /* AND THE SELECTION FITS TOO — WHICH THE ASSERTION ABOVE HAS ALREADY MADE TRUE. It stays because it
+           states the property at the write rather than at the declaration, and because it is the condition a
+           reader of this loop needs; what it is no longer is the thing that says the table has outgrown its
+           room. Its message used to say only `more probes were selected than the caller has room for`, which
+           reads as the cap's own guard and is why the constant above went nine rows from spent with nothing
+           having fired: this condition cannot be false until a SELECTION exceeds the cap, and a selection is
+           one session's rows in one document. */
         DCHECK(n < cap, "more probes were selected than the caller has room for — the report would state a "
-                        "verdict over a prefix of the table and call it the table");
+                        "verdict over a prefix of the table and call it the table. The static assertion at the "
+                        "table has already established that the WHOLE declaration fits, so this is now "
+                        "unfailable and a failure here means that assertion was edited away");
         out[n++] = probes[pi];
     }
     /* AND THIS RUN ASSERTS SOMETHING. A selection of nothing reports `=> OK` over an empty conjunction, which is
