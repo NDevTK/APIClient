@@ -4593,8 +4593,14 @@ static const char *HTML =
        capability gap. The two are told apart by ONE comparison and no reasoning: the SAME ternary, over the
        SAME source, in the SAME frame, at the SAME point in the document, WITHOUT an accessor in the way. If
        this carries both values and `/api/getfork` does not, the difference is the accessor and nothing else.
-       If this carries one, the premise (2b) rests on is false and (2b) is mine to fix rather than the engine's.
-       It costs no fork of its own: the ternary is decided inside each arm that already exists. */
+       IT COSTS NO FORK OF ITS OWN: the ternary is decided inside each arm that already exists — and that
+       sentence REFUTES the clause this paragraph used to end on, which read "If this carries one, the premise
+       (2b) rests on is false and (2b) is mine to fix rather than the engine's". It is rewritten rather than
+       deleted because it is the conclusion a reader re-derives from a single arm. A statement that forks
+       nothing cannot report a gate: one arm HERE is an arm that did not REACH this statement, which is three
+       states — the gate upstream was decided (`boot-fork`'s finding), the arm is still parked on a frontier
+       that has not drained, or the arm was LOST. Only the third is (2b)'s premise, and only a DRAINED frontier
+       says which. The row's own rungs separate them; see `base_fork` in probes_eval. */
     " fetch('/api/getbase?v=' + (cfg.admin ? 'gbADMIN' : 'gbPUBLIC'));"
 
     /* (2d) THE DISPOSE ARM NO CORPUS RUNS, appended at the end for the reason (2c) was: a statement added
@@ -16759,9 +16765,11 @@ static int probes_eval(const char *js, Probe *out, int cap) {
                        param_value_count_of(js, "/api/getfork", "v", "gxPUBLIC") == 1);
     /* AND THE CONTROL, WHICH IS WHAT MAKES THE LADDER ABOVE MEAN THE ACCESSOR. The same ternary over the same
        source in the same frame with no accessor in the way: `base_fork` at 1 while `getter_fork` is 0 isolates
-       the difference to the accessor, and `base_fork` at 0 says `cfg.admin` is not two-armed at this point in
-       the document at all — in which case (2b) asserts something no run can satisfy and the fixture is what
-       needs fixing. Without this row those two are one number, and the wrong one gets worked on. A CONTROL
+       the difference to the accessor, and `base_fork` at 0 says ONE of the two arms that already exist did not
+       REACH this statement — which is not one reading but three, because this statement forks nothing of its
+       own and so cannot indict a gate at all: see the rungs below for the split and for what the clause that
+       stood here ("`cfg.admin` is not two-armed at this point in the document at all") was wrong about.
+       Without this row those two are one number, and the wrong one gets worked on. A CONTROL
        ASKS THE SAME QUESTION AS THE THING IT CONTROLS, so this is whole-value equality for rung 3's reason:
        a control that could be satisfied by a shape while the claim could not is a control that answers a
        different question and cannot isolate anything. */
@@ -16823,14 +16831,44 @@ static int probes_eval(const char *js, Probe *out, int cap) {
                  "is fixed somewhere else. Read the unnamed entry itself: `param_value_count` counts it, no "
                  "row prints it, and whether it is a derived display shape or a duplicate of the arm beside "
                  "it is the question that decides which of the two mechanisms this is");
-        fold_row(&base_fork, &base_fork_why, adm && pub,
-                 "the same ternary over the same source in the same frame, with NO accessor in the way, "
-                 "produced exactly ONE of its two arms — so `cfg.admin` is not two-armed at this point in the "
-                 "document at all. That is the concretized gate §Solver-half forbids for server-injected "
-                 "absent state, and it is UPSTREAM of every `getter-*` row above: those assert something no "
-                 "run can satisfy while this is 0, so the accessor is not what needs fixing. EXACTLY ONE IS "
-                 "ENTAILED AND NOT ASSUMED: the rung above has established that no entry here is anything but "
-                 "an arm's literal, which is what a membership test could not say and is why that rung exists");
+        /* AND THE RUNG THAT STOOD HERE PUBLISHED THE STRONGEST VERDICT THIS FILE HAS WITHOUT READING THE
+           FRONTIER, WHICH IS THE ONE STATE `probe_frontier_state` EXISTS TO WITHHOLD. It read: "the same
+           ternary over the same source in the same frame, with NO accessor in the way, produced exactly ONE
+           of its two arms — so `cfg.admin` is not two-armed at this point in the document at all. That is the
+           concretized gate §Solver-half forbids for server-injected absent state". Its ENTAILMENT clause was
+           exact and is kept below — rung 3 really does establish that no entry here is anything but an arm's
+           literal — and the verdict drawn from that does not follow, for two separately fatal reasons.
+           (i) THIS STATEMENT FORKS NOTHING OF ITS OWN, which the paragraph beside it in the document says in
+           as many words: the ternary is decided inside each arm that already exists. So a missing arm here is
+           an arm that did not REACH the document's last `<script>`, and the gate it came from is UPSTREAM —
+           `boot-fork` and `role-public` are the rows that measure it, so this row restating their finding is
+           one observation under two names rather than a second one.
+           (ii) A MISSING WORLD IS THREE STATES AND THE FRONTIER IS WHAT SEPARATES THEM, which is the whole of
+           `role_public`'s ladder above and of `fork_row_impl`'s three messages: at a DRAINED frontier a
+           missing world was LOST, while members have never been handed the thread the answer is THIS RUN
+           CANNOT SAY WHY, and `probe_frontier_state`'s own DCHECK calls the drained verdict "the strongest of
+           the three verdicts this rung exists to withhold". The old rung named it at every sample.
+           MEASURED, at the terminal census of one dev build's native smoke: `boot-fork`, `role-admin`,
+           `role-public` and `merged` all read 1 on the SAME line as `base-fork`=0 — so both worlds existed,
+           both reached the branch and their records had merged — while the frontier stood at 83 of 175
+           members never once handed the thread. Four rows of one census contradicting a fifth's sentence is
+           the sibling diff rather than a run of anybody's, and it needs no build.
+           SO IT IS ROUTED AND NOT RE-WORDED. The DECIDED state names `boot-fork`; the two-world claim goes to
+           FORK_ROW, which is this file's canonical spelling for one — one reading of the frontier, no second
+           copy of its three sentences, and the MISSING ARM NAMED, which no version of this row has ever
+           printed and which is the one coordinate a reader of a 0 here most needs. Rungs 1-3 stay, because
+           FORK_ROW asks `param_value_is` and cannot see a third entry; rung 3 is the only thing in this file
+           that can, which is why this is a split and not a replacement.
+           RETIREMENT: this record goes when no rung in this file can name a verdict `probe_frontier_state`
+           withholds without having called it — the reading asserted at the fold rather than argued here. */
+        fold_row(&base_fork, &base_fork_why, !bootfork_decided,
+                 "an arm is missing and the branch BOTH of this control's arms come from was DECIDED rather "
+                 "than forked — `boot-fork` on this same line carries the diagnosis. This statement forks "
+                 "nothing of its own, so it has nothing to add to that finding and is not a second one. "
+                 "EXACTLY ONE ARM IS ENTAILED AND NOT ASSUMED: the rung above has established that no entry "
+                 "here is anything but an arm's literal, which is what a membership test could not say");
+        FORK_ROW(js, &base_fork, &base_fork_why, "/api/getbase", "v",
+                 "the rest of the document", "gbADMIN", "gbPUBLIC");
         fold_row(&base_fork, &base_fork_why, adm == 1 && pub == 1,
                  "BOTH arms reached the sink and one of them reached it MORE THAN ONCE: every `v` is an arm's "
                  "literal and the two do not appear once each, so a flow got to this statement some way the "
