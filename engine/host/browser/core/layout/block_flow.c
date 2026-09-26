@@ -13,6 +13,7 @@
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/flex_cross_size.h"
+#include "core/layout/flex_intrinsic_size.h"
 #include "core/layout/flex_item.h"
 #include "core/layout/flow_placement.h"
 #include "core/layout/layout_question.h"
@@ -1992,7 +1993,8 @@ done:
  * `row` container and WRONG for a `column` one, in the direction that costs the most — it named §9.6
  * "Cross-Axis Alignment" and the flex lines unconditionally, so a reader meeting it on a `column` container
  * was told to build §9.3 "Main Size Determination" and §9.4 "Cross Size Determination" for a number that
- * needs NO FLEX LINE AT ALL. ONE OF THE TWO IS NOW BUILT AND THE SPLIT IS WHY THE OTHER STILL CRASHES.
+ * needs NO FLEX LINE AT ALL. BOTH OF §5.1's ARMS ARE NOW BUILT AND WHAT STILL CRASHES IS THE WRITING MODE,
+ * which is a different question and is why the split is still worth stating.
  *
  * WHICH SIZE A *HEIGHT* IS, IS A FACT ABOUT THE WRITING MODE AND THEN ABOUT §5.1, in that order, and stating
  * only the second is one predicate answering two questions. A height is the BLOCK size only in a
@@ -2008,17 +2010,25 @@ done:
  * part-way through — the same reason core/layout/flex_intrinsic_size.c asks §5.1 first for the mirror
  * question, a flex container's intrinsic INLINE size.
  *
- * IT RETURNS A BOOL RATHER THAN A `CssPx` SO THAT THE RELEASE ARM OF THE ONE REMAINING CRASH IS UNCHANGED BY
- * THIS DIFF, which is the one thing a half-built dispatch must not quietly alter. With the asserts compiled
- * out a `DFAILF` is a no-op and control falls through whatever follows it, so returning the CROSS size from
- * the bottom of this function would hand a `column` container a number from the wrong section in release —
- * where today it falls through to CSS 2.1 §10.6.3's stack of block-level boxes, a DEFINED wrong number that
- * is what the single crash already left behind and is not this diff's to choose. FALSE is therefore "this
- * arm did not answer", and the caller's fall-through is §10.6.3 exactly as before.
+ * IT RETURNS A BOOL SO THAT THE RELEASE ARM OF THE ONE REMAINING CRASH IS UNCHANGED, and that crash is now
+ * the WRITING-MODE one rather than the `column` one. With the asserts compiled out a `DFAILF` is a no-op and
+ * control falls through whatever follows it, so answering from the bottom of this function would hand a box in
+ * a VERTICAL writing mode a number measured along the wrong dimension in release — where today it falls
+ * through to CSS 2.1 §10.6.3's stack of block-level boxes, a DEFINED wrong number that is what that crash
+ * already left behind and is not a dispatch's to choose. FALSE is therefore "this arm did not answer", and the
+ * caller's fall-through is §10.6.3 exactly as before.
  *
- * RETIREMENT: this function goes when the `column` arm is built; at that point there is no question left to
- * dispatch on, the bool goes with the last crash, and `block_flow_auto_height` calls the two sections'
- * components directly. */
+ * RETIREMENT — THE CONDITION THAT STOOD HERE IS MET AND IS REWRITTEN RATHER THAN OBEYED, WHICH IS WORTH
+ * RECORDING BECAUSE OBEYING IT WOULD HAVE BEEN A REGRESSION. It read: "this function goes when the `column`
+ * arm is built; at that point there is no question left to dispatch on, the bool goes with the last crash".
+ * The `column` arm IS built, and the clause was written when the `column` crash was the last one — so its own
+ * reason ("the last crash") had a referent that moved, and a reader taking it literally would delete the bool
+ * while the WRITING-MODE crash's release fall-through still depends on it. The condition was satisfiable by an
+ * EDIT rather than by a CONSTRUCTION, which is the one shape a retirement clause must not have.
+ * WHAT ENDS IT IS NAMED AS A CONSTRUCTION INSTEAD: this function goes when CSS 2.1 §10.6.3's stack and
+ * core/layout/intrinsic_size.c's pair are each readable in the OTHER physical direction — the
+ * dimension-parameterised walks the writing-mode arm below names — because at that point there is no refusal
+ * left, every arm answers, and `block_flow_auto_height` can call the two sections' components directly. */
 static bool bf_flex_auto_block_size(lxb_dom_element_t *el, CssPx *out)
 {
     char nbuf[160], wbuf[64];
@@ -2048,51 +2058,33 @@ static bool bf_flex_auto_block_size(lxb_dom_element_t *el, CssPx *out)
     }
 
     if (flex_container_main_axis(el) == FLEX_MAIN_AXIS_BLOCK) {
-        DFAILF("%s: this FLEX CONTAINER's main axis is its BLOCK axis (css-flexbox-1 §5.1 \"Flex Flow "
-               "Direction: the flex-direction property\": a `column` container's main axis \"has the same "
-               "orientation as the block axis of the current writing mode\"), so the auto HEIGHT asked for "
-               "here is its MAIN size and NOT its cross size — §9.6 \"Cross-Axis Alignment\" is the wrong "
-               "section for it and so are the flex lines. §9.2 \"Line Length Determination\"'s last step "
-               "answers it in one sentence: \"Determine the main size of the flex container using the rules "
-               "of the formatting context in which it participates. The automatic block size of a "
-               "block-level flex container is its max-content size.\" "
-               "SO WHAT IS MISSING IS NOT §9 AND NEEDS NO FLEX LINE. The max-content MAIN size is §9.9.1 "
-               "\"Flex Container Intrinsic Main Sizes\", whose web-compatible arm §9.9.1.2 \"Web-compatible "
-               "Intrinsic Sizing Algorithm: Max-content Size and Min-content Single-line Size\" is one "
-               "sentence of arithmetic over the ITEMS — \"For the max-content size of a flex container, take "
-               "the sum of the max-content contributions of all the non-collapsed flex items in the flex "
-               "container\" — and §9.9.1 says outright that \"an implementation is conformant to CSS Flexible "
-               "Box Layout if it conforms to either the Ideal Algorithm or the Web-compatible Algorithm\". "
-               "BUILD §9.9.1 IN THE BLOCK AXIS, AND THE SENTENCE THAT STOOD HERE SAID THE INLINE AXIS WAS "
-               "MISSING TOO: it said core/layout/flex_intrinsic_size.c crashed for the SAME section in the "
-               "INLINE axis and enumerated the two terms missing from both. IT NO LONGER CRASHES — §9.9.1.2, "
-               "§9.9.1.3, §9.9.3 and §9.2's flex base size are built there for a `row` container — so what "
-               "is left here is the AXIS and not the algorithm, and a reader who follows the old sentence "
-               "will build §9.9.3 a second time. WHAT DIFFERS IS EVERY OPERAND'S AXIS AND NOTHING ELSE: that "
-               "component reads `width`, `min-width` and `max-width` and asks core/layout/intrinsic_size.h "
-               "for an INLINE pair, and this one owes `height`, `min-height`, `max-height` and a BLOCK-axis "
-               "pair, so the shape to reach for is that walk with its main-axis property names and its "
-               "measurement entry parameterised rather than a second copy of §9.9.3. The per-item operand "
-               "here is a BLOCK-axis max-content contribution, and "
-               "css-sizing-3 §3.2 \"Sizing Values: …\" is what that is: \"for a box's block size, unless "
-               "otherwise specified, this is equivalent to its automatic size\" — so the operand re-enters "
-               "this entry one level down, which core/layout/used_value.c already reads the same way. "
-               "AND THE POPULATION REACHING THIS CRASH USED TO BE WIDER THAN IT LOOKS, WHICH IS KEPT "
-               "BECAUSE A READER WHO RE-DERIVES IT WILL RE-INTRODUCE IT: this arm is reached ONLY when the "
-               "height BEHAVES AS AUTO, and a height the author DECLARED behaved as auto whenever its unit "
-               "was one lexbor could not parse — `lxb_css_property_state_length` returns false when "
-               "`lxb_css_unit_absolute_relative_by_name` answers NULL, and a dropped declaration leaves the "
-               "initial `auto` behind with nothing anywhere to say so. MEASURED on a frozen native binary "
-               "with controls both ways: a `height` of `100dvh`, of `100cqh` and of an INVENTED `100zzq` all "
-               "reached THIS crash, while `100vh` and `50em` did not reach it at all. THE TWO TABLES NOW "
-               "AGREE: engine/cssunitgen.mjs generates lexbor's from its own unit families and refuses to "
-               "finish while any unit core/css/css_length.c's `css_length_is_length_unit` admits is one "
-               "lexbor cannot resolve, so `node engine/cssunitgen.mjs --check` is the standing derivation "
-               "and answers 0. RETIREMENT: this paragraph goes when an ARTIFACT built after that landing "
-               "shows a declared `100dvh` reaching css_length.c's viewport-families crash instead of this "
-               "arm — a BUILD AND AN INSTALL, which is an act only the agent that owns builds may perform",
-               box_subject(el, nbuf, sizeof nbuf));
-        return false;
+        /* THE `column` ARM, WHICH IS NOW A CALL AND WAS THE CRASH. §5.1 has just made this container's block
+           axis its MAIN axis, so the auto HEIGHT asked for is its MAIN size and neither §9.6 "Cross-Axis
+           Alignment" nor a flex line has anything to say about it. §9.2 "Line Length Determination"' last step
+           is the whole composition in one sentence — "Determine the main size of the flex container using the
+           rules of the formatting context in which it participates. The automatic block size of a block-level
+           flex container is its max-content size." — and the max-content MAIN size is css-flexbox-1 §9.9.1
+           "Flex Container Intrinsic Main Sizes", which core/layout/flex_intrinsic_size.h answers in this axis.
+           WHAT THE CRASH THAT STOOD HERE TOLD ITS READER TO BUILD IS WHAT WAS BUILT, and two clauses of it are
+           worth keeping because a reader will re-derive them: §9.9.1's conformance sentence lets an
+           implementation choose the Web-compatible Algorithm, §9.9.1.2 "Web-compatible Intrinsic Sizing
+           Algorithm: Max-content Size and Min-content Single-line Size", whose max-content half is one sentence
+           of arithmetic over the ITEMS with no line in it; and what differed from the INLINE-axis walk beside
+           it was EVERY OPERAND'S AXIS and nothing else, so what landed is that walk with its main-axis property
+           names and its measurement parameterised rather than a second copy of §9.9.3 "Flex Item Intrinsic Size
+           Contributions".
+           THE CONFORMANCE SENTENCE IS SCOPED AND THE OLD CRASH QUOTED IT CUT, which is recorded because the cut
+           was harmless here and would not be one axis over: §9.9.1 reads "For max-content sizes, and for
+           single-line min-content sizes, an implementation is conformant …", so the choice does NOT extend to a
+           MULTI-LINE min-content size, which §9.9.1 hands to §9.9.1.3 "Multi-line Min-content Algorithm"
+           unconditionally. Nothing on this path asks for one — a max-content main size is one algorithm for
+           every container — so no multi-line arm is missing here and a reader must not add a refusal for one.
+           IT IS A CONTENT EXTENT, which is what this function's contract returns and what §9.9.1.2's sum is:
+           every operand is an item's own OUTER contribution inside the container's content box, so there is no
+           edge to convert and css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"' conversion
+           stays with the caller that exposes a used value, exactly as it does for the `row` arm below. */
+        *out = flex_intrinsic_max_content_main_block_size(el);
+        return true;
     }
 
     /* THE `row` ARM, WHICH IS A CALL AND NOT AN ALGORITHM. §5.1 has just made this container's block axis its
@@ -2131,8 +2123,9 @@ CssPx block_flow_auto_height(lxb_dom_element_t *el)
     free(d);
     /* THE FLEX DISPATCH IS NOT AN `if` IN FRONT OF THIS WALK, IT IS A ROUTE THAT MAY ANSWER. A `row`
        container's auto height is css-flexbox-1 §9.6 "Cross-Axis Alignment"' content-based cross size and
-       returns here; the `column` arm and the vertical writing modes still crash by name and return FALSE,
-       and their fall-through into §10.6.3's stack below is the release arm this walk already had for them. */
+       returns here, and so does the `column` arm's §9.9.1 "Flex Container Intrinsic Main Sizes" max-content
+       main size. The VERTICAL WRITING MODES still crash by name and return FALSE, and their fall-through into
+       §10.6.3's stack below is the release arm this walk already had for them. */
     if (flex) {
         CssPx cross;
 

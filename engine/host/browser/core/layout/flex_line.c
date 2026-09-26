@@ -13,8 +13,8 @@
 #include "core/layout/box_subject.h"
 #include "core/layout/flex_item.h"
 #include "core/layout/flex_line.h"
+#include "core/layout/intrinsic_block_size.h"
 #include "core/layout/intrinsic_size.h"
-#include "core/layout/line_box.h"
 #include "core/layout/replaced_element.h"
 #include "core/layout/used_value.h"
 
@@ -182,7 +182,6 @@ typedef struct {
 static FlMainSizes fl_measure_element(lxb_dom_element_t *el, bool vertical)
 {
     FlMainSizes out;
-    char nbuf[160];
 
     if (!vertical) {
         IntrinsicInlineSizes m = intrinsic_inline_sizes(el);
@@ -191,37 +190,25 @@ static FlMainSizes fl_measure_element(lxb_dom_element_t *el, bool vertical)
         out.max_content = m.max_content;
         return out;
     }
-    /* A REPLACED BOX IS REFUSED HERE AND `block_flow_auto_height` CANNOT REFUSE IT, which is why this is a
-       precondition of THIS call and not a second copy of that entry's own. That walk's guard is over the box
-       being a BLOCK CONTAINER, and css-flexbox-1 §4 "Flex Items" blockifies every item — so an `img` flex
-       item computes `display: block`, passes that guard, and is walked for BLOCK-LEVEL CHILDREN IT HAS NONE
-       OF, which answers ZERO for a box whose automatic block size is its natural height. That is the one
-       shape this measurement can get wrong while returning a number, and that entry's own header says the
-       classification is the caller's: it walks `el`'s CHILDREN and asks nothing about what kind of box they
-       belong to. THE INLINE ARM ABOVE ALREADY REFUSES THE SAME BOX at the same point
-       of the same walk — core/layout/intrinsic_size.c crashes for a replaced element by name — so this is
-       the two arms agreeing rather than a new restriction. */
-    if (replaced_element_of(el).replaced)
-        DFAILF("%s: this FLEX ITEM is a REPLACED element and its MAIN axis is the BLOCK one, so the "
-               "automatic block size css-sizing-3 §3.2 \"Sizing Values: the <length-percentage [0,∞]>, auto "
-               "| none, stretch, min-content, max-content, and fit-content values\" sends both intrinsic "
-               "keywords to is NOT CSS 2.1 §10.6.3 \"Block-level non-replaced elements in normal flow when "
-               "'overflow' computes to 'visible'\"' stack of block-level children — that section says "
-               "non-replaced in its own title. It is CSS 2.1 §10.6.2 \"Inline replaced elements, block-level "
-               "replaced elements in normal flow, 'inline-block' replaced elements in normal flow and "
-               "floating replaced elements\", whose arms derive the height from the box's natural dimensions "
-               "and intrinsic ratio. THE ARITHMETIC IS BUILT AND WHAT IS MISSING IS THE WIRING: "
-               "core/layout/replaced_element.h answers css-images-3 §4.1 \"Object-Sizing Terminology\"'s "
-               "natural dimensions and core/layout/used_value.c runs CSS 2.1 §10.6.2 over them, so BUILD a "
-               "block-axis "
-               "twin of the export css-sizing-3 §5.1 \"Intrinsic Sizes\" already justifies for the inline "
-               "one — css-sizing-3 §5.1's own closing sentence is the argument for both, \"a block-level "
-               "or inline-level "
-               "replaced element whose height or width behaves as auto is effectively defined to use its "
-               "max-content size\" — and this arm becomes a call. THE OTHER AXIS REFUSES THE SAME BOX AT THE "
-               "SAME POINT and names the inline half, so the two are one absence read twice",
-               box_subject(el, nbuf, sizeof nbuf));
-    out.min_content = out.max_content = block_flow_auto_height(el);
+    /* THE BLOCK ARM IS A CALL AND THE REFUSALS WENT WITH THE MEASUREMENT. What stood here was
+       `block_flow_auto_height` reached directly, under a REPLACED-element refusal whose own remedy clause told
+       its reader to build a block-axis twin of the export css-sizing-3 §5.1 "Intrinsic Sizes" already justifies
+       for the inline one. THAT CLAUSE IS PARAPHRASED AND NOT QUOTED, DELIBERATELY: a run of this tree's own
+       prose inside double quotation marks is judged against the nearest preceding citation's section, so
+       quoting a deleted crash message here would read as a fabricated quotation of css-sizing-3 — and a
+       code span cannot mask it, because the pattern that would crosses at most one newline and this sentence
+       spans more. That twin is core/layout/intrinsic_block_size.h and this is it: the css-sizing-3 §3.2
+       derivation, the argument for `block_flow_auto_height` over the used-value entry, the replaced-element
+       refusal and the writing-mode precondition are all stated there ONCE, for the two passes that need them.
+       THE SECOND CONSUMER IS WHAT MADE IT A COMPONENT: core/layout/flex_intrinsic_size.c reaches the same
+       measurement for css-flexbox-1 §9.9.3 "Flex Item Intrinsic Size Contributions"' outer max-content size,
+       and the two passes diverge over the DECLARATION and the PERCENTAGE — which is why they keep two flex-base
+       -size functions and two clamps — and may not diverge over the measurement both of them substitute a
+       declaration away in favour of.
+       THE PAIR IS STILL ONE NUMBER TWICE AND THAT IS §3.2 rather than this call: both intrinsic keywords send a
+       box's BLOCK size to its automatic size, so `FlMainSizes`' two fields carry the shape the inline axis needs
+       and not a second measurement. */
+    out.min_content = out.max_content = intrinsic_block_size(el);
     return out;
 }
 
@@ -232,8 +219,10 @@ static FlMainSizes fl_measure_element(lxb_dom_element_t *el, bool vertical)
    "Block-level elements and block boxes" therefore "establishes an inline formatting context and thus
    contains only inline-level boxes" — so CSS 2.1 §10.6.3's list is answered by its first item, "the bottom
    edge of
-   the last line box", and `line_box_content_height` is that measurement. `block_flow_auto_height` cannot be
-   asked instead, for the reason its own contract gives: it is stated over an ELEMENT, and this box has none.
+   the last line box", and `line_box_content_height` is that measurement — reached through
+   core/layout/intrinsic_block_size.h's run entry, which is where that derivation and the ELEMENT arm's now both
+   live. `block_flow_auto_height` cannot be asked instead, for the reason its own contract gives: it is stated
+   over an ELEMENT, and this box has none.
    `style` IS THE CONTAINER because the anonymous box has no cascade of its own — CSS 2.2 §9.2.1.1 "Anonymous
    block boxes" gives it "the properties of anonymous boxes are inherited from the enclosing non-anonymous
    box", and css-flexbox-1 §4 says the same of this one ("the anonymous item's box is unstyleable"). That is
@@ -249,14 +238,7 @@ static FlMainSizes fl_measure_run(lxb_dom_element_t *container, BlockFlowRun run
         out.max_content = m.max_content;
         return out;
     }
-    {
-        bool any_line_box = false;
-        CssPx first = css_px(0.0), last = css_px(0.0);
-
-        out.min_content = out.max_content =
-            line_box_content_height(container, run, line_box_available_width_derived(), &any_line_box, &first,
-                                    &last);
-    }
+    out.min_content = out.max_content = intrinsic_block_run_size(container, run);
     return out;
 }
 

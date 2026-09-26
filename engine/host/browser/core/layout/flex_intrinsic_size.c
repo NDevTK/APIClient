@@ -13,6 +13,7 @@
 #include "core/layout/box_subject.h"
 #include "core/layout/flex_intrinsic_size.h"
 #include "core/layout/flex_item.h"
+#include "core/layout/intrinsic_block_size.h"
 #include "core/layout/intrinsic_size.h"
 
 /* css-writing-modes-4 §7.3 "Orthogonal Flows"' PERPENDICULAR CASE, REFUSED. §7.3 states the alternative in two
@@ -131,6 +132,118 @@ static IntrinsicInlineSizes fis_item_cross_contribution(lxb_dom_element_t *conta
     }
 }
 
+/* THE MAIN AXIS'S THREE SIZING PROPERTY NAMES AND ITS PHYSICAL AXIS, composed once. css-flexbox-1 §9.9.3
+   "Flex Item Intrinsic Size Contributions" and §9.2 "Line Length Determination"' step 3 are stated in the
+   container's MAIN axis and name no physical property; css-writing-modes-4 §7.2 "Dimensional Mapping" pins each
+   triple to a physical extent — "The height properties (height, min-height, and max-height) refer to the
+   physical height, and the width properties (width, min-width, and max-width) refer to the physical width" — so
+   a physical name is only ever reached by composing the two, and this is where that composition is made.
+   `vertical` IS THE CALLER'S ANSWER AND NOT A QUESTION ASKED HERE, for the reason the entry at the bottom of
+   this file states: which section owns a PHYSICAL axis is a fact about the container's `flex-direction` and
+   core/layout/flex_item.h's `flex_container_axis_is_vertical` is the composition that answers it.
+   `flex-basis` IS NOT ON THIS TABLE AND MUST NOT BE, which is core/layout/flex_line.c's finding at its own
+   copy: css-flexbox-1 §7.2.3 "The flex-basis property" gives it ONE spelling on either axis, so a mapping that
+   renamed it would rename a property the axis does not move. */
+typedef struct {
+    const char *size;       /* §9.9.3's "outer preferred size" — §7.1's "main size property" */
+    const char *min_size;
+    const char *max_size;
+    IntrinsicAxis axis;     /* which pair of edges §2.2's outer size and §3.3's conversion read */
+} FisMainProps;
+
+static FisMainProps fis_main_props(bool vertical)
+{
+    FisMainProps p;
+
+    p.size     = vertical ? "height"     : "width";
+    p.min_size = vertical ? "min-height" : "min-width";
+    p.max_size = vertical ? "max-height" : "max-width";
+    p.axis     = vertical ? INTRINSIC_AXIS_VERTICAL : INTRINSIC_AXIS_HORIZONTAL;
+    return p;
+}
+
+/* css-sizing-3 §5.1 "Intrinsic Sizes"' TWO SIZES IN THE CONTAINER'S MAIN AXIS, which is a DIFFERENT FACT from
+   core/layout/intrinsic_size.h's `IntrinsicInlineSizes` and not a second copy of it — that type is named for the
+   INLINE axis because that is the only axis its walk measures, and a `column` container's main axis is the BLOCK
+   one. The two coincide for a `row` container in a `horizontal-tb` mode and for nothing else, so a caller that
+   read one as the other would report a box's height as its width. core/layout/flex_line.c declares the same type
+   for the same reason and states it at length; this is that decision applied to the INTRINSIC pass.
+   THE CROSS WALK IN THIS FILE KEEPS `IntrinsicInlineSizes` AND THAT IS NOT AN INCONSISTENCY: §9.9.2 "Flex
+   Container Intrinsic Cross Sizes" is reached here only for a container whose CROSS axis IS its inline axis, so
+   every number in that walk really is an inline size and the type's name is a true statement about it. */
+typedef struct {
+    CssPx min_content;
+    CssPx max_content;
+} FisMainSizes;
+
+/* ONE ITEM'S OWN css-sizing-3 §5.1 PAIR IN THE MAIN AXIS — the measurement §9.9.3's first step takes "the larger
+   of" against a declared size, before any cap, floor or clamp.
+   THE BLOCK ARM IS ONE NUMBER TWICE AND css-sizing-3 §3.2 IS WHY, in its own words at BOTH intrinsic keywords:
+   "for a box's block size, unless otherwise specified, this is equivalent to its automatic size". So the block
+   axis has ONE intrinsic size and this pair is the inline axis's shape carried across rather than a measurement
+   made twice — core/layout/intrinsic_block_size.h is where that derivation and the walk it reaches live, shared
+   with §9.2's step 3 in the USED pass so the two passes cannot come to disagree about how tall a box's content
+   is. */
+static FisMainSizes fis_measure_item(lxb_dom_element_t *item, bool vertical)
+{
+    FisMainSizes out;
+
+    if (!vertical) {
+        IntrinsicInlineSizes m = intrinsic_inline_sizes(item);
+
+        out.min_content = m.min_content;
+        out.max_content = m.max_content;
+        return out;
+    }
+    out.min_content = out.max_content = intrinsic_block_size(item);
+    return out;
+}
+
+/* THE SAME PAIR FOR §4's ANONYMOUS CHILD TEXT SEQUENCE, whose box has no element. Both arms are the entry that
+   owns an anonymous box's measurement on that axis, and neither adds an edge — see `fis_child_main_contribution`
+   for why §4 makes every one of them zero. */
+static FisMainSizes fis_measure_run(lxb_dom_element_t *container, BlockFlowRun run, bool vertical)
+{
+    FisMainSizes out;
+
+    if (!vertical) {
+        IntrinsicInlineSizes m = intrinsic_inline_run_sizes(container, run);
+
+        out.min_content = m.min_content;
+        out.max_content = m.max_content;
+        return out;
+    }
+    out.min_content = out.max_content = intrinsic_block_run_size(container, run);
+    return out;
+}
+
+/* css-sizing-3 §2.2 "Intrinsic Size Contributions"' OUTER STEP IN THE MAIN AXIS.
+   IT IS TWO ENTRIES BEHIND ONE ARM AND NOT AN AXIS PARAMETER, which is core/layout/intrinsic_size.h's own split
+   and is worth restating at the site that consumes both: §2.2's FLOOR — "if the ideal max-content contribution
+   would be smaller than the min-content contribution (e.g. due to the use of negative margins), the effective
+   max-content contribution is floored by the min-content contribution" — is a rule about a pair that can INVERT,
+   and the block axis has one intrinsic size for it to have nothing to compare. The horizontal arm therefore
+   takes the pair entry, which applies that floor, and the vertical arm takes the single-extent entry, which has
+   no floor to apply and no second member to apply it to. */
+static FisMainSizes fis_outer_main(lxb_dom_element_t *el, bool vertical, FisMainSizes inner)
+{
+    FisMainSizes out;
+
+    if (!vertical) {
+        IntrinsicInlineSizes p;
+
+        p.min_content = inner.min_content;
+        p.max_content = inner.max_content;
+        p = intrinsic_outer_contribution(el, p);
+        out.min_content = p.min_content;
+        out.max_content = p.max_content;
+        return out;
+    }
+    out.min_content = intrinsic_outer_block_contribution(el, inner.min_content);
+    out.max_content = intrinsic_outer_block_contribution(el, inner.max_content);
+    return out;
+}
+
 /* css-flexbox-1 §9.2 "Line Length Determination"'s FLEX BASE SIZE of `item`, in the container's MAIN axis —
    which for every caller here is the INLINE axis, by §5.1's mapping. `measured` is the item's own §5.1 pair.
    TWO OF §9.2's FIVE ARMS ARE REACHABLE AND THE ROUTING IS §7.1's, NOT §7.2.3's. §7.1 "The flex Shorthand"
@@ -156,17 +269,21 @@ static IntrinsicInlineSizes fis_item_cross_contribution(lxb_dom_element_t *conta
    sibling agree with the rule above, 48 of 48. WHAT WOULD RETIRE THIS NOTE is a case that separates the two
    readings the other way; until one exists, the oracle outranks the arm and this cites the two sentences that
    agree with the oracle. */
-static CssPx fis_flex_base_size(lxb_dom_element_t *item, IntrinsicInlineSizes measured)
+static CssPx fis_flex_base_size(lxb_dom_element_t *item, bool vertical, FisMainSizes measured)
 {
+    FisMainProps prop = fis_main_props(vertical);
     CssLength basis = css_computed_length(item, "flex-basis");
     CssPx v;
 
     if (basis.kind == CSS_LENGTH_ABSOLUTE) {
-        /* §3.3's conversion is the same one a declared `width` needs, so it is the same entry: §7.2.3's own
+        /* §3.3's conversion is the same one a declared main size needs, so it is the same entry: §7.2.3's own
            closing sentence is that "flex-basis determines the size of the content box, unless otherwise
-           specified, such as by box-sizing". Read through the `width` spelling because that entry takes the
-           property NAME, and `flex-basis`'s initial keyword is `auto` exactly as `width`'s is. */
-        if (intrinsic_declared_sizing_px(item, "flex-basis", "auto", &v)) return v;
+           specified, such as by box-sizing". THE PROPERTY NAME IS `flex-basis` ITSELF ON EITHER AXIS — §7.2.3
+           gives it one spelling, which is why `fis_main_props` does not carry it — and `prop.axis` is what
+           tells that entry WHICH pair of paddings and border widths to subtract, which is the half a bare
+           property name could never have carried. Its initial keyword is `auto` exactly as a main size
+           property's is. */
+        if (intrinsic_declared_sizing_px(item, prop.axis, "flex-basis", "auto", &v)) return v;
         DFAIL("css-flexbox-1 §7.2.3 \"The flex-basis property\"' computed value was an absolute length and "
               "core/layout/intrinsic_size.h's §3.3 conversion declined it. The two read the same cascade entry "
               "one call apart, so they cannot disagree about its shape");
@@ -186,7 +303,10 @@ static CssPx fis_flex_base_size(lxb_dom_element_t *item, IntrinsicInlineSizes me
            "`Value:` line of `content | <'width'>` admits");
     if (strcmp(basis.keyword, "content") == 0) return measured.max_content;
     if (strcmp(basis.keyword, "auto") == 0) {
-        if (intrinsic_declared_sizing_px(item, "width", "auto", &v)) return v;
+        /* §7.1's `auto` reads "the value of the main size property", which is the one the axis names and
+           never `width` — the sentence is stated flow-relatively and `fis_main_props` is where it is made
+           physical. core/layout/flex_line.c's own §9.2 arm states the identical correction. */
+        if (intrinsic_declared_sizing_px(item, prop.axis, prop.size, "auto", &v)) return v;
         return measured.max_content;
     }
     DFAILF("`flex-basis` computed to the keyword `%s`. css-flexbox-1 §7.2.3 \"The flex-basis property\" gives "
@@ -202,7 +322,10 @@ static CssPx fis_flex_base_size(lxb_dom_element_t *item, IntrinsicInlineSizes me
 }
 
 /* css-flexbox-1 §9.9.3 "Flex Item Intrinsic Size Contributions" for ONE ELEMENT FLEX ITEM, as the OUTER pair
-   §9.9.1's arms sum and maximize over.
+   §9.9.1's arms sum and maximize over, IN THE CONTAINER'S MAIN AXIS — `vertical` says which physical axis that
+   is and `fis_main_props` turns it into the three property names and the edge pair every step below reads. The
+   section is stated flow-relatively throughout and names no physical property, so one walk answers both arms of
+   §5.1's mapping and a second copy of it would be two readings of one section.
    THE SECTION IS FOUR STEPS AND THEIR ORDER IS ITS OWN. "The main-size min-content contribution of a flex item
    is the larger of its outer min-content size and outer preferred size if that is not an automatic size", the
    same sentence with max-content for the other half, and then: "each contribution is capped by the item's flex
@@ -219,42 +342,50 @@ static CssPx fis_flex_base_size(lxb_dom_element_t *item, IntrinsicInlineSizes me
    contribution size" — so the omission in §9.9.3 is deliberate and this ordering is what makes the two
    readings agree.
    NAMED RESIDUAL — §4.5 "Automatic Minimum Size of Flex Items" IS NOT BUILT, and the code above is right for
-   what the conformance corpus expects rather than unfinished. WHAT IS NOT COVERED: `min-width: auto` on a flex
-   item, which css-sizing-3 §3.2's "unless otherwise defined by the relevant layout module" hands to §4.5 —
-   "the used value of a main-axis automatic minimum size on a flex item whose computed overflow value is
-   non-scrollable is its content-based minimum size" — and which this clamp reads as the plain zero §3.2 gives
-   every other box. WHAT THE NEXT DIFF BUILDS: §4.5's three suggestions over this item, of which the content
-   size suggestion ("the min-content size in the main axis") is the pair's own min-content half and is already
-   in hand here, with the specified size suggestion taken from the same `width` read above; the transferred
-   size suggestion needs a preferred aspect ratio, which core/layout/replaced_element.h mints nowhere.
-   HOW ITS ABSENCE WOULD SHOW: a flex container whose reported intrinsic inline size is NARROWER than a real
-   browser's, for a document holding an item whose flex base size or `max-width` sits below that item's own
-   min-content size — read the container's measured width against the same document in Chrome, since both
-   numbers are a width and neither is a crash. The oracle is silent in the OTHER direction and that is why this
-   is a residual and not a defect: WPT's flex-container-min-content-001.html expects 0.2ch for a
+   what the conformance corpus expects rather than unfinished. WHAT IS NOT COVERED: an AUTOMATIC MINIMUM MAIN
+   SIZE on a flex item — the MIN SIZE PROPERTY the main axis names computing to `auto`, which css-sizing-3 §3.2's
+   "unless otherwise defined by the relevant layout module" hands to §4.5 — "the used value of a main-axis
+   automatic minimum size on a flex item whose computed overflow value is non-scrollable is its content-based
+   minimum size" — and which this clamp reads as the plain zero §3.2 gives every other box. IT IS STATED AS THE
+   PROPERTY THE AXIS NAMES AND NOT AS `min-width`, WHICH IS WHAT IT USED TO SAY: the enumeration was exact while
+   this walk ran on one axis, and naming a physical property in a clause about a flow-relative step is the
+   §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS shape in a residual — a reader building to it would have covered a
+   `row` container and left a `column` one exactly as uncovered while the clause read as spent. WHAT THE NEXT
+   DIFF BUILDS: §4.5's three suggestions over this item, of which the content size suggestion ("the min-content
+   size in the main axis") is the pair's own min-content half and is already in hand here, with the specified
+   size suggestion taken from the same main size read above; the transferred size suggestion needs a preferred
+   aspect ratio, which core/layout/replaced_element.h mints nowhere.
+   HOW ITS ABSENCE WOULD SHOW: a flex container whose reported intrinsic MAIN size is SMALLER than a real
+   browser's, for a document holding an item whose flex base size or max main size sits below that item's own
+   min-content size — read the container's measured extent against the same document in Chrome, since the number
+   is a size on both axes and neither is a crash. The oracle is silent in the OTHER direction and that is why
+   this is a residual and not a defect: WPT's flex-container-min-content-001.html expects 0.2ch for a
    `flex: 0 1 0.2ch` item whose min-content size is 1ch, which is the answer a zero floor gives and not the one
    §4.5 gives. */
-static IntrinsicInlineSizes fis_item_main_contribution(lxb_dom_element_t *container, lxb_dom_element_t *item)
+static FisMainSizes fis_item_main_contribution(lxb_dom_element_t *container, lxb_dom_element_t *item,
+                                               bool vertical)
 {
-    IntrinsicInlineSizes measured, out;
+    FisMainProps prop = fis_main_props(vertical);
+    FisMainSizes measured, out;
     CssPx base, v;
 
     fis_require_parallel(container, item);
-    measured = intrinsic_inline_sizes(item);
+    measured = fis_measure_item(item, vertical);
     out = measured;
 
     /* STEP ONE — "the larger of its outer min-content size and outer preferred size if that is not an
-       automatic size". The preferred size is the main size property, which §5.1's mapping makes `width` for
-       every container reaching this walk, and its automatic value is the one css-sizing-3 §3.2 "Sizing
+       automatic size". The preferred size is the MAIN SIZE PROPERTY, which §5.1's mapping makes `width` for a
+       container whose main axis is its INLINE one and `height` for a `column` container in a horizontal writing
+       mode — `fis_main_props` is that composition — and its automatic value is the one css-sizing-3 §3.2 "Sizing
        Values: the <length-percentage [0,∞]>, auto | none, stretch, min-content, max-content, and fit-content
        values" describes for `auto`: "specifies an automatic size". So the FALSE arm of the read is that
        condition of §9.9.3 being met rather than a gap in this walk. */
-    if (intrinsic_declared_sizing_px(item, "width", "auto", &v)) {
+    if (intrinsic_declared_sizing_px(item, prop.axis, prop.size, "auto", &v)) {
         out.min_content = css_px_max(out.min_content, v);
         out.max_content = css_px_max(out.max_content, v);
     }
     /* STEPS TWO AND THREE. */
-    base = fis_flex_base_size(item, measured);
+    base = fis_flex_base_size(item, vertical, measured);
     if (flex_item_flexibility_factor(item, "flex-grow") <= 0.0) {
         out.min_content = css_px_min(out.min_content, base);
         out.max_content = css_px_min(out.max_content, base);
@@ -263,22 +394,26 @@ static IntrinsicInlineSizes fis_item_main_contribution(lxb_dom_element_t *contai
         out.min_content = css_px_max(out.min_content, base);
         out.max_content = css_px_max(out.max_content, base);
     }
-    /* STEP FOUR — "and then further clamped by the item's min/max main size", in CSS 2.1 §10.4 "Minimum and
-       maximum widths: 'min-width' and 'max-width'"' order: the maximum caps first and the minimum floors last,
-       so a `min-width` above a `max-width` wins. The `auto` arm is the residual above. */
-    if (intrinsic_declared_sizing_px(item, "max-width", "none", &v)) {
+    /* STEP FOUR — "and then further clamped by the item's min/max main size", in CSS 2.1's own order: the
+       maximum caps first and the minimum floors last, so a `min-width` above a `max-width` wins.
+       WHICH SECTION STATES THAT ORDER DEPENDS ON THE AXIS AND BOTH STATE IT THE SAME WAY, which is why one
+       ordering serves both: CSS 2.1 §10.4 "Minimum and maximum widths: 'min-width' and 'max-width'" for the
+       horizontal axis and CSS 2.1 §10.7 "Minimum and maximum heights: 'min-height' and 'max-height'" for the
+       vertical one. The `auto` arm is the residual above. */
+    if (intrinsic_declared_sizing_px(item, prop.axis, prop.max_size, "none", &v)) {
         out.min_content = css_px_min(out.min_content, v);
         out.max_content = css_px_min(out.max_content, v);
     }
-    if (intrinsic_declared_sizing_px(item, "min-width", "auto", &v)) {
+    if (intrinsic_declared_sizing_px(item, prop.axis, prop.min_size, "auto", &v)) {
         out.min_content = css_px_max(out.min_content, v);
         out.max_content = css_px_max(out.max_content, v);
     }
-    return intrinsic_outer_contribution(item, out);
+    return fis_outer_main(item, vertical, out);
 }
 
-/* css-flexbox-1 §9.9.1 "Flex Container Intrinsic Main Sizes", for the container whose MAIN axis is its inline
-   axis — a `row` or `row-reverse` container, by §5.1's mapping.
+/* css-flexbox-1 §9.9.1 "Flex Container Intrinsic Main Sizes", in the container's MAIN axis — `vertical` says
+   which physical axis that is, so a `row` container reaches this walk for an INLINE size and a `column`
+   container for a BLOCK one. The section names no physical axis anywhere in it.
    WHICH ALGORITHM, AND WHY THE SECTION LETS THIS CHOOSE: §9.9.1 says outright that "an implementation is
    conformant to CSS Flexible Box Layout if it conforms to either the Ideal Algorithm or the Web-compatible
    Algorithm", of max-content sizes and single-line min-content sizes. This is the SECOND, §9.9.1.2
@@ -311,9 +446,9 @@ static IntrinsicInlineSizes fis_item_main_contribution(lxb_dom_element_t *contai
    wrong in §9.9.1.3's MAXIMUM, because css-sizing-3 §2.2 "Intrinsic Size Contributions" permits a negative
    outer contribution (CSS 2.1 §8.3 "Margin properties": "negative values for margin properties are allowed")
    and a zero would floor the answer above every one of them. A skipped item is skipped, not zeroed. */
-static IntrinsicInlineSizes fis_child_main_contribution(lxb_dom_element_t *container, lxb_dom_node_t *child,
-                                                        FlexItemChildKind kind, lxb_dom_node_t **next,
-                                                        bool *counts)
+static FisMainSizes fis_child_main_contribution(lxb_dom_element_t *container, lxb_dom_node_t *child,
+                                                FlexItemChildKind kind, bool vertical,
+                                                lxb_dom_node_t **next, bool *counts)
 {
     /* THE KIND IS THE CALLER'S AND IS NOT RE-ASKED, for the reason the cross walk states in full: §4's
        classification of a TEXT node walks the whole sequence it is in, so asking twice is two readings of one
@@ -331,21 +466,21 @@ static IntrinsicInlineSizes fis_child_main_contribution(lxb_dom_element_t *conta
         seq.after = child->prev;
         seq.end = end;
         *next = end;
-        return intrinsic_outer_contribution(NULL, intrinsic_inline_run_sizes(container, seq));
+        return fis_outer_main(NULL, vertical, fis_measure_run(container, seq, vertical));
     }
     case FLEX_ITEM_CHILD_ELEMENT: {
         lxb_dom_element_t *item = lxb_dom_interface_element(child);
 
         *next = child->next;
         if (flex_item_is_collapsed(item)) {
-            IntrinsicInlineSizes none;
+            FisMainSizes none;
 
             *counts = false;
             none.min_content = css_px(0.0);
             none.max_content = css_px(0.0);
             return none;
         }
-        return fis_item_main_contribution(container, item);
+        return fis_item_main_contribution(container, item, vertical);
     }
     case FLEX_ITEM_CHILD_NONE:
         break;
@@ -356,7 +491,7 @@ static IntrinsicInlineSizes fis_child_main_contribution(lxb_dom_element_t *conta
        failure at every caller and not a crash at one. */
     }
     {
-        IntrinsicInlineSizes none;
+        FisMainSizes none;
 
         DFAIL("css-flexbox-1 §4's classification answered FLEX_ITEM_CHILD_NONE for a child this walk had "
               "already decided to measure. The caller skips that value before it asks for a contribution, so "
@@ -371,10 +506,10 @@ static IntrinsicInlineSizes fis_child_main_contribution(lxb_dom_element_t *conta
     }
 }
 
-static IntrinsicInlineSizes fis_main_sizes(lxb_dom_element_t *el, bool multi_line)
+static FisMainSizes fis_main_sizes(lxb_dom_element_t *el, bool vertical, bool multi_line)
 {
     lxb_dom_node_t *c = lxb_dom_interface_node(el)->first_child;
-    IntrinsicInlineSizes out;
+    FisMainSizes out;
     bool any = false;
 
     /* THE EMPTY CONTAINER IS A REAL ANSWER: a sum over no items is zero and so is a maximum over none, which
@@ -388,11 +523,11 @@ static IntrinsicInlineSizes fis_main_sizes(lxb_dom_element_t *el, bool multi_lin
     while (c != NULL) {
         lxb_dom_node_t *next = c->next;
         FlexItemChildKind kind = flex_item_child_kind(el, c);
-        IntrinsicInlineSizes one;
+        FisMainSizes one;
         bool counts;
 
         if (kind == FLEX_ITEM_CHILD_NONE) { c = next; continue; }
-        one = fis_child_main_contribution(el, c, kind, &next, &counts);
+        one = fis_child_main_contribution(el, c, kind, vertical, &next, &counts);
         DCHECK(next != c,
                "css-flexbox-1 §4's item walk did not advance past the child it had just measured, so this walk "
                "would measure the same flex item for ever. A text sequence always contains at least the node "
@@ -482,6 +617,9 @@ static IntrinsicInlineSizes fis_cross_sizes(lxb_dom_element_t *el, bool multi_li
 
 IntrinsicInlineSizes flex_intrinsic_inline_sizes(lxb_dom_element_t *el)
 {
+    IntrinsicInlineSizes out;
+    FisMainSizes main;
+
     DCHECK(el != NULL, "css-flexbox-1 §9.9's intrinsic sizes were asked for with no element");
     /* §5.1's MAPPING RUN BACKWARDS — see flex_intrinsic_size.h. Asked first and over the whole container,
        because §9.9.1 and §9.9.2 share no step: one sums along an axis and the other takes a maximum across
@@ -490,5 +628,50 @@ IntrinsicInlineSizes flex_intrinsic_inline_sizes(lxb_dom_element_t *el)
     if (flex_container_main_axis(el) == FLEX_MAIN_AXIS_BLOCK)
         return fis_cross_sizes(el, flex_container_is_multi_line(el));
 
-    return fis_main_sizes(el, flex_container_is_multi_line(el));
+    /* §9.9.1 IN THE HORIZONTAL AXIS, WHICH FOR THIS CONTAINER IS BOTH ITS MAIN AND ITS INLINE ONE — that is
+       what makes the conversion between the two types SOUND here rather than a cast. `FisMainSizes` is a pair
+       in the MAIN axis and `IntrinsicInlineSizes` is a pair in the INLINE axis; §5.1 has just established that
+       this container's main axis "has the same orientation as the inline axis of the current writing mode", so
+       for this box and no other the two types describe one number each. A `column` container never reaches
+       this line, which is why the conversion cannot be reached with the two axes apart. */
+    main = fis_main_sizes(el, false, flex_container_is_multi_line(el));
+    out.min_content = main.min_content;
+    out.max_content = main.max_content;
+    return out;
+}
+
+CssPx flex_intrinsic_max_content_main_block_size(lxb_dom_element_t *el)
+{
+    char nbuf[160];
+
+    DCHECK(el != NULL,
+           "css-flexbox-1 §9.9.1's max-content main size was asked for with no element");
+    /* §5.1's MAPPING, ASSERTED AND NOT ASKED, which is the difference between this entry and the one above.
+       That entry answers an INLINE size and so must DISPATCH on which of §9.9.1 and §9.9.2 owns it; this one
+       answers the MAIN size outright, so the only thing §5.1 decides is whether the caller has come to the
+       right axis at all. A `row` container's main size is its INLINE size and `flex_intrinsic_inline_sizes` is
+       where that is answered. */
+    DCHECKF(flex_container_main_axis(el) == FLEX_MAIN_AXIS_BLOCK,
+            "%s: this FLEX CONTAINER's main axis is its INLINE axis (css-flexbox-1 §5.1 \"Flex Flow Direction: "
+            "the flex-direction property\": a `row` container's main axis \"has the same orientation as the "
+            "inline axis of the current writing mode\"), so the max-content MAIN size asked for here is not a "
+            "block size and this entry would measure it along the wrong dimension. "
+            "`flex_intrinsic_inline_sizes` is the entry for it, and it reaches the same §9.9.1 walk with its "
+            "other axis",
+            box_subject(el, nbuf, sizeof nbuf));
+    /* THERE IS NO MULTI-LINE ARM AND THAT IS §9.9.1's OWN SCOPING RATHER THAN A GAP — which is worth stating
+       because the walk above carries `multi_line` and `fis_cross_sizes` REFUSES a multi-line container by name,
+       so a reader arriving here expects a third refusal. §9.9.1 hands only the MIN-content size of a multi-line
+       container to §9.9.1.3 "Multi-line Min-content Algorithm" — "For the min-content size of a multi-line flex
+       container, see §9.9.1.3" — and §9.9.1.3's own title says min-content. §9.9.1.2's max-content sentence is
+       stated over "a flex container" with no line-count condition on it at all, and its conformance sentence is
+       scoped to "max-content sizes, and … single-line min-content sizes". So the MAX-CONTENT main size is one
+       algorithm for every container, the `multi_line` argument below can only reach the half this entry does not
+       read, and passing the container's real answer is what keeps that true if a min-content reader is ever
+       built rather than a literal that would then be a lie.
+       THE MIN-CONTENT HALF IS NOT RETURNED BECAUSE IT HAS NO CALLER, and that is §Do-subproblems-IN-ORDER
+       rather than an omission: the only thing that could ask for it is css-sizing-3 §3.2's `min-content`
+       keyword on a `min-height`, and this engine records no computed-value rule for that keyword — every entry
+       that reads the grammar asserts so by name. A pair here would be one half nothing exercises. */
+    return fis_main_sizes(el, true, flex_container_is_multi_line(el)).max_content;
 }

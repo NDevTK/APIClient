@@ -106,6 +106,37 @@
    stops it being asked at a used-value site, where its zero would be a wrong number no assert could see. */
 CssPx used_inline_box_edge_px(lxb_dom_element_t *el, bool trailing);
 
+/* WHICH PHYSICAL AXIS A SIZING PROPERTY OR A BOX EDGE IS READ ON. It is PHYSICAL and not flow-relative, and
+   that naming is a statement about this component rather than a convenience: css-writing-modes-4 §7.2
+   "Dimensional Mapping" pins the six sizing properties to physical extents in its own words — "The height
+   properties (height, min-height, and max-height) refer to the physical height, and the width properties
+   (width, min-width, and max-width) refer to the physical width" — and every edge property this file reads is
+   physical too (`margin-left`, `padding-top`, `border-right-width`). So a CALLER holding a flow-relative
+   question composes css-writing-modes-4 §6.4 "Abstract-to-Physical Mappings" first (core/css/css_logical.h's
+   `css_logical_axis_is_vertical`, which core/layout/flex_item.h's `flex_container_axis_is_vertical` composes
+   with css-flexbox-1 §5.1 "Flex Flow Direction: the flex-direction property") and hands the ANSWER here.
+   Naming these two values `inline` and `block` would put that mapping inside this file, where it is not made.
+   IT IS A REQUIRED PARAMETER ON `intrinsic_declared_sizing_px` AND NOT A DEFAULT, WHICH IS THE WHOLE REASON IT
+   EXISTS. That entry used to be hardcoded to the HORIZONTAL axis, so
+   `intrinsic_declared_sizing_px(el, "height", "auto", &v)` COMPILED and subtracted this box's LEFT and RIGHT
+   padding and border widths from a declared HEIGHT — a wrong number for a real document with no assert that
+   could see it, and the one shape css-flexbox-1 §9.9.1 "Flex Container Intrinsic Main Sizes" in the block axis
+   was always going to reach for. An enum in the position a property NAME used to occupy makes that call fail
+   to COMPILE, which is the state being made impossible rather than reported.
+   §2.2's OUTER SIZE TAKES NO AXIS PARAMETER AND HAS TWO ENTRIES INSTEAD, and that asymmetry is deliberate: the
+   pair entry applies §2.2's FLOOR, which is a rule about two numbers that can invert, and the block axis has
+   one intrinsic size for the floor to have nothing to compare. Each of those entries states its axis in its own
+   name; only the property-name entry, whose result is a single extent either way, is honestly one function.
+   THE VERTICAL ARM IS NOT A SECOND MEASUREMENT AND THIS TYPE DOES NOT CLAIM ONE: what it parameterises is which
+   pair of paddings and border widths §3.3's conversion subtracts, and `intrinsic_inline_sizes` below is still
+   the HORIZONTAL walk alone (core/layout/intrinsic_block_size.h is the other one). A caller that reads a
+   vertical declaration and then a horizontal measurement has composed two axes into one number, which is why
+   the two measurements live in two headers rather than behind one parameter. */
+typedef enum {
+    INTRINSIC_AXIS_HORIZONTAL = 0,
+    INTRINSIC_AXIS_VERTICAL   = 1
+} IntrinsicAxis;
+
 /* css-sizing-3 §5.1's PAIR. They are returned together and never separately because §2.1 defines them over the
    same content with only the soft wrap opportunities differing, so one walk produces both — and because the
    one relation between them (`min_content <= max_content`) is a statement about the pair that a caller holding
@@ -121,10 +152,14 @@ typedef struct {
    classification core/layout/block_flow.c owns. */
 IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el);
 
-/* ONE OF `el`'s THREE INLINE SIZING PROPERTIES as a CONTENT-box width in CSS pixels, for an INTRINSIC pass —
-   true when the property states a size the caller must apply, false when it states none. `name` is `width`,
-   `min-width` or `max-width` and `initial` is that property's initial value (`auto`, `auto`, `none`), which is
-   the only keyword the assertion inside admits.
+/* ONE OF `el`'s THREE SIZING PROPERTIES ON `axis` as a CONTENT-box extent in CSS pixels, for an INTRINSIC
+   pass — true when the property states a size the caller must apply, false when it states none. `name` is
+   `width`, `min-width` or `max-width` on the horizontal axis and `height`, `min-height` or `max-height` on the
+   vertical one, and `initial` is that property's initial value (`auto`, `auto`, `none`), which is the only
+   keyword the assertion inside admits. `axis` IS NOT DERIVED FROM `name` and must not be: it governs which
+   pair of paddings and border widths css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"
+   subtracts, and deriving one from the other would be a second table of the same six property names free to
+   disagree with the one the edges are read from.
    IT ANSWERS TWO SECTIONS AND COMPOSES NEITHER, and that is the point of exporting this half rather than the
    pair: css-sizing-3 §5.2 "Intrinsic Contributions" makes a declared size REPLACE the box's measured one,
    while css-flexbox-1 §9.9.3 "Flex Item Intrinsic Size Contributions" takes "the larger of its outer
@@ -138,7 +173,8 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el);
    item and only the caller knows whether its box is one.
    css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"' conversion is applied here, over the
    INTRINSIC surround, so the result is a content-box width whichever `box-sizing` the box computed. */
-bool intrinsic_declared_sizing_px(lxb_dom_element_t *el, const char *name, const char *initial, CssPx *out);
+bool intrinsic_declared_sizing_px(lxb_dom_element_t *el, IntrinsicAxis axis, const char *name,
+                                 const char *initial, CssPx *out);
 
 /* CSS 2.2 §9.4.2 "Inline formatting contexts"' CONTEXT OVER ONE RUN of `el`'s CONTENT — core/layout/
    block_flow.h's `BlockFlowRun`, the range between two of §9.2.1.1's block-level boxes — as CONTENT-box inline
@@ -194,5 +230,21 @@ IntrinsicInlineSizes intrinsic_inline_run_sizes(lxb_dom_element_t *el, BlockFlow
    number at every used-value site with no assert that could see it. Being reachable only through a function
    that has already committed to being a contribution is what keeps the two apart. */
 IntrinsicInlineSizes intrinsic_outer_contribution(lxb_dom_element_t *el, IntrinsicInlineSizes inner);
+
+/* css-sizing-3 §2.2's OUTER SIZE of `el`'s BOX IN THE VERTICAL AXIS over an INNER size the CALLER computed —
+   the top and bottom margin, border and padding, each at §5.2.1's zero basis exactly as the pair above takes
+   the left and right ones.
+   IT IS ONE NUMBER AND NOT A PAIR BECAUSE css-sizing-3 §3.2 GIVES A BOX'S BLOCK SIZE ONE INTRINSIC SIZE, in
+   its own words at both intrinsic keywords ("for a box's block size, unless otherwise specified, this is
+   equivalent to its automatic size"). core/layout/intrinsic_block_size.h is the measurement; this is §2.2's
+   step over it.
+   IT IS A SECOND ENTRY RATHER THAN AN AXIS PARAMETER ON THE PAIR ABOVE, AND THE DIFFERENCE IS ONE OPERATION:
+   §2.2's floor of the max-content contribution by the min-content one is a rule about a pair that can invert,
+   and there is no second member here for it to invert against. An axis parameter would have made that floor a
+   comparison of a number with itself — a vacuous step wearing the syntax of a real one — and would have
+   returned a type named for the other axis. What the two DO share is the edge arithmetic, which is one static
+   derivation over `IS_EDGE`'s two rows.
+   `el` IS NULL FOR AN ANONYMOUS BOX, whose edge sum is zero, for the derivation stated in full above. */
+CssPx intrinsic_outer_block_contribution(lxb_dom_element_t *el, CssPx inner);
 
 #endif

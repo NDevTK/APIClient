@@ -48,4 +48,29 @@
    flex containers, and reading one off any other box answers the cascade's initial keyword. */
 IntrinsicInlineSizes flex_intrinsic_inline_sizes(lxb_dom_element_t *el);
 
+/* §9.9.1 "Flex Container Intrinsic Main Sizes"' MAX-CONTENT MAIN SIZE of the flex container `el`, as a
+   CONTENT-box extent in CSS pixels, for the container whose MAIN axis is its BLOCK axis — a `column` or
+   `column-reverse` container, by §5.1 "Flex Flow Direction: the flex-direction property"' mapping, asserted
+   inside. `el`'s computed `display` must be `flex` or `inline-flex`, for the reason the entry above states.
+   WHO ASKS, AND WHY THE ANSWER IS ONE NUMBER RATHER THAN A PAIR OR A GENERIC MAIN SIZE. css-flexbox-1 §9.2
+   "Line Length Determination"' last step is the caller in one sentence — "Determine the main size of the flex
+   container using the rules of the formatting context in which it participates. The automatic block size of a
+   block-level flex container is its max-content size." So what a `column` container's auto HEIGHT needs is
+   exactly §9.9.1's MAX-CONTENT size and nothing else, and core/layout/block_flow.c's content-based height is
+   where that sentence is composed.
+   THE MIN-CONTENT MAIN SIZE IS NOT HERE AND IS NOT DEFERRED WORK WITH A CRASH BEHIND IT — it is a question
+   nothing in this engine can currently ask. The only route to it is css-sizing-3 §3.2 "Sizing Values: the
+   <length-percentage [0,∞]>, auto | none, stretch, min-content, max-content, and fit-content values"'
+   `min-content` keyword on a `height` or `min-height`, and this engine records no computed-value rule for that
+   keyword: every entry that reads the grammar refuses it BY NAME. Returning a pair would have been one half
+   nothing exercises, which is the write-with-no-reader shape rather than a wider answer. The walk behind this
+   entry computes both halves and the other one is dropped at this boundary, so building that reader later is a
+   signature change and not an algorithm.
+   IT NEEDS NO FLEX LINE AND NO MULTI-LINE ARM, which is the one thing about §9.9.1 most likely to be assumed
+   the other way, since the cross-size walk behind the entry above REFUSES a multi-line container by name.
+   §9.9.1 hands only a MULTI-LINE MIN-CONTENT size to §9.9.1.3 "Multi-line Min-content Algorithm", and
+   §9.9.1.2's max-content sentence is stated over a flex container with no line-count condition on it — so
+   §9.3 "Main Size Determination"'s line breaking is not on this path for either kind of container. */
+CssPx flex_intrinsic_max_content_main_block_size(lxb_dom_element_t *el);
+
 #endif

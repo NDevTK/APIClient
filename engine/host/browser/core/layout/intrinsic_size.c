@@ -77,9 +77,23 @@ static bool is_computed_is(lxb_dom_element_t *el, const char *name, const char *
    unreachable through either entry for the same kind of reason: it is conditioned on a cyclic dependency
    "introduced due to a block-axis size other than a minimum size on the containing block", and all six of
    these resolve against the containing block's WIDTH, which is the INLINE axis. */
-static const char *const IS_EDGE[2][3] = {
-    { "margin-left",  "padding-left",  "border-left-width"  },
-    { "margin-right", "padding-right", "border-right-width" },
+/* THE FOUR SIDES, INDEXED BY PHYSICAL AXIS AND THEN BY SIDE. `IntrinsicAxis` is the first index and is the
+   caller's answer rather than this file's question — see intrinsic_size.h for why it is named physically. The
+   SECOND index is `trailing`, which on the vertical axis is the BOTTOM: css-writing-modes-4 §6.4
+   "Abstract-to-Physical Mappings" is what makes top/bottom the vertical pair, and nothing here depends on
+   WHICH of the two a flow-relative start maps to, because every consumer below SUMS the pair.
+   THE VERTICAL ROW IS NOT A NEW DERIVATION, which is the whole reason it is a table row and not a function:
+   every rule the three helpers below apply — §8.3's `auto` margin becoming zero, §5.2.1's cyclic percentage
+   resolved against zero, §8.4's clamp of a padding at zero, §3.3's subtraction of the padding and border from
+   a `border-box` length — is stated of the PROPERTY and not of the axis, so an axis is four names and the
+   arithmetic is one copy. A second family of functions over `margin-top`/`margin-bottom` would be a second
+   answer free to drift from this one, which is the reason `is_intrinsic_pad_border_px` states at its own site
+   for having been split out of the edge rather than written twice. */
+static const char *const IS_EDGE[2][2][3] = {
+    { { "margin-left",  "padding-left",  "border-left-width"   },
+      { "margin-right", "padding-right", "border-right-width"  } },
+    { { "margin-top",    "padding-top",    "border-top-width"    },
+      { "margin-bottom", "padding-bottom", "border-bottom-width" } },
 };
 enum { IS_EDGE_MARGIN, IS_EDGE_PADDING, IS_EDGE_BORDER };
 
@@ -112,9 +126,9 @@ static CssPx is_edge_border_px(lxb_dom_element_t *el, const char *name)
    the same sentence rather than a style: it records that the two Editor's Draft editions of §3.3 word the
    flooring differently — one as a clause of the subtraction sentence, one as a sentence of its own — so a
    one-line quotation is a quotation of ONE edition. Do not "restore" one here. */
-static CssPx is_intrinsic_pad_border_px(lxb_dom_element_t *el, bool trailing)
+static CssPx is_intrinsic_pad_border_px(lxb_dom_element_t *el, IntrinsicAxis axis, bool trailing)
 {
-    const char *const *side = IS_EDGE[trailing ? 1 : 0];
+    const char *const *side = IS_EDGE[axis][trailing ? 1 : 0];
     CssLength padding = css_computed_length(el, side[IS_EDGE_PADDING]);
     CssPx pad;
 
@@ -150,9 +164,9 @@ static CssPx is_intrinsic_pad_border_px(lxb_dom_element_t *el, bool trailing)
    resolves against ZERO. It is `static` on purpose and that is the structural half of this split: it has no
    caller outside this file, and being unreachable from anywhere else is what stops it being asked at a
    used-value site, where its zero would be a wrong answer no assert could see. */
-static CssPx is_intrinsic_edge_px(lxb_dom_element_t *el, bool trailing)
+static CssPx is_intrinsic_edge_px(lxb_dom_element_t *el, IntrinsicAxis axis, bool trailing)
 {
-    const char *const *side = IS_EDGE[trailing ? 1 : 0];
+    const char *const *side = IS_EDGE[axis][trailing ? 1 : 0];
     CssLength margin = css_computed_length(el, side[IS_EDGE_MARGIN]);
     CssPx sum;
 
@@ -189,7 +203,7 @@ static CssPx is_intrinsic_edge_px(lxb_dom_element_t *el, bool trailing)
            two terms in one step. */
         sum = css_length_resolve_pct(margin, css_px(0.0));
     }
-    return css_px_add(sum, is_intrinsic_pad_border_px(el, trailing));
+    return css_px_add(sum, is_intrinsic_pad_border_px(el, axis, trailing));
 }
 
 /* QUESTION TWO — §5.2.1's "Otherwise, the percentage is resolved against the containing block's size", which is
@@ -202,7 +216,10 @@ static CssPx is_intrinsic_edge_px(lxb_dom_element_t *el, bool trailing)
    derivability and not about an ordering this file has to arrange. */
 CssPx used_inline_box_edge_px(lxb_dom_element_t *el, bool trailing)
 {
-    const char *const *side = IS_EDGE[trailing ? 1 : 0];
+    /* THE HORIZONTAL ROW, NAMED RATHER THAN DEFAULTED: this entry is a LINE BOX's question (see the split
+       above) and a line box runs along the inline axis, which in the one writing mode this engine lays out is
+       the horizontal one. It takes no axis parameter because it has no second axis to be asked about. */
+    const char *const *side = IS_EDGE[INTRINSIC_AXIS_HORIZONTAL][trailing ? 1 : 0];
     CssPx sum;
 
     DCHECK(el != NULL, "CSS 2.2 §9.4.2's line-box edge was asked for with no element");
@@ -299,8 +316,8 @@ static void is_atomic_replaced(TextRunMeasure *m, lxb_dom_element_t *el)
     size_t i;
 
     for (i = 0; i < sizeof CYCLIC / sizeof CYCLIC[0]; i++) is_require_acyclic(el, CYCLIC[i]);
-    lead = is_intrinsic_edge_px(el, false);
-    trail = is_intrinsic_edge_px(el, true);
+    lead = is_intrinsic_edge_px(el, INTRINSIC_AXIS_HORIZONTAL, false);
+    trail = is_intrinsic_edge_px(el, INTRINSIC_AXIS_HORIZONTAL, true);
     outer = css_px_add(css_px_add(lead, used_value_content_px(el, false)), trail);
     /* ONE NUMBER STATED AS BOTH OF css-sizing-3 §2.1's CONTRIBUTIONS, WHICH IS A DERIVATION AND NOT A MEMBER
        LEFT UNFILLED — and the derivation is `is_replaced_sizes`' own, in full at its site: §5.1 separates the
@@ -491,14 +508,14 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
            run's own break-position mapping is what then puts each on the line its fragment is on. They are
            emitted even when both are ZERO, because an edge occupies a POSITION and that position is what says
            which line an otherwise-empty inline box sits on. */
-        text_run_measure_add_box_edge(r->m, el, is_intrinsic_edge_px(el, false));
+        text_run_measure_add_box_edge(r->m, el, is_intrinsic_edge_px(el, INTRINSIC_AXIS_HORIZONTAL, false));
         is_walk(r, el);
         /* §9.2.1.1's "open at the end of the line": the run ended INSIDE this inline box, so this fragment
            has no closing edge and the next anonymous block box's fragment of the same box has no opening
            one. The leading edge above was emitted because the run did NOT start inside it — the entry that
            resumes a run mid-tree never calls this arm for an already-open ancestor. */
         if (r->past_end) return;
-        text_run_measure_add_box_edge(r->m, el, is_intrinsic_edge_px(el, true));
+        text_run_measure_add_box_edge(r->m, el, is_intrinsic_edge_px(el, INTRINSIC_AXIS_HORIZONTAL, true));
         return;
     }
     /* THE LEVEL OF EVERY CHILD THIS WALK REACHES, ASSERTED ONCE FOR BOTH ORIGINS. Two different sections
@@ -637,7 +654,7 @@ static IntrinsicInlineSizes is_run_sizes(lxb_dom_element_t *el, lxb_dom_element_
         if (r.past_end) break;
         box = lxb_dom_interface_node(open);
         if (box == root) break;
-        text_run_measure_add_box_edge(&m, open, is_intrinsic_edge_px(open, true));
+        text_run_measure_add_box_edge(&m, open, is_intrinsic_edge_px(open, INTRINSIC_AXIS_HORIZONTAL, true));
         DCHECK(box->parent != NULL && box->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
                "CSS 2.2 §9.2.1.1's run was inside a box whose parent is not an element, so the walk cannot "
                "leave it — the ancestors of every position in a container's content are inline boxes up to "
@@ -710,7 +727,27 @@ IntrinsicInlineSizes intrinsic_outer_contribution(lxb_dom_element_t *el, Intrins
        NULL is CSS 2.2 §9.2.1.1's and css-flexbox-1 §4's ANONYMOUS box — see intrinsic_size.h — whose edge sum
        is zero because neither section gives it any declaration to compute one from. */
     if (el == NULL) return is_contribution(inner, css_px(0.0));
-    return is_contribution(inner, css_px_add(is_intrinsic_edge_px(el, false), is_intrinsic_edge_px(el, true)));
+    return is_contribution(inner, css_px_add(is_intrinsic_edge_px(el, INTRINSIC_AXIS_HORIZONTAL, false),
+                                            is_intrinsic_edge_px(el, INTRINSIC_AXIS_HORIZONTAL, true)));
+}
+
+CssPx intrinsic_outer_block_contribution(lxb_dom_element_t *el, CssPx inner)
+{
+    /* §2.2's OUTER SIZE OVER ONE NUMBER, WHICH IS WHY THIS IS A SECOND ENTRY AND NOT AN AXIS PARAMETER ON THE
+       PAIR ABOVE. The two differ in exactly one operation and it is §2.2's FLOOR: "if the ideal max-content
+       contribution would be smaller than the min-content contribution (e.g. due to the use of negative
+       margins), the effective max-content contribution is floored by the min-content contribution." That is a
+       rule about a PAIR THAT CAN INVERT, and css-sizing-3 §3.2 gives a box's block size ONE intrinsic size —
+       both keywords are sent to "its automatic size" in the section's own words — so there is no second member
+       for it to invert against and applying it here would be a comparison of a number with itself.
+       THE EDGE ARITHMETIC IS SHARED AND ONLY THE COMPOSITION IS NOT, which is the same split
+       `is_intrinsic_pad_border_px` states at its own site: every rule in it is stated of a PROPERTY and not of
+       an axis, so `IS_EDGE`'s vertical row plus one call is the whole of the difference. A second derivation of
+       the margin's `auto`, the cyclic percentage's zero basis and the padding's clamp would be a second answer
+       free to drift from this one. */
+    if (el == NULL) return inner;
+    return css_px_add(inner, css_px_add(is_intrinsic_edge_px(el, INTRINSIC_AXIS_VERTICAL, false),
+                                       is_intrinsic_edge_px(el, INTRINSIC_AXIS_VERTICAL, true)));
 }
 
 /* ONE DECLARED SIZING VALUE of `ch` in the INLINE axis, as a CONTENT-box width, for css-sizing-3 §5.2
@@ -751,7 +788,8 @@ IntrinsicInlineSizes intrinsic_outer_contribution(lxb_dom_element_t *el, Intrins
    `is_declared_inline_sizes`: §5.2 makes a declared size REPLACE the measurement and §9.9.3 takes the LARGER
    of the two. Handing a flex item the composed entry would report one section's answer under the other's
    name. */
-bool intrinsic_declared_sizing_px(lxb_dom_element_t *ch, const char *name, const char *initial, CssPx *out)
+bool intrinsic_declared_sizing_px(lxb_dom_element_t *ch, IntrinsicAxis axis, const char *name,
+                                 const char *initial, CssPx *out)
 {
     CssLength len = css_computed_length(ch, name);
     CssPx declared, surround;
@@ -779,7 +817,14 @@ bool intrinsic_declared_sizing_px(lxb_dom_element_t *ch, const char *name, const
     }
     /* css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"' CONVERSION. Under `border-box` the
        declared length is the BORDER box's, so the content box is that length less this box's two paddings and
-       two border widths, floored at zero because an inner size cannot be negative. IT IS CITED AND NOT QUOTED
+       two border widths, floored at zero because an inner size cannot be negative.
+       THE TWO SIDES ARE THE ONES `axis` NAMES AND THAT IS THE WHOLE OF §3.3's DIMENSIONALITY. The section's own
+       sentence is "the specified padding and border widths of the box are subtracted from that size", and a
+       `height` is bounded by the TOP and BOTTOM pair exactly as a `width` is by the left and right one —
+       css-writing-modes-4 §7.2 "Dimensional Mapping" is what pins each property triple to its physical extent.
+       Reading the horizontal pair for a declared `height` would subtract one dimension's surround from the
+       other's length, which is a wrong number for any box with asymmetric padding and is what this parameter
+       exists to make unspellable. IT IS CITED AND NOT QUOTED
        for the reason core/layout/table_column_width.c records at the same sentence: the two Editor's Draft
        editions word the flooring differently, so a one-line quotation is a quotation of ONE edition.
        THE SURROUND IS THE INTRINSIC ONE AND NOT THE USED ONE, which is this file's own split and not a
@@ -796,7 +841,8 @@ bool intrinsic_declared_sizing_px(lxb_dom_element_t *ch, const char *name, const
     border_box = strcmp(box_sizing, "border-box") == 0;
     free(box_sizing);
     if (border_box) {
-        surround = css_px_add(is_intrinsic_pad_border_px(ch, false), is_intrinsic_pad_border_px(ch, true));
+        surround = css_px_add(is_intrinsic_pad_border_px(ch, axis, false),
+                              is_intrinsic_pad_border_px(ch, axis, true));
         declared = css_px_max(css_px_sub(declared, surround), css_px(0.0));
     }
     *out = declared;
@@ -833,11 +879,11 @@ static IntrinsicInlineSizes is_declared_inline_sizes(lxb_dom_element_t *ch, Intr
     IntrinsicInlineSizes out = measured;
     CssPx v;
 
-    if (intrinsic_declared_sizing_px(ch, "width", "auto", &v)) {
+    if (intrinsic_declared_sizing_px(ch, INTRINSIC_AXIS_HORIZONTAL, "width", "auto", &v)) {
         out.min_content = v;
         out.max_content = v;
     }
-    if (intrinsic_declared_sizing_px(ch, "max-width", "none", &v)) {
+    if (intrinsic_declared_sizing_px(ch, INTRINSIC_AXIS_HORIZONTAL, "max-width", "none", &v)) {
         out.min_content = css_px_min(out.min_content, v);
         out.max_content = css_px_min(out.max_content, v);
     }
@@ -848,7 +894,7 @@ static IntrinsicInlineSizes is_declared_inline_sizes(lxb_dom_element_t *ch, Intr
        `is_contribution`'s own recorded reasoning true: a negative MARGIN on this child is added after this
        returns and can still drive the outer pair below zero, so the non-negativity that function declines to
        assert is still not assertable. */
-    if (!intrinsic_declared_sizing_px(ch, "min-width", "auto", &v)) v = css_px(0.0);
+    if (!intrinsic_declared_sizing_px(ch, INTRINSIC_AXIS_HORIZONTAL, "min-width", "auto", &v)) v = css_px(0.0);
     out.min_content = css_px_max(out.min_content, v);
     out.max_content = css_px_max(out.max_content, v);
     return out;
@@ -1049,7 +1095,7 @@ static IntrinsicInlineSizes is_replaced_sizes(lxb_dom_element_t *el, const Repla
            — and that entry is the one place in this tree that owns the qualified answer. Writing the literal
            would give one box an intrinsic width and a used width that disagree on a narrow device, which is a
            worse failure than either rule alone. */
-        if (!intrinsic_declared_sizing_px(el, "min-width", "auto", &size))
+        if (!intrinsic_declared_sizing_px(el, INTRINSIC_AXIS_HORIZONTAL, "min-width", "auto", &size))
             size = used_value_default_replaced_size(false);
     } else {
         size = used_value_replaced_auto_width_px(el, rep);
