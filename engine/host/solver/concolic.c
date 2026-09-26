@@ -8,6 +8,7 @@
 #include "solver/solve_filter.h" /* …and the SEARCH is told which bytes its carrier refuses, before it builds one */
 #include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
 #include "solver/endpoint.h"  /* …and the @H surface is told what a program NAMES — see `.global_named` below */
+#include "solver/rung_entry.h" /* …and so is the SCHEDULER, for the arms a program asks for by name */
 #include "check.h"
 #include <stdarg.h>
 #include <stdlib.h>
@@ -6055,6 +6056,22 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
    declined took neither. The conformance runner declined, and paid for it by growing a SECOND Location
    component out of the address to avoid the concolic it could not coerce — which is how a §7.10.5 stringifier
    fix landed in a file that runner does not use. */
+/* TWO CONSUMERS OF ONE FACT, AND THE LIST OF THEM BELONGS IN THE FILE THAT ASSEMBLES THE TABLE. A hook member
+   is one pointer and "the compiler resolved this free identifier against the global object" is a fact two
+   components are the denominator of: solver/endpoint.c grades it against a DOOR's ask rows, which endpoint_init
+   resets, and solver/rung_entry.c grades it against an ARM of `stepUnitRuns`, which nothing resets. Two scopes,
+   two populations, one report — so neither may forward to the other, and a component that did would be holding a
+   pointer to a census it does not own.
+   THIS FILE RATHER THAN A REGISTRY, because this is already the file that points one table at two components'
+   functions — `.absent`, `.present` and `.publish` are solver/absent.c's — so the consumer list is where the
+   table is, and a third consumer is a line here beside the line that installs the table it belongs to.
+   IT DECIDES NOTHING AND THE ORDER OF THE TWO CALLS IS NOT A FACT: both are void reports over disjoint name
+   tables, so neither can see the other's effect and a reader may not read one as happening first. */
+static void compile_global_named_dispatch(const char *name, int typeof_only) {
+    endpoint_compile_global_named(name, typeof_only);
+    rung_entry_compile_global_named(name, typeof_only);
+}
+
 static JSConcolicHooks g_hooks = {
     .add = concolic_add_hook, .cmp = concolic_cmp_hook, .is = concolic_is,
     .rel = concolic_rel_hook, .type_of = concolic_typeof_hook,
@@ -6105,7 +6122,7 @@ static JSConcolicHooks g_hooks = {
        IT IS ROUTED TO solver/endpoint.c AND NOT HANDLED HERE, which is the same split `.absent` already makes to
        solver/absent.c: the component that owns the door census is the component that knows which identifiers are
        door entry points, and this file would be a second list of them. */
-    .global_named = endpoint_compile_global_named,
+    .global_named = compile_global_named_dispatch,
     .lead = concolic_lead_hook };
 
 /* Concolic VALUE propagation stays installed across scheduling AND verification, because taint must flow

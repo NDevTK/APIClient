@@ -8,6 +8,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/rendering/animation_frame.h"
+#include "solver/rung_entry.h"  /* this rung's denominator — the names a program must spell to ask for it */
 
 /* THE PER-REALM STORE. §8.12 Animation frames gives every Window "a map of animation frame callbacks" and "an animation frame
    callback identifier", and both are per-Window rather than per-agent — a child navigable's rAF handles are
@@ -301,11 +302,28 @@ void animation_frame_install_map(JSContext *ctx)
     realm_value_set(ctx, g_slot, st);
 }
 
+/* THE NAMES THIS COMPONENT INSTALLS ITSELF UNDER, SPELLED ONCE AND USED TWICE — at the install below, and in
+   the table this file declares to the @COLD census so that a document which NAMES this rung's work and whose
+   arm of `stepUnitRuns` reads zero is a FINDING there rather than a zero indistinguishable from a document that
+   names none. ONE constant rather than two literals: the census's copy and the install's copy would otherwise be
+   free to drift, and drift here is silent in the worst direction — a name that stopped matching reads as a
+   program that never asked. §Fix-the-ROOT prefers making the state impossible to asserting it is absent, and
+   sharing the constant does that, so no check on the pair exists or is needed. */
+static const char RAF_REQUEST_NAME[] = "requestAnimationFrame";
+/* …AND THE RENDERING RUNG'S ENTRY TABLE, WHICH IS A LIST AND IS SHORTER THAN THE RUNG'S OWN WORK. solver/engine.c
+   names ResizeObserver delivery, IntersectionObserver, scroll/resize/pagereveal and the Web Animations
+   checkpoint as work that same arm runs; each belongs here when the component that owns it is built, which is
+   why the denominator this publishes RISES as those land and is a floor until they do. `cancelAnimationFrame` is
+   NOT here: cancelling asks the rung for nothing, so counting it would raise a denominator on a program that
+   only ever tears a callback down. */
+static const char *const RENDERING_ENTRY_NAMES[] = { RAF_REQUEST_NAME, NULL };
+
 void animation_frame_install(JSContext *ctx, JSValueConst global)
 {
     DCHECK(g_ready, "§8.12 Animation frames's members were installed before they were declared");
-    idl_install_method(ctx, (JSValue)global, "requestAnimationFrame", g_id_request);
+    idl_install_method(ctx, (JSValue)global, RAF_REQUEST_NAME, g_id_request);
     idl_install_method(ctx, (JSValue)global, "cancelAnimationFrame", g_id_cancel);
+    rung_entry_declare(STEP_UNIT_RENDERING, RENDERING_ENTRY_NAMES);
 }
 
 /* THE RUNTIME, NOT A REALM, and it is core/platform.c's release column that calls it — see core/platform.h.

@@ -99,6 +99,12 @@ const COMPOSERS = {
                from: "char *endpoint_fetch_edge_rows(void)", to: "\n}\n", shape: "key" },
   xhrEdge:   { file: "engine/host/solver/endpoint.c",
                from: "char *endpoint_xhr_edge_rows(void)",   to: "\n}\n", shape: "key" },
+  /* THE INVOKER RUNGS' DENOMINATOR, spliced into `_cold` beside `stepUnitRuns` exactly as the two edges above
+     are spliced beside `epAsks` — so its rows are this composer's and not `cold`'s, and the kind statement that
+     covers them has to name THIS composer or it names nothing. `key` shape for the edges' reason: the rows go
+     out through `json_buf_key`, whose argument the compiler already refuses to let be anything but a literal. */
+  rungEntry: { file: "engine/host/solver/rung_entry.c",
+               from: "char *rung_entry_rows(void)",          to: "\n}\n", shape: "key" },
 };
 
 /* THE ROWS A COMPOSER PUBLISHES, FROM ITS OWN EMISSION AND NOT FROM A LIST HERE. The format shape matches the

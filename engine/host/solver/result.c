@@ -6,6 +6,7 @@
 #include "solver/compose.h"   /* every census below is sized by what it writes — see composef */
 #include "solver/result.h"
 #include "solver/endpoint.h"
+#include "solver/rung_entry.h"  /* the invoker rungs' denominator, read beside `stepUnitRuns` */
 #include "solver/solve.h"
 #include "solver/engine.h"
 #include "solver/flow.h"
@@ -2373,6 +2374,12 @@ char *result_cold_json(void) {
        trusted-zone JavaScript that is live on WRITE while this half is live only after a build. */
     char *edge;
     char *xedge;
+    /* …AND THE INVOKER RUNGS' OWN DENOMINATOR, which is the same SHAPE of fact one ladder over and is here for
+       the same reason: it lands BESIDE `stepUnitRuns`, which is what it exists to be read against. A rung's arm
+       of that histogram is an `else if` inside flow_step, so a zero in it stood for a document that hangs
+       nothing off the rung AND for a ladder that never gave the rung a turn — solver/rung_entry.h states why no
+       counter inside the ladder could ever tell those apart, and why no assert could stand on either. */
+    char *rungs;
     /* …AND THE SAME SURFACE PARTITIONED BY THE MECHANISM THAT COMPOSED EACH ADDRESS — solver/endpoint.h
        states the contract and asserts the partition where both sides are in one hand. */
     char *doors;
@@ -2675,14 +2682,16 @@ char *result_cold_json(void) {
        allocation failure, and §Testing's absent-is-not-zero rule is the same sentence one layer up. */
     edge = endpoint_fetch_edge_rows();
     xedge = endpoint_xhr_edge_rows();
+    rungs = rung_entry_rows();
     doors = endpoint_door_hist_json();
     reach = endpoint_reach_hist_json();
     acls  = endpoint_address_hist_json();
-    if (!cursors || !ahead || !edge || !xedge || !doors || !reach || !acls) {
+    if (!cursors || !ahead || !edge || !xedge || !rungs || !doors || !reach || !acls) {
         free(cursors);
         free(ahead);
         free(edge);
         free(xedge);
+        free(rungs);
         free(doors);
         free(reach);
         free(acls);
@@ -3163,7 +3172,11 @@ char *result_cold_json(void) {
                     XMLHttpRequest runs no send machine and has no population. solver/endpoint.h holds the
                     contract and the refutation of the clause that had this census built over the wrong
                     machine. */
-                 "%s%s}",
+                 /* …AND THE INVOKER RUNGS' DENOMINATOR, spliced rather than a row each for the reason the two
+                    edges above are: which rungs HAVE one is the declaring components' fact, so the key set
+                    itself says which arms of `stepUnitRuns` can be read as a fraction and an arm with no
+                    component installed has no row rather than a zero. */
+                 "%s%s%s}",
                  c.flows, c.framed, c.blocked, flow_host_owed_count(),
                  e.finished, e.finished_flows, e.finished_cands,
                  e.deepest, e.completed, e.deepest_left,
@@ -3214,11 +3227,12 @@ char *result_cold_json(void) {
                  ladder, hist, cursors, ahead,
                  ep_minted, ep_assets, ep_emitted, ep_pre_program, doors, reach, acls,
                  ep_asks, ep_ask_pre, ep_ask_sup, ep_ask_merged, ep_ask_minted, ep_ask_merged_pre,
-                 edge, xedge);
+                 edge, xedge, rungs);
     free(cursors);
     free(ahead);
     free(edge);
     free(xedge);
+    free(rungs);
     free(doors);
     free(reach);
     free(acls);

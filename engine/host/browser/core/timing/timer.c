@@ -121,6 +121,7 @@
 #include "core/dom/document.h"   /* §8.7 Timers's substep 9.8.5 base URL is `global`'s document's, and the
                                     task that compiles a STRING handler runs in that document's realm */
 #include "solver/engine.h"
+#include "solver/rung_entry.h"  /* this rung's denominator — the names a program must spell to ask for it */
 #include "solver/concolic.h"   /* §8.7 Timers's handler may be unknown external input, which crosses the IDL as itself */
 #include "solver/solve.h"      /* …and an unknown handler string is the @S JS-context sink */
 #include "solver/decide.h"     /* …and an unknown expiry makes §8.7's ORDER a fork, not a guess (step 4's is the
@@ -2419,6 +2420,17 @@ static void timer_install_map(JSContext *ctx)
     realm_value_set(ctx, g_slot, st);
 }
 
+/* THE NAMES THIS COMPONENT INSTALLS ITSELF UNDER, SPELLED ONCE AND USED TWICE — at the install below, and in
+   the table this file declares to the @COLD census so that a document which NAMES this rung's work and whose
+   arm of `stepUnitRuns` reads zero is a FINDING there rather than a zero indistinguishable from a document that
+   names none. ONE constant rather than two literals: the census's copy and the install's copy would otherwise be
+   free to drift, and drift here is silent in the worst direction — a name that stopped matching reads as a
+   program that never asked. §Fix-the-ROOT prefers making the state impossible to asserting it is absent, and
+   sharing the constant does that, so no check on the pair exists or is needed. */
+static const char TIMER_SET_TIMEOUT_NAME[]  = "setTimeout";
+static const char TIMER_SET_INTERVAL_NAME[] = "setInterval";
+static const char *const TIMER_ENTRY_NAMES[] = { TIMER_SET_TIMEOUT_NAME, TIMER_SET_INTERVAL_NAME, NULL };
+
 void timer_install(JSContext *ctx, JSValueConst global)
 {
     JSValue g = (JSValue)global;
@@ -2435,8 +2447,13 @@ void timer_install(JSContext *ctx, JSValueConst global)
        setters and `idl_optional_from(0)` for the two clearers — which is the whole of the defect: the fact was
        written twice and only one copy was §3.7.7's. The `any...` tail is not yet declared (see timer_init),
        and that does not move either number: the tail is optional under step 5.9.1 either way. */
-    idl_install_method(ctx, g, "setTimeout", g_id_set_timeout);
-    idl_install_method(ctx, g, "setInterval", g_id_set_interval);
+    idl_install_method(ctx, g, TIMER_SET_TIMEOUT_NAME, g_id_set_timeout);
+    idl_install_method(ctx, g, TIMER_SET_INTERVAL_NAME, g_id_set_interval);
+    /* …AND THE TIMER TASK SOURCE'S ENTRY TABLE. BOTH names and not one: HTML §8.7 "Timers" gives the two one
+       task source, so a table with either alone would publish a fraction of this rung's own denominator. The
+       `clearTimeout`/`clearInterval` pair is absent for `cancelAnimationFrame`'s reason — clearing asks the rung
+       for nothing. */
+    rung_entry_declare(STEP_UNIT_TIMER, TIMER_ENTRY_NAMES);
     idl_install_method(ctx, g, "clearTimeout", g_id_clear_timeout);
     idl_install_method(ctx, g, "clearInterval", g_id_clear_interval);
     JS_SetPropertyStr(ctx, g, "queueMicrotask",

@@ -15,6 +15,7 @@
 #include "core/scheduling/idle_deadline.h"
 #include "solver/concolic.h"
 #include "solver/engine.h"
+#include "solver/rung_entry.h"  /* this rung's denominator — the names a program must spell to ask for it */
 
 /* §4's THREE ASSOCIATED CONCEPTS, as three fields of one per-realm record. The slot holds ONE object for the
    realm's whole life and is never replaced: what time-travels is that object's PROPERTIES, which the heap COW
@@ -500,11 +501,23 @@ void idle_callback_install_store(JSContext *ctx)
     realm_value_set(ctx, g_slot, st);
 }
 
+/* THE NAMES THIS COMPONENT INSTALLS ITSELF UNDER, SPELLED ONCE AND USED TWICE — at the install below, and in
+   the table this file declares to the @COLD census so that a document which NAMES this rung's work and whose
+   arm of `stepUnitRuns` reads zero is a FINDING there rather than a zero indistinguishable from a document that
+   names none. ONE constant rather than two literals: the census's copy and the install's copy would otherwise be
+   free to drift, and drift here is silent in the worst direction — a name that stopped matching reads as a
+   program that never asked. §Fix-the-ROOT prefers making the state impossible to asserting it is absent, and
+   sharing the constant does that, so no check on the pair exists or is needed. */
+static const char IDLE_REQUEST_NAME[] = "requestIdleCallback";
+static const char *const IDLE_ENTRY_NAMES[] = { IDLE_REQUEST_NAME, NULL };
+
 void idle_callback_install(JSContext *ctx, JSValueConst global)
 {
     DCHECK(g_ready, "§4's members were installed before they were declared");
-    idl_install_method(ctx, (JSValue)global, "requestIdleCallback", g_id_request);
+    idl_install_method(ctx, (JSValue)global, IDLE_REQUEST_NAME, g_id_request);
     idl_install_method(ctx, (JSValue)global, "cancelIdleCallback", g_id_cancel);
+    /* …AND THE IDLE RUNG'S ENTRY TABLE. `cancelIdleCallback` is absent for `cancelAnimationFrame`'s reason. */
+    rung_entry_declare(STEP_UNIT_IDLE_PERIOD, IDLE_ENTRY_NAMES);
     idle_deadline_install(ctx, global);
 }
 
