@@ -79,16 +79,47 @@
  * §A-CONTRACT-THAT-NAMES-A-HAZARD-AND-OFFERS-NO-EXIT forbids.
  *
  * THE DECLARED BLIND SPOTS CARRY A SIZE AND NOT A SENTENCE, because a floor that names what it excludes
- * without measuring it is read as a total anyway. MEASURED over the same corpus, same parse:
- *   - `el.src = url` / `el.href = url` — the door `html_script.c` and `html_link.c` DO record and this file
- *     does not, because `.src` is a property of many things that are not elements and admitting it would
- *     buy recall with precision this comparison cannot afford. There are 217 `.src =` and 212 `.href =`
- *     assignments in the corpus and 21 and 8 of them have a single string literal on the right — so 400 of
- *     429 are computed, which points the SAME way as the DATA-door result rather than against it. A reader
- *     widening this file to catch them should expect to add mostly OPAQUE rows.
+ * without measuring it is read as a total anyway:
+ *   - `el.src = url` / `el.href = url` — the door `html_script.c` and `html_link.c` DO record and no door
+ *     above reads, because `.src` is a property of many things that are not elements and admitting it to
+ *     the door set would buy recall with precision this comparison cannot afford. THAT EXCLUSION STANDS
+ *     AND ITS SIZE IS NOW COUNTED ON EVERY RUN, per site, in the same four kinds, printed as THE DOOR
+ *     SET'S OWN BLIND SPOT and summed into no door total. The count is an OVER-count of elements by
+ *     construction — every `.src`/`.href` assignment in the file, element or not — which is the safe
+ *     direction for the size of a blind spot: a blind spot stated too large certifies nothing, while one
+ *     stated too small is read as a clean bill.
+ *     THIS PARAGRAPH USED TO CARRY THE SIZE AS FOUR FROZEN NUMBERS — "217 `.src =` and 212 `.href =`
+ *     assignments in the corpus and 21 and 8 of them have a single string literal on the right — so 400
+ *     of 429 are computed" — and it is rewritten rather than deleted because the ARGUMENT is right and a
+ *     reader who re-derives it will re-add the figures. A count over a corpus this repository does not
+ *     carry is unreproducible BY CONSTRUCTION, so it cannot be checked and cannot go loudly wrong: a
+ *     re-derivation at a later fetch answered 218 and 215 against its 217 and 212. The claim that a reader
+ *     widening this file "should expect to add mostly OPAQUE rows" is the part that HELD and is what the
+ *     band now measures rather than asserts.
+ *     THE REASON THE BAND EXISTS RATHER THAN A WIDER DOOR SET IS A MEASUREMENT AND NOT A PREFERENCE. The
+ *     PROGRAM door is BIMODAL BY BUNDLER: a bundle that ships native `import()` scores in the door, and
+ *     one whose bundler compiled `import()` away into a chunk-id map plus a `<script>` injection scores
+ *     ZERO there. The address is then composed through a CALL (`script.src = R.tu(R.p + R.u(id))`), so a
+ *     `.src` door would add one OPAQUE row per runtime and recover NO address — recall bought for nothing,
+ *     and precision spent. What would recover those addresses is interprocedural folding through the
+ *     chunk-URL function, which is a different subproblem and is named as one below.
  *   - a library wrapper (`axios.get`, `$.ajax`, an SDK `request()`), for the reason the DOORS table gives.
  *   - anything a bundle reaches through a member call this file cannot name, which is unbounded and is why
  *     the site count here is stated as a floor everywhere it is stated at all.
+ *
+ * NAMED RESIDUAL — THE CHUNK MANIFEST. WHAT IS NOT COVERED: a program address a bundler emits as a MAP
+ * (`R.u = id => 9016===id ? "static/chunks/a.js" : ...`, or `"p/"+({id:"hash"})[id]+".js"`) composed with a
+ * public-path literal and delivered to `script.src`. A parse has every one of those addresses in plain
+ * literal text and this file recovers none of them, because the fold is per-argument and the composition
+ * crosses a function boundary. WHAT THE NEXT DIFF BUILDS: a fold that resolves a PROPERTY assigned exactly
+ * once in the file (the same bound-once-never-reassigned discipline `collectBinds` already applies to
+ * names, which is what makes it sound) and that inlines a single-parameter function whose body folds,
+ * ENUMERATING a ternary chain or a computed member on an object literal into the set of addresses it can
+ * return — a 1-site-to-N-addresses relation this file's row shape does not yet have. It may NOT be keyed
+ * on a bundler: CLAUDE.md §RUN-DON'T-MATCH bans bundler recognition by name, so the rule has to be about
+ * the EXPRESSION and never about whose runtime emitted it. HOW ITS ABSENCE WOULD SHOW: a site whose
+ * PROGRAM-door row reads 0 while the blind-spot row beside it reads a nonzero OPAQUE count — read those
+ * two columns together in the per-site PROGRAM block, which is the reason that block prints them adjacent.
  *
  * WHAT COMPLETES THE COMPARISON, NAMED SO IT CAN BE RUN RATHER THAN RE-DERIVED. This file is one half. The
  * other half is not "the engine's endpoint count", which answers a different question: `solver/result.c`
@@ -343,11 +374,13 @@ function readFile(src, filename) {
     try { ast = parse(src, { sourceType, errorRecovery: false, plugins: [] }); err = null; break; }
     catch (e) { err = e; }
   }
-  if (!ast) return { parsed: false, error: String(err && err.message || err).slice(0, 160), sites: [], pathish: new Set() };
+  if (!ast) return { parsed: false, error: String(err && err.message || err).slice(0, 160), sites: [], pathish: new Set(), blind: [], xhrOpenSkippedNonLiteralMethod: 0 };
 
   const { binds, count: bindCount } = collectBinds(ast);
   const sites = [];
   const pathish = new Set();
+  const blind = [];
+  let xhrOpenSkippedNonLiteralMethod = 0;
   const attached = new Set();          // node identity of URL args, so a door's own literal is not double-counted
   let guard = 0;
   const guardStack = [];
@@ -380,8 +413,9 @@ function readFile(src, filename) {
          reported as `xhrOpenSkippedNonLiteralMethod`. */
       if (door && door.arg0Method) {
         const m = args[0];
-        if (!m || m.type !== "StringLiteral" || !/^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|TRACE)$/i.test(m.value))
-          door = null;
+        if (!m || m.type !== "StringLiteral" || !/^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|TRACE)$/i.test(m.value)) {
+          door = null; xhrOpenSkippedNonLiteralMethod++;
+        }
       }
     }
 
@@ -428,13 +462,33 @@ function readFile(src, filename) {
   /* THE BASE RATE. Every string literal in this program that looks like an address and is NOT the URL
      argument of a door — what a naive extractor would report and what this one deliberately does not. */
   walk(ast, (n) => {
+    /* THE DECLARED BLIND SPOT, COUNTED RATHER THAN DESCRIBED. `el.src = url` / `el.href = url` is a door
+       `html_script.c` and `html_link.c` DO record and the site channel above deliberately does not, because
+       `.src` is a property of many things that are not elements. That exclusion is right and it was stated
+       as a SENTENCE carrying two numbers frozen at a past corpus, which is the shape this file's own header
+       forbids: a floor that names what it excludes without measuring it is read as a total. It is measured
+       here, on every run, per site, in the same four kinds as a door — so a PROGRAM-door zero can be read
+       against it. These rows are NOT sites and are summed into no door total; they are the size of what the
+       door set cannot see, printed where a zero would otherwise be read as a clean bill. */
+    if (n.type === "AssignmentExpression" && n.operator === "=") {
+      const L = n.left;
+      if (!L || L.type !== "MemberExpression" || L.computed || L.property.type !== "Identifier") return;
+      if (L.property.name !== "src" && L.property.name !== "href") return;
+      const r = fold(n.right, binds, 0);
+      const literalChars = r.text.replace(/\{\?\}/g, "").length;
+      const kind = n.right.type === "StringLiteral" ? "literal"
+        : r.holes === 0 ? "folded" : literalChars > 0 ? "shape" : "opaque";
+      blind.push({ prop: L.property.name, kind, url: r.text, file: filename,
+                   line: n.loc ? n.loc.start.line : 0 });
+      return;
+    }
     if (n.type !== "StringLiteral" || attached.has(n)) return;
     const v = n.value;
     if (v.length < 2 || v.length > 512) return;
     if (/^https?:\/\/[^\s]+$/.test(v) || /^\/[A-Za-z0-9_][^\s"'<>]*$/.test(v)) pathish.add(v);
   });
 
-  return { parsed: true, error: null, sites, pathish };
+  return { parsed: true, error: null, sites, pathish, blind, xhrOpenSkippedNonLiteralMethod };
 }
 
 /* ── THE ARMED CONTROL ────────────────────────────────────────────────────────────────────────────────────
@@ -476,6 +530,25 @@ const SELFTEST = [
 ];
 const SELFTEST_GUARDED = new Set([`if(a){fetch("/g")}`]);
 
+/* THE BLIND-SPOT CHANNEL IS ARMED SEPARATELY AND IN BOTH DIRECTIONS. Its whole job is to be the number a
+   PROGRAM-door zero is read against, so a channel that silently stopped counting would make every such zero
+   read as a clean bill — the one reading CLAUDE.md §A-CONTROL-ARMS-ONLY-ON-A-SITE exists to forbid. Each
+   positive row must be classified the stated way AND must produce NO site row, because a blind-spot row
+   that leaked into `sites` would move a number this file's conclusions are drawn from. */
+const SELFTEST_BLIND = [
+  [`s.src="/a.js"`,                 ["src|literal|/a.js"]],
+  [`const B="/b/";s.src=B+"c.js"`,  ["src|folded|/b/c.js"]],
+  [`s.src="/x/"+e`,                 ["src|shape|/x/{?}"]],
+  [`s.src=P+u(e)`,                  ["src|opaque|{?}{?}"]],
+  [`l.href="/s.css"`,               ["href|literal|/s.css"]],
+  // NEGATIVES — none of these is an `.src`/`.href` assignment and counting one would inflate the size of
+  // the blind spot, which is the direction that would make the door set look worse than it is.
+  [`s.srcset="/a.js"`,              []],
+  [`s[k]="/a.js"`,                  []],
+  [`s.src+="/a.js"`,                []],
+  [`fetch("/api/x")`,               []],
+];
+
 function selftest() {
   const seenKind = new Set(), seenCls = new Set();
   let spoke = 0;
@@ -506,13 +579,39 @@ function selftest() {
         die(`SELF-TEST FAILED: an address-shaped literal attached to no door was not counted as a base rate.`);
     }
   }
+  const seenBlindKind = new Set(), seenBlindProp = new Set();
+  let blindSpoke = 0;
+  for (const [src, want] of SELFTEST_BLIND) {
+    const r = readFile(src, "<selftest-blind>");
+    if (!r.parsed) die(`SELF-TEST: the parser refused \`${src}\` — ${r.error}`);
+    const got = r.blind.map((x) => `${x.prop}|${x.kind}|${x.url}`);
+    if (got.join("\n") !== want.join("\n"))
+      die(`SELF-TEST FAILED on the blind-spot channel for \`${src}\`\n  want ${JSON.stringify(want)}\n` +
+          `  got  ${JSON.stringify(got)}\nThe number every PROGRAM-door zero is read against is measuring ` +
+          `something other than what it is printed as meaning, so nothing is printed.`);
+    if (want.length && r.sites.length)
+      die(`SELF-TEST FAILED: \`${src}\` produced ${r.sites.length} SITE row(s). A blind-spot row must never ` +
+          `enter the door totals — it is the size of what the doors cannot see, not a door.`);
+    for (const x of r.blind) { seenBlindKind.add(x.kind); seenBlindProp.add(x.prop); blindSpoke++; }
+  }
+  for (const k of ["literal", "folded", "shape", "opaque"])
+    if (!seenBlindKind.has(k))
+      die(`SELF-TEST FAILED: no control exercises the ${k} kind of the blind-spot channel.`);
+  for (const p of ["src", "href"])
+    if (!seenBlindProp.has(p)) die(`SELF-TEST FAILED: no control exercises the ${p} blind-spot property.`);
+  if (blindSpoke < 5) die(`SELF-TEST FAILED: only ${blindSpoke} blind-spot row(s) from the positive controls.`);
+  /* THE xhr.open EXCLUSION IS A DECLARED FLOOR AND CARRIES A SIZE FOR THE SAME REASON. */
+  if (readFile(`x.open(method,"/t")`, "<selftest>").xhrOpenSkippedNonLiteralMethod !== 1)
+    die(`SELF-TEST FAILED: the xhr.open non-literal-method exclusion is not counted, so the floor this ` +
+        `file's own DOORS comment says is "reported as xhrOpenSkippedNonLiteralMethod" is a sentence with ` +
+        `no number behind it.`);
   for (const k of ["literal", "folded", "shape", "opaque"])
     if (!seenKind.has(k)) die(`SELF-TEST FAILED: no control exercises the ${k} kind, so its count is unarmed.`);
   for (const c of ["data", "program"])
     if (!seenCls.has(c)) die(`SELF-TEST FAILED: no control exercises the ${c} destination class.`);
   /* A CONTROL THAT NEVER SPOKE IS NOT A CONTROL. */
   if (spoke < 10) die(`SELF-TEST FAILED: only ${spoke} row(s) were produced by the positive controls.`);
-  return { rows: SELFTEST.length, produced: spoke };
+  return { rows: SELFTEST.length, produced: spoke, blindRows: SELFTEST_BLIND.length, blindProduced: blindSpoke };
 }
 
 /* ── THE RUN ──────────────────────────────────────────────────────────────────────────────────────────── */
@@ -570,6 +669,7 @@ function main(argv) {
       engineDoorSites: 0, nonEngineDoorSites: 0, byDoor: {}, pathish: new Set(), urls: new Set(), rows: [],
       data: kindTally(), program: kindTally(),
       argShape: {}, bindBuckets: { "1": 0, "2-5": 0, "6-20": 0, "21-100": 0, "101+": 0, "0": 0 }, oneCharNames: 0,
+      blind: { sites: 0, literal: 0, folded: 0, shape: 0, opaque: 0, src: 0, href: 0 }, blindUrls: new Set(), xhrOpenSkipped: 0,
     });
     return perSite.get(id);
   };
@@ -597,6 +697,11 @@ function main(argv) {
     if (!r.parsed) { b.unparsed++; parseFail.push(`${relative(corpusDir, f)}: ${r.error}`); continue; }
     b.parsed++;
     for (const v of r.pathish) b.pathish.add(v);
+    b.xhrOpenSkipped += r.xhrOpenSkippedNonLiteralMethod;
+    for (const s of r.blind) {
+      b.blind.sites++; b.blind[s.kind]++; b.blind[s.prop]++;
+      if (s.kind !== "opaque") b.blindUrls.add(s.url);
+    }
     for (const s of r.sites) {
       b.sites++;
       b[s.kind]++;
@@ -647,8 +752,9 @@ function main(argv) {
     sites: 0, literal: 0, folded: 0, shape: 0, opaque: 0, guarded: 0, branchAlt: 0,
     engineDoorSites: 0, nonEngineDoorSites: 0, byDoor: {}, distinctUrls: 0, pathish: 0,
     argShape: {}, bindBuckets: { "1": 0, "2-5": 0, "6-20": 0, "21-100": 0, "101+": 0, "0": 0 }, oneCharNames: 0,
+    blind: { sites: 0, literal: 0, folded: 0, shape: 0, opaque: 0, src: 0, href: 0 }, blindDistinctUrls: 0, xhrOpenSkipped: 0,
   };
-  const allUrls = new Set(), allPathish = new Set();
+  const allUrls = new Set(), allPathish = new Set(), allBlindUrls = new Set();
   const clsUrls = { data: new Set(), program: new Set() };
   tot.data = kindTally(); tot.program = kindTally();
   for (const b of perSite.values()) {
@@ -664,7 +770,11 @@ function main(argv) {
     }
     for (const u of b.urls) allUrls.add(u);
     for (const p of b.pathish) allPathish.add(p);
+    for (const k of Object.keys(tot.blind)) tot.blind[k] += b.blind[k];
+    tot.xhrOpenSkipped += b.xhrOpenSkipped;
+    for (const u of b.blindUrls) allBlindUrls.add(u);
   }
+  tot.blindDistinctUrls = allBlindUrls.size;
   tot.distinctUrls = allUrls.size; tot.pathish = allPathish.size;
   tot.data.distinctUrls = clsUrls.data.size; tot.program.distinctUrls = clsUrls.program.size;
   delete tot.data.urls; delete tot.program.urls;
@@ -681,6 +791,10 @@ function main(argv) {
   for (const cls of ["data", "program"])
     if (tot[cls].literal + tot[cls].folded + tot[cls].shape + tot[cls].opaque !== tot[cls].sites)
       die(`the ${cls} kind partition does not sum against ${tot[cls].sites}`);
+  if (tot.blind.literal + tot.blind.folded + tot.blind.shape + tot.blind.opaque !== tot.blind.sites)
+    die(`the blind-spot kind partition does not sum against ${tot.blind.sites}`);
+  if (tot.blind.src + tot.blind.href !== tot.blind.sites)
+    die(`the blind-spot property partition does not sum against ${tot.blind.sites}`);
 
   const out = {
     total: tot,
@@ -693,6 +807,7 @@ function main(argv) {
       argShape: b.argShape, bindBuckets: b.bindBuckets, oneCharNames: b.oneCharNames,
       data: { ...b.data, urls: undefined, distinctUrls: b.data.urls.size },
       program: { ...b.program, urls: undefined, distinctUrls: b.program.urls.size },
+      blind: { ...b.blind, distinctUrls: b.blindUrls.size }, xhrOpenSkipped: b.xhrOpenSkipped,
     })),
     parseFailures: parseFail,
     examples: nExamples ? [...perSite.values()].flatMap((b) => b.rows.slice(0, nExamples)) : undefined,
@@ -704,6 +819,8 @@ function main(argv) {
   console.log(`# static_surface — WHAT A PARSE RECOVERS FROM THE JS DOOR. A CONTROL, NEVER A TARGET.`);
   console.log(`selftest ARMED: ${st.rows} controls produced ${st.produced} classified row(s); every kind and ` +
               `both destination classes exercised`);
+  console.log(`         plus ${st.blindRows} blind-spot controls producing ${st.blindProduced} row(s), each ` +
+              `asserted to enter NO door total`);
   console.log(`corpus   ${corpusDir}`);
   console.log(`fetched  ${fetchedFrom} .. ${fetchedTo}   read ${tot.readAt}   parse ${ms} ms`);
   console.log(`corpusPrograms: ${cp.onDisk} on disk = ${cp.nProgram} program + ${cp.nDocument} document + ` +
@@ -731,6 +848,19 @@ function main(argv) {
         `Fetch §2.2.5 destinations whose reply becomes a VALUE. THIS IS THE @H PRODUCT SURFACE.`);
   block(`PROGRAM DOOR (import() / Worker / SharedWorker / importScripts)`, tot.program,
         `replies that become a PROGRAM — the page loading itself. Reported apart and never summed in.`);
+  console.log(``);
+  console.log(`THE DOOR SET'S OWN BLIND SPOT, MEASURED — \`el.src =\` / \`el.href =\`, which html_script.c and`);
+  console.log(`  html_link.c DO record and no door above reads. NOT sites and summed into no total; this is the`);
+  console.log(`  number a PROGRAM-door or DATA-door ZERO has to be read against, because a bundler that loads`);
+  console.log(`  its chunks by injecting a <script> passes through here and through no door at all.`);
+  console.log(`  assignments ${tot.blind.sites}   (.src ${tot.blind.src}  .href ${tot.blind.href})   ` +
+              `distinct addresses ${tot.blindDistinctUrls}`);
+  console.log(`  literal ${tot.blind.literal} (${pct(tot.blind.literal, tot.blind.sites)})   ` +
+              `folded ${tot.blind.folded} (${pct(tot.blind.folded, tot.blind.sites)})   ` +
+              `shape ${tot.blind.shape} (${pct(tot.blind.shape, tot.blind.sites)})   ` +
+              `opaque ${tot.blind.opaque} (${pct(tot.blind.opaque, tot.blind.sites)})`);
+  console.log(`  ${tot.xhrOpenSkipped} further xhr.open call(s) were skipped for a non-literal first argument —`);
+  console.log(`  the floor the DOORS comment names, carrying a size rather than a sentence.`);
   console.log(``);
   console.log(`BOTH CLASSES ${tot.sites} sites, ${tot.distinctUrls} distinct addresses — printed last and`);
   console.log(`  never first, because ${pct(tot.program.sites, tot.sites)} of it is chunk loading.`);
@@ -762,6 +892,23 @@ function main(argv) {
                 `${String(s.data.literal).padStart(8)} ${String(s.data.folded).padStart(6)} ${String(s.data.shape).padStart(6)} ` +
                 `${String(s.data.opaque).padStart(6)} ${String(s.data.guarded).padStart(7)} ` +
                 `${String(s.data.distinctUrls).padStart(6)} ${String(s.pathish).padStart(8)}`);
+  console.log(``);
+  /* PER SITE, THE PROGRAM DOOR BESIDE THE BLIND SPOT, WHICH IS THE ONLY PLACE THE TWO CAN BE READ TOGETHER.
+     A site whose program door reads 0 has either shipped no chunk loader or loaded its chunks through the
+     column to its right, and a table printing one without the other cannot tell those apart. MEASURED and
+     the reason this block exists: the program door is BIMODAL BY BUNDLER — a bundle that emits native
+     `import()` scores in the door, and one whose bundler compiled `import()` away into a chunk-id map plus
+     a `<script>` injection scores ZERO there and scores here instead. Neither zero is a statement about how
+     much the site loads. */
+  console.log(`PER SITE — the PROGRAM door against the blind spot it can be lost in.`);
+  console.log(`site             programs  prog  p.lit p.fold p.urls | blind  b.lit b.fold b.shape b.opaq  b.urls`);
+  for (const s of [...out.perSite].sort((a, b) => b.blind.sites - a.blind.sites || b.program.sites - a.program.sites))
+    console.log(`  ${s.site.padEnd(14)} ${String(s.programs).padStart(8)} ${String(s.program.sites).padStart(5)} ` +
+                `${String(s.program.literal).padStart(6)} ${String(s.program.folded).padStart(6)} ` +
+                `${String(s.program.distinctUrls).padStart(6)} | ${String(s.blind.sites).padStart(5)} ` +
+                `${String(s.blind.literal).padStart(6)} ${String(s.blind.folded).padStart(6)} ` +
+                `${String(s.blind.shape).padStart(7)} ${String(s.blind.opaque).padStart(6)} ` +
+                `${String(s.blind.distinctUrls).padStart(7)}`);
   if (parseFail.length) { console.log(``); console.log(`PARSE REFUSED (${parseFail.length}):`); for (const p of parseFail.slice(0, 10)) console.log(`  ${p}`); }
   if (nExamples) {
     console.log(``); console.log(`EXAMPLES:`);
