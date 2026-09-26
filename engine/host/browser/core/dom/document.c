@@ -320,21 +320,88 @@ typedef struct Document {
     struct Document     *next_created;
 } Document;
 
-/* THE RUNNING REALM'S ACTIVE DOCUMENT. The context opaque, because a JSContext IS one navigable's document — so
-   there is no table to look it up in and no way for the answer to be the wrong document's. NULL before install,
-   which is a state only the accessors that tolerate it may see. */
+/* THE RUNNING REALM'S ACTIVE DOCUMENT, AND THE PLACE THIS ENGINE IDENTIFIES A REALM WITH A DOCUMENT. The
+ * context opaque, because a JSContext IS one navigable's document — so there is no table to look it up in and
+ * no way for the answer to be the wrong document's. NULL before install, which is a state only the accessors
+ * that tolerate it may see. */
 static Document *doc_of(JSContext *ctx)
 {
     return (Document *)JS_GetContextOpaque(ctx);
 }
 
-static Document *doc_here(JSContext *ctx)
+/* THE SAME POINTER, FOR THE READERS THAT DEREFERENCE IT — and the guard is a `CHECK` because they dereference
+ * it in EVERY BUILD while the condition stopped being universal.
+ *
+ * WHAT CHANGED IS THE POPULATION OF REALMS AND NOT THIS LINE. While every realm this engine built was a
+ * Window realm the null could not arrive, and core/platform.c's per-DOCUMENT column still asserts that its
+ * own realm's Web IDL §3.3.8 "[Global]" global names are `Window`. But core/realm.h's per-REALM column runs
+ * for every realm of every kind, and a WorkerGlobalScope realm goes through it WITHOUT ever reaching
+ * document_install — so the opaque is null in one, and a component installed by that column carries whatever
+ * the corpus says is `[Exposed]` there. At `-DAPICLIENT_DEV=0` a DCHECK here is compiled out and each caller
+ * reads through the null: that is CLAUDE.md §A-DIFF-THAT-MAKES-A-DCHECKED-POINTER-LOAD-BEARING-IN-RELEASE,
+ * where the promotion belongs to the diff that created the release-mode dereference and was not made.
+ * THE POPULATION IS MEASURED AND IT IS NOT ONE ENTRY, WHICH IS WHY THE GUARD IS HERE RATHER THAN AT A
+ * READER. core/xhr/xml_http_request.c is installed per-REALM and the harvested IDL declares its interface
+ * `[Exposed=(Window,DedicatedWorker,SharedWorker)]`, so it is PLACED in a worker realm; it reaches two
+ * entries of this file that take a realm and come through here — `document_doc` on its JavaScript-reply arm
+ * and `document_fully_active` at XHR §3.5.1 "The open() method" step 1, which is the FIRST step of the first
+ * member an XHR script calls — and that step is a CONJUNCTION this engine dropped the first conjunct of, its
+ * text being "relevant global object is a Window object and its associated Document is not fully active", so
+ * a worker realm must SKIP it and instead reads through the null. Enumerating which of this file's entries a
+ * per-realm component can reach is a sweep whose survivors would be certified by the enumeration, so the
+ * invariant is stated once at the pointer every one of them takes.
+ * IT IS A `CHECK` AND NOT A `DFAIL` BECAUSE THE TWO REGIMES NEED THE SAME ANSWER. The state is
+ * §Offensive-programming's category (2) — a capability that should exist and does not — so dev must abort;
+ * a DFAIL compiles out, which in release leaves exactly the wild read. And the operand earns production
+ * fatality on §CHECK's own list: `document_doc`'s answer is the handle a program is COMPILED under
+ * (solver/engine.h), so a wrong or wild one compiles a page's code into another document's global.
+ * IT ADDS NO ARM, NO DEFAULT AND NO SENTINEL. A realm with no Document has no handle, and 0 is the world
+ * registry's NONE that every consumer already refuses — returning it would put a whole realm KIND onto one
+ * value that names nothing, which is the shape CLAUDE.md §AND-THE-FORM-THAT-DEFEATS-THAT-RULE-IS-A-SENTINEL
+ * bans and which would route a worker's program into whichever document answered first.
+ * THE SITE TRAVELS WITH THE OPERATION, which is why this is a macro over a function taking the pair rather
+ * than a function deriving its own line. A shared helper stamps ONE address for every caller, and the remedy
+ * this abort names is an action on the ASKING component — so without the caller's file and line it would
+ * name an action with no object, which is CLAUDE.md §AN-ASSERT-THAT-NAMES-A-REMEDY-BUT-NOT-A-SITE. The
+ * spelling is core/idl_args.h's, which this file already includes for exactly that convention.
+ *
+ * NAMED RESIDUAL — THE IDENTIFICATION ITSELF, WHICH THIS DOES NOT BREAK.
+ *   WHAT IS NOT COVERED: a realm that is not a Document cannot be NAMED to the scheduler at all. Every
+ *   production route from source text to a frontier flow is an `engine_queue_` entry taking a `uint32_t doc`
+ *   handle, solver/flow.h carries that handle per queued program and refuses a JSContext for it because a
+ *   handle survives a park and a realm does not, and `document_doc` is the only bridge from a running realm
+ *   to one — so the handle is a FIELD OF THE Document RECORD and a realm without a Document has nowhere to
+ *   keep it. Re-derive rather than believe: `git grep -nE '\bdocument_doc[[:space:]]*\('`.
+ *   WHAT THE NEXT DIFF BUILDS: the handle as a fact about the ENVIRONMENT rather than about the Document.
+ *   HTML §8.1.3.1 "Environments" gives every environment "an opaque string that uniquely identifies this
+ *   environment", and the field beside it is the one that tells the two realm kinds apart — a top-level
+ *   creation URL of which the same section says "it is null for workers and worklets". So the id is owed by
+ *   a worker environment exactly as by a window one, and core/realm.h's realm_install_intrinsics is already
+ *   the one call every realm goes through AND already creates that environment. A SECOND KIND OF DOCUMENT is
+ *   the answer to refuse: HTML §10.2.6.2 "Script settings for workers" sets up an environment and no
+ *   Document, so minting a child-document name for a worker realm would enter a realm kind into the document
+ *   name table under a name that is a lie about what created it.
+ *   HOW ITS ABSENCE WOULD SHOW: a realm whose global object is not a Window reaches this line and aborts with
+ *   `@E`, carrying the asking component's own file and line. */
+static Document *doc_here_at(JSContext *ctx, const char *at_file, int at_line)
 {
     Document *d = doc_of(ctx);
-    DCHECK(d != NULL, "a document member ran in a realm with no Document — document_install names which realm "
-                      "a document is, and a realm that never had one cannot answer for a tree it has not got");
+
+    CHECKF(d != NULL,
+           "%s:%d asked a realm WHICH DOCUMENT it is in a realm that has none. A WorkerGlobalScope realm is "
+           "the kind that reaches here: core/realm.h's per-REALM column builds it and places every "
+           "`[Exposed]` member on it, and it never goes through document_install, so this realm has no "
+           "Document and no world-registry handle — there is no answer to give and no default that would not "
+           "answer for a different document. Either the asking member does not belong in a non-Window realm "
+           "(Web IDL §3.3.7 \"[Exposed]\" decides that, from the corpus, at its own install), or the step it "
+           "is running is conditioned on the global being a Window and this engine dropped the condition. If "
+           "it belongs here, the handle is what must be built: HTML §8.1.3.1 \"Environments\"' id, a fact "
+           "about the environment realm_install_intrinsics already creates, and never a second kind of "
+           "document",
+           at_file, at_line);
     return d;
 }
+#define doc_here(ctx_) doc_here_at((ctx_), IDL_SITE)
 
 /* ---- THE RECORD'S ADDRESSES: ONE PRODUCER, ONE RELEASE, AND NOTHING FREED IN BETWEEN ---------------------
  *
