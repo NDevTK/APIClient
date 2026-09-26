@@ -605,10 +605,10 @@ static int xhr_final_encoding(JSContext *ctx, XhrData *d)
    builds is a Window realm — that there is no DedicatedWorkerGlobalScope and no SharedWorkerGlobalScope, so
    `[Exposed=(Window,DedicatedWorker,SharedWorker)]` reduces to its first member — and the body was
    `return true`. It was true of core/platform.c's per-DOCUMENT column and it stopped being true when
-   core/realm.h's per-REALM column began building realms of every kind. This component declares itself to THAT column, so it is PLACED in
-   a `DedicatedWorkerGlobalScope` realm, and every one of the five asks above was answering about a realm it was
-   not in. The same retirement is why core/dom/document.c's reader of the realm-is-a-document pointer is
-   release-fatal: a realm kind with no Document now exists.
+   core/realm.h's per-REALM column began building realms of every kind. This component declares itself to THAT
+   column, so it is PLACED in a `DedicatedWorkerGlobalScope` realm, and every one of the five asks above was
+   answering about a realm it was not in. The same retirement is why core/dom/document.c's reader of the
+   realm-is-a-document pointer is release-fatal: a realm kind with no Document now exists.
 
    IT IS READ OFF WEB IDL §3.3.8 "[Global]"'s GLOBAL NAMES AND NEVER OFF A REALM KIND OF THIS FILE'S OWN. The
    mask core/realm.h resolves once per realm is the corpus's own vocabulary, and core/idl_args.h DERIVES the
