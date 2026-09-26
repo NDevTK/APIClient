@@ -1727,18 +1727,30 @@ static double xhr_response_length(JSContext *ctx, XhrData *d)
    carry one: §3.5.1 "The open() method" throws a SecurityError for a forbidden method, which Fetch §2.2.1
    "Methods" defines as "a byte-case-insensitive match for `CONNECT`, `TRACE`, or `TRACK`", and the comparison
    is against the UPPERCASE spelling because §3.5.1 has already run Fetch's "normalize a method" over it.
-   AN UNPINNED METHOD ANSWERS FALSE AND THAT IS NOT AN ANSWER ABOUT IT — see the residual at `XR_RSC_HEADERS`,
-   its one caller.
-   The `concolic_is` test is a question about the VALUE'S CARRIER and not a branch on its contents, which is
-   the same distinction every other reader of `d->method` in this file makes; what this function must never
-   become is a concrete read of an unpinned method, because that decides a question §3.5.6 step 3's fork
-   deliberately left open. */
+   AN UNPINNED METHOD CANNOT REACH THIS QUESTION, AND THIS LINE USED TO ANSWER IT FALSE AND CALL THAT A
+   RESIDUAL. The silent arm is deleted and the route that makes it unreachable is asserted instead, which is
+   the same shape `xhr_request_op` one function down already uses over this same field and for a neighbouring
+   reason. The chain is entirely inside this component: §3 gives the response "a network error" initially and
+   `d->network_error` carries it; `xhr_main_fetch_local` answers an UNKNOWN method INSIDE THIS AGENT and
+   returns before it takes any reply, so nothing clears that flag; and processResponse step 3 — "If this's
+   response is a network error, then return" — sends the lifecycle machine to the request error steps at
+   `XR_RESPONSE`. Steps 4-13 never run, so step 7 is never asked. A concolic method arriving here is therefore
+   a ROUTE this engine controls having been broken, never anything a page said, which is what makes it a
+   DCHECK rather than a refusal.
+   §4.1's METHOD HALF IS THEREFORE WHOLE AT THIS SITE RATHER THAN NARROWED. `HEAD` is compared against the
+   spelling §3.5.1 normalized to, `CONNECT` cannot be opened at all, and the third case does not arrive. */
 static int xhr_method_nulls_body(JSContext *ctx, const XhrData *d)
 {
     const char *m;
     int null_body;
 
-    if (concolic_is(d->method)) return 0;
+    DCHECK(!concolic_is(d->method),
+           "an XMLHttpRequest reached Fetch §4.1 \"Main fetch\"'s null-body test with a method that is "
+           "UNKNOWN EXTERNAL INPUT — such a request is answered inside this agent by xhr_main_fetch_local, "
+           "which returns before any reply is taken, so §3's initial network error still stands and "
+           "processResponse step 3 has already left for the request error steps. An arrival here is a route "
+           "that skipped that refusal, and the coercion below would run the page's toString from a C "
+           "activation with no flow base under it");
     DCHECK(JS_IsString(d->method),
            "an XMLHttpRequest was asked whether its method nulls the response's body before §3.5.1 \"The "
            "open() method\" had put a normalized method on the object — every other reader of this field "
@@ -2623,17 +2635,22 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
            error, the other reason §5.3 "Body mixin" gives for a null body, so what is left of the disjunction
            at THIS step is the method and the status. `CONNECT` is unreachable: §3.5.1 "The open() method"
            throws a SecurityError for it, Fetch §2.2.1 "Methods" making it a forbidden method.
-           NAMED RESIDUAL — the arm is CORRECT for every method this flow has pinned and is NARROWER than
-           §4.1. NOT COVERED: a method that is still CONCOLIC here takes the not-null-body arm, which is the
-           answer this line gave for every method before it existed; §3.5.6 step 3's fork splits the operand
-           two ways (body rides / bodyless) and `GET` and `HEAD` are both in its bodyless arm, so the
-           HEAD-versus-GET question is a SECOND predicate over that same operand and has no answer yet. WHAT
-           THE NEXT DIFF BUILDS: that second declared fork here, over `d->method`, whose feasible arms the
-           step-3 narrowing already constrains — never a concrete read of an unpinned method, which would
-           delete the world §Solver-half exists to keep. HOW ITS ABSENCE SHOWS: a document whose method this
-           run never pinned reaches `readyState === 3` and a pre-end-of-body `progress` on a reply a browser
-           gives no body, while the same document with a literal `"HEAD"` does not — so the two disagree
-           about the event sequence for one request. */
+           A NAMED RESIDUAL STOOD HERE CLAIMING §4.1's METHOD HALF WAS NARROWED, AND IT WAS FALSE AT BIRTH —
+           REWRITTEN RATHER THAN DELETED, BECAUSE THE READING THAT PRODUCED IT IS THE ONE A READER
+           RE-DERIVES. It said a method still CONCOLIC here takes the not-null-body arm, that §3.5.6 step 3's
+           fork leaves `GET` and `HEAD` both in its bodyless arm, and that the next diff was therefore a
+           SECOND declared fork over that same operand. Every clause of that is true ABOUT STEP 3 and the
+           conclusion does not follow, because the population it names is EMPTY: an unknown method is
+           answered inside this agent and never reaches a response at all, so this line is never asked about
+           one. `xhr_method_nulls_body` now asserts that route instead of answering past it, and §4.1's
+           method half is WHOLE at this site rather than narrowed.
+           THE METHOD THAT PRODUCED IT IS THE FINDING AND THE CLAUSE IS ONLY ITS SYMPTOM. Both halves of the
+           disjunction were verified against the standards, and the question never asked was the one a
+           residual owes its own operand: WHICH STEP FIRST SEES THIS INPUT. Fetch §4.1 "Main fetch" runs
+           BEFORE this one and disposes of the unknown-method case two steps upstream, so a clause reasoning
+           only about §3.5.6's own steps could not see it. A NOT-COVERED clause naming a POPULATION is a
+           hypothesis about this tree; one naming a PROPERTY is a statement about the spec, and only the
+           second is worth what this file's conventions rate a residual at. */
         if (fetch_status_is_null_body(d->status) || xhr_method_nulls_body(ctx, d)) {
             s->hdr.stage = XR_EOB_BEGIN;
         } else {
