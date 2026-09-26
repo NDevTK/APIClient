@@ -3288,6 +3288,21 @@ static const char *HTML =
        emits none. */
     "function orphanClamp(e){ var v = Math.max(0, Math.min(255, e.n));"
     " fetch('/api/orphan/clamp?v=' + v); }"
+    /* AND THE EIGHTH AND NINTH: the driven body built a DATE out of its unknown and survived it. TWO rows
+       because §21.4.2.1 Date ( ...values ) has TWO coercing arms whose repairs are DIFFERENT, and each was
+       aborting on a different real site of a 19-site corpus: the ONE-argument shape's step 4.c.iii coerces the
+       primitive step 4.c.i produced and has to keep its ToPrimitive apart, because step 4.c.ii inspects what
+       came back; the MULTI-argument shape's steps 5.b-5.h are §7.1.4 ToNumber over the ARGUMENT with no step
+       in between, so the pair is one sub-sequence call. A row holding only one of them reports a family that
+       works while half of it takes documents down, which is the same reason `orphanUpdate` spells both the
+       prefix and the postfix update.
+       THE UNKNOWN IS THE FIELD AT INDEX 0 in the multi-argument statement and the remaining two are literals,
+       deliberately: an unknown at an earlier field does not coerce the later ones (see the residual on
+       js_date_ctor_step), so a `valueOf` written into field 1 here would be asserting that residual rather
+       than this row. The requests are uninteresting and REACHING them is the claim, because an abort emits
+       none — and this is the arm that carries §21.4.2.1 step 5.i MakeFullYear too. */
+    "function orphanDate(e){ var t = new Date(e.n * 1000), u = new Date(e.y, 0, 1);"
+    " fetch('/api/orphan/date1?t=' + t); fetch('/api/orphan/datef?u=' + u); }"
     "(async function(){ var c = await (await fetch('/api/config')).json(); fetch('/api/user?region=' + c.region); })();"   /* FETCH-AWAIT-RESULT: await a safe GET, then §6.4.3 json() over the host's bytes — the parsed body's field flows into a later endpoint as a concrete example */
     /* THE SAME REPLY THROUGH THE OTHER SPELLING, AND THE ROW IS THE SECOND REACTION. Every statement above
        reaches the reply with `await`, which is §27.5.4.7.1 PromiseResolve ( ctor, resolution ) inside Await;
@@ -13522,6 +13537,12 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        reaching it is the claim. */
     int orphan_update = strstr(js, "\"/api/orphan/update\"") != NULL;
     int orphan_clamp  = strstr(js, "\"/api/orphan/clamp\"") != NULL;
+    /* AND THE EIGHTH AND NINTH, which are the SAME builtin and NOT the same mechanism — see the statement they
+       are about. One is §21.4.2.1 step 4.c.iii's ToNumber of the primitive step 4.c.i made; the other is steps
+       5.b-5.h's ToNumber of the argument itself. Both reached §7.1.4 ToNumber ( arg )'s conversion boundary
+       over unknown external input and aborted the instance, which took every row here down with them. */
+    int orphan_date1  = strstr(js, "\"/api/orphan/date1\"") != NULL;
+    int orphan_datef  = strstr(js, "\"/api/orphan/datef\"") != NULL;
     /* AND WHICH OF THREE THINGS A 0 ON ANY OF THE SEVEN ROWS ABOVE IS — the one clause none of them could make.
        Every one of them is `is there a record for this endpoint`, so its 0 folds three findings that take
        OPPOSITE actions: no flow of this run ever RAN OUT OF WORK, so the frontier never reached the question at
@@ -17408,6 +17429,12 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "orphan-ccode", orphan_ccode, "orphanCharCode", SESS_EXPLORE, orphan_why },
         { "orphan-update", orphan_update, "orphanUpdate", SESS_EXPLORE, orphan_why },
         { "orphan-clamp", orphan_clamp, "orphanClamp", SESS_EXPLORE, orphan_why },
+        /* THE TWO DATE ROWS DECLARE THEIR 0 ENTAILED BY `orphan`, which the seven above them do not and which
+           is free here: if no body was driven at all these two are 0 for that reason and for no reason of
+           their own, so summing them as two findings would be one fact counted twice. `orphan_why` still
+           carries the split between the schedule, the take and the row. */
+        { "orphan-date1", orphan_date1, "orphanDate", SESS_EXPLORE, orphan_why, .gate = "orphan" },
+        { "orphan-datef", orphan_datef, "orphanDate", SESS_EXPLORE, orphan_why, .gate = "orphan" },
         /* §29.4.5's THREE ARMS AND THEIR REACH ROW. The key is each row's own endpoint, so a 0 is already a
            localisation; `xk-reach` is keyed on the same statement and stands first because it is what says
            whether the three below it are about §29.4.5 or about how far the run got. */

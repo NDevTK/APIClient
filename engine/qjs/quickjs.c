@@ -87287,10 +87287,51 @@ enum { DATECTOR_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_date_ctor_steps[] = { DATECTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 /* THE SUB-SEQUENCE CURSORS THIS MACHINE CAN LEAVE IN FLIGHT, named once so two transitions cannot list
-   different sets: step_toprim_run's (num_phase) and the [[Get]] inside step_create_from_ctor_run (get_phase).
-   The machine holds no request buffer of its own, so there is nothing else to leave behind. */
+   different sets: `num_phase`, which the NUMERIC family shares — step_toprim_run in the one-argument arm and
+   step_tofloat64_run in both arms write the same byte, which is why one entry covers them — and `get_phase`,
+   the [[Get]] inside step_create_from_ctor_run. The machine holds no request buffer of its own, so there is
+   nothing else to leave behind. */
 #define DATECTOR_CURSORS  &s->hdr.num_phase, &s->hdr.get_phase, NULL
 
+/* A NAMED RESIDUAL OVER BOTH COERCING ARMS — step 4.c.iii and steps 5.b-5.h. The code is CORRECT for what it
+   does and NARROWER than the spec, so there is nothing here to crash on: both arms answer UNKNOWN EXTERNAL
+   INPUT by reporting JS_STEP_UNKNOWN from the coercion sub-sequence, and the driver derives this machine's
+   whole completion from the operand under this definition's algorithm and the coercing stage's label.
+   WHAT IS NOT COVERED: that derived time value carries NO EXAMPLE, even where the operand it came from has
+   one. This is a property of the shared derivation and not of this machine — js_step_unknown_result composes
+   the name and then derives with `real` = JS_UNDEFINED, which every step machine in this engine shares — so
+   `new Date(u * 1000)` with a concrete example behind `u` yields an unknown whose provenance and domain are
+   right and whose concrete date nobody has, where the real operation could have computed one.
+   WHAT THE NEXT DIFF BUILDS: this machine answering at its own site instead of reporting upward. It TAKES the
+   parked operand off the header rather than calling STEP_UNKNOWN_ANSWERED, which frees it and is only for a
+   machine whose answer need not preserve the taint, and derives with js_concolic_derive over that operand
+   whose `real` is the time value these steps actually compute from the operand's own example — which is what
+   21.4.3.2 Date.parse ( string ) already does one algorithm over, running the real parse on the example so
+   the derived value carries the number it really produced. For the multi-argument shape that is one
+   derivation over the WHOLE date and not one per field, and it exists only when every unknown field has an
+   example, so the honest arm when one does not is the derivation this code already gets.
+   HOW ITS ABSENCE WOULD SHOW: in the emitted surface, a record whose date-derived segment carries a source
+   identity and a shape and no concrete value, taken from a run whose operand for that date did carry an
+   example — which is the difference between an endpoint a reader can replay and one they can only describe.
+   WHAT IT IS NOT: a lost arm. Nothing here retires a world — the derived value keeps `src` and `root`, so a
+   branch over the date still forks and an @S candidate still injects at the source that fed it.
+
+   AND A SECOND RESIDUAL OVER THE MULTI-ARGUMENT ARM ALONE, which is ALSO correct-and-narrower rather than
+   wrong. WHAT IS NOT COVERED: an unknown at an EARLIER field skips the LATER fields' coercions, which a page
+   can observe — `new Date(u, { valueOf() { … } })` runs that valueOf in a browser and does not here, because
+   the sub-sequence reports the first unknown it meets and this arm returns it. That is not a property of this
+   machine: it is what EVERY coerce-then-compute builtin in this engine does with a loop of coercions, the
+   generic PRIMARGS body included, because step_coerce_unknown parks ONE operand and asserts that a second
+   coercion over unknown input on the same machine is a machine that returned JS_STEP_UNKNOWN to something
+   which did not place its completion.
+   WHAT THE NEXT DIFF BUILDS: it is the SHARED mechanism and not a Date arm, or this machine becomes the one
+   that does it right while every sibling does not — a second spelling of one answer. The sub-sequence needs a
+   way to say `unknown, and CARRY ON`: the caller TAKES `JSStepHdr.unknown_operand` into a field its own
+   `visit` covers — a move rather than a dup, which is how a machine that forwards a step already carries that
+   field across to another header — keeps coercing, and derives once at the end over the operand it kept. Nothing in the coercion sub-sequences offers that today.
+   HOW ITS ABSENCE WOULD SHOW: a document in which a request composed inside a later argument's `valueOf` is
+   absent from the surface while the date built around it is present — the coercion that would have issued it
+   never ran, so nothing anywhere names it. */
 static int js_date_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSDateCtor *s = st;
@@ -87361,30 +87402,67 @@ static int js_date_ctor_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
             JSValue dv = js_Date_parse(ctx, JS_UNDEFINED, 1, vc(&v));
             JS_FreeValue(ctx, v);
             if (JS_IsException(dv)) return -1;
+            /* 21.4.3.2 Date.parse ( string )'s OWN result and never a coercion of the page's value: that
+               function answers a Number this engine computed, so no operand the page supplied reaches this
+               conversion and the boundary below cannot be asked a question it has no answer for. */
             if (JS_ToFloat64Free(ctx, &s->val, dv)) return -1;
-        } else if (JS_ToFloat64Free(ctx, &s->val, v)) {
-            return -1;
+        } else {
+            /* step 4.c.iii, ECMAScript 21.4.2.1 Date ( ...values ): "Let tv be ? ToNumber(v)" — ASKED OF THE
+               COERCION SUB-SEQUENCE rather than performed here. This was a JS_ToFloat64Free of the primitive,
+               and that is the shape 7.1.4 ToNumber ( arg )'s own conversion boundary aborts on: 7.1.1
+               ToPrimitive ( input [ , preferredType ] ) over UNKNOWN EXTERNAL INPUT is the IDENTITY, so
+               step_toprim_run above hands a concolic straight back and the boundary — which owes C a real
+               double and says so — is where `new Date({orphan.arg0} * 1000)` ended a whole document, and an
+               aborted instance's findings are discarded. step_tofloat64_run reports JS_STEP_UNKNOWN and the
+               driver completes this machine with the unknown derived under this definition's algorithm and
+               this stage's label, so a later branch over the date still forks and an @S candidate still
+               injects at the source that fed it.
+               AND STEP 4.c.ii's `If v is a String` IS NOT FORKED FOR ONE, which is what makes that answer
+               WHOLE rather than a narrowing. A concolic is not a JS_TAG_STRING, so an unknown takes this arm
+               — and the arm above would have produced an unknown Number too, being 21.4.3.2's parse of a
+               String nobody has. Both arms end in an unknown time value derived from the SAME operand at the
+               SAME stage, whose label names 4.c.ii and 4.c.iii together, so there is one derived identity
+               either way and no arm is deleted. The branch is the BUILTIN'S OWN test on the operand and not
+               the page's, which is why C-stack forbids forking it.
+               IT CANNOT ASK FOR A ToPrimitive: step 4.c.i already made this value primitive, and a REQUEST
+               from here would be re-entered above as that coercion's answer and overwrite the wrong slot. */
+            r = step_tofloat64_run(ctx, &s->hdr, v, JS_UNDEFINED, &s->val, out_cb, out_argc);
+            DCHECK(r != 5, "21.4.2.1 step 4.c.iii's ToNumber asked for a ToPrimitive — step 4.c.i's own "
+                           "primitive is still an Object, which 7.1.4 ToNumber ( arg ) step 9 asserts it "
+                           "is not");
+            JS_FreeValue(ctx, v);
+            if (r) return r < 0 ? -1 : r;
         }
         s->val = time_clip(s->val);                                /* step 4.d */
         STEP_GOTO(s->hdr.stage, DATECTOR_CREATE, DATECTOR_CURSORS);
         STEP_JUMP(DATECTOR_CREATE);
     }
     STEP_ARM(DATECTOR_FIELD);
-    /* steps 5.b-5.h's ToNumber per field. EVERY provided argument is coerced, in order, before any of them is
-       examined — a NaN in an earlier one does not skip the later coercions the page can observe. The NUMERIC
-       half runs right here, on a primitive, so it invokes nothing and needs no stage: a stage between the two
-       would be entered and left inside one step() call and rest at no step at all. The loop condition is `i`
-       and not the stage, so a resume re-enters at the field it parked on and collects its own answer. */
+    /* steps 5.b-5.h's ToNumber per field. EVERY provided argument that is coerced AT ALL is coerced in order,
+       before any of them is examined — a NaN in an earlier one does not skip the later coercions the page can
+       observe, and neither does a throw, which is what each step's `?` means. An UNKNOWN in an earlier one
+       DOES: the residual on js_date_ctor_step names that and what would close it. The NUMERIC
+       half runs inside the sub-sequence, on a primitive, so it invokes nothing and needs no stage: a stage
+       between the two would be entered and left inside one step() call and rest at no step at all. The loop
+       condition is `i` and not the stage, so a resume re-enters at the field it parked on and collects its own
+       answer.
+       IT IS ONE CALL AND NOT A ToPrimitive PLUS A CONVERSION OF THIS BODY'S OWN, because ECMAScript
+       21.4.2.1 Date ( ...values ) step 5.b is "Let yearNumber be ? ToNumber(values[0])" and its six siblings
+       are the same shape — 7.1.4 ToNumber ( arg ) over the ARGUMENT, with no step in between that inspects
+       the primitive, which is the one thing that would need the halves apart (step 4.c.ii of the
+       one-argument shape is that step, and that arm keeps them apart for exactly that reason). The
+       hand-decomposed pair was step_toprim_run followed by a JS_ToFloat64Free written here, and 7.1.1
+       ToPrimitive ( input [ , preferredType ] ) over UNKNOWN EXTERNAL INPUT is the IDENTITY — so the pair
+       handed a concolic to the conversion boundary that owes C a real double, and `new Date(u.getFullYear(),
+       m, 1)` over an unknown `u` aborted a whole document. step_tofloat64_run reports JS_STEP_UNKNOWN and
+       the driver completes this machine with the unknown derived under this definition's algorithm and this
+       stage's label: an unknown FIELD makes the whole date unknown, which is what JS_STEP_UNKNOWN states for
+       every value-producing algorithm and the same rule Array.prototype.join writes by hand. */
     while (s->i < s->n) {
-        JSValue v;
         double a;
-        r = step_toprim_run(ctx, &s->hdr, step_arg(&s->hdr, s->i), HINT_NUMBER, cb_result, &s->prim,
-                            out_cb, out_argc);
+        r = step_tofloat64_run(ctx, &s->hdr, step_arg(&s->hdr, s->i), cb_result, &a, out_cb, out_argc);
         cb_result = JS_UNDEFINED;
         if (r) return r < 0 ? -1 : r;
-        v = s->prim;
-        s->prim = JS_UNDEFINED;
-        if (JS_ToFloat64Free(ctx, &a, v)) return -1;
         s->fields[s->i] = isfinite(a) ? trunc(a) : NAN;
         /* step 5.i MakeFullYear, over values[0] */
         if (s->i == 0 && isfinite(a) && s->fields[0] >= 0 && s->fields[0] < 100)
