@@ -35,5 +35,8 @@ void html_progress_declare(JSContext *ctx);
    core/html/html_element.c, which owns the table of which interface a tag wears, for the same reason §4.12.1's
    `async` is: none of the four is a plain reflection and this file owns the algorithms. */
 void html_progress_install(JSContext *ctx, JSValueConst proto);
+/* The AGENT's other half: both setter ids back at pre-init, so a second declaration cycle starts where
+   html_progress_declare asserts it does. Called from html_element_free's cascade. */
+void html_progress_free(void);
 
 #endif

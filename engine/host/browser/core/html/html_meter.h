@@ -35,5 +35,8 @@ void html_meter_declare(JSContext *ctx);
 /* §4.10.14's `value`, `min`, `max`, `low`, `high`, `optimum` and `labels` on HTMLMeterElement.prototype. Handed
    the prototype by core/html/html_element.c, which owns the table of which interface a tag wears. */
 void html_meter_install(JSContext *ctx, JSValueConst proto);
+/* The AGENT's other half: the six setter ids back at pre-init, so a second declaration cycle in this
+   process starts where html_meter_declare asserts it does. Called from html_element_free's cascade. */
+void html_meter_free(void);
 
 #endif

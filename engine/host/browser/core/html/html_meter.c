@@ -268,6 +268,23 @@ void html_meter_declare(JSContext *ctx)
     for (i = 0; i < M_N; i++) g_id_set[i] = idl_setter_id(ctx, IDL_DOUBLE, false, js_meter_set, i);
 }
 
+/* THE SETTER IDS BACK, AT THIS COMPONENT'S RELEASE — the shape core/html/nonce_attribute.c already has and
+   the one core/html/html_base_element.c's comment in html_element_free names as the model.
+   WHY IT IS OWED RATHER THAN OPTIONAL: an id here is an INDEX INTO THE IDL MEMBER POOL, and
+   idl_args_pool_free ends that pool's cycle with `g_n = 0` and its chunks freed — so an id kept across a
+   release names a member record that no longer exists. `html_meter_declare` already asserts its cache is
+   at pre-init, and NOTHING PUT IT THERE: this file had the assert and no release, which is a precondition
+   nothing establishes rather than a guard. Measured over the twenty components with such a cache, that
+   combination was this file and core/html/html_progress.c and nothing else.
+   IT IS A RESET AND NOT A FREE OF ANYTHING: the ids are ints, the members they name belong to the pool,
+   and this line is the statement that this component no longer names any of them. */
+void html_meter_free(void)
+{
+    int i;
+
+    for (i = 0; i < M_N; i++) g_id_set[i] = -1;
+}
+
 void html_meter_install(JSContext *ctx, JSValueConst proto)
 {
     int i;

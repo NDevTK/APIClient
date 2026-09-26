@@ -224,6 +224,15 @@ void html_progress_declare(JSContext *ctx)
     g_id_set_max = idl_setter_id(ctx, IDL_DOUBLE, false, js_progress_set, PG_MAX);
 }
 
+/* THE SETTER IDS BACK — see core/html/html_meter.c for why this is owed, which is the same argument and the
+   same measurement: these two were the only components of the twenty carrying such a cache that ASSERT the
+   cache is at pre-init and never put it there. This one had not been reached because the meter's assert is
+   one declaration earlier in html_element_init and a run stops at its first abort. */
+void html_progress_free(void)
+{
+    g_id_set_value = g_id_set_max = -1;
+}
+
 void html_progress_install(JSContext *ctx, JSValueConst proto)
 {
     DCHECK(g_id_set_value >= 0 && g_id_set_max >= 0,

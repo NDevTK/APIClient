@@ -1652,6 +1652,12 @@ void html_element_free(JSRuntime *rt)
     html_audio_free(rt);
     html_option_free(rt);
     html_select_free();   /* §4.10.7's `remove` id, declared under `element` from this cascade */
+    /* §4.10.13's two setter ids and §4.10.14's six, in REVERSE declaration order like the rest of this
+       cascade — html_meter_declare runs before html_progress_declare above, so the progress half goes back
+       first. Both components asserted their cache was at pre-init and neither had a release to put it
+       there, which is the one combination the other eighteen such caches in this tree avoid. */
+    html_progress_free();
+    html_meter_free();
     html_link_free(rt);
     element_internals_free(rt);
     if (g_dataset_key != JS_ATOM_NULL) { JS_FreeAtomRT(rt, g_dataset_key); g_dataset_key = JS_ATOM_NULL; }
