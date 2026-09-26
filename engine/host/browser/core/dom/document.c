@@ -372,32 +372,62 @@ static Document *doc_of(JSContext *ctx)
  *   handle survives a park and a realm does not, and `document_doc` is the only bridge from a running realm
  *   to one — so the handle is a FIELD OF THE Document RECORD and a realm without a Document has nowhere to
  *   keep it. Re-derive rather than believe: `git grep -nE '\bdocument_doc[[:space:]]*\('`.
- *   WHAT THE NEXT DIFF BUILDS: the handle as a fact about the ENVIRONMENT rather than about the Document.
- *   HTML §8.1.3.1 "Environments" gives every environment "an opaque string that uniquely identifies this
- *   environment", and the field beside it is the one that tells the two realm kinds apart — a top-level
- *   creation URL of which the same section says "it is null for workers and worklets". So the id is owed by
- *   a worker environment exactly as by a window one, and core/realm.h's realm_install_intrinsics is already
- *   the one call every realm goes through AND already creates that environment. A SECOND KIND OF DOCUMENT is
- *   the answer to refuse: HTML §10.2.6.2 "Script settings for workers" sets up an environment and no
- *   Document, so minting a child-document name for a worker realm would enter a realm kind into the document
- *   name table under a name that is a lie about what created it.
- *   HOW ITS ABSENCE WOULD SHOW: a realm whose global object is not a Window reaches this line and aborts with
- *   `@E`, carrying the asking component's own file and line. */
+ *   WHAT THE NEXT DIFF BUILDS: the fact that decides whether an environment HAS a world-registry name at all,
+ *   and it is that DECISION rather than the field — which is this clause CORRECTED, not restated. It used to
+ *   prescribe the handle as a fact about the ENVIRONMENT rather than about the Document, on the ground that
+ *   core/realm.h's realm_install_intrinsics is already the one call every realm goes through and already
+ *   creates that environment, and it is rewritten rather than deleted because both grounds are TRUE: that
+ *   header states in its own capitals that the call ALSO CREATES THE REALM'S ENVIRONMENT, and it has twice
+ *   taken a new argument for exactly this reason. A reader will therefore re-derive the conclusion, and the
+ *   conclusion does not follow.
+ *   THE FIRST REASON IS A DERIVATION COLLAPSED INTO AN IDENTITY. HTML §8.1.3.1 "Environments"' id is "an
+ *   opaque string that uniquely identifies this environment"; the handle is this instance's INDEX into its own
+ *   name table (solver/world.h), so the id is `world_doc_name(handle)` and the two are ONE STEP APART. A field
+ *   named after the id and holding the index is CLAUDE.md §THE-GENERAL-FORM-IS-THE-SHARPEST-PART's
+ *   substitution, landing in an identifier where no instrument here can see it.
+ *   THE SECOND REASON IS THE BLOCKING ONE: THE ASSERT PATTERN CANNOT BE WRITTEN. What makes every environment
+ *   argument that call already takes impossible to state WRONGLY rather than merely easy to state correctly is
+ *   that the realm's Web IDL §3.3.8 "[Global]" global names PIN it — a worker environment's top-level creation
+ *   URL must be NULL and a Window environment's owner answer must be false, each asserted, so a host cannot
+ *   state the field the other kind owns. A world-registry name is NOT a function of the global names: a WINDOW
+ *   realm may have one or have none. So a further argument has no value the call could refuse, and a host with
+ *   no document could pass only 0 — the registry's NONE, which puts two unrelated populations on one value
+ *   (CLAUDE.md §AND-THE-FORM-THAT-DEFEATS-THAT-RULE-IS-A-SENTINEL) — or a minted name, which is the
+ *   child-document name this clause already refuses.
+ *   AND THE WINDOW REALM WITH NO NAME IS WHAT SETTLES IT RATHER THAN A HYPOTHETICAL. A host may bring an agent
+ *   up whose first realm is a Window realm with no navigable, no Document and no world registry ALIVE — the
+ *   declaration-cycle fixture does exactly that, deliberately, after the frontier release has run, and
+ *   solver/world.c clears its document table and its own document id there, so asking that realm for the local
+ *   document is an abort rather than an answer. Derive it rather than believe it — run
+ *   `git grep -n platform_agent_init -- engine/host` and read each caller for whether a handle is in scope.
+ *   SO THE ORDER IS THE REVERSE OF WHAT THIS CLAUSE USED TO PRESCRIBE, and every route converges on the same
+ *   missing decision — a further install argument and a realm-to-document reverse lookup in the registry
+ *   alike — because neither can name a realm the document name table has no KIND for. A SECOND KIND OF
+ *   DOCUMENT stays the answer to refuse: HTML §10.2.6.2 "Script settings for workers" sets up an environment
+ *   and no Document, so minting a child-document name for a worker realm would enter a realm kind into the
+ *   document name table under a name that is a lie about what created it.
+ *   HOW ITS ABSENCE WOULD SHOW: a realm with no Document reaches this line and aborts with `@E`, carrying the
+ *   asking component's own file and line. It used to name a realm whose global object is not a Window, which
+ *   is the same under-count of the population the abort below used to carry.
+ *   RETIREMENT: this record goes when a realm in this tree states its environment's world-registry name at its
+ *   own construction, because the decision above has then been made and there is a field to read. */
 static Document *doc_here_at(JSContext *ctx, const char *at_file, int at_line)
 {
     Document *d = doc_of(ctx);
 
     CHECKF(d != NULL,
-           "%s:%d asked a realm WHICH DOCUMENT it is in a realm that has none. A WorkerGlobalScope realm is "
-           "the kind that reaches here: core/realm.h's per-REALM column builds it and places every "
-           "`[Exposed]` member on it, and it never goes through document_install, so this realm has no "
-           "Document and no world-registry handle — there is no answer to give and no default that would not "
-           "answer for a different document. Either the asking member does not belong in a non-Window realm "
-           "(Web IDL §3.3.7 \"[Exposed]\" decides that, from the corpus, at its own install), or the step it "
-           "is running is conditioned on the global being a Window and this engine dropped the condition. If "
-           "it belongs here, the handle is what must be built: HTML §8.1.3.1 \"Environments\"' id, a fact "
-           "about the environment realm_install_intrinsics already creates, and never a second kind of "
-           "document",
+           "%s:%d asked a realm WHICH DOCUMENT it is in a realm that has none. TWO KINDS REACH HERE and this "
+           "message used to name one. A WorkerGlobalScope realm is the first: core/realm.h's per-REALM column "
+           "builds it and places every `[Exposed]` member on it. The second is the FIRST REALM OF AN AGENT A "
+           "HOST BROUGHT UP WITH NO NAVIGABLE, which core/platform.c states is a `Window` realm and which has "
+           "no Document either. Neither goes through document_install, so this realm has no Document and no "
+           "world-registry handle — there is no answer to give and no default that would not answer for a "
+           "different document. Either the asking member does not belong in a non-Window realm (Web IDL "
+           "§3.3.7 \"[Exposed]\" decides that, from the corpus, at its own install), or the step it is running "
+           "is conditioned on the global being a Window and this engine dropped the condition. If it belongs "
+           "here, what must be built FIRST is not this handle but the decision the residual above names — what "
+           "a non-Document realm's environment name IS and which table it holds it in — because no realm can "
+           "state a name the world registry's DOCUMENT table has no kind for",
            at_file, at_line);
     return d;
 }
