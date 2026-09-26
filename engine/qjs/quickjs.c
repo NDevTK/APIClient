@@ -112359,12 +112359,26 @@ int JS_IntrinsicName(JSContext *ctx, JSValueConst v, char *buf, size_t buf_size)
        names, of which 89 carry a dot and 65 are non-ASCII. So this skip costs NO NAME THAT WORKED — the 89
        aborted and the other 8 composed a whole English sentence with `.prototype%` glued onto it — and it
        leaves the check below standing over exactly the population it is true of.
+       AND THOSE 97 ARE A FLOOR FOR A REASON THE SWEEP CANNOT REMOVE, which is worth more than the figure: a
+       derivation keyed on the CONSTRUCT still reads its argument as SOURCE TEXT, so a name the program
+       COMPOSES AT RUNTIME is in no count of it — core/streams/queuing_strategy.c builds
+       `snprintf(what, "%s.prototype", NAMES[i])` in a loop, and core/realm.c's own §3.8 census passes its
+       description down through a parameter. Both are dotted, neither is spelled anywhere a grep can match,
+       and the number a reader acts on is therefore a LOWER BOUND whichever way the sweep is written. What is
+       NOT a floor is the repair, because it is keyed on the DOOR rather than on the names: every one of these
+       goes through `realm_value_declare`, so a name nobody can enumerate is marked exactly as a literal is.
        NAMED RESIDUAL, and it is where the naming VALUE of this skip is recovered rather than a gap it opens.
        Some value slots are per-realm PROTOTYPE HOLDERS for an interface whose prototype cannot live in a class
        slot, and their declarations say so in their own text — the list, rather than a count of it, because a
        count beside its own list is the one arithmetic a reader never performs: `CSSOM §6.6.1
        CSSStyleDeclaration.prototype`, `CSS Fonts 5 §9.1 CSSFontFaceDescriptors.prototype`, `CSSOM §6.4.7
-       CSSPageDescriptors.prototype`, `CSSOM §6.1.1 StyleSheet.prototype`, `ReadableStreamBYOBReader.prototype`.
+       CSSPageDescriptors.prototype`, `CSSOM §6.1.1 StyleSheet.prototype`, `ReadableStreamBYOBReader.prototype`,
+       and queuing_strategy.c's `CountQueuingStrategy.prototype` and `ByteLengthQueuingStrategy.prototype` —
+       the last two composed at runtime, so they were MISSING from this list when it was first written and a
+       reader who re-derives it from a grep will miss them again. Three of the seven say in their own
+       `agent_state_realm_slot` text why the prototype cannot live in a class slot: the interfaces SHARE one
+       class, so the slot is the only per-realm place left for a second prototype — which is what makes the
+       conversion below a new class id rather than a move.
        Those objects ARE intrinsics of their realm, a page reaches them through the `[[Prototype]]` chain of
        `el.style` and of a stylesheet, and after this diff they answer NO NAME. What the next diff builds is
        their conversion from a value slot to an ordinary CLASS NAMED AFTER THE INTERFACE, after which the namer
