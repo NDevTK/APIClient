@@ -940,9 +940,23 @@ void    endpoint_ask_census(long *asks, long *pre_program, long *suppressed, lon
    so a concolic URL — `fetch('/api/u?uid=' + state.id)`, the computed address this tool exists to report —
    CROSSES the conversion without parking or forking and reaches §5.4. The conversions park on a page GETTER,
    which is a `Request` input's `url` or a `RequestInit` member, and not on an unknown string.
-   RETIREMENT: this record goes when a flow that reached no declared member at all is distinguishable from one
-   that reached this member's prologue by a row on the ORDER's own census, because the state this row cannot
-   separate is then separated by the component that owns it and no reader has to come here to learn that. */
+   RETIREMENT — MET BY A DIFFERENT ROUTE THAN THIS CONDITION NAMED, AND THE RECORD IS REWRITTEN RATHER THAN
+   DELETED BECAUSE THE SENTENCE ABOVE IT IS STILL TRUE AND A READER WILL RE-DERIVE THE WRONG CONSEQUENCE FROM IT.
+   The condition asked for the separation to arrive as a row on the ORDER's own census. It arrived instead as
+   `epFetchAskNamedLife` two rows down, raised where the COMPILER resolves the free identifier against the global
+   object — so `no counter AT THIS EDGE ever will` is unchanged and correct, and what has changed is that the
+   state it names is no longer unseparated. A reader who met the condition as it stood would go and build the
+   ORDER row believing nothing yet answers the question, which is the stale-absence direction this file rates
+   worst: the only reader of a named gap is somebody about to fill it.
+   WHY THE COMPILER AND NOT THE ORDER, since the condition guessed the other one: the ask must be recorded
+   upstream of every arm that may legitimately DECLINE, and REACH is such an arm — reach is what running is — so
+   no row on the order's census is upstream of it either. The order answers WHY a call was not reached; the
+   compiler answers WHETHER the program contains one. Those are two questions and the second is the one a zero
+   here was being read as.
+   WHAT IS STILL OWED IS NARROWER AND IS THE NEW CONDITION: the compile row sees ONE SPELLING, the free
+   identifier, so `window.fetch(u)` and a parameter a bundle shadowed the name with reach no global resolution and
+   raise nothing. RETIREMENT: this record goes when a member-name channel at the field-get emitter reports those
+   spellings into the same rows, because the denominator is then a floor over no spelling at all. */
 /* …AND THE FREE GLOBAL IDENTIFIER A PROGRAM MUST SPELL TO REACH IT — `entry`, stated by the edge beside its
    stage table for `first_stage`'s reason exactly: which name a component installs itself under is that
    component's own fact, and a table of them in this file would be the drifting second copy

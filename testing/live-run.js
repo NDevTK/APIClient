@@ -419,7 +419,32 @@ const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "u
    own `absentPair` reader exists to avoid.
    RETIREMENT: this note goes when result.c states each @COLD row's kind beside it and these three lists are
    derived from that, because the question it answers can then be asked of the producer. */
-const COLD_STEP_UNITS = ["stepUnitRuns", "stepUnitOverruns"];
+/* THE DENOMINATOR OF THE LADDER'S THREE INVOKER ARMS, FIRST ON THE LIST BECAUSE IT IS WHAT THEIR ZERO IS A
+   FRACTION OF. `stepUnitRuns`' rendering, timer and idle arms are `else if`s inside flow_step, so REACHING ONE
+   IS RUNNING and a zero there stood for two states that take opposite work: the document hangs nothing off that
+   rung, or the ladder never gave the rung a turn. solver/rung_entry.h states why no counter INSIDE the ladder
+   can ever separate them — the ask has to be recorded upstream of every arm that may decline, and reach is such
+   an arm — so these are raised where the COMPILER resolves a free identifier against the global object.
+   READ AS A BIT AND NEVER AS A MAGNITUDE. A program is recompiled by every flow that replays it, so these count
+   COMPILER RESOLUTIONS and not source sites; the producer names them `Named` rather than `Sites` for that
+   reason. NO INEQUALITY AGAINST THE RUNS ARM HOLDS IN EITHER DIRECTION and the producer asserts none: one
+   `setInterval` feeds the timer arm for ever (runs exceed names) and a rung the ladder never reached runs zero
+   times against any number of names (names exceed runs, which is the finding).
+   THE `…Typeof…` HALF IS THE DISCRIMINATOR AND NOT A SECOND OBSERVATION. The unary parser patches an ordinary
+   read into the non-throwing form only for `typeof` (ECMAScript §13.5.3 "The typeof Operator" step 2.a), so a
+   bundle that merely PROBES for a name raises that row and not its partner — which is what keeps a nonzero
+   denominator from being read as work the document actually asked for. Read the pair, never either alone.
+   AN ARTIFACT OLDER THAN THESE ROWS PRINTS `-` FOR ALL SIX, this driver's absent-versus-zero rule: the
+   producer's absent form is the rows being ABSENT from `_cold` — a host whose realms install none of the three
+   components has no population — so `k in c` is false and this list yields `null`, with no arm that could turn
+   that into a 0. A ROW READING 0 AND A ROW READING `-` ARE DIFFERENT FACTS and only the first is about the run.
+   THEY ARE NUMBERS ON A LIST WHOSE OTHER TWO MEMBERS ARE HISTOGRAMS, which is safe because this list is a KIND
+   partition and nothing spreads it: `census()` copies every member of COLD_ROWS with one uniform `k in c` read.
+   All six are LIFETIME counts, which is the kind this list states, and the producer spells it into each name. */
+const COLD_STEP_UNITS = ["stepNamedRenderingLife", "stepNamedRenderingTypeofLife",
+                         "stepNamedTimerLife", "stepNamedTimerTypeofLife",
+                         "stepNamedIdleLife", "stepNamedIdleTypeofLife",
+                         "stepUnitRuns", "stepUnitOverruns"];
 /* …AND THE REPLY DOOR'S ONE LEVEL, FILED WITH THE GAUGES AND NOT WITH ITS OWN THREE SIBLINGS, which is the
    whole reason this driver splits the two lists: `replyOutstanding` is the count of records the host may still
    be shown AT THE INSTANT the census was composed, so it may FALL and differencing it reads a level as a rate.
@@ -847,11 +872,28 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      flow that never reached a call the page does make — the prologue is entered in neither. That is the
      ORDER's question and solver/flow.h's `readyPicksLifetime` legend is its instrument, which is why these two
      rows are read BESIDE the job rows on this list and not instead of them.
+     AND THAT SENTENCE IS STILL TRUE OF THIS EDGE AND IS NO LONGER TRUE OF THIS LIST, which is why it is
+     REWRITTEN rather than left standing: `epFetchAskNamedLife` below separates exactly those two states, and it
+     does so WITHOUT being a row at this edge — it is raised where the COMPILER resolves the free identifier
+     `fetch` against the global object, which is upstream of reach because reach is what running is. A reader who
+     took the paragraph above as it stood would go on reading `called == 0` beside the job rows and inferring,
+     where one row on this same line now answers it. The job rows remain the instrument for WHY a call was not
+     reached; the pair below is the instrument for WHETHER the program contains one at all.
      A ZERO HERE IS NOT EVIDENCE THE HOOK IS BROKEN, and the producer states the narrowing: `idl_concolic_rule`
      answers CROSSES for IDL_USVSTRING, so a concolic URL — the computed address this tool exists to report —
      passes the conversion without parking, and the conversions park on a page GETTER rather than on an unknown
      string. `called == began` is therefore the expected healthy reading, and the containment `began <= called`
      is asserted by the producer where both terms are in one hand. */
+  /* THE DENOMINATOR, BEFORE THE ROW IT IS A FRACTION OF. `named > 0` with `called == 0` is a program that spells
+     `fetch` and a flow that never reached the call — the state the paragraph above says no row at this edge can
+     reach, answered from outside the edge. `named == 0` beside `called == 0` is the CORRECT SILENCE, and it is
+     the reading this census could not express before: a document whose bundle names no `fetch` at all.
+     IT IS A FLOOR OVER ONE SPELLING AND THAT IS WHY IT WITHHOLDS RATHER THAN ACCUSES. `window.fetch(u)` is a
+     property read and a bundle that shadows the name with a parameter uses a local slot, so neither reaches a
+     global resolution — `called > named` is ORDINARY and so is `named > called`, and the producer asserts no
+     containment in either direction. Read as a BIT; the magnitude counts compiler resolutions and rises with
+     every flow that replays the document. */
+  "epFetchAskNamedLife", "epFetchAskNamedTypeofLife",
   "epFetchAskCalledLife",
   "epFetchAskBeganLife", "epFetchAskOfferedLife",
   "epFetchOutFreedLife", "epFetchOutFreedOfferedLife", "epFetchOutDiedAtLife",
@@ -890,6 +932,11 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
   /* AND THE SAME SPLIT FOR THIS DOOR, for the same reason and with the same two states it cannot separate —
      `send()` is its own declared member, so SEND_STAGES is based at IDL_STEP_FIRST and the conversion of its
      argument runs in front of SEND_CHECKS. Read the pair, never either alone. */
+  /* …AND THIS DOOR'S DENOMINATOR, whose entry identifier is the INTERFACE's and not `send`'s: a program reaches
+     this construction only through `new XMLHttpRequest`, so that is the free identifier the compiler resolves
+     and `send` — reached through a receiver — is never a global. Same floor, same two ordinary inequalities,
+     same reason the `…Typeof…` half travels with it. */
+  "epXhrAskNamedLife", "epXhrAskNamedTypeofLife",
   "epXhrAskCalledLife",
   "epXhrAskBeganLife", "epXhrAskPlacedLife", "epXhrAskOfferedLife",
   "epXhrOutFreedLife", "epXhrOutFreedPlacedLife", "epXhrOutDiedAtLife",
