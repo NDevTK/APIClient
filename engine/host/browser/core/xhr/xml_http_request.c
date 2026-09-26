@@ -1624,10 +1624,12 @@ enum { XHR_CD_OBJECT = 0, XHR_CD_MODE, XHR_CD_EVENT };
                     "flow is suspended on the host's answer; siblings run)") \
     X(XR_RESPONSE,  "XHR §3.5.6 send() step 5's processResponse steps 1-4 (set this's response, handle " \
                     "errors, set the state to headers received)") \
-    X(XR_RSC_HEADERS, "XHR §3.5.6 send() step 5's processResponse step 5 (fire an event named " \
-                      "readystatechange at this)") \
+    X(XR_RSC_HEADERS, "XHR §3.5.6 send() step 5's processResponse steps 5-7 (fire an event named " \
+                      "readystatechange at this, return if a listener left headers received, and return " \
+                      "through handle response end-of-body when the response's body is null)") \
     X(XR_LOADING,   "XHR §3.5.6 send() step 5's processBodyChunk steps 1-3 (append the bytes to this's " \
-                    "received bytes and set the state to loading)") \
+                    "received bytes, return unless roughly 50ms have passed since these steps were last " \
+                    "invoked, and set the state to loading)") \
     X(XR_RSC_LOADING, "XHR §3.5.6 send() step 5's processBodyChunk step 4 (fire an event named " \
                       "readystatechange at this)") \
     X(XR_PROGRESS,  "XHR §3.5.6 send() step 5's processBodyChunk step 5 (fire a progress event named " \
@@ -1638,8 +1640,11 @@ enum { XHR_CD_OBJECT = 0, XHR_CD_MODE, XHR_CD_EVENT };
                       "named load at this's upload object)") \
     X(XR_UPLOAD_LOADEND, "XHR §3.5.6 send() step 5's processRequestEndOfBody step 5 (fire a progress event " \
                          "named loadend at this's upload object)") \
+    X(XR_EOB_BEGIN, "XHR §3.5.6 handle response end-of-body steps 1-5 (handle errors, return on a network " \
+                    "error, and compute transmitted and length from the RESPONSE)") \
     X(XR_EOB_PROGRESS, "XHR §3.5.6 handle response end-of-body step 6 (fire a progress event named progress " \
-                       "at xhr with transmitted and length)") \
+                       "at xhr with transmitted and length — the step is conditioned on xhr's synchronous " \
+                       "being false, which XR_EOB_BEGIN honours by routing a synchronous object past it)") \
     X(XR_EOB_RSC,   "XHR §3.5.6 handle response end-of-body steps 7-9 (state done, send() invoked false, " \
                     "fire an event named readystatechange at xhr)") \
     X(XR_EOB_LOAD,  "XHR §3.5.6 handle response end-of-body step 10 (fire a progress event named load at xhr)") \
@@ -1715,6 +1720,36 @@ static double xhr_response_length(JSContext *ctx, XhrData *d)
     if (end == v || (end && *end) || !(n >= 0)) n = 0;
     free(v);
     return n;
+}
+
+/* Fetch §4.1 "Main fetch"'s METHOD half of the same nulling — "either request's method is `HEAD` or
+   `CONNECT`" — asked of the method this flow has actually pinned. `CONNECT` is not tested because XHR cannot
+   carry one: §3.5.1 "The open() method" throws a SecurityError for a forbidden method, which Fetch §2.2.1
+   "Methods" defines as "a byte-case-insensitive match for `CONNECT`, `TRACE`, or `TRACK`", and the comparison
+   is against the UPPERCASE spelling because §3.5.1 has already run Fetch's "normalize a method" over it.
+   AN UNPINNED METHOD ANSWERS FALSE AND THAT IS NOT AN ANSWER ABOUT IT — see the residual at `XR_RSC_HEADERS`,
+   its one caller.
+   The `concolic_is` test is a question about the VALUE'S CARRIER and not a branch on its contents, which is
+   the same distinction every other reader of `d->method` in this file makes; what this function must never
+   become is a concrete read of an unpinned method, because that decides a question §3.5.6 step 3's fork
+   deliberately left open. */
+static int xhr_method_nulls_body(JSContext *ctx, const XhrData *d)
+{
+    const char *m;
+    int null_body;
+
+    if (concolic_is(d->method)) return 0;
+    DCHECK(JS_IsString(d->method),
+           "an XMLHttpRequest was asked whether its method nulls the response's body before §3.5.1 \"The "
+           "open() method\" had put a normalized method on the object — every other reader of this field "
+           "asserts the same pair, and a value that is neither a string nor concolic is this file's own "
+           "bookkeeping broken rather than anything a page said");
+    m = JS_ToCString(ctx, d->method);
+    CHECK(m != NULL, "XMLHttpRequest: OOM reading the request method back for Fetch §4.1 \"Main fetch\"'s "
+                     "null-body test — a method this engine cannot read is one that test has no answer for");
+    null_body = !strcmp(m, "HEAD");
+    JS_FreeCString(ctx, m);
+    return null_body;
 }
 
 /* §3.5.6 "handle errors": which request error the response calls for, or 0 for none. */
@@ -2520,14 +2555,10 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         }
         if (d->synchronous) {
             /* §3.5.6's synchronous arm runs "handle response end-of-body" and NOTHING ELSE — no
-               processResponse, no headers-received state, no progress event. */
-            err = xhr_handle_errors(d);
-            if (err != XHR_ERR_NONE) { s->hdr.stage = XR_ERR_BEGIN; goto error_steps; }
-            s->transmitted = 0;
-            s->length = 0;
-            d->state = XHR_DONE;
-            d->send_invoked = 0;
-            s->hdr.stage = XR_EOB_RSC;
+               processResponse, no headers-received state, no progress event. It reaches that algorithm
+               through its one entry, which is what makes step 6's synchronous test and steps 3-5's operands
+               a property of the algorithm rather than of this caller. */
+            s->hdr.stage = XR_EOB_BEGIN;
         } else {
             /* processRequestEndOfBody steps 1-2: upload complete becomes true, and an object with no upload
                listener fires none of the three. */
@@ -2576,14 +2607,57 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         if (r < 0) return JS_STEP_ABRUPT;
         /* "If this's state is not headers received, then return" — a listener may have aborted or reopened. */
         if (d->state != XHR_HEADERS_RECEIVED) return JS_STEP_DONE;
-        s->hdr.stage = XR_LOADING;
+        /* STEP 7, WHICH STOOD UNASKED AND MADE EVERY BODYLESS REPLY LOOK LIKE A BODY. §3.5.6's processResponse
+           step 7 is "If this's response's body is null, then run handle response end-of-body for this and
+           return", and the three stages below it are steps 8-13's — the length, processBodyChunk, and
+           "Incrementally read this's response's body". Without this arm a 204 answered `readyState === 3`,
+           fired a `readystatechange` a browser never fires there, and fired a `progress` event before
+           end-of-body's own; the reply carries no bytes either way, so the defect was the EVENTS rather than
+           the data and nothing downstream could report it.
+           THE RECORD CANNOT SAY "NULL BODY" AND THE STATUS CAN, WHICH IS FETCH'S OWN KEYING RATHER THAN A
+           SUBSTITUTE FOR IT. Fetch §4.1 "Main fetch" is what nulls the body — "If response is not a network
+           error and either request's method is `HEAD` or `CONNECT`, or internalResponse's status is a null
+           body status, set internalResponse's body to null and disregard any enqueuing toward it (if any)" —
+           and a null body reaches this engine as the EMPTY byte sequence, because the trusted zone's reader
+           answers that for a stream that was never there. Step 3 above has already returned for a network
+           error, the other reason §5.3 "Body mixin" gives for a null body, so what is left of the disjunction
+           at THIS step is the method and the status. `CONNECT` is unreachable: §3.5.1 "The open() method"
+           throws a SecurityError for it, Fetch §2.2.1 "Methods" making it a forbidden method.
+           NAMED RESIDUAL — the arm is CORRECT for every method this flow has pinned and is NARROWER than
+           §4.1. NOT COVERED: a method that is still CONCOLIC here takes the not-null-body arm, which is the
+           answer this line gave for every method before it existed; §3.5.6 step 3's fork splits the operand
+           two ways (body rides / bodyless) and `GET` and `HEAD` are both in its bodyless arm, so the
+           HEAD-versus-GET question is a SECOND predicate over that same operand and has no answer yet. WHAT
+           THE NEXT DIFF BUILDS: that second declared fork here, over `d->method`, whose feasible arms the
+           step-3 narrowing already constrains — never a concrete read of an unpinned method, which would
+           delete the world §Solver-half exists to keep. HOW ITS ABSENCE SHOWS: a document whose method this
+           run never pinned reaches `readyState === 3` and a pre-end-of-body `progress` on a reply a browser
+           gives no body, while the same document with a literal `"HEAD"` does not — so the two disagree
+           about the event sequence for one request. */
+        if (fetch_status_is_null_body(d->status) || xhr_method_nulls_body(ctx, d)) {
+            s->hdr.stage = XR_EOB_BEGIN;
+        } else {
+            s->hdr.stage = XR_LOADING;
+        }
     }
     if (s->hdr.stage == XR_LOADING) {
         JS_FreeValue(ctx, in);
         in = JS_UNDEFINED;
-        /* processBodyChunk steps 1-3. The whole body arrives as one chunk, so `received bytes` is already what
-           the reply carried and the length is the header's — §3.5.6's "extract a length", 0 when there is
-           none, which is exactly what leaves `lengthComputable` false. */
+        /* processBodyChunk steps 1-3, run ONCE because the reply arrives whole.
+           NAMED RESIDUAL — these three stages are CORRECT for a body delivered in one piece and are NARROWER
+           than step 13's "Incrementally read this's response's body", which Fetch §2.2.4 "Bodies" defines as
+           a LOOP ("Perform the incrementally-read loop given reader, taskDestination, processBodyChunk,
+           processEndOfBody, and processBodyError"). NOT COVERED: this algorithm's own step 2, which XHR
+           §3.5.6 states as "If not roughly 50ms have passed since these steps were last invoked, then
+           return" — it has no operand to read, because nothing on this
+           object records when these steps last ran; with one invocation the condition is vacuously satisfied,
+           so the omission is unobservable and only a second invocation could expose it. WHAT THE NEXT DIFF
+           BUILDS: the chunk seam itself, in spec order — a reply record whose body GROWS (core/fetch/fetch.c
+           asserts today that a record does NOT already carry one), a park the delivery RESUMES without
+           RETIRING (solver/pending_index.h: a record "leaves the outstanding set for good" when answered, and
+           is "keyed at most once"), and only then this stage looping back to the wait. HOW ITS ABSENCE SHOWS:
+           a page counting its own `progress` events, or accumulating in `onprogress`, sees exactly one before
+           end-of-body for a reply of any size, where a browser fires one per ~50ms of arrival. */
         d->state = XHR_LOADING;
         s->length = xhr_response_length(ctx, d);
         {
@@ -2608,10 +2682,49 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         in = JS_UNDEFINED;
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
-        /* "handle response end-of-body" begins with "handle errors", which is a no-op for a healthy reply. */
+        s->hdr.stage = XR_EOB_BEGIN;
+    }
+    /* ---- "handle response end-of-body", through its ONE entry ------------------------------------------
+       THREE CALLERS REACHED THIS ALGORITHM AND EACH INLINED A DIFFERENT PREFIX OF IT, which is the defect
+       the `RUN_STAGES` machine's own banner already names ("Writing the sequences twice — once for the send machine
+       and once for a task — is how two copies of an event order drift, and the order IS the spec"). The
+       asynchronous arm ran steps 1-2 above and left 3-5 to a stage that belongs to a DIFFERENT algorithm;
+       the synchronous arm ran 1-2 and 7-8 for itself and answered 3-5 with zeroes; and processResponse step
+       7 had no way in at all, which is why it was never built. Steps 1-5 are stated here once and every
+       caller routes to this stage.
+       STEPS 3-5 ARE THE RESPONSE'S NUMBERS AND THEY ARE COMPUTED WHERE THE ALGORITHM COMPUTES THEM. "Let
+       transmitted be xhr's received bytes's length", then "Let length be the result of extracting a length
+       from this's response's header list" and "If length is not an integer, then set it to 0" — and the two
+       fields they land in are SHARED with processRequestEndOfBody's upload events, which fire with the
+       REQUEST body's numbers. A shared carrier is not a shared answer: the synchronous arm zeroed them
+       precisely so the request's length would not be reported on the response's `load`, and that workaround
+       is deleted here because the values this stage writes are the ones step 10 and step 11 are owed. A
+       synchronous object's `load` and `loadend` therefore stop reporting `loaded: 0` for every reply.
+       STEP 6 IS CONDITIONED AND THE CONDITION IS THIS ROUTE. "If xhr's synchronous is false, then fire a
+       progress event named progress at xhr with transmitted and length" — so a synchronous object goes
+       straight to steps 7-8, which is what it did before by jumping past XR_EOB_PROGRESS and is stated here
+       as the step's own test rather than as a jump a reader has to reconstruct. */
+    if (s->hdr.stage == XR_EOB_BEGIN) {
+        JS_FreeValue(ctx, in);
+        in = JS_UNDEFINED;
+        /* Steps 1-2. */
         err = xhr_handle_errors(d);
         if (err != XHR_ERR_NONE) { s->hdr.stage = XR_ERR_BEGIN; goto error_steps; }
-        s->hdr.stage = XR_EOB_PROGRESS;
+        /* Steps 3-5. */
+        {
+            size_t len = 0;
+            (void)fetch_body_bytes(ctx, d->received, &len);
+            s->transmitted = (double)len;
+        }
+        s->length = xhr_response_length(ctx, d);
+        /* Step 6's condition, as the route. Steps 7-8 for the arm that skips it. */
+        if (d->synchronous) {
+            d->state = XHR_DONE;
+            d->send_invoked = 0;
+            s->hdr.stage = XR_EOB_RSC;
+        } else {
+            s->hdr.stage = XR_EOB_PROGRESS;
+        }
     }
     if (s->hdr.stage == XR_EOB_PROGRESS) {
         r = xhr_fire_run(ctx, s, self, "progress", /*progress*/ true, in, out_cb, out_argc);

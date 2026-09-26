@@ -869,6 +869,15 @@ char *fetch_reply_status_text(JSContext *ctx, JSValueConst reply)
 }
 
 /* §2.2.6 "Responses"' STATUS, READ BACK — see fetch.h for why it is one reader and not a literal per caller. */
+/* Fetch §2.2.3 "Statuses"' null body status, as the one spelling of that list in this tree — see fetch.h for
+   why it is not a `static` in the consumer that happened to need it first. It is the SAME five statuses
+   core/fetch/response.c's §5.5 "Response class" constructor test asks about and the same five Fetch §4.1
+   "Main fetch" nulls a body for, so a reader here and a reader there cannot disagree. */
+int fetch_status_is_null_body(int status)
+{
+    return status == 101 || status == 103 || status == 204 || status == 205 || status == 304;
+}
+
 int fetch_reply_status(JSContext *ctx, JSValueConst reply)
 {
     JSValue v;

@@ -561,13 +561,6 @@ static void js_response_ctor_release(JSContext *ctx, void *st)
     header_list_free(&((JSResponseCtorState *)st)->list);
 }
 
-/* §5.5 "a null body status": the statuses HTTP defines as carrying no body, which a constructed Response may
-   therefore not be given one with. */
-static int response_is_null_body_status(int status)
-{
-    return status == 101 || status == 103 || status == 204 || status == 205 || status == 304;
-}
-
 /* §5.5's `reason-phrase` production: HTAB, SP, VCHAR and obs-text — and nothing else, which is what makes
    `new Response("", {statusText: "\n"})` a TypeError. */
 static int response_status_text_is_valid(const char *s, size_t len)
@@ -715,7 +708,13 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
     if (entry == RESP_ENTRY_JSON || (!JS_IsNull(body) && !JS_IsUndefined(body))) {
         char *mime = NULL;
 
-        if (response_is_null_body_status(d->status)) {
+        /* THE LIST ITSELF IS core/fetch/fetch.h's, NOT A SECOND COPY HERE. The five statuses are Fetch
+           §2.2.3 "Statuses"' — "A null body status is a status that is 101, 103, 204, 205, or 304" — and
+           §5.5 "Response class" is where this constructor ASKS about them rather than where they are
+           defined, so the citation that stood over the local copy named the caller for the definition. The
+           copy is deleted with the citation: a second reader of this question arrived (XHR's §3.5.6
+           processResponse step 7) and two spellings of one list is the shape that drifts silently. */
+        if (fetch_status_is_null_body(d->status)) {
             JS_ThrowTypeError(ctx, "a Response with a null body status cannot be given a body");
             return -1;
         }

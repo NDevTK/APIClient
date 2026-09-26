@@ -524,6 +524,26 @@ char *fetch_reply_computed_type(JSContext *ctx, JSValueConst reply);
    every reader downstream would be correct about the value it was handed. */
 int fetch_reply_status(JSContext *ctx, JSValueConst reply);
 
+/* WHETHER THAT STATUS IS ONE HTTP GIVES NO BODY — Fetch §2.2.3 "Statuses" in its own words: "A null body
+   status is a status that is 101, 103, 204, 205, or 304."
+   IT IS DECLARED HERE RATHER THAN STAYING A `static` IN ONE CONSUMER, and the reason is the one this project
+   keeps paying for: the list was spelled once inside core/fetch/response.c for §5.5 "Response class"'s
+   constructor test, and a SECOND reader of the same question then has a choice between a second spelling and
+   this one. Two right answers to one question is the shape that drifts, and the drift here is silent — a
+   status added to one copy and not the other makes two components disagree about whether a reply has a body.
+   WHAT IT IS ASKED FOR, BESIDE THAT CONSTRUCTOR. Fetch §4.1 "Main fetch" is what makes a fetched response's
+   body null — "If response is not a network error and either request's method is `HEAD` or `CONNECT`, or
+   internalResponse's status is a null body status, set internalResponse's body to null and disregard any
+   enqueuing toward it (if any)" — and a CONSUMER of a reply record cannot see that nulling, because the
+   record carries a byte sequence and the trusted zone's reader answers the EMPTY one for a stream that was
+   never there (extension/lib/safe-fetch.js: "A RESPONSE WITH NO BODY IS NOT AN EMPTY ONE"). So a reader that
+   must tell §4.1's null body from a real zero-length one re-derives it from the status, which is the half of
+   §4.1's disjunction this predicate answers.
+   IT IS A PREDICATE OVER A STATUS AND NOT OVER A RECORD, deliberately: the other half of that disjunction is
+   the REQUEST's method, which no reply record carries, so a record-arity spelling would be a predicate whose
+   name promised an answer it structurally cannot give. */
+int fetch_status_is_null_body(int status);
+
 /* …AND THE STATUS MESSAGE BESIDE IT — Fetch §2.2.6 "Responses"' status message, as a malloc'd string the
    caller frees. It is the LAST field of this record that two consumers still read by hand, and it defaults in
    both: the fetch() delivery did `JS_ToCString(...); stx ? stx : ""` and XMLHttpRequest's §3.5.6 reply read did
