@@ -322,8 +322,106 @@ const add = (band, p, id, line) => { tally.set(band, (tally.get(band) ?? 0) + 1)
    standing between the reset channel and every local in the tree. */
 const isStatic = (s, id) => new RegExp(`^\\s*static\\s[^;(]*\\b${id}\\b`, "m").test(s);
 
+/* WHICH PHASE A RESET RUNS IN, WHICH IS THE ONE THING THE BAND ABOVE COULD NOT SAY AND THE WHOLE REASON ITS
+ * COUNT IS NOT A WORK QUEUE.
+ *
+ * `reset: UNDECLARED` means a release body puts this slot back and core/agent_state.h was never told. What a
+ * reader then wants is whether DECLARING it would be right, and that is not a property of the slot: the
+ * registry's assertion point is ONE function, platform_agent_free, and its rule is that every declared slot is
+ * back at its pre-init value THERE. So a reset that runs INSIDE that column is declarable, and a reset that
+ * runs LATER is not — at platform_agent_free such a slot is legitimately still set, and the header refuses a
+ * slot which is. Declaring one would fire on every correct host.
+ * THE WORKED CASE IS `g_sealed` AND IT IS WHY THIS EXISTS. It is reset in idl_args_pool_free, which every host
+ * calls AFTER platform_agent_free and after JS_FreeRuntime — a DECLARATION CYCLE's end rather than an agent's.
+ * It is in the undeclared band and must never leave it. Nothing in the output said so.
+ *
+ * A NAME GREP CANNOT ANSWER THIS AND THE ATTEMPT IS RECORDED BECAUSE IT READS AS IF IT COULD. Asking whether
+ * core/platform.c NAMES the resetting function answered 36 inside / 217 outside and is WRONG: this header's own
+ * rule is that a SUB-COMPONENT NAMES THE ROW THAT RELEASES IT rather than its own file, so the cascade is a
+ * TREE — element_free reaches html_element_free reaches html_meter_free — and a name grep sees one edge of it.
+ * html_element_free appears in no host and not in platform.c at all, and runs inside the column every time.
+ * NOR CAN A RUNTIME ASSERT AT THE RELEASE, WHICH IS THE CHEAPER-SOUNDING ANSWER AND IS STRUCTURALLY BLIND.
+ * agent_state_check_released already asserts exactly that every DECLARED slot is back, agent_state_reached
+ * already records the ASK a cascade's middle cannot, and the undo already refuses a slot whose declaring file
+ * has not spoken — so the three states EXIST AT RUNTIME for the declared population, and building them again
+ * would be the second copy §AN-AUDITOR-DERIVES-THE-RULE forbids. The population here is the UNDECLARED one,
+ * which is absent from the registry by definition: no read of the registry can see a slot nothing told it
+ * about. The question is about a FUNCTION'S REACHABILITY and is answered where reachability lives.
+ *
+ * SO IT IS THE CALL GRAPH, CLOSED FROM THE COLUMN core/platform.c ITSELF PUBLISHES. The roots are that table's
+ * own release entries plus whatever platform_agent_free calls directly — read from the table rather than from
+ * the `r_` naming convention, so a row spelled otherwise is still a root. PRECEDENCE IS AGENT FIRST: a body in
+ * the agent closure is agent-phase whether or not some later teardown also reaches it, which is what keeps a
+ * host that re-enters the column after it (test_forced.c's second agent does) from recolouring the column.
+ *
+ * ITS FLOORS, BECAUSE THEY ARE THE OUTPUT AND NOT A CAVEAT ON IT. Calls are matched as `name(`, so a call
+ * through a FUNCTION POINTER is an edge this cannot see — the release column's own `PLATFORM[i].release(...)`
+ * is exactly that, which is why the table is read directly instead of being walked into. A callee defined
+ * outside the scanned prefix is not an edge either. Both make a body read UNREACHED when it may not be, so
+ * that band is a CEILING on the alarming state and never a count of it, and the unresolved-callee figure is
+ * printed so a reader can see how much of the graph went unjoined. */
+const CALLS = /\b([A-Za-z_]\w*)\s*\(/g;
+const SRC = new Map();
+for (const p of files) { const t = read(p); if (t) SRC.set(p, t); }
+
+const graph = new Map();            /* function name -> callees, over every scanned file */
+const defined = new Set();
+for (const [, t] of SRC)
+  for (const [fn, v] of bodies(t)) {
+    defined.add(fn);
+    const out = graph.get(fn) ?? new Set();
+    for (const m of v.b.matchAll(CALLS)) out.add(m[1]);
+    graph.set(fn, out);
+  }
+
+const PLATFORM_C = "engine/host/browser/core/platform.c";
+const HOSTS = ["engine/host/main.c", "engine/host/test_forced.c", "engine/host/wpt_runner.c"];
+const close = (roots) => {
+  const seen = new Set(), q = [...roots];
+  while (q.length) {
+    const f = q.pop();
+    if (seen.has(f)) continue;
+    seen.add(f);
+    for (const c of graph.get(f) ?? []) if (!seen.has(c)) q.push(c);
+  }
+  return seen;
+};
+
+/* THE AGENT COLUMN'S OWN ROOTS: the table's release field, which is its LAST column, plus the direct calls
+   platform_agent_free makes around the indirect loop. */
+const platSrc = SRC.get(PLATFORM_C) ?? "";
+const agentRoots = new Set();
+for (const m of platSrc.matchAll(/^\s*\{\s*"[a-z_0-9]+"\s*,[^}]*?,\s*([A-Za-z_]\w*)\s*\}\s*,/gm))
+  if (m[1] !== "NULL") agentRoots.add(m[1]);
+const agentFreeBody = bodies(platSrc).get("platform_agent_free");
+if (agentFreeBody) for (const m of agentFreeBody.b.matchAll(CALLS)) agentRoots.add(m[1]);
+if (!agentRoots.size)
+  throw new Error("agentstate: core/platform.c's release column read as EMPTY, so every reset would band as a "
+                + "later phase and the one question this channel exists to answer would be answered wrongly "
+                + "for all of them. Either the table's row shape changed or the path prefix excludes that file.");
+const agentPhase = close(agentRoots);
+
+/* AND A LATER PHASE'S: whatever a host calls in `main` AFTER platform_agent_free, which is where a declaration
+   cycle's end lives and where `g_sealed` is put back. */
+const laterRoots = new Set();
+for (const h of HOSTS) {
+  const mb = bodies(SRC.get(h) ?? "").get("main");
+  if (!mb) continue;
+  const cut = mb.b.indexOf("platform_agent_free(");
+  if (cut < 0) continue;
+  for (const m of mb.b.slice(cut).matchAll(CALLS)) laterRoots.add(m[1]);
+}
+const laterPhase = close(laterRoots);
+
+/* AGENT FIRST — see the precedence note above. */
+const phaseOf = (fn) => agentPhase.has(fn) ? "agent phase"
+                      : laterPhase.has(fn) ? "later phase, NOT declarable"
+                      : "phase unreached";
+const unjoined = new Set();
+for (const [, out] of graph) for (const c of out) if (!defined.has(c)) unjoined.add(c);
+
 for (const p of files) {
-  const s = read(p);
+  const s = SRC.get(p);
   if (!s) continue;
   const declared = new Set([...s.matchAll(DECLARED)].map((m) => m[1]));
   const rel = [...bodies(s)].filter(([k]) => k.includes("_free") || k.includes("_release"));
@@ -351,7 +449,7 @@ for (const p of files) {
   /* THE RELEASE-RESET CHANNEL. A mint is excluded here so the channels PARTITION rather than double-count:
      a class id that is both minted and reset is one row, in the channel that can say more about it. */
   const seen = new Set();
-  for (const [, v] of rel) {
+  for (const [relfn, v] of rel) {
     for (const m of v.b.matchAll(new RegExp(RESET.source, "g"))) {
       const id = m[1];
       if (seen.has(id) || minted.has(id)) continue;
@@ -363,7 +461,7 @@ for (const p of files) {
       const d = declOf(s, id);
       if (!d) { add("reset: UNDECLARED, declaration unread", p, id, line); continue; }
       const base = d.type.replace(/\b(const|volatile|signed)\b/g, "").replace(/\*/g, "").trim().split(/\s+/).pop() ?? "";
-      add(d.ptr || SLOTTYPES.includes(base) ? "reset: UNDECLARED"
+      add(d.ptr || SLOTTYPES.includes(base) ? `reset: UNDECLARED, ${phaseOf(relfn)}`
                                             : `reset: UNDECLARABLE, no kind takes ${base || "this C type"}`, p, id, line);
     }
   }
@@ -380,6 +478,14 @@ console.log(`  may not be differenced against core/platform.c's minted==declared
 console.log(`  ID ALLOCATION. Two instruments, two denominators, one question.`);
 console.log(`mint spellings searched: ${MINTS.map(([k]) => k).join(", ")} -- anything else MINTED is invisible here`);
 console.log(`release bodies searched: a top-level name containing _free or _release -- the reset channel's floor`);
+console.log(`reset PHASE, closed over the call graph from core/platform.c's own release column: `
+          + `${agentRoots.size} root(s) -> ${agentPhase.size} function(s) run INSIDE platform_agent_free, `
+          + `${laterRoots.size} root(s) -> ${laterPhase.size} run in a LATER phase (agent takes precedence)`);
+console.log(`  the graph held ${defined.size} defined function(s) over ${SRC.size} file(s); ${unjoined.size} `
+          + `callee name(s) resolved to no body in that set, and a call through a FUNCTION POINTER is no edge `
+          + `at all -- so \`phase unreached\` is a CEILING on that state and never a count of it`);
+console.log(`  a LATER-phase reset must NOT be declared: at platform_agent_free the slot is legitimately set, `
+          + `and ${HEADER} refuses one that is. \`g_sealed\` is the worked case.`);
 console.log(`declaring kinds, read from ${HEADER}: ${KINDS.join(", ")}`);
 console.log(`pre-init spellings, read from the same header: ${PREINIT.join(" | ")}`);
 console.log(`  kinds whose pre-init this sweep CANNOT match, so whose resets raise no row: `
