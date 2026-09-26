@@ -356,6 +356,50 @@ typedef struct {
     long *died;                 /* one per stage, sized at the declare from the table above */
     int   stage_n;              /* how many, from that table's NULL terminator */
     int   stage_first;          /* the stage number `steps[0]` is — the edge states it, this file never assumes */
+    /* THE FREE GLOBAL IDENTIFIER A PROGRAM MUST SPELL TO REACH THIS EDGE — `fetch`, `XMLHttpRequest` — and it
+       is the EDGE's to state beside its stage table, for `stage_first`'s reason exactly: which name a component
+       installs itself under is that component's own fact, and a table of them here would be the drifting second
+       copy §AN-AUDITOR-DERIVES-THE-RULE forbids. It would drift in the SILENT direction, which is why it is not
+       a convenience: a name that stopped matching reads as a program that never spelled it, and that reading is
+       indistinguishable from the finding the rows below exist to publish. Borrowed and never copied — a literal
+       with static storage at the declaring site, as `steps` is. */
+    const char *entry;
+    /* ASK, ONE FRAME FURTHER OUT AGAIN, AND THE ONLY PAIR IN THIS STRUCT THAT IS NOT A FACT ABOUT A FLOW.
+       Every other row here is raised from a live frame, so every one of them is a fact about a site some flow
+       REACHED. That left the whole census structurally unable to say the one thing a reader of a zero most
+       needs: an occurrence nobody reached has no frame, no operand and no moment, so there is no runtime edge
+       that could report it and — the sharper half — no assert that could stand on it either. The only invariant
+       that would have fired is `this document asked for something`, whose operand is a count derived from the
+       PAGE'S OWN BYTES, and §WHOSE-BYTES-STATE-THE-VALUE forbids exactly that: a page does not have to be
+       hostile to hold an abort switch, it only has to ship no `fetch`. So the artifact is a ROW WITH A
+       DENOMINATOR and never a `DCHECK`, and this is the denominator.
+       WHERE IT IS RAISED IS WHAT MAKES IT ONE: quickjs's own `resolve_scope_var` reports every free identifier
+       it resolves against the global object, which is the last instant at which this engine knows what a
+       program NAMES independently of what any flow RAN. §AN-INVARIANT-OVER-A-GATED-OPERATION says to census the
+       ASK rather than the OUTCOME; REACH is an arm that declines, so the recording point has to sit upstream of
+       reach, and the only point upstream of reach is COMPILATION.
+       WHAT THE PAIR TURNS A ZERO INTO. `called == 0` stood for three states that take opposite work — the
+       program names no such call, a flow never reached one it does make, or the hook is not wired. With
+       `named == 0` beside it the first is separated from the second, which is the whole diff; `named > 0 &&
+       called == 0` is the second, and it is the state CLAUDE.md §What-the-tool-produces is about, since every
+       address behind such a site is a surface a parse of the same bytes recovers and this engine did not.
+       IT IS A FLOOR OVER ONE SPELLING AND NO CONTAINMENT WITH `called` MAY BE ASSERTED IN EITHER DIRECTION,
+       which is not a caution but the reason there is no `DCHECKF` under these two rows where there is one under
+       every other pair in this file. `called > named` is ORDINARY: `window.fetch(u)` is a property read and
+       `(function (fetch) {…})(self.fetch)` is a local slot, and neither reaches a global resolution at all.
+       `named > called` is ordinary too, and for a second reason on top of the finding: a program is recompiled
+       by every flow that replays it, so this counts COMPILER RESOLUTIONS and never source sites — it is read as
+       a BIT and never as a magnitude, and its name says `Named` rather than `Sites` so that nobody reads it
+       against a static per-bundle site count and finds two populations under one number.
+       `named_typeof` IS THE DISCRIMINATOR THAT KEEPS THE FINDING HONEST and is named for the OPERATOR rather
+       than for a category. The unary parser patches an ordinary read into the non-throwing form only for
+       `typeof` (ECMAScript §13.5.3 "The typeof Operator" step 2.a answers an unresolvable reference without
+       throwing), so a bundle that merely PROBES for `fetch` and uses something else raises this row and not the
+       one above it — §AND-THAT-FORCING-FUNCTION-FIRES-ONLY-ON-UNGUARDED-USE's split, arriving at the compiler.
+       It is NOT every guard shape and must not be read as one: `window.fetch` and `"fetch" in self` are
+       property reads and reach neither row. */
+    long  named;
+    long  named_typeof;
     /* ASK, ONE FRAME FURTHER OUT THAN `began`, AND IT IS A SECOND ROW RATHER THAN A RELOCATION OF THE FIRST.
        `began` is raised at the member's own FIRST STAGE, and core/idl_args.h numbers a declared member's
        stages from IDL_STEP_FIRST because stages 0 and 1 belong to the hosting machine — the argument-count
@@ -391,6 +435,7 @@ static long  g_xhr_offered;
 /* THE COUNTERS BACK TO ZERO, THE ALLOCATION LEFT ALONE. endpoint_init asserts the array ABSENT rather than
    zeroing it — see its own comment — so this resets what a new session owns and touches nothing it does not. */
 static void edge_reset(EndpointEdge *e) {
+    e->named = e->named_typeof = 0;
     e->called = e->began = e->reached = e->freed = e->freed_reached = 0;
 }
 
@@ -403,6 +448,12 @@ static void edge_release(EndpointEdge *e) {
     free(e->died);
     e->died = NULL;
     e->steps = NULL;
+    /* AND THE ENTRY NAME WITH THE TABLE, which is what scopes the compile report to the session: nothing
+       matches an edge that has not declared, so a program compiled before this session opened or after it
+       closed raises no row into it. The `g_boundary_spent` defect one field over is a counter graded against a
+       boundary that is not its own, and this is the same boundary answered by construction rather than by an
+       assert — a compile is the one event this file receives that a host can perform outside a session. */
+    e->entry = NULL;
     e->stage_n = 0;
     e->stage_first = 0;
 }
@@ -2251,9 +2302,15 @@ void endpoint_ask_census(long *asks, long *pre_program, long *suppressed, long *
    stages are numbered from it, and this file has no business knowing that — so the stage a row is keyed by is
    `steps[stage - first]` with the base the machine itself supplied. A hard-coded 2 here would be a second
    copy of a constant one header owns, and it would be wrong the day a member's prologue grows a stage. */
-static void edge_declare(EndpointEdge *e, const char *who, const char *const *steps, int first_stage) {
+static void edge_declare(EndpointEdge *e, const char *who, const char *entry,
+                         const char *const *steps, int first_stage) {
     int n = 0;
 
+    DCHECKF(entry != NULL && entry[0] != '\0',
+            "the %s edge declared no global entry identifier — the compile report keyed on it matches nothing, "
+            "so this edge's `named` rows would read zero for every document and a reader would take that for a "
+            "corpus of programs none of which spells the name, which is the one reading those rows exist to "
+            "make impossible", who);
     DCHECKF(steps != NULL && steps[0] != NULL,
             "the %s edge declared no stage table at all — the census keyed on it would have a row for every "
             "state it counts and no name to put on one, and a histogram whose buckets cannot be named is a "
@@ -2266,10 +2323,12 @@ static void edge_declare(EndpointEdge *e, const char *who, const char *const *st
        IT IS PER EDGE AND NOT PER FILE, which is the whole reason there are two of these structs: core/fetch
        and core/xhr each declare their own table here and neither can reach the other's array. */
     if (e->steps) {
-        DCHECKF(e->steps == steps && e->stage_first == first_stage && e->stage_n == n,
+        DCHECKF(e->steps == steps && e->stage_first == first_stage && e->stage_n == n && e->entry == entry,
                 "a SECOND machine declared itself to the %s edge census, or the same machine declared a "
-                "different table — these rows are keyed by ONE machine's stages, so a second one's arms "
-                "summed into them would publish a histogram of two populations under one edge's name", who);
+                "different table or a different global entry identifier — these rows are keyed by ONE "
+                "machine's stages, so a second one's arms summed into them would publish a histogram of two "
+                "populations under one edge's name, and a second entry name would file one edge's compile "
+                "report under two spellings of which only the last would ever match", who);
         return;
     }
     e->died = (long *)calloc((size_t)n, sizeof *e->died);
@@ -2280,6 +2339,18 @@ static void edge_declare(EndpointEdge *e, const char *who, const char *const *st
     e->steps = steps;
     e->stage_n = n;
     e->stage_first = first_stage;
+    e->entry = entry;
+}
+
+/* THE COMPILE REPORT, MATCHED AGAINST ONE EDGE. `name` is bytes valid for this call only — quickjs converts the
+   atom into its own frame's buffer, which is what keeps this seam free of a runtime-lifetime atom reference the
+   leak report at JS_FreeRuntime would name — so a match is a compare and never a keep. An edge that has not
+   declared has a NULL `entry` and matches nothing, which is `endpoint_edge_member_asked`'s rule for a member
+   that declares no steps: the caller has no arm to get wrong and no reason to know this file has two edges. */
+static void edge_named(EndpointEdge *e, const char *name, int typeof_only) {
+    if (!e->entry || strcmp(e->entry, name) != 0) return;
+    if (typeof_only) e->named_typeof++;
+    else             e->named++;
 }
 
 /* …AND THE STATE IS GONE. `stage` is where it was standing, `reached` whether its construction had completed
@@ -2308,8 +2379,8 @@ static void edge_freed(EndpointEdge *e, const char *who, int stage, int reached)
     else e->died[i]++;
 }
 
-void endpoint_fetch_edge_declare(const char *const *steps, int first_stage) {
-    edge_declare(&g_fetch_edge, "fetch", steps, first_stage);
+void endpoint_fetch_edge_declare(const char *entry, const char *const *steps, int first_stage) {
+    edge_declare(&g_fetch_edge, "fetch", entry, steps, first_stage);
 }
 
 /* THE SAME DECLARATION FOR THE OTHER EDGE, AND THE TABLE IS `SEND_STEPS` AND NOT THE LIFECYCLE MACHINE'S.
@@ -2317,8 +2388,8 @@ void endpoint_fetch_edge_declare(const char *const *steps, int first_stage) {
    where it can throw or park without ever reaching a door, and the lifecycle machine's twenty stages are all
    downstream of the record. `first_stage` is the edge's to state for core/fetch's reason exactly — SEND_STAGES
    is based at IDL_STEP_FIRST and which constant that is belongs to core/idl_args.h. */
-void endpoint_xhr_edge_declare(const char *const *steps, int first_stage) {
-    edge_declare(&g_xhr_edge, "xhr send", steps, first_stage);
+void endpoint_xhr_edge_declare(const char *entry, const char *const *steps, int first_stage) {
+    edge_declare(&g_xhr_edge, "xhr send", entry, steps, first_stage);
 }
 
 /* A DECLARED MEMBER'S CALL ENTERED THE HOSTING MACHINE'S PROLOGUE, keyed on the STAGE TABLE the caller hands
@@ -2334,6 +2405,25 @@ void endpoint_xhr_edge_declare(const char *const *steps, int first_stage) {
    a NULL `steps` and matches nothing, which is what an uninstalled door should read.
    A MEMBER THAT DECLARES NO STEPS PASSES NULL and is dropped here rather than at the caller, so the caller has
    no arm to get wrong and no reason to know this file has two edges at all. */
+/* THE COMPILER RESOLVED A FREE IDENTIFIER AGAINST THE GLOBAL OBJECT, keyed on the NAME the edge declared and
+   on nothing else. quickjs calls this once per occurrence as it rewrites the reference, for EVERY free
+   identifier in every program this session compiles and not only the two this file has edges for — it cannot
+   know which of them are network entry points and must not be told, which is `endpoint_edge_member_asked`'s
+   argument one frame out and has the same silent failure direction: a list of door names spelled in the
+   compiler would read, for a name removed from it, as a program that never spelled it.
+   BOTH EDGES ARE OFFERED THE NAME AND NEITHER IS TOLD WHICH ONE MATCHED, so a name that somehow belonged to two
+   would raise both rows rather than whichever `if` ran first — the silent double-attribution no total reveals.
+   The two entries are disjoint by construction, being a member name and an interface name of two standards.
+   WHAT IT COSTS AND HOW OFTEN IT RUNS, because an observer runs at the frequency of what it observes: two
+   length-guarded compares per free identifier of every compiled program, once per compile, on the compiler's
+   own time and inside no flow's slice. It allocates nothing and raises no ask, so it cannot move the ask rows
+   it exists to make readable. */
+void endpoint_compile_global_named(const char *name, int typeof_only) {
+    if (!name) return;
+    edge_named(&g_fetch_edge, name, typeof_only);
+    edge_named(&g_xhr_edge, name, typeof_only);
+}
+
 void endpoint_edge_member_asked(const char *const *steps) {
     if (!steps) return;
     if (steps == g_fetch_edge.steps)    g_fetch_edge.called++;
@@ -2669,6 +2759,7 @@ static void edge_stage_hist(JsonBuf *b, const EndpointEdge *e) {
    readable fact about these rows anywhere.
 
    @kinds-of fetchEdge
+   @kind lifetime: epFetchAskNamedLife epFetchAskNamedTypeofLife
    @kind lifetime: epFetchAskCalledLife epFetchAskBeganLife epFetchAskOfferedLife
    @kind lifetime: epFetchOutFreedLife epFetchOutFreedOfferedLife epFetchOutDiedAtLife
 */
@@ -2745,6 +2836,14 @@ char *endpoint_fetch_edge_rows(void) {
             "stage 0, and the difference a reader takes for the calls that died in the conversions would be "
             "negative",
             g_fetch_edge.began, g_fetch_edge.called);
+    /* THE DENOMINATOR FIRST, BECAUSE IT IS WHAT THE ROW BELOW IT IS A FRACTION OF, and a reader compares within
+       a census in the order the rows arrive. No `DCHECKF` stands over this pair: the two relations a reader
+       would reach for — `named >= called` and `called >= named` — are BOTH ordinary, and the struct's own field
+       comment says which spellings make each of them so. */
+    json_buf_raw(&b, ",");
+    json_buf_key(&b, "epFetchAskNamedLife");        edge_num(&b, g_fetch_edge.named);
+    json_buf_raw(&b, ",");
+    json_buf_key(&b, "epFetchAskNamedTypeofLife");  edge_num(&b, g_fetch_edge.named_typeof);
     json_buf_raw(&b, ",");
     json_buf_key(&b, "epFetchAskCalledLife");       edge_num(&b, g_fetch_edge.called);
     json_buf_raw(&b, ",");
@@ -2800,6 +2899,7 @@ char *endpoint_fetch_edge_rows(void) {
    read as one population.
 
    @kinds-of xhrEdge
+   @kind lifetime: epXhrAskNamedLife epXhrAskNamedTypeofLife
    @kind lifetime: epXhrAskCalledLife epXhrAskBeganLife epXhrAskPlacedLife epXhrAskOfferedLife
    @kind lifetime: epXhrOutFreedLife epXhrOutFreedPlacedLife epXhrOutDiedAtLife
 */
@@ -2862,6 +2962,10 @@ char *endpoint_xhr_edge_rows(void) {
             "core/idl_args.c's stage 0, and the difference a reader takes for the calls that died in the "
             "conversions would be negative",
             g_xhr_edge.began, g_xhr_edge.called);
+    json_buf_raw(&b, ",");
+    json_buf_key(&b, "epXhrAskNamedLife");        edge_num(&b, g_xhr_edge.named);
+    json_buf_raw(&b, ",");
+    json_buf_key(&b, "epXhrAskNamedTypeofLife");  edge_num(&b, g_xhr_edge.named_typeof);
     json_buf_raw(&b, ",");
     json_buf_key(&b, "epXhrAskCalledLife");       edge_num(&b, g_xhr_edge.called);
     json_buf_raw(&b, ",");

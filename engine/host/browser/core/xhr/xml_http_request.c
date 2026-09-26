@@ -3575,8 +3575,14 @@ void xhr_init(JSContext *ctx)
        the record. The table is `SEND_STEPS` itself and never a copy — literals with static storage, so the
        surface may key rows on it for the life of the session and a stage added to SEND_STAGES adds a row
        there with no edit at all. `IDL_STEP_FIRST` is PASSED rather than assumed by the reader, because a
-       member's stages are numbered from it and which constant that is belongs to core/idl_args.h. */
-    endpoint_xhr_edge_declare(SEND_STEPS, IDL_STEP_FIRST);
+       member's stages are numbered from it and which constant that is belongs to core/idl_args.h.
+       AND THE NAME A PROGRAM SPELLS TO REACH THIS MACHINE AT ALL IS THE INTERFACE'S AND NOT `send`'s. A program
+       reaches this construction only through the constructor, so the free identifier it must resolve is the one
+       `idl_define_global_property_reference` installs below — a member name would match nothing, since `send` is
+       reached through a receiver and is never a global. The surface keys its compile report on it so that a
+       bundle spelling `XMLHttpRequest` whose call rows read zero is a FINDING there rather than a zero
+       indistinguishable from a bundle that spells none. */
+    endpoint_xhr_edge_declare("XMLHttpRequest", SEND_STEPS, IDL_STEP_FIRST);
     /* §5 is part of THIS standard and every event this component fires is one of its instances, so it is
        declared from here rather than by each host separately — the same rule fetch_init follows for §5's
        Headers and §6's Response. */

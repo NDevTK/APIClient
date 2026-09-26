@@ -943,7 +943,13 @@ void    endpoint_ask_census(long *asks, long *pre_program, long *suppressed, lon
    RETIREMENT: this record goes when a flow that reached no declared member at all is distinguishable from one
    that reached this member's prologue by a row on the ORDER's own census, because the state this row cannot
    separate is then separated by the component that owns it and no reader has to come here to learn that. */
-void    endpoint_fetch_edge_declare(const char *const *steps, int first_stage);
+/* …AND THE FREE GLOBAL IDENTIFIER A PROGRAM MUST SPELL TO REACH IT — `entry`, stated by the edge beside its
+   stage table for `first_stage`'s reason exactly: which name a component installs itself under is that
+   component's own fact, and a table of them in this file would be the drifting second copy
+   §AN-AUDITOR-DERIVES-THE-RULE forbids, drifting in the direction where a name that stopped matching reads as a
+   corpus of programs none of which spells it. It is borrowed and never copied, and it is let go with the stage
+   table at endpoint_free, which is what scopes the compile report below to this session. */
+void    endpoint_fetch_edge_declare(const char *entry, const char *const *steps, int first_stage);
 /* A DECLARED MEMBER'S CALL ENTERED THE HOSTING MACHINE'S PROLOGUE — core/idl_args.c's stage 0, called once per
    call for EVERY declared member and not only the two this file has edges for. The argument is the member's
    own stage table, so the caller states a FACT about the member and this file decides whether it is an edge:
@@ -954,6 +960,36 @@ void    endpoint_fetch_edge_declare(const char *const *steps, int first_stage);
    dropped here rather than at the caller. It is NOT per-edge for the same reason, and it is one entry rather
    than two because the caller cannot know which edge it is calling and must not have to. */
 void    endpoint_edge_member_asked(const char *const *steps);
+
+/* THE COMPILER RESOLVED A FREE IDENTIFIER AGAINST THE GLOBAL OBJECT — install as JSConcolicHooks.global_named.
+   `name` is bytes valid for the call only and `typeof_only` says which of the two reads it was. It raises the
+   `…AskNamed…` rows of whichever edge declared that identifier and NOTHING else: it composes no address, mints
+   no ask and takes no decision, so it cannot move a single row it exists to make readable.
+   IT IS THE ONE THING IN THIS FILE THAT IS NOT A FACT ABOUT A FLOW, AND THAT IS THE WHOLE REASON IT EXISTS.
+   Every other entry here is called from a live frame, so every row this census publishes is a row about a site
+   some flow REACHED — which left `called == 0` standing for three states that take opposite work, and left the
+   one that matters (a program spells this call and no flow got to it) reading as the one that does not (a
+   program spells no such call). A site nobody reached has no frame, no operand and no moment, so no runtime
+   edge in this engine could have reported it — and, sharper, no ASSERT could have stood on it either: the only
+   invariant that would have fired is one whose operand is a count derived from the PAGE'S OWN BYTES, which
+   §WHOSE-BYTES-STATE-THE-VALUE forbids outright, since a page does not have to be hostile to hold an abort
+   switch and only has to ship no `fetch`. That is why this lands as a ROW WITH A DENOMINATOR rather than as a
+   crash, and it is the reason §Offensive-programming was structurally unable to name this gap.
+   WHY THE COMPILER AND NOT SOME EARLIER RUNTIME EDGE. §AN-INVARIANT-OVER-A-GATED-OPERATION says to record the
+   ASK rather than the OUTCOME, and to record it upstream of every arm that may legitimately decline. REACH is
+   such an arm, and reach is what RUNNING IS — so the recording point has to be upstream of execution, and the
+   only point upstream of execution at which this engine holds the page's own program is the moment it compiles
+   it. The door census obeyed that rule one level too shallow: it censused the ask AT THE DOOR, which is itself
+   downstream of reach.
+   WHAT IT IS NOT. It is not a call-site count and its rows say `Named` rather than `Sites` so that nobody reads
+   one against a static per-bundle figure: a program is recompiled by every flow that replays it, so the row
+   counts COMPILER RESOLUTIONS and is read as a BIT — zero against nonzero — and never as a magnitude. It sees
+   ONE SPELLING, the free identifier; `window.fetch`, `self[n]` and a parameter a bundle shadowed the name with
+   are a property read or a local slot and reach no global resolution at all. So it is a FLOOR in the direction
+   that withholds a finding rather than manufactures one, and no containment between these rows and the call row
+   may be asserted in either direction — solver/endpoint.c states at the fields which spellings make each
+   inequality ordinary, and that is why those are the only ask rows in this file with no identity over them. */
+void    endpoint_compile_global_named(const char *name, int typeof_only);
 void    endpoint_fetch_edge_began(void);
 void    endpoint_fetch_edge_offered(void);
 void    endpoint_fetch_edge_freed(int stage, int offered);
@@ -1091,7 +1127,7 @@ char   *endpoint_fetch_edge_rows(void);
    WOULD SHOW: a document whose page calls `xhr.send()` and whose begun row reads zero, with nothing in this
    census distinguishing that from a page that called none.
    RETIREMENT: this record goes when a `send()` that never reached the member body raises a row here. */
-void    endpoint_xhr_edge_declare(const char *const *steps, int first_stage);
+void    endpoint_xhr_edge_declare(const char *entry, const char *const *steps, int first_stage);
 void    endpoint_xhr_edge_began(void);
 void    endpoint_xhr_edge_placed(void);
 void    endpoint_xhr_edge_offered(void);

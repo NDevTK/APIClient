@@ -72363,6 +72363,30 @@ static int resolve_scope_var(JSContext *ctx, JSFunctionDef *s,
 
     /* global variable access */
 
+    /* AND THE ONE INSTANT AT WHICH THIS ENGINE KNOWS WHAT A PROGRAM NAMES RATHER THAN WHAT A FLOW RAN. Nothing
+       above bound this identifier, so the compiler is about to emit a reference resolved against the global
+       object — a fact about the SOURCE, reported here because it is unobtainable anywhere downstream: an
+       occurrence no flow reaches produces no frame, so every other seam in this file is structurally silent
+       about it and a host's per-door "nobody asked" cannot be told apart from "the page names no such call".
+       READS ONLY, AND THE TWO READS SEPARATED. `OP_scope_get_var` is an ordinary reference, which throws a
+       ReferenceError when nothing binds it; `OP_scope_get_var_undef` is the form the unary parser PATCHES it
+       into for `typeof` so that ECMAScript §13.5.3 "The typeof Operator" step 2.a can answer without throwing.
+       A host reading the first as a USE and the second as a FEATURE DETECT therefore keeps a name a bundle only
+       probes out of the population it reads as reached, which is a distinction no later seam recovers: by the
+       time the interpreter runs either one they are two opcodes over one atom and the guard is gone.
+       A PUT, A DELETE AND A `make_ref` ARE NOT REPORTED. None of them is a use of the name the way a call is,
+       and a report that included them would raise a host's count on a bundle that merely assigns the global —
+       the direction that manufactures a finding, which is the one a report must not take.
+       THE NAME IS CONVERTED INTO THIS FRAME'S OWN BUFFER and the callee may not keep it. An atom handed over
+       instead would be a runtime-lifetime reference in a host that has no context at its teardown, so the
+       leak report at JS_FreeRuntime would name it; `JS_AtomGetStr` allocates nothing and truncates at the
+       buffer, and a truncated name can only cost the host a MISS. */
+    if ((op == OP_scope_get_var || op == OP_scope_get_var_undef) && g_concolic.global_named) {
+        char gn_buf[ATOM_GET_STR_BUF_SIZE];
+        g_concolic.global_named(JS_AtomGetStr(ctx, gn_buf, sizeof(gn_buf), var_name),
+                                op == OP_scope_get_var_undef);
+    }
+
     switch (op) {
     case OP_scope_make_ref:
         /* Rewriting a GLOBAL reference back into OP_get_var/OP_put_var re-resolves the name at the PUT, and a

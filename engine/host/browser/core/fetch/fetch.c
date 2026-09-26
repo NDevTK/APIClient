@@ -1775,8 +1775,14 @@ void fetch_init(JSContext *ctx)
        `IDL_STEP_FIRST` IS PASSED RATHER THAN ASSUMED BY THE READER, because a member's stages are numbered
        from it and which constant that is belongs to idl_args.h: the census keys `steps[stage - first]`, so the
        base is the machine's to state and a copy of the number on the other side would be wrong the day the
-       prologue grows a stage. */
-    endpoint_fetch_edge_declare(js_fetch_steps, IDL_STEP_FIRST);
+       prologue grows a stage.
+       AND THE NAME A PROGRAM SPELLS TO REACH THIS MACHINE AT ALL, which is this component's fact and not the
+       census's: it is the same literal `idl_install_method` installs this member under below, and the surface
+       keys its compile report on it so that a document whose bundle spells `fetch` and whose call rows read
+       zero is a FINDING there rather than a zero indistinguishable from a bundle that spells none. Two literals
+       in one file rather than one because the install is a §5.6 step and the declaration is a census's; a
+       reader who changes one changes both, and they are ninety lines apart in the same function. */
+    endpoint_fetch_edge_declare("fetch", js_fetch_steps, IDL_STEP_FIRST);
     g_fetch_rt = rt;
     /* The reply's delivery, declared once for the runtime — every parked fetch mints a CLOSURE over this
        one definition rather than a definition per request. */

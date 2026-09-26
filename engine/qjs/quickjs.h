@@ -2588,6 +2588,39 @@ typedef struct JSConcolicHooks {
        global object or a record already published under it; both are BORROWED. Installing this is what makes
        the engine mark records at all, so a host that wants neither half installs neither. */
     void (*publish)(JSContext *ctx, JSValueConst parent, JSAtom name, JSValueConst value);
+    /* THE COMPILER RESOLVED A FREE IDENTIFIER TO A GLOBAL REFERENCE — reported ONCE PER OCCURRENCE as
+       resolve_scope_var rewrites it, which is the one instant at which this engine knows what a program NAMES
+       independently of what any flow went on to RUN. Every other member of this table is asked from a live
+       frame, so every fact they carry is a fact about a site that was REACHED; a site nobody reached has no
+       frame, no operand and no moment, so no runtime edge can report it and no assert can stand on it. That
+       is not a gap in this table, it is the property that makes a host's "this door was never asked" ambiguous
+       between a program that names no such call and a flow that never got to one the program does make.
+       `name` IS BYTES VALID FOR THE CALL ONLY and is NOT an atom, deliberately: a host holding an atom holds a
+       runtime-lifetime reference the atom-leak report at JS_FreeRuntime would name, and it would have to free
+       it from a teardown that has no context. The conversion is into the caller's stack buffer and allocates
+       nothing; a name longer than the buffer is TRUNCATED, which can only cost a host a MISS and never invent
+       one — the conservative direction for a report whose whole use is that a nonzero reading is a claim.
+       `typeof_only` IS THE ONE GUARD SHAPE THIS SEAM CAN SEE AND IS NAMED FOR THE OPERATOR RATHER THAN FOR A
+       CATEGORY. The parser emits an ordinary read for `x` and PATCHES it to the non-throwing form for
+       `typeof x` (ECMAScript §13.5.3 "The typeof Operator" step 2.a answers an unresolvable reference without
+       throwing), so the two arrive here already separated and a host can keep a name a program merely
+       FEATURE-DETECTS out of a population it reads as uses. It does NOT see `window.x`, an `"x" in window` or a
+       parameter a bundle shadowed the name with — all of which are property reads or local slots and reach no
+       global resolution at all — so a host's count is a FLOOR over ONE SPELLING and no containment between it
+       and any call count may be asserted in either direction.
+       IT RECORDS AND DECIDES NOTHING, which is why it is installed with the value semantics rather than with
+       the exploration set: a void return changes no arm of any run, and what it changes is whether a run can
+       say why a door it owns was never asked. Reported for READS only — a write to a global, a delete and a
+       Reference taken for its own sake are not a use of the name and are not reported, which is the same
+       floor in the same direction.
+       NO `JSContext` IS PASSED, WHICH IS A STATEMENT AND NOT AN OMISSION, and it is the one member of this
+       table that takes none. What is reported is a fact about SOURCE TEXT — this program spells this name and
+       nothing binds it — and a realm is a fact about the state that text will be RUN against, so a consumer
+       handed one would be free to file a source fact under whichever realm happened to be compiling. Every
+       other member here answers about a value in a live frame and needs the realm to answer at all; this one
+       would hold a parameter no reader consults, which is the shape §A-FIELD-A-CONSUMER-DEFAULTS names one
+       argument over. A per-realm census of this fact is a different row and would take it back deliberately. */
+    void (*global_named)(const char *name, int typeof_only);
     int (*rel)(JSContext *ctx, JSValue *sp, int op);
     /* `typeof v`. Returns the type STRING to use, or JS_UNINITIALIZED to run the real js_operator_typeof. An
        unknown value's type is unknown, and the engine must not answer it from the host object's REPRESENTATION

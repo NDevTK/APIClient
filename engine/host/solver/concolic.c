@@ -7,6 +7,7 @@
 #include "solver/solve.h"     /* …and the SEARCH is told a substitution happened — see concolic_deliver */
 #include "solver/solve_filter.h" /* …and the SEARCH is told which bytes its carrier refuses, before it builds one */
 #include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
+#include "solver/endpoint.h"  /* …and the @H surface is told what a program NAMES — see `.global_named` below */
 #include "check.h"
 #include <stdarg.h>
 #include <stdlib.h>
@@ -6092,6 +6093,19 @@ static JSConcolicHooks g_hooks = {
        the empty-List fabrication the predicate exists to prevent, arriving one step later and with a decided
        arm on top of it. The engine says so at its own site rather than trusting the pair. */
     .own_key_mint = concolic_own_key_mint,
+    /* WHAT THE COMPILER SAW, WHICH IS THE ONE MEMBER OF THIS TABLE THAT IS NOT ABOUT A VALUE AND IS INSTALLED
+       HERE RATHER THAN WITH THE EXPLORATION SET FOR EXACTLY THAT REASON. `.absent`, `.present` and `.publish`
+       below are a DECISION — an unset global becomes unknown input rather than a ReferenceError — so a host that
+       wants the value semantics and not the exploration must be able to decline them. This one decides nothing:
+       it is a void report of a fact about SOURCE TEXT, raised once per free identifier the compiler resolves
+       against the global object, and it changes no arm of any run. A conformance host takes it and is unaffected;
+       what it buys the exploring host is the only thing in this engine that can say a door was never ASKED
+       because no flow ever reached a call the program plainly spells — which is a fact no live frame exists to
+       carry and, §WHOSE-BYTES-STATE-THE-VALUE, no assert may ever stand on.
+       IT IS ROUTED TO solver/endpoint.c AND NOT HANDLED HERE, which is the same split `.absent` already makes to
+       solver/absent.c: the component that owns the door census is the component that knows which identifiers are
+       door entry points, and this file would be a second list of them. */
+    .global_named = endpoint_compile_global_named,
     .lead = concolic_lead_hook };
 
 /* Concolic VALUE propagation stays installed across scheduling AND verification, because taint must flow
