@@ -286,12 +286,53 @@ static void script_csp_meta_free(JSContext *ctx, ScriptCspMeta *h)
    worth separating is what they are evidence OF. A document's own external script is markup; a script an
    insertion prepared and a dynamic `import()` are code this engine RAN, and a lazy chunk reached through the
    third is the address CLAUDE.md §What-the-tool-produces' headline claim is most about. Folded to one token
-   the emitted surface cannot tell the `<head>` from the router. */
-static int program_load_door(int kind)
+   the emitted surface cannot tell the `<head>` from the router.
+   AND WHICH OF THE FIRST TWO IS THE PARSER-INSERTED MARK AND NOT THE KIND, WHICH IS WHAT THE SECOND ARGUMENT
+   IS FOR AND IS THE ARGUMENT THIS FUNCTION USED TO GET WRONG IN BOTH DIRECTIONS AT ONCE. A kind is chosen for
+   a QUEUE POSITION and a door asks about ORIGIN — solver/pending.h's `PROV_OBSERVED` records that sentence
+   about the GRADE, names the two ends the pair comes apart at, and BOTH of them are doors here.
+   HTML §4.12.1.1 "Processing model" branches on `el has an async attribute or el's force async is true`
+   FIRST and on `el is not parser inserted` only after it, and core/loader/document_scripts.c's
+   `script_block_schedule` is those two tests in that order — so a PARSER-INSERTED `<script async src>`
+   joins the `set of scripts that will execute as soon as possible`, takes FLOW_PENDING_SCRIPT, and was
+   reported through `injected-script`, whose reach column says no parse of the served bytes finds the
+   address, FOR AN ELEMENT THE SERVED BYTES CARRY (core/frame/navigable.c's child-document inventory walk
+   states by construction that every row of it is parser-inserted, and it is the ASAP arm that parks); while
+   the `async` IDL setter clearing `force async` on an element no parser touched reaches the second branch,
+   takes FLOW_PENDING_DOCSCRIPT, and was reported through `document-script` — `markup`, for an address only the
+   page's own code composed. The first OVER-credits CLAUDE.md §What-the-tool-produces' razor on a shape real
+   bundles ship constantly, which is the exact over-credit the retired `epEmitted - epPreProgram` subtraction
+   is recorded for; the second publishes a positive FALSE claim about what a `<script src>` scan reaches. ONE
+   MARK ANSWERS BOTH, it is `PROV_OBSERVED`'s own first conjunct, and it is on the park one field from the
+   grade the caller already reads.
+   THE MODULE ARM READS NO MARK AND THAT IS NOT AN OMISSION: `pending_prov_compose` refuses a parser-inserted
+   park of any kind but these two BY NAME, because §4.12.1.1 gives `parser document` to `script` elements only
+   and a dynamic `import()` has no element at all. A test here would be a second copy of that refusal.
+   IT IS STILL NARROWER THAN THE REACH IT DECIDES — NAMED RESIDUAL. WHAT IS NOT COVERED: a `<script src>` a
+   `document.write` put in the tree. §4.12.1.1's `parser document` is non-null for it —
+   core/html/html_script.c's `html_script_parser_inserted` prepares the element at every non-fragment
+   `</script>` the tokenizer closes, and core/html/document_open.c records at its own site that a written
+   external script IS prepared and reaches the same program-compile as one the markup carried — so it takes
+   `document-script`, which endpoint.h classes `markup`, while the bytes that named the element came out of
+   RUNNING CODE and no parse of the served document reaches the address. That is the UNDER-crediting
+   direction, so the razor's floor falls rather than rising, and it is a false statement about a parse either
+   way. WHAT THE NEXT DIFF BUILDS: the fact this mark is a proxy for — whether the bytes the element was
+   parsed out of are the RESPONSE's — stated by the producers that hold it and carried beside
+   `parser_inserted` on the park. It may NOT be inferred from WHICH producer parked instead:
+   core/loader/xml_document.c records that a LOAD's own scripts return at §4.12.1.1 step 18 in this engine
+   today and that the two parsers will still agree the day that order is corrected, so a rule keyed on the
+   producer goes stale on exactly that diff. HOW ITS ABSENCE WOULD SHOW: a document whose only external
+   script is one a `document.write` wrote reports a nonzero `epReach.markup`, so the razor publishes a
+   smaller floor than the run earned. */
+static int program_load_door(int kind, int parser_inserted)
 {
     switch (kind) {
-    case FLOW_PENDING_DOCSCRIPT: return EPD_DOCUMENT_SCRIPT;
-    case FLOW_PENDING_SCRIPT:    return EPD_INJECTED_SCRIPT;
+    /* ONE KIND-TEST AND ONE MARK-TEST FOR THE TWO ELEMENT DOORS, NEVER TWO KIND-TESTS. Both queue positions
+       hold parser-inserted AND script-created elements — core/html/html_script.c hands the same
+       `parser_inserted` to both of its destinations and chooses between them on the SCHEDULE — so the mark
+       is what separates these two doors and the kind is only what says a mark is readable at all. */
+    case FLOW_PENDING_DOCSCRIPT:
+    case FLOW_PENDING_SCRIPT:    return parser_inserted ? EPD_DOCUMENT_SCRIPT : EPD_INJECTED_SCRIPT;
     case FLOW_PENDING_MODULE:    return EPD_MODULE_IMPORT;
     }
     DCHECKF(0, "a park whose reply becomes a PROGRAM states the kind %d, which `pending_kind_is_program` "
@@ -402,11 +443,15 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
        "Processing model"'s `parser document` — which is exactly what a document's own markup `<script src>`
        has and what this
        register already composed one line before `pending_push` returned. Asking a second time would be two
-       computations of one fact, free to disagree; reading PEND_PROV cannot. WHAT THAT ONE COMPUTATION IS
-       NARROWER THAN is a named residual at `pending_prov_compose` (solver/pending.c): the parser-inserted
-       conjunct is inferred from the park's KIND, and a kind chosen for a QUEUE POSITION answers a question
-       about ORIGIN. This line inherits that grade exactly and adds nothing to it, which is the point — a
-       second reading here would hide the one place the fact can be repaired.
+       computations of one fact, free to disagree; reading PEND_PROV cannot.
+       AND THAT PARAGRAPH CARRIED A CLAIM ABOUT THIS TREE WHICH IS RETIRED RATHER THAN DELETED, because a
+       reader re-derives it from the sentence above: it said the grade's parser-inserted conjunct is INFERRED
+       FROM THE PARK'S KIND and pointed at a named residual at `pending_prov_compose` for it. There is no such
+       residual — grep solver/pending.c — and the conjunct is a PARAMETER: `pending_push` takes it,
+       solver/pending.h's `PROV_OBSERVED` records the kind-as-proxy reading as the argument that parameter
+       RETIRED, and `pending_prov_compose`'s own `DCHECKF` admits a parser-inserted park of EITHER element
+       kind by name. What the kind was still standing in for is the @H DOOR below, which is the one place the
+       fact had left to be repaired, and the mark read there is that repair.
        BEFORE STEP 6 AND BEFORE STEP 7, which is where core/html/html_link.c and core/fetch/fetch.c put
        theirs and for their stated reason: the endpoint is what the page's code COMPOSED, so a policy that
        refuses it and an upgrade that rewrites it both leave a request the bundle can still make. */
@@ -416,13 +461,35 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
        `pending_get_int` of the same field. */
     pkind = (int)pending_get_int(e, PEND_KIND);
     if (pending_kind_is_program(pkind)) {
+        /* THE GRADE AND THE MARK ARE READ ONCE EACH, for `pkind`'s reason exactly: the door and the assert
+           below are two questions about the same two register fields, and a second read of either would be a
+           second copy free to disagree with the first. */
+        int prov = (int)pending_get_int(e, PEND_PROV);
+        int door = program_load_door(pkind, (int)pending_get_int(e, PEND_PARSER_INS));
         JSValue uv = JS_NewString(ctx, req->url);
         CHECK(!JS_IsException(uv), "engine: OOM naming a program load for the endpoint surface");
+        /* AND THE TWO READINGS OF ONE PARK AGREE, WHICH IS THE ONE INVARIANT THIS LINE CAN HOLD AND IS WHAT
+           MAKES THE DOOR'S REPAIR CHECKABLE RATHER THAN MERELY ARGUED. `observed` is the parser-inserted mark
+           AND an unforced path (solver/pending.h's `PROV_OBSERVED`), and the door above is now that same mark
+           read off the same register field, so a park graded `observed` whose door is not `document-script`
+           means the two compositions have come apart over ONE mark.
+           BOTH SIDES ARE THIS CODEBASE'S OWN, which is what makes it a DCHECK rather than a refusal
+           (CLAUDE.md §WHOSE-BYTES-STATE-THE-VALUE): a flag whichever of this engine's components inserted
+           the element stated, and a path the solver owns — no byte a page or a server wrote reaches either.
+           IT IS NOT VACUOUS: two functions compose these from one field, so a change to either alone fires
+           here. AND THE CONVERSE IS NOT ASSERTED AND IS NOT TRUE — a `document-script` row is graded `forced`
+           whenever its path stood on a contradicted arm, which is a real row and not a drift. */
+        DCHECKF(prov != PROV_OBSERVED || door == EPD_DOCUMENT_SCRIPT,
+                "a program park graded `observed` states the @H door %d rather than `document-script` — the "
+                "grade's first conjunct is HTML §4.12.1.1 \"Processing model\"'s `parser document` and this "
+                "door is now that same mark read off the same register field, so the two compositions have "
+                "come apart over one park of kind %d, and the row about to be emitted would say a markup "
+                "parse cannot reach an address its own element carries", door, pkind);
         /* HTML §8.1.4.2 "Fetching scripts" creates every one of these requests without setting a method, so
            it is Fetch §2.2.5 "Requests"' `GET` — and `req->method` is what the producer stated one frame up
-           and what the DCHECK above has already refused to be absent, so it is read rather than restated. */
-        endpoint_record(ctx, req->method, uv, NULL, 0, NULL, (int)pending_get_int(e, PEND_PROV),
-                        program_load_door(pkind));
+           and what `pending_park_request`'s own method DCHECK at this function's entry has already refused to
+           be absent, so it is read rather than restated. */
+        endpoint_record(ctx, req->method, uv, NULL, 0, NULL, prov, door);
         JS_FreeValue(ctx, uv);
     }
     /* FETCH §4.1 "Main fetch" STEP 6, AND IT RUNS BEFORE THE KEY IS COMPOSED — WHICH IS THE ORDERING THIS

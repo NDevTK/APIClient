@@ -237,17 +237,32 @@ typedef struct { const char *mime, *bytes; size_t len; EndpointBodyKind kind;
    separates them"). All three arrive at ONE call site — solver/engine.c's park consumer, whose own comment
    says they are "a `<script src>` an insertion prepared, a document's own external script taking its slot,
    and a dynamic `import()`" and that this is the only line that sees the set — so the site cannot spell a
-   literal and reads solver/pending.h's kind instead, which is in hand there and separates them exactly.
+   literal and reads solver/pending.h's kind instead — AND, FOR THE TWO ELEMENT DOORS, THE PARK'S OWN
+   PARSER-INSERTED MARK. THE KIND ALONE SEPARATED THEM FOR AS LONG AS THIS SENTENCE SAID SO AND IT DOES
+   NOT: a kind is chosen for a QUEUE POSITION and a door asks about ORIGIN, and HTML §4.12.1.1
+   "Processing model" sends an element to either queue on its `async`/`force async` state rather than on
+   who inserted it, so both queues hold a parser-inserted element and a script-created one. The kind
+   separates the `module-import` door exactly and the other two not at all.
    A LIST AND NOT A SET OF `#define`s, so the enum, the token table and any census over it are ONE list: a
    name added to the enum and not to the table is a row whose token comes off the end of a name array, which
    is the defect endpoint_json_array's `ep_loc_name` CHECK exists for one field over. */
 #define ENDPOINT_DOORS(X)                                                                                    \
-    /* HTML §4.12.1.1 "Processing model" — the document's OWN external script, its reply filling the row. \
-       PARSER-INSERTED BY DEFINITION — solver/engine.c reads this door off a park whose grade's first      \
-       conjunct IS §4.12.1.1's `parser document`, so the element is in the served bytes. */                 \
+    /* HTML §4.12.1.1 "Processing model" — a program load whose element A PARSER INSERTED. That is all    \
+       this door states, and it is read off the park's own `parser document` mark, never off the QUEUE       \
+       POSITION its reply is delivered at. THE RETIRED READING IS KEPT BECAUSE A READER RE-DERIVES IT: this  \
+       door was the park KIND, and §4.12.1.1 branches on `el has an async attribute or el's force async is  \
+       true` BEFORE it branches on `el is not parser inserted`, so each queue holds BOTH origins and the     \
+       kind answered neither — solver/engine.c's `program_load_door` states the pair and what each         \
+       direction cost. DELIVERY IS THE KIND'S AND IS NOT THIS TOKEN'S: whether the reply fills the           \
+       element's slot or is queued as the flow's next program is solver/pending.h's fact, and neither may    \
+       be read off the other. NARROWER THAN `markup` BY ONE POPULATION, NAMED AS A RESIDUAL AT               \
+       `program_load_door`: a `<script src>` a `document.write` put in the tree is parser-inserted and is    \
+       NOT in the served bytes. */                                                                           \
     X(EPD_DOCUMENT_SCRIPT, "document-script", EPR_MARKUP)                                                    \
-    /* …a `<script src>` an insertion prepared, whose reply is queued as the running flow's next program — \
-       so running code put the element there and a parse of the served bytes never sees it. */               \
+    /* …a `<script src>` NO parser inserted, so running code put the element there and a parse of the      \
+       served bytes never sees it — TRUE BY CONSTRUCTION rather than by the queue the element took, this   \
+       being the complement of the door above over the one mark. Its reply is queued as the running flow's   \
+       next program, which is the KIND's fact and not this token's. */                                       \
     X(EPD_INJECTED_SCRIPT, "injected-script", EPR_BEYOND)                                                    \
     /* …and a dynamic `import()`, whose promise is settled with the SOURCE TEXT the compiler is handed — \
        no element at all, so there is nothing for a parse of the document to have found. */                  \
