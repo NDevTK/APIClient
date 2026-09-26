@@ -595,12 +595,46 @@ static int xhr_final_encoding(JSContext *ctx, XhrData *d)
     return enc;
 }
 
-/* §3.5.1, §3.5.3, §3.5.4 and §3.6.8 each ask "is the current global object a Window object". Every realm this
-   engine builds IS a Window realm — there is no DedicatedWorkerGlobalScope and no SharedWorkerGlobalScope, so
-   `[Exposed=(Window,DedicatedWorker,SharedWorker)]` reduces to the first — and the answer is written once here
-   so the day a worker global exists there is ONE place that learns to say no, rather than four `if`s that were
-   each right for the wrong reason. */
-static bool xhr_global_is_window(JSContext *ctx) { (void)ctx; return true; }
+/* IS A GLOBAL A `Window` OBJECT — the question XHR §3.5.1 "The open() method" asks at step 1 and again at step
+   9, XHR §3.5.3 "The timeout getter and setter" asks at its setter's step 1, and XHR §3.6.8 "The responseType
+   getter and setter" asks at its setter's steps 1 and 3. FIVE asks, one answer, so a realm that must be told no
+   is told no in one place rather than in five `if`s that were each right for the wrong reason.
+
+   THE ARGUMENT THIS USED TO ANSWER BY IS RETIRED AND IS WRITTEN DOWN RATHER THAN DELETED, because a reader who
+   re-derives it from this interface's own exposure set will re-add it. It said that every realm this engine
+   builds is a Window realm — that there is no DedicatedWorkerGlobalScope and no SharedWorkerGlobalScope, so
+   `[Exposed=(Window,DedicatedWorker,SharedWorker)]` reduces to its first member — and the body was
+   `return true`. It was true of core/platform.c's per-DOCUMENT column and it stopped being true when
+   core/realm.h's per-REALM column began building realms of every kind. This component declares itself to THAT column, so it is PLACED in
+   a `DedicatedWorkerGlobalScope` realm, and every one of the five asks above was answering about a realm it was
+   not in. The same retirement is why core/dom/document.c's reader of the realm-is-a-document pointer is
+   release-fatal: a realm kind with no Document now exists.
+
+   IT IS READ OFF WEB IDL §3.3.8 "[Global]"'s GLOBAL NAMES AND NEVER OFF A REALM KIND OF THIS FILE'S OWN. The
+   mask core/realm.h resolves once per realm is the corpus's own vocabulary, and core/idl_args.h DERIVES the
+   `Window` question from the generated [Global] rows rather than asserting it — so the day a second [Global]
+   interface names `Window`, that derivation's own check fires instead of this line quietly answering yes.
+
+   THE REALM IT ASKS ABOUT IS THE ONE THE MEMBER IS RUNNING IN, which is exactly "the current global object" that
+   four of the five asks name. XHR §3.5.1 step 1 names "this's relevant global object" instead, and those are two
+   concepts. NAMED RESIDUAL. WHAT IS NOT COVERED: an XMLHttpRequest whose `open` is reached through ANOTHER
+   realm's prototype answers step 1 out of the calling prototype's realm rather than out of the receiver's.
+   WHAT THE NEXT DIFF BUILDS: the receiver's own realm, recorded on XhrData where the object is constructed and
+   read by step 1 in place of `ctx`. HOW ITS ABSENCE WOULD SHOW: open()'s first step throwing, or declining to
+   throw, against a global that is not the one the receiver belongs to — observed where a receiver and the
+   prototype its `open` came off belong to realms that disagree about whether their global is a `Window`.
+   RETIREMENT: this record goes when XhrData carries that realm and step 1 reads it.
+
+   XHR §3.5.4 "The withCredentials getter and setter" WAS ON THE OLD LIST AND ASKS NOTHING OF THE KIND. Its
+   setter steps are "If this's state is not unsent or opened, then throw an "InvalidStateError" DOMException.
+   If this's send() invoked is true, then throw an "InvalidStateError" DOMException. Set this's cross-origin
+   credentials to the given value." — no global test at all, and the code correctly never asked one there. A list
+   that names a section which does not ask is a mis-aimed citation no instrument here can see, so the correction
+   is recorded where the claim was made. */
+static bool xhr_global_is_window(JSContext *ctx)
+{
+    return idl_global_names_are_window(realm_global_names(ctx));
+}
 
 /* ---- the receiver check every member performs -------------------------------------------------------------- */
 
@@ -806,8 +840,21 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                    "resolution algorithm's `values`, so a body reading the machine's raw `args` has skipped "
                    "§3.2.11 ByteString and §3.2.12 USVString for every call it ever served");
         }
-        /* Step 1: a Window whose document is not fully active. */
-        if (!document_fully_active(ctx))
+        /* XHR §3.5.1 "The open() method" STEP 1 IS A CONJUNCTION AND THIS ENGINE DROPPED THE FIRST CONJUNCT:
+           "If this's relevant global object is a Window object and its associated Document is not fully active,
+           then throw an "InvalidStateError" DOMException." The Window half was missing, on the argument
+           xhr_global_is_window used to carry, and this is the FIRST step of the FIRST member an XHR script
+           calls — so in a `DedicatedWorkerGlobalScope` realm, where the step does not apply at all, it reached
+           core/dom/document.c's release-fatal reader of the realm-is-a-document pointer instead.
+           THE ORDER IS THE REPAIR AND NOT MERELY THE TRUTH: `&&` short-circuits, so a realm whose global is not
+           a `Window` never asks the second question — which is what "the step does not apply" means. Such a
+           realm CONTINUES to step 2, with nothing thrown and nothing defaulted; a `DCHECK` here would instead
+           abort on a case the algorithm handles correctly, and a realm kind is not this codebase's value to
+           assert about in any event (CLAUDE.md §WHOSE-BYTES-STATE-THE-VALUE).
+           NOTHING EARLIER SEES THE OPERAND. What runs before step 1 is Web IDL §3.7.7 "Operations"' receiver
+           check, which `xhr_receiver` performs, and Web IDL §3.6 "Overload resolution algorithm"'s conversions
+           — neither of which is realm-kind-sensitive — and `open` carries no [Exposed=Window] of its own. */
+        if (xhr_global_is_window(ctx) && !document_fully_active(ctx))
             return JS_ThrowDOMException(ctx, "InvalidStateError",
                                         "open() on an XMLHttpRequest whose document is not fully active"), -1;
         {
