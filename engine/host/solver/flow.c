@@ -2722,6 +2722,7 @@ void flow_release(JSContext *ctx, Flow *f) {
     free(f->dyn_el); f->dyn_el = NULL;
     free(f->dyn_doc); f->dyn_doc = NULL;
     free(f->dyn_id); f->dyn_id = NULL;
+    free(f->dyn_run); f->dyn_run = NULL;
     free(f->dyn_token); f->dyn_token = NULL;
     free(f->dyn_pos); f->dyn_pos = NULL;
     f->dyn_n = f->dyn_cap = 0;
@@ -8030,8 +8031,8 @@ void flow_remove(JSContext *ctx, Flow *f) {
            "frees that Array and every [vector, taken, arm] row it names, so a flow reaching here with one was "
            "removed without being released");
     DCHECK(f->dyn == NULL && f->dyn_cand == NULL && f->dyn_type == NULL && f->dyn_url == NULL &&
-           f->dyn_el == NULL && f->dyn_doc == NULL && f->dyn_id == NULL && f->dyn_token == NULL &&
-           f->dyn_pos == NULL && f->dec_blob == NULL && f->pin_blob == NULL,
+           f->dyn_el == NULL && f->dyn_doc == NULL && f->dyn_id == NULL && f->dyn_run == NULL &&
+           f->dyn_token == NULL && f->dyn_pos == NULL && f->dec_blob == NULL && f->pin_blob == NULL,
            "a flow was removed with its lazily-loaded chunk bodies or its suspended decision/pin blobs still "
            "attached — the flow's own allocations, freed by nothing else");
     /* THE SLOT IS READ OFF THE MEMBER AND THE WALK THAT USED TO FIND IT IS GONE (flow.h's `reg_i`). A
@@ -8359,6 +8360,11 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
             /* THE NAME TRAVELS WITH THE ROW, which is the whole of why this walk no longer aborts: the row
                moves, its `dyn_id` does not change, and every register entry naming it is still naming it. */
             f->dyn_id[w]    = f->dyn_id[k];
+            /* AND SO DOES THE ARRIVAL STAMP, by a sentence the name's does not make: a compaction moves a row
+               within one flow's sequence and changes nothing about WHEN it became runnable, so a row that is
+               older than a queued callback before §7.5.10 step 7 is older than it afterwards. Re-minting here
+               would let a destroy reorder a surviving row against this flow's own queue. */
+            f->dyn_run[w]   = f->dyn_run[k];
             f->dyn_token[w] = f->dyn_token[k];
             f->dyn_pos[w]   = f->dyn_pos[k];
         }
@@ -8367,7 +8373,7 @@ int flow_programs_remove_for_document(Flow *f, uint32_t doc) {
     DCHECK(w == f->dyn_n - removed,
            "§7.5.10 step 7's compaction kept a different number of rows than the count said it would take — "
            "the count and the walk ask one predicate over one column, so a disagreement means the sequence "
-           "was written between them and the nine columns no longer describe one queue");
+           "was written between them and the ten columns no longer describe one queue");
     f->dyn_n = w;
     /* `script_i` AND `last_compiled` ARE DELIBERATELY UNTOUCHED — the proof is the `lowest` assert above, which
        is where it is checkable: there the columns still hold the positions the claim is about. */

@@ -879,16 +879,64 @@ typedef struct Flow {
        shared register entry be delivered correctly into either arm.
        IT IS NOT PARKED. The cold tier stores a recipe and replays the document from its first script, so a
        resumed flow's rows are rebuilt and take fresh names — the same reason `dyn_el` may never be parked.
-       AND IT IS ALSO THE ROW'S ARRIVAL STAMP, WHICH IS A SECOND JOB FOR ONE VALUE AND IS DELIBERATE. The
-       counter behind it is flow.c's g_work_seq, which a `jobs` record draws from too, so a row and a queued
-       callback of one flow are comparable by WHEN THEY WERE QUEUED — which is what flow_step's task ladder
-       needs and what no per-carrier order can supply. The two jobs do not fight: a NAME must be unique and
-       never reused, and an ARRIVAL STAMP must be unique, never reused and MONOTONE IN ISSUE ORDER, and the
-       second is strictly the first plus a property the mint already had. What it costs is that the ids of one
-       flow's rows are no longer contiguous — nothing reads them that way (flow_dyn_row_index searches by
-       value, and the register stores one whole), and the clock is uint64 rather than a per-carrier counter
-       precisely so that sharing it cannot exhaust either. */
+       IT USED TO BE THE ROW'S ARRIVAL STAMP AS WELL, AND THAT SENTENCE IS RETIRED RATHER THAN DELETED
+       BECAUSE ITS ARGUMENT IS THE ONE A READER RE-DERIVES. It read: "The two jobs do not fight: a NAME must be
+       unique and never reused, and an ARRIVAL STAMP must be unique, never reused and MONOTONE IN ISSUE ORDER,
+       and the second is strictly the first plus a property the mint already had." Every clause of that is true
+       of the MINT and the conclusion is false, because it never asks WHEN the arrival of a work item is. A
+       name's moment is fixed by what a name is for — the register names a row and a name may not move, so it
+       is minted at CREATION. An arrival stamp's moment is fixed by what the order is for: a work item arrives
+       when it becomes RUNNABLE, and a DYN_SCRIPT_SRC row is created at parse and becomes runnable when its
+       bytes come back. For that one kind the two requirements are not a superset and a subset, they are two
+       different instants — which is CLAUDE.md's §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS exactly, decided by
+       the stricter question (the name, which may never move) with the cost landing silently on the looser one.
+       WHAT IT COST IS MEASURED AND IT IS THE PRODUCT'S BIGGEST BLOCKER. A root `<script src>` is inserted by
+       the seed before any program runs, so it holds one of the document's LOWEST stamps, while every queued
+       callback is pushed during execution and is therefore younger — so flow_task_precedes' `s < row_seq`
+       answers NO for every job of the flow while any seed row still stands at the cursor, and the arrival order
+       that was landed to END the sequence arm's permanent exclusion reproduces it exactly for the rows a real
+       page has most of. Measured on gitlab.com/explore/projects through a dev artifact, 5254 steps: 35 root
+       programs, cursor at 8, `run-a-task` and `microtask-checkpoint` ZERO, against a one-root-row page on the
+       same artifact whose cursor exhausted and whose tasks ran.
+       SO THE ARRIVAL STAMP IS `dyn_run` BELOW AND THIS COLUMN IS A NAME AGAIN. What the sharing did buy is
+       kept: the clock is still one clock, so a row and a queued callback remain comparable, and the ids of one
+       flow's rows are still not contiguous — nothing reads them that way (flow_dyn_row_index searches by value,
+       and the register stores one whole). */
     uint64_t *dyn_id;
+    /* AND WHEN THE ROW BECAME A RUNNABLE WORK ITEM, which is a DIFFERENT INSTANT from the name above for
+       exactly one kind of row and the same instant for every other. It is the number flow_step's ladder hands
+       flow_task_precedes, and the reason it is a second column rather than a re-mint of `dyn_id` is that
+       `dyn_id` is load-bearing as an IDENTITY: the pending register names a row by it (PEND_SCRIPT_ROW), and
+       re-stamping it at a delivery would orphan every entry naming it, on every arm of a fork, at the one
+       moment the delivery is looking that row up by that name.
+       THE MOMENT IS THE STANDARD'S AND NOT A PREFERENCE, AND THE STANDARD RESUMES A BLOCKED PARSE WITH A TASK.
+       HTML §13.2.6.4.8 The "text" insertion mode blocks only the TOKENIZER while a parser-blocking script is
+       outstanding — "Block the tokenizer for this instance of the HTML parser, such that the event loop will
+       not run tasks that invoke the tokenizer" — and then "spin the event loop until the parser's Document has
+       no style sheet that is blocking scripts and the script's ready to be parser-executed becomes true". HTML
+       §8.1.7.3 "Processing model" gives that macro's expansion, and the resumption is a QUEUED TASK taken at
+       the moment the condition is met: "Empty the JavaScript execution context stack. Perform a microtask
+       checkpoint." then, after the wait, "Queue a task on task source to: Replace the JavaScript execution
+       context stack with old stack. Perform any steps that appear after this spin the event loop instance in
+       the original algorithm." So a task queued while the bytes were in the air runs BEFORE the script, however
+       much earlier the element was inserted — and the element's place in the DOCUMENT is untouched by that,
+       which is what `dyn_id` and §4.12.1.1's order keep.
+       SO THERE ARE EXACTLY TWO WRITERS AND THE SECOND ONE IS THE KIND FLIP. It is minted from the same clock at
+       engine_queue_into, where it EQUALS `dyn_id` — every kind whose body is already a program is runnable the
+       instant it is queued — and re-minted at the two lines that take a row OUT of DYN_SCRIPT_SRC
+       (flow_deliver_one_reply's program arm and its null arm, which is §4.12.1.1 step 4's `error`). Those two
+       are the row's "ready to be parser-executed becomes true", and they are the only sites in the tree that
+       write a row's kind over an existing row.
+       IT IS NOT A BOUND AND THE ARRIVAL ARGUMENT SURVIVES WHOLE: the stamp is written once per row per
+       readiness and never moved afterwards, so the set of work items that outrank a job is still FIXED AT THAT
+       JOB'S BIRTH and finite, which is CLAUDE.md's own line between an ORDER and a BOUND. Nothing is capped,
+       counted down or decided against; a row still runs, and now it runs after the callbacks that were already
+       waiting for it.
+       ZERO IS NO STAMP, inherited from `dyn_id`'s contract because it is the same counter (flow.c's g_work_seq
+       starts at 1) — which is what lets the ladder DCHECK a live row's stamp rather than trust that the ten
+       columns were all plumbed. IT IS NOT PARKED, for `dyn_id`'s reason: the cold tier stores a recipe and
+       replays the document, so a resumed flow's rows are rebuilt and take fresh stamps. */
+    uint64_t *dyn_run;
     /* AND THE RENDEZVOUS TOKEN OF THE PEER PARKED ON IT, for the one kind of row that OWES AN ANSWER. A
        cross-agent operation's answer IS its program's completion, so the question and the program are one thing
        and the token is a fact about the ROW. Held beside the flow instead it was a single slot, and both halves
@@ -1405,7 +1453,7 @@ long    flow_world_commit_rows_written(void);
  *     the record to cover a range the runtime asserts is unreachable — a rule with no reachable input is a
  *     rule nothing can exercise. JS_TASK_HANDLE_NONE is the never-issued value and is what a record pushed by
  *     something other than the runtime's enqueue path honestly carries; it names nothing, so nothing finds it.
- *   - WHEN IT ARRIVED, on the ONE clock this flow's program sequence is also named by (`dyn_id`, and
+ *   - WHEN IT ARRIVED, on the ONE clock this flow's program sequence is also stamped by (`dyn_run`, and
  *     flow.c's g_work_seq). This is the field flow_step's task ladder compares, and it is what turns
  *     HTML §8.1.7.3 "Processing model" step 2.1's choice of queue from an ARM ORDER into a fact about the
  *     work:
@@ -1440,15 +1488,18 @@ void flow_job_kinds(const Flow *f, int *task_out, int *micro_out);
 void flow_job_push(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueConst *argv, int task,
                    JSTaskHandle handle);
 /* THE NEXT ARRIVAL STAMP — one monotone counter for the instance, issued to BOTH of a flow's task carriers:
-   a `jobs` record takes one at flow_job_push, a `dyn` row takes one as its `dyn_id`. See flow.c's g_work_seq
+   a `jobs` record takes one at flow_job_push, a `dyn` row takes one as its `dyn_run` (and a second, at the
+   same creation, as the NAME `dyn_id` that never moves). See flow.c's g_work_seq
    for why the two must share a clock and why an order over arrival is the one order §8.1.7.1 "Definitions"
    and §8.1.7.3 "Processing model" step 2.1 admit that no page can starve. It is NOT a bound and nothing
    branches on its VALUE — only two stamps are ever compared with each other. */
 uint64_t flow_work_seq_next(void);
 /* DOES THIS FLOW HOLD A TASK OLDER THAN THE ROW AT ITS CURSOR — §8.1.7.3 step 2.1's choice, asked by
    flow_step's ladder and answered from the stamps rather than from which array holds what. `row_seq` is the
-   cursor row's `dyn_id`, which the caller reads because only the caller has established there IS a row (the
-   sequence arm's `seq_compiles`). Answers 0 whenever no task may begin at all — a DYN_POS_IMMEDIATE row at
+   cursor row's `dyn_run` — its arrival as a RUNNABLE work item and never its NAME, which for a row whose
+   bytes came back late is a far older number and was what excluded every job of a real page's flow (see
+   `dyn_run`). The caller reads it because only the caller has established there IS a row (the sequence arm's
+   `seq_compiles`). Answers 0 whenever no task may begin at all — a DYN_POS_IMMEDIATE row at
    the cursor, an outstanding microtask, an empty queue — each of which is a rule of the standard rather than
    a guard, and each of which is argued at the definition. */
 int flow_task_precedes(const Flow *f, uint64_t row_seq);

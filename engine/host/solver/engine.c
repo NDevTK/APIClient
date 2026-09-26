@@ -5097,6 +5097,13 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                            "without one was queued by something that is not engine_queue_docscript_url or the "
                            "seed's address arm, both of which take the element that owns the address");
                     f->dyn_cand[di] = DYN_SCRIPT_FAILED;
+                    /* AND THE ROW IS RUNNABLE FROM NOW, WHICH IS AS TRUE OF A FAILURE AS OF A PROGRAM. The row
+                       was not a work item this flow could take while its bytes were in the air; it is one now,
+                       because §4.12.1.1's step 4 — fire `error` at el and return — is what this step will run at
+                       it. Stamped here for the same reason the program arm stamps: HTML §13.2.6.4.8 The "text"
+                       insertion mode spins the event loop until "the script's ready to be parser-executed
+                       becomes true", and a load that FAILED is one of the two ways it becomes true. */
+                    f->dyn_run[di] = flow_work_seq_next();
                 } else {
                     /* AN INJECTED `<script src>` HAS NO ROW YET — its reply is what CREATES one (the branch
                        below queues the program), so its failure creates the row that runs nothing. It takes
@@ -5213,6 +5220,22 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                 f->dyn[di] = nb;
             }
             f->dyn_cand[di] = DYN_PAGE_SCRIPT;
+            /* AND THE ROW ARRIVES AS A RUNNABLE WORK ITEM HERE, WHICH IS THE WHOLE POINT OF A SECOND COLUMN.
+               Until this line the row held an ADDRESS and no step could start it; from this line it holds a
+               program and one can, so THIS is its arrival and its creation at parse was not. HTML §13.2.6.4.8
+               The "text" insertion mode blocks only the tokenizer while the bytes are outstanding — "Block the
+               tokenizer for this instance of the HTML parser, such that the event loop will not run tasks that
+               invoke the tokenizer" — and then "spin the event loop until the parser's Document has no style
+               sheet that is blocking scripts and the script's ready to be parser-executed becomes true"; HTML
+               §8.1.7.3 "Processing model" expands that macro and resumes the blocked algorithm with a QUEUED
+               TASK taken when the wait ends: "Queue a task on task source to: Replace the JavaScript execution
+               context stack with old stack. Perform any steps that appear after this spin the event loop
+               instance in the original algorithm." So every callback queued while these bytes were in the air is
+               OLDER than this row and runs first, and the stamp is what says so.
+               THE NAME IS DELIBERATELY NOT TOUCHED. `dyn_id` is what the register entry just above resolved this
+               row by, and what every other entry of every forked arm still names it by — re-stamping it here
+               would orphan them from inside the delivery that depends on the lookup. */
+            f->dyn_run[di] = flow_work_seq_next();
         } else if (kind == FLOW_PENDING_SCRIPT) {
             /* the reply is PROGRAM: it joins this flow's script sequence, and the one BFS runs it */
             /* AN INJECTED `<script src>` IS A CLASSIC SCRIPT, which is a statement about this entry and not a
@@ -5929,6 +5952,13 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
            and to the right row in the other, from one reply. Copied, never re-minted. */
         sib->dyn_id = malloc((size_t)parent->dyn_n * sizeof(uint64_t));
         CHECK(sib->dyn_id, "engine: OOM fork dyn row names");
+        /* AND WHEN EACH ROW BECAME RUNNABLE, copied for the NAME's reason and not for a second one: the arm is
+           the parent's timeline continued over the SAME rows, so an inherited row arrived when the parent's did
+           and a fresh stamp here would let an arm change its own place in the arrival order by being forked —
+           which is the reset-by-splitting CLAUDE.md's §EVERY-TERM-IS-CARRIED-BY-A-FORK bans. Copied, never
+           re-minted; the re-mint belongs to the READINESS and flow_deliver_one_reply owns it. */
+        sib->dyn_run = malloc((size_t)parent->dyn_n * sizeof(uint64_t));
+        CHECK(sib->dyn_run, "engine: OOM fork dyn row arrival stamps");
         /* AND THE RENDEZVOUS TOKEN OF ANY ROW THAT STILL OWES AN ANSWER, by the same sentence and for the
            reason above: the arm is the operation's program continued, so it answers the same peer under the
            same token. An arm that inherited the row without it would run a peer's operation and tell nobody. */
@@ -5941,7 +5971,12 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
            reaction on one arm and not on the other, from one insertion. */
         sib->dyn_pos = malloc((size_t)parent->dyn_n);
         CHECK(sib->dyn_pos, "engine: OOM fork dyn positions");
-        /* THE SEVEN ARRAYS ARE ONE TABLE WITH ONE LENGTH, asserted rather than defaulted past. This read used to
+        /* THE TEN ARRAYS ARE ONE TABLE WITH ONE LENGTH, asserted rather than defaulted past. THE COUNT WAS
+           WRONG IN THIS COMMENT AND IN THE MESSAGE BELOW AND THE TWO DISAGREED WITH EACH OTHER: this line read
+           SEVEN, the DCHECK's own text read EIGHT, and the compaction in solver/flow.c read NINE, for a table
+           that held nine — which is CLAUDE.md's count-contradicting-its-own-list, three times over one table.
+           Add the arrival stamp and all three go stale together, so all three are corrected here and there
+           rather than one of them. This read used to
            be `parent->dyn_cand ? parent->dyn_cand[i] : 0`, and a zero there is DYN_PAGE_SCRIPT — a real kind
            belonging to a real entry — so a parent whose flags were somehow absent handed the arm a queue of
            page scripts. The seven are allocated, grown and freed together, which makes the `? :` a claim about
@@ -5949,9 +5984,10 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
            compiling a candidate as a page script, or an ADDRESS (DYN_SCRIPT_SRC) as a program. */
         DCHECK(parent->dyn_cand != NULL && parent->dyn_type != NULL && parent->dyn_url != NULL &&
                parent->dyn_el != NULL && parent->dyn_doc != NULL && parent->dyn_id != NULL &&
-               parent->dyn_token != NULL && parent->dyn_pos != NULL,
-               "a flow holds queued programs with no kind, script type, address, document, name, token or "
-               "position column — the eight arrays are one table and are allocated together, so the arm would "
+               parent->dyn_run != NULL && parent->dyn_token != NULL && parent->dyn_pos != NULL,
+               "a flow holds queued programs with no kind, script type, address, document, name, arrival "
+               "stamp, token or position column — the ten arrays are one table and are allocated together, so "
+               "the arm would "
                "inherit bodies whose kind, evaluation algorithm, resolution base, realm, identity, waiting "
                "peer or place against the microtask checkpoint are lost");
         for (int i = 0; i < parent->dyn_n; i++) {
@@ -5968,6 +6004,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
             sib->dyn_el[i] = parent->dyn_el[i];
             sib->dyn_doc[i] = parent->dyn_doc[i];
             sib->dyn_id[i] = parent->dyn_id[i];
+            sib->dyn_run[i] = parent->dyn_run[i];
             sib->dyn_pos[i] = parent->dyn_pos[i];
             sib->dyn_url[i] = NULL;
             if (parent->dyn_url[i]) {
@@ -7673,10 +7710,11 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
         f->dyn_el = realloc(f->dyn_el, (size_t)f->dyn_cap * sizeof(lxb_dom_element_t *));
         f->dyn_doc = realloc(f->dyn_doc, (size_t)f->dyn_cap * sizeof(uint32_t));
         f->dyn_id = realloc(f->dyn_id, (size_t)f->dyn_cap * sizeof(uint64_t));
+        f->dyn_run = realloc(f->dyn_run, (size_t)f->dyn_cap * sizeof(uint64_t));
         f->dyn_token = realloc(f->dyn_token, (size_t)f->dyn_cap * sizeof(char *));
         f->dyn_pos = realloc(f->dyn_pos, (size_t)f->dyn_cap);
         CHECK(f->dyn && f->dyn_cand && f->dyn_type && f->dyn_url && f->dyn_el && f->dyn_doc && f->dyn_id &&
-              f->dyn_token && f->dyn_pos,
+              f->dyn_run && f->dyn_token && f->dyn_pos,
               "engine: OOM dynamic-script queue");
     }
     at = f->dyn_n;
@@ -7786,6 +7824,7 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
         memmove(&f->dyn_el[at + 1],    &f->dyn_el[at],    tail * sizeof(lxb_dom_element_t *));
         memmove(&f->dyn_doc[at + 1],   &f->dyn_doc[at],   tail * sizeof(uint32_t));
         memmove(&f->dyn_id[at + 1],    &f->dyn_id[at],    tail * sizeof(uint64_t));
+        memmove(&f->dyn_run[at + 1],   &f->dyn_run[at],   tail * sizeof(uint64_t));
         memmove(&f->dyn_token[at + 1], &f->dyn_token[at], tail * sizeof(char *));
         memmove(&f->dyn_pos[at + 1],   &f->dyn_pos[at],   tail);
     }
@@ -7810,6 +7849,14 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
        is therefore younger than rows already below the cursor, which is correct and is never consulted: it is
        DYN_POS_IMMEDIATE, so flow_stack_empty is false for it and no task may begin in front of it at all. */
     f->dyn_id[at] = flow_work_seq_next();
+    /* AND ITS ARRIVAL AS A RUNNABLE WORK ITEM, WHICH FOR EVERY KIND BUT ONE IS THIS SAME INSTANT — a row whose
+       body is already a program can be started the moment it is queued, so its readiness and its creation are
+       one event and one stamp states both. THE EXCEPTION IS THE KIND WHOSE BODY IS AN ADDRESS: a DYN_SCRIPT_SRC
+       row is not runnable until its bytes come back, and flow_deliver_one_reply re-mints this column at the two
+       lines that take a row out of that kind. Assigned from `dyn_id` rather than by a second call of the clock
+       so that the two are EQUAL here by construction — a second mint would make them differ by an increment
+       that means nothing and would put every row of a seed behind every other row's name. */
+    f->dyn_run[at] = f->dyn_id[at];
     f->dyn_token[at] = token;   /* MOVED: one allocation from engine_perform to flow_answer_perform */
     /* THE POSITION IS KEPT, NOT CONSUMED. `at` says where the row went; this says WHY, and the microtask
        checkpoint reads it (flow_checkpoint_due) because §4.12.1.1's immediate program ran inside the causing
@@ -10615,7 +10662,26 @@ static int flow_step(JSContext *ctx, Flow *f) {
                start, and it is the caller's to establish because flow_task_precedes has no way to know that a
                row the flow is merely HOLDING is not one it can run. Every refusal inside that predicate is a
                rule of the standard rather than a guard, and each is argued at its definition. */
-            int job_precedes = seq_compiles && flow_task_precedes(f, f->dyn_id[f->script_i]);
+            /* THE ROW'S ARRIVAL AS A RUNNABLE WORK ITEM, NEVER ITS NAME — `dyn_run` and not `dyn_id`, which is
+               the correction this line exists for and the one the NOT COVERED clause above did not reach. A
+               root `<script src>` is inserted by the seed before any program runs, so its NAME is one of the
+               document's lowest numbers while its READINESS is whenever the network answered; asked by name,
+               `s < row_seq` was NO for every job of the flow for as long as any seed row stood at the cursor,
+               and the arrival order argued at this ladder's head reproduced for the seed's own rows exactly the
+               permanent exclusion it was landed to end. Measured: a real application page ran 5254 steps with
+               `run-a-task` and `microtask-checkpoint` at ZERO and 35 root programs, while a one-root-row page on
+               the same artifact exhausted its cursor and ran its tasks. See flow.h's `dyn_run`.
+               ZERO IS NO STAMP AND IS A PLUMBING HOLE RATHER THAN A ROW — the clock starts at 1, so a live row
+               reaching the cursor with 0 means one of the ten columns was grown, forked, shifted or compacted
+               without this one, which is the only way this change can go wrong and is not a state any input can
+               reach. Asserted HERE because this is where a missed site first decides something. */
+            DCHECK(!seq_compiles || f->dyn_run[f->script_i] != 0,
+                   "the row at this flow's cursor can start and carries NO arrival stamp — `dyn_run` is minted "
+                   "with the row and re-minted where a delivery takes it out of DYN_SCRIPT_SRC, so a zero is a "
+                   "column that was allocated, forked, grown, shifted or compacted without its nine siblings "
+                   "and this step would order a program against this flow's queued callbacks by a number no "
+                   "clock issued");
+            int job_precedes = seq_compiles && flow_task_precedes(f, f->dyn_run[f->script_i]);
             if (seq_compiles && !job_precedes) {
                 /* NOTHING HERE, AND THE EMPTINESS IS THE FALL-THROUGH MADE EXPLICIT. This arm's work is the
                    compile ~200 lines below; its body is empty because the only thing it has to do is decline
