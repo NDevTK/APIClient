@@ -285,6 +285,37 @@
  * receiver-anchored static sweep of global installs being wrong TWICE in this project, a static derivation
  * over source text being a lower bound wearing a total's clothes. A third static guess would land in the
  * ACCUSING direction, which needs more suspicion than the quiet one and not less.
+ * AND THE INSTRUMENT THAT SENTENCE NAMES IS BUILT AND COMMITTED, WHICH THE REFUSAL DOES NOT SAY AND WHICH IS
+ * THE ONE DIRECTION A CORRECT REFUSAL ROTS IN. "The sound instrument is a RUNTIME invariant over the finished
+ * artifact" reads, to somebody who has not gone looking, as a thing nobody has written — and the only reader
+ * of a sentence shaped like that is a person deciding whether to BUILD it. testing/probe_globals.mjs asks
+ * `name in globalThis` in a real realm of the running engine, derives its list through
+ * testing/platform_names.mjs from the same generated header this file parses, drives itself over CDP for a
+ * stated run count and spread, stamps every figure with the artifact's sha256 and revision, refuses to print
+ * a figure for a run that did not reach PROBE-END, and calls assertHeaderMatchesArtifact BEFORE touching the
+ * browser so a table this file's revision derived is never asked of a realm compiled against another one.
+ * Its banner names BOTH edges this paragraph is about, in the same words. CLAUDE.md records that probe
+ * having been dispatched for TWICE already — once as a claim it existed when it did not, and once, after it
+ * landed, as a claim it did not exist because an incident about its absence was left standing in the present
+ * tense. A brief written off THIS paragraph was the third.
+ * WHAT IS MISSING IS THE JOIN AND NOT THE PROBE, which is a different diff and a smaller one: nothing here
+ * reads a run's answer. `REACHED` below is built from idl_installed.mjs over engine/host/browser and there is
+ * no input for a resolved-set, so the qjs column stands, list A stays a CEILING, and the RETIREMENT above is
+ * NOT met — a retirement keyed on this file's DENOMINATOR is not discharged by a producer existing somewhere
+ * else. Read the probe before building one; read this sentence before believing the join is done.
+ * AND THE RANKING HALF OF THAT PAIR IS DEAD AT THIS REVISION, which is stated here because "the probe exists"
+ * alone is an over-claim in the reassuring direction. testing/rank_globals.mjs is what consumes the probe's
+ * `--absent` list, and `node testing/rank_globals.mjs` throws before it reads a byte: its CORPUS names
+ * testing/corpus/mirror/gitlab, `git ls-files -- testing/corpus/mirror` answers 0, and its own refusal to
+ * skip a group it cannot find is correct. Six of its seven groups are tracked libraries and the missing one
+ * is its only APPLICATION. That is the repair THIS file already made for itself — the committed mirror is
+ * gone and the corpus became a required `--corpus <dir>` naming a real drive's saved responses — applied to
+ * one instrument and not to its sibling.
+ * RETIREMENT: this record goes when this file takes a resolved-set as an INPUT — the probe's own answer,
+ * asserted against the artifact revision it was read at — and when rank_globals.mjs names its application
+ * corpus the way this file names its own. A reader then meets the probe as an ARGUMENT to a command rather
+ * than as a sentence somebody has to remember, which is what makes it un-re-derivable rather than merely
+ * written down; until both are built, deleting this record restores the silence that dispatched three lanes.
  * RETIREMENT: this paragraph goes when list A's denominator is taken from what a built realm reports rather
  * than from a walk of engine/host/browser, at which point the qjs column goes with it.
  *
