@@ -100,8 +100,9 @@ static void slot_declare(const char *component, const void *slot, const char *wh
 
 void agent_state_id_at(const char *c, const int *slot, const char *what, const char *f, int l) { slot_declare(c, slot, what, SLOT_ID, 0, f, l); }
 /* A PER-REALM VALUE SLOT — see agent_state.h for why it is its own kind and not an id. The ONE thing this
-   entry does that agent_state_id could not is the assert: a realm slot is HANDED OUT BY core/realm.c's
-   realm_value_declare, whose body is JS_NewClassID plus JS_NewClass and whose local starts at 0, so it always
+   entry does that agent_state_id could not is the assert: a realm slot is HANDED OUT BY one of core/realm.c's
+   two declare doors — realm_value_declare and realm_proto_declare — each of whose body is JS_NewClassID plus
+   a JS_NewClass over a local that starts at 0, so either always
    mints and what it returns is a real class id — which is `rt->js_class_id_alloc` at the moment of the call
    and therefore never JS_INVALID_CLASS_ID. THE PREDICATE READ `*slot > 0` AND COULD NOT SURVIVE THE TYPE:
    a slot is a JSClassID, which is unsigned, so a range over the sign admits every value there is bar one and
@@ -122,7 +123,7 @@ void agent_state_realm_slot_at(const char *c, const JSClassID *slot, const char 
 {
     DCHECKF(slot == NULL || *slot != JS_INVALID_CLASS_ID,
             "`%s` declared a per-realm value slot (%s) at %s:%d that has not been minted yet — it reads %u, "
-            "and core/realm.c's realm_value_declare never returns that: it hands back a class id, which this "
+            "and neither of core/realm.c's declare doors ever returns that: each hands back a class id, which this "
             "runtime's allocator starts at JS_CLASS_INIT_COUNT. The declaration stands BELOW the line that "
             "assigns the slot, because a row declared above one is counted as a class id this agent minted "
             "while the allocator was never asked for it",

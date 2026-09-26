@@ -4894,7 +4894,12 @@ void readable_stream_init(JSContext *ctx)
        reason every other one does: a realm's list of intrinsics is built from the declarations, so a component
        nobody initialises is a component no realm has. */
     readable_byte_stream_init(ctx);
-    g_byob_proto_slot = realm_value_declare(ctx, "ReadableStreamBYOBReader.prototype");
+    /* THE BRAND AND THE DESCRIPTION ARE TWO ARGUMENTS BECAUSE THEY ANSWER TWO QUESTIONS — core/realm.h's
+       realm_proto_declare takes Streams §4.5 "The ReadableStreamBYOBReader class"'s own interface identifier,
+       so the intrinsic namer composes `%ReadableStreamBYOBReader.prototype%`, and the row below keeps the
+       sentence that says WHOSE slot it is. This used to be one string carrying both, which put
+       `ReadableStreamBYOBReader.prototype` into `class_name` — a field whose contract is a brand. */
+    g_byob_proto_slot = realm_proto_declare(ctx, "ReadableStreamBYOBReader");
     agent_state_realm_slot("readable_stream", &g_byob_proto_slot,
                            "§4.5 The ReadableStreamBYOBReader class's per-realm prototype slot — it shares "
                            "§4.4's class, so its prototype cannot live in the class slot");

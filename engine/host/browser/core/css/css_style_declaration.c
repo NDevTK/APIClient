@@ -5668,15 +5668,27 @@ void cssom_init(JSContext *ctx)
         agent_state_class("element", &g_cssd_class,
                           "CSSOM §6.6.1 \"The CSSStyleDeclaration Interface\"'s per-realm prototype-holder class");
     }
-    /* ONE SPELLING FOR BOTH HALVES OF EACH SLOT. core/realm.h names it for a heap dump and
-       core/agent_state.h names it for the assert a forgotten release fires; the same sentence typed twice
-       on two adjacent lines is a fact kept in step by whoever remembers, which is what the registry exists
-       to stop being asked of a person. */
-    g_declaration_proto_slot = realm_value_declare(ctx, DECLARATION_PROTO);
+    /* THE TWO HALVES ASK DIFFERENT QUESTIONS AND THEREFORE NO LONGER SHARE A SPELLING, WHICH IS A RETIRED
+       ARGUMENT AND NOT A REGRESSION. Each slot used to hand ONE sentence to both, for the stated reason that "the
+       same sentence typed twice on two adjacent lines is a fact kept in step by whoever remembers" — true of
+       a DESCRIPTION, which is what both halves then wanted. It stopped being true when the realm half became
+       a class BRAND: core/realm.h's realm_proto_declare names the object for §20.1.3.6 and for the constraint
+       key `%CSSStyleDeclaration.prototype%`, and core/agent_state.h names the SLOT for the assert a forgotten
+       release fires. One is an interface identifier and the other is a citation; a single spelling can only
+       be wrong for one of them, and it was — the citation went into `class_name` and aborted a real page.
+       The clerical risk the old note names is real and is answered by the door instead: a description reaching
+       realm_proto_declare is refused there by name, so the two cannot be swapped silently.
+       THE NAMES ARE VERIFIED AGAINST THE MAINTAINED EDITIONS AND NOT AGAINST RECALL: CSSOM §6.6.1 "The
+       CSSStyleDeclaration Interface" declares `interface CSSStyleDeclaration`; CSSOM §6.4.7 "The CSSPageRule
+       Interface" declares `interface CSSPageDescriptors : CSSStyleDeclaration` — the section is titled for
+       the RULE and defines the descriptors interface inside it, which is why the citation beside it names a
+       section whose title is another interface's and is right anyway; CSS Fonts 5 §9.1 "The CSSFontFaceRule
+       interface" declares `interface CSSFontFaceDescriptors : CSSStyleDeclaration`, the same arrangement. */
+    g_declaration_proto_slot = realm_proto_declare(ctx, "CSSStyleDeclaration");
     agent_state_realm_slot("element", &g_declaration_proto_slot, DECLARATION_PROTO);
-    g_font_face_proto_slot = realm_value_declare(ctx, FONT_FACE_PROTO);
+    g_font_face_proto_slot = realm_proto_declare(ctx, "CSSFontFaceDescriptors");
     agent_state_realm_slot("element", &g_font_face_proto_slot, FONT_FACE_PROTO);
-    g_page_proto_slot = realm_value_declare(ctx, PAGE_PROTO);
+    g_page_proto_slot = realm_proto_declare(ctx, "CSSPageDescriptors");
     agent_state_realm_slot("element", &g_page_proto_slot, PAGE_PROTO);
     g_ready = 1;
     {

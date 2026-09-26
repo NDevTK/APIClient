@@ -155,9 +155,23 @@ const files = REV ? listTree() : listDisk(PATHPFX.replace(/\/$/, ""));
 const read = (p) => REV ? execFileSync("git", ["show", `${REV}:${p}`], { encoding: "utf8", maxBuffer: 512 * 1024 * 1024 })
                         : readFileSync(p, "utf8");
 
-/* THE TWO MINT SPELLINGS THIS SWEEP CAN SEE, named in the output because they bound it. They are the whole of
-   the MINT side and they always will be: they are the two kinds that HAVE a minting call. Everything else is
-   born by assignment and is reached by the release-reset channel below instead. */
+/* THE MINT SPELLINGS THIS SWEEP CAN SEE, named in the output because they bound it. There are two KINDS that
+   have a minting call -- a class id and a per-realm slot -- and everything else is born by assignment and is
+   reached by the release-reset channel below instead.
+   THIS USED TO READ `THE TWO MINT SPELLINGS ... AND THEY ALWAYS WILL BE`, WITH `realm_value_declare` TYPED
+   OUT BELOW, AND THE SECOND HALF OF THAT WAS FALSIFIED BY A DIFF RATHER THAN BEING WRONG WHEN WRITTEN. It is
+   rewritten and not deleted because the reasoning a reader re-derives is the reasoning that produced it: the
+   KINDS are two and stay two, so it reads as though the DOORS must be two as well. They are different
+   quantities. core/realm.h now has a SECOND door minting a realm slot -- realm_proto_declare, for an
+   interface prototype, whose registry entry is a real class where realm_value_declare's is not -- and both
+   hand out a slot this sweep must see.
+   THE DIRECTION IS THE SILENT ONE, WHICH IS WHY THE ALTERNATION IS DERIVED AND NOT EXTENDED BY HAND. A door
+   missing from this list takes its slots out of the MINT population altogether: they are declared, so the
+   declaration channel sees them, and they are in no mint band at all -- not declared-and-minted, not
+   accused, absent from every total, which is the under-count CLAUDE.md rates as the one nothing announces.
+   Typing a third name here would leave the fourth to whoever remembers, which is the second copy this file
+   refuses everywhere else. So the doors are READ OUT OF core/realm.h, from the one shape that can mint one:
+   an entry returning JSClassID and taking a `const char *`. */
 /* THE CAPTURE ENDS AT THE ARGUMENT'S END, WHICH IS NOT PEDANTRY: `&f->class_id`, `&rec->slot` and `*slot =` are mints
    into a STRUCT MEMBER, and a pattern that stops at the first identifier captures the POINTER instead. That
    name then has to be tested for being a file static, and the test is a regex over `static ... \bname\b`,
@@ -203,9 +217,17 @@ const read = (p) => REV ? execFileSync("git", ["show", `${REV}:${p}`], { encodin
    closing note names that root, a door taking the slot's address and the component's row -- because an
    undeclared class id is then unconstructible and no pattern here has two halves to disagree. */
 const SUBSCRIPT = "(?:\\s*\\[[^\\]]*\\])?";
+const REALM_HEADER = "engine/host/browser/core/realm.h";
+const REALM_DOORS = [...new Set([...read(REALM_HEADER)
+  .matchAll(/\bJSClassID\s+(realm_\w+)\s*\(\s*JSContext\s*\*\s*\w+\s*,\s*const\s+char\s*\*/g)].map((m) => m[1]))];
+if (!REALM_DOORS.length)
+  throw new Error(`agentstate: no per-realm slot door was found in ${REALM_HEADER}. The realm mint channel is `
+                + `derived from that header rather than restated here, so an empty table is a statement about `
+                + `this file and not about the engine -- every realm slot in the tree would leave the mint `
+                + `population silently, appearing in no band at all. The entry shape changed, or the path is wrong.`);
 const MINTS = [
   ["class", new RegExp(`JS_NewClassID\\s*\\(\\s*[^,]+,\\s*&\\s*([A-Za-z_]\\w*)${SUBSCRIPT}\\s*\\)`, "g")],
-  ["realm", new RegExp(`(?<![>.*])\\b([A-Za-z_]\\w*)${SUBSCRIPT}\\s*=\\s*realm_value_declare\\s*\\(`, "g")],
+  ["realm", new RegExp(`(?<![>.*])\\b([A-Za-z_]\\w*)${SUBSCRIPT}\\s*=\\s*(?:${REALM_DOORS.join("|")})\\s*\\(`, "g")],
 ];
 /* EVERY FACT THIS FILE HOLDS ABOUT THE REGISTRY IS READ OUT OF core/agent_state.h AND NOT RESTATED HERE.
    CLAUDE.md: an auditor derives the rule it checks from the code that owns it, because a restated rule is a

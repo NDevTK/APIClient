@@ -761,7 +761,12 @@ void realm_intrinsics_free(void)
    collision and leave the wrong claim standing — the namer would go on reporting a per-realm map as some
    class's prototype — and it would be a sweep over prose that is deliberate and argued for at each site. So
    the slot says what it IS, once, at the one door that mints one, and the namer passes it over; §NO BOUNDS is
-   untouched because nothing was hashed, escaped or truncated, and no name became ambiguous. */
+   untouched because nothing was hashed, escaped or truncated, and no name became ambiguous.
+   AND THE PROTOTYPES THAT WERE DECLARED HERE HAVE A DOOR OF THEIR OWN — realm_proto_declare, below. This one
+   is for a value that is NOT a prototype, which is what realm.h's title for it says and what the skip above
+   costs: a slot the namer passes over answers no name, which is right for a count map and wrong for an
+   interface's prototype object. Sending a prototype through this door is therefore not merely untidy, it is
+   the one input that makes the skip lose something. */
 JSClassID realm_value_declare(JSContext *ctx, const char *what)
 {
     JSClassID id = 0;
@@ -770,6 +775,62 @@ JSClassID realm_value_declare(JSContext *ctx, const char *what)
     JS_NewClassID(JS_GetRuntime(ctx), &id);
     CHECK(JS_NewRealmValueSlotClass(JS_GetRuntime(ctx), id, what) == 0,
           "realm: a per-realm value slot could not be declared");
+    return id;
+}
+
+/* AS MUCH OF AN INTERFACE IDENTIFIER AS A BRAND HAS TO SATISFY: every byte ASCII, and no `.`. Web IDL §2.1
+   "Names" is where the identifier comes from and neither property is stated there — they are the two
+   READERS' (JSClassDef's `class_name` contract and the intrinsic namer's separator), which is why this tests
+   them rather than citing a grammar for them. It is a PREDICATE and not a repair — a name that fails it is a
+   caller that reached the wrong door, and there is nothing here to clamp.
+   IT IS NOT UNDER `#if APICLIENT_DEV`, WHICH IS WHERE IT WAS WRITTEN AND WHERE IT DOES NOT COMPILE. The
+   reasoning that put it there is sound and is the reasoning a reader re-derives: its only caller is a DCHECK,
+   the DCHECK is compiled out in release, so a pure helper left standing there is a function nothing calls.
+   What that misses is check.h's own contract for the release arm — `DCHECK(cond, msg)` is
+   `((void)sizeof(cond))`, TYPE-CHECKED AND NEVER EVALUATED — so the condition must still NAME something the
+   compiler can type in release, and a dev-only helper makes it an implicit declaration instead. That is the
+   arm's whole point: a condition that has rotted is a compile error rather than a surprise on the day
+   somebody builds dev. `static inline` is what keeps the unused-in-release definition from being a warning,
+   so the function is present in both regimes and called in one. */
+static inline bool realm_proto_name_is_brand(const char *s)
+{
+    const unsigned char *p = (const unsigned char *)s;
+
+    for (; *p; p++)
+        if (*p >= 0x80 || *p == '.') return false;
+    return true;
+}
+
+/* A PER-REALM INTERFACE PROTOTYPE OBJECT — see realm.h for why this is a second door rather than an argument
+   to the one above, and for why the registry kind stays SLOT_REALM. The body is what realm_value_declare's
+   was before the crash: an ORDINARY class, because here the entry really is one. Nothing is constructed with
+   it either — an interface whose instances wear a class of their own, or SHARE one with a sibling interface,
+   still needs one prototype PER REALM and this is the slot quickjs keeps for exactly that.
+   THE NAME IS ASSERTED AND THE SIBLING DOOR'S IS NOT, and the difference is a measurement rather than a
+   preference: 65 of that door's 97 names are non-ASCII today, so the same assert there would abort every dev
+   realm at init, while every name reaching THIS door is a Web IDL identifier and ASCII by construction. So
+   the contract JSClassDef states in its own words ("pure ASCII only!") is enforced where it can be met, at
+   the moment it is met, rather than written down and hoped for. */
+JSClassID realm_proto_declare(JSContext *ctx, const char *interface_name)
+{
+    JSClassID id = 0;
+    JSClassDef d;
+
+    DCHECK(interface_name != NULL && *interface_name,
+           "a per-realm interface prototype was declared with no interface name — the name is the BRAND the "
+           "intrinsic namer composes `%<Interface>.prototype%` out of, so an empty one names nothing");
+    DCHECKF(realm_proto_name_is_brand(interface_name),
+            "`%s` is not an interface identifier — a per-realm interface prototype's name is the class BRAND, "
+            "so it is Web IDL §2.1 \"Names\"' identifier, ASCII and carrying no `.`. A non-ASCII "
+            "byte interns as one latin-1 code point per byte and a dot collides with the very "
+            "`X.prototype` spelling the intrinsic namer's separator is. A DESCRIPTION belongs in the "
+            "agent_state_realm_slot row beside this call, and a per-realm value that is not a prototype "
+            "belongs at realm_value_declare",
+            interface_name);
+    d = (JSClassDef){ interface_name };
+    JS_NewClassID(JS_GetRuntime(ctx), &id);
+    CHECK(JS_NewClass(JS_GetRuntime(ctx), id, &d) == 0,
+          "realm: a per-realm interface prototype slot could not be declared");
     return id;
 }
 

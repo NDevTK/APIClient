@@ -112365,31 +112365,64 @@ int JS_IntrinsicName(JSContext *ctx, JSValueConst v, char *buf, size_t buf_size)
        `snprintf(what, "%s.prototype", NAMES[i])` in a loop, and core/realm.c's own §3.8 census passes its
        description down through a parameter. Both are dotted, neither is spelled anywhere a grep can match,
        and the number a reader acts on is therefore a LOWER BOUND whichever way the sweep is written. What is
-       NOT a floor is the repair, because it is keyed on the DOOR rather than on the names: every one of these
-       goes through `realm_value_declare`, so a name nobody can enumerate is marked exactly as a literal is.
-       NAMED RESIDUAL, and it is where the naming VALUE of this skip is recovered rather than a gap it opens.
-       Some value slots are per-realm PROTOTYPE HOLDERS for an interface whose prototype cannot live in a class
-       slot, and their declarations say so in their own text — the list, rather than a count of it, because a
-       count beside its own list is the one arithmetic a reader never performs: `CSSOM §6.6.1
-       CSSStyleDeclaration.prototype`, `CSS Fonts 5 §9.1 CSSFontFaceDescriptors.prototype`, `CSSOM §6.4.7
-       CSSPageDescriptors.prototype`, `CSSOM §6.1.1 StyleSheet.prototype`, `ReadableStreamBYOBReader.prototype`,
-       and queuing_strategy.c's `CountQueuingStrategy.prototype` and `ByteLengthQueuingStrategy.prototype` —
-       the last two composed at runtime, so they were MISSING from this list when it was first written and a
-       reader who re-derives it from a grep will miss them again. Three of the seven say in their own
-       `agent_state_realm_slot` text why the prototype cannot live in a class slot: the interfaces SHARE one
-       class, so the slot is the only per-realm place left for a second prototype — which is what makes the
-       conversion below a new class id rather than a move.
-       Those objects ARE intrinsics of their realm, a page reaches them through the `[[Prototype]]` chain of
-       `el.style` and of a stylesheet, and after this diff they answer NO NAME. What the next diff builds is
-       their conversion from a value slot to an ordinary CLASS NAMED AFTER THE INTERFACE, after which the namer
-       composes ECMAScript §6.1.7.4 Well-Known Intrinsic Objects' own spelling — `%CSSStyleDeclaration.prototype%`,
-       which is what the author of each description was reaching for when they wrote the suffix by hand.
-       THE PRECEDENT IS ALREADY IN THIS TREE AND IS WHY THAT DIFF IS A CONVERSION RATHER THAN A DESIGN:
+       NOT a floor is the repair, because it is keyed on the DOOR rather than on the names: a value slot is
+       whatever went through `realm_value_declare`, so a name nobody can enumerate is marked exactly as a
+       literal is. (There are now TWO declare doors in core/realm.h and this skip is keyed on neither of them
+       by name — it reads the FLAG the value-slot door sets, which is why a prototype routed to the sibling
+       door arrives here as an ordinary class with no edit to this walk. The door is the thing that decides;
+       the flag is how it says so.)
+       THE PROTOTYPE HOLDERS THIS SKIP USED TO SILENCE HAVE A DOOR OF THEIR OWN AND ARE NO LONGER SILENCED:
+       core/realm.h's realm_proto_declare mints an ORDINARY class named after the interface, so the slot is a
+       class in every sense this walk cares about and the namer reaches it here. `CSSStyleDeclaration`,
+       `CSSFontFaceDescriptors`, `CSSPageDescriptors`, `StyleSheet`, `ReadableStreamBYOBReader`,
+       `CountQueuingStrategy` and `ByteLengthQueuingStrategy` answer `%<Interface>.prototype%` again — which
+       is the spelling each description's author was reaching for when they wrote the suffix by hand.
+       AND THE RESIDUAL THAT ASKED FOR THAT NAMED SEVEN WHERE THE POPULATION IS AT LEAST TWENTY-FIVE, WHICH IS
+       RECORDED HERE BECAUSE THE METHOD IS THE FINDING AND THE LIST WAS ONLY ITS SYMPTOM. It was corrected once
+       already, for the two names queuing_strategy.c COMPOSES AT RUNTIME, and the correction stated the general
+       mechanism exactly: a derivation keyed on the construct still reads its argument as SOURCE TEXT. What it
+       did not do is apply that sentence to its own list a second time. A MACRO PARAMETER defeats the same
+       derivation for the same reason a runtime `snprintf` does — the literal is at the macro CALL and the door
+       is in the macro BODY, so no grep anchored on `realm_value_declare` and `.prototype` in one line can see
+       it — and core/css/css_rule.c declares EIGHTEEN prototype holders exactly that way, through one
+       `RULE_PROTO_SLOT` macro: CSSRule, CSSGroupingRule, CSSStyleRule, CSSConditionRule, CSSMediaRule,
+       CSSSupportsRule, CSSContainerRule, CSSImportRule, CSSNamespaceRule, CSSFontFaceRule, CSSPageRule,
+       CSSMarginRule, CSSKeyframesRule, CSSKeyframeRule, CSSLayerBlockRule, CSSLayerStatementRule,
+       CSSPropertyRule, CSSStartingStyleRule. Every one is an interface a page reaches through
+       `document.styleSheets[…].cssRules[…]`, and every one still answers NO NAME.
+       SO THE POPULATION IS DERIVED FROM THE DOOR AND NEVER FROM THE NAMES, and the derivation is handed over
+       as a command rather than as a figure, because the figure moves as this work lands: read every call to
+       `realm_value_declare` (`git grep -n 'realm_value_declare' -- engine/host`) and ask of each slot whether
+       its VALUE is an interface prototype — which is a question about the component and not about the string,
+       so a macro and a `snprintf` are no harder than a literal. Twenty-five is what that walk answered at the
+       revision this was written, and it is a SET with respect to that door rather than a floor: the remaining
+       ~70 slots hold maps, flags, instances and function objects, none of which is a prototype.
+       NAMED RESIDUAL — THE EIGHTEEN IN core/css/css_rule.c ARE NOT CONVERTED HERE.
+         WHAT IS NOT COVERED: those eighteen slots still go through realm_value_declare, so this walk passes
+           them over and each answers no name. Nothing about them is wrong; they are narrower than the door
+           above, not broken by it.
+         WHAT THE NEXT DIFF BUILDS: the same conversion, plus the one thing that makes it not a sweep —
+           `CSSRule` COLLIDES. core/css/css_rule.c already registers a class of that name, the one every rule
+           INSTANCE wears, and this walk refuses a name a lower slot has taken, so minting a second
+           `CSSRule` would cost that interface its name rather than buy one. Its `class_proto` is also the
+           right home and is empty: every rule object is built with `JS_NewObjectProtoClass(ctx, proto,
+           g_rule_class)` handing the prototype in explicitly, so `class_proto[g_rule_class]` is never
+           written and never read. The conversion for that ONE member is therefore a MOVE into the class's
+           own slot and not a new id — and it must not leave two agent_state rows against one mint, because
+           core/platform.c's identity counts declarations against the allocator and would then report a mint
+           nobody made. The other seventeen are new ids, exactly as the seven above were.
+         HOW ITS ABSENCE WOULD SHOW: a fork census whose heavy `~?[…]` site rows are computed property reads
+           on a CSS RULE — a page walking `cssRules` and reading a property off a rule object — where the
+           same rows for a style declaration or a stylesheet now carry a name.
+       THE PRECEDENT IS IN THIS TREE AND ITS REGISTRY CALL IS THE ONE THING NOT TO COPY FROM IT:
        core/timing/user_timing.c mints `PerformanceMark` and `PerformanceMeasure` as plain classes for exactly
-       this purpose — no object wears either, they exist so the per-context slot can hold §2.2's prototype per
-       realm — so those two answer `%PerformanceMark.prototype%` CORRECTLY today and are the shape to copy.
-       ITS ABSENCE SHOWS as a fork census whose heavy `~?[…]` site rows are computed property reads on a style
-       declaration or a stylesheet. */
+       this purpose — no object wears either — so those two answer `%PerformanceMark.prototype%` CORRECTLY
+       today and are the shape to copy for the MINT. They route to `agent_state_class`, and
+       core/agent_state.h's own named residual puts the line elsewhere: SLOT_CLASS is "a class worn by
+       objects" and SLOT_REALM "a class that exists only for its per-context prototype slot", which is what
+       every one of these is. The conversions above therefore keep `agent_state_realm_slot`. Reading the
+       precedent's own hazard notes rather than its shape is what decided that, and the two bands are counted
+       together against one allocator so the choice cannot break the identity either way. */
     for (i = 0; i < rt->class_count; i++) {
         if (rt->class_array[i].is_realm_value_slot) continue;
         if (JS_VALUE_GET_TAG(ctx->class_proto[i]) == JS_TAG_OBJECT &&

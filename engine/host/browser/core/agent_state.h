@@ -208,7 +208,11 @@ void agent_state_ptr_at(const char *component, const void *slot, const char *wha
  *     component's own next `_init` meanwhile reading an element the undo put at a value its gate accepts. */
 void agent_state_zeroed_at(const char *component, const void *slot, size_t size, const char *what,
                            const char *file, int line);              /* pre-init: the zero bytes */
-/* A PER-REALM VALUE SLOT — core/realm.h's realm_value_declare handed this out, and it is A CLASS ID.
+/* A PER-REALM VALUE SLOT — one of core/realm.h's two declare doors handed this out, and it is A CLASS ID.
+ * (This entry named realm_value_declare alone while that was the only door. realm_proto_declare is the
+ * second: same allocator, same slot array, and a registry entry that IS a class because what it holds is an
+ * interface prototype. Both hand out a slot, so both belong to this kind; what differs is the entry left in
+ * the class registry, which is a question for the intrinsic namer and not for this row.)
  *
  * WHY IT IS NOT AN id, WHICH IS WHAT IT WAS — AND THE HALF OF THAT ARGUMENT THAT IS NOW RE-DERIVABLE IS
  * GONE RATHER THAN RESTATED, which is this paragraph's own retirement condition being met by the assert in

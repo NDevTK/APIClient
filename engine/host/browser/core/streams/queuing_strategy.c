@@ -206,8 +206,17 @@ void queuing_strategy_init(JSContext *ctx)
                                                  (int)(sizeof QS_INIT / sizeof *QS_INIT), js_qs_ctor, i);
         agent_state_id("queuing_strategy", &g_qs_ctor_stepid[i],
                        "one of §7.2.3's and §7.3.3's two constructor declarations");
-        snprintf(what, sizeof what, "%s.prototype", NAMES[i]);
-        g_qs_proto_slot[i] = realm_value_declare(ctx, what);
+        /* THE BRAND IS THE TABLE ENTRY ITSELF, WHICH IS WHY A `snprintf` WENT AWAY HERE RATHER THAN BEING
+           CORRECTED. It composed `<Interface>.prototype` into `class_name`, a field whose contract is the
+           class BRAND — so the suffix its author wrote by hand is exactly what core/realm.h's
+           realm_proto_declare now appends for them, at the namer, as `%CountQueuingStrategy.prototype%`.
+           AND THAT COMPOSITION WAS THE ONE NAME IN THIS ENGINE NO SWEEP COULD SEE: quickjs.c's value-slot
+           census is keyed on the construct and still reads its argument as SOURCE TEXT, so a name built at
+           runtime is in no count of it, and this pair was missing from the residual's own list when it was
+           first written. Passing the table entry straight through is what ends that, not a better grep.
+           Streams §7.2 "The ByteLengthQueuingStrategy class" and §7.3 "The CountQueuingStrategy class"
+           declare the two identifiers, verified against the living standard. */
+        g_qs_proto_slot[i] = realm_proto_declare(ctx, NAMES[i]);
         agent_state_realm_slot("queuing_strategy", &g_qs_proto_slot[i],
                                "one of §7.2's and §7.3's two per-realm prototype slots — both interfaces' "
                                "instances wear ONE class, so neither prototype can live in the class slot");

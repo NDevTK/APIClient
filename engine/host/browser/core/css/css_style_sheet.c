@@ -1127,9 +1127,15 @@ static JSValue js_css_style_sheet_ctor(JSContext *ctx, JSValueConst this_val, in
 void css_style_sheet_init(JSContext *ctx)
 {
     JSClassDef d = { "CSSStyleSheet", sheet_finalizer, sheet_gc_mark };
-    /* ONE SPELLING, READ BY BOTH HALVES. core/realm.h names the slot for a heap dump and
-       core/agent_state.h names it for the assert a forgotten release fires; a second copy of the same
-       sentence on the next line is a fact kept in step by whoever remembers. */
+    /* THE TWO HALVES NO LONGER SHARE A SPELLING, AND THE ARGUMENT THAT THEY SHOULD IS RETIRED RATHER THAN
+       WRONG. It read: one sentence, because "a second copy of the same sentence on the next line is a fact
+       kept in step by whoever remembers" — which holds while both halves want a DESCRIPTION. The realm half
+       now wants a class BRAND (core/realm.h's realm_proto_declare), so the constraint key reads
+       `%StyleSheet.prototype%` and a heap dump reads `StyleSheet`; this constant stays as the SLOT's
+       description, which is the question core/agent_state.h asks. CSSOM §6.1.1 "The StyleSheet Interface"
+       declares `interface StyleSheet`, verified against the editor's draft rather than recalled — and it is
+       the BASE interface, which is why its prototype cannot live in the class slot below: that class is
+       CSSOM §6.1.2 "The CSSStyleSheet Interface"'s and holds the DERIVED prototype. */
     static const char STYLESHEET_PROTO[] = "CSSOM §6.1.1 StyleSheet.prototype";
 
     if (g_sheet_class) return;   /* one AGENT, one class and one set of pool entries */
@@ -1137,7 +1143,7 @@ void css_style_sheet_init(JSContext *ctx)
     JS_NewClass(JS_GetRuntime(ctx), g_sheet_class, &d);
     agent_state_class("element", &g_sheet_class,
                       "CSSOM §6.1.2 \"The CSSStyleSheet Interface\"'s class, and this component's latch");
-    g_stylesheet_proto_slot = realm_value_declare(ctx, STYLESHEET_PROTO);
+    g_stylesheet_proto_slot = realm_proto_declare(ctx, "StyleSheet");
     agent_state_realm_slot("element", &g_stylesheet_proto_slot, STYLESHEET_PROTO);
     g_id_set_disabled = idl_setter_id(ctx, IDL_BOOLEAN, false, js_sheet_set_disabled, 0);
     {

@@ -268,6 +268,40 @@ void realm_intrinsics_free(void);
  * not-yet-minted. A static with no initialiser is already at it. */
 JSClassID realm_value_declare(JSContext *ctx, const char *what);
 
+/* AND THE SIBLING DOOR, FOR THE CASE THE ENTRY ABOVE EXCLUDES BY ITS OWN TITLE: A PER-REALM INTERFACE
+ * PROTOTYPE OBJECT.
+ *
+ * The store is the same per-context slot and the mint is the same allocator, so nothing about the MECHANISM
+ * separates these two — which is exactly why the DOOR has to. `ctx->class_proto[id]` is where quickjs keeps a
+ * class's prototype, so an interface prototype held there is the slot being used FOR ITS OWN PURPOSE, and the
+ * registry entry that comes with it is then a class in every sense a reader cares about: its `class_proto`
+ * holds a prototype, and its `class_name` is the interface's BRAND — the spelling §20.1.3.6 prints and the
+ * one quickjs's intrinsic namer composes `%<Interface>.prototype%` out of. The entry above is the other case
+ * and says so in its first line, and routing a prototype through it is what put a free-form DESCRIPTION where
+ * a brand belongs and aborted a real page: see JS_IntrinsicName's residual for the incident and the list.
+ *
+ * SO THE ARGUMENT IS AN INTERFACE IDENTIFIER AND NOT A DESCRIPTION, and that is asserted rather than asked
+ * for. What an interface's identifier IS comes from Web IDL §2.1 "Names" — the token after the `interface`
+ * keyword — and the two properties this door demands of it come from the two readers rather than from that
+ * section: `class_name`'s own contract (JSClassDef: "pure ASCII only!", which JS_NewClass restates) makes it
+ * ASCII, and the intrinsic namer's `.` separator makes a dotted brand compose a key that reads as some other
+ * interface's prototype. Both are satisfied BY CONSTRUCTION by every identifier reaching here, which is why
+ * this door can assert what the sibling one could only be given a guard for — 65 of that door's names are
+ * non-ASCII today, so the same assert there would abort every dev realm at init.
+ * THE COMPONENT'S FULL SENTENCE IS NOT LOST — it is what agent_state_realm_slot still takes, which is the
+ * field asking `whose slot is this` where this one asks `what is this object's brand`. One field, one
+ * question, which is the whole of what the two doors are for.
+ *
+ * THE REGISTRY KIND STAYS `agent_state_realm_slot` AND IS NOT agent_state_class, which is the one place the
+ * obvious precedent is the wrong thing to copy. core/timing/user_timing.c mints PerformanceMark and
+ * PerformanceMeasure this way and routes both to agent_state_class; core/agent_state.h's own named residual
+ * draws the line elsewhere — SLOT_CLASS is "a class worn by objects" and SLOT_REALM "a class that exists only
+ * for its per-context prototype slot" — and every slot reaching THIS door is the second. The identity in
+ * core/platform.c counts the two bands TOGETHER against one allocator, so the choice cannot break it either
+ * way; what it decides is whether the check that residual names (a SLOT_CLASS row's class has instances, a
+ * SLOT_REALM row's does not) will accuse these rows when it is built. Returns a minted class id. */
+JSClassID realm_proto_declare(JSContext *ctx, const char *interface_name);
+
 /* THE READ AND THE WRITE CARRY THE CALLER'S SITE, which is why each is a MACRO over an `_at` function.
  *
  * A DCHECK stamps the file and line it is WRITTEN at, and both entries below assert from ONE line in
