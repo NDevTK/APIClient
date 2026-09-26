@@ -7244,6 +7244,37 @@ STAGES.push(onHost(runProgram("CLAUDE.md record-landing gate", [join(ENGINE, "md
                        "word: the slip is a record appended after an emphasised run whose closing `**` was " +
                        "then consumed as the new headline's opener. There is no baseline to update and no " +
                        "allowlist: the findings ARE the disagreement."), STAGE_HOST.SOURCE));
+/* THE FIFTH AREA: IS EVERY FILE IN THE TEST CORPUS COLLECTED BY SOMEBODY. §Testing — "A TEST FILE THE GATE
+   DOES NOT COLLECT IS AN EXCLUDED TEST, AND AN EXCLUDED TEST IS A FAILURE … worse, because the total LOOKS
+   complete." engine/gate_collect.mjs is the walk that answers it: a file under engine/tests is either a
+   fixture run-test262 collects or it is claimed by a `GATE` line in its OWN directory naming a runner that
+   exists, and nobody maintains a list — the list IS the directory.
+   IT IS PUSHED HERE BECAUSE ITS ONLY CALLER WAS A BULK GATE. engine/features.mjs invokes clang, so the lanes
+   that cannot build could not run the accounting at all, and a walk costing milliseconds was reachable only
+   behind a whole-corpus fixture run: an unclaimed file dropped into engine/tests raised nothing until
+   somebody happened to make one. That is the excluded test with a delay on it, and the delay is the defect —
+   the total looks complete throughout it.
+   IT IS NOT FURNITURE AND THAT WAS MEASURED, not assumed: the walk answers 18 collectable fixtures and ZERO
+   failures at the revision this landed, so a non-zero here is a CHANGE and the change is the signal.
+   CLAUDE.md §A-VERDICT-THAT-IS-RED-ON-EVERY-RUN is about a stage whose red never moves; this one is green,
+   and the day it is not, something was added that nothing runs.
+   WHAT IS DELIBERATELY NOT ON THIS LIST IS THE RUNNER A CLAIM NAMES. engine/solvergate.mjs is 19 documents
+   against seven schedules at up to 120s of CPU apiece, and §A-BULK-GATE-IS-RUN-ONCE names it beside test262
+   and WPT as a whole-corpus run the main agent serialises — a build that ran one would manufacture the
+   loaded-machine defect on every build. The ACCOUNTING is cheap and belongs here; its subject's RUNNER is not
+   and does not, and that gap is printed by the stage itself as a blind spot rather than left unstated.
+   IT IS A SOURCE STAGE ON THE SAME ARGUMENT AS THE FOUR ABOVE: it compiles no C, reads no artifact and opens
+   no engine slice, so it asks its question of the SOURCES whatever the programs did and a link failure can
+   never take it out of the run. */
+STAGES.push(onHost(runProgram("test-corpus collection accounting", [join(ENGINE, "gate_collect.mjs")],
+                       "a file under engine/tests that no gate collects is an EXCLUDED TEST, and the number " +
+                       "the fixture driver prints looks complete without it. An exemption is a POSITIVE " +
+                       "STATEMENT and never silence: say it in the filename (test262's `_FIXTURE.js`), or " +
+                       "declare the gate that owns the content in a `GATE` file in ITS OWN directory — that " +
+                       "one and not an ancestor's, because the runner a claim names need not descend. This " +
+                       "stage prints its FINDINGS and its BLIND SPOTS separately and only the findings carry " +
+                       "the exit code: it cannot see whether a runner a claim names is ever INVOKED. There " +
+                       "is no baseline to update and no allowlist."), STAGE_HOST.SOURCE));
 report(STAGES, FINDINGS);
 
 /* A THIRD DRIVE STOOD HERE — the driver for the deleted second program, which put the RENDERER REGISTRY's

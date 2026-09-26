@@ -119,12 +119,13 @@
  * Usage:  node engine/solvergate.mjs [document-name]
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join, basename } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, basename, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadavg, cpus } from "node:os";
 import { gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
 import { childCpuSeconds, childCpuDelta, cpuText } from "./gate_cpu.mjs";
+import { claimedCorpus } from "./gate_collect.mjs";
 /* THE SHIPPED ARTIFACT, and deliberately not a runner of this gate's own. engine/wpt.mjs builds its own native
    runner because it runs 800 files and an eight-minute wasm link per iteration is a gate nobody runs; this one
    runs a handful of documents through the ENTRY THE EXTENSION LOADS, which costs one import and makes the gate
@@ -142,6 +143,7 @@ import { GLUE_PATH as WASM, abiOperands } from "./renderer_abi.mjs";
 import { topLevelFacts } from "./top_level_facts.mjs";
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
+const ROOT = join(ENGINE, "..");
 const SELF = fileURLToPath(import.meta.url);
 const CORPUS = join(ENGINE, "tests", "solver");
 
@@ -1748,8 +1750,24 @@ function reportStaleExclusions(result) {
 }
 
 const arg = process.argv[2] || "";
-const docs = readdirSync(CORPUS).filter((f) => f.endsWith(".html")).sort()
-                                .filter((f) => !arg || f === arg || f === arg + ".html");
+/* THE CORPUS IS THE `GATE` CLAIM, READ — never a suffix spelled here beside the one spelled there.
+   engine/tests/solver/GATE is the POSITIVE statement that this file collects those documents, and it is what
+   engine/features.mjs's collection accounting consults to decide they are not EXCLUDED TESTS. That accounting
+   checks one thing about the runner a claim names: that it EXISTS. So while this line carried its own
+   `.html`, the claim and the enumeration were two copies of one fact with nothing comparing them — narrow
+   either and every document here stays claimed by a line and run by nobody, which is §Testing's excluded test
+   reached THROUGH the accounting written to end it, wearing a total that looks complete. One copy now, held
+   by the GATE, read here. §AN-AUDITOR-DERIVES-THE-RULE: the repair is the deleted copy, not a comparator.
+   THE RUNNER NAME IS DERIVED FROM THIS FILE'S OWN PATH and never written out, so a rename cannot leave the
+   claim naming a file that no longer answers for it — the mismatch FAILS here rather than reading as a
+   directory somebody else collects.
+   WHAT THIS DOES NOT ESTABLISH is that this gate is ever RUN: it is a hand-run bulk gate (CLAUDE.md §A-BULK-
+   GATE-IS-RUN-ONCE) and nothing in engine/build.mjs invokes it. A claim is honoured by its runner; whether
+   the runner runs is a fact about the build's stage list and is not visible from here. */
+const { files: claimed, claims, failures: claimFail } = claimedCorpus(CORPUS, relative(ROOT, SELF), ROOT);
+for (const f of claimFail) console.error("[solvergate] " + f);
+if (claimFail.length) process.exit(1);
+const docs = claimed.filter((f) => !arg || f === arg || claims.some((c) => f === arg + c.claim));
 if (!docs.length) {
   console.error(`[solvergate] no document matches ${arg || "*"} in ${CORPUS}`);
   process.exit(1);

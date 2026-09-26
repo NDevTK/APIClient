@@ -7,10 +7,26 @@
 # IS AN EXCLUDED TEST … worse, because the total LOOKS complete."
 #
 # These are the solver differential's documents, not ECMAScript fixtures. Each is a page whose frontier drains,
-# run under several schedules by engine/solvergate.mjs; it enumerates them with
-# `readdirSync(CORPUS).filter(f => f.endsWith(".html"))`, which is the claim below.
+# run under several schedules by engine/solvergate.mjs, WHICH TAKES ITS CORPUS FROM THE CLAIM BELOW: it calls
+# engine/gate_collect.mjs's `claimedCorpus` with its own path, so the suffix on that line is not a DESCRIPTION
+# of what the runner enumerates — it IS what the runner enumerates. Edit it and the run changes with it.
 #
-# THAT ENUMERATION IS ONE DIRECTORY DEEP, AND THIS CLAIM IS THEREFORE ABOUT THIS DIRECTORY ONLY. A GATE does
+# THIS USED TO READ "it enumerates them with `readdirSync(CORPUS).filter(f => f.endsWith(\".html\"))`, which is
+# the claim below", and it is rewritten rather than deleted because that sentence was ACCURATE and was the
+# problem. The suffix was spelled twice — here and in the runner — and the accounting that reads this file
+# checks exactly one thing about the runner a claim names: that it EXISTS. Nothing compared the two spellings,
+# so narrowing either would have left these documents claimed by a line and run by nobody, with the calling
+# gate green over a corpus it never asked about. A reader who re-derives "say what the runner does" writes
+# that sentence again; there is one copy now and the runner reads it.
+#
+# WHAT IS STILL NOT CHECKED ANYWHERE: that engine/solvergate.mjs is ever INVOKED. It is a hand-run bulk gate
+# and no stage of engine/build.mjs runs it. A claim is honoured by its runner; whether the runner runs is a
+# fact about the build's stage list, and this file cannot see it.
+#
+# `claimedCorpus` READS ONE DIRECTORY, AND THIS CLAIM IS THEREFORE ABOUT THIS DIRECTORY ONLY. (It said
+# "THAT ENUMERATION" while the sentence it pointed at named a `readdirSync` call; a reference by POSITION
+# survives the rewrite of what it points at and goes on reading as authoritative, so it carries the
+# name now.) A GATE does
 # not speak for a subdirectory, precisely because the runner it names need not descend and this one does not:
 # a document at solver/<anything>/x.html would be claimed by a claim that inherits and enumerated by nobody —
 # an excluded test whose exclusion is stated nowhere, reached THROUGH the accounting that exists to end it. So
