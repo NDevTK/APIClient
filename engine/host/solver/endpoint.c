@@ -326,6 +326,24 @@ typedef struct {
     long *died;                 /* one per stage, sized at the declare from the table above */
     int   stage_n;              /* how many, from that table's NULL terminator */
     int   stage_first;          /* the stage number `steps[0]` is — the edge states it, this file never assumes */
+    /* ASK, ONE FRAME FURTHER OUT THAN `began`, AND IT IS A SECOND ROW RATHER THAN A RELOCATION OF THE FIRST.
+       `began` is raised at the member's own FIRST STAGE, and core/idl_args.h numbers a declared member's
+       stages from IDL_STEP_FIRST because stages 0 and 1 belong to the hosting machine — the argument-count
+       check and the ES-to-IDL conversions — and BOTH are rest points, the second being where a page's
+       `toString` or a Proxy get trap runs. So a call the page made that THREW or PARKED in the prologue never
+       reaches the member body and raises no `began`, which left that row's zero standing for three states
+       that take opposite work: the page called nothing, the page called and the conversion died, or the flow
+       never reached the call at all. This row separates the middle one from the other two from inside ONE
+       run's census, where the alternative was a reader grepping the page's bundle and assuming.
+       IT IS RAISED AT THE PROLOGUE'S ENTRY AND NOT MOVED THERE FROM `began`, because relocating it would
+       change what the published number means and leave the old meaning unread — the split this file is an
+       instance of, stated at its own accessor. `called >= began` is the containment and it is asserted.
+       IT NEEDS NO ONE-TIME FLAG, unlike `began`: the prologue's stage-0 block runs exactly once per call
+       (its only exits are two abrupt throws, and a park leaves the stage at 1, which the block does not
+       test), and a deep-fork copy re-enters at the stage it was copied holding rather than at 0. The same
+       property that makes `began` unpairable with the teardown rows therefore leaves this row pairable with
+       `began` and with nothing else. */
+    long  called;               /* ASK: calls that entered the HOSTING machine's prologue (stage 0) */
     long  began;                /* ASK: constructions that began (the machine's one-time capture) */
     long  reached;              /* ASK: …of those, the ones whose construction COMPLETED (see above) */
     long  freed;                /* OUTCOME: states torn down after a construction began */
@@ -343,7 +361,7 @@ static long  g_xhr_offered;
 /* THE COUNTERS BACK TO ZERO, THE ALLOCATION LEFT ALONE. endpoint_init asserts the array ABSENT rather than
    zeroing it — see its own comment — so this resets what a new session owns and touches nothing it does not. */
 static void edge_reset(EndpointEdge *e) {
-    e->began = e->reached = e->freed = e->freed_reached = 0;
+    e->called = e->began = e->reached = e->freed = e->freed_reached = 0;
 }
 
 /* …AND THE ARRAY GIVEN BACK AND THE TABLE LET GO, in that order and both of them, because the next session's
@@ -2224,6 +2242,25 @@ void endpoint_xhr_edge_declare(const char *const *steps, int first_stage) {
     edge_declare(&g_xhr_edge, "xhr send", steps, first_stage);
 }
 
+/* A DECLARED MEMBER'S CALL ENTERED THE HOSTING MACHINE'S PROLOGUE, keyed on the STAGE TABLE the caller hands
+   over and on nothing else. core/idl_args.c calls this once per call for EVERY declared member — it cannot
+   know which two of them are network edges and must not be told, because a list of network members spelled
+   there would be the drifting second copy §AN-AUDITOR-DERIVES-THE-RULE forbids, and it would drift in the
+   silent direction: a member removed from it reads as a door nobody called.
+   THE KEY IS THE POINTER AND NOT A NAME, which is the same property `edge_declare` already leans on. Both
+   edges declared themselves with their own X-list — core/fetch's `js_fetch_steps[]`, core/xhr's `SEND_STEPS` —
+   static tables of string literals that outlive every document, and core/idl_args.c holds that same pointer on
+   the member's own `IdlStepDecl`. So the two sides agree by IDENTITY rather than by a string compare that
+   could match a member sharing a label, and there is no third list anywhere: an edge that never declared has
+   a NULL `steps` and matches nothing, which is what an uninstalled door should read.
+   A MEMBER THAT DECLARES NO STEPS PASSES NULL and is dropped here rather than at the caller, so the caller has
+   no arm to get wrong and no reason to know this file has two edges at all. */
+void endpoint_edge_member_asked(const char *const *steps) {
+    if (!steps) return;
+    if (steps == g_fetch_edge.steps)    g_fetch_edge.called++;
+    else if (steps == g_xhr_edge.steps) g_xhr_edge.called++;
+}
+
 /* THE CONSTRUCTION BEGAN — raised at the machine's ONE-TIME CAPTURE, which is the first line of its first
    stage. A deep-fork copy inherits that flag and does NOT come through here, which is the whole reason
    endpoint.h forbids pairing this row with either of the teardown rows by a containment. */
@@ -2489,7 +2526,7 @@ static void edge_stage_hist(JsonBuf *b, const EndpointEdge *e) {
    readable fact about these rows anywhere.
 
    @kinds-of fetchEdge
-   @kind lifetime: epFetchAskBeganLife epFetchAskOfferedLife
+   @kind lifetime: epFetchAskCalledLife epFetchAskBeganLife epFetchAskOfferedLife
    @kind lifetime: epFetchOutFreedLife epFetchOutFreedOfferedLife epFetchOutDiedAtLife
 */
 char *endpoint_fetch_edge_rows(void) {
@@ -2549,6 +2586,24 @@ char *endpoint_fetch_edge_rows(void) {
        name — `Ask` or `Out` for which side of §AN-INVARIANT-OVER-A-GATED-OPERATION it counts, `Life` for a
        lifetime count rather than a gauge. §Testing records this tree being misled by that second distinction
        twice, and a comment stating it is read by nobody holding the number. */
+    /* AND THE CONTAINMENT THAT MAKES THE NEXT ROW READABLE, asserted here because both terms are in one hand
+       and because it is the ONE relation `began` has to anything. Every construction that began entered this
+       machine's prologue first — core/idl_args.c raises the call at stage 0 and the body cannot be reached
+       without passing the line that leaves stage 1 — and a deep-fork copy raises NEITHER, since it re-enters
+       at the stage it was copied holding. So the two move together or the slack is a real population: the
+       calls that entered the prologue and threw or parked inside it, which is the whole reason the row exists.
+       A LARGER `began` IS A CONSTRUCTION THAT BEGAN WITHOUT A CALL, which is a member body reached by
+       something other than the hosting machine — the one way this pair could come apart, and the one a reader
+       of either row alone could not see. */
+    DCHECKF(g_fetch_edge.began <= g_fetch_edge.called,
+            "the fetch edge counted more constructions that began (%ld) than calls that entered the hosting "
+            "machine's prologue (%ld) — every begin is downstream of a prologue entry and a deep-fork copy "
+            "raises neither, so a larger begin count is the member body reached without core/idl_args.c's "
+            "stage 0, and the difference a reader takes for the calls that died in the conversions would be "
+            "negative",
+            g_fetch_edge.began, g_fetch_edge.called);
+    json_buf_raw(&b, ",");
+    json_buf_key(&b, "epFetchAskCalledLife");       edge_num(&b, g_fetch_edge.called);
     json_buf_raw(&b, ",");
     json_buf_key(&b, "epFetchAskBeganLife");        edge_num(&b, g_fetch_edge.began);
     json_buf_raw(&b, ",");
@@ -2602,7 +2657,7 @@ char *endpoint_fetch_edge_rows(void) {
    read as one population.
 
    @kinds-of xhrEdge
-   @kind lifetime: epXhrAskBeganLife epXhrAskPlacedLife epXhrAskOfferedLife
+   @kind lifetime: epXhrAskCalledLife epXhrAskBeganLife epXhrAskPlacedLife epXhrAskOfferedLife
    @kind lifetime: epXhrOutFreedLife epXhrOutFreedPlacedLife epXhrOutDiedAtLife
 */
 char *endpoint_xhr_edge_rows(void) {
@@ -2650,6 +2705,22 @@ char *endpoint_xhr_edge_rows(void) {
             "it, and a reader taking the rest of the asks as the OTHER doors' share would read a negative "
             "count as a large one",
             g_xhr_offered, g_asks);
+    /* AND THE CONTAINMENT THIS EDGE SHARES WITH THE OTHER ONE, which is the only relation either edge's
+       `began` has and holds here for the identical reason: `send()` is a declared member, so its stages are
+       based at IDL_STEP_FIRST and every call reaches SEND_CHECKS through core/idl_args.c's stage 0. A call
+       whose argument conversion threw or parked — §3.6's conversion of `send()`'s own argument is the page's
+       code when the page passes an object — raises the call and no begin, and that difference is the
+       population. A deep-fork copy raises neither, which is what lets this pair be asserted where the
+       placement pair below may not be. */
+    DCHECKF(g_xhr_edge.began <= g_xhr_edge.called,
+            "the XHR edge counted more send() calls that reached the member body (%ld) than calls that entered "
+            "the hosting machine's prologue (%ld) — every begin is downstream of a prologue entry and a "
+            "deep-fork copy raises neither, so a larger begin count is SEND_CHECKS reached without "
+            "core/idl_args.c's stage 0, and the difference a reader takes for the calls that died in the "
+            "conversions would be negative",
+            g_xhr_edge.began, g_xhr_edge.called);
+    json_buf_raw(&b, ",");
+    json_buf_key(&b, "epXhrAskCalledLife");       edge_num(&b, g_xhr_edge.called);
     json_buf_raw(&b, ",");
     json_buf_key(&b, "epXhrAskBeganLife");        edge_num(&b, g_xhr_edge.began);
     json_buf_raw(&b, ",");

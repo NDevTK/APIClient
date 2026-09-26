@@ -815,6 +815,24 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      landed them — so the first reader of this list sees five `-` and that is the rows working, not the run.
      RETIREMENT: that measurement goes when this driver prints the artifact's own distance from the rows it
      asks for, because the absence is then derivable from the output rather than stated here. */
+  /* AND THE ROW WITHOUT WHICH `epFetchAskBeganLife`'s ZERO IS THREE READINGS, which is the reading this driver
+     is pointed at every day and the one it could not answer. The begun row is raised at Fetch §5.4's first
+     stage, and core/idl_args.h numbers a declared member's stages from IDL_STEP_FIRST because stages 0 and 1
+     belong to the HOSTING machine — the argument-count check and the ES-to-IDL conversions — and BOTH are rest
+     points. So a zero there was consistent with the page calling no `fetch()`, with the page calling one whose
+     conversion THREW, and with one whose conversion PARKED and was never resumed, and those take opposite
+     work: leave it, fix core/idl_args.c, or fix the ORDER. `epFetchAskCalledLife` is raised at that prologue's
+     entry, so `called > 0` with `began` at 0 is the middle state and `called == 0` is the other two.
+     WHAT IT STILL DOES NOT SEPARATE, because no row at this edge can: a page that calls no `fetch()` from a
+     flow that never reached a call the page does make — the prologue is entered in neither. That is the
+     ORDER's question and solver/flow.h's `readyPicksLifetime` legend is its instrument, which is why these two
+     rows are read BESIDE the job rows on this list and not instead of them.
+     A ZERO HERE IS NOT EVIDENCE THE HOOK IS BROKEN, and the producer states the narrowing: `idl_concolic_rule`
+     answers CROSSES for IDL_USVSTRING, so a concolic URL — the computed address this tool exists to report —
+     passes the conversion without parking, and the conversions park on a page GETTER rather than on an unknown
+     string. `called == began` is therefore the expected healthy reading, and the containment `began <= called`
+     is asserted by the producer where both terms are in one hand. */
+  "epFetchAskCalledLife",
   "epFetchAskBeganLife", "epFetchAskOfferedLife",
   "epFetchOutFreedLife", "epFetchOutFreedOfferedLife", "epFetchOutDiedAtLife",
   /* AND THE OTHER DOOR, WITHOUT WHICH THE FIVE ROWS ABOVE ARE READ AS THE WHOLE OF WHAT A PAGE CALLED. The
@@ -849,6 +867,10 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      and is the honest answer. The engine's absent form is the rows being ABSENT from `_cold` rather than six
      zeroes — a host that installs no XMLHttpRequest runs no send machine and has no population — so `k in c`
      is false and this list yields `null`, with no arm anywhere that could turn that into a 0. */
+  /* AND THE SAME SPLIT FOR THIS DOOR, for the same reason and with the same two states it cannot separate —
+     `send()` is its own declared member, so SEND_STAGES is based at IDL_STEP_FIRST and the conversion of its
+     argument runs in front of SEND_CHECKS. Read the pair, never either alone. */
+  "epXhrAskCalledLife",
   "epXhrAskBeganLife", "epXhrAskPlacedLife", "epXhrAskOfferedLife",
   "epXhrOutFreedLife", "epXhrOutFreedPlacedLife", "epXhrOutDiedAtLife",
   /* AND CLAUDE.md §What-the-tool-produces' RAZOR, WHICH IS THE ONE ROW ON THIS WHOLE LIST THAT ANSWERS WHAT

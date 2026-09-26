@@ -26,6 +26,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "solver/concolic.h"
+#include "solver/endpoint.h"
 #include "core/idl_args.h"
 /* GENERATED from @webref/idl — Web IDL §3.3.7 [Exposed] step 1's two sets. UNCONDITIONAL, unlike
    idl_inheritance.h below: that table is an ASSERTION and compiles out with the DCHECK that reads it, while
@@ -4046,6 +4047,22 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
     }
 
     if (s->hdr.stage == 0) {
+        /* THIS MEMBER WAS CALLED, RECORDED BEFORE ANY STEP OF §3.6 RUNS. It is the ASK half of the split
+           §AN-INVARIANT-OVER-A-GATED-OPERATION names, and it is raised HERE — above the two abrupt throws
+           below and above the conversions — because the two stages this machine owns are BOTH rest points, so
+           a call the page made can throw or PARK without the member's own algorithm beginning. A census taken
+           at the member body therefore reports such a call identically to a call the page never wrote, and the
+           two take opposite work.
+           IT IS UNCONDITIONAL AND KEYS ON NOTHING, which is the whole of why it may live in this file. This
+           machine hosts every declared member and cannot know which of them are doors worth counting; it hands
+           over the member's own STAGE TABLE and solver/endpoint.c decides, against the pointer its two host
+           edges declared themselves with. A test here for which member this is would be the second list
+           §AN-AUDITOR-DERIVES-THE-RULE forbids, in the file least able to keep it current.
+           NO ONE-TIME FLAG, AND THAT IS A PROPERTY OF THIS BLOCK RATHER THAN AN ASSUMPTION: its only exits are
+           the two abrupt returns below, a park inside the conversion loop leaves the stage at 1 so a re-entry
+           does not test true here, and a deep-fork copy re-enters at the stage it was copied holding. The
+           seeding immediately below already relies on exactly that, and its own comment is the argument. */
+        endpoint_edge_member_asked(m->step ? m->step->steps : NULL);
         /* THE RECORD SAYS "NOT YET ANSWERED" UNTIL STEPS 3-4 ANSWER IT, and this line is what makes that
            sentence true rather than merely intended. IDL_OVL_UNSEEDED was declared, described in its own
            comment as the state an assert would catch, and WRITTEN NOWHERE — so the whole block arrives from

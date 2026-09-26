@@ -740,10 +740,18 @@ void    endpoint_ask_census(long *asks, long *pre_program, long *suppressed, lon
    THE ROWS, AND EACH SAYS ITS KIND IN ITS OWN NAME rather than in a comment no consumer reads — `Ask` or
    `Out` for which side of §AN-INVARIANT-OVER-A-GATED-OPERATION it counts, `Life` for a LIFETIME COUNT and
    never a gauge. They are terse and camelCase because they are rows of `_cold`, whose own rows are:
+     `epFetchAskCalledLife` — the calls that entered the HOSTING machine's prologue. core/idl_args.h numbers a
+       declared member's stages from IDL_STEP_FIRST because stages 0 and 1 are that machine's — the argument
+       count check and the ES-to-IDL conversions — and BOTH are rest points, so a call that threw or PARKED in
+       them never reaches Fetch §5.4 at all. This is raised at stage 0, which needs no one-time flag because
+       that block's only exits are two abrupt throws and a park leaves the stage at 1. It is the row that turns
+       the next one's zero from THREE states into one: the page called nothing, the page called and the
+       conversion died, or the flow never reached the call — and the first and third are `called == 0` while
+       the second is `called > 0` with the next row at zero.
      `epFetchAskBeganLife` — the constructions that BEGAN. Raised at the machine's one-time capture, which is
        Fetch §5.4's first stage, so it is one per page-level `fetch()` call that reached the member body at
-       all. A call whose ARGUMENT CONVERSION threw is upstream of it and is in no row here; that population is
-       core/idl_args.c's and is named in this block's residual.
+       all. A call whose ARGUMENT CONVERSION threw or parked is upstream of it and is in no row here; that
+       population is core/idl_args.c's and is the difference between this row and the one above.
      `epFetchAskOfferedLife` — the constructions that reached §5.6 step 12 and offered an address. Raised
        on the line before the edge's own call to endpoint_record.
      `epFetchOutFreedLife` — the states TORN DOWN after §5.4 began, DEEP-FORK COPIES INCLUDED.
@@ -785,15 +793,43 @@ void    endpoint_ask_census(long *asks, long *pre_program, long *suppressed, lon
    — the scope defect `g_boundary_spent` exists to catch is the one this placement makes unreachable.
    A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing branches on one, no construction is refused because of
    one, and no arm is narrowed by one.
-   NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: a `fetch()` whose ARGUMENT CONVERSION threw or
-   parked, which never reaches the member body and so raises nothing here — Web IDL §3.2's conversion of the
-   `RequestInfo` union and the `RequestInit` dictionary runs the page's getters, so this is a real arm and not
-   a corner. WHAT THE NEXT DIFF BUILDS: the same pair one frame out, raised by idl_args.c for EVERY declared
-   member at its prologue's entry and at its teardown, which answers it for every host edge at once instead of
-   per component. HOW ITS ABSENCE WOULD SHOW: a document whose page calls `fetch()` and whose begun row reads
-   zero, with nothing in this census distinguishing that from a page that called none.
-   RETIREMENT: this record goes when a construction that never reached the member body raises a row here. */
+   THE RESIDUAL THAT STOOD HERE IS DISCHARGED BY `epFetchAskCalledLife`, AND WHAT IS KEPT IS THE HALF OF IT
+   THE ROW DOES NOT ANSWER. It read: NOT COVERED, a `fetch()` whose ARGUMENT CONVERSION threw or parked, which
+   never reaches the member body and so raises nothing here; NEXT DIFF, the same pair one frame out raised by
+   idl_args.c at the prologue's entry; ABSENCE SHOWS, a document whose page calls `fetch()` and whose begun row
+   reads zero, with nothing in this census distinguishing that from a page that called none. Its retirement
+   condition was that a construction which never reached the member body raise a row here, and the call row
+   above is that row — raised at core/idl_args.c's stage 0, keyed on this edge's own stage table so no second
+   list of network members exists anywhere, and tied to the begun row by a containment asserted at the emitter.
+   ITS ABSENCE CLAUSE WAS EXACTLY WHAT WAS THEN OBSERVED, WHICH IS WHY THE CLAUSE AND NOT THE FIGURE IS WHAT
+   THE NEXT READER NEEDS. Four real application pages were reported as having started no request-construction
+   machine, with `epFetchAskBeganLife` at zero — and a zero there was consistent with all three states above,
+   so the observation could not be acted on and the reading that was drawn from it (the page calls no `fetch`)
+   was the one the census is structurally least able to support. Three of those pages' captured bundles hold
+   real global `fetch(` call sites and `new XMLHttpRequest` constructions, so that reading was false.
+   WHAT THE ROW STILL CANNOT DO, AND IT IS A PROPERTY OF THE MACHINE AND NOT AN OMISSION: `called == 0` does
+   not separate a page that calls no `fetch()` from a flow that never reached a call the page does make, and no
+   counter at this edge ever will — the prologue is not entered in either case. That question is the ORDER's,
+   and solver/flow.h's `readyPicksLifetime` legend is the instrument for it.
+   THE NARROWING THAT MAKES THIS ROW LIKELIER TO READ ZERO THAN ITS OWN ARGUMENT SUGGESTS, stated so that a
+   zero here is not read as a broken hook: `idl_concolic_rule` answers IDL_CONCOLIC_CROSSES for IDL_USVSTRING,
+   so a concolic URL — `fetch('/api/u?uid=' + state.id)`, the computed address this tool exists to report —
+   CROSSES the conversion without parking or forking and reaches §5.4. The conversions park on a page GETTER,
+   which is a `Request` input's `url` or a `RequestInit` member, and not on an unknown string.
+   RETIREMENT: this record goes when a flow that reached no declared member at all is distinguishable from one
+   that reached this member's prologue by a row on the ORDER's own census, because the state this row cannot
+   separate is then separated by the component that owns it and no reader has to come here to learn that. */
 void    endpoint_fetch_edge_declare(const char *const *steps, int first_stage);
+/* A DECLARED MEMBER'S CALL ENTERED THE HOSTING MACHINE'S PROLOGUE — core/idl_args.c's stage 0, called once per
+   call for EVERY declared member and not only the two this file has edges for. The argument is the member's
+   own stage table, so the caller states a FACT about the member and this file decides whether it is an edge:
+   a list of network members spelled in core/idl_args.c would be the drifting second copy
+   §AN-AUDITOR-DERIVES-THE-RULE forbids, and it would drift silently, since a member missing from it reads as a
+   door nobody called. Both edges declared themselves with that same static pointer, so the match is by
+   IDENTITY and never by a label two members could share; NULL is a member that declares no steps and is
+   dropped here rather than at the caller. It is NOT per-edge for the same reason, and it is one entry rather
+   than two because the caller cannot know which edge it is calling and must not have to. */
+void    endpoint_edge_member_asked(const char *const *steps);
 void    endpoint_fetch_edge_began(void);
 void    endpoint_fetch_edge_offered(void);
 void    endpoint_fetch_edge_freed(int stage, int offered);
@@ -833,6 +869,11 @@ char   *endpoint_fetch_edge_rows(void);
    edge's stage histogram answers — where did a request the page asked for stop being built — asked of the
    machine where an XHR request is actually built.
    THE ROWS:
+     `epXhrAskCalledLife`      — the `send()` calls that entered the HOSTING machine's prologue, which is
+       core/idl_args.c's stage 0. SEND_STAGES is based at IDL_STEP_FIRST, so the argument-count check and the
+       ES-to-IDL conversion of `send()`'s own argument run in front of the row below and BOTH are rest points.
+       It is the row that turns that row's zero from three states into one; core/fetch's sibling block states
+       the split and what it still cannot answer, and it is the same split here.
      `epXhrAskBeganLife`       — the `send()` calls that reached the member body. Raised at SEND_CHECKS's
        one-time capture, which is gated on a FLAG and not on a slot for core/fetch's reason exactly: that
        stage PARKS on §3.5.6 step 3's declared fork over a concolic method, and a parked stage is re-entered
