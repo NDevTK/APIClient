@@ -912,6 +912,42 @@ char   *endpoint_fetch_edge_rows(void);
    record nothing. An inequality between them would be a claim about which sites mint that machine, which is
    not a fact this file can check, and it would fire on a legitimate state — which is the concession shape
    §Offensive-programming refuses.
+   AND THAT UNASSERTABLE GAP IS THE ORDINARY STATE OF A REAL BUNDLE'S XHR DOOR, WHICH IS MEASURED HERE
+   RATHER THAN LEFT AS THE HYPOTHETICAL THE PARAGRAPH ABOVE NAMES. `a task that is never run offers nothing`
+   is that paragraph's own phrasing of the only way these two rows can differ on this machine, and it is what
+   a real application page does at EVERY call. Measured on one attributed row of `app.slack.com` through an
+   installed artifact stamped 5e2485ab95232e66bdb6851f175c833644fe7250, clean cone, dev asserts, 120 s:
+   `epXhrAskCalledLife` 379, `epXhrAskBeganLife` 379, `epXhrAskPlacedLife` 379, `epXhrAskOfferedLife` ZERO.
+   The PARTITION closes to the digit — every arm of `epXhrOutDiedAtLife` 0, `epXhrOutFreedPlacedLife` 379,
+   `epXhrOutFreedLife` 379 — so not one send state died at any stage of `send()`. The page called `send()` 379
+   times, the request was CONSTRUCTED 379 times, and the address reached the @H surface never.
+   THE CONTROL IS THE SIBLING EDGE AND IT IS ARMED. The same revision's smoke fixture reads
+   `epFetchAskCalledLife` 1954, `epFetchAskBeganLife` 1954, `epFetchAskOfferedLife` 1954 — one to one, because
+   core/fetch OFFERS inside the machine that CONSTRUCTS, which is the difference this whole block is written
+   around. That fixture also reads `epXhrAskCalledLife` 0, so NO GATE IN THIS TREE EXERCISES THIS EDGE: the
+   loss sits in the door the smoke cannot see, while the door the smoke drives 1954 times is the one that real
+   corpus did not call at all (`epFetchAskCalledLife` 0 on every attributed real-page row that produced a
+   census). That is §A-FIXTURE-BUILT-TO-EXERCISE-EVERY-MECHANISM landing on a door rather than on a rate.
+   WHAT IT LOCALISES, BECAUSE THE OFFER'S RAISE SITE ADMITS NO OTHER READING. `xhr_record_endpoint` holds no
+   `return` above `endpoint_xhr_edge_offered`; `XR_FETCH` is the lifecycle machine's FIRST stage (xhr_run_closure
+   mints at stage 0 and XR_FETCH is the first XR_ entry) and parks before nothing; and SEND_RUN's asynchronous
+   arm mints its closure XHR_MODE_FETCH, so the one arm that skips the record is not the arm that placed these.
+   A STEPPED CLOSURE THEREFORE RAISES THE ROW, and 0 against 379 says NONE OF THE 379 ENQUEUED CLOSURES WAS
+   EVER STEPPED. They are `JS_EnqueueCallTask` entries, which puts the recording site at solver/engine.c's
+   `run-a-task` arm — the `else` below the program sequence — and the same row set reads `jobsReady` 36169 with
+   `jobsReadyMicro` 0 and `jobsFramed` 28533 against `run-a-task` 163 steps of 6673 and `finished` 0.
+   AND IT IS A THIRD READING OF `asks - preProgram == 0`, WHICH THE FOURTH-NUMBER ENUMERATION ABOVE DOES NOT
+   CONTAIN AND WHICH TAKES DIFFERENT WORK FROM EITHER OF ITS TWO. That enumeration offers NEVER REACHED and
+   REACHED AND ALREADY KNOWN; this row is neither, because the door WAS reached 379 times and NOTHING merged —
+   the ask lives on the far side of a task hop and was never made. A reader holding a razor of zero on a run of
+   thousands of jobs may not spend it on either of those two without reading this edge's Called row first, and
+   the same corpus carries a row that IS the second reading (146 post-program asks, every one merged into a
+   record the markup already held) so the two are separable in practice and not only in principle.
+   RETIREMENT: this record goes when a placed send whose closure is never stepped is visible WITHOUT it — a
+   row counting the lifecycle closures this edge ENQUEUED against the ones that reached `XR_FETCH`, which makes
+   the loss a subtraction. That is NOT the began/offered pair this block already refutes as a non-check: those
+   two cannot disagree because both are raised inside the lifecycle machine, and these two are raised on
+   opposite sides of the task hop, which is exactly where the 379 went.
    WHAT MAY NOT BE ASSERTED IS ALSO core/fetch's, and for the same mechanism as the paragraph above:
    `freed <= began` and `placed <= began` are both FALSE,
    because a step state is BYTE-COPIED at a deep fork and the copy inherits the capture flag. §3.5.6 step 3's
