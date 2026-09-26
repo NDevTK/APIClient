@@ -937,6 +937,45 @@ void engine_set_idle_hook(int (*fn)(JSContext *ctx))
     g_idle_hook = fn;
 }
 
+/* THE CLOCK BOUNDARY'S OWN ARRIVAL COUNT, WHICH IS THE DISCRIMINATOR ITS THREE OUTCOME ROWS STRUCTURALLY
+   CANNOT BE. `queue-rendering-opportunity`, `fire-due-timer` and `start-or-run-an-idle-period` are raised only
+   when their hook TAKES the step, so each is a census of an OUTCOME over a gated operation and a 0 there is two
+   opposite things: the rung was asked and the clock legitimately had nothing due, or no dispatch ever descended
+   far enough to ask it. Those take opposite work — the first is a fact about the page's own timers and frames,
+   the second is a fact about the arms ABOVE this boundary — and the three rows cannot separate them at any
+   value. Recorded at the ASK, ahead of the gate, which is the only recording point that answers "did anyone
+   ask" rather than "did anything come of it".
+   IT COUNTS THE ARRIVAL AND NOT THE INVOCATION, which is why the hook's NULL test moved inside: an arm whose
+   hook is absent is skipped without asking, so counting invocations would make the chain identity below depend
+   on which components happened to register, and an UNINSTALLED clock would read exactly like a never-reached
+   one. Counting arrivals keeps the identity true unconditionally and leaves a missing registration visible as
+   asks above zero with its own outcome row at zero.
+   NEVER RESET, AND THAT IS THE LOAD-BEARING HALF RATHER THAN AN OVERSIGHT. These are asserted against
+   `g_step_unit_runs`, which nothing releases, so a per-SESSION reset would make the identity false from the
+   first engine_session_close onward — the scheduler's `g_orphan_asks` is the opposite choice one rung up (it IS
+   cleared there) and is the wrong precedent to copy for exactly that reason. solver/concolic.c states the
+   general shape: two counters of different reset scope are "two scopes, two populations", and neither may be
+   differenced against the other. A reader wanting these per session differences two censuses.
+   A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing branches on one, no arm is narrowed by one, and no rung is
+   skipped because one is large. */
+static long g_clock_render_asks, g_clock_timer_asks, g_clock_idle_asks;
+
+/* ONE PER RUNG RATHER THAN ONE SHARED HELPER, because the three are at three DIFFERENT rungs of an `else if`
+   chain and the whole value of the pair below is that it pins that order: a single helper taking a hook pointer
+   would count three arrivals into one place and the chain's shape would stop being checkable. */
+static int engine_clock_render_asked(JSContext *ctx) {
+    g_clock_render_asks++;
+    return g_rendering_hook != NULL && g_rendering_hook(ctx);
+}
+static int engine_clock_timer_asked(JSContext *ctx) {
+    g_clock_timer_asks++;
+    return g_timer_hook != NULL && g_timer_hook(ctx);
+}
+static int engine_clock_idle_asked(JSContext *ctx) {
+    g_clock_idle_asks++;
+    return g_idle_hook != NULL && g_idle_hook(ctx);
+}
+
 /* HTML §4.6.8.20 Link type "preload"'s browsing-context-connected time for the elements a PARSE produced,
    registered by the link component for the reason the two above are: naming it here would make the scheduler
    depend on the browser half. It is asked AHEAD of everything else a flow could do, which is the position and
@@ -11206,12 +11245,12 @@ static int flow_step(JSContext *ctx, Flow *f) {
                requestAnimationFrame, no ResizeObserver delivery, no IntersectionObserver task, no
                scroll/resize/pagereveal and no Web Animations microtask checkpoint — a large fraction of a real
                page's code hangs off exactly those. */
-            else if (g_rendering_hook && g_rendering_hook(ctx)) {
+            else if (engine_clock_render_asked(ctx)) {
                 g_step_unit = STEP_UNIT_RENDERING; return 0; }
             /* AND THE TIMER TASK SOURCE — §8.7 "Timers"'s timer initialization steps end by "queues a global
                task on the timer task source given global to run task", so a due timer IS a runnable task and
                §8.1.7.3 step 2 runs it. */
-            else if (g_timer_hook && g_timer_hook(ctx)) { g_step_unit = STEP_UNIT_TIMER; return 0; }
+            else if (engine_clock_timer_asked(ctx)) { g_step_unit = STEP_UNIT_TIMER; return 0; }
             /* AND THE IDLE RUNG — Cooperative Scheduling of Background Tasks §5.1 Start an idle period
                algorithm, whose note says it "is called by the event loop processing model when it determines
                that the event loop is otherwise idle". THIS LINE IS WHERE THAT SENTENCE IS TRUE: every source
@@ -11219,7 +11258,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                by a clock reading nobody could take on this host. One step per visit — a period started, or one
                callback queued — because §5.1 step 6 and §5.2 step 3.4 both QUEUE a task rather than looping,
                and this rung being reached again IS that task being run. */
-            else if (g_idle_hook && g_idle_hook(ctx)) { g_step_unit = STEP_UNIT_IDLE_PERIOD; return 0; }
+            else if (engine_clock_idle_asked(ctx)) { g_step_unit = STEP_UNIT_IDLE_PERIOD; return 0; }
             /* ONLY HOST-OWED REPLIES REMAIN: no progress, and NOT finished.
              *
              * BELOW THE TWO CLOCK-DRIVEN SOURCES, which is the same sentence the lifecycle arm makes one rung
@@ -12545,6 +12584,38 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
             "`hand-a-parked-drive-its-function` has silently stopped being the memo and the empty walk",
             g_orphan_asks, g_orphan_asks_memo + g_orphan_asks_empty + g_orphan_asks_took,
             g_orphan_asks_memo, g_orphan_asks_empty, g_orphan_asks_took);
+/* THE CLOCK BOUNDARY'S CHAIN, ASSERTED — which is what makes "how many dispatches reached the clock at all" a
+   reading off this histogram rather than a grep over flow_step. The three rungs are consecutive arms of ONE
+   `else if` chain, so a dispatch that arrives at the timer arm is exactly one that arrived at the rendering arm
+   and was not taken there; the same one rung down. Both sides have different writers — the asks are raised
+   INSIDE flow_step at the arm and the outcome totals at the convergence point AFTER it returns — so this is a
+   real check and not a tautology.
+   WHAT BREAKS IT IS WHAT A READER OF THOSE THREE ROWS NEEDS TO KNOW: an arm inserted between two of them, a
+   `return` added between them, a reorder, or a second writer of STEP_UNIT_RENDERING or STEP_UNIT_TIMER. Every
+   one of those silently changes what a zero on `queue-rendering-opportunity` means, and none of them changes
+   anything a census could otherwise show.
+   AND THE READING IT LICENSES, stated here because it is not derivable from any single row: the nine units at
+   or below this boundary (RENDERING, TIMER, IDLE_PERIOD, AWAIT_FETCH_RECORD, AWAIT_OWED_REPLY, AWAIT_DECLINED,
+   CLOSE_REQUEST, AWAIT_PEER, FINISHED) are each written at exactly ONE site and every one of those sites is at
+   or below it, so their SUM is the number of dispatches that descended this far — and `g_clock_render_asks` is
+   that same number counted at the arm instead of at the exits. The two agreeing is the whole of why either may
+   be quoted. FINISHED is the last of the nine, so a frontier that never retires is read here first: `finished`
+   at zero with this sum at zero says the retirement arm was never ASKED, which is a fact about the arms above
+   this boundary, and `finished` at zero with this sum LARGE says it was asked and something below declined. */
+    DCHECKF(g_clock_timer_asks == g_clock_render_asks - g_step_unit_runs[STEP_UNIT_RENDERING],
+            "the rendering rung was reached %ld times and took %ld, so the timer rung one arm below it must "
+            "have been reached %ld times and was reached %ld — the two rungs are consecutive arms of one chain, "
+            "so a difference is an arm or a return added between them, a reorder, or a second writer of "
+            "STEP_UNIT_RENDERING",
+            g_clock_render_asks, g_step_unit_runs[STEP_UNIT_RENDERING],
+            g_clock_render_asks - g_step_unit_runs[STEP_UNIT_RENDERING], g_clock_timer_asks);
+    DCHECKF(g_clock_idle_asks == g_clock_timer_asks - g_step_unit_runs[STEP_UNIT_TIMER],
+            "the timer rung was reached %ld times and took %ld, so the idle rung one arm below it must have "
+            "been reached %ld times and was reached %ld — the two rungs are consecutive arms of one chain, so a "
+            "difference is an arm or a return added between them, a reorder, or a second writer of "
+            "STEP_UNIT_TIMER",
+            g_clock_timer_asks, g_step_unit_runs[STEP_UNIT_TIMER],
+            g_clock_timer_asks - g_step_unit_runs[STEP_UNIT_TIMER], g_clock_idle_asks);
 }
 
 /* TWO FACTS THE SCHEDULER HAS AND HAS NEVER SAID, and both of them are questions that were being ANSWERED BY
