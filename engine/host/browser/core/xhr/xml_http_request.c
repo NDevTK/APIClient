@@ -2358,17 +2358,51 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
        already, so this is nothing written and everything not done — the lifecycle machine's "handle errors"
        fires the request error steps on the way out, which for §3.5.6 is an `error` event.
        NAMED RESIDUAL — NOT COVERED: the world in which the real method IS one §9.2.1 calls safe, where a
-       browser would have made the request and the reply would have been learned. WHAT THE NEXT DIFF BUILDS:
-       one more ask over the same operand this member already forks at OPEN_METHOD_OP — whether this method is
-       in that safe set — so the flow standing on its true arm has a method it can COMPOSE AND STATE while the
-       flow standing on the remainder does not, instead of one answer covering both. THAT CLAUSE SAID "composes
-       and fires", AND THE RETIREMENT ABOVE MOVED THE SECOND VERB OUT OF THIS FILE: safe-set membership is one
-       SIGNAL the chokepoint surfaces per-origin and never the firing decision itself, so what that arm gains
-       is the right to be STATED to safe-fetch.js — whether the act is spent is that file's answer and a
-       person's. The mechanism half of the clause is the original author's and is unchanged here; it is a
-       hypothesis about this tree and is re-derived before it is built. HOW ITS ABSENCE SHOWS: a bundle whose only
+       browser would have made the request and the reply would have been learned.
+       THE MECHANISM HALF OF THIS CLAUSE IS REFUSED, AND IT IS REWRITTEN RATHER THAN DELETED BECAUSE IT IS
+       THE DESIGN A READER RE-DERIVES FROM THE GAP. It asked for "one more ask over the same operand this
+       member already forks at OPEN_METHOD_OP — whether this method is in that safe set — so the flow
+       standing on its true arm has a method it can COMPOSE AND STATE". It was re-derived before being built
+       and it fails on TWO independent legs, either of which is enough.
+       FIRST, A MEMBERSHIP FORK YIELDS A SET AND THE CALLER NEEDS BYTES. RFC 9110 §9.2.1 "Safe Methods" —
+       "Of the request methods defined by this specification, the GET, HEAD, OPTIONS, and TRACE methods are
+       defined to be safe" — and TRACE cannot be opened, so the true arm narrows an unknown to THREE
+       spellings and pins none of them. Both consumers want one: §4.3's `blob` arm reads the method and the
+       trusted zone hands it to a real `fetch()`. Picking one off that arm is the defect this member's own
+       endpoint record already names, a method no run ever computed being reported as the safest one there
+       is — and CLAUDE.md §@H's line is that only an equality-pinned or run-computed value is
+       concrete while a value known only to satisfy a GATE stays a shape. A fork whose arms pin nothing
+       cannot hand this line a method.
+       SECOND, THE COMPLETIONS WOULD BE NAMED AFTER THE POLICY AND NOT AFTER A STEP. Every other fork over
+       this operand is a spec branch the page can observe: OPEN_METHOD_OP's three are §3.5.1 steps 2-3 and
+       show as two different DOMExceptions, and SEND_METHOD_OP's two are §3.5.6 step 3 and show in whether
+       the body is sent. No algorithm asks the safe question here — the string "safe method" occurs ZERO
+       times in the whole Fetch Standard — and §9.2.1 states its own purpose as something a USER AGENT
+       APPLIES: "it allows a user agent to apply appropriate constraints on the automated use of unsafe
+       methods". A fork cut on that predicate is CLAUDE.md §Learning-from-replies' safety `if` inside the
+       engine, wearing a completion set. THE TEST THAT SEPARATES THE TWO IS NOT "DOES IT DECIDE FIRING" BUT
+       "WHOSE STEP IS THIS BRANCH" — a fork named after a step some standard takes is the algorithm; one
+       named after a partition only a policy consults is the policy, however carefully its arms avoid
+       sending anything.
+       AND THE PARTITION NEXT DOOR IS THE SPEC-REAL ONE, which is worth naming because it is one line away
+       and is not this: Fetch §2.2.1 "Methods" — "A CORS-safelisted method is a method that is `GET`, `HEAD`,
+       or `POST`" — IS consulted by an algorithm, and it is a different set (POST is CORS-safelisted and not
+       safe; OPTIONS is safe and not CORS-safelisted). A fork over the method that this engine may legitimately
+       want is that one, asked where §4.x consults it, and it does not make a method spellable either.
+       WHAT THE NEXT DIFF BUILDS IS THEREFORE NOT A FORK AT ALL: this refusal is keyed on `concolic_is`, and
+       the question it means to ask is whether the operand carries a SPELLABLE EXAMPLE — §3.5.1 step 4 runs
+       "normalize a method" on the operand's own example and `concolic_new_derived` carries the result, so
+       that population is run-computed rather than invented and is exactly what §@H calls concrete. Keying
+       the refusal on the example rather than on the carrier moves a decision this member is currently making
+       to the one place that owns it, and leaves this line stating what it already claims to state — a fact
+       about whether there are bytes to put in the field. HOW ITS ABSENCE SHOWS: a bundle whose only
        request is built from an uncalled function's argument emits its endpoint and never a reply, so that @H
-       record carries no server-learned example values while the sibling arm that took a literal method does. */
+       record carries no server-learned example values while the sibling arm that took a literal method does.
+       AND WHAT CLOSING IT BUYS IS NOT PARITY WITH THAT SIBLING, which the sentence above invites and which
+       CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE forbids: a request composed on an arm nothing observed is
+       FORCED by its PATH whatever its method spells, so its reply is learned and CARRIED AS FORCED and never
+       merged into the observed pool. The gain is real and it is forced example values, not the literal
+       sibling's. */
     if (concolic_is(d->method))
         return true;
 
