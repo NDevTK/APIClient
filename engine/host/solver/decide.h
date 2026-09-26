@@ -95,6 +95,17 @@ int  solver_decide_restartable(JSContext *ctx, JSValueConst cond, int nonforking
    sibling queue and no second frame from the step driver's one clone; the chain is drawn lazily, one link per
    time the scheduler picks the sibling that carries the remainder. The walk is at solver_outcome and states
    why the order it asks in is forced rather than chosen.
+   AND A COMPLETION IS KEYED BY ITS NUMBER, SO WIDENING A MACHINE IS SAFE AT THE END AND A MIGRATION IN THE
+   MIDDLE. The numbering is fixed at the machine's own definition, which is exactly what makes a completion
+   mean the same thing in every session — and the frontier is NEVER RESET, so a parked flow holds recorded
+   arms keyed by the numbers that machine declared on the day that flow parked. APPENDING a completion
+   appends a QUESTION: every existing boolean replays unchanged and the new one forks fresh. INSERTING one
+   shifts every number above it, so a resumed flow's recorded arms answer questions they were never about —
+   silently, with every arm still in range and every assert satisfied, which is an index naming a thing only
+   while the set is fixed, with the set fixed by a DEFINITION a diff can move. So a new completion goes LAST,
+   and one that cannot is a migration and not a widening. RETIREMENT: this record goes when a completion is
+   keyed by a name its machine spells rather than by its position, because an insert is then
+   indistinguishable from an append and there is nothing left to get wrong.
    `real` IS THE ASKING MACHINE'S DECLARATION, AND IT IS THE OUTCOME SEAM'S ANSWER TO WHAT decide_real_arm
    COMPUTES FOR A BRANCH — "which completion does a session carrying real values reach". It is a PARAMETER for
    the same reason `nonforking` above is: the answer belongs to the site and to no two sites alike, and this
