@@ -11,6 +11,7 @@
 #include "check.h"
 #include "core/css/css_computed_value.h"
 #include "core/html/integer_microsyntax.h"
+#include "core/layout/box_subject.h"
 #include "core/layout/table_box.h"
 #include "core/layout/table_column_box.h"
 
@@ -19,13 +20,63 @@
    CLAUDE.md's sense — a page may write any digits it likes and this is what the algorithm does with them. */
 #define TCB_SPAN_MAX ((size_t) 1000)
 
+/* THE ONE PLACE THIS FILE READS A COMPUTED `display`, WHICH IS WHERE ITS BOX-TREE-SHAPE ASSUMPTION LIVES, and
+   the refusal below is here rather than at the four walks that call it for the reason the two passes are
+   written to share a branch at all: the banner over pass one says they "take the identical branch on the
+   identical child list", and a test written four times is that invariant held by hand.
+   A `contents` CHILD IS A WRONG ANSWER HERE AND NOT AN UNBUILT ONE, WHICH IS THE WHOLE REASON IT CRASHES.
+   Every other value this mapping does not name is a child that generates no column box, so skipping it is
+   rules 3 and 4 running: css-display-3 §2.5 "Box Generation: the none and contents keywords" gives `none`
+   "The element and its descendants generate no boxes or text sequences", so nothing inside one can be a column
+   box and the skip is exact. `contents` is the opposite — "The element itself does not generate any boxes,
+   but its children and pseudo-elements still generate boxes and text sequences as normal" — so the boxes
+   rules 3 and 4 must count may be INSIDE the skipped child, and skipping it undercounts `noccupied` and leaves
+   a grid column mapped to no box at all.
+   THE WALK STEPPED PAST IT RATHER THAN REFUSING, AND THAT IS THE DEFECT SHAPE WORTH KEEPING: a walk that
+   cannot express the splice must REFUSE a spliced child rather than step past it, because a step past is a
+   plausible box tree and a refusal is a named gap. table_column_box.h's own argument for being a component
+   says why the plausible answer is the expensive one — three algorithms read a different property off this
+   mapping, and a disagreement between them "is invisible, because every answer is a real box of the real
+   document" — and a silently short mapping is that same invisibility with no second walk needed to produce
+   it.
+   IT IS NOT THIS COMPONENT'S SPLICE TO BUILD, which is why the message names the box-tree step rather than a
+   local descent: core/layout/block_flow.c's child classification, core/layout/flex_item.c's flex-item
+   classification, core/layout/line_box.c's line walk and core/layout/table_box.c's anonymous-table walk each
+   meet this value at their own child walk and each names the same absent construction, so a fifth copy here
+   would be one box-tree rule with five answers about which children a box has.
+   RETIREMENT: this paragraph goes when the splice is built and this walk iterates it, because the contrast
+   between `none` and `contents` is then a property of the sequence handed to this walk rather than an argument
+   about a value it reads for itself. */
 static TableBoxKind tcb_kind_of(lxb_dom_element_t *el)
 {
     char *display = css_computed_value(el, "display");
     TableBoxKind kind;
+    char nbuf[160];
 
     DCHECK(display != NULL, "the cascade produced no computed `display` — the UA layer answers `inline` for "
                             "every element it does not name, so this cannot be unset");
+    if (strcmp(display, "contents") == 0) {
+        free(display);
+        DFAILF("%s: CSS 2.1 §17.5 \"Visual layout of table contents\"' rules 3 and 4 count this child's "
+               "column and column-group boxes off a child list it is not a member of yet. Its computed "
+               "`display` is `contents`, and css-display-3 §2.5 \"Box Generation: the none and contents "
+               "keywords\" states both halves of what that means: \"The element itself does not generate any "
+               "boxes, but its children and pseudo-elements still generate boxes and text sequences as "
+               "normal\", and \"For the purposes of box generation and layout, the element must be treated as "
+               "if it had been replaced in the element tree by its contents (including both its "
+               "source-document children and its pseudo-elements, such as ::before and ::after "
+               "pseudo-elements, which are generated before/after the element's children as normal).\" So "
+               "the boxes rules 3 and 4 must place are this child's OWN children, spliced into this list at "
+               "its position: a `contents` column group hands the table its `col` children directly, which "
+               "is rule 3's group-less column box this walk already has an arm for, and a `contents` child "
+               "of a column group hands that group its own. BUILD THE SPLICE §2.5 STATES AS THE THING "
+               "EVERY WALK OVER A BOX'S CHILDREN ITERATES: core/layout/block_flow.c, "
+               "core/layout/flex_item.c, core/layout/line_box.c and core/layout/table_box.c each meet this "
+               "value at their own child walk and each names the same construction, so it is one box-tree "
+               "step and not five",
+               box_subject(el, nbuf, sizeof nbuf));
+        return TABLE_BOX_NOT_A_TABLE_BOX;
+    }
     kind = table_box_kind(display);
     free(display);
     return kind;
