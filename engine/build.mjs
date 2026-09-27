@@ -4407,6 +4407,97 @@ const quantumText = (q) =>
    question, and it read as a confident verdict about the subject. So the absence of the signal is now reported
    AS an absence of the signal, and the tail -- which is what a reader actually has -- is named as the evidence
    instead. `nothing has been established` is a true statement; `it never started` was not. */
+/* WHETHER ANYTHING RETIRED, AND WHETHER THE RETIREMENT ARM WAS EVER ASKED — two facts, and the two arms below
+ * were making a claim that needs both out of a predicate that carries neither.
+ *
+ * WHAT THEY SAID. Each tested `lastRetire < 0` and printed "NOTHING HAS RETIRED IN THIS RUN AT ALL, which is
+ * the stronger statement: this is not a frontier that stopped retiring, it is one that never did". `lastRise`
+ * reads CONSECUTIVE PAIRS and never reads s[0] as a value, so -1 also covers a run that retired BEFORE its
+ * first sample and not since — the landmark words `flat/total` and `none/total` exist because of exactly that,
+ * and these two sentences were the same defect in prose, one arm over, still asserting the strong reading off
+ * the weak predicate. `finished === 0` is the strong statement and needs no series at all.
+ *
+ * AND THE SECOND FACT IS THE ONE NO COUNTER ON THIS LINE USED TO CARRY, which is why solver/result.c grew the
+ * three `stepReached*Life` rows. Its own paragraph states the conflation and names this file: "`finished` at 0
+ * with `stepReachedRenderingLife` at 0 says the retirement arm was never ASKED and the cause is upstream of
+ * this boundary; the same 0 with it LARGE says the boundary was reached and one of the ten arms ABOVE
+ * `finished` took every descent — it is the LAST of the eleven — which `stepUnitRuns` then names. Those two
+ * states were ONE string in the hung-cause verdict engine/build.mjs composes … that verdict reads
+ * `finishedFlows` and has no way to ask this question until it reads a row like this." Those two take OPPOSITE
+ * work: one sends a reader upstream of the clock boundary and the other sends them to the eleven arms at it.
+ *
+ * THE THREE ROWS ARE SUFFIX SUMS AND THAT IS WHAT MAKES THE LOWEST 0 A LOCALISATION. `stepReachedRenderingLife`
+ * is every descent that reached the chain, the next is it less the rendering rung's take, the third is that
+ * less the timer rung's — so they are NON-INCREASING and the first that reads 0 is the rung that consumed
+ * everything handed to it. The producer is explicit that the same rule is FALSE of `stepUnitRuns` read row by
+ * row, where an arm at 0 with a lower one nonzero is that rung correctly DECLINING every descent; so this
+ * function reads the suffix sums for the localisation and defers to `stepUnitRuns` for the NAME, and never the
+ * other way round.
+ *
+ * THE NON-INCREASING PROPERTY IS ASSERTED RATHER THAN ASSUMED, because every arm below rests on it and because
+ * it is the one thing that can fail without any row going missing: a rename or a reorder in the composer
+ * leaves three numbers of the right kind in the wrong order, and `censusFields` cannot see that. The engine
+ * asserts the same containment at engine_step_unit_runs where every operand is in one hand; a disagreement
+ * visible HERE and not there is the two rows having stopped describing one chain.
+ *
+ * NO DEFAULTING AND NO PRESENCE CHECK, on the contract one function up: `censusFields` has already refused any
+ * census that does not carry all four of these as numbers, so a `?? 0` here would be the plausible datum this
+ * file is largely about, standing behind a guarantee that already holds.
+ *
+ * ONE IMPLEMENTATION FOR BOTH ARMS, which is the same rule `censusFields` itself was written for. The two arms
+ * held two hand-written copies of one claim and they had already drifted in what they asserted from it — one
+ * calling it "a reading of WHERE THE WAVE IS", the other "the stronger statement" — so the substance of each is
+ * kept and the CLAIM is now made once. Module-level and handed one census, for `stepUnitReading`'s stated
+ * reason: a sentence spliced into the middle of a composer can only be exercised by running the whole build,
+ * and this one can be driven from a line off a log. */
+function retireReading(b, lastRetire, n, every) {
+  if (!(b.stepReachedRenderingLife >= b.stepReachedTimerLife &&
+        b.stepReachedTimerLife >= b.stepReachedIdleLife))
+    throw new Error(`[build] the @COLD census reports stepReachedRenderingLife ` +
+                    `${b.stepReachedRenderingLife}, stepReachedTimerLife ${b.stepReachedTimerLife} and ` +
+                    `stepReachedIdleLife ${b.stepReachedIdleLife} — solver/result.c composes those as SUFFIX ` +
+                    `SUMS of one else-if chain, each the one before it less a rung's take, so they cannot ` +
+                    `increase. A triple that does means the three rows have stopped describing one chain, and ` +
+                    `every localisation below reads the FIRST 0 as the rung that consumed everything — which ` +
+                    `over a non-monotone triple names the wrong rung rather than failing. THE OPERANDS ARE ` +
+                    `NUMBERS BY \`censusFields\`, which has already refused any @COLD census that does not ` +
+                    `carry all three, so this cannot be an ABSENT row reading as a broken order: a caller ` +
+                    `reaching here with \`undefined\` has skipped that contract and is the defect rather than ` +
+                    `the census.`);
+  const since = n - 1 - lastRetire;
+  if (lastRetire >= 0)
+    return `finished last rose at census ${lastRetire} of ${n}, so a wave HAS completed in this run and the ` +
+           `${since} census(es) since — ${since * every} units of engine work — are the run inside the next ` +
+           `one, and THAT is the number two runs of one revision must agree on.`;
+  if (b.finished > 0)
+    return `finished stands at ${b.finished} and NOT ONE consecutive pair of these ${n} censuses rose, so this ` +
+           `run retired before its FIRST sample and not since — which is NOT "nothing retired". A pair cannot ` +
+           `see a rise that happened before the series began, which is why the landmark reads flat/${n} here ` +
+           `and none/${n} only where the counter never left zero.`;
+  if (b.stepReachedRenderingLife === 0)
+    return `NOTHING RETIRED AND THE RETIREMENT ARM WAS NEVER ASKED — finished is 0 AND ` +
+           `stepReachedRenderingLife is 0, so not one descent reached the clock chain that arm is the last of, ` +
+           `and the cause is UPSTREAM of that boundary rather than at the retirement arm. That is a reading of ` +
+           `where the members are standing and not evidence that a flow of this document cannot terminate: the ` +
+           `terminating shape is the fall-through of solver/engine.c's flow_step, which no term of the order ` +
+           `gates. ${b.unframedStepsLifetime} unframed step(s) were taken in total, so the question is what ` +
+           `consumed them before the chain, and stepUnitRuns above is where they went.`;
+  const rung = b.stepReachedTimerLife === 0
+    ? `every one of them was taken by queue-rendering-opportunity, the FIRST rung of that chain — the suffix ` +
+      `sums drop to 0 at stepReachedTimerLife`
+    : b.stepReachedIdleLife === 0
+    ? `${b.stepReachedRenderingLife - b.stepReachedTimerLife} went to queue-rendering-opportunity and the ` +
+      `remaining ${b.stepReachedTimerLife} to fire-due-timer — the suffix sums drop to 0 at ` +
+      `stepReachedIdleLife`
+    : `${b.stepReachedIdleLife} descent(s) got past BOTH clock rungs, so what took them sits between the idle ` +
+      `rung and the retirement arm and no suffix sum on this line narrows it further`;
+  return `NOTHING RETIRED AND THE BOUNDARY WAS REACHED — finished is 0 while stepReachedRenderingLife is ` +
+         `${b.stepReachedRenderingLife}, so the retirement arm WAS asked and an arm ABOVE it took every ` +
+         `descent (finished is the LAST of the eleven at or below that boundary): ${rung}. Those two are ` +
+         `opposite findings and this is the second — the cause is AT the chain and not upstream of it, so ` +
+         `stepUnitRuns above is what NAMES the arm, the suffix sums here being the only rows for which "the ` +
+         `lowest 0 is the localisation" is true at all.`;
+}
 function hungCauseCensus(out) {
   const s = [];
   for (const m of out.matchAll(/^@COLD (\{.*\})$/gm)) { try { s.push(JSON.parse(m[1])); } catch { /* truncated tail */ } }
@@ -4805,13 +4896,7 @@ function hungCauseCensus(out) {
            `two are independent and only the second is output: a member retires when its own path runs out of ` +
            `continuations, which under a fair order waits on every member ahead of it, so a breadth-first ` +
            `frontier retires in waves and reads 0 between them. ` +
-           (lastRetire < 0
-             ? `Nothing has retired in this run at all, and that is a reading of WHERE THE WAVE IS rather than ` +
-               `evidence that a flow of this document cannot terminate — the terminating shape is the ` +
-               `fall-through of solver/engine.c's flow_step, which no term of the order gates.`
-             : `finished last rose at census ${lastRetire} of ${n}, so a wave has completed in this run and ` +
-               `the ${n - 1 - lastRetire} census(es) since — ${(n - 1 - lastRetire) * PROGRESS_EVERY} units of ` +
-               `engine work — are the run inside the next one.`) +
+           retireReading(b, lastRetire, n, PROGRESS_EVERY) +
            ` The question this run poses is what the WORKING SET is made of, not why nothing retires. ` +
            `${wfq.whose}.`;
   if (b.live >= a.live)
@@ -4823,12 +4908,7 @@ function hungCauseCensus(out) {
              : `not one probe row reached 1 in that window either, so BOTH axes are silent — this is the ` +
                `quadrant that is a stall rather than a wave: `) +
            `work is being admitted and not retired. ` +
-           (lastRetire < 0
-             ? `AND NOTHING HAS RETIRED IN THIS RUN AT ALL, which is the stronger statement: this is not a ` +
-               `frontier that stopped retiring, it is one that never did.`
-             : `finished last rose at census ${lastRetire} of ${n}, so the silence is the ` +
-               `${n - 1 - lastRetire} census(es) — ${(n - 1 - lastRetire) * PROGRESS_EVERY} units of engine ` +
-               `work — since then, and THAT is the number two runs of one revision must agree on.`) +
+           retireReading(b, lastRetire, n, PROGRESS_EVERY) +
            /* AND WHOSE REWARD THE ADMITTED WORK IS RANKED ON, which is the one thing this arm can say about the
               ORDER and used to leave inside `wfq.text` for the reader to derive. A frontier that admits and
               does not retire is ranked on an account almost none of whose members filled — a fork JOINS its
