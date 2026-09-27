@@ -199,32 +199,51 @@
  * INTERPROCEDURAL INLINE that crosses into a callee with the argument its call site supplies. What the
  * widening COST is printed on every run beside what it bought, for the reason the global door's three
  * numbers are: a widening whose refusals are unmeasured is a trade nobody made.
- * (a) A CALLEE THAT REACHES ITS OBJECT AS A PARAMETER. The inline resolves a callee through the three
- *     spellings `collectBinds` can prove — a binding declared once and never written, a function
- *     declaration a reference resolves to, and a property written exactly once — and a MEMBER callee is the
- *     dominant refusal by a wide margin. The cause is structural rather than incidental and is why this is a
- *     residual and not a bug: a bundler hands its own runtime to every module as a PARAMETER, so a module's
- *     read of `r.chunkUrl` and the runtime's single write of it resolve to two DIFFERENT bindings, and no
- *     scope-correct slot map can join them. The manifest band reaches the same composition because it scans
- *     the runtime's OWN scope, where both do resolve. WHAT THE NEXT DIFF BUILDS: a single-call-site closure
- *     over the references `collectBinds` already resolves — for a function whose binding is referenced
- *     EXACTLY ONCE and whose one reference stands in callee position, each parameter is determined by that
- *     call's argument, which is sound for the same reason a once-written slot is and makes a parameter
- *     foldable in precisely the cases where one call decides it. HOW ITS ABSENCE WOULD SHOW: the inline's
- *     largest refusal row stays a member callee while a site's PROGRAM-door opaque count stands above zero
- *     beside a nonzero manifest column — two channels over one composition, only one of them able to reach
- *     it. DERIVE THE SIZE rather than reading a number here: the refusal rows under the inline's own price
- *     block partition every call it declined, and the parameter population is the DATA door's ceiling table
- *     read against `whyNoBind`.
- * (b) A BOUND `URL` THAT NOTHING MUTATES. `deref` adds a hole wherever a `new URL` is read out of a name, a
- *     slot or an object-literal property, because a `URL` is mutable and `searchParams.set` leaves no trace
- *     in the text the fold reads. That is a FLOOR: a bound URL nothing ever mutates has a COMPLETE text and
- *     is reported as a SHAPE, which understates what the parse recovered — the direction this file is
- *     required to be wrong in. WHAT THE NEXT DIFF BUILDS: the same once-written question `collectBinds`
- *     already answers for `obj.prop`, asked of the URL's own binding — a binding on which no member call and
- *     no member write ever appears cannot have been mutated, so its hole drops and the row becomes `folded`.
- *     HOW ITS ABSENCE WOULD SHOW: the DATA door's `shape` rows include ones whose text ends in `{?}` with no
- *     literal byte after it, and the complete-from-text share reads lower than those rows support.
+ * (a) WAS "A CALLEE THAT REACHES ITS OBJECT AS A PARAMETER", AND IT IS BUILT — the unique-call-site closure
+ *     is in `collectBinds` and its price prints on every run. THE MECHANISM IT NAMED IS SOUND AND ITS
+ *     DIAGNOSIS WAS WRONG, and the diagnosis is recorded here because a reader who re-derives it will draw
+ *     the same conclusion: the clause said the obstacle was a MEMBER callee whose object is a parameter, and
+ *     pricing the built closure says the obstacle is that THE FUNCTION OWNING THE PARAMETER HAS NO NAME AT
+ *     ALL. Measured over the refused population, that half is a CLASS METHOD or an anonymous function or
+ *     arrow — a callback, a stored property, a returned closure — so it is reached through a RECEIVER or by
+ *     being PASSED, and in neither case does a name exist for any reference count to be about. This clause
+ *     first said that half was the bundler's module shape, which was a guess and is corrected by the
+ *     measurement: run the closure's refusal block and read the reasons apart rather than reading a total,
+ *     because a shared helper and an unnamed function take different work and no refinement of the reference
+ *     count reaches the second at all. WHAT THE CLOSURE ITSELF BOUGHT, and it is the honest half: it settled
+ *     ZERO COMPLETE addresses over this corpus and moved three rows out of `opaque` into `shape`. That does
+ *     NOT move the razor, because SHAPE and OPAQUE are both inside it — what it moved is this file's shape
+ *     RECALL, which is a real gain in what a static reader is handed and not a gain against the engine.
+ * (a') A REFERENCE THAT IS A CALLEE ONLY THROUGH `.call` OR `.apply`. NOT COVERED: the closure admits a
+ *     reference standing in callee position and nothing else, so `f.call(recv, x)` and `f.apply(recv, [x])`
+ *     put that one reference in an OBJECT position and the function is refused as un-entered — correctly by
+ *     the closure's own rule and needlessly, because those two spellings name the argument list as plainly as
+ *     a direct call does. WHAT THE NEXT DIFF BUILDS: two more admitting shapes at the same soundness bar —
+ *     a sole reference that is the object of a non-computed `.call` member whose own parent is a call, with
+ *     parameter i taken from argument i+1; and the same for `.apply` where the second argument is an
+ *     ArrayExpression carrying no spread, with parameter i taken from element i. Both refuse a computed
+ *     property and a further-wrapped receiver, for the reason the closure refuses a spread. HOW ITS ABSENCE
+ *     WOULD SHOW: the closure's refusal block carries a nonzero row reading that a function's one reference
+ *     is not a callee, while its settled count does not move.
+ * (b) WAS "A BOUND `URL` THAT NOTHING MUTATES", AND IT IS MEASURED AND DECLINED. `deref` demotes a
+ *     constructed URL read out of a name, a slot or an object-literal property, because a URL is mutable and
+ *     a `searchParams` write leaves no trace in the text this fold reads; that is a FLOOR and the clause
+ *     proposed proving the absence of mutation so the hole could drop. THE CLAUSE WAS TOO NARROW AS WRITTEN
+ *     and the correction is the part worth keeping: "no member call and no member write on the binding" does
+ *     not bound mutation at all — a URL ESCAPES through `f(r)`, an alias, an array or object it is put into,
+ *     a return and a closure capture, none of which is a member call or a write; `r.searchParams` is a member
+ *     READ that hands out a mutator; and a blanket "no member expression on `r`" would refuse
+ *     `fetch(r.toString())`, which is the dominant shape the floor exists to serve. A sound closure is
+ *     therefore a per-property classification from the URL Standard PLUS an escape analysis enumerating the
+ *     reference roles that are safe and refusing everything unlisted.
+ *     IT IS NOT BUILT BECAUSE THE CEILING IS PRINTED AND THE TRADE IS THE WRONG WAY ROUND. The mutable-fold
+ *     floor's own block names every demoted row with its coordinates, so the most the escape analysis could
+ *     ever recover is that count — and against it stands the failure it would introduce, which is a false
+ *     COMPLETE: this file's one measured false resolution was exactly that, a URL reported as a whole address
+ *     whose real request carries five query parameters the text does not hold. A gap understates the parse and
+ *     a false complete OVERSTATES it, and only one of those two is the direction this file is required to be
+ *     wrong in. BUILD IT WHEN the floor's block names rows that reading the bundle shows are NOT mutated —
+ *     which is a question the printed coordinates answer and this sentence cannot.
  *
  * WHAT COMPLETES THE COMPARISON, NAMED SO IT CAN BE RUN RATHER THAN RE-DERIVED. This file is one half. The
  * other half is not "the engine's endpoint count", which answers a different question: `solver/result.c`
@@ -552,7 +571,16 @@ const MISS = () => ({ text: "{?}", holes: 1, miss: true });
    SHAPE where the text is in fact complete, which understates what the parse recovered — the direction
    CLAUDE.md §A-SWEEP-IS-TRUSTED-BY-ITS-METHOD requires of this file, since the lower bound belongs to the
    baseline. Proving the absence of mutation is a second slot analysis and is the named residual below. */
-const deref = (r) => r.mut ? { text: r.text + "{?}", holes: r.holes + 1 } : r;
+/* THE FLOOR'S OWN PRICE IS COUNTED, WHICH IS WHAT MAKES THE RESIDUAL ABOVE A MEASUREMENT RATHER THAN A
+   CLAIM. Every demotion is a row whose text the fold recovered completely and which this file reports as a
+   SHAPE, so the count is the exact CEILING on what an escape analysis over the URL's binding could ever
+   recover — and the rows are printed with their `file:line` so the question "is this URL really mutated"
+   is answered by reading the source rather than by believing a sentence here. */
+const deref = (r, env) => {
+  if (!r.mut) return r;
+  if (env && env.mutFloor) env.mutFloor.demoted++;
+  return { text: r.text + "{?}", holes: r.holes + 1 };
+};
 
 /* ── WHAT AN ADDRESS LOOKS LIKE, IN ONE PLACE ─────────────────────────────────────────────────────────────
    The base rate and the chunk manifest both have to decide whether a recovered string is an address, and two
@@ -607,7 +635,7 @@ function fold(node, binds, depth, env) {
     case "Identifier": {
       /* THE BINDING THIS REFERENCE MEANS, by node identity rather than by name — see `collectBinds`. */
       const b = binds.get(node);
-      if (b && b.node) return deref(fold(b.node, binds, depth + 1, env));
+      if (b && b.node) return deref(fold(b.node, binds, depth + 1, env), env);
       return { text: "{?}", holes: 1 };
     }
     case "MemberExpression": {
@@ -620,7 +648,7 @@ function fold(node, binds, depth, env) {
       for (const p of b.node.properties) {
         if (p.type !== "ObjectProperty" || p.computed) continue;
         const k = p.key.type === "Identifier" ? p.key.name : (p.key.type === "StringLiteral" ? p.key.value : null);
-        if (k === node.property.name) return deref(fold(p.value, binds, depth + 1, env));
+        if (k === node.property.name) return deref(fold(p.value, binds, depth + 1, env), env);
       }
       return { text: "{?}", holes: 1 };
     }
@@ -835,6 +863,35 @@ function foldEnvOnly(node, binds, depth, env) {
       /* THE ENUMERATED PARAMETER. Its value is a candidate drawn from the function's OWN body, so the text
          this returns is a value the bundler really can be called with rather than one invented here. */
       if (env.vars.has(node.name)) return { text: env.vars.get(node.name), holes: 0 };
+      /* THE PARAMETER OF A FUNCTION WITH ONE CALL SITE — see `collectBinds` for what makes that sound.
+         Priced by the numbers `sole` carries, for the reason the inline is priced: a widening that buys
+         coverage is paid for in false resolutions, and the two are read together or the trade is not being
+         made. `unsettled` is counted apart from `settled` because a parameter resolved to an argument
+         that is ITSELF opaque is the arm working and buying nothing, which is a different fact from the arm
+         refusing. */
+      if (env.sole && env.paramOf) {
+        const ps = env.paramOf.get(node);
+        if (!ps) return null;
+        const no = (k) => { env.sole.refused.set(k, (env.sole.refused.get(k) || 0) + 1); return null; };
+        const call = env.callSiteOf.get(ps.fn);
+        if (!call) return no("no call site: " + (env.whyNoCall.get(ps.fn) || "it is not a named value at all"));
+        /* A CYCLE IS POSSIBLE EVEN THOUGH EACH FUNCTION HAS ONE CALL SITE — two helpers calling only each
+           other are unreachable code and still a cycle in this graph — so the walk carries its own seen set
+           rather than relying on the depth limit to end it. */
+        if (env.sole.seen.has(ps.fn)) return no("a cyclic call graph");
+        const as = call.arguments || [];
+        /* A SPREAD MAKES POSITION MEANINGLESS: `f(...xs)` binds parameter i to an element nothing here
+           can name, so the whole call is refused rather than any one position. */
+        if (as.some((x) => x && (x.type === "SpreadElement" || x.type === "ArgumentPlaceholder")))
+          return no("a spread argument");
+        /* FEWER ARGUMENTS THAN PARAMETERS LEAVES THIS ONE `undefined`, which is a value the call does not
+           supply, so there is nothing to fold. */
+        if (ps.index >= as.length) return no("the call supplies no argument at that position");
+        const seen = new Set(env.sole.seen); seen.add(ps.fn);
+        const got = fold(as[ps.index], binds, depth + 1, { ...env, sole: { ...env.sole, seen } });
+        if (got.holes === 0) env.sole.settled++; else env.sole.unsettled++;
+        return got;
+      }
       return null;
     case "MemberExpression":
     case "OptionalMemberExpression": {
@@ -847,7 +904,7 @@ function foldEnvOnly(node, binds, depth, env) {
            additionally requires the OBJECT to resolve to a binding declared once in its own scope and never
            written, because a property of an object nobody can identify names nothing. */
         const m = env.slotOf.get(node);
-        if (m) return deref(fold(m, binds, depth + 1, env));
+        if (m) return deref(fold(m, binds, depth + 1, env), env);
         return null;
       }
       const key = fold(node.property, binds, depth + 1, env);
@@ -859,7 +916,7 @@ function foldEnvOnly(node, binds, depth, env) {
         const k = q.key.type === "Identifier" ? q.key.name
                 : q.key.type === "StringLiteral" ? q.key.value
                 : q.key.type === "NumericLiteral" ? String(q.key.value) : null;
-        if (k === key.text) return deref(fold(q.value, binds, depth + 1, env));
+        if (k === key.text) return deref(fold(q.value, binds, depth + 1, env), env);
       }
       return MISS();
     }
@@ -1049,6 +1106,24 @@ function collectBinds(ast) {
   const memberWrites = [];    // { obj, prop, value, plain, s }
   const memberComputed = [];  // { obj, s }                            `obj[k] = v`, which may be any slot
   const count = new Map();    // FILE-WIDE name -> binding occurrences; the ceiling column's own question
+  /* WHICH IDENTIFIER NODES ARE NOT REFERENCES AT ALL, AND WHY THE SET HAS TO BE EXPLICIT. The reference
+     COUNT below decides whether a function can be entered from anywhere but one call, so a node counted
+     wrongly matters in BOTH directions and they are not alike: an over-count refuses a sound closure, which
+     is the floor, and an UNDER-count admits an unsound one, which would hand a parameter a value some other
+     call site never passes. Every member here is a node the language resolves to no binding — a
+     declaration's own name, a plain parameter's name, a non-computed member PROPERTY, a non-computed
+     object or class KEY, and a label. Everything this walker cannot classify stays counted, which is the
+     over-counting direction on purpose.
+     THE MEMBER-PROPERTY MEMBER IS THE LOAD-BEARING ONE AND IT WAS MEASURED, NOT ASSUMED: the slack bundle
+     declares `function sendBeacon(r,n)` and spells `navigator.sendBeacon` three times, so a count that
+     read a property name as a reference would put that binding at four references and refuse the one closure
+     on this corpus that recovers a real endpoint path. */
+  const notRef = new Set();
+  const paramSlot = new Map();      // the decl object of a PLAIN parameter -> { fn, index }
+  const calleeOf = new Map();       // a call's callee NODE -> that call
+  const declOfFn = new Map();       // a function node -> the binding it is the value of, where it has one
+  const usesArguments = new Set();  // fn nodes under which the name `arguments` appears at all
+  const fnStackCB = [];
 
   const declare = (scope, name, initNode, fnNode) => {
     let d = scope.decls.get(name);
@@ -1078,19 +1153,26 @@ function collectBinds(ast) {
         const target = n.kind === "var" ? varScopeOf(cur) : cur;
         for (const d of n.declarations || []) {
           if (!d || d.type !== "VariableDeclarator") continue;
-          if (d.id.type === "Identifier") declare(target, d.id.name, d.init || null, null);
-          else declPattern(target, d.id);
+          if (d.id.type === "Identifier") {
+            declare(target, d.id.name, d.init || null, null);
+            notRef.add(d.id);
+            if (d.init && FN_LIKE.has(d.init.type)) declOfFn.set(d.init, target.decls.get(d.id.name));
+          } else declPattern(target, d.id);
         }
         break;
       }
       case "FunctionDeclaration":
-        if (n.id) declare(varScopeOf(cur), n.id.name, null, n);
+        if (n.id) {
+          declare(varScopeOf(cur), n.id.name, null, n);
+          notRef.add(n.id);
+          declOfFn.set(n, varScopeOf(cur).decls.get(n.id.name));
+        }
         break;
       case "ClassDeclaration":
-        if (n.id) declare(cur, n.id.name, null, null);
+        if (n.id) { declare(cur, n.id.name, null, null); notRef.add(n.id); }
         break;
       case "ImportSpecifier": case "ImportDefaultSpecifier": case "ImportNamespaceSpecifier":
-        declare(rootScope, n.local.name, null, null);
+        declare(rootScope, n.local.name, null, null); notRef.add(n.local);
         break;
       case "AssignmentExpression": {
         if (n.left.type === "Identifier") asgTargets.push({ n: n.left, s: cur });
@@ -1111,20 +1193,49 @@ function collectBinds(ast) {
       }
       default: break;
     }
+    /* THE NON-REFERENCE IDENTIFIER POSITIONS, the callee map the unique-call-site question reads, and the
+       one construct that defeats the whole closure. `arguments[0] = v` in sloppy mode ALIASES a parameter
+       and leaves no write any of these passes can see, so a function mentioning the name at all is refused
+       rather than reasoned about — and the mark is put on every function on the stack because an arrow has
+       no `arguments` of its own and means its enclosing function's. */
+    if ((n.type === "MemberExpression" || n.type === "OptionalMemberExpression") &&
+        !n.computed && n.property.type === "Identifier") notRef.add(n.property);
+    else if ((n.type === "ObjectProperty" || n.type === "ObjectMethod" || n.type === "ClassMethod" ||
+              n.type === "ClassProperty" || n.type === "ClassPrivateMethod") &&
+             !n.computed && n.key && n.key.type === "Identifier") notRef.add(n.key);
+    else if (n.type === "LabeledStatement" && n.label) notRef.add(n.label);
+    else if ((n.type === "BreakStatement" || n.type === "ContinueStatement") && n.label) notRef.add(n.label);
+    else if ((n.type === "CallExpression" || n.type === "OptionalCallExpression") && n.callee)
+      calleeOf.set(n.callee, n);
+    if (n.type === "Identifier" && n.name === "arguments") for (const f of fnStackCB) usesArguments.add(f);
     /* THEN THE NODE'S OWN SCOPE, AND WHAT BINDS INSIDE IT. */
     if (VAR_SCOPES.has(n.type) || BLOCK_SCOPES.has(n.type)) {
       open.push(cur);
       cur = mkScope(cur, VAR_SCOPES.has(n.type), cur.inWith || n.type === "WithStatement");
       if (FN_LIKE.has(n.type)) {
+        fnStackCB.push(n);
         /* A NAMED FUNCTION EXPRESSION'S OWN NAME IS VISIBLE INSIDE IT AND NOWHERE ELSE. */
-        if (n.type === "FunctionExpression" && n.id) declare(cur, n.id.name, null, n);
-        for (const p of n.params || []) declPattern(cur, p);
+        if (n.type === "FunctionExpression" && n.id) { declare(cur, n.id.name, null, n); notRef.add(n.id); }
+        for (let i = 0; i < (n.params || []).length; i++) {
+          const q = n.params[i];
+          declPattern(cur, q);
+          /* THE PARAMETER SLOT IS RECORDED ONLY FOR A PLAIN IDENTIFIER. A pattern, a default and a rest each
+             stand for something other than "argument i", so none of them is recorded and the arm that reads
+             this map has nothing to answer with — which is the refusal and not a gap. */
+          if (q && q.type === "Identifier") {
+            notRef.add(q);
+            paramSlot.set(cur.decls.get(q.name), { fn: n, index: i });
+          }
+        }
       } else if (n.type === "CatchClause") declPattern(cur, n.param);
       else if (n.type === "ClassExpression" && n.id) declare(cur, n.id.name, null, null);
     }
     if (n.type === "Identifier") refs.push({ n, s: cur });
     else if (n.type === "MemberExpression" || n.type === "OptionalMemberExpression") members.push({ n, s: cur });
-  }, (n) => { if (VAR_SCOPES.has(n.type) || BLOCK_SCOPES.has(n.type)) cur = open.pop(); });
+  }, (n) => {
+    if (FN_LIKE.has(n.type)) fnStackCB.pop();
+    if (VAR_SCOPES.has(n.type) || BLOCK_SCOPES.has(n.type)) cur = open.pop();
+  });
 
   /* PHASE 2 — resolution. A reference means the binding of the nearest enclosing scope that declares its
      name, which is what the language says and is the whole of this pass's claim. */
@@ -1188,7 +1299,72 @@ function collectBinds(ast) {
     if (!w || w.n !== 1) continue;
     slotOf.set(n, w.node);
   }
-  return { binds, fnDeclOf, slotOf, count, freeRef };
+  /* ── THE UNIQUE CALL SITE, AND THE PARAMETER IT DETERMINES ──────────────────────────────────────────────
+     WHAT THIS ANSWERS. The per-argument fold stops at a function boundary in the CALLER->CALLEE direction
+     too: a door written inside a helper reads its address from a PARAMETER, which has no initializer and no
+     slot, so such a row is opaque however completely the caller spelled the address. This is the other
+     direction of the boundary the inline already crosses, and it was this file's own named residual.
+     THE SOUNDNESS ARGUMENT IS THE ONCE-WRITTEN SLOT'S AND IT IS NOT "CALLED ONCE". A function whose binding
+     is referenced exactly once in the whole file, with that one reference standing in CALLEE position, can
+     be entered only through that call — so every invocation binds parameter i to the fold of THAT ONE
+     ARGUMENT EXPRESSION. How many times it is invoked is irrelevant, because the argument is the same node
+     each time and its fold is a sound over-approximation of what that node evaluates to, holes included.
+     That is why a call inside a loop, or inside another helper called a thousand times, costs this nothing.
+     WHAT A SINGLE REFERENCE EXCLUDES, and each of these is a real corpus shape: an export (`export {f}`,
+     `m.exports.f = f`) is a second reference; `f.call`/`f.apply`/`f.bind` puts the reference in an
+     OBJECT position rather than a callee one; `new f()` is a NewExpression and is not admitted; an alias
+     (`var g = f`) is a second reference; and a recursive function references its own name, so it can never
+     qualify and needs no separate guard.
+     WHAT IT INHERITS RATHER THAN GUARDS, STATED SO THE TWO ARE NOT CONFUSED. A reference inside `with` IS
+     counted here even though phase 3 refuses to resolve it, because an uncounted call site is the unsound
+     direction while an over-counted one merely refuses. `eval` is NOT guarded, and that is the same
+     assumption `binds` and `slotOf` have always made — a file that rewrites its own bindings through
+     `eval` defeats every answer this pass produces, so guarding one arm alone would be a second standard
+     rather than a stronger one. */
+  const refCount = new Map();  // decl object -> how many identifier nodes resolve to it
+  const refFirst = new Map();  // decl object -> the first such node
+  for (const { n, s: sc } of refs) {
+    if (notRef.has(n)) continue;
+    const r = resolve(sc, n.name);
+    if (!r) continue;
+    refCount.set(r.d, (refCount.get(r.d) || 0) + 1);
+    if (!refFirst.has(r.d)) refFirst.set(r.d, n);
+  }
+  const callSiteOf = new Map();  // fn node -> the one CallExpression that can enter it
+  /* AN IMMEDIATELY-INVOKED FUNCTION NEEDS NO REFERENCE COUNT AT ALL: the function expression IS the callee,
+     so no name exists anywhere for anything else to reach it through. */
+  for (const [node, call] of calleeOf)
+    if (node.type === "FunctionExpression" || node.type === "ArrowFunctionExpression") callSiteOf.set(node, call);
+  for (const [d, c] of refCount) {
+    if (c !== 1 || d.reassigned) continue;
+    const fn = d.fn || (d.init && FN_LIKE.has(d.init.type) ? d.init : null);
+    if (!fn) continue;
+    const call = calleeOf.get(refFirst.get(d));
+    if (call) callSiteOf.set(fn, call);
+  }
+  /* WHY A FUNCTION HAS NO UNIQUE CALL SITE, NAMED AS A STRUCTURE RATHER THAN COUNTED AS ONE NUMBER. The
+     refusal reasons partition differently and take different work: a function REFERENCED many times is a
+     shared helper and no call-site analysis will ever settle its parameters, while a function that is not a
+     named value at all — an object-literal property, a callback argument, a returned closure — is the
+     bundler's module shape and cannot be reached by any reference count, because there is no reference. */
+  const whyNoCall = new Map();
+  for (const [fn, d] of declOfFn) {
+    if (callSiteOf.has(fn)) continue;
+    const c = refCount.get(d) || 0;
+    whyNoCall.set(fn, d.reassigned ? "its binding is reassigned"
+      : c === 0 ? "it is named and never referenced"
+      : c > 1 ? "it is referenced " + (c > 4 ? "5 or more" : String(c)) + " times — a shared helper"
+      : "its one reference is not a callee");
+  }
+  const paramOf = new Map();   // reference node -> { fn, index } for a plain parameter nothing rewrites
+  for (const { n, s: sc } of refs) {
+    if (notRef.has(n) || sc.inWith) continue;
+    const r = resolve(sc, n.name);
+    if (!r || r.d.n !== 1 || r.d.reassigned) continue;
+    const ps = paramSlot.get(r.d);
+    if (ps && !usesArguments.has(ps.fn)) paramOf.set(n, ps);
+  }
+  return { binds, fnDeclOf, slotOf, count, freeRef, paramOf, callSiteOf, whyNoCall };
 }
 
 /* ── THE CHUNK MANIFEST ───────────────────────────────────────────────────────────────────────────────────
@@ -1347,16 +1523,17 @@ function readFile(src, filename) {
                      globalDoor: { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 },
                      manifest: { rows: [], refusedTwoApplications: 0 },
                      spell: new Map(), spellOther: { globalComputedDynamic: 0 },
-                     inline: { settled: 0, refused: new Map() }, recvDoor: { admitted: 0, declined: 0 } };
+                     inline: { settled: 0, refused: new Map() }, recvDoor: { admitted: 0, declined: 0 },
+                     sole: { settled: 0, unsettled: 0, refused: new Map() }, mutFloor: { demoted: 0, rows: [] } };
 
-  const { binds, fnDeclOf, slotOf, count: bindCount, freeRef } = collectBinds(ast);
+  const { binds, fnDeclOf, slotOf, count: bindCount, freeRef, paramOf, callSiteOf, whyNoCall } = collectBinds(ast);
   /* THE ENUMERATING FOLD'S FIXED HALF, built once per file: which binding a reference resolves to and which
      slot a member read names. The per-row half — which application, which candidate — is added at the row. */
   /* `freeRef` IS PART OF THE FOLD'S ENV AND NOT ONLY THE DOOR MATCHER'S, because the coercion arms below
      ask the same question the global door asks — is this `URL`, this `Request`, this `String` the platform's
      one — and one answer read two ways is what keeps them from disagreeing. A fold with no env cannot answer
      it and REFUSES, which is the floor direction. */
-  const envBase = { fnDeclOf, slotOf, freeRef };
+  const envBase = { fnDeclOf, slotOf, freeRef, paramOf, callSiteOf, whyNoCall };
   const manifest = scanManifest(ast, binds, envBase, filename);
   /* THE DOOR CHANNEL'S OWN ENV, AND WHY THE DOOR CHANNEL HAS ONE AT ALL. `foldEnvOnly` was reached only
      with a manifest CANDIDATE, so every arm in it that needs no candidate was being withheld from the rows
@@ -1374,7 +1551,13 @@ function readFile(src, filename) {
      for every call. What the door channel adds is `inline`, which is the OTHER direction of the same
      boundary crossing and is priced by the three numbers it carries. */
   const inlineBudget = { seen: new Set(), settled: 0, refused: new Map() };
-  const envDoor = { ...envBase, vars: new Map(), app: null, fn: null, candidate: null, inline: inlineBudget };
+  const soleBudget = { seen: new Set(), settled: 0, unsettled: 0, refused: new Map() };
+  /* THE FLOOR'S COUNTER AND THE ROWS IT DEMOTED. Kept on the DOOR env rather than inside `deref` so the
+     rows can be named at the site that owns them: a demotion read off a global would say how many there
+     are and never WHERE, and where is the whole of what makes the residual above answerable. */
+  const mutFloor = { demoted: 0, rows: [] };
+  const envDoor = { ...envBase, vars: new Map(), app: null, fn: null, candidate: null,
+                    inline: inlineBudget, sole: soleBudget, mutFloor };
   const sites = [];
   const pathish = new Set();
   const blind = [];
@@ -1474,7 +1657,10 @@ function readFile(src, filename) {
 
     if (door && args) {
       const a = args[door.urlArg];
+      const m0 = mutFloor.demoted;
       const r = a ? fold(a, binds, 0, envDoor) : { text: "{?}", holes: 1 };
+      if (mutFloor.demoted > m0)
+        mutFloor.rows.push({ chan: door.id, file: filename, line: n.loc ? n.loc.start.line : 0, url: r.text });
       const literalChars = r.text.replace(/\{\?\}/g, "").length;
       let kind;
       if (a && a.type === "StringLiteral") kind = "literal";
@@ -1694,7 +1880,10 @@ function readFile(src, filename) {
          the one direction a blind spot must not be wrong in, since a blind spot stated too large certifies
          nothing while one stated too small is read as a clean bill. Its opaque share moving DOWN is the
          honest consequence of the doors' own share moving down. */
+      const m0 = mutFloor.demoted;
       const r = fold(n.right, binds, 0, envDoor);
+      if (mutFloor.demoted > m0)
+        mutFloor.rows.push({ chan: "." + L.property.name, file: filename, line: n.loc ? n.loc.start.line : 0, url: r.text });
       const literalChars = r.text.replace(/\{\?\}/g, "").length;
       const kind = n.right.type === "StringLiteral" ? "literal"
         : r.holes === 0 ? "folded" : literalChars > 0 ? "shape" : "opaque";
@@ -1713,7 +1902,9 @@ function readFile(src, filename) {
 
   return { parsed: true, error: null, sites, pathish, blind, xhrOpenSkippedNonLiteralMethod, globalDoor,
            manifest, spell, spellOther,
-           inline: { settled: inlineBudget.settled, refused: inlineBudget.refused }, recvDoor };
+           inline: { settled: inlineBudget.settled, refused: inlineBudget.refused }, recvDoor,
+           sole: { settled: soleBudget.settled, unsettled: soleBudget.unsettled, refused: soleBudget.refused },
+           mutFloor };
 }
 
 /* ── THE ARMED CONTROL ────────────────────────────────────────────────────────────────────────────────────
@@ -1820,6 +2011,51 @@ const SELFTEST = [
   [`function f(){return fetch("/rs")}`,                     ["fetch|data|literal|/rs"]],
   [`const g=async()=>fetch("/rq")`,                         ["fetch|data|literal|/rq"]],
   [`async function o(){return function(){return fetch("/rn")}}`, ["fetch|data|literal|/rn"]],
+  /* ── THE UNIQUE-CALL-SITE CLOSURE, EVERY ARM AND EVERY REFUSAL ─────────────────────────────────────────
+     THE POSITIVE ROWS FIRST, because a closure whose refusals are armed and whose acceptance is not is a
+     mechanism nobody has shown working. The negatives below are the ones that matter more: every one of them
+     is a shape where binding the parameter to one call's argument would state an address some OTHER entry
+     into the function never passes, which is this file INVENTING one — the single failure it may not have. */
+  [`function f(u){fetch(u)}f("/a/b")`,                      ["fetch|data|folded|/a/b"]],
+  [`const f=u=>fetch(u);f("/a/"+r)`,                        ["fetch|data|shape|/a/{?}"]],
+  [`(u=>fetch(u))("/iife")`,                                ["fetch|data|folded|/iife"]],
+  [`function f(a,b){fetch(b)}f("/x","/y")`,                 ["fetch|data|folded|/y"]],
+  //  THE SCOPE CONTROL, AND IT IS THE ONE THAT SAYS THIS IS NOT A NAME MATCH: two functions whose parameter
+  //  is spelled the same, one nested in the other, and the door inside the inner one. `/in` is the answer a
+  //  browser reads; `/out` is what a pass keying on the NAME would report.
+  [`function f(u){function g(u){fetch(u)}g("/in")}f("/out")`, ["fetch|data|folded|/in"]],
+  //  A SECOND CALL SITE MEANS THE PARAMETER IS NOT DETERMINED — the first refusal, and the commonest.
+  [`function f(u){fetch(u)}f("/a");f("/b")`,                ["fetch|data|opaque|{?}"]],
+  //  A RECURSIVE FUNCTION REFERENCES ITS OWN NAME, so it can never qualify and needs no separate guard.
+  [`function f(u){fetch(u);f(u)}f("/a")`,                   ["fetch|data|opaque|{?}"]],
+  //  THE REFERENCE IS NOT A CALLEE — passed as a value, reached through `.call`, or constructed. Each of
+  //  these can be entered with arguments this file never sees.
+  [`function f(u){fetch(u)}g(f)`,                           ["fetch|data|opaque|{?}"]],
+  [`function f(u){fetch(u)}f.call(null,"/a")`,              ["fetch|data|opaque|{?}"]],
+  [`function f(u){fetch(u)}new f("/a")`,                    ["fetch|data|opaque|{?}"]],
+  //  THE FUNCTION IS NOT A NAMED VALUE AT ALL — an object method, which is the bundler's own module shape
+  //  and the dominant refusal over the corpus. There is no reference for any count to be about.
+  [`const o={f(u){fetch(u)}};o.f("/a")`,                    ["fetch|data|opaque|{?}"]],
+  //  A SPREAD MAKES POSITION MEANINGLESS, and a call short of the parameter supplies nothing to fold.
+  [`function f(u){fetch(u)}f(...a)`,                        ["fetch|data|opaque|{?}"]],
+  [`function f(u,v){fetch(v)}f("/a")`,                      ["fetch|data|opaque|{?}"]],
+  //  THE PARAMETER IS REWRITTEN INSIDE THE BODY, so what the call passed is not what the door reads. This is
+  //  the row whose WRONG answer would be an address the program never requests.
+  [`function f(u){u="/z";fetch(u)}f("/a")`,                 ["fetch|data|opaque|{?}"]],
+  //  `arguments` ALIASES A PARAMETER IN SLOPPY MODE and leaves no write any of these passes can see, so a
+  //  function mentioning the name is refused outright rather than reasoned about.
+  [`function f(u){arguments[0]="/z";fetch(u)}f("/a")`,      ["fetch|data|opaque|{?}"]],
+  //  A PATTERN, A DEFAULT AND A REST each stand for something other than "argument i".
+  [`function f({u}){fetch(u)}f({u:"/a"})`,                  ["fetch|data|opaque|{?}"]],
+  [`function f(u="/d"){fetch(u)}f("/a")`,                   ["fetch|data|opaque|{?}"]],
+  //  A FUNCTION NOBODY CALLS HAS NO ARGUMENT TO READ, and one whose BINDING is rewritten could be any
+  //  function at all by the time the call runs — two refusals that look like the others and are not,
+  //  because neither is about how many times the name is referenced.
+  [`function f(u){fetch(u)}`,                               ["fetch|data|opaque|{?}"]],
+  [`var f=u=>fetch(u);f=null`,                              ["fetch|data|opaque|{?}"]],
+  //  TWO HELPERS CALLING ONLY EACH OTHER are unreachable code and still a CYCLE in this graph, so the walk
+  //  carries its own seen set rather than trusting the depth limit to end it.
+  [`function f(u){g(u)}function g(v){f(v);fetch(v)}`,       ["fetch|data|opaque|{?}"]],
 ];
 const SELFTEST_GUARDED = new Set([`if(a){fetch("/g")}`]);
 /* THE REACH BAND'S OWN CONTROLS — source to the pair the row must carry. It is armed in BOTH directions and
@@ -1921,6 +2157,8 @@ const SELFTEST_MANIFEST_TWO = `var p={};p.u=e=>1===e?"/a/1.js":"/b";p.v=e=>2===e
 function selftest() {
   const seenKind = new Set(), seenCls = new Set();
   let spoke = 0, reachSpoke = 0;
+  const soleRefused = new Set();
+  let soleSettled = 0, soleUnsettled = 0, mutDemoted = 0;
   for (const [src, want] of SELFTEST) {
     const r = readFile(src, "<selftest>");
     if (!r.parsed) die(`SELF-TEST: the parser refused \`${src}\` — ${r.error}`);
@@ -1930,6 +2168,8 @@ function selftest() {
           `This file's classifier no longer does what its own numbers are read as meaning. Every figure ` +
           `below this point would be about a different question, so nothing is printed.`);
     for (const x of r.sites) { seenKind.add(x.kind); seenCls.add(x.cls); spoke++; }
+    for (const k of r.sole.refused.keys()) soleRefused.add(k);
+    soleSettled += r.sole.settled; soleUnsettled += r.sole.unsettled; mutDemoted += r.mutFloor.demoted;
     /* THE BRANCH COLUMN IS ARMED HERE AND NOWHERE ELSE. It reads 0 over the corpus, and a column that has
        never spoken cannot tell "the corpus has none" from "the mechanism is dead" — which is exactly the
        pair CLAUDE.md §A-CONTROL-ARMS-ONLY-ON-A-SITE exists to separate. */
@@ -1957,6 +2197,34 @@ function selftest() {
         die(`SELF-TEST FAILED: an address-shaped literal attached to no door was not counted as a base rate.`);
     }
   }
+  /* ── THE CLOSURE'S OWN REFUSALS, EACH SHOWN FIRING ──────────────────────────────────────────────────────
+     CLAUDE.md §A-CONTROL-ARMS-ONLY-ON-A-SITE-THE-INSTRUMENT-CAN-JUDGE: a refusal row nobody has watched fire
+     cannot be told apart from a refusal row that is dead, so every reason the closure can print is named here
+     and the selftest DIES if one of them never spoke. The list is the reasons themselves rather than a count
+     of them, because a count would be satisfied by any three of the eight. */
+  const wantSoleRefusals = [
+    "no call site: it is referenced 2 times — a shared helper",
+    "no call site: its one reference is not a callee",
+    "no call site: it is not a named value at all",
+    "no call site: it is named and never referenced",
+    "no call site: its binding is reassigned",
+    "a cyclic call graph",
+    "a spread argument",
+    "the call supplies no argument at that position",
+  ];
+  for (const k of wantSoleRefusals)
+    if (!soleRefused.has(k))
+      die(`SELF-TEST FAILED: no control makes the unique-call-site closure refuse for the reason ` +
+          `"${k}", so that row's count is unarmed and a zero in it says nothing about the corpus.`);
+  if (!(soleSettled > 0))
+    die(`SELF-TEST FAILED: no control shows the unique-call-site closure SETTLING a parameter, so its ` +
+        `\`settled 0\` over the corpus cannot be told from a dead mechanism.`);
+  if (!(soleUnsettled > 0))
+    die(`SELF-TEST FAILED: no control shows the closure crossing to an argument that is itself opaque, so ` +
+        `\`unsettled\` — the arm working and buying nothing — is measuring nothing.`);
+  if (!(mutDemoted > 0))
+    die(`SELF-TEST FAILED: no control demotes a constructed URL read through a name, so the mutable-fold ` +
+        `floor's count is unarmed and the residual it prices is a claim rather than a measurement.`);
   const seenBlindKind = new Set(), seenBlindProp = new Set();
   let blindSpoke = 0;
   for (const [src, want] of SELFTEST_BLIND) {
@@ -2167,7 +2435,8 @@ function selftest() {
   return { rows: SELFTEST.length, produced: spoke, blindRows: SELFTEST_BLIND.length, blindProduced: blindSpoke,
            manifestRows: SELFTEST_MANIFEST.length + 1, manifestProduced: manifestSpoke, manifestAddrs,
            reachRows: SELFTEST_REACH.size, spellRows: spWant.length, spellColumns: SPELLINGS.length + 2,
-           spellNames: ENTRY_NAMES.size, derivationRefusals: 3 };
+           spellNames: ENTRY_NAMES.size, derivationRefusals: 3,
+           soleReasons: wantSoleRefusals.length, soleSettled, soleUnsettled, mutDemoted };
 }
 
 /* ── THE RUN ──────────────────────────────────────────────────────────────────────────────────────────── */
@@ -2233,6 +2502,7 @@ function main(argv) {
       blind: { sites: 0, literal: 0, folded: 0, shape: 0, opaque: 0, src: 0, href: 0 }, blindUrls: new Set(), xhrOpenSkipped: 0,
       globalDoor: { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 },
       inline: { settled: 0, refused: new Map() }, recvDoor: { admitted: 0, declined: 0 },
+      sole: { settled: 0, unsettled: 0, refused: new Map() }, mutFloor: { demoted: 0, rows: [] },
       manifest: { sites: 0, addressSites: 0, candidates: 0, dropped: 0, fragments: 0, refusedTwoApplications: 0, multi: 0 },
       manifestUrls: new Set(), manifestRows: [],
       spell: {}, spellOther: { globalComputedDynamic: 0 },
@@ -2268,6 +2538,10 @@ function main(argv) {
     for (const k of Object.keys(b.recvDoor)) b.recvDoor[k] += r.recvDoor[k];
     b.inline.settled += r.inline.settled;
     for (const [k, v] of r.inline.refused) b.inline.refused.set(k, (b.inline.refused.get(k) || 0) + v);
+    b.sole.settled += r.sole.settled; b.sole.unsettled += r.sole.unsettled;
+    for (const [k, v] of r.sole.refused) b.sole.refused.set(k, (b.sole.refused.get(k) || 0) + v);
+    b.mutFloor.demoted += r.mutFloor.demoted;
+    for (const row of r.mutFloor.rows) b.mutFloor.rows.push(row);
     b.spellOther.globalComputedDynamic += r.spellOther.globalComputedDynamic;
     for (const [nm, t] of r.spell) {
       if (!b.spell[nm]) b.spell[nm] = spellTally();
@@ -2362,6 +2636,7 @@ function main(argv) {
     blind: { sites: 0, literal: 0, folded: 0, shape: 0, opaque: 0, src: 0, href: 0 }, blindDistinctUrls: 0, xhrOpenSkipped: 0,
     globalDoor: { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 },
     inline: { settled: 0, refused: new Map() }, recvDoor: { admitted: 0, declined: 0 },
+    sole: { settled: 0, unsettled: 0, refused: new Map() }, mutFloor: { demoted: 0, rows: [] },
     manifest: { sites: 0, addressSites: 0, candidates: 0, dropped: 0, fragments: 0, refusedTwoApplications: 0, multi: 0 }, manifestDistinctUrls: 0,
     /* THE SPELLING BAND'S OWN TOTALS. `spellSites` is a presence count over SITES and never a sum of
        occurrences, because the landed rows it prices are read as a bit and a site is the unit at which one
@@ -2391,6 +2666,10 @@ function main(argv) {
     for (const k of Object.keys(tot.recvDoor)) tot.recvDoor[k] += b.recvDoor[k];
     tot.inline.settled += b.inline.settled;
     for (const [k, v] of b.inline.refused) tot.inline.refused.set(k, (tot.inline.refused.get(k) || 0) + v);
+    tot.sole.settled += b.sole.settled; tot.sole.unsettled += b.sole.unsettled;
+    for (const [k, v] of b.sole.refused) tot.sole.refused.set(k, (tot.sole.refused.get(k) || 0) + v);
+    tot.mutFloor.demoted += b.mutFloor.demoted;
+    for (const row of b.mutFloor.rows) tot.mutFloor.rows.push(row);
     tot.spellOther.globalComputedDynamic += b.spellOther.globalComputedDynamic;
     for (const nm of ENTRY_NAMES) {
       const t = b.spell[nm];
@@ -2486,6 +2765,9 @@ function main(argv) {
               `${st.manifestAddrs} address(es), the rest refused for a stated reason`);
   console.log(`         plus ${st.reachRows} REACH controls, each asserted for BOTH its function depth and ` +
               `whether its innermost enclosing function is async`);
+  console.log(`         plus the unique-call-site closure: all ${st.soleReasons} refusal reason(s) shown FIRING, ` +
+              `${st.soleSettled} parameter(s) settled and ${st.soleUnsettled} crossed to an opaque argument, and ` +
+              `${st.mutDemoted} mutable-fold demotion(s) — so neither price is a zero nobody has armed`);
   console.log(`         plus ${st.spellRows} SPELLING controls over ${st.spellNames} name(s) derived from the ` +
               `engine, every one of ${st.spellColumns} column(s) shown rising and every silence asserted`);
   console.log(`         plus the derivation itself: 1 positive row and ${st.derivationRefusals} refusal(s) ` +
@@ -2587,6 +2869,50 @@ function main(argv) {
   console.log(`  settled ${tot.inline.settled}   call(s) whose whole value the inline recovered`);
   for (const [k, v] of [...tot.inline.refused].sort((a, b) => b[1] - a[1]))
     console.log(`  refused ${String(v).padStart(5)}   ${k === "async" ? "an `async` or generator callee — its call evaluates to a Promise and not to the body's value, so inlining one would fabricate an address that looks exactly like the real one" : k === "nested-fn" ? "a function written inside the expression being inlined, which could rebind the parameter's name and make the substitution name a value no call site passes" : k}`);
+  /* ── THE UNIQUE-CALL-SITE CLOSURE AND ITS PRICE ─────────────────────────────────────────────────────────
+     THE OTHER DIRECTION OF THE BOUNDARY THE INLINE CROSSES, and reported the same way for the same reason.
+     What this one adds that the inline's block does not is that its refusals name a STRUCTURE rather than a
+     spelling: a helper referenced five times is a shared helper and no call-site analysis will ever settle
+     its parameters, while a function that is not a named value AT ALL — an object-literal property, a
+     callback argument, a returned closure — is the bundler's module shape, where there is no reference for
+     any count to be about. Those two take opposite work, and summing them into one number would say only
+     that the closure declined.
+     `unsettled` IS PRINTED APART FROM `settled` BECAUSE THEY ARE DIFFERENT FACTS. A parameter resolved to an
+     argument that is itself opaque is this arm WORKING and buying nothing — the caller did not spell the
+     address either — and that is not the arm refusing. A reading that merged them would report the closure
+     as having declined a population it in fact crossed. */
+  console.log(``);
+  console.log(`THE UNIQUE-CALL-SITE CLOSURE AND WHAT IT DECLINED — a door written inside a helper reads its`);
+  console.log(`  address from a PARAMETER, which has no initializer and no slot, so the row is opaque however`);
+  console.log(`  completely the CALLER spelled the address. Where a function's binding is referenced exactly`);
+  console.log(`  once and that one reference is a callee, every invocation binds parameter i to the fold of`);
+  console.log(`  that one argument — sound for the same reason a once-written slot is, and independent of how`);
+  console.log(`  many times the call runs, because the argument is the same node each time.`);
+  console.log(`  settled   ${String(tot.sole.settled).padStart(5)}   parameter(s) resolved to a COMPLETE text — a row this closure moved OUT of the razor`);
+  console.log(`  unsettled ${String(tot.sole.unsettled).padStart(5)}   resolved to the caller's argument and it carries a hole too — the arm working, buying nothing`);
+  for (const [k, v] of [...tot.sole.refused].sort((a, b) => b[1] - a[1]))
+    console.log(`  refused   ${String(v).padStart(5)}   ${k}`);
+  console.log(``);
+
+  /* ── THE MUTABLE-FOLD FLOOR AND ITS PRICE ────────────────────────────────────────────────────────────────
+     THE ONE NUMBER THAT MAKES A NAMED RESIDUAL A MEASUREMENT. `deref` demotes a `new URL` read out of a
+     name, a slot or an object-literal property, because a URL is mutable and `searchParams.set` leaves no
+     trace in the text this fold reads. Every demotion is therefore a row whose text was recovered COMPLETELY
+     and is reported as a SHAPE, so this count is the exact CEILING on what an escape analysis over the URL's
+     binding could ever recover — and the rows carry their coordinates, so whether each URL is really mutated
+     is answered by READING THE SOURCE rather than by believing a sentence in the header. */
+  console.log(``);
+  console.log(`THE MUTABLE-FOLD FLOOR AND WHAT IT COST — a constructed URL read through a NAME is demoted to a`);
+  console.log(`  SHAPE, because a URL is mutable and a searchParams write leaves nothing in the text. Each row`);
+  console.log(`  below is one whose text this fold recovered COMPLETELY and which is reported as incomplete, so`);
+  console.log(`  the count is the CEILING on what proving the absence of mutation could recover — and the`);
+  console.log(`  coordinates are printed so that question is settled by reading the bundle, never by a claim here.`);
+  console.log(`  demoted ${tot.mutFloor.demoted}`);
+  for (const row of tot.mutFloor.rows.slice(0, 12))
+    console.log(`    [${row.chan}] ${row.file}:${row.line}  ${row.url.slice(0, 120)}`);
+  if (tot.mutFloor.rows.length > 12) console.log(`    ... and ${tot.mutFloor.rows.length - 12} more`);
+  console.log(``);
+
   console.log(``);
   console.log(`HOW A REAL BUNDLE SPELLS THE NAMES THE ENGINE'S COMPILER-SIDE ROWS COUNT — the population a`);
   console.log(`  MEMBER-NAME CHANNEL would add, measured before it is built. Two engine components raise a row`);
