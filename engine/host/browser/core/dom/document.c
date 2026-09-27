@@ -707,21 +707,44 @@ enum { QS_FIRST = 0, QS_ALL, QS_MATCHES, QS_CLOSEST };
 enum { IDL_STEP_STAGE_BASE(QS_STAGES) QS_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const QS_STEPS[] = { QS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
+/* WHICH COMPLETION OF A §6 PREDICATE OVER AN UNDETERMINED VALUE THIS WORLD IS IN. TWO, and OUTCOME 0 IS "DOES
+   NOT HOLD" — step_fork_run's one numbering rule, read against this predicate: a run with no forking policy
+   (the @S candidate re-fire) takes 0, and 0 is the arm the matcher's own control flow already realises, since
+   an undetermined read behaves as no-match there. So the answer a release build gives is byte-identical to the
+   one every build gave before this fork existed, with nothing to re-derive. */
+enum { QS_PRED_FALSE = 0, QS_PRED_TRUE, QS_PRED_OUTCOMES };
+
 typedef struct {
     SelectorList *compiled;   /* Selectors 4 §17.1's parsed selector, SHARED by reference with every forked arm */
     lxb_dom_node_t *root, *cursor;
     JSValue arr;      /* QS_ALL's collected matches (owned) */
     uint32_t n;
+    /* THE §6 PREDICATE THIS FLOW HAS PROVED HOLDS, and it is ON THE STATE for the reason the ask key below is:
+       the SNAPSHOT has to carry it. A sibling minted at the fork resumes here and re-runs the match, and the
+       match's answer is a function of what is supplied to it — so an arm held in a C local would be an arm the
+       sibling never receives, and the re-run would decline on the same predicate and fork again for ever. Its
+       `over` is an OWNED reference (qs_visit names it) rather than the borrowed one the match hands out,
+       because the value has to outlive the park the arm was decided across. */
+    SelectorUndet decided;
+    /* THE NAME OF THE FORK THIS WALK IS ASKING — step_fork_run's `op`, and HALF THE CONSTRAINT KEY rather than
+       a label. It is here and not a C local because the driver reads `JSStepHdr::fork_op` AFTER the machine has
+       returned JS_STEP_FORK, by which time a local of this body is gone; and it is re-composed from the record
+       on every entry, so what survives the park is `fork_ask_key`'s content hash matching the question rather
+       than these bytes. */
+    char ask[SELECTOR_UNDET_KEY_MAX];
 } QsState;
 
 /* EVERYTHING THIS MACHINE OWNS, and the whole of it — which is what makes it forkable. The compiled selector
    is refcounted and read-only, so the sibling arm takes a reference rather than a copy: nothing writes it
    after selector_list_compile built it, and the interior pointers a match takes into it therefore stay valid
-   in both arms. The cursor and the root are borrowed tree pointers the COW delta already isolates. */
+   in both arms. The cursor and the root are borrowed tree pointers the COW delta already isolates.
+   THE DECIDED PREDICATE'S `over` IS THE THIRD REFERENCE and the rest of that record is inline bytes the fork's
+   byte-copy carries for free — so is `ask`, which is scratch re-composed on every entry. */
 static void qs_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     QsState *s = st;
     v->val(ctx, &s->arr);
+    v->val(ctx, &s->decided.over);
     v->shared(ctx, (void **)&s->compiled, s->compiled ? &s->compiled->refs : NULL, selector_list_destroy);
 }
 
@@ -730,8 +753,13 @@ static int js_document_qs(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
 {
     QsState *s = st;
     int magic = idl_step_magic(hdr);
+    bool matched;
 
     (void)out_cb; (void)out_argc;
+    /* THIS MACHINE ISSUES NO REQUEST THAT DELIVERS A VALUE, so `cb_result` is never its answer: on an ordinary
+       re-entry it is the driver's filler and on both of a fork's two entries (the parent's delivery and the
+       sibling's resume) it is the driver's filler too. Releasing it unconditionally is what leaves this body no
+       `step_fork_pending` question to get wrong — the shape quickjs.c names as the one with nothing to ask. */
     JS_FreeValue(ctx, cb_result);
 
     if (hdr->stage == QS_PARSE) {
@@ -785,7 +813,111 @@ static int js_document_qs(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         return JS_STEP_DONE;
     }
 
-    if (selector_match_node(s->cursor, s->compiled->list, NULL)) {
+    /* SELECTORS 4 §17.3 AGAINST THIS ONE NODE, AND A FORK WHERE ITS ANSWER IS KLEENE'S THIRD VALUE.
+     *
+     * THE LOOP IS THE WALK OF THIS NODE'S OWN QUESTIONS AND NOT A WALK OF THE TREE — the cursor does not move
+     * inside it. A selector poses one question per simple selector that reads a value, and the matcher abandons
+     * a compound at the first it cannot decide, so the answers arrive ONE AT A TIME: decide one predicate, run
+     * the match again, and either it concludes or it declines on the NEXT one. That is
+     * `step_ownkeys_chain`'s shape — a request per element rather than a drive over all of them — and it is
+     * what makes the flow end up holding a constraint on EVERY undetermined member instead of one arm standing
+     * for all of them.
+     * RE-RUNNING THE MATCH IS WHAT MAKES THE ANSWER ACTIONABLE, and it is sound because a match runs none of
+     * the page's code: it reads the tree, this flow's own pins and this flow's own decided predicate, so the
+     * same three inputs give the same answer and a second run cannot observe anything the first did not.
+     * AND IT IS WHAT EVERY ENTRY DOES, including the parent's fork delivery and the sibling's resume. Neither
+     * of those carries a value — this machine issues no request that delivers one, which is why `cb_result` is
+     * released unconditionally at the top — so an entry re-runs the match with the state's own `decided`
+     * UNCHANGED, declines on the same predicate, re-composes the same key and consumes its answer at the same
+     * call site. That is what `JSStepHdr::fork_ask_key`'s content hash asserts, and it is the reason `ask` and
+     * `decided` are on the state rather than in this body. */
+    for (;;) {
+        SelectorUndet u;
+        int arm, rc;
+
+        matched = selector_match_node(s->cursor, s->compiled->list, NULL,
+                                      s->decided.undetermined ? &s->decided : NULL, &u);
+        /* A DEFINITE ANSWER, WHICH IS EVERY NODE OF EVERY DOCUMENT THAT PUT NO UNKNOWN IN AN ATTRIBUTE. */
+        if (!u.undetermined) break;
+        /* AND AN UNDETERMINED ANSWER THIS FORK CANNOT REALISE, which selector_match_node has ALREADY ABORTED on
+           in dev — see SelectorUndet::forkable for the two reasons. This is that abort's release arm and is the
+           same defined wrong answer every build gave before the fork existed: `matched` is the answer under
+           "the test does not hold", which is what the matcher's control flow already computed. */
+        if (!u.forkable) break;
+        /* THE SAME PREDICATE DECLINING AGAIN AFTER THIS FLOW PROVED IT HOLDS is the one state that would make
+           this loop unbounded, and it cannot arise: the supply at host_attr_value_read grants the arm on
+           `selector_pred_same` — the SAME predicate comparison this asks, which is why it is asked through that
+           entry and not re-spelled here — and `SelectorUndet::forkable` already refused every ask whose value
+           has no identity to recognise it by and every operand that cannot satisfy its own test.
+           SO IT IS AN INVARIANT AND NOT A GUARD, AND IT STILL HAS A RELEASE ARM, which is the one thing a bare
+           assert here could not have: with the abort compiled out, a re-decline is an unbounded fork — a
+           sibling per re-match over ONE question — and that is not the unbounded WORK §NO BOUNDS protects, it
+           is a loop that emits nothing and explores nothing. The `break` leaves `matched`, which is the answer
+           under "the test does not hold" and the answer every build gave before this fork existed. */
+        if (s->decided.undetermined && selector_pred_same(&s->decided, &u)) {
+            DFAILF("DOM §1.3 step 3's walk proved `[%s\"%s\"]` HOLDS and the next match declined on that same "
+                   "predicate — the supply at core/dom/selector_match.c's host_attr_value_read grants the arm "
+                   "on selector_pred_same and on the value's own identity, and this asks the same comparison, "
+                   "so a re-decline means the VALUE the match read is not the one the arm was decided about. "
+                   "The usual cause is a flow whose attribute shadow moved under it between the fork and the "
+                   "re-match, which a match cannot do because it runs none of the page's code",
+                   u.attr, u.operand);
+            break;
+        }
+        if (!selector_undet_key(s->ask, sizeof s->ask, &u)) {
+            /* A TRUNCATED KEY FILES TWO QUESTIONS UNDER ONE NAME, so one predicate's recorded arm would decide
+               another's. SelectorUndet::forkable already refuses a truncated FIELD, and this is the width of
+               the composed key rather than of its parts — the two bounds are checked at the two places they
+               are, so neither can be satisfied by the other. */
+            DFAILF("DOM §1.3 step 3's walk could not spell the constraint key for `[%s\"%s\"]` — the key is what "
+                   "a parked flow's recorded answers are filed under, and a truncated one lets one predicate's "
+                   "arm decide another's. SELECTOR_UNDET_KEY_MAX is sized from SelectorUndet's own two buffers, "
+                   "so reaching this means those two widths and this one have stopped agreeing",
+                   u.attr, u.operand);
+            break;
+        }
+        /* `real` IS JS_OUTCOME_REAL_UNSTATED AND IT IS A POSITIVE STATEMENT. The question is which completion
+           this predicate reaches when run on the operand's EXAMPLE, and this machine cannot compute it: the
+           example never reaches the matcher, because host_attr_value_read answers UNDETERMINED rather than
+           handing over bytes it has not proved. Saying so leaves both arms running with neither marked forced,
+           which is what the sentinel is for.
+           NAMED RESIDUAL — THE EXAMPLE COULD ANSWER IT AND DOES NOT. WHAT IS NOT COVERED: a concolic carrying a
+           concrete example has bytes the matcher could decide this predicate against, so `real` is knowable for
+           that population and is stated as unknown. WHAT THE NEXT DIFF BUILDS: a probe answer at the value seam
+           that supplies the EXAMPLE for one ask, so this machine can run the predicate on it and name the real
+           completion. HOW ITS ABSENCE WOULD SHOW, as an observation: a forced request whose provenance says no
+           arm was forced, for a page whose attribute this engine holds an example for. */
+        rc = step_fork_run(ctx, hdr, u.over, s->ask, QS_PRED_OUTCOMES, JS_OUTCOME_REAL_UNSTATED, &arm);
+        if (rc) return rc;   /* parked at the fork; the sibling resumes at this stage with the other completion */
+        DCHECKF(arm == QS_PRED_FALSE || arm == QS_PRED_TRUE,
+                "DOM §1.3 step 3's walk was answered with a completion it never declared (%d) — a §6 predicate "
+                "has two and the numbering is `does not hold` first", arm);
+        /* OUTCOME 0: THE TEST DOES NOT HOLD, and `matched` IS ALREADY THE ANSWER UNDER IT. An undetermined read
+           behaves as no-match in the matcher's control flow, so the match just performed is the one this arm
+           asks for — there is nothing to re-run and nothing to supply. */
+        if (arm == QS_PRED_FALSE) break;
+        /* OUTCOME 1: IT HOLDS. Hand it back to the next match, which realises it and either concludes or
+           declines on the next question this selector poses.
+           ONE SLOT, AND THE SECOND IS AN ABORT RATHER THAN A SILENT OVERWRITE. A compound both of whose members
+           are undetermined and whose flow answers TRUE to both needs two supplied AT ONCE, and overwriting the
+           first would decide the second's test against the first's operand — a merge of two questions inside
+           one match, which is the whole thing the key is composed to prevent. The next diff is this slot
+           becoming a SET the `visit` above carries; until then this names itself. */
+        if (s->decided.undetermined) {
+            DFAILF("DOM §1.3 step 3's walk proved a SECOND §6 predicate holds in one match — `[%s\"%s\"]` "
+                   "beside `[%s\"%s\"]` — and this machine supplies one at a time. A compound with two "
+                   "undetermined members whose flow takes the holding arm of both needs both supplied to the "
+                   "same match; build the decided slot into a SET the machine's `visit` carries. Until then the "
+                   "second test is undetermined at the re-match and this selector answers no-match, which is "
+                   "the answer every build gave before this fork existed",
+                   s->decided.attr, s->decided.operand, u.attr, u.operand);
+            break;
+        }
+        s->decided = u;
+        s->decided.over = JS_DupValue(ctx, u.over);   /* OWNED from here: the park has to carry the value */
+    }
+
+    if (matched) {
         switch (magic) {
         case QS_ALL:
             JS_SetPropertyUint32(ctx, s->arr, s->n++, node_wrap(ctx, s->cursor));
@@ -799,6 +931,17 @@ static int js_document_qs(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         }
     }
 
+    /* THE DECIDED PREDICATE IS SPENT WHEN THE CURSOR MOVES, AND DISCARDING IT LOSES NO FACT. What it holds is
+       one match's SUPPLY and not the flow's knowledge: the knowledge is in the flow's own constraint record,
+       written by the solver when the arm was settled, so the next node whose attribute holds the same value
+       under the same predicate has its answer REPLAYED at the ask rather than forked again — a re-entry rather
+       than a sibling. Keeping it instead would make the one-slot limit a fact about the WALK rather than about
+       one compound: two nodes holding two different unknowns under one selector would each prove a predicate
+       and the second would meet the abort above, for a shape that has nothing wrong with it. */
+    if (s->decided.undetermined) {
+        JS_FreeValue(ctx, s->decided.over);
+        memset(&s->decided, 0, sizeof s->decided);
+    }
     switch (magic) {
     case QS_FIRST:
     case QS_ALL:     s->cursor = node_next_in(s->cursor, s->root); break;

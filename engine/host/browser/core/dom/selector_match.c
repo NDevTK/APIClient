@@ -24,10 +24,10 @@ static bool host_defined(const lxb_dom_node_t *node, void *ctx)
     return custom_elements_is_defined(node);
 }
 
-#if APICLIENT_DEV
 /*
  * THE PREDICATE THIS MATCH DECLINED ON -- the ask's own identity, kept so that the crash at
- * `selector_match_node` names the TEST rather than only the selector it was inside.
+ * `selector_match_node` names the TEST rather than only the selector it was inside, and so that a caller that
+ * can KEEP the arm can compose the fork's key from it.
  *
  * WHY THE SELECTOR TEXT IS NOT ENOUGH. A real sheet's selector is a LIST, and the list is what the crash can
  * already serialize; which of its simple selectors read a value the host declined to state is not recoverable
@@ -48,10 +48,12 @@ static bool host_defined(const lxb_dom_node_t *node, void *ctx)
  * that argument stops at the return. A copy has no lifetime question, and a diagnostic's cost is paid on the
  * decline path only. Truncation is correct for a diagnostic, exactly as it is for the selector text below.
  *
- * DEV ONLY, BECAUSE ITS ONLY CONSUMER IS THE CRASH -- which is the same reasoning this file's value seam once
- * gave for compiling its own work out, and it is sound HERE for the reason it stopped being sound there: both
- * answers the seam gives are correctness answers, and a spelled predicate is not. RETIREMENT: this record's
- * gate goes when the fork reads it, because the key is then a correctness datum in both builds.
+ * IT RUNS IN BOTH BUILDS, AND ITS OWN RETIREMENT CONDITION IS WHY. It read "DEV ONLY, BECAUSE ITS ONLY
+ * CONSUMER IS THE CRASH", with "RETIREMENT: this record's gate goes when the fork reads it, because the key is
+ * then a correctness datum in both builds" -- and the fork at `document.c`'s selector walk is that reader. The
+ * retired argument is kept rather than deleted because it was the same argument this file's value seam once
+ * gave for compiling its own work out, and a reader who re-derives it from "a diagnostic costs nothing in
+ * release" will gate this again and take the fork's key with it.
  *
  * NAMED RESIDUAL -- IT IS THE FIRST DECLINE OF THE MATCH AND NOT THE ONE THE CONCLUSION RESTS ON. WHAT IS NOT
  * COVERED: an undetermined read behaves as no-match in control flow and the scope's bit is STICKY, so a
@@ -63,30 +65,41 @@ static bool host_defined(const lxb_dom_node_t *node, void *ctx)
  * ABSENCE WOULD SHOW, as an observation: a crash naming a predicate whose attribute the selector it prints
  * tests in a compound that also tests something the element plainly does not have.
  */
-typedef struct {
-    bool                     seen;
-    unsigned                 declines;   /* HOW MANY asks declined in this match -- see (4): a selector posing
-                                            several questions over one value forks once per question, so a
-                                            reader needs to know whether this crash is one ask or ten. */
-    lxb_css_selector_match_t op;
-    bool                     insensitive;
-    char                     attr[64];
-    char                     operand[96];
-} SelUndet;
+/* THE RECORD IS THE HEADER'S, so the crash's fields and the fork's key fields are ONE list. `seen` is that
+   type's `undetermined`: the record is written at the DECLINE and the conclusion is read from the arena, and
+   the assert at `selector_match_node` is what holds the two together. */
+static SelectorUndet g_undet;
 
-static SelUndet g_undet;
+/* WHAT THIS FLOW HAS ALREADY PROVED ABOUT ONE §6 PREDICATE, for the length of ONE match -- the caller's
+   `decided`, parked here because `lxb_selectors_host_cb_t`'s ctx is the ARENA's and is installed once at init,
+   while this fact is the MATCH's. A file static is correct for exactly the reason one arena is: `g_in_match`
+   asserts there is no rest point inside a match and no two matches can interleave, so the span this is live
+   over is the span that assert already owns. Cleared on the way out beside the bit it is read with. */
+static const SelectorUndet *g_decided;
 
 /* BOUNDED, ALWAYS NUL-TERMINATED, and the length is the DESTINATION's because the source is a lexbor string
-   with no terminator of its own. */
-static void sel_undet_copy(char *dst, size_t cap, const lxb_char_t *data, size_t len)
+   with no terminator of its own. IT REPORTS TRUNCATION, and that is a correctness answer rather than a
+   diagnostic's tidiness: these two copies are fields of the fork's KEY, so an operand cut at the buffer's
+   width spells two different operands the same way and merges their questions -- the exact merge the key
+   exists to prevent, arriving through the buffer. `SelectorUndet::forkable` is where the answer lands. */
+static bool sel_undet_copy(char *dst, size_t cap, const lxb_char_t *data, size_t len)
 {
-    if (len > cap - 1) len = cap - 1;
+    bool whole = len <= cap - 1;
+
+    if (!whole) len = cap - 1;
     if (data != NULL && len != 0) memcpy(dst, data, len);
     dst[len] = '\0';
+    return whole;
 }
 
-/* §6.1/§6.2's OPERATOR, spelled. A `default` arm here answers "?" rather than asserting: this is the text of a
-   crash message, and a diagnostic that can itself abort trades a report for a second abort at a worse site. */
+/* §6.1/§6.2's OPERATOR, spelled. A `default` arm here answers "?" rather than asserting, and that reasoning is
+   UNCHANGED for the reason it was written: this is the text of a crash message, and a diagnostic that can itself
+   abort trades a report for a second abort at a worse site.
+   WHAT CHANGED IS THAT THE SAME STRING IS NOW HALF A CONSTRAINT KEY, so the `?` has a second meaning it must
+   never carry: two operators outside the enumeration would spell ONE key and merge two questions. The operand
+   is one LEXBOR enumerates and every one of its six members is spelled above — so the guard is sound where it
+   is and the INVARIANT belongs where the key is composed, which is sel_undet_compose. Asserting it here would
+   put it inside the crash. */
 static const char *sel_undet_op(lxb_css_selector_match_t m)
 {
     switch (m) {
@@ -99,7 +112,98 @@ static const char *sel_undet_op(lxb_css_selector_match_t m)
     default:                               return "?";
     }
 }
-#endif
+
+/* CAN THIS PREDICATE'S TRUE ARM BE REALISED BY HANDING THE MATCHER THE OPERAND'S OWN BYTES? -- the one
+   question `SelectorUndet::forkable` asks that is about §6 rather than about a buffer, and the whole of the
+   exception is one operator. Every §6.1/§6.2 operator is satisfied by its own operand (`=`/`|=` by equality,
+   `^=`/`$=`/`*=` because a string is its own prefix, suffix and substring) and so are §6.6's and §6.7's
+   synthesised ones -- except §6.1's `~=`, which reads the value as "a whitespace-separated list of words, one
+   of which is exactly val" and whose own text says "If "val" contains whitespace, it will never represent
+   anything". So a whitespace operand's TRUE arm is a world no value satisfies and there is nothing to hand the
+   matcher; declining to declare the fork keeps the abort, which is where that case is named.
+   ITS COUNTERPART IN THE MATCHER IS A NAMED NEXT DIFF AND NOT A SECOND COPY OF THIS TEST: host_attr_value_read
+   records that `lxb_selectors_match_attribute` should test the operand for whitespace beside its length test,
+   after which such a predicate never ASKS and this arm answers about an empty population. */
+static bool sel_undet_satisfiable(const SelectorUndet *u)
+{
+    size_t i;
+
+    if (u->op != LXB_CSS_SELECTOR_MATCH_INCLUDE) return true;
+    for (i = 0; u->operand[i] != '\0'; i++) {
+        /* §6.1's "whitespace" is CSS Syntax 3 §3.2 "Definitions"' -- newline, tab and space, with §3.3
+           "Preprocessing the input stream" having already turned CR and FF into newlines. */
+        if (u->operand[i] == ' ' || u->operand[i] == '\t' || u->operand[i] == '\n') return false;
+    }
+    return u->operand[0] != '\0';
+}
+
+/* WHICH TEST THIS ASK IS -- the record's four key fields, composed from the seam's own arguments, through ONE
+   entry. Every decline and every decided-arm comparison goes through it, so the fields the crash prints, the
+   fields the key is spelled from and the fields a supply is granted on cannot be three spellings of one test.
+   IT IS PER ASK AND NOT PER MATCH, which is the defect it exists to make impossible: a selector list is an OR
+   and a combinator walk asks per candidate, so ONE match declines several times and a comparison made against
+   the FIRST decline's fields would grant a supply to a later ask about a different attribute -- deciding a test
+   nothing forked, and then refusing the one that was forked, which is a walk that forks over one question for
+   ever. Returns the record's own `forkable`, which is the only thing a caller asks it. */
+static bool sel_undet_compose(SelectorUndet *u, const lxb_dom_attr_t *attr,
+                              const lxb_selectors_predicate_t *pred, JSValue taint)
+{
+    const lxb_char_t *an;
+    size_t an_n = 0;
+    bool whole;
+
+    /* THE OPERATOR IS ONE OF THE SIX LEXBOR ENUMERATES, asserted where the KEY is built rather than where it is
+       spelled: `sel_undet_op` answers "?" for anything else so that a crash cannot abort inside its own message,
+       and one "?" standing for two operators would file two questions under one key. It is a CLOSED enumeration
+       that lexbor owns, so this is a guard on a state the three ask sites make impossible (each sets one of the
+       six by hand) and not a capability this engine has yet to build. */
+    DCHECK(pred->match >= LXB_CSS_SELECTOR_MATCH_EQUAL && pred->match < LXB_CSS_SELECTOR_MATCH__LAST_ENTRY,
+           "Selectors 4 §6's value seam was asked about an operator outside the closed set lexbor enumerates — "
+           "the three arms that ask each set one of the six by hand (§6.1/§6.2's, and §6.6's and §6.7's "
+           "synthesised ones), so a seventh is a matcher arm that composed its predicate somewhere else");
+    memset(u, 0, sizeof *u);
+    u->undetermined = true;
+    u->declines = 1;
+    u->op = pred->match;
+    u->insensitive = pred->insensitive;
+    u->over = taint;   /* BORROWED -- see SelectorUndet; a caller that keeps it dups it */
+    an = lxb_dom_attr_local_name(attr, &an_n);
+    whole = sel_undet_copy(u->attr, sizeof u->attr, an, an_n);
+    whole &= sel_undet_copy(u->operand, sizeof u->operand, pred->operand->data, pred->operand->length);
+    /* THE KEY IS EXACT, THE VALUE IS SPELLABLE AND THE TRUE ARM IS REALISABLE, asked as ONE bit because a
+       caller can act on none of the three alone -- see SelectorUndet::forkable for each. The identity is not
+       decoration on the key: it is what the supply below RECOGNISES this predicate's value by, so a value
+       without one could be forked and its arm could never be granted. */
+    u->forkable = whole && concolic_ident_c(taint) != NULL && sel_undet_satisfiable(u);
+    return u->forkable;
+}
+
+bool selector_pred_same(const SelectorUndet *a, const SelectorUndet *b)
+{
+    DCHECK(a != NULL && b != NULL, "two §6 predicates were compared and one of them is not there");
+    /* THE FIELDS, COMPARED RATHER THAN RE-SPELLED. A comparison over `selector_undet_key`'s composed string
+       would be a SECOND consumer of that format, and the two could then disagree about what the key names. */
+    return a->op == b->op && a->insensitive == b->insensitive
+           && strcmp(a->attr, b->attr) == 0 && strcmp(a->operand, b->operand) == 0;
+}
+
+bool selector_undet_key(char *out, size_t cap, const SelectorUndet *u)
+{
+    int wrote;
+
+    DCHECK(out != NULL && u != NULL, "a §6 predicate's constraint key was spelled from nothing or into nowhere");
+    /* THE ALGORITHM AND THE FOUR FIELDS, AND NOTHING ELSE. It is deliberately NOT the selector's text: the
+       question this key names is "does this test hold of this value", which `[att=dark]` and
+       `:not([att=dark])` ask ONCE between them -- §Solver-half's "keyed by the PREDICATE's own identity" --
+       and a key carrying the rule would fork a world for each. The ATTRIBUTE is in it because two attributes
+       of one element can hold two different unknowns and §6.6's and §6.7's synthesised predicates are tests on
+       `class` and `id`; `insensitive` is in it because §6.3's `i` changes which values satisfy the test and
+       therefore which question is asked. The VALUE is the other half and is `step_fork_run`'s `over`, which
+       the solver composes in -- see solver/decide.c's outcome_key. */
+    wrote = snprintf(out, cap, "Selectors 4 §17.3 over [%s%s\"%s\"%s]",
+                     u->attr, sel_undet_op(u->op), u->operand, u->insensitive ? " i" : "");
+    return wrote > 0 && (size_t)wrote < cap;
+}
 
 /*
  * THE HOST'S ANSWER FOR AN ATTRIBUTE WHOSE VALUE IS NOT BYTES — Selectors 4 §6 "Attribute selectors" read
@@ -171,19 +275,22 @@ static const char *sel_undet_op(lxb_css_selector_match_t m)
  *       undetermined read behaves as no-match in CONTROL FLOW, so a compound abandons at the undetermined
  *       member rather than reaching a later member that would decide it false. That answers UNKNOWN where
  *       FALSE was available, which keeps an arm that could have been dropped and is the safe direction.
- *   (2) A CASCADE THAT REPORTS ITS UNANSWERED PREDICATE, rather than an answer it does not have. THIS IS
- *       NEXT, AND `selector_match_node`'s abort below is where it lands: the answer exists now and the
- *       signature has nowhere to put it, so the abort is standing in for the out-parameter.
- *       AND `THIS IS NEXT` IS WRONG ABOUT THE ORDER, WHICH IS RECORDED RATHER THAN CORRECTED IN PLACE BECAUSE
- *       THE CLAUSE READS AS A LANDING ORDER AND A READER WILL FOLLOW IT. (2) names a THIRD STATE AT
- *       `cssom_cascaded_value`, and that member has NO CONSUMER: GREPPED, the cascade's three callers are
- *       core/css/css_computed_value.c's `css_cv_cascaded` (which asks WHAT THE VALUE IS and reads NULL as
- *       css-cascade-5 §4.2's empty list), core/html/html_element_view.c's `hev_declares` and
- *       core/layout/used_value.c's `uv_require_readable_positioning` (which ask DOES THIS ELEMENT DECLARE IT
- *       and whose own comments say the answer's only outcome is a crash) — so all three spell `decl != NULL`,
- *       the only thing any of them can do with a third state is abort, and two of them abort already. In
- *       RELEASE every one of those aborts is compiled out, so the widening alone changes nothing observable in
- *       EITHER build: it is a write whose reader is the crash it replaces.
+ *   (2) A CASCADE THAT REPORTS ITS UNANSWERED PREDICATE, rather than an answer it does not have. STILL OPEN,
+ *       AND ITS "THIS IS NEXT" IS SPENT: the sentence read "THIS IS NEXT, AND `selector_match_node`'s abort
+ *       below is where it lands: the answer exists now and the signature has nowhere to put it, so the abort is
+ *       standing in for the out-parameter." The out-parameter LANDED — `selector_match_node`'s `out_undet` —
+ *       and it landed for the DOM half, which is why the paragraph below this one was right about the order and
+ *       this one's own numbering was not. What (2) still needs is unchanged and is a CONSUMER rather than a
+ *       type: the cascade's walk has no resume point, so a third state at `cssom_cascaded_value` has nothing
+ *       that can keep an arm and is a write whose reader is the crash it replaces.
+ *       THE MEASUREMENT THAT SETTLED IT IS KEPT BECAUSE IT IS WHAT MAKES THE ORDER CHECKABLE, and not because
+ *       the count is durable: GREPPED, the cascade's three callers are core/css/css_computed_value.c's
+ *       `css_cv_cascaded` (which asks WHAT THE VALUE IS and reads NULL as css-cascade-5 §4.2's empty list),
+ *       core/html/html_element_view.c's `hev_declares` and core/layout/used_value.c's
+ *       `uv_require_readable_positioning` (which ask DOES THIS ELEMENT DECLARE IT and whose own comments say
+ *       the answer's only outcome is a crash) — so all three spell `decl != NULL`, the only thing any of them
+ *       can do with a third state is abort, and two of them abort already. In RELEASE every one of those aborts
+ *       is compiled out, so the widening alone changes nothing observable in EITHER build.
  *       AND (4) IS A PREREQUISITE OF (3) RATHER THAN A REFINEMENT AFTER IT, which is the half of this list that
  *       cannot simply be reordered by a reader who notices. `step_fork_run` takes the unknown operand as `over`
  *       and the PREDICATE as `op`, and together they are the constraint key — so a fork keyed on anything
@@ -204,19 +311,37 @@ static const char *sel_undet_op(lxb_css_selector_match_t m)
  *       for `getComputedStyle` is a step machine to declare first.
  *       RETIREMENT: this record goes when the ordered list itself is numbered in landing order, because the
  *       hazard is then a property of the numbering rather than of a paragraph a reader has to reach.
- *   (3) A CONSUMER THAT CAN ASK. A fork needs a RESUME POINT, and there is none inside a match: the arena
- *       note below says lxb_selectors_match_node "is a single C call that returns before the machine driving
- *       it can yield", and solver/engine.c's `engine_prepare_fork` aborts by name for a C body that forks
- *       from inside its own activation, naming the remedy — JS_CFUNC_STEP_DEF, with the ask in the machine's
- *       own `step_fork_run`. So the ask belongs at whichever step machine reached the cascade, which re-runs
- *       it once per answered predicate exactly as quickjs.c's `step_ownkeys_chain` re-runs its enumeration.
- *       WHICH MACHINES THOSE ARE IS THE PART TO DERIVE RATHER THAN ASSUME: `cssom_cascaded_value`'s callers
- *       are what reach it, and the ones a page drives (`getComputedStyle`, the §7 view members) are plain C
- *       bodies today, so each is a declaration to build and not a call to add.
- *   (4) ONE KEY PER PREDICATE, NOT PER RULE. `html[data-theme=dark]` and `html:not([data-theme=dark])` are
- *       ONE question asked twice, and a key composed from the rule rather than from (the value's identity,
- *       the operator, the operand) forks a world for each — §Solver-half's "keyed by the PREDICATE's own
- *       identity — operator and both operands".
+ *   (3) AND (4) TOGETHER — A CONSUMER THAT CAN ASK, KEYED ONE PER PREDICATE. LANDED FOR THE DOM HALF, at
+ *       core/dom/document.c's selector walk, and the two are ONE landing because the paragraph above says so:
+ *       a fork keyed coarser than the predicate merges two operands' questions, so there was never a (3) to
+ *       land without (4). A fork needs a RESUME POINT and there is none inside a match — the arena note below
+ *       says lxb_selectors_match_node "is a single C call that returns before the machine driving it can
+ *       yield", and solver/engine.c's `engine_prepare_fork` aborts by name for a C body that forks from inside
+ *       its own activation — so the ask is at the MACHINE, which re-runs the match once per answered predicate
+ *       exactly as quickjs.c's `step_ownkeys_chain` re-runs its enumeration.
+ *       THE COMPLETIONS ARE THE PREDICATE'S AND NOT THE SELECTOR'S, and that is the load-bearing choice rather
+ *       than a spelling. A fork over "does this SELECTOR match" cannot be keyed soundly at all: the matcher
+ *       abandons a compound at its first undetermined member, so a `matched` arm would be a claim the matcher
+ *       never verified AND the flow would hold no constraint on the members it never reached — after which a
+ *       second element sharing the recorded value replays that arm and its own undetermined member is decided
+ *       by an answer that was never about it, which is §a-wrong-narrowing's deleted arm. Forking the PREDICATE
+ *       has neither problem: the matcher composes it, and a later undetermined member declines in its own
+ *       right and is forked in its own right.
+ *       THE TRUE ARM IS REALISED WITHOUT A LEXBOR CHANGE and the FALSE ARM NEEDS NOTHING AT ALL, which is why
+ *       this is a call to add rather than a seam to widen. TRUE hands the matcher the predicate's own operand
+ *       (see sel_undet_satisfiable for the one operator that has no such realisation); FALSE is already what
+ *       an undetermined read does in control flow, so the answer the machine already holds IS the answer under
+ *       it. OUTCOME 0 IS THEREFORE "THE TEST DOES NOT HOLD", which is step_fork_run's one numbering rule read
+ *       against this predicate: a run with no forking policy takes it and gets the byte-identical answer every
+ *       build gave before this landed.
+ *       WHAT IS NOT COVERED: ONE DECIDED PREDICATE PER MATCH. A compound both of whose members are undetermined
+ *       and whose flow answers TRUE to BOTH needs two supplied at once, and `document.c`'s machine holds one
+ *       slot and aborts by name for the second. The next diff is the slot becoming a SET the machine's `visit`
+ *       carries. How its absence would show: that abort, on a selector with two undetermined tests in one
+ *       compound, in a flow that took the holding arm of both.
+ *       WHICH MACHINES THE CASCADE HALF NEEDS IS STILL THE PART TO DERIVE RATHER THAN ASSUME:
+ *       `cssom_cascaded_value`'s callers are what reach it, and the ones a page drives (`getComputedStyle`, the
+ *       §7 view members) are plain C bodies today, so each is a declaration to build and not a call to add.
  *   (5) THE PIN TAKEN *AT* THE MATCH, which is the direction (0) does NOT cover and is a different fact:
  *       (0) READS a determination the page's own predicate made, while this one MAKES one — `[att=dark]`
  *       answered TRUE by a fork of (3) pins the value, after which `[att=light]` is DECIDED by the flow's own
@@ -240,11 +365,9 @@ static lxb_selectors_value_t host_attr_value_read(const lxb_dom_node_t *node,
     lxb_dom_element_t *el;
     JSValue taint;
     const char *pinned;
+    SelectorUndet ask;
 
     (void)ctx;
-#if !APICLIENT_DEV
-    (void)pred;   /* the predicate's only reader is the record below, which is the crash's and dev-only */
-#endif
     /* THE O(1) PRECONDITION FIRST. This runs per attribute test per rule per element, and resolving §4.9's
        key out of the attribute allocates; a document that never put an unknown in an attribute — which is
        most of them — pays one load for its whole cascade. */
@@ -302,31 +425,60 @@ static lxb_selectors_value_t host_attr_value_read(const lxb_dom_node_t *node,
        function gives are now CORRECTNESS answers — a release build that skipped either would render a
        different page from the dev build that measured it — and the `attr_shadow_count` load above is what
        keeps the whole seam free for every document that stores no unknown. */
-#if APICLIENT_DEV
-    /* WHICH ASK THIS WAS, for the crash at `selector_match_node` and for the fork's key after it. The FIRST
-       decline is kept and later ones only counted -- see SelUndet for why the first rather than the last, and
-       for what a first that the conclusion does not rest on costs. */
-    g_undet.declines++;
-    if (!g_undet.seen) {
-        const lxb_char_t *an;
-        size_t an_n = 0;
+    /* §6.1's `[att]` reads no value and never asks, so every ask that reaches here has an operand --
+       lxb_selectors_predicate_t says so at its own site, and this is the one place that claim is relied
+       on rather than merely stated. */
+    DCHECK(pred->operand != NULL,
+           "Selectors 4 §6's value seam was asked with no operand. Every shape that asks reads a value "
+           "and therefore has one to compare against; the shapes decided by the operand alone do not "
+           "ask at all. A NULL here is a matcher arm that started asking about `[att]`");
+    /* WHICH ASK THIS IS, composed for THIS ask and not for the match -- see sel_undet_compose. */
+    sel_undet_compose(&ask, attr, pred, taint);
 
-        g_undet.seen = true;
-        g_undet.op = pred->match;
-        g_undet.insensitive = pred->insensitive;
-        an = lxb_dom_attr_local_name(attr, &an_n);
-        sel_undet_copy(g_undet.attr, sizeof g_undet.attr, an, an_n);
-        /* §6.1's `[att]` reads no value and never asks, so every ask that reaches here has an operand --
-           lxb_selectors_predicate_t says so at its own site, and this is the one place that claim is relied
-           on rather than merely stated. */
-        DCHECK(pred->operand != NULL,
-               "Selectors 4 §6's value seam was asked with no operand. Every shape that asks reads a value "
-               "and therefore has one to compare against; the shapes decided by the operand alone do not "
-               "ask at all. A NULL here is a matcher arm that started asking about `[att]`");
-        sel_undet_copy(g_undet.operand, sizeof g_undet.operand,
-                       pred->operand->data, pred->operand->length);
+    /* AND WHAT THIS FLOW HAS ALREADY PROVED ABOUT *THIS TEST* -- the answered fork, realised. §Solver-half's
+       "uncertainty keeps the arm" is what the decline below is; this is the OTHER arm, where a consumer that
+       kept it has come back with the answer. The arm says the test HOLDS, and the honest realisation of that
+       is to hand the matcher the predicate's OWN OPERAND: it satisfies every operator §6 defines (see
+       sel_undet_satisfiable, which is why an unsatisfiable one is never declared forkable), so the matcher
+       decides this ONE test true and composes it through §6.6's `~=`, the compound's AND, the list's OR and
+       any `:not()` exactly as it would have on real bytes.
+       IT IS NOT A VALUE AND MUST NEVER BECOME ONE. The bytes decide THIS test and nothing else: a second test
+       over the same attribute is a DIFFERENT predicate, does not match this record, and declines again -- so
+       `[a^=dark][a$=mode]` forks twice and ends holding both facts, rather than having the first arm's bytes
+       answer the second test. Nothing is PINNED, which is the difference between this and §Solver-half's
+       concretize-on-pin: a pin is a claim about the VALUE, and `^=dark` does not determine one. The pin taken
+       AT a match is a later diff and is named in the ordered list above.
+       THE COMPARISON IS THE FULL KEY. The predicate's four fields AND the value's identity -- because two
+       attributes of one element can hold two different unknowns under one predicate, and `concolic_ident_c` is
+       what the solver's own key is composed from, so this compares the fact the solver filed and survives a
+       park and a cross-session resume. An absent identity on either side is a value this engine cannot spell:
+       it matches nothing here and was never declared forkable at the ask that produced it either, so there is
+       no arm to realise and no route to a supply that names the wrong value. */
+    if (g_decided != NULL && g_decided->undetermined && selector_pred_same(g_decided, &ask)) {
+        const char *want = concolic_ident_c(g_decided->over), *have = concolic_ident_c(taint);
+
+        /* BOTH ARE NON-NULL FOR ANY RECORD A CALLER COULD HAVE FORKED, because `forkable` required one at the
+           ask -- so this is the assertion that a `decided` record came from THIS seam rather than a test. */
+        DCHECK(want != NULL, "a decided §6 predicate was handed back naming a value this engine cannot spell — "
+                             "the ask that produced it would not have been declared forkable, so this record "
+                             "was composed somewhere other than sel_undet_compose");
+        if (want != NULL && have != NULL && strcmp(want, have) == 0) {
+            /* BORROWED FOR THE LENGTH OF THE MATCH, exactly as the pin's bytes are and for the same reason:
+               the operand points into the compiled selector list, which nothing writes after it is built, and
+               a match runs none of the page's code. */
+            out->data = (lxb_char_t *)g_decided->operand;
+            out->length = strlen(g_decided->operand);
+            return LXB_SELECTORS_VALUE_HOST;
+        }
     }
-#endif
+
+    /* WHICH ASK DECLINED, for the crash at `selector_match_node` and for the fork's key after it. RECORDED
+       AFTER THE SUPPLY AND NOT BEFORE IT, because a supplied ask is not a decline: counting one would report a
+       match that declined on nothing as having declined once, and the count is what a reader of the crash uses
+       to tell one question from ten. The FIRST decline is kept and later ones only counted -- see SelectorUndet
+       for why the first rather than the last, and for what a first that the conclusion does not rest on costs. */
+    if (!g_undet.undetermined) g_undet = ask;
+    else                       g_undet.declines++;
     return LXB_SELECTORS_VALUE_UNDETERMINED;
 }
 
@@ -436,7 +588,8 @@ static lxb_status_t sel_text_cb(const lxb_char_t *data, size_t len, void *vctx)
 #endif
 
 bool selector_match_node(lxb_dom_node_t *node, const lxb_css_selector_list_t *list,
-                         lxb_css_selector_specificity_t *out_spec)
+                         lxb_css_selector_specificity_t *out_spec,
+                         const SelectorUndet *decided, SelectorUndet *out_undet)
 {
     SelHit h = { false, 0 };
 
@@ -452,18 +605,34 @@ bool selector_match_node(lxb_dom_node_t *node, const lxb_css_selector_list_t *li
                         "because a match has no rest point inside it and cleans its pools before it returns, "
                         "and a match inside a match would share those pools");
     g_in_match = true;
-#if APICLIENT_DEV
     /* CLEARED HERE AND NOT AT THE DECLINE, on the same span the arena clears its own bit on. lexbor sets
        `unknown` false at the entry of match_node and says why ("a field the caller is about to read may not be
        cleared under it"), so a record cleared anywhere else would answer about a PREVIOUS match for a match
-       that declined on nothing. */
+       that declined on nothing. `over` is set to a REAL JSValue rather than left as the memset's zero bytes,
+       because a tag of 0 is a tag and not `undefined` -- it is borrowed, so nothing is released. */
     memset(&g_undet, 0, sizeof g_undet);
-#endif
+    g_undet.over = JS_UNDEFINED;
+    /* AND WHAT THE CALLER HAS ALREADY PROVED, live for exactly this match -- see g_decided. */
+    g_decided = decided;
     /* lxb_selectors_match_node, not a subtree find: a combinator is resolved by walking UP from the candidate
        through the whole document, so §1.3's scoped matching still holds when the caller filters the results to
        a subtree — `el.querySelectorAll('div p')` finds a <p> under `el` whose <div> ancestor is OUTSIDE it. */
     lxb_selectors_match_node(g_arena, node, list, sel_hit_cb, &h);
     g_in_match = false;
+    g_decided = NULL;
+
+    /* THE THIRD ANSWER, HANDED TO A CALLER THAT SAID IT COULD KEEP IT. `g_arena->unknown` is Kleene's value
+       carried out of the match and the record is which ask produced it; the two are ONE fact and the assert
+       below is what holds them together, so this fills the caller's record from both rather than from either.
+       IT IS GATED ON `!h.matched`, WHICH IS KLEENE'S OR: a selector list matches through whichever of its
+       selectors did, so a definite match makes the list's answer TRUE whatever some other branch could not
+       decide -- `#known, [att=x]` on an element `#known` matches is ANSWERED, and the seam being asked along
+       the way is not a question this engine failed. */
+    if (out_undet != NULL) {
+        *out_undet = g_undet;
+        out_undet->undetermined = !h.matched && g_arena->unknown;
+        out_undet->forkable = out_undet->undetermined && g_undet.forkable;
+    }
 
 #if APICLIENT_DEV
     /* THE QUESTION THIS SELECTOR ASKED AND NOBODY CAN ANSWER — §Offensive-programming's category (2), a
@@ -476,11 +645,17 @@ bool selector_match_node(lxb_dom_node_t *node, const lxb_css_selector_list_t *li
        list's answer TRUE whatever some other branch could not decide — `#known, [att=x]` on an element
        `#known` matches is answered, and the seam being asked along the way is not a question the engine
        failed. The old crash could not tell those apart because it fired before the list had one.
-       WHAT THE NEXT DIFF BUILDS is (2) in this file's ordered list, and this abort is standing in for its
-       signature: the answer exists now and `bool` has nowhere to put it, so the cascade cannot yet REPORT an
-       unanswered predicate and the process stops instead. Its shape is an out-parameter here and a third
-       state at `cssom_cascaded_value`, exactly as `out_spec` is an out-parameter for the thing the bool
-       cannot carry.
+       AND WHAT IT IS STANDING IN FOR IS NOW A PROPERTY OF THE CALLER RATHER THAN OF THIS FILE, which is the
+       argument this paragraph retires rather than deletes: it read "WHAT THE NEXT DIFF BUILDS is (2) in this
+       file's ordered list, and this abort is standing in for its signature: the answer exists now and `bool`
+       has nowhere to put it, so the cascade cannot yet REPORT an unanswered predicate and the process stops
+       instead." The signature HAS somewhere to put it — `out_undet` — and `document.c`'s selector walk forks
+       on it. A reader who re-derives the old reason from the `bool` in front of them will re-propose the
+       out-parameter and find it built, which is the same wasted reading the note in the header was written to
+       prevent one layer up. What remains true is the SECOND half: the CASCADE still cannot keep an arm,
+       because keeping one needs a resume point and its walk is a plain C loop, so a third state at
+       `cssom_cascaded_value` is still a write whose only reader would be the crash it replaces until that walk
+       is a step machine. The condition below is what says which of the two a reader is standing at.
        THE VALUE IS NOT ASSERTED ON and no page string reaches this condition: `g_arena->unknown` is a bit
        THIS ENGINE set about its own capability, which is what a `DFAIL` is for.
        NAMED RESIDUAL — `out_spec` IS A LOWER BOUND WHEN A BRANCH WAS UNDETERMINED. What is not covered: a
@@ -491,7 +666,7 @@ bool selector_match_node(lxb_dom_node_t *node, const lxb_css_selector_list_t *li
        branches' specificities beside the answer, since a cascade that must fork on the predicate must fork on
        its weight too. How its absence would show: two rules whose winner changes with an attribute this
        engine never observed, reported with the loser's declaration and no question asked. */
-    if (!h.matched && g_arena->unknown) {
+    if (!h.matched && g_arena->unknown && (out_undet == NULL || !out_undet->forkable)) {
         SelText t;
         const lxb_char_t *tag;
         size_t tag_n = 0;
@@ -507,7 +682,7 @@ bool selector_match_node(lxb_dom_node_t *node, const lxb_css_selector_list_t *li
            is a matcher arm that invented the answer, and a recorded ask with no conclusion is this record
            outliving its span. Neither operand is a byte a page wrote: one is lexbor's own Kleene bit and the
            other is what this file wrote down one call earlier. */
-        DCHECK(g_undet.seen,
+        DCHECK(g_undet.undetermined,
                "Selectors 4 §17.3's answer is UNKNOWN and no ask in this match declined. The host value seam "
                "is the only place that answer is born, so either an arm set the conclusion without asking — in "
                "which case the bit is wrong — or this record was cleared inside the match it is about");
@@ -520,12 +695,26 @@ bool selector_match_node(lxb_dom_node_t *node, const lxb_css_selector_list_t *li
                "contradicted branch is pruned (sound-only — uncertainty keeps the arm)\" means the arm must "
                "be KEPT, and keeping it needs a consumer that can ask. NOTHING HERE CAN: `bool` has nowhere "
                "to put a third answer, so the cascade would receive `false` for a predicate nobody decided "
-               "and both worlds would paint the same page. Build (2) — see host_attr_value_read in this file "
-               "for the ordered diffs.",
+               "and both worlds would paint the same page. %s",
                (int)tag_n, tag ? (const char *)tag : "?",
                t.buf[0] ? t.buf : "?",
                g_undet.attr, sel_undet_op(g_undet.op), g_undet.operand,
-               g_undet.insensitive ? " i" : "", g_undet.declines);
+               g_undet.insensitive ? " i" : "", g_undet.declines,
+               /* WHY THIS CALLER CANNOT KEEP IT, and it is now TWO different answers rather than one — which
+                  is the whole of what changed here: the abort no longer means "nothing in this engine can
+                  carry a third answer", it means "not THIS caller, for THIS reason". */
+               out_undet == NULL
+                 ? "THIS CALLER PASSED NO `out_undet`, so it has not declared that it can keep the arm — and "
+                   "keeping one needs a RESUME POINT. `document.c`'s selector walk is a step machine and forks "
+                   "here; the cascade's is a plain C loop inside `cssom_cascaded_value`, which "
+                   "solver/engine.c's `engine_prepare_fork` refuses by name. Declare that walk "
+                   "JS_CFUNC_STEP_DEF and pass this record — see host_attr_value_read's ordered diffs."
+                 : "THIS CALLER CAN KEEP AN ARM AND THIS PREDICATE'S CANNOT BE REALISED — either a field of "
+                   "the key was TRUNCATED into its buffer (two operands would spell one question) or the TRUE "
+                   "arm has no realisation, which for §6.1's `~=` means the operand contains whitespace and "
+                   "its own text says such a selector \"will never represent anything\". The next diff for the "
+                   "second is in `lxb_selectors_match_attribute`: test the operand for whitespace beside its "
+                   "length test, after which such a predicate never asks at all.");
     }
 #endif
 

@@ -1597,7 +1597,13 @@ static void cssd_author_collect(lxb_dom_element_t *el, const char *name, const c
                        "a disagreement means the rules have shifted and every rule after this one would be "
                        "cascaded in a neighbour's layer");
                 if (r->type != LXB_CSS_RULE_STYLE || !st->selector || !st->declarations) continue;
-                if (!selector_match_node(self, st->selector, &spec)) continue;
+                /* NO `decided` AND NO `out_undet` — THE CASCADE'S WALK CANNOT KEEP AN ARM, and passing NULL
+                   is how it says so rather than how it forgets to. This is a plain C loop: there is no rest
+                   point in it, so a fork here would be built against no resume point and solver/engine.c's
+                   `engine_prepare_fork` refuses that by name. selector_match_node's abort is what that NULL
+                   reaches, and its message names the declaration to build — JS_CFUNC_STEP_DEF over this walk,
+                   after which this call passes the record `document.c`'s already does. */
+                if (!selector_match_node(self, st->selector, &spec, NULL, NULL)) continue;
                 /* THE RULE'S OWN §6.6 DECLARATIONS, which is the same list its `rule.style` reports and the
                    same one an inline block is read through — expanded to longhands and collapsed to one per
                    property. A rule declaring a property twice has already been resolved by the collapse's own
