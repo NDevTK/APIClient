@@ -658,16 +658,43 @@ char   *endpoint_door_hist_json(void);
    is real and is bounded to a diagnostic CLAUDE.md §netdiff says is never a target.
    NAMED RESIDUAL, ON THE AXIS THE BAR ACTUALLY READS AND AT THE ONE DOOR WHERE IT IS OPEN. NOT COVERED: a
    `<form action>` this run proved was composed out of an unknown reaches the bar as `concrete`.
-   core/html/html_form.c reads that attribute's taint five lines before it records the request and spends it on
-   the @S sink alone (`solve_url_sink`), then records `url_serialize`'d bytes — so the two sibling doors carry
-   the shape into `addressClass` and this one does not. WHAT THE NEXT DIFF BUILDS: the taint recorded as the
-   address at core/html/html_form.c's submission recorder where the action carries one, which is what
-   core/html/html_link.c already does at its own door and needs no new field here. HOW ITS ABSENCE SHOWS: a
-   document whose forms submit to script-composed actions publishes `form-submit` rows whose `razorClass` is
-   `unproven` while the same document's `link-element` rows prove `runtime-only` — an under-claim on the bar,
-   which is the direction nobody discovers by acting on it. RETIREMENT: this record goes when an address a
-   recorder holds a taint for cannot be recorded as a ToString of it, because the door has then no arm left in
-   which to lose the class. */
+   core/html/html_form.c reads that attribute's taint at §4.10.22.3 "Form submission algorithm" step 12 and
+   spends it on the @S sink alone (`solve_url_sink`), then `form_record_request` records `url_serialize`'d
+   bytes — so the two sibling doors carry an unknown into `addressClass` and this one does not.
+   WHERE THE UNKNOWN GOES, WHICH IS A DATA-FLOW FACT AND WAS READ RATHER THAN INFERRED: core/dom/element.c's
+   `el_attr_value` writes a concolic attribute value's SHAPE into Lexbor and the concolic into the taint
+   shadow ("NEVER ToString a concolic to get bytes"), so the unknown survives into the tree AS BRACE TEXT; a
+   braced path or query is ordinary URL text, so step 14's `url_parse` SUCCEEDS and `parsed` carries the
+   braces; and the taint itself is read into a local at step 12 and stored on no step state, so it is gone by
+   the recorder. NEITHER HALF DIES AT THE PARSE — the shape survives it and the taint never reaches it.
+   AND THE REMEDY THIS RECORD FIRST NAMED WAS A REGRESSION, KEPT HERE BECAUSE IT IS WHAT A READER RE-DERIVES
+   FROM THE SIBLING DOOR. It said: "WHAT THE NEXT DIFF BUILDS: the taint recorded as the address at
+   core/html/html_form.c's submission recorder where the action carries one, which is what
+   core/html/html_link.c already does at its own door and needs no new field here." BOTH HALVES ARE FALSE.
+   §4.10.22.3's cells MUTATE the parsed action — `CELL_MUTATE_ACTION_URL` and `CELL_ENTITY_BODY` REPLACE its
+   query with the serialized entry list — so recording the bare taint would discard the PARAMETERS, which is
+   what an @H record is for and is strictly worse than the class it would buy. For a `<link>` the `href` IS
+   the address, and a form's address is the action PLUS its entries; the analogy was the whole error, and it
+   is the shape CLAUDE.md names as reasoning from where the code SITS rather than from what it COSTS. The
+   second half is false because `endpoint_record` has no parameter by which a caller can state the class:
+   `addr_class` is derived once, from the url alone, by `address_class_of`.
+   AND THE NEXT REMEDY A READER REACHES FOR IS UNSOUND, WHICH IS WHY IT IS NAMED HERE RATHER THAN LEFT TO BE
+   TRIED. This record already publishes, PER PARAM, the fact the address row lacks: `valueClass` is
+   `has_hole`, merged as a union, and the razor banner above calls that merge "`valueClass`'s rule one grain
+   out" — so one row can carry `valueClass` `unknown` beside `addressClass` `concrete` about the same
+   address, which is this header's two-answers defect arriving in DATA instead of in prose. Unioning them
+   would OVER-CLAIM the floor: `concolic_hole_key` is `if (!shape || !strchr(shape, '{')) return NULL`, a bare
+   brace test that answers for a literal `{"a":1}` a page composed out of constants, and a FLOOR may not be
+   wrong in the direction that credits the bar. The same argument rules out reading braces off the address.
+   SO WHAT IS OWED IS A DECOMPOSITION AND NOT A LINE, AND IT IS NAMED RATHER THAN ATTEMPTED: the recorded
+   address would have to BE a concolic composed from the action's taint and the entries, and the composition
+   runs through `url_parse` and `url_serialize` over `const char *`, outside the concolic machinery entirely.
+   HOW ITS ABSENCE SHOWS: a document whose forms submit to script-composed actions publishes `form-submit`
+   rows whose `razorClass` is `unproven` beside their own `valueClass` `unknown`, while the same document's
+   `link-element` rows prove `runtime-only` — an under-claim on the bar, which is the direction nobody
+   discovers by acting on it. RETIREMENT: this record goes when an address composed out of a value this run
+   did not determine cannot be recorded as a plain string, because the door has then no arm left in which to
+   lose the class. */
 char   *endpoint_reach_hist_json(void);
 
 /* Record one learned endpoint (deduped by method+url). `url` may be concolic (shape) or concrete. Headers are
