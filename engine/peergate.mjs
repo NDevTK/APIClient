@@ -343,10 +343,20 @@ const CHECKS = [
      that ended cleanly has an EMPTY process group by the time it exits and this row reads `pass` — which is
      what makes it a check and not a note. A non-empty one is the lifetime failure this whole file is about,
      seen from outside the engine: an `--abi` instance that never returned to its ABI loop, so it never
-     observed the closed channel, never reached `test_forced.c`'s `rec != NULL` CHECK, and is therefore the
-     one shape that leaves NO `@E` behind it. That is why the row exists: the two identical aborts in a
-     wedged run are the instances that DID reach the loop, and the one that matters is the one that printed
-     nothing at all. */
+     observed the closed channel and never reached the assertion `test_forced.c` makes on that read. That is
+     why the row exists: an instance nothing else can see leaves this process's group non-empty.
+     THIS PARAGRAPH USED TO CALL THAT `THE ONE SHAPE THAT LEAVES NO @E` AND TO NAME `rec != NULL` AS THE
+     CONDITION, AND BOTH HALVES ARE RETIRED RATHER THAN DELETED because a reader re-derives them from the
+     sentence above: an instance that never reads cannot report, so silence looks like the exclusive property
+     of a spinner. It is not, and it never was the property the row needed. `test_forced.c` now splits that
+     read THREE ways — a stream that FAILED, an end of input with something OUTSTANDING, and an end of input
+     with NOTHING outstanding — and only the middle one aborts, because the last is the state this file's own
+     `referenced` peers rest in and an assert on it reported a harness kill as a defect in a tree. So an
+     instance that DID reach the loop and owed nothing now leaves no `@E` either, and a run wedged the way
+     this row is about no longer produces TWO identical aborts: it produces one from whichever instance was
+     genuinely owed an answer, and nothing from the peers that were merely resting.
+     WHAT THAT DOES TO THIS ROW IS NOTHING, WHICH IS WHY IT SURVIVES THE CHANGE: it reports a PROCESS that
+     outlived its zone, and a spinning instance outlives it whether or not anybody else is silent too. */
   ['orphans', 'the child\'s process group was EMPTY once it ended — no `--abi` instance outlived the zone that ' +
               'provisioned it. An instance spinning inside the engine never returns to `abi_line()`, so it ' +
               'observes no closed channel, prints no `@E`, holds this process\'s stderr pipe and burns a core ' +

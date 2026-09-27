@@ -28231,7 +28231,16 @@ static void looseeq_selftest(void)
    is megabytes and its base64 is more, so a fixed line buffer is a document this host would refuse to be
    handed — and the established primitive already grows, so hand-rolling the realloc loop `wpt_child_read_line`
    already contains would be a second copy of it in a second program. Returns malloc'd text with the delimiter
-   removed, or NULL at end of input. Only the '\n' is stripped: a stray CR is not silently absorbed, because
+   removed, or NULL where the stream produced no record — WHICH IS TWO FACTS AND NOT ONE, and the caller is the
+   party that has to tell them apart. `getdelim` answers -1 at END OF INPUT and -1 on a READ ERROR, so a NULL
+   here is either a writer that has gone away or an fd that broke, and those take opposite work: the first is a
+   process that ended and the second is this process's own IO failing. THIS SENTENCE USED TO READ "or NULL at
+   end of input", which is an UNDER-CLAIM about this function's own return, and it is rewritten rather than
+   deleted because a reader re-derives it from the delimiter: the error arm is the one `n < 0` reaches without
+   anybody having closed anything, and §AN-UNDER-CLAIM-IS-NOT-FOUND-BY-ACTING-ON-IT is exactly why it survived —
+   nobody discovers it by obeying it, because obeying it means reporting a broken fd as a departed writer.
+   `ferror(stdin)` is what separates them and `abi_pay` asks it. Only the '\n' is stripped: a stray CR is not
+   silently absorbed, because
    every field of this record is either an address, a name or base64, and none of the three contains one — so a
    CR is a writer this driver does not share a grammar with and the decode below says so. */
 static char *abi_line(void)
@@ -28240,7 +28249,16 @@ static char *abi_line(void)
     size_t cap = 0;
     ssize_t n = getdelim(&buf, &cap, '\n', stdin);
 
-    if (n < 0) { free(buf); return NULL; }
+    if (n < 0) {
+        /* THE STREAM'S OWN ERROR NUMBER, KEPT ACROSS THE RELEASE BELOW, because the reader of this NULL PRINTS
+           it: `free` is permitted to set `errno`, so a value read after the release would be a fact about the
+           allocator presented as a fact about the channel. */
+        int e = errno;
+
+        free(buf);
+        errno = e;
+        return NULL;
+    }
     if (n > 0 && buf[n - 1] == '\n') buf[n - 1] = 0;
     return buf;
 }
@@ -28443,6 +28461,13 @@ static void abi_declined(const char *reason)
    the whole of why a running frontier was never paid. It is rewritten rather than deleted because the
    reasoning under it is exactly right and is what a reader re-derives — blocking at a stall denies nobody the
    thread — and because that reasoning is a claim about what is SAFE, never about what is sufficient. */
+/* WHAT `abi_pay` ANSWERS WHERE THE CHANNEL ITSELF IS OVER, WHICH IS NOT A COUNT AND SO IS NOT A VALUE OF
+   `paid`. The two are different facts and the callers act on them differently: a round that PAID NOTHING is
+   the zone REFUSING — a statement it made, and the one thing that ends a live session — while a channel at its
+   END is the zone being GONE, which is nobody's statement at all. `paid` only ever increments, so it is never
+   negative and this value cannot collide with one. */
+#define ABI_PAY_CHANNEL_ENDED (-1)
+
 static int abi_pay(void)
 {
     int paid = 0;
@@ -28455,9 +28480,68 @@ static int abi_pay(void)
         size_t body_n = 0, json_n = 0;
         unsigned long id, completion;
 
-        CHECK(rec != NULL, "the trusted zone closed this host's channel while the frontier was still parked — "
-                           "every flow's snapshot is intact and every request is still owed, so this is not a "
-                           "session that ended, it is one whose only payer went away");
+        if (rec == NULL) {
+            /* THE END OF THIS READ IS THREE FACTS AND USED TO BE ONE, AND THE ONE IT WAS IS THE PATHOLOGICAL
+               THIRD — so the abort below fired on two states nothing had asked about. `abi_line` answers NULL
+               for a READ ERROR as well as for end of input (see its own contract), and an end of input is
+               itself two states: this host is OWED something the zone can no longer supply, or it is owed
+               NOTHING and the payer's departure costs it nothing that was outstanding.
+               MEASURED, ON THE STAGE THAT DRIVES THIS ARM, and reproduced across two revisions and two runs at
+               loads 1.00 and 3.00: `engine/peergate.mjs`'s own idle watchdog ends the trusted zone — a verdict
+               that file declares to be "about the HARNESS" and "NOT one of the checks below" — and the zone's
+               death closes every instance's channel at once. Of the instances standing in this read, ONE was
+               owed a cross-agent answer (the `nothing_is_owed` sentence is TRUE of it) and one was a
+               `referenced` peer at rest owing nothing, which is exactly the state `abi_main`'s stall arm calls
+               an ORDERLY END through its own `referenced && *qjs_pending() == '\0' && *qjs_host_requests() ==
+               '\0'` gate (that sentence is FALSE of it). Two identical `@E` records, one a
+               correct report and one a manufactured defect, with nothing in the condition to separate them —
+               while the registers that DO separate them were already being read by that caller and by
+               `abi_stalled`. A build reads an `@E` as a fact about the revision, so the false one does not
+               merely mislead: it converts a harness kill into a DEFECT verdict about a tree.
+               THE ORDER IS BY WHAT THIS PROCESS CAN PROVE, cheapest first — whether the STREAM failed, then
+               whether anything is OUTSTANDING — and each arm's condition names its own operands rather than
+               resting on a precondition established at whichever call site reached here. */
+            int stream_failed = ferror(stdin);
+            int nothing_is_owed;
+
+            CHECKF(!stream_failed,
+                   "this host's channel failed as a STREAM rather than reaching its end — a read error is not "
+                   "the payer going away and must not be reported as one, because the two take opposite work: "
+                   "an end of input is a process that ended, and this is an fd that broke while the writer on "
+                   "the other side of it may be perfectly alive. errno=%d (%s)", errno, strerror(errno));
+            /* THE SAME PAIR THE CALLER'S POLL GATE AND `abi_stalled` READ, asked HERE so the sentence below is
+               proven by its own condition instead of by the site that arrived at it. They are read one after
+               the other and neither pointer is held, which is the constraint `abi_announce` states (the two
+               registers answer out of buffers they reuse) and the shape the poll gate already uses. */
+            nothing_is_owed = (*qjs_pending() == '\0' && *qjs_host_requests() == '\0');
+            CHECK(nothing_is_owed,
+                  "the trusted zone closed this host's channel while the frontier was still parked — every "
+                  "flow's snapshot is intact and every request is still owed, so this is not a session that "
+                  "ended, it is one whose only payer went away. THE REGISTERS ARE READ HERE AND ONE OF THEM IS "
+                  "NON-EMPTY, so the clause before this one is a fact this condition established rather than a "
+                  "claim the site inherited");
+            /* …AND THE OTHER END OF INPUT, WHICH IS ORDERLY AND IS NOT THIS HOST'S OWN LOGIC BEING WRONG.
+               Both registers are empty, so nothing outstanding is lost by the channel closing, and §Offensive-
+               programming's rule is that an assert stands on a value THIS CODEBASE COMPUTED — another process's
+               LIFETIME is not one, and a `CHECK` on it hands an abort switch for this engine to the OS, to a
+               harness watchdog and to anybody who can signal the zone.
+               WHETHER THIS INSTANCE WAS BEING HELD IS NOT THE DISCRIMINATOR HERE AND MUST NOT BE READ AS ONE.
+               A `referenced` instance is kept alive so that a PEER can ask it something; the asking travels
+               through the zone; the zone is gone — so once this read has ended no peer can ask anything of ANY
+               instance, held or not, and `referenced` answers a different question (may this frontier rest)
+               which the payer's departure has already settled for every one of them.
+               IT IS SAID ON `stderr` AND NOT ON THE CHANNEL, for the reason `abi_report_declines` gives: the
+               zone parses every line of `stdout` against a verb, and the reader of that stream is in any case
+               the process that has just gone. */
+            fprintf(stderr, "[abi] the trusted zone's channel reached its end with NOTHING OUTSTANDING on "
+                            "either register — no reply is owed and no request is unanswered — so the payer "
+                            "going away costs this instance nothing it was waiting for, and this is the end of "
+                            "its part in the session rather than a defect in it. A round that paid nothing "
+                            "would have been the zone REFUSING, which is a statement; an end of input is the "
+                            "zone being GONE, which is not.\n");
+            fflush(stderr);
+            return ABI_PAY_CHANNEL_ENDED;
+        }
         p = rec;
         verb = abi_take(&p, "verb");
         if (!strcmp(verb, "go")) {
@@ -29615,16 +29699,36 @@ static int abi_main(int argc, char **argv)
         if (step != ENGINE_STEP_STALLED &&
             (*qjs_pending() != '\0' || *qjs_host_requests() != '\0')) {
             abi_say("poll");
-            (void)abi_pay();
+            /* AND THE ONE ANSWER THAT IS NOT A COUNT, HANDLED RATHER THAN ASSERTED UNREACHABLE. A `poll` is
+               written only where a register is non-empty and the engine does not run between that gate and
+               this call, so an end of channel reached from here is the OWED end and `abi_pay` has already
+               aborted on it — which makes this branch dead BY AN ARGUMENT, and an argument is what this file
+               distrusts wherever the alternative costs one comparison. A `paid` of zero is still dropped, for
+               the reason `abi_pay`'s own header gives: the zone answers a poll with whatever is READY, so an
+               empty round is "your bytes have not landed yet" and not a refusal. */
+            if (abi_pay() == ABI_PAY_CHANNEL_ENDED) break;
         }
         if (step == ENGINE_STEP_STALLED) {
+            int paid;
+
             abi_say("stalled");
             /* A ROUND THAT PAID NOTHING IS THE ZONE DECLINING, which is the one thing that ends a live
                session here. A round that paid ANYTHING goes back into the step loop with no further
                condition: whether that payment unparked a flow is the frontier's answer to give on the next
                step, not this host's to predict — and predicting it is how a driver comes to stop one step
                before the work it was waiting for. */
-            if (abi_pay() == 0) {
+            paid = abi_pay();
+            /* THE CHANNEL'S END IS NOT A ROUND THAT PAID NOTHING, AND COLLAPSING THEM WAS THE WHOLE DEFECT
+               `abi_pay` RECORDS AT ITS OWN NULL. Both of the arms this `paid == 0` block holds are about a
+               statement the zone MADE: `abi_stalled` prints the zone's own refusals beside both registers, and
+               all three are empty here, so firing it would report a refusal nobody made and send the reader
+               looking for a request that is on neither list. The `referenced` gate asks whether a peer may
+               still arrive, which is settled for every instance the moment the zone is gone. So this ends the
+               session ahead of both, through the exit
+               path a drained frontier already takes — which is what puts this run's refusals, its `@RESULT`,
+               its last image and its teardown on the same road rather than skipping all four by aborting. */
+            if (paid == ABI_PAY_CHANNEL_ENDED) break;
+            if (paid == 0) {
                 /* …UNLESS NOTHING WAS OWED, WHICH IS A DIFFERENT SENTENCE AND ONLY A REFERENCED INSTANCE CAN
                    SAY IT. A document a peer holds a WindowProxy for does not finish: its last timeline reports
                    host-owed and the scheduler stalls with BOTH REGISTERS EMPTY, waiting to be asked something
