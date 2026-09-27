@@ -13,6 +13,40 @@ const ROOT = path.resolve(__dirname, "fixtures");
 const PORT = parseInt(process.env.FIX_PORT || "8765", 10);
 const LOCK = path.resolve(__dirname, "fixtures.lock");
 
+/* THE ACCESS LINE NEEDS A READER THAT IS NOT A REDIRECT SOMEBODY REMEMBERED, WHICH IS WHY THIS FILE EXISTS.
+   CLAUDE.md §A-WITNESS-MAY-NOT-BE-COMPOSED-FROM-A-VALUE-THE-SUBJECT-CAN-MAKE-UNKNOWN judges a witness on two
+   axes: can its payload become unknown, and does its CHANNEL have a reader that is not the thing under test.
+   A request landing in a serving host's own access log is the good channel and is the one that worked when a
+   console line did not — and this server's access line was written by `console.log` ALONE, so whether it was
+   ever readable afterwards depended on whether whoever started the server happened to redirect stdout.
+
+   WHAT THAT DEGRADED INTO IS WORSE THAN NO LOG, and it was measured rather than feared. A tracked
+   `testing/fixtures_access.log` sat in this tree with NOTHING IN THE REPOSITORY WRITING IT — a one-off
+   redirect from a single afternoon, committed, and then read by everybody who asked whether a fixture's
+   witness had fired. Asked for `/api/` it answered 0, with `poc_hash` at 41 as an armed positive control and
+   an invented path at 0, and that 0 means NOTHING HAS WRITTEN THIS FILE FOR MONTHS while reading exactly like
+   THE SUBJECT NEVER MADE THE REQUEST. Those two take opposite work: one is a missing capture and one is a
+   finding about the engine. That is §A-FIELD-A-CONSUMER-DEFAULTS with the artifact in the field's place — a
+   reader with no writer — and §AND-A-`NEVER`-OVER-A-LOG-CORPUS, whose population was chosen by a redirect.
+
+   SO THE SERVER WRITES IT, THE PATH IS PORT-SCOPED, AND THE FILE IS TRUNCATED AND STAMPED AT STARTUP.
+   Port-scoped because two servers on two ports are two subjects and a shared file interleaves them into one
+   that answers about neither. TRUNCATED because the question a reader asks of this file is always `did it fire
+   in THIS run`, and an accumulating file answers it out of a previous one — the recency bias that rule is
+   about, arriving through the instrument instead of through the reader. STAMPED because an EMPTY file and an
+   ABSENT one are different facts: the header line means `the server ran and nothing asked it for anything`,
+   which is separable from `no server ever ran`, and averaging those two is what produced the incident above.
+
+   THE WRITE IS SYNCHRONOUS AND ITS FAILURE IS NOT CAUGHT. A served request whose record is lost is exactly the
+   unarmed witness this exists to end, so a channel that cannot record must not quietly go on serving; the fd is
+   opened BEFORE the bind so a bad path is a configuration error at startup rather than a 500 mid-run. */
+const ACCESS_LOG = path.resolve(__dirname, `fixtures_access.${PORT}.log`);
+const ACCESS_FD = fs.openSync(ACCESS_LOG, "w");
+fs.writeSync(ACCESS_FD,
+  `# fixtures_server access log — port ${PORT}, pid ${process.pid}, opened ${new Date().toISOString()}\n` +
+  `# ONE RUN. This file is truncated at startup, so an absence here is an absence in THIS run and in no other.\n` +
+  `# A file holding only these two lines means the server ran and NOTHING requested anything of it.\n`);
+
 /* THE DEFAULT ROUTE IS RESOLVED ONCE, AGAINST THE DISK, AND ITS ABSENCE IS SAID OUT LOUD.
  *
  * This mapped `/` to a fixture unconditionally and the banner below announced the mapping, while the file it
@@ -243,8 +277,11 @@ const srv = http.createServer((req, res) => {
      navigation carries NEITHER, so neither channel can attribute the document's own line. Logging both means
      a reader picks whichever is populated for the request kind in front of them, rather than discovering
      after a run that this server happened to record the other one. */
-  console.log(`[${new Date().toISOString()}] ${req.method} ${reqUrlFull}  referer=${req.headers.referer || "-"}` +
-              `  dest=${req.headers["sec-fetch-dest"] || "-"}`);
+  const accessLine = `[${new Date().toISOString()}] ${req.method} ${reqUrlFull}` +
+                     `  referer=${req.headers.referer || "-"}` +
+                     `  dest=${req.headers["sec-fetch-dest"] || "-"}`;
+  console.log(accessLine);
+  fs.writeSync(ACCESS_FD, accessLine + "\n");
   const url = pick(reqUrlFull.split("?")[0].split("#")[0]);
   const qs = reqUrlFull.split("#")[0].split("?")[1] || "";
   const pipe = pipeStatus(qs);
@@ -281,6 +318,7 @@ srv.listen(PORT, "127.0.0.1", () => {
     : `  GET / -> UNMAPPED: ${DEFAULT_ROUTE} is not in this checkout, so / answers 404`);
   console.log(`  GET ${HOLD_PATH} -> a body with NO END (wpt fetch/api/resources/infinite-slow-response.py)`);
   console.log(`  lock: ${LOCK}`);
+  console.log(`  access log: ${ACCESS_LOG}  (truncated at this startup; two lines and no more means nothing was requested)`);
 });
 
 process.on("SIGTERM", () => { try { fs.unlinkSync(LOCK); } catch {} for (const f of [..._holding]) f();

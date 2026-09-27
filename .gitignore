@@ -362,3 +362,13 @@ engine/.work/wpt-gaps.json
 # rather than removed: a worktree here is registered in .git/worktrees and an agent may be working in it.
 # Put new ones in the scratchpad; this entry exists so the ones already here cannot be committed by accident.
 base/
+
+# THE FIXTURE SERVER'S PER-RUN ACCESS LOG, WHICH IS A RUN ARTIFACT AND NEVER AN INPUT.
+# `testing/fixtures_server.cjs` truncates and stamps one of these at every startup, port-scoped, so the file
+# answers about ONE run — see that file's own paragraph for why an accumulating or shared one answers about
+# none. It is ignored rather than tracked because the defect it replaces was a TRACKED access log with nothing
+# in the repository writing it: a one-off stdout redirect, committed, four months stale, and then read by
+# everybody who asked whether a fixture's reachability witness had fired. Asked for `/api/` it answered 0 with
+# an armed positive control at 41, and that 0 meant NOTHING HAS WRITTEN THIS FILE FOR MONTHS while reading
+# exactly like THE SUBJECT NEVER MADE THE REQUEST. A committed log is evidence written once and read as live.
+testing/fixtures_access.*.log
