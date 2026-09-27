@@ -2293,6 +2293,20 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
 
    @kinds-of cold
    @kind gauge: stepUnits programCursors replyOutstanding rowsAwaitingBytes
+   @kind gauge: live outOfPrograms outOfProgramsUnrun outOfProgramsFramed outOfProgramsAtTheLadder
+   @kind gauge: outOfProgramsAtTheLadderUnits
+   THE OUT-OF-PROGRAMS WALK'S SIX ROWS ARE GAUGES, DETERMINED AT THE SITE THAT RAISES THEM AND NEVER FROM
+   THEIR NAMES, which is what the residual below asks of every line here. solver/cold.c raises `live` at the
+   top of its loop body and the other five inside it, keyed on `f->script_i == f->dyn_n` — a per-member state
+   NOW — so every one of them FALLS when a member advances its cursor, is sold, or forks a copy standing short
+   of the tail. The `…Units` row is a histogram and is stated for the reason the scalars are: a per-member
+   walk may not be differenced whether it arrives as one number or as twenty.
+   `live` IS DECLARED BESIDE THEM RATHER THAN LEFT OUT, because the quantity a consumer wants is
+   `live - outOfPrograms` — the members flow_step's ladder cannot reach at all — and it is ONE WALK AT ONE
+   INSTANT with them (`out->flows++` at the top of that loop, `out->out_of_programs++` inside the same body).
+   The only other frontier size on a driver's list is the WFQ walk's, taken at whichever entry that driver's
+   own index names, so a consumer that carries the total and not `live` performs the two-moments subtraction
+   instead of the one this composer already makes available.
    @kind lifetime: stepUnitRuns stepUnitOverruns
    @kind lifetime: hostAsked hostAnswered replyAsked replyAnswered replyDeclined replyDropped
    @kind lifetime: replayHits replayLeft replayLeftArms

@@ -461,7 +461,44 @@ const COLD_STEP_UNITS = ["stepNamedRenderingLife", "stepNamedRenderingTypeofLife
    per MEMBER at the instant the census was composed, so a fork copies its parent's rows into the count and a
    sold member takes its rows out of it — it may FALL, and no inequality against the seed's arm holds in
    either direction. */
-const COLD_FRONTIER = ["stepUnits", "programCursors", "replyOutstanding", "rowsAwaitingBytes"];
+/* AND THE POPULATION `flow_step`'s LADDER CANNOT REACH AT ALL, WHICH IS THE ROW THAT MAKES `orphansAsked`'s
+   ZERO READABLE AND WHICH THIS DRIVER CARRIED NEITHER HALF OF. solver/engine.h states the split in its own
+   words: that zero with `unframedStepsLifetime` 0 says the ladder was never descended, so the cause is
+   UPSTREAM of every arm in it, and the same zero with it LARGE says the ladder WAS descended and an arm ABOVE
+   the orphan rung took every descent. Those are different files to open, and solver/result.c names the row
+   that tells them apart — zero orphan asks otherwise "reads identically for `nobody has run out of programs`
+   and for `members have and something else is due`".
+   THIS LIST CARRIED THE ROW BEFORE IT AND THE ROW AFTER IT IN THE COMPOSER'S OWN FORMAT STRING AND NOT THE
+   ONE BETWEEN THEM, WHICH IS MEASURED AND NOT ASSERTED: an archived 19-site corpus drive taken with this
+   driver publishes `unframedStepsLifetime` and `programCursors` on its own key line and no `outOfPrograms`
+   anywhere, so FOUR of its six attributed engine rows read `orphansAsked` 0 with nothing on the line that
+   could say which of the two readings it was.
+   AND THE DERIVATION A READER REACHES FOR INSTEAD IS FORBIDDEN BY THE PRODUCER, which is why carrying the row
+   is not a convenience. `programCursors`' top bucket against `rootPrograms` is NOT this number: one cursor
+   value covers a member INSIDE the program at that index and a member PAST THE LAST ROW of its own sequence,
+   and `dyn_n` is PER-FLOW and crosses no boundary — solver/result.c says a member at that bucket "may have
+   sixteen chunk rows still in front of it; read the old way it looks like a document that finished".
+   `live` TRAVELS WITH IT AND `wfqMembers` IS NOT ITS DENOMINATOR. The quantity is `live - outOfPrograms` and
+   both halves are ONE walk at ONE instant (solver/cold.c raises `out->flows++` at the top of the loop and
+   `out->out_of_programs++` inside the same body); `wfqMembers` is a DIFFERENT walk's count taken at whichever
+   entry `wfqFrom` names, so subtracting from THAT is the two-moments defect and no arm here does it.
+   BOTH ARE GAUGES and are filed here for `programCursors`' reason exactly: they are summed per MEMBER at the
+   instant the census was composed, so a fork copies its parent's state into the count and a sold member takes
+   it out. READ THEM WITH `stepUnitRuns.finished`, NEVER ALONE — a census taken when `live` is 0 reports 0
+   whatever every member did before it left, which is the same 0 a frontier that never forked reports.
+   NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: the three-arm PARTITION under the total and the
+   ladder-arm histogram beside it, which say WHICH of three things holds an out-of-programs member — never
+   dispatched, framed, or standing at the ladder — and are what separate "the pick has not returned to it"
+   from "a rung above the orphan seed takes it every round". WHAT THE NEXT DIFF BUILDS: the
+   prefix-and-numeric derivation `testing/corpus/site.mjs` already performs, with cold.c's own
+   `unrun + framed + atTheLadder == outOfPrograms` checked from this driver's own output — that identity is a
+   DCHECK, so it is compiled out of a release artifact and a driver is the only place it can be checked on
+   one. It is NOT a hand-typed list here, for that file's stated reason: a fourth arm added to cold.c's
+   if/else chain must be carried the day it lands. HOW ITS ABSENCE WOULD SHOW: a run whose total is nonzero
+   and whose orphan asks are 0, with nothing on the line saying which of the three states those members are
+   standing in. */
+const COLD_FRONTIER = ["stepUnits", "programCursors", "replyOutstanding", "rowsAwaitingBytes",
+                       "live", "outOfPrograms"];
 /* …AND THE CONSTANT IT IS READ AGAINST, WHICH IS NEITHER OF THE TWO KINDS EVERY OTHER LIST HERE STATES.
    solver/engine.c writes both arms at the ONE line `rootPrograms` is written and never again, because the pair
    is a DENOMINATOR — a fact about what the DOCUMENT owed the reply door when its rows were laid down — so it
