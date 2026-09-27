@@ -2871,33 +2871,24 @@ JS_EXTERN void JS_SetEvalSinkHook(JSEvalSinkFunc *cb);
 
 /* Forced-execution FLOW API — the host CALLS these to create / drive / snapshot / free flows. (The preempt
    CALLBACK that parks a running flow lives in JSFlowControlHooks above; these are the host-driven counterpart.)
-   A flow runs as a preemptible heap-resident async-function frame, so it interleaves under the WFQ. */
+   A flow runs as a preemptible heap-resident async-function frame, so it interleaves under the WFQ.
+   JS_FlowNew IS THE COMPOSITION OF JS_FlowCompileStep AND JS_FlowInstantiate WITH THE COMPILE SEAM UNARMED — one program per
+   call, the closure freed on the way out, and no `pcompile`, so the parse cannot hand the thread back. That is
+   a host DECLINING an edge exactly as a NULL `JSFlowControlHooks.budget` is, and it gets the parse it always
+   got.
+     THERE USED TO BE A THIRD ENTRY BESIDE THESE THREE, the same composition with `pcompile` threaded through it, and it is
+   recorded rather than quietly dropped because it is the shape a reader re-derives: a composed entry LOOKS
+   like the natural place to put the seam. It is the one place the seam's only real consumer cannot use it. A
+   host that wants N flows crossing one document's script sequence to PARSE that sequence once rather than
+   once each HOLDS the closure, so it calls JS_FlowCompileStep and JS_FlowInstantiate itself; a composition
+   that frees the closure on its way out has nothing to offer it, and what was left was a capability with no
+   consumer. */
 JS_EXTERN JSValue *JS_FlowNew(JSContext *ctx, const char *src, size_t len, const char *filename, int eval_flags);
-/* …AND THE SAME THING WITH THE COMPILE'S OWN SUSPEND POINT ARMED. The PARSE is the one span in this engine
-   that is O(a length the PAGE chose) and could not rest at any input size: the three interpreter raise kinds
-   above are raised from DISPATCH, which a parse never reaches, so a compile polled nothing for its whole
-   length. It polls now, from its own production dispatch, through the SAME budget hook and the SAME preempt
-   policy as the interpreter — one park decision, still in one place.
-     Answers 1 (the flow is built and *pframe holds it), 0 (the compile HANDED THE THREAD BACK — *pcompile
-   holds it and the host calls again, with the same src/len/filename/eval_flags, when it next wants to spend
-   time here) or -1 (the compile failed; the exception is pending). A `pcompile` of NULL is a host that
-   DECLINES this edge, exactly as a NULL `budget` above is, and it gets the parse it always got: JS_FlowNew is
-   that spelling and is a wrapper over this entry rather than a second implementation.
-     THE RESUME IS BYTE-IDENTICAL AND NOT A RE-PARSE. What is suspended is the descent's explicit frame stack,
-   whose chunks are allocated once and never moved, so the frames, the JSFunctionDef chain and every
-   break/continue linkage stay at the addresses they already hold; nothing is serialised and nothing is
-   rebuilt. That is also why a parked compile is an IN-RAM park only: it cannot be serialised, and it does not
-   need to be, because a compile is RE-DERIVABLE from the source the host is holding — a flow paged out
-   mid-parse drops the parse through JS_FlowCompileDrop and re-compiles when its recipe replays the document.
-     THE SOURCE AND THE FILENAME ARE BORROWED FOR THE WHOLE COMPILE and not merely for one call — the parse
-   reads them across every stint — so a host that offers `pcompile` is promising those bytes outlive it. */
-JS_EXTERN int JS_FlowNewStep(JSContext *ctx, const char *src, size_t len, const char *filename, int eval_flags,
-                             JSValue **pframe, void **pcompile);
-/* THE TWO HALVES OF THAT ENTRY, SEPARATELY, BECAUSE ONLY ONE OF THEM IS PER-FLOW. A parsed program's bytecode is
-   a fact about the SOURCE BYTES and its frame is a fact about ONE ACTIVATION: JS_FlowInstantiate dups what it
-   needs and writes nothing to the closure or its bytecode, so ONE closure instantiates into any number of
-   independent frames — which is what a concolic fork already rests on, since a cloned frame dups `cur_func` and
-   the sibling runs the SAME bytecode as its parent. JS_FlowNewStep is the composition of these two and not a
+/* THE TWO HALVES OF A FLOW'S CONSTRUCTION, SEPARATELY, BECAUSE ONLY ONE OF THEM IS PER-FLOW. A parsed program's
+   bytecode is a fact about the SOURCE BYTES and its frame is a fact about ONE ACTIVATION: JS_FlowInstantiate
+   dups what it needs and writes nothing to the closure or its bytecode, so ONE closure instantiates into any
+   number of independent frames — which is what a concolic fork already rests on, since a cloned frame dups
+   `cur_func` and the sibling runs the SAME bytecode as its parent. JS_FlowNew is their composition and not a
    third implementation of either.
      WHAT THEY ARE FOR: a host that wants N flows crossing one document's script sequence to PARSE that sequence
    once rather than once each. It holds the closure from JS_FlowCompileStep and instantiates it per flow. Holding
@@ -2910,7 +2901,22 @@ JS_EXTERN int JS_FlowNewStep(JSContext *ctx, const char *src, size_t len, const 
      JS_FlowCompileStep answers 1 (*pfn holds the closure, which the CALLER now owns and must free), 0
    (SUSPENDED — *pcompile holds the parse, call again with the same arguments) or -1 (the parse failed; the
    exception is pending). JS_FlowInstantiate answers a frame handle, or NULL with the exception pending; it does
-   NOT consume `fn`. */
+   NOT consume `fn`.
+     …AND THE PARSE'S SUSPEND POINT IS THE ONE THIS ENGINE HAD NOWHERE TO PUT. The PARSE is the one span here
+   that is O(a length the PAGE chose) and could not rest at any input size: three of the four raise kinds this header
+   declares (JS_PREEMPT_BACKEDGE, JS_PREEMPT_FORK, JS_PREEMPT_CALL) are raised from the interpreter's DISPATCH, which a
+   parse never reaches, so a compile polled nothing for its whole length. It polls now, from its own production
+   dispatch, through the SAME budget hook and the SAME preempt policy as the interpreter — one park decision,
+   still in one place. A `pcompile` of NULL is a caller DECLINING that edge, exactly as a NULL
+   `JSFlowControlHooks.budget` is, and JS_FlowNew is that spelling.
+     THE RESUME IS BYTE-IDENTICAL AND NOT A RE-PARSE. What is suspended is the descent's explicit frame stack,
+   whose chunks are allocated once and never moved, so the frames, the JSFunctionDef chain and every
+   break/continue linkage stay at the addresses they already hold; nothing is serialised and nothing is
+   rebuilt. That is also why a parked compile is an IN-RAM park only: it cannot be serialised, and it does not
+   need to be, because a compile is RE-DERIVABLE from the source the host is holding — a flow paged out
+   mid-parse drops the parse through JS_FlowCompileDrop and re-compiles when its recipe replays the document.
+     THE SOURCE AND THE FILENAME ARE BORROWED FOR THE WHOLE COMPILE and not merely for one call — the parse
+   reads them across every stint — so a caller that offers `pcompile` is promising those bytes outlive it. */
 JS_EXTERN int JS_FlowCompileStep(JSContext *ctx, const char *src, size_t len, const char *filename,
                                  int eval_flags, JSValue *pfn, void **pcompile);
 JS_EXTERN JSValue *JS_FlowInstantiate(JSContext *ctx, JSValueConst fn);
