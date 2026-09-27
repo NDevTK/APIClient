@@ -87,7 +87,7 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import { loadavg } from 'node:os';
 
@@ -258,6 +258,41 @@ function loadChokepoint(peerOrigin) {
   return sandbox;
 }
 
+/* ── WHAT THIS GATE LEFT RUNNING, WHICH IS A FACT ABOUT PROCESSES AND NOT ABOUT PIPES ────────────────
+   `trusted.mjs` spawns every `--abi` instance with stderr `inherit`, so a native child holds THIS PROCESS'S
+   stderr pipe; and it awaits each instance's channel, so an instance that never returns to `abi_line()`
+   outlives the zone that provisioned it and is reparented to init. That process is not a leak in the ordinary
+   sense — it is a live engine burning a core with no payer, which is CLAUDE.md
+   §A-CAPABILITY-MATERIALIZED-PER-FLOW-AND-NEVER-RECLAIMED arriving as a PROCESS rather than as a realm, and
+   §AND-THE-LOAD-IS-NOT-ONLY-FROM-WORK-THAT-IS-RUNNING prices it: it competes with every measurement taken on
+   this box until something ends it.
+   IT IS READ OUT OF `/proc` AND NEVER OUT OF A PATTERN, which is §A-PROCESS-PATTERN-MATCHES-THE-SHELL-THAT-
+   NAMES-IT: a `pgrep -f` over a command string matches the shell doing the matching. A PROCESS GROUP is the
+   kernel's own answer to "what did this child start" — the child is spawned `detached`, so it is a group
+   leader and every descendant it does not itself detach is in that group — so membership is a lookup and not
+   an inference.
+   `comm` IS FIELD 2 OF `/proc/<pid>/stat` AND IS PARENTHESISED AND MAY CONTAIN SPACES, so every numeric field
+   is taken AFTER THE LAST `)`; splitting the line on whitespace from the left mis-indexes every field for any
+   process whose name has a space in it. A ZOMBIE IS EXCLUDED because it holds no fd and burns nothing: it is
+   an accounting entry its parent has not read yet, and reporting one as a process this gate left running
+   would be an absence and a presence behind one number. */
+const CLK_TCK = 100;   /* `getconf CLK_TCK` on this platform; only ever used to render ticks as seconds */
+function procStat(pid) {
+  let raw;
+  try { raw = readFileSync(`/proc/${pid}/stat`, 'utf8'); } catch { return null; }
+  const close = raw.lastIndexOf(')');
+  if (close < 0) return null;
+  const f = raw.slice(close + 2).split(' ');
+  return { pid, comm: raw.slice(raw.indexOf('(') + 1, close), state: f[0], pgrp: Number(f[2]),
+           /* utime + stime, which is the quantity §Testing says to measure a budget in */
+           cpuS: (Number(f[11]) + Number(f[12])) / CLK_TCK };
+}
+function groupMembers(pgid) {
+  if (!Number.isInteger(pgid) || pgid <= 1) return [];
+  return readdirSync('/proc').filter((d) => /^\d+$/.test(d)).map((d) => procStat(Number(d)))
+    .filter((r) => r !== null && r.pgrp === pgid && r.state !== 'Z');
+}
+
 /* ── THE CHECK TABLE ─────────────────────────────────────────────────────────────────────────────────────────
    DECLARED BEFORE ANYTHING RUNS, which is W5's mechanism. Each entry states what it is evidence OF and which
    wrong-reason it closes; each produces exactly one of `pass`, `wrong` (an observation was made and it is not
@@ -303,6 +338,20 @@ const CHECKS = [
      a FOREIGN world and for nothing else, and the asking agent cannot raise a count inside a peer process at
      all. It is read out of the PEER's own `@RESULT` — the artifact, not this harness — which `trusted.mjs` now
      prints under that peer's tag. */
+  /* THE PROCESSES THIS GATE LEFT BEHIND, DECLARED AS A CHECK BECAUSE THE COST IS MEASURED RATHER THAN
+     ARGUED AND BECAUSE A HEALTHY RUN CAN PASS IT. `trusted.mjs` awaits every instance's channel, so a run
+     that ended cleanly has an EMPTY process group by the time it exits and this row reads `pass` — which is
+     what makes it a check and not a note. A non-empty one is the lifetime failure this whole file is about,
+     seen from outside the engine: an `--abi` instance that never returned to its ABI loop, so it never
+     observed the closed channel, never reached `test_forced.c`'s `rec != NULL` CHECK, and is therefore the
+     one shape that leaves NO `@E` behind it. That is why the row exists: the two identical aborts in a
+     wedged run are the instances that DID reach the loop, and the one that matters is the one that printed
+     nothing at all. */
+  ['orphans', 'the child\'s process group was EMPTY once it ended — no `--abi` instance outlived the zone that ' +
+              'provisioned it. An instance spinning inside the engine never returns to `abi_line()`, so it ' +
+              'observes no closed channel, prints no `@E`, holds this process\'s stderr pipe and burns a core ' +
+              'with no payer until something else ends it. This row is the only place such a process is ' +
+              'visible at all, and it states each one\'s consumed CPU beside it'],
   ['peerflow', 'a peer instance\'s OWN result document reports `_worldSegmentsMade` at least 1 — the asking ' +
                'agent\'s world arrived in the peer process and a segment was materialized for it, which is ' +
                'the witness that the read was performed as a PROGRAM on the peer\'s frontier under the ' +
@@ -465,10 +514,17 @@ async function main() {
      the nav vector this gate actually needs. HOW ITS ABSENCE WOULD SHOW: a person reading what this gate
      permitted at its own fixture sees every value of every row permitted at both authorities, where the
      run only ever asks for two vectors. */
+  /* AND IT IS `detached`, WHICH IS WHAT GIVES THIS GATE A HANDLE ON WHAT ITS CHILD STARTED RATHER THAN ONLY
+     ON THE CHILD. `trusted.mjs` spawns each `--abi` instance in its own caller's process group, so without
+     this the grandchildren share THIS process's group and `-pid` would name the group peergate itself is in.
+     Detaching makes the child a group LEADER, so `-child.pid` is exactly "the zone and every instance it
+     provisioned" and nothing else — the kernel's own answer to the question, in place of a pattern that
+     would match the shell asking it (§A-PROCESS-PATTERN-MATCHES-THE-SHELL-THAT-NAMES-IT). It is NOT
+     `unref`'d: the child is still this process's to wait for. */
   const child = spawn(process.execPath,
                       [join(ENGINE, 'trusted.mjs'), seedUrl, bin,
                        '--explore', seedOrigin, '--explore', peerOrigin],
-                      { stdio: ['ignore', 'pipe', 'pipe'] });
+                      { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
   let out = '', err = '', spawnError = null;
   child.stdout.on('data', (d) => { out += d; progress(); });
   child.stderr.on('data', (d) => { err += d; process.stderr.write(d); progress(); });
@@ -477,6 +533,44 @@ async function main() {
      send the reader hunting a transport failure in a process that does not exist. */
   child.on('error', (e) => { spawnError = e; });
 
+  /* THE GROUP ID, READ FROM THE KERNEL WHILE THE CHILD IS CERTAINLY ALIVE, AND EVERY GROUP-WIDE SIGNAL GATED
+     ON IT. `detached` not taking effect is the one failure that turns a reaper into a suicide: `-child.pid`
+     against a child that shares this process's group signals THIS PROCESS and everything beside it, so the
+     group kill below is refused unless the kernel says the child IS a group leader and that its group is not
+     ours. That is §A-DESTRUCTIVE-STEP-IS-GATED-BY-THE-CHECK'S-EXIT-STATUS: the value is read once, here,
+     where the answer can be trusted, and every later act branches on it rather than on the intention. */
+  const ourPgrp = procStat(process.pid)?.pgrp ?? -1;
+  const childStat = child.pid === undefined ? null : procStat(child.pid);
+  const pgid = (childStat !== null && childStat.pgrp === child.pid && childStat.pgrp !== ourPgrp)
+                 ? child.pid : null;
+  if (child.pid !== undefined && pgid === null)
+    console.error(`[peergate] the child ${child.pid} is not a process group leader of its own (its group is ` +
+                  `${childStat === null ? 'unreadable' : childStat.pgrp}, this process's is ${ourPgrp}), so ` +
+                  'no group-wide signal will be sent: an `--abi` instance this run leaves behind will be ' +
+                  'reported by the `orphans` row and left for the caller\'s RLIMIT_CPU. A group kill here ' +
+                  'would name the group this gate is itself in.');
+  /* ONE SPELLING FOR EVERY GROUP-WIDE SIGNAL, so the gate cannot acquire a second one that skips the gate. */
+  const signalGroup = (sig) => {
+    if (pgid === null) return 'no group to signal';
+    try { process.kill(-pgid, sig); return `${sig} to group ${pgid}`; }
+    catch (e) { return `${sig} to group ${pgid} refused: ${e.code || e.message}`; }
+  };
+  /* AND THIS GATE'S OWN DEATH REAPS THE GROUP TOO, BECAUSE A PARENT THAT EXITS IS THE CASE THE WHOLE
+     `orphans` ROW IS ABOUT AND THIS PROCESS IS ONE. `engine/build.mjs` wraps each stage in a wall backstop
+     that signals the STAGE, so a peergate killed there would otherwise leave the zone and every instance it
+     provisioned running with no payer and no reader — the same lifetime failure one level out, arriving
+     through the harness that was measuring it. `exit` is the one handler that covers every ordinary path, and
+     the two signals are handled because their default disposition would skip it; each re-exits rather than
+     swallowing, so a caller's kill still ends this process. */
+  const reapOnOurWayOut = () => { if (pgid !== null) signalGroup('SIGKILL'); };
+  process.on('exit', reapOnOurWayOut);
+  for (const sig of ['SIGTERM', 'SIGINT'])
+    process.on(sig, () => {
+      console.error(`[peergate] ${sig} — reaping the zone's process group before exiting: ${
+        signalGroup('SIGKILL')}`);
+      process.exit(3);
+    });
+
   /* W6's BACKSTOP, AND IT IS A BACKSTOP RATHER THAN A BUDGET. It measures NO PROGRESS — no request arriving,
      no byte written by the child — because a deadlocked pipe is the one failure that consumes no CPU and
      emits no signal, and it is the only thing here a clock can see that nothing else can. It is generous, it
@@ -484,16 +578,84 @@ async function main() {
      examples are all one machine under load reporting HOW a thing ran as WHAT ran. */
   const IDLE_MS = 180000;
   let backstop = null;
+  /* IT RESOLVES ON `exit` AND NOT ON `close`, AND THE DIFFERENCE IS THE WHOLE OF WHY THIS GATE ONCE TOOK
+     SIXTEEN MINUTES TO DELIVER A VERDICT IT HAD REACHED IN THREE. Node's `close` fires when the process has
+     ended AND EVERY STDIO STREAM HAS CLOSED; `exit` fires on the process ending, which is the fact every
+     reader of this gate wants and the fact `record('exit', …)` reports. `trusted.mjs` spawns each `--abi`
+     instance with stderr `inherit`, so an instance is holding a DUP of the write end of this process's stderr
+     pipe — and an instance that never returns to `abi_line()` is not ended by the channel closing, so it goes
+     on holding it after the zone is gone. The read end therefore never reaches EOF and `close` NEVER ARRIVES,
+     for as long as that process lives.
+     MEASURED ON BOTH SHAPES IN THIS NODE (v22), with the failing case as the control: a three-level parent /
+     child / grandchild where the child exits while the grandchild holds the inherited stderr, `exit` fires in
+     under half a second and `close` DOES NOT FIRE AT ALL — not in eight seconds, not ever while the
+     grandchild lives. The gate that waited on `close` was waiting on a process it had already given up on.
+     AND THAT IS NOT A TIDIER SPELLING OF THE SAME WAIT: on the run this was written from, the backstop had
+     decided at 182 s and the stage did not end until THIRTEEN MINUTES LATER, when the kernel's RLIMIT_CPU —
+     which is per-process and therefore a FRESH budget for every descendant — killed the orphan at 900 CPU
+     seconds. The gate's verdict was correct and unreadable, and what ended the stage was a budget the caller
+     installs around something else.
+     SO THE THREE ACTS ARE ORDERED AND THE ORDER IS LOAD-BEARING: learn that the child ENDED, REAP the group
+     (nothing else can release the fd), and only then DRAIN, because a drain attempted first is the same wait
+     under a different name. */
   const ended = await new Promise((res) => {
-    child.on('close', (code, signal) => res({ code, signal }));
+    child.on('exit', (code, signal) => res({ code, signal }));
     const tick = setInterval(() => {
       if (Date.now() - lastProgress < IDLE_MS) return;
       clearInterval(tick);
       backstop = { idleMs: Date.now() - lastProgress, load: loadavg() };
-      child.kill('SIGTERM');
+      /* THE GROUP AND NOT THE CHILD. A `SIGTERM` to the child alone leaves every instance it provisioned
+         running — and the ones that are spinning are exactly the ones that will not notice their channel
+         closing, so the single-process kill reaches only the instances that would have died anyway. */
+      backstop.termed = signalGroup('SIGTERM');
     }, 2000);
-    child.on('close', () => clearInterval(tick));
+    child.on('exit', () => clearInterval(tick));
   });
+
+  /* ── THE REAP, WHICH IS A CHECK BEFORE IT IS AN ACT ─────────────────────────────────────────────
+     ENUMERATED BEFORE ANYTHING IS SIGNALLED, because what was left behind is the FINDING and a kill that ran
+     first would have destroyed the evidence for it. On a healthy run this list is empty and the row passes.
+     THE CPU EACH ONE HAD BURNED IS STATED BESIDE IT, because that is the cost §AND-THE-LOAD-IS-NOT-ONLY-FROM-
+     WORK-THAT-IS-RUNNING names and it is the one number that says whether a leftover process was wedged
+     (nothing) or spinning (everything). */
+  const leftBehind = pgid === null ? [] : groupMembers(pgid).filter((r) => r.pid !== child.pid);
+  const reaped = leftBehind.length ? signalGroup('SIGKILL') : 'nothing to reap';
+  /* AND `missing` WHERE THERE IS NO GROUP TO LOOK IN, WHICH IS NOT THE SAME SENTENCE AS AN EMPTY ONE. A run
+     whose child never started, or whose group this process could not establish, has not shown that no
+     instance was left behind — it has shown nothing about instances at all, and answering `pass` there is
+     the vacuous pass the `nohold` row above refuses for the same reason. */
+  if (pgid === null)
+    record('orphans', 'missing', 'this gate established no process group for its child, so there is no set of ' +
+                                 'processes for this row to be about — the line above says why');
+  else
+    record('orphans', leftBehind.length ? 'wrong' : 'pass',
+           leftBehind.length
+             ? `${leftBehind.length} process(es) outlived the zone: ${
+                 leftBehind.map((r) => `${r.pid}:${r.comm} ${r.cpuS.toFixed(1)}s CPU`).join(', ')} — ${reaped}`
+             : `group ${pgid} held nothing but the child once it ended`);
+
+  /* ── THE DRAIN, BOUNDED, AND ITS OUTCOME STATED RATHER THAN ASSUMED ───────────────────────────
+     `exit` says nothing about whether this process has READ everything the child wrote, and four checks below
+     are decided out of `err` and `out` — so a resolve on `exit` with no drain would report `routed`, `peers`,
+     `peerflow` and `result` about bytes that were still in a pipe. It is a BOUNDED wait and its completion is
+     RECORDED, because a truncated `err` read as a zone that said nothing is the absent-versus-zero pair
+     arriving in this gate's own inputs; where the drain does not complete, the rows that read those buffers
+     say so in their own text rather than reporting a silence they cannot vouch for. */
+  const DRAIN_MS = 5000;
+  const drainStream = (st) => new Promise((res) => {
+    if (st === null || st.readableEnded || st.destroyed) return res(true);
+    st.once('end', () => res(true));
+    st.once('close', () => res(true));
+  });
+  const drained = await Promise.race([
+    Promise.all([drainStream(child.stdout), drainStream(child.stderr)]).then(() => true),
+    new Promise((res) => setTimeout(() => res(false), DRAIN_MS)),
+  ]);
+  if (!drained)
+    console.error(`[peergate] the child's stdio did not reach EOF within ${DRAIN_MS} ms of it exiting, so ` +
+                  '`result`, `routed`, `peers` and `peerflow` below are decided over what had arrived by then ' +
+                  'and not over everything the zone wrote. Something still holds the write end of one of ' +
+                  'these pipes; the `orphans` row above names what.');
   server.close();
   /* THE KEEP-ALIVE SOCKETS TOO. `close` stops ACCEPTING and waits for live connections to end, and this
      process made one itself (the chokepoint probe, through Node's own pooling `fetch`), so a gate that only
@@ -525,16 +687,29 @@ async function main() {
        through W6 instead of through a reply. The EXIT CODE stays 3 and no verdict is composed: `printRows`
        marks an unmade check `NOT RUN`, which is neither `pass` nor a failure, so nothing here can be read
        as the gate having answered about peers.
-       NAMED RESIDUAL. WHAT IS NOT COVERED: the watchdog itself, which fires on a child that is CONSUMING A
-       FULL CORE. Its own W6 paragraph rests on a deadlocked pipe consuming no CPU — true of a deadlock and
-       false of a busy engine — so it kills a run that is working and reports it in the harness's voice, and
-       §Testing's rule is to measure the thing the invariant is about. WHAT THE NEXT DIFF BUILDS: the tick
-       reads the child\'s own consumed CPU (`/proc/<pid>/stat`\'s utime+stime, which is what the kernel
-       already accounts) and fires only where the child has burned no CPU across the window, leaving the
-       busy case to the RLIMIT_CPU the caller installs — which is where a bound on work belongs and is what
-       `engine/build.mjs` already wraps this gate in. HOW ITS ABSENCE WOULD SHOW: a BACKSTOP verdict whose
-       stderr tail is not empty and whose child had accumulated minutes of CPU time, on a box under load,
-       reported as a harness idle rather than as a budget the caller owns. */
+       THAT RESIDUAL'S REMEDY IS REFUTED BY MEASUREMENT AND IS REWRITTEN RATHER THAN DELETED, because it is
+       the reading a reader re-derives from the W6 paragraph above and because §AND-THE-`WHAT-THE-NEXT-DIFF-
+       BUILDS`-CLAUSE says a wrong one is not caught but EXECUTED. It read: the watchdog fires on a child
+       CONSUMING A FULL CORE, so the tick should read the child's own utime+stime and fire only where the
+       child has burned no CPU across the window, "leaving the busy case to the RLIMIT_CPU the caller
+       installs". Its DIAGNOSIS was right and its two remedy halves are both wrong, and the run that
+       established it is the one this arm was reached on:
+         · WHOSE CPU. The busy process was not the child. `trusted.mjs` was idle — correctly, since its
+           session-end arm fires only when EVERY live instance is stalled and one instance never stalled —
+           while a native GRANDCHILD burned a full core. A tick reading the CHILD's CPU would have fired
+           exactly as it did; a tick reading the TREE's would have DECLINED TO FIRE on a session that was
+           genuinely wedged, which is the flattering direction and the expensive one.
+         · WHOSE BUDGET. `RLIMIT_CPU` is PER PROCESS and inherited, so it is not a bound on this stage at
+           all — it is a FRESH 900 seconds for every descendant. The orphan spent all of it: the backstop
+           decided at 182 s and the stage did not end for another thirteen minutes, when the kernel killed
+           the orphan at its own limit. Handing the busy case to the caller's RLIMIT_CPU hands it to a
+           budget that does not bound the thing being measured.
+       WHAT THE NEXT DIFF BUILDS, given the reap above already ends the leftover process: the tick states
+       WHICH member of the group is consuming CPU when it fires, read once per window from the group it
+       already enumerates, so a BACKSTOP verdict distinguishes a deadlocked zone from a zone idling in front
+       of a spinning instance without a reader having to go to `ps`. HOW ITS ABSENCE WOULD SHOW: a BACKSTOP
+       line whose load average is high and whose `orphans` row names a process with minutes of CPU on it,
+       with nothing on the BACKSTOP line itself connecting the two. */
     printRows();
     printFixtures(port);
     process.exitCode = 3;
