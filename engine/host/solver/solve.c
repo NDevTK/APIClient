@@ -219,6 +219,18 @@ typedef struct {
        raise an invariant rather than a decoration.
        A LIFETIME COUNT AND NOT A GAUGE: it says what has HAPPENED, cannot fall, and two samples of one
        session may be differenced — which is also why it can stand in one implication with `tried`.
+       PER SESSION, BECAUSE `tried` IS, AND THE IMPLICATION IS WHAT FIXES THE SCOPE RATHER THAN A PREFERENCE.
+       `tried` counts candidate RUNS this session has had — 0 at sink_search, raised only by this session's two
+       doors and never restored from a park document — so a carried `ends` would state more finishes than there
+       have been runs and would break `ends < tried` at the first cold rebuild. Nothing persists this field and
+       the resume door deliberately raises `tried` and `resumed` and not this, which is the property to keep.
+       AND AN IMPLICATION HOLDS OVER WRITTEN OPERANDS ONLY, which is not a truism here: this field was the one
+       member of Cand sink_search did not state, so for as long as that stood the left-hand side was whatever a
+       realloc'd slot held and the assert at the raise could neither fire on a broken invariant nor stay silent
+       on a sound one. See sink_search's line for the measurement.
+       RETIREMENT: this clause goes when `ends` and `tried` are raised through one accessor that cannot be
+       handed an unwritten operand, because the implication is then true by construction rather than by two
+       initialisers agreeing.
        RETIREMENT: this record's measured paragraph goes when a parked record in this tree cannot be emitted
        without a statement of whether its candidates are still live, because the gate reading is then
        unspellable rather than merely corrected here. */
@@ -936,6 +948,28 @@ static Cand *sink_search(const char *src, int sink, int *created) {
        thread, which is the confident-wrong-instruction direction this pair exists to remove. */
     e->substituted = 0;
     e->sink_strings = 0;
+    /* AND THE TERMINATION COUNT, WHICH IS THE FIELD THE COMMENT AT THE HEAD OF THIS BLOCK WAS WRONG ABOUT FOR
+       AS LONG AS IT STOOD. That comment says EVERY field, because the array is realloc'd and never zeroed, and
+       thirty-four of thirty-five were stated here; this one was not, so `candEnds` reported whatever the
+       allocator held. MEASURED, in a dev-asserts native smoke run at 9ccc3bc9 (`solve.c` byte-identical at that
+       revision and at this one): 18 emitted `candEnds` values, 12 reading 0 and SIX reading 3, and six of the
+       eighteen rows carried `candEnds` GREATER than `tried` — the state the assert at the raise declares
+       impossible — with that assert's message occurring 0 times in the run and no `@WHY` anywhere in it.
+       THE ASSERT COULD NOT SEE IT, WHICH IS THE WHOLE SHAPE AND NOT A DETAIL OF THIS FILE: the check stands at
+       the WRITER (solve_flow_end) and the garbage is read by the EMITTER, so a search none of whose candidates
+       has ended is never asked the question at all. What it would have done on the day one ended is worse than
+       a wrong report — `3 < 1` is false, so a HEALTHY engine aborts, and the same garbage reading below `tried`
+       would have stayed silent on a genuinely broken invariant. A DCHECK on an unwritten operand is not a
+       check; this line is what makes it one.
+       0 AND NOT A CARRIED COUNT, AND THE COLD-RESUME DOOR OWES IT NOTHING. It stands in one implication with
+       `tried`, and `tried` is a count of candidate RUNS in THIS session — set to 0 by this same block and raised
+       only by this session's two doors (solve_seed_candidates, solve_resume_candidate), never restored from a park
+       document. So `ends` is per-session for the same reason, and a resumed candidate raises `tried` at a door
+       its run has not yet finished at: restoring a stored count there would state more finishes than this
+       session has had runs and would break the implication at the first rebuild, which is exactly the shape
+       measured above. Nothing persists this field — it occurs nowhere in cold.c — so there is no stored count
+       to carry even by accident, and that is a property to keep rather than a gap to close. */
+    e->ends = 0;
     /* AND THE RUNWAY RATCHET TAKES THE SAME LINE FOR THE REASON THE SENTENCE ABOUT `surv_len` GIVES, which is
        the sharper one of the two: a best-so-far left holding garbage does not merely misreport — it makes
        every real observation compare against a maximum nothing ever reached, so the field never moves again
@@ -3030,7 +3064,16 @@ void solve_flow_end(Flow *f) {
            at the creation, solve_resume_candidate during the cold rebuild), a withdrawn record never reaches
            this line as a candidate at all because the same refusal drops `cand_src`, and each of engine.c's
            two finish lines is followed by flow_finish — so an end whose candidate was never seeded, or a
-           second end of one flow, is the only way this can fail. */
+           second end of one flow, is the only way this can fail.
+           THAT ENUMERATION WAS SHORT BY ONE WHEN IT WAS WRITTEN AND THE MISSING MEMBER WAS THE OPERAND, which
+           is recorded rather than repaired silently because the enumeration is the part a reader ACTS on. Both
+           named members are facts about the CANDIDATE; `ends` was not stated at sink_search, so the third way
+           this could fail was that the left-hand side had never been written at all — and a dev-asserts run
+           emitted six rows with `candEnds` above `tried` while this assert's message occurred 0 times in it,
+           because the check is HERE and the garbage is read at the EMIT. An enumeration of the ways an assert
+           can fail is not complete until it has asked where each of its own operands comes from, which is the
+           one question that cannot be answered from the candidate. Both operands are now written by this file
+           and the two named members are the whole of it. */
         DCHECK(e->ends < e->tried,
                "an @S candidate flow ended for a search with no unfinished candidate left to end — both doors "
                "raise `tried` before a candidate flow can be picked and engine.c's two finish lines are "
@@ -3277,7 +3320,20 @@ char *solve_json_array(JSContext *ctx) {
                             below are about a path.
            UNCONDITIONAL, AND 0 IS THE LOAD-BEARING VALUE: it is the state this engine is in, so an omission
            here would be the defect rather than a statement. Not a rung and not a credit — nothing about the
-           WFQ moves at the write. */
+           WFQ moves at the write.
+           AND `it is the state this engine is in` WAS A CLAIM ABOUT ALLOCATOR MEMORY UNTIL THE FIELD WAS
+           WRITTEN AT ITS CREATE, which is kept rather than cut because the sentence is right about the DESIGN
+           and was wrong about the TREE, and a reader who checks the design finds it sound. sink_search stated
+           thirty-four of Cand's thirty-five fields and not this one, so before that repair the `candEnds:0`
+           and `candEnds:N` arms above were told apart by whatever the realloc'd slot held: MEASURED in a
+           dev-asserts run, 12 of 18 emitted values read 0 and SIX read 3, with six of the eighteen rows
+           reading `candEnds` above `tried` outright. The `candEnds:N` arm is the one that would have cost
+           something — it tells a reader the readings below are about a PATH, so a garbage value landing on
+           `tried` would have sent them to hunt a gate in front of a source nothing had been turned away from.
+           WHAT A READER CHECKS BEFORE EITHER ARM, AND IT COSTS NOTHING: `candEnds` may not exceed `tried`. That
+           is the same implication the assert at the raise makes, it is an identity rather than a reach total so
+           it survives an interleaving, and a row that breaks it is a statement about this file and not about
+           the search it names. */
         json_buf_raw(&b, ","); json_buf_key(&b, "candEnds");
         snprintf(t, sizeof t, "%d", g_pending[i].ends); json_buf_raw(&b, t);
         /* …AND THE TWO OBSERVATION COUNTS, WHICH ARE WHAT SPLIT `turns:N,reached:0,survived:0` INTO THE THREE
