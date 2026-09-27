@@ -1,0 +1,64 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>unknown key breadth one site</title>
+<script>
+/* ONE PROBLEM: THREE DISTINCT objects read with ONE unknown key, where the three were created at ONE SITE and
+ * are separated by the ORDINAL alone. THE CONTROLLED TWIN of unknown_key_breadth.html — same breadth, same key,
+ * same three branches, same eight endpoint paths, differing in exactly one thing: whether the bases share a
+ * creation site. So a disagreement between the two documents' endpoint sets is attributable to the ORDINAL half
+ * of a page-created name and to nothing else.
+ *
+ * WHY THAT HALF NEEDS ITS OWN DOCUMENT. solver/decide.c states why a site alone cannot name an object: a body
+ * is 1:1 with its position and an object is 1:N with it, N unbounded, so one `{}` inside a loop is one site and
+ * a thousand objects. solver/concolic.c states what a site-only name would cost, and it is not a duplicate
+ * world but a LOST one: three iterations of one loop would name one object, iteration 1's constraint would
+ * refine 2 and 3, and the arms would be lost rather than duplicated. This document is that sentence as an
+ * observation. Its twin cannot make it: there the three sites already differ, so it is answered by the site
+ * half alone and a missing ordinal would not show in it at all.
+ *
+ * WHAT IT ASSERTS:
+ *   CORRECT: EIGHT records, `/api/keyonesite/000` through `/api/keyonesite/111`, every 3-bit path present —
+ *   the ordinal separating three objects one site cannot.
+ *   DEFECT: TWO records (`000`, `111`). That is the site naming all three, the first read's constraint
+ *   refining the other two, and six worlds LOST. It is the wrong narrowing CLAUDE.md §Solver-half forbids, and
+ *   the direction matters: it reads as a cheaper search and is an arm nothing observed contradicted. Four
+ *   records is one object separated and two collided.
+ * Each arm appends its own bit so the path carries the whole arm vector, and WHICH vectors are missing says
+ * which of the three collapsed.
+ *
+ * WHY A FACTORY AND NOT A LOOP. A loop would put the branch inside it too, and a forked sibling continuing a
+ * loop is a second mechanism in a document whose subject is one. `mk()` called three times puts ONE object
+ * literal at ONE byte offset — JS_RunningSiteHash folds the offset of the creating opcode, and the nearest
+ * bytecode frame at each of those three creations is `mk`'s own — so the site is shared by construction while
+ * the flow's own mint counter (solver/concolic.c's PinBlob `mint_ord`, minted AT CREATION) separates them. The
+ * three branches stay straight-line, exactly as in the twin.
+ *
+ * WHY THE BASES ARE CREATED BEFORE ANY BRANCH. The ordinal is a fact about the EXECUTED PREFIX and a fork's
+ * sibling inherits the parent's counter, so an object minted above the first fork carries the SAME name in
+ * every world. Minting one below a fork would give two arms two names for two different objects, which is
+ * correct and is a different subject.
+ *
+ * NOTHING IS WRITTEN THROUGH THE UNKNOWN KEY: quickjs's OP_get_array_el arm answers an own slot already stored
+ * under the key's own denoted name before it asks JSConcolicHooks.key_read, so a write through `wks` would make
+ * these reads concrete and the document would fork nowhere.
+ *
+ * WHAT MAKES IT A SCHEDULE-INVARIANCE DOCUMENT: eight worlds each parking on their own reply, so the resume
+ * order is the schedule's and all eight paths must be in the answer whichever way it chose.
+ *
+ * WHY IT DRAINS: one three-call factory, no loop, no recursion, three branches, one fetch per world.
+ *
+ * WHAT IS WRITTEN AROUND: `mk` is CALLED, so it is not an uncalled function and no orphan drive is owed for it
+ * — which keeps this document's flows the eight worlds and their replies and nothing else. The key is never
+ * enumerated, and an unknown key this engine cannot read aborts naming the capability rather than being
+ * written around with a concrete one. */
+var wks = "@@" + __coreJsShared__;
+function mk() { return {}; }
+var protoA = mk();
+var protoB = mk();
+var protoC = mk();
+var p = "";
+if (protoA[wks]) { p += "1"; } else { p += "0"; }
+if (protoB[wks]) { p += "1"; } else { p += "0"; }
+if (protoC[wks]) { p += "1"; } else { p += "0"; }
+fetch("/api/keyonesite/" + p);
+</script>

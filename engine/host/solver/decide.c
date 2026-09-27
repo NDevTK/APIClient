@@ -967,6 +967,48 @@ static void fork_key_count(const char *key, ForkRowKind kind)
  * IS THEREFORE ITS AUTHOR'S, so the transfer to a real document is a HYPOTHESIS this fixture cannot settle;
  * what supports it is the pooled measurement above, which is a different instrument agreeing.
  *
+ * AND WHICH BASE THIS BANNER'S RECORDED POINTS USED IS NOT STATED, WHICH COST NOTHING WHILE NOTHING NAMED AN
+ * OBJECT AND IS THE FIRST THING A READER NOW NEEDS. concolic.c's own measurement of the repetition shape
+ * records that an INTRINSIC base and a PAGE-CREATED base gave byte-identical numbers, so by that file's own
+ * evidence those points are ambiguous between two documents — and the two stopped answering alike when JS_IntrinsicName
+ * landed for the first and JS_RunningSiteHash plus the mint for the second. A point quoted against today's
+ * tree therefore names its base or it names neither document.
+ *
+ * AND THIS BANNER'S POINTS ARE NOT RE-DERIVABLE, WHICH IS A FACT ABOUT THIS REPOSITORY RATHER THAN ABOUT THE
+ * MEASUREMENT. The documents they were taken on are in no tracked revision, and the artifact they name is not
+ * reachable either: this repository is SHALLOW, so `git cat-file -t 9c757178` answers that it is not a valid
+ * object name and the archaeology CLAUDE.md prescribes for a stale claim cannot run from a clone at all. What
+ * stood here was an exact-integer measurement with neither its subject nor its artifact in reach.
+ * WHAT CLOSES THAT GOING FORWARD IS THREE COMMITTED DOCUMENTS, on the precedent quickjs.c's reference-collapse
+ * block sets by naming four committed ones: engine/tests/solver/unknown_key_repeat.html is the repetition
+ * shape at R = 4, unknown_key_breadth.html the breadth shape at N = 3 over three distinct creation SITES, and
+ * unknown_key_breadth_one_site.html that document's controlled twin over three objects of ONE site, so a
+ * disagreement between the pair is attributable to the ORDINAL half of a page-created name and to nothing
+ * else. Each states its base at its own head, and each asserts the SET of endpoint paths rather than a flow
+ * count: the arm vector is in the path, so a refined repeat is a PURE pair and a collapsed breadth is a SHORT
+ * set — readings of one run, rather than counts held against a number somebody remembers.
+ *
+ * AND THE REPETITION POINTS DISAGREE WITH concolic.c'S OWN MEASUREMENT OF THE SAME SHAPE, WHICH IS A FINDING
+ * ABOUT THIS RECORD AND NOT ABOUT THE ENGINE. That file states, of one base and one unknown key branched R
+ * times before the namer, a frontier of 2^R and forks of 2^R - 1 at R = 1, 2, 3. This record states forks of
+ * R and a frontier of 6 + 2R. No one document answers both, and the arithmetic says which of them follows from
+ * the mechanism this file's own residual states at fork_site_name: an unnamed read records no constraint and
+ * re-forks at every reach, so in a STRAIGHT-LINE repeat both arms of repeat 1 reach repeat 2 and fork there,
+ * 2^(r-1) flows reach repeat r, and the total is 2^R - 1. Linear is unreachable for that shape.
+ * WHAT A LINEAR LAW WOULD REQUIRE IS ONE FLOW PER REPEAT, AND SUCH A DOCUMENT IS ONE NO NAME CAN COLLAPSE. A
+ * constraint set is PER FLOW — concolic.c's PinBlob carries the segment chain and decide_enter calls
+ * concolic_clear_pins to give a fresh flow an empty one — so refinement cannot cross flows however completely
+ * an operand is named. R uncalled functions driven as orphans is ONE shape that fits 6 + 2R, and naming it is
+ * a hypothesis rather than a reading. So the prediction that this row falls to a constant in R is true of a
+ * straight-line repeat and false of a per-flow one, and the integers alone do not say which was measured.
+ * SO THE `Linear per repetition and exponential per distinct unnamed read` CONCLUSION IS SPLIT RATHER THAN
+ * DELETED: exponential per distinct unnamed read is consistent with its own points and with the mechanism,
+ * and LINEAR PER REPETITION IS CONSISTENT WITH NEITHER. Nothing in
+ * this tree can say which document either record was taken on; the committed documents answer it for a
+ * straight-line repeat, which is the only shape a reader can now check.
+ * RETIREMENT: this record goes when the repetition law in this file is stated as a reading of a document this
+ * tree carries, so a number and its subject cannot be separated again.
+ *
  * WHAT MUST EXIST AFTERWARD: a name for an object composed from what the BUNDLE OR THE ENGINE determines and
  * the session does not — minted where the object is CREATED and never read off its address — after which
  * concolic.c can spell an identity for a value derived from one, decide_key stops answering NULL for it, and

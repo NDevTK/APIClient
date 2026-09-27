@@ -1,0 +1,64 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>unknown key breadth</title>
+<script>
+/* ONE PROBLEM: THREE DISTINCT objects read with ONE unknown key. This is the BREADTH half of the cost law
+ * solver/decide.c's fork-census banner states, and it is the half whose CORRECT answer is the expensive one —
+ * which is why it is committed with the collapse written down as a DEFECT rather than left to read as a win.
+ *
+ * WHAT IT ASSERTS, AND THE DIRECTION IS COUNTER-INTUITIVE. solver/concolic.c states it at the namer itself: a
+ * named branch over an unknown value STILL FORKS, because what a name buys is that concolic_branch_decided can
+ * refine the SAME question asked again — so N distinct named operands owe N distinct questions and exactly the
+ * worlds they owed before, and collapsing those is the wrong narrowing CLAUDE.md §Solver-half forbids. Naming
+ * these three bases therefore moves the fork census's CLASSIFICATION and must not move the world count: one
+ * `~` site row becomes three predicate rows each carrying a replay slot, and the eight worlds stay eight.
+ *   CORRECT: EIGHT records, `/api/keybreadth/000` through `/api/keybreadth/111`, every 3-bit path present.
+ *   DEFECT: FEWER. Two records (`000`, `111`) is all three names collapsed to one, so one object's arm refined
+ *   the other two and SIX WORLDS WERE LOST. Four records is two of the three collapsed. Each of those is a
+ *   lost arm and not a cheaper search, and §Solver-half's wrong-narrowing ban is why: nothing this run
+ *   observed contradicts any of the eight.
+ * The set is the reading rather than its size, for the same reason as in the repetition document beside it:
+ * each arm appends its own bit, so the path records the whole arm vector, and WHICH vectors are missing says
+ * which names collided.
+ *
+ * THE BASES ARE THREE PAGE-CREATED ORDINARY OBJECTS AT THREE DISTINCT CREATION SITES, said out loud because
+ * the banner's recorded points do not say which base they used and because this document's twin
+ * (unknown_key_breadth_one_site.html) differs from it in exactly that. `{}` is JS_CLASS_OBJECT, so quickjs's
+ * JS_CreationName names each one (site, ordinal) and solver/concolic.c's literal_ident composes `fn` over
+ * `ob@<site>#<ord>`; here the three SITES already differ, because JS_RunningSiteHash folds the byte offset of
+ * the creating opcode and these are three separate object literals. So this document is answered by the SITE
+ * half of the name alone and says nothing about the ordinal — which is what the twin is for.
+ *
+ * WHY THE KEY IS DERIVED FROM AN ABSENT GLOBAL: solver/absent.c answers a name no vocabulary claims as unknown
+ * INPUT, and the derivation gives the key an identity of its own so the READ's identity turns on the BASE's.
+ * That is the mechanism decide.c's banner names on a real page — a computed key landing on many prototypes.
+ *
+ * NOTHING IS WRITTEN THROUGH THE UNKNOWN KEY. quickjs's OP_get_array_el arm answers an own slot already stored
+ * under the key's own denoted name before it asks JSConcolicHooks.key_read, so a write through `wks` anywhere
+ * above would make these reads concrete and the document would fork nowhere.
+ *
+ * WHY THREE AND NOT TWO. Two bases separate "correct" from "all collapsed" and nothing else. Three separate
+ * three states — eight records is correct, four is a PARTIAL collapse, two is total — and a partial collapse is
+ * the one a site-plus-ordinal name can actually produce, because two of three sites colliding is a hash fact
+ * while all three colliding is a missing mechanism.
+ *
+ * WHAT MAKES IT A SCHEDULE-INVARIANCE DOCUMENT: eight worlds, each parking on its own reply, so the order they
+ * resume in is entirely the schedule's and all eight paths must be in the answer whichever way it chose. The
+ * per-flow constraint chain that keeps each world's three arms consistent is the one `park` carries across a
+ * session boundary and rebuilds.
+ *
+ * WHY IT DRAINS: no loop, no recursion, three branches, one fetch per world.
+ *
+ * WHAT IS WRITTEN AROUND: the key is never ENUMERATED (ECMAScript §10.1.11 "[[OwnPropertyKeys]] ( )" over an
+ * example-free record is a different question), and if an unknown key is not a capability this engine has, the
+ * read aborts naming it and this gate reports a corpus defect rather than the document being softened. */
+var wks = "@@" + __coreJsShared__;
+var protoA = {};
+var protoB = {};
+var protoC = {};
+var p = "";
+if (protoA[wks]) { p += "1"; } else { p += "0"; }
+if (protoB[wks]) { p += "1"; } else { p += "0"; }
+if (protoC[wks]) { p += "1"; } else { p += "0"; }
+fetch("/api/keybreadth/" + p);
+</script>

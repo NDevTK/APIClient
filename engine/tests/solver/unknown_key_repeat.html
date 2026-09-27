@@ -1,0 +1,83 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>unknown key repeat</title>
+<script>
+/* ONE PROBLEM: the SAME unknown-key read branched on FOUR TIMES in one flow's own prefix. This is the
+ * REPETITION half of the cost law solver/decide.c's fork-census banner states, committed so the law is
+ * re-derivable from a clone instead of quoted out of that banner — whose own points name an artifact this
+ * shallow repository does not carry and documents no tracked revision holds.
+ *
+ * THE BASE IS A PAGE-CREATED ORDINARY OBJECT, said out loud because the banner's recorded points do not say
+ * which base they used and the answer now decides the reading. `{}` is JS_CLASS_OBJECT, so quickjs's
+ * JS_CreationName names it (site, ordinal) and solver/concolic.c's literal_ident composes `fn` over
+ * `ob@<site>#<ord>` for it. The other two bases a reader may flip to, and what each says:
+ *   an INTRINSIC (`Array.prototype[wks]`) is named by its realm slot (JS_IntrinsicName), which is an OLDER
+ *   namer than the object one, so that base reads the same as this one today and separates nothing about the
+ *   object half;
+ *   an ARRAY (`[][wks]`) is the class solver/concolic.c's literal_ident still records as having NO site
+ *   composer, so that base is the one that still renders `?` and still files a `~` site row — which is what
+ *   the BEFORE state of this document looks like, available today by editing one line.
+ *
+ * WHY THE KEY IS DERIVED FROM AN ABSENT GLOBAL RATHER THAN WRITTEN. solver/absent.c answers a name no
+ * vocabulary claims as unknown INPUT and names `__core-js_shared__` among that population by hand; the
+ * mechanism decide.c's banner describes on a real page is an absent global read, a well-known-symbol name
+ * derived from it, and that unknown spent as a PROPERTY KEY across many prototypes. The identifier here is a
+ * valid one because the real spelling is not, and the derivation is one concat, so the key is a derived
+ * concolic with an identity of its own — which is what makes the READ's identity turn on the BASE's.
+ *
+ * WHY THE STORE IS WRITTEN `{}` AND NOT `G = G || {}`. solver/concolic.c names that shim as the ordinary
+ * spelling every shared store and hydration shim in a real minified bundle ships, and its FALSY arm is exactly
+ * this object. Writing the shim here would fork the shim's own gate first, so every count below would be a
+ * function of that fork as well as of the repeats and the arithmetic this document exists to make readable
+ * would stop being attributable. The arm is written directly and the shim is named instead.
+ *
+ * NOTHING IS WRITTEN THROUGH THE UNKNOWN KEY, and that is load-bearing rather than incidental. quickjs's
+ * OP_get_array_el arm answers an own slot already stored under the key's own denoted name BEFORE it asks
+ * JSConcolicHooks.key_read — a write through the same source wins, in that file's own words — so a
+ * `store[wks] = 1` anywhere above would make every read below concrete and this document would fork nowhere.
+ *
+ * WHAT THIS DOCUMENT ASSERTS, AND IT IS THE SHAPE OF THE ENDPOINT SET RATHER THAN A COUNT SOMEBODY REMEMBERS.
+ * Each arm appends its own bit, so the path records the WHOLE ARM VECTOR and the emitted set is the set of
+ * worlds. Two readings, told apart by what is IN the set and not by how big it is:
+ *   THE READ IS NAMED AND THE REPEAT IS REFINED — solver/decide.c's decide_arm asks concolic_branch_decided
+ *   above the fork, so repeats 2..4 are DECIDED by repeat 1's arm and no flow can hold a mixed vector. The set
+ *   is exactly TWO records, `/api/keyrepeat/1111` and `/api/keyrepeat/0000`, and every other 4-bit path is
+ *   ABSENT. A pure pair is refinement OBSERVED rather than inferred from a number.
+ *   THE READ IS UNNAMED AND EVERY REPEAT RE-FORKS — the state decide.c files as a bare site row that records
+ *   no constraint, claims no replay slot and re-forks at every reach. Then every flow arriving at repeat r
+ *   forks again, the set is ALL SIXTEEN 4-bit paths, and the mixed vectors (`1000`, `0101`, …) are the
+ *   witness. Sixteen is not a defect in this document's own terms — it is the before state, and it is the
+ *   arithmetic 2^R rather than R.
+ * A SET THAT IS NEITHER TWO NOR SIXTEEN is the finding worth the most: some repeats refined and others did
+ * not, which is a name that is not stable across one flow's own prefix.
+ *
+ * WHAT IT DOES NOT ASSERT, said because the banner's own frontier figures are not reproducible here: the FLOW
+ * COUNT. CLAUDE.md §Testing drops `_forkAt` from the schedule comparison as a reading of an instant, this
+ * host's quantum is wall-denominated, and the scaffolding flows a fetch costs are not this document's subject.
+ * The census readings a coordinator takes off it — the `~` row for this base's shape at zero, one predicate
+ * row for the read, `replayHits` above zero because the forced sibling consumes its recorded arm — are
+ * READINGS and not this document's own claim. What this document claims is the endpoint set.
+ *
+ * WHAT MAKES IT A SCHEDULE-INVARIANCE DOCUMENT: the two worlds are two flows and each parks on a reply, so
+ * which one resumes first is the schedule's choice; and the refinement that keeps each vector pure is carried
+ * in the forked sibling's own inherited constraint chain (solver/concolic.c's PinBlob), which `park` takes
+ * across a session boundary and rebuilds. A sibling whose recorded arm did not survive the park emits a MIXED
+ * vector, which is a record this gate's set is long by.
+ *
+ * WHY IT DRAINS: no loop, no recursion, four branches over one question, one fetch per world.
+ *
+ * WHAT IS WRITTEN AROUND, by name. The unknown key is never ENUMERATED — ECMAScript
+ * §10.1.11 "[[OwnPropertyKeys]] ( )" over an example-free record is answered from the example alone
+ * (solver/concolic.c), and this store has none, so a `for..in` here would ask a different question than the
+ * one this document is about. And if an unknown key is not a capability this engine has at all, `store[wks]`
+ * aborts naming it and this gate reports a corpus defect — which is the correct outcome and not a reason to
+ * write a concrete key. */
+var wks = "@@" + __coreJsShared__;
+var store = {};
+var p = "";
+if (store[wks]) { p += "1"; } else { p += "0"; }
+if (store[wks]) { p += "1"; } else { p += "0"; }
+if (store[wks]) { p += "1"; } else { p += "0"; }
+if (store[wks]) { p += "1"; } else { p += "0"; }
+fetch("/api/keyrepeat/" + p);
+</script>
