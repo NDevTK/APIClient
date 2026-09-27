@@ -212,4 +212,18 @@ void cookie_store_process_changes_free(void)
     DCHECK(g_claimed, "Cookie Store API §7.4 was released in an agent that never claimed §2.2's steps");
     cookie_jar_set_process_changes(NULL);
     g_claimed = 0;
+    /* AND THE LAST THING IS TO SAY THE CASCADE GOT HERE, which is what `cookie_store`'s undo asserts on and
+       what this release did not do. core/agent_state.h states the rule at its own site: the undoing file is
+       exempt because calling the undo IS its claim, so `every declaring file must have spoken` — and this file
+       DECLARES under that row from the init above while cookie_store_free's agent_state_undo runs in a
+       different translation unit, so the exemption is not this file's to take.
+       IT IS AFTER THE HAND-BACK AND NOT BEFORE IT. The statement is that the release RAN, so a line that could
+       still abort must stand in front of it; placed first it would mark the slot reached and then fail, leaving
+       a run whose next agent reads a claim nothing gave back as one that was.
+       THE ROW IS SPELLED AS A LITERAL HERE BECAUSE `CS_COMPONENT` IS A `#define` IN cookie_store.c RATHER THAN
+       IN ANY HEADER, so it is not in scope in this file and the init eight lines up spells the row the same
+       way. Two spellings of one row is a state the registry refuses at runtime in both directions rather than
+       by construction, and agent_state.h argues at its own site why no spelling scheme can check the claim a
+       sub-component's row name makes. */
+    agent_state_reached("cookie_store");
 }
