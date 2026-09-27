@@ -162,6 +162,23 @@
  *         so a delivery that happened would be reported as never delivered. The manifest's COOP value is
  *         therefore doing the job its name states rather than standing in for an engine gap, and the flip owes
  *         an outcome oracle that does not ride the returned handle FIRST.
+ *         THAT ORACLE IS BUILT, AND THE SECTION NAMED ABOVE IS NOT WHAT MAKES THE CALL ANSWER NULL — the
+ *         measurement is kept because it was right and because a reader re-derives it from the handle. §7.1.3.2
+ *         decides a browsing context group switch from the RESPONSE's opener policy, which arrives after
+ *         `window.open` has already returned, so it cannot be the cause of a SYNCHRONOUS null; what it severs
+ *         is a handle already returned. The synchronous null is HTML §7.2.2.1 "Opening and closing windows"
+ *         step 17 — "If windowType is `new with no opener`, then return null" — one of FOUR `return null` arms
+ *         (1, 14, 17, 18) over that algorithm's 19 top-level steps, whose navigate is step 15, so steps 17 and
+ *         18 answer null for a document that HAS been navigated and only step 14 means no navigable was made.
+ *         HTML §7.3.1.7 "Navigable target names"' rules for choosing a navigable set that windowType whenever
+ *         "currentDocument's opener policy's value is `same-origin` or `same-origin-plus-COEP`, and
+ *         currentDocument's origin is not same origin with currentDocument's relevant settings object's
+ *         top-level origin". A `manifest.sandbox.pages` document has an OPAQUE origin, so the second conjunct
+ *         holds at every COOP value and the clause asks NOTHING about the target — which makes the flip arm it
+ *         for EVERY delivery rather than for the targets §7.1.3.2 would have selected. The premise is now
+ *         latched in the trusted zone from a document ANNOUNCING ITSELF at the delivered address with the
+ *         browser's own origin and frame (extension/offscreen-brain.js `_recordProbeDelivery`); the handle is
+ *         reported as context and gates nothing. This half of the flip's cost is paid and the others are not.
  *         SO THE REQUIREMENT IS EITHER ROUTE IN THE ENGINE'S OWN REALM, AND NO GETTER STATES IT. A CAPABILITY
  *         IS CONFIRMED BY ATTEMPTING THE ACT AND A GETTER IS A TRIPWIRE IN FRONT OF IT: `crossOriginIsolated`
  *         names the STANDARD's gate, which is not the one the runtime keys on alone, and `typeof

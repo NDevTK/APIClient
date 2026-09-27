@@ -516,6 +516,21 @@
        measured 3 of 3 with the opened document's own request on a constant path as the witness: `delivered`
        becomes `no-navigable` and the witness fires in both. So an outcome oracle that does not ride the
        returned handle is owed BEFORE the flip, and that is a trusted-zone gap rather than an engine one.
+       THAT ORACLE IS BUILT AND THIS HALF OF THE COST IS PAID — the measurement above is kept in its own words
+       because it is what a reader re-derives from the handle, and because it was RIGHT. The delivery premise is
+       now latched in the trusted zone from a document ANNOUNCING ITSELF at the delivered address with the
+       browser's own origin and frame (offscreen-brain.js `_recordProbeDelivery`), and the handle is reported as
+       context that gates nothing. The standard predicts the measurement rather than merely permitting it:
+       HTML §7.2.2.1 "Opening and closing windows"' window open steps have FOUR `return null` arms over 19
+       steps — 1, 14, 17, 18 — with the navigate at step 15, and HTML §7.3.1.7 "Navigable target names"' rules
+       for choosing a navigable set step 17's `new with no opener` windowType whenever the opening document's
+       own opener policy is `same-origin` or `same-origin-plus-COEP` and its origin is not same origin with its
+       top-level origin. A `manifest.sandbox.pages` document has an OPAQUE origin, so that second conjunct holds
+       at EVERY COOP value and the flip arms the clause for every delivery rather than for some.
+       THE FLIP IS STILL NOT ORDERED NEXT, AND THIS PARAGRAPH IS NOT A CLEARANCE FOR IT. What remains is this
+       document's own DCHECK below, the wasm link gaining `-pthread`/`-sSHARED_MEMORY`, and the watchdog thread
+       that the transport exists to carry — at `same-origin` a DEV build aborts here and a RELEASE build gains
+       the capability with nothing using it.
        THE ORIGINAL READINGS ARE KEPT BELOW UNALTERED, because they are correct about the cells they cover and
        are what a reader compares the widened factorial against.
        MEASURED on real Chrome, one browser per case with the IndexedDB cleared, every reading taken beside an

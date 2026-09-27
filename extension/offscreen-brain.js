@@ -1508,6 +1508,13 @@ function handleContentMessage(msg, sender) {
                     "origin, so this is not a route of this document", msg.seedUrl, _seedOrigin, _docOrigin);
       return;
     }
+    /* AND THIS DOCUMENT IS ALSO A LIVE PROBE'S DELIVERY WITNESS, which is why the call sits HERE rather than
+       anywhere else: the two refusals above are exactly the guarantee the witness needs (a real address, whose
+       origin is the one the BROWSER reported for this document), and `_facts` is the one mint. A document
+       announcing itself is the only browser-backed statement in this extension that a navigable was created
+       and a document committed at an address — §LIVE-VERIFY's premise — and it costs no new message type, no
+       content-script change and no request. */
+    _recordProbeDelivery(msg.seedUrl, _facts);
     /* NO PAGE-SOURCE RECORD IS WRITTEN HERE. Whether this document loads is not known yet — the navigation
        has not happened — and writing "delivered" at the arrival of a SUGGESTION would state a fact this zone
        invented. bridge.js writes it, both ways, the instant the load settles. */
@@ -1647,6 +1654,14 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
     if (!frag) base.search = "";
     out.targetUrl = base.href + deliveryPrefix + payload;
     out.targetOrigin = base.origin;       // OUR expectation, compared against the browser's MessageSender.origin — never the reverse
+    /* WHICH COMPONENT THE PAYLOAD WAS PLACED IN, stated here because this is the only place that knows and
+       because a witness reading needs it. A delivery witness compares the FULL address, so the component never
+       decides one; the NEAR-MISS reading — a top-level document of the delivered origin arriving at the same
+       address APART FROM the payload's own component — cannot be answered without it. One comparison serving
+       both components would be decided by the stricter of the two: stripping only the fragment answers the `#`
+       arm and silently reads a `?` delivery's near miss as nothing at all, which is the state that reading
+       exists to make visible. */
+    out.deliveryComponent = frag ? "fragment" : "query";
     /* THE PAYLOAD IS NOT PERCENT-ENCODED HERE, AND THAT IS THE AGREEMENT RATHER THAN AN OMISSION. The engine's
        `poc` is the candidate AS THE SEARCH BUILT IT — the bytes an attacker writes — and the browser's own
        transform is applied on the way in by concolic_deliver (solver/concolic.c), off the set
@@ -1662,14 +1677,27 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
        the engine's own prefix names and CHROME performs the transform — the same one transform, applied once,
        by the two independent implementations whose agreement is the entire point of §LIVE-VERIFY. A byte
        Chrome encodes and the engine does not is then a real engine-fidelity divergence and reports as one.
-       AND ITS COMPLETION VALUE IS THE DELIVERY'S OWN ANSWER, which poc-sandbox.html READS: this is ONE
-       ExpressionStatement, so evaluating it yields what HTML §7.2.2.1 Opening and closing windows says the
-       window open steps return — step 14, If targetNavigable is null, then return null (no navigable was
-       created, which is what a popup blocker is), against step 19's active WindowProxy. That is the only thing
-       that can tell a delivery which ran and did not fire from one that never reached a document at all, and
-       §LIVE-VERIFY reads the first as an engine bug. A delivery arm that grows a second statement stops
-       answering, and the sandbox crosses that as `unstated` rather than guessing — it must never be turned
-       into a statement sequence in silence. */
+       AND ITS COMPLETION VALUE IS NOT THE DELIVERY'S ANSWER, WHICH THIS PARAGRAPH USED TO SAY AND IS REWRITTEN
+       RATHER THAN DELETED BECAUSE THE RETIRED READING IS THE ONE A READER RE-DERIVES FROM THE SINGLE
+       EXPRESSION STATEMENT. It read: evaluating it yields what HTML §7.2.2.1 Opening and closing windows says
+       the window open steps return — step 14, If targetNavigable is null, then return null (no navigable was
+       created, which is what a popup blocker is), against step 19's active WindowProxy; that is the only thing
+       that can tell a delivery which ran and did not fire from one that never reached a document at all.
+       Step 14 and step 19 are both real and both correctly quoted, and the enumeration is SHORT: the window
+       open steps have 19 top-level steps and FOUR `return null` arms — 1, 14, 17 and 18 — and the navigate is
+       step 15, so step 17 ("If windowType is `new with no opener`, then return null") and step 18 (noopener
+       with a target that is not `_self`/`_parent`/`_top`) answer null for a document that HAS been navigated.
+       HTML §7.3.1.7 "Navigable target names"' rules for choosing a navigable set that windowType whenever the
+       opening document's own opener policy is `same-origin` or `same-origin-plus-COEP` and its origin is not
+       same origin with its top-level origin — which is every sandboxed extension page, at every COOP value,
+       since a `manifest.sandbox.pages` document has an OPAQUE origin. So a null handle is FOUR states wearing
+       one value and three of them are deliveries that happened.
+       WHAT DECIDES IT IS `_recordProbeDelivery`, off a document ANNOUNCING ITSELF at `expect.url` with the
+       browser's own origin and frame — see that function. This expression's value is still worth reporting as
+       CONTEXT for a human, because nothing else can observe it, and it gates nothing. `unstated` likewise
+       stops being a delivery outcome and stays a real statement about THIS function: a delivery arm that grows
+       a second statement no longer answers, and it must never be turned into a statement sequence in
+       silence. */
     out.pocJs = "window.open(" + JSON.stringify(out.targetUrl) + ', "_blank");';
     out.delivery = "navigate the victim to a URL whose " + (frag ? "fragment" : "query string") + " is the payload";
     return out;
@@ -1783,6 +1811,23 @@ function startExploitProbe(msg) {
        from "two documents both know the marker". */
     expect: null,
     deliveredDocumentId: null,
+    /* WHETHER A DOCUMENT WAS EVER HANDED THE PAYLOAD — THE BROWSER'S ANSWER, and the premise the popup's
+       strongest verdict rests on. It is latched by `_recordProbeDelivery` from a document ANNOUNCING ITSELF,
+       not from anything the attacker sandbox reports: HTML §7.2.2.1 "Opening and closing windows"' window
+       open steps have FOUR `return null` arms over 19 top-level steps — step 1 (the event loop's termination
+       nesting level is nonzero), step 14 (If targetNavigable is null, then return null), step 17 (If
+       windowType is "new with no opener", then return null) and step 18 (If noopener is true and target is
+       not an ASCII case-insensitive match for "_self", "_parent", or "_top", then return null) — and the
+       navigate is step 15, so steps 17 and 18 return null AFTER the document has been navigated. Only step 14
+       means no navigable was created. A `null` handle is therefore FOUR states behind one value, three of
+       which are deliveries that happened.
+       `deliveredNearMiss` IS THE DISCRIMINATOR AND NOT A SPARE FIELD. A top-level document of the delivered
+       origin that announces itself at the delivery's path and query but NOT its full href is neither a
+       witness nor nothing: it is the state that would otherwise be silent, and it is what a reader needs in
+       order to tell a run in which no document arrived from one in which a document of that origin arrived at
+       another address. */
+    delivered: null,
+    deliveredNearMiss: null,
   };
   // ENGINE AGREEMENT: perform the delivery the ENGINE declared, carrying its EXACT poc (X9 -> apiclientsink).
   // The user runs it by clicking Run in the sandboxed attacker page (poc-sandbox.html) — that real click is
@@ -1801,8 +1846,17 @@ function startExploitProbe(msg) {
            "a delivery arm produced a pocJs without naming the address it navigates to — the target URL and "
            + "its origin are what a PROBE_HIT is attributed against, so a PoC without them can only ever be "
            + "counted, and every hit on this session would report as unattributable");
+    /* AND THE COMPONENT IS AS REQUIRED AS THE ADDRESS, because the near-miss reading is computed from it and a
+       missing one would make that reading answer the `#` arm for a `?` delivery. THIS codebase computes it —
+       `buildLiveDelivery` states it on the arm that placed the payload — so it is ASSERTED rather than
+       defaulted; a `||` here would be this zone choosing a component on a producer's behalf. */
+    DCHECK(_poc.deliveryComponent === "fragment" || _poc.deliveryComponent === "query",
+           "a delivery arm produced a pocJs without naming which component of the address it placed the "
+           + "payload in (got " + JSON.stringify(_poc.deliveryComponent) + ") — a URL has no third place an "
+           + "attacker-controlled component lives, and the near-miss reading is computed from it");
     // frameId 0 is the BROWSER'S name for the top-level traversable, and window.open creates exactly one.
-    session.expect = { url: _poc.targetUrl, origin: _poc.targetOrigin, frameId: 0 };
+    session.expect = { url: _poc.targetUrl, origin: _poc.targetOrigin, frameId: 0,
+                       component: _poc.deliveryComponent };
   }
   /* THE REASON IS AS REQUIRED AS THE PoC, because one of the two is always the answer: a delivery this layer
      can perform has a pocJs, and one it cannot has the sentence saying which mechanism and why. An absent
@@ -1841,6 +1895,114 @@ function startExploitProbe(msg) {
 function _sameAddress(a, b) {
   if (typeof a !== "string" || typeof b !== "string") return false;
   try { return new URL(a).href === new URL(b).href; } catch (_) { return false; }   // b is attacker text; a non-URL is an answer
+}
+/* THE SAME COMPARISON WITH THE PAYLOAD'S OWN COMPONENT DROPPED, AND IT IS A SEPARATE FUNCTION BECAUSE IT
+   ANSWERS A DIFFERENT QUESTION. `_sameAddress` compares `href`, which includes every component, and that is
+   what a delivery witness must be decided on — an `address` delivery places the payload at the component
+   `buildLiveDelivery`'s own prefix names, so a match without that component is a match on the bare page. This
+   one therefore NEVER gates a witness; it is the NEAR-MISS reading, so that a top-level document of the
+   delivered origin arriving at the same address apart from the payload is recorded as what it is instead of
+   counting as nothing.
+   IT TAKES THE COMPONENT RATHER THAN ALWAYS STRIPPING THE FRAGMENT, and that is not a generalisation for its
+   own sake: the fragment-only form is decided by the STRICTER of the two arms this delivery has. `#` places
+   the payload in the fragment, so stripping the fragment answers it; `?` places the payload in the search and
+   `buildLiveDelivery` empties the fragment on that arm, so stripping only the fragment compares a bare page
+   against an address that still carries the payload and answers NOT EVEN A NEAR MISS — the one state this
+   reading exists to make visible, silently lost for half of the deliveries this layer performs. Measured by
+   exercising this function: `…/page?q=<payload>` against `…/page` answered `none` under the fragment-only
+   form and answers a near miss under this one.
+   `hash = ""` and `search = ""` are the same spellings `buildLiveDelivery` uses to build the base it appends
+   the payload to, so both ends are normalised by the one parser. */
+function _sameAddressIgnoringComponent(a, b, component) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  if (component !== "fragment" && component !== "query") return false;   // an unstated component compares nothing
+  try {
+    var ua = new URL(a), ub = new URL(b);
+    ua.hash = ""; ub.hash = "";
+    if (component === "query") { ua.search = ""; ub.search = ""; }
+    return ua.href === ub.href;
+  } catch (_) { return false; }
+}
+
+/* A DOCUMENT ANNOUNCING ITSELF AT A LIVE PROBE'S DELIVERED ADDRESS IS THE DELIVERY WITNESS — the thing
+   §LIVE-VERIFY's strongest verdict needs and the one thing the attacker sandbox cannot state.
+
+   WHY THE SANDBOX CANNOT STATE IT. poc-sandbox.html evaluates ONE expression statement and used to classify
+   the delivery by the IDENTITY of `window.open`'s completion value. HTML §7.2.2.1 "Opening and closing
+   windows"' window open steps return null at FOUR of their 19 top-level steps and navigate at step 15, so
+   steps 17 and 18 answer null for a document that HAS been navigated. HTML §7.3.1.7 "Navigable target names"'
+   rules for choosing a navigable reach step 17 by name: "If currentDocument's opener policy's value is
+   `same-origin` or `same-origin-plus-COEP`, and currentDocument's origin is not same origin with
+   currentDocument's relevant settings object's top-level origin: Set noopener to true. Set name to "_blank".
+   Set windowType to "new with no opener"." The attacker sandbox is a `manifest.sandbox.pages` document, so
+   its origin is OPAQUE and is never same origin with the extension top-level origin that frames it — the
+   SECOND conjunct holds at every COOP value this extension can ship. The first conjunct is the manifest's
+   `cross_origin_opener_policy`, so at `same-origin-allow-popups` the clause does not fire and at `same-origin`
+   it fires for EVERY delivery. Reading the handle therefore reports a delivery that happened as one that never
+   did, which is exactly the claim §LIVE-VERIFY converts into "the engine's model diverges from Chrome".
+
+   TWO HALVES, NAMED FOR THEIR PROVENANCE, exactly as `_recordProbeHit` splits them, and for the same reason.
+   ATTRIBUTION is browser-stated: `facts` is the ONE `_browserFacts` mint, so origin and frameId are chrome.*
+   answers a renderer cannot forge. The ADDRESS is the correlation, and the payload — which carries the
+   marker — lives in it, so a document claiming the delivered address must have been able to READ the
+   delivered address. That is the same standing `hit.id` already has: it is page-claimed, it keys the session,
+   and the browser's facts decide whether it is evidence. It also closes the one false positive a weaker
+   comparison would have: a victim page the user already had open is not at the payload address, and a
+   document that IS at the payload address was handed the payload.
+
+   THE ADDRESS IS COMPARED FROM BOTH SOURCES AND THE RECORD SAYS WHICH ANSWERED. `facts.url` is the browser's
+   own statement of this document's address; `seedUrl` is the page's, read off
+   `PerformanceNavigationTiming`'s `name`. A match on the browser-stated one is STRONGER and is named as such,
+   rather than one of the two being assumed to carry what the other does — which is the claim this zone would
+   otherwise be making about a platform field nobody here has measured.
+
+   NO DCHECK ON `seedUrl`, and the CONTENT_SEED arm above is why it needs none: it has already refused a
+   non-string, an empty string, and an address whose origin is not the one the BROWSER reported for this
+   document. This runs behind those refusals and asserts only `facts`, which this zone minted.
+
+   NAMED RESIDUAL — NOT COVERED: a witness requires the payload's own component to survive into at least ONE of
+   the two addresses compared here, and whether either carries it is a property of the platform that nobody in
+   this tree has measured. `facts.url` is `MessageSender.url`; `seedUrl` is
+   `PerformanceNavigationTiming`'s `name`, falling back to `location.href` only where there was no navigation
+   to time. If BOTH drop a fragment, a `#` delivery — the commonest `address` arm — latches no witness however
+   faithfully it was delivered.
+   WHAT THE NEXT DIFF BUILDS: content.js ships the delivered document's own `location.href` on CONTENT_SEED
+   BESIDE `seedUrl`, and this function compares it as a third page-claimed source. It is a new field rather
+   than a widening of `seedUrl` because those two are different facts — `seedUrl` is the address to LOAD, and
+   the seed arm deliberately prefers the timing entry over `location.href` so that an SPA's `pushState` route
+   cannot become the address this zone fetches. Grepped before writing: `location.href` rides RESPONSE_BODY in
+   that file and occurs on NO CONTENT_SEED, so the field does not exist today.
+   HOW ITS ABSENCE WOULD SHOW: a `#` delivery reporting NOT DELIVERED with a NONZERO `deliveredNearMiss` — a
+   top-level document of the delivered origin announcing itself at the delivered address apart from the
+   payload's own component. That pair is the observation, and it is rendered on the verify card; a run in which
+   it never appears is a run in which one of the two addresses carried the component. */
+function _recordProbeDelivery(seedUrl, facts) {
+  _statedFacts(facts);
+  for (const ses of _probeSessions.values()) {
+    const exp = ses.expect;
+    if (!exp) continue;                 // this session performed no delivery — there is nothing to witness
+    if (ses.delivered) continue;        // latched: the first document to arrive at the address is the delivery
+    if (facts.origin !== exp.origin) continue;
+    if (facts.frameId !== exp.frameId) continue;
+    const browserStated = _sameAddress(exp.url, facts.url);
+    const pageClaimed = _sameAddress(exp.url, seedUrl);
+    if (!browserStated && !pageClaimed) {
+      if (_sameAddressIgnoringComponent(exp.url, facts.url, exp.component) ||
+          _sameAddressIgnoringComponent(exp.url, seedUrl, exp.component)) {
+        const nm = ses.deliveredNearMiss || { count: 0, browserStatedUrl: null, pageClaimedUrl: null };
+        nm.count += 1;
+        if (nm.browserStatedUrl === null) { nm.browserStatedUrl = facts.url; nm.pageClaimedUrl = seedUrl; }
+        ses.deliveredNearMiss = nm;
+      }
+      continue;
+    }
+    ses.delivered = {
+      documentId: facts.documentId, tabId: facts.tabId,
+      origin: facts.origin, frameId: facts.frameId,
+      addressSource: browserStated ? "browser-stated" : "page-claimed",
+      at: Date.now(),
+    };
+  }
 }
 function _recordProbeHit(msg, facts) {
   // `hit` crosses from the UNTRUSTED renderer, so its fields are validated as attacker input rather than

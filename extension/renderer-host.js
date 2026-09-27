@@ -386,7 +386,23 @@
        so that call answers null while the document loads and runs anyway. Measured 3 of 3 with the opened
        document's own request to a constant path as the witness: `delivered` becomes `no-navigable` and the
        load witness fires in both. That is a delivery the card would report as never delivered, and the fix
-       that must precede the flip is an outcome oracle that does not ride the returned handle. */
+       that must precede the flip is an outcome oracle that does not ride the returned handle.
+       THAT ORACLE IS BUILT, AND THE SECTION CITED ABOVE IS NOT WHAT MAKES THE CALL ANSWER NULL. The
+       measurement is kept because it was right, and because a reader re-derives it from the handle.
+       §7.1.3.2 decides a group switch from the RESPONSE's opener policy, which arrives AFTER `window.open`
+       has returned — so it severs a handle already answered and cannot produce a synchronous null. The
+       synchronous null is HTML §7.2.2.1 "Opening and closing windows" step 17, "If windowType is `new with no
+       opener`, then return null": one of FOUR `return null` arms (1, 14, 17, 18) over 19 top-level steps whose
+       navigate is step 15, so steps 17 and 18 answer null for a document that HAS been navigated and only
+       step 14 means no navigable was created. HTML §7.3.1.7 "Navigable target names"' rules for choosing a
+       navigable set that windowType whenever the opening document's own opener policy is `same-origin` or
+       `same-origin-plus-COEP` and its origin is not same origin with its top-level origin — which every
+       `manifest.sandbox.pages` document satisfies on the second conjunct at any COOP value, and which asks
+       NOTHING about the target. So the flip arms it for EVERY delivery, not only for the targets §7.1.3.2
+       would have selected. The premise now comes from a document ANNOUNCING ITSELF at the delivered address
+       with the browser's own origin and frame (offscreen-brain.js `_recordProbeDelivery`), and the handle is
+       reported as context that gates nothing. This half of the flip's cost is paid; the wasm link's
+       `-pthread`/`-sSHARED_MEMORY` and the watchdog thread are not. */
     f.setAttribute("allow", "cross-origin-isolated");
     /* THE ROUTING ID LEADS THE TITLE because the cluster key's own separator is a NUL, which every console and
        every element inspector renders as nothing at all — so a document holding several renderers showed a

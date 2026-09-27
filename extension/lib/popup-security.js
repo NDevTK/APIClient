@@ -1342,94 +1342,73 @@ window.addEventListener("message", function (e) {
   }
 });
 
-/* WHAT THE SANDBOX SAYS ITS DELIVERY PRODUCED — the gate in front of _pollVerify, and the reason the verdict
-   below it is allowed to name the engine at all.
-   THIS LINE USED TO POLL ON EVERY RUN, AND POLLING IS WHAT MAKES THE CLAIM. _pollVerify's last arm reports
-   "NOT REPRODUCED … the engine's model diverges from Chrome here (an engine-fidelity bug to investigate)" —
-   the strongest instruction this panel gives, and one that is only true of a payload a document actually
-   received. Three states reached it as one: a delivery that ran and did not fire (the real divergence), a
-   delivery that THREW before navigating anything, and a `window.open` that created NO NAVIGABLE — HTML
-   §7.2.2.1 "Opening and closing windows" step 14, "If targetNavigable is null, then return null", which is
-   what a popup blocker is. The second and third are HARNESS results with nothing in them about the engine,
-   and both printed as an engine bug. That is §@S's tell exactly: a rung whose ABSENCE and whose ZERO read
-   alike, here on the one surface CLAUDE.md defines as ENGINE AGREEMENT.
-   IT FAILS CLOSED, AND DELIBERATELY DOES NOT DCHECK THE TOKEN. `outcome` crosses from the frame that EVALS
-   the payload, so a payload can post its own POC_RAN — asserting the vocabulary here would hand an analysed
-   page an abort of the popup, which is the hazard offscreen-brain.js's `_recordProbeHit` names for the same
-   channel. So the strongest reading is reachable ONLY from an explicit positive statement and every other
-   value — absent, unknown, or forged — renders as a non-delivery with the token shown. A hostile payload can
-   therefore weaken its own report and can never manufacture a fire: the fire verdict is decided in the
-   trusted zone against browser-stated facts, never here. */
-/* THE MISS ARMS ARE A TABLE, AND ITS KEYS ARE WHAT THE UNKNOWN-TOKEN LINE ENUMERATES. A ladder stood here
-   whose `else` spelled the vocabulary out in prose — "poc-sandbox.html answers delivered / no-navigable /
-   threw for every run, so this is that contract broken — or a payload that posted its own POC_RAN" — and that
-   file answers FOUR. `unstated` is the fourth, and it is there deliberately, with its own paragraph:
-   `undefined` is not a delivery outcome, it is the sandbox stating that the pocJs it was handed is no longer
-   an expression whose value says what happened, and it crosses "as `unstated` rather than being folded into
-   either real answer, so a delivery arm that grows a second statement shows up as a NAMED contract gap on the
-   card instead of as an engine bug". The `else` folded it straight back — into broken-contract-or-forgery,
-   which sends a reader to suspect the relay or the page when the thing to open is offscreen-brain.js's
-   `buildLiveDelivery`. Two states, one arm, opposite work, on the one surface CLAUDE.md defines as ENGINE
-   AGREEMENT — and the stale half was a CLAIM ABOUT ANOTHER FILE that nobody re-read.
-   SO THE ENUMERATION IS THE TABLE AND NOT A SENTENCE. The unknown-token line names these keys, so the list a
-   reader is shown cannot drift from the list this view dispatches on, and this paragraph needs no standing
-   warning to stay true.
-   A `Map` AND NOT AN OBJECT LITERAL, because `d.outcome` crosses from the frame that EVALS the payload: a
-   payload posting `outcome:"constructor"` indexes an object literal straight onto Object.prototype and gets a
+/* WHAT THE SANDBOX SAYS ITS DELIVERY PRODUCED IS NO LONGER THE GATE IN FRONT OF _pollVerify, AND THE
+   PARAGRAPH THAT MADE IT ONE IS KEPT BECAUSE ITS ARGUMENT IS SOUND AND ITS PREMISE WAS NOT.
+   IT READ: "THIS LINE USED TO POLL ON EVERY RUN, AND POLLING IS WHAT MAKES THE CLAIM. _pollVerify's last arm
+   reports 'NOT REPRODUCED … the engine's model diverges from Chrome here (an engine-fidelity bug to
+   investigate)' — the strongest instruction this panel gives, and one that is only true of a payload a
+   document actually received. Three states reached it as one: a delivery that ran and did not fire (the real
+   divergence), a delivery that THREW before navigating anything, and a `window.open` that created NO
+   NAVIGABLE — HTML §7.2.2.1 'Opening and closing windows' step 14, 'If targetNavigable is null, then return
+   null', which is what a popup blocker is." Every word of that is right about WHY a gate is owed, and it named
+   the wrong instrument: the handle cannot answer it.
+   HTML §7.2.2.1's window open steps have NINETEEN top-level steps and FOUR `return null` arms — 1, 14, 17,
+   18 — and the navigate is step 15, so steps 17 and 18 answer null for a document that HAS been navigated.
+   HTML §7.3.1.7 "Navigable target names"' rules for choosing a navigable set windowType to "new with no
+   opener" (step 17's condition) whenever the opening document's own opener policy is `same-origin` or
+   `same-origin-plus-COEP` and its origin is not same origin with its top-level origin — which is every
+   `manifest.sandbox.pages` document, whose origin is opaque, at every COOP value. So the gate as built
+   reported a delivery that HAPPENED as one that never did, and turned every popup-blocked reading into a
+   reading that is wrong for three of four spec arms.
+   THE GATE IS STILL HERE AND ITS PREMISE MOVED: it is `snap.delivered`, latched in the trusted zone when a
+   document ANNOUNCES ITSELF at the delivered address with the browser's own origin and frame
+   (offscreen-brain.js `_recordProbeDelivery`). That is why this now polls on every run — the premise is
+   established DURING the poll rather than before it, because a document cannot announce itself until it has
+   loaded. Anyone removing the `snap.delivered` read is removing the premise; the unconditional poll is not
+   the defect this paragraph was written about.
+   IT STILL FAILS CLOSED AND STILL DOES NOT DCHECK THE SANDBOX'S TOKENS. Everything on a POC_RAN crosses from
+   the frame that EVALS the payload, so a payload can post its own POC_RAN — asserting that vocabulary would
+   hand an analysed page an abort of the popup, which is the hazard offscreen-brain.js's `_recordProbeHit`
+   names for the same channel. Nothing the sandbox says can now manufacture a delivery either: the strongest
+   verdict is reachable only from a browser-stated witness in the trusted zone, and the sandbox's words are
+   rendered as an EXPLANATION of a non-delivery and never as evidence of one. */
+/* THE SANDBOX'S OWN STATEMENT, AS A SENTENCE AND NOT AS A VERDICT. A `Map` and not an object literal for the
+   reason the deleted outcome table gave: `d.handle` crosses from the frame that EVALS the payload, so a
+   payload posting `handle:"constructor"` indexes an object literal straight onto Object.prototype and gets a
    FUNCTION back, which is the `(constructor)`-where-a-type-belongs hazard CLAUDE.md records for foreign bytes.
-   A Map has no prototype chain to reach. STILL NO DCHECK ON THE TOKEN, for the reason stated above this
-   function: asserting a vocabulary a page can write hands that page an abort of the popup. */
-var _DELIVERY_MISS = new Map([
-  // VALIDATED, NOT DEFAULTED, and the difference is which side of the seam this is. Everything on a POC_RAN
-  // arrives from the frame that EVALS the payload, so these are checked the way offscreen-brain.js's
-  // `_recordProbeHit` checks a relayed hit — by TYPE, with the miss named — rather than asserted the way a
-  // producer's own record is. A `||` here would read to the next person as a defaulted contract field.
-  ["threw", function (d) {
-    return "NOT DELIVERED — the delivery threw in the attacker sandbox before any navigation "
-      + "happened (" + (typeof d.error === "string" && d.error ? d.error : "the sandbox stated no message")
-      + "), so no document was ever handed the payload. This is a "
-      + "result about the HARNESS: it is NOT an engine-fidelity divergence, and NOT a statement that the sink "
-      + "is safe. The finding stands — the engine fire-verified this breakout.";
-  }],
-  ["no-navigable", function () {
-    return "NOT DELIVERED — window.open created no navigable, so no document was ever handed the "
-      + "payload. HTML §7.2.2.1 “Opening and closing windows” step 14 returns null exactly when the user agent "
-      + "creates none, which is what a popup blocker is: allow popups for this extension and run it again. "
-      + "This is a result about the HARNESS — NOT an engine-fidelity divergence, and NOT a statement that the "
-      + "sink is safe. The finding stands.";
-  }],
-  // THE ARM THE PROSE ABOVE WAS WRITTEN FOR. `unstated` is the sandbox's own statement that the delivery it
-  // evaluated no longer ANSWERS — poc-sandbox.html reads the completion value of `pocJs` as HTML §7.2.2.1's
-  // window open steps result, which is only a value while that pocJs stays ONE ExpressionStatement. So this
-  // names the file and the function to open, because that is the whole remedy and no part of it is here.
-  ["unstated", function () {
-    return "NOT DELIVERED — the delivery ran and the attacker sandbox could not read what it produced. "
-      + "poc-sandbox.html takes the completion value of the delivery expression as the result of "
-      + "HTML §7.2.2.1 “Opening and closing windows”’ window open steps, which it is only while that "
-      + "delivery is ONE expression statement — so this is offscreen-brain.js’s buildLiveDelivery having "
-      + "grown a second statement, and that function is the whole of what to read. This is a CONTRACT GAP "
-      + "in the harness, stated as one on purpose: it is NOT an engine-fidelity divergence, NOT a forged "
-      + "message, and NOT a statement that the sink is safe. The finding stands — the engine fire-verified "
-      + "this breakout.";
-  }],
+   A Map has no prototype chain to reach. Validated by TYPE with the miss named, never asserted. */
+var _SANDBOX_HANDLE = new Map([
+  ["window", "the delivery’s window.open answered a WindowProxy"],
+  ["null", "the delivery’s window.open answered null — HTML §7.2.2.1 “Opening and closing windows” returns "
+         + "null at four of its nineteen top-level steps (1, 14, 17, 18) and navigates at step 15, so this is "
+         + "consistent with a popup the browser never created (step 14) AND with a document that was navigated "
+         + "and whose opener was severed (steps 17 and 18)"],
+  ["none", "the delivery produced no value at all, which is not a shape the window open steps return — it is "
+         + "offscreen-brain.js’s buildLiveDelivery having grown a second statement, so that function is the "
+         + "whole of what to read. A CONTRACT GAP in the harness, stated as one on purpose"],
 ]);
+function _sandboxSaid(d) {
+  if (typeof d.error === "string" && d.error) {
+    return "The attacker sandbox reported that the delivery THREW before it completed (" + d.error + ").";
+  }
+  if (d.ran !== true) {
+    return "The attacker sandbox did not state that the delivery ran (ran=" + JSON.stringify(d.ran) + "), so "
+      + "this is poc-sandbox.html’s contract broken — or a payload that posted its own POC_RAN.";
+  }
+  var h = _SANDBOX_HANDLE.get(d.handle);
+  if (!h) {
+    return "The attacker sandbox stated a handle shape this view does not know (handle="
+      + JSON.stringify(d.handle) + "); poc-sandbox.html answers \"window\" / \"null\" / \"none\" for every "
+      + "run, so this is that contract broken — or a payload that posted its own POC_RAN.";
+  }
+  return "The attacker sandbox ran the delivery and " + h + " — CONTEXT only: the handle’s identity is not "
+    + "what decides whether a document received the payload.";
+}
 function _reportDelivery(d, ent) {
   var el = ent.resultEl;
-  if (d.outcome === "delivered") {
-    el.className = "verify-result";
-    el.textContent = "payload delivered — waiting for the sink to fire in Chrome…";
-    _pollVerify(el, ent.marker, ent.blockers);
-    return;
-  }
-  el.className = "verify-result verify-miss";
-  var miss = _DELIVERY_MISS.get(d.outcome);
-  if (miss) { el.textContent = miss(d); return; }
-  var known = ['"delivered"'];
-  _DELIVERY_MISS.forEach(function (_fn, k) { known.push(JSON.stringify(k)); });
-  el.textContent = "NOT DELIVERED — the attacker sandbox stated an outcome this view does not know (outcome="
-    + JSON.stringify(d.outcome) + "). poc-sandbox.html answers " + known.join(" / ") + " for every run, so "
-    + "this is that contract broken — or a payload that posted its own POC_RAN. Either way nothing "
-    + "here is evidence about the sink, and nothing here says anything about the engine's model.";
+  el.className = "verify-result";
+  el.textContent = "delivery ran — waiting for the browser to report a document at the delivered address…";
+  _pollVerify(el, ent.marker, ent.blockers, _sandboxSaid(d));
 }
 async function _handleVerify(btn) {
   // THE PROBE IS THIS VIEW'S OWN JSON, so a parse failure here is this file disagreeing with itself — never a
@@ -1506,8 +1485,13 @@ function _refusedReasons(refused) {
   refused.forEach(function (h) { if (h.mismatch && seen.indexOf(h.mismatch) < 0) seen.push(h.mismatch); });
   return seen.join("; ");
 }
-async function _pollVerify(resultEl, marker, blockers) {
+async function _pollVerify(resultEl, marker, blockers, sandboxSaid) {
   var refused = [];
+  /* THE PREMISE, AND IT IS READ ON EVERY POLL RATHER THAN ONCE BEFORE THE LOOP. A document cannot announce
+     itself until it has loaded, so the witness for "a document received the payload" arrives AFTER the
+     delivery ran — which is why this function is now entered unconditionally and why the last arm's premise is
+     established here instead of by _reportDelivery. */
+  var delivered = null, nearMiss = null;
   for (var i = 0; i < 20; i++) {
     await new Promise(function (r) { setTimeout(r, 400); });
     var snap = await new Promise(function (res) { chrome.runtime.sendMessage({ type: "EXPLOIT_PROBE_STATUS", sessionId: marker }, function (r) { res(r); }); });
@@ -1527,6 +1511,22 @@ async function _pollVerify(resultEl, marker, blockers) {
            "EXPLOIT_PROBE_STATUS answered without a hits array — the probe session is created with hits:[] "
            + "and PROBE_HIT only appends to it, so its absence is that reply broken and every live verify "
            + "would report NOT REPRODUCED no matter what real Chrome did");
+    /* ASSERTED, NOT DEFAULTED, and `null` is its POSITIVE value: this reply is built by OUR trusted zone, so
+       an absent field is that producer having stopped rather than a state to substitute for. `null` MEANS no
+       document has yet announced itself at the delivered address — which is exactly the reading the last arm
+       needs, and a `||` here would make a producer that stopped writing it indistinguishable from a delivery
+       that never landed, printing "the engine's model diverges from Chrome" for every finding for ever. */
+    DCHECK("delivered" in snap && (snap.delivered === null || typeof snap.delivered === "object"),
+           "EXPLOIT_PROBE_STATUS answered without a `delivered` field — _recordProbeDelivery latches it and "
+           + "the reply carries it on every session, so its absence is the premise of this panel's strongest "
+           + "verdict being unreadable");
+    DCHECK("deliveredNearMiss" in snap
+           && (snap.deliveredNearMiss === null || typeof snap.deliveredNearMiss === "object"),
+           "EXPLOIT_PROBE_STATUS answered without a `deliveredNearMiss` field — it is what separates a run "
+           + "in which no document arrived from one in which a top-level document of that origin arrived at "
+           + "another address, and without it the second state renders as the first");
+    if (snap.delivered) delivered = snap.delivered;
+    if (snap.deliveredNearMiss) nearMiss = snap.deliveredNearMiss;
     /* A HIT IS EVIDENCE ONLY IF IT CAME FROM THE DELIVERED DOCUMENT, so the array is PARTITIONED before it is
        read as an outcome. `snap.hits.length` alone was the whole test, which is why any document in any tab
        that knew the marker could print the strongest verdict this panel has. Attribution is decided in the
@@ -1565,6 +1565,30 @@ async function _pollVerify(resultEl, marker, blockers) {
       return;
     }
   }
+  /* NO DOCUMENT ANNOUNCED ITSELF AT THE DELIVERED ADDRESS — the arm the handle used to answer, now answered
+     by the browser. It is placed BEFORE the refused arm's siblings and AFTER it deliberately: a marker that
+     surfaced somewhere it was never delivered is the more specific statement and keeps its own arm, and this
+     one explains the silence when nothing surfaced at all. The sandbox's own sentence is the EXPLANATION here
+     and nowhere else, because a non-delivery is the one state it can shed light on. */
+  if (!delivered && !refused.length) {
+    resultEl.className = "verify-result verify-miss";
+    resultEl.textContent =
+      "NOT DELIVERED — no document announced itself at the delivered address, so nothing this panel can see "
+      + "was ever handed the payload. The premise is the browser's: a document of the delivered origin, in the "
+      + "top-level frame, at the address this zone navigated to (offscreen-brain.js _recordProbeDelivery). "
+      + sandboxSaid + " "
+      + (nearMiss
+          ? "A top-level document of that origin DID announce itself " + nearMiss.count + " time(s) at the "
+            + "delivered address APART FROM the component the payload was placed in — the fragment for a `#` "
+            + "delivery, the query for a `?` one — so the payload's own component did not compare. That is the "
+            + "reading to open first: it is a delivery that landed at the page and not at the payload, or an "
+            + "address field that does not carry the component the delivery placed it in. "
+          : "If the delivery's window.open answered null, a popup the browser refused to create is the first "
+            + "thing to rule out: allow popups for this extension and run it again. ")
+      + "This is a result about the HARNESS — NOT an engine-fidelity divergence, and NOT a statement that the "
+      + "sink is safe. The finding stands: the engine fire-verified this breakout.";
+    return;
+  }
   if (refused.length) {
     // §@S: absence of a PoC is never a "safe" verdict, and a marker surfacing where it was never delivered is
     // itself a fact about the page — so this is REFUSED (not evidence for this sink), never dropped and never
@@ -1584,6 +1608,21 @@ async function _pollVerify(resultEl, marker, blockers) {
     return;
   }
   resultEl.className = "verify-result verify-miss";
+  /* WHICH HALF OF THE WITNESS ANSWERED, READ RATHER THAN LEFT ON THE RECORD. The delivered address is compared
+     from two sources and `_recordProbeDelivery` names the one that matched: `browser-stated` is chrome.*'s own
+     statement of that document's address and `page-claimed` is the address the document reported off
+     PerformanceNavigationTiming. Both are real and one is stronger, so the strength is PRINTED instead of
+     assumed — and a reader who sees only `page-claimed` for every fragment delivery has measured, for free,
+     that the browser-stated address does not carry that component. */
+  DCHECK(delivered.addressSource === "browser-stated" || delivered.addressSource === "page-claimed",
+         "a delivery witness reached the panel with no address source — _recordProbeDelivery names the half "
+         + "that matched on every witness it latches, and without it this arm claims a browser-stated premise "
+         + "it has not established the strength of");
+  // Read by the divergence arm below — the one claim in this function whose strength the source decides.
+  var _premise = delivered.addressSource === "browser-stated"
+    ? "The delivered address was matched against the browser's own statement of that document's address. "
+    : "The delivered address was matched against the address that document reported for itself (the browser's "
+      + "own statement of it did not compare); its origin and frame are still the browser's. ";
   // POLICY-RELATIVE no-fire: when the engine already flagged the page's own policy — a CSP, a Trusted-Types
   // requirement, or both — as killing THIS vector, a non-fire is the EXPECTED, confirmed outcome (real sink,
   // dead vector), not an engine-fidelity divergence to chase. The last arm does not OFFER "CSP/Trusted-Types"
@@ -1601,10 +1640,20 @@ async function _pollVerify(resultEl, marker, blockers) {
         }).join("; and ")
       + ". The sink is REAL; it needs a policy-permitted vector. A policy-relative result, NOT an "
       + "engine-fidelity bug — and NOT a statement that the sink is safe."
-    // THE DIVERGENCE CLAIM RESTS ON A PREMISE THIS FUNCTION DOES NOT ESTABLISH, so it is named: _reportDelivery
-    // reaches here ONLY for `outcome === "delivered"`, i.e. the window open steps answered a navigable rather
-    // than HTML §7.2.2.1 step 14's null. Without that gate this arm printed "an engine-fidelity bug to
-    // investigate" for a popup Chrome never opened — a confident wrong instruction about a navigation that did
-    // not happen. Anyone tempted to poll unconditionally again is removing the premise, not a guard.
-    : "NOT REPRODUCED — the payload WAS delivered to a real document (window.open answered a navigable) and apiclientsink never fired, and the engine reported neither a blocking CSP nor a Trusted-Types requirement for this vector, so the engine’s model diverges from Chrome here (an engine-fidelity bug to investigate). Not a statement that the sink is safe.";
+    // THE DIVERGENCE CLAIM RESTS ON A PREMISE THIS FUNCTION NOW ESTABLISHES, and the premise is the browser's
+    // rather than the attacker sandbox's. This comment used to read: "_reportDelivery reaches here ONLY for
+    // `outcome === "delivered"`, i.e. the window open steps answered a navigable rather than HTML §7.2.2.1
+    // step 14's null. Without that gate this arm printed 'an engine-fidelity bug to investigate' for a popup
+    // Chrome never opened. Anyone tempted to poll unconditionally again is removing the premise, not a guard."
+    // The hazard it names is real and the instrument was wrong: step 14 is one of FOUR `return null` arms
+    // (1, 14, 17, 18) over nineteen top-level steps whose navigate is step 15, so a null handle is also what a
+    // severed-opener delivery answers — and HTML §7.3.1.7's rules for choosing a navigable make that the arm
+    // EVERY delivery from an opaque-origin sandbox page takes once the opener's own COOP is `same-origin`.
+    // The gate is now `delivered`, latched from a document announcing itself, and the unconditional poll is
+    // what lets it be read at all. Removing the `delivered` read is removing the premise.
+    : "NOT REPRODUCED — a document DID receive the payload (one announced itself in the top-level frame at the "
+      + "delivered origin and the delivered address) and apiclientsink never fired, and the engine reported "
+      + "neither a blocking CSP nor a Trusted-Types requirement for this vector, so the engine’s model diverges "
+      + "from Chrome here (an engine-fidelity bug to investigate). " + _premise
+      + "Not a statement that the sink is safe.";
 }

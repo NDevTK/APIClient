@@ -61,57 +61,62 @@
     statusEl.className = ""; statusEl.textContent = "ready — click Run";
   });
 
-  // WHETHER A DOCUMENT WAS EVER HANDED THE PAYLOAD IS THIS FILE'S TO SAY, AND NOTHING DOWNSTREAM CAN SAY IT.
-  // §LIVE-VERIFY reads NO HIT as an ENGINE-FIDELITY DIVERGENCE TO FIX, which is only true of a payload that
-  // actually reached a document. This handler used to discard the delivery's own answer and post `error:null`
-  // for every run that did not THROW, so three states arrived at the popup as one and the popup printed the
-  // strongest of them: a delivery that ran and did not fire (a real divergence), a delivery that created NO
-  // NAVIGABLE AT ALL, and a delivery whose result this file cannot state, all read as "payload delivered" and
-  // then as "the engine's model diverges from Chrome here (an engine-fidelity bug to investigate)" — a
-  // confident wrong instruction about a navigation that never happened, and CLAUDE.md §@S's named tell
-  // (a rung whose ABSENCE and whose ZERO read alike) performed on the verify surface.
+  // WHETHER A DOCUMENT WAS EVER HANDED THE PAYLOAD IS *NOT* THIS FILE'S TO SAY, AND THE PARAGRAPH THAT STOOD
+  // HERE SAID THE OPPOSITE. It is kept in its own words because it is the reading a reader re-derives from the
+  // fact that the delivery is ONE expression statement: "THE ANSWER IS THE PLATFORM'S OWN AND IT IS ALREADY IN
+  // HAND. HTML §7.2.2.1 'Opening and closing windows' defines the window open steps to end either 'If
+  // targetNavigable is null, then return null' (step 14 — the user agent created no navigable, which is what a
+  // popup blocker is) or 'Return targetNavigable's active WindowProxy' (step 19). The delivery this layer
+  // performs is one `window.open(...)` expression statement, so the completion value of `pocJs` IS that return
+  // value — which is why it is READ here rather than re-derived from anything."
   //
-  // THE ANSWER IS THE PLATFORM'S OWN AND IT IS ALREADY IN HAND. HTML §7.2.2.1 "Opening and closing windows"
-  // defines the window open steps to end either "If targetNavigable is null, then return null" (step 14 — the
-  // user agent created no navigable, which is what a popup blocker is) or "Return targetNavigable's active
-  // WindowProxy" (step 19). The delivery this layer performs is one `window.open(...)` expression statement
-  // (offscreen-brain.js `buildLiveDelivery`, the `address` arm), so the completion value of `pocJs` IS that
-  // return value — which is why it is READ here rather than re-derived from anything.
+  // BOTH QUOTATIONS ARE VERBATIM AND THE ENUMERATION IS SHORT, which is the whole defect. The window open
+  // steps have NINETEEN top-level steps and FOUR `return null` arms: step 1 (the event loop's termination
+  // nesting level is nonzero), step 14, step 17 ("If windowType is 'new with no opener', then return null")
+  // and step 18 ("If noopener is true and target is not an ASCII case-insensitive match for '_self',
+  // '_parent', or '_top', then return null"). The navigate is step 15. So steps 17 and 18 answer null for a
+  // document that HAS been navigated, and only step 14 means no navigable was created.
   //
-  // AND THE THIRD TOKEN IS THE HONEST ONE. `undefined` is not a delivery outcome: it is this file's statement
-  // that the pocJs it was handed is no longer an expression whose value says what happened. It crosses as
-  // `unstated` rather than being folded into either real answer, so a delivery arm that grows a second
-  // statement shows up as a NAMED contract gap on the card instead of as an engine bug. HOW ITS ABSENCE WOULD
-  // SHOW, had this stayed unstated: every popup-blocked verify reporting the engine as wrong.
+  // AND STEP 17 IS REACHED BY THIS FILE'S OWN SHAPE, NOT BY AN EXOTIC ONE. HTML §7.3.1.7 "Navigable target
+  // names"' rules for choosing a navigable: "If currentDocument's opener policy's value is 'same-origin' or
+  // 'same-origin-plus-COEP', and currentDocument's origin is not same origin with currentDocument's relevant
+  // settings object's top-level origin: Set noopener to true. Set name to '_blank'. Set windowType to 'new
+  // with no opener'." This page is a `manifest.sandbox.pages` document, so its origin is OPAQUE and the SECOND
+  // conjunct holds at every COOP value the extension can ship; the first is the manifest's
+  // `cross_origin_opener_policy`. At `same-origin-allow-popups` the clause does not fire. At `same-origin` it
+  // fires for EVERY delivery — the document loads and runs, and this expression answers null.
+  //
+  // SO THE HANDLE IS REPORTED AND GATES NOTHING. What crosses is what this file can soundly state and nothing
+  // else: whether the evaluation THREW (only this frame can see that), and which of the three shapes the
+  // completion value had — read by IDENTITY only, since a successful open answers a CROSS-ORIGIN WindowProxy
+  // whose members are HTML §7.2.1's fixed cross-origin list and whose anything-else is a SecurityError. The
+  // DELIVERY verdict is decided in the trusted zone from the browser's own facts, off a document announcing
+  // itself at the delivered address (offscreen-brain.js `_recordProbeDelivery`).
+  //
+  // `handle: "none"` IS STILL THE HONEST THIRD TOKEN and keeps its own reason. `undefined` is not a shape the
+  // window open steps can return: it is this file's statement that the pocJs it was handed is no longer an
+  // expression whose value says anything, so it names a CONTRACT GAP in offscreen-brain.js's
+  // `buildLiveDelivery` — a delivery arm that grew a second statement. It no longer decides delivery, because
+  // a second statement in the delivery says nothing about whether a document received the payload.
   runBtn.addEventListener("click", function () {
     if (!pocJs) return;
     statusEl.className = ""; statusEl.textContent = "running…";
     var threw = null, opened;
     try { opened = (0, eval)(pocJs); }   // user gesture present → window.open allowed
     catch (err) { threw = (err && err.message) || String(err); }
-    // Identity comparisons ONLY: a successful open answers a CROSS-ORIGIN WindowProxy, whose members are
-    // HTML §7.2.1's fixed cross-origin list and whose anything-else is a SecurityError — so the value is
-    // classified by what it IS and never by reading it.
-    var outcome = threw !== null    ? "threw"
-                : opened === undefined ? "unstated"
-                : opened === null      ? "no-navigable"
-                                       : "delivered";
-    if (outcome === "threw") {
-      statusEl.className = "err"; statusEl.textContent = "PoC threw before any navigation: " + threw;
-    } else if (outcome === "no-navigable") {
-      statusEl.className = "err";
-      statusEl.textContent = "no window was created — the payload was never delivered (allow popups for this extension)";
-    } else if (outcome === "unstated") {
-      statusEl.className = "err";
-      statusEl.textContent = "the delivery did not state what it produced — see the card";
+    var handle = opened === undefined ? "none" : opened === null ? "null" : "window";
+    if (threw !== null) {
+      statusEl.className = "err"; statusEl.textContent = "the delivery threw before it completed: " + threw;
     } else {
-      statusEl.className = "ok"; statusEl.textContent = "PoC delivered — verdict updates below when the sink fires";
+      statusEl.className = "ok";
+      statusEl.textContent = "delivery ran — the panel reports below whether a document received it";
     }
     // NO `catch (_) {}` AROUND THE HANDOFF, for the reason lib/popup-security.js gives for dropping its own:
     // this posts a plain object to the document that handed us the PoC and whose origin came off that very
     // message, so the only way it throws is a bug in that pairing — and swallowing it left the popup showing
     // "click Run PoC" for ever, which reads as a verify the user never started rather than as one that broke.
-    (parentWin || parent).postMessage({ type: "POC_RAN", marker: marker, error: threw, outcome: outcome },
+    (parentWin || parent).postMessage({ type: "POC_RAN", marker: marker, error: threw,
+                                        ran: threw === null, handle: handle },
                                       parentOrigin);
   });
 

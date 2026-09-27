@@ -734,9 +734,20 @@ async function handlePopupMessage(msg, sender, sendResponse) {
       DCHECK(Array.isArray(ses.hits),
              "a probe session carries no hits array — it is created with hits:[] and PROBE_HIT only ever " +
              "appends to it, so its absence is the one evidence channel this reply has being unreadable");
+      /* `delivered` IS THE PREMISE THE STRONGEST VERDICT RESTS ON, so it crosses on every reply and `null` is
+         its POSITIVE value: _recordProbeDelivery latches it when a document ANNOUNCES ITSELF at the delivered
+         address with the browser's own origin and frame, so null MEANS no such document has announced itself
+         yet. The popup used to take that premise from the attacker sandbox's reading of `window.open`'s
+         completion value, which HTML §7.2.2.1 "Opening and closing windows" returns null at four of its
+         nineteen top-level steps — three of them AFTER step 15's navigate — so a delivery that happened
+         reported as one that never did. `deliveredNearMiss` travels beside it because the two together are
+         what separate a run in which no document arrived from one in which a top-level document of that
+         origin arrived at another address; a reply carrying only the first would leave the second silent. */
       sendResponse({
         success: true, status: ses.status, marker: ses.marker, pageUrl: ses.pageUrl,
         hits: ses.hits.slice(),
+        delivered: ses.delivered,
+        deliveredNearMiss: ses.deliveredNearMiss,
         pocJs: ses.pocJs,
         startedAt: ses.createdAt,
       });
