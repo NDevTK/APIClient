@@ -734,6 +734,61 @@ static char *errs_json_array(ErrsArray which) {
    @kind gauge: members jobsReady jobsFramed jobsOwed jobWGap jobsReadyTask jobsReadyMicro memUnframed visZero
    @kind lifetime: picksLifetime unframedPicksLifetime readyPicksLifetime
    @kind lifetime: taskHeldDelivLifetime taskHeldSeqLifetime taskArmOlderLifetime taskArmNoRowLifetime
+   AND EVERY REMAINING ROW OF THIS COMPOSER, DETERMINED FROM THE ACCESSOR THAT FILLS IT AND NEVER FROM ITS
+   KEY. Most need no argument: a row folded by this census's own walk over the live frontier is a reading at
+   ONE INSTANT, and each free function beside them — the scan pair, the preempt ask, the rival-miss partition,
+   the member-key and index checks, the epoch pair, the starvation pair, the arrival and departure processes,
+   the credit triple, the work total and the rank-change count — states LIFETIME, NEVER RESET, at its own
+   declaration. Three groups do not follow from that and are the ones this block exists to state.
+   THE FRONTIER'S CLOCK IS A HIGH-WATER MARK AND NO OTHER ROW ON THIS LINE IS. flow.c's whole statement of it
+   is one comparison that keeps the larger value, under an assertion that it IS the maximum coordinate any
+   account stands at and that no account's coordinate ever falls. So it SATURATES and then PLATEAUS exactly as
+   the program maxima on the @COLD line do, and a plateau in it is not a ceiling. Filed as a gauge it would be
+   differenced as a rate of virtual time; filed as a lifetime count it would be compared across two runs of
+   different length, which is the misreading CLAUDE.md §Testing records a maximum being dispatched on three
+   times and the only reason that kind is filed apart from `lifetime` at all.
+   ELEVEN KEYS HERE SPELL `Life` AND ARE GAUGES, WHICH IS THE ONE TRAP IN THIS DECLARATION AND IS NOT A
+   DISAGREEMENT WITH THE SUFFIX. The suffix names the horizon of the PER-BUCKET QUANTITY a row reports — a
+   bucket's mint count and its receipt really are lifetime counters OF THAT BUCKET — and the ROW is an
+   EXTREMUM OR A SUM OVER WHICHEVER BUCKETS THIS WALK REACHED, so the bucket SELECTED moves between two
+   samples and the row may FALL. solver/flow.h says exactly that of the crowd and minter triples in its own
+   words: an extremum's rule applies to them, neither may be DIFFERENCED, and both are read as ratios at one
+   instant. A kind read off a key is therefore read off the WRONG NOUN, and this is the line where that would
+   have licensed differencing eleven falling quantities.
+   AND THE BURN SPLIT IS THREE GAUGES AND TWO LIFETIME COUNTS, WHICH CORRECTS THE SENTENCE BESIDE IT RATHER
+   THAN RESTATING IT. That block says of `brHeldUsLife` and `brEmptyUsLife` that "their population is every
+   microsecond ever charged rather than whichever buckets happen to be standing, so unlike every extremum on
+   this line they MAY be differenced", and the identity the same file ASSERTS is `brUsLifeSum +
+   brRetiredUsLife == chargedUsLife`. A bucket whose subtree WHOLLY DEPARTS is freed, its receipt moves into
+   the retired total at that free, and it leaves the walk the other three are folded over — so the population
+   that is every microsecond ever charged is `chargedUsLife`, the population that only ever grows is
+   `brRetiredUsLife`, and `brUsLifeSum`, `brHeldUsLife` and `brEmptyUsLife` FALL by a bucket's whole receipt
+   the moment its last arm departs. The sentence is RIGHT about the arithmetic it is for — a live arm's share
+   may only be taken against a denominator drawn from the live buckets — and wrong about the one word that
+   decides what a consumer may do, which is why this declaration follows the asserted identity and not the
+   prose. It is recorded here rather than only there because THIS is the statement a consumer reads.
+   RETIREMENT: this correction goes when that sentence states the falling arm beside its own identity, so a
+   reader meeting the prose and a reader meeting the declaration are told the same thing.
+   @kind maximum: vt
+   @kind gauge: valMin valMax valTop valZero valArrived valUnplaced selfEmit unrun
+   @kind gauge: neverPicked neverPickedGap neverPickedAtTop picksLive picksMax
+   @kind gauge: svcMax svcMin svcFamMax svcFamMin families silPhases silCarry
+   @kind gauge: visMin visMax topSvc topSvcFam topForgiven nonrewardMax
+   @kind gauge: branches brLiveMax brLiveMin brLiveSum brDepthMax brFanMax brFanSum brFanDepth
+   @kind gauge: brBornLifeMax brBornLifeMin brCrowdLive brCrowdBornLife brCrowdUsLife
+   @kind gauge: brMinterLive brMinterGoneLife brMinterUsLife brUsLifeMax brUsLifeMin
+   @kind gauge: brUsLifeSum brHeldUsLife brEmptyUsLife
+   @kind gauge: cands candUnrun candSvcMax candDecMax decMax distMax wTop wMin candWMax
+   @kind gauge: delivReady delivFramed delivOwed delivWGap delivWGapVis wTopVis
+   @kind gauge: curDeep curDeepLive curDeepWGap epochAwayLive epochAwayWalk
+   @kind lifetime: brRetiredUsLife chargedUsLife
+   @kind lifetime: scanNextRuns scanNextWeights scanRivalRuns scanRivalWeights
+   @kind lifetime: scanOtherRuns scanOtherWeights scanCensusRuns scanCensusWeights
+   @kind lifetime: preemptAsksLifetime rivalMissGen rivalMissCur rivalMissBoth
+   @kind lifetime: keyArmedLifetime keyStaleGenLifetime keyFirstSeenLifetime keyRunningLifetime
+   @kind lifetime: epochRebuildLifetime epochResetsLifetime starvedPicks starvedPicksIdle
+   @kind lifetime: arrivals departures creditsOfferedLifetime creditsPaidLifetime creditsDroppedLifetime
+   @kind lifetime: workDone rankChanges
    @kind lifetime: keyIndexAskedLifetime keyIndexDifferedLifetime keyIndexDifferedTieLifetime
    @kind lifetime: keyIndexDifferedStrictLifetime keyIndexBandMembersLifetime keyIndexBandWeighedLifetime
 */
@@ -2351,6 +2406,41 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    @kind lifetime: netProgXhrAsksLife netProgXhrQueuedLife
    @kind constant: rootPrograms rootProgramsHeldAtSeed rootProgramsAwaitedAtSeed
    @kind maximum: deepest completed deepestLeft
+   AND EVERY REMAINING ROW OF THIS COMPOSER, WHICH THE RESIDUAL ABOVE NAMED AS THE NEXT DIFF AND WHICH IS
+   DETERMINED FROM THE ACCESSOR THAT FILLS IT RATHER THAN FROM ITS NAME. The grouping is MECHANICAL, which is
+   the whole of why it is checkable by the next reader instead of being this paragraph: `cold_census` is
+   declared as a WALK of the frontier that takes no reference and mutates nothing, so every row it fills is a
+   reading at ONE INSTANT; `EngineFrontierCensus` is the record solver/engine.h relies on as admitting NO
+   GAUGE — which is stated there as the reason `engine_rows_awaiting_bytes` and `flow_host_owed_count` are
+   free functions BESIDE it rather than fields of it — so its rows are the monotone kinds, the maxima and seed
+   constants above included; `ColdPreviewCensus` states in its own banner that every row of it accumulates
+   over the document and none of them can fall, the one row that counts LEDGER ROWS rather than asks included;
+   and `ColdResumed` describes the LAST REBUILD of a session whose rebuild runs at most once, which this
+   composer asserts one screen down, so its rows are written at a seed and never again.
+   THREE ROWS DO NOT INHERIT THEIR NEIGHBOURS' ACCESSOR AND THOSE ARE THE ONES TO READ TWICE. `owed` is filled
+   by neither census — a walk of its own, whose marks AGE OUT with a generation, so it is a GAUGE standing
+   among lifetime counts. And `orphanClaims` is filled from the REBUILD while `orphanClaimsMet` and
+   `orphanClaimsUnmet` beside it are filled from the frontier census, so that triple is ONE CONSTANT AND TWO
+   LIFETIME COUNTS: a reader differencing all three differences a seed, and the round trip's verdict is the
+   two that may be differenced read against the one that may not.
+   RETIREMENT: these three sentences go when a row's kind is asked of the accessor by something mechanical —
+   a reader that resolves a row to the record field feeding it — because the grouping is then derived rather
+   than stated and a row added to a census cannot be filed by hand at all.
+   @kind gauge: framed blocked owed
+   @kind gauge: decEntries decKiB headEntries headKiB domHeadEntries domHeadKiB pendKiB miscKiB perFlowKiB
+   @kind gauge: jobs pend pendReady stackEmpty canDeliver
+   @kind gauge: segKiB domSegKiB pinSegs pinSegEntries pinSegKiB decSegs decSegEntries decSegKiB
+   @kind gauge: dynBodies dynKiB sharedKiB programsAhead
+   @kind lifetime: finishedFlows finishedCands progStarts progStartsCand progStartsOther progQueuedCand
+   @kind lifetime: sold soldFlows soldCands forks orphanClaimsMet orphanClaimsUnmet
+   @kind lifetime: hostAnswersExtra hostAnswersLate hostTerminated
+   @kind lifetime: pagedReqs pagedAsks pagedUnarmed pagedFloor
+   @kind lifetime: previewAsks previewAsksRefusing previewAsksEmpty previewAsksWritable
+   @kind lifetime: previewAsksWithFlows previewAsksWithCands previewAsksWithDeep previewAsksWithDeepCands
+   @kind lifetime: previewAsksWithWorlds previewAsksWithOrphans previewAsksWithCommits previewAsksWithDelivers
+   @kind lifetime: previewAsksAfterCommit previewCommitRowsWritten
+   @kind lifetime: instanceUs loopUs betweenSlicesUs slices
+   @kind constant: resumed resumedSegs resumedFlows resumedCands resumedWorlds orphanClaims
 */
 char *result_cold_json(void) {
     ColdCensus c;
