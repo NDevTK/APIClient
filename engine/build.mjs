@@ -6492,6 +6492,20 @@ const SHARED_SOURCES = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
     ...walkC(join(HOST, "solver")),
     ...walkC(join(HOST, "browser")),
   ]);
+/* THE PATHS EVERY PROGRAM THIS FILE BUILDS IS COMPILED FROM, DECLARED ONCE, because it is what BOTH build
+   stamps claim about their artifact and one fact spelled at two call sites is two chances to disagree — which
+   is not hypothetical here: these two literals differed by `engine/lexbor` for as long as the wasm stamp
+   existed, and the site that omitted it is the one that gates the INSTALL.
+   IT IS ONE CONSTANT BECAUSE THE TWO LINKS COMPILE ONE SOURCE SET AND DIFFER ONLY IN TOOLCHAIN: SHARED_SOURCES
+   and both entries are `engine/qjs` and `engine/host`, and lexbor reaches both — emcc's `LEXBOR_LIB` through
+   LDFLAGS_COMMON and clang's `LEXBOR_NATIVE` through lexborNativeArchive — out of `engine/lexbor/source`, whose
+   headers are on both include paths through ENGINE_INCLUDE_ROOTS. The day a program here compiles something
+   these three paths do not hold, this splits into two constants and each says what it is for; until then a
+   second literal is the drift and not the flexibility.
+   NOT THE WHOLE TREE, for gate_revision.mjs's own reason: another agent's popup edit is not a reason to
+   distrust a JS-engine number. */
+const STAMP_CONE = ["engine/host", "engine/qjs", "engine/lexbor"];
+
 /* WHAT THE PROGRAM IS — BOTH entries, because both are compiled and both are linked. This used to be whichever
    single entry the `abi` argument selected, and that argument is gone: it chose which of the two programs a run
    produced, and a run now produces both, so nothing is left for it to select. check_recursion.sh shells in here
@@ -6949,21 +6963,23 @@ function nativeProgram(kind, dev) {
      RETURNS, so this line cannot be reached without `cc.status === 0`, and the wasm site's own reason applies
      unchanged — stamping after a failed link marks whatever binary a PREVIOUS build left as belonging to this
      revision, which is a number about nothing with the stamp itself doing the lying.
-     THE CONE IS WHAT THIS LINK ACTUALLY COMPILED, AND IT IS WIDER THAN THE WASM STAMP'S BY `engine/lexbor`
-     DELIBERATELY. The archive handed to clang above is compiled from engine/lexbor/source, and every host object
-     is compiled against its headers (`-I` + LEXBOR_INC in NATIVE_DIALECT), so a dirty file there is a file this
-     program CONTAINS. That is not a hypothetical at this site: the paragraph above LEXBOR_NATIVE records a
-     stale archive against edited headers producing "a lexbor no revision contains", found three frames from the
-     write inside free(), and a cone omitting engine/lexbor would have reported that build clean. The wasm
-     stamp's cone omits it while linking lexbor too — that is a finding about THAT call, and it is NOT a reason
-     to narrow this one to match it.
+     THE CONE IS `STAMP_CONE`, WHICH IS WHAT THIS LINK ACTUALLY COMPILED: the archive handed to clang above is
+     compiled from engine/lexbor/source and every host object is compiled against its headers (`-I` + LEXBOR_INC
+     in NATIVE_DIALECT), so a dirty file there is a file this program CONTAINS — which is not hypothetical at
+     this site, the paragraph above LEXBOR_NATIVE recording a stale archive against edited headers producing "a
+     lexbor no revision contains", found three frames from the write inside free().
+     THIS PARAGRAPH SAID THE CONE WAS `wider than the wasm stamp's by engine/lexbor` AND THAT THE WASM'S OMISSION
+     WAS `not a reason to narrow this one`. It was true when written and the difference is GONE — the wasm cone
+     was widened to match and both now read one constant. The sentence is kept because its ARGUMENT is what a
+     reader re-derives: the two literals really did differ, and the reason this one was right is the reason the
+     other one was wrong.
      AND A DIRTY CONE IS RECORDED HERE RATHER THAN REFUSED, which is the opposite call from the wasm install
      gate and is FORCED rather than chosen: clang has already written `bin` by the time this line runs, so there
      is no previous artifact left for a refusal to preserve, and refusing would leave exactly the unstamped
      binary this call exists to end — an absent record where a dirty one is the honest statement. A refusal
      becomes meaningful here the day this link writes its output to a staging path and renames it on success,
      and not before. */
-  const rev = stampArtifact(bin, ["engine/host", "engine/qjs", "engine/lexbor"], NATIVE_REGIME);
+  const rev = stampArtifact(bin, STAMP_CONE, NATIVE_REGIME);
   /* THE REGIME IS IN THE LINE THAT NAMES THE BINARY, for the reason the wasm install line gives about itself: a
      green line from a program with its invariants compiled out is a SMALLER claim than one from a program with
      them armed, and two claims of different size may not share a spelling. */
@@ -7567,8 +7583,31 @@ const ABI_LINK = ABI_LIST.code
    any artifact and the check reported a build OF that revision as stale against 600 sources, three minutes
    after the checkout. The stamp is computed by gate_revision.mjs itself rather than re-derived here, so
    what is written and what is checked are the same answer by construction. The cone is what this link
-   actually compiled — the host and the submodule — and not the whole tree, for the reason that file gives:
-   another agent's popup edit is not a reason to distrust a JS-engine number.
+   actually compiled and not the whole tree, for the reason that file gives: another agent's popup edit is not
+   a reason to distrust a JS-engine number.
+   THAT CLAUSE READ `the host and the submodule` AND IT NAMED TWO PATHS WHERE THIS LINK COMPILES THREE — it is
+   rewritten rather than deleted because a reader who re-derives the cone from the SOURCE LISTS will re-derive
+   exactly those two and narrow it back. `LDFLAGS_COMMON` begins with `LEXBOR_LIB`, and `link()` passes it to
+   every link including the production ABI one this stamp describes; `buildLexbor` compiles that object with
+   emcc from `findC(engine/lexbor/source/lexbor)`, and CFLAGS carries `-I engine/lexbor/source` through
+   ENGINE_INCLUDE_ROOTS, so every host object is compiled against those headers too. A dirty file there is a
+   file the INSTALLED artifact contains, and a cone of two paths reported that build `clean cone`.
+   THE FAILURE IT ALLOWED IS THE ONE THIS FILE HAS ALREADY PAID FOR ONCE, at nativeProgram's LEXBOR_NATIVE: an
+   archive whose headers disagreed with the ones its callers compiled against, aborting inside `free()` three
+   frames from the write, and `every measurement taken with that binary was a measurement of a lexbor no
+   revision contains`. That incident was the NATIVE archive; the same two artifacts share the same source tree
+   and only one of them had the path in its cone.
+   THE ONE FALSE-DIRTY THIS BUYS, NAMED: `engine/lexbor/CMakeLists.txt` and anything else under engine/lexbor
+   that is not a `.c` or `.h` under `source/lexbor`. `lexborSourceId` hashes only those, so an edit elsewhere
+   under the path does not invalidate the cached object and this build did not read it — it will be reported
+   dirty anyway. That is the cheap direction here and deliberately so: this cone gates a PUBLICATION, where a
+   refusal leaves a correctly-stamped older artifact standing and a false clean bill ships bytes belonging to no
+   revision.
+   AND IT IS THIS CONE THAT MAY REFUSE WHERE THE NATIVE STAMP'S MAY NOT, which is not an inconsistency between
+   the two sites but a difference in what a refusal can preserve: `nativeProgram` stamps a binary clang has
+   ALREADY written, so refusing there would leave an unstamped artifact and nothing better; this gate stands in
+   front of a rename, so refusing leaves the previous qjs.mjs AND the stamp that describes it. A gate is worth
+   having exactly where there is a good state to keep.
    ONLY WHEN THAT LINK PRODUCED THE ARTIFACT: stamping after a failed link would mark whatever qjs.mjs a
    PREVIOUS build left on disk as belonging to this revision, which is §Testing's number about nothing with the
    stamp itself doing the lying. */
@@ -7599,7 +7638,7 @@ if (ABI_LINK.code === 0) {
      below, whose own comment states the consequence — so a stamp that named the run rather than the artifact
      would be false of one of them. It is derived from the flag list that compiled these objects, never from
      argv: see `regimeOf`. */
-  const rev = stampArtifact(stageArtifact, ["engine/host", "engine/qjs"], WASM_REGIME);
+  const rev = stampArtifact(stageArtifact, STAMP_CONE, WASM_REGIME);
   /* THE SAME READING THE NATIVE LINK PRINTS, through `coneReading` rather than restated here — see its own
      header for why one fact may not have two spellings when one of them is a DECISION. */
   const why = coneReading(rev);
