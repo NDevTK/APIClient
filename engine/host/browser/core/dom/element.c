@@ -70,6 +70,7 @@
 #include "core/idl_indexed.h"
 #include "core/css/css_style_declaration.h"
 #include "core/css/css_rule.h"
+#include "core/css/css_font_feature_values.h"
 #include "core/css/media_list.h"
 #include "core/css/css_rule_list.h"
 #include "core/css/css_style_sheet.h"
@@ -3253,6 +3254,11 @@ void element_init(JSContext *ctx)
        resolves to a section that does not exist and reads as a wrong number rather than as an unstated
        document. */
     media_list_init(ctx);
+    /* CSS Fonts 4 §12.2 "The CSSFontFeatureValuesRule interface"'s CSSFontFeatureValuesMap, BEFORE the rules:
+       css_rule.c MINTS the seven maps with every `@font-feature-values` rule (§12.2 declares them
+       `[SameObject]`, so the rule owns them rather than a getter remembering one), which means the map class and
+       its per-realm prototype must already be declared when the first such rule is built. */
+    css_font_feature_values_init(ctx);
     /* CSSOM §6.4 "CSS Rules" for the rule interfaces a sheet holds, and CSS Conditional 3 §7.2 "The
        CSSConditionRule interface" and CSS Conditional 3 §7.3 "The CSSMediaRule interface" for the conditional group rules among
        them — `css-conditional.idl` is where both are declared, not `cssom.idl`. The term itself is CSS
@@ -3402,6 +3408,7 @@ void element_free(JSRuntime *rt)
     style_sheet_list_free(rt);
     css_rule_list_free(rt);
     css_rule_free(rt);
+    css_font_feature_values_free(rt);   /* after the rules, whose seven map attributes hold one each */
     media_list_free(rt);         /* after the rules, whose `media` attribute holds one */
     css_style_sheet_free(rt);
     cssom_free(rt);

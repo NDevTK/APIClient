@@ -24970,6 +24970,15 @@ JSValue JS_GetAsyncIteratorPrototype(JSContext *ctx)
     return js_dup(ctx->async_iterator_proto);
 }
 
+/* %MapIteratorPrototype% — see quickjs-step.h. It is `class_proto[JS_CLASS_MAP_ITERATOR]`, the object this
+   engine's own `Map.prototype.entries` hands its result, and the intrinsic Web IDL §3.7.11.2 names for a
+   `maplike<>` interface's iterator. Returned dup'd: the caller installs it as some object's [[Prototype]] and
+   owns that reference. */
+JSValue JS_GetMapIteratorPrototype(JSContext *ctx)
+{
+    return js_dup(ctx->class_proto[JS_CLASS_MAP_ITERATOR]);
+}
+
 /* 27.1.5.1 CreateAsyncFromSyncIterator ( syncIteratorRecord ), for a HOST performing GetIterator(obj, ASYNC).
  *
  * A host can do every OTHER step of that abstract operation with what quickjs-step.h already exports — the

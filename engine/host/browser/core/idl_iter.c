@@ -607,6 +607,11 @@ int idl_pair_iter_declare(JSContext *ctx, const char *component, const IdlPairIt
     DCHECK(g_pair_n < IDL_PAIR_ITER_MAX,
            "more iterable<> interfaces were declared than this table holds — grow it, the count is fixed "
            "because the platform's is");
+    DCHECK(!(ops->setlike && ops->maplike),
+           "an interface was declared BOTH `setlike<V>` and `maplike<K, V>`. Web IDL §2.5.11 \"Maplike "
+           "declarations\" and §2.5.12 \"Setlike declarations\" are two declarations an interface has at most "
+           "one of, and the two flags decide different observables — which intrinsic the iterator inherits and "
+           "which member @@iterator IS — so a declaration carrying both has no answer for either");
     f = &g_pair[handle];
     f->ops = ops;
     f->component = component;
@@ -710,7 +715,29 @@ void idl_pair_iter_release(int handle)
         g_pair_n = g_pair_released = 0;
 }
 
-/* §3.7.9.2's ITERATOR PROTOTYPE OBJECTS, FOR ONE REALM — one per declared iterable<>. */
+/* §3.7.9.2's ITERATOR PROTOTYPE OBJECTS, FOR ONE REALM — one per declared iterable<>, and §3.7.11.2's for a
+ * declared maplike<>.
+ *
+ * THE TWO SECTIONS NAME DIFFERENT INTRINSICS AND DIFFERENT TAGS, which is the whole of what `ops->maplike`
+ * decides and is not a detail: §3.7.9.2 "Iterator prototype object" says "The [[Prototype]] internal slot of an
+ * iterator prototype object must be %Iterator.prototype%" and gives the object a @@toStringTag of the interface
+ * name plus " Iterator", while §3.7.11.2 "%Symbol.iterator%" builds the iterator with
+ * `CreateIteratorFromClosure(closure, "%MapIteratorPrototype%", %MapIteratorPrototype%)` — so a maplike's
+ * iterator is a MAP ITERATOR, tagged `Map Iterator` by that intrinsic itself, and nothing here re-declares it.
+ *
+ * A MAPLIKE'S `next` IS STILL THIS FILE'S, and that is a fact about the ENGINE rather than about the spec.
+ * ECMAScript states %MapIteratorPrototype%.next over a generator brand; this engine implements a map iterator
+ * natively (JS_CLASS_MAP_ITERATOR, `u.map_iterator_data`), so the inherited `next` refuses an object that is not
+ * one of its own. The per-interface prototype below therefore chains TO the intrinsic and defines a `next` that
+ * resumes this file's cursor — which is what makes the object a Map Iterator to every observation a page can
+ * make of it while keeping the resumption the interface's.
+ * THE RESIDUAL THAT LEAVES: `Object.getPrototypeOf(m.entries())` is this per-interface object and not
+ * %MapIteratorPrototype% itself, where §3.7.11.2's CreateIteratorFromClosure names the intrinsic directly. The
+ * next diff closes it by giving quickjs a map-iterator whose resumption a host can supply, so the shim is not
+ * needed at all; its absence shows as a page comparing that prototype against
+ * `Object.getPrototypeOf(new Map().entries())` and getting false where a browser answers true, and as
+ * `Object.getOwnPropertyNames` of it holding `next`. What is NOT affected is the tag or the helper surface,
+ * both of which are inherited. */
 void idl_pair_iter_install_protos(JSContext *ctx)
 {
     int i;
@@ -719,8 +746,9 @@ void idl_pair_iter_install_protos(JSContext *ctx)
         IdlPairIface *f = &g_pair[i];
         /* §3.7.9.2: the ITERATOR PROTOTYPE OBJECT inherits from %IteratorPrototype%. That is where `@@iterator`
            returning `this` comes from (so `for (const e of h.entries())` works) and where the ES2025 iterator
-           helpers come from, so none of that is re-declared here. */
-        JSValue intrinsic = JS_GetIteratorPrototype(ctx);
+           helpers come from, so none of that is re-declared here. A maplike takes §3.7.11.2's intrinsic
+           instead, which inherits %IteratorPrototype% in turn and so carries the same surface. */
+        JSValue intrinsic = f->ops->maplike ? JS_GetMapIteratorPrototype(ctx) : JS_GetIteratorPrototype(ctx);
         JSValue proto = JS_NewObjectProto(ctx, intrinsic);
         char name[64];
 
@@ -731,8 +759,12 @@ void idl_pair_iter_install_protos(JSContext *ctx)
         JS_DefinePropertyValueStr(ctx, proto, "next",
                                   JS_NewCFunction(ctx, js_idl_pair_next, "next", 0),
                                   JS_PROP_WRITABLE | JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE);
-        JS_DefinePropertyValue(ctx, proto, JS_DupAtom(ctx, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG)),
-                               JS_NewString(ctx, name), JS_PROP_CONFIGURABLE);
+        /* §3.7.11.2 DECLARES NO TAG OF ITS OWN, because %MapIteratorPrototype% already carries `Map Iterator`
+           and the iterator INHERITS it. Defining the interface's name here would shadow the intrinsic's and
+           make `String(m.entries())` read a string no browser produces. */
+        if (!f->ops->maplike)
+            JS_DefinePropertyValue(ctx, proto, JS_DupAtom(ctx, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG)),
+                                   JS_NewString(ctx, name), JS_PROP_CONFIGURABLE);
         JS_SetClassProto(ctx, f->class_id, proto);
     }
 }

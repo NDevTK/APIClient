@@ -712,3 +712,72 @@ char *css_font_family_descriptor_value(const char *value)
            "declaration — which CSSOM reads back as UNDECLARED and which the round-trip cannot re-parse");
     return out.s;
 }
+
+/* See css_font_family.h: css-fonts-4 §6.9.1's `<font-family-name>#` — the DESCRIPTOR entry above with the `#`
+ * put back, and therefore the property entry's `#` walk with the generic arm and the CSS-wide keyword arm both
+ * suppressed. It is written out rather than expressed as a flag on either neighbour because the two flags it
+ * would need (`generic_arm` and `keyword_arm`) are not independent of what the entry MEANS: a NULL from this
+ * one is a whole rule dropped, and a caller reading a shared entry's NULL cannot tell which of the three
+ * questions it answered. */
+char *css_font_family_name_list_value(const char *value)
+{
+    FfList list = { 0 };
+    FfBuf out = { 0 };
+    const char *p, *end;
+    char *text;
+    size_t i;
+
+    if (!value) return NULL;
+    /* CSS Syntax §4.3.1 "Consume a token"'s first step, owed here for the reason ff_strip_comments gives and
+       owed to the WHOLE value for the same reason the other two entries owe it to theirs: the walk below reads
+       code points and a comment is not whitespace to it. */
+    text = ff_strip_comments(value);
+    p = text;
+    end = text + strlen(text);
+    /* §6.9.1's prelude is "a comma-delimited list of font family names", so this is §2.1's own `#` walk — the
+       SAME loop, with `generic_arm` false, which is what makes `@font-feature-values serif { }` a syntax error
+       where `font-family: serif` is a generic. An EMPTY prelude reaches ff_parse_item with nothing to consume
+       and is refused there, which is `#`'s "one or more". */
+    for (;;) {
+        uint32_t cp;
+
+        if (!ff_parse_item(&p, end, &list, false)) { ff_list_free(&list); free(text); return NULL; }
+        ff_skip_ws(&p, end);
+        cp = css_cp_at(p, end, NULL);
+        if (cp == CSS_CP_EOF) break;
+        if (cp != ',') { ff_list_free(&list); free(text); return NULL; }
+        p++;                 /* U+002C COMMA is one byte, and css_cp_at answered it as one code point */
+    }
+    DCHECK(list.n > 0,
+           "css-fonts-4 §6.9.1's `#` produced an EMPTY list from a prelude every item parse accepted. `#` is "
+           "\"one or more\", so an empty list is not a `<font-family-name>#` at all, and a caller would build a "
+           "`@font-feature-values` rule whose `fontFamily` serializes to nothing where the rule itself is "
+           "invalid and must be ignored");
+    /* THE COMMA ARM IS A REFUSAL AND NOT A DCHECK, unlike §2.1's walk one entry up, and the difference is
+       whose bytes decide it. There the item parse runs with `generic_arm` TRUE and accepts every shape the
+       property admits, so a stop at neither EOF nor a comma really would be the two walks disagreeing; here
+       the item parse is the descriptor's and a value like `a b, c` can stop the walk at a code point that is
+       part of the page's own prelude. A page's bytes may not abort the engine (see CLAUDE.md's rule on whose
+       bytes state a value), so the answer is the rule being invalid. */
+
+    /* CSSOM §2.1 "Common Serializing Idioms"' SERIALIZE A COMMA-SEPARATED LIST, the same join §2.1's property
+       serialization uses — which is what makes `rule.fontFamily` read back in the canonical form the setter
+       re-parses. */
+    for (i = 0; i < list.n; i++) {
+        if (i) ff_buf_add(&out, ", ", 2);
+        DCHECK(list.v[i].generic == NULL,
+               "css-fonts-4 §6.9.1's prelude parse produced a `<generic-font-family>` item. §6.9.1 says in as "
+               "many words that \"rules that include generic or system fonts in the list of font families are "
+               "syntax errors\", so the generic arm is suppressed at the item parse — an item answering one "
+               "means the suppression did not reach it, and `@font-feature-values serif { }` would build a "
+               "rule a browser drops");
+        ff_serialize_item(&out, &list.v[i]);
+    }
+    ff_list_free(&list);
+    free(text);
+    DCHECK(out.s != NULL,
+           "css-fonts-4 §6.9.1's serializer produced NO TEXT from a non-empty list. Every arm of "
+           "ff_serialize_item appends at least one code point, so an empty answer would be stored as a "
+           "`fontFamily` CSSOM reads back as the empty string");
+    return out.s;
+}

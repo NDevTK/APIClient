@@ -109,4 +109,28 @@ char *css_font_family_value(const char *value);
  * instead of writing a second one beside it. */
 char *css_font_family_descriptor_value(const char *value);
 
+/* css-fonts-4 §6.9.1 "Basic syntax" — the `@font-feature-values` PRELUDE, whose fetched production line is
+ * `@font-feature-values = @font-feature-values <font-family-name># { <declaration-rule-list> }`. NULL for a
+ * value outside it; otherwise the CSSOM serialization of the whole list, OWNED.
+ *
+ * IT IS THE `#` OF THE FIRST ENTRY OVER THE GRAMMAR OF THE SECOND, WHICH IS WHY NEITHER OF THEM FITS. The
+ * property of §2.1 is `[ <font-family-name> | <generic-font-family> ]#` — a list, WITH the generic
+ * alternative and with CSS Cascade 5 §7.3 "Explicit Defaulting"'s keywords ahead of it; the descriptor of §4.2
+ * is `<font-family-name>` — the right grammar, with no `#`. §6.9.1 is the third combination, and it is the
+ * SPEC'S OWN SENTENCE rather than an inference from the production: "This means that only named font families
+ * are allowed; rules that include generic or system fonts in the list of font families are syntax errors."
+ *
+ * A SYNTAX ERROR HERE INVALIDATES THE WHOLE RULE AND NOT THE ITEM, which is the one thing this entry's NULL
+ * means that the other two do not. §6.9.1: "If syntax errors occur within the <font-family-name> list, the
+ * entire rule @font-feature-values rule is invalid and must be ignored." So a caller answers a DROPPED RULE
+ * for a NULL rather than a rule with a shorter list — the two are different objects in `cssRules` and a page
+ * counts them.
+ *
+ * NO CSS-WIDE KEYWORD ARM, for the reason css_font_family_descriptor_value gives at length: §7.3's keywords are
+ * a value for every PROPERTY and a prelude is not one, so an unquoted `inherit` falls into §2.1.1 "Syntax of
+ * <font-family-name>"'s own exclusion and is refused there. `@font-feature-values inherit { }` is therefore an
+ * invalid rule and `@font-feature-values "inherit" { }` names the family spelled `inherit`, which is the
+ * `<string>` arm that section's closing paragraph tells authors to reach for. */
+char *css_font_family_name_list_value(const char *value);
+
 #endif

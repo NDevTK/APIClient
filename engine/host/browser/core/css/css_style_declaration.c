@@ -103,6 +103,7 @@
 #include "core/css/css_computed_value.h"
 #include "core/css/css_defaulting.h"
 #include "core/css/css_font_family.h"
+#include "core/css/css_font_feature_values.h"   /* css-fonts-4 §6.9.1's seven feature value blocks, which are not property bodies */
 #include "core/css/css_font_src.h"
 #include "core/css/css_keyframes.h"
 #include "core/css/css_logical.h"
@@ -375,6 +376,36 @@ static char *cssd_decl_source_value(const lxb_css_rule_declaration_t *d, const c
     if (begin > end || end > len) return NULL;
     out = malloc(end - begin + 1);
     CHECK(out != NULL, "cssom: OOM copying a declaration's source value");
+    memcpy(out, text + begin, end - begin);
+    out[end - begin] = '\0';
+    return out;
+}
+
+/* A declaration's NAME AS THE PAGE SPELLED IT — the slice between the offsets lexbor recorded for it, rather
+   than the name its registry canonicalised. `cssd_decl_name` above answers the REGISTRY's spelling, which for
+   every name the registry holds has been ASCII-lowercased by a case-insensitive lookup; that is right for a
+   property (CSS Syntax makes a property name case-insensitive) and wrong for the one declaration kind whose
+   name is not a property: css-fonts-4 §6.9.1 "Basic syntax" says a feature value name is "case-sensitive (so
+   foo: 1; and FOO: 2 define two different features)", so `@styleset { COLOR: 1 }` must declare `COLOR` and the
+   registry would answer `color`.
+   THE OFFSETS INDEX THE TOKENIZER'S INPUT BUFFER, exactly as cssd_decl_source_value's do and asserted for the
+   same reason: a caller reading a rule against a DIFFERENT buffer is the only way the bound can be false, which
+   is this file's own plumbing and not the page's bytes. OWNED, NULL for a span the offsets do not describe. */
+static char *cssd_decl_source_name(const lxb_css_rule_declaration_t *d, const char *text, size_t len)
+{
+    size_t begin, end;
+    char *out;
+
+    DCHECK(d != NULL && text != NULL, "a declaration's source name was asked for with no declaration or no "
+                                      "text — the text IS where the offsets point");
+    begin = d->offset.name_begin;
+    end = d->offset.name_end;
+    DCHECK(begin <= end && end <= len,
+           "a declaration's name offsets fall outside the text that was parsed — they index the tokenizer's "
+           "input buffer, which is the very string handed to the parse that produced this rule");
+    if (begin > end || end > len) return NULL;
+    out = malloc(end - begin + 1);
+    CHECK(out != NULL, "cssom: OOM copying a declaration's source name");
     memcpy(out, text + begin, end - begin);
     out[end - begin] = '\0';
     return out;
@@ -737,6 +768,14 @@ static bool cssd_block_admits(CssomBlockContext context, const char *name, bool 
         return custom || css_page_property_applies(CSS_PAGE_CONTEXT_MARGIN, name);
     case CSSOM_BLOCK_KEYFRAME:
         return css_keyframes_declaration_applies(name, important);
+    case CSSOM_BLOCK_FEATURE_VALUES:
+        /* css-fonts-4 §6.9.1: "The feature value blocks accept ANY declaration name". So there is no
+           membership question here at all — every CSS identifier is a `<font-feature-value-name>` — and this
+           arm is a real closed answer rather than the unbuilt one below it. `important` is not consulted
+           because §6.9.1's declaration grammar carries no `!important`: a declaration written with one is a
+           value outside `<font-feature-index>+` and is refused where that grammar is read, which is the
+           component that owns the rule and not this predicate. */
+        return true;
     case CSSOM_BLOCK_FONT_FACE:
         /* NAMED RESIDUAL — THE MEMBERSHIP HALF OF `@font-face` IS NOT BUILT AND THIS ARM ADMITS WHAT
            UNRESTRICTED ADMITS.
@@ -789,6 +828,15 @@ static void cssd_decls_collect_declaration(CssDecls *d, const char *name, const 
        reached — including the one `animation-timing-function` that css-animations-1 §3 "Declaring Keyframes"
        admits as a declaration of its own. */
     if (!cssd_block_admits(d->context, name, important)) return;
+    /* css-fonts-4 §6.9.1's FEATURE VALUE BLOCK holds no properties, so the SHORTHAND EXPANSION below must not
+       run over it: a feature named `margin` would be replaced by four declarations named after longhands and
+       the value the page wrote would be gone, and `all: 1` would expand over every property in the registry.
+       The name and the value arrive as the page's own spellings (see cssd_decl_take's first arm) and are
+       collected verbatim, which is the whole of what this context means. */
+    if (d->context == CSSOM_BLOCK_FEATURE_VALUES) {
+        cssd_decls_collect(d, name, value ? cssd_strdup(value) : NULL, important);
+        return;
+    }
     lh = css_shorthand_longhands(name, &n);
     if (!lh) {
         /* THE DECLARATION IS THE LONGHAND, and its value has been through a grammar only if lexbor's registry
@@ -899,6 +947,23 @@ static bool cssd_decl_take(const lxb_css_rule_declaration_t *d, const char *text
            "CSSOM §6.7.1's parse a CSS value was asked about no declaration, or with nowhere to report the "
            "name and value it produces — this entry answers a rule lexbor already parsed, so an absent one is "
            "a caller that lost it rather than a declaration that never had it");
+    /* css-fonts-4 §6.9.1 "Basic syntax"'s FEATURE VALUE BLOCK, AHEAD OF EVERY OTHER ARM AND AHEAD OF THE
+       REGISTRY — see CSSOM_BLOCK_FEATURE_VALUES in css_style_declaration.h for the three mechanisms this
+       suppresses and why each of them would corrupt the block. Both halves are the PAGE'S OWN SPELLINGS: the
+       name because §6.9.1 makes a feature value name case-sensitive, and the value because §6.9.1's value is
+       `<font-feature-index>+` and lexbor would re-spell one it has a property id for under that property's
+       value definition. Nothing here judges either — §6.9.1's own grammar over the values belongs to the
+       component that owns the rule, and an invalid one is that section's "the declaration is invalid and must
+       be ignored" decided there. */
+    if (context == CSSOM_BLOCK_FEATURE_VALUES) {
+        name = cssd_decl_source_name(d, text, len);
+        if (!name) return false;
+        value = cssd_decl_source_value(d, text, len);
+        if (!value) { free(name); return false; }
+        *pname = name;
+        *pvalue = value;
+        return true;
+    }
     name = cssd_decl_name(d);
     if (!name) return false;                       /* lexbor has no id for the property either */
     /* css-fonts-4 §2.1 "Font family: the font-family property", AHEAD OF LEXBOR ON THE READ PATH TOO.
@@ -1782,12 +1847,14 @@ static char *cssd_serialize_block(const lxb_css_rule_declaration_list_t *list, c
    §6.6 says a declaration block holds one declaration per property, whichever run declared it — so all of them
    are collected before the collapse runs, rather than serialized separately and concatenated. OWNED, NULL for
    a body that declares nothing. */
-static char *cssd_serialize_at_block(const lxb_css_rule_list_t *block, const char *text, size_t len)
+static char *cssd_serialize_at_block(const lxb_css_rule_list_t *block, const char *text, size_t len,
+                                     CssomBlockContext context)
 {
     CssDecls d = { 0 };
     const lxb_css_rule_t *r;
     char *out;
 
+    d.context = context;
     for (r = block ? block->first : NULL; r; r = r->next)
         if (r->type == LXB_CSS_RULE_DECLARATION_LIST)
             cssd_decls_from_list(lxb_css_rule_declaration_list(r), text, len, &d);
@@ -1946,7 +2013,20 @@ static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_lis
                the body's own rather than a table of at-rule names kept in the parser layer. The BUILDER
                decides which of the two a given at-rule is allowed to have; CSS Syntax drops the other. */
             if (kids) {
-                block = cssd_serialize_at_block(kids, text, len);
+                /* WHICH BODY THIS IS, asked of the at-rule's own NAME — the one thing the token stream can
+                   say. css-fonts-4 §6.9.1 "Basic syntax"'s seven `<font-feature-value-type>` at-rules hold
+                   FEATURE VALUE DECLARATIONS and not properties, and the three property mechanisms that would
+                   otherwise run over them each corrupt the block (see CSSOM_BLOCK_FEATURE_VALUES).
+                   IT IS ASKED WITHOUT REGARD TO THE ENCLOSING RULE, and that is sound rather than a shortcut:
+                   the seven are subsidiary at-rules of `@font-feature-values` in §6.9.1's own words, so
+                   outside one they are invalid IN CONTEXT and the rule builder DROPS them whole — so a body
+                   serialized this way anywhere else is a body nothing ever reads. Asking the enclosing rule
+                   here is not possible in any case; this walk reports a rule before its children and holds no
+                   rule objects. */
+                block = cssd_serialize_at_block(kids, text, len,
+                                                css_font_feature_value_at_rule(out.at_name)
+                                                    ? CSSOM_BLOCK_FEATURE_VALUES
+                                                    : CSSOM_BLOCK_UNRESTRICTED);
                 out.block = block ? block : "";
             }
             break;

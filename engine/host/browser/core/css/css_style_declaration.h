@@ -112,6 +112,28 @@ typedef enum {
     CSSOM_BLOCK_MARGIN,      /* one of §5's margin at-rules */
     CSSOM_BLOCK_KEYFRAME,    /* CSS Animations §3's `<keyframe-block>` */
     CSSOM_BLOCK_FONT_FACE,   /* css-fonts-4 §4.1's `@font-face` body — a DESCRIPTOR list */
+    /* css-fonts-4 §6.9.1 "Basic syntax"'s FEATURE VALUE BLOCK — the body of one of that section's seven
+       `<font-feature-value-type>` at-rules, and the ONE context here whose declarations are neither properties
+       nor descriptors. §6.9.1: "Each feature value block accepts a list of declarations, the font feature value
+       declarations, where the declaration's name can be any css identifier, and the value must be a list of one
+       or more non-negative <integer>s", and "The feature value blocks accept any declaration name; these names
+       must be <font-feature-value-name>, per standard CSS syntax rules, and are case-sensitive (so foo: 1; and
+       FOO: 2 define two different features)."
+       SO IT SUPPRESSES EVERY PROPERTY MECHANISM AND NOT MERELY A GRAMMAR, which is what makes it a fourth kind
+       of answer rather than a fifth row of the two questions above. Three of them would each corrupt a feature
+       value block outright: the SHORTHAND EXPANSION would replace a feature named `margin` with four longhands
+       named after properties and lose the value the page wrote (and `all: 1` would expand over every property
+       in the registry); the registry's CASE-INSENSITIVE NAME LOOKUP would answer `COLOR: 1` as the name `color`,
+       which §6.9.1's own sentence above forbids; and a name the registry TYPES would have its value re-spelled
+       under that property's value definition, so `order: 3` is a `<font-feature-index>` list and not an
+       `order`. What this context therefore says is that the name and the value are the PAGE'S OWN SPELLINGS —
+       the source spans — and that nothing between the tokenizer and the block judges either.
+       NOTHING ELSE IN THIS FILE READS THE VALUES. §6.9.1's own grammar over them (the count limits, and
+       css-fonts-4 §6.9.2 "Multi-valued feature value definitions"' two-value maximum for
+       `@character-variant`) belongs to the component that OWNS the rule — see
+       core/css/css_font_feature_values.h — because the answer is a `CSSFontFeatureValuesMap` and not a
+       declaration block. */
+    CSSOM_BLOCK_FEATURE_VALUES,
 } CssomBlockContext;
 
 /* CSSOM §6.6's SERIALIZE A CSS DECLARATION BLOCK over the text a backing keeps — the declarations that parsing

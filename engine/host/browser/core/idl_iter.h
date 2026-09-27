@@ -158,6 +158,24 @@ typedef struct {
        DECLARATION — a caller passing a flag to the install would be the same fact asked at the wrong place,
        and the interface that forgot to pass it would silently iterate pairs. */
     bool setlike;
+    /* IS THIS A `maplike<K, V>` RATHER THAN AN `iterable<K, V>`? Web IDL §3.7.11 "Maplike declarations" and
+       §3.7.9 "Iterable declarations" put the SAME FIVE members on a prototype and disagree about the ITERATOR
+       OBJECT: §3.7.9.2 "Iterator prototype object" makes its [[Prototype]] %IteratorPrototype% and tags it
+       `<Interface> Iterator`, while §3.7.11.2 "%Symbol.iterator%" builds it with
+       `CreateIteratorFromClosure(closure, "%MapIteratorPrototype%", %MapIteratorPrototype%)` — a DIFFERENT
+       intrinsic, whose own @@toStringTag is `Map Iterator`. So `String(m.entries())` is an observable this flag
+       decides, and reaching for the §3.7.9 install because the five member names match would have got it wrong
+       for every one of them.
+       IT IS DECLARED HERE, BESIDE `setlike`, BECAUSE IT IS A FACT ABOUT THE DECLARATION — which section governs
+       this interface — and for the reason that member's own paragraph gives: a caller passing a flag to the
+       install would be the same fact asked at the wrong place, and the interface that forgot to pass it would
+       silently hand out an iterator of the other kind.
+       WHAT IT DOES NOT SAY is which of §3.7.11's ELEVEN members exist. This file installs the five that are
+       common to both sections; `size`, `get`, `has`, `set`, `delete` and `clear` are stated over the maplike's
+       `map entries` and are the declaring component's, because their answers are the map's own contents rather
+       than a walk over an index. A `maplike<>` interface therefore calls idl_pair_iter_install AND installs
+       those six itself. */
+    bool maplike;
 } IdlPairIterOps;
 
 /* DECLARE the iterator class, its prototype and the forEach machine for one interface. Returns a handle.

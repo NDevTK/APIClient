@@ -283,6 +283,46 @@ typedef enum {
        union algorithm's and not the arm list's — a second copy is the second answer that reads @@iterator with
        a different notion of GetMethod. What each union states is only WHICH TWO TYPES its two outcomes are. */
     IDL_DOUBLE_OR_SEQUENCE,
+    /* `sequence<unsigned long>` — §3.2.21's iterator-protocol conversion with §3.2.6 "unsigned long"'s
+       conversion as the element conversion. That is ToNumber (the page's `valueOf`, so each element is a
+       request and its own rest point, exactly as `sequence<double>`'s is) followed by §3.2.6's MODULO: "Set x
+       to ToNumber(V) … If x is NaN, +0, −0, +∞, or −∞, return +0 … Set x to x modulo 2^32". So the type
+       REFUSES NOTHING — `[Infinity]` is 0 and `[-1]` is 4294967295 — which is the whole difference from
+       IDL_SEQUENCE_DOUBLE beside it, whose RESTRICTED `double` makes a non-finite element a TypeError. Getting
+       the two the wrong way round is not a rounding difference: it is a throw where the standard has a value.
+       CSS Fonts 4 §12.2 "The CSSFontFeatureValuesRule interface"'s `CSSFontFeatureValuesMap.set` declares it
+       inside the union below, which is the only way it is reached today; it is a row of its own rather than a
+       clause of that union's because the union's ARM and the element's TYPE are two facts and
+       idl_union_seq_arm takes the sequence type by name. */
+    IDL_SEQUENCE_UNSIGNED_LONG,
+    /* `(unsigned long or sequence<unsigned long>)` — §3.2.25 Union types over the union CSS Fonts 4 §12.2
+       declares for `CSSFontFeatureValuesMap.set`'s `values` argument, and its arm is chosen by exactly the read
+       IDL_DOUBLE_OR_SEQUENCE's and IDL_DOMSTRING_OR_SEQUENCE's are: step 11.2's
+       `? GetMethod(V, %Symbol.iterator%)`. Nothing in this union names a dictionary, an interface, an `object`,
+       a buffer source or a callback, so steps 4 through 10 pass the value straight to step 11.2 against the
+       numeric clause — an Object with a CALLABLE @@iterator takes the sequence, and EVERYTHING else takes the
+       `unsigned long` arm, an Object with no @@iterator included, and null, and a string. `map.set("k", null)`
+       is therefore 0 (ToNumber(null), then §3.2.6's +0 arm) and `map.set("k", "x")` is 0 as well (NaN, then the
+       same arm) — neither throws, which is what a browser answers and which is why the arm may not be spelled
+       over `double`.
+       DECLARING THIS POSITION AS IDL_DOUBLE_OR_SEQUENCE IS SPEC-WRONG AND NO AUDIT WOULD SEE IT. The two
+       differ only in the numeric type, engine/idl_typename.mjs answers `null` for a union so the
+       argument-type audit is blind to the position either way, and the divergence is visible only at a value
+       the restricted `double` refuses: `set("di", Infinity)` must store 0 and a `double` arm throws a
+       TypeError. So the row exists to make the numeric half of the union statable, and the sequence half above
+       exists for the same sentence one level down.
+       IT SHARES THE ARM RESOLVER WITH THE TWO UNIONS ABOVE rather than restating step 11.2, because the step is
+       the union algorithm's and not the arm list's — a second copy is the second answer that reads @@iterator
+       with a different notion of GetMethod. What this row states is only WHICH TWO TYPES its two outcomes are.
+       ITS CONCOLIC RULE IS THE SIBLING'S, WHICH IS A DECISION AND NOT AN OMISSION — see idl_concolic_rule,
+       where IDL_DOUBLE_OR_SEQUENCE falls under `default:` at IDL_CONCOLIC_CROSSES. A type is only ever
+       IDL_CONCOLIC_FORKS when the SITE that resolves it asks that fork, and this row's resolution site asks
+       none; declaring FORKS here would be one union of this shape answering differently from the union it is
+       a copy of, at a site with no second question. What a crossed unknown then reaches is the member's own
+       body, which for this one is a store of the value into the map — a list of one unknown feature index,
+       which is exactly what §12.2's own "a single unsigned long value is treated as a sequence of a single
+       value" says of a known one, so the opacity survives the boundary and nothing about it is decided here. */
+    IDL_UNSIGNED_LONG_OR_SEQUENCE,
     /* `sequence<T>` where T is an INTERFACE type — §3.2.21's iterator-protocol conversion with §3.2.15's brand
        test as the element conversion. HTML §8.5's `GetHTMLOptions.shadowRoots` is `sequence<ShadowRoot>` and is
        the first, and it is the same reason IDL_SEQUENCE_DOMSTRING is a declared type rather than a body's walk:

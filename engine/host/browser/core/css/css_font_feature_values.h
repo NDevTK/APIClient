@@ -36,16 +36,20 @@
  * the enclosing rule rather than a child rule of it — so the enclosing rule's builder consumes them, and this
  * predicate is what stops them being read as rules anywhere else.
  *
- * WHAT IS DELIBERATELY NOT HERE YET. CSS Fonts 4 §6.9.1's per-block VALUE GRAMMAR (`<font-feature-index>` for
- * `@annotation`, `@ornaments`, `@stylistic` and `@swash`; `@character-variant`'s pair; `@styleset`'s
- * repetition) and CSS Fonts 4 §6.9.2 "Multi-valued feature value definitions"' limits are the material
- * CSS Fonts 4 §12.2's maps are filled from, and nothing reads them until that interface exists — a table with
- * no consumer is the producer-with-no-reader shape CLAUDE.md names, where the unread half is free to be wrong
- * for as long as nobody misses it. They arrive with their first consumer. */
+ * WHAT ARRIVED WITH ITS FIRST CONSUMER. This entry's own banner used to end by saying that CSS Fonts 4 §6.9.1's
+ * per-block VALUE GRAMMAR and CSS Fonts 4 §6.9.2 "Multi-valued feature value definitions"' limits were
+ * deliberately absent because nothing read them — a table with no consumer being the producer-with-no-reader
+ * shape CLAUDE.md names. CSS Fonts 4 §12.2's interface below IS that consumer, so the grammar, the limits and
+ * the block parse are here: `css_font_feature_values_max_values` is the count half and
+ * `css_font_feature_values_map_fill` is the walk. It is recorded rather than deleted because the REASON is the
+ * durable half — a member added here with no reader would be free to be wrong for as long as nobody missed it,
+ * which is exactly the state the two of them were kept out of. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_FONT_FEATURE_VALUES_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_FONT_FEATURE_VALUES_H
 
 #include <stdbool.h>
+
+#include "quickjs.h"
 
 /* CSS Fonts 4 §6.9.1 "Basic syntax"'s seven `<font-feature-value-type>` at-rules (`@stylistic`,
    `@historical-forms`, `@styleset`, `@character-variant`, `@swash`, `@ornaments`, `@annotation`), by the name
@@ -57,5 +61,67 @@
    discards it. A false answer says only that this at-keyword is not one of the seven — whether it is a rule at
    all is the recognized-at-rule registry's question and not this one's. */
 bool css_font_feature_value_at_rule(const char *name);
+
+/* HOW MANY VALUES ONE OF THE SEVEN ADMITS PER DECLARATION — css-fonts-4 §6.9.1 "Basic syntax"'s per-block value
+   grammar, as the ONE number css-fonts-4 §12.2 "The CSSFontFeatureValuesRule interface"'s `set` and this
+   component's block parse both read. 0 means UNBOUNDED and is a real answer rather than "unknown": §6.9.1
+   states a grammar for five of the seven and states none for `@historical-forms`, and `@styleset`'s carries a
+   `+`.
+   §12.2'S `InvalidAccessError` IS ABOUT THIS COUNT AND NOTHING ELSE — "the set() method throws an
+   InvalidAccessError exception when the input sequence to set() contains more than the limited number of
+   values" — so the RANGE halves of §6.9.1's productions are not asked of a `set` at all, and must not be:
+   css-fonts-4 §6.9.2 "Multi-valued feature value definitions" says in as many words that "values greater than
+   99 or equal to 0 do not generate a syntax error when parsed but enable no OpenType features", which
+   contradicts §6.9.1's own `[0,20]` on `@styleset` inside one document. §6.9.2 is the section that states what
+   the numbers MEAN, and `css/cssom/CSSFontFeatureValuesRule.html` pins it: `di: 10 9 4 5` parses and
+   `set("di", 43)` stores 43.
+   `name` is the at-rule's identifier with NO `@`, ASCII-lowercased — the same spelling the predicate above
+   takes. Asking it about a name that is not one of the seven is a caller error and aborts. */
+unsigned css_font_feature_values_max_values(const char *name);
+
+/* css-fonts-4 §12.2's `CSSFontFeatureValuesMap` for ONE of the seven feature value blocks — `kind` being that
+ * block's at-keyword without the `@`, which is what decides the count limit above. OWNED: the caller frees.
+ *
+ * THE MAP ENTRIES ARE A JS ARRAY OF `[name, valuesArray]` PAIRS IN AN OWN PRIVATE-SYMBOL SLOT, which is
+ * core/css/media_list.c's arrangement and is chosen for its two reasons. (1) Every member §12.2 declares
+ * MUTATES — `set`, `delete` and `clear` are exactly the writes two flows must be able to disagree about — and
+ * an Array's mutations are property writes the per-flow COW delta already captures, where a malloc'd list would
+ * be captured as a POINTER and leave the nodes reachable from nothing on a context switch. (2) The store must
+ * PARK to the IDB cold tier and resume, which a JS value does for free. So there is no class record, no COW
+ * layout, no finalizer and no gc_mark here, and therefore no write site left to miss.
+ * INSERTION ORDER IS THE MAP'S ORDER AND THAT IS THE TYPE'S OWN WORD. Web IDL §2.5.11 "Maplike declarations":
+ * "objects implementing an interface that is declared to be maplike represent an ordered map of key-value
+ * pairs, initially empty, known as that object's map entries". An ORDERED map is what §3.7.11.2's iterator and
+ * §3.7.11.6's `forEach` both walk, so an Array is the shape rather than an approximation of one. */
+JSValue css_font_feature_values_map_new(JSContext *ctx, const char *kind);
+
+/* Is `v` a `CSSFontFeatureValuesMap`? The brand — an own-slot read, for a caller holding something it took off
+   an attribute. */
+bool css_font_feature_values_map_is(JSContext *ctx, JSValueConst v);
+
+/* css-fonts-4 §6.9.1's FEATURE VALUE DECLARATIONS of ONE block, merged into `map`. `block` is that block's
+   serialized declaration list — the text core/css/css_style_declaration.h's CSSOM_BLOCK_FEATURE_VALUES
+   context produces, which is the page's own name and value spellings and nothing judged — and may be NULL or
+   empty for a block that declares nothing.
+   IT MERGES RATHER THAN REPLACES, because §6.9.1 says the same block type may appear more than once:
+   "Specifying the same <font-feature-value-type> more than once is valid; their contents are cascaded
+   together", and "If the same tuple appears more than once in a document … the last-defined one is used". So a
+   second `@swash` adds to the first and a repeated name overwrites.
+   A DECLARATION OUTSIDE §6.9.1's GRAMMAR IS DROPPED AND THE REST OF THE BLOCK SURVIVES, which is that section's
+   own sentence: "A syntax error within a font feature value declaration makes the declaration invalid and
+   ignored, but does not invalidate the font feature value block it occurs in." */
+void css_font_feature_values_map_fill(JSContext *ctx, JSValueConst map, const char *block);
+
+/* ONE feature value block's declarations, serialized back — `@<kind> { <name>: <v> <v>; … }`, or NULL for a map
+   that holds nothing. For css-fonts-4 §12.2's rule's own `cssText`, which is built out of the seven maps rather
+   than out of a stored block text precisely because the maps are MUTABLE: a `set` must show through. OWNED. */
+char *css_font_feature_values_map_serialize(JSContext *ctx, JSValueConst map);
+
+void css_font_feature_values_init(JSContext *ctx);
+/* §12.2's `CSSFontFeatureValuesMap.prototype` for ONE realm — declared into core/realm.h's list. */
+void css_font_feature_values_install_proto(JSContext *ctx);
+/* `CSSFontFeatureValuesMap` as a global. */
+void css_font_feature_values_install(JSContext *ctx, JSValueConst global);
+void css_font_feature_values_free(JSRuntime *rt);
 
 #endif

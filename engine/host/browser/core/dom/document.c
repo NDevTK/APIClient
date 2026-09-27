@@ -55,6 +55,7 @@
 #include "core/dom/selector_match.h"
 #include "core/css/css_style_declaration.h"
 #include "core/css/css_rule.h"
+#include "core/css/css_font_feature_values.h"
 #include "core/css/media_list.h"
 #include "core/css/css_rule_list.h"
 #include "core/css/css_style_sheet.h"
@@ -5131,6 +5132,10 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     css_style_sheet_install(ctx, global); /* CSSOM §6.1.1 StyleSheet and §6.1.2 CSSStyleSheet */
     style_sheet_list_install(ctx, global); /* CSSOM §6.2.2 StyleSheetList */
     media_list_install(ctx, global);     /* CSSOM §4.4 MediaList, which §7.3's `media` hands back */
+    /* CSS Fonts 4 §12.2's CSSFontFeatureValuesMap, whose seven attributes on a `@font-feature-values` rule hand
+       one back. It has no constructor, so the interface object is here only for the brand a page reads with
+       `instanceof`. */
+    css_font_feature_values_install(ctx, global);
     css_rule_install(ctx, global);       /* CSSOM §6.4's five rule interfaces, §7.2 and §7.3 included */
     css_rule_list_install(ctx, global);  /* CSSOM §6.4.1 CSSRuleList */
     custom_elements_install(ctx, global);   /* §4.13.4 window.customElements */

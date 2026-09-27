@@ -4756,6 +4756,19 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             if (r < 0) return JS_STEP_ABRUPT;
         }
 
+        /* §3.2.25 over `(unsigned long or sequence<unsigned long>)` — the same step 11.2 read as the two unions
+           above, two other arms. The numeric arm is §3.2.6 "unsigned long" and NOT §3.2.7 `double`, which is the
+           whole reason this row exists rather than being spelled as the one above: §3.2.6 has no refusal in it,
+           so `set("di", Infinity)` is 0 where a restricted `double` throws. Resolved AFTER the concolic
+           pass-through above for the reason every union here is: unknown external input IS an object, and
+           asking it for @@iterator would read a property off an attacker's value. */
+        if (t == IDL_UNSIGNED_LONG_OR_SEQUENCE) {
+            r = idl_union_seq_arm(ctx, &s->hdr, &s->dw.lvl, &s->dw.lvl.uni_phase, a, &cb_result, &t,
+                                  IDL_SEQUENCE_UNSIGNED_LONG, IDL_UNSIGNED_LONG, out_cb, out_argc);
+            if (r > 0) return r;
+            if (r < 0) return JS_STEP_ABRUPT;
+        }
+
         /* §3.6 STEP 12 OVER TWO ENTRIES STEP 4 REMOVED NEITHER OF — a `sequence<object>` against an
            `optional StructuredSerializeOptions options = {}` at the same index, which is what
            HTML §9.4.4 Message ports' `MessagePort.postMessage` declares. The row above can decide its split
@@ -5304,7 +5317,8 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            clause, whose step 14 says to create the sequence "from V and method" — the method that clause
            already obtained, never a second read. */
         if (t == IDL_SEQUENCE_BLOBPART || t == IDL_SEQUENCE_INTERFACE || t == IDL_SEQUENCE_OBJECT ||
-            t == IDL_SEQUENCE_DOMSTRING || t == IDL_SEQUENCE_DOUBLE || t == IDL_SEQUENCE_ENUM) {
+            t == IDL_SEQUENCE_DOMSTRING || t == IDL_SEQUENCE_DOUBLE || t == IDL_SEQUENCE_ENUM ||
+            t == IDL_SEQUENCE_UNSIGNED_LONG) {
             if (!JS_IsObject(a)) {
                 JS_FreeValue(ctx, cb_result);
                 JS_ThrowTypeError(ctx, "the sequence argument is not an object");
@@ -5394,6 +5408,25 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                         return JS_STEP_ABRUPT;
                     }
                     JS_SetPropertyUint32(ctx, s->dw.lvl.seq_list, s->dw.lvl.seq_n++, JS_NewFloat64(ctx, d));
+                    s->dw.lvl.seq_phase = 1;
+                    continue;
+                }
+                /* §3.2.6 `unsigned long` AS AN ELEMENT CONVERSION — the same ToNumber request the arm
+                   above makes, and then the OPPOSITE answer to a value outside the type: §3.2.6's steps are
+                   "If x is NaN, +0, −0, +∞, or −∞, then return +0" and "Set x to x modulo 2^32", so there is
+                   no refusal at all and `[Infinity, -1]` is « 0, 4294967295 ». Writing `isfinite` here — the
+                   line directly above, which is the natural thing to copy — would be a TypeError the standard
+                   does not have, on the one element shape a page is most likely to reach it with. */
+                if (t == IDL_SEQUENCE_UNSIGNED_LONG) {
+                    double d = 0.0;
+
+                    DCHECK(s->dw.lvl.seq_phase == 2, "the sequence conversion resumed at a phase it never parks in");
+                    r = step_todouble_run(ctx, &s->hdr, s->dw.lvl.seq.value, cb_result, &d, out_cb, out_argc);
+                    cb_result = JS_UNDEFINED;
+                    if (r > 0) return r;
+                    if (r < 0) return JS_STEP_ABRUPT;
+                    JS_SetPropertyUint32(ctx, s->dw.lvl.seq_list, s->dw.lvl.seq_n++,
+                                         JS_NewUint32(ctx, (uint32_t)idl_integer_of(IDL_UNSIGNED_LONG, d)));
                     s->dw.lvl.seq_phase = 1;
                     continue;
                 }

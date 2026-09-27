@@ -1164,6 +1164,24 @@ JS_EXTERN JSValue JS_GetIteratorPrototype(JSContext *ctx);
    hand. Dup'd. */
 JS_EXTERN JSValue JS_GetAsyncIteratorPrototype(JSContext *ctx);
 
+/* %MapIteratorPrototype%. Web IDL §3.7.11.2 "%Symbol.iterator%" builds a `maplike<>` interface's iterator with
+   `CreateIteratorFromClosure(closure, "%MapIteratorPrototype%", %MapIteratorPrototype%)`, so it is that
+   intrinsic and NOT %IteratorPrototype% that a maplike's iterator object inherits — which is the whole of what
+   makes `String(m.entries())` read `[object Map Iterator]` where an `iterable<>` interface's reads
+   `[object <Interface> Iterator]`. §3.7.12.2 is the SETLIKE spelling of the same sentence and names
+   %SetIteratorPrototype%; the two are different intrinsics and neither serves the other.
+   A HOST CANNOT REACH IT FROM OUTSIDE, exactly as it cannot reach the two above: the object is not a global,
+   is not reachable by name, and the only script-level route is
+   `Object.getPrototypeOf(new Map().entries())` — which needs a Map allocated and its `entries` called, so
+   deriving it that way from C is running two engine members to ask for a slot the engine already holds.
+   ITS `next` IS NOT A HOST'S TO USE, which is the half a caller must read here rather than discover. ECMAScript
+   states %MapIteratorPrototype%.next over a GENERATOR brand, and this engine implements a map iterator natively
+   (JS_CLASS_MAP_ITERATOR, `u.map_iterator_data`), so the inherited `next` refuses any object that is not one of
+   its own. A maplike interface therefore chains its own iterator prototype TO this object and defines a `next`
+   of its own on it, which is what gives it §3.7.11.2's @@toStringTag and the iterator helpers while keeping the
+   resumption the interface's. Dup'd. */
+JS_EXTERN JSValue JS_GetMapIteratorPrototype(JSContext *ctx);
+
 /* ECMAScript §27.1.5.1 "CreateAsyncFromSyncIterator ( syncIteratorRecord )" — the ONE step of
    GetIterator(obj, ASYNC) a host cannot perform itself. §27.1.4.1 stood here and is
    "%AsyncIteratorPrototype% [ %Symbol.asyncDispose% ] ( )", a different operation entirely. The DEFINITION
