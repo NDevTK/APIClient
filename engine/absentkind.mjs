@@ -187,8 +187,16 @@ report("flattened absent (interface, member) PAIR(s) — the denominator a per-i
    Interface prototype object (a derived interface may REDECLARE a name and gets its own property for it), and a
    second answer to that question here is the shape that drifts.
    IT IS NOT A QUEUE, which is the whole of what this column does not claim: it says which interfaces a page
-   cannot get PAST, and says nothing about whether a page reaches them. That question needs a corpus and
-   engine/absentrank.mjs is what asks it for the names it can anchor. An interface high here and absent from
+   cannot get PAST, and says nothing about whether a page reaches them. That question needs a corpus, and
+   there are now TWO instruments that ask it because they take different subjects:
+   engine/absentrank.mjs for a GLOBAL NAME, which is all it can anchor, and engine/memberguard.mjs for a
+   MEMBER on an arbitrary receiver, which is this file's own subject and had none until it was built. This
+   sentence used to name only the first and is rewritten rather than extended, because a reader who wants
+   the guarded question for a MEMBER re-derives from it that nothing asks one — and the answer to a stated
+   absence is that somebody builds it, twice. What memberguard will NOT do is rank this column: a member
+   name is not owned by an interface, so the whole absent-member population answers mostly `Set.prototype.add`
+   and `String.prototype.replace`, and it takes the name a caller supplies instead. Its header carries that
+   measurement. An interface high here and absent from
    absentrank's lists is not thereby unimportant — absentrank's receiver map is derived from Window's
    interface-typed IDL attributes, so an interface a page reaches through the DOM or through an operation's
    RETURN VALUE (a 2D context off `getContext`, a range off `createRange`) is outside what it can rank at all,

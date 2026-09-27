@@ -331,15 +331,36 @@ const NOT_A_READ = (node, parent, key) => {
   }
 };
 
+/* A FUNCTION BOUNDARY BREAKS A `catch` AND DOES NOT BREAK A GUARD, WHICH IS ONE LINE AND IS THE DIFFERENCE
+   BETWEEN WHAT THE TWO VERDICTS CLAIM. This file's header states its rule as LEXICAL CONTAINMENT and not
+   control-flow dominance, and is right to; what it did not separate is that a GUARD's claim is about whether
+   a NAME EXISTS, which no deferred invocation changes, while `caught`'s claim is about WHERE THE CALL STACK
+   IS AT THE MOMENT OF THE THROW. A use inside a callback is lexically inside the `try` and raises inside it
+   only if the callback runs SYNCHRONOUSLY — `[1].forEach(() => X())` does and `p.then(() => X())` does not,
+   and nothing here can tell them apart. So the crossing makes `caught` UNESTABLISHED and the walk CONTINUES,
+   which is the promoting direction: an enclosing guard may still decide, and otherwise the site reads
+   `throws`. THE REPAIR CANNOT INTRODUCE A DEMOTION, which is what makes it safe to make at all — `caught`
+   and `guarded-*` are both non-flow-ending, so every site it moves goes to a costlier verdict or a lateral
+   one and none to a cheaper one.
+   ITS SIZE WAS MEASURED BEFORE IT WAS MADE, over the member subject where the population is large enough to
+   have a rate: 106 of 968 `caught` sites — 11.0% — had a function boundary between the use and the deciding
+   `try`, found by re-locating every one of them and walking its ancestors. That is a CEILING on the false
+   ones rather than the rate, because a synchronously-invoked callback really is caught and is moved here
+   too; the direction of the loss is the one this file errs in everywhere. */
+const FN_BOUNDARY = new Set(["FunctionExpression", "FunctionDeclaration", "ArrowFunctionExpression",
+                             "ObjectMethod", "ClassMethod", "ClassPrivateMethod"]);
+
 /* The innermost enclosing construct that decides. `stack` is the ancestor chain, outermost first, each entry
    carrying the node and the KEY of its parent that reached it — the key is what says which ARM an occurrence
    is in, and an arm is the whole of the question. */
 function verdictOf(stack, name) {
+  let crossedFn = false;
   for (let i = stack.length - 1; i > 0; i--) {
     const key = stack[i].key, p = stack[i - 1].node;
+    if (FN_BOUNDARY.has(p.type)) crossedFn = true;
     /* A `finally` with no `catch` re-raises, so the handler is required and not decoration. An occurrence in
        the HANDLER or the FINALIZER is not protected by this try at all, which the key test enforces. */
-    if (p.type === "TryStatement" && key === "block" && p.handler) return "caught";
+    if (p.type === "TryStatement" && key === "block" && p.handler && !crossedFn) return "caught";
     if (p.type === "IfStatement" || p.type === "ConditionalExpression") {
       const g = presence(p.test, name);
       if (key === "consequent" && g === 1)
@@ -467,7 +488,11 @@ const ARM = [
   ["if(typeof X<`${a}`){new X(1)}",                   "throws"],
   ["if(typeof X!==`undefined${a}`){new X(1)}",        "throws"],
   /* A try whose throw is NOT caught here: no handler, or the occurrence in the handler / the finalizer. */
-  ["try{new X(1)}finally{}",                          "throws"],
+  /* A FUNCTION BOUNDARY between the use and the try: the callback may run after the try has returned, and
+     nothing here can say whether it does, so `caught` is unestablished and the walk continues. */
+  ["try{p.then(function(){new X(1)})}catch(e){}",      "throws"],
+  ["try{[1].forEach(()=>{new X(1)})}catch(e){}",       "throws"],
+  ["try{new X(1)}finally{}",                           "throws"],
   ["try{}catch(e){new X(1)}",                         "throws"],
   ["try{}finally{new X(1)}",                          "throws"],
   /* Lexical containment and not control-flow dominance — stated in the header and exercised here. */
@@ -538,4 +563,335 @@ export function guardShapeReader() {
   }
   return { classify: classifyIn, armed: ARM.length + ARM_UNLOCATED.length + ARM_LOCATED.length,
            receivers: GLOBAL_RECEIVERS };
+}
+
+/* ============ THE SAME QUESTION ASKED OF A MEMBER ON AN ARBITRARY RECEIVER ============================
+ *
+ * WHY IT IS A SECOND SUBJECT AND NOT A WIDER `GLOBAL_RECEIVERS`. The reader above decides a FREE IDENTIFIER,
+ * and it is armed to refuse a member: `o.X` and `o?.X` are two of its ARM_UNLOCATED controls, asserting that
+ * a member property reaches NO verdict. That is a designed refusal rather than an oversight, and widening
+ * the set of receivers would not touch it — `NOT_A_READ` returns true for a non-computed `property` key
+ * whatever the object is. So this is a different occurrence, a different absence and a different cost, and
+ * it is built beside the first rather than inside it, with its own controls; the two ARM_UNLOCATED entries
+ * stay exactly as they are and are what keeps the two subjects apart.
+ *
+ * AND THE COST IS DIFFERENT IN THE ONE WAY THAT DECIDES THE VERDICT SET. An absent GLOBAL raises on the READ
+ * — ECMAScript §6.2.5.5 "GetValue ( refRecord )" throws a ReferenceError for an unresolvable one — so
+ * every position is a flow-ender and the four verdicts cover the space. An absent MEMBER does not: the read
+ * answers `undefined` and nothing raises until the value is USED, so the population this file can speak
+ * about is the one engine/absentkind.mjs already names as the costly kind — the OPERATION, whose call is
+ * ECMAScript §13.3.6.2 "EvaluateCall ( func , thisValueRef , argumentListNode , tailPosition )"' "If func is
+ * not an Object, throw a TypeError exception". THE SUBJECT IS THEREFORE THE CALL AND NOT THE ACCESS, and a
+ * member access in any other position reaches NO verdict rather than a fifth one. That is argued rather than
+ * assumed and the argument is the consumer's: absentkind decides an absent member's cost from its KIND with
+ * no corpus at all, states in its own header that its answer is about what the language does at an
+ * UNGUARDED use, and sends the GUARDED question to a corpus and to engine/absentrank.mjs — which can anchor
+ * a global name and nothing else. This is that question for the names it cannot anchor, and absentkind's
+ * sentence is REWRITTEN at its own site by the diff that lands this rather than quoted here, because a
+ * sibling file's prose set between quotation marks is a spec quotation to every instrument that reads
+ * this tree and is reported as one.
+ *
+ * A FIFTH VERDICT WAS CONSIDERED AND REFUSED, AND THE REFUSAL IS THE MEASURABLE HALF. `a.X` in a non-call
+ * position is neither a flow-ender nor guarded: it evaluates to `undefined` and the program goes on, which
+ * none of the four says. Naming it would make the reader speak about every occurrence — and it would speak
+ * about the GUARD READS, so `a.X && a.X(id)` would produce two rows for one decision and the same site would
+ * be counted as a silent absence AND as a guarded call. The guard is already fully expressed by the CALL's
+ * verdict, which is what a reader dispatches from, so the fifth row would be an inflation rather than a
+ * signal. What it costs to refuse is stated as a residual below and its population is measured rather than
+ * asserted.
+ *
+ * RECEIVER IDENTITY IS THE WHOLE OF THE NEW DIFFICULTY AND THE BIAS IS THE SAME ONE. `a.X && a.X(id)` is a
+ * guard only if the two receivers are the SAME, and nothing here does scope analysis — the alias widening is
+ * one engine/absentrank.mjs BUILT, MEASURED and DECLINED, and this subject inherits the refusal. So a
+ * receiver is compared SYNTACTICALLY and only where it is SIMPLE: an identifier, `this`, or a chain of
+ * non-computed properties on those. Anything else — a call's result, a computed index — answers 0, which is
+ * `throws`, which is the promoting direction this file errs in everywhere.
+ *
+ * AND THE RECEIVER'S OWN OPTIONALITY IS NOT A MEMBER GUARD, WHICH IS THE ONE PAIR A READER GETS BACKWARDS IN
+ * THE SILENCING DIRECTION. `a.X?.(id)` and `a?.X(id)` differ by one character and by everything: Babel
+ * spells the first `OptionalCallExpression{optional:true}` over a plain `MemberExpression`, and the second
+ * `OptionalCallExpression{optional:false}` over an `OptionalMemberExpression{optional:true}`. The CALL's
+ * optionality skips the call when the MEMBER is absent — a guard by effect, and the one spelling no pattern
+ * written to find a presence test matches. The MEMBER's optionality skips it when the RECEIVER is nullish
+ * and does nothing whatever about the member, so that site still ends the flow. Both are controls below, in
+ * opposite directions, because demoting the second would delete a real flow-ender. */
+export const MEMBER_VERDICTS = ["throws", "caught", "guarded-fallback", "guarded-silent"];
+
+/* A SIMPLE receiver's canonical text, or null for one this file will not compare. `null` propagates, so one
+   computed step anywhere in the chain makes the whole receiver incomparable rather than partly compared. */
+const receiverKey = (n) => {
+  if (!n || typeof n !== "object") return null;
+  if (n.type === "Identifier") return "i:" + n.name;
+  if (n.type === "ThisExpression") return "this";
+  if ((n.type === "MemberExpression" || n.type === "OptionalMemberExpression")
+      && !n.computed && n.property?.type === "Identifier") {
+    const o = receiverKey(n.object);
+    return o === null ? null : o + "." + n.property.name;
+  }
+  return null;
+};
+
+/* Is `n` an access of member `name` ON THE RECEIVER `rk`? The receiver comparison is NOT optional and `rk`
+   may not be null, which the arming found rather than the design anticipating it: this was first written
+   with a `rk === null ||` escape meaning "the caller does not care", and the caller that passes null is the
+   one whose USE sits on a receiver this file REFUSES TO COMPARE — so the escape turned an incomparable
+   receiver into a WILDCARD and read `f().X && f().X(1)` as guarded. That is the exact demotion this
+   subject's controls exist to catch, in the exact direction the header says nobody finds by acting on it,
+   and it was written by the author of the sentence above it. The computed key goes through `stringValue`
+   for the reason that predicate exists: a bundle emitting every string as a template would otherwise have
+   its guarded uses reported as flow-enders. */
+const isMemberAccess = (n, name, rk) =>
+  !!n && rk !== null
+  && (n.type === "MemberExpression" || n.type === "OptionalMemberExpression")
+  && ((!n.computed && n.property?.type === "Identifier" && n.property.name === name)
+      || (n.computed && stringValue(n.property) === name))
+  && receiverKey(n.object) === rk;
+
+/* presenceMember(test, name, rk): +1 when `test` being TRUE entails `rk` has `name`, -1 when it entails it
+   does NOT, 0 otherwise. Same contract and same shape as `presence` above, and deliberately so — the two
+   differ only in what they will accept as naming the capability, which is the whole of the new subject. */
+function presenceMember(t, name, rk) {
+  if (!t || typeof t !== "object" || typeof t.type !== "string") return 0;
+  switch (t.type) {
+    case "UnaryExpression":
+      return t.operator === "!" ? -presenceMember(t.argument, name, rk) : 0;
+    /* Truthiness of `a.X` entails the member is there. It cannot itself throw for an ABSENT member, which is
+       exactly why this is a guard here and why the bare `if (X)` of a global is NOT one up there. */
+    case "MemberExpression": case "OptionalMemberExpression":
+      return isMemberAccess(t, name, rk) ? 1 : 0;
+    case "BinaryExpression": {
+      if (t.operator === "in")
+        return (stringValue(t.left) === name && receiverKey(t.right) === rk) ? 1 : 0;
+      if (t.operator === "<" || t.operator === ">") {
+        for (const [a, b, typeofOnLeft] of [[t.left, t.right, true], [t.right, t.left, false]]) {
+          if (a?.type !== "UnaryExpression" || a.operator !== "typeof") continue;
+          if (!isMemberAccess(a.argument, name, rk)) continue;
+          if (stringValue(b) !== "u") return 0;
+          return (typeofOnLeft ? t.operator === "<" : t.operator === ">") ? 1 : -1;
+        }
+        return 0;
+      }
+      if (!["===", "==", "!==", "!="].includes(t.operator)) return 0;
+      const eq = t.operator === "===" || t.operator === "==";
+      for (const [a, b] of [[t.left, t.right], [t.right, t.left]]) {
+        if (a?.type !== "UnaryExpression" || a.operator !== "typeof") continue;
+        if (!isMemberAccess(a.argument, name, rk)) continue;
+        const bv = stringValue(b);
+        if (bv === null) return 0;
+        if (bv === "undefined") return eq ? -1 : 1;
+        return eq ? 1 : 0;
+      }
+      return 0;
+    }
+    case "LogicalExpression": {
+      if (t.operator !== "&&") return 0;
+      const l = presenceMember(t.left, name, rk), r = presenceMember(t.right, name, rk);
+      if (l === 1 || r === 1) return (l === -1 || r === -1) ? 0 : 1;
+      if (l === -1 || r === -1) return -1;
+      return 0;
+    }
+    case "SequenceExpression":
+      return presenceMember(t.expressions[t.expressions.length - 1], name, rk);
+    default:
+      return 0;
+  }
+}
+
+/* The innermost enclosing construct that decides, over the member subject. `stack` ends at the ACCESS node;
+   `i` starts one above it so the access's own parent is the first thing examined. */
+function memberVerdictOf(stack, name, rk) {
+  /* A receiver this file will not compare cannot have a guard TIED to it, so no ancestor can demote the
+     site and the promoting answer is the only sound one. Stated here as well as enforced in the predicate
+     above, because the two together are what stop a null receiver reading as "matches anything". */
+  if (rk === null) return "throws";
+  let crossedFn = false;
+  for (let i = stack.length - 1; i > 0; i--) {
+    const key = stack[i].key, p = stack[i - 1].node;
+    if (FN_BOUNDARY.has(p.type)) crossedFn = true;
+    if (p.type === "TryStatement" && key === "block" && p.handler && !crossedFn) return "caught";
+    if (p.type === "IfStatement" || p.type === "ConditionalExpression") {
+      const g = presenceMember(p.test, name, rk);
+      if (key === "consequent" && g === 1)
+        return (p.type === "ConditionalExpression" || p.alternate) ? "guarded-fallback" : "guarded-silent";
+      if (key === "alternate" && g === -1) return "guarded-fallback";
+    }
+    if (p.type === "LogicalExpression" && key === "right") {
+      if (p.operator === "&&" && presenceMember(p.left, name, rk) === 1) return "guarded-silent";
+      if (p.operator === "||" && presenceMember(p.left, name, rk) === -1) return "guarded-silent";
+    }
+  }
+  return "throws";
+}
+
+/* FIND EVERY ACCESS OF THESE MEMBER NAMES AND SAY WHAT ITS ABSENCE COSTS. It takes NAMES rather than the
+   OFFSETS the global reader takes, and that is the point rather than a convenience: a text channel cannot
+   locate a member access reliably — the same bytes are a property, a string argument, an object key and an
+   `in` operand — so the LOCATION is part of what this reader owes its caller. `sites` carries one entry per
+   CALLED access, in source order, each with the receiver text it was decided against so a reader can check
+   the pairing without re-parsing. `seen` counts every access including the ones that reach no verdict, so a
+   caller can report the split rather than inferring it from a smaller list. */
+function classifyMemberAccessesIn(src, names) {
+  let ast;
+  try {
+    ast = parse(src, { sourceType: "unambiguous", errorRecovery: false, attachComment: false });
+  } catch (e) {
+    return { parsed: false, why: `parse: ${String(e && e.message).slice(0, 80)}`, sites: [], seen: 0 };
+  }
+  const sites = [];
+  let seen = 0;
+  const stack = [];
+  const walk = (node, key) => {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) { for (const c of node) walk(c, key); return; }
+    if (typeof node.type !== "string" || node.start === undefined) return;
+    const parent = stack.length ? stack[stack.length - 1].node : null;
+    stack.push({ node, key });
+    if (node.type === "MemberExpression" || node.type === "OptionalMemberExpression") {
+      const nm = !node.computed
+        ? (node.property?.type === "Identifier" ? node.property.name : null)
+        : stringValue(node.property);
+      if (nm !== null && names.has(nm)) {
+        seen++;
+        /* THE SUBJECT IS THE CALL. A `new` callee raises the same TypeError and is included; every other
+           position answers `undefined` and is left without a verdict rather than given a fifth. */
+        const called = !!parent && key === "callee"
+          && (parent.type === "CallExpression" || parent.type === "OptionalCallExpression"
+              || parent.type === "NewExpression");
+        if (called) {
+          /* The CALL's own optionality is the guard; the MEMBER's is a guard on the RECEIVER and protects
+             nothing here — `a.X?.()` against `a?.X()`, which is the pair this reader exists to tell apart. */
+          const verdict = (parent.type === "OptionalCallExpression" && parent.optional === true)
+            ? "guarded-silent"
+            : memberVerdictOf(stack, nm, receiverKey(node.object));
+          sites.push({ offset: node.property.start, name: nm, verdict,
+                       receiver: receiverKey(node.object) });
+        }
+      }
+    }
+    for (const k of Object.keys(node)) {
+      if (SKIP.has(k)) continue;
+      const v = node[k];
+      if (v && typeof v === "object") walk(v, k);
+    }
+    stack.pop();
+  };
+  try {
+    walk(ast, null);
+  } catch (e) {
+    return { parsed: false, why: `walk: ${String(e && e.message).slice(0, 80)}`, sites: [], seen: 0 };
+  }
+  return { parsed: true, why: null, sites, seen };
+}
+
+/* EVERY SHAPE THIS SUBJECT REFUSES TO CALL A GUARD IS EXERCISED, AND THE REFUSALS OUTNUMBER THE POSITIVES
+   FOR THE REASON THE FIRST TABLE GIVES: a classifier that stopped recognising guards reports everything
+   `throws`, which is loud and promotes, and one whose receiver or polarity inverted reports a flow-ender
+   guarded, which is silent and removes a row from a queue. Each entry is a source and the verdicts its
+   CALLED accesses of `X` must produce, in source order — so an empty list asserts that NOTHING here is a
+   call site, which is how the non-call positions are armed without inventing a verdict for them. */
+const MARM = [
+  /* --- it can speak ------------------------------------------------------------------------------- */
+  ["a.X(1)",                              ["throws"]],
+  ["new a.X()",                           ["throws"]],
+  ["try{a.X(1)}catch(e){}",               ["caught"]],
+  /* THE OPTIONAL CALL — a guard by effect, and the spelling that matches no presence-test pattern. */
+  ["a.X?.(1)",                            ["guarded-silent"]],
+  ["a[`X`]?.(1)",                         ["guarded-silent"]],
+  ["a?.X?.(1)",                           ["guarded-silent"]],
+  /* AND THE OPTIONAL CALL NEEDS NO COMPARABLE RECEIVER, which is the one place a null receiver is not a
+     refusal: `?.()` skips on an ABSENT MEMBER whatever the receiver expression was. */
+  ["f().X?.(1)",                          ["guarded-silent"]],
+  /* The four spellings a real corpus writes, measured rather than imagined. */
+  ["a.X&&a.X(1)",                         ["guarded-silent"]],
+  ["'X' in a&&a.X(1)",                    ["guarded-silent"]],
+  ["`X` in a&&a.X(1)",                    ["guarded-silent"]],
+  ["typeof a.X==='function'&&a.X(1)",     ["guarded-silent"]],
+  ["typeof a.X!=='undefined'&&a.X(1)",    ["guarded-silent"]],
+  ["typeof a.X<'u'&&a.X(1)",              ["guarded-silent"]],
+  ["if(a.X){a.X(1)}",                     ["guarded-silent"]],
+  ["if(a.X){a.X(1)}else{fb()}",           ["guarded-fallback"]],
+  ["a.X?a.X(1):fb()",                     ["guarded-fallback"]],
+  ["if(!a.X){fb()}else{a.X(1)}",          ["guarded-fallback"]],
+  ["typeof a.X==='undefined'||a.X(1)",    ["guarded-silent"]],
+  /* A receiver that is a non-computed chain, which is what `e.target.X` and `Z.current.X` are. */
+  ["e.target.X&&e.target.X(1)",           ["guarded-silent"]],
+  ["this.X&&this.X(1)",                   ["guarded-silent"]],
+  /* A computed access is a call site like any other, in both delimiters. */
+  ["a['X'](1)",                           ["throws"]],
+  ["a[`X`](1)",                           ["throws"]],
+  /* --- and it refuses ----------------------------------------------------------------------------- */
+  /* THE RECEIVER'S OPTIONALITY IS NOT THE MEMBER'S. `a?.X(1)` skips when `a` is nullish and calls an absent
+     member otherwise, so it ends the flow — demoting it would delete a real flow-ender one character from
+     the shape directly above. */
+  ["a?.X(1)",                             ["throws"]],
+  ["a?.b.X(1)",                           ["throws"]],
+  /* A guard on a DIFFERENT receiver, and on a receiver this file will not compare. */
+  ["b.X&&a.X(1)",                         ["throws"]],
+  ["f().X&&f().X(1)",                     ["throws"]],
+  ["a[i].X&&a[i].X(1)",                   ["throws"]],
+  /* A guard on a DIFFERENT member of the right receiver — absentrank's standing sibling-capability
+     residual, untouched here and armed so it cannot be silently admitted. */
+  ["a.Y&&a.X(1)",                         ["throws"]],
+  ["'Y' in a&&a.X(1)",                    ["throws"]],
+  /* Polarity, in every construct that has one. */
+  ["if(!a.X){a.X(1)}",                    ["throws"]],
+  ["a.X||a.X(1)",                         ["throws"]],
+  ["typeof a.X==='undefined'&&a.X(1)",    ["throws"]],
+  ["typeof a.X>'u'&&a.X(1)",              ["throws"]],
+  ["if(typeof a.X==='undefined'){a.X(1)}", ["throws"]],
+  /* `!== "function"` is satisfied by an absent member as well as by a defined non-function. */
+  ["typeof a.X!=='function'&&a.X(1)",     ["throws"]],
+  /* A relational test against any other string decides nothing. */
+  ["typeof a.X<'v'&&a.X(1)",              ["throws"]],
+  /* A try whose throw is not caught here. */
+  ["try{p.then(function(){a.X(1)})}catch(e){}", ["throws"]],
+  ["try{[1].forEach(()=>{a.X(1)})}catch(e){}",  ["throws"]],
+  ["try{a.X(1)}finally{}",                ["throws"]],
+  ["try{}catch(e){a.X(1)}",               ["throws"]],
+  /* Lexical containment and not control-flow dominance, stated for this subject too. */
+  ["if(a.X){}a.X(1)",                     ["throws"]],
+  /* A guard the parser sees as a string. */
+  ["if('a.X'){a.X(1)}",                   ["throws"]],
+];
+/* THE POSITIONS THAT REACH NO VERDICT, which is how the refused fifth verdict is armed: each of these
+   contains an access or a mention of `X` and NO call site, so the list must come back empty. A reader that
+   began giving these verdicts would inflate every row by its guard reads and by its strings. */
+const MARM_NOSITE = [
+  "a.X",                 /* a bare read — answers undefined and raises nothing */
+  "var v=a.X",           /* the same, assigned */
+  "a.X=1",               /* a WRITE, which creates the member rather than reading an absent one */
+  "typeof a.X",          /* the presence test's own occurrence */
+  "'X' in a",            /* the `in` test's own occurrence */
+  "f(a,'X')",            /* the name as a string argument */
+  "var o={X:1}",         /* an object literal key */
+  "class C{X(){}}",      /* a method name */
+  "var X=1",             /* a free binding of the same name */
+  "X(1)",                /* a free CALL of the same name — the OTHER reader's subject, not this one */
+  "a.b.X",               /* a chained read in no call position */
+];
+
+export function memberGuardShapeReader() {
+  const die = (s) => { throw new Error(`[js_guard_shape/member] ${s}`); };
+  const names = new Set(["X"]);
+  for (const [src, want] of MARM) {
+    const { parsed, why, sites } = classifyMemberAccessesIn(src, names);
+    if (!parsed) die(`control ${JSON.stringify(src)} did not parse (${why}) — its verdict would mean nothing.`);
+    const got = sites.map((s) => s.verdict);
+    if (got.length !== want.length || got.some((v, i) => v !== want[i]))
+      die(`control ${JSON.stringify(src)} wanted [${want}] and answered [${got}]. ` +
+          (want.every((w) => w === "throws")
+            ? "This classifier calls a member use GUARDED that is not, which removes a flow-ender from the "
+              + "band a reader dispatches from and is the one error nobody finds by acting on it."
+            : "This classifier can no longer see the shape it exists to see, so every site would read "
+              + "`throws` and the split would be a column of one number."));
+  }
+  for (const src of MARM_NOSITE) {
+    const { parsed, sites } = classifyMemberAccessesIn(src, names);
+    if (!parsed) die(`no-site control ${JSON.stringify(src)} did not parse.`);
+    if (sites.length)
+      die(`no-site control ${JSON.stringify(src)} produced ${sites.length} verdict(s) — a member access that `
+          + `is not CALLED answers undefined and raises nothing, so giving it a verdict would count a guard `
+          + `read as a second row for the decision its call already carries.`);
+  }
+  return { classify: classifyMemberAccessesIn, armed: MARM.length + MARM_NOSITE.length };
 }
