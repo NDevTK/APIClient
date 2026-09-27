@@ -830,6 +830,28 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            fact about the BUILD and never about an address, which is the ordinary case in a zone deployed on
            write beside an engine that is live only after a build. */
         endpointAddressClass: endpointFactHistogram(result.fetchCallSites, "addressClass"),
+        /* AND THE FOURTH, WHICH IS THE UNION OF TWO OF THE THREE ABOVE AND IS THE ONE FIGURE A PERSON MAY
+           READ AS CLAUDE.md §What-the-tool-produces' HARD BAR. That bar's own retirement condition is "the
+           emitter that states a razor figure composes that union ITSELF, so a door count cannot be assembled
+           into one at all", and this row is it arriving ALREADY COMPOSED: solver/endpoint.c unions the
+           address class's `unknown` rows with the rows whose DOOR handed it bytes that were never in the
+           served document, per row, at the one line where both facts are in hand.
+           SO THIS ZONE STILL HOLDS NO MAP, WHICH IS WHY THE UNION IS COMPOSED THERE AND NOT HERE. The
+           argument is the one the row above makes and one class wider: a classification that grows in the
+           engine and is duplicated in a zone live on WRITE would abort that zone the day the engine ships one
+           more door. Unioning `endpointDoors` with `endpointAddressClass` here would be exactly that copy,
+           and the operand a reader assembles by hand is the one three prose sites in the engine had WRONG —
+           `EPR_BEYOND` is what a MARKUP parse cannot reach, and `fetch`, `xhr` and `module-import` are all in
+           it, so a union assembled that way is the figure CLAUDE.md demoted rather than the one it chose.
+           IT IS A FLOOR AND NOT A VERDICT, AND THE THREE HISTOGRAMS ARE STILL TWO OBSERVATIONS AND NOT FOUR.
+           This is DERIVED from `door` and `addressClass` and adds no observation to them: `unproven` is not
+           the claim that a parse could state the address — a source a flow PINNED and re-read lands there and
+           really is past every parse, which solver/endpoint.h enumerates and which no field on the row can
+           say (CLAUDE.md §EVIDENCE-INFLATION, said here because here is where the numbers are).
+           RENDERED AND ASSERTED GENERICALLY for the row above's reason, so a class added to
+           `ENDPOINT_RAZOR_CLASSES` reaches this reader unedited and a row from a wasm older than the key
+           lands in the `(unstated)` bucket — a fact about the BUILD and never about an address. */
+        endpointRazorClass: endpointFactHistogram(result.fetchCallSites, "razorClass"),
         park: result._park.length, resumed: resumed,
         coldLookup: cold.lookup, coldOther: cold.other, bundleId: cold.bundle,
         url: (msg && msg.sourceUrl) || "" }
@@ -882,7 +904,7 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            "request(s) asked of it — the two are raised in one loop, one `asked` per delivered pending line " +
            "and at most one refusal inside that same iteration, so a sum above the denominator is a second " +
            "site raising one of them and every share read off this pair is over a population that never ran");
-    /* AND THE THREE ENDPOINT PARTITIONS ARE PARTITIONS, ASSERTED WHERE EVERY SIDE IS IN ONE HAND. Two claims,
+    /* AND THE FOUR ENDPOINT PARTITIONS ARE PARTITIONS, ASSERTED WHERE EVERY SIDE IS IN ONE HAND. Two claims,
        and only the second can fail against today's producer. (a) Each histogram SUMS to `endpoints` — one row,
        one bucket, one array — which is asserted for the reason the egress containment above is: the edit that
        breaks it is precisely the one the residual this landing retires proposed, a histogram built over a
@@ -892,7 +914,8 @@ function linesToAnalysis(lines, msg, outcome, eng) {
        is that emit having become conditional — and a half-unstated histogram says "this artifact predates the
        key" about part of one array, which is true of no build. */
     for (const _p of [["endpointDoors", m.endpointDoors], ["endpointMintedAt", m.endpointMintedAt],
-                      ["endpointAddressClass", m.endpointAddressClass]]) {
+                      ["endpointAddressClass", m.endpointAddressClass],
+                      ["endpointRazorClass", m.endpointRazorClass]]) {
       let _n = 0;
       for (const k of Object.keys(_p[1])) _n += _p[1][k];
       DCHECK(_n === m.endpoints,

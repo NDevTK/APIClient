@@ -1814,9 +1814,11 @@ function renderEngineRuns() {
            m.endpointMintedAt && typeof m.endpointMintedAt === "object" &&
            !Array.isArray(m.endpointMintedAt) &&
            m.endpointAddressClass && typeof m.endpointAddressClass === "object" &&
-           !Array.isArray(m.endpointAddressClass),
+           !Array.isArray(m.endpointAddressClass) &&
+           m.endpointRazorClass && typeof m.endpointRazorClass === "object" &&
+           !Array.isArray(m.endpointRazorClass),
            "an engine run record reached the popup without its endpoint partitions — bridge.js builds all " +
-           "three off the same `fetchCallSites` array that the `endpoints` figure beside them is the LENGTH " +
+           "four off the same `fetchCallSites` array that the `endpoints` figure beside them is the LENGTH " +
            "of, and writes them onto every non-crashed record, so their absence is that relay broken and the " +
            "razor's raw material goes back to being a number no reader can partition");
     /* THE PARTITION IS RE-ASSERTED HERE AND IT IS NOT A SECOND COPY OF BRIDGE.JS'S CHECK, because the two are
@@ -1827,7 +1829,8 @@ function renderEngineRuns() {
        solver/result.c says of its own re-check one boundary further out. A share rendered off a histogram
        that does not sum to the figure beside it is a share of a population nobody holds. */
     for (const _p of [["endpointDoors", m.endpointDoors], ["endpointMintedAt", m.endpointMintedAt],
-                      ["endpointAddressClass", m.endpointAddressClass]]) {
+                      ["endpointAddressClass", m.endpointAddressClass],
+                      ["endpointRazorClass", m.endpointRazorClass]]) {
       let _n = 0;
       for (const k of Object.keys(_p[1])) _n += _p[1][k];
       DCHECK(_n === m.endpoints,
@@ -2029,6 +2032,72 @@ function renderEngineRuns() {
               + `${esc(String(_emitted - _undet))} may be past a parse too (a pinned source re-read, an `
               + `address a reply named) and nothing here guesses which, so this floor and the razor above `
               + `OVERLAP and may not be added. A DIAGNOSTIC AND NEVER A TARGET, read WITHIN this run.`;
+    /* AND THE SAME BAR COMPOSED RATHER THAN BOUNDED, WHICH IS THE ROW THE TWO ABOVE COULD ONLY BRACKET.
+       The block directly above ends by telling a person that its floor and the razor's OVERLAP and may not be
+       added — which was honest and was all that could be said, because the union is a statement about per-row
+       MEMBERSHIP and both of those rows are MARGINALS of the engine's own census. That sentence is retired by
+       this one and is kept in the block above rather than deleted, because a reader holding two marginals
+       re-derives exactly it. solver/endpoint.c composes the union PER ROW now — the address class's `unknown`
+       rows together with the rows whose DOOR handed it bytes that were never in the served document — and
+       bridge.js partitions the emitted array by that one word, so what arrives here is the floor itself and
+       not two halves to bracket. CLAUDE.md §What-the-tool-produces asks for exactly this as that record's
+       retirement: "the emitter that states a razor figure composes that union ITSELF, so a door count cannot
+       be assembled into one at all".
+       ITS DENOMINATOR IS `endpoints` AND NOT `epEmitted`, WHICH IS WHY IT IS ITS OWN ROW AND NOT AN EDIT TO
+       THE ONE ABOVE. This is bridge.js's partition of the emitted @H ARRAY and that is the engine's census
+       taken at an INSTANT — result.c declares `epEmitted` a GAUGE that can FALL — so they are one population
+       read at two moments and this view asserts no identity between them. They are a CROSS-CHECK: this row
+       nonzero beside an `unknown: 0` up there is a disagreement worth opening, and adding them or rendering
+       one against the other's denominator would be a share of a population nobody holds.
+       IT IS STILL A FLOOR AND THE SENTENCE SAYS WHAT IT CANNOT SEE. `unproven` is NOT the claim that a parse
+       could have stated the address: a source a flow PINNED and re-read lands there and really is past every
+       parse, because `pin_mint` answers a pinned read with a bare primitive and the composed URL has
+       forgotten where its bytes came from. solver/endpoint.h enumerates that population and this file holds
+       no copy of the reasoning, for the reason it holds no copy of the door-to-reach map.
+       IT IS A DIAGNOSTIC AND NEVER A TARGET, and a `runtime-only` of zero is a REFUSAL TO CLAIM the bar on
+       this document rather than a small number — an identity read WITHIN this run.
+       A `DCHECK` DOES STAND ON THIS KEY, unlike the two rows above, and the difference is which zone wrote
+       it: this is bridge.js's OWN composition over the emitted array, written onto every non-crashed record
+       by the zone this file ships with, so an installed wasm older than the engine key does not make it
+       absent — it makes one BUCKET read `(unstated)`, which is the handled case and a fact about the build.
+       That assert is the one at the top of this block, widened to four.
+       IT SITS BETWEEN THE HARD-BAR ROW AND THE EGRESS SENTENCE, WHICH IS CHECKED AND NOT ASSUMED. That
+       sentence's arms point at "the surface above" and at "the surface figure above"; this row is about that
+       SAME surface and states its size in figures, so the reference resolves to a statement about the same
+       population either way (CLAUDE.md
+       §AND-THE-FORM-THAT-SURVIVES-EVERY-SWEEP-ABOVE-IS-A-POSITIONAL-REFERENCE). */
+    /* THE STATED-ABSENCE TEST ASKS WHETHER EITHER CLASS APPEARS AND NOT WHETHER THE `(unstated)` BUCKET IS
+       FULL, WHICH IS BOTH SAFER AND WIDER. `ENDPOINT_FACT_UNSTATED` is bridge.js's constant and is not in
+       this realm — naming it here would be a read with no writer in the one zone that is live on WRITE, and
+       `node --check` cannot see that because it parses without resolving identifiers (CLAUDE.md
+       §THE-VERIFICATION-CAN-FAIL-IN-THE-VERIFIER). Spelling the bucket's text instead would be a second copy
+       of a wire word bridge.js owns. Asking whether either class name appears needs neither, and it covers
+       the SECOND cause the `m.cold` blocks above split out as well as the first: a build older than the key
+       writes no class at all, and a build whose class list moved under this reader writes words this reader
+       does not know, and both make every bucket unreadable here. */
+    const _razorCls = m.endpointRazorClass;
+    const _only = _razorCls["runtime-only"] === undefined ? 0 : _razorCls["runtime-only"];
+    const _razorReadable = _razorCls["runtime-only"] !== undefined || _razorCls["unproven"] !== undefined;
+    const composedBar = m.endpoints === 0
+      ? `hard bar, composed — this run emitted no address at all, so there is no surface to partition and the `
+        + `bar has no population here. A statement about this RUN.`
+      : !_razorReadable
+        ? `hard bar, composed — NOT READABLE FROM THIS BUILD. No emitted address carries a razor class this `
+          + `reader knows, which is either an installed engine older than the key or one whose class list `
+          + `moved under this zone — a fact about the BUILD in both cases, and NOT a zero. The two `
+          + `bracketing rows above are what this build can say.`
+        : _only === 0
+          ? `hard bar, composed — NONE of ${esc(String(m.endpoints))} emitted address(es) is one this run `
+            + `PROVED exists only at run time. That is a REFUSAL TO CLAIM the bar on this document and NOT a `
+            + `small number. Still a FLOOR: "unproven" claims nothing about what a parse could reach, and a `
+            + `source this flow pinned and re-read really is past every parse and cannot be seen from here.`
+          : `hard bar, composed — ${esc(String(_only))} of ${esc(String(m.endpoints))} emitted address(es) `
+            + `is one this run PROVED exists only at run time: it reached the address holding a value it had `
+            + `not determined, or read the address out of bytes that were never in the served document. This `
+            + `is the UNION of those two, composed per address by the engine, so it is ONE floor and not two `
+            + `to bracket. Still a FLOOR: "unproven" claims nothing about what a parse could reach. A `
+            + `DIAGNOSTIC AND NEVER A TARGET, read WITHIN this run; its denominator is the emitted array's `
+            + `own length above and not the engine's census figure.`;
     /* AND WHETHER THIS TOOL'S OWN EGRESS POLICY IS WHY THAT SURFACE IS THE SIZE IT IS — bridge.js's
        `egressAsked`/`egressDeclined`, written onto this record and, exactly like the two partitions above,
        read by nobody. They are not engine counters and are not in `FULL` or in `CENSUS`: bridge.js raises
@@ -2202,6 +2271,7 @@ function renderEngineRuns() {
          + `<span class="deep-label">${surface}</span>`
          + `<span class="deep-label">${razor}</span>`
          + `<span class="deep-label">${hardBar}</span>`
+         + `<span class="deep-label">${composedBar}</span>`
          + `<span class="deep-label">${egress}</span>`
          + `<span class="deep-label">${order}</span>` + denom + censusRows.join("") + `</div>`;
   }).join("");

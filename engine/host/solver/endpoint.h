@@ -258,43 +258,43 @@ typedef struct { const char *mime, *bytes; size_t len; EndpointBodyKind kind;
        be read off the other. NARROWER THAN `markup` BY ONE POPULATION, NAMED AS A RESIDUAL AT               \
        `program_load_door`: a `<script src>` a `document.write` put in the tree is parser-inserted and is    \
        NOT in the served bytes. */                                                                           \
-    X(EPD_DOCUMENT_SCRIPT, "document-script", EPR_MARKUP)                                                    \
+    X(EPD_DOCUMENT_SCRIPT, "document-script", EPR_MARKUP, EPB_DOCUMENT)                             \
     /* …a `<script src>` NO parser inserted, so running code put the element there and a parse of the      \
        served bytes never sees it — TRUE BY CONSTRUCTION rather than by the queue the element took, this   \
        being the complement of the door above over the one mark. Its reply is queued as the running flow's   \
        next program, which is the KIND's fact and not this token's. */                                       \
-    X(EPD_INJECTED_SCRIPT, "injected-script", EPR_BEYOND)                                                    \
+    X(EPD_INJECTED_SCRIPT, "injected-script", EPR_BEYOND, EPB_DOCUMENT)                             \
     /* …and a dynamic `import()`, whose promise is settled with the SOURCE TEXT the compiler is handed — \
        no element at all, so there is nothing for a parse of the document to have found. */                  \
-    X(EPD_MODULE_IMPORT,   "module-import", EPR_BEYOND)                                                      \
+    X(EPD_MODULE_IMPORT,   "module-import", EPR_BEYOND, EPB_DOCUMENT)                               \
     /* a `<script src>` whose address running code ASSIGNED and this engine cannot fetch: the taint shadow   \
        map holds an entry only where a script wrote the attribute, so this door is never parser-inserted — \
        which is the same sentence read as a reach and is why this one is decidable where the two below       \
        are not. */                                                                                           \
-    X(EPD_SCRIPT_ELEMENT,  "script-element", EPR_BEYOND)                                                     \
+    X(EPD_SCRIPT_ELEMENT,  "script-element", EPR_BEYOND, EPB_DOCUMENT)                              \
     /* HTML §4.2.4.3 "Fetching and processing a resource from a link element", preloads included — and the \
        door CANNOT SAY WHICH, which is this header's own sentence three paragraphs up: a `<link>` a router   \
        created and one the markup declared reach this surface through it alike. */                           \
-    X(EPD_LINK_ELEMENT,    "link-element", EPR_EITHER)                                                       \
+    X(EPD_LINK_ELEMENT,    "link-element", EPR_EITHER, EPB_DOCUMENT)                                \
     /* HTML §4.8.4.3.5 "Updating the image data", its source set and its undecided arm — `link-element`'s \
        ambiguity exactly: an `<img src>` the parser built and one `new Image()` composed are one door. */    \
-    X(EPD_IMAGE_ELEMENT,   "image-element", EPR_EITHER)                                                      \
+    X(EPD_IMAGE_ELEMENT,   "image-element", EPR_EITHER, EPB_DOCUMENT)                               \
     /* …and the third of the same kind: a `<form action>` in the served bytes and a form whose action a    \
        script wrote reach core/html/html_form.c's one recording pair alike. */                               \
-    X(EPD_FORM_SUBMIT,     "form-submit", EPR_EITHER)                                                        \
-    X(EPD_FETCH,           "fetch", EPR_BEYOND)                                                              \
-    X(EPD_XHR,             "xhr", EPR_BEYOND)                                                                \
-    X(EPD_BEACON,          "beacon", EPR_BEYOND)                                                             \
+    X(EPD_FORM_SUBMIT,     "form-submit", EPR_EITHER, EPB_DOCUMENT)                                 \
+    X(EPD_FETCH,           "fetch", EPR_BEYOND, EPB_DOCUMENT)                                       \
+    X(EPD_XHR,             "xhr", EPR_BEYOND, EPB_DOCUMENT)                                         \
+    X(EPD_BEACON,          "beacon", EPR_BEYOND, EPB_DOCUMENT)                                      \
     /* a sub-request written INSIDE a multipart batch body the page composed */                              \
-    X(EPD_BATCH_PART,      "batch-part", EPR_BEYOND)                                                         \
+    X(EPD_BATCH_PART,      "batch-part", EPR_BEYOND, EPB_DOCUMENT)                                  \
     /* an address a REPLY named and no line of the page ever composed — which is BEYOND a parse of the     \
        DOCUMENT and is not a claim that the page's code composed it; the class is named for what a markup    \
        parser reaches and never for who ran. */                                                              \
-    X(EPD_REPLY_CHUNK,     "reply-chunk", EPR_BEYOND)
+    X(EPD_REPLY_CHUNK,     "reply-chunk", EPR_BEYOND, EPB_OFF_DOCUMENT)
 
 typedef enum {
     EPD_UNSTATED = 0,   /* nobody said; endpoint_record refuses it */
-#define ENDPOINT_DOOR_MEMBER(id, token, reach) id,
+#define ENDPOINT_DOOR_MEMBER(id, token, reach, bytes) id,
     ENDPOINT_DOORS(ENDPOINT_DOOR_MEMBER)
 #undef ENDPOINT_DOOR_MEMBER
     EPD_COUNT           /* the list's own end — what the mint's range check and any census over it are bounded
@@ -364,6 +364,55 @@ const char *endpoint_reach_token(int reach);
    second table anywhere. A door outside the list is a `CHECK` for `endpoint_door_token`'s reason exactly. */
 int         endpoint_door_reach(int door);
 
+/* AND WHOSE BYTES THE ADDRESS WAS COMPOSED OUT OF — the FOURTH column of `ENDPOINT_DOORS`, and a DIFFERENT
+   question from the third one above it. `EPR_*` asks what a MARKUP parse reaches; this asks whether the bytes
+   the door hands this surface were in the DOCUMENT THIS ENGINE WAS SERVED at all, which is what CLAUDE.md
+   §What-the-tool-produces' HARD BAR is keyed on: "an address, a key or a value that NO PARSE of the served
+   bytes can state, because it exists only at run time".
+   IT IS A COLUMN BECAUSE THE PROSE FORM OF IT WAS WRONG IN THIS HEADER, WHICH IS A SHARPER REASON THAN THE
+   REACH COLUMN HAD. That one was two INCOMPLETE copies of a fact in two files; this one was a copy that named
+   the wrong SET, at the `ENDPOINT_ADDRESS_CLASSES` banner below — "`batch-part` and the three program doors
+   are the same shape" — of which `document-script` is `EPR_MARKUP` by this very list, so one header gave two
+   answers about one door, and `module-import` is the address CLAUDE.md names by hand as the one that "is
+   `beyond` and scores ZERO here". A third spelling stood at `endpoint_address_hist_json`'s residual and named
+   `endpoint_door_reach(door) == EPR_BEYOND`, which is `fetch`, `xhr` and `beacon` as well — "a JS AST parse
+   reads them off the text without running anything", in CLAUDE.md's own words. Three prose spellings of one
+   operand, three different sets, and only the one in `extension/popup.js` was right. A door added to
+   `ENDPOINT_DOORS` without this column does not compile, which is the whole of why it is here.
+   THE CONSERVATIVE MEMBER IS FIRST AND IS ZERO BY CONSTRUCTION, for `ENDPOINT_ADDRESS_CLASSES`' reason: a
+   door some later diff adds and forgets reads as the class that PROVES NOTHING, and the direction that
+   forgetting errs in is the one CLAUDE.md §AN-UNDER-CLAIM-IS-NOT-FOUND-BY-ACTING-ON-IT rates as the invisible
+   one — which is exactly why the omission has to be a compile error rather than a safe default. */
+#define ENDPOINT_DOOR_BYTES(X)                                                                      \
+    /* the address was composed out of the document this engine was served — its markup, or its own \
+       scripts. It claims NOTHING about whether a parse of those bytes states the address: that     \
+       depends on the VALUE, which is `ENDPOINT_ADDRESS_CLASSES`' question and not this one. */     \
+    X(EPB_DOCUMENT,     "document")                                                                 \
+    /* …and the bytes reached this engine at RUN TIME from outside that document — today, a payload \
+       a reply carried (solver/reply_decode.c reads a Flight client reference's chunk list out of a \
+       response body, and "a route the user never navigated to still ships its chunk list in the    \
+       payload of the route they did"). No parse of the served document holds those bytes, so       \
+       such a row clears the hard bar WHATEVER its address class says — which is the half           \
+       `ENDPOINT_ADDRESS_CLASSES` structurally cannot reach, since the value is an ordinary         \
+       determined string by the time it arrives. */                                                 \
+    X(EPB_OFF_DOCUMENT, "off-document")
+
+typedef enum {
+#define ENDPOINT_DOOR_BYTES_MEMBER(id, token) id,
+    ENDPOINT_DOOR_BYTES(ENDPOINT_DOOR_BYTES_MEMBER)
+#undef ENDPOINT_DOOR_BYTES_MEMBER
+    EPB_COUNT           /* the list's own end — dense by construction, for `EPR_COUNT`'s reason, and with its
+                           reason for having NO unstated member: this is a property of the DOOR, stated in the
+                           door list, so there is no producer who could forget one and nothing for a zero to
+                           mean that the first member does not already say. */
+} EndpointDoorBytes;
+
+/* WHOSE BYTES A GIVEN DOOR HANDS THIS SURFACE — the door list read through its fourth column, with no second
+   table anywhere. A door outside the list is a `CHECK` for `endpoint_door_reach`'s reason exactly: this runs
+   once per emitted row in EVERY build, so a release build falling through would classify a row under whatever
+   the register held and publish it as an answer to the product's own bar. */
+int         endpoint_door_bytes(int door);
+
 /* WHETHER THE RUN COMPOSED THIS ADDRESS OUT OF A VALUE IT HAD NOT DETERMINED — the fourth fact about a
    sighting, and the one CLAUDE.md §What-the-tool-produces' HARD BAR is a claim about. That bar is "an
    address, a key or a value that NO PARSE of the served bytes can state, because it exists only at run
@@ -399,12 +448,20 @@ int         endpoint_door_reach(int door);
    from an unknown and this cannot say so, which is why the field is a floor.
    AND THE SECOND THING IT CANNOT ANSWER IS AN ADDRESS WHOSE RUNTIME-NESS THE *DOOR* CARRIES. `reply-chunk`
    is the sharpest: solver/reply_decode.c hands this surface a plain string it read out of a REPLY, so the
-   value is `concrete` while no parse of the DOCUMENT reaches that address at all. `batch-part` and the three
-   program doors are the same shape — each records an address already resolved to a `char *`, because a park's
-   URL is what the reply seam is keyed on. So the hard bar's floor over a whole surface is the UNION of this
-   column's `unknown` rows and the doors whose mechanism is itself beyond a parse, and neither is the other's
-   better answer: a consumer holding `door` and `addressClass` holds both halves and this file composes
-   neither into a verdict, for the reason `endpoint_reach_hist_json` declines to fold `either` into a guess.
+   value is `concrete` while no parse of the DOCUMENT reaches that address at all. THAT SET IS NOW THE FOURTH
+   COLUMN OF `ENDPOINT_DOORS` (`ENDPOINT_DOOR_BYTES`) AND IS NO LONGER NAMED HERE, and the enumeration that
+   stood in this paragraph is recorded rather than deleted because it is the one a reader re-derives from "a
+   park's URL is what the reply seam is keyed on". It read: "`batch-part` and the three program doors are the
+   same shape — each records an address already resolved to a `char *`". EVERY CLAUSE OF THAT IS TRUE AND THE
+   CONCLUSION DOES NOT FOLLOW, because an address being a resolved `char *` is a fact about the ENGINE'S OWN
+   PLUMBING and the bar is a question about the SERVED BYTES. The three program doors carry addresses the
+   document's markup or its own scripts SPELL — `document-script` is `EPR_MARKUP` by this file's own third
+   column, so one header was giving two answers about one door, and `module-import` is the address CLAUDE.md
+   §What-the-tool-produces names by hand as "a literal chunk URL delivered through `module-import` is `beyond`
+   and scores ZERO here". `batch-part`'s sub-request address is written into a body the page composed, whose
+   literal segments stand in the bundle. So the floor is the UNION of this column's `unknown` rows and the rows
+   whose door is `EPB_OFF_DOCUMENT`, and `endpoint_razor_class_of` composes exactly that, per row, at the one
+   line where both facts are in hand.
    ITS MERGE IS A UNION, which is `valueClass`'s rule one grain out and holds for its reason: the four
    domain reads are claims about a VALUE that a path reaching the request without obeying them disproves,
    and this is a fact about whether SOME observed path composed the address out of an unknown, which a later
@@ -440,6 +497,66 @@ typedef enum {
    once per emitted ROW and once per census row in EVERY build, so a release build falling through would put
    whatever the register held into a JSON string and publish a class name nothing decided. */
 const char *endpoint_address_class_token(int cls);
+
+/* WHETHER THIS RUN PROVED THE ADDRESS EXISTS ONLY AT RUN TIME — CLAUDE.md §What-the-tool-produces' HARD BAR
+   AS ONE WORD PER ROW, and the thing that bar's own retirement condition asks for: "the emitter that states a
+   razor figure composes that union ITSELF, so a door count cannot be assembled into one at all". Until this
+   list there was no such word anywhere: `door`, `mintedAt` and `addressClass` are three facts a consumer had
+   to UNION by hand, the union's second operand was named in prose at three sites with three different sets
+   (see `ENDPOINT_DOOR_BYTES`), and a reader who assembled it out of `EPR_BEYOND` got the figure CLAUDE.md
+   demoted rather than the one it chose.
+   IT IS THE UNION OF TWO POSITIVE STATEMENTS AND IT IS A FLOOR IN BOTH DIRECTIONS. A row clears the bar if
+   the run reached the address holding a value it had NOT DETERMINED (`EPA_UNKNOWN` — some segment entered at
+   a source, so it stands in no served byte), or if the door handed this surface bytes that were never in the
+   served document at all (`EPB_OFF_DOCUMENT`). Neither implies the other and each alone is sound, which is
+   what makes the union a floor rather than a guess: `reply-chunk` is `concrete` every time and clears the bar
+   every time, and `/api/{location.hash}` through `fetch` is `EPB_DOCUMENT` and clears it every time.
+   ITS TWO OPERANDS HAVE DIFFERENT MERGE RULES AND THE UNION IS SOUND UNDER BOTH, which a reader must be told
+   because it looks like a defect. `addr_class` is UNIONED on a merge and `door` is the FIRST sighting's and is
+   never re-armed. Both directions hold: if ANY sighting composed the address out of an undetermined value the
+   address exists only at run time and a later determined sighting cannot take that back, and if the FIRST
+   sighting read the address out of a reply's payload then those bytes were in no served document and a later
+   sighting of the same address through `fetch` does not put them there. So the verdict is computed at the
+   EMITTER from the two fields rather than stored, and there is no third merge rule to get wrong.
+   WHAT `unproven` DOES NOT SAY IS THE WHOLE OF ITS HONESTY, and it is `EPA_CONCRETE`'s rule one grain out: it
+   is NOT the claim that a parse could have stated the address. Three populations land in it and one of them
+   really is past every parse — a source this flow PINNED and re-read, which `url_display`'s banner enumerates
+   and which `concolic_is` cannot see because `pin_mint` answers a pinned read with a BARE primitive. That
+   half is bounded by solver/flow.h's `path_pinned` and is NOT folded in here, deliberately: that bit is a
+   MAY-REST-ON (the necessary condition, recorded where the bytes are chosen) and reading a necessary
+   condition as the bar would turn this floor into an OVER-claim, which is the same defect as unioning over
+   `EPR_BEYOND` one operand back.
+   A LIST AND NOT TWO `#define`s, and THE CONSERVATIVE MEMBER IS FIRST AND ZERO BY CONSTRUCTION, for
+   `ENDPOINT_ADDRESS_CLASSES`' reasons exactly. */
+#define ENDPOINT_RAZOR_CLASSES(X)                                                                   \
+    /* this run proved nothing about whether a parse of the served bytes could state this address.  \
+       It is not the complement of the member below over parses: see the banner for the three       \
+       populations it holds, of which a PINNED AND RE-READ source really is past every parse. */    \
+    X(EPZ_UNPROVEN,     "unproven")                                                                 \
+    /* …and this run PROVED the address exists only at run time: it reached it holding a value it   \
+       had not determined, or the door handed it bytes that were never in the served document. */   \
+    X(EPZ_RUNTIME_ONLY, "runtime-only")
+
+typedef enum {
+#define ENDPOINT_RAZOR_CLASS_MEMBER(id, token) id,
+    ENDPOINT_RAZOR_CLASSES(ENDPOINT_RAZOR_CLASS_MEMBER)
+#undef ENDPOINT_RAZOR_CLASS_MEMBER
+    EPZ_COUNT           /* the list's own end — dense by construction, and with NO unstated member for
+                           `ENDPOINT_ADDRESS_CLASSES`' reason twice over: this is DERIVED from two fields that
+                           are themselves written unconditionally, so there is no producer at all, let alone
+                           one who could forget. */
+} EndpointRazorClass;
+
+/* THE ONE WIRE SPELLING OF A RAZOR CLASS, and `endpoint_address_class_token`'s severity for its reason: it
+   runs once per emitted ROW in EVERY build, so a release build falling through would publish a word nothing
+   decided as this engine's answer to the product's own bar. */
+const char *endpoint_razor_class_token(int cls);
+
+/* …AND THE UNION ITSELF, COMPOSED WHERE BOTH FACTS ARE IN ONE HAND. It takes the two fields rather than a
+   record because that is what makes it a function of exactly what the wire carries: a consumer holding a row
+   can check this answer against the row's own `door` and `addressClass`, which is the one property of a
+   derived verdict a reader can verify without re-deriving the mechanism. */
+int         endpoint_razor_class_of(int door, int addr_class);
 
 /* THE EMITTED SURFACE PARTITIONED BY THAT CLASS, as a malloc'd JSON OBJECT (caller frees) — one row per
    member of `ENDPOINT_ADDRESS_CLASSES`, zeroes included, summing to the same `emitted` figure

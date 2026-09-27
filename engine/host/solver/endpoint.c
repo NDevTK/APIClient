@@ -124,7 +124,7 @@ typedef struct { char *method; char *path; Param *params; int np, pcap;
    arm that catches a producer who never stated a door has to be the one that ships. */
 const char *endpoint_door_token(int door) {
     switch (door) {
-#define ENDPOINT_DOOR_ARM(id, token, reach) case id: return token;
+#define ENDPOINT_DOOR_ARM(id, token, reach, bytes) case id: return token;
     ENDPOINT_DOORS(ENDPOINT_DOOR_ARM)
 #undef ENDPOINT_DOOR_ARM
     }
@@ -144,7 +144,7 @@ const char *endpoint_door_token(int door) {
    record under whatever the register held, which is a plausible razor reading rather than a missing one. */
 int endpoint_door_reach(int door) {
     switch (door) {
-#define ENDPOINT_DOOR_REACH_ARM(id, token, reach) case id: return reach;
+#define ENDPOINT_DOOR_REACH_ARM(id, token, reach, bytes) case id: return reach;
     ENDPOINT_DOORS(ENDPOINT_DOOR_REACH_ARM)
 #undef ENDPOINT_DOOR_REACH_ARM
     }
@@ -187,6 +187,59 @@ const char *endpoint_address_class_token(int cls) {
                 "about to be published is a claim about CLAUDE.md §What-the-tool-produces' hard bar that no "
                 "measurement made",
                 cls);
+}
+
+/* See endpoint.h. GENERATED FROM THE SAME LIST AS `endpoint_door_reach`, one column over, so a door added
+   without stating whose bytes it hands this surface does not compile — which is the whole point, because the
+   direction a forgotten door would err in is the SAFE one (`EPB_DOCUMENT` proves nothing) and CLAUDE.md
+   §AN-UNDER-CLAIM-IS-NOT-FOUND-BY-ACTING-ON-IT rates that as the direction nobody discovers.
+   THE FALLTHROUGH IS A `CHECK` FOR `endpoint_door_reach`'s REASON AND WITH ITS SEVERITY — this runs once per
+   emitted @H record in EVERY build, and a release build reaching it would hand the razor composer whatever the
+   register held, which publishes a plausible answer to the product's own bar rather than a missing one. */
+int endpoint_door_bytes(int door) {
+    switch (door) {
+#define ENDPOINT_DOOR_BYTES_ARM(id, token, reach, bytes) case id: return bytes;
+    ENDPOINT_DOORS(ENDPOINT_DOOR_BYTES_ARM)
+#undef ENDPOINT_DOOR_BYTES_ARM
+    }
+    CHECK_FAILF("endpoint: an @H record states the door %d, which is none of endpoint.h's ENDPOINT_DOORS — "
+                "the razor composer is asking whether that mechanism's bytes were in the served document at "
+                "all, about a mechanism nothing named, and the class it is about to hand that composer is at "
+                "an index outside the list it is a member of",
+                door);
+}
+
+/* See endpoint.h. `endpoint_reach_token`'s construct and its severity, one list over — and with the sharper
+   reason `endpoint_address_class_token` has: this runs once per EMITTED ROW in every build, on the one key of
+   an @H record that states the product's own hard bar. */
+const char *endpoint_razor_class_token(int cls) {
+    switch (cls) {
+#define ENDPOINT_RAZOR_CLASS_ARM(id, token) case id: return token;
+    ENDPOINT_RAZOR_CLASSES(ENDPOINT_RAZOR_CLASS_ARM)
+#undef ENDPOINT_RAZOR_CLASS_ARM
+    }
+    CHECK_FAILF("endpoint: an @H record states the razor class %d, which is none of endpoint.h's "
+                "ENDPOINT_RAZOR_CLASSES — every value comes off `endpoint_razor_class_of`, which returns one "
+                "of exactly two members of that list, so this is a value nothing in this file composed and the "
+                "word about to be published is this engine's answer to CLAUDE.md §What-the-tool-produces' hard "
+                "bar with no measurement under it",
+                cls);
+}
+
+/* See endpoint.h. THE UNION, AND IT IS A UNION RATHER THAN AN INTERSECTION FOR THE REASON THE ADDRESS CLASS'S
+   OWN MERGE IS ONE: each operand is a POSITIVE statement that the address exists only at run time, so an
+   intersection would answer `unproven` for a row one of the two already proved and make the floor read LOWER
+   than what the run established.
+   NO ASSERT ON EITHER OPERAND AND THAT IS NOT AN OMISSION. Both arrive through generated switches whose
+   fallthrough is a `CHECK` in every build, so each is a member of its list or the program has already
+   stopped; an assert here could not fail, and CLAUDE.md §AN-ASSERT-WHOSE-TWO-SIDES-CANNOT-DISAGREE rates a
+   non-check wearing a check's syntax as worse than none.
+   IT ANSWERS THE TWO OPERANDS IN THIS ORDER AND THE ORDER IS NOT LOAD-BEARING, which is worth saying because
+   the two `if`s look like a precedence: they cannot disagree, since both arms return the same member. */
+int endpoint_razor_class_of(int door, int addr_class) {
+    if (addr_class == EPA_UNKNOWN) return EPZ_RUNTIME_ONLY;
+    if (endpoint_door_bytes(door) == EPB_OFF_DOCUMENT) return EPZ_RUNTIME_ONLY;
+    return EPZ_UNPROVEN;
 }
 
 /* A value carrying a `{hole}` is a SHAPE — an unknown the code did not compute — and a hole-free one is the
@@ -2661,26 +2714,30 @@ char *endpoint_address_hist_json(void) {
             "the census beside it does, so a difference is one of those walks having stopped describing the "
             "population the other counts, and the hard bar a reader reads off this row would be a share of a "
             "number that is not the surface's size", sum, emitted);
-    /* NAMED RESIDUAL — THE FLOOR endpoint.h DEFINES IS COMPUTED BY NOTHING, AND THIS CENSUS IS HALF OF IT.
-       NOT COVERED: that banner states the hard bar's floor over a surface as the UNION of this column's
-       `unknown` rows and the rows whose door is `EPR_BEYOND`, and no surface anywhere carries, FOR ANY ROW,
-       both of those facts at once. This walk and `endpoint_reach_hist_json`'s are MARGINALS over one array,
-       and a union is a statement about per-row MEMBERSHIP that no marginal carries — so the figure the header
-       names as the floor is not derivable by any reader, including the trusted zone, which composes the same
-       two marginals and deliberately holds no door-to-reach map (a classification that grows here and is
-       duplicated in a zone live on WRITE would abort it the day one more class ships).
-       WHAT THE NEXT DIFF BUILDS: a SCALAR count raised in THIS loop, where `g_eps[i].addr_class` and
-       `endpoint_door_reach(g_eps[i].door)` are both already in hand — the rows that are `unknown` OR
-       beyond-door, emitted beside `emitted` as its denominator. It is NOT a histogram keyed on the pair: the
-       decision against a cross-product is already recorded at the zone's door/mintedAt pair, and its reason —
-       a table of mostly zeroes whose two MARGINS are what a reader reads — reaches a TABLE and not a scalar.
-       It is also not the VERDICT this file declines to compose: folding `either` into a guess is a claim about
-       a door whose reach is undecided, and a union needs no such claim, since an `either` row enters it only
-       through its own `unknown`.
-       HOW ITS ABSENCE SHOWS: a reader scoring the bar over a surface can state two floors and not the one the
-       header defines, and cannot say whether the two sets overlap — so the union is quotable only as the range
-       [max(unknown, beyond), unknown + beyond]. Observably, the door any given `unknown` row came through is
-       INFERRED, from the marginals happening to agree plus the address's own text, and never read. */
+    /* THE RESIDUAL THAT STOOD HERE IS RETIRED, AND BOTH OF ITS CLAUSES WERE WRONG — RECORDED RATHER THAN
+       DELETED, BECAUSE A READER HOLDING TWO MARGINALS RE-DERIVES BOTH OF THEM IN THIS ORDER.
+       ITS NOT-COVERED CLAUSE SAID "no surface anywhere carries, FOR ANY ROW, both of those facts at once",
+       AND THE PER-RECORD EMITTER CARRIES `door` AND `addressClass` ON EVERY ROW, unconditionally, in every
+       build, and has since before that sentence was written. What was true is the ARGUMENT under it — this
+       walk and `endpoint_reach_hist_json`'s are MARGINALS over one array, and a union is a statement about
+       per-row MEMBERSHIP that no marginal carries — and a clause that is right about its mechanism and wrong
+       about the tree is the shape CLAUDE.md rates worst, since a reader who checks the reasoning finds it
+       sound and only a reader who greps the emitter finds nothing there.
+       ITS WHAT-THE-NEXT-DIFF-BUILDS CLAUSE NAMED THE WRONG OPERAND, WHICH IS THE HALF THAT WOULD HAVE BEEN
+       EXECUTED. It said to raise a scalar over the rows that are `unknown` OR `endpoint_door_reach(door) ==
+       EPR_BEYOND`, and `EPR_BEYOND` is what a MARKUP parse cannot reach while the bar is keyed on a parse of
+       the SERVED BYTES — so that scalar would have counted every `fetch`, `xhr`, `beacon` and `module-import`
+       row, which is essentially the whole of a real surface and is the figure CLAUDE.md
+       §What-the-tool-produces DEMOTED by name ("a literal chunk URL delivered through `module-import` is
+       `beyond` and scores ZERO here"). It would also have been an OVER-claim published as a FLOOR, which is
+       the one direction a floor may not be wrong in.
+       WHERE IT LANDED INSTEAD is `endpoint_razor_class_of`, composed PER ROW at the emitter out of
+       `addressClass` and the door list's own FOURTH column — the set the prose operand was reaching for, now
+       data, with `EPB_OFF_DOCUMENT` as its single member today. A scalar here would additionally have been a
+       third marginal over a population the emitted array already answers per row, and a census cannot be the
+       emitter CLAUDE.md's retirement condition asks for: this file's censuses reach a reader only through
+       solver/result.c's @COLD line, while the razor figure a person is shown is composed in the trusted zone
+       off the emitted array. */
     return json_buf_take(&b);
 }
 
@@ -3134,6 +3191,24 @@ char *endpoint_json_array(void) {
            tolerance). */
         json_buf_raw(&b, ","); json_buf_key(&b, "addressClass");
         json_buf_str(&b, endpoint_address_class_token(e->addr_class));
+        /* …AND THE UNION OF TWO OF THE THREE, WHICH IS CLAUDE.md §What-the-tool-produces' HARD BAR AS ONE WORD
+           AND IS THE FIELD THAT BAR'S OWN RETIREMENT CONDITION ASKS FOR: "the emitter that states a razor
+           figure composes that union ITSELF, so a door count cannot be assembled into one at all". Before it,
+           the floor was TWO facts a consumer had to union by hand, the second operand was named in prose at
+           three sites with three different sets, and the one a reader would have reached for —
+           `endpoint_door_reach(door) == EPR_BEYOND`, which the residual at `endpoint_address_hist_json`
+           proposed — is the figure CLAUDE.md demoted rather than the one it chose, because `fetch`, `xhr`,
+           `beacon` and `module-import` are all `beyond` a MARKUP parse and "a JS AST parse reads them off the
+           text without running anything".
+           IT IS DERIVED AND NOT STORED, AND THAT IS WHAT KEEPS IT HONEST UNDER THE TWO MERGE RULES ITS
+           OPERANDS HAVE. `addr_class` is unioned on a merge and `door` is the first sighting's; both
+           directions are sound as a floor (see endpoint.h), and computing the verdict HERE means there is no
+           third merge rule to get wrong and a consumer can check this word against the two beside it.
+           WRITTEN UNCONDITIONALLY ON EVERY ROW IN EVERY BUILD, exactly as the three above are, so the
+           `(unstated)` bucket a consumer keeps for a row from an artifact older than the key stays a fact
+           about the BUILD and never about an address. */
+        json_buf_raw(&b, ","); json_buf_key(&b, "razorClass");
+        json_buf_str(&b, endpoint_razor_class_token(endpoint_razor_class_of(e->door, e->addr_class)));
         json_buf_raw(&b, ","); json_buf_key(&b, "params"); json_buf_raw(&b, "[");
         for (int j = 0; j < e->np; j++) {
             if (j) json_buf_raw(&b, ",");
