@@ -7672,6 +7672,38 @@ STAGES.push(onHost(runProgram("test-corpus collection accounting", [join(ENGINE,
                        "stage prints its FINDINGS and its BLIND SPOTS separately and only the findings carry " +
                        "the exit code: it cannot see whether a runner a claim names is ever INVOKED. There " +
                        "is no baseline to update and no allowlist."), STAGE_HOST.SOURCE));
+/* THE SIXTH AREA: DOES A BLOCK COMMENT IN THIS PROJECT'S JAVASCRIPT HOLD CODE. It is on this list because the
+   floor every lane reaches for CANNOT ANSWER IT, which no other stage here can say of itself: `node --check` is
+   a PARSE, and a comment whose terminator is missing while a LATER comment's is not absorbs every declaration
+   between them and leaves a file that is still valid JavaScript with less code in it. MEASURED on
+   extension/lib/safe-fetch.js with one terminator deleted — `node --check` exits 0 while `_PINNED_MARKS` and
+   `_pinnedOf` have ceased to exist, and that state was committed to a working tree TWICE in one lane's editing
+   of that one file with `node --check` passing both times.
+   THE ZONE IT GUARDS IS DEPLOYED ON WRITE, WHICH IS WHY A GATE RATHER THAN A HABIT. CLAUDE.md
+   §A-CROSS-BOUNDARY-DIFF: the trusted zone's JavaScript is INTERPRETED FROM THE TREE, so a commented-out
+   `_pinnedOf` is live the instant the file is saved with no build in between — and what that function guards is
+   the chokepoint's firing decision. The C half of the same hazard already has an instrument (a prose-only diff
+   is checkable with `clang -E`, which CLAUDE.md §AND-THE-MIRROR-OF-THAT-IS-A-DIFF-CLAIMING-TO-CHANGE-NOTHING
+   prescribes); the JS half had none, and the JS half is the one that needs no build to ship.
+   IT PROVES IT CAN FAIL ON EVERY RUN, which is the property that makes its green line worth reading. It derives
+   a corrupt copy from a file in its own population, requires its scanner to FIRE on it, requires BOTH
+   `node --check` and `vm.Script` to ACCEPT the same bytes, and requires the pristine file to scan clean — and it
+   FAILS rather than passing if any of those is absent. A control that has never produced a finding is not a
+   control (CLAUDE.md §THE-ORDER-IS-FIXED-AND-IT-IS-TWO-RUNS), and this gate's whole claim is about another
+   tool's blind spot, so the claim is measured on every invocation instead of asserted in its banner.
+   ITS POPULATION IS A CONSTRUCT AND ITS BASELINE IS ZERO. `git ls-files` filtered by extension — no path is
+   typed, and the engine's installed glue is out because the build writes it and git does not track it. The
+   signature answered ZERO over all 281 tracked files at the revision it landed, so a non-zero is a CHANGE and
+   the change is the signal, which is the property CLAUDE.md §A-VERDICT-THAT-IS-RED-ON-EVERY-RUN asks for.
+   A SOURCE STAGE for the four above's reason: it compiles no C, reads no artifact, and opens no engine slice. */
+STAGES.push(onHost(runProgram("JS comment-boundary gate", [join(ENGINE, "jscommentgate.mjs")],
+                       "a block comment is holding CODE. The repair is a TERMINATOR and never a word, and it " +
+                       "is the one JavaScript defect in this tree that `node --check` answers exit 0 on — so " +
+                       "a lane that verified a prose-only diff with `node --check` alone has not checked this. " +
+                       "This stage prints its FINDINGS and its BLIND SPOTS separately and only the findings " +
+                       "carry the exit code; it also FAILS if its own control did not arm, because a green " +
+                       "line from an unarmed control is a statement about the probe. There is no baseline to " +
+                       "update and no allowlist."), STAGE_HOST.SOURCE));
 report(STAGES, FINDINGS);
 
 /* A THIRD DRIVE STOOD HERE — the driver for the deleted second program, which put the RENDERER REGISTRY's
