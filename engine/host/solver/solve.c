@@ -184,8 +184,10 @@ typedef struct {
        rather than a number that can answer one.
        `substituted:0` BESIDE `turns:N` IS A POSITIVE STATEMENT AND THE WHOLE REASON THE FIELD EXISTS: these
        candidates have held the thread and not one of them reached its own SOURCE READ, so the question is
-       about the PATH in front of the source — a gate turning the flows away — and not about the payload, the
-       filter or the sink. Without it that state was reported as `turns:N,reached:0,survived:0`, which is
+       about the PATH in front of the source — and not about the payload, the filter or the sink.
+       THAT SENTENCE ENDED `a gate turning the flows away` AND IS REWRITTEN RATHER THAN DELETED, because it is
+       the reading a reader re-derives from a count of ARRIVALS and it names the wrong work. A gate is one of
+       TWO states this field cannot tell apart, and `ends` below is the discriminator; see it for which. Without it that state was reported as `turns:N,reached:0,survived:0`, which is
        byte-identical to a candidate whose bytes DID enter the program and never reached a sink, and the popup
        stated the second for both: "the flows run and do not get this far through the document", which is a
        confident wrong instruction for a flow that never got as far as the read.
@@ -198,7 +200,30 @@ typedef struct {
        crossings, the flow's comparator keeps FLOW_RUNG_DELIVERED, and this is the REPORT's copy of the same
        event — the third accounting unit, and the only one a reader ever sees. */
     int substituted;
-    /* …AND THE ONE RUNG BENEATH *THAT*, WHICH THE COMPARATOR HAS BEEN READING AND THE REPORT COULD NOT SAY.
+    /* …AND WHETHER THIS SEARCH'S CANDIDATES HAVE ENDED AT ALL, WHICH IS THE ONE THING EVERY READING OF
+       `substituted:0` ASSERTS AND NONE OF THEM OBSERVES. Both statements of that zero — here and at the emit —
+       read it as "the runs ENDED before their own source read, so something in front of the source turned
+       them away", and that is an INFERENCE drawn from a count of ARRIVALS. It is
+       §AN-INVARIANT-OVER-A-GATED-OPERATION exactly: a census of what LANDED cannot tell a candidate the path
+       turned away from one that HAS NOT GOT THERE YET, and the two take opposite work — the first is a
+       question about the path, the second about the SCHEDULE, whose answer is thread and not a gate to find.
+       MEASURED, AND THIS ENGINE IS IN THE SECOND STATE, WHICH IS THE ONE THE RECORD COULD NOT STATE: across a
+       smoke run every parked record reads `substituted:0` at `turns` up to 66, while the session's own
+       divergence ledger reads `replayLeft:0` and `replayLeftArms:0` — no replay left its recorded path, so
+       nothing was turned away — and the run's terminal event names a frontier ADVANCING WITHOUT RETIRING,
+       candidates included. The gate reading was the only one the record could make and it was the wrong one.
+       A COUNT OF FLOW FINISHES, and the key says so. engine.c reaches solve_flow_end from two MUTUALLY
+       EXCLUSIVE lines — the deferred-paint completion and the ordinary finish, which yields to the first when
+       a picture is owed — and each is followed by flow_finish, so a candidate flow ends exactly once and this
+       is therefore also a count of distinct candidates that have ended. That is what makes the assert at the
+       raise an invariant rather than a decoration.
+       A LIFETIME COUNT AND NOT A GAUGE: it says what has HAPPENED, cannot fall, and two samples of one
+       session may be differenced — which is also why it can stand in one implication with `tried`.
+       RETIREMENT: this record's measured paragraph goes when a parked record in this tree cannot be emitted
+       without a statement of whether its candidates are still live, because the gate reading is then
+       unspellable rather than merely corrected here. */
+    int ends;
+    /* …AND THE ONE RUNG BENEATH `substituted`, WHICH THE COMPARATOR HAS BEEN READING AND THE REPORT COULD NOT SAY.
        `substituted:0` beside `turns:N` is a positive statement — these runs ended before their own source
        read — and it is structurally silent about HOW FAR they got, which on a runway of hundreds of
        statements is the whole remaining question. The two states it has been saying at once are
@@ -2991,7 +3016,29 @@ void solve_flow_end(Flow *f) {
            "because detection opened one and a cold-resumed one re-registers before it runs an opcode, so an "
            "absent entry here is the search having been dropped under a flow that was still running it, and "
            "the runway this candidate walked is about to be lost with it");
-    if (e) observe_runway(e, f);
+    if (e) {
+        observe_runway(e, f);
+        /* AND THE FINISH ITSELF, COUNTED HERE BECAUSE THIS IS THE SITE AND THERE IS NO OTHER. `tried` is the
+           ASK — candidates SEEDED, raised before one can be picked — and `substituted` is the OUTCOME at the
+           source read; this is the third fact neither can carry, and without it a reader cannot tell a
+           candidate the path turned away from one still on its way. It is raised at the FINISH and not at the
+           switch-out for the reason observe_runway gives about its own sampling: engine.c routes no solve-side
+           switch-out seam, and inventing one for a report counter's benefit would be a second door into the
+           candidate state.
+           STRICTLY LESS BEFORE THE INCREMENT, WHICH IS THE WHOLE OF WHY THIS IS AN INVARIANT AND NOT A TALLY.
+           Both doors into a candidate raise `tried` before the flow can ever be picked (solve_seed_candidates
+           at the creation, solve_resume_candidate during the cold rebuild), a withdrawn record never reaches
+           this line as a candidate at all because the same refusal drops `cand_src`, and each of engine.c's
+           two finish lines is followed by flow_finish — so an end whose candidate was never seeded, or a
+           second end of one flow, is the only way this can fail. */
+        DCHECK(e->ends < e->tried,
+               "an @S candidate flow ended for a search with no unfinished candidate left to end — both doors "
+               "raise `tried` before a candidate flow can be picked and engine.c's two finish lines are "
+               "mutually exclusive and each followed by flow_finish, so this is either a candidate that "
+               "reached this seam without being seeded or one flow finishing twice, and `candEnds` would "
+               "report more candidates ended than this search has ever had");
+        e->ends++;
+    }
     f->cand_verifying = 0;
 }
 
@@ -3219,13 +3266,31 @@ char *solve_json_array(JSContext *ctx) {
            and have not got as far as the sink. One is a WFQ question and the other is a distance question. */
         json_buf_raw(&b, ","); json_buf_key(&b, "turns");
         snprintf(t, sizeof t, "%d", g_pending[i].turns); json_buf_raw(&b, t);
+        /* …AND HOW MANY OF THEM HAVE ENDED, WHICH IS WHAT MAKES EVERY ZERO BELOW READABLE AS A QUESTION ABOUT
+           A PATH OR ABOUT THE SCHEDULE. `tried` is the ASK and `turns` is the service; this is the only fact
+           here about a candidate's own TERMINATION, and the three are read together:
+             `candEnds:0`   beside any zero below — those candidates are STILL LIVE and have not got there
+                            yet. Nothing in front of the source has been shown to turn anything away, and the
+                            work is thread rather than a gate to find.
+             `candEnds:N`   beside `tried:N` and a zero below — every candidate this search has ever had ran
+                            to its own end without reaching that point. THEN, and only then, the readings
+                            below are about a path.
+           UNCONDITIONAL, AND 0 IS THE LOAD-BEARING VALUE: it is the state this engine is in, so an omission
+           here would be the defect rather than a statement. Not a rung and not a credit — nothing about the
+           WFQ moves at the write. */
+        json_buf_raw(&b, ","); json_buf_key(&b, "candEnds");
+        snprintf(t, sizeof t, "%d", g_pending[i].ends); json_buf_raw(&b, t);
         /* …AND THE TWO OBSERVATION COUNTS, WHICH ARE WHAT SPLIT `turns:N,reached:0,survived:0` INTO THE THREE
            STATES IT HAS ALWAYS BEEN. `turns` made `reached:0` readable by separating a search the WFQ has
            never served from one whose flows have run; these separate the second of those into the three things
            it was still saying at once, each taking different work:
-             `substituted:0`                      — the runs ended before their own SOURCE READ. A question
-                                                    about the PATH: a gate in front of the source is turning
-                                                    these flows away, and nothing here is about the payload.
+             `substituted:0`                      — no run reached its own SOURCE READ. READ WITH `candEnds`,
+                                                    which is what says whether they ENDED short of it (a
+                                                    question about the PATH, something in front of the source)
+                                                    or are still live and have not arrived (a question about
+                                                    the SCHEDULE). This clause asserted the first outright and
+                                                    is corrected rather than dropped: it is the reading a
+                                                    count of arrivals invites, and it names the wrong work.
              `substituted:D, sinkStrings:0`       — the bytes entered the program and no code-execution sink
                                                     ran at all while they were live. The distance question.
              `sinkStrings:S, survived:0`          — S sinks EXECUTED and not one byte of the candidate was in
