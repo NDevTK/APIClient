@@ -1598,7 +1598,54 @@ function _pruneProbeSessions() {
 // Returns {pocJs, payload, context, source, delivery} — or pocJs:null with `why` when the declared mechanism is
 // one this layer cannot PERFORM. That is an answer, not a failure: the finding stands (the engine fire-verified
 // the breakout), and `why` names the mechanism rather than a missing field.
-function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, pageUrl, marker) {
+// THE `forgeable` VERDICT'S EVIDENCE, AS A SENTENCE — solve.h's `principalGates`, rendered for the one reader a
+// `why` has, which is a person about to reproduce the finding by hand.
+//
+// IT RESTATES AND INVENTS NOTHING. §@H forbids inventing `6` for `x > 5`, and composing
+// `https://x.evil.example` out of `endsWith(".evil.example")` is that same invention one source kind over — so
+// this prints the METHOD the page named, the ARGUMENTS it passed and the ARM the run took, which is what the
+// engine emitted and all of it. Turning `startsWith("https://")` into a REGEX or an anchored pattern would be
+// deciding what the method MEANS, which is the recogniser §RUN-DON'T-MATCH forbids and which endpoint.c's own
+// emitter declines for the identical rows.
+//
+// `holds:false` IS PRINTED AS A FACT AND NOT DROPPED. Forced multi-path runs both arms, so a path that PROVED
+// `origin.startsWith("https://admin.")` false is one whose identity must NOT match it — a constraint exactly as
+// the true arm is, and the arm the shipped page did not take. Dropping it would render a path constrained in
+// one direction as one constrained in the other.
+//
+// THE SHAPE IS ASSERTED AND NEVER DEFAULTED. These bytes are the ENGINE'S — this codebase computed them — so a
+// malformed row is our own logic being wrong and a DCHECK is what belongs there (a page's handler, its origin
+// string and a bundle's bytes are the foreign input that may never be asserted on, and none of them is here).
+// A `||` or a `?.` past a missing member would turn "the producer does not emit this" into a plausible
+// sentence, which is the one thing a delivery reason must not be.
+function _principalGateSentence(principalGates) {
+  DCHECK(Array.isArray(principalGates) && principalGates.length > 0,
+         "a `forgeable` principal verdict arrived with no gates to state — solve.c emits `principalGates` on "
+         + "exactly that verdict and asserts the pairing both ways, so this record would say an identity is "
+         + "constrained and then not say by what");
+  return principalGates.map(function (pg) {
+    DCHECK(pg && typeof pg.principal === "string" && pg.principal.length > 0
+           && Array.isArray(pg.predicates) && pg.predicates.length > 0,
+           "a principal gate arrived with no principal named or with no predicates — the engine writes the "
+           + "name and the rows together at the capture, so a row holding one of them names a demand nothing "
+           + "can answer for");
+    var preds = pg.predicates.map(function (pr) {
+      DCHECK(pr && typeof pr.method === "string" && pr.method.length > 0
+             && Array.isArray(pr.arguments) && typeof pr.holds === "boolean",
+             "a principal gate's predicate arrived without its method, its arguments or its arm — the arm IS "
+             + "the fact the record carries, and a predicate missing any of the three is a constraint this "
+             + "reason would state without being able to say which identity satisfies it");
+      return "`" + pr.method + "(" + pr.arguments.map(function (a) { return JSON.stringify(a); }).join(", ")
+           + ")` answered " + (pr.holds ? "true" : "false");
+    });
+    // JOINED WITH `and` BECAUSE THE DEMANDS OF ONE PATH CONJOIN (solve.h): an identity meeting some of them
+    // fails the rest, and a reader handed an `or` would stand up a domain that does not reproduce the finding.
+    return "the page's own tests over `" + pg.principal + "`: " + preds.join(", and ");
+  }).join("; and ");
+}
+
+function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, pageUrl, marker,
+                           principalDemand, principalGates) {
   DCHECK(typeof poc === "string" && poc.length > 0,
          "an @S live-verify was started with no engine poc — solve_json_array emits `poc` on every fire-verified "
          + "entry and only on those, so a probe without one is being built for a PARKED search (sink=" + sinkName + ")");
@@ -1742,19 +1789,112 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
     // probe that can answer "no" for a reason that is not a divergence poisons the one signal this whole path
     // exists to produce, so the mechanism is NAMED instead of half-performed.
     //
-    // WHAT IT NEEDS is one thing and it is not this file's: an attacker document at an origin the harness
-    // CHOOSES — a registrable one, served rather than sandboxed — so the post carries an origin a gate can be
-    // tested against. The engine's own half of that pair is the required-origin the gate demands, which it
-    // does not yet surface for a forgeable check (a startsWith/endsWith/includes token is not recorded by any
-    // derivation today), so neither side of the delivery can be built without the other.
+    // WHAT IT NEEDED IS NOW HALF IN HAND, AND THE SENTENCE THAT STOOD HERE IS KEPT IN ITS OWN WORDS BECAUSE ITS
+    // ARGUMENT IS SOUND AND A READER WHO RE-DERIVES IT FROM THE OPAQUE ORIGIN WILL RE-ADD THE BLANKET REFUSAL.
+    // It read: "WHAT IT NEEDS is one thing and it is not this file's: an attacker document at an origin the
+    // harness CHOOSES — a registrable one, served rather than sandboxed — so the post carries an origin a gate
+    // can be tested against. The engine's own half of that pair is the required-origin the gate demands, which
+    // it does not yet surface for a forgeable check (a startsWith/endsWith/includes token is not recorded by any
+    // derivation today), so neither side of the delivery can be built without the other."
+    //
+    // ITS PARENTHETICAL WAS FALSE WHEN IT WAS WRITTEN, which matters more than the clause it sat in, because
+    // what a reader ACTS on is the mechanism it names. A startsWith/endsWith/includes token IS recorded, by
+    // `concolic_strpred_file`, and has been for as long as `endpoint.c` has emitted `predicates` off
+    // `concolic_strpred_read` for every @H parameter. What did not exist was a READER at the @S emission —
+    // solve.c named `strpred` nowhere at all — so the engine half was never a derivation to BUILD, it was a
+    // consumption to ADD, and a reader obeying the clause would have built a second recorder beside a working
+    // one. That is CLAUDE.md's next-diff-clause defect exactly: the spec half (a forgeable gate must be
+    // surfaced) was right and the this-tree half was wrong.
+    //
+    // AND ITS ORDERING CLAIM — "neither side can be built without the other" — WAS RIGHT AND IS WHY THIS ARM
+    // SPLITS RATHER THAN PERFORMING. The engine now states the verdict (solve.h `principalDemand`) and its
+    // evidence (`principalGates`), so this layer can finally tell a handler that checks NOTHING from one that
+    // gates — which is the pair the old refusal could not separate and whose conflation was its whole reason.
+    //
+    // FOUR ARMS, AND EVERY ONE OF THEM IS SPELLED, because the field has four states and three of them are
+    // values: an ABSENT verdict is not `none`. It says THIS ENGINE DID NOT STATE IT, which while this file is
+    // interpreted from the tree and the engine's C is live only after a build (CLAUDE.md
+    // §A-CROSS-BOUNDARY-DIFF) is the ORDINARY case and not an exotic one. Reading it as `none` would deliver
+    // with the opaque identity for EVERY finding there is, and every origin-gating victim would answer no-hit
+    // — manufacturing the divergence signal this arm exists to protect, out of the half-deployed state.
+    var _pgWhy = "this source arrives by CROSS-DOCUMENT MESSAGE (HTML §9.3.3 \"Posting messages\"): the "
+               + "attacker holds the victim open in a document of their own and postMessage()s the payload to "
+               + "it. ";
     out.delivery = "the attacker keeps the victim open in a document of their own and posts the payload to it";
-    out.why = "this source arrives by CROSS-DOCUMENT MESSAGE (HTML §9.3.3): the attacker holds the victim open "
-            + "in a document of their own and postMessage()s the payload to it. The post itself is performable "
-            + "here — what is not is the ORIGIN it comes from: the attacker page is a sandboxed frame with an "
-            + "OPAQUE origin, so the victim would see `event.origin === \"null\"`, and a handler with any "
-            + "origin check would report NO HIT for a reason that is not an engine divergence. Reproducing it "
-            + "needs an attacker document at a chosen, registrable origin. The sink and its breakout are still "
-            + "fire-verified.";
+    if (principalDemand === "unforgeable") {
+      // §Attacker-sources' SUPPRESSING half, and it is the engine's strongest negative result rather than a
+      // gap in this layer: the path every candidate replays PINNED the victim's `event.origin` to a concrete
+      // token, and a principal is a value an attacker names only by OWNING the domain it names. There is no
+      // delivery to perform at any origin this or any other harness could present.
+      out.why = _pgWhy + "The engine reports that the path reaching this sink PINNED the victim's "
+              + "`event.origin` to an exact value — an identity an attacker names only by owning the domain, so "
+              + "no cross-document delivery reproduces it. That is not a statement that the sink is safe: the "
+              + "sink and its breakout are fire-verified, and it stays reachable through any path whose origin "
+              + "check is forgeable.";
+      return out;
+    }
+    if (principalDemand === "forgeable") {
+      // §Attacker-sources' SOLVING half. The demand is one an attacker CAN meet by registering a domain, so the
+      // finding is real and reproducible — and not by THIS layer, because the identity a sandboxed frame
+      // presents is the opaque one and nothing here can choose another. The required shape is stated so a
+      // person reproducing it by hand knows what to stand up, which is the whole content of a `why`.
+      out.why = _pgWhy + "The engine reports that the path reaching this sink demands a FORGEABLE identity of "
+              + "the victim's `event.origin` — " + _principalGateSentence(principalGates) + ". An attacker "
+              + "meets that by registering a matching domain; this layer cannot, because the attacker page is a "
+              + "sandboxed frame whose origin is OPAQUE, so the victim would see `event.origin === \"null\"` and "
+              + "report NO HIT for a reason that is not an engine divergence. Reproducing it needs an attacker "
+              + "document at the stated identity. The sink and its breakout are still fire-verified.";
+      return out;
+    }
+    if (principalDemand === "none") {
+      // THE ONE ARM THE OLD REFUSAL WAS WRONG ABOUT, and it is wrong in the direction that loses a real PoC:
+      // the path demanded NOTHING of the victim's `event.origin`, so the handler accepts any identity —
+      // including the opaque `"null"` a sandboxed frame presents — and the post is performable HERE, with the
+      // machinery that already exists and no domain to register.
+      //
+      // NAMED RESIDUAL — THE POST IS NOT PERFORMED YET AND THIS IS NOT THE ARM'S FINAL ANSWER.
+      //   WHAT IS NOT COVERED: this arm states the delivery is performable and does not perform it, so a
+      // `none` finding is reported with a reason rather than with a `pocJs`.
+      //   WHAT THE NEXT DIFF BUILDS: a two-statement delivery in this arm — `window.open(pageUrl, "_blank")`
+      // held in a local, then a `postMessage(payload, "*")` REPEATED over the session's own `waitMs`, because
+      // an opener cannot observe a cross-origin openee's load and a single post lands on the initial
+      // `about:blank` and is lost. Its handle is real rather than assumed: HTML §7.3.1.7 "Navigable target
+      // names"' rules for choosing a navigable set `windowType` to "new with no opener" only when the opening
+      // document's opener policy is "same-origin" or "same-origin-plus-COEP", and `manifest.json` ships
+      // `same-origin-allow-popups`, which is neither — so §7.2.2.1's step 17 `return null` does not fire and
+      // step 19 hands back the openee's WindowProxy. `poc-sandbox.html` states that same conjunction at its own
+      // site and is the sibling to read before building it. Landing it also retires that file's sentence
+      // calling a `handle:"none"` completion "a CONTRACT GAP in offscreen-brain.js's buildLiveDelivery — a
+      // delivery arm that grew a second statement", which this arm would then do deliberately.
+      //   HOW ITS ABSENCE WOULD SHOW: an @S finding whose record carries `principalDemand:"none"` rendering a
+      // `pocWhy` in the panel where every `address`-delivered finding beside it renders a runnable `pocJs`,
+      // with the verify button reporting a mechanism it declined rather than a delivery that ran.
+      out.why = _pgWhy + "The engine reports that the path reaching this sink demanded NOTHING of the victim's "
+              + "`event.origin`, so the handler accepts any identity — including the opaque `\"null\"` a "
+              + "sandboxed attacker frame presents. This delivery is therefore performable here with no domain "
+              + "to register, and this layer does not perform it yet: it opens the victim and posts, which is "
+              + "two statements and a repeat rather than the one expression every other arm here returns. The "
+              + "sink and its breakout are fire-verified.";
+      return out;
+    }
+    // AND THE FOURTH STATE, WHICH IS AN ABSENCE AND NOT A TOKEN. This is the old blanket refusal, kept for
+    // exactly the population it is still correct about: an engine that does not state what the path demanded.
+    // A vocabulary token this layer has no arm for lands here too, and that is deliberate rather than lazy —
+    // an unknown token is a contract drift whose safe reading is the same as an unstated one, and refusing on
+    // both is what stops a delivery being performed on a verdict nobody wrote. The DFAIL below is the dev
+    // answer for the `delivery` vocabulary; this verdict is a value rather than a mechanism, and a page's own
+    // record is not a thing to abort the zone over.
+    DCHECK(principalDemand === undefined || principalDemand === null,
+           "the engine stated a principal-demand verdict this layer has no arm for ("
+           + JSON.stringify(principalDemand) + ") — the token vocabulary is solve.h's `principalDemand` field "
+           + "(none / forgeable / unforgeable), so either a verdict was added in C without its arm here, or "
+           + "this record did not come from solve_json_array");
+    out.why = _pgWhy + "The post itself is performable here — what is not known is the ORIGIN it must come "
+            + "from: this engine build does not state what the path reaching the sink demanded of the victim's "
+            + "`event.origin`, so a handler that checks nothing and a handler with any origin gate cannot be "
+            + "told apart, and both would report NO HIT through this one channel for reasons only one of which "
+            + "is an engine divergence. The attacker page is a sandboxed frame with an OPAQUE origin, so the "
+            + "victim would see `event.origin === \"null\"`. The sink and its breakout are still fire-verified.";
     return out;
   }
   DFAIL("the engine declared a delivery mechanism this layer has no arm for: " + JSON.stringify(delivery)
@@ -1769,7 +1909,8 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
 }
 function startExploitProbe(msg) {
   _pruneProbeSessions();
-  const { waitMs, findingId, sinkName, poc, source, delivery, deliveryPrefix } = msg || {};
+  const { waitMs, findingId, sinkName, poc, source, delivery, deliveryPrefix,
+          principalDemand, principalGates } = msg || {};
   if (!poc) throw new Error("need the engine's poc (the fire-verified breakout input from the @S finding)");
 
   // pageUrl: the page the finding was observed on (recorded in securityFindings). The caller may pass it;
@@ -1834,7 +1975,8 @@ function startExploitProbe(msg) {
   // the user activation window.open needs. When the real page's sink fires, intercept.js → content.js →
   // PROBE_HIT lands on this marker and _recordProbeHit decides whether the reporting document is the one the
   // payload was delivered to.
-  var _poc = buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, session.pageUrl, marker);
+  var _poc = buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, session.pageUrl, marker,
+                               principalDemand, principalGates);
   DCHECK(!!_poc && typeof _poc === "object" && typeof _poc.payload === "string",
          "buildLiveDelivery answered with no record — it returns {pocJs, payload, context, source} on every "
          + "arm including the ones it cannot perform, so an absent one is that function having grown a path "

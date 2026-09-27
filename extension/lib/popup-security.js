@@ -902,6 +902,20 @@ function renderSecurityPanel() {
       if (item.deliveryPrefix) probeObj.deliveryPrefix = item.deliveryPrefix;
       if (item.cspBlocks)      probeObj.cspBlocks = item.cspBlocks;
       if (item.trustedTypes)   probeObj.trustedTypes = item.trustedTypes;
+      /* AND WHOSE IDENTITY THE DELIVERY NEEDS — the OTHER half of the engine's delivery declaration, and a
+         different question from `delivery` rather than a detail of one: that says HOW bytes get into the
+         source, and this says whether an attacker can be the one putting them there. solve.h's
+         `principalDemand` is the verdict a delivery layer BRANCHES on (`none`/`forgeable`/`unforgeable`) and
+         `principalGates` is the evidence under `forgeable`.
+         ABSENCE IS CARRIED AS ABSENCE, for the reason stated above about `item.delivery || ""`: `principalDemand`
+         legitimately has no key — an artifact built before the engine stated it, which is the ORDINARY case
+         while this file deploys on WRITE and the engine's C is live only after a build — and solve.h is
+         explicit that an absent verdict may NEVER be read as `none`. Normalising it here would hand the
+         receiver a value the record does not carry, and the receiver's own four-arm split would then perform a
+         delivery with an opaque identity for a finding whose page gates on origin, whose NO HIT §LIVE-VERIFY
+         reads as an engine-fidelity divergence. So the receiver sees the record's real shape. */
+      if (item.principalDemand) probeObj.principalDemand = item.principalDemand;
+      if (item.principalGates)  probeObj.principalGates = item.principalGates;
       var probe = JSON.stringify(probeObj);
       verifyHtml = '<div class="verify-row">'
         + '<button class="verify-btn" data-probe=\'' + esc(probe) + '\' data-key="' + esc(key) + '">Verify in real Chrome</button>'

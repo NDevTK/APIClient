@@ -2392,6 +2392,42 @@ int concolic_principal_pinned(void)
     return 0;
 }
 
+/* …AND WHAT IT DEMANDED WITHOUT PINNING — see concolic.h for what the pair decides and for the named residual.
+ * THE SAME WALK OVER THE SAME COLUMN as concolic_principal_pinned above, and it is a second function rather
+ * than a second return of that one because the two answers are different KINDS: a pin is a yes/no that decides
+ * whether a search may open at all, and a demand is an OBSERVATION a report carries. Folding them would make
+ * one call answer "may this be reported" and "what must the attacker's identity look like", which is the
+ * one-predicate-two-questions shape §Solver-half forbids — and the looser half would then be decided by the
+ * stricter one, since a pinned principal returns before any demand is read.
+ * THE ROW IS READ THROUGH `concolic_strpred_read` AND NOT OFF `cons_lookup`, so the key composition
+ * (`strp_key`) has exactly one speller: a second lookup spelling `strpred` here would be a copy of a namespace
+ * whose whole purpose is that `≠ "admin"`, `> 5` and `startsWith("/api")` are three claims about one hole. */
+void concolic_principal_preds(void (*cb)(void *user, const char *src, const ConcolicPred *pred, int n),
+                              void *user)
+{
+    int i;
+
+    DCHECK(cb != NULL,
+           "the demands a flow made of an attacker's principal were walked with nowhere to hand them — a walk "
+           "that reads the constraint and discards it is the computed-writer-with-no-reader §@S names, in the "
+           "one observation a delivery layer needs to know whose identity it has to model");
+    for (i = 0; i < g_srcs_n; i++) {
+        const ConcolicPred *pr;
+        int n = 0;
+
+        if (!g_srcs[i].principal) continue;
+        /* THE DECLARED `src` IS THE HOLE KEY FOR A SOURCE READ, and that is a property of the two spellings
+           rather than a coincidence: a source read's display shape is `{<src>}` (the component composes it from
+           the provenance and concolic.c asserts that composition at the mint), and a hole key is the shape with
+           every brace removed. The DERIVED spellings are what the residual in the header is about. */
+        pr = concolic_strpred_read(g_srcs[i].src, &n);
+        DCHECK(n == 0 || pr != NULL,
+               "a principal's predicate set reported a COUNT with no row — the two are returned by one line, "
+               "so a count alone would be walked as rows this flow never recorded");
+        if (n > 0) cb(user, g_srcs[i].src, pr, n);
+    }
+}
+
 int concolic_source_delivery(const char *root, const char **kind, char *prefix)
 {
     int row = root_declared_row(root);

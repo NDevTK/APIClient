@@ -190,14 +190,15 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
    and they must never be confused:
      fire-verified  `{"sink":..,"source":..,"poc":..,"firesOn":..[,"cspBlocks":".."][,"trustedTypes":"script"]
                       ,"searched":N[,"sourceEncodes":".."][,"sourceDelivers":".."][,"delivery":".."]
-                      [,"deliveryPrefix":"#"]}`
+                      [,"deliveryPrefix":"#"][,"principalDemand":".."][,"principalGates":[..]]}`
      parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"resumed":R,"resumedWithdrawn":RW,
                       "reached":M,"turns":T,
                       "substituted":D,"sinkStrings":X,"runwayPerMille":R2,"survived":S,
                       "survivedOf":L[,"survivedAt":A,"survivedTo":O],"escaped":E[,"fires":F][,"witnessed":W]
                       [,"deliveryProbed":B],"probes":P,"payloads":[..],
                       "survivedBy":[..],"withdrawn":[..]
-                      [,"sourceEncodes":".."][,"sourceDelivers":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
+                      [,"sourceEncodes":".."][,"sourceDelivers":".."][,"delivery":".."][,"deliveryPrefix":"#"]
+                      [,"principalDemand":".."][,"principalGates":[..]]}`
    The parked shape exists because absence is never a "safe" verdict: a sink an attacker source REACHES is
    reported whether or not its breakout has been solved, and it carries how far the search got plus the source's
    own declaration. There is deliberately no "verified":false — the entry states what was searched, never that
@@ -480,6 +481,56 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
                     plant, and nothing transforms the bytes on the way in). ABSENT = the source declared
                     none, which is what server-injected page state is: the attacker writes it directly and no
                     component carries or transforms it. A consumer states that; it never guesses a vector.
+     `principalDemand` WHETHER AN ATTACKER CAN HOLD THE IDENTITY THIS DELIVERY NEEDS, and it is a different
+                    question from `delivery` rather than a detail of one: `delivery` says HOW bytes get into the
+                    source, and for a `cross-document-message` the post itself is performable by anything
+                    holding a handle while the victim's handler reads `event.origin` BEFORE it reads
+                    `event.data`. §Attacker-sources decides the pair and this states which half a path is in:
+                      `none`        the path every candidate of this search replays demanded NOTHING of any
+                                    declared principal, so any identity satisfies it — INCLUDING the opaque one
+                                    a sandboxed attacker frame has, which is what makes such a finding
+                                    deliverable with no domain to register and nothing to serve.
+                      `forgeable`   it demanded a shape an attacker CAN hold (`endsWith`/`includes`/
+                                    `startsWith`), which §Attacker-sources SOLVES — and `principalGates` below
+                                    carries which shape. A layer that cannot present a chosen identity says so;
+                                    it never substitutes an opaque one, which would answer NO HIT for a reason
+                                    that is not an engine divergence.
+                      `unforgeable` it PINNED one, which no cross-document attacker can meet. Reachable only
+                                    through the second capture door — a candidate flow arriving with its own
+                                    context probe (solve_eval_sink's verifying branch), which detect_sink's
+                                    suppression never sees — because a DETECTION that pinned a principal never
+                                    opens a search at all.
+                      ABSENT IS NOT ONE OF THOSE AND MUST NEVER BE READ AS `none`. It says THIS ENGINE DID NOT
+                    STATE IT, which is two real things: a search whose path was never frozen, and — the one that
+                    matters — an artifact built before this field existed. The trusted zone's JavaScript is
+                    INTERPRETED FROM THE TREE while this C is live only after a build (§A-CROSS-BOUNDARY-DIFF),
+                    so a reader between the two meets exactly that artifact; an absence read as `none` would
+                    have it deliver with an opaque identity for every finding there is, and every origin-gating
+                    victim would answer no-hit, which §LIVE-VERIFY reads as an ENGINE-FIDELITY DIVERGENCE. The
+                    half-deployed state would manufacture the one signal this surface exists to keep clean. So
+                    the verdict is stated POSITIVELY on every examined entry and a consumer spells all four arms.
+     `principalGates` THE EVIDENCE UNDER A `forgeable` VERDICT — what the identity must look like, where the
+                    verdict above says only whether one exists. Present exactly when the verdict is `forgeable`
+                    and never otherwise, which the emitter asserts both ways: `forgeable` with no rows would say
+                    an identity is constrained and not say by what, and rows under any other verdict would offer
+                    a shape to satisfy for a path whose answer is that no shape does.
+                      EACH ENTRY IS `{"principal":<src>,"predicates":[{"method":..,"arguments":[..],
+                    "holds":B}]}` — ONE per declared principal the path tested, and the set CONJOINS, because
+                    they are the demands of one path. A consumer that met some of them would compose an identity
+                    failing the rest, which is a PoC that does not fire for a reason that is not an engine
+                    divergence, and §LIVE-VERIFY reads a no-hit as a divergence.
+                      `predicates` IS endpoint.c's GRAMMAR VERBATIM, so a call predicate has ONE spelling in
+                    this engine's output: the method the page named, the arguments it passed, and the arm this
+                    run took. `holds:false` is a fact and not a modifier — forced multi-path runs both arms, so
+                    a path that PROVED `origin.startsWith("https://admin.")` false is one whose identity must
+                    NOT match it.
+                      IT STAYS A SHAPE. Nothing here picks an origin that satisfies the predicate; §@H forbids
+                    inventing `6` for `x > 5` and this is the same invention one source kind over. §@S SOLVES
+                    freely for a firing input because its emission is working-PoC-only and fire-verified, so the
+                    search for an identity belongs to the layer that performs the delivery and can verify what
+                    it chose. A layer that MODELS the chosen identity rather than registering it states that:
+                    an origin the trusted zone stamped because the engine's own record named it is ENGINE
+                    AGREEMENT, and §LIVE-VERIFY keeps the real-browser run as the oracle.
    The engine owns this whole vocabulary. A delivery layer switches on these tokens and may say it cannot
    PERFORM one, but it never decides which source uses which — that was a `{hash}|{search}|{pm}|{reply}` table
    in the offscreen matching a display shape this engine has never emitted, which is why live verify could not
