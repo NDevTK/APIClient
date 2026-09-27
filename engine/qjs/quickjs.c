@@ -348,6 +348,11 @@ struct JSRuntime {
        when it has not. Wraps at 2^32 as a MONOTONE COUNTER is entitled to — a host compares it for INEQUALITY
        only, so a wrap costs one redundant walk and never a skipped one. */
     uint32_t orphan_gen;
+    /* …AND WHO WANTS TO BE TOLD AS IT HAPPENS — JS_SetOrphanBornHook. The generation above answers "could the
+       set have grown"; this is for the part of the set no later walk can see, a body whose only closure is
+       released with the frame that built it. NULL on every runtime until a host installs one. */
+    JSOrphanBornFn *orphan_born;
+    void *orphan_born_opaque;
     JSMallocFunctions mf;
     JSMallocState malloc_state;
     JSArenaState arena_state;
@@ -24214,6 +24219,17 @@ static JSValue js_closure2(JSContext *ctx, JSValue func_obj,
                 goto fail;
             var_refs[i] = var_ref;
         }
+    }
+    /* AND THE SET IS OFFERED AS IT GROWS AND NOT ONLY COUNTED — JS_SetOrphanBornHook, whose banner carries the
+       whole argument. AT THIS LINE and not beside the generation bump above, which is the one thing about the
+       placement that is load-bearing: the bump is a NUMBER and needs nothing of the object, while a host handed
+       this closure may KEEP it and call it later, so it is offered only once `var_refs` holds every cell this
+       function owes it — above, `p->u.func.var_refs` is still NULL. The three filters are JS_OrphanTakeOne's own
+       so that both doors offer one set, and marking `entered` on a nonzero answer is that function's own
+       sentence: a body the host has scheduled is not a second orphan. */
+    if (ctx->rt->orphan_born && b->byte_code_buf && !b->entered && !b->is_program) {
+        if (ctx->rt->orphan_born(ctx, func_obj, b->arg_count, ctx->rt->orphan_born_opaque))
+            b->entered = 1;
     }
     return func_obj;
  fail:
@@ -112491,6 +112507,15 @@ JSValue *JS_FlowNewCall(JSContext *ctx, JSValueConst func, JSValueConst this_val
  * Returns 1 if one was handed over, 0 if this heap holds none. `arg_count` is the callee's own declared formal
  * parameter count, which is how many unknowns its caller has to supply. */
 uint32_t JS_OrphanGen(JSRuntime *rt) { return rt->orphan_gen; }
+
+/* WHO IS TOLD WHEN ONE IS BORN — see quickjs.h for why a generation is not enough and what a nonzero answer
+   commits the runtime to. Installed and taken down by the host around the span in which it has a frontier to
+   route to; a runtime with no hook reaches nothing below. */
+void JS_SetOrphanBornHook(JSRuntime *rt, JSOrphanBornFn *hook, void *opaque)
+{
+    rt->orphan_born = hook;
+    rt->orphan_born_opaque = opaque;
+}
 
 int JS_OrphanTakeOne(JSContext *ctx, JSOrphanVisitFn *visit, void *opaque)
 {

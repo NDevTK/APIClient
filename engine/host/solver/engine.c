@@ -7086,8 +7086,14 @@ static long g_orphan_claims_met, g_orphan_claims_unmet;
 /* …AND WHETHER ANY CLAIM IS STILL OPEN. It is a LATCH set by a walk that found none, not a counter maintained
    at every site that could clear one: a claimant can also leave the frontier by being finished or paged, and a
    counter would then have to be decremented at flow_remove, at flow_release and at the park — three obligations
-   for a fact one walk answers exactly. The walk is O(members) and runs once per orphan TAKEN, only in a session
-   that resumed drives at all, and it stops for good the first time it finds the frontier holds none. */
+   for a fact one walk answers exactly. It stops for good the first time it finds the frontier holds none.
+   THIS SAID THE WALK "RUNS ONCE PER ORPHAN TAKEN", AND IT IS REWRITTEN RATHER THAN DELETED because the reason it
+   was true is the reason the latch has to be cheap: while a take was the only door, the walk ran a few dozen
+   times in a session and the latch was an optimisation. engine_orphan_born is a SECOND reader of the same walk
+   at a FAR hotter event — every function object the runtime builds — so the latch is now what makes that door
+   affordable rather than merely tidy, and it is answered at the seeding (engine_orphan_claim_open) instead of
+   being discovered on the first closure of the compile. The walk is still O(members) and still only in a session
+   that resumed drives at all; what changed is how often it would run without the latch. */
 static int g_orphan_claims_closed;
 
 /* HAND THIS BODY TO EVERY RESUMED DRIVE THAT WAS WAITING FOR IT, and answer how many there were.
@@ -7100,6 +7106,63 @@ static int g_orphan_claims_closed;
    deleted pointer-keyed index one level over: the value would be a `Flow *`, a flow leaves the frontier by
    several different doors, and an entry that outlives its flow answers a later take with a dangling pointer.
    The registry is the one structure that cannot be stale about which flows exist, so it is what is asked. */
+static int engine_orphan_route(JSContext *ctx, JSValueConst fn, int argc, uint64_t hash);
+
+/* IS ANY INHERITED CLAIM STILL WAITING FOR A BODY — the same predicate the routing walk counts as `open`, asked
+   ONCE at seeding so that a session which inherited no drive never pays for the routing walk at all. It is the
+   latch's answer computed where the answer is already known rather than discovered on the first closure a page
+   builds, which is what engine_orphan_born needs it for: that hook is reached by EVERY function object in the
+   runtime, and the latch is the whole of what makes it free. */
+static int engine_orphan_claim_open(void) {
+    Flow *fl;
+    int i;
+
+    for (i = 0; (fl = flow_at(i)) != NULL; i++)
+        if (fl->orphan_want && JS_IsUndefined(fl->fn)) return 1;
+    return 0;
+}
+
+/* THE SAME WALK, ASKED AT THE ONE MOMENT THE BODY EXISTS RATHER THAN AT A TAKE — quickjs's JS_SetOrphanBornHook.
+   A take enumerates the HEAP, so it can hand over only a body some live reference is holding; a body whose only
+   closure is a NESTED DECLARATION inside a call frame is released with that frame, so it is takeable for the
+   length of one frame and invisible before and after. Whether any flow's ask falls inside that window is a fact
+   about the SCHEDULE, which §Testing names as the shape a green must never depend on — and the round trip is
+   where it stops being a nicety, because the nested body is itself a parked claim and its own parent is another.
+   MEASURED, ON THE FIXTURE'S OWN RESIDUE, AND IT IS WHY THIS EXISTS. The cold document ships an uncalled
+   function with an uncalled function inside it, so the residue carries THREE locators: two arms of the outer
+   drive and one for the inner body. A session that SEEDS the outer drive takes the inner body, because the
+   outer arm FORKS and the fork CLONES the live frame, so the nested closure stands in the frontier until the
+   sibling is picked. A session that RESUMES the outer drive from the residue does not fork at all — the replay
+   consumes a RECORDED arm — so the outer call is built and its frame ends inside ONE step, and the inner body is
+   offered to nobody: one take in the whole session, `seed-one-orphan-flow` 0, and the third claim carried
+   forward unmet. Running the residue through a third session is a FIXED POINT — same nineteen records, 2 met, 1
+   unmet, for ever. The claim, the locator, and the routing to EVERY claimant were all correct; what was missing
+   was a moment at which the claim could be satisfied.
+   IT ROUTES AND NEVER SEEDS, which is the one thing this door may not borrow from the take. A body nobody
+   claimed is left takeable and the take seeds it exactly as before. Seeding here would mint a frontier member
+   from inside a compile, with no flow switched in and no path under it — the take asserts both of those at the
+   line that mints, and they are properties of the DISCOVERING FLOW, which a closure's creation does not have. */
+static int engine_orphan_born(JSContext *ctx, JSValueConst fn, int argc, void *opaque) {
+    uint64_t hash;
+
+    (void)opaque;
+    /* THE LATCH FIRST, BEFORE THE HASH. Only cold_resume opens a claim and it runs before any flow is picked, so
+       a frontier that holds none holds none for the rest of the session — and this hook is on the path of every
+       function object a page builds, so a session with no residue must pay one load and one branch here and not
+       a fold over a function's source text. */
+    if (g_orphan_claims_closed) return 0;
+    hash = JS_OrphanHash(ctx, fn);
+    /* THE LOCATOR IS THIS CODEBASE'S OWN COMPOSITION over bytes a stranger wrote, so its WELL-FORMEDNESS is an
+       invariant this engine owes and may assert — solver/cold.c refuses this same value on the way IN ("no body
+       hashes to the value this file uses to mean 'not a drive'"), and the two ends have to agree or a residue
+       would carry a name no claim could ever match and the drive would wait for ever. */
+    DCHECK(hash != 0,
+           "a body this runtime has just built names itself with the value the cold tier writes to mean 'not a "
+           "drive' — solver/cold.c refuses that locator when it reads a residue, so a claim could never match "
+           "this body and the fold that produced it has collided with the one reserved answer");
+    return engine_orphan_route(ctx, fn, argc, hash);
+}
+
 static int engine_orphan_route(JSContext *ctx, JSValueConst fn, int argc, uint64_t hash) {
     Flow *fl;
     int i, open = 0, n = 0;
@@ -7252,10 +7315,15 @@ static int engine_orphan_resume(JSContext *ctx, Flow *f) {
         g_orphans_driven++;
         base = engine_orphan_call(ctx, f->fn, f->orphan_argc, f->orphan_hash);
         f->frame = base;
-        /* THE WAIT IS OVER AND IT IS NOT COUNTED AGAIN HERE. `orphanClaimsMet` counts HAND-OVERS BY A TAKE,
-           which is the event the round trip is about; an arm that inherited the function from a waiting parent
-           reaches this line too, and counting frames built would add those to a number compared against the
-           records. */
+        /* THE WAIT IS OVER AND IT IS NOT COUNTED AGAIN HERE. `orphanClaimsMet` counts HAND-OVERS BY THE ROUTING
+           WALK, which is the event the round trip is about; an arm that inherited the function from a waiting
+           parent reaches this line too, and counting frames built would add those to a number compared against
+           the records.
+           IT SAID "BY A TAKE", AND THE CLAUSE IS REWRITTEN RATHER THAN DELETED because a reader who re-derives it
+           from the seed will re-derive the take: the walk has TWO callers now — the take, and a body's own
+           creation (engine_orphan_born) — and `met` counts the walk rather than either door, so a session in
+           which no take ever routed still reports every claim it satisfied. What the number means is unchanged
+           and where it is raised is unchanged; what is no longer true is that a take is the only way to raise it. */
         f->orphan_want = 0;
         return ORPHAN_STEP_RESUMED;
     }
@@ -7433,7 +7501,22 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
      * reachable in the first place — finds nothing left to take and finishes having driven nothing. The
      * function would still be driven and the WORK would not look lost, which is exactly what makes it the kind
      * of loss nothing reports.
-     * IT IS SKIPPED ENTIRELY WHEN NO CLAIM CAN BE OPEN, so a session with no residue pays one comparison. */
+     * IT IS SKIPPED ENTIRELY WHEN NO CLAIM CAN BE OPEN, so a session with no residue pays one comparison.
+     * AND IT IS ONE OF TWO DOORS ONTO THE SAME WALK NOW, not a selector and not a fallback: engine_orphan_born
+     * asks the identical question at a body's CREATION, which is the only moment a body whose closure dies with
+     * the frame that built it can be offered to anybody. Two call sites of one function at two events, exactly as
+     * the COW capture is reached from several accessors — there is no condition here choosing between them.
+     * NAMED RESIDUAL — WHAT IS NOT COVERED: whether this door can still fire at all. A claim is opened only by
+     * cold_resume, which runs INSIDE engine_sched_begin above every compile, and the born hook is installed in
+     * that same function — so every body of the page is offered at its creation and marked `entered` if it was
+     * claimed, which is precisely the filter that keeps it from reaching a take. The population left for this
+     * line is a body that was ALREADY a live, un-entered, non-program closure when the claim opened, and nothing
+     * here establishes that such a body exists. WHAT THE NEXT DIFF BUILDS: this branch deleted, with the ordering
+     * it depends on ASSERTED at the seeding instead of being true by where two calls happen to sit. HOW ITS
+     * ABSENCE SHOWS: `hand-a-parked-drive-its-function` in the step-unit histogram of a resumed run — nonzero
+     * says this door fired and the population is real, and zero on every run of every host says it is the dead
+     * code §Aggressively-delete asks for. It is NOT deleted in this diff because a wrong answer here is a claim
+     * that waits for ever, and that number has not been read yet. */
     if (!g_orphan_claims_closed && engine_orphan_route(ctx, t.fn, t.argc, hash)) {
         /* NO FRESH DRIVE IS SEEDED BESIDE THEM. The body is being driven — by flows standing on the recorded
            paths that made it reachable, which is strictly more than a fresh drive from the baseline would
@@ -11570,8 +11653,26 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    neighbour where it means its ANCESTOR is the stale-claim failure with the conclusion intact,
                    which is the shape a reader trusts hardest — and the reason the boundary-sum assert in
                    engine_frontier_census is over WHICH SIDE of the clock each arm is written on rather than
-                   over anybody's prose. A claimant therefore does not leave while a take could still feed it,
-                   which is the invariant the old placement bought with a special case. Its absence is a
+                   over anybody's prose.
+                   AND THE SENTENCE THAT FOLLOWED — "a claimant therefore does not leave while a take could still
+                   feed it, which is the invariant the old placement bought with a special case" — IS AN INVARIANT
+                   THIS LADDER DOES NOT HAVE, and it is rewritten rather than deleted because it is exactly what a
+                   reader re-derives from the seed standing above this exit. The seed's rung answering 0 is a
+                   statement about ONE INSTANT, and the orphan set is not final: a live flow that is about to run
+                   a body CREATES function objects, which is the whole reason js_closure2 bumps the generation. So
+                   "the heap holds no untaken orphan NOW" was being read as "no take could ever feed it", and the
+                   two differ by every body some other member has not built yet. Measured on this fixture's own
+                   residue at 8b3b115a: three locators in, TWO met, one carried forward unmet through a third
+                   session unchanged — the inner body of an uncalled function, whose closure the outer drive
+                   builds and releases inside one step. The route is asked at a body's CREATION now
+                   (engine_orphan_born) precisely so that a claim is satisfied at the one moment its body exists
+                   rather than at whichever instant a take happens to land. WHAT IS STILL NOT COVERED, and it is
+                   narrower than what stood here: a body created by some OTHER member AFTER this flow has passed
+                   this line. WHAT THE NEXT DIFF BUILDS: a resting verdict for an open claim — the shape the
+                   referenced return above already has, which this arm cannot borrow because FLOW_STEP_OWED is a
+                   claim about the HOST and only a host event clears it, while a claim is answered by another
+                   FLOW. HOW ITS ABSENCE SHOWS: `orphanClaimsUnmet` nonzero on a run whose residue's locators all
+                   name bodies the page still ships. Its absence is a
                    legitimate outcome and NOT a should-never-happen — §Time-travel has a resumed flow
                    re-deriving from CURRENT sources, and the code itself is one — so it is COUNTED rather than
                    asserted, at the one place it can be distinguished from a drive that ran. Without the count a
@@ -13457,6 +13558,11 @@ static void engine_session_close(void) {
     JS_SetJobEnqueueHook(NULL);
     JS_SetJobDropHook(NULL);
     JS_SetJobRemoveHook(NULL);
+    /* …AND THE ORPHAN-BORN HOOK WITH THEM, for the reason every line in this column has: past this point there
+       is no frontier to route to, and the teardown below still compiles and still builds closures (the result
+       document's own composition runs no page code, but a host that opens a SECOND session in this process
+       does), so a hook left standing would walk a registry that has been given back. */
+    JS_SetOrphanBornHook(JS_GetRuntime(g_sess_ctx), NULL, NULL);
     JS_SetFlowControlHooks(&FC_OFF);
     g_sess_forking = 0;   /* …and the same bit for the callers that ask the seam by symbol — see engine_sched_begin */
     /* THE SESSION'S GENERATION ENDS HERE, and it is the LIVE stamp that is cleared rather than the scheduler's
@@ -13905,6 +14011,11 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
            "un-forked path explored twice, and every branch the existing members already stand on re-forked");
     if (recipes && *recipes) cold_resume(ctx, recipes);
     else flow_add(ctx, JS_UNDEFINED, WORLD_NONE);   /* the first flow: the page's scripts, empty decision vector */
+    /* AND THE ROUTING LATCH IS ANSWERED HERE, WHERE THE ANSWER IS ALREADY KNOWN. Only the resume above opens a
+       claim on an orphan's body, so the frontier either holds one now or holds none for the rest of the session.
+       Closing it here rather than on the first closure a page builds is what makes engine_orphan_born free for
+       every session that inherited no drive — that hook is reached by EVERY function object in this runtime. */
+    if (!engine_orphan_claim_open()) g_orphan_claims_closed = 1;
     /* THE GENERATION THE FIRST SLICE WILL OPEN AT — written to the scheduler's saved copy and NOT to the live
        stamp, which is the whole point of the move. Setting the live one here would stamp everything created
        between this call and the first step — the host reads qjs_bundle_id, pulls the pending list, provides
@@ -13930,6 +14041,13 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
     JS_SetJobEnqueueHook(engine_enqueue_job);   /* ASYNC-AS-FLOW: reactions route to the enqueuing flow's queue */
     JS_SetJobDropHook(engine_drop_jobs);        /* …and §7.5.10 step 7 takes them back off it */
     JS_SetJobRemoveHook(engine_remove_job);     /* …and a toggle task tracker takes ONE back off, by name */
+    /* AND AN INHERITED DRIVE IS HANDED ITS BODY THE MOMENT THAT BODY EXISTS — engine_orphan_born, which is a
+       SECOND READER of the routing walk and not a second door onto the frontier (it routes; it never mints).
+       INSTALLED BELOW THE SEEDING and not above it, which is the one ordering this hook has: the latch it reads
+       is answered by the line after cold_resume, so a hook installed earlier would be asked about a frontier
+       that had not been rebuilt yet — and engine_orphan_route would have closed the latch on the first closure
+       of the compile, before a single claim existed. */
+    JS_SetOrphanBornHook(JS_GetRuntime(ctx), engine_orphan_born, NULL);
     /* THE FRONTIER IS THE ENGINE'S RESERVE, and this is what lets an allocator spend it. Installed with the
        session because that is exactly when there is a frontier to page: a refusal asks engine_reclaim_tail,
        which sells the lowest-weight member to the cold tier and answers "retry".

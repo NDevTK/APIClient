@@ -2983,6 +2983,22 @@ JS_EXTERN int      JS_OrphanTakeOne(JSContext *ctx, JSOrphanVisitFn *visit, void
    taken, collecting one only removes it), so a host that took the orphans at generation G may skip the heap
    walk until this differs from G. Compared for INEQUALITY only, so its wrap costs one redundant walk. */
 JS_EXTERN uint32_t JS_OrphanGen(JSRuntime *rt);
+/* …AND THAT ONE EVENT OFFERED AS IT HAPPENS, BECAUSE A GENERATION ONLY SAYS TO LOOK AGAIN. The counter above
+   lets a host SKIP a walk it would have wasted; this lets it see a body no later walk can reach. The take
+   enumerates the heap, so it can hand over only a body some live reference is holding — and a function object
+   created by a nested declaration inside a call frame is released WITH that frame, which for an ordinary
+   `function outer(){ function inner(){} … }` is the whole of its life. A host that can only look BETWEEN two of
+   its own steps therefore sees such a body exactly when some other reference happens to outlive the frame,
+   which is a fact about that host's schedule and not about the page.
+   CALLED AT js_closure2, the one line every function object in this runtime passes through, with the closure
+   COMPLETE — every cell of `var_refs` installed, so a hook that keeps the value may call it. It is handed only a
+   body no frame has begun, that is not a program, and that no take has taken: the same three filters
+   JS_OrphanTakeOne applies, so the two doors offer one set. `fn` is BORROWED and a hook that keeps it dups it.
+   A NONZERO ANSWER MEANS THE HOST HAS SCHEDULED THIS BODY, and the runtime then marks it `entered` exactly as a
+   take does — one body is one drive however many closures of it a factory makes, so a later take must not hand
+   the same body to a second driver. A zero answer leaves the body takeable and changes nothing whatever. */
+typedef int JSOrphanBornFn(JSContext *ctx, JSValueConst fn, int arg_count, void *opaque);
+JS_EXTERN void JS_SetOrphanBornHook(JSRuntime *rt, JSOrphanBornFn *hook, void *opaque);
 /* THE CROSS-SESSION NAME OF ONE ORPHAN'S BODY — what a host writes down so a LATER session can drive the same
    function again. Neither of the two names a session already has survives it: a function object is a live heap
    reference, and a position in the heap walk above is a fact about one heap at one instant. So the locator is
