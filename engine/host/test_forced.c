@@ -23259,6 +23259,9 @@ static void canvas_pixel_selftest(JSContext *ctx)
     static const char WANT_FILL_STYLE[] =
         "#000000|string|#ff0000|#ff00ff|rgba(255, 0, 255, 0.93)|rgba(255, 0, 255, 0.93)|"
         "rgba(255, 0, 255, 0.93)|#0000ff|rgba(255, 0, 255, 0.93)|color(display-p3 1 0 0)|#000000";
+    static const char WANT_SHADOW[] =
+        "rgba(0, 0, 0, 0)|0,0,0|number,string|5,-7.5|4|4|5|-7.5|true|#ff0000|#ff0000|"
+        "9,#00ff00|4,#ff0000|0,0,0,rgba(0, 0, 0, 0)";
     char *got;
 
     got = tf_flow_answer(ctx, "canvas-pixel",
@@ -23414,6 +23417,84 @@ static void canvas_pixel_selftest(JSContext *ctx)
            "neighbours there names which step moved it: 6 is the invalid-value arm, 7 is the DOMString "
            "conversion and 9 is `restore()`", got, WANT_FILL_STYLE);
     printf("@CANVAS2D fill-style answer=%s\n", got);
+    free(got);
+
+    /* HTML §4.12.5.1.19 "Shadows" — ITS FOUR ATTRIBUTES, AND THE TWO REFUSAL ARMS THAT ARE THE WHOLE REASON
+     * THIS ROW IS NOT THE FILL STYLE'S WITH ANOTHER NAME. That section gives the offsets and the blur
+     * DIFFERENT ignore conditions, and reading them as one is a silent wrong answer in both directions, so the
+     * fields that separate them are the point of the row rather than decoration on it. The fourteen are
+     * separated by `|`:
+     *
+     *  1 `rgba(0, 0, 0, 0)`  — "Initially, it must be transparent black", through the getter's own
+     *                          "serialization ... with HTML-compatible serialization requested". The LEGACY
+     *                          comma form rather than a hex one, because CSS Color 4 §16.2.1's second
+     *                          condition is an alpha of exactly 1 and this alpha is 0 — a `#000000` here is a
+     *                          serializer that dropped the alpha, and an `undefined` is the member absent.
+     *  2 `0,0,0`             — "the shadow offset attributes must initially have the value 0" and "the
+     *                          shadowBlur attribute must initially have the value 0".
+     *  3 `number,string`     — the declared types, `unrestricted double` and `DOMString`.
+     *  4 `5,-7.5`            — a NEGATIVE offset is KEPT. §4.12.5.1.19 ignores an offset only "if the value is
+     *                          infinite or NaN", so a `0` or a `5` in the second position is a blur's arm
+     *                          applied to an offset — which is what copying one predicate for all three
+     *                          produces, and it would silently forbid a shadow cast up and to the left.
+     *  5 `4`                 — the blur set to a finite non-negative value.
+     *  6 `4`                 — a NEGATIVE blur is IGNORED and the attribute keeps what it had: the blur's own
+     *                          third condition, "negative, infinite or NaN". A `-1` here is that condition
+     *                          missing, and this section's shadows-are-only-drawn-if test would then read a
+     *                          negative blur as NONZERO and hand σ, "half the value of shadowBlur", a
+     *                          negative standard deviation. A `0` is the refusal CLAMPING instead of ignoring.
+     *  7 `5`                 — NaN ignored on an offset, so the previous value stands.
+     *  8 `-7.5`              — an infinity ignored on an offset. Fields 7 and 8 are what say `isfinite` is
+     *                          being asked rather than a range: a clamp would answer 0 or 1 here.
+     *  9 `true`              — `Object.is(x.shadowOffsetX, -0)` after assigning `-0`. The getter round-trips
+     *                          the field through a double, so this is the field that says that trip is exact:
+     *                          a `false` is a negative zero normalised to a positive one somewhere between
+     *                          the setter's store and the getter's read.
+     * 10 `#ff0000`           — a colour set, taking §16.2.1's hex form because its alpha IS 1.
+     * 11 `#ff0000`           — "Values that cannot be parsed as CSS colors are ignored", so the attribute
+     *                          keeps the previous colour. A `rgba(0, 0, 0, 0)` here is a failed parse treated
+     *                          as a reset, and a THROW is a page-supplied string reaching an assert.
+     * 12 `9,#00ff00`         — §4.12.5.1.3's drawing state after a `save()`, still writable.
+     * 13 `4,#ff0000`         — `restore()` carrying BOTH a number and a six-field colour back. This is the
+     *                          field no shorter round trip makes: the copy `save()` takes is one property deep
+     *                          over whatever the record holds, so a `9` or a `#00ff00` here is a stack that
+     *                          popped nothing, and an initial value is a restore that rebuilt the state
+     *                          instead of restoring it.
+     * 14 `0,0,0,rgba(0, 0, 0, 0)` — `reset()` reaching *reset the rendering context to its default state* step
+     *                          4 over a drawing state that now has five members rather than two.
+     *
+     * WHAT THIS ROW DOES NOT REACH: no painter exists, so nothing here says a shadow reaches a pixel — the
+     * rendering steps that build the blurred bitmap B, and this section's own shadows-are-only-drawn-if
+     * condition, are unbuilt and are named at the component's residual. `currentcolor` and the system colours
+     * are deliberately not asked of `shadowColor` for the same reason the fill style does not ask them: the
+     * parse takes no context element, which is a named residual a row here would pin an answer to. */
+    got = tf_flow_answer(ctx, "canvas-shadow",
+        "var c=document.createElement('canvas');"
+        "c.setAttribute('width','2');c.setAttribute('height','2');"
+        "var x=c.getContext('2d');"
+        "var g=''+x.shadowColor;"
+        "g+='|'+x.shadowOffsetX+','+x.shadowOffsetY+','+x.shadowBlur;"
+        "g+='|'+(typeof x.shadowOffsetX)+','+(typeof x.shadowColor);"
+        "x.shadowOffsetX=5;x.shadowOffsetY=-7.5;g+='|'+x.shadowOffsetX+','+x.shadowOffsetY;"
+        "x.shadowBlur=4;g+='|'+x.shadowBlur;"
+        "x.shadowBlur=-1;g+='|'+x.shadowBlur;"
+        "x.shadowOffsetX=NaN;g+='|'+x.shadowOffsetX;"
+        "x.shadowOffsetY=Infinity;g+='|'+x.shadowOffsetY;"
+        "x.shadowOffsetX=-0;g+='|'+Object.is(x.shadowOffsetX,-0);"
+        "x.shadowColor='red';g+='|'+x.shadowColor;"
+        "x.shadowColor='nosuchcolour';g+='|'+x.shadowColor;"
+        "x.save();x.shadowBlur=9;x.shadowColor='#00ff00';g+='|'+x.shadowBlur+','+x.shadowColor;"
+        "x.restore();g+='|'+x.shadowBlur+','+x.shadowColor;"
+        "x.reset();g+='|'+x.shadowOffsetX+','+x.shadowOffsetY+','+x.shadowBlur+','+x.shadowColor;"
+        "return g;");
+    CHECKF(!strcmp(got, WANT_SHADOW),
+           "HTML §4.12.5.1.19 \"Shadows\" over a 2x2 canvas answered\n  %s\nwhere its own four attributes "
+           "answer\n  %s\nRead it by FIELD — the fourteen are separated by `|` and each is derived at this "
+           "function's banner, which also names what each wrong answer means. Fields 4, 6, 7 and 8 are the "
+           "REFUSAL ARMS and they are two arms rather than one: 4 and 7 and 8 are the offsets' "
+           "infinite-or-NaN, and 6 is the blur's extra NEGATIVE condition, so a field differing there names "
+           "which of the two predicates was applied to the wrong member", got, WANT_SHADOW);
+    printf("@CANVAS2D shadow answer=%s\n", got);
     free(got);
 }
 

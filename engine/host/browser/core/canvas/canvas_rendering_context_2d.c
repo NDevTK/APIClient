@@ -6,7 +6,8 @@
  * §4.12.5.1.3's drawing state landed. What the pairing rule forbids is a PAINTER without the state it reads,
  * so a drawing-STATE member is on the side it calls harmless: `globalAlpha` and `fillStyle` are here and
  * every member that PAINTS is not. The residual at the install below says which six attributes a `fillRect`
- * would have to bring with it and why they are not one diff. */
+ * READS, which of them are still absent, and why the painter is not one diff with them. */
+#include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -29,6 +30,8 @@ static JSClassID g_class;
 static int g_id_attrs = -1, g_id_lost = -1, g_id_reset = -1,
            g_id_save = -1, g_id_restore = -1, g_id_set_alpha = -1,
            g_id_set_fill_style = -1,
+           g_id_set_shadow_offset_x = -1, g_id_set_shadow_offset_y = -1,
+           g_id_set_shadow_blur = -1, g_id_set_shadow_color = -1,
            g_id_get_image_data = -1, g_id_put_image_data = -1;
 static JSValue g_state_key = JS_UNDEFINED;
 static JSAtom  g_atom_state = JS_ATOM_NULL;
@@ -169,6 +172,16 @@ static const Ctx2dColorFields CTX2D_FILL_STYLE = {
     "fillStyleSpace", "fillStyleR", "fillStyleG", "fillStyleB", "fillStyleAlpha", "fillStyleMissing"
 };
 
+/* §4.12.5.1.19's SHADOW COLOR — the second row the table above says it exists for, and it is a row rather
+   than a second representation because that section asks for the SAME serialization §4.12.5.1.10 does:
+   "Objects which implement the CanvasShadowStyles interface have an associated shadow color, which is a CSS
+   color." One `Ctx2dColorFields` and one `ctx2d_color_store` therefore serve both, so a colour cannot be
+   stored one way here and read another way there. */
+static const Ctx2dColorFields CTX2D_SHADOW_COLOR = {
+    "shadowColorSpace", "shadowColorR", "shadowColorG", "shadowColorB",
+    "shadowColorAlpha", "shadowColorMissing"
+};
+
 /* THE ONE DOOR A DRAWING-STATE COLOUR ENTERS BY, AND THE 8-BIT QUANTIZATION IS WHAT MAKES IT ONE.
  * CSS Color 4 §16.2.1 "HTML-compatible serialization of sRGB values" states FOUR conditions and the third is
  * about this engine's own representation rather than about the colour: "the RGB component values are
@@ -254,8 +267,15 @@ static JSValue ctx2d_drawing_new(JSContext *ctx)
        sentence is an algorithm's answer and a constant beside it would be a second spelling of one value —
        and a colour is six numbers, which is six chances for the two to disagree. */
     static const char INITIAL_STYLE[] = "#000000";
+    /* §4.12.5.1.19: "Objects which implement the CanvasShadowStyles interface have an associated shadow
+       color, which is a CSS color. Initially, it must be transparent black." The two standards agree on that
+       colour BY NAME rather than by anybody's arithmetic: CSS Color 4 §6.3 "The transparent keyword"
+       "specifies a transparent black. It is a type of <named-color>". So it is PARSED for the same reason the
+       fill style's string is — a colour written out here would be six numbers beside an algorithm's answer,
+       which is six chances for the two spellings to disagree. */
+    static const char INITIAL_SHADOW_COLOR[] = "transparent";
     JSValue d = idl_slots_new(ctx);
-    CssColor black;
+    CssColor black, clear;
 
     if (JS_IsException(d)) return d;
     /* §4.12.5.1.17 "Compositing": the global alpha "value ranges from 0.0 (fully transparent) to 1.0 (no
@@ -266,6 +286,20 @@ static JSValue ctx2d_drawing_new(JSContext *ctx)
     CHECK(css_color_parse(INITIAL_STYLE, sizeof INITIAL_STYLE - 1, &black),
           "§4.12.5.1.10: the initial fill style's own string did not parse as a CSS color");
     ctx2d_color_store(ctx, d, &CTX2D_FILL_STYLE, &black);
+
+    /* §4.12.5.1.19: "When the context is created, the shadow offset attributes must initially have the value
+       0" and "When the context is created, the shadowBlur attribute must initially have the value 0". Three
+       fields named by `ctx2d_shadow_number_field` below and by nothing else, so the initial value and the
+       getter cannot name two different fields. */
+    JS_SetPropertyStr(ctx, d, "shadowOffsetX", JS_NewFloat64(ctx, 0.0));
+    JS_SetPropertyStr(ctx, d, "shadowOffsetY", JS_NewFloat64(ctx, 0.0));
+    JS_SetPropertyStr(ctx, d, "shadowBlur",    JS_NewFloat64(ctx, 0.0));
+    /* `transparent` is CSS Color 4 §6.3's own named colour and this string is a literal of this file, so a
+       refusal is this codebase's own logic being wrong rather than anything a page did — the same CHECK the
+       initial fill style's own string gets, for the same reason. */
+    CHECK(css_color_parse(INITIAL_SHADOW_COLOR, sizeof INITIAL_SHADOW_COLOR - 1, &clear),
+          "§4.12.5.1.19: the initial shadow color's own string did not parse as a CSS color");
+    ctx2d_color_store(ctx, d, &CTX2D_SHADOW_COLOR, &clear);
     return d;
 }
 
@@ -543,12 +577,34 @@ JSValue canvas_rendering_context_2d_create(JSContext *ctx, JSValueConst target, 
 
 /* ---- §4.12.5.1's members ------------------------------------------------------------------------------------ */
 
-enum { M_CANVAS = 0, M_ATTRS, M_LOST, M_GLOBAL_ALPHA, M_FILL_STYLE };
+enum { M_CANVAS = 0, M_ATTRS, M_LOST, M_GLOBAL_ALPHA, M_FILL_STYLE,
+       M_SHADOW_OFFSET_X, M_SHADOW_OFFSET_Y, M_SHADOW_BLUR, M_SHADOW_COLOR };
+
+/* §4.12.5.1.19's THREE `unrestricted double`s, AND THE MEMBER NAME IS THE FIELD NAME. The getter and the
+   setter both reach a field through this one function, so neither can name a field the other does not — which
+   is the property `Ctx2dColorFields` gives a COLOUR, owed to a number for the same reason and got the same way:
+   the names are data and no site composes one. `ctx2d_state_of` wants the MEMBER name for its TypeError and
+   that is the same string, so one lookup serves both. `ctx2d_drawing_new`'s initial values are the one place
+   that writes these names as literals, and its comment says so. */
+static const char *ctx2d_shadow_number_field(int magic)
+{
+    switch (magic) {
+    case M_SHADOW_OFFSET_X: return "shadowOffsetX";
+    case M_SHADOW_OFFSET_Y: return "shadowOffsetY";
+    case M_SHADOW_BLUR:     return "shadowBlur";
+    default: break;
+    }
+    /* The magic is a value THIS file enumerates and every install and every setter id below passes one of the
+       three above, so this arm is UNREACHABLE BY CONSTRUCTION — a guard over this codebase's own enumeration,
+       and not a member left to build. */
+    DFAIL("§4.12.5.1.19: a shadow number was asked for by a magic its own member list does not hold");
+    return "shadowBlur";
+}
 
 static JSValue js_ctx2d_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
     JSValue st, d, out;
-    CssColor fill;
+    CssColor fill, shadow;
 
     switch (magic) {
     case M_CANVAS:
@@ -577,6 +633,48 @@ static JSValue js_ctx2d_get(JSContext *ctx, JSValueConst this_val, int magic)
         d = ctx2d_drawing(ctx, st);
         ctx2d_color_load(ctx, d, &CTX2D_FILL_STYLE, &fill);
         out = ctx2d_color_serialize(ctx, &fill);
+        JS_FreeValue(ctx, d);
+        JS_FreeValue(ctx, st);
+        return out;
+    case M_SHADOW_OFFSET_X:
+    case M_SHADOW_OFFSET_Y:
+    case M_SHADOW_BLUR: {
+        /* §4.12.5.1.19's own two getter sentences, which are ONE read: "On getting, they must return their
+           current value" for the offsets and "On getting, the attribute must return its current value" for the
+           blur. The three differ only in WHICH field, and the field is named by the member — so this is one
+           arm rather than three copies of it, which is also why nothing here can read a field the initial
+           values did not write. */
+        const char *field = ctx2d_shadow_number_field(magic);
+
+        st = ctx2d_state_of(ctx, this_val, field);
+        if (JS_IsException(st)) return JS_EXCEPTION;
+        d = ctx2d_drawing(ctx, st);
+        /* IT GOES THROUGH `ctx2d_double` RATHER THAN READING THE SLOT RAW, AND THE ASSERT IS THE WHOLE REASON.
+           `ctx2d_drawing_new` above is the only thing that creates these three fields and
+           `js_ctx2d_set_shadow_number` the only thing that overwrites them, so a read that answers anything
+           but a Number is this codebase's own logic being wrong — and the way it WOULD go wrong is a field
+           name drifting between the initial values and this read, which `JS_GetPropertyStr` answers
+           `undefined` for. That is §A-FIELD-A-CONSUMER-DEFAULTS exactly: the page would see `undefined` where
+           the IDL says `unrestricted double`, with nothing anywhere saying the field was never written. The
+           round trip is lossless because the setter stores through `JS_NewFloat64` too, so re-wrapping the
+           same double is idempotent — including for the `-0` a page may legitimately assign to an offset. */
+        out = JS_NewFloat64(ctx, ctx2d_double(ctx, d, field));
+        JS_FreeValue(ctx, d);
+        JS_FreeValue(ctx, st);
+        return out;
+    }
+    case M_SHADOW_COLOR:
+        /* §4.12.5.1.19: "The shadowColor getter steps are to return the serialization of this's shadow color
+           with HTML-compatible serialization requested." That is the SAME sentence §4.12.5.1.10's fill-style
+           getter performs, so it is the same two calls under a different `Ctx2dColorFields` row and not a
+           second spelling of CSS Color 4 §16.2.1's choice between the three forms. The initial value is
+           transparent black, whose alpha is 0 rather than 1, so it takes the legacy comma form and a fresh
+           context answers `rgba(0, 0, 0, 0)` — never the hex form, which cannot carry an alpha. */
+        st = ctx2d_state_of(ctx, this_val, "shadowColor");
+        if (JS_IsException(st)) return JS_EXCEPTION;
+        d = ctx2d_drawing(ctx, st);
+        ctx2d_color_load(ctx, d, &CTX2D_SHADOW_COLOR, &shadow);
+        out = ctx2d_color_serialize(ctx, &shadow);
         JS_FreeValue(ctx, d);
         JS_FreeValue(ctx, st);
         return out;
@@ -619,6 +717,41 @@ static JSValue js_ctx2d_set_global_alpha(JSContext *ctx, JSValueConst this_val, 
     return JS_UNDEFINED;
 }
 
+/* THE ONE DOOR A CSS-COLOUR-VALUED DRAWING-STATE MEMBER IS SET THROUGH. §4.12.5.1.10's fillStyle steps 1.1 to
+ * 1.4 and §4.12.5.1.19's shadowColor steps 1 to 4 are the SAME FOUR STEPS — the standard writes them twice,
+ * differing only in which member the parsed colour is stored to — so they are one function here and the member
+ * is an argument. `member` is the MEMBER NAME for `ctx2d_state_of`'s diagnostic and `f` is the row
+ * `ctx2d_color_store` writes; nothing else differs between the two callers. */
+static JSValue ctx2d_set_color_member(JSContext *ctx, JSValueConst this_val, JSValueConst val,
+                                      const char *member, const Ctx2dColorFields *f)
+{
+    JSValue st = ctx2d_state_of(ctx, this_val, member);
+    JSValue d;
+    CssColor parsed;
+    const char *text;
+    size_t len;
+
+    if (JS_IsException(st)) return JS_EXCEPTION;
+    /* The declared type already ran Web IDL §3.2.10's ToString at the argument boundary, so this reads the
+       CONVERTED value and is never itself a conversion that could run a page's toString from inside this
+       body — the same split `globalAlpha`'s setter names one member over. */
+    text = JS_ToCStringLen(ctx, &len, val);
+    if (text == NULL) { JS_FreeValue(ctx, st); return JS_EXCEPTION; }
+    /* Step 1.2's / step 2's CONTEXT ELEMENT is not passed, and the narrowing is named at the install below
+       rather than hidden here: core/css/css_color.h's parse takes no element, so `currentcolor` and the system
+       colours resolve against the initial values of the properties instead of against this canvas. It is ONE
+       narrowing rather than two because this is one function — which is the whole reason the two members share
+       it, since a later diff that passes the element repairs both members or neither. */
+    if (css_color_parse(text, len, &parsed)) {
+        d = ctx2d_drawing(ctx, st);
+        ctx2d_color_store(ctx, d, f, &parsed);                     /* step 1.4 / step 4 */
+        JS_FreeValue(ctx, d);
+    }
+    JS_FreeCString(ctx, text);
+    JS_FreeValue(ctx, st);
+    return JS_UNDEFINED;                                           /* steps 1.3 and 1.5 / step 3 */
+}
+
 /* §4.12.5.1.10's fillStyle SETTER STEPS, whose first step is the whole of what this build can reach:
  *   "If the given value is a string:
  *      Let context be this's canvas attribute's value, if that is an element; otherwise null.
@@ -643,30 +776,82 @@ static JSValue js_ctx2d_set_global_alpha(JSContext *ctx, JSValueConst this_val, 
  * the PAGE'S bytes and a refusal is this algorithm's own arm, not an invariant of this codebase. */
 static JSValue js_ctx2d_set_fill_style(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    JSValue st = ctx2d_state_of(ctx, this_val, "fillStyle");
-    JSValue d;
-    CssColor parsed;
-    const char *text;
-    size_t len;
-
     (void)magic;
+    return ctx2d_set_color_member(ctx, this_val, val, "fillStyle", &CTX2D_FILL_STYLE);
+}
+
+/* §4.12.5.1.19's shadowColor SETTER STEPS, which are §4.12.5.1.10's steps 1.1 to 1.4 with no union in front
+ * of them — the standard writes the same four steps twice:
+ *   "Let context be this's canvas attribute's value, if that is an element; otherwise null.
+ *    Let parsedValue be the result of parsing the given value with context if non-null.
+ *    If parsedValue is failure, then return.
+ *    Set this's shadow color to parsedValue."
+ *
+ * SO IT ROUTES TO THE FILL STYLE'S OWN DOOR RATHER THAN RESTATING IT, and the two share a function because
+ * they share an ALGORITHM rather than because the code looked alike: the only thing that differs is which
+ * `Ctx2dColorFields` row the parsed colour lands in, which is the argument. Two spellings of one algorithm is
+ * the shape that drifts, and the thing that would drift here is named and outstanding — step 1.2's context
+ * element, which neither member passes.
+ *
+ * AN UNPARSEABLE VALUE IS IGNORED AND THAT IS STEP 3 RATHER THAN A SOFTENED ERROR. §4.12.5.1.19's own prose
+ * says it twice: "Values that cannot be parsed as CSS colors are ignored", and the steps spell it "If
+ * parsedValue is failure, then return" — so `ctx.shadowColor = "not a color"` leaves the attribute holding
+ * whatever it already had. A DCHECK over this parse would hand any page an abort switch, because the string is
+ * the PAGE'S bytes and a refusal is this algorithm's own arm rather than an invariant of this codebase. */
+static JSValue js_ctx2d_set_shadow_color(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    (void)magic;
+    return ctx2d_set_color_member(ctx, this_val, val, "shadowColor", &CTX2D_SHADOW_COLOR);
+}
+
+/* §4.12.5.1.19's THREE `unrestricted double`s, AND THE REFUSAL IS TWO ARMS RATHER THAN ONE — WHICH IS THE
+ * CORRECTION THIS DIFF MAKES TO THE CLAUSE THAT NAMED THIS LANDING. The named residual at the install below
+ * said these were
+ * `three unrestricted doubles with the same ignore-if-not-finite arm globalAlpha already performs` — and it is
+ * wrong in BOTH directions, each of which would have been a silent wrong answer. THE RETIRED WORDING IS
+ * BACKTICKED AND NOT QUOTED, because it is THIS TREE'S prose rather than the standard's: a quoted run of six
+ * or more words standing beside a section number is compared against that section's own committed text, so
+ * quoting a retired clause here manufactures a fabrication finding out of a correct record.
+ *
+ *   — `globalAlpha` HAS NO ignore-if-not-finite arm to copy. §4.12.5.1.17's step is "If the given value is
+ *     either infinite, NaN, or not in the range 0.0 to 1.0, then return", which its setter performs as the
+ *     single interval test `a >= 0.0 && a <= 1.0`. Copying that predicate here would IGNORE
+ *     `ctx.shadowOffsetX = 5` — an offset is in coordinate space units and has no upper bound at all.
+ *   — THE THREE DO NOT SHARE ONE ARM. §4.12.5.1.19 gives the offsets "except if the value is infinite or NaN,
+ *     in which case the new value must be ignored" and the blur "except if the value is negative, infinite or
+ *     NaN" — a THIRD condition the offsets must not have, because a shadow may legitimately be cast up and to
+ *     the left while a blur is a standard deviation and σ is "half the value of shadowBlur". Reading the
+ *     clause as uniform would have accepted `ctx.shadowBlur = -5`, which that section's own
+ *     shadows-are-only-drawn-if condition then reads as a NONZERO blur.
+ *
+ * `isfinite` IS THE SPELLING THE SIBLING COMPONENT ALREADY USES for exactly this condition — §4.12.5.1.6's
+ * path builders return early on the same "infinite or NaN", and core/canvas/canvas_path.c writes that as
+ * `isfinite` per value — so this routes to that spelling rather than adding a second correct answer to one
+ * question. NaN and both infinities fail it in one predicate, which leaves the blur's own clause as the only
+ * thing that is per-member.
+ *
+ * AND IGNORING IS NOT CLAMPING: the attribute keeps whatever it already held, which is the value a page reads
+ * back on the next line, so a refused blur does not become 0 unless 0 is what it already was. */
+static JSValue js_ctx2d_set_shadow_number(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    const char *field = ctx2d_shadow_number_field(magic);
+    JSValue st = ctx2d_state_of(ctx, this_val, field);
+    JSValue d;
+    double v;
+    bool accept;
+
     if (JS_IsException(st)) return JS_EXCEPTION;
-    /* The declared type already ran Web IDL §3.2.10's ToString at the argument boundary, so this reads the
-       CONVERTED value and is never itself a conversion that could run a page's toString from inside this
-       body — the same split `globalAlpha`'s setter names one member over. */
-    text = JS_ToCStringLen(ctx, &len, val);
-    if (text == NULL) { JS_FreeValue(ctx, st); return JS_EXCEPTION; }
-    /* Step 1.2's CONTEXT ELEMENT is not passed, and the narrowing is named at the install below rather than
-       hidden here: core/css/css_color.h's parse takes no element, so `currentcolor` and the system colours
-       resolve against the initial values of the properties instead of against this canvas. */
-    if (css_color_parse(text, len, &parsed)) {
+    /* The declared type already ran ToNumber at the argument boundary, so this reads the CONVERTED value and
+       is never itself a conversion that could run a page's valueOf from inside this body. */
+    if (JS_ToFloat64(ctx, &v, val) < 0) { JS_FreeValue(ctx, st); return JS_EXCEPTION; }
+    accept = isfinite(v) && (magic != M_SHADOW_BLUR || v >= 0.0);
+    if (accept) {
         d = ctx2d_drawing(ctx, st);
-        ctx2d_color_store(ctx, d, &CTX2D_FILL_STYLE, &parsed);     /* step 1.4 */
+        JS_SetPropertyStr(ctx, d, field, JS_NewFloat64(ctx, v));
         JS_FreeValue(ctx, d);
     }
-    JS_FreeCString(ctx, text);
     JS_FreeValue(ctx, st);
-    return JS_UNDEFINED;                                           /* steps 1.3 and 1.5 */
+    return JS_UNDEFINED;
 }
 
 /* §4.12.5.1.3: "The save() method steps are to push a copy of the current drawing state onto the drawing
@@ -1024,6 +1209,19 @@ void canvas_rendering_context_2d_init(JSContext *ctx)
        value a page can produce takes; see the setter for why the other two are unreachable rather than
        dropped, and the install below for the residual that retires this line. */
     g_id_set_fill_style = idl_setter_id(ctx, IDL_DOMSTRING, false, js_ctx2d_set_fill_style, 0);
+    /* §4.12.5.1.19's four. The three numbers are `attribute unrestricted double` — §3.2.8's type and not
+       §3.2.7's, so NaN and the infinities reach the body, which is what lets it perform that section's own
+       ignore rather than raising the TypeError a `double` would; and the MAGIC is the member, which is how one
+       body serves three members without any site composing a field name. `shadowColor` is a plain
+       `attribute DOMString` with no union in front of it, which is the one way it is simpler than
+       `fillStyle`. */
+    g_id_set_shadow_offset_x = idl_setter_id(ctx, IDL_UNRESTRICTED_DOUBLE, false,
+                                             js_ctx2d_set_shadow_number, M_SHADOW_OFFSET_X);
+    g_id_set_shadow_offset_y = idl_setter_id(ctx, IDL_UNRESTRICTED_DOUBLE, false,
+                                             js_ctx2d_set_shadow_number, M_SHADOW_OFFSET_Y);
+    g_id_set_shadow_blur     = idl_setter_id(ctx, IDL_UNRESTRICTED_DOUBLE, false,
+                                             js_ctx2d_set_shadow_number, M_SHADOW_BLUR);
+    g_id_set_shadow_color    = idl_setter_id(ctx, IDL_DOMSTRING, false, js_ctx2d_set_shadow_color, 0);
 
     g_id_get_image_data = idl_method_id_dict(ctx, GET_IMAGE_DATA, 5, IMAGE_DATA_SETTINGS,
                                              IMAGE_DATA_SETTINGS_N, js_ctx2d_get_image_data, 0);
@@ -1143,7 +1341,7 @@ void canvas_rendering_context_2d_init(JSContext *ctx)
  * `clearRect` for two DIFFERENT reasons, and both were found by tracing what the algorithm READS rather than
  * what it calls.
  *
- * `fillRect` READS SIX ATTRIBUTES THIS BUILD DOES NOT HAVE, AND AN ABSENT ATTRIBUTE IS SILENT WHERE AN ABSENT
+ * `fillRect` READS SIX ATTRIBUTES, AND AN ABSENT ATTRIBUTE IS SILENT WHERE AN ABSENT
  * METHOD IS LOUD. That split is the whole of the derivation and it is mechanical: a page calling an absent
  * METHOD gets Web IDL's TypeError and its flow ends there, which is the header's own forcing function, while
  * a page ASSIGNING an absent attribute creates an ordinary property on the context, reads its own value back
@@ -1155,10 +1353,22 @@ void canvas_rendering_context_2d_init(JSContext *ctx)
  * absence is loud and their spec-initial values — the identity matrix and the whole bitmap — are what a
  * painter may assume; `globalAlpha` is present and would be read. The other six are ATTRIBUTES:
  * `globalCompositeOperation`, `filter`, `shadowColor`, `shadowBlur`, `shadowOffsetX` and `shadowOffsetY`.
- * A `fillRect` landing beside them paints source-over with no shadow and no filter for a page that asked for
- * `destination-out`, a drop shadow or a blur, silently — the forbidden pair, six times.
+ * A `fillRect` landing beside an ABSENT one paints source-over with no shadow and no filter for a page that
+ * asked for `destination-out`, a drop shadow or a blur, silently — the forbidden pair, once per absence.
  *
- * `clearRect` ESCAPES ALL SIX AND IS BLOCKED ONE LAYER DOWN INSTEAD. It is the exception in §4.12.5.1.11's own
+ * THIS PARAGRAPH SAID `SIX ATTRIBUTES THIS BUILD DOES NOT HAVE` AND `THE FORBIDDEN PAIR, SIX TIMES`, AND THE
+ * COUNT WAS A CLAIM ABOUT THE TREE INSIDE A DERIVATION THAT IS ABOUT THE STANDARD — which is why the two
+ * halves are now spelled apart rather than the number corrected. That §4.12.5.1.11 and §4.12.5.1.22 make SIX
+ * attributes inputs to a filled rectangle is permanent and is what this derivation establishes; how many of
+ * the six THIS BUILD INSTALLS moves every time somebody lands one, and it moved by four the day
+ * §4.12.5.1.19's shadow attributes landed. So the blocker is stated as a PREDICATE a reader can re-derive —
+ * a `fillRect` may not land while any of the six is absent — and the population is a command rather than a
+ * sentence here: read the install below for which of the six it names, or ask the member-list audit's ABSENT
+ * column for this interface. A count written here would be read as the standing description of the work and
+ * would be wrong in the direction that makes it look larger than it is.
+ *
+ * `clearRect` ESCAPES ALL SIX WHETHER THEY ARE BUILT OR NOT, AND IS BLOCKED ONE LAYER DOWN INSTEAD. It is
+ * the exception in §4.12.5.1.11's own
  * sentence, its steps never enter §4.12.5.1.22's drawing model, and it therefore reads nothing but the CTM and
  * the clipping region — both loud. What stops it is core/graphics/raster_surface.h: clearing a rectangle whose
  * edges do not land on pixel boundaries is a coverage-weighted REMOVAL of alpha, which is a second span sink
@@ -1195,19 +1405,36 @@ void canvas_rendering_context_2d_init(JSContext *ctx)
  * painter — and `raster_surface_bytes` is what makes the assert two-sided, since a view's extent and the
  * bitmap's own `4 * width * height` are then one number rather than two that may drift.
  *
+ * ITEM (1) HAS LANDED AND ITS CLAUSE WAS WRONG ABOUT THE ONE MECHANISM IT NAMED, which is recorded here
+ * rather than deleted because it is the reading a reader re-derives from `globalAlpha` sitting one member
+ * over. It said §4.12.5.1.19's numbers were
+ * `three unrestricted doubles with the same ignore-if-not-finite arm globalAlpha already performs`
+ * — BACKTICKED rather than quoted, since it is this tree's retired prose and a quoted run beside a section
+ * number is read as a claim about that section. `globalAlpha` has no such arm to reuse, its step being an
+ * INTERVAL (`a >= 0.0 && a <= 1.0`) that would IGNORE `ctx.shadowOffsetX = 5`; nor do the three share one arm
+ * with each other, since the blur ignores NEGATIVE as well and the offsets must not. Both halves are worked
+ * out at `js_ctx2d_set_shadow_number`, which is where a reader meets them, and each would have been a silent
+ * wrong answer rather than a crash. What the clause got RIGHT is the part that decided the landing order, and
+ * it was CHECKED rather than assumed: the four are consumed by nothing until the painters, and a
+ * drawing-state member beside an absent painter is the harmless half of the pairing rule. §NO-STUBS' own
+ * ordering hazard — a partially built interface flipping a page's feature detection TRUE onto a branch
+ * nothing can complete, while abandoning a fallback that worked — CANNOT ARISE FOR THESE FOUR, and that is a
+ * measurement rather than a reading of the rule: in the mirrored corpus every occurrence of all four members
+ * is a bare WRITE in a straight-line drawing sequence, with no guard of any shape over any of them, so there
+ * is no `if` whose true arm becomes reachable and no fallback to abandon. The DERIVATION, because that corpus
+ * is untracked by design and its figures move: grep each member name over the mirror and read what FOLLOWS
+ * it — a single `=` is a write, and a `===`, `!=`, `)`, `,`, `&&` or `||` would be the read a guard is made
+ * of, with an invented member name as the control that says the search could see anything at all.
+ *
  * WHAT THE NEXT DIFF BUILDS, IN LANDING ORDER RATHER THAN DEPENDENCY ORDER, each member named with the call
- * that will consume it: (1) §4.12.5.1.19's four shadow attributes, which are this file's own shape — three
- * `unrestricted double`s with the same ignore-if-not-finite arm `globalAlpha` already performs, and a
- * `shadowColor` that is `ctx2d_color_store` and `ctx2d_color_serialize` under a second `Ctx2dColorFields`
- * row, consumed by nothing until (4) and landable alone because a drawing-state member beside an absent
- * painter is the harmless half of the pairing rule; (2) §4.12.5.1.17's `globalCompositeOperation`, blocked on
+ * that will consume it: (1) §4.12.5.1.17's `globalCompositeOperation`, blocked on
  * the `<blend-mode>` and `<composite-mode>` value lists, which are Compositing and Blending Level 1's and
- * which this tree indexes no copy of; (3) §4.12.5.1.20's `filter`, blocked on a `<filter-value-list>` parser,
+ * which this tree indexes no copy of; (2) §4.12.5.1.20's `filter`, blocked on a `<filter-value-list>` parser,
  * of which this tree has none — and a partial one is WORSE than the absence, because an absent member lets a
- * page read its own string back where a setter that refused what it cannot parse answers "none"; (4) the
+ * page read its own string back where a setter that refused what it cannot parse answers "none"; (3) the
  * bitmap-as-surface entry above, with the assert that the view's extent and the bitmap's own agree, consumed
- * by nothing until (5) and landable alone only if something exercises it — which is what makes it the one
- * member of this list that may have to land WITH its consumer rather than before it; (5) the painters, which
+ * by nothing until (4) and landable alone only if something exercises it — which is what makes it the one
+ * member of this list that may have to land WITH its consumer rather than before it; (4) the painters, which
  * is the first landing that may install a member of `CanvasRect`, with the second span sink clearRect needs
  * and with a crash by name for every composite operator, shadow and filter value the rasterizer cannot yet
  * perform. HOW ITS ABSENCE WOULD SHOW: a document reaches its first drawing call and
@@ -1237,6 +1464,17 @@ void canvas_rendering_context_2d_install_realm(JSContext *ctx)
                          g_id_set_alpha);                                           /* CanvasCompositing */
     idl_install_accessor(ctx, proto, "fillStyle", js_ctx2d_get, M_FILL_STYLE,
                          g_id_set_fill_style);                                      /* CanvasFillStrokeStyles */
+    /* §4.12.5.1.19's `CanvasShadowStyles`, in the IDL's own order within the mixin — the offsets, the blur,
+       then the colour. Web IDL §3.7.3 gives a mixin no prototype of its own, so these flatten onto the
+       includer exactly as `CanvasFillStrokeStyles` above does. */
+    idl_install_accessor(ctx, proto, "shadowOffsetX", js_ctx2d_get, M_SHADOW_OFFSET_X,
+                         g_id_set_shadow_offset_x);                                 /* CanvasShadowStyles */
+    idl_install_accessor(ctx, proto, "shadowOffsetY", js_ctx2d_get, M_SHADOW_OFFSET_Y,
+                         g_id_set_shadow_offset_y);                                 /* CanvasShadowStyles */
+    idl_install_accessor(ctx, proto, "shadowBlur", js_ctx2d_get, M_SHADOW_BLUR,
+                         g_id_set_shadow_blur);                                     /* CanvasShadowStyles */
+    idl_install_accessor(ctx, proto, "shadowColor", js_ctx2d_get, M_SHADOW_COLOR,
+                         g_id_set_shadow_color);                                    /* CanvasShadowStyles */
     idl_install_method(ctx, proto, "getImageData", g_id_get_image_data);            /* CanvasImageData */
     idl_install_method(ctx, proto, "putImageData", g_id_put_image_data);            /* CanvasImageData */
 
@@ -1263,5 +1501,7 @@ void canvas_rendering_context_2d_free(JSRuntime *rt)
     g_class = 0;
     g_id_attrs = g_id_lost = g_id_reset = -1;
     g_id_save = g_id_restore = g_id_set_alpha = g_id_set_fill_style = -1;
+    g_id_set_shadow_offset_x = g_id_set_shadow_offset_y = -1;
+    g_id_set_shadow_blur = g_id_set_shadow_color = -1;
     g_id_get_image_data = g_id_put_image_data = -1;
 }

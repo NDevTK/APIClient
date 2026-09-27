@@ -49,11 +49,16 @@
  *
  * AND THAT PARAGRAPH ENDED `is still why fillRect is not next`, WHICH READ AS A CLAIM THAT THE PAINTER
  * FOLLOWS ITS STATE AND IS THE ONE HALF OF IT THAT WAS WRONG. §4.12.5.1.10's fill style has landed and
- * `fillRect` is further away rather than nearer, because the pairing rule's own mechanism reaches FIVE more
- * members the sentence never counted: an absent METHOD is loud, so the transformation matrix and the clipping
+ * `fillRect` is further away rather than nearer, because the pairing rule's own mechanism reaches MORE
+ * members than the sentence counted: an absent METHOD is loud, so the transformation matrix and the clipping
  * region may be assumed at their initial values, while an absent ATTRIBUTE is silent — and §4.12.5.1.11 with
- * §4.12.5.1.22's drawing model make `globalCompositeOperation`, `filter` and the four shadow attributes
- * inputs to a filled rectangle. `clearRect` escapes all six by that section's own exception and is blocked one
+ * §4.12.5.1.22's drawing model make `globalCompositeOperation`, `filter` and §4.12.5.1.19's four shadow
+ * attributes inputs to a filled rectangle, which is SIX and not the FIVE this sentence used to say. The number
+ * is dropped rather than corrected and the LIST kept, because a count standing beside the enumeration it
+ * counts is the one error a reader can catch with no tree and no fetch — both halves are in the sentence — and
+ * because how many of the six are BUILT is a fact about the tree that moves: the four shadow attributes have
+ * since landed, leaving the other two named at the residual. `clearRect` escapes all six by that section's
+ * own exception and is blocked one
  * layer down instead, on a second span sink core/graphics/raster_surface.h says is a second landing. The
  * ordered decomposition is a named residual at canvas_rendering_context_2d.c's install, beside the clause it
  * corrects. */
