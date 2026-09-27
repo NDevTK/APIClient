@@ -839,7 +839,16 @@ async function esbuildSelftest(R, tmp) {
         `would be a statement about this probe rather than about the corpus.`);
   if (!raw.has("/direct/lit") || !bun.has("/direct/lit"))
     die(`the control's plain literal is missing from one side, so the two readings are not of one program.`);
-  rmSync(dir, { recursive: true, force: true }); rmSync(out, { recursive: true, force: true });
+  /* THE WHOLE SELFTEST TREE GOES, PARENT INCLUDED, AND THAT IS A MEASURED DEFECT OF THIS FILE RATHER THAN
+     TIDINESS. The first version removed the two CHILD directories and left `tmp` itself, so every run of this
+     column left a directory behind in `engine/.work/` — SEVENTEEN of them after one session, some holding the
+     debris of a run that died inside the selftest. `engine/.work/` is the shared scratch area every lane's
+     corpora and snapshots live in, and §AND-THE-LOAD-IS-NOT-ONLY-FROM-WORK-THAT-IS-RUNNING is about exactly
+     this: what a finished lane leaves behind goes on competing with every measurement taken afterwards, and
+     the question "is anyone else running" answers about AGENTS while a box is filled by what nobody is
+     waiting for. A per-run path is what makes deleting this safe — it is named for this process and no peer
+     can be inside it. */
+  rmSync(tmp, { recursive: true, force: true });
   return { rawStates: [...raw].sort(), bundledStates: [...bun].sort(), newlyStated: WANT };
 }
 
