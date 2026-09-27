@@ -1016,32 +1016,47 @@ async function cmdPopup(args) {
   });
 }
 
-// Fire the embedded PoC sandbox the way a USER does: a real (trusted) click on
-// the "Run PoC" button INSIDE poc-sandbox.html. A trusted click is the user
-// activation window.open needs — a JS dispatchEvent would be untrusted and the
-// PoC's window.open would be popup-blocked, so this can't be done via `popup`.
-// After the click, polls the finding card's verdict (REAL EXPLOIT / NOT REPRO).
+// Fire the ATTACKER PAGE the way a USER does: a real (trusted) click on the "Run PoC" button the extension's
+// named injector armed in that document. A trusted click is the user activation window.open needs — a JS
+// dispatchEvent would be untrusted and the PoC's window.open would be popup-blocked, so this can't be done via
+// `popup`. After the click, polls the finding card's verdict (REAL EXPLOIT / NOT REPRO).
+//
+// IT USED TO CLICK INSIDE AN IFRAME IN THE POPUP, and that is worth saying because the two shapes differ in
+// which DOCUMENT is foregrounded. It read: a frame whose url contains `poc-sandbox.html`, found among
+// `popup.frames()`, with `popup.bringToFront()` first because "the popup tab must be FOREGROUND for
+// window.open to count as an active-tab user gesture — a real toolbar popup always is; a puppeteer-opened
+// popup tab sits in the background, so window.open would be popup-blocked". Every word of that is still true
+// and its SUBJECT moved: the attacker document is now a PAGE of its own at a real registrable origin, so it is
+// that page which must be foregrounded, and the popup does not have to be open at all.
+// THE SANDBOXED PAGE IS GONE BECAUSE ITS ORIGIN WAS OPAQUE, so every cross-document delivery it performed
+// arrived with `event.origin === "null"` — an identity no real handler's origin check accepts.
 async function cmdPocRun(args) {
   const waitMs = parseInt(args[0] || "12000", 10);
   await withBrowser(async (browser) => {
     const popup = await getPopupPage(browser);
-    let frame = null;
-    for (let i = 0; i < 40 && !frame; i++) {
-      frame = popup.frames().find((f) => f.url().indexOf("poc-sandbox.html") >= 0) || null;
-      if (!frame) await sleep(150);
+    // The attacker document is a TAB now, not a frame of the popup. It is identified by the overlay the
+    // injector renders rather than by its URL, because the URL is the trusted zone's policy constant and this
+    // harness may not restate it — a second copy of that address here is exactly the drift CLAUDE.md's
+    // derive-from-the-artifact rule is about.
+    let attacker = null;
+    for (let i = 0; i < 60 && !attacker; i++) {
+      const pages = await browser.pages();
+      for (const pg of pages) {
+        const armed = await pg.evaluate(() => !!document.getElementById("__apiclient_poc_overlay")).catch(() => false);
+        if (armed) { attacker = pg; break; }
+      }
+      if (!attacker) await sleep(150);
     }
-    if (!frame) { log("no poc-sandbox frame — click 'Load PoC' in the popup first"); return; }
-    await frame.waitForFunction(() => { const b = document.getElementById("run"); return b && !b.disabled; }, { timeout: 8000 }).catch(() => {});
+    if (!attacker) { log("no armed attacker page — click 'Verify in real Chrome' in the popup first"); return; }
     const pocLen = await popup.evaluate(() => { const c = document.querySelector("pre.poc-js code"); return c ? c.textContent.length : 0; });
-    // The popup tab must be FOREGROUND for window.open to count as an active-tab
-    // user gesture — a real toolbar popup always is; a puppeteer-opened popup tab
-    // sits in the background, so window.open would be popup-blocked (returns null,
-    // the PoC's own alert fires and a modal wedges the renderer). bringToFront
-    // mirrors the real interaction; it is NOT a dialog workaround.
-    await popup.bringToFront();
-    await sleep(500);   // let the foreground/activation state settle so the click counts as an active-tab gesture (else window.open is popup-blocked on a fresh restart)
-    await frame.click("#run");   // TRUSTED, FOREGROUND gesture → window.open allowed
-    log("clicked Run PoC (trusted gesture); PoC length=" + pocLen);
+    // The ATTACKER page must be FOREGROUND for window.open to count as an active-tab user gesture, for the
+    // same reason the popup had to be: a background tab's window.open is popup-blocked (returns null, and a
+    // PoC's own alert can wedge the renderer). bringToFront mirrors the real interaction; it is NOT a dialog
+    // workaround.
+    await attacker.bringToFront();
+    await sleep(500);   // let the foreground/activation state settle so the click counts as an active-tab gesture
+    await attacker.click("#__apiclient_poc_overlay button");   // TRUSTED, FOREGROUND gesture → window.open allowed
+    log("clicked Run PoC on the attacker page at " + attacker.url() + " (trusted gesture); PoC length=" + pocLen);
     // Poll the popup card's verdict for up to waitMs.
     const deadline = Date.now() + waitMs;
     let verdict = "(no verdict yet)";

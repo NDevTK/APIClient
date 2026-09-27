@@ -330,9 +330,16 @@
     var f = document.createElement("iframe");
     /* THE SANDBOX ATTRIBUTE IS SET BEFORE THE ADDRESS AND BEFORE INSERTION, because the flags are read when the
        load begins: an `allow-same-origin`-less frame whose attribute lands late is a document that already has
-       the extension's own origin. `allow-scripts` alone — the manifest's sandbox policy grants this page
-       `allow-popups`/`allow-popups-to-escape-sandbox`/`allow-modals` as well (poc-sandbox.html needs them), and
-       the effective flag set is the UNION of both restrictions, so this attribute is what takes them away. */
+       the extension's own origin. `allow-scripts` alone, and the effective flag set is the UNION of both
+       restrictions, so this attribute is what decides the frame's flags whatever the policy grants.
+       THE POLICY NO LONGER GRANTS THE OTHER THREE, WHICH IS A CONSEQUENCE OF A DELETION RATHER THAN A CHOICE
+       MADE HERE. This comment read that the manifest's sandbox policy also grants `allow-popups`,
+       `allow-popups-to-escape-sandbox` and `allow-modals` because `poc-sandbox.html needs them` — and that page
+       is deleted, so the only document the `sandbox` policy now covers is this one, which opens no popup and
+       shows no modal. The tokens went with the page that needed them: a grant whose sole justification has been
+       removed is the legacy fallback CLAUDE.md §A-superseded-system-is-DELETED forbids, wearing a policy string.
+       This attribute is unchanged and is still what takes them away at the element, because the union rule means
+       the narrower of the two decides and neither may rely on the other. */
     f.setAttribute("sandbox", "allow-scripts");
     /* AND THE PERMISSIONS POLICY IS DELEGATED, BECAUSE THE CAPABILITY IS A CONJUNCTION AND THIS IS THE HALF
        THIS ELEMENT OWNS. HTML §7.2.2.6 "Script settings for Window objects" defines the window's

@@ -92,6 +92,41 @@
     catch (err) { console.warn("[content:probe_hit] sendMessage failed:", err && err.message || err); }
   }
   document.addEventListener("__uasr_probe_hit", (e) => { if (e.detail) _forwardProbeHit(e.detail); });
+
+  /* THE ATTACKER PAGE'S OWN STATEMENT ABOUT ITS RUN, RELAYED — AND THAT IS ALL IT IS.
+     background.js's `pocAttackerButton` injector renders a Run button in the MAIN world of a real registrable
+     origin and evaluates the engine's PoC there on the user's click. It cannot reach `chrome.runtime` at all:
+     measured in real Chrome at `https://example.com` with an invented-capability control, the MAIN world has no
+     `chrome.runtime` and the ISOLATED world's `new Function` throws an `EvalError` naming THIS EXTENSION's own
+     `script-src`. So the two halves of the delivery are in two worlds by construction and this is the relay.
+     IT USES A `document` EVENT AND NOT `window.postMessage`, exactly as `__uasr_probe_hit` above does and for
+     the same reason: a `message` event would be visible to every handler the page has, which on an attacker
+     document is the one place a stray listener could read a payload it was not given.
+     NOTHING HERE IS EVIDENCE OF A DELIVERY. This runs in a THIRD-PARTY document, so any script on that page
+     can dispatch this event with any fields it likes — which is why the shape is COPIED FIELD BY FIELD with the
+     types coerced and NOTHING asserted. A DCHECK here would hand an analysed page an abort of the isolated
+     world, which is the hazard CLAUDE.md §WHOSE-BYTES-STATE-THE-VALUE names and which offscreen-brain.js's
+     `_recordProbeHit` already refuses for this same channel. The DELIVERY verdict stays where the browser's own
+     facts are: `_recordProbeDelivery`, off a document ANNOUNCING ITSELF at the delivered address. What crosses
+     here is an EXPLANATION of a non-delivery and never proof of one.
+     THE MARKER IS REQUIRED AND IS NOT ASSERTED. An event with no marker keys nothing and is DROPPED rather
+     than forwarded under `undefined`, which would have the offscreen poll a session it has never held. */
+  document.addEventListener("__uasr_poc_ran", (e) => {
+    var d = e && e.detail;
+    if (!d || typeof d !== "object") return;
+    var marker = typeof d.marker === "string" ? d.marker : "";
+    if (!marker) return;
+    try {
+      chrome.runtime.sendMessage({ type: "POC_RAN", ran: {
+        marker: marker,
+        ran: d.ran === true,
+        error: typeof d.error === "string" ? d.error : null,
+        errorName: typeof d.errorName === "string" ? d.errorName : null,
+        handle: typeof d.handle === "string" ? d.handle : null,
+        attackerOrigin: typeof d.attackerOrigin === "string" ? d.attackerOrigin : null,
+      } });
+    } catch (err) { console.warn("[content:poc_ran] sendMessage failed:", err && err.message || err); }
+  });
   function _drainHitMirror() {
     try {
       var raw = document.documentElement.getAttribute("data-uasr-hits");

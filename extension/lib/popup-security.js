@@ -1,6 +1,8 @@
 /* Popup security panel — extracted from popup.js (classic script, shares the popup global scope + DOM).
-   Renders the @S securityFindings (source -> sink -> poc) and drives live-verify: _handleVerify opens the
-   sandboxed attacker popup, _pollVerify + the message listener report REAL EXPLOIT / NOT REPRODUCED. */
+   Renders the @S securityFindings (source -> sink -> poc) and drives live-verify: _handleVerify asks the
+   trusted zone to open the ATTACKER PAGE at a real registrable origin and arm its Run button, and _pollVerify
+   reads the session back — the verdict, and the attacker document's own account of its run — reporting REAL
+   EXPLOIT / NOT REPRODUCED. There is no message listener here any more: the click happens in another tab. */
 // ─── Security Panel ──────────────────────────────────────────────────────────
 
 // §@S(d)'s ENVELOPE VOCABULARY, rendered. The TOKENS are the engine's — solve.h documents both sets, one
@@ -1318,9 +1320,16 @@ function renderSecurityPanel() {
 
 // ── ENGINE-AGREEMENT live verify ─────────────────────────────────────────────
 // The offscreen builds pocJs = the engine's EXACT poc (X9 -> apiclientsink) delivered to the REAL page via
-// its source. We embed the sandboxed attacker page (poc-sandbox.html) and postMessage it the pocJs; the
-// user clicks Run inside it (real user gesture for window.open). When the real sink fires, intercept.js's
+// its source. It then opens the ATTACKER PAGE as an ordinary tab at a real registrable origin and the service
+// worker's named injector arms a Run button in that document's MAIN world with the engine's payload; the user
+// clicks it there (a real user gesture for window.open). When the real sink fires, intercept.js's
 // apiclientsink relays a hit keyed by the session marker.
+//
+// IT USED TO BE A SANDBOXED IFRAME INSIDE THIS POPUP, and the reason that went is not tidiness: a
+// `manifest.sandbox.pages` document has an OPAQUE origin, so every cross-document delivery it performed
+// arrived at the victim with `event.origin === "null"` — an identity no real handler's origin check accepts.
+// A no-hit through that channel could not be told apart from the engine-fidelity divergence §LIVE-VERIFY reads
+// a no-hit as, which is the one signal this whole path exists to produce.
 //
 // WHAT A HIT PROVES, STATED ONCE HERE BECAUSE EVERY SENTENCE BELOW IS BOUNDED BY IT. The marker rides INSIDE
 // the payload — it must, since it is what a fired sink relays — and the payload is delivered TO the page, so
@@ -1338,92 +1347,82 @@ function renderSecurityPanel() {
 //     "the payload's code RAN in the delivered document", never "the sink produced it".
 // That is the strongest claim the evidence supports, and it is still the claim worth having: the payload only
 // executes if the page's real CSP and Trusted-Types let it, which is exactly what the model predicted.
-var _verifySandboxes = new Map();   // pocId -> {pocJs, marker, resultEl}
-var _verifyIdSeq = 0;
-window.addEventListener("message", function (e) {
-  var d = e.data;
-  if (!d || typeof d !== "object" || (d.type !== "POC_READY" && d.type !== "POC_RAN")) return;
-  for (var ent of _verifySandboxes.values()) {
-    var ifr = document.querySelector('iframe[data-verify-id="' + ent.pocId + '"]');
-    if (!ifr || ifr.contentWindow !== e.source) continue;
-    // NO try/catch AROUND THE HANDOFF. This posts a plain object to a same-origin extension frame THIS view
-    // created and whose contentWindow it has just identified, so the only way it throws is a bug in that
-    // identification — and swallowing it left the sandbox waiting for a POC_SETUP that never came, which
-    // reads to the user as a live-verify that simply never answers.
-    if (d.type === "POC_READY") { e.source.postMessage({ type: "POC_SETUP", pocJs: ent.pocJs, marker: ent.marker }, "*"); }
-    else if (d.type === "POC_RAN" && ent.resultEl) _reportDelivery(d, ent);
-    return;
+/* WHAT THE ATTACKER DOCUMENT SAID ABOUT ITS OWN RUN, AS A SENTENCE AND NEVER AS A VERDICT.
+   THE SANDBOXED IFRAME AND ITS postMessage PAIRING ARE GONE, AND WHAT STOOD HERE IS SUMMARISED RATHER THAN
+   QUOTED WHOLE BECAUSE ITS MECHANISM NO LONGER EXISTS TO BE RE-DERIVED: a `_verifySandboxes` map keyed by a
+   per-card iframe id, a `window` message listener pairing POC_READY/POC_RAN against `ifr.contentWindow`, a
+   `_SANDBOX_HANDLE` Map of handle shapes, `_sandboxSaid` and `_reportDelivery`. Two of its decisions survive
+   here for the reasons it gave, and both were right: the handle is read by IDENTITY only and is CONTEXT that
+   gates nothing, and nothing the attacker document says is ASSERTED — it evaluates the payload, so a payload
+   could state this vocabulary itself, and a DCHECK would hand an analysed page an abort of the popup.
+   WHY THE IFRAME WENT. It was a `manifest.sandbox.pages` document, so its origin was OPAQUE, and every
+   cross-document delivery it performed arrived at the victim with `event.origin === "null"` — an identity no
+   real handler's origin check accepts. A no-hit through that channel was therefore indistinguishable from the
+   engine-fidelity divergence §LIVE-VERIFY reads a no-hit as, which is the one signal this whole path exists to
+   produce. The attacker document is now a REAL REGISTRABLE ORIGIN that the trusted zone opens as an ordinary
+   tab, and the payload is EVALUATED there rather than served from there.
+   AND THE PAYLOAD NO LONGER PASSES THROUGH THIS VIEW AT ALL. The offscreen holds `ses.pocJs` and hands it
+   straight to the service worker's NAMED injector, so the one artifact the engine fire-verified is the one that
+   runs and it crosses one boundary fewer than it used to.
+   THE COST, STATED BECAUSE IT IS REAL: the person has to LEAVE this popup to click the button in that tab, and
+   a popup that loses focus closes. So the record lives in the offscreen session (`ran`) and is read back on
+   every poll rather than held in a variable here — which is what the iframe got for free by keeping the click
+   inside the popup. */
+function _attackerSaid(ran) {
+  if (ran === null) {
+    return "No attacker document has reported evaluating the payload yet — if the tab that opened is still "
+      + "showing a Run PoC button, that click is what starts the delivery.";
   }
-});
-
-/* WHAT THE SANDBOX SAYS ITS DELIVERY PRODUCED IS NO LONGER THE GATE IN FRONT OF _pollVerify, AND THE
-   PARAGRAPH THAT MADE IT ONE IS KEPT BECAUSE ITS ARGUMENT IS SOUND AND ITS PREMISE WAS NOT.
-   IT READ: "THIS LINE USED TO POLL ON EVERY RUN, AND POLLING IS WHAT MAKES THE CLAIM. _pollVerify's last arm
-   reports 'NOT REPRODUCED … the engine's model diverges from Chrome here (an engine-fidelity bug to
-   investigate)' — the strongest instruction this panel gives, and one that is only true of a payload a
-   document actually received. Three states reached it as one: a delivery that ran and did not fire (the real
-   divergence), a delivery that THREW before navigating anything, and a `window.open` that created NO
-   NAVIGABLE — HTML §7.2.2.1 'Opening and closing windows' step 14, 'If targetNavigable is null, then return
-   null', which is what a popup blocker is." Every word of that is right about WHY a gate is owed, and it named
-   the wrong instrument: the handle cannot answer it.
-   HTML §7.2.2.1's window open steps have NINETEEN top-level steps and FOUR `return null` arms — 1, 14, 17,
-   18 — and the navigate is step 15, so steps 17 and 18 answer null for a document that HAS been navigated.
-   HTML §7.3.1.7 "Navigable target names"' rules for choosing a navigable set windowType to "new with no
-   opener" (step 17's condition) whenever the opening document's own opener policy is `same-origin` or
-   `same-origin-plus-COEP` and its origin is not same origin with its top-level origin — which is every
-   `manifest.sandbox.pages` document, whose origin is opaque, at every COOP value. So the gate as built
-   reported a delivery that HAPPENED as one that never did, and turned every popup-blocked reading into a
-   reading that is wrong for three of four spec arms.
-   THE GATE IS STILL HERE AND ITS PREMISE MOVED: it is `snap.delivered`, latched in the trusted zone when a
-   document ANNOUNCES ITSELF at the delivered address with the browser's own origin and frame
-   (offscreen-brain.js `_recordProbeDelivery`). That is why this now polls on every run — the premise is
-   established DURING the poll rather than before it, because a document cannot announce itself until it has
-   loaded. Anyone removing the `snap.delivered` read is removing the premise; the unconditional poll is not
-   the defect this paragraph was written about.
-   IT STILL FAILS CLOSED AND STILL DOES NOT DCHECK THE SANDBOX'S TOKENS. Everything on a POC_RAN crosses from
-   the frame that EVALS the payload, so a payload can post its own POC_RAN — asserting that vocabulary would
-   hand an analysed page an abort of the popup, which is the hazard offscreen-brain.js's `_recordProbeHit`
-   names for the same channel. Nothing the sandbox says can now manufacture a delivery either: the strongest
-   verdict is reachable only from a browser-stated witness in the trusted zone, and the sandbox's words are
-   rendered as an EXPLANATION of a non-delivery and never as evidence of one. */
-/* THE SANDBOX'S OWN STATEMENT, AS A SENTENCE AND NOT AS A VERDICT. A `Map` and not an object literal for the
-   reason the deleted outcome table gave: `d.handle` crosses from the frame that EVALS the payload, so a
-   payload posting `handle:"constructor"` indexes an object literal straight onto Object.prototype and gets a
-   FUNCTION back, which is the `(constructor)`-where-a-type-belongs hazard CLAUDE.md records for foreign bytes.
-   A Map has no prototype chain to reach. Validated by TYPE with the miss named, never asserted. */
-var _SANDBOX_HANDLE = new Map([
-  ["window", "the delivery’s window.open answered a WindowProxy"],
-  ["null", "the delivery’s window.open answered null — HTML §7.2.2.1 “Opening and closing windows” returns "
-         + "null at four of its nineteen top-level steps (1, 14, 17, 18) and navigates at step 15, so this is "
-         + "consistent with a popup the browser never created (step 14) AND with a document that was navigated "
-         + "and whose opener was severed (steps 17 and 18)"],
-  ["none", "the delivery produced no value at all, which is not a shape the window open steps return — it is "
-         + "offscreen-brain.js’s buildLiveDelivery having grown a second statement, so that function is the "
-         + "whole of what to read. A CONTRACT GAP in the harness, stated as one on purpose"],
-]);
-function _sandboxSaid(d) {
-  if (typeof d.error === "string" && d.error) {
-    return "The attacker sandbox reported that the delivery THREW before it completed (" + d.error + ").";
+  var whose = ran.browserStatedOrigin
+    ? "at " + ran.browserStatedOrigin + " (the browser's own statement of where that message came from)"
+    : "at an origin the browser did not state, which is this relay broken rather than a page's claim";
+  if (typeof ran.error === "string" && ran.error) {
+    /* AN `EvalError` IS ITS OWN STATE AND NOT A DELIVERY THAT FAILED TO FIRE. The injected half runs in the
+       attacker document's MAIN world, where the PAGE's CSP governs, so an attacker origin shipping `script-src`
+       without `'unsafe-eval'` cannot evaluate the payload at all. Folding that into "it ran and nothing
+       happened" would report a policy on the ATTACKER's side as a divergence on the engine's. */
+    if (ran.errorName === "EvalError") {
+      return "The attacker document " + whose + " could not EVALUATE the payload: its own Content Security "
+        + "Policy refuses `eval` (" + ran.error + "). That is a property of the attacker origin and not of the "
+        + "engine's model — the delivery never began.";
+    }
+    return "The attacker document " + whose + " reported that the delivery THREW before it completed ("
+      + ran.error + ").";
   }
-  if (d.ran !== true) {
-    return "The attacker sandbox did not state that the delivery ran (ran=" + JSON.stringify(d.ran) + "), so "
-      + "this is poc-sandbox.html’s contract broken — or a payload that posted its own POC_RAN.";
+  if (ran.ran !== true) {
+    return "The attacker document " + whose + " did not state that the delivery ran (ran="
+      + JSON.stringify(ran.ran) + "), so this is background.js's `pocAttackerButton` contract broken — or a "
+      + "script on that page dispatching the relay's own event.";
   }
-  var h = _SANDBOX_HANDLE.get(d.handle);
+  var h = _ATTACKER_HANDLE.get(ran.handle);
   if (!h) {
-    return "The attacker sandbox stated a handle shape this view does not know (handle="
-      + JSON.stringify(d.handle) + "); poc-sandbox.html answers \"window\" / \"null\" / \"none\" for every "
-      + "run, so this is that contract broken — or a payload that posted its own POC_RAN.";
+    return "The attacker document " + whose + " stated a handle shape this view does not know (handle="
+      + JSON.stringify(ran.handle) + "); `pocAttackerButton` answers \"window\" / \"null\" / \"none\" for "
+      + "every run, so this is that contract broken — or a script on that page dispatching the event.";
   }
-  return "The attacker sandbox ran the delivery and " + h + " — CONTEXT only: the handle’s identity is not "
-    + "what decides whether a document received the payload.";
+  return "The attacker document " + whose + " ran the delivery and " + h + " \u2014 CONTEXT only: the handle's "
+    + "identity is not what decides whether a document received the payload.";
 }
-function _reportDelivery(d, ent) {
-  var el = ent.resultEl;
-  el.className = "verify-result";
-  el.textContent = "delivery ran — waiting for the browser to report a document at the delivered address…";
-  _pollVerify(el, ent.marker, ent.blockers, _sandboxSaid(d));
-}
+/* A `Map` AND NOT AN OBJECT LITERAL, for the reason the retired table gave and which is unchanged: `ran.handle`
+   crosses from a document that EVALUATES the payload, so `handle:"constructor"` would index an object literal
+   straight onto Object.prototype and answer a FUNCTION. A Map has no prototype chain to reach.
+   AND `window` IS NOW THE EXPECTED ANSWER RATHER THAN THE SURPRISING ONE, which is a consequence of moving off
+   the sandbox worth stating: HTML §7.3.1.7 "Navigable target names"' rules for choosing a navigable set
+   windowType to "new with no opener" only when the OPENING document's own opener policy is `same-origin` or
+   `same-origin-plus-COEP`. A real registrable origin whose response says nothing about COOP has `unsafe-none`
+   (HTML §7.1.3 "Cross-origin opener policies"' initial value), so that clause does not fire and step 19 hands
+   back the openee's WindowProxy. For the retired sandbox the second conjunct held at every COOP value, so the
+   clause fired for every delivery once the manifest went to `same-origin`. */
+var _ATTACKER_HANDLE = new Map([
+  ["window", "its window.open answered a WindowProxy"],
+  ["null", "its window.open answered null \u2014 HTML \u00A77.2.2.1 \u201COpening and closing windows\u201D "
+         + "returns null at four of its nineteen top-level steps (1, 14, 17, 18) and navigates at step 15, so "
+         + "this is consistent with a popup the browser never created (step 14) AND with a document that was "
+         + "navigated and whose opener was severed (steps 17 and 18)"],
+  ["none", "the delivery produced no value at all, which is not a shape the window open steps return \u2014 it "
+         + "is offscreen-brain.js\u2019s buildLiveDelivery having grown a second statement, so that function is "
+         + "the whole of what to read. A CONTRACT GAP in the harness, stated as one on purpose"],
+]);
 async function _handleVerify(btn) {
   // THE PROBE IS THIS VIEW'S OWN JSON, so a parse failure here is this file disagreeing with itself — never a
   // page state. `probe = {}` on the catch built a probe with no poc and no pageUrl and sent it anyway, and
@@ -1444,32 +1443,43 @@ async function _handleVerify(btn) {
     // finding itself stands — the engine fire-verified the breakout. Reporting only "no pocJs" read as a
     // broken build, which is a different claim from "this vector is not deliverable from a sandbox".
     if (!start || start.error || !start.pocJs) {
-      resultEl.textContent = "not deliverable from this sandbox: "
+      resultEl.textContent = "not deliverable by this harness: "
         + ((start && (start.error || start.pocWhy)) || "the offscreen returned no PoC and no reason — an engine↔host contract gap");
       btn.disabled = false; btn.textContent = prev; return;
     }
     // THE MARKER IS THE WHOLE CORRELATION, so it is asserted and never allowed to arrive as `undefined`. It
     // rides INSIDE the payload as apiclientsink('<id>') and is the only thing that ties a real Chrome hit back
-    // to this session, so an absent one keys _verifySandboxes under `undefined` and then polls a session id the
-    // offscreen has never held — every live verify would report NOT REPRODUCED whatever Chrome actually did,
-    // which is the exact consequence the deleted `snap.executed` read used to have. `pocJs` above was already
-    // checked; the id it is useless without was not.
+    // to this session, so an absent one polls a session id the offscreen has never held — every live verify
+    // would report NOT REPRODUCED whatever Chrome actually did, which is the exact consequence the deleted
+    // `snap.executed` read used to have. `pocJs` above was already checked; the id it is useless without was
+    // not. (It used to key a `_verifySandboxes` map under `undefined`; the map is gone with the iframe, and the
+    // id is now the only thing tying this card to the offscreen session it polls.)
     DCHECK(typeof start.sessionId === "string" && start.sessionId.length > 0,
            "EXPLOIT_PROBE_START answered with a pocJs but no sessionId — startExploitProbe mints a "
            + "crypto.randomUUID marker on every session and popup-handlers answers it as `sessionId`, so its "
            + "absence is that reply broken and this verify could never be correlated to a real Chrome hit");
-    var pocId = "v" + (_verifyIdSeq++);
+    /* ARMING IS A SECOND COMMAND AND IT OPENS A TAB, which is why it is not folded into START: a session whose
+       delivery could not be built refuses above without a tab ever appearing. The payload does not travel with
+       this message — the offscreen already holds it and hands it to the service worker's named injector, so the
+       artifact the engine fire-verified is the one that runs. */
+    resultEl.textContent = "opening the attacker page…";
+    var armed = await new Promise(function (res) { chrome.runtime.sendMessage({ type: "EXPLOIT_PROBE_ARM", sessionId: start.sessionId }, function (r) { res(r); }); });
+    if (!armed || armed.error || !armed.success) {
+      resultEl.textContent = "the attacker page could not be armed: "
+        + ((armed && armed.error) || "the offscreen answered neither a success nor a reason — an engine↔host contract gap");
+      btn.disabled = false; btn.textContent = prev; return;
+    }
+    /* THE PERSON IS TOLD WHERE THE BUTTON IS, BECAUSE IT IS NO LONGER IN THIS DOCUMENT. That is the whole cost
+       of moving the attacker page to a real origin: the click has to happen in another tab, and this popup
+       closes when it loses focus. The poll below therefore reads the session's own `ran` record rather than
+       waiting for a message, and reopening the popup re-reads it. */
+    resultEl.textContent = "a tab has opened at " + (armed.attackerPageUrl || "the attacker page")
+      + " — click Run PoC there (your click is the user gesture window.open needs). This panel reads the result "
+      + "back from the session, so it survives this popup closing.";
     // The probe carries the engine's policy facts (present only when the engine stated them), so the ONE
     // _policyBlockers reading serves the card and the verify verdict alike. Two spellings of "did the page's
     // policy kill this" is how the badge and the envelope came to disagree in the first place.
-    _verifySandboxes.set(start.sessionId, { pocId: pocId, pocJs: start.pocJs, marker: start.sessionId,
-                                            resultEl: resultEl, blockers: _policyBlockers(probe) });
-    var ifr = document.createElement("iframe");
-    ifr.setAttribute("data-verify-id", pocId);
-    ifr.src = "poc-sandbox.html";
-    ifr.style.cssText = "width:100%;height:120px;border:1px solid var(--border,#444);border-radius:6px;margin-top:6px;";
-    resultEl.textContent = "click Run PoC inside the sandbox below (your click is the user gesture window.open needs):";
-    resultEl.parentNode.appendChild(ifr);
+    _pollVerify(resultEl, start.sessionId, _policyBlockers(probe));
     btn.textContent = prev; btn.disabled = false;
   } catch (err) {
     RETHROW_FATAL(err);   // an invariant abort is never reported as a verify that went wrong
@@ -1499,13 +1509,15 @@ function _refusedReasons(refused) {
   refused.forEach(function (h) { if (h.mismatch && seen.indexOf(h.mismatch) < 0) seen.push(h.mismatch); });
   return seen.join("; ");
 }
-async function _pollVerify(resultEl, marker, blockers, sandboxSaid) {
+async function _pollVerify(resultEl, marker, blockers) {
   var refused = [];
   /* THE PREMISE, AND IT IS READ ON EVERY POLL RATHER THAN ONCE BEFORE THE LOOP. A document cannot announce
      itself until it has loaded, so the witness for "a document received the payload" arrives AFTER the
-     delivery ran — which is why this function is now entered unconditionally and why the last arm's premise is
-     established here instead of by _reportDelivery. */
-  var delivered = null, nearMiss = null;
+     delivery ran — which is why this function is entered as soon as the attacker page is armed rather than
+     after any message, and why the last arm's premise is established here. (It used to be established by a
+     `_reportDelivery` that ran on the retired iframe's POC_RAN message; there is no such message now, because
+     the click is in another tab and this popup may be closed when it happens.) */
+  var delivered = null, nearMiss = null, ran = null;
   for (var i = 0; i < 20; i++) {
     await new Promise(function (r) { setTimeout(r, 400); });
     var snap = await new Promise(function (res) { chrome.runtime.sendMessage({ type: "EXPLOIT_PROBE_STATUS", sessionId: marker }, function (r) { res(r); }); });
@@ -1539,8 +1551,18 @@ async function _pollVerify(resultEl, marker, blockers, sandboxSaid) {
            "EXPLOIT_PROBE_STATUS answered without a `deliveredNearMiss` field — it is what separates a run "
            + "in which no document arrived from one in which a top-level document of that origin arrived at "
            + "another address, and without it the second state renders as the first");
+    /* THE ATTACKER DOCUMENT'S ACCOUNT IS READ HERE AND NOT HANDED IN, which is the change the retired iframe
+       forced: the click happens in another tab, so there is no message this document receives and no variable
+       it can hold. ASSERTED AND NOT DEFAULTED, with `null` as its POSITIVE value — startExploitProbe declares
+       the field on every session and the POC_RAN relay is its only writer, so `null` MEANS nobody has clicked
+       Run yet, and a `||` here would make that indistinguishable from the relay having stopped. */
+    DCHECK("ran" in snap && (snap.ran === null || typeof snap.ran === "object"),
+           "EXPLOIT_PROBE_STATUS answered without a `ran` field — the session declares it as null and the "
+           + "POC_RAN relay is its only writer, so its absence is that reply broken and every non-delivery "
+           + "would be explained by nothing at all");
     if (snap.delivered) delivered = snap.delivered;
     if (snap.deliveredNearMiss) nearMiss = snap.deliveredNearMiss;
+    ran = snap.ran;
     /* A HIT IS EVIDENCE ONLY IF IT CAME FROM THE DELIVERED DOCUMENT, so the array is PARTITIONED before it is
        read as an outcome. `snap.hits.length` alone was the whole test, which is why any document in any tab
        that knew the marker could print the strongest verdict this panel has. Attribution is decided in the
@@ -1590,7 +1612,7 @@ async function _pollVerify(resultEl, marker, blockers, sandboxSaid) {
       "NOT DELIVERED — no document announced itself at the delivered address, so nothing this panel can see "
       + "was ever handed the payload. The premise is the browser's: a document of the delivered origin, in the "
       + "top-level frame, at the address this zone navigated to (offscreen-brain.js _recordProbeDelivery). "
-      + sandboxSaid + " "
+      + _attackerSaid(ran) + " "
       + (nearMiss
           ? "A top-level document of that origin DID announce itself " + nearMiss.count + " time(s) at the "
             + "delivered address APART FROM the component the payload was placed in — the fragment for a `#` "
@@ -1663,7 +1685,11 @@ async function _pollVerify(resultEl, marker, blockers, sandboxSaid) {
     // (1, 14, 17, 18) over nineteen top-level steps whose navigate is step 15, so a null handle is also what a
     // severed-opener delivery answers — and HTML §7.3.1.7's rules for choosing a navigable make that the arm
     // EVERY delivery from an opaque-origin sandbox page takes once the opener's own COOP is `same-origin`.
-    // The gate is now `delivered`, latched from a document announcing itself, and the unconditional poll is
+    // THAT SANDBOX PAGE IS ITSELF RETIRED NOW — the attacker document is a real registrable origin, whose
+    // response says nothing about COOP, so the clause does not fire there and a null handle is once again the
+    // unusual answer rather than the universal one. The reasoning is kept because it is why the premise moved:
+    // an instrument that was wrong for three of four spec arms is not repaired by a better attacker page.
+    // The gate is `delivered`, latched from a document announcing itself, and the unconditional poll is
     // what lets it be read at all. Removing the `delivered` read is removing the premise.
     : "NOT REPRODUCED — a document DID receive the payload (one announced itself in the top-level frame at the "
       + "delivered origin and the delivered address) and apiclientsink never fired, and the engine reported "

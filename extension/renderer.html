@@ -32,8 +32,12 @@
 
      AND AN `extension_pages` DOCUMENT COULD NOT BE FRAMED AT ALL: that policy ends in `frame-ancestors 'none'`,
      which is enforced against ANY embedder, this extension's own offscreen included. The `sandbox` policy
-     carries no frame-ancestors, which is why poc-sandbox.html — the same shape, listed the same way, handed its
-     payload by postMessage the same way — is embeddable by the popup today.
+     carries no frame-ancestors, which is why THIS document is embeddable by the offscreen at all. The sentence
+     that stood here named the other page listed the same way — poc-sandbox.html, handed its payload by
+     postMessage, embeddable by the popup — and that page is DELETED: its OPAQUE origin made every cross-document
+     delivery it performed arrive at the victim with `event.origin === "null"`, so the attacker document is now a
+     real registrable origin the trusted zone opens as an ordinary tab. This listing therefore names exactly one
+     page, which is this one.
 
      WHICH IS WHY IT IS IN `manifest.sandbox.pages`. That listing is what swaps the `extension_pages` policy
      (`script-src 'self' 'wasm-unsafe-eval'` — a grant this document cannot use, see above) for the `sandbox`

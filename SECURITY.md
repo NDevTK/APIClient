@@ -172,9 +172,12 @@ has to remember:
   `fromExtDocument` (`sender.origin === EXTENSION_ORIGIN`) is what gates the trusted popup command surface.
   Collapsing them into one url-prefix test deletes the document→document rule: a **sandboxed** extension
   page's `sender.url` is still `chrome-extension://<id>/…` while its origin is the opaque `"null"`, so a
-  prefix hands an opaque-origin document `GET_STATE` / `SEND_REQUEST` / `CLEAR_TAB`. `poc-sandbox.html` and
-  `renderer.html` are both sandboxed (`manifest.json` `sandbox.pages` names exactly those two), so this is a
-  page that exists. Content types are dropped on the BROADER predicate — dropping more can only ever refuse —
+  prefix hands an opaque-origin document `GET_STATE` / `SEND_REQUEST` / `CLEAR_TAB`. `renderer.html` is
+  sandboxed (`manifest.json` `sandbox.pages` names exactly it), so this is a page that exists — and it is the
+  page every WASM instance runs in, which is the whole reason that listing is not empty. `poc-sandbox.html` was
+  the second entry and is DELETED; the retired name is stated here rather than dropped because the rule's force
+  came from there being more than one such page, and a reader who finds only one may think the case is
+  hypothetical. It is not: the engine's own realm is one. Content types are dropped on the BROADER predicate — dropping more can only ever refuse —
   and the popup gates the reverse direction on `sender.origin` too (`isExtensionPage` in `popup.js`), because
   a boundary checked on one side only is not a boundary.
 - **A PERSON'S EGRESS SENTENCE REACHES THE POLICY THROUGH THAT SURFACE, AND IT NEEDS A SECOND FACT NO
@@ -185,8 +188,8 @@ has to remember:
   it, so the offscreen (which has no command line) could not be told anything at all.
   The **authorization** is the document→document rule above and nothing else: the router refuses anything
   whose `sender.origin` is not `chrome-extension://<id>`, so a content script never reaches the switch and a
-  SANDBOXED extension page (`renderer.html`, `poc-sandbox.html`, origin `"null"`) is refused by the same
-  equality. The handler **re-asserts that principal where it is relied on** rather than resting on which
+  SANDBOXED extension page (`renderer.html`, origin `"null"` — `poc-sandbox.html` was the other and is
+  deleted) is refused by the same equality. The handler **re-asserts that principal where it is relied on** rather than resting on which
   functions happen to call it.
   **AND THE PRINCIPAL IS ONLY HALF OF IT.** A trusted extension document is where a person's click arrives
   AND where an automatic caller would sit, and nothing about the message tells them apart — which is the
@@ -626,11 +629,38 @@ what it owes is that the destination be one this zone can name exactly.
   — and `manifest.json` declares no `externally_connectable`, so no other extension and no web page has a
   door. A compromised renderer needs none of this: it already holds the socket.
 - **The live-verify NAVIGATION — the one egress that is not a request this zone issues.** The offscreen builds
-  the PoC's JavaScript as a `window.open` of the delivery address; the popup embeds `poc-sandbox.html`, an
-  opaque-origin sandboxed page, and hands it that string; the OPERATOR'S CLICK is the user activation that
-  lets it run. What results is a real top-level credentialed GET in the person's own profile, and it reaches
-  `safeFetch` never — there is no interception layer and none is wanted, because the whole value of the
-  signal is that CHROME answers rather than we do (§The live PoC verify).
+  the PoC's JavaScript as a `window.open` of the delivery address, opens the ATTACKER PAGE as an ordinary tab
+  at a real registrable origin, and has the service worker's NAMED injector arm a Run button in that document's
+  MAIN world with that string; the OPERATOR'S CLICK is the user activation that lets it run. What results is a
+  real top-level credentialed GET in the person's own profile, and it reaches `safeFetch` never — there is no
+  interception layer and none is wanted, because the whole value of the signal is that CHROME answers rather
+  than we do (§The live PoC verify).
+  **THE ATTACKER PAGE USED TO BE AN OPAQUE-ORIGIN SANDBOXED EXTENSION PAGE AND THAT WAS A FIDELITY DEFECT
+  RATHER THAN A WEAKER BOUNDARY.** `poc-sandbox.html` was in `manifest.sandbox.pages`, so its origin was
+  `"null"` — and a cross-document delivery from it arrived at the victim with `event.origin === "null"`, an
+  identity no real handler's origin check accepts. A no-hit through that channel was indistinguishable from the
+  engine-fidelity divergence §The live PoC verify reads a no-hit as, which is the one signal the whole path
+  exists to produce. The change is therefore about what the ATTACKER can be, not about what this extension may
+  do: the person's browser makes ONE ordinary GET of a documentation domain's front page, and the payload is
+  EVALUATED in that loaded document rather than served from it, so nothing is hosted, no domain is registered
+  and no local server exists to become a second document-load transport.
+  **TWO WORLDS, AND THE SPLIT IS MEASURED RATHER THAN CHOSEN.** In real Chrome at that origin, with an
+  invented-capability control beside each reading: the ISOLATED world has `chrome.runtime.sendMessage` and its
+  `new Function` THROWS an `EvalError` naming THIS EXTENSION's own `script-src`, which governs an isolated
+  world and carries no `'unsafe-eval'`; the MAIN world evaluates (the page's CSP governs, and that page ships
+  none) and has no `chrome.runtime` at all. So the evaluation is MAIN-world and the relay is ISOLATED-world,
+  and they meet over a `document` CustomEvent — the same cross-world transport `__uasr_probe_hit` already uses,
+  chosen over `window.postMessage` so no handler the page has sees a `message` event that was not the page's.
+  **WHAT CROSSES BACK IS PAGE-CLAIMED AND IS RECORDED AS SUCH.** Any script in that third-party document can
+  dispatch the relay's event, so `content.js` copies the shape field by field with the types coerced and
+  asserts NOTHING (a `DCHECK` there would hand an analysed page an abort of the isolated world), and the
+  offscreen records the browser's own statement of where the message came from BESIDE the page's claim. The
+  DELIVERY verdict is unchanged and still browser-stated: a document ANNOUNCING ITSELF at the delivered address
+  (`_recordProbeDelivery`). **THE INJECTION IS A NAMED OP AND NOT A STRING.** `background.js` holds the
+  injector table and the offscreen selects `pocAttackerButton` BY NAME with serializable arguments, so the only
+  zone allowed to ask cannot inject code of its own composing; that gate is why the whole delivery routes
+  through the offscreen rather than through the popup, and it is the caller the table's own standing security
+  note said would either arrive or take the table with it.
   **It is inside the model because of what the address IS, and that is a property of how it is built rather
   than a promise.** `buildLiveDelivery` takes the page the sink was OBSERVED on, re-parses it through the URL
   parser, clears its fragment and query, and appends the payload at the component the ENGINE declared — so

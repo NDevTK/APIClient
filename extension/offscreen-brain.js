@@ -1459,6 +1459,37 @@ function handleContentMessage(msg, sender) {
     return;
   }
 
+  /* POC_RAN: THE ATTACKER DOCUMENT REPORTING THAT IT EVALUATED THE PAYLOAD. It arrives from the MAIN world of a
+     real registrable origin through content.js's isolated-world relay, and it is the replacement for the
+     `poc-sandbox.html` iframe's POC_RAN — which came from a `manifest.sandbox.pages` document whose OPAQUE
+     origin made every cross-document delivery arrive at the victim with `event.origin === "null"`.
+     IT IS AN EXPLANATION AND NEVER EVIDENCE OF A DELIVERY, which is why it is recorded beside `delivered`
+     rather than into it. `_recordProbeDelivery` latches the premise from a document ANNOUNCING ITSELF at the
+     delivered address with the browser's own origin and frame, and nothing a third-party page says can
+     manufacture that. Same reason nothing here is asserted: any script on the attacker page could dispatch the
+     relay's event, so a DCHECK would hand it an abort of this zone.
+     THE BROWSER'S OWN ANSWER IS RECORDED BESIDE THE PAGE'S CLAIM, exactly as `_recordProbeHit` splits them,
+     because `_facts` is the ONE mint and its origin is the address Chrome says this message came from — which
+     is the whole point of moving the attacker page to a registrable origin, and is the half a reader can trust
+     when the two disagree. */
+  if (msg.type === "POC_RAN") {
+    const r = msg.ran;
+    if (!r || typeof r !== "object" || typeof r.marker !== "string" || !r.marker) return;
+    const ses = _probeSessions.get(r.marker);
+    if (!ses) return;   // an expired or unknown marker keys nothing; a real state, and not ours to assert on
+    ses.ran = {
+      at: Date.now(),
+      ran: r.ran === true,
+      error: typeof r.error === "string" ? r.error : null,
+      errorName: typeof r.errorName === "string" ? r.errorName : null,
+      handle: typeof r.handle === "string" ? r.handle : null,
+      pageClaimedOrigin: typeof r.attackerOrigin === "string" ? r.attackerOrigin : null,
+      browserStatedOrigin: _facts.origin,
+      browserStatedUrl: _facts.url,
+    };
+    return;
+  }
+
   // SCRIPT_SOURCE / SCRIPTS_LOADED removed: content.js no longer ships per-script
   // bodies or a load signal. One CONTENT_SEED per document drives the analysis; the custom browser loads the
   // suggested address and the engine sources every script from what it loaded (inline via the SSR phase,
@@ -1971,6 +2002,14 @@ function startExploitProbe(msg) {
        from "two documents both know the marker". */
     expect: null,
     deliveredDocumentId: null,
+    /* WHAT THE ATTACKER DOCUMENT SAID ABOUT ITS OWN RUN, STATED HERE SO `null` IS A POSITIVE VALUE AND NOT A
+       PRODUCER THAT MIGHT NOT HAVE WRITTEN IT. `null` means no attacker document has reported evaluating this
+       session's payload; a record means one did, and it carries the browser's own statement of where the
+       message came from BESIDE the page's claim, because the page half is a third party's and the other half
+       is Chrome's. Declaring it here is what lets the STATUS reply read it without a `||`, which CLAUDE.md
+       §A-FIELD-A-CONSUMER-DEFAULTS is exactly about: a default here would make "the relay stopped writing
+       this" indistinguishable from "nobody has clicked Run yet". */
+    ran: null,
     /* WHETHER A DOCUMENT WAS EVER HANDED THE PAYLOAD — THE BROWSER'S ANSWER, and the premise the popup's
        strongest verdict rests on. It is latched by `_recordProbeDelivery` from a document ANNOUNCING ITSELF,
        not from anything the attacker sandbox reports: HTML §7.2.2.1 "Opening and closing windows"' window
@@ -1990,7 +2029,10 @@ function startExploitProbe(msg) {
     deliveredNearMiss: null,
   };
   // ENGINE AGREEMENT: perform the delivery the ENGINE declared, carrying its EXACT poc (X9 -> apiclientsink).
-  // The user runs it by clicking Run in the sandboxed attacker page (poc-sandbox.html) — that real click is
+  // The user runs it by clicking Run on the ATTACKER PAGE, a real registrable origin the trusted zone opens as
+  // an ordinary tab and the service worker's named injector arms (it was a sandboxed `poc-sandbox.html` iframe
+  // inside the popup, whose OPAQUE origin made every cross-document delivery arrive with `event.origin ===
+  // "null"`) — that real click is
   // the user activation window.open needs. When the real page's sink fires, intercept.js → content.js →
   // PROBE_HIT lands on this marker and _recordProbeHit decides whether the reporting document is the one the
   // payload was delivered to.
@@ -2027,6 +2069,73 @@ function startExploitProbe(msg) {
          "that answers no pocJs, so this is that record having grown a path that answers neither");
   _probeSessions.set(marker, session);
   return session;
+}
+
+/* THE ATTACKER DOCUMENT'S ADDRESS, AS A POLICY CONSTANT IN THE TRUSTED ZONE AND NOWHERE ELSE.
+   §LIVE-VERIFY needs the PoC to run at an origin a victim's own origin check can be tested against, and the
+   PROJECT OWNER decided which one: `https://example.com`, opened as an ordinary tab in the browser this
+   extension is already running in, with the payload EVALUATED there rather than served from there — so nothing
+   is hosted, no domain is registered and no local server exists to be a second document-load transport.
+   IT IS ONE GET OF A DOCUMENTATION DOMAIN'S FRONT PAGE AND NOTHING ELSE LEAVES THE BROWSER. The payload is
+   injected into the loaded document in this person's own browser; it is never sent anywhere. Measured with
+   `curl -sSI`: that address answers 200 `text/html` with NO `content-security-policy` and no
+   `x-frame-options`, which is why the MAIN world can evaluate at all — the page's CSP governs there, and an
+   attacker origin that shipped `script-src` without `'unsafe-eval'` would refuse the evaluation and say so.
+   NAMED RESIDUAL — A `forgeable` PRINCIPAL DEMAND NEEDS A CHOSEN ORIGIN AND THIS CONSTANT IS NOT ONE.
+     WHAT IS NOT COVERED: solve.h's `principalDemand` of `forgeable` states a SHAPE the victim's own
+   `event.origin` test demands (`endsWith`/`includes`/`startsWith` over a token the page named), and a fixed
+   attacker address satisfies such a shape only by coincidence. Those deliveries are still REFUSED by
+   `buildLiveDelivery` with the shape stated, which is correct and narrower than §Attacker-sources' SOLVING
+   half. What this covers is every delivery whose demand is `none` — any identity satisfies it — and every
+   `address` delivery, whose payload rides the victim's own URL and asks nothing of the attacker's origin.
+     WHAT THE NEXT DIFF BUILDS: this constant becomes a per-session address the offscreen derives from the
+   session's own `principalGates`, plus the person's statement of which origins they control — because an
+   origin that satisfies an `endsWith` shape is one somebody has to own, and picking one here would be §@H's
+   invention of `6` for `x > 5` one source kind over.
+     HOW ITS ABSENCE WOULD SHOW: a `forgeable` finding rendering a `pocWhy` naming a shape, in a panel where
+   every `none` and `address` finding beside it arms a real Run button. */
+const ATTACKER_PAGE_URL = "https://example.com/";
+
+/* OPEN THE ATTACKER TAB AND ARM ITS BUTTON. Two acts through the SW's relay, in this order, because the second
+   one is about a DOCUMENT and the first is what makes that document exist:
+     `tabs.create` — an ordinary navigation the browser performs, focused so the person can reach it. It is
+   `active` on purpose: the click IS the mechanism (HTML §7.2.2.1's window open steps reach the rules for
+   choosing a navigable at step 12, and a popup blocker is that algorithm answering with no navigable, which a
+   real user activation prevents and nothing this extension can fake does).
+     `scripting.exec` with the op `pocAttackerButton` — a NAMED injector the service worker holds. The offscreen
+   selects it by name and passes only serializable arguments, so this zone cannot inject code of its own
+   composing even though it is the only zone allowed to ask. That gate is background.js's and it is why the
+   whole delivery routes through here rather than through the popup.
+   THE LOAD IS WAITED FOR AND THE WAIT IS BOUNDED BY A STATED NUMBER OF ASKS, which is a UI round trip and not
+   the frontier: injecting into a tab still at `about:blank` would arm the button at the WRONG ORIGIN, which is
+   the one thing this whole change exists to fix. A tab that never completes is REPORTED rather than waited on
+   for ever, because an unbounded wait here is a popup that never answers.
+   NOTHING IS ASSERTED ABOUT WHAT THE INJECTOR RETURNS. It ran in a third-party document's MAIN world, so its
+   answer is page-reachable; the browser-stated half arrives later on the POC_RAN relay's own `_facts`. */
+async function armAttackerPage(ses) {
+  const tab = await swRpc("tabs.create", { url: ATTACKER_PAGE_URL, active: true });
+  const tabId = tab && tab.id;
+  if (typeof tabId !== "number") {
+    return { error: "the browser created no tab for the attacker page, so there is no document to arm" };
+  }
+  let status = tab.status || null;
+  for (let i = 0; i < 40 && status !== "complete"; i += 1) {
+    await new Promise(function (r) { setTimeout(r, 250); });
+    const t = await swRpc("tabs.get", tabId);
+    status = (t && t.status) || null;
+  }
+  if (status !== "complete") {
+    return { error: "the attacker page did not finish loading (tabs.get last reported status="
+                    + JSON.stringify(status) + "), so arming it would have injected into whatever document was "
+                    + "standing there — which for a tab still loading is about:blank, at the wrong origin",
+             attackerTabId: tabId };
+  }
+  const results = await swRpc("scripting.exec", { op: "pocAttackerButton", tabId: tabId,
+                                                  args: [ses.pocJs, ses.marker] });
+  const top = (results || []).find(function (r) { return r && r.frameId === 0; }) || (results || [])[0];
+  return { success: true, attackerTabId: tabId, attackerPageUrl: ATTACKER_PAGE_URL,
+           injected: !!(top && top.result && top.result.armed),
+           pageClaimedOrigin: (top && top.result && top.result.attackerOrigin) || null };
 }
 
 /* ATTRIBUTE A RELAYED apiclientsink CALL TO A DOCUMENT — the check SECURITY.md names as missing and buildable.
@@ -2088,7 +2197,8 @@ function _sameAddressIgnoringComponent(a, b, component) {
 /* A DOCUMENT ANNOUNCING ITSELF AT A LIVE PROBE'S DELIVERED ADDRESS IS THE DELIVERY WITNESS — the thing
    §LIVE-VERIFY's strongest verdict needs and the one thing the attacker sandbox cannot state.
 
-   WHY THE SANDBOX CANNOT STATE IT. poc-sandbox.html evaluates ONE expression statement and used to classify
+   WHY THE SANDBOX COULD NOT STATE IT, AND WHY IT IS RETIRED. poc-sandbox.html evaluated ONE expression
+   statement and used to classify
    the delivery by the IDENTITY of `window.open`'s completion value. HTML §7.2.2.1 "Opening and closing
    windows"' window open steps return null at FOUR of their 19 top-level steps and navigate at step 15, so
    steps 17 and 18 answer null for a document that HAS been navigated. HTML §7.3.1.7 "Navigable target names"'
@@ -2445,6 +2555,11 @@ const CONTENT_TYPES = new Set([
   "CONTENT_FORM_SUBMIT",
   "RESPONSE_BODY",
   "PROBE_HIT",
+  /* THE ATTACKER PAGE'S ACCOUNT OF ITS OWN RUN. It is a CONTENT type and not a popup one because it comes from
+     a web-page origin — the attacker document is a real registrable origin now, not a sandboxed extension page
+     — so it takes the untrusted arm with the browser-verified sender that arm mints, which is what lets the
+     record carry Chrome's own statement of where the message came from beside the page's claim. */
+  "POC_RAN",
 ]);
 
 // The brain runs in the OFFSCREEN document and receives messages DIRECTLY:

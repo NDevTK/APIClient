@@ -428,7 +428,8 @@ async function handlePopupMessage(msg, sender, sendResponse) {
        this extension's, and that is the whole authorization for every command in this switch — but this one
        hands a person's sentence to the network policy, so the premise is stated at the site that relies on
        it rather than left as a fact about which function calls which. A web renderer never reaches this
-       function at all; a SANDBOXED extension page (`renderer.html`, `poc-sandbox.html` — both named in
+       function at all; a SANDBOXED extension page (`renderer.html` — and `poc-sandbox.html` until it was
+       deleted, both named in
        manifest.json) carries the opaque `"null"` origin and is refused by the same equality.
        `initiator` IS PASSED THROUGH AND NEVER SUPPLIED. It is the grade that says a HUMAN did this, and a
        relay that manufactured it would be answering the question the grade exists to ask. The bridge CHECKs
@@ -703,6 +704,31 @@ async function handlePopupMessage(msg, sender, sendResponse) {
       return true;
     }
 
+    /* EXPLOIT_PROBE_ARM: open the attacker document and arm its Run button. A SEPARATE COMMAND FROM START, and
+       the split is about what each one DOES rather than about round trips: START builds a delivery and touches
+       nothing outside this zone, while this one OPENS A TAB — an outward act — so a session whose delivery could
+       not be built refuses here without a tab ever having appeared.
+       IT REPLACES THE POPUP CREATING AN IFRAME, and the payload no longer reaches the popup at all: the
+       offscreen already holds `ses.pocJs` and hands it straight to the service worker's named injector, so the
+       one artifact the engine fire-verified is the one that runs and it crosses one boundary fewer.
+       A SESSION WITH NO PoC IS REFUSED WITH ITS OWN REASON. `pocWhy` is the positive statement of a delivery
+       mechanism this zone cannot perform, and arming a button for it would put a Run control in front of a
+       person for a payload that does not exist. */
+    case "EXPLOIT_PROBE_ARM": {
+      const ses = msg.sessionId ? _probeSessions.get(msg.sessionId) : null;
+      if (!ses) { sendResponse({ error: "session not found or expired" }); return; }
+      if (typeof ses.pocJs !== "string" || !ses.pocJs) {
+        sendResponse({ error: "this session has no PoC to arm — " + (ses.pocWhy || "and no reason was stated, "
+                               + "which is buildLiveDelivery's pairing broken rather than a mechanism") });
+        return;
+      }
+      armAttackerPage(ses).then(function (r) { sendResponse(r); }).catch(function (e) {
+        RETHROW_FATAL(e);   // an invariant abort is never reported as a tab that failed to open
+        sendResponse({ error: (e && e.message) || String(e) });
+      });
+      return true;
+    }
+
     // EXPLOIT_PROBE_STATUS: report whether the engine's poc, run against the real page, fired the sink.
     // Correlation is the relayed apiclientsink(<marker>) hit (intercept.js → content.js → PROBE_HIT). A hit
     // = REAL EXPLOIT (Chrome agrees with the engine); no hit = divergence / CSP-blocked.
@@ -731,6 +757,10 @@ async function handlePopupMessage(msg, sender, sendResponse) {
              "a probe session carries no usable pocJs — startExploitProbe writes buildLiveDelivery's answer " +
              "on every session it stores, so an absent field is that producer having stopped and an empty " +
              "string is a delivery that was built out of nothing");
+      DCHECK("ran" in ses,
+             "a probe session carries no `ran` field — startExploitProbe declares it as null on every session " +
+             "and the POC_RAN relay is its only writer, so its absence is that declaration having been dropped " +
+             "and would make `no attacker document has reported a run` indistinguishable from a broken relay");
       DCHECK(Array.isArray(ses.hits),
              "a probe session carries no hits array — it is created with hits:[] and PROBE_HIT only ever " +
              "appends to it, so its absence is the one evidence channel this reply has being unreadable");
@@ -743,12 +773,23 @@ async function handlePopupMessage(msg, sender, sendResponse) {
          reported as one that never did. `deliveredNearMiss` travels beside it because the two together are
          what separate a run in which no document arrived from one in which a top-level document of that
          origin arrived at another address; a reply carrying only the first would leave the second silent. */
+      /* `ran` IS THE ATTACKER DOCUMENT'S OWN ACCOUNT AND `null` IS ITS POSITIVE VALUE: no attacker document has
+         reported evaluating the payload yet. It crosses on every reply because the popup is a document that
+         CLOSES — the person has to leave it to click the button in the attacker tab — so the panel cannot hold
+         that statement in a variable and must be able to read it back when it is reopened. That is the one
+         thing the retired `poc-sandbox.html` iframe got for free by keeping the click inside the popup, and it
+         is the cost of moving the attacker page to a real origin.
+         IT IS AN EXPLANATION AND NEVER EVIDENCE. `delivered` above is the premise the strongest verdict rests
+         on and it is browser-stated; every field of `ran` except `browserStatedOrigin` and `browserStatedUrl`
+         is a third-party page's claim, which is why the record carries both halves named for their provenance
+         rather than one merged answer. */
       sendResponse({
         success: true, status: ses.status, marker: ses.marker, pageUrl: ses.pageUrl,
         hits: ses.hits.slice(),
         delivered: ses.delivered,
         deliveredNearMiss: ses.deliveredNearMiss,
         pocJs: ses.pocJs,
+        ran: ses.ran,
         startedAt: ses.createdAt,
       });
       return;
