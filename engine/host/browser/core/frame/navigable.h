@@ -256,7 +256,22 @@ void navigable_install(JSContext *ctx, JSValueConst global, const char *origin);
  * frontier ever created in order to ask is the heap exhaustion navigable.c's deferral exists to avoid. */
 JSValue navigable_tree_order(JSContext *ctx);
 
-JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url);
+/* `document_resource` is HTML §7.4.2.2 "Beginning navigation"'s own third input, declared in the algorithm's
+ * first sentence: "To navigate a navigable navigable to a URL url using an optional Document-or-null
+ * sourceDocument (default null), with an optional POST resource, string, or null documentResource (default
+ * null) …". This engine carries the STRING arm and nothing else, which is §4.8.5's srcdoc: *navigate an iframe
+ * or frame* passes "the value of element's srcdoc attribute" and §7.4.5 "Populating a session history entry"'s
+ * CREATE NAVIGATION PARAMS FROM A SRCDOC RESOURCE is the one algorithm that reads it back — "let
+ * documentResource be entry's document state's resource … let response be a new response with URL
+ * about:srcdoc, header list « (`Content-Type`, `text/html`) », body the UTF-8 encoding of documentResource, as
+ * a body". NULL for every destination that has a response of its own.
+ *
+ * IT RIDES BESIDE THE ADDRESS AND IS NOT ENCODED INTO IT, because the address of every navigation that carries
+ * one is the SAME four words. `about:srcdoc` names the constructor and the resource is the document; a scheme
+ * that carried its own bytes would make every reader of a destination — the fetch, §7.1.7's determine step,
+ * §7.3.2.1's determine-the-origin, §2.4.3's base URL — parse a document out of a URL to answer a question
+ * about a URL. */
+JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url, const char *document_resource);
 
 /* HTML §7.4.3 "Reloading and traversing"'s RELOAD, over the navigable whose ACTIVE DOCUMENT is this realm's.
  *
@@ -606,9 +621,19 @@ int navigable_realm_ref_sites(NavigableRealmRefSite *out, int cap, long *release
    materialized in a flow that never walked that tree would not have one to find.
    THE PAIRING WITH `is_child` IS ASSERTED, so a child navigable cannot be created with no element to present
    it and an auxiliary one cannot be created with one. */
+/* `document_resource` is §7.4.2.2's `documentResource` for the navigation this create FOLDS IN — see
+   navigable_navigate above for what the value is and why it travels beside the address. It is NULL for every
+   caller but §4.8.5's srcdoc arm, and when it is non-null `url` is `about:srcdoc`: that pairing is asserted at
+   the enqueue rather than described here, because a resource on any other address would be a document nothing
+   parses and an `about:srcdoc` with none is the empty frame this file used to produce.
+   IT IS WHAT MAKES THE `about:` NO-LOAD DEFERRAL A STATEMENT ABOUT THE DESTINATION RATHER THAN ABOUT ITS
+   SCHEME. §7.4's create enqueues no load for an `about:` address because such a destination has no response
+   and no content, so navigating to it produces the Document the navigable already holds — and a srcdoc
+   destination is the one `about:` URL that HAS content, which is why the guard reads this argument and not
+   just the scheme. */
 JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool is_child,
                          const WindowFeatures *feat, SandboxFlags iframe_sandbox_flags,
-                         JSValueConst container);
+                         JSValueConst container, const char *document_resource);
 
 /* THE NAVIGABLE AN INSTANCE IS ROOTED IN — the one navigable_create above did NOT make, because it was made in
  * another instance or by the browser itself — together with HTML §7.1.4.2 "Embedder policy checks" for the

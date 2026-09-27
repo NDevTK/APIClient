@@ -540,7 +540,9 @@ static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev,
        behind that route while the @S URL entry for the href stands parked — read it as the endpoint set and
        the parked entry disagreeing about the same address. */
     if (window_type == WINDOW_TYPE_EXISTING_OR_NONE && window_proxy_is(r) && href != NULL) {
-        JSValue nav = navigable_navigate(ctx, r, href);
+        /* NO §7.4.2.2 `documentResource`: §4.6.5's follow the hyperlink states none, and the string arm of
+           that argument is §4.8.5's `srcdoc` alone. */
+        JSValue nav = navigable_navigate(ctx, r, href, /*documentResource*/ NULL);
         JS_FreeValue(ctx, r);
         r = nav;
     }

@@ -1160,6 +1160,35 @@ typedef struct {
 enum { NAV_LOAD_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const NAV_LOAD_STEPS[] = { NAV_LOAD_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
+/* WHAT §7.4 STEP 14's JOB CARRIES, NAMED ONCE FOR BOTH OF ITS ENDS — the writer is navigable_load_enqueue and
+   the reader is js_nav_load_step below, and until this list existed the two agreed by counting. THE COUNT IS
+   THE LAST MEMBER, so the array the enqueue declares, the argc it passes and the highest slot the step reads
+   are ONE declaration: an argument added here reaches all three, and an argument added to only one of them
+   does not compile. That is the construction CLAUDE.md §Fix-the-ROOT asks for in place of the assertion this
+   replaces — the state is impossible rather than checked.
+   THE INCIDENT IT CLOSES, KEPT WITHOUT ITS COORDINATES: a slot was added to the writer and to the reader and
+   NOT to the array's declared size, so the last assignment wrote one JSValue past the end of a stack array and
+   the enqueue then read past it too. `-Warray-bounds` names exactly that and this build silences it (see
+   build.mjs's quiet list), so nothing between the edit and the crash could see it. A hand-written extent and a
+   hand-written enumeration are two copies of one number, and the one that drifts is the extent, because it is
+   the copy no reader of the record ever looks at. */
+enum {
+    NAV_LOAD_ARG_PROXY,                        /* the WindowProxy being navigated */
+    NAV_LOAD_ARG_URL,                          /* §7.4.5's ENTRY'S URL — the address this job was enqueued with */
+    NAV_LOAD_ARG_INITIATOR_ORIGIN,             /* §7.4.2.2's initiatorOriginSnapshot, as a handle */
+    NAV_LOAD_ARG_CSP,                          /* §7.1.7's clone of the initiator's container: its CSP text */
+    NAV_LOAD_ARG_SELF_ORIGIN,                  /* …and CSP §2.2's self-origin that list is paired with */
+    NAV_LOAD_ARG_ABOUT_BASE,                   /* §7.4.5's aboutBaseURL, or JS_NULL for a destination that fetches */
+    NAV_LOAD_ARG_COEP,                         /* §7.1.4's four items of that same container, as §7.1.4's tokens */
+    NAV_LOAD_ARG_COEP_ENDPOINT,
+    NAV_LOAD_ARG_COEP_REPORT_ONLY,
+    NAV_LOAD_ARG_COEP_REPORT_ONLY_ENDPOINT,
+    NAV_LOAD_ARG_PROVENANCE,                   /* CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's word for it */
+    NAV_LOAD_ARG_INTEGRITY,                    /* SRI §3.8's item of that container */
+    NAV_LOAD_ARG_DOCUMENT_RESOURCE,            /* §7.4.2.2's documentResource: §4.8.5's srcdoc text, or JS_NULL */
+    NAV_LOAD_ARG_COUNT
+};
+
 /* HTML §7.1.4.2 "Embedder policy checks"' STEPS 1 AND 2 — the half of check-a-navigation-response's-adherence-
  * to-its-embedder-policy that is about the NAVIGABLE — and then the check itself, which is §7.1.4's
  * (core/frame/embedder_policy.h states why the algorithm is split exactly here).
@@ -1275,13 +1304,17 @@ static void nav_check_embedder_policy_adherence(JSContext *ctx, JSValueConst pro
 static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     NavLoadState *s = st;
-    JSValueConst proxy = step_arg(&s->hdr, 0);
+    JSValueConst proxy = step_arg(&s->hdr, NAV_LOAD_ARG_PROXY);
     JSValueConst answer = JS_UNDEFINED;
     const char *addr, *tlu;
     /* Fetch §2.2.6 "Responses"' RESPONSE URL, OWNED — the string the answer above carries, released with
        `addr` at the one exit this frame has past the fetch. NULL for a destination that made no request, which
        is the same fact `fetches` states one line down and is why the borrowed pointer below is separate. */
     const char *resp_url = NULL;
+    /* §7.4.2.2's `documentResource`, OWNED — the bytes §7.4.5's srcdoc constructor makes its response's body
+       out of. It is released beside `about_base` at the one exit past the creation, because `body` points INTO
+       it and §13.2.3.2's decode does not run until nav_create_begin. NULL for every other destination. */
+    const char *resource = NULL;
     /* AND THE URL EVERY ALGORITHM BELOW IS RUN OVER, BORROWED from one of the two above. §7.4.5 builds
        navigation params three ways and only create-navigation-params-BY-FETCHING has a response: its
        responseURL is the response's, while the srcdoc and non-fetch-scheme constructors are written over
@@ -1383,14 +1416,14 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     STEP_DISPATCH(NAV_LOAD_STAGES, s->hdr.stage, NAV_LOAD_ALGORITHM, JS_STEP_ABRUPT);
 
     STEP_ARM(NAV_LOAD_FETCH);
-    addr = JS_ToCString(ctx, step_arg(&s->hdr, 1));
+    addr = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_URL));
     if (!addr) return JS_STEP_ABRUPT;
     /* CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's word for this navigation, RIDING THE JOB — asserted once
        here for both readers of it below (the request the host is asked to perform, and §7.1.3.2's swap record
        when the response's opener policy forces a new browsing context group). It is stated by the OPERATION
        that enqueued this load and never asked of the flow running now: this is a task, and the flow that runs
        it need not be the flow that queued it. */
-    DCHECK(JS_IsString(step_arg(&s->hdr, 10)),
+    DCHECK(JS_IsString(step_arg(&s->hdr, NAV_LOAD_ARG_PROVENANCE)),
            "a document load carried no PROVENANCE — navigable_load_enqueue asserts one on every path and puts "
            "it on the job because §scheduler's \"an operation that becomes a work item takes its inputs with "
            "it\" applies to what a request is evidence of exactly as it applies to its address; the trusted "
@@ -1432,7 +1465,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            ALONE, and a host handed an address and nothing else has no way to tell a navigation a real client
            makes from one that exists only because a gate was forced — so one host declined all of them and the
            other fetched all of them with the person's cookies. */
-        const char *prov = JS_ToCString(ctx, step_arg(&s->hdr, 10));
+        const char *prov = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_PROVENANCE));
         char *op;
 
         CHECK(prov != NULL, "navigable: OOM taking §7.4.5's provenance off the load job");
@@ -1454,7 +1487,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        determine-the-origin steps 3 and 4 return this record ITSELF for an `about:` destination, and a
        serialization would mint a second one and make the loaded document cross-origin to the document that
        navigated it. */
-    orc = JS_ToUint32(ctx, &oid, step_arg(&s->hdr, 2));
+    orc = JS_ToUint32(ctx, &oid, step_arg(&s->hdr, NAV_LOAD_ARG_INITIATOR_ORIGIN));
     (void)orc;
     DCHECK(orc == 0 && oid != 0, "the document-load job carried no INITIATOR ORIGIN handle — §7.4.2.2 snapshots "
                                  "the source document's origin before anything is fetched, and §7.3.2.1's "
@@ -1547,6 +1580,40 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
             computed_defined = true;
         }
     }
+    /* HTML §7.4.5 "Populating a session history entry"'s CREATE NAVIGATION PARAMS FROM A SRCDOC RESOURCE — the
+       standard's OTHER response, and the reason this frame needs no second entry to serve it. That constructor
+       builds one out of the value the job carries: "Let documentResource be entry's document state's resource.
+       Let response be a new response with URL about:srcdoc, header list « (`Content-Type`, `text/html`) », body
+       the UTF-8 encoding of documentResource, as a body." So a srcdoc navigation is a load whose RESPONSE this
+       instance states instead of a host, and every algorithm below it — §7.1.7's determine step, §7.3.2.1's
+       determine the origin, §13.2.3.2's decode, §7.5.2's parse, §7.4.6.2's update the document — runs over it
+       unchanged. THE PARSE IS WHY IT IS A LOAD AND NOT navigable_realm's ONE-CALL FORM: a srcdoc document is
+       the page's own markup, so its tree construction is O(DOCUMENT) and belongs to the stage that can park
+       between items, which is exactly what that entry's own assert refuses a response for.
+       ITS HEADER LIST IS THE SECTION'S AND CARRIES ONE FIELD, so `Content-Type` is STATED rather than absent:
+       §7.4.5 hands §7.5's document-type dispatch the COMPUTED TYPE of its response, and a resource with no
+       type at all would reach core/loader/document_load_type.c as a response that sent none — which is a
+       different fact about a different kind of load.
+       AND THE CHARSET IS STATED, WHICH §7.4.5 DOES NOT STATE, because it is a fact about THESE BYTES rather
+       than a guess about a server's: the section says the body is "the UTF-8 encoding of documentResource", and
+       these bytes are what JS_ToCString produced, so the transport-layer charset §13.2.3.2 "Determining the
+       character encoding" reads at its own step is something this frame KNOWS. Leaving it out would send that
+       algorithm past the transport step to the prescan and then to the CONTAINER document's encoding, so a
+       `<meta charset>` inside the srcdoc — or a parent this engine parsed as windows-1252 — would decode UTF-8
+       bytes as something else and replace every non-ASCII character in a document this engine generated itself.
+       NO REQUEST, NO RESPONSE URL, NO RESERVED ENVIRONMENT: `fetches` is false for `about:srcdoc`, and that one
+       answer is already what makes `dest_url` the ADDRESS below (§7.4.5's srcdoc constructor is written over
+       entry's URL), leaves §7.1.4.2's embedder check unasked (its condition is a reserved environment, which
+       only create-navigation-params-by-fetching has) and takes the about-base-URL arm. */
+    else if (JS_IsString(step_arg(&s->hdr, NAV_LOAD_ARG_DOCUMENT_RESOURCE))) {
+        resource = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_DOCUMENT_RESOURCE));
+        CHECK(resource != NULL, "navigable: OOM taking §7.4.5's document resource off the load job");
+        body = (const uint8_t *)resource;
+        body_len = strlen(resource);
+        header_list_parse_field_lines(&response_headers, "Content-Type: text/html;charset=utf-8");
+        document_load_computed_type(&computed, &response_headers, body, body_len);
+        computed_defined = true;
+    }
     /* AND THE URL EVERYTHING BELOW IS RUN OVER, DECIDED ONCE, HERE. §7.4.5's three constructors differ in
        exactly this: create-navigation-params-by-fetching has a response and states its URL, while the srcdoc
        and non-fetch-scheme ones have none and are written over ENTRY'S URL. `fetches` is that same split
@@ -1562,7 +1629,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        THE INHERITED HALF IS ALWAYS PRESENT. §7.1.7's `initiatorPolicyContainer is not null` is a question about
        a CONTAINER, not about policy text, and every operation that enqueues a load has a document to clone
        from — so the job carries one whether or not it holds any policies. */
-    DCHECK(JS_IsString(step_arg(&s->hdr, 3)) && JS_IsString(step_arg(&s->hdr, 4)),
+    DCHECK(JS_IsString(step_arg(&s->hdr, NAV_LOAD_ARG_CSP)) && JS_IsString(step_arg(&s->hdr, NAV_LOAD_ARG_SELF_ORIGIN)),
            "a document load carried no §7.1.7 POLICY CONTAINER for its initiator — the operation that enqueued "
            "it had a document, every document has a container, and §7.1.7 step 3 asks whether that container "
            "is null rather than whether it holds any policies; a load without one gives an `about:blank` "
@@ -1572,24 +1639,27 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        behind at the enqueue is a clone that silently downgrades a `require-corp` creator's `about:blank` child
        to `unsafe-none` — the item is exactly as much a fact about the OPERATION as the CSP list is, and by the
        time this job runs the only document it could ask is the one being replaced. */
-    DCHECK(JS_IsString(step_arg(&s->hdr, 11)),
+    DCHECK(JS_IsString(step_arg(&s->hdr, NAV_LOAD_ARG_INTEGRITY)),
            "a document load ran with no §7.1.7 INTEGRITY POLICY item on its job — the enqueue writes the "
            "creator's as a string and the EMPTY one for a creator that stated none, so a non-string here is "
            "an enqueue that stopped writing the slot rather than a container without the item. Read as an "
            "absence it would silently drop the item for exactly the documents whose container is INHERITED, "
            "which is the case this argument exists for");
-    DCHECK(JS_IsString(step_arg(&s->hdr, 6)) && JS_IsString(step_arg(&s->hdr, 7)) &&
-           JS_IsString(step_arg(&s->hdr, 8)) && JS_IsString(step_arg(&s->hdr, 9)),
+    DCHECK(JS_IsString(step_arg(&s->hdr, NAV_LOAD_ARG_COEP)) &&
+           JS_IsString(step_arg(&s->hdr, NAV_LOAD_ARG_COEP_ENDPOINT)) &&
+           JS_IsString(step_arg(&s->hdr, NAV_LOAD_ARG_COEP_REPORT_ONLY)) &&
+           JS_IsString(step_arg(&s->hdr, NAV_LOAD_ARG_COEP_REPORT_ONLY_ENDPOINT)),
            "a document load carried no §7.1.4 EMBEDDER POLICY for its initiator's §7.1.7 container — the "
            "container travels whole or it is not a container, and every operation that enqueues a load has a "
            "document whose container holds one (initially a new embedder policy, never absent)");
-    inherited_csp  = JS_ToCString(ctx, step_arg(&s->hdr, 3));
-    inherited_self = JS_ToCString(ctx, step_arg(&s->hdr, 4));
-    inherited_coep = JS_ToCString(ctx, step_arg(&s->hdr, 6));
-    inherited_coep_endpoint = JS_ToCString(ctx, step_arg(&s->hdr, 7));
-    inherited_coep_report_only = JS_ToCString(ctx, step_arg(&s->hdr, 8));
-    inherited_coep_report_only_endpoint = JS_ToCString(ctx, step_arg(&s->hdr, 9));
-    inherited_integrity = JS_ToCString(ctx, step_arg(&s->hdr, 11));
+    inherited_csp  = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_CSP));
+    inherited_self = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_SELF_ORIGIN));
+    inherited_coep = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_COEP));
+    inherited_coep_endpoint = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_COEP_ENDPOINT));
+    inherited_coep_report_only = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_COEP_REPORT_ONLY));
+    inherited_coep_report_only_endpoint =
+        JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_COEP_REPORT_ONLY_ENDPOINT));
+    inherited_integrity = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_INTEGRITY));
     {
         EmbedderPolicyValue v = EMBEDDER_POLICY_UNSAFE_NONE, ro = EMBEDDER_POLICY_UNSAFE_NONE;
         /* §7.1.4's THREE STRINGS, READ BACK. A token this job carries was written by embedder_policy_value_token
@@ -1627,11 +1697,11 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         /* ASKED OF THE VALUE AND NOT OF THE STRING IT CONVERTS TO. `JS_ToCString(JS_NULL)` answers "null" —
            a five-character URL that parses — so a job that carried no base would have set one silently. The
            absent case is a JS_NULL slot, which is a question about the slot. */
-        DCHECK(JS_IsString(step_arg(&s->hdr, 5)),
+        DCHECK(JS_IsString(step_arg(&s->hdr, NAV_LOAD_ARG_ABOUT_BASE)),
                "§7.4.2.2 navigated to an `about:` destination with no INITIATOR base URL on the job — §7.4.5 "
                "takes the about base URL from the initiator, and without it every relative URL in the loaded "
                "Document resolves against `about:blank`, whose opaque path makes the parse FAIL");
-        about_base = JS_ToCString(ctx, step_arg(&s->hdr, 5));
+        about_base = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_ABOUT_BASE));
     }
     /* WHERE THE NEW DOCUMENT'S ENVIRONMENT SITS, which HTML §8.1.3.1 answers by asking what this navigable IS
        rather than what it is loading. Navigating a TOP-LEVEL TRAVERSABLE moves the top-level environment to
@@ -1862,7 +1932,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                the job rather than off the flow running now is §scheduler's rule again — by here the response
                has come back, and the flow standing at this line need not be the one that navigated. */
             {
-                const char *swap_prov = JS_ToCString(ctx, step_arg(&s->hdr, 10));
+                const char *swap_prov = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_PROVENANCE));
 
                 CHECK(swap_prov != NULL, "navigable: OOM taking §7.1.3.2's provenance off the load job");
                 browsing_context_group_swap(ctx, proxy, dest_url, origin, final_flags, swap_prov);
@@ -1932,6 +2002,10 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     JS_FreeCString(ctx, inherited_coep_report_only);
     JS_FreeCString(ctx, inherited_coep_report_only_endpoint);
     JS_FreeCString(ctx, about_base);
+    /* §7.4.5's DOCUMENT RESOURCE, HERE AND NOT EARLIER: `body` points into these bytes and nav_create_begin is
+       where §13.2.3.2's decode copies them into a buffer the creation record owns — the same ownership the
+       fetched body's own note states one screen down, and the same reason. */
+    JS_FreeCString(ctx, resource);
     free(resp_csp);
     free(resp_integrity);
     free(resp_pp);
@@ -2121,17 +2195,21 @@ static int g_nav_load_stepid = -1;
    composition today (solver/engine.h's engine_provenance_of_running_path), and taking it as a parameter is
    what keeps that from being an assumption this function makes on their behalf the day one of them differs —
    a document-install create, whose navigation no flow produced, is already the one that differs in kind. */
+/* AND §7.4.2.2's `documentResource` RIDES FOR THE SAME SENTENCE AS THE TWO ABOVE. That algorithm's own first
+   line takes "an optional POST resource, string, or null documentResource (default null)", and §4.8.5's
+   *navigate an iframe or frame* fills it with "the value of element's srcdoc attribute" — a value read out of
+   the RUNNING FLOW's DOM delta, which by the time this job runs may have been written by an arm that is not
+   this one. So it is read at the enqueue exactly as the address and the base URL are, and for the identical
+   reason: the operation takes its inputs with it. NULL for every destination that has a response of its own. */
 static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const char *addr, const Origin *origin,
                                    SerializedPolicyContainer inherit_policy, const char *about_base,
-                                   const char *provenance)
+                                   const char *document_resource, const char *provenance)
 {
-    /* TWELVE, and COUNTOF BELOW so the size and the count cannot disagree again: this read
-       `argv[11]` against twelve assignments and an enqueue of 12, so `argv[11] = integ` wrote one
-       JSValue PAST the end of the stack array and the enqueue then read past it too. The step's own
-       `step_arg(&s->hdr, 11)` is what says twelve is the right number. -Warray-bounds names this
-       exactly and the shipped build silences it — see build.mjs's quiet list. */
-    JSValueConst argv[12];
-    JSValue fn, url, org, csp, self, about, prov;
+    /* THE SIZE IS THE SLOT LIST'S LAST MEMBER AND EVERY ASSIGNMENT BELOW NAMES ITS SLOT — see the enum beside
+       NAV_LOAD_STEPS for the incident that cost, and for why a hand-written extent standing beside a
+       hand-written enumeration is two copies of one number with only one of them ever read. */
+    JSValueConst argv[NAV_LOAD_ARG_COUNT];
+    JSValue fn, url, org, csp, self, about, prov, res;
     JSValue coep, coep_endpoint, coep_ro, coep_ro_endpoint, integ;
 
     if (g_nav_load_stepid < 0)
@@ -2222,20 +2300,43 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
            "address and whether to send the person's cookies with it on exactly this word");
     prov = JS_NewString(ctx, provenance);
     CHECK(!JS_IsException(prov), "the document-load job's provenance could not be allocated");
-    argv[0] = proxy;
-    argv[1] = url;
-    argv[2] = org;
-    argv[3] = csp;
-    argv[4] = self;
-    argv[5] = about;
-    argv[6] = coep;
-    argv[7] = coep_endpoint;
-    argv[8] = coep_ro;
-    argv[9] = coep_ro_endpoint;
-    argv[10] = prov;
-    argv[11] = integ;
+    /* §7.4.2.2's `documentResource`, AND THE ONE ADDRESS IT MAY ARRIVE WITH. §7.4.5 reads a resource in exactly
+       one constructor — create navigation params from a SRCDOC resource, whose response it gives the URL
+       `about:srcdoc` — so a resource riding any other destination is a document body nothing would parse, and
+       an `about:srcdoc` carrying none is the empty frame §4.8.5's arm used to produce. The pair is asserted
+       HERE because this is the one place all three callers converge, and it is ASSERTED rather than described
+       because the step reads the resource off one slot and the ADDRESS off another: a disagreement between the
+       two makes a Document whose body came from one navigation and whose origin, base URL and policy container
+       were determined for a different one. */
+    DCHECK(document_resource == NULL || strncmp(addr, "about:srcdoc", sizeof "about:srcdoc" - 1) == 0,
+           "a document load was enqueued with §7.4.2.2's DOCUMENT RESOURCE on a destination that is not "
+           "`about:srcdoc` — §7.4.5 \"Populating a session history entry\" reads a resource in exactly one "
+           "constructor, create navigation params from a srcdoc resource, and that constructor states its own "
+           "response's URL; a resource on any other address is a document body this load would hand to a frame "
+           "whose origin, base URL and policy container were determined for somewhere else");
+    /* JS_NULL AND NOT THE EMPTY STRING, because `<iframe srcdoc="">` is a real and DIFFERENT destination: the
+       attribute is SPECIFIED, so §4.8.5's step 1 takes its arm and the frame shows an empty HTML document with
+       this document's origin and base URL. An absent resource is the other constructor entirely. The step asks
+       the SLOT (JS_IsString) and never the string, for the reason the about-base-URL slot beside it is asked
+       that way — `JS_ToCString(JS_NULL)` answers "null", which is four bytes of document. */
+    res = document_resource ? JS_NewString(ctx, document_resource) : JS_NULL;
+    CHECK(!JS_IsException(res), "the document-load job's document resource could not be allocated");
+    argv[NAV_LOAD_ARG_PROXY] = proxy;
+    argv[NAV_LOAD_ARG_URL] = url;
+    argv[NAV_LOAD_ARG_INITIATOR_ORIGIN] = org;
+    argv[NAV_LOAD_ARG_CSP] = csp;
+    argv[NAV_LOAD_ARG_SELF_ORIGIN] = self;
+    argv[NAV_LOAD_ARG_ABOUT_BASE] = about;
+    argv[NAV_LOAD_ARG_COEP] = coep;
+    argv[NAV_LOAD_ARG_COEP_ENDPOINT] = coep_endpoint;
+    argv[NAV_LOAD_ARG_COEP_REPORT_ONLY] = coep_ro;
+    argv[NAV_LOAD_ARG_COEP_REPORT_ONLY_ENDPOINT] = coep_ro_endpoint;
+    argv[NAV_LOAD_ARG_PROVENANCE] = prov;
+    argv[NAV_LOAD_ARG_INTEGRITY] = integ;
+    argv[NAV_LOAD_ARG_DOCUMENT_RESOURCE] = res;
     JS_EnqueueCallTask(ctx, fn, COUNTOF(argv), argv,
                        TASK_SOURCE_NAVIGATION_AND_TRAVERSAL);   /* §7.4.2.2 step 21 */
+    JS_FreeValue(ctx, res);
     JS_FreeValue(ctx, integ);
     JS_FreeValue(ctx, prov);
     JS_FreeValue(ctx, coep_ro_endpoint);
@@ -2258,8 +2359,14 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
  * settings objects"' API base URL (§4.4 stood here and is "Grouping content")
  * belongs to the document whose script ran, which for `open("/x", "_self")` happens to be the same document
  * and for `open("/x", "someFrame")` is not. Resolving it HERE and not in the job is that sentence: by the time
- * the job runs, the only document it could resolve against is the one being replaced. */
-JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
+ * the job runs, the only document it could resolve against is the one being replaced.
+ *
+ * `documentResource` IS §7.4.2.2's OWN THIRD INPUT AND NOT AN ADDITION HERE — see navigable.h for what the
+ * value is. It is CARRIED rather than read off the frame being navigated for the same sentence the address
+ * above is resolved by: §4.8.5's *navigate an iframe or frame* passes "the value of element's srcdoc attribute"
+ * off the ELEMENT in the initiating flow's DOM delta, and by the time the job runs the only document this
+ * function could ask is the one being replaced. */
+JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url, const char *document_resource)
 {
     char *addr = NULL;
     const Origin *origin = NULL;
@@ -2486,6 +2593,9 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
     navigable_load_enqueue(ctx, proxy, addr, origin_agent(),
                            serialized_policy_container_of(document_policy(ctx)),
                            strncmp(addr, "about:", 6) == 0 ? document_base_url(ctx) : NULL,
+                           /* §7.4.2.2's `documentResource`, straight from the caller — §4.8.5's srcdoc arm is
+                              the only one that states it and every other navigation states null. */
+                           document_resource,
                            engine_provenance_of_running_path());
     free(addr);
     return JS_DupValue(ctx, proxy);
@@ -2641,9 +2751,28 @@ static void nav_reload_enqueue(JSContext *ctx, const char *addr)
        members beside it — the page's own code, every time — so the fact that decides it is the same one every
        other running-code act asks. A reload of a document that only exists because a gate was forced is still
        a request no client makes, which is why this is the running path's answer and not the address's. */
+    /* §7.4.3's RELOAD OF AN IFRAME SRCDOC DOCUMENT HAS A RESOURCE AND THIS BUILD HOLDS NONE. The section
+       re-populates the navigable's EXISTING session history entry, and §7.4.5 reads the resource off "entry's
+       document state's resource" — a field of the ENTRY, which is where a srcdoc's markup lives for every later
+       navigation to it. This engine carries the resource on the LOAD JOB and nowhere else, so by the time a
+       reload composes a new job the bytes are gone and this destination would produce an EMPTY document where
+       a browser re-shows the frame's markup. That is a wrong answer rather than a narrower one, so it crashes:
+       BUILD §7.4.5's document state resource as a field of core/frame/session_history.c's entry, written by the
+       load that first carried one and read by every re-population of it — the same diff the history CARRY
+       above already needs under it. HOW ITS ABSENCE SHOWS, until then: the entry could not exist at all, since
+       nothing but this address reaches it. */
+    DCHECK(strncmp(addr, "about:srcdoc", sizeof "about:srcdoc" - 1) != 0,
+           "§7.4.3's reload was asked to re-populate a navigable whose active entry's URL is `about:srcdoc` — "
+           "§7.4.5 \"Populating a session history entry\" builds that destination's response out of ENTRY'S "
+           "DOCUMENT STATE'S RESOURCE, and this build carries a document resource on the load job only, so the "
+           "markup of the frame being reloaded is not anywhere this operation can reach. Reloading it without "
+           "one would show an empty document where the frame's own markup was");
     navigable_load_enqueue(ctx, proxy, addr, origin_agent(),
                            serialized_policy_container_of(document_policy(ctx)),
                            strncmp(addr, "about:", 6) == 0 ? document_base_url(ctx) : NULL,
+                           /* §7.4.5's resource for a RELOAD is the entry's, which this build does not store —
+                              see the assert above, which is why null here is a statement rather than a gap. */
+                           NULL,
                            engine_provenance_of_running_path());
 }
 
@@ -3062,7 +3191,7 @@ static JSValue navigable_choose_keyword(JSContext *ctx, const char *target)
 
 JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool is_child,
                          const WindowFeatures *feat, SandboxFlags iframe_sandbox_flags,
-                         JSValueConst container)
+                         JSValueConst container, const char *document_resource)
 {
     const PolicyContainer *creator_container = document_policy(ctx);
     /* §7.1.7's CLONE OF THE CREATOR'S CONTAINER, in the form it travels — the ONE value this whole function
@@ -3347,14 +3476,59 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            response and no content, so navigating to it produces the Document the navigable already has. It is
            the same test the RealmBuilder applies to decide whether to fetch, and it is stated in both places
            because it is one spec fact about the scheme rather than a protocol between them. */
-        if (strncmp(addr, "about:", 6) != 0)
+        /* …AND "IS THERE ANYTHING TO FETCH" IS NOT THE SAME QUESTION AS "IS THE SCHEME `about:`", WHICH IS
+           WHAT THE SECOND CLAUSE IS. §7.4.5 builds a response for exactly one `about:` destination — create
+           navigation params from a SRCDOC resource, whose response's URL is `about:srcdoc` and whose body is
+           the resource this call was handed — so a srcdoc frame is the one `about:` URL that HAS content, and
+           the deferral above is about content rather than about a scheme. Reading the scheme alone left
+           `<iframe srcdoc>` holding the initial about:blank for ever, with §NO-STUBS' forcing function unable
+           to fire because no global was missing: an empty frame, running nothing, indistinguishable from a
+           srcless one. The resource is what tells them apart, so the guard asks for it. */
+        if (strncmp(addr, "about:", 6) != 0 || document_resource != NULL)
             /* §7.1.7: the CREATOR's container, for §7.4's create — every item of it, as one value. */
-            /* NO ABOUT BASE URL: the `if` above admits only a destination that is not an `about:` URL, so
-               §7.4.5's aboutBaseURL stays null — §2.4.3's answer for a Document that comes from a response. */
+            /* AND §7.4.5's aboutBaseURL, WHICH A SRCDOC DESTINATION NEEDS AND A FETCHED ONE HAS NONE OF. This
+               was an unconditional null under a note saying the `if` above admitted no `about:` URL, and that
+               note retires with the clause that made it true: §2.4.3 "Document base URLs" step 1 ASSERTS an
+               iframe srcdoc Document has a non-null about base URL (core/dom/document.c states the same
+               assert from the other side), because every relative URL in the srcdoc — and the `<base href>` it
+               may carry — resolves against the FRAME'S NODE DOCUMENT and never against `about:srcdoc`, whose
+               opaque path makes the parse fail. The initiator is this document, which is §7.4.2.2's
+               initiatorBaseURLSnapshot, and the spelling is the one both other callers of this function's
+               enqueue use so the rule is stated one way. */
             /* AND THE PROVENANCE THE CROSS-ORIGIN ARM PUTS ON ITS NOTICE, taken from the same local rather
                than recomputed: one operation, one answer. */
-            navigable_load_enqueue(ctx, proxy, addr, origin, creator_policy, NULL, provenance);
+            navigable_load_enqueue(ctx, proxy, addr, origin, creator_policy,
+                                   strncmp(addr, "about:", 6) == 0 ? document_base_url(ctx) : NULL,
+                                   document_resource, provenance);
     } else {
+        /* AND A SRCDOC FRAME CAN REACH THIS ARM, WHICH IS A CAPABILITY AND NOT A CONTRADICTION. §7.3.2.1's
+           determine the origin answers a srcdoc destination with the SOURCE origin — step 3, "if url is
+           about:srcdoc … return sourceOrigin" — so a srcdoc child is same-origin with its creator and takes the
+           arm above, UNLESS its element carries `sandbox`: §7.1.5's sandboxed origin browsing context flag
+           "forces content into an opaque origin", step 1 runs before step 3, and an opaque origin is same origin
+           with nothing. So `<iframe sandbox srcdoc="…">` is a second INSTANCE with a document body this
+           instance is holding, and the notice below has no field for it — the peer would provision a navigable
+           at `about:srcdoc` with nothing to parse.
+           BUILD: §7.4.5's document resource as a field of this notice, beside the policy container and the
+           top-level creation URL it already carries and for the same reason — the bytes are an input of the
+           OPERATION and the peer cannot derive them from anything it holds. It goes BEFORE the policy, which
+           is the record's remainder, and it is a document rather than a URL, so it needs the escape the fields
+           split on rather than a raw field of its own.
+           HOW ITS ABSENCE SHOWS: `<iframe sandbox srcdoc="<script>…">` presents a frame whose document is
+           EMPTY and whose scripts never ran, while the identical markup without `sandbox` runs — and nothing in
+           the run names the sandbox attribute, because the two frames differ only in which arm of this
+           function they took. */
+        if (document_resource != NULL)
+            DFAIL("§7.3.1.3's create reached its CROSS-INSTANCE arm for a child navigable that carries "
+                  "§7.4.2.2's DOCUMENT RESOURCE — an `<iframe sandbox srcdoc=\"…\">`, whose §7.1.5 sandboxed "
+                  "origin flag forces §7.3.2.1's determine-the-origin past its about:srcdoc step and into a "
+                  "fresh OPAQUE origin, so the frame is a document of another agent cluster and another "
+                  "INSTANCE. The notice below carries this navigable's address, origin, parent, container "
+                  "policy, ancestor origins, sandboxing flags and its creator's whole policy container, and it "
+                  "does NOT carry the document's own BYTES, which is the one field a srcdoc peer cannot derive "
+                  "from anything it holds. Add §7.4.5's resource to the notice — before the policy, which is "
+                  "the record's remainder — and give the receiving host the same reader it has for the "
+                  "container");
         /* THE NOTICE, and every field of it is load-bearing. The CHILD is the name the host provisions an
            instance under; the CREATOR names who made it, which is what the host routes replies through and what
            a browser would decide policy from; the URL is the child's initial address; the ORIGIN is the
@@ -3898,7 +4072,11 @@ JSValue navigable_open(JSContext *ctx, const char *url, const char *target, cons
     /* §7.3.1.3's container is JS_NULL here and that is the whole difference between step 8's navigable and
        §4.8.5's. §7.3.1.7's rules for choosing a navigable are given a target NAME, never an element, so
        nothing presents the traversable they create and §7.2.2.4's `frameElement` is null in it for ever. */
-    return navigable_create(ctx, url, target_name_is(name, "_blank") ? NULL : name, false, feat, 0, JS_NULL);
+    /* NO §7.4.2.2 `documentResource`: §7.2.2.1 "Opening and closing windows" step 15's navigate states none,
+       and the string arm of that argument is §4.8.5's srcdoc alone — an auxiliary navigable has no element for
+       one to come off. */
+    return navigable_create(ctx, url, target_name_is(name, "_blank") ? NULL : name, false, feat, 0, JS_NULL,
+                            /*documentResource*/ NULL);
 }
 
 /* HTML §7.2.2.1 "Opening and closing windows" — `window.open`'s WINDOW OPEN STEPS, AS A STEP MACHINE, and it is
@@ -4079,7 +4257,7 @@ static int js_win_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
            reachable ONLY through `window.open(tainted)` contributes no @H endpoints from exploration and is
            seen only when an @S candidate run substitutes real bytes at the source. */
         if (!url_is_null && !url_is_unknown) {
-            JSValue r = navigable_navigate(ctx, s->result, url);
+            JSValue r = navigable_navigate(ctx, s->result, url, /*documentResource*/ NULL);
             JS_FreeValue(ctx, s->result);
             s->result = r;
         }

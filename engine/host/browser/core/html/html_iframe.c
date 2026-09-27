@@ -148,56 +148,86 @@ static bool iframe_has_srcdoc(JSContext *ctx, JSValueConst wrap)
     return present;
 }
 
-/* HTML §4.8.5's process-the-iframe-attributes STEP 1 — THE ARM THIS ENGINE DOES NOT HAVE, named where the
- * frame that needs it is standing.
+/* HTML §4.8.5's process-the-iframe-attributes STEP 1's VALUE — "Navigate to the srcdoc resource: Navigate an
+ * iframe or frame given element, about:srcdoc, the empty string, and THE VALUE OF ELEMENT'S SRCDOC ATTRIBUTE.
+ * The resulting Document must be considered an iframe srcdoc document."
  *
- * WHAT WAS HERE INSTEAD WAS A WRONG ANSWER AND NOT A MISSING ONE, which is why this is a crash rather than a
- * residual. §4.8.5 states the precedence in its own prose — "If the `src` attribute and the `srcdoc` attribute
- * are both specified together, the `srcdoc` attribute takes priority. This allows authors to provide a fallback
- * URL for legacy user agents that do not support the `srcdoc` attribute." — so `<iframe srcdoc="…" src="/a">`
- * loaded `/a`, which is the one address a browser never fetches for that element. That is worse than an empty
- * frame twice over: the Document is the wrong Document, and the REQUEST is one no session makes, so a learned
- * endpoint out of it is CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's plausible fabrication with a fetch
- * behind it. A srcdoc with no `src` was the quieter half of the same defect — an empty about:blank frame,
- * running nothing, with §NO-STUBS' forcing function unable to fire because no global is missing.
+ * WHAT STOOD HERE WAS A CRASH NAMING THIS ROUTE, AND ITS OWN NEXT-DIFF CLAUSE SAID THE CRASH GOES WITH IT. It
+ * named five things to build — a document resource on navigable_create, on navigable_load_enqueue's job, into
+ * nav_create_begin's body, the create's `about:` no-load guard admitting a destination that carries one, and
+ * §4.8.5's first trigger at iframe_attr_changed — and all five are now here. What it was right about and worth
+ * keeping is the DEFECT it replaced, because the wrong answer is the intuitive one: §4.8.5 states the precedence
+ * in its own prose — "If the `src` attribute and the `srcdoc` attribute are both specified together, the
+ * `srcdoc` attribute takes priority. This allows authors to provide a fallback URL for legacy user agents that
+ * do not support the `srcdoc` attribute." — so `<iframe srcdoc="…" src="/a">` loaded `/a`, which is the one
+ * address a browser never fetches for that element. That was worse than an empty frame twice over: the Document
+ * was the wrong Document, and the REQUEST was one no session makes, so a learned endpoint out of it is
+ * CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's plausible fabrication with a fetch behind it.
  *
- * THE RELEASE ARM IS THE INITIAL about:blank AND NOT THE `src`, and the pair is coherent rather than merely
- * safer: the navigable holds the Document §7.3.2.1 created it with, which is byte-for-byte the state a srcless
- * `<iframe>` leaves and which every reader of one already handles (core/frame/navigable.c's create enqueues no
- * load for an `about:` address, and iframe_attr_changed's precedence return below already preserves exactly
- * this state on the belief that a srcdoc is being shown). So a DEFINED wrong answer replaces an
- * undefined-in-the-standard one, which is what CLAUDE.md §AND-THE-ARM-BENEATH-A-`DFAIL` asks of a release arm:
- * it hands the next component a state that component tests for.
+ * THE VALUE IS THE DOCUMENT, WHICH IS WHY THIS READS BYTES WHERE iframe_has_srcdoc DELIBERATELY DOES NOT. That
+ * predicate answers WHICH ARM §4.8.5 takes and must not stringify a value to do it; this function is the arm
+ * itself, and §7.4.5 "Populating a session history entry"'s create-navigation-params-from-a-srcdoc-resource
+ * makes a response body out of exactly these bytes ("body the UTF-8 encoding of documentResource, as a body").
+ * So the two callers are two questions over one attribute, and the presence test is the cheap one on purpose.
  *
- * WHAT THE NEXT DIFF BUILDS, and the receiving half of it is already here — grepped rather than remembered.
- * §7.4.2.2's about-base-URL arm for `about:srcdoc` is at core/frame/navigable.c's load step, §7.1.7's
- * clone-the-PARENT's-container arm for `about:srcdoc` is at core/frame/policy_container.c, and
- * nav_create_begin already takes a `body`/`body_len` pair, so the Document half needs no new machinery. WHAT
- * IS MISSING IS THE ROUTE: §7.4.2.2 takes a `documentResource` beside its url and navigable_create takes a
- * `const char *url` alone, so the srcdoc text has nowhere to ride. Carry it — a document resource on
- * navigable_create, on navigable_load_enqueue's job (whose COUNTOF'd twelve arguments become thirteen) and
- * into nav_create_begin's body, make the create's `about:` no-load guard admit a destination that HAS a
- * resource, and give iframe_attr_changed the first trigger above — and this crash goes with them.
+ * READ THROUGH THE DOM CHOKEPOINT like every other attribute in this file, so the answer is the RUNNING FLOW's:
+ * an arm that wrote `srcdoc` and an arm that wrote a different one frame two different documents, which is how
+ * §4.8.5's markup becomes per-flow with nothing here having to capture anything.
  *
- * HOW ITS ABSENCE SHOWS: an `<iframe srcdoc>` presents a Document with an EMPTY tree, so a page that writes
- * one and then reads through it observes a frame whose `document.body` has no children and whose scripts never
- * ran, with no request anywhere naming the frame. */
-static void iframe_srcdoc_unbuilt(const char *algorithm)
+ * Answers OWNED bytes, and NEVER NULL — its caller has already asked iframe_has_srcdoc, and `<iframe srcdoc="">`
+ * is a specified attribute whose value is the EMPTY DOCUMENT rather than an absent resource. */
+static char *iframe_srcdoc_resource(JSContext *ctx, JSValueConst wrap, const char *algorithm)
 {
-    DFAILF("%s reached an `<iframe>` whose `srcdoc` attribute is SPECIFIED, and HTML §4.8.5 \"The `iframe` "
-           "element\"'s process-the-iframe-attributes step 1 is the arm that owns it: \"If element's srcdoc "
-           "attribute is specified: … Navigate to the srcdoc resource: Navigate an iframe or frame given "
-           "element, about:srcdoc, the empty string, and the value of element's srcdoc attribute. The "
-           "resulting Document must be considered an iframe srcdoc document.\" This engine has the RECEIVING "
-           "half — §7.4.2.2's about base URL arm and §7.1.7's clone-the-parent's-container arm both test for "
-           "`about:srcdoc` already — and no route to it. DO NOT FALL BACK TO `src`: the section says \"If the "
-           "src attribute and the srcdoc attribute are both specified together, the srcdoc attribute takes "
-           "priority\", so that address is a fallback for legacy user agents and a browser never fetches it. "
-           "BUILD: a DOCUMENT RESOURCE that rides beside the address — on navigable_create, on "
-           "navigable_load_enqueue's job, and into nav_create_begin's `body`/`body_len` — plus the create's "
-           "`about:` no-load guard admitting a destination that carries one, and §4.8.5's FIRST trigger "
-           "(\"whenever an iframe element with a non-null content navigable has its srcdoc attribute set, "
-           "changed, or removed\") at iframe_attr_changed", algorithm);
+    JSValue v = element_attr_get_value(ctx, wrap, "srcdoc");
+    const char *c;
+    char *out;
+
+    DCHECK(algorithm != NULL, "§4.8.5's `srcdoc` was read for a document resource by a caller that did not name "
+                              "the algorithm reading it — step 1 is reached from the post-connection steps and "
+                              "from both of §4.8.5's attribute-change triggers, and the assert below is the "
+                              "only place that difference is visible");
+    DCHECK(!JS_IsNull(v) && !JS_IsException(v),
+           "§4.8.5's step 1 read the `srcdoc` attribute of an `<iframe>` that does not have one — every caller "
+           "reaches this through iframe_has_srcdoc, which is the same presence test the standard's own \"if "
+           "element's srcdoc attribute is specified\" is, so an absent value here means an arm was taken on an "
+           "answer that has since changed");
+#if APICLIENT_DEV
+    if (concolic_is(v)) {
+        const char *sh = concolic_shape_c(v);
+
+        DCHECK(sh != NULL,
+               "an unknown reached §4.8.5's `srcdoc` with no display shape — the shape is the only thing this "
+               "site can say about a document it cannot know, and a value that has lost it names neither the "
+               "frame whose markup came from outside nor the source it came from");
+        DFAILF("%s read an `<iframe>`'s `srcdoc` and it holds UNKNOWN EXTERNAL INPUT `%s`. This value is not an "
+               "address, it is the DOCUMENT: §7.4.5 \"Populating a session history entry\"'s create navigation "
+               "params from a srcdoc resource makes a response body out of it and §7.5.2 \"Loading HTML "
+               "documents\" parses it, so a page that writes `frame.srcdoc = <attacker input>` is naming a whole "
+               "child Document whose MARKUP this engine cannot represent. DO NOT COERCE IT: ToString has no "
+               "concolic semantics and the bytes it would produce are a document the run did not observe, which "
+               "would report a sink inside that frame as concrete and de-taint the one source that reached it. "
+               "BUILD: a child Document PARSED FROM A CONCOLIC RESOURCE, so the tree construction that consumes "
+               "these bytes forks where the markup is unknown and a sink inside the frame carries the taint out "
+               "— which is the mXSS surface §@S's re-serialization half is about, arriving through an element "
+               "instead of through `innerHTML`. THE RECEIVING HALF IS THE PARSE and it is core/loader's, not "
+               "this file's: navigable_load_enqueue already carries this value to the load job as a JSValue, so "
+               "what is missing is a tokenizer that takes one", algorithm, sh);
+    }
+#endif
+    c = JS_ToCString(ctx, v);
+    /* FATAL RATHER THAN AN EMPTY DOCUMENT, for the reason iframe_src_destination's own conversion is: two
+       things reach here — OOM, and a RELEASE build where the arm above is compiled out and a concolic's
+       ToString throws — and the second is precisely the case that must not be swallowed into a frame that
+       silently shows nothing with a throw still pending. */
+    CHECK(c != NULL,
+          "§4.8.5's `srcdoc` would not convert to bytes: either the allocation failed, or this is a release "
+          "build and the attribute holds unknown external input, whose ToString has no concolic semantics — a "
+          "dev build names the capability to build at the arm above this line");
+    out = strdup(c);
+    CHECK(out != NULL, "§4.8.5: OOM copying an `<iframe>`'s document resource");
+    JS_FreeCString(ctx, c);
+    JS_FreeValue(ctx, v);
+    return out;
 }
 
 /* HTML §4.8.5 "The `iframe` element"'s `src`, READ AS THE VALUE IT IS BEFORE IT IS ASKED FOR BYTES — the one
@@ -313,6 +343,9 @@ static char *iframe_src_destination(JSContext *ctx, JSValueConst wrap, const cha
 void iframe_create_navigable(JSContext *ctx, JSValueConst wrap)
 {
     char *src, *name, *sandbox;
+    /* §4.8.5 step 1's DOCUMENT RESOURCE — the frame's own markup, which rides beside the address rather than
+       inside it (navigable.h states why). NULL on the `Otherwise` arm. */
+    char *resource = NULL;
     SandboxFlags iframe_flags;
     JSValue proxy;
     /* §4.8.5's process-the-iframe-attributes STEP 1, ASKED BEFORE STEP 1's `Otherwise` READS `src` — which is
@@ -335,17 +368,26 @@ void iframe_create_navigable(JSContext *ctx, JSValueConst wrap)
        release it loaded that address. Skipping the read on this arm is the standard's `Otherwise` and not an
        optimisation. */
     srcdoc_wins = iframe_has_srcdoc(ctx, wrap);
-    if (srcdoc_wins)
-        iframe_srcdoc_unbuilt("HTML §4.8.5 \"The `iframe` element\"'s iframe HTML element post-connection "
-                              "steps step 4, \"process the iframe attributes for insertedNode, with "
-                              "initialInsertion set to true\", into which this engine folds step 3's create");
-    src  = srcdoc_wins
-         ? NULL   /* the initial about:blank §7.3.2.1 creates the navigable with — see iframe_srcdoc_unbuilt */
-         : iframe_src_destination(ctx, wrap,
-                                  "HTML §4.8.5 \"The `iframe` element\"'s iframe HTML element post-connection "
-                                  "steps step 3, \"create a new child navigable for insertedNode\" "
-                                  "(HTML §7.3.1.3 \"Child navigables\"), into which this engine folds step "
-                                  "4's navigate");
+    if (srcdoc_wins) {
+        /* §4.8.5 STEP 1's OWN DESTINATION, WHICH IS FOUR LITERAL WORDS AND NOT A PARSE OF ANYTHING. "Navigate an
+           iframe or frame given element, ABOUT:SRCDOC, the empty string, and the value of element's srcdoc
+           attribute" — the address names the CONSTRUCTOR §7.4.5 builds the response with and the resource is the
+           document, which is why neither is derivable from the other. Nothing here encoding-parses a URL: step
+           2's parse belongs to the `Otherwise` arm and there is no `src` on this one. */
+        resource = iframe_srcdoc_resource(ctx, wrap,
+                                          "HTML §4.8.5 \"The `iframe` element\"'s iframe HTML element "
+                                          "post-connection steps step 4, \"process the iframe attributes for "
+                                          "insertedNode, with initialInsertion set to true\", into which this "
+                                          "engine folds step 3's create");
+        src = strdup("about:srcdoc");
+        CHECK(src != NULL, "§4.8.5: OOM naming step 1's destination");
+    } else {
+        src = iframe_src_destination(ctx, wrap,
+                                     "HTML §4.8.5 \"The `iframe` element\"'s iframe HTML element "
+                                     "post-connection steps step 3, \"create a new child navigable for "
+                                     "insertedNode\" (HTML §7.3.1.3 \"Child navigables\"), into which this "
+                                     "engine folds step 4's navigate");
+    }
     name = element_attr_get(ctx, wrap, "name");
     /* §7.1.5's IFRAME SANDBOXING FLAG SET: "every iframe element has an iframe sandboxing flag set … which
        flags in it are set at any particular time is determined by the iframe element's sandbox attribute."
@@ -362,10 +404,15 @@ void iframe_create_navigable(JSContext *ctx, JSValueConst wrap)
        handed over rather than looked up, because the container link the create makes is a link back to it and
        §7.2.2.4's `frameElement` is the read that follows it. The slot written below is the same link's other
        half; they are one step of one algorithm and both are written here. */
-    proxy = navigable_create(ctx, src, name, true, NULL, iframe_flags, wrap);
+    proxy = navigable_create(ctx, src, name, true, NULL, iframe_flags, wrap, resource);
     /* §4.8.5 has no "did not parse" branch the way §7.4 does: an `<iframe src="::">` still has a navigable,
-       holding the initial about:blank it was created with. */
-    if (JS_IsUndefined(proxy)) proxy = navigable_create(ctx, NULL, name, true, NULL, iframe_flags, wrap);
+       holding the initial about:blank it was created with.
+       NO RESOURCE ON THE RETRY, and that is a statement rather than a loss: this arm is reached only when the
+       destination did not parse, and step 1's destination is the four literal words `about:srcdoc`. A resource
+       here would ride an `about:blank` address, which the enqueue asserts against by name. */
+    if (JS_IsUndefined(proxy))
+        proxy = navigable_create(ctx, NULL, name, true, NULL, iframe_flags, wrap, /*documentResource*/ NULL);
+    free(resource);
     free(src);
     free(name);
     free(sandbox);
@@ -527,6 +574,35 @@ void iframe_process_attributes(JSContext *ctx, JSValueConst wrap, bool initial_i
            "§4.8.5's process the iframe attributes ran for an `<iframe>` with no content navigable in this "
            "flow — the post-connection steps create it in the step directly before this one and the attribute "
            "change steps ask for it by name, so one of those two is calling this without its own precondition");
+    /* §4.8.5's STEP 1, WHICH IS THE WHOLE OF THIS ALGORITHM FOR A FRAME THAT HAS A `srcdoc`: "If element's
+       srcdoc attribute is specified: … Navigate to the srcdoc resource: Navigate an iframe or frame given
+       element, about:srcdoc, the empty string, and the value of element's srcdoc attribute." It is asked FIRST
+       and the `Otherwise` below is the standard's own else — a frame carrying both attributes never reads its
+       `src` at all, which is the precedence sentence §4.8.5 spells in prose beside the algorithm.
+       LAZY LOADING IS NOT HERE. Step 1's first three sub-steps are the `loading=lazy` machinery ("if the will
+       lazy load element steps given element return true: … set element's lazy load resumption steps to the rest
+       of this algorithm starting with the step labeled navigate to the srcdoc resource"), and this engine has
+       no intersection observer driving them, so it takes the eager path — which is what a browser does for
+       `loading=eager` and for every frame in the viewport. Its absence is a frame that loads sooner than a
+       browser's would, never one that does not load.
+       THE FOLD, WHICH IS THE ONE LINE HERE THAT IS ABOUT THIS ENGINE rather than the standard, and it is the
+       same fold the `Otherwise` arm carries below: navigable_create takes step 1's destination AND its resource,
+       so on the INSERTION path this navigate has already been enqueued and running it again would load the
+       document twice. */
+    if (iframe_has_srcdoc(ctx, wrap)) {
+        char *resource;
+        JSValue nav;
+
+        if (initial_insertion) return;
+        resource = iframe_srcdoc_resource(ctx, wrap,
+                                         "HTML §4.8.5 \"The `iframe` element\"'s process the iframe attributes "
+                                         "step 1, \"navigate to the srcdoc resource\"");
+        nav = iframe_navigable(ctx, wrap);
+        JS_FreeValue(ctx, navigable_navigate(ctx, nav, "about:srcdoc", resource));
+        JS_FreeValue(ctx, nav);
+        free(resource);
+        return;
+    }
     if (!iframe_shared_attribute_steps(ctx, wrap, &url, &blank))
         return;                     /* step 3's null: the frame is nested in itself — do nothing at all */
     /* "If url matches about:blank and initialInsertion is true: Run the iframe load event steps given
@@ -545,7 +621,10 @@ void iframe_process_attributes(JSContext *ctx, JSValueConst wrap, bool initial_i
        from the INITIATOR rather than from the frame being replaced. */
     {
         JSValue nav = iframe_navigable(ctx, wrap);
-        JS_FreeValue(ctx, navigable_navigate(ctx, nav, url));
+        /* NO DOCUMENT RESOURCE ON THIS ARM: §4.8.5's step 1 above owns the one navigation that has one, and
+           this is its `Otherwise` — the frame has no `srcdoc` specified at all, which the branch above just
+           established. */
+        JS_FreeValue(ctx, navigable_navigate(ctx, nav, url, /*documentResource*/ NULL));
         JS_FreeValue(ctx, nav);
     }
     free(url);
@@ -570,8 +649,12 @@ void iframe_process_attributes(JSContext *ctx, JSValueConst wrap, bool initial_i
  * the iframe attributes." A header that quotes from the word "Similarly" has quoted the half the code performs
  * and said nothing about the half it does not, which is the under-claim nobody finds by acting on it — a reader
  * who wants the srcdoc trigger reads this banner, sees the rule it names honoured, and never learns that
- * `frame.srcdoc = "…"` reaches nothing at all. Both names arrive here now and the srcdoc arm CRASHES, because
- * routing it into iframe_process_attributes would run the `Otherwise` arm and navigate to `src`.
+ * `frame.srcdoc = "…"` reaches nothing at all. BOTH NAMES ARRIVE HERE AND BOTH RUN THE SAME ALGORITHM, which
+ * is what §4.8.5 says twice: the two triggers differ in their CONDITION and not in what they do, so the only
+ * thing this function decides is whether the second trigger's extra clause is satisfied. Routing the srcdoc
+ * name here used to be impossible for a reason that has retired with the arm it was about — process the iframe
+ * attributes had no step 1, so it would have run the `Otherwise` arm and navigated to the `src` this attribute
+ * takes priority over.
  *
  * THE THREE CONDITIONS ARE ASKED IN THE STANDARD'S OWN ORDER and each is a different fact. A non-null CONTENT
  * NAVIGABLE is what makes this a navigation rather than a write on a disconnected element — an `<iframe>` that
@@ -596,21 +679,16 @@ void iframe_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, 
     /* BOTH TRIGGERS OPEN ON THE SAME CONDITION — "an `iframe` element with a NON-NULL CONTENT NAVIGABLE" — so
        it is asked once, ahead of the split, rather than twice inside it. */
     if (!iframe_has_navigable(ctx, wrap)) { JS_FreeValue(ctx, wrap); return; }
-    if (is_srcdoc) {
-        /* §4.8.5's FIRST trigger. A `srcdoc` WRITE takes process-the-iframe-attributes' step 1, which is the
-           arm this engine has no route to; it must not reach the `Otherwise` below, whose whole content is the
-           `src` this attribute takes priority over. THE RELEASE ARM RETURNS, which leaves the frame showing
-           whatever it was already showing — the same state this function has always left it in, now stated
-           rather than reached by an early return that read as the precedence rule. */
-        iframe_srcdoc_unbuilt("HTML §4.8.5 \"The `iframe` element\"'s \"whenever an iframe element with a "
-                              "non-null content navigable has its srcdoc attribute set, changed, or removed\"");
-        JS_FreeValue(ctx, wrap);
-        return;
-    }
-    /* "NO `srcdoc` ATTRIBUTE SPECIFIED" — the second trigger's own condition, asked through the one predicate
-       §4.8.5 asks it with everywhere in this file (iframe_has_srcdoc states why it is a presence test over the
-       VALUE, and why a second spelling of it here is what let the create above disagree with this site). */
-    if (iframe_has_srcdoc(ctx, wrap)) { JS_FreeValue(ctx, wrap); return; }
+    /* "NO `srcdoc` ATTRIBUTE SPECIFIED" — the SECOND trigger's own condition and the only clause that separates
+       the two, asked through the one predicate §4.8.5 asks it with everywhere in this file (iframe_has_srcdoc
+       states why it is a presence test over the VALUE, and why a second spelling of it here is what let the
+       create above disagree with this site). The FIRST trigger carries no such clause: a `srcdoc` write is
+       processed whatever else the element has, which is the precedence rule from the other side.
+       A REMOVAL IS A CHANGE AND TAKES THE `Otherwise` ARM, which is the standard's own answer and not a special
+       case here: `removeAttribute("srcdoc")` fires the first trigger, and by the time the algorithm asks its
+       step 1 the attribute is gone — so the frame navigates to its `src`, or to `about:blank` when it has
+       none. */
+    if (!is_srcdoc && iframe_has_srcdoc(ctx, wrap)) { JS_FreeValue(ctx, wrap); return; }
     iframe_process_attributes(ctx, wrap, /*initialInsertion*/ false);
     JS_FreeValue(ctx, wrap);
 }
