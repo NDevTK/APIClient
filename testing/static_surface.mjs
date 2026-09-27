@@ -205,15 +205,40 @@
  *     the same conclusion: the clause said the obstacle was a MEMBER callee whose object is a parameter, and
  *     pricing the built closure says the obstacle is that THE FUNCTION OWNING THE PARAMETER HAS NO NAME AT
  *     ALL. Measured over the refused population, that half is a CLASS METHOD or an anonymous function or
- *     arrow — a callback, a stored property, a returned closure — so it is reached through a RECEIVER or by
- *     being PASSED, and in neither case does a name exist for any reference count to be about. This clause
- *     first said that half was the bundler's module shape, which was a guess and is corrected by the
- *     measurement: run the closure's refusal block and read the reasons apart rather than reading a total,
- *     because a shared helper and an unnamed function take different work and no refinement of the reference
- *     count reaches the second at all. WHAT THE CLOSURE ITSELF BOUGHT, and it is the honest half: it settled
+ *     arrow — reached through a RECEIVER or by being PASSED — and NOT the bundler's module shape this clause
+ *     first guessed at. THAT CORRECTION IS NOT THE END OF IT, BECAUSE THE SENTENCE THAT REPLACED IT WAS AN
+ *     UNDER-CLAIM: it said no refinement of the reference count reaches that half, which is true of a
+ *     reference COUNT and reads as "nothing reaches it", and a reader who believes it does not look. The
+ *     refusal block now partitions it BY SYNTACTIC ROLE and the three populations take OPPOSITE work:
+ *       · THE VALUE OF A MEMBER WRITE — `o.f = u => fetch(u)` — is REACHABLE, by the same once-written
+ *         question `slotOf` already answers for a property, asked of the SLOT instead of the binding. It is
+ *         the largest single member of the half and it is a queue rather than a wall.
+ *       · A CLASS or OBJECT METHOD is reached through a RECEIVER, so naming its arguments needs the
+ *         receiver's TYPE — a recogniser §RUN-DON'T-MATCH forbids, whatever it is called.
+ *       · A CALLBACK ARGUMENT has its parameter bound by the CALLEE'S OWN SEMANTICS: a resolution value, an
+ *         array element, an Event. There is no argument in this file to read, so no parse recovers it at any
+ *         strength, and its count is not a queue for anything on this side of the comparison.
+ *     Read the reasons apart; one number over the three says none of that.
+ *     WHAT THE CLOSURE ITSELF BOUGHT, and it is the honest half: it settled
  *     ZERO COMPLETE addresses over this corpus and moved three rows out of `opaque` into `shape`. That does
  *     NOT move the razor, because SHAPE and OPAQUE are both inside it — what it moved is this file's shape
  *     RECALL, which is a real gain in what a static reader is handed and not a gain against the engine.
+ * (a'') THE VALUE OF A MEMBER WRITE, WHICH IS THE ONLY REACHABLE THIRD OF (a)'s REFUSED HALF. NOT COVERED:
+ *     the closure asks whether a function's BINDING is referenced once, and a function assigned to a
+ *     PROPERTY has no binding at all, so `o.f = u => fetch(u)` with one `o.f(x)` read is refused even though
+ *     the slot names its one entry as plainly as a binding would. WHAT THE NEXT DIFF BUILDS: the same
+ *     admitting rule keyed on the SLOT — a function that is the single plain `=` write to `obj.prop` where
+ *     `obj` resolves to a binding declared once and never written and nothing writes that object through a
+ *     computed property, entered by the one READ of that slot standing in callee position. Every one of those
+ *     conditions already exists in `collectBinds` as `slotWrites`, `slotPoison` and `slotKey`; what is new is
+ *     counting the slot's READS and requiring exactly one in callee position. HOW ITS ABSENCE WOULD SHOW: the
+ *     closure's refusal block carries a nonzero row naming the value of a member write, while its settled
+ *     count does not move.
+ *     AND ITS EXPECTED YIELD IS ZERO COMPLETE ADDRESSES, WHICH IS THE MEASUREMENT AND NOT A PREDICTION FROM
+ *     TASTE: of the crossings the closure already makes, EVERY ONE landed on an argument carrying a hole, and
+ *     all but three carried no literal byte at all. The boundary is not where the addresses are being lost —
+ *     the caller had not spelled them either. Widening the reach does not change that ratio, so (a'') buys
+ *     recall and not razor, and anyone building it should say so before they start.
  * (a') A REFERENCE THAT IS A CALLEE ONLY THROUGH `.call` OR `.apply`. NOT COVERED: the closure admits a
  *     reference standing in callee position and nothing else, so `f.call(recv, x)` and `f.apply(recv, [x])`
  *     put that one reference in an OBJECT position and the function is refused as un-entered — correctly by
@@ -874,7 +899,8 @@ function foldEnvOnly(node, binds, depth, env) {
         if (!ps) return null;
         const no = (k) => { env.sole.refused.set(k, (env.sole.refused.get(k) || 0) + 1); return null; };
         const call = env.callSiteOf.get(ps.fn);
-        if (!call) return no("no call site: " + (env.whyNoCall.get(ps.fn) || "it is not a named value at all"));
+        if (!call) return no("no call site: " + (env.whyNoCall.get(ps.fn) ||
+          "it is not a named value at all — it is " + (env.roleOfFn.get(ps.fn) || "in a role this pass does not name")));
         /* A CYCLE IS POSSIBLE EVEN THOUGH EACH FUNCTION HAS ONE CALL SITE — two helpers calling only each
            other are unreachable code and still a cycle in this graph — so the walk carries its own seen set
            rather than relying on the depth limit to end it. */
@@ -1124,6 +1150,20 @@ function collectBinds(ast) {
   const declOfFn = new Map();       // a function node -> the binding it is the value of, where it has one
   const usesArguments = new Set();  // fn nodes under which the name `arguments` appears at all
   const fnStackCB = [];
+  /* WHAT SYNTACTIC ROLE AN UNNAMED FUNCTION OCCUPIES, because `it is not a named value at all` is a count
+     over at least three populations that take OPPOSITE work and no reading of one number separates them.
+     A function that is the VALUE OF A MEMBER WRITE is reachable by the same once-written question `slotOf`
+     already answers for a property, one level over from the reference count. A CLASS or OBJECT METHOD is
+     reached through a RECEIVER, so naming its arguments needs the receiver's type and that is a recogniser
+     §RUN-DON'T-MATCH forbids. A CALLBACK ARGUMENT has its parameter bound by the CALLEE's own semantics —
+     a resolution value, an array element, an Event — so there is no argument in this file to read at all and
+     no parse ever recovers it. Carrying the role INTO the refusal string is what makes the existing block
+     partition them, rather than adding a second count that could disagree with the first.
+     THE ROLE IS RECORDED FROM THE PARENT SIDE AND WITHOUT A PARENT STACK: every role here is a property of
+     a node kind that is a small fraction of the tree, so the question is asked once when that parent is
+     entered rather than of every node on the way down. A method needs no parent, being its own node kind. */
+  const roleOfFn = new Map();
+  const role = (child, what) => { if (child && FN_LIKE.has(child.type) && !roleOfFn.has(child)) roleOfFn.set(child, what); };
 
   const declare = (scope, name, initNode, fnNode) => {
     let d = scope.decls.get(name);
@@ -1208,6 +1248,27 @@ function collectBinds(ast) {
     else if ((n.type === "CallExpression" || n.type === "OptionalCallExpression") && n.callee)
       calleeOf.set(n.callee, n);
     if (n.type === "Identifier" && n.name === "arguments") for (const f of fnStackCB) usesArguments.add(f);
+    switch (n.type) {
+      case "AssignmentExpression":
+        role(n.right, n.left && (n.left.type === "MemberExpression" || n.left.type === "OptionalMemberExpression")
+          ? (n.left.computed ? "the value of a COMPUTED member write" : "the value of a member write")
+          : "the value of an identifier write");
+        break;
+      case "ObjectProperty": role(n.value, "an object-literal property value"); break;
+      case "ClassProperty": role(n.value, "a class field initialiser"); break;
+      case "VariableDeclarator": role(n.init, "a variable initialiser"); break;
+      case "ReturnStatement": role(n.argument, "a returned value"); break;
+      case "ArrayExpression": for (const e of n.elements || []) role(e, "an array element"); break;
+      case "ConditionalExpression": role(n.consequent, "a ternary arm"); role(n.alternate, "a ternary arm"); break;
+      case "LogicalExpression": role(n.left, "a logical arm"); role(n.right, "a logical arm"); break;
+      case "SequenceExpression": for (const e of n.expressions || []) role(e, "a sequence element"); break;
+      case "CallExpression": case "OptionalCallExpression": case "NewExpression":
+        for (const x of n.arguments || []) role(x, "a CALLBACK argument — its parameter is bound by the callee's own semantics");
+        break;
+      default: break;
+    }
+    if (n.type === "ClassMethod" || n.type === "ClassPrivateMethod") roleOfFn.set(n, "a CLASS METHOD — reached through a receiver");
+    else if (n.type === "ObjectMethod") roleOfFn.set(n, "an OBJECT METHOD — reached through a receiver");
     /* THEN THE NODE'S OWN SCOPE, AND WHAT BINDS INSIDE IT. */
     if (VAR_SCOPES.has(n.type) || BLOCK_SCOPES.has(n.type)) {
       open.push(cur);
@@ -1364,7 +1425,7 @@ function collectBinds(ast) {
     const ps = paramSlot.get(r.d);
     if (ps && !usesArguments.has(ps.fn)) paramOf.set(n, ps);
   }
-  return { binds, fnDeclOf, slotOf, count, freeRef, paramOf, callSiteOf, whyNoCall };
+  return { binds, fnDeclOf, slotOf, count, freeRef, paramOf, callSiteOf, whyNoCall, roleOfFn };
 }
 
 /* ── THE CHUNK MANIFEST ───────────────────────────────────────────────────────────────────────────────────
@@ -1526,14 +1587,14 @@ function readFile(src, filename) {
                      inline: { settled: 0, refused: new Map() }, recvDoor: { admitted: 0, declined: 0 },
                      sole: { settled: 0, unsettled: 0, refused: new Map() }, mutFloor: { demoted: 0, rows: [] } };
 
-  const { binds, fnDeclOf, slotOf, count: bindCount, freeRef, paramOf, callSiteOf, whyNoCall } = collectBinds(ast);
+  const { binds, fnDeclOf, slotOf, count: bindCount, freeRef, paramOf, callSiteOf, whyNoCall, roleOfFn } = collectBinds(ast);
   /* THE ENUMERATING FOLD'S FIXED HALF, built once per file: which binding a reference resolves to and which
      slot a member read names. The per-row half — which application, which candidate — is added at the row. */
   /* `freeRef` IS PART OF THE FOLD'S ENV AND NOT ONLY THE DOOR MATCHER'S, because the coercion arms below
      ask the same question the global door asks — is this `URL`, this `Request`, this `String` the platform's
      one — and one answer read two ways is what keeps them from disagreeing. A fold with no env cannot answer
      it and REFUSES, which is the floor direction. */
-  const envBase = { fnDeclOf, slotOf, freeRef, paramOf, callSiteOf, whyNoCall };
+  const envBase = { fnDeclOf, slotOf, freeRef, paramOf, callSiteOf, whyNoCall, roleOfFn };
   const manifest = scanManifest(ast, binds, envBase, filename);
   /* THE DOOR CHANNEL'S OWN ENV, AND WHY THE DOOR CHANNEL HAS ONE AT ALL. `foldEnvOnly` was reached only
      with a manifest CANDIDATE, so every arm in it that needs no candidate was being withheld from the rows
@@ -2036,6 +2097,15 @@ const SELFTEST = [
   //  THE FUNCTION IS NOT A NAMED VALUE AT ALL — an object method, which is the bundler's own module shape
   //  and the dominant refusal over the corpus. There is no reference for any count to be about.
   [`const o={f(u){fetch(u)}};o.f("/a")`,                    ["fetch|data|opaque|{?}"]],
+  //  ... AND THE OTHER TWO POPULATIONS THAT REFUSAL COVERS, armed separately because they take OPPOSITE
+  //  work. A function that is the VALUE OF A MEMBER WRITE is reachable by the once-written question
+  //  `slotOf` already answers one level over, so its count is a queue; a CLASS METHOD needs the receiver's
+  //  type, which is a recogniser; and a CALLBACK ARGUMENT has its parameter bound by the CALLEE — a
+  //  resolution value, an array element, an Event — so no argument exists in this file to read at all and
+  //  its count is not a queue for any parse. One number over the three would say none of that.
+  [`var o={};o.f=u=>fetch(u);o.f("/a")`,                    ["fetch|data|opaque|{?}"]],
+  [`class C{m(u){fetch(u)}}`,                              ["fetch|data|opaque|{?}"]],
+  [`p.then(u=>fetch(u))`,                                  ["fetch|data|opaque|{?}"]],
   //  A SPREAD MAKES POSITION MEANINGLESS, and a call short of the parameter supplies nothing to fold.
   [`function f(u){fetch(u)}f(...a)`,                        ["fetch|data|opaque|{?}"]],
   [`function f(u,v){fetch(v)}f("/a")`,                      ["fetch|data|opaque|{?}"]],
@@ -2205,7 +2275,10 @@ function selftest() {
   const wantSoleRefusals = [
     "no call site: it is referenced 2 times — a shared helper",
     "no call site: its one reference is not a callee",
-    "no call site: it is not a named value at all",
+    "no call site: it is not a named value at all — it is the value of a member write",
+    "no call site: it is not a named value at all — it is a CLASS METHOD — reached through a receiver",
+    "no call site: it is not a named value at all — it is an OBJECT METHOD — reached through a receiver",
+    "no call site: it is not a named value at all — it is a CALLBACK argument — its parameter is bound by the callee's own semantics",
     "no call site: it is named and never referenced",
     "no call site: its binding is reassigned",
     "a cyclic call graph",
