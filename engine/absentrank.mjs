@@ -1838,6 +1838,39 @@ say(`   down = WHAT A READER FOUND WHEN THEY OPENED THE SITES, and it ORDERS NOT
     ["Navigator\u0000credentials", ["net",
       "a WebAuthn assertion whose JSON is written into a form the same handler then SUBMITS, and a passkey " +
       "create/get pair — an endpoint no other branch of those pages composes"]],
+    /* THE SEVEN BELOW CLOSE THE HEAD OF THIS CHANNEL, which is a different kind of statement from any one of
+       them: every ranked row at rank 5 or above now carries a verdict, so a dispatcher reading from the top
+       is no longer choosing between a reading and a blank. What that closure ESTABLISHES is the finding, and
+       it is one this section could not make while the head had holes — the value order's head holds exactly
+       one `prog`, one `net` and one `gain`, and every other row of it is `none`. A reader who has been told
+       to "take the top row that is landable" therefore has no unread candidate left to hope for up here, and
+       the next `prog` or `net` is somewhere this channel does not rank rather than somewhere nobody looked.
+       They are all `none`, and a run of one verdict is the shape a reader should distrust, so the reason for
+       each is its own site and not the family it belongs to. */
+    ["Performance\u0000getEntriesByName", ["none",
+      "Next.js hydration/route-change MARKS read straight back by `performance.measure`, and one editor's own " +
+      "measure wrapper reading its own mark inside a `try` — a metric's own bookkeeping either way"]],
+    ["Document\u0000elementFromPoint", ["none",
+      "pointer hit-testing in a drag-and-drop library (`_emulateDragOver`, and the spill check that asks " +
+      "whether the pointer left the list) — the branch moves a ghost element and composes no address"]],
+    ["Performance\u0000interactionCount", ["none",
+      "web-vitals' INP counter, and the one row whose `guard` column and reading agree completely: every site " +
+      "is `performance.interactionCount || 0` under that file's own `\"interactionCount\" in performance` " +
+      "test, whose false arm registers a PerformanceObserver over `event` and counts interactionIds instead"]],
+    ["Performance\u0000timing", ["none",
+      "a session recorder's clock offset, optional-chained and defaulted (`performance.timeOrigin || " +
+      "performance.timing?.navigationStart || 0`), and an analytics load-time behind its own " +
+      "`isPerformanceTimingApiSupported()` — a number reported by a beacon composed elsewhere"]],
+    ["Document\u0000adoptedStyleSheets", ["none",
+      "a session recorder's full-snapshot path, under its own `document.adoptedStyleSheets && " +
+      "document.adoptedStyleSheets.length > 0` — the branch adds constructed-stylesheet nodes to a snapshot " +
+      "the recorder builds and sends either way"]],
+    ["Navigation\u0000transition", ["none",
+      "a view-transition integration asking whether a navigation is already in flight before it starts one, " +
+      "and a router hop that falls to the same `history` mechanism `Navigation.navigate`'s reading names"]],
+    ["Document\u0000elementsFromPoint", ["none",
+      "pointer hit-testing again, in a dashboard's panel drag: the returned list is searched for a drop " +
+      "target's `id` or a tab's activation key, and the branch lays out panels"]],
   ]);
   for (const [k, v] of READ) {
     const i = k.slice(0, k.indexOf("\u0000")), m = k.slice(k.indexOf("\u0000") + 1);
