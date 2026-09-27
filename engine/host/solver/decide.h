@@ -330,6 +330,56 @@ long  decide_fork_total(void);
  * or the same numbers read the other way and a real loss excused as a moved peer. */
 void decide_replay_stats(long *hits, long *left, long *left_arms);
 
+/* WHAT A NAME BOUGHT — the ASK and the OUTCOME of decide_arm's FIRST arm, which is the one of its three that
+ * had no row at all.
+ *
+ * WHAT THEY ARE FOR. Every decision this file reaches over a question it can SPELL is answered exactly one of
+ * three ways: REFINED out of this flow's own constraint (concolic_branch_decided answered, no slot is consumed,
+ * no member is minted, nothing is explored twice), REPLAYED from a recorded slot (`replayHits`), or NEW (a fork,
+ * counted per predicate by the `_forkAt` census, or dec_answer_here's declared answer). The last two were
+ * published and the FIRST was counted nowhere, so the question every naming diff in this engine exists to move
+ * — how much did giving this operand an identity collapse — had no reading on any document. fork_site_name's
+ * banner states the converse falsifier it can offer without these rows and states why it is not enough: a named
+ * repeat is REFINED and not REPLAYED, so `replayHits` moves by ONE per collapsed fork whatever the repeat count
+ * is, while the re-asks the name actually paid for are this pair's numerator.
+ *
+ * `asked` IS A REACHABILITY WITNESS AND NOT A SECOND OUTCOME, on the idiom flow.h's `index_asked` states for
+ * the six FlowIndexChecks rows. `refined` at 0 has two readings and they take OPPOSITE work: no branch was
+ * ever re-asked inside one flow's constraint, or NO SPELLABLE QUESTION WAS REACHED AT ALL. The second is not
+ * the exotic case — it is the state fork_site_name's residual is entirely about, and the population it measures
+ * was 26.9-37.2% of all forks on the one real document anybody has pooled — so a bare `refined` would read as a
+ * finding about refinement on exactly the runs where it is a finding about SPELLING.
+ *
+ * KIND: both are LIFETIME COUNTS over the SESSION, released with it (decide_free), monotone within one, and
+ * therefore differenceable between two samples of ONE session.
+ * UNIT: both are DECISIONS — one per call of decide_arm that reached the constraint lookup with a key. Neither
+ * is arms and neither is members: a refinement consumes no slot and mints no flow, which is the whole point of
+ * it, so this pair may not be read against `replayHits` as if the two were the same unit of anything except
+ * DECISIONS, which they are.
+ * ACCESSOR: plain reads of two statics; no division, no derivation, nothing behind the names.
+ * IDENTITY, checkable off the emitted numbers and asserted where both are in one hand (solver/result.c's
+ * composer): `refined <= asked`. It comes from the increments being one line apart on the same `key` test, so a
+ * break is a second writer of either counter rather than a sampling artifact.
+ * SCOPE: counted at decide_arm and NOWHERE ELSE, which is a statement about concolic_branch_decided's OTHER
+ * callers and is handed over as a derivation rather than as a figure, because the figure moves:
+ * `git grep -nE 'concolic_branch_decided[[:space:]]*\(' -- '*.c' '*.h'` names every one. At the revision this
+ * landed there were THREE, of which exactly one is a DECISION — decide_value_arm and outcome_settle READ the
+ * constraint, and a read is not a decision and must not consume a slot, so a counter inside that function would
+ * count a population most of which decided nothing. That is the one property of this pair a reader cannot check
+ * off the emitted numbers.
+ *
+ * NAMED RESIDUAL — WHAT IS NOT COVERED: WHICH predicate was refined. `asked` and `refined` are session totals,
+ * so a document whose `branchRefined` is large says that naming paid and not WHERE, while the `_forkAt` census
+ * beside them says exactly where a fork happened, per predicate and per unnamed site. A run in which one named
+ * operand collapses a thousand repeats and a second re-forks at every reach reads identically to one in which
+ * both half-collapse. WHAT THE NEXT DIFF BUILDS: a refinement count per constraint key, filed through
+ * fork_key_count's own Space-Saving table under a THIRD namespace byte (the two it already partitions are
+ * asserted at that function), so the row that grew and the row that stopped growing are the same key read in
+ * two columns. HOW ITS ABSENCE SHOWS: a `branchRefined` that rises while one `_forkAt` predicate row rises with
+ * it, which is a name working for most of its reaches and unrefined at one call site, read as a name working.
+ */
+void decide_refine_stats(long *asked, long *refined);
+
 /* THE SIBLING'S DECISION STATE AT A FORK THAT TOOK NO ARM — and the arm-taking fork above is the special case,
  * not this one. A flow forks over a VALUE as well as over a predicate: a peer document's state IS its flows, so
  * one cross-instance read has N true answers and the asking flow explores one arm per DISTINCT ANSWER

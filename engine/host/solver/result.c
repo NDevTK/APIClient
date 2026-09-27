@@ -2041,6 +2041,12 @@ char *result_swap_json(void) {
      From `decide_replay_stats` — LIFETIME COUNTS in TWO UNITS, which is the half a key cannot carry:
      `replayHits` and `replayLeftArms` are ARMS (decision-vector slots) and `replayLeft` is EVENTS (one per
      divergence, whatever it abandoned), so the three may be differenced and only two of them may be compared.
+     From `decide_refine_stats` — LIFETIME COUNTS in a THIRD UNIT, which is why they are on their own line
+     rather than joined to the three above: `branchAsked` and `branchRefined` are DECISIONS, and a refinement
+     consumes no arm and mints no member, so the two ledgers partition decide_arm's arms and may not be summed
+     as though they counted one thing. They are a FRACTION and the denominator is a reachability witness —
+     see decide.h for why a bare `branchRefined` reads as a finding about refinement on exactly the runs where
+     it is a finding about SPELLING.
      From `pending_index_*_total` — LIFETIME COUNTS: `replyAsked`, `replyAnswered`.
      From `cold_preview_census` — LIFETIME COUNTS OF ASKS over this document, and the only rows on this
      line whose KEY carries its own kind: every `previewAsks*` row counts a CONSULTATION of the cold tier,
@@ -2462,6 +2468,7 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    @kind lifetime: stepUnitRuns stepUnitOverruns
    @kind lifetime: hostAsked hostAnswered replyAsked replyAnswered replyDeclined replyDropped
    @kind lifetime: replayHits replayLeft replayLeftArms
+   @kind lifetime: branchAsked branchRefined
    @kind lifetime: steps sliceUs sliceOverruns sliceOverrunAsks sliceOverrunSeamless stepUs schedUs
    @kind lifetime: unitMidProgram unitParked unitCheckpointOwed unframedStepsLifetime
    @kind lifetime: classicCompiles classicCompileOverruns finished
@@ -2570,6 +2577,9 @@ char *result_cold_json(void) {
        one: a composer that read `left` and `left_arms` in two calls could publish a pair no instant of this
        session ever held. */
     long rp_hits, rp_left, rp_left_arms;
+    /* AND THE REFINEMENT PAIR, IN ONE CALL FOR THE SAME REASON — see decide.h. It is decide_arm's THIRD arm,
+       whose two siblings are `replayHits` and the `_forkAt` census, and it is what a naming diff moves. */
+    long rf_asked, rf_refined;
     long awaiting_rows;   /* the awaited-rows gauge, read ONCE below and used by the assert and the row */
     /* what the emitted @H array is a fraction of, and what of it predates any program — endpoint.h */
     long ep_minted, ep_assets, ep_emitted, ep_pre_program;
@@ -2739,6 +2749,7 @@ char *result_cold_json(void) {
            "ever be asked for, and `rowsAwaitingBytes` is about to be published as a debt the reply door does "
            "not hold");
     decide_replay_stats(&rp_hits, &rp_left, &rp_left_arms);
+    decide_refine_stats(&rf_asked, &rf_refined);
     /* THE CURSOR HISTOGRAM AGAINST THE MAXIMUM IT IS READ BESIDE — the one identity that says the two rows are
        about the same run, asserted here because this is the only place both are in one hand. It is not a
        restatement of the partition above: that one asks whether the walk saw every member, and this asks
@@ -2883,6 +2894,20 @@ char *result_cold_json(void) {
            "arm total can be neither smaller than the event count nor zero beside a non-zero one. "
            "`replayLeft` and `replayLeftArms` are about to be published as the statement of what a resume did "
            "with its recorded path, and they are counted at one site two lines apart");
+    /* AND THE REFINEMENT PAIR'S ONE IDENTITY, ASSERTED HERE FOR THE REASON THE THREE ABOVE ARE: `refined` is
+       raised one line below the test that raises `asked` and on the same `key`, so a numerator above its
+       denominator is a SECOND WRITER of one of them rather than a sampling artifact — and the fraction is
+       about to be published as the share of this session's spellable decisions that cost nothing, which a
+       consumer reads as a percentage. A single clause is the whole identity here and that is not an oversight:
+       `refined == 0` beside `asked == 0` is the legitimate and important state (no spellable question was
+       reached), which is exactly what decide.h's witness paragraph is for, so the second clause the replay
+       ledger needs would forbid the reading this pair exists to make. */
+    DCHECK(rf_refined <= rf_asked,
+           "more decisions were refined out of a flow's own constraint than were ASKED over a spellable "
+           "question — decide_arm raises the denominator on the `key` test and the numerator one line below "
+           "it, so a subset larger than its population is a second writer of one of the two. "
+           "`branchRefined / branchAsked` is about to be published as the share of this session's spellable "
+           "decisions that cost nothing at all");
     /* A HISTOGRAM THAT COULD NOT BE ALLOCATED MAKES THE CENSUS ABSENT, never a census with a row missing.
        composef's own contract on this seam is that a NULL is "this census is absent" and every caller already
        treats it as one; splicing a hole into the document instead would publish a @COLD line whose readers —
@@ -3057,6 +3082,20 @@ char *result_cold_json(void) {
                     0` beside a non-zero `replayLeft` is the one attribution they make on their own: siblings,
                     because that row states this session was handed no residue at all. */
                  "\"replayHits\":%ld,\"replayLeft\":%ld,\"replayLeftArms\":%ld,"
+                 /* THE THIRD OF decide_arm'S THREE ARMS, PUBLISHED BESIDE THE SECOND BECAUSE THEY PARTITION
+                    ONE POPULATION AND THE THIRD IS WHAT A NAME BUYS. A spellable decision is REFINED (this
+                    pair's numerator, no slot, no member), REPLAYED (`replayHits`) or NEW (the `_forkAt`
+                    census's predicate rows), and until these two rows the first was counted nowhere — so
+                    `how much did naming this operand collapse` had no reading on any document. THE UNIT IS
+                    DECISIONS and it is NOT `replayHits`' unit, which is ARMS: a refinement consumes no slot,
+                    which is the whole point of it, so the three may be read as a partition of DECISIONS and
+                    the two ledgers may not be summed. `branchAsked` IS THE REACHABILITY WITNESS and is why
+                    there are two rows rather than one — a zero `branchRefined` beside a zero `branchAsked`
+                    says no spellable question was REACHED, which is the state solver/decide.c's
+                    fork_site_name residual is entirely about and is therefore the NEAR MISS rather than the
+                    exotic case; beside a non-zero `branchAsked` the same zero is a finding about refinement.
+                    Read them as a fraction or not at all. */
+                 "\"branchAsked\":%ld,\"branchRefined\":%ld,"
                  "\"orphanClaims\":%ld,\"orphanClaimsMet\":%ld,\"orphanClaimsUnmet\":%ld,"
                  "\"hostAsked\":%ld,\"hostAnswered\":%ld,\"hostAnswersExtra\":%ld,"
                  "\"hostAnswersLate\":%ld,\"hostTerminated\":%ld,"
@@ -3421,6 +3460,7 @@ char *result_cold_json(void) {
                  e.sold, e.sold_flows, e.sold_cands, e.forks,
                  ran, resumed.segs, resumed.flows, resumed.cands, resumed.worlds,
                  rp_hits, rp_left, rp_left_arms,
+                 rf_asked, rf_refined,
                  resumed.orphans, e.claims_met, e.claims_unmet,
                  e.host_asked, e.host_answered, e.host_answers_extra, e.host_answers_late, e.host_terminated,
                  pending_index_asked_total(), pending_index_answered_total(),

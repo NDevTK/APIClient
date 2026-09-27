@@ -258,6 +258,26 @@ static long g_replay_hits;        /* ARMS consumed on a matching question (dec_r
 static long g_replay_left;        /* EVENTS: divergences (dec_leave_path)                               */
 static long g_replay_left_arms;   /* ARMS abandoned by those divergences, summed                        */
 
+/* THE THIRD OF decide_arm'S THREE ARMS, WHICH HAD NO ROW AT ALL WHILE THE OTHER TWO HAD FOUR BETWEEN THEM.
+   Every decision this file reaches over a SPELLABLE question is answered exactly one of three ways: REFINED out
+   of this flow's own constraint (no slot, no member, no cost), REPLAYED from a recorded slot (g_replay_hits), or
+   NEW (a fork, counted per predicate by fork_key_count, or dec_answer_here's site answer). Two of those three
+   were published and the first was counted nowhere — and the first is the whole of what a NAME buys, so
+   "how much did naming this operand buy" had no reading in this engine, on any document, ever.
+   THE PAIR IS AN ASK AND AN OUTCOME AND NOT TWO OUTCOMES, which is why `asked` exists at all. `refined` at 0
+   has two readings that take opposite work — no branch was ever re-asked inside one flow's own constraint,
+   or NO SPELLABLE QUESTION WAS EVER REACHED — and the second is the state fork_site_name's whole residual
+   describes, so it is the NEAR MISS rather than the exotic case. `asked` is the reachability witness that
+   separates them, on the idiom flow.h's `index_asked` states for the six FlowIndexChecks rows.
+   COUNTED AT decide_arm AND NOWHERE ELSE, WHICH IS A STATEMENT ABOUT concolic_branch_decided'S OTHER CALLERS
+   AND IS A DERIVATION RATHER THAN A FIGURE — `git grep -nE 'concolic_branch_decided[[:space:]]*\(' -- '*.c'
+   '*.h'` names them, and the count is not written here because it moves. At the revision this landed there were
+   THREE, of which exactly one is a DECISION: decide_value_arm and outcome_settle READ the constraint, and a
+   read is not a decision and must not consume a slot, so a counter inside that function would count a
+   population most of which decided nothing. */
+static long g_branch_asked;       /* DECISIONS reached over a question this engine can spell (decide_arm)  */
+static long g_branch_refined;     /* …of those, answered from this flow's own constraint (no slot, no fork) */
+
 static void dec_ensure(int n) {
     if (n <= g_dec_cap) return;
     int nc = g_dec_cap ? g_dec_cap * 2 : 64;
@@ -660,6 +680,10 @@ void decide_free(void) {
        describes THIS session's rebuild, and a ledger that outlived the session would be a lifetime count
        under a per-session discriminator — two moments published on one line. */
     g_replay_hits = g_replay_left = g_replay_left_arms = 0;
+    /* AND THE REFINEMENT PAIR, RELEASED WITH THEM FOR THEIR REASON: it is read BESIDE `replayHits` (the two
+       are two arms of one partition) and beside `resumed`, which describes THIS session's rebuild, so a pair
+       that outlived the session would be a lifetime count under a per-session discriminator. */
+    g_branch_asked = g_branch_refined = 0;
     /* THE CHAIN HAS TWO KINDS OF HOLDER AND THIS USED TO NAME ONE. A frozen segment is referenced by the flows
        forked below it — released by flow_registry_free's loop above — AND by every open @S SEARCH, which takes
        one at the moment its sink is detected (solve.c's add_pending freezes the path a candidate is re-injected
@@ -1097,7 +1121,15 @@ static void fork_key_count(const char *key, ForkRowKind kind)
  * PREDICTION, so what the sentence is still good for is its CONVERSE: after the namer lands, this row falls
  * AND `replayHits` rises on the same document, and either half alone is a fix that did not work.
  *
- * AND THE SAME PAIR NOW READS THE OTHER DIRECTION TOO, WHICH IS WHAT MAKES IT A FALSIFIER FOR THE SLOT FIX
+ * AND THAT CONVERSE IS RIGHT ABOUT THE DIRECTION AND INSENSITIVE TO R, WHICH IS WHY IT CANNOT BE THE WHOLE
+ * FALSIFIER AND WHY `branchRefined` EXISTS. A named repeat is REFINED — decide_arm's first arm, which consumes
+ * no slot — and never REPLAYED, so `replayHits` gains exactly the ONE slot the collapsed fork's sibling
+ * replays, whatever R is, while the R-1 re-asks the name actually paid for land in an arm nothing counted.
+ * Derived from the three arms rather than measured: over a straight-line repeat of one branch, an UNNAMED
+ * operand gives site row 2^R - 1 and `branchAsked` 0; a NAMED one gives predicate row 1, `replayHits` 1,
+ * `branchAsked` 2R and `branchRefined` 2(R-1). So the pair to read after a namer lands is the site row against
+ * `branchRefined`, and `replayHits` says how many FORKS collapsed rather than how many re-asks did.
+ * AND THE SAME PAIR READS THE OTHER DIRECTION TOO, WHICH IS WHAT MAKES IT A FALSIFIER FOR THE SLOT FIX
  * RATHER THAN ONLY FOR THE NAMER. While these forks recorded slots, `replayHits` was inflated by every one of
  * them that a diverged replay consumed by position — an agreement nobody had checked — so removing the slots
  * must move THREE numbers together on a document with a large site row and any resume in it: the parked chain
@@ -1381,6 +1413,14 @@ void decide_replay_stats(long *hits, long *left, long *left_arms) {
     if (hits) *hits = g_replay_hits;
     if (left) *left = g_replay_left;
     if (left_arms) *left_arms = g_replay_left_arms;
+}
+
+/* See decide.h. BOTH IN ONE CALL for decide_replay_stats' reason exactly: `refined <= asked` is an assertion
+   about ONE MOMENT, and two getters would let a caller read the denominator before a refinement and the
+   numerator after it and publish a fraction above 1 that no instant of this session ever held. */
+void decide_refine_stats(long *asked, long *refined) {
+    if (asked) *asked = g_branch_asked;
+    if (refined) *refined = g_branch_refined;
 }
 
 /* Swap the running decision state when the scheduler interleaves flows. A flow paused mid-execution keeps the
@@ -2097,7 +2137,15 @@ static int decide_arm(JSContext *ctx, const char *key, JSValueConst subject, int
             return owed;   /* no slot, no constraint, no sibling: this IS the other arm of a fork already made */
         }
     }
+    /* THE DENOMINATOR OF THE ARM BELOW, RAISED ABOVE ALL THREE ARMS BECAUSE THAT IS WHAT MAKES IT ONE. A
+       decision with a spellable question is about to be answered exactly one of three ways and this counts the
+       ASK, so a zero `branchRefined` beside a zero `branchAsked` says no spellable question was REACHED rather
+       than that none was re-asked — two states that take opposite work and that no outcome row can separate.
+       It is above the birth handoff's early return by construction: that return is taken only for `key == NULL`
+       (the DCHECK one screen up is that guarantee), so nothing this counts is a handoff being spent. */
+    if (key) g_branch_asked++;
     if (key && (arm = concolic_branch_decided(key)) >= 0) {
+        g_branch_refined++;   /* the ask above was answered for free — see the declaration */
         /* FEASIBLE REFINEMENT, AND IT IS ASKED FIRST. This flow has already decided this exact predicate, so
            the other arm is CONTRADICTED: same unknown input, same test, one answer. Forking it again would add
            a flow that explores nothing and still carries a COW delta, and a bundle testing one flag in twenty
