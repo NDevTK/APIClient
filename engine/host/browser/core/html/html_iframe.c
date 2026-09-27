@@ -118,6 +118,88 @@ bool iframe_has_navigable(JSContext *ctx, JSValueConst wrap)
     return had;
 }
 
+/* HTML §4.8.5 "The `iframe` element"'s `srcdoc`, ASKED AS A PRESENCE TEST AND NEVER FOR ITS BYTES — the
+ * question that decides WHICH arm of process-the-iframe-attributes a frame takes, and therefore the question
+ * every destination in this file owes BEFORE it reads `src`.
+ *
+ * WHY IT IS A FUNCTION WITH THREE CALLERS AND NOT AN `if` AT EACH OF THEM. §4.8.5 asks it three times, and the
+ * three are three different algorithms: its two triggers — "Whenever an `iframe` element with a non-null
+ * content navigable has its `srcdoc` attribute set, changed, or removed, the user agent must process the iframe
+ * attributes. Similarly, whenever an `iframe` element with a non-null content navigable but with no `srcdoc`
+ * attribute specified has its `src` attribute set, changed, or removed, the user agent must process the iframe
+ * attributes." — and process-the-iframe-attributes' own step 1. A second correct spelling of one question is
+ * the shape that drifts, and this file had two: iframe_attr_changed carried its own copy while
+ * iframe_create_navigable asked nothing at all, so the file stated the precedence rule at one site and broke
+ * it at the other.
+ *
+ * IT IS A PRESENCE TEST OVER THE VALUE, which is iframe_attr_changed's own stated reason and the reason that
+ * site is routed here rather than left standing: a frame whose `srcdoc` a flow tainted still HAS a srcdoc, and
+ * stringifying it merely to learn that it is there would de-taint it in core/dom/element.c's bytes accessor —
+ * one attribute away from the read this file was called about, naming a capability no caller of this predicate
+ * needs. element_attr_get_value is the DOM chokepoint, so the answer is the RUNNING FLOW's: an arm that wrote
+ * `srcdoc` and an arm that did not take different arms of §4.8.5, which is the same per-flow reason `src`,
+ * `name` and `sandbox` are read through it. */
+static bool iframe_has_srcdoc(JSContext *ctx, JSValueConst wrap)
+{
+    JSValue v = element_attr_get_value(ctx, wrap, "srcdoc");
+    bool present = !JS_IsNull(v) && !JS_IsException(v);
+
+    JS_FreeValue(ctx, v);
+    return present;
+}
+
+/* HTML §4.8.5's process-the-iframe-attributes STEP 1 — THE ARM THIS ENGINE DOES NOT HAVE, named where the
+ * frame that needs it is standing.
+ *
+ * WHAT WAS HERE INSTEAD WAS A WRONG ANSWER AND NOT A MISSING ONE, which is why this is a crash rather than a
+ * residual. §4.8.5 states the precedence in its own prose — "If the `src` attribute and the `srcdoc` attribute
+ * are both specified together, the `srcdoc` attribute takes priority. This allows authors to provide a fallback
+ * URL for legacy user agents that do not support the `srcdoc` attribute." — so `<iframe srcdoc="…" src="/a">`
+ * loaded `/a`, which is the one address a browser never fetches for that element. That is worse than an empty
+ * frame twice over: the Document is the wrong Document, and the REQUEST is one no session makes, so a learned
+ * endpoint out of it is CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's plausible fabrication with a fetch
+ * behind it. A srcdoc with no `src` was the quieter half of the same defect — an empty about:blank frame,
+ * running nothing, with §NO-STUBS' forcing function unable to fire because no global is missing.
+ *
+ * THE RELEASE ARM IS THE INITIAL about:blank AND NOT THE `src`, and the pair is coherent rather than merely
+ * safer: the navigable holds the Document §7.3.2.1 created it with, which is byte-for-byte the state a srcless
+ * `<iframe>` leaves and which every reader of one already handles (core/frame/navigable.c's create enqueues no
+ * load for an `about:` address, and iframe_attr_changed's precedence return below already preserves exactly
+ * this state on the belief that a srcdoc is being shown). So a DEFINED wrong answer replaces an
+ * undefined-in-the-standard one, which is what CLAUDE.md §AND-THE-ARM-BENEATH-A-`DFAIL` asks of a release arm:
+ * it hands the next component a state that component tests for.
+ *
+ * WHAT THE NEXT DIFF BUILDS, and the receiving half of it is already here — grepped rather than remembered.
+ * §7.4.2.2's about-base-URL arm for `about:srcdoc` is at core/frame/navigable.c's load step, §7.1.7's
+ * clone-the-PARENT's-container arm for `about:srcdoc` is at core/frame/policy_container.c, and
+ * nav_create_begin already takes a `body`/`body_len` pair, so the Document half needs no new machinery. WHAT
+ * IS MISSING IS THE ROUTE: §7.4.2.2 takes a `documentResource` beside its url and navigable_create takes a
+ * `const char *url` alone, so the srcdoc text has nowhere to ride. Carry it — a document resource on
+ * navigable_create, on navigable_load_enqueue's job (whose COUNTOF'd twelve arguments become thirteen) and
+ * into nav_create_begin's body, make the create's `about:` no-load guard admit a destination that HAS a
+ * resource, and give iframe_attr_changed the first trigger above — and this crash goes with them.
+ *
+ * HOW ITS ABSENCE SHOWS: an `<iframe srcdoc>` presents a Document with an EMPTY tree, so a page that writes
+ * one and then reads through it observes a frame whose `document.body` has no children and whose scripts never
+ * ran, with no request anywhere naming the frame. */
+static void iframe_srcdoc_unbuilt(const char *algorithm)
+{
+    DFAILF("%s reached an `<iframe>` whose `srcdoc` attribute is SPECIFIED, and HTML §4.8.5 \"The `iframe` "
+           "element\"'s process-the-iframe-attributes step 1 is the arm that owns it: \"If element's srcdoc "
+           "attribute is specified: … Navigate to the srcdoc resource: Navigate an iframe or frame given "
+           "element, about:srcdoc, the empty string, and the value of element's srcdoc attribute. The "
+           "resulting Document must be considered an iframe srcdoc document.\" This engine has the RECEIVING "
+           "half — §7.4.2.2's about base URL arm and §7.1.7's clone-the-parent's-container arm both test for "
+           "`about:srcdoc` already — and no route to it. DO NOT FALL BACK TO `src`: the section says \"If the "
+           "src attribute and the srcdoc attribute are both specified together, the srcdoc attribute takes "
+           "priority\", so that address is a fallback for legacy user agents and a browser never fetches it. "
+           "BUILD: a DOCUMENT RESOURCE that rides beside the address — on navigable_create, on "
+           "navigable_load_enqueue's job, and into nav_create_begin's `body`/`body_len` — plus the create's "
+           "`about:` no-load guard admitting a destination that carries one, and §4.8.5's FIRST trigger "
+           "(\"whenever an iframe element with a non-null content navigable has its srcdoc attribute set, "
+           "changed, or removed\") at iframe_attr_changed", algorithm);
+}
+
 /* HTML §4.8.5 "The `iframe` element"'s `src`, READ AS THE VALUE IT IS BEFORE IT IS ASKED FOR BYTES — the one
  * gate both of this file's DESTINATIONS pass through.
  *
@@ -126,10 +208,14 @@ bool iframe_has_navigable(JSContext *ctx, JSValueConst wrap)
  * step 2 — "let maybeURL be the result of ENCODING-PARSING A URL given that attribute's value, relative to
  * element's node document" — which is what an attribute WRITE navigates an existing content navigable to. The
  * other is iframe_create_navigable, and its `src` read is THIS ENGINE'S rather than the standard's: the iframe
- * HTML element post-connection steps are three steps, of which step 2 is "create a new child navigable for
- * insertedNode" (HTML §7.3.1.3 "Child navigables", which takes no url and navigates nothing) and step 3 is
- * process-the-iframe-attributes with initialInsertion true, and navigable_create FOLDS that navigate into the
- * create — the fold iframe_process_attributes' own `initial_insertion` test exists to compensate for. So the
+ * HTML element post-connection steps are FOUR steps, of which step 3 is "create a new child navigable for
+ * insertedNode" (HTML §7.3.1.3 "Child navigables", which takes no url and navigates nothing) and step 4 is
+ * "process the iframe attributes for insertedNode, with initialInsertion set to true", and navigable_create
+ * FOLDS that navigate into the create — the fold iframe_process_attributes' own `initial_insertion` test
+ * exists to compensate for. THE NUMBERS WERE 2 AND 3 UNDER THE WORD "THREE", which is an off-by-one over a
+ * whole algorithm rather than a typo: the steps open with "If insertedNode's node document's browsing context
+ * is null, then return" and continue with the `sandbox` parse, so every later number shifts and a reader
+ * checking the create against "step 2" is handed the sandboxing directive. So the
  * two reads are two algorithms in the standard and two callers here for the same reason, and each names its
  * own at the call. An entry that skipped the question would not report a missing capability — it would report
  * core/dom/element.c's BYTES accessor failing on a value that accessor should never have been shown, which is
@@ -229,6 +315,9 @@ void iframe_create_navigable(JSContext *ctx, JSValueConst wrap)
     char *src, *name, *sandbox;
     SandboxFlags iframe_flags;
     JSValue proxy;
+    /* §4.8.5's process-the-iframe-attributes STEP 1, ASKED BEFORE STEP 1's `Otherwise` READS `src` — which is
+       the whole of what makes the two arms exclusive rather than one preferring the other. */
+    bool srcdoc_wins;
 
     DCHECK(g_atom_navigable != JS_ATOM_NULL, "an iframe's navigable was created before iframe_init ran");
     DCHECK(JS_IsObject(wrap), "something that is not an element wrapper was given a child navigable");
@@ -240,11 +329,23 @@ void iframe_create_navigable(JSContext *ctx, JSValueConst wrap)
        the attribute keeps its value. Both are read through the DOM chokepoint so the read stays in the running
        flow's delta — a flow that set `src` and a sibling that did not create different children, which is the
        whole reason the navigable is per-flow. */
-    src  = iframe_src_destination(ctx, wrap,
+    /* STEP 1 FIRST, AND IT DECIDES WHETHER `src` IS READ AT ALL. Reading `src` unconditionally was not merely
+       a wasted read: iframe_src_destination is the gate that names an UNKNOWN destination, so a frame carrying
+       both attributes reported a capability owed for an address §4.8.5 says this element never loads — and in
+       release it loaded that address. Skipping the read on this arm is the standard's `Otherwise` and not an
+       optimisation. */
+    srcdoc_wins = iframe_has_srcdoc(ctx, wrap);
+    if (srcdoc_wins)
+        iframe_srcdoc_unbuilt("HTML §4.8.5 \"The `iframe` element\"'s iframe HTML element post-connection "
+                              "steps step 4, \"process the iframe attributes for insertedNode, with "
+                              "initialInsertion set to true\", into which this engine folds step 3's create");
+    src  = srcdoc_wins
+         ? NULL   /* the initial about:blank §7.3.2.1 creates the navigable with — see iframe_srcdoc_unbuilt */
+         : iframe_src_destination(ctx, wrap,
                                   "HTML §4.8.5 \"The `iframe` element\"'s iframe HTML element post-connection "
-                                  "steps step 2, \"create a new child navigable for insertedNode\" "
+                                  "steps step 3, \"create a new child navigable for insertedNode\" "
                                   "(HTML §7.3.1.3 \"Child navigables\"), into which this engine folds step "
-                                  "3's navigate");
+                                  "4's navigate");
     name = element_attr_get(ctx, wrap, "name");
     /* §7.1.5's IFRAME SANDBOXING FLAG SET: "every iframe element has an iframe sandboxing flag set … which
        flags in it are set at any particular time is determined by the iframe element's sandbox attribute."
@@ -461,31 +562,55 @@ void iframe_process_attributes(JSContext *ctx, JSValueConst wrap, bool initial_i
  * makes this reach the navigate instead of the load event steps. An `<iframe>` with a `src` in its MARKUP is
  * not this path at all: the parser's attributes are already on the element when the post-connection steps run.
  *
+ * AND THE SENTENCE QUOTED ABOVE IS THE SECOND OF TWO, WHICH IS THE OTHER TRIGGER THIS FUNCTION OWES. §4.8.5
+ * writes them as a pair and the first one is about the OTHER attribute: "Whenever an `iframe` element with a
+ * non-null content navigable has its `srcdoc` attribute set, changed, or removed, the user agent must process
+ * the iframe attributes. SIMILARLY, whenever an `iframe` element with a non-null content navigable but with no
+ * `srcdoc` attribute specified has its `src` attribute set, changed, or removed, the user agent must process
+ * the iframe attributes." A header that quotes from the word "Similarly" has quoted the half the code performs
+ * and said nothing about the half it does not, which is the under-claim nobody finds by acting on it — a reader
+ * who wants the srcdoc trigger reads this banner, sees the rule it names honoured, and never learns that
+ * `frame.srcdoc = "…"` reaches nothing at all. Both names arrive here now and the srcdoc arm CRASHES, because
+ * routing it into iframe_process_attributes would run the `Otherwise` arm and navigate to `src`.
+ *
  * THE THREE CONDITIONS ARE ASKED IN THE STANDARD'S OWN ORDER and each is a different fact. A non-null CONTENT
  * NAVIGABLE is what makes this a navigation rather than a write on a disconnected element — an `<iframe>` that
  * was never inserted has none, and setting its `src` navigates nothing in any browser. NO `srcdoc` SPECIFIED is
  * the standard's precedence rule and not an optimisation: a frame carrying both attributes is showing its
- * srcdoc, and a `src` write must not steal it. And the attribute is the HTML namespace's — a `foo:src` is a
- * different attribute entirely. */
+ * srcdoc, and a `src` write must not steal it — AND THAT SENTENCE WAS TRUE OF THE STANDARD AND FALSE OF THIS
+ * ENGINE, which is why the create above now crashes rather than falling through: nothing here ever loaded a
+ * srcdoc, so this return was preserving an EMPTY about:blank on the belief that a srcdoc was being shown. And
+ * the attribute is the HTML namespace's — a `foo:src` is a different attribute entirely. */
 void iframe_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local)
 {
     lxb_dom_node_t *n = lxb_dom_interface_node(el);
-    JSValue wrap, srcdoc;
-    bool has_srcdoc;
+    JSValue wrap;
+    bool is_srcdoc;
 
     if (ns && *ns) return;
     DCHECK(local != NULL, "§4.8.5 was asked about an attribute change with no attribute name");
-    if (!iframe_element_is(n) || strcmp(local, "src")) return;
+    if (!iframe_element_is(n)) return;
+    is_srcdoc = strcmp(local, "srcdoc") == 0;
+    if (!is_srcdoc && strcmp(local, "src")) return;
     wrap = node_wrap(ctx, n);
-    /* "NO `srcdoc` ATTRIBUTE SPECIFIED" IS A PRESENCE TEST, so it asks for the VALUE and not for bytes — the
-       same distinction core/html/hyperlink.c's link_has_activation draws over `href`. A frame whose `srcdoc` a
-       flow tainted still HAS a srcdoc, and stringifying it merely to learn that it is there is a de-taint that
-       buys nothing: it would abort in core/dom/element.c's bytes accessor, one attribute away from the `src`
-       this function was called about, and name a capability neither this condition nor that write needs. */
-    srcdoc = element_attr_get_value(ctx, wrap, "srcdoc");
-    has_srcdoc = !JS_IsNull(srcdoc) && !JS_IsException(srcdoc);
-    JS_FreeValue(ctx, srcdoc);
-    if (!iframe_has_navigable(ctx, wrap) || has_srcdoc) { JS_FreeValue(ctx, wrap); return; }
+    /* BOTH TRIGGERS OPEN ON THE SAME CONDITION — "an `iframe` element with a NON-NULL CONTENT NAVIGABLE" — so
+       it is asked once, ahead of the split, rather than twice inside it. */
+    if (!iframe_has_navigable(ctx, wrap)) { JS_FreeValue(ctx, wrap); return; }
+    if (is_srcdoc) {
+        /* §4.8.5's FIRST trigger. A `srcdoc` WRITE takes process-the-iframe-attributes' step 1, which is the
+           arm this engine has no route to; it must not reach the `Otherwise` below, whose whole content is the
+           `src` this attribute takes priority over. THE RELEASE ARM RETURNS, which leaves the frame showing
+           whatever it was already showing — the same state this function has always left it in, now stated
+           rather than reached by an early return that read as the precedence rule. */
+        iframe_srcdoc_unbuilt("HTML §4.8.5 \"The `iframe` element\"'s \"whenever an iframe element with a "
+                              "non-null content navigable has its srcdoc attribute set, changed, or removed\"");
+        JS_FreeValue(ctx, wrap);
+        return;
+    }
+    /* "NO `srcdoc` ATTRIBUTE SPECIFIED" — the second trigger's own condition, asked through the one predicate
+       §4.8.5 asks it with everywhere in this file (iframe_has_srcdoc states why it is a presence test over the
+       VALUE, and why a second spelling of it here is what let the create above disagree with this site). */
+    if (iframe_has_srcdoc(ctx, wrap)) { JS_FreeValue(ctx, wrap); return; }
     iframe_process_attributes(ctx, wrap, /*initialInsertion*/ false);
     JS_FreeValue(ctx, wrap);
 }
