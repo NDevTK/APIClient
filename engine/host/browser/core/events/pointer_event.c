@@ -71,7 +71,26 @@
  * Pointer Events 4 §8.2 writes and only Pointer Events 4 §3.1.3.2 promotes. core/html/html_dialog.c's named
  * residual is blocked on that same absent source, so the source has consumers and the members alone have
  * none — a reader arriving here from the measurement above builds the source, never the members.
- * RETIREMENT: this record goes when this engine dispatches a trusted `pointerdown`.
+ * AND THAT IS EXACT FOR TWO OF THE THREE AND FALSE FOR THE THIRD, WHICH IS REWRITTEN RATHER THAN DELETED
+ * BECAUSE THE SENTENCES ABOVE ARE THE ONES A READER RE-DERIVES FROM Pointer Events 4 §8.2's OWN STEP 1.
+ * `every call of Pointer Events 4 §4's members throws on its FIRST STEP` is TRUE of setPointerCapture and of
+ * releasePointerCapture, whose §8.2 and §8.3 step 1 is the NotFoundError quoted above — and hasPointerCapture
+ * HAS NO FIRST STEP TO THROW ON. Pointer Events 4 §4 defines it entirely as "returns true if the pending
+ * pointer capture target override for pointerId is set to the element on which this method is invoked, and
+ * false otherwise", with no throw clause anywhere in it, so reading a slot nothing writes is not a gap: it is
+ * that section's own answer, false for every pointerId at once, and the same answer a real browser gives for
+ * an element that has never captured a pointer. THE ARGUMENT WAS RIGHT ABOUT THE SLOT AND WRONG ABOUT WHAT
+ * READING AN EMPTY ONE COSTS.
+ * AND THE MEMBER THAT NEEDS NO SOURCE IS THE ONE THAT GATES THE TWO THAT DO, which is the measured part and
+ * the reason this is a landing rather than a correction. The dominant corpus idiom pairs them in ONE
+ * expression — `t.hasPointerCapture(e.pointerId) && t.releasePointerCapture(e.pointerId)` — so once
+ * hasPointerCapture answers false the `&&` SHORT-CIRCUITS and the sibling call is never reached, and one
+ * member removes BOTH flow-enders at every site of that shape. It is built, in
+ * core/events/pointer_capture.c, which carries the derivation and the counts. What is UNCHANGED is this
+ * record's verdict on the other two: they stay absent, because their step 1 throws and because every
+ * presence test the corpus spells is spelled on THEIR names rather than on hasPointerCapture's.
+ * RETIREMENT: this record goes when this engine dispatches a trusted `pointerdown`, which is what Pointer
+ * Events 4 §3.2.9 needs and what the remaining two members are still blocked on.
  * `navigator.maxTouchPoints` (Pointer Events 4 §6 "Extensions to the Navigator interface") is not behind this
  * guard and answers falsey either way — and the retired sentence gave its count as ONE, which is withdrawn
  * for the same reason and over the same missing corpus. Its BARE `§6` is repaired too: this file's own
