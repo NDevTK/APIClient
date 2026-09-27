@@ -3098,6 +3098,27 @@ void idl_install_accessor_at(JSContext *ctx, JSValueConst target, const char *na
 void idl_install_interface_object_exposed(JSContext *ctx, JSValueConst target, const char *name,
                                           JSValueConst proto, IdlExposure exposure);
 
+/* THE SAME DOOR FOR AN INTERFACE THAT DECLARES A CONSTRUCTOR **AND** CARRIES A §3.3.7 CONDITIONAL ATTRIBUTE —
+ * the one combination neither of the two entries above can serve, and the reason is a property of each rather
+ * than an oversight in either. `idl_install_interface_object_exposed` asks the condition and MINTS over
+ * `idl_illegal_ctor`, so routing a constructor-declaring interface through it would answer `new X()` with a
+ * TypeError; `idl_define_global_property_reference` takes the object the component minted and asks step 1
+ * alone, because a conditional attribute is a fact only the component knows it carries. So an interface that
+ * is both — `[Exposed=Window, SecureContext] interface CookieChangeEvent : Event { constructor(…); }` is the
+ * first in this engine — had no door at all.
+ *
+ * AND THE SHAPE A CALLER REACHES FOR INSTEAD ABORTS THE DEV BUILD, which is why this is a door and not advice.
+ * `if (idl_exposed(ctx, IDL_SECURE_CONTEXT)) { … define … }` is the per-site conditional idl_exposed's own
+ * contract forbids, and it is not merely style here: the ask is recorded INSIDE the define, so a realm that
+ * took the false arm would have built this realm's `X.prototype` and recorded no §3.8 ask for `X` — which is
+ * exactly the disagreement `realm_assert_interface_objects_asked` fires on, naming the interface. The gate has
+ * to sit where the ask can be recorded before it.
+ *
+ * TAKES OWNERSHIP of `object` on EVERY path, the refusal included, exactly as the entry above does — a caller
+ * that could get it back would have two shapes to write instead of one. `global` is BORROWED. */
+void idl_define_global_property_reference_exposed(JSContext *ctx, JSValueConst global, const char *id,
+                                                 JSValue object, IdlExposure exposure);
+
 /* THE SAME ATTRIBUTE, WITH ITS GETTER DECLARING THAT ITS BODY RUNS NONE OF THE PAGE'S CODE.
  *
  * WHY THERE IS ANYTHING TO DECLARE. A property read that lands on an accessor may not invoke it from C:

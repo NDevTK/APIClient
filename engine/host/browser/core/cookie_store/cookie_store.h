@@ -17,12 +17,19 @@
  *
  * WHAT THIS COMPONENT IS AND IS NOT. It is the whole of §3's four METHODS — §3.1's `get` and §3.2's `getAll`
  * over §7.1 "Query cookies", §3.3's `set` over §7.2 "Set a cookie" and §3.4's `delete` over §7.3 "Delete a
- * cookie" — and the §6.1 Window member that reaches them. What it is NOT is the CHANGE-EVENT half: §5.1 "The
- * CookieChangeEvent interface", §7.4 "Process changes" and the `onchange` handler are absent TOGETHER, which is
- * a SUBPROBLEM ORDER rather than an oversight — installing the handler without §7.4 would flip a page's
- * `"onchange" in cookieStore` true and abandon nothing, because `CookieStore : EventTarget` already answers
- * `addEventListener("change", f)` and no change is dispatched to either. See the named residual in
- * cookie_store.c for what the next diff builds.
+ * cookie" — and the §6.1 Window member that reaches them. What it is NOT is the rest of the CHANGE-EVENT half:
+ * §7.4 "Process changes" and the `onchange` handler. Those two are absent TOGETHER, which is a SUBPROBLEM ORDER
+ * rather than an oversight — installing the handler without §7.4 would flip a page's `"onchange" in cookieStore`
+ * true and abandon nothing, because `CookieStore : EventTarget` already answers `addEventListener("change", f)`
+ * and no change is dispatched to either. See the named residual in cookie_store.c for what the next diff builds.
+ * THIS PARAGRAPH NAMED §5.1 "The CookieChangeEvent interface" AS ABSENT WITH THEM AND IS REWRITTEN RATHER THAN
+ * DELETED, FOR THE REASON THE PARAGRAPH BELOW GIVES ABOUT ITS OWN TWICE-WRONG CLAIM: a reader who re-derives
+ * the subproblem order from the query half landing first will group all three again. §5.1 is BUILT, in
+ * core/events/cookie_change_event.c — it is an Event subclass, so it lives with the other Event subclasses and
+ * is declared from core/events/event.c's list rather than from here, which is also why a reader arriving at it
+ * never passes this header. It landed FIRST and alone because its own true branch COMPLETES: `new
+ * CookieChangeEvent(…)` converts the page's dictionary and both attributes answer, where the handler's true
+ * branch waits on a dispatch this engine does not yet perform.
  * THIS PARAGRAPH TWICE SAID A WRITER WAS UNBUILT AND IS REWRITTEN RATHER THAN DELETED, BECAUSE A READER WHO
  * RE-DERIVES THE SUBPROBLEM ORDER FROM THE QUERY HALF LANDING FIRST WILL RE-ADD EITHER CLAIM. It said §7.2 was
  * unbuilt, and then that §3.3 was; §7.2 is the algorithm BOTH writers reach — §7.3 step 4 is "Return the

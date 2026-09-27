@@ -55,6 +55,7 @@
 #include "core/events/before_unload_event.h"
 #include "core/events/security_policy_violation_event.h"
 #include "core/events/storage_event.h"
+#include "core/events/cookie_change_event.h"
 #include "core/events/ui_event.h"
 #include "core/events/mouse_event.h"
 #include "core/events/pointer_event.h"
@@ -1056,6 +1057,13 @@ static void event_declare_subclasses(JSContext *ctx)
        all twelve of its attributes are strings and integers — so, unlike NavigateEvent's two, there is
        nothing here that has to wait for a per-realm install to read a class id. */
     security_policy_violation_event_init(ctx);
+    /* COOKIE STORE API §5.1 "The CookieChangeEvent interface" — the event a COOKIE CHANGE fires at a
+       Window's CookieStore. Declared here for the reason the rest of this list gives: its prototype chains to
+       this realm's Event.prototype. It brands against no other component's class — its two members are
+       `FrozenArray<CookieListItem>`, which is a frozen Array of converted dictionaries and not an interface —
+       so, unlike NavigateEvent's two, there is nothing here that has to wait for a per-realm install to read a
+       class id. */
+    cookie_change_event_init(ctx);
     /* THE ORDER IS THE CHAIN. Each of these declares a per-realm install and realm.h runs them in declaration
        order, so an interface must declare AFTER the one it extends or its prototype chains to a slot no realm
        has filled yet: `MouseEvent : UIEvent : Event`, `KeyboardEvent : UIEvent : Event` and
@@ -1090,6 +1098,7 @@ static void event_free_subclasses(JSRuntime *rt)
     pointer_event_free(rt);
     mouse_event_free(rt);
     ui_event_free(rt);
+    cookie_change_event_free(rt);
     security_policy_violation_event_free(rt);
     storage_event_free(rt);
     before_unload_event_free(rt);

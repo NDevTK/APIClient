@@ -9656,6 +9656,29 @@ void idl_define_global_property_reference(JSContext *ctx, JSValueConst global, c
     CHECK(defined >= 0, "an interface's property could not be defined on the global");
 }
 
+/* THE SAME DOOR WITH §3.3.7's CONDITIONAL-ATTRIBUTE AXIS ASKED TOO — see idl_args.h for why an interface that
+   declares a constructor and carries [SecureContext] had neither of the two entries above, and for why the
+   caller-side `if` a reader reaches for instead is the one shape that aborts the dev build.
+   THE ASK IS RECORDED BEFORE THE REFUSAL, exactly as idl_install_interface_object_exposed records its own and
+   for the identical reason: core/realm.h's owed-half assertion reads the census of what was ASKED, and a
+   component that asked and was refused BY THE STANDARD is not a component that failed to ask. The define below
+   records it again for the identifiers that reach it, which is a set membership and not a count.
+   THE OBJECT IS FREED ON THE REFUSAL, because this entry owns it on every path. */
+void idl_define_global_property_reference_exposed(JSContext *ctx, JSValueConst global, const char *id,
+                                                 JSValue object, IdlExposure exposure)
+{
+    DCHECK(id != NULL && *id, "a global property reference was defined with no identifier — §3.8 keys it by "
+                              "the interface's identifier and there is nothing else to name it by");
+#if APICLIENT_DEV
+    realm_note_property_reference_asked(ctx, id);
+#endif
+    if (!idl_exposed(ctx, exposure)) {   /* §3.3.13: "there will be no \"X\" property on Window" */
+        JS_FreeValue(ctx, object);
+        return;
+    }
+    idl_define_global_property_reference(ctx, global, id, object);
+}
+
 /* WEB IDL §3.4.11 [LegacyWindowAlias], WHICH IS §3.8's STEP 3.1.4 — see idl_args.h for the sentences and for
    why the alias's value is the interface object itself. Web IDL §3.8 Platform objects implementing interfaces'
    step 3.1.4 reads "If the interface is declared with a

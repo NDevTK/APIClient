@@ -951,13 +951,25 @@ static void cs_install_realm(JSContext *ctx)
        §3.3 set, §3.4 delete, §3.1 get and §3.2 getAll are all here; what is not is the CHANGE-EVENT half, and
        that is this component's stated narrowing rather than an exposure decision — see the file header.
 
-       NAMED RESIDUAL. NOT COVERED: §5.1 "The CookieChangeEvent interface", §7.4 "Process changes" and the
-       `onchange` handler §3's IDL writes as `[Exposed=Window] attribute EventHandler onchange` — so a page may
-       now read, create and delete a cookie through this API and cannot be TOLD that one changed. NEXT DIFF:
-       §5.1's interface (a constructor, `changed` and `deleted` as FrozenArrays of CookieListItem, and a
-       CookieChangeEventInit) and §7.4's "fire a change event" over its "prepare lists from changes", whose step
-       3.3.1 sets a deleted item's `value` to undefined — then the accessor. `idl_interface_tag` names no
-       CookieChangeEvent today, so the interface is the first half and the handler is the last.
+       NAMED RESIDUAL. NOT COVERED: §7.4 "Process changes" and the `onchange` handler §3's IDL writes as
+       `[Exposed=Window] attribute EventHandler onchange` — so a page may now read, create and delete a cookie
+       through this API, and may CONSTRUCT the event that says one changed, and still cannot be TOLD that one
+       did. NEXT DIFF: §7.4's "fire a change event" over its "prepare lists from changes", whose step 3.3.1 sets
+       a deleted item's `value` to undefined — then the accessor.
+       §5.1 "The CookieChangeEvent interface" WAS THE FIRST OF THESE THREE AND IS BUILT, in
+       core/events/cookie_change_event.c: the constructor, `changed` and `deleted` as frozen arrays of
+       CookieListItem, and a CookieChangeEventInit. This clause named it as absent and is rewritten rather than
+       deleted, because the SUBPROBLEM ORDER a reader re-derives from it is the durable half — the interface
+       first, the handler last — and a reader who re-derives it will re-add the clause. What is retired with it
+       is the sentence `idl_interface_tag` names no CookieChangeEvent today, which that component's own install
+       now makes false; `node engine/idlgen.mjs` answers `CookieChangeEvent: complete`.
+       WHAT §7.4 STILL NEEDS IS NOT AT THIS SITE, AND THAT IS THE ONE THING THIS RESIDUAL WAS WRONG ABOUT.
+       §2.2 "Cookie store" is where the standard puts the trigger — "When any of the following conditions occur
+       for a cookie store, perform the steps to process cookie changes", over three conditions, of which a
+       newly-created cookie being inserted is the only one this component can cause. `document.cookie` and a
+       network Set-Cookie insert one too, and an expiry eviction is the jar's alone, so an observable-change
+       record placed HERE would answer for writes through this API and miss every other writer of the one store
+       §2.2 names. The producer belongs at core/loader/cookie_jar.c, which is the store.
        INSTALLING THE ACCESSOR ALONE IS THE SHAPE §NO STUBS FORBIDS TWICE OVER: it flips `"onchange" in
        cookieStore` true and abandons nothing, because `CookieStore : EventTarget` already answers
        `addEventListener("change", f)` and no change is ever dispatched to either — so a bundle that tests for
