@@ -5924,6 +5924,31 @@ const heldBy = new Map();     // field name -> the holder that names it
      write site, because the confusion it records is then unspellable rather than merely not made. */
   /* MATCHED ON `code`, where a comment is blank and a literal's own characters are intact — so a field name
      written in English prose is not a holder, and the bytes read are the bytes the program holds. */
+  /* WHETHER THE `[` IN FRONT OF A LITERAL OPENS AN INDEX OR AN ARRAY, WHICH IS A CLASSIFICATION AND WAS A
+     THREE-CHARACTER LOOKBEHIND FOR THE BRACKET ALONE. Three characters cannot tell `o[` from `= [`, so the
+     FIRST ELEMENT of every array literal of held names was read as an `o["n"]` member read and dropped from
+     this band — while `readAnywhere` never credited it either, a bare literal in an array being no member
+     expression, so it fell out of BOTH and landed in the accusation. A row's classification then turned on its
+     POSITION IN A LIST, which is no fact about the tree and is the ordinal defect CLAUDE.md
+     §AN-INDEX-NAMES-A-THING-ONLY-WHILE-THE-SET-IS-FIXED names, arriving in the instrument rather than in a
+     subject. MEASURED in a frozen snapshot: prepending one name to `testing/live-run.js`'s own carried list
+     moved `stepNamedRenderingLife` out of WRITE-with-no-reader and into this band, the accusation falling from
+     5 to 4 and this band rising from 42 to 43, with the judged total and the spelled, derived and both counts
+     all unchanged — which is the whole signature of a row whose classification was decided by its position.
+     AN INDEX BRACKET FOLLOWS AN EXPRESSION AND AN ARRAY LITERAL'S DOES NOT, which is the whole discriminator:
+     `o[`, `f()[` and `a[i][` end in an identifier character, `)` or `]`, while `= [`, `, [`, `([` and `[[` do
+     not. THE IDENTIFIER-SHAPED EXCEPTION IS A KEYWORD — `return [`, `typeof [`, `of [`, `case [` all end in a
+     letter and open an array — so the word itself is asked, and a keyword is NOT an operand. The window is 48
+     characters because the longest of those words plus a receiver fits in it; a window that truncated one
+     would answer the wrong arm in silence, which is why this reads the WORD and not a fixed count of bytes. */
+  const INDEX_OPERAND_TAIL = /(?:[\w$]|\)|\]|"|'|`)$/;
+  const NOT_AN_OPERAND     = /\b(?:return|typeof|of|in|case|do|else|void|delete|await|yield|instanceof|new)$/;
+  const opensAnIndex = (before) => {
+    const b = before.replace(/\s+$/, "");
+    if (!b.endsWith("[")) return false;
+    const head = b.slice(0, -1).replace(/\s+$/, "");
+    return INDEX_OPERAND_TAIL.test(head) && !NOT_AN_OPERAND.test(head);
+  };
   const HELD = /"([A-Za-z_$][\w$]*)"|'([A-Za-z_$][\w$]*)'/g;
   for (const s of jsScans) {
     const held = new Map();   // emission (shape) id -> Set(name)
@@ -5937,7 +5962,7 @@ const heldBy = new Map();     // field name -> the holder that names it
       if (/^\s*:/.test(s.code.slice(m.index + m[0].length))) continue;
       /* AND `o["n"]` IS A SPELLED READ, which `readAnywhere` has already answered for. Counting it here would
          put one construct in two bands and make the numbers below overlap with nothing saying so. */
-      if (/\[\s*$/.test(s.code.slice(Math.max(0, m.index - 3), m.index))) continue;
+      if (opensAnIndex(s.code.slice(Math.max(0, m.index - 48), m.index))) continue;
       const qs = shapesOfName.get(n);
       if (!qs) continue;
       for (const q of qs) {
