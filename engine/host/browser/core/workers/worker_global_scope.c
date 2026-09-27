@@ -756,6 +756,47 @@ void worker_global_scope_free(JSRuntime *rt)
  *     "If is shared is true:", is ONE step holding five — and step 12 carries a switch on the options type,
  *     then a performFetch list, then an onComplete list of eighteen. Every sub-number below therefore names
  *     its list in the spec's own words.
+ *     AND THE ROMAN NUMERALS ARE §10.2.4's ORDER, WHICH IS A DEPENDENCY ORDER AND NOT A LANDING ORDER — STATED
+ *     BECAUSE A NUMBERED LIST IS AN INSTRUCTION AND A SENTENCE BENEATH ONE IS NOT. A reader dispatching from
+ *     this list starts at (i) because that is where a list starts, and (i) THE AGENT is the member with the
+ *     largest blast radius and no page-visible consumer at all. The landing order is not the numerals reversed
+ *     either, so it is written out by NAME rather than renumbered: renumbering would make every numeral
+ *     elsewhere in this file an ordinal over a set this list keeps growing, which is the defect the paragraph
+ *     above exists to prevent.
+ *     NO MEMBER BUT (vii) `Worker` HAS A CONSUMER A PAGE CAN REACH, AND THAT IS THE STRUCTURAL FACT THE ORDER
+ *     HAS TO BE BUILT AROUND rather than a reason to land (vii) first. CLAUDE.md's rule is to number the member
+ *     that HAS a consumer as the first landing; here the only such member is the one §NO-STUBS forbids landing
+ *     before the rest exist, because installing the interface object flips a bundle's `if (window.Worker)` guard
+ *     TRUE onto a branch nothing can complete. So the consumer that makes each intermediate landing EXERCISED
+ *     rather than dead is a FIXTURE DRIVE, which is not a stub by §NO-STUBS' test — the code is correct and
+ *     narrower, and a fixture IS a host here, which is the same reading that corrected (4) above. A member
+ *     landed with no drive at all is the write-with-no-reader CLAUDE.md
+ *     §A-FIELD-A-CONSUMER-DEFAULTS names, and is what this ordering exists to refuse.
+ *     THE ORDER, EACH MEMBER WITH THE CALL THAT WILL CONSUME IT:
+ *       1. (i) THE AGENT's CONCURRENT arm — core/agent_state.h and core/platform.c, whose own declaration
+ *          refuses a second live agent BY NAME under a residual stating exactly this next diff. FIRST because
+ *          every later member runs IN that agent and because its consumer exists TODAY: the fixture's second
+ *          agent is sequential only because the concurrent arm aborts, so the landing's drive is that agent
+ *          brought up while the first is live. NOT THIS DIRECTORY'S.
+ *       2. (ii) THE ENVIRONMENT SETTINGS OBJECT's fields that do not read the worker's url, and (iii) THE
+ *          SCRIPT FETCH — ONE LANDING, because §10.2.6.2's remaining fields read the url (iii)'s response step
+ *          sets, so neither half is coherent alone. Consumer: the one chokepoint, which exists.
+ *       3. (iv) RUNNING IT, WITH ITS UNSTATED PREREQUISITE FIRST — naming a realm that is not a Document, in
+ *          solver/world and core/dom/document. Consumer: the `engine_queue_` entry that takes a `uint32_t doc`,
+ *          which exists; what does not is a handle for a realm with no Document behind it.
+ *       4. (vi) THE WORKER'S EVENT LOOP and (v) THE PORT PAIR — ONE LANDING, and the event loop FIRST inside
+ *          it, which is the one place this order departs from §10.2.4's: a pair entangled with nothing
+ *          servicing either end is a queue whose deliveries never arrive, so the loop is what makes the pair
+ *          observable rather than the other way round. Consumer: the MessagePort of HTML §9.4.4 "Message
+ *          ports", which exists.
+ *       5. (vii) `Worker` — LAST, unchanged, for the reason its own entry gives.
+ *     WHAT WOULD MAKE THIS ORDER WRONG, so a reader can refute it rather than inherit it: a member of 2–4 whose
+ *     landing is coherent WITHOUT the agent of 1 — which would be true the day a worker realm of the FIRST
+ *     agent could hold a flow, since §10.2.4 step 4's agent is what makes it a second one.
+ *     RETIREMENT: this record goes when browser/idl_exposure.h's generated rows carry the agent-cluster arm each
+ *     [Global] name's agent takes — the same construction the banner at the top of this file names — because a
+ *     landing order over these members is then read off the table beside the scope list rather than out of a
+ *     paragraph a reader has to find.
  *       (i)   THE AGENT — step 4, "Let agent be the result of obtaining a dedicated/shared worker agent given
  *             outside settings and is shared", whose own second sentence is "Run the rest of these steps in
  *             that agent". IT IS A SECOND AGENT INSIDE THIS INSTANCE and not a peer instance — see the banner
@@ -766,15 +807,39 @@ void worker_global_scope_free(JSRuntime *rt)
  *             agent is per JSRuntime (core/platform.h states the split — platform_agent_init once per
  *             JSRuntime, platform_document_install once per JSContext — and core/platform.c's own note says a
  *             WorkerGlobalScope agent is a second entry beside that one, with its own install column); the
- *             HOST creates the runtime, and `git grep JS_NewRuntime engine/host` answers three, one per host,
- *             so no host in this tree has ever held two at once; solver/flow.c's flow_registry_init takes a
- *             document name and no runtime, so a second agent of ONE instance shares the frontier that call
+ *             HOST creates the runtime, and `git grep -n JS_NewRuntime engine/host` names every host that
+ *             holds one; solver/flow.c's flow_registry_init takes a document name and no runtime, so a second
+ *             agent of ONE instance shares the frontier that call
  *             created and must not re-run it — which is the state test_forced.c's own main describes when it
  *             refuses to root two INSTANCES in one process, and reading that refusal as forbidding a second
  *             AGENT would forbid §10.2.4 step 4 itself; core/realm.c needs nothing new, since its worker arm
  *             already takes NULL for the top-level creation URL; and core/agent_state.h's pre-init discipline
- *             is the mechanism written FOR a second agent that no second agent has ever exercised.
+ *             is the mechanism written FOR a second agent.
  *             THIS COMPONENT IS NOT ON THAT LIST, which is why (i) cannot land from this directory.
+ *             AND (i) IS HALF DISCHARGED, WHICH THIS ENTRY DENIED IN THREE PLACES AND IS THE CORRECTION WORTH
+ *             MORE THAN THE ENTRY. It read that the grep answers `three, one per host`, that `no host in this
+ *             tree has ever held two at once`, and that the pre-init discipline is a mechanism `no second agent
+ *             has ever exercised`. A SECOND AGENT HAS BEEN BROUGHT UP: a fixture declares the platform in a
+ *             second JSRuntime, builds a DedicatedWorkerGlobalScope realm in it through the one call, reads
+ *             §10.2.1.1's `self` off that realm's WorkerGlobalScope.prototype, and releases both — and the
+ *             pre-init discipline is what that agent's declare column reads, so it HAS been exercised, and its
+ *             first exercise found a leaked browsing-context-group Array the host teardown had not given back.
+ *             THE CONCLUSION SURVIVES AND ITS ARGUMENT DOES NOT, WHICH IS WHY THE CLAUSES ARE REWRITTEN RATHER
+ *             THAN DELETED: those runtimes are SEQUENTIAL — the fixture frees the first before it brings the
+ *             second up — so `never two AT ONCE` is exactly right and `one per host` is not, and a reader who
+ *             runs the grep finds the premise refuted and may discard the true conclusion with it. The count
+ *             was TRUE WHEN WRITTEN and went stale when the second agent landed, which is ordinary drift and
+ *             prescribes nothing about the method; it is the COUNT that is dropped for a command, because a
+ *             count beside a population a lane keeps adding to is a number nobody re-derives.
+ *             SO WHAT (i) STILL OWES IS THE CONCURRENT ARM AND NOT AN AGENT, and it is LOCATED rather than
+ *             described: §10.2.4 step 4's agent runs WHILE its owner does, because the same algorithm's
+ *             onComplete list entangles a port pair whose two ends are both live — so it is not the sequential
+ *             successor core/agent_state.h's pre-init discipline is for, and core/platform.c refuses it BY NAME
+ *             at its own declaration under a three-clause residual whose next-diff clause is the whole of the
+ *             work: agent-state slots reached through the runtime that declared them rather than through a
+ *             file-scope static, so that two live agents hold two sets. That residual's own census is derived
+ *             — core/agent_state.h's declarations are what is keyed per process today — so the population is
+ *             enumerable without anybody maintaining a list of it.
  *       (ii)  THE ENVIRONMENT SETTINGS OBJECT — step 7, "Set up a worker environment settings object with
  *             realm execution context, outside settings, and unsafeWorkerCreationTime, and let inside
  *             settings be the result", which is §10.2.6.2 "Script settings for workers". TWO OF ITS FIELDS
@@ -818,9 +883,19 @@ void worker_global_scope_free(JSRuntime *rt)
  *             the runtime question and lands in solver/world and core/dom/document — which is why (iv) cannot
  *             be read as work this directory unblocks by finishing (i).
  *       (v)   THE PORT PAIR — step 12's onComplete list again, "Let inside port be a new MessagePort object
- *             in inside settings's realm" and "Entangle outside port and inside port". HTML §9.2 exists in
- *             this build; what does not is an entanglement whose two ends are in two AGENTS — which, by (i),
- *             is two JSRuntimes of ONE instance rather than two instances.
+ *             in inside settings's realm" and "Entangle outside port and inside port". HTML §9.4.4 "Message
+ *             ports" exists in this build; what does not is an entanglement whose two ends are in two AGENTS
+ *             — which, by (i), is two JSRuntimes of ONE instance rather than two instances.
+ *             THAT NUMBER READ §9.2 AND IS REPAIRED RATHER THAN QUIETLY CORRECTED, BECAUSE OF HOW IT WAS FOUND
+ *             AND OF WHAT IT COST FIRST. HTML §9.2 is "Server-sent events"; `MessagePort` is declared by §9.4.4
+ *             "Message ports", under §9.4 "Channel messaging", which is also where entangle is defined — so the
+ *             citation was a REAL section correctly numbered about a different subject, the one axis a
+ *             quotation check is blind to by construction, and it carried no title for the title channel to
+ *             mismatch. The landing order above cited §9.2 for the same claim before either was fetched, which
+ *             is the copy costing more than the original: an unverified number in this file is what the next
+ *             reader reaches for, so a wrong one recruits rather than merely misleading. Both were repaired by
+ *             one fetch of the chapter's own heading list, which is what settles a number and what reading
+ *             either site could not.
  *       (vi)  THE WORKER'S EVENT LOOP — step 12's onComplete list again, step 15 of its eighteen: "Event
  *             loop: Run the responsible event loop specified by inside settings until it is destroyed."
  *             THIS LIST DID NOT NAME IT, AND THE OMISSION IS THE KIND A READER EXECUTES RATHER THAN READS.

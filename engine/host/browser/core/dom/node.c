@@ -5550,9 +5550,21 @@ void node_init(JSContext *ctx)
        time: the hand-maintained member is the one that stayed right and its two siblings are what a
        hand-maintained list does.
 
-       NO AGENT HAS EVER BEEN SECOND, so nothing here fires today and this is armed rather than exercised:
-       `git grep JS_NewRuntime engine/host` answers one per host, and main.c's shipped entry refuses a second
-       root outright ("qjs_init ran twice in one WASM instance"). HTML §10.2.4 "Processing model" step 4 is the
+       AN AGENT HAS BEEN SECOND, AND THE SENTENCE THAT STOOD HERE SAID OTHERWISE — it read that no agent has
+       ever been second, so nothing here fires and this is armed rather than exercised, on the ground that
+       `git grep JS_NewRuntime engine/host` answers one per host and main.c's shipped entry refuses a second
+       root outright ("qjs_init ran twice in one WASM instance"). The main.c half is still exactly true and the
+       first half is not: a fixture in this tree brings up a SECOND agent in one process — a second JSRuntime,
+       `platform_agent_init` over it, and this component's `element` row declared a second time — so the derived
+       undo above is EXERCISED rather than armed, and the three lists it gives back are given back. It is
+       rewritten rather than deleted because the grep is what a reader re-runs, and `one per host` reads as
+       refuted the moment they do: the two runtimes are SEQUENTIAL, the fixture freeing the first before it
+       brings the second up, so what is true is that no host holds two AT ONCE and the per-host count is not.
+       WHAT IS STILL UNEXERCISED IS THE CONCURRENT CASE, AND IT IS THE ONE THE NUMBERS ABOVE ARE ABOUT: this
+       list's doubling is a fact about two agents' registrations coexisting, and core/platform.c refuses a
+       second live agent BY NAME at its own declaration, so agent two's append is reachable only after that
+       refusal is lifted. A sequential second agent runs the undo; a concurrent one is what would run the
+       table over. HTML §10.2.4 "Processing model" step 4 is the
        arrival — obtaining a dedicated or shared worker agent is a SECOND agent INSIDE this instance, and
        core/workers/worker_global_scope.c already names this header as the mechanism written for it.
        ALL OF THEM OR NONE: core/dom/selection.c records what a short count buys — a release that is the

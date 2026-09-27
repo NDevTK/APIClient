@@ -634,12 +634,40 @@ void realm_install_intrinsics(JSContext *ctx, const char *top_level_creation_url
        routing rather than a second copy. */
     realm_assert_global_property_references(ctx);
 
+    /* AND THE OTHER DIRECTION, FOR THE ONE REALM KIND WHOSE CONSTRUCTION ENDS HERE. The walk above is the
+       PRESENT ⇒ CORRECT half; realm.h's realm_assert_interface_objects_asked is the OWED ⇒ ASKED half, which
+       may be asked ONLY where no further Web IDL §3.8 placement will happen in this realm — and WHICH end that
+       is is a fact about the realm KIND, which the sentence above already states: a WorkerGlobalScope realm is
+       finished when this function returns, and a WINDOW realm is not, because core/platform.c's per-document
+       install column runs after it and legitimately leaves interface prototype objects whose property
+       reference that column has not placed yet. So the worker arm is asked HERE and the Window arm at the end
+       that finishes a Window.
+       IT IS ROUTING AND NOT A FALLBACK BY §C-stack's TEST: delete the Window end and this question still has to
+       be asked, because the invariant is about a FINISHED global and only the realm kind decides which call
+       finishes one. `names` is the local the two argument checks above already read, so nothing here re-derives
+       Web IDL §3.3.8's answer a second time.
+       IT REPLACES A HAND-COPIED HOST LINE THAT WAS ALREADY MISSING AT ONE OF THE SITES THAT BUILD A WORKER
+       REALM, which is the measured reason it is DERIVED rather than documented. Every worker realm is built by
+       this one call, and the audit was a separate line each builder had to remember: one builder carried it
+       and a later one did not, so the axis read as covered while the newer site's realm was judged by nothing.
+       Derive the two populations rather than trusting a count here — `git grep -n 'realm_install_intrinsics('`
+       against `git grep -n 'realm_assert_interface_objects_asked('` — and note that the first is now the
+       complete population for a worker realm, which is what this line buys. That is the hand-maintained
+       per-realm line this file's own banner exists to abolish, arriving in an ASSERTION instead of an install.
+       RETIREMENT: this record goes when the WINDOW end is stated from inside this file too — core/platform.c
+       telling this file that its per-document column has finished, rather than calling the entry itself —
+       because no host can then omit the audit for any realm kind and there is no hand-copied form left for a
+       reader to re-derive. */
+    if (idl_global_names_are_worker(names))
+        realm_assert_interface_objects_asked(ctx);
+
     /* AND WEB IDL §3.7.3's [Unscopable] BLOCK AGAINST THE MEMBERS THIS LIST JUST INSTALLED. It belongs HERE and
-       not at the owed-half entry below, and the difference is a population rather than a preference: that entry
-       states §3.8's condition and is not reached by a realm that never installs a document, while this one
-       needs §3.7.6's and §3.7.7's — every member is on its prototype — which is true of every realm exactly at
-       the end of this loop, because an interface that carries an [Unscopable] row declares its install here and
-       defines its members in the same function that tags its prototype. core/idl_args.c owns the question; what
+       not at the owed-half entry, and the difference is a population rather than a preference: that entry
+       states §3.8's condition and is reached only where no further placement will happen — the worker arm above
+       and core/platform.c's document column for a Window — while this one needs §3.7.6's and §3.7.7's — every
+       member is on its prototype — which is true of every realm exactly at the end of this loop, because an
+       interface that carries an [Unscopable] row declares its install here and defines its members in the same
+       function that tags its prototype. core/idl_args.c owns the question; what
        this line states is the ORDERING fact, which is this file's to state and not that one's. */
     idl_assert_unscopables_name_members(ctx);
 #endif

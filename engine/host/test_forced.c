@@ -10412,18 +10412,22 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
        standard never lets a WorkerGlobalScope reach. */
     realm_install_intrinsics(worker, NULL, "DedicatedWorkerGlobalScope", owner_secure);
     realm_install_intrinsics(worker_insecure, NULL, "DedicatedWorkerGlobalScope", !owner_secure);
-#if APICLIENT_DEV
-    /* AND THESE TWO REALMS ARE FINISHED, WHICH IS A STATEMENT ONLY THIS LINE CAN MAKE. core/realm.h's owed
-       half — every interface object a realm owes is one some component asked Web IDL §3.8 for — may be asked
-       only where no further placement will happen, and its other caller is core/platform.c's per-document
-       column, which a WorkerGlobalScope realm never reaches. So without these two calls the assertion has no
-       worker realm to run over at all, and the realm kind whose surface Web IDL §3.3.7 [Exposed] step 1 exists
-       to make different would be the one kind it never judges. The pair is also what exercises the step 1
-       skip: a Window-only interface whose prototype a per-realm intrinsic built here is owed no property, and
-       an assertion that demanded one would fire on a correct realm. */
-    realm_assert_interface_objects_asked(worker);
-    realm_assert_interface_objects_asked(worker_insecure);
-#endif
+    /* AND THESE TWO REALMS ARE FINISHED, WHICH USED TO BE A STATEMENT ONLY THIS FIXTURE COULD MAKE. Two calls
+       to core/realm.h's owed half — every interface object a realm owes is one some component asked Web IDL
+       §3.8 for — stood here, on the argument that it may be asked only where no further placement will happen
+       and that its other caller is core/platform.c's per-document column, which a WorkerGlobalScope realm
+       never reaches. Every clause of that is still true and the CONCLUSION is retired: which end finishes a
+       realm is decided by the realm's [Global] KIND, so realm_install_intrinsics asks it on its worker arm and
+       these two lines were the second copy of an answer that call already derives.
+       THEY ARE DELETED RATHER THAN KEPT AS A BELT, and the reason is what the deletion measured: a worker realm
+       is built at more than one site in this file, and the LATER site never carried the call — so the axis read
+       as covered while that realm was judged by nothing. A per-realm line a host can forget is exactly the
+       shape core/realm.h's banner exists to abolish, and keeping a correct copy beside the derived one would
+       leave the next builder with the same line to remember.
+       WHAT THE PAIR BOUGHT IS BOUGHT BY THE DERIVED CALL AND IS WORTH RESTATING, because it is the reason the
+       worker arm is not decoration: these realms exercise Web IDL §3.3.7 [Exposed] step 1's SKIP — a
+       Window-only interface whose prototype a per-realm intrinsic built here is owed no property on a worker
+       global, and an assertion that demanded one would fire on a correct realm. */
     win_global = JS_GetGlobalObject(win);
     worker_global = JS_GetGlobalObject(worker);
     /* AND NO DOCUMENT HAS BEEN INSTALLED OVER THE REALM THE WINDOW COLUMN IS ABOUT — the ONE precondition

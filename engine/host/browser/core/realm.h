@@ -208,10 +208,22 @@ void realm_assert_global_property_references(JSContext *ctx);
  * realm's construction is free; owed ⇒ asked is not monotone, and at the end of realm_install_intrinsics a
  * WINDOW realm legitimately holds interface prototype objects whose property reference core/platform.c's
  * per-document column has not placed yet. `CSSRuleList` is one: tagged by a per-realm intrinsic, asked for by
- * the document column. So there is no derivation inside this function that could tell the two ends apart —
- * the fact lives in the caller, and the caller states it by calling THIS entry rather than the other one.
+ * the document column. So there is no derivation inside that WALK which could tell the two ends apart.
  * Derive the split rather than trusting a number here: `node engine/placeaudit.mjs` prints how many identifier
  * placements each column makes.
+ *
+ * AND FOR ONE REALM KIND THE FACT IS NOT THE CALLER'S AT ALL, WHICH IS THE SENTENCE THAT USED TO STAND HERE
+ * RETIRED RATHER THAN DELETED — it read that the fact lives in the caller and the caller states it by calling
+ * this entry rather than the other one, and a reader who re-derives it from the paragraph above will re-add it.
+ * WHICH end finishes a realm is decided by the realm's [Global] KIND and by nothing a host knows that this file
+ * does not: a WorkerGlobalScope realm is finished when realm_install_intrinsics returns, so THAT function asks
+ * this entry on its worker arm and no host may state it. The caller half survives for a WINDOW realm, whose
+ * second end is core/platform.c's per-document column and whose completion this file cannot see.
+ * THE MEASURED REASON IS THAT THE HAND-COPIED FORM DID NOT HOLD: every worker realm goes through the one call,
+ * the audit was a separate line each builder had to remember, and one builder carried it while a later one did
+ * not — so the realm kind Web IDL §3.3.7 [Exposed] step 1 exists to make different read as audited while the
+ * newer site's realm was judged by nothing. A per-realm line a host can forget is what this file's own banner
+ * exists to abolish, and an ASSERTION is not exempt from that because it asserts rather than installs.
  *
  * DEV ONLY, and the two note entries with it: they build a per-realm census object per realm, which is work
  * rather than a side-effect-free test, so the block and not merely the DCHECK is compiled out. A caller guards
@@ -237,7 +249,11 @@ JSValue realm_interface_prototype_object(JSContext *ctx, const char *iface);
    idl_install_interface_object_exposed, before §3.3.7 step 2. Recorded BEFORE either refusal, because a
    refusal is the standard answering and not a component failing to ask. */
 void realm_note_property_reference_asked(JSContext *ctx, const char *id);
-/* The assertion over the two. ONLY where no further §3.8 placement will happen in this realm — see above. */
+/* The assertion over the two. ONLY where no further §3.8 placement will happen in this realm — see above.
+   TWO CALLERS, AND ONLY ONE OF THEM IS A HOST: realm_install_intrinsics asks it on its WORKER arm, because that
+   is where a WorkerGlobalScope realm's construction ends; core/platform.c asks it at the end of the
+   per-document column, because that is where a WINDOW realm's does. A worker-realm builder that also asks it
+   is a second copy of an answer this file already derives. */
 void realm_assert_interface_objects_asked(JSContext *ctx);
 #endif
 
