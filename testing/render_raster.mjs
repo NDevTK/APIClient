@@ -298,11 +298,23 @@ function splitPending(line) {
      RECORD'S DECLARED ABSENCE with a named reason (a decline, or Fetch §5.6's network error) rather than
      substituting a value for a missing field, so neither is the `catch {}` CLAUDE.md §A-FIELD-A-CONSUMER-
      DEFAULTS names beside `|| 0`. `url` is also read UNGUARDED in `decline` above, so its presence is already
-     load-bearing here on a path no catch covers. NO NON-EMPTY CHECK IS ADDED: engine_pending_split is the
-     authority on this grammar and asserts the SEPARATORS, not the field contents, and a JS side asserting
-     more than the producer does would be one contract stated two ways with the stricter copy here.
-     RETIREMENT: this record goes when that producer asserts each field's own extent, because the JS side's
-     count check is then the same statement and there is nothing left to say about which side is stricter. */
+     load-bearing here on a path no catch covers. NO NON-EMPTY CHECK IS ADDED, AND THE REASON THAT
+     STOOD HERE — that engine_pending_split "asserts the SEPARATORS, not the field contents" — IS KEPT
+     BECAUSE A READER RE-DERIVES IT AND IS FALSE OF THIS PRODUCER AT BOTH OF ITS ENDS. That splitter DCHECKs
+     the CONTENTS of destination, initiator, provenance and pinned against engine.h's own enumerations and
+     asks fetch_credentials_of_token for the fifth; and the field is not born there but at the JOIN, where
+     engine_pending_fetches asserts method (non-NULL, method_is_token), destination and credentials, asserts
+     `url`'s OWN extent — no TAB and no NEWLINE, URL Standard §4.4 URL parsing having removed both — and
+     SKIPS outright any entry whose url is not a string. So the presence read on this side is stated at BOTH
+     ends, and the producer is not the lax party that sentence described; what survives of it is only its
+     SHAPE, that a content check stated on this side alone would be one contract stated twice with the
+     stricter copy here. WHICH LEAVES EXACTLY ONE FIELD CONTENT NO ASSERT ANYWHERE REFUSES, and it is the
+     park's to refuse rather than this side's. NOT COVERED: an EMPTY `url`, which is not a page's bytes but
+     pending_park_request having stored an empty address. NEXT DIFF: a DCHECK there refusing one, naming the
+     algorithm that owes an address. HOW ITS ABSENCE SHOWS: a decline whose `why` reads `unparseable
+     address` beside a log entry whose own `url` is the empty string — the bytes called unparseable being
+     none. RETIREMENT: this record goes when that park refuses an empty address, because `new URL` can then
+     fail here only on bytes a PAGE composed, which is the refusal this decline already is. */
   return { method: f[0], destination: f[1], initiator: f[2], provenance: f[3],
            pinned: f[4], credentials: f[5], url: f[6] };
 }
