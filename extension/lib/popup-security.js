@@ -212,6 +212,33 @@ function _encodeSentence(item) {
 // queue to count. A `0` written there would read as "nothing executable" when it means "nothing to queue" —
 // which is why this reads the absence positively rather than defaulting it.
 function _parkedProgress(item) {
+  // THE ONLY FACT ON THIS RECORD ABOUT A CANDIDATE'S OWN TERMINATION, AND IT HAD NO READER ANYWHERE — solve.c
+  // emitted it, `git grep -l -F candEnds` answered that one file tree-wide, and §@S: an observation with a
+  // computed writer and no reader is not a mechanism. It is the SAME shape as `witnessed` above it and was
+  // found the same way, by the record-field contract audit, which reported it as a name a producer emits and
+  // nothing reads. Every other numeric field of this record has a reader in this file; this one did not.
+  // ASSERTED AND NEVER DEFAULTED, WHICH THE PRODUCER'S OWN CONTRACT LICENSES: solve.c writes this row
+  // UNCONDITIONALLY and says so in as many words — "0 IS THE LOAD-BEARING VALUE: it is the state this engine is
+  // in, so an omission here would be the defect rather than a statement". So absence is not a positive fact the
+  // way `fires` and `survivedAt` are, and a `|| 0` here would turn a stale artifact into a plausible datum in
+  // the one arm below that is read as a conclusion. The TYPE is asserted and never the content: a search whose
+  // every flow is still live legitimately reads 0, and that arm is the load-bearing one.
+  // AND THE CURRENTLY INSTALLED ARTIFACT DOES NOT CARRY IT, WHICH IS A STALE ARTIFACT AND NOT AN UNLANDED
+  // PRODUCER — checked by CONTENT with both controls armed, never by timestamp, which is how the
+  // `runwayPerMille` note below checks the same thing: `candEnds` occurs 0 times in extension/lib/qjs/qjs.wasm
+  // while `runwayPerMille`, `survivedOf`, `witnessed`, `substituted` and `resumedWithdrawn` each occur and an
+  // invented name occurs 0, and the reason is that the artifact's own stamp names a revision whose solve.c
+  // contains the string 0 times and which is 73 commits behind the branch. So the producer half is LANDED and
+  // what lags is an INSTALL. THE OBSERVATION THAT RETIRES THE DEFERRAL and the act that makes it true, because
+  // an observation with no actor reads as merely pending: `candEnds` occurring in extension/lib/qjs/qjs.wasm,
+  // which becomes true when whoever owns the builds installs an artifact of a revision containing the emit —
+  // no edit here can make it true and none is owed.
+  DCHECK(typeof item.candEnds === "number",
+         "a parked search arrived with no candEnds — solve_json_array writes that row unconditionally on every " +
+         "parked entry and states that its 0 is the load-bearing value, so an absence is this seam's contract " +
+         "broken rather than a fact about the search. Either the installed artifact predates the row, in which " +
+         "case install one of a revision that emits it, or the producer has stopped writing it and the two " +
+         "readings this card splits on below have gone back to being one sentence.");
   var held = 'its candidates have held the thread ' + item.turns + ' time' + (item.turns === 1 ? "" : "s");
   // …AND WHICH SEGMENT THAT WAS, WHICH IS THE HALF A SIZE CANNOT SAY AND THE HALF A MUTATION ACTS ON.
   // `survivedAt` is the offset into the CANDIDATE at which the longest surviving run begins (solve.h), so the
@@ -404,8 +431,26 @@ function _parkedProgress(item) {
   if (item.substituted === 0)
     return held + ' and NOT ONE of them reached its own SOURCE READ — the substitution is performed where the '
          + 'page reads the attacker source, and it has never once happened for this search, so these bytes '
-         + 'have never been in the page\'s program at all. That is a question about the PATH in front of the '
-         + 'source, and the runway says WHICH question: '
+         + 'have never been in the page\'s program at all. '
+         // AND WHICH QUESTION THAT IS, WHICH THIS SENTENCE ASSERTED OUTRIGHT AND IS NOT THIS CARD'S TO DECIDE.
+         // It read `That is a question about the PATH in front of the source`, and the producer's own banner
+         // says that reading needs `candEnds` beside it: with no flow of this search ENDED, nothing it has run
+         // got there and nothing in front of the source has been shown to turn anything away, so the work is
+         // THREAD and not a gate to find — solve.c calls that "the load-bearing one". The retired clause is
+         // kept in its own words because the arithmetic invites it: a search that has never substituted LOOKS
+         // like a search something is refusing, and the two states take opposite work.
+         // `candEnds:N` LICENSES THE PATH READING AND NOTHING MORE. It says at least one flow ended short of
+         // the read; it does not say all of them did, because a candidate session is a TREE of flows and N ends
+         // against N seeds can be one candidate that forked N times — solve.c records that over-reading as a
+         // clause it retired, and this card must not re-commit it one consumer over.
+         + (item.candEnds === 0
+            ? 'NOT ONE FLOW of this search has ENDED, so nothing has been shown to turn anything away and this '
+              + 'is a question about the SCHEDULE rather than a gate to find — the runway readings that follow '
+              + 'are about flows still LIVE and short of the read, never about a stop: '
+            : item.candEnds + ' of its flows have ENDED short of that read, so something in front of the source '
+              + 'is turning them away and this IS a question about the PATH — though not that ALL of them are '
+              + 'done, since a candidate session forks and these count flow finishes against seeds. The runway '
+              + 'says WHICH question: ')
          + (item.runwayPerMille === 0
             ? (item.runwayArms === 0
                ? 'this search was never offered a recorded path at all — the flow that detected the sink '
