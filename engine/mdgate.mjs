@@ -237,6 +237,11 @@ const base = (BASE_ARG || BASE.sha)
 const baseParas = base.text === null ? null : readFile(base.text);
 const scoped = baseParas !== null;
 
+/* THE BASE AS ONE FLAT STRING, hoisted here because TWO channels now ask it the same question and a second
+   spelling of `norm(base.text)` is the second copy this project's own rule is about. The record channel asks
+   whether a RUN was already there; the unreadable-touched band below asks whether a PARAGRAPH was. */
+const baseFlat = scoped ? norm(base.text) : "";
+
 const runsRead = subject.reduce((a, p) => a + p.runs.length, 0);
 const headlines = subject.flatMap((p) => p.runs.filter(isHeadline).map((txt) => ({ n: p.n, txt })));
 const retOccurrences = subject.reduce((a, p) => a + (maskSpans(p.line).match(RETIREMENT_G) || []).length, 0);
@@ -301,7 +306,6 @@ if (scoped) {
      already there; making it parse as emphasis is a REPAIR and not a new argument. Without this, repairing an
      unterminated paragraph reads as dozens of records landing at once — measured on the commit that repaired
      two such paragraphs, 66 runs became newly parseable and every one of their texts was already in the base. */
-  const baseFlat = norm(base.text);
   const baseRets = new Set();
   for (const p of baseParas) for (const m of maskSpans(p.line).matchAll(RETIREMENT_TEXT)) baseRets.add(norm(m[1]));
   const byPara = new Map();
@@ -314,6 +318,29 @@ if (scoped) {
     if (!gained.length) recordFindings.push({ n, runs });
   }
 }
+
+/* ── AND THE ONE LANDING THE RECORD CHANNEL CANNOT SEE, WHICH UNTIL NOW PASSED IN SILENCE ─────────────────
+   A paragraph this gate cannot pair is filed as STANDING and carries no exit code, which is right: it was
+   here before this checkout and a gate that reddened every build over it would be the chronic-red furniture
+   CLAUDE.md measures the cost of. But the STANDING line states the hazard in its own words — A RECORD LANDING
+   IN THIS PARAGRAPH IS INVISIBLE TO THE RECORD CHANNEL — and nothing acted on it: the record channel reads
+   HEADLINES off the PAIRING, so in a swapped paragraph a landed headline reads as prose, contributes no entry
+   to `byPara`, and the condition check never runs. The PASS line then said the verdict "says nothing about"
+   those paragraphs, which was true and was printed UNDER a green exit code, so a record could land in one
+   unconditioned and unseen. That is the gate's own blind spot used as a route, and it is the flattering
+   direction: nothing downstream contradicts a pass.
+   THE REFUSAL IS SCOPED TO WHAT THE CHECKOUT TOUCHED, WHICH IS WHAT KEEPS IT FROM BEING A SWEEP. It selects a
+   paragraph that this gate cannot pair AND whose text is not in the base — so a checkout that leaves the four
+   alone still passes, nothing is listed as a work queue, and the only thing that becomes impossible is the one
+   act the record channel is blind to. That is CLAUDE.md's own retirement condition for this gate read
+   literally: "a record cannot land in a paragraph this check is unable to pair".
+   IT ASKS THE PARAGRAPH'S TEXT AND NEVER ITS INDEX. `baseOf` aligns by position, which a paragraph inserted
+   above silently shifts; an exact substring test against the base's flat text cannot be wrong that way, and it
+   is the discriminator the record channel already uses one block up.
+   RETIREMENT: this band goes when the subject has no paragraph this gate cannot pair, because it then selects
+   nothing — which is the MARKER repair itself and not an edit to this file. */
+const unreadableTouched = [...standingMarkers, ...incomparable]
+  .filter((p) => scoped && !baseFlat.includes(norm(p.line)));
 
 /* ── THE VERDICTS, NEVER SUMMED ───────────────────────────────────────────────────────────────────────────
    CLAUDE.md: "a gate states its FINDINGS and its BLIND SPOTS as separate verdicts, because an instrument that
@@ -365,10 +392,12 @@ if (!scoped) {
       `from another repository means a revision that repository still has.`);
   process.exit(1);
 }
-if (!introducedMarkers.length && !recordFindings.length) {
+if (!introducedMarkers.length && !recordFindings.length && !unreadableTouched.length) {
   log(`PASS (findings) — this checkout landed no emphasised record into ${MD_PATH} without a retirement ` +
-      `condition, and broke no paragraph's emphasis. That verdict covers the ${readable} paragraph(s) this ` +
-      `gate can pair and says nothing about the ${standingMarkers.length + incomparable.length} listed above.`);
+      `condition, broke no paragraph's emphasis, and CHANGED none of the ` +
+      `${standingMarkers.length + incomparable.length} paragraph(s) this gate cannot pair. That verdict ` +
+      `covers the ${readable} paragraph(s) it can pair, and it no longer has to say "nothing about" the rest: ` +
+      `an untouched unreadable paragraph carries no landing of this checkout's to be blind to.`);
   process.exit(0);
 }
 bad("FINDINGS — introduced by this checkout, and the exit code carries these:");
@@ -396,8 +425,17 @@ for (const { n, runs } of recordFindings) {
       `been built, which is a sweep target and never a removal licence.`);
   for (const r of runs) bad(`      + ${r.slice(0, 140)}`);
 }
+for (const p of unreadableTouched)
+  bad(`  ${MD_PATH}:${p.n}  CHANGED A PARAGRAPH THIS GATE CANNOT PAIR (${p.state.toUpperCase()}, ` +
+      `${p.markers} \`**\`) — this checkout edited it, and the record channel reads headlines off the ` +
+      `pairing, so ANY record landed here is invisible to the condition check and this gate cannot tell you ` +
+      `whether one was. It is refused rather than reported: a pass over a paragraph the instrument cannot ` +
+      `read is a verdict with no evidence under it. The repair is a MARKER and never a word, in THIS ` +
+      `landing — find the emphasised run whose closing \`**\` was consumed as the opener of the headline ` +
+      `appended after it — or move the record to a paragraph that pairs.`);
 bad(`FAILED — ${introducedMarkers.length} paragraph(s) whose emphasis this checkout broke, ` +
-    `${recordFindings.length} record(s) it landed with no retirement condition. There is no baseline to ` +
+    `${recordFindings.length} record(s) it landed with no retirement condition, ` +
+    `${unreadableTouched.length} it changed where this gate cannot read what landed. There is no baseline to ` +
     `update and no allowlist: the findings ARE the disagreement, and every one of them is in work this ` +
     `checkout has not published yet.`);
 process.exit(1);
