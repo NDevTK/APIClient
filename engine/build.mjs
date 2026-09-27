@@ -6720,10 +6720,29 @@ function coldRoundTripStages(bin, kind) {
      writes no bytes at all", so ABSENT and EMPTY are the same non-residue and a size is one of the two ways to
      ask. Reading it asks both at once and costs nothing at this size — the document is a few hundred bytes. */
   const residue = existsSync(store) && readFileSync(store, "utf8").trim().length > 0;
+  /* AND THE SKIP REASON CARRIES SESSION ONE'S TERMINAL EVENT, BECAUSE AN ABSENT DOWNSTREAM LOG IS A FACT ABOUT
+     THE UPSTREAM STAGE AND IS READ AS A VERDICT ON THE DOWNSTREAM ONE. The paragraph above is right that the
+     dependency is the RESIDUE rather than session ONE's exit code, and it stops one question short: with the
+     residue named as the reason, "session ONE wrote no residue" is TRUE and hides two causes that take
+     OPPOSITE work. Session ONE ABORTED, so no document ran and this absence says nothing whatever about the
+     RESUME — the reader is owed the abort and nothing else. Or session ONE RAN and parked nothing, which is a
+     finding about the PARK and sends the reader to its own `@H park-*` rows. Measured, and the wrong one was
+     relayed: four frozen snapshots carried no `run-session-TWO-cold-resume.log`, and its absence was reported
+     as evidence that cross-session RESUME had regressed — over a population in which that stage PASSES in 8
+     of the 8 logs it appears in and has never once failed. Session ONE was aborting in all four, at two
+     different asserts, and reading ITS log is what separated them. `abortRecord` already held the fact, on
+     bytes this caller already holds; only the reason was not reading it, so the skip line — the one line that
+     travels into a report — named the casualty and not the cause. */
+  const oneAbort = v1.captured ? abortRecord(v1.captured) : null;
   const v2 = bin === null
     ? skipped("session TWO (--cold-resume)", "the native program did not link")
     : !residue
-    ? skipped("session TWO (--cold-resume)", "session ONE wrote no residue for it to resume from")
+    ? skipped("session TWO (--cold-resume)",
+              "session ONE wrote no residue for it to resume from, " + (oneAbort
+                ? "BECAUSE SESSION ONE ABORTED — so no document ran and this skip is evidence about the PARK " +
+                  "and about nothing in the resume: " + oneAbort
+                : "and session ONE did NOT abort — so it ran and parked nothing, which is a finding about the " +
+                  "park itself (read its `@H park-*` rows) and not about the resume"))
     : runChild("session TWO (--cold-resume)", bin, ["--cold-resume", store],
                "the round-trip line below says what it rebuilt out of the residue; a kind session one " +
                "wrote and this one did not rebuild is the arm to look at.");
