@@ -822,11 +822,15 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
          HOW ITS ABSENCE WOULD SHOW: a reply whose header list names a parseable `Content-Type` while its
          `computedType` is empty — a pair the sniff's final arm cannot produce, and the first thing a head-before-body
          producer would emit.
-         AND THAT PRODUCER HAS EXACTLY ONE CONSUMER, WHICH DECIDES WHICH LANDING MINTS THE VALUE AND IS WHY THE
-         CLAUSE ABOVE SAYS `nothing here` RATHER THAN `not yet`. The head-before-body producer is NOT part of
-         the chunk seam core/xhr/xml_http_request.c's XR_LOADING residual names: XHR sets XHR_HEADERS_RECEIVED
-         out of a reply it already holds WHOLE, so it needs a body that GROWS and never a head that arrives
-         FIRST. The only algorithm in this tree that cannot synthesize the head is HTML §9.2.2 "The EventSource
+         AND EXACTLY ONE CONSUMER IS BLOCKED WITHOUT THAT PRODUCER, WHICH DECIDES WHICH LANDING MINTS THE VALUE
+         AND IS WHY THE CLAUSE ABOVE SAYS `nothing here` RATHER THAN `not yet`. BLOCKED and not WANTED is the
+         whole of the distinction, and the weaker word is the one that picks the landing: the head-before-body
+         producer is NOT part of the chunk seam core/xhr/xml_http_request.c's XR_LOADING residual names, and
+         XHR would nonetheless BENEFIT from it — its stage machine already has `processResponse` and
+         `processBodyChunk` as SEPARATE stages (XR_RESPONSE before XR_LOADING) and feeds BOTH from the one
+         whole reply XR_WAIT waits for, so its XHR_HEADERS_RECEIVED fires at the wrong time. Wrong, and not
+         BLOCKED: it synthesizes that state and proceeds. The only algorithm in this tree that CANNOT
+         synthesize the head is HTML §9.2.2 "The EventSource
          interface"' constructor step 15, which puts its refusal and its announce in `processResponse` — "if
          res's status is not 200, or if res's `Content-Type` is not `text/event-stream`, then fail the
          connection. Otherwise, announce the connection and interpret res's body line by line." — and an event
