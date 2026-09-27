@@ -137,23 +137,56 @@ char *quantum_json(void)
    Both are facts about the transport (quantum.h names the requirement that would change them), so what is
    built here is the honest thing this host CAN do: the slice is measured on the only clock it has, and the
    claim that this clock is not a CPU clock is CHECKED rather than assumed.
-   AND THE MISSING EDGE IS ONE OF TWO POPULATIONS THAT CAN HOLD THE THREAD PAST THE BUDGET, NOT THE WHOLE GAP,
-   which is stated where the fact lives (quantum.h) and repeated here only as a bound on what this heading
-   claims: the edge is what a straight-line, call-free, fork-free basic block evades, and a C ACTIVATION THAT
-   DECLARES NO STEP BOUNDARY evades the budget on BOTH hosts alike, because the request byte is answered at a
-   DISPATCH and such an activation performs none however the request was raised. A heading that names one
-   host's absence is otherwise read as the other host having none. */
+   AND THE HEADING NAMES AN ABSENCE THAT COSTS ALMOST NOTHING, WHICH IS THE BOUND IT IS REPEATED HERE FOR.
+   quantum.h names the two populations that can hold the thread past the budget. (a) A straight-line,
+   call-free, fork-free basic block is CLOSED — not by an edge but by `133f190`'s dispatch-periodic raise,
+   installed under no host #ifdef, so this host evaluates the slice every ENGINE_QUANTUM_ASK_EVERY dispatches
+   whatever shape the page's bytecode takes. (b) A C ACTIVATION THAT DECLARES NO STEP BOUNDARY evades the
+   budget on BOTH hosts alike, because the request byte is answered at a DISPATCH and such an activation
+   performs none however the request was raised — the native host, with a real per-thread CPU timer, has it
+   identically. So what this heading's `no asynchronous edge` costs is neither (a) nor (b): it is the interval
+   between a long activation returning and the countdown next reaching zero, which solver/engine.h's own
+   derivation of ENGINE_QUANTUM_ASK_EVERY prices under one percent of the slice.
+   THE SENTENCE THAT STOOD HERE SAID THE EDGE IS WHAT (a) EVADES, and it is kept because it was true before
+   `133f190` and is what a reader re-derives from the heading: an absence named at the top of a branch reads
+   as the whole of that branch's gap, and nothing in a heading can say how large it is. A heading that names
+   one host's absence is otherwise read as the other host having none. */
 #if defined(__EMSCRIPTEN__)
 
-/* THE DAY THE TRANSPORT ARRIVES, THIS BRANCH IS THE WRONG ONE, AND A BUILD IS THE CHEAPEST PLACE TO SAY SO.
-   Shared linear memory is the whole of what the asynchronous edge is missing here (quantum.h), so a link that
-   HAS it must not quietly keep the polling-only host beside it: the slice would still be evaluated only at
-   whichever raise the page's own bytecode happens to reach, and the flag would look like it had bought
-   something. */
+/* A LINK THAT GAINS SHARED MEMORY IS A STATE SOMEBODY CHOSE, AND THE ONE THING IT MUST NOT DO IS ARRIVE
+   QUIETLY — SO THIS STAYS AN #error AND ITS REMEDY CLAUSE IS THE PART THAT IS REWRITTEN.
+   IT USED TO READ, AND IS KEPT IN ITS OWN WORDS BECAUSE A READER WHO RE-DERIVES IT FROM `-pthread` WILL WRITE
+   IT AGAIN: "this wasm link HAS shared memory, so the cooperative quantum can finally have an asynchronous
+   edge — build the watchdog thread (it stores the yield request through the address of the main thread's own
+   thread-local copy of that byte; see quantum.h) rather than linking this polling-only branch", over a comment
+   whose reason was that otherwise "the slice would still be evaluated only at whichever raise the page's own
+   bytecode happens to reach". THAT REASON WAS RETIRED BY `133f190` AND THIS SITE WENT ON GIVING IT, which is
+   §A-FIX-THAT-RETIRES-AN-ARGUMENT: that commit's code delta was a hook and a gate, and it made this crash's
+   remedy false in a file the commit never opened. The slice is now evaluated every
+   ENGINE_QUANTUM_ASK_EVERY dispatches by a raise installed under NO host #ifdef (solver/engine.c's
+   FC_EXPLORE/FC_VERIFY .budget), so the polling-only branch is not the wrong one under shared memory — it is
+   the same branch, correct for the same reason, with one raise source it does not have.
+   WHAT A WATCHDOG THREAD WOULD ACTUALLY BUY, AS A BOUND RATHER THAN A DIRECTION, because a crash that sends
+   its reader to build something owes them the size of it. quantum.h names the two populations that hold the
+   thread past the budget: (a) a straight-line, call-free, fork-free basic block, which the dispatch-periodic
+   raise CLOSED; and (b) a C activation that declares no step boundary, which performs no dispatch and so
+   answers no poll HOWEVER the request was raised — the native host has (b) identically, with a real per-thread
+   CPU timer. Neither is a thread's to close. What is left is the interval between a long activation returning
+   and the countdown next reaching zero, which solver/engine.h's own derivation of ENGINE_QUANTUM_ASK_EVERY
+   prices at "tens of microseconds against a twelve-millisecond slice", plus the clock read that derivation
+   amortises — both stated there as under one percent of the slice.
+   SO WHAT THIS CRASH ASKS FOR IS A CONSUMER AND NOT A THREAD. CLAUDE.md's test on a decomposition is to name
+   the CALL that will consume each member and confirm it exists; for the shared-memory grant on this link there
+   is none, and `-pthread` additionally costs what emscripten's own tools/link.py warns about by name
+   (`pthreads-mem-growth`, which rewrites every HEAP access in the glue into a growMemViews() call) on the
+   byte path the production ABI runs on. NAME THE CONSUMER IN THIS FILE BEFORE DELETING THIS #error, and
+   correct quantum_measure()'s string in the same diff — it asserts "this wasm link has no shared memory", a
+   claim this #error is the whole of what makes true.
+   AND THE CONSUMER MAY NOT BE CROSS-INSTANCE COW: see quantum.h, where that clause is retired. */
 #if defined(__EMSCRIPTEN_SHARED_MEMORY__)
-#error "solver/quantum.c: this wasm link HAS shared memory, so the cooperative quantum can finally have an \
-asynchronous edge — build the watchdog thread (it stores the yield request through the address of the main \
-thread's own thread-local copy of that byte; see quantum.h) rather than linking this polling-only branch."
+#error "solver/quantum.c: this wasm link HAS shared memory and nothing in this file uses it. The comment \
+above states what a watchdog thread would and would not close and what quantum_measure() asserts about this \
+link; name the consumer here, correct that string, and delete this. Do not delete it to make a link build."
 #endif
 
 static int64_t g_slice_start_us;
@@ -185,7 +218,11 @@ int64_t quantum_thread_us(void)
    for Window objects"' conjunction, whose default allowlist is 'self' and which therefore has to be DELEGATED
    — which extension/renderer-host.js now does with `allow="cross-origin-isolated"`, beside a manifest shipping
    COOP `same-origin` and COEP `require-corp`. So the wording below no longer says this realm can never be
-   isolated; it says what remains true, which is that THIS LINK has no shared memory to hand a thread.
+   isolated. THIS SENTENCE THEN SAID IT SAYS `what remains true, which is that THIS LINK has no shared memory
+   to hand a thread`, AND THAT HALF IS RETIRED TOO, in the same direction and one step later: the link really
+   has no shared memory, and naming a THREAD as what the absence denies is the retired remedy arriving through
+   a description of the string rather than through the string. The wording below states the DENOMINATION and
+   when the clock is read, and names no thread at all.
    AND THE WORDING IS THE ONLY THING THAT MOVED. `quantum_measure_is_cpu` still answers 0 and the slice is
    still wall-denominated on this host, because a grant is not a clock: what a shared memory would buy is a
    thread that can raise the request, and extension/renderer.html's residual records that the population such a
@@ -197,10 +234,17 @@ int64_t quantum_thread_us(void)
    interpolates this string into JSON unescaped. */
 const char *quantum_measure(void)
 {
-    return "wall (this host has NO cpu clock and NO asynchronous edge — this wasm link has no shared memory, "
-           "so no watchdog thread can be handed the memory it would raise the request through, and the slice "
-           "is bounded by the wall clock read at whichever back-edge, call or dispatch the flow next reaches; "
-           "see solver/quantum.h)";
+    /* AND THE REMEDY CLAUSE IS GONE FROM IT, WHICH IS THE SECOND SITE `133f190` LEFT BEHIND IN THIS FILE. It
+       read "this wasm link has no shared memory, so no watchdog thread can be handed the memory it would
+       raise the request through", and it is kept here rather than in the string because a string printed on
+       every stage line of every build is the widest-read prose this component has: a remedy in it is a
+       standing instruction to a population that never asked, and this one names a thread that closes neither
+       open population (see the #error above). What the string keeps is the DENOMINATION and the one fact a
+       reader of a number needs — WHEN the wall clock is read — which is what quantum.h says this field is
+       for and what it says a coverage fact in it would spoil. */
+    return "wall (this host has NO cpu clock and NO asynchronous edge — the slice is bounded by the wall "
+           "clock read at whichever back-edge, call, fork or periodic dispatch the flow next reaches, and "
+           "the periodic one is unevadable by the page's own code shape; see solver/quantum.h)";
 }
 
 int quantum_measure_is_cpu(void) { return 0; }

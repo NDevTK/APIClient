@@ -430,8 +430,16 @@
        defined. The WATCHDOG THREAD is retired as a reason — renderer.html's own residual records that
        `133f190`'s dispatch-periodic raise closed the population a watchdog would have closed, and that the
        population still open is one no raise mechanism reaches — so the flip's benefit is not the quantum's and
-       is not claimed here. What it makes buildable is CLAUDE.md §AN-INSTANCE-IS-AN-ORIGIN-KEYED-AGENT-CLUSTER's
-       cross-WASM COW synchronisation, whose transport is one shared linear memory between two instances. */
+       is not claimed here. AND THE CONSUMER THIS SENTENCE NAMED IS STRUCK, kept in its own words because a
+       reader re-derives it from `two instances` and `one delta`. It read: what it makes buildable is CLAUDE.md
+       §AN-INSTANCE-IS-AN-ORIGIN-KEYED-AGENT-CLUSTER's cross-WASM COW synchronisation, whose transport is one
+       shared linear memory between two instances. That section says a different-origin instance may be
+       REMOTE, and that what crosses an instance boundary is a CLOSED set of WindowProxy, Location and
+       serialized messages; SECURITY.md says one WASM instance per ORIGIN-KEYED AGENT CLUSTER, keyed on
+       (browsing-context group, origin), with ISOLATED MEMORY, over a sandbox it calls attacker-controlled. One
+       address space across two instances is a page of one origin reading another's whole heap through the
+       boundary THIS FILE mints the frame to state, so it is the boundary removed rather than a transport.
+       The flip's benefit is therefore not claimed here at all — renderer.html carries the full argument. */
     f.setAttribute("allow", "cross-origin-isolated");
     /* THE ROUTING ID LEADS THE TITLE because the cluster key's own separator is a NUL, which every console and
        every element inspector renders as nothing at all — so a document holding several renderers showed a

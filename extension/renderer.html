@@ -567,12 +567,26 @@
        no shared memory anywhere in it; and population (b), a C activation that performs no dispatch, answers no
        poll however the request was raised, so the transport does not close it either. A reader who acted on the
        retired sentence would have built a thread for a gap that is shut and a gap it cannot reach.
-       WHAT THE GRANT IS ACTUALLY FOR IS A DIFFERENT SUBSYSTEM, AND THE RESIDUAL BELOW COULD NOT SEE IT BECAUSE
-       IT WAS ONLY EVER ASKING ABOUT THE QUANTUM. CLAUDE.md §AN-INSTANCE-IS-AN-ORIGIN-KEYED-AGENT-CLUSTER makes
-       cross-WASM COW synchronisation a REQUIRED mechanism — a flow whose world spans two instances has ONE
-       delta that must apply, unapply and park across both — and two renderer instances that can hold one shared
-       linear memory are the transport for it. That is a claim about what becomes BUILDABLE and not one about
-       what is built; nothing consumes the grant today, and this file says so rather than implying otherwise.
+       THE GRANT HAS NO CONSUMER, AND THE ONE THIS FILE NAMED IS FORBIDDEN BY THE SECTION IT CITED. The
+       sentence is kept in its own words because it is what a reader re-derives from `two instances` and
+       `one delta`. It read: CLAUDE.md §AN-INSTANCE-IS-AN-ORIGIN-KEYED-AGENT-CLUSTER makes cross-WASM COW
+       synchronisation a REQUIRED mechanism — a flow whose world spans two instances has ONE delta that must
+       apply, unapply and park across both — and two renderer instances that can hold one shared linear memory
+       are the transport for it. The premise is exact and the transport is not: that same section says a
+       different-origin instance may be REMOTE (the native host provisions its peer as a CHILD PROCESS over
+       a pipe, which has no address space to share), that what crosses an instance boundary is a CLOSED
+       set of WindowProxy, Location and serialized messages, and that what crosses is TEXT carrying its
+       TYPE, because a live JSValue crosses neither a process, nor an instance, nor a session, nor a park.
+       SECURITY.md settles it from the other side, over a sandbox its own heading calls attacker-controlled:
+       one WASM instance per ORIGIN-KEYED AGENT CLUSTER, keyed on (browsing-context group, origin), with
+       ISOLATED MEMORY.
+       One address space across two instances is a page of one origin reading the whole heap of another
+       through the boundary this document's opaque origin exists to state, so it is not a narrower version of
+       the right answer — it is the boundary removed. Cross-WASM COW sync is required and its transport is the
+       serialized one the instance seam already carries.
+       SO NOTHING CONSUMES THE GRANT, AND THAT IS WHAT THIS FILE SAYS. It is not a gap: the two populations
+       below are closed and unreachable respectively, and the only other thing the grant was ever offered for
+       is the design struck above.
        THE ORIGINAL READINGS ARE KEPT BELOW UNALTERED, because they are correct about the cells they cover and
        are what a reader compares the widened factorial against.
        MEASURED on real Chrome, one browser per case with the IndexedDB cleared, every reading taken beside an

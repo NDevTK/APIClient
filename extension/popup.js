@@ -2162,14 +2162,22 @@ function renderEngineRuns() {
     /* AND WHAT THAT ORDER WAS DENOMINATED IN — solver/quantum.h's `_quantum`, relayed whole by bridge.js and
        rendered HERE, immediately under the order, because it is the fact that decides whether the order above
        may be compared with another run's at all. A person reading this panel is doing exactly one thing with
-       two rows of it: comparing them. On the host this extension runs — the engine's realm is an opaque
-       origin, so it is neither the extension origin nor ever isolated, and a shared-memory transfer needs one
-       of those two, which is what denies it the watchdog thread a CPU-clocked slice would need (the isolation
-       flag alone was the reason this clause used to give; solver/quantum.h records why that step does not
-       hold) — solver/engine.c's `flow_age_running` charge is billed in WALL TIME, and that charge is a
+       two rows of it: comparing them. On the host this extension runs — a wasm link carrying no `-pthread`,
+       so this engine's linear memory is an ordinary ArrayBuffer and nothing outside the flow's own
+       instruction stream can raise its yield request — solver/engine.c's `flow_age_running` charge is billed
+       in WALL TIME, and that charge is a
        comparison BETWEEN flows, so a descheduling the OS chose lands on whichever flow was running and moves
        its rank alone. Two runs of ONE build over ONE page then take different frontier orders. Without this
        sentence the only available reading of that is "the engine changed", which is the one thing it is not.
+       AND THE REASON THIS CLAUSE USED TO GIVE IS RETIRED, kept in its own words because the browser's own
+       DataCloneError invites it and a reader will re-derive it from the opaque origin: `the engine's realm is
+       an opaque origin, so it is neither the extension origin nor ever isolated, and a shared-memory transfer
+       needs one of those two, which is what denies it the watchdog thread a CPU-clocked slice would need`.
+       That realm IS isolated now (manifest COOP `same-origin` + COEP `require-corp` + renderer-host.js's
+       `allow="cross-origin-isolated"`, with renderer.html asserting on the ACT), and the clause additionally
+       conflated two things: a WATCHDOG THREAD is a raise source and not a clock, so it could not have bought a
+       CPU-clocked slice at any value of COOP. What is billed in wall time is billed there because emscripten
+       answers every WASI clock from `emscripten_get_now()`, which solver/quantum.c CHECKS at the first slice.
        IT IS NOT A CENSUS ROW AND IS NOT RENDERED AS ONE. The three below are readings of an instant and are
        rendered generically from whatever rows they carry; this is three NAMED facts about the host, one of
        which is a string and one a boolean, so it is read by name — and it is written as a SENTENCE rather than

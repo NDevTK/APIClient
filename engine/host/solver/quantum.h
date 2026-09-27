@@ -129,12 +129,27 @@
  *         Cross-Origin-Opener-Policy: same-origin and a Cross-Origin-Embedder-Policy header whose value is
  *         compatible with cross-origin isolation".
  *         SO THIS BRANCH'S ABSENCE IS NOW A MANIFEST DECISION RATHER THAN A PROPERTY OF THE REALM, and the
- *         ordered work behind the flip is three things and not one: the COOP flip, `-pthread`/`-sSHARED_MEMORY`
- *         on the wasm link so this engine's own linear memory is shared (renderer.html records it as
- *         `[object ArrayBuffer]` today, which is a watchdog with nothing to store into), and the address of
- *         the main thread's own thread-local request byte exported for that thread to write. renderer.html's
- *         act-based DCHECK is what fires on the day the first lands, and it fires in the realm that would host
- *         the thing that has become buildable.
+ *         COOP flip has landed. THIS PARAGRAPH THEN LISTED THE REMAINING WORK AS `three things and not one:
+ *         the COOP flip, -pthread/-sSHARED_MEMORY on the wasm link so this engine's own linear memory is
+ *         shared (renderer.html records it as [object ArrayBuffer] today, which is a watchdog with nothing to
+ *         store into), and the address of the main thread's own thread-local request byte exported for that
+ *         thread to write`, and that list is kept in its own words because it is exactly what a reader
+ *         re-derives from the grant. It is an ORDERED WORK list for a thread that closes neither population
+ *         below, so it is a next-diff clause whose mechanism is sound and whose PURPOSE is spent.
+ *         WHAT THE LIST LEFT OUT IS WHAT DECIDES IT, and it is a fact about the link rather than about this
+ *         realm. `-pthread` on an EXPORT_ES6 link makes emscripten spawn its pool worker as
+ *         `new Worker(new URL(TARGET_JS_NAME, import.meta.url))`, and renderer.html imports the glue from a
+ *         `blob:` URL it revokes — resolving a relative reference against a blob base THROWS (measured, with
+ *         an https base as the control), so the module would fail to INSTANTIATE in the one realm that ships
+ *         it unless renderer.html also passes `Module.mainScriptUrlOrBlob` and the link widens
+ *         `INCOMING_MODULE_JS_API`, which does not carry that name by default. emscripten's own
+ *         tools/link.py additionally warns `pthreads-mem-growth` for `-pthread` beside this build's
+ *         `-sALLOW_MEMORY_GROWTH=1`, and rewrites every HEAP access in the glue into a `growMemViews()` call —
+ *         which is the byte path the production ABI runs on. A flag that costs that, on the shipped path, to
+ *         buy back the under-one-percent interval priced at the #error in quantum.c, is not a landing this
+ *         file can ask for without naming who consumes it.
+ *         renderer.html's act-based DCHECK is what fired on the day the COOP flip landed, and it fires in the
+ *         realm that would host the thing that has become buildable.
  *         AND THE REFUTATION WAS ALREADY IN THIS PARAGRAPH, UNSUBTRACTED FOR AS LONG AS THE RETIRED SENTENCE
  *         STOOD. The identical watchdog runs END TO END in the offscreen document at BOTH
  *         COOP values (worker created, memory transferred, Atomics.wait returned, its store read back on the
@@ -201,12 +216,35 @@
  *         request was raised, so no raise mechanism reaches it. extension/renderer.html carries that split as a
  *         named residual and its assert is now the other way up: it fires when a realm that STATES the
  *         capability was REFUSED it, which is this extension's own configuration being wrong rather than a
- *         capability arriving. The one outstanding item is the LINK, and it is not deferred in prose:
- *         quantum.c #errors if this branch is ever linked WITH shared memory, so the day `-pthread` and
- *         `-sSHARED_MEMORY` land, the build refuses until the thread that uses them exists. What the grant
- *         makes buildable is not this file's subject at all — it is CLAUDE.md
+ *         capability arriving. THE SENTENCE THAT STOOD HERE CALLED THE LINK `the one outstanding item` AND
+ *         SAID THE BUILD `refuses until the thread that uses them exists`, AND IT IS KEPT IN ITS OWN WORDS
+ *         BECAUSE A READER WHO RE-DERIVES IT FROM THE GRANT WILL WRITE IT AGAIN. It is wrong in the one
+ *         direction this file keeps having to correct: it makes a LINK FLAG the outstanding work and a THREAD
+ *         its purpose, when the thread closes neither population above and the flag has no consumer in this
+ *         tree. quantum.c's #error is unchanged in what it FIRES on and rewritten in what it ASKS FOR — it now
+ *         asks for the consumer to be named in that file and for quantum_measure()'s string to be corrected in
+ *         the same diff, and says so.
+ *         AND `WHAT THE GRANT MAKES BUILDABLE` NAMED A DESIGN CLAUDE.md'S OWN CITED SECTION FORBIDS, WHICH IS
+ *         WHY IT IS STRUCK RATHER THAN NARROWED. It read: it is CLAUDE.md
  *         §AN-INSTANCE-IS-AN-ORIGIN-KEYED-AGENT-CLUSTER's cross-WASM COW synchronisation, whose transport is
- *         one shared linear memory between two instances.
+ *         one shared linear memory between two instances. That is a next-diff clause in a named residual,
+ *         which CLAUDE.md rates as the clause a reader does not CHECK but EXECUTES, and the section it cites
+ *         refutes it three times over: a different-origin instance "may be remote" (the native host
+ *         provisions its peer as a CHILD PROCESS over a pipe, which has no address space to share);
+ *         "What crosses an instance boundary is then a CLOSED set — WindowProxy, Location, serialized
+ *         messages"; and "What crosses is TEXT and it carries its TYPE, because a live JSValue crosses neither
+ *         a process, nor an instance, nor a session, nor a park". SECURITY.md settles it from the other side —
+ *         "One WASM instance per ORIGIN-KEYED AGENT CLUSTER — (browsing-context group, origin), isolated
+ *         memory" — over a sandbox that section's own heading calls attacker-controlled, so one address space
+ *         across two instances is a page of one origin reading the whole heap of another through the boundary
+ *         the design exists to hold. Cross-WASM COW sync IS required; its transport is the serialized one this
+ *         engine already crosses instances with, and no design may be argued from the grant.
+ *         SO THIS FILE NAMES NO CONSUMER FOR THE GRANT, WHICH IS THE HONEST STATE AND NOT A GAP: the two
+ *         populations are closed and unreachable respectively, and a flag whose consumer nobody can name is
+ *         one CLAUDE.md's own decomposition test — name the CALL that will consume each member and confirm it
+ *         exists today — refuses as a first landing however deep it is.
+ *         RETIREMENT: this record goes when a consumer of shared memory is named at quantum.c's #error, because
+ *         a reader then meets the answer at the site that refuses rather than the argument here.
  *         AND THE ACT IS SMALLER THAN THE SENTENCE HERE USED TO DEMAND, WHICH MATTERS BECAUSE THE OLD ONE IS
  *         UNSPELLABLE IN HALF THE REALMS THAT WOULD RUN IT. This paragraph told its reader to confirm with a
  *         real postMessage of a shared WebAssembly.Memory — a second agent, asynchrony, and a `Worker` a
