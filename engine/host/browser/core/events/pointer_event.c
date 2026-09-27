@@ -56,8 +56,12 @@
  * core/dom/element.c carries Pointer Events 4 §4's members" — a clause naming a MECHANISM, and the mechanism
  * closes nothing. Pointer Events 4 §8.2 "Setting pointer capture" opens "If the pointerId provided as the
  * method's argument does not match any of the active pointers, then throw a "NotFoundError" DOMException",
- * and Pointer Events 4 §3 defines an active pointer as "Any touch contact, pen/stylus, mouse cursor, or
- * other pointer that can produce events". THIS ENGINE HAS NONE — core/html/user_activation.h's banner states
+ * and Pointer Events 4 §15 "Glossary" defines an active pointer as "Any touch contact, pen/stylus, mouse
+ * cursor, or other pointer that can produce events" — the QUOTATION is verbatim and the NUMBER was wrong:
+ * this sentence read §3, which is "Pointer Events and interfaces" and defines no such term. The mis-aim
+ * costs nothing here because what the refusal RESTS on is normative and correctly cited — §8.2 step 1
+ * above, and §4's own prose — while §15 opens "This section is non-normative", so a reader sent there for
+ * the OBLIGATION would have found only the vocabulary. THIS ENGINE HAS NONE — core/html/user_activation.h's banner states
  * it "dispatches no trusted keydown/mousedown/pointerdown/pointerup/touchend" — so that set is EMPTY and
  * every call of Pointer Events 4 §4's members throws on its FIRST STEP. Building Pointer Events 4 §4 alone
  * only renames the exception a drag handler dies on; and at the minority of corpus sites that guard PER
