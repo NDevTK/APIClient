@@ -330,13 +330,43 @@ static void cs_install_realm(JSContext *ctx)
        fallback there, which is the branch a bundle writes it to take, and `"cookieStore" in window` is false.
        §3.3 set and §3.4 delete are ABSENT here and that is this component's stated narrowing, not an exposure
        decision — see the file header.
-       NAMED RESIDUAL. NOT COVERED: §3.3's `set` and §3.4's `delete`, so a page can read this store through
-       this API and cannot write it through this API; `document.cookie` remains the only writer, and because
-       both reach ONE jar a cookie written there IS read back here. NEXT DIFF: §7.2 "Set a cookie" over
-       cookie_jar_receive, whose step 12.3 now has a predicate to call —
-       `registrable_domain_suffix_or_equal` in core/url/registrable_domain.h. THAT CLAUSE USED TO SAY THE
-       PREDICATE HAD FIRST TO BE EXTRACTED, and it was right when written and is spent; a reader who acts on
-       the retired half writes a second copy of the one thing this component's header says must not be copied.
+       NAMED RESIDUAL. NOT COVERED: §3.3 "The set() method" and §3.4 "The delete() method", so a page can read
+       this store through this API and cannot write it through this API; `document.cookie` remains the only
+       writer, and because both reach ONE jar a cookie written there IS read back here. NEXT DIFF: §7.2 "Set a
+       cookie" over `cookie_jar_store`, whose step 12.3 has a predicate to call —
+       `registrable_domain_suffix_or_equal` in core/url/registrable_domain.h — and then §7.3 "Delete a cookie",
+       which is FOUR steps whose last one is "Return the results of running set a cookie with url, name, value,
+       null, domain, path, "strict", partitioned, and 0", so §3.4 arrives with §7.2 and is not a second
+       algorithm to build. The two §3.3 entries differ in LENGTH (2 against 1) so that position is
+       IDL_USVSTRING_OR_DICT with a split stated, and §3.4's two are both 1 with NEITHER optional, which is
+       IDL_STRING_OR_DICT's same-length family — carrying the USVString-arm residual this file's other named
+       residual already states, at a second site. `CookieInit`'s `DOMHighResTimeStamp? expires` and
+       `long long? maxAge` have no declared type yet: core/idl_args.h has no nullable NUMERIC row at all, which
+       is a row in that file and sequences ahead of this member.
+
+       THIS CLAUSE NAMED `cookie_jar_receive` AND THAT WAS THE WRONG ENTRY, RECORDED RATHER THAN QUIETLY
+       REPAIRED BECAUSE THE ROUTE IT NAMED IS THE INTUITIVE ONE AND IS A SECURITY DIVERGENCE. That entry takes a
+       set-cookie-string and runs §5.2's parse over it, and §7.2 refuses U+003B (;) in the NAME and the VALUE
+       and in NOTHING ELSE — its own Note leaves open whether the restriction "should also apply to expires,
+       domain, path, and sameSite as well". So `path: "/;Domain=example"` spelled as a set-cookie-string is
+       split at that semicolon into a Domain attribute the page never wrote and step 12.3 never judged: the
+       round trip does not lose an attribute, it MANUFACTURES one past the check this clause exists to reach. It
+       drops one too, since §7.2 permits an empty cookie-name and §5.2's step 5 ignores a set-cookie-string
+       carrying one. §7.2's own last step but one names the right seam instead, handing §5.3 a request-uri, a
+       cookie-name, a cookie-value and a cookie-attribute-list with no string anywhere in it, and that is
+       `cookie_jar_store`'s signature. THE SPEC HALF OF THE OLD CLAUSE WAS RIGHT AND ITS MECHANISM HALF WAS NOT,
+       which is the split CLAUDE.md measures: the section, the step and the predicate all checked out, and the
+       one part that was a claim about THIS TREE yielded.
+
+       `onchange` IS NOT COVERED BY THE REASON ABOVE AND IS A DIFFERENT QUESTION. The reason above is about
+       §7.2's predicate, which an event handler does not reach: §3's IDL writes `[Exposed=Window] attribute
+       EventHandler onchange`, and what fires it is §7.4 "Process changes" dispatching a §5.1 "The
+       CookieChangeEvent interface" event this tree does not have — `idl_interface_tag` names no
+       CookieChangeEvent. Installing the accessor without §7.4 is the shape §NO STUBS forbids twice over: it
+       flips `"onchange" in cookieStore` true and abandons nothing, because `CookieStore : EventTarget` already
+       answers `addEventListener("change", f)` and no change is ever dispatched to either. So it is sequenced
+       AFTER set/delete rather than beside them — there is nothing to notify about until this API can write.
+
        HOW ITS ABSENCE SHOWS: `cookieStore.set` is undefined, so a page calling it throws a TypeError at its
        own line rather than at anything of this engine's, and `node engine/idlgen.mjs` prints
        `CookieStore (core/cookie_store/cookie_store.c): ABSENT 3 — set, delete, onchange`. */

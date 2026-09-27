@@ -56,6 +56,57 @@ void cookie_jar_free(void);
    standard says to ignore leaves the store untouched. */
 void cookie_jar_receive(JSContext *ctx, const UrlRecord *uri, const char *set_cookie, size_t len);
 
+/* §5.3's COOKIE-ATTRIBUTE-LIST as §5.3 ITSELF READS IT — the four attributes its steps ask for by
+   attribute-name, plus the two flags, in the parsed shape rather than as the list of byte-sequence pairs a
+   Set-Cookie header spells. `domain` and `path` are BORROWED and must outlive the store call; every field is
+   read only when its own `have_`/`_len` companion says it is present, so an absent attribute is a POSITIVE
+   statement rather than a value some reader fills in.
+
+   ZERO IT AND THEN FILL IT. `have_expiry`, `have_path`, `max_age_seen`, `secure` and `http_only` false with
+   `domain_len` and `path_len` zero is the attribute-list with nothing in it, which is what a Set-Cookie
+   carrying only a name and a value produces and what a caller that states no attribute must hand over. */
+typedef struct {
+    bool        max_age_seen;   /* §5.3 step 3's "an attribute with an attribute-name of Max-Age" */
+    bool        have_expiry;    /* §5.3 step 3: EITHER Max-Age or Expires was stated */
+    long long   expiry;         /* the expiry-time, in SECONDS — the unit cookie_jar.c compares against time() */
+    const char *domain; size_t domain_len;   /* the domain-attribute, leading U+002E already dropped */
+    const char *path;   size_t path_len;     /* the path-attribute; read only when have_path */
+    bool        have_path;
+    bool        secure;         /* the Secure attribute */
+    bool        http_only;      /* the HttpOnly attribute — §5.3 step 10 refuses it for a non-HTTP API */
+} CookieJarAttributes;
+
+/* §5.3 "RECEIVE A COOKIE" over an ALREADY-PARSED cookie-attribute-list, for a "non-HTTP" API — the half
+   `cookie_jar_receive` reaches after §5.2 has read a set-cookie-string, and the half a SECOND standard reaches
+   with no string in its hand at all.
+ *
+ * THE SPLIT IS THE OTHER STANDARD'S OWN WORDS, exactly as cj_collect's is for the read side. Cookie Store API
+ * §7.2 "Set a cookie" builds `attributes` as a list and then says, in its last step but one: "Perform the steps
+ * defined in Cookies § Storage Model for when the user agent "receives a cookie" with url as request-uri,
+ * encodedName as cookie-name, encodedValue as cookie-value, and attributes as cookie-attribute-list." Those
+ * four are this signature. §5.2 is named nowhere in it, because that algorithm's input is a header field and
+ * §7.2's input is a dictionary.
+ *
+ * AND ROUTING §7.2 THROUGH `cookie_jar_receive` INSTEAD IS NOT A LONGER ROAD TO THE SAME PLACE, WHICH IS WHY
+ * THIS ENTRY EXISTS RATHER THAN A SERIALIZER. §7.2 refuses U+003B (;) in the NAME and the VALUE and in nothing
+ * else — its own Note says the restriction "should also apply to expires, domain, path, and sameSite as well"
+ * is still an open question — so a `path` member is free to carry one. Spell that attribute-list as a
+ * set-cookie-string and §5.2's unparsed-attributes parse splits it there, so `path: "/;Domain=example"` arrives
+ * as a Domain attribute the page never wrote and §7.2 step 12.3 never judged. That step is the whole of what
+ * bounds a cookie to its registrable domain, so the round trip does not lose an attribute, it MANUFACTURES one
+ * past the check the algorithm exists to make. A second divergence rides with it: §7.2 permits an empty
+ * cookie-name and §5.2's step 5 ignores a set-cookie-string that has one, so the serialized route drops a
+ * cookie the algorithm stored.
+ *
+ * `name` AND `value` ARE THE ENCODED BYTE SEQUENCES §7.2 step 24 hands over, and this entry parses NOTHING out
+ * of them: a U+003D (=) inside `value` is part of the value, where §5.2 would have to have found it after the
+ * first one. Every caller's refusals are its own algorithm's; what this entry asserts is only what it computed.
+ *
+ * RETIREMENT: this record goes when no caller in this tree spells a cookie-attribute-list as a string for
+ * another to re-read — the injection is then unreachable by construction rather than argued against here. */
+void cookie_jar_store(JSContext *ctx, const UrlRecord *uri, const char *name, size_t name_len,
+                      const char *value, size_t value_len, const CookieJarAttributes *attrs);
+
 /* §5.4's COOKIE-STRING for `uri` for a "non-HTTP" API — the cookies of this store that domain-match, path-match
    and pass the secure-only test, sorted by §5.4 step 2 and serialized `name=value` joined by "; ".
    Returns an OWNED JS string. */

@@ -16,11 +16,20 @@
  * surfaced when it was added, and nothing at the site was wrong.
  *
  * WHAT THIS COMPONENT IS AND IS NOT. It is §3.1's `get` and §3.2's `getAll` — the QUERY half, §7.1 "Query
- * cookies" — and the §6.1 Window member that reaches them. It is NOT §3.3's `set` or §3.4's `delete`, and that
- * absence is a SUBPROBLEM ORDER rather than an oversight: §7.2's step 12.3 needs a registrable-domain-suffix
- * predicate that exists in this tree but is private to another component, and §7.1 needs nothing that is not
- * built. See the file header and the named residual in cookie_store.c. A page that calls `cookieStore.set` finds it absent and throws, which is what §NO STUBS
- * asks for and is the forcing function for the diff that builds §7.2.
+ * cookies" — and the §6.1 Window member that reaches them. It is NOT §3.3 "The set() method" or §3.4 "The
+ * delete() method", and that absence is a SUBPROBLEM ORDER rather than an oversight. See the named residual in
+ * cookie_store.c for what the next diff builds; a page that calls `cookieStore.set` finds it absent and throws,
+ * which is what §NO STUBS asks for and is the forcing function for the diff that builds §7.2 "Set a cookie".
+ * THIS SENTENCE USED TO NAME THE BLOCKER AS A REGISTRABLE-DOMAIN-SUFFIX PREDICATE THAT IS PRIVATE TO ANOTHER
+ * COMPONENT, AND IT IS REWRITTEN RATHER THAN DELETED BECAUSE THE RETIRED HALF IS THE ONE A READER ACTS ON.
+ * §7.2's step 12.3 does need that predicate, the predicate was private, and it is now
+ * `registrable_domain_suffix_or_equal` in core/url/registrable_domain.h — whose own header names this
+ * standard's step BY NAME as a second consumer. The extraction landed in the .c's header and left THIS file
+ * asserting the privacy in the present tense, which is the direction that costs most: a reader opens the
+ * header first (the .c's second line sends them here), is told the predicate cannot be reached, and either
+ * stops or writes the second copy both files say must never exist. A stale blocker is not a stale label, it is
+ * a standing reason not to do the work. RETIREMENT: this record goes when a blocker named in this component is
+ * named by something a diff trips over rather than by prose in two files that can disagree.
  *
  * WHY THE JAR AND NOT A STORE OF ITS OWN. §2.2 "Cookie store" says the object is a view: this API and
  * `document.cookie` read ONE store, so a cookie written through either is a cookie the other reads. Two stores
