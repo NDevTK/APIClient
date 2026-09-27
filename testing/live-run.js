@@ -752,6 +752,24 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      answer: the run did not state them. */
   "classicCompiles", "classicCompileOverruns",
   "classicCompileAgain", "classicCompileAgainBytes", "classicCompileOwnDecode",
+  /* AND WHETHER A PARSE THAT HANDED THE THREAD BACK WAS EVER PICKED UP AGAIN, which none of the five rows
+     above can say and which decides what a `classicCompiles` BELOW a document's row count means. It is read
+     as a SUBTRACTION against an arm this driver already carries, and the pair is the whole of its value:
+         stepUnitRuns["compile-handed-the-thread-back"] - classicCompileResumed
+     is the parses BEGUN AND NOT ENDED, because an ended parse of k stints parks k-1 times and resumes k-1
+     times while one still in flight parks k times and resumes k-1 — so every ended parse contributes ZERO and
+     every parse still held contributes exactly ONE. Near zero, the seam is carrying every parse forward and a
+     program count under `rootPrograms` is a BUDGET: the parse was advancing and the run ended inside it.
+     Large, parses are being handed back and not picked up, which is a work item the frontier is holding and
+     not advancing. Those take opposite work and every other row on this line reads the same for both.
+     IT IS NOT A SUBSET OF `classicCompiles` AND THEIR QUOTIENT IS NOT A RATE: the two are raised at different
+     events, one per stint that continued a parse and one per parse that ended, which is the same relationship
+     `classicCompileOverruns` has to it. The containment that does hold is against the yielded arm.
+     BOTH ZERO IS A THIRD READING AND NOT THE FIRST: a process whose yielded arm is also zero never fired the
+     parse seam at all — every program parsed inside one stint — and says nothing about resumption. So the arm
+     is the witness that makes this row's own zero mean something, and neither is read without the other.
+     An artifact older than it prints `-`, which is this driver's absent-versus-zero rule. */
+  "classicCompileResumed",
   "rootPrograms", "deepest", "completed", "deepestLeft", "finished",
   /* AND WHETHER A REPLY EVER BECAME A PROGRAM, WHICH IS CLAUDE.md §Learning-from-replies' HEADLINE MOAT
      SURFACE AND WHICH NO ROW ABOVE CAN STATE. "A fetch whose body is JAVASCRIPT is ALWAYS fetched + EXECUTED

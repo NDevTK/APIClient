@@ -9930,6 +9930,42 @@ static long     g_over_seamless;   /* …and how many of those turns offered NOT
    and the count has nothing left to report. */
 static long g_classic_compiles;       /* classic program compiles, ONE PER PROGRAM, at flow_step's start site */
 static long g_classic_compile_over;   /* compile STINTS that met the slice — NOT a subset of the row above */
+/* AND WHETHER A PARSE THAT HANDED THE THREAD BACK WAS EVER PICKED UP AGAIN, which is the one thing the pair
+   above cannot say and the question a reader of `compile-handed-the-thread-back` actually has. Every compile
+   STINT either BEGINS a parse or CONTINUES one; the stint population is already derived exactly
+   (`g_classic_compiles` + the yielded arm, asserted at the copy-out), and until this row existed nothing
+   partitioned it on that axis — so a stint that resumed a parse and one that started a fresh program were
+   ONE number, in EVERY arm a stint can end in. A resuming stint that parks again is named
+   `compile-handed-the-thread-back` exactly as a first stint is, and one that FINISHES is named by whichever
+   of the start arms its outcome takes — `start-a-classic-program`, one of its three frame-clearing siblings,
+   or `program-did-not-compile` for a parse that ended in a SyntaxError — in each case exactly as a program
+   parsed inside ONE stint is. So there is no arm of the histogram a reader could have differenced to recover
+   this: CLAUDE.md's computed-writer-with-no-reader defect one level up — the operation happens, on a document
+   big enough to be worth interleaving it happens a great many times, and no row anywhere says it happened.
+   WHAT IT DECIDES, AS A SUBTRACTION RATHER THAN AS THIS COUNT. A parse of k stints yields k-1 times if it
+   ENDS and k times while it is still in flight, and is resumed k-1 times either way — so every ENDED parse
+   contributes ZERO to `yielded - resumed` and every parse begun and not ended contributes exactly ONE:
+       arms[`compile-handed-the-thread-back`] - classic_compile_resumed
+           == parses suspended right now + parses dropped while suspended
+   That difference is the quantity that separates the two readings a small `classic_compiles` admits. Near
+   zero, the seam is firing and every parse is being carried forward, so a program count below a document's
+   row count is a BUDGET — the parse is making progress and the run ended inside it. Large, parses are being
+   handed back and not picked up, and that is a work item this scheduler is holding and not advancing, which
+   is what §scheduler's razor is about. A reader holding only the yielded arm cannot tell those apart, and
+   both are consistent with every other row on this census.
+   IT IS A COUNT AND NOT A MAXIMUM, DELIBERATELY. The shape a reader reaches for here is the deepest stint
+   count any one parse took, and CLAUDE.md §AND-THE-COUNTER-KIND-NONE-OF-THAT-REACHES is why that is the
+   wrong instrument: a high-water mark SATURATES, so its plateau is indistinguishable from a ceiling and it
+   is not comparable across two runs of different length — which on a wall-denominated slice is every pair of
+   runs. A count is comparable, and the question it is asked is CATEGORICAL: zero against a nonzero yielded
+   arm says no parse in this process was ever continued, which does not depend on how far the run got.
+   HOW ITS OWN ZERO IS SEPARABLE, which a bare count cannot state for itself: the yielded arm is the witness.
+   Both zero is a process in which the parse seam never fired at all — every program parsed inside one stint —
+   and says nothing about resumption. Yielded nonzero with this at zero is the claim above. The two rows are
+   read together or neither is read, which is why the containment below is asserted rather than described.
+   IT DECIDES NOTHING AND BOUNDS NOTHING (§NO BOUNDS): no parse covers less ground on any reading of it, no
+   stint is refused and no flow is demoted — nothing reads it at all. */
+static long g_classic_compile_resumed; /* compile STINTS that CONTINUED a parse rather than beginning one */
 /* THE REPEAT, OBSERVED RATHER THAN INFERRED — see the third state above for the inference these replace and
    solver/dyn_body.h for why the identity is the BODY and not a hash of the source text. All three are raised
    AT THE SAME EVENT as `g_classic_compiles` — the next statements of one straight-line block, with no branch
@@ -11706,6 +11742,22 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    numerator actually has is derived at the declaration (g_classic_compiles) out of the two
                    arms every stint ends in; nothing extra is counted here, and a third accumulator beside
                    these two would be the second answer that drifts. */
+                /* …AND WHICH OF THE TWO KINDS OF STINT THIS ONE IS, READ BEFORE THE CALL BECAUSE THE CALL
+                   CONSUMES THE ANSWER — see g_classic_compile_resumed. JS_FlowNewStep takes the carrier out
+                   of this slot (`*pcompile = NULL`) the moment it decides to continue a parse, so the field
+                   is NULL at every line below this one whichever kind of stint it was, and a read placed
+                   after the call would report every stint as a start. It is not a second copy of the
+                   predicate the compile itself branches on: the call is handed `&f->compile`, so this reads
+                   the same storage one statement earlier with nothing between the two that could write it.
+                   ABOVE THE TIMING BRACKET AND NOT INSIDE IT, so the span `g_classic_compile_over` is drawn
+                   from stays exactly the parse and nothing else — the bracket's own paragraph above is what
+                   makes that a reading of this seam rather than of the page's source length.
+                   UNCONDITIONALLY, AND NOT UNDER EITHER ARM BELOW: a resume is a fact about how this stint
+                   STARTED, so it is true of a stint that goes on to park again, one that finishes the parse
+                   and one whose parse ends in a SyntaxError alike. Raised under an arm it would partition the
+                   outcomes instead of the stints, and the subtraction at the declaration would then be a
+                   difference between two populations of different width. */
+                if (f->compile != NULL) g_classic_compile_resumed++;
                 int64_t t_comp0 = quantum_thread_us();
                 JSValue *newframe = NULL;
                 int cr = JS_FlowNewStep(prog_ctx, body, body_n, prog_name, src_flags, &newframe, &f->compile);
@@ -12539,6 +12591,13 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
     out->classic_compile_again       = g_classic_compile_again;
     out->classic_compile_again_bytes = g_classic_compile_again_bytes;
     out->classic_compile_own_decode  = g_classic_compile_own_decode;
+    /* …AND THE STINT PARTITION, IN THE SAME READING AS THE ARM IT IS SUBTRACTED FROM. The quantity a
+       reader of this row wants is `arms[STEP_UNIT_COMPILE_YIELDED] - classic_compile_resumed` (see
+       g_classic_compile_resumed), so a copy taken one call later than the arm histogram below would be a
+       difference between two instants — which for this pair is not a rounding error but a sign change: the
+       true value is the number of parses currently suspended, which is small, so a skew of one stint in
+       either row is the whole of it. Both are taken here, before the loop that reads the histogram. */
+    out->classic_compile_resumed     = g_classic_compile_resumed;
     for (i = 0; i < STEP_UNIT_N; i++) out->over_arms[i] = g_step_unit_over[i];
     /* …AND THE ARM HISTOGRAM ITSELF, TAKEN HERE RATHER THAN AT THIS FUNCTION'S TAIL, because the compile
        pair's containment below READS one of its arms: `arms[STEP_UNIT_COMPILE_YIELDED]` is the other half
@@ -12597,6 +12656,23 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
             out->classic_compile_overruns,
             out->classic_compiles + out->arms[STEP_UNIT_COMPILE_YIELDED],
             out->classic_compiles, out->arms[STEP_UNIT_COMPILE_YIELDED]);
+    /* AND THE STINT PARTITION'S OWN CONTAINMENT, WHICH IS AN EXACT ACCOUNTING IDENTITY AND NOT A SLACK
+       BOUND — which is what makes it worth asserting rather than describing. A parse's stints are one BEGIN
+       followed by k RESUMES; every resume is preceded by the park of that same parse and every park is
+       followed by at most one resume, so over the life of the process `resumed <= yielded` with the slack
+       being EXACTLY the parses begun and not ended (g_classic_compile_resumed derives it). A violation is
+       therefore not an off-by-one to tolerate: it is a stint that continued a parse this process never parked,
+       which means `f->compile` was made non-NULL by some route other than the compile block's own park arm —
+       the third-site defect JS_FlowNewStep's own suspend assert names on the other side of the seam.
+       BOTH ROWS ARE TAKEN AT THE COPY-OUT ABOVE, one of them from the arm histogram, so this compares two
+       readings of one instant; the pair's own paragraph there is why that matters more here than for the
+       overrun containment, whose slack is unbounded by construction and whose sign therefore cannot flip. */
+    DCHECKF(out->classic_compile_resumed <= out->arms[STEP_UNIT_COMPILE_YIELDED],
+            "solver/engine.c: classic_compile_resumed %ld exceeds the %ld stint(s) that handed a parse back — "
+            "a stint may only CONTINUE a parse this process PARKED, and the park arm of the compile block is "
+            "the one site that leaves a carrier in `f->compile`, so more resumes than parks is a carrier "
+            "installed by a third site and a parse being continued that nothing here suspended",
+            out->classic_compile_resumed, out->arms[STEP_UNIT_COMPILE_YIELDED]);
     /* AND THE CROSS-ROW ONE, WHICH IS WHAT TIES THE NEW PHASE TO THE TURN IT IS A PHASE OF. A compile stint
        whose own duration met the slice sits inside a step whose duration is therefore at least as large, and
        the step's own reading brackets flow_step from outside — flow_step has exactly ONE caller and the slice

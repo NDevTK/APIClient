@@ -2002,6 +2002,20 @@ typedef struct {
        cheap engine. Asserted against its own count at engine_step_unit_runs, which is what catches that. */
     int64_t classic_compile_again_bytes;
     long classic_compile_own_decode; /* …whose body ONE flow decoded for its own delivery: the floor's bound */
+    /* AND HOW MANY OF THE STINTS CONTINUED A PARSE RATHER THAN BEGINNING ONE — the row without which
+     * `compile-handed-the-thread-back` cannot say whether a parse handed back is a parse CARRIED FORWARD. The
+     * stint population is already exact (the two arms above), and this partitions it on the one axis that
+     * separates the two readings a small `classic_compiles` admits: subtract it from that arm and what is left
+     * is the parses begun and NOT ENDED, because an ended parse of k stints parks k-1 times and resumes k-1
+     * times while one still in flight parks k times and resumes k-1. Near zero is a seam carrying every parse
+     * forward, so a program count under a document's row count is a BUDGET; large is parses being handed back
+     * and not picked up. The engine's own derivation, the reachability argument for its zero and the reason it
+     * is a count rather than a high-water mark are all at solver/engine.c's g_classic_compile_resumed.
+     * IT IS NOT A SUBSET OF `classic_compiles`, so it is not asserted against it: the two are raised at
+     * DIFFERENT EVENTS — one per stint that continued, one per parse that ended — which is the same
+     * relationship `classic_compile_overruns` has to it and fails the same way if it is read as a rate. What it
+     * IS contained in is the yielded arm, asserted at engine_step_unit_runs where both are in one hand. */
+    long classic_compile_resumed;    /* compile STINTS that CONTINUED a parse — NOT a subset of the programs */
     /* WHY THE TURNS THAT DID NOT END A UNIT OF WORK DID NOT — the three-state answer behind `_unitsDone`
      * reading low, and the rows a reader needs before that number means anything at all.
      *

@@ -2466,6 +2466,7 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    @kind lifetime: unitMidProgram unitParked unitCheckpointOwed unframedStepsLifetime
    @kind lifetime: classicCompiles classicCompileOverruns finished
    @kind lifetime: classicCompileAgain classicCompileAgainBytes classicCompileOwnDecode
+   @kind lifetime: classicCompileResumed
    @kind lifetime: epMinted epAssets
    @kind gauge: epEmitted epPreProgram epDoors epReach epAddressClass
    @kind lifetime: epAsks epAskPreProgram epAskSuppressed epAskMerged epAskMinted epAskMergedPreProgram
@@ -3204,6 +3205,15 @@ char *result_cold_json(void) {
                  "\"classicCompiles\":%ld,\"classicCompileOverruns\":%ld,"
                  "\"classicCompileAgain\":%ld,\"classicCompileAgainBytes\":%lld,"
                  "\"classicCompileOwnDecode\":%ld,"
+                 /* …AND WHETHER A PARSE HANDED BACK WAS EVER CARRIED FORWARD, which is the partition
+                    `stepUnitRuns[compile-handed-the-thread-back]` cannot make on its own and the one a small
+                    `classicCompiles` needs before it means anything. Subtract this from that arm and what is
+                    left is the parses BEGUN AND NOT ENDED — near zero is a seam carrying every parse forward,
+                    so a program count under `rootPrograms` is a budget rather than a stall; large is parses
+                    handed back and not picked up again. It is NOT a subset of `classicCompiles` and their
+                    quotient is not a rate: the two are raised at different events, one per stint that
+                    continued and one per parse that ended. See solver/engine.h's `classic_compile_resumed`. */
+                 "\"classicCompileResumed\":%ld,"
                  /* AND WHY EVERY TURN THAT DID NOT END A UNIT OF WORK DID NOT — the three rows without
                     which `_unitsDone` reading low is three states behind one answer. It is a GATED count, so
                     a low value is equally consistent with a thread that did nothing and with one that spent
@@ -3443,6 +3453,7 @@ char *result_cold_json(void) {
                  r.classic_compiles, r.classic_compile_overruns,
                  r.classic_compile_again, (long long)r.classic_compile_again_bytes,
                  r.classic_compile_own_decode,
+                 r.classic_compile_resumed,
                  r.unit_mid_program, r.unit_parked, r.unit_checkpoint_owed,
                  r.unframed_steps,
                  c.out_of_programs,
