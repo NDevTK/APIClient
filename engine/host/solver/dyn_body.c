@@ -10,6 +10,13 @@ struct DynBody {
     long   refs;   /* holders; the text is freed with the last one */
     size_t len;    /* strlen(text), kept so the census does not walk every byte of every bundle */
     char  *text;   /* NUL-terminated, never written through */
+    /* CENSUS ONLY, AND NEITHER OF THESE IS EVER READ TO DECIDE ANYTHING — see dyn_body.h for what they are
+       for and CLAUDE.md §NO BOUNDS for why that sentence is here rather than only there. `parsed` is
+       monotone: it is set by the first parse of these bytes that finishes and never cleared, so it cannot
+       become a fixpoint or a seen-set gating work. `own_decode` is written once at creation from WHICH ENTRY
+       made the body and is a fact about the buffer's provenance rather than about any flow. */
+    char   parsed;      /* some flow of this process has finished parsing these bytes */
+    char   own_decode;  /* the buffer came from `dyn_body_adopt` — one flow's own decode of a reply */
 };
 
 /* THE INSTANCE'S TOTAL, kept incrementally rather than walked, because the walk that would answer it is the
@@ -18,7 +25,10 @@ struct DynBody {
 static long g_dyn_body_bytes;
 static long g_dyn_body_live;
 
-static DynBody *dyn_body_wrap(char *text, size_t len)
+/* `own_decode` IS A PARAMETER AND NOT A DEFAULT THE ENTRIES OVERWRITE, because the two entries are the two
+   values and a default would make ONE of them the one a later entry silently inherits. It is the only field
+   here whose value depends on which entry was used, so it is the one field this helper may not choose. */
+static DynBody *dyn_body_wrap(char *text, size_t len, int own_decode)
 {
     DynBody *b = (DynBody *)malloc(sizeof(DynBody));
 
@@ -26,6 +36,8 @@ static DynBody *dyn_body_wrap(char *text, size_t len)
     b->refs = 1;
     b->len = len;
     b->text = text;
+    b->parsed = 0;
+    b->own_decode = (char)(own_decode != 0);
     g_dyn_body_bytes += (long)len + 1;
     g_dyn_body_live++;
     return b;
@@ -45,7 +57,10 @@ DynBody *dyn_body_new(const char *text, size_t len)
        claim about what — if anything — follows them, so reading a terminator out of the caller's buffer would
        be a read past the range it handed over. */
     copy[len] = '\0';
-    return dyn_body_wrap(copy, len);
+    /* A COPY THE CALLER MADE, WHICH SEVERAL ROWS MAY REFERENCE — the seed table's body is one of these and
+       every flow of the document holds it, which is exactly the population dyn_body.h's `note_parsed` answer
+       has its force over. */
+    return dyn_body_wrap(copy, len, /*own_decode*/0);
 }
 
 DynBody *dyn_body_adopt(char *text, size_t len)
@@ -67,7 +82,10 @@ DynBody *dyn_body_adopt(char *text, size_t len)
            "a program's source text was adopted with no NUL at its stated length — the body carries (text, "
            "len) and every reader takes the pair, but the guard byte is what stops a C read that walks past "
            "the end inside this allocation instead of in the heap after it");
-    return dyn_body_wrap(text, len);
+    /* ONE FLOW'S OWN DECODE OF A REPLY — both callers of this entry are a response arriving into a single
+       timeline, so a sibling parked on the same row adopts a SECOND buffer over the same bytes. dyn_body.h's
+       `is_own_decode` is what publishes that population, because a repeat inside it cannot be observed. */
+    return dyn_body_wrap(text, len, /*own_decode*/1);
 }
 
 DynBody *dyn_body_ref(DynBody *b)
@@ -117,6 +135,31 @@ size_t dyn_body_len(const DynBody *b)
     DCHECK(b != NULL, "a program's length was asked of no body");
     DCHECK(b->refs > 0, "a program's length was asked after its last holder released it");
     return b->len;
+}
+
+/* See dyn_body.h. THE ANSWER AND THE MARK ARE ONE CALL, which is what makes the row it feeds honest: a
+   caller that could read the bit without setting it would report every later parse of these bytes as a
+   first, and a caller that set it without reading would report the first parse as a repeat. */
+int dyn_body_note_parsed(DynBody *b)
+{
+    int was;
+
+    DCHECK(b != NULL,
+           "a parse was recorded against no program text — the cursor only ever names a row that was queued, "
+           "and a queued row holds one");
+    DCHECK(b->refs > 0,
+           "a parse was recorded against a program text whose last holder has already released it — the "
+           "buffer is freed with that release, so this write is to memory the allocator has given away");
+    was = b->parsed != 0;
+    b->parsed = 1;
+    return was;
+}
+
+int dyn_body_is_own_decode(const DynBody *b)
+{
+    DCHECK(b != NULL, "a program text's provenance was asked of no body");
+    DCHECK(b->refs > 0, "a program text's provenance was asked after its last holder released it");
+    return b->own_decode != 0;
 }
 
 long dyn_body_total_bytes(void) { return g_dyn_body_bytes; }

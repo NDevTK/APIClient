@@ -92,6 +92,49 @@ const char *dyn_body_text(const DynBody *b);
    every flow, and a `strlen` there is a pass over every byte of every bundle the frontier holds. */
 size_t dyn_body_len(const DynBody *b);
 
+/* HAVE THESE BYTES ALREADY BEEN PARSED TO COMPLETION BY SOME FLOW OF THIS PROCESS — the direct answer to the
+   question `classicCompiles` against a document's program count was being asked to infer, and it lives HERE
+   because the body is the only thing in the engine that IS a program's source rather than a holder of one.
+   WHY THE INFERENCE IT REPLACES IS UNSOUND, which is the whole reason this entry exists. solver/engine.h USED
+   TO READ `classic_compiles` against "the programs a document reached" and call a figure far above that count a
+   compile REPEATED per flow; it records that sentence in its own words rather than deleting it, because it is
+   what two counters printed side by side invite and because a brief was written out of it and a lane dispatched
+   on it. The numerator's population is wider than that denominator's on TWO independent
+   axes at once: it counts every FLOW and every TIMELINE (a fork carries its parent's cursor and then parses
+   every later program of the sequence itself; an @S candidate session and a cold-resumed replay re-run the
+   document from the baseline and parse its own programs again), and it counts every APPENDED row as well as
+   every seeded one — a lazy chunk, an injected `<script>`, a `javascript:` URL, a peer's operation, a value
+   dump. A modern bundle's chunks are the bulk of that second axis and each one is DISTINCT BYTES, so a count
+   many times a document's `<script>` count is what a healthy run of such a page MUST read. The tree already
+   records the identical defect one row over, for `progStarts` read against `rootPrograms` (solver/flow.c): two
+   counters differenced across populations of different width, agreeing by coincidence on one document.
+   IT IS NOT A HASH OF THE SOURCE TEXT, which CLAUDE.md §ONE-global rules out by name because a minified bundle
+   repeats one-line bodies dozens of times and a text hash therefore names a SET. It is the BODY — the one
+   allocation those bytes arrived in — so two rows answer `already` for each other only when they are literally
+   holding the same program: the seed table's body, which every flow of a document references, and a fork's
+   inherited column, which references its parent's.
+   IT IS A FLOOR AND THE ROW BESIDE IT IS WHAT SAYS BY HOW MUCH. A reply is decoded PER DELIVERY, so two arms
+   parked on one external row each adopt their own buffer for the same chunk and a repeat between them is
+   invisible here; `dyn_body_is_own_decode` is that population, so a reader has a floor and a bound instead of
+   a floor and a sentence. It is also a floor across a park: a cold-resumed flow's rows are rebuilt, so its
+   first parse of bytes some earlier session parsed reads as a first.
+   MONOTONE, SET ONCE, AND READ BY NOTHING THAT DECIDES ANYTHING (CLAUDE.md §NO BOUNDS). No source is refused
+   for having been parsed, no parse is skipped and no arm is chosen on it; the mark's only consumer is the
+   census counter raised at the same event as `classic_compiles`. It is state on a C allocation and not on the
+   JS heap, so the COW delta neither owes it a capture nor can unapply it — which is the same reason
+   `dyn_body_total_bytes` is kept incrementally on this side rather than walked per flow.
+   THE MARK IS MADE HERE AND NOT AT THE CALLER, so the answer and the write cannot come apart: a caller that
+   read the bit and then forgot to set it would report every later parse of those bytes as a first. */
+int dyn_body_note_parsed(DynBody *b);
+/* WHETHER THIS BUFFER WAS DECODED FOR ONE FLOW'S OWN DELIVERY — the population in which the answer above
+   CANNOT be observed, published so the floor has a bound. `dyn_body_adopt`'s two callers are both a reply
+   arriving into ONE flow, which decodes the response for that timeline and adopts the result; a sibling parked
+   on the same row takes its own delivery and adopts a SECOND buffer over the same bytes. So a repeat within
+   this population is real and unobservable, and a count of parses of such bodies is how much of the total a
+   reader must treat as unmeasured rather than as measured-zero. `dyn_body_new`'s bodies are a COPY the caller
+   made and may be referenced by many rows, which is where the answer above has its force. */
+int dyn_body_is_own_decode(const DynBody *b);
+
 /* WHAT THE PROGRAM TEXT COSTS THE INSTANCE, ONCE — the sum of `len + 1` over every body alive right now.
    It is a SHARED row of the cold census (solver/cold.h) and not a per-flow one, for the reason that file
    already states about frozen segments: a shared buffer added into each holder's own total reports the sharing

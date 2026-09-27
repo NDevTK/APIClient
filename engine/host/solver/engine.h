@@ -1957,12 +1957,30 @@ typedef struct {
      * one hand. `classic_compile_overruns <= slice_overruns` also still holds by construction and is checked
      * there; that one additionally rests on a turn reaching the compile at most once, which its own comment
      * names.
-     * READ AS A PAIR AND AGAINST A THIRD NUMBER, never alone: `classic_compiles` against the programs a
-     * document reached says whether the compile is REPEATED per flow, and `classic_compile_overruns` says
-     * whether the rest seam is firing often enough inside a parse for a stint to stay under the slice. Those
-     * are three different diffs — the bytecode between the page's own raise points, a per-flow
-     * materialization ceiling, and the GRANULARITY of the parse's rest point — and a reader holding either
-     * row by itself cannot tell them apart.
+     * READ AS A PAIR AND AGAINST A THIRD NUMBER, never alone: `classic_compile_overruns` says whether the rest
+     * seam is firing often enough inside a parse for a stint to stay under the slice, and `classic_compile_again`
+     * says whether the compile is REPEATED. Those are three different diffs — the bytecode between the page's
+     * own raise points, a per-flow materialization ceiling, and the GRANULARITY of the parse's rest point — and
+     * a reader holding either row by itself cannot tell them apart.
+     * THE REPEAT CLAUSE READ `classic_compiles AGAINST THE PROGRAMS A DOCUMENT REACHED SAYS WHETHER THE COMPILE
+     * IS REPEATED PER FLOW`, AND THAT IS A DIFFERENCE BETWEEN TWO POPULATIONS OF DIFFERENT WIDTH. It is kept in
+     * its own words because it is the reading two counters printed side by side invite, and because a brief was
+     * written out of it and a lane dispatched on it. `classic_compiles` counts every FLOW and every TIMELINE —
+     * a fork parses every later program of its inherited sequence itself, and an @S candidate session and a
+     * cold-resumed replay re-run the document from the baseline — AND every APPENDED row as well as every seeded
+     * one, which for a modern bundle means dozens of lazy chunks of DISTINCT BYTES. The nearest published
+     * denominator, `root_programs`, is narrower on both axes, so a figure many times it is what a healthy run of
+     * such a page MUST read. The tree records the identical defect one row over for `progStarts` against
+     * `rootPrograms` (solver/flow.c), where the two agreed by coincidence on one document.
+     * WHAT REPLACES IT IS AN OBSERVATION WITH NO DENOMINATOR IN IT. `classic_compile_again` is the parses whose
+     * BYTES some flow of this process had already parsed to completion — the identity being the BODY and not a
+     * hash of the source text, which CLAUDE.md §ONE-global rules out because a minified bundle repeats one-line
+     * bodies and a hash names a SET. It is a FLOOR and `classic_compile_own_decode` is its bound: a reply is
+     * decoded PER DELIVERY, so two arms parked on one external row hold two buffers over one chunk and a repeat
+     * between them is unobservable, which puts the true figure in [`again`, `again + own_decode`].
+     * THE TWO SUBSETS ARE TWO PARTITIONS OF ONE POPULATION AND MAY NOT BE ADDED TO EACH OTHER — a parse can be
+     * both a repeat and a per-flow decode — and each is contained in `classic_compiles`, asserted at
+     * engine_step_unit_runs where all four are in one hand.
      * WHY A COUNT AND NOT A TIME, which `over_arms` above already argues for its own axis: a count answers
      * WHICH SPAN DID NOT REST, a time answers WHERE THE RUN WENT, and only the first is what §NO BOUNDS'
      * suspend-at-any-depth requirement is about.
@@ -1975,6 +1993,15 @@ typedef struct {
      * that met the slice is an ordinary preempted span and these have nothing left to report. */
     long classic_compiles;           /* classic program compiles, ONE PER PROGRAM, at flow_step's start site */
     long classic_compile_overruns;   /* compile STINTS that met the slice — NOT a subset of the row above */
+    long classic_compile_again;      /* …of which the bytes had ALREADY been parsed by some flow: the REPEAT */
+    /* AND WHAT THOSE RE-PARSES COVERED, WHICH IS THE ONLY FORM IN WHICH THE REPEAT IS A COST. A count of
+       repeats says nothing about whether the diff §A-CAPABILITY-MATERIALIZED-PER-FLOW would justify is worth
+       making: twenty repeats of a 200-byte inline script and twenty of a 1.4 MB chunk are the same number and
+       two different answers. int64_t for `step_us`' reason, and the arithmetic is worse — the second of those
+       overflows a four-byte total after about fifteen hundred repeats and reads NEGATIVE, which reads as a
+       cheap engine. Asserted against its own count at engine_step_unit_runs, which is what catches that. */
+    int64_t classic_compile_again_bytes;
+    long classic_compile_own_decode; /* …whose body ONE flow decoded for its own delivery: the floor's bound */
     /* WHY THE TURNS THAT DID NOT END A UNIT OF WORK DID NOT — the three-state answer behind `_unitsDone`
      * reading low, and the rows a reader needs before that number means anything at all.
      *

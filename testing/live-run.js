@@ -733,7 +733,25 @@ const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered
      engine. An artifact older than this row prints `-`, which is this driver's absent-versus-zero rule and is
      the honest answer: the run did not state it. */
   "unframedStepsLifetime",
+  /* AND WHETHER THE COMPILE IS REPEATED, WHICH `classicCompiles` ALONE CANNOT SAY AND WAS BEING READ AS
+     SAYING. solver/engine.h used to have a reader difference it against the programs a document reached and
+     call a figure far above that count a compile repeated per flow; the numerator counts every FLOW, every
+     TIMELINE and every APPENDED row — a lazy chunk, an injected `<script>`, a `javascript:` URL, a peer's
+     operation — so on an app page whose bundle loads dozens of chunks of DISTINCT BYTES a figure many times
+     `rootPrograms` is what a healthy run MUST read, and that reading cannot tell such a page from one that is
+     re-parsing. `classicCompileAgain` is the parses whose BYTES some flow of this process had already parsed
+     to completion, raised on the same line as the total it partitions.
+     THE THREE ARE A FLOOR, A PRICE AND A BOUND, AND NONE OF THEM IS READABLE ALONE. `…Again` is the floor;
+     `…AgainBytes` is what those re-parses covered, because twenty repeats of a 200-byte inline script and
+     twenty of a 1.4 MB chunk are the same count and two different answers about whether a sharing diff is
+     worth making; `…OwnDecode` is the bound, since a reply is decoded PER DELIVERY and two arms parked on one
+     external row hold two buffers over one chunk, so a repeat inside that population is UNOBSERVABLE rather
+     than absent. The true figure is in [`…Again`, `…Again + …OwnDecode`] and the two subsets are TWO
+     PARTITIONS of one total that may not be added to each other.
+     An artifact older than them prints `-`, which is this driver's absent-versus-zero rule and is the honest
+     answer: the run did not state them. */
   "classicCompiles", "classicCompileOverruns",
+  "classicCompileAgain", "classicCompileAgainBytes", "classicCompileOwnDecode",
   "rootPrograms", "deepest", "completed", "deepestLeft", "finished",
   /* AND WHETHER A REPLY EVER BECAME A PROGRAM, WHICH IS CLAUDE.md §Learning-from-replies' HEADLINE MOAT
      SURFACE AND WHICH NO ROW ABOVE CAN STATE. "A fetch whose body is JAVASCRIPT is ALWAYS fetched + EXECUTED

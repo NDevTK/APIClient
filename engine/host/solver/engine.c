@@ -9862,9 +9862,32 @@ static long     g_over_seamless;   /* …and how many of those turns offered NOT
    points; a nonzero `classicCompileOverruns` says one STINT of a parse ran to the slice boundary with the
    seam not firing in it, which names the production dispatch's own GRANULARITY — how much of a parse one
    rest point covers — and no longer names the descent loop as a span to convert, because it has been; and
-   `classicCompiles` far above that
-   count says the compile is being REPEATED per flow that crosses a program boundary, which is
-   §A-CAPABILITY-MATERIALIZED-PER-FLOW in time rather than in memory and is a third diff again.
+   the REPEAT is the third state, which `classicCompileAgain` states DIRECTLY and which this paragraph used to
+   have its reader INFER.
+   THE THIRD STATE'S SENTENCE READ `classicCompiles far above that count says the compile is being REPEATED per
+   flow that crosses a program boundary`, AND THAT INFERENCE IS UNSOUND — it is kept in its own words because it
+   is what a reader re-derives from two counters printed side by side, and because it is the sentence a brief
+   was written out of and a lane was dispatched on. Its numerator's population is wider than its denominator's
+   on TWO INDEPENDENT AXES AT ONCE. (i) FLOWS AND TIMELINES: a fork inherits `last_compiled`, so a sibling does
+   not re-parse the program it branched inside and DOES parse every later program of the sequence itself; an @S
+   candidate session and a cold-resumed replay re-run the document from the baseline and parse its own programs
+   again, which the compile site's own arm comment names as correct. (ii) ROWS: `classicCompiles` counts every
+   APPENDED row as well as every seeded one — a lazy chunk, an injected `<script>`, a `javascript:` URL, a
+   peer's operation, a value dump — and a modern bundle's chunks are the bulk of that, each one DISTINCT BYTES.
+   So a figure many times a document's own `<script>` count is what a healthy run of such a page MUST read, and
+   the reading that called it a repeat cannot tell that page from one that is re-parsing.
+   AND THE DENOMINATOR IT ASKS FOR IS NOT PUBLISHED AT ALL, which is the same defect the tree already records
+   one row over: solver/flow.c's account of `progStarts` read against `rootPrograms` — a count of program STARTS
+   across every flow and every timeline differenced against a count of the document's own ROWS, which agreed by
+   coincidence on one document and was quoted onward as evidence for the method. `rootPrograms` is the nearest
+   published row to `the programs a document reached` and it is narrower on both axes above.
+   WHAT REPLACES THE INFERENCE IS AN OBSERVATION AND NEEDS NO DENOMINATOR (CLAUDE.md
+   §a-bare-count-over-a-population-you-have-not-partitioned): `classicCompileAgain` is the parses whose BYTES
+   some flow of this process had already parsed to completion, partitioned off this same total at this same
+   event, so `again` near 0 with `classicCompiles` far above the document's program count is CHUNK DISCOVERY and
+   `again` large is the repeat, with no reading in which the two look alike. `classicCompileAgainBytes` prices
+   it, because the diff §A-CAPABILITY-MATERIALIZED-PER-FLOW would justify is a megabyte-scale one and a count of
+   repeats says nothing about cost until the lengths are beside it.
    TWO EXTRA CLOCK READS PER COMPILE AND NOT PER TURN, stated for `g_slice_us`' reason: `quantum_thread_us`
    crosses into the embedder on the host that ships, so frequency is the whole of the price — and a compile
    happens once per program a flow starts, where the turn's own pair is taken once per dispatch.
@@ -9907,6 +9930,37 @@ static long     g_over_seamless;   /* …and how many of those turns offered NOT
    and the count has nothing left to report. */
 static long g_classic_compiles;       /* classic program compiles, ONE PER PROGRAM, at flow_step's start site */
 static long g_classic_compile_over;   /* compile STINTS that met the slice — NOT a subset of the row above */
+/* THE REPEAT, OBSERVED RATHER THAN INFERRED — see the third state above for the inference these replace and
+   solver/dyn_body.h for why the identity is the BODY and not a hash of the source text. All three are raised
+   AT THE SAME EVENT as `g_classic_compiles` — the next statements of one straight-line block, with no branch
+   between them and it — which is what makes the first two a PARTITION of it (the complement
+   is derived and not minted, for the reason the overrun's denominator is) and the third an independent
+   partition of the same population. THE TWO PARTITIONS MAY NOT BE ADDED TO EACH OTHER: `again` and
+   `own_decode` are answers to different questions about one parse, and a parse can be both.
+   `again_bytes` IS int64_t FOR THE REASON `g_step_us` IS, and the arithmetic is worse here: one real bundle
+   ships a 1.4 MB chunk, so a four-byte accumulator of re-parsed bytes turns NEGATIVE after about fifteen
+   hundred repeats of it — which is a plausible count for a page whose frontier forks, and a negative total
+   reads as a cheap engine rather than as a broken number. Asserted at the copy-out beside its neighbours. */
+static long    g_classic_compile_again;        /* parses of bytes some flow had ALREADY parsed to completion */
+static int64_t g_classic_compile_again_bytes;  /* and how many source bytes those re-parses covered */
+static long    g_classic_compile_own_decode;   /* parses of a body one flow decoded for its own delivery */
+/* AND THE WIDTH OF THE BYTE TOTAL, MADE A BUILD FAILURE RATHER THAN A SENTENCE, for the reason the pair below
+   `g_step_us` gives and with one difference that makes it the more urgent of the two: the runtime check at
+   engine_step_unit_runs is a `DCHECKF`, so it is COMPILED OUT in release — which is the build a real page is
+   measured on. A narrowed field there truncates a re-parsed-byte total silently and in the direction that
+   reads as a cheap engine. BOTH OBJECTS, because the accumulator and the field it is copied into are two
+   declarations in two files and narrowing EITHER loses the same run. */
+_Static_assert(sizeof g_classic_compile_again_bytes >= 8,
+               "solver/engine.c: the re-parsed-byte accumulator has been narrowed. On wasm32 `long` is 4 "
+               "bytes, so a 32-bit total of source bytes re-parsed turns NEGATIVE after about 1500 repeats of "
+               "a 1.4 MB chunk — a count a forking frontier reaches on a real bundle — and it reads as a "
+               "cheap engine rather than as a broken number; see solver/engine.h's `classic_compile_again_bytes`.");
+_Static_assert(sizeof ((EngineStepUnitRuns *)0)->classic_compile_again_bytes
+                   >= sizeof g_classic_compile_again_bytes,
+               "solver/engine.h: EngineStepUnitRuns' `classic_compile_again_bytes` is narrower than the "
+               "accumulator it is copied from, so engine_step_unit_runs truncates the total on its way to "
+               "solver/result.c's census — the same lost run as an overflow and with the same inverted "
+               "reading behind it.");
 /* THE WIDTH, MADE A BUILD FAILURE RATHER THAN A SENTENCE. A comment saying "this must be 64-bit" is read by
    whoever is already thinking about it; the one edit that matters is the one that narrows the type back to
    match its neighbours on this page, and the author of that edit is precisely the reader the comment misses.
@@ -11675,6 +11729,35 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    spending it. Counting a stint would make the denominator the number of times the scheduler
                    looked at a parse rather than the number of programs parsed. */
                 g_classic_compiles++;
+                /* …AND WHETHER THESE BYTES HAD BEEN PARSED BEFORE, PARTITIONED OFF THAT TOTAL AT THIS EVENT
+                   rather than left to be inferred from a denominator that is not published — see
+                   g_classic_compile_again for the inference this replaces and solver/dyn_body.h for why the
+                   identity is the BODY. ON THIS LINE AND NOT ONE EARLIER: a stint that handed the thread back
+                   has parsed part of a program and finished none, so marking at the entry would report the
+                   SECOND stint of one parse as a repeat of its own first.
+                   THE MARK IS THE ROW'S OWN BODY AND THE COMPILE'S OWN BYTES, asserted rather than assumed,
+                   because the two are read at lines two hundred apart: `body` came off this row when the
+                   sequence arm read it and nothing between may have moved the cursor, so a disagreement here
+                   is a mark being made against a program that was not the one parsed — which would report a
+                   later parse of the OTHER row's bytes as a repeat and this one's as a first. */
+                DCHECK(f->script_i < f->dyn_n && dyn_body_text(f->dyn[f->script_i]) == body,
+                       "a finished parse is about to be recorded against a row that is not the one it parsed "
+                       "— the cursor moved between the sequence arm's read and the compile, so the repeat "
+                       "census would mark one program's bytes for another's");
+                {
+                    DynBody *pb = f->dyn[f->script_i];
+                    if (dyn_body_note_parsed(pb)) {
+                        g_classic_compile_again++;
+                        g_classic_compile_again_bytes += (int64_t)dyn_body_len(pb);
+                    }
+                    /* THE FLOOR'S BOUND, RAISED UNCONDITIONALLY BECAUSE IT IS A PROPERTY OF THE BUFFER AND NOT
+                       OF THIS PARSE: a reply is decoded PER DELIVERY, so two arms parked on one external row
+                       adopt two buffers over the same chunk and a repeat between them is UNOBSERVABLE above.
+                       A reader therefore has repeats in [`again`, `again + ownDecode`] instead of a floor and
+                       a sentence, and the upper end is loose by the number of DISTINCT such programs — which
+                       is the honest direction and is why it is published rather than described. */
+                    if (dyn_body_is_own_decode(pb)) g_classic_compile_own_decode++;
+                }
                 started = (f->frame != NULL);
                 /* §4.12.1.1's CLASSIC arm, steps 1-2, and the reason they are HERE and not around a call: the
                    arm's third step ("run the classic script") is the JS_FlowNew above plus every JS_FlowResume
@@ -12449,6 +12532,13 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        instant, which is exactly what the containment assert would then fail to catch. */
     out->classic_compiles         = g_classic_compiles;
     out->classic_compile_overruns = g_classic_compile_over;
+    /* …AND THE REPEAT PARTITION, IN THE SAME READING AS THE TOTAL IT PARTITIONS — for the pair's reason above
+       and with the sharper edge the containment below makes load-bearing: all four are raised on ONE line, so a
+       copy of the subset taken one call later than its own total would be a split of one population reported
+       against the size of another and the check would be an assertion about two instants. */
+    out->classic_compile_again       = g_classic_compile_again;
+    out->classic_compile_again_bytes = g_classic_compile_again_bytes;
+    out->classic_compile_own_decode  = g_classic_compile_own_decode;
     for (i = 0; i < STEP_UNIT_N; i++) out->over_arms[i] = g_step_unit_over[i];
     /* …AND THE ARM HISTOGRAM ITSELF, TAKEN HERE RATHER THAN AT THIS FUNCTION'S TAIL, because the compile
        pair's containment below READS one of its arms: `arms[STEP_UNIT_COMPILE_YIELDED]` is the other half
@@ -12528,6 +12618,34 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
             "outside the dispatch loop's clock bracket, an arm that returns before the slice accounting, or a "
             "`continue` below the script row that lets one turn take two compile stints",
             out->classic_compile_overruns, (long long)out->slice_overruns);
+    /* THE REPEAT PARTITION'S TWO CONTAINMENTS, ASSERTED WHERE ALL FOUR ARE IN ONE HAND — and they are TWO
+       checks rather than one sum because these are TWO INDEPENDENT PARTITIONS of one population and a parse
+       can be in both. Adding them would be the arithmetic the rows exist to stop a reader doing.
+       BOTH SUBSETS ARE RAISED AT THE SAME EVENT AS THEIR TOTAL — the next statements of the same straight-line
+       block, with no branch between — so unlike the overrun above neither can outrun it by construction: a
+       violation is one of the three raises having been moved out from under `g_classic_compiles` or behind a
+       condition, which is the one edit that would silently turn a partition into a ratio. */
+    DCHECKF(out->classic_compile_again <= out->classic_compiles,
+            "solver/engine.c: classic_compile_again %ld exceeds classic_compiles %ld — the repeat count is "
+            "raised in the same straight-line block as the total it is a subset of, with no branch between, so "
+            "a subset larger than its population means one of the two has been moved: a parse marked at the "
+            "stint entry rather than at the stint that FINISHES it would count the second stint of one program "
+            "as a repeat of its own first",
+            out->classic_compile_again, out->classic_compiles);
+    DCHECKF(out->classic_compile_own_decode <= out->classic_compiles,
+            "solver/engine.c: classic_compile_own_decode %ld exceeds classic_compiles %ld — the provenance "
+            "count is raised in the same straight-line block as the total it is a subset of, so this is that "
+            "raise having been moved out from under it or behind a condition",
+            out->classic_compile_own_decode, out->classic_compiles);
+    /* AND THE BYTE TOTAL AGAINST ITS OWN COUNT, WHICH IS THE ONE THING THAT CATCHES THE OVERFLOW ITS TYPE IS
+       CHOSEN AGAINST (g_classic_compile_again_bytes). A body is at least one byte and the accumulator only
+       climbs, so a total below its count — or negative — is the narrowing this row's declaration argues about,
+       arriving as a number that reads as a cheap engine rather than as a broken one. */
+    DCHECKF(out->classic_compile_again_bytes >= (int64_t)out->classic_compile_again,
+            "solver/engine.c: classic_compile_again_bytes %lld is below the %ld re-parse(s) it sums the "
+            "lengths of — every body is at least one byte and this accumulator only climbs, so the total has "
+            "either overflowed a narrowed type or is being raised for parses the count does not cover",
+            (long long)out->classic_compile_again_bytes, out->classic_compile_again);
     /* THE TWO OVERRUN-PATH ROWS' EQUIVALENCE, ASSERTED RATHER THAN DESCRIBED — see solver/engine.h's
        `slice_overrun_asks`. A turn adds to the sum precisely when it is not counted as seamless, by the order
        of two statements in one branch, so an empty sum and a wholly-seamless population are the SAME fact and

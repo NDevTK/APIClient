@@ -2465,6 +2465,7 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    @kind lifetime: steps sliceUs sliceOverruns sliceOverrunAsks sliceOverrunSeamless stepUs schedUs
    @kind lifetime: unitMidProgram unitParked unitCheckpointOwed unframedStepsLifetime
    @kind lifetime: classicCompiles classicCompileOverruns finished
+   @kind lifetime: classicCompileAgain classicCompileAgainBytes classicCompileOwnDecode
    @kind lifetime: epMinted epAssets
    @kind gauge: epEmitted epPreProgram epDoors epReach epAddressClass
    @kind lifetime: epAsks epAskPreProgram epAskSuppressed epAskMerged epAskMinted epAskMergedPreProgram
@@ -3181,14 +3182,28 @@ char *result_cold_json(void) {
                     have rested`; both were true of the parse before that seam and are kept in their own
                     words because a reader re-derives them from quickjs's four raise kinds.)
                     THE TWO ROWS COUNT DIFFERENT EVENTS, SO THEY ARE NOT A RATIO. `classicCompiles` is ONE
-                    PER PROGRAM and, read against the programs this document reached, says whether a compile
-                    is repeated per flow. `classicCompileOverruns` is ONE PER STINT that met the slice, and
-                    says the parse's rest point is too coarse for a stint to stay under it. The denominator
-                    the second one is drawn from is not published as a row because it is DERIVED from two
-                    that are: `classicCompiles + stepUnitRuns[compile-handed-the-thread-back]` is the stint
-                    population exactly, and the engine asserts the containment against that sum. See
-                    solver/engine.h's `classic_compiles` for the three states the pair separates. */
+                    PER PROGRAM and `classicCompileOverruns` is ONE PER STINT that met the slice, which says
+                    the parse's rest point is too coarse for a stint to stay under it. The denominator the
+                    second one is drawn from is not published as a row because it is DERIVED from two that
+                    are: `classicCompiles + stepUnitRuns[compile-handed-the-thread-back]` is the stint
+                    population exactly, and the engine asserts the containment against that sum.
+                    THIS SAID `classicCompiles`, READ AGAINST THE PROGRAMS THIS DOCUMENT REACHED, SAYS
+                    WHETHER A COMPILE IS REPEATED PER FLOW, AND THAT DIFFERENCE IS BETWEEN TWO POPULATIONS
+                    OF DIFFERENT WIDTH — kept in its own words because it is what two counters side by side
+                    invite and because a brief was written out of it and a lane dispatched on it.
+                    `classicCompiles` counts every FLOW and every TIMELINE and every APPENDED row (a lazy
+                    chunk, an injected `<script>`, a `javascript:` URL, a peer's operation, a value dump),
+                    where `rootPrograms` is the document's own `<script>` rows ONCE; a bundle's chunks are
+                    DISTINCT BYTES, so a figure many times that count is what a healthy run of an app page
+                    MUST read. `classicCompileAgain` states the repeat DIRECTLY — parses whose bytes some
+                    flow of this process had already parsed to completion — with `classicCompileAgainBytes`
+                    pricing it and `classicCompileOwnDecode` bounding it, since a reply is decoded PER
+                    DELIVERY and a repeat inside that population is unobservable. The two subsets are TWO
+                    PARTITIONS of one total and may not be added to each other. See solver/engine.h's
+                    `classic_compiles`. */
                  "\"classicCompiles\":%ld,\"classicCompileOverruns\":%ld,"
+                 "\"classicCompileAgain\":%ld,\"classicCompileAgainBytes\":%lld,"
+                 "\"classicCompileOwnDecode\":%ld,"
                  /* AND WHY EVERY TURN THAT DID NOT END A UNIT OF WORK DID NOT — the three rows without
                     which `_unitsDone` reading low is three states behind one answer. It is a GATED count, so
                     a low value is equally consistent with a thread that did nothing and with one that spent
@@ -3426,6 +3441,8 @@ char *result_cold_json(void) {
                  (long long)r.slice_us, (long long)r.sched_us, (long long)r.slice_overruns, runs, over,
                  (unsigned long long)r.slice_overrun_asks, r.slice_overrun_seamless,
                  r.classic_compiles, r.classic_compile_overruns,
+                 r.classic_compile_again, (long long)r.classic_compile_again_bytes,
+                 r.classic_compile_own_decode,
                  r.unit_mid_program, r.unit_parked, r.unit_checkpoint_owed,
                  r.unframed_steps,
                  c.out_of_programs,
