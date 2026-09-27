@@ -553,7 +553,12 @@ static void lb_child(LbRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
               "parent at every depth, and that is what §2.5's Note requires — \"any semantics based on the "
               "document tree, such as selector-matching, event handling, and property inheritance, are not "
               "affected\" — so only the CONTAINER's child enumeration moves to the box tree while every "
-              "inherited property stays read off the node's document parent");
+              "inherited property stays read off the node's document parent. AND THIS WALK DOES NOT LAND "
+              "ALONE: `LbRun`'s `end` is a `BlockFlowRun`'s `end`, so this walk is BOUNDED by one of "
+              "§9.2.1.1's anonymous block boxes, and that type reads its bounds as SIBLINGS of the container. "
+              "core/layout/intrinsic_size.c's walk over the same content is bounded the same way. So the run "
+              "type, core/layout/block_flow.c's five walks and both of these are ONE landing rather than "
+              "four, and core/layout/table_box.c's array-materialising walk is the only one that is free");
         return;
     }
     inline_block = strcmp(d, "inline-block") == 0;
