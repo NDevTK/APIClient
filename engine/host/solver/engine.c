@@ -15955,6 +15955,17 @@ void engine_set_park_hook(int (*want_park)(void)) { g_park_hook = want_park; }
  * and a zero line are different facts (solver/result.c says so about every row of @COLD), and this is that
  * rule applied to the sample itself.
  *
+ * AND EACH OF THOSE THREE STATES IS READABLE OFF ONE LINE RATHER THAN OFF THE WHOLE STREAM, which is what the
+ * sample ordinal is for. The paragraph above is a statement about a COUNT OF LINES, so only a reader holding
+ * the log entire can make it — and CLAUDE.md's standing instruction is to read a run's TERMINAL census, which
+ * a series of length ONE satisfies with its OPENING sample and says nothing whatever about having done so. A
+ * reader who greps one line out of a build log, or reads one echoed by the trusted zone, gets the state before
+ * anything happened and has nothing on the line to tell them. So every line states the ordinal of the sample it
+ * belongs to: the greatest ordinal in a log IS the series length, and a last line reading 1 is the wedged state
+ * this paragraph describes rather than an end state. It is spliced by the emission below and is NOT a
+ * composer's row — see the comment there for why a fact about a POSITION IN A STREAM may not ride bytes that
+ * also go on a document, and why one of the five lines does not carry it.
+ *
  * THE CADENCE IS STATIC AND NOT A CALLER'S LOCAL, which is the one behaviour change here beyond the caller
  * set. `engine_work_done` is a LIFETIME counter that this file refuses to reset at a session boundary, so a
  * cadence restarting per call would be a reporting interval keyed on a clock that does not restart with it.
@@ -15971,6 +15982,12 @@ int engine_census_emit(void)
 {
     static long next = ENGINE_PROGRESS_EVERY;
     static int  last_cands = -1;
+    /* THE SAMPLE ORDINAL, STATIC FOR THE CADENCE'S OWN REASON. The emission below states what it is and why no
+       composer publishes it; what makes it a LIFETIME count rather than a per-call one is the paragraph above
+       about `next` — `engine_work_done()` is not reset at a session boundary, so an ordinal that restarted
+       while the cadence it numbers did not would give two samples of one process one number. `long` for the
+       same reason that counter is one. */
+    static long seq = 0;
 
     /* THE PRECONDITION THAT MAKES EVERY LINE BELOW LEGAL, NAMED AT THE CALLER'S MISTAKE. Each of the five
        composers walks state the SESSION owns — the frontier, the pager's tables, the runtime behind
@@ -15987,6 +16004,11 @@ int engine_census_emit(void)
         return 0;
     while (engine_work_done() >= next) next += ENGINE_PROGRESS_EVERY;
     last_cands = solve_candidate_count();
+    /* THE SAMPLE IS NUMBERED BEFORE IT IS COMPOSED, so the four emissions below carry ONE ordinal and the lines
+       of a block are joinable by it rather than by the order they happen to arrive in. Raised on its own
+       statement and never inside a condition: an increment is a side effect and §Offensive-programming forbids
+       one in a DCHECK's condition, which is exactly the mistake a counter asserted at its own read invites. */
+    seq += 1;
 
     /* THE FOUR CENSUSES, EACH PRINTED FROM THE ONE COMPOSER THAT ALSO PUTS IT ON THE RESULT DOCUMENT
        — solver/result.c's `result_swap_json`/`result_cold_json`/`result_heap_json`/`result_wfq_json`
@@ -16038,11 +16060,63 @@ int engine_census_emit(void)
            `^@COLD (\{.*\})$` and `^@WFQ (\{.*\})$` to drive its stuck-run discriminators, and a
            single format string carrying five of them puts four marker names in the middle of an
            emission where nothing looking for an emission's marker can see them. The bytes on the
-           stream are identical; what differs is whether the stream is READABLE as five records. */
-        printf("@SWAP %s\n", swap);
-        printf("@COLD %s\n", cold);
-        printf("@HEAP %s\n", heap);
-        printf("@WFQ %s\n", wfq);
+           stream are identical; what differs is whether the stream is READABLE as five records.
+           AND THE MARKER STAYS A LITERAL AT THE HEAD OF ITS OWN FORMAT STRING, which is why the ordinal below
+           is spliced at each line rather than once inside a helper taking the marker as an argument:
+           engine/fieldgate.mjs reads a stream marker as `@TAG` at the very START of an emission, so a marker
+           handed to a helper is a marker that namespace no longer sees WRITTEN — and a written marker read as
+           unwritten is a finding in the one gate that pairs this stream's producers with its readers.
+
+           EACH LINE STATES THE ORDINAL OF THE SAMPLE IT BELONGS TO, SPLICED IN FRONT OF THE COMPOSER'S FIRST
+           ROW. It is written HERE and is a row of no composer, because those bytes are read at TWO emission
+           sites — this stream and solver/result.c's own document — and an ordinal is a fact about a POSITION IN
+           A STREAM, which a document is not. A composer row would answer a count of census LINES on a document
+           whose host emits none, and that zero is a REGIME rather than a count: one field answering two
+           questions, which is the shape §A-FIELD-A-CONSUMER-DEFAULTS calls a plausible datum. A composer does
+           not know it is being streamed; the thing that streams it does, and owns the number.
+           IT IS NOT A SECOND SPELLING OF `workDone`, WHICH result_wfq_json ALREADY PUBLISHES. That row says
+           WHEN a sample was composed and this says WHICH sample it is, and only the second is UNIQUE: the gate
+           above has a second arm, so a NEW CANDIDATE emits a sample without `engine_work_done()` having
+           advanced at all and two samples can carry one `workDone`. That is what makes the ordinal the key the
+           lines of one block are JOINED by — result_wfq_json's own note is that two censuses share no identity
+           unless a row holds one — and it is why emitting `workDone` here as well would put a DUPLICATE KEY on
+           the @WFQ line, which a JSON parser resolves silently to whichever of the two came last.
+           THE SPLICE STEPS ONE BYTE PAST THE COMPOSER'S OPENING BRACE, so the composer's bytes go out VERBATIM
+           as a suffix and the payload is still ONE object for `^@COLD (\{.*\})$` to match whole. The comma is
+           CONDITIONAL because a composer may legitimately answer an EMPTY object — result_wfq_json does so for
+           an empty frontier, as a positive statement that nothing was standing — and an ordinal followed by
+           `,}` is not a smaller answer but a line no reader can parse: engine/trusted.mjs takes an unparseable
+           payload as the two grammars having parted rather than as a line to drop.
+
+           @FORKAT IS DELIBERATELY NOT ONE OF THEM, AND THAT IS A FINDING ABOUT THAT LINE'S OBJECT RATHER THAN A
+           NARROWING HERE. Its payload is not a record of named rows: it is a TABLE whose keys are PARTITIONED
+           BY THEIR FIRST BYTE — solver/decide.c writes a constraint key opening on concolic_ident_compose's
+           decimal length prefix, a mechanism row on `(`, an unnamed fork site on `~` and its own two bounds on
+           `_` — and engine/build.mjs's `forkReading` classifies every key exhaustively and THROWS on a fourth
+           spelling, deliberately, because a key it cannot name is mass filed under whichever population it
+           resembles. `{}` there is also the positive statement that nothing forked, which a spliced row would
+           end. So that census is placed in its block by the @COLD line it is printed beside, which is what that
+           reader's own landed residual on this pairing already asks for.
+           RESIDUAL: a reader who greps `^@FORKAT` alone still has no ordinal. What the next diff builds is a
+           fourth namespace in `forkReading` — a census-owned member admitted BY NAME, as its two bounds are —
+           and its empty-table sentence rewritten to mean "the ordinal and no rows". Its absence shows as a
+           @FORKAT line that cannot be placed in a series without counting the @COLD lines above it. */
+        DCHECK(swap[0] == '{' && swap[1] != '\0' && cold[0] == '{' && cold[1] != '\0'
+                   && heap[0] == '{' && heap[1] != '\0' && wfq[0] == '{' && wfq[1] != '\0',
+               "a census composer handed this host bytes that are not a closed object — the four emissions "
+               "below splice the sample ordinal in front of the composer's first row by stepping one byte past "
+               "its opening brace, so a body that does not open on `{` goes out with its first character eaten "
+               "and a body one byte long has no closing brace to splice in front of. Either way the line "
+               "parses into rows nobody wrote, which is worse than an absent census: build.mjs and "
+               "engine/trusted.mjs each read an unparseable payload as the two grammars having parted. A "
+               "conjunction over four bodies for the reason the CHECK above it is one — they are composed on "
+               "the two lines above this comment and emitted on the four below it, so which composer to open "
+               "is named by which of those four objects is malformed and a reader is standing in the block "
+               "either way");
+        printf("@SWAP {\"censusSeq\":%ld%s%s\n", seq, swap[1] == '}' ? "" : ",", swap + 1);
+        printf("@COLD {\"censusSeq\":%ld%s%s\n", seq, cold[1] == '}' ? "" : ",", cold + 1);
+        printf("@HEAP {\"censusSeq\":%ld%s%s\n", seq, heap[1] == '}' ? "" : ",", heap + 1);
+        printf("@WFQ {\"censusSeq\":%ld%s%s\n", seq, wfq[1] == '}' ? "" : ",", wfq + 1);
         printf("@FORKAT %s\n", forks);
         free(swap); free(cold); free(heap); free(wfq); free(forks);
     }

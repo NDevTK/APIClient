@@ -3654,6 +3654,34 @@ function lastTwo(out, marker, fields, composer) {
   if (s.length === 0) return null;
   const b = s[s.length - 1], a = s[Math.floor((s.length - 1) / 2)];
   for (const c of [a, b]) censusFields(c, marker, fields, composer);
+  /* WHICH SAMPLE OF THE SERIES EACH OF THESE TWO IS, AND IT IS NOT IN THE ROW SETS ABOVE BECAUSE IT IS NOT ONE
+     OF THE COMPOSERS' ROWS. solver/engine.c's `engine_census_emit` numbers each sample and splices `censusSeq`
+     onto the LINE, which is where an ordinal belongs: a composer's bytes also ride solver/result.c's document,
+     and a position in a stream is not a fact about a document.
+     WHAT THIS READER GETS FOR IT IS THE ONE THING THE PAIR BELOW CANNOT SAY ABOUT ITSELF. `b` is the LAST line
+     and `a` the MIDDLE one, so a series of length ONE makes them the SAME OBJECT — every delta taken off the
+     pair is then 0 and the sentences composed out of it read as a run in which nothing moved. That emitter's
+     first sample is UNCONDITIONAL and deliberately so, which makes the one line of such a series the OPENING
+     state of the run: `b.censusSeq === 1` says a verdict is being composed from a census taken before anything
+     happened, which no row of these derived sets states and which CLAUDE.md's read-the-TERMINAL-census
+     instruction is silently SATISFIED by.
+     ASSERTED AND NEVER READ WITH A `??`, on this file's own contract: an absent row compared as `undefined` is
+     FALSE for every input, so the arm reading it could never fire again — which is how `live` came to be read
+     off a census that spelled it `flows`.
+     RESIDUAL: the ordinal is NOT compared against `n`. The emitter states how many samples it WROTE and this
+     counts how many it could PARSE, and the two differ by exactly the lines a capture lost — but a capture is
+     not this reader's to own, so a throw on that difference would false-throw on the ARTIFACT rather than on
+     the census, which is the argument the @FORKAT reader's own residual already makes against a last-to-last
+     comparison. What the next diff builds is that comparison REPORTED beside `n` rather than thrown on. Its
+     absence shows as a run whose tail was cut reporting a sample count one short of the greatest ordinal in
+     its own stream, with nothing on either number saying which of the two a reader is holding. */
+  for (const c of [a, b])
+    if (typeof c.censusSeq !== "number")
+      throw new Error(`[build] the ${marker} census has no numeric \`censusSeq\` — solver/engine.c's ` +
+                      `engine_census_emit numbers each sample and splices that ordinal onto every line it ` +
+                      `writes, so its absence is that emitter having changed rather than a run with one ` +
+                      `sample. It is the row that says WHICH census of the series a line is, and without it a ` +
+                      `series of length ONE hands this reader its OPENING state as both ends of a pair.`);
   return { a, b, n: s.length };
 }
 /* THE LARGEST OF A NAMED SET, AND WHICH OF THEM MOVED — the shape every reading below is built out of. The

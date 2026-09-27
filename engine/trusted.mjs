@@ -1405,8 +1405,20 @@ async function main() {
        them and each row has a KIND — @COLD's `live` is a gauge, its `forks` and `steps` are lifetime counters
        — so a field list chosen here would be a second contract over the engine's census, maintained by hand
        in the reader, which is the drift CLAUDE.md's §AN-AUDITOR-DERIVES-THE-RULE names. The bytes are the
-       engine's own; what this zone adds is the INSTANCE and the SAMPLE ORDINAL, which the engine cannot know
-       and which are what make a multi-instance drive readable and a truncated tail countable.
+       engine's own; what this zone adds is the INSTANCE, which the engine cannot know and which is what makes
+       a multi-instance drive readable.
+       THE SAMPLE ORDINAL IS THE ENGINE'S, AND THE PER-MARKER COUNT BELOW IS A CROSS-CHECK RATHER THAN THE ONLY
+       COPY OF IT. This clause read `the INSTANCE and the SAMPLE ORDINAL, which the engine cannot know`, and
+       that was true of the instance and false of the ordinal: solver/engine.c's `engine_census_emit` numbers
+       each sample and splices `censusSeq` onto the lines it writes, which is one static counter and nothing an
+       emitter cannot hold. It is kept in its own words because a reader who re-derives it from the
+       multi-instance argument beside it will re-add it to both halves. What the count below is worth once a
+       line states its own number is the DISAGREEMENT between the two: the echo prints them side by side, so a
+       count here BELOW the ordinal on the line is lines LOST between the child and this zone, which neither
+       copy alone can say. Not asserted, deliberately — this zone is INTERPRETED FROM THE TREE and the emitter
+       is live only after a build, so a check on that row here would be the half-deployed state
+       §A-CROSS-BOUNDARY-DIFF forbids; the retiring observation is that row occurring in the native ABI's own
+       built binary, and the act that would change it is a build-and-install by the one role that may.
        THE PAYLOAD IS ASSERTED TO PARSE AND NEVER SWALLOWED, on the same ground the `@QUANTUM` arm above
        states: these composers speak one JSON grammar, so a payload this zone cannot read is the two grammars
        having parted and is a failure rather than a line to drop. */
