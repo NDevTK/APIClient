@@ -17,6 +17,7 @@
 #include "quickjs.h"
 #include "core/agent_state.h"
 #include "core/canvas/canvas_path.h"
+#include "core/canvas/canvas_path_members.h"
 #include "core/canvas/canvas_rendering_context_2d.h"
 #include "core/canvas/image_data.h"
 #include "core/css/css_color.h"
@@ -32,7 +33,10 @@ static int g_id_attrs = -1, g_id_lost = -1, g_id_reset = -1,
            g_id_set_fill_style = -1,
            g_id_set_shadow_offset_x = -1, g_id_set_shadow_offset_y = -1,
            g_id_set_shadow_blur = -1, g_id_set_shadow_color = -1,
-           g_id_get_image_data = -1, g_id_put_image_data = -1;
+           g_id_get_image_data = -1, g_id_put_image_data = -1,
+           g_id_begin_path = -1;
+/* §4.12.5.1.6's nine, indexed by the MIXIN's own magic — see core/canvas/canvas_path.h. */
+static int g_id_path[CANVAS_PATH_M_COUNT];
 static JSValue g_state_key = JS_UNDEFINED;
 static JSAtom  g_atom_state = JS_ATOM_NULL;
 
@@ -374,24 +378,34 @@ static JSValue ctx2d_drawing_copy(JSContext *ctx, JSValueConst src)
     return dst;
 }
 
-/* §4.12.5.1.3's *reset the rendering context to its default state*, in its own four steps. It is a FUNCTION
-   with two callers and not an inlined body, because the creation algorithm reaches it through *set bitmap
-   dimensions* step 1 and `reset()` reaches it directly — two spellings of one algorithm is the shape that
-   drifts. */
-static void ctx2d_reset_to_default(JSContext *ctx, JSValueConst st)
+/* §4.12.5.1.13's "Objects that implement the CanvasDrawPath interface have a current default path. There is
+   only one current default path. It is not part of the drawing state." — which is why it hangs off `st` and is
+   absent from `ctx2d_drawing_new`. The creation algorithm mints it before it returns and only the emptying
+   below ever replaces it, so an absent one is this codebase's own logic being wrong: a CHECK for `ctx2d_state`'s
+   reason, since the release arm would otherwise hand a path builder an `undefined` to append to. */
+static JSValue ctx2d_path(JSContext *ctx, JSValueConst st)
 {
-    JSValue canvas = JS_GetPropertyStr(ctx, st, "canvas");
-    JSValue path, stack, drawing;
+    JSValue path = JS_GetPropertyStr(ctx, st, "path");
 
-    /* Step 1 — "Clear canvas's bitmap to transparent black." The `alpha` arm is §4.12.5.1.2's: a context whose
-       alpha is false has a bitmap that "starts off as opaque black instead of transparent black", and its
-       alpha component "must be fixed to 1.0 (fully opaque) for all pixels". */
-    canvas_bitmap_clear(ctx, canvas, !ctx2d_bool(ctx, st, "alpha"));
+    CHECK(JS_IsArray(path), "§4.12.5.1.13: a CanvasRenderingContext2D carries no current default path");
+    return path;
+}
 
-    /* Step 2 — "Empty the list of subpaths in the context's current default path." §4.12.5.1.6's own
-       `beginPath()` is defined as exactly this, so the day that member lands it calls this line rather than
-       restating it. */
-    path = JS_GetPropertyStr(ctx, st, "path");
+/* §4.12.5.1.13: "The beginPath() method steps are to empty the list of subpaths in this's current default path
+   so that it once again has zero subpaths." IT IS A FUNCTION WITH TWO CALLERS AND NOT AN INLINED BODY, for the
+   reason `ctx2d_reset_to_default` is one: *reset the rendering context to its default state* step 2 is that
+   same sentence, and two spellings of one algorithm is the shape that drifts. The file already predicted this
+   caller at that step.
+   THE EMPTYING IS A FRESH ARRAY AND NOT A TRUNCATION, because canvas_path.h's layout puts five HEADER slots in
+   front of the op stream and `canvas_path_new` is the one thing that states their initial values — including
+   the subpath count, which IS the derived need-new-subpath flag that section's own "so that it once again has
+   zero subpaths" drives to true. A `length = 0` here would leave a path with no header at all.
+   NOTHING IS OWED TO THE COW DELTA BY THIS WRITE: `st` is an ordinary property record, so the assignment is
+   captured at `JS_SetPropertyInternal2`'s head like every other field of it. */
+static void ctx2d_empty_default_path(JSContext *ctx, JSValueConst st)
+{
+    JSValue path = JS_GetPropertyStr(ctx, st, "path");
+
     DCHECK(!JS_IsUndefined(path), "a 2D context carries no current default path");
     JS_FreeValue(ctx, path);
     path = canvas_path_new(ctx);
@@ -400,6 +414,28 @@ static void ctx2d_reset_to_default(JSContext *ctx, JSValueConst st)
        makes an always-fatal CHECK rather than a recoverable state. */
     CHECK(!JS_IsException(path), "§4.12.5.1.3: OOM emptying a 2D context's current default path");
     JS_SetPropertyStr(ctx, st, "path", path);
+}
+
+/* §4.12.5.1.3's *reset the rendering context to its default state*, in its own four steps. It is a FUNCTION
+   with two callers and not an inlined body, because the creation algorithm reaches it through *set bitmap
+   dimensions* step 1 and `reset()` reaches it directly — two spellings of one algorithm is the shape that
+   drifts. */
+static void ctx2d_reset_to_default(JSContext *ctx, JSValueConst st)
+{
+    JSValue canvas = JS_GetPropertyStr(ctx, st, "canvas");
+    JSValue stack, drawing;
+
+    /* Step 1 — "Clear canvas's bitmap to transparent black." The `alpha` arm is §4.12.5.1.2's: a context whose
+       alpha is false has a bitmap that "starts off as opaque black instead of transparent black", and its
+       alpha component "must be fixed to 1.0 (fully opaque) for all pixels". */
+    canvas_bitmap_clear(ctx, canvas, !ctx2d_bool(ctx, st, "alpha"));
+
+    /* Step 2 — "Empty the list of subpaths in the context's current default path." THIS LINE USED TO BE THE
+       BODY and said that `beginPath()` "is defined as exactly this, so the day that member lands it calls this
+       line rather than restating it" — which named §4.12.5.1.6 for a member §4.12.5.1.13 declares. That member
+       has landed and does call it; the section number is corrected here rather than in a second place, because
+       the sentence's prediction is the reason the emptying is a function at all. */
+    ctx2d_empty_default_path(ctx, st);
 
     /* Step 3 — "Clear the context's drawing state stack." */
     stack = ctx2d_stack(ctx, st);
@@ -467,7 +503,6 @@ static bool ctx2d_dict_bool(JSContext *ctx, JSValueConst settings, const char *n
 static JSValue ctx2d_create_from_settings(JSContext *ctx, JSValueConst target, JSValueConst settings)
 {
     JSValue proto, self, st, path, drawing, stack;
-    uint32_t w, h;
 
     DCHECK(g_class != 0, "a 2D context was minted before §4.12.5.1 was declared");
 
@@ -906,6 +941,95 @@ static JSValue js_ctx2d_restore(JSContext *ctx, JSValueConst this_val, int argc,
     return JS_UNDEFINED;
 }
 
+
+/* ---- §4.12.5.1.6 "Building paths" and §4.12.5.1.13's `beginPath()` ---------------------------------------- */
+
+/* `CanvasRenderingContext2D includes CanvasPath`, AND THE NINE MEMBERS ARE ROUTED RATHER THAN WRITTEN. Web IDL
+ * §3.7.3 "Interface prototype object" gives a mixin no prototype of its own, so the includer PLACES them — and
+ * core/canvas/canvas_path.h holds the list, the names, the arities, the declared types and the dispatch, which
+ * is where they moved when this became the mixin's SECOND includer. Writing a second nine-arm switch here would
+ * be two right answers to one question in a component whose arithmetic is geometry, where a disagreement is a
+ * wrong coordinate rather than a loud failure.
+ *
+ * `beginPath()` LANDS WITH THEM AND IS THE REASON THE NINE ARE WORTH PLACING AT ALL. It is §4.12.5.1.13's
+ * member and not the mixin's, and a path builder placed without it moves the flow-ender NOWHERE: every drawing
+ * sequence in the mirrored corpus opens with `ctx.beginPath()`, so a document reaching for a path today ends at
+ * that call before any of its own geometry has been computed. With both, the whole path-BUILDING half of a
+ * sequence runs and the flow ends at the PAINTER — which is where the honest absence belongs, and the geometry
+ * the page computed on the way is the surface this product exists to read.
+ *
+ * NO GUARD IS FLIPPED BY EITHER, AND THAT IS A MEASUREMENT OVER THE MIRRORED CORPUS RATHER THAN A READING OF
+ * §NO-STUBS' ORDERING RULE. THE DERIVATION, because that corpus is untracked by design and its figures move:
+ * for each member name, count the occurrences of `.<name>` in the mirror's `.js` files and read the CHARACTER
+ * THAT FOLLOWS — a `(` is a CALL, and a `?`, `??`, `&&`, `||`, `===` or `!==` is the READ a feature test is
+ * made of — with an invented member name beside them as the control that says the search could see anything at
+ * all. Every occurrence of `beginPath` and of the nine is a call, and the handful of non-call reads belong to
+ * OTHER receivers entirely (a text editor's own range object, a `DOMRect` field, a shape-kind enumeration),
+ * which is established by reading the hit rather than by counting it. So there is no `if` whose true arm these
+ * make reachable and no fallback for them to abandon.
+ *
+ * `roundRect` IS THE ONE MEMBER OF THE MIXIN THAT MEASUREMENT REFUSES, and it is a residual at the install
+ * below rather than a gap: the same derivation finds non-call reads of it on a RENDERING CONTEXT, every one of
+ * the form `ctx.roundRect ? (ctx.beginPath(), ctx.roundRect(…)) : <other shape>`.
+ *
+ * THE CURRENT TRANSFORMATION MATRIX IS THE IDENTITY, AND THAT IS PROVED RATHER THAN ASSUMED — THE PROOF IS AN
+ * ASSERT AT THE INSTALL AND NOT THIS PARAGRAPH. §4.12.5.1.6 requires that "for objects implementing the
+ * CanvasDrawPath and CanvasTransform interfaces, the points passed to the methods, and the resulting lines
+ * added to current default path by these methods, must be transformed according to the current transformation
+ * matrix before being added to the path", and §4.12.5.1.8 states the matrix's initial value: "When an object
+ * implementing the CanvasTransform interface is created, its transformation matrix must be initialized to the
+ * identity matrix." Every one of `CanvasTransform`'s members is a METHOD, so its absence is LOUD — a page that
+ * reaches for one gets Web IDL's TypeError and its flow ends there — and therefore NOTHING CAN HAVE MOVED the
+ * matrix off the identity by the time a builder below runs. A transform by the identity is the coordinates
+ * unchanged, so these members are EXACTLY right today rather than narrower than the section.
+ *
+ * WHAT WOULD MAKE THEM NARROWER IS A LATER DIFF AND NOT A STATE OF THE PROGRAM, so the forcing function is an
+ * assert over THIS FILE'S OWN INSTALL LIST rather than a comment asking the next author to remember: the
+ * install below refuses to place these members beside any `CanvasTransform` member, by name, in the same
+ * function that would place one. Its two sides can disagree — it holds today and fails on the first
+ * `CanvasTransform` landing — so it is a check and not a restatement, and it fires for exactly the person who
+ * owes the transform.
+ *
+ * AND A MATRIX PARAMETER IS NOT ADDED HERE NOW, which is canvas_path.h's own argument at `canvas_path_add_all`
+ * and the same one: "a `const double *m` parameter here with NULL at its only two call sites would be untested
+ * code wearing a finished argument", so the diff that can MOVE the matrix is the diff that applies it. */
+
+/* The receiver's current default path, or JS_EXCEPTION with the Web IDL §3.7.7 TypeError a page-supplied
+   receiver is owed — `CanvasRenderingContext2D.prototype.lineTo.call(null, 0, 0)` is one line a page can
+   write, so this is a throw and never a DCHECK, which would hand any page an abort switch for the engine.
+   NOTHING IS OWED TO THE COW DELTA BY THE WRITES THE MIXIN THEN MAKES: the path is a JS Array, so its element
+   writes are captured at `JS_SetPropertyInternal2`'s head, which is where a C caller's `JS_SetPropertyUint32`
+   arrives — canvas_path.h says why the representation is an Array and not a malloc'd vector. */
+static JSValue js_ctx2d_path_member(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                    int magic)
+{
+    JSValue st, path;
+    int r;
+
+    DCHECK(magic >= 0 && magic < CANVAS_PATH_M_COUNT,
+           "a CanvasPath member on a 2D context ran with a magic outside the mixin's own list");
+    st = ctx2d_state_of(ctx, this_val, CANVAS_PATH_M_NAMES[magic]);
+    if (JS_IsException(st)) return JS_EXCEPTION;
+    path = ctx2d_path(ctx, st);
+    r = canvas_path_member(ctx, path, magic, argc, argv);
+    JS_FreeValue(ctx, path);
+    JS_FreeValue(ctx, st);
+    return r < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+}
+
+/* §4.12.5.1.13's `beginPath()`, whose steps are the one sentence `ctx2d_empty_default_path` states. */
+static JSValue js_ctx2d_begin_path(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                   int magic)
+{
+    JSValue st = ctx2d_state_of(ctx, this_val, "beginPath");
+
+    (void)argc; (void)argv; (void)magic;
+    if (JS_IsException(st)) return JS_EXCEPTION;
+    ctx2d_empty_default_path(ctx, st);
+    JS_FreeValue(ctx, st);
+    return JS_UNDEFINED;
+}
+
 /* §4.12.5.1.2's "The getContextAttributes() method steps are to return «[ "alpha" → this's alpha,
    "desynchronized" → this's desynchronized, "colorSpace" → this's color space, "colorType" → this's color
    type, "willReadFrequently" → this's will read frequently ]»" — the five, in the section's own order.
@@ -1229,6 +1353,24 @@ void canvas_rendering_context_2d_init(JSContext *ctx)
     g_id_put_image_data = idl_method_id(ctx, PUT_IMAGE_DATA, 7, js_ctx2d_put_image_data, 0);
     idl_optional_from(3);
 
+    /* §4.12.5.1.13's `beginPath()` declares no argument. */
+    g_id_begin_path = idl_method_id(ctx, NULL, 0, js_ctx2d_begin_path, 0);
+    /* §4.12.5.1.6's nine, declared from the MIXIN's own tables so this loop states which interface is being
+       declared and nothing about what CanvasPath IS — core/canvas/canvas_path.h holds the arities, the types
+       and the one optional cursor, and `Path2D` declares its own copies of these ids from the same tables. */
+    {
+        int i;
+
+        for (i = 0; i < CANVAS_PATH_M_COUNT; i++) {
+            int opt;
+
+            g_id_path[i] = idl_method_id(ctx, canvas_path_member_types(i), CANVAS_PATH_M_ARGC[i],
+                                         js_ctx2d_path_member, i);
+            opt = canvas_path_member_optional_from(i);
+            if (opt >= 0) idl_optional_from(opt);
+        }
+    }
+
     g_state_key = JS_NewSymbol(ctx, "canvasRenderingContext2DState", false);
     CHECK(!JS_IsException(g_state_key), "§4.12.5.1: the 2D context state slot key allocation failed");
     g_atom_state = JS_ValueToAtom(ctx, g_state_key);
@@ -1349,8 +1491,8 @@ void canvas_rendering_context_2d_init(JSContext *ctx)
  * HTML §4.12.5.1.11 "Drawing rectangles to the bitmap" says a shape is "subject to the clipping region, and,
  * with the exception of clearRect(), also shadow effects, global alpha, and the current compositing and
  * blending operator", and §4.12.5.1.22's drawing model adds the filter between them. Of those inputs the CURRENT TRANSFORMATION MATRIX and the
- * CLIPPING REGION are reachable only through methods (`CanvasTransform`'s six, and `clip()`), so their
- * absence is loud and their spec-initial values — the identity matrix and the whole bitmap — are what a
+ * CLIPPING REGION are reachable only through methods (every member of `CanvasTransform`, and `clip()`), so
+ * their absence is loud and their spec-initial values — the identity matrix and the whole bitmap — are what a
  * painter may assume; `globalAlpha` is present and would be read. The other six are ATTRIBUTES:
  * `globalCompositeOperation`, `filter`, `shadowColor`, `shadowBlur`, `shadowOffsetX` and `shadowOffsetY`.
  * A `fillRect` landing beside an ABSENT one paints source-over with no shadow and no filter for a page that
@@ -1426,6 +1568,57 @@ void canvas_rendering_context_2d_init(JSContext *ctx)
  * it — a single `=` is a write, and a `===`, `!=`, `)`, `,`, `&&` or `||` would be the read a guard is made
  * of, with an invented member name as the control that says the search could see anything at all.
  *
+ *
+ * NAMED RESIDUAL — `roundRect`, WHICH IS THE ONE MEMBER OF §4.12.5.1.6's TEN THIS LANDING LEAVES OUT AND THE
+ * ONLY ONE MEASUREMENT REFUSES. WHAT IS NOT COVERED: `roundRect` is not placed on this prototype, so a page
+ * that calls it gets Web IDL's TypeError for an absent member while the other nine answer. WHAT THE NEXT DIFF
+ * BUILDS: an `IdlArgType` for its `optional (unrestricted double or DOMPointInit or sequence<(unrestricted
+ * double or DOMPointInit)>) radii = 0` — a three-armed union no position in this platform declares yet, which
+ * is a row in core/idl_args.h and a conversion beside it rather than a test in a body, since §3.2.25's sequence
+ * clause reads @@iterator and can therefore park — and then that section's own steps, whose refusals are
+ * "throws a RangeError if a value in radii is a negative number" and the list-size RangeError, followed by the
+ * per-radius normalization, the four-corner assignment for a list of one, two, three or four, and the
+ * scale-to-prevent-overlap that CSS `border-radius` shares. It lands on `canvas_path.c` beside the other nine
+ * and on both includers' name tables at once, because the list is the MIXIN's.
+ * HOW ITS ABSENCE WOULD SHOW: read the member off a 2D context — this build answers `undefined` where a browser
+ * answers a function, which is the state every feature test in the corpus is written to detect.
+ * AND ITS COST CLAUSE IS WHY IT MAY NOT SIMPLY BE PLACED SHORT: on the mirrored corpus `roundRect` is the ONE
+ * member of the mixin whose occurrences include non-call READS, and every one read is a guard on a rendering
+ * context of the form `ctx.roundRect ? (ctx.beginPath(), ctx.roundRect(…)) : <other shape>`. Placing the member
+ * without its argument flips those guards TRUE onto an arm whose own call then throws, while abandoning an arm
+ * that runs — §NO-STUBS' ordering hazard, measured rather than read off the rule. THE DERIVATION, because that
+ * corpus is untracked by design and its figures move: count `.roundRect` in the mirror's `.js` files and read
+ * the character that FOLLOWS each hit, with an invented member name beside it as the control.
+ * AND THE SAME DERIVATION FINDS THE ARGUMENT FOR THIS LANDING RATHER THAN AGAINST IT, which is the reason it is
+ * recorded here and not only as a refusal. Some of those reads are not a guard over an ARM at all but a
+ * POLYFILL over the PROTOTYPE — `CanvasRenderingContext2D.prototype.roundRect ?? (m.roundRect = P)` — and `P`
+ * builds the shape out of `this.moveTo`, `this.lineTo`, `this.ellipse` and `this.closePath`, which are four of
+ * the nine placed here. So with `roundRect` honestly absent the page installs its own and that implementation
+ * now RUNS, where before this landing it ended at its first `moveTo`. Placing a partial member instead would
+ * satisfy the `??`, the polyfill would decline to install, and the page would be left with the throwing member
+ * — which is the flip hazard arriving through a polyfill rather than through a branch, and the same answer.
+ * WHAT THIS LANDING DOES NOT DO FOR THOSE GUARDS, STATED BECAUSE THE FLATTERING READING IS AVAILABLE AND IS
+ * WRONG: it does not make their FALLBACK arms whole either. Those arms were read, and they call `strokeRect`
+ * and `clip`, which are `CanvasRect`'s and `CanvasDrawPath`'s and are both still absent — so the fallback ends
+ * at a TypeError one call later than it used to. What changed is only that `beginPath` no longer ends the
+ * guarded arm; the arm still ends, at `roundRect`.
+ *
+ * WHAT §4.12.5.1.6's NINE AND §4.12.5.1.13's `beginPath` DO NOT REACH, AND WHAT THE PATH ROAD'S NEXT MEMBER IS.
+ * A path is now BUILDABLE and is READ BY NOTHING: the members that read one are §4.12.5.1.13's, and of those
+ * `isPointInPath` is the only one that needs no bitmap at all — its steps are "return the result of the is
+ * point in path steps given this, null, x, y, and fillRule", and those steps are geometry over the path with
+ * "open subpaths must be implicitly closed when computing the area inside the path, without affecting the
+ * actual subpaths" and "points on the path itself must be considered to be inside the path". So it is the
+ * member that makes a path OBSERVABLE, and it is nearer than the painters rather than behind them, because it
+ * enters none of §4.12.5.1.22's drawing model and reads none of the six attributes a `fillRect` does.
+ * WHAT IT IS BLOCKED ON, GREPPED RATHER THAN GUESSED: core/graphics/raster_path.h already flattens this exact
+ * segment vocabulary (it reads `canvas_path_op_width` rather than restating it) and core/graphics/rasterizer.h
+ * already holds `CanvasFillRule` as `RasterFillRule` and fills an edge list under it — so the fill rule and the
+ * flattening EXIST. What does not is a walker from a `CanvasPath` JS Array into a `RasterPath` (no entry in
+ * either directory takes a `JSValueConst path`), and a point-in-path query (`raster_fill` answers COVERAGE over
+ * a device region, which is a different question from whether one point is inside). Both are this road's work
+ * and neither is the bitmap-as-surface bridge item (3) below names.
+ *
  * WHAT THE NEXT DIFF BUILDS, IN LANDING ORDER RATHER THAN DEPENDENCY ORDER, each member named with the call
  * that will consume it: (1) §4.12.5.1.17's `globalCompositeOperation`, blocked on
  * the `<blend-mode>` and `<composite-mode>` value lists, which are Compositing and Blending Level 1's and
@@ -1475,8 +1668,80 @@ void canvas_rendering_context_2d_install_realm(JSContext *ctx)
                          g_id_set_shadow_blur);                                     /* CanvasShadowStyles */
     idl_install_accessor(ctx, proto, "shadowColor", js_ctx2d_get, M_SHADOW_COLOR,
                          g_id_set_shadow_color);                                    /* CanvasShadowStyles */
+    idl_install_method(ctx, proto, "beginPath", g_id_begin_path);                   /* CanvasDrawPath */
     idl_install_method(ctx, proto, "getImageData", g_id_get_image_data);            /* CanvasImageData */
     idl_install_method(ctx, proto, "putImageData", g_id_put_image_data);            /* CanvasImageData */
+    /* §4.12.5.1.6's `CanvasPath` — Web IDL §3.7.3 gives a mixin no prototype of its own, so these flatten onto
+       the includer exactly as `CanvasShadowStyles` above does. THE NAME IS A LITERAL AT EVERY ONE because
+       `engine/idlgen.mjs` reads an install's name STATICALLY and reports a cross-file name table as an install
+       it could not resolve, crediting none of the nine and listing all nine as gaps — see the same argument,
+       with the measurement, at core/canvas/path_2d.c's install. The completeness loop below is what keeps the
+       spelling from becoming a second fact. */
+    idl_install_method(ctx, proto, "closePath",        g_id_path[CANVAS_PATH_M_CLOSE_PATH]);        /* CanvasPath */
+    idl_install_method(ctx, proto, "moveTo",           g_id_path[CANVAS_PATH_M_MOVE_TO]);           /* CanvasPath */
+    idl_install_method(ctx, proto, "lineTo",           g_id_path[CANVAS_PATH_M_LINE_TO]);           /* CanvasPath */
+    idl_install_method(ctx, proto, "quadraticCurveTo", g_id_path[CANVAS_PATH_M_QUADRATIC_CURVE_TO]); /* CanvasPath */
+    idl_install_method(ctx, proto, "bezierCurveTo",    g_id_path[CANVAS_PATH_M_BEZIER_CURVE_TO]);   /* CanvasPath */
+    idl_install_method(ctx, proto, "arcTo",            g_id_path[CANVAS_PATH_M_ARC_TO]);            /* CanvasPath */
+    idl_install_method(ctx, proto, "rect",             g_id_path[CANVAS_PATH_M_RECT]);              /* CanvasPath */
+    idl_install_method(ctx, proto, "arc",              g_id_path[CANVAS_PATH_M_ARC]);               /* CanvasPath */
+    idl_install_method(ctx, proto, "ellipse",          g_id_path[CANVAS_PATH_M_ELLIPSE]);           /* CanvasPath */
+#if APICLIENT_DEV
+    {
+        int i;
+
+        for (i = 0; i < CANVAS_PATH_M_COUNT; i++) {
+            JSValue m = JS_GetPropertyStr(ctx, proto, CANVAS_PATH_M_NAMES[i]);
+            bool placed = JS_IsFunction(ctx, m);
+
+            JS_FreeValue(ctx, m);
+            DCHECKF(placed, "§4.12.5.1.6 declares `%s` and CanvasRenderingContext2D.prototype does not carry "
+                            "it — the mixin's member list grew and this includer's install did not, which "
+                            "core/canvas/canvas_path_members.h says is the one thing a shared list cannot "
+                            "prevent by itself", CANVAS_PATH_M_NAMES[i]);
+        }
+    }
+#endif
+
+#if APICLIENT_DEV
+    /* THE FORCING FUNCTION FOR §4.12.5.1.6's TRANSFORM STEP, and the reason the path builders above may store
+       a page's coordinates unchanged. That step requires the points to be "transformed according to the current
+       transformation matrix before being added to the path", and §4.12.5.1.8 initializes that matrix to the
+       identity; every member of `CanvasTransform` is a METHOD, so while none is placed here nothing can have
+       moved it off the identity and the transform is the coordinates unchanged. The day one IS placed, that
+       ceases to hold — and the omission would be SILENT, a wrong coordinate in a path nothing reads back yet
+       rather than a crash. So the invariant is asserted over THIS FUNCTION'S OWN OUTPUT, in the one function
+       that would place such a member, and it names what the placing diff owes.
+       IT IS A LOOP AND THEREFORE A `#if` BLOCK RATHER THAN A BARE `DCHECK`: a DCHECK's condition must be
+       side-effect-free and these reads allocate, so the reads themselves may not survive into release. The
+       seven names are `CanvasTransform`'s whole declared surface — `setTransform` is declared twice, as two
+       overload entries of one name. */
+    {
+        static const char *const CANVAS_TRANSFORM_MEMBERS[] = {
+            "scale", "rotate", "translate", "transform", "getTransform", "setTransform", "resetTransform", NULL
+        };
+        int i;
+
+        for (i = 0; CANVAS_TRANSFORM_MEMBERS[i] != NULL; i++) {
+            JSValue v = JS_GetPropertyStr(ctx, proto, CANVAS_TRANSFORM_MEMBERS[i]);
+            bool placed = !JS_IsUndefined(v);
+
+            JS_FreeValue(ctx, v);
+            DCHECKF(!placed,
+                    "§4.12.5.1.8's `%s` is now placed on CanvasRenderingContext2D.prototype, and the "
+                    "§4.12.5.1.6 path builders beside it still store a page's coordinates UNCHANGED. Those "
+                    "members were correct only while no member could move the current transformation matrix "
+                    "off §4.12.5.1.8's initial identity, which this member can. The diff that places it owes "
+                    "the transform at `js_ctx2d_path_member`: the matrix is §4.12.5.1.3's first drawing-state "
+                    "item, so it is six numbers on the drawing state record (six PRIMITIVES, which is what "
+                    "keeps `ctx2d_drawing_copy`'s one-property-deep copy total over it), and canvas_path.h's "
+                    "`canvas_path_add_all` states the shape of applying one — a MOVE, LINE, QUAD or CUBIC's "
+                    "coordinates map directly and an ARC decomposes, an affine image of an ellipse being "
+                    "another ellipse whose centre, two radii and rotation all move",
+                    CANVAS_TRANSFORM_MEMBERS[i]);
+        }
+    }
+#endif
 
     /* §3.7.1's interface object for an interface that declares NO constructor — `CanvasRenderingContext2D`
        has none in its IDL, so `new CanvasRenderingContext2D()` is a TypeError and the only thing that mints
@@ -1504,4 +1769,10 @@ void canvas_rendering_context_2d_free(JSRuntime *rt)
     g_id_set_shadow_offset_x = g_id_set_shadow_offset_y = -1;
     g_id_set_shadow_blur = g_id_set_shadow_color = -1;
     g_id_get_image_data = g_id_put_image_data = -1;
+    g_id_begin_path = -1;
+    {
+        int i;
+
+        for (i = 0; i < CANVAS_PATH_M_COUNT; i++) g_id_path[i] = -1;
+    }
 }

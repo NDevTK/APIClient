@@ -23496,6 +23496,8 @@ static void canvas_pixel_selftest(JSContext *ctx)
     static const char WANT_FILL_STYLE[] =
         "#000000|string|#ff0000|#ff00ff|rgba(255, 0, 255, 0.93)|rgba(255, 0, 255, 0.93)|"
         "rgba(255, 0, 255, 0.93)|#0000ff|rgba(255, 0, 255, 0.93)|color(display-p3 1 0 0)|#000000";
+    static const char WANT_PATH[] =
+        "function,undefined|0,2,4,5,5,7|true|true|I|I|I|u|u|T|u|T|T|false|#ff0000|1";
     static const char WANT_SHADOW[] =
         "rgba(0, 0, 0, 0)|0,0,0|number,string|5,-7.5|4|4|5|-7.5|true|#ff0000|#ff0000|"
         "9,#00ff00|4,#ff0000|0,0,0,rgba(0, 0, 0, 0)";
@@ -23732,6 +23734,114 @@ static void canvas_pixel_selftest(JSContext *ctx)
            "infinite-or-NaN, and 6 is the blur's extra NEGATIVE condition, so a field differing there names "
            "which of the two predicates was applied to the wrong member", got, WANT_SHADOW);
     printf("@CANVAS2D shadow answer=%s\n", got);
+    free(got);
+
+    /* HTML §4.12.5.1.6 "Building paths" PLACED ON A RENDERING CONTEXT, AND §4.12.5.1.13's `beginPath()` WITH
+     * THEM. Every field below is a value the engine COMPUTES rather than a member it holds: the three
+     * `IndexSizeError` arms, the step ORDER that decides whether a non-finite argument reaches them at all, Web
+     * IDL §3.7.7's declared `length`, §3.6's short-call refusal, and the brand check a page-supplied receiver
+     * gets. The sixteen are separated by `|`:
+     *
+     *  1 `function,undefined`   — `typeof x.beginPath` and `typeof x.roundRect`. §4.12.5.1.6 declares TEN
+     *                            members and nine are placed; the tenth is a residual at the component's
+     *                            install, whose cost clause is measured. A `function` in the second position
+     *                            is `roundRect` placed without its three-armed `radii` union, which flips
+     *                            every feature test in the corpus onto an arm that then throws.
+     *  2 `0,2,4,5,5,7`          — Web IDL §3.7.7's `length` for `closePath`, `moveTo`, `rect`, `arcTo`, `arc`
+     *                            and `ellipse`: the count of REQUIRED positions, so `arc` answers 5 of its 6
+     *                            and `ellipse` 7 of its 8, those two carrying the mixin's only optional
+     *                            position. This is the field that says the arity table and the optional cursor
+     *                            came from ONE derivation — a `6` or an `8` here is the cursor never declared,
+     *                            and a `2` for `rect` is the wrong row read.
+     *  3 `true`                 — `x.moveTo(0, 0) === undefined`. Every member of the mixin is `undefined` in
+     *                            the IDL.
+     *  4 `true`                 — `x.beginPath() === undefined`.
+     *  5 `I`                    — `arcTo` with a negative radius: "throws an IndexSizeError DOMException if
+     *                            the given radius is negative". A `?` is no refusal at all.
+     *  6 `I`                    — `arc` with a negative radius. Its own steps are to run the ellipse steps
+     *                            with the radius twice, so this arm is ELLIPSE's negative test reached through
+     *                            `arc` — a `?` here with field 7 answering `I` is `arc` implemented as its own
+     *                            algorithm rather than as that section's own delegation.
+     *  7 `I`                    — `ellipse` with a negative `radiusY`: "if either radiusX or radiusY are
+     *                            negative then throw an IndexSizeError DOMException". Both radii are tested,
+     *                            so a `?` is the check reading only the first.
+     *  8 `u`                    — `arcTo` with a NON-FINITE coordinate AND a negative radius, which must NOT
+     *                            throw. This is the field no other one produces and it is about ORDER: that
+     *                            member's steps are "if any of the arguments are infinite or nan then return"
+     *                            and only THEN "if radius is negative then throw an IndexSizeError
+     *                            DOMException", so the early return wins. An `I` here is the two steps
+     *                            swapped, which turns a page's ordinary NaN into a thrown exception.
+     *  9 `u`                    — `moveTo(NaN, 0)`, the same early return with nothing after it to throw.
+     * 10 `T`                    — `x.lineTo(0)`. Web IDL §3.6's overload resolution throws a TypeError for a
+     *                            call short of the required positions, BEFORE any body runs — which is what
+     *                            lets the body assert its own argument count rather than testing it.
+     * 11 `u`                    — `x.arc(0, 0, 1, 0, 1)` with `counterclockwise` omitted, so five arguments
+     *                            are enough. Read with field 10, this pair says the optional cursor is at the
+     *                            declared position and not one either side of it.
+     * 12 `T`                    — `CanvasRenderingContext2D.prototype.lineTo.call(null, 0, 0)`. A receiver is
+     *                            PAGE-SUPPLIED INPUT, so the answer is Web IDL §3.7.7's TypeError and never an
+     *                            assert: a DCHECK there would hand any page an abort switch for the whole
+     *                            engine in one line, and a forcing solver writes that line constantly. An
+     *                            ABORT rather than a field is the defect this row exists to catch.
+     * 13 `T`                    — the same member called on a `Path2D`. Both interfaces include the mixin and
+     *                            each resolves its OWN path — one behind a class opaque, one on a state record
+     *                            — so a context's member may not accept a Path2D. A `u` here is one brand
+     *                            check standing for two classes, which would build a path on the wrong object.
+     * 14 `false`                — `x.moveTo === Path2D.prototype.moveTo`. Web IDL §3.7.3 gives a mixin no
+     *                            prototype of its own, so each includer places its own function objects. A
+     *                            `true` is one declaration shared between the two, whose body would resolve
+     *                            the wrong receiver's path.
+     * 15 `#ff0000`             — the fill style after `beginPath()`. §4.12.5.1.13 says of the current default
+     *                            path "It is not part of the drawing state", so emptying it must touch nothing
+     *                            else. A `#000000` is `beginPath` reaching *reset the rendering context to its
+     *                            default state* whole instead of its step 2.
+     * 16 `1`                    — the four members a real `roundRect` polyfill in the mirrored corpus builds
+     *                            its shape out of, run in sequence: `beginPath`, `moveTo`, `lineTo`, `ellipse`
+     *                            and `closePath`. It is the REACH field rather than a semantic one — with
+     *                            `roundRect` honestly absent that polyfill installs itself and now runs, where
+     *                            before this landing it ended at its first `moveTo`.
+     *
+     * WHAT THIS ROW DOES NOT REACH, AND IT IS MOST OF WHAT A PATH IS FOR: nothing reads a path back, so no
+     * field here says a coordinate was STORED where the algorithm puts it. The member that would is
+     * §4.12.5.1.13's `isPointInPath`, which needs no bitmap and is the component's named next step; until it
+     * exists the geometry in core/canvas/canvas_path.c is exercised only by its own fixture over the op stream.
+     * Nor does any field ask for a TRANSFORMED coordinate: §4.12.5.1.8's matrix is the identity because every
+     * `CanvasTransform` member is absent, which the component asserts at its install rather than here. */
+    got = tf_flow_answer(ctx, "canvas-path",
+        "var c=document.createElement('canvas');"
+        "c.setAttribute('width','2');c.setAttribute('height','2');"
+        "var x=c.getContext('2d');"
+        "function R(f){try{return f()===undefined?'u':'?';}catch(e){"
+        "return e.name==='IndexSizeError'?'I':(e.name==='TypeError'?'T':'!'+e.name);}}"
+        "var g=(typeof x.beginPath)+','+(typeof x.roundRect);"
+        "g+='|'+x.closePath.length+','+x.moveTo.length+','+x.rect.length+','+x.arcTo.length"
+        "+','+x.arc.length+','+x.ellipse.length;"
+        "g+='|'+(x.moveTo(0,0)===undefined);"
+        "g+='|'+(x.beginPath()===undefined);"
+        "g+='|'+R(function(){return x.arcTo(0,0,1,1,-1);});"
+        "g+='|'+R(function(){return x.arc(0,0,-1,0,1);});"
+        "g+='|'+R(function(){return x.ellipse(0,0,1,-1,0,0,1);});"
+        "g+='|'+R(function(){return x.arcTo(Infinity,0,1,1,-1);});"
+        "g+='|'+R(function(){return x.moveTo(NaN,0);});"
+        "g+='|'+R(function(){return x.lineTo(0);});"
+        "g+='|'+R(function(){return x.arc(0,0,1,0,1);});"
+        "g+='|'+R(function(){return CanvasRenderingContext2D.prototype.lineTo.call(null,0,0);});"
+        "g+='|'+R(function(){return CanvasRenderingContext2D.prototype.lineTo.call(new Path2D(),0,0);});"
+        "g+='|'+(x.moveTo===Path2D.prototype.moveTo);"
+        "x.fillStyle='#ff0000';x.beginPath();g+='|'+x.fillStyle;"
+        "var p=0;try{x.beginPath();x.moveTo(1,0);x.lineTo(2,0);"
+        "x.ellipse(2,1,1,1,0,-Math.PI/2,0);x.closePath();p=1;}catch(e){p='!'+e.name;}"
+        "g+='|'+p;"
+        "return g;");
+    CHECKF(!strcmp(got, WANT_PATH),
+           "HTML §4.12.5.1.6 \"Building paths\" on a 2D context answered\n  %s\nwhere its own nine members and "
+           "§4.12.5.1.13's beginPath answer\n  %s\nRead it by FIELD — the sixteen are separated by `|` and each "
+           "is derived at this function's banner, which also names what each wrong answer means. Fields 5 to 9 "
+           "are the REFUSALS and their ORDER: 5, 6 and 7 are the three IndexSizeError arms, and 8 is the one "
+           "that says the infinite-or-NaN early return runs BEFORE the negative-radius throw rather than after "
+           "it. Fields 12 and 13 are the brand check, where an ABORT rather than a field is a page-supplied "
+           "receiver reaching an assert", got, WANT_PATH);
+    printf("@CANVAS2D path answer=%s\n", got);
     free(got);
 }
 

@@ -1,6 +1,5 @@
 /* HTML §4.12.5.1.7 "Path2D objects", and §4.12.5.1.6 "Building paths"'s mixin members placed on its
    prototype. See path_2d.h for why this is buildable with no rendering context. */
-#include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -10,11 +9,11 @@
 #include "quickjs.h"
 #include "core/agent_state.h"
 #include "core/canvas/canvas_path.h"
+#include "core/canvas/canvas_path_members.h"
 #include "core/canvas/path_2d.h"
 #include "core/canvas/svg_path_data.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
-#include "solver/concolic.h"
 #include "solver/cow.h"
 
 /* §4.12.5.1.6's "Objects that implement the CanvasPath interface have a path". One owned reference, behind the
@@ -29,22 +28,14 @@ static const CowRecord PATH_2D_REC = { sizeof(Path2DBox), PATH_2D_OFF, 1 };
 
 static JSClassID g_class;
 static int g_id_ctor = -1;
-static int g_id_m[10];
 
-/* §4.12.5.1.6's ten operations, in the order the IDL declares them. The magic IS the member, and the order is
-   the one place it is written down. `roundRect` is absent from this list — see the residual at the install. */
-typedef enum {
-    P2D_CLOSE_PATH = 0, P2D_MOVE_TO, P2D_LINE_TO, P2D_QUADRATIC_CURVE_TO, P2D_BEZIER_CURVE_TO,
-    P2D_ARC_TO, P2D_RECT, P2D_ARC, P2D_ELLIPSE, P2D_MEMBER_COUNT
-} Path2DMember;
-
-static const char *const P2D_NAMES[P2D_MEMBER_COUNT] = {
-    "closePath", "moveTo", "lineTo", "quadraticCurveTo", "bezierCurveTo", "arcTo", "rect", "arc", "ellipse"
-};
-
-/* The declared argument count of each member, from the IDL. Read by the declaration below so the arity a
-   member is declared with and the arity its body reads cannot be two facts. */
-static const int P2D_ARGC[P2D_MEMBER_COUNT] = { 0, 2, 2, 4, 6, 5, 4, 6, 8 };
+/* §4.12.5.1.6's members are the MIXIN's — its list, its names, its arities, its declared types and its
+   dispatch all live in core/canvas/canvas_path.h, which says why a second includer is what moved them there.
+   THE THREE TABLES THAT STOOD HERE ARE DELETED RATHER THAN KEPT BESIDE IT: an enum, a name table and an argc
+   table copied per includer are three facts free to disagree about an arity, and CLAUDE.md
+   §A-superseded-system-is-DELETED-in-the-same-diff forbids the copy surviving the thing that replaced it.
+   `roundRect` is absent from the mixin's list too — see the residual at the install below. */
+static int g_id_m[CANVAS_PATH_M_COUNT];
 
 static Path2DBox *p2d_box(JSValueConst v)
 {
@@ -191,109 +182,20 @@ static JSValue js_p2d_ctor(JSContext *ctx, JSValueConst new_target, int argc, JS
     return out;                                                         /* step 8 */
 }
 
-/* ONE DECLARED `unrestricted double` POSITION, READ. Web IDL §3.2.8's conversion produces a Number, and the
-   ONE other thing that can stand here is unknown external input, which the IDL boundary passes through AS
-   ITSELF — CLAUDE.md §Every-value-is-CONCOLIC, and idl_concolic_rule leaves a numeric position at CROSSES. So
-   exactly two values can arrive and the DCHECK over that pair is a statement about this codebase's own logic
-   rather than about the page's value, which is what lets it be an assert at all.
-   `JS_ToFloat64` IS NEVER CALLED ON THE UNKNOWN ARM, and that is the whole reason this is a helper. Opacity
-   SURVIVES §7.1.4 ToNumber in this engine — that is what keeps control flow forking rather than collapsing to
-   NaN — so a concolic handed to JS_ToFloat64 reaches the ToNumber boundary's own assert rather than yielding a
-   double. The example is taken through concolic_example, which is the run-COMPUTED value and not an invented
-   one.
- *
- * NAMED RESIDUAL. WHAT IS NOT COVERED: a coordinate that is unknown external input is recorded as its
- * concrete EXAMPLE rather than as itself, and one carrying no example reaches HTML §4.12.5.1.6's own step
- * "If any of the arguments are infinite or NaN, then return" instead of being placed — so the path's bytes stop
- * carrying the source identity that reached them, even though no fork is lost here, since a stored coordinate
- * is branched on by nothing in this component. WHAT THE NEXT DIFF BUILDS: the point-recording ops — moveTo,
- * lineTo, quadraticCurveTo and bezierCurveTo, which perform NO arithmetic at all and merely append what they
- * were given — take the JSValue and store it in the op stream verbatim, the array already being a JSValue
- * store; the four that COMPUTE (arcTo's tangent circle, ellipse's parametric points, rect's corners) keep a
- * double contract, because an affine of an unknown is a concolic and not a number and that is a
- * concolic-arithmetic question rather than a path one. HOW ITS ABSENCE WOULD SHOW: the day anything READS a
- * path back — §4.12.5.1.13's `isPointInPath`, which returns a boolean a page branches on — that branch would
- * be DECIDED by an example where the coordinate it rests on was never known. */
-static double p2d_coord(JSContext *ctx, JSValueConst v)
-{
-    JSValue ex;
-    double d = 0;
-
-    if (JS_IsNumber(v)) {
-        /* THE CONVERSION IS NOT INSIDE THE DCHECK. A DCHECK's condition is compiled out in release, so a
-           condition that WRITES is a value the release build never sets — CLAUDE.md §DCHECK's "condition MUST
-           be side-effect-free". The call runs, and the assert reads its result. */
-        int ok = JS_ToFloat64(ctx, &d, v);
-        DCHECK(ok == 0, "a Number at a declared `unrestricted double` position did not convert to a double");
-        return d;
-    }
-    DCHECK(concolic_is(v),
-           "a Path2D member's declared `unrestricted double` argument was neither a Number nor unknown "
-           "external input — Web IDL §3.2.8's conversion produces the first and the IDL boundary passes the "
-           "second through as itself, and there is no third thing that reaches a converted position");
-    ex = concolic_example(ctx, v);
-    if (JS_IsNumber(ex)) {
-        int ok = JS_ToFloat64(ctx, &d, ex);
-        DCHECK(ok == 0, "a concolic's Number example did not convert to a double");
-        JS_FreeValue(ctx, ex);
-        return d;
-    }
-    JS_FreeValue(ctx, ex);
-    /* NOT ZERO. An unknown with no example has no coordinate, and zero would be a plausible datum — the origin
-       is a point a page really draws at. NaN is the algorithm's OWN answer for a position it has no number
-       for. HTML §4.12.5.1.6 opens every one of these members with "If any of the arguments are infinite or
-       NaN, then return". */
-    return NAN;
-}
-
-/* §4.12.5.1.6's members. Every argument is `unrestricted double` or `boolean` and is DECLARED, so each has
-   already been converted by the time this runs and nothing here converts anything. */
+/* §4.12.5.1.6's members. THE BODY, THE COORDINATE READ AND THE NINE-ARM SWITCH THAT STOOD HERE ARE DELETED
+   AND ROUTED to core/canvas/canvas_path.h's `canvas_path_member`, because a second interface now includes the
+   same mixin and a copy of one dispatch per includer is the two-right-answers shape. What is left here is the
+   only part that is genuinely this interface's: WHICH PATH the members build, which `p2d_path_of` answers
+   through the class opaque and with the Web IDL §3.7.7 TypeError a page-supplied receiver is owed.
+   THE COORDINATE READ WENT FURTHER THAN THE MIXIN: it was a local spelling of `core/idl_args.h`'s
+   `idl_number_of`, which is this engine's canonical answer for what a converted numeric argument denotes and
+   has several other callers, so the mixin routes to THAT rather than carrying the copy forward. */
 static JSValue js_p2d_member(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     JSValue path = p2d_path_of(ctx, this_val);
-    double a[8];
-    int i, want;
 
     if (JS_IsException(path)) return path;
-    DCHECK(magic >= 0 && magic < P2D_MEMBER_COUNT, "a Path2D member ran with a magic outside its own list");
-    want = P2D_ARGC[magic];
-    /* `arc` and `ellipse` end in `optional boolean counterclockwise = false`; every other position of every
-       member is required, so Web IDL §3.6 has already thrown for a short call and each of these is present. */
-    if (magic == P2D_ARC || magic == P2D_ELLIPSE) want--;
-    DCHECK(argc >= want, "a Path2D member ran with fewer arguments than its required positions — Web IDL "
-                         "§3.6's overload resolution throws before a body is reached");
-    for (i = 0; i < want; i++) a[i] = p2d_coord(ctx, argv[i]);
-
-    switch ((Path2DMember)magic) {
-    case P2D_CLOSE_PATH:
-        return canvas_path_close_path(ctx, path) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
-    case P2D_MOVE_TO:
-        return canvas_path_move_to(ctx, path, a[0], a[1]) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
-    case P2D_LINE_TO:
-        return canvas_path_line_to(ctx, path, a[0], a[1]) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
-    case P2D_QUADRATIC_CURVE_TO:
-        return canvas_path_quadratic_curve_to(ctx, path, a[0], a[1], a[2], a[3]) < 0
-               ? JS_EXCEPTION : JS_UNDEFINED;
-    case P2D_BEZIER_CURVE_TO:
-        return canvas_path_bezier_curve_to(ctx, path, a[0], a[1], a[2], a[3], a[4], a[5]) < 0
-               ? JS_EXCEPTION : JS_UNDEFINED;
-    case P2D_ARC_TO:
-        return canvas_path_arc_to(ctx, path, a[0], a[1], a[2], a[3], a[4]) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
-    case P2D_RECT:
-        return canvas_path_rect(ctx, path, a[0], a[1], a[2], a[3]) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
-    case P2D_ARC:
-        return canvas_path_arc(ctx, path, a[0], a[1], a[2], a[3], a[4],
-                               argc > 5 && JS_ToBool(ctx, argv[5])) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
-    case P2D_ELLIPSE:
-        return canvas_path_ellipse(ctx, path, a[0], a[1], a[2], a[3], a[4], a[5], a[6],
-                                   argc > 7 && JS_ToBool(ctx, argv[7])) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
-    case P2D_MEMBER_COUNT:
-        break;
-    }
-    /* The operand is this component's own enum over a closed set the DCHECK above has already narrowed, so
-       the arm is unreachable by construction and is a guard rather than an unbuilt capability. */
-    DFAIL("a Path2D member dispatched on a magic its own member list does not contain");
-    return JS_UNDEFINED;
+    return canvas_path_member(ctx, path, magic, argc, argv) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
 }
 
 /* ---- the declaration and the per-realm install ------------------------------------------------------------ */
@@ -302,21 +204,6 @@ void path_2d_init(JSContext *ctx)
 {
     JSClassDef def = { "Path2D", p2d_finalizer, p2d_gc_mark };
     static const IdlArgType CTOR[1] = { IDL_STRING_UNLESS_IFACE };
-    static const IdlArgType DOUBLES[8] = {
-        IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE,
-        IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE
-    };
-    /* `arc` and `ellipse` end in `optional boolean counterclockwise = false`, so their last position is a
-       boolean and every earlier one an unrestricted double. Two tables rather than a per-member one, because
-       every other member's positions are doubles all the way down. */
-    static const IdlArgType ARC_ARGS[6] = {
-        IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE,
-        IDL_UNRESTRICTED_DOUBLE, IDL_BOOLEAN
-    };
-    static const IdlArgType ELLIPSE_ARGS[8] = {
-        IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE,
-        IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE, IDL_BOOLEAN
-    };
     int i;
 
     DCHECK(g_class == 0, "path_2d_init ran twice — §4.12.5.1.7's class is declared once per AGENT");
@@ -332,13 +219,14 @@ void path_2d_init(JSContext *ctx)
     idl_iface_brand(g_class);
     idl_optional_from(0);
 
-    for (i = 0; i < P2D_MEMBER_COUNT; i++) {
-        const IdlArgType *types = DOUBLES;
-        if (i == P2D_ARC) types = ARC_ARGS;
-        else if (i == P2D_ELLIPSE) types = ELLIPSE_ARGS;
-        g_id_m[i] = idl_method_id(ctx, P2D_ARGC[i] ? types : NULL, P2D_ARGC[i], js_p2d_member, i);
-        /* `arc`'s and `ellipse`'s trailing `counterclockwise` is the one optional position in the mixin. */
-        if (i == P2D_ARC || i == P2D_ELLIPSE) idl_optional_from(P2D_ARGC[i] - 1);
+    /* The mixin's own tables answer every position, every arity and every optional cursor, so this loop states
+       which interface is being declared and nothing about what CanvasPath IS. */
+    for (i = 0; i < CANVAS_PATH_M_COUNT; i++) {
+        int opt;
+
+        g_id_m[i] = idl_method_id(ctx, canvas_path_member_types(i), CANVAS_PATH_M_ARGC[i], js_p2d_member, i);
+        opt = canvas_path_member_optional_from(i);
+        if (opt >= 0) idl_optional_from(opt);
     }
 
     agent_state_class("path_2d", &g_class, "§4.12.5.1.7's Path2D class, and the declaration latch");
@@ -369,12 +257,23 @@ void path_2d_init(JSContext *ctx)
  * own steps: the list-size RangeError, the per-radius normalization, the four-corner assignment for a list of
  * one, two, three or four, and the scale-to-prevent-overlap that CSS 'border-radius' shares. HOW ITS ABSENCE
  * WOULD SHOW: a page that rounds a rectangle ON A PATH rather than on a context reaches the member and its
- * flow ends there. (The corpus's own roundRect calls are all on a rendering context and all feature-detected,
- * which is why this one is a residual and `addPath` is the member to build first.) */
+ * flow ends there.
+ * THIS CLAUSE ENDED `all on a rendering context and all feature-detected`, AND THE SECOND HALF IS REFUTED
+ * RATHER THAN CORRECTED, because the reasoning it supports still holds and a reader re-deriving it from the
+ * guards would re-state the absolute. The receiver half stands: every `roundRect` call in the mirrored corpus
+ * is on a rendering context and none is on a `Path2D`, which is why this member is a residual here and
+ * `addPath` is the one to build first. The `all` does not: measured over that mirror, `.roundRect` carries
+ * THIRTEEN guard-shaped reads against SIXTEEN calls, and several calls sit in expressions with no presence
+ * test of the member anywhere in them — so an absolute over a population is a promise about every site nobody
+ * opened (CLAUDE.md §AN-OVER-CLAIM-IS-REFUTABLE), and one grep ends it. THE DERIVATION, because that corpus
+ * is untracked by design and its figures move: count `.roundRect` in the mirror's `.js` files and read the
+ * character that FOLLOWS each hit — `(` is a call and `?`, `??` or `&&` is a guard's read — with an invented
+ * member name beside it as the control. Three of the reads are neither: they are a POLYFILL, installing its
+ * own implementation under `CanvasRenderingContext2D.prototype.roundRect ?? (m.roundRect = P)`, whose body
+ * builds the shape out of `this.moveTo`, `this.lineTo`, `this.ellipse` and `this.closePath`. */
 void path_2d_install_realm(JSContext *ctx)
 {
     JSValue proto, prev, ctor, global;
-    int i;
 
     DCHECK(g_class != 0, "a realm asked for Path2D.prototype before the interface was declared");
     prev = JS_GetClassProto(ctx, g_class);
@@ -387,10 +286,47 @@ void path_2d_install_realm(JSContext *ctx)
     /* `Path2D includes CanvasPath` — Web IDL §3.7.3 gives a mixin no prototype of its own, so its members are
        placed on the INCLUDER's, which is why flattening them here is the standard's own shape and not this
        engine's shortcut. */
-    for (i = 0; i < P2D_MEMBER_COUNT; i++) {
-        DCHECK(g_id_m[i] >= 0, "a Path2D member's interface object was built before path_2d_init declared it");
-        idl_install_method(ctx, proto, P2D_NAMES[i], g_id_m[i]);
+    /* THE NAME IS WRITTEN AS A LITERAL AT EVERY ONE, AND THE LOOP THAT STOOD HERE IS DELETED FOR A MEASURED
+       REASON RATHER THAN A STYLISTIC ONE. `engine/idlgen.mjs` is this project's GAP AUDITOR: it reads the real
+       `.idl` and diffs it against what each component INSTALLS, by reading the install's name statically. A
+       `CANVAS_PATH_M_NAMES[i]` there is a table in ANOTHER FILE, which it reports as an install construct whose
+       member name could not be resolved — so it credits none of the nine and lists every one of them as a GAP.
+       Measured on the diff that moved these tables: Path2D's row went from ABSENT 2 to ABSENT 11 and the 2D
+       context's kept all nine, eighteen rows of a queue naming members that are installed and answering. That
+       is §A-COUNT-OVER-SOURCE-TEXT-IS-A-COUNT-OF-A-SPELLING in the ACCUSING direction, in the one instrument a
+       coordinator scopes a canvas lane from.
+       THE COPY IS NOT FREE TO DISAGREE, WHICH IS WHAT MAKES IT A SPELLING AND NOT A SECOND FACT: the loop below
+       asserts every name the MIXIN declares is on this prototype, so a member added to `CANVAS_PATH_M_NAMES`
+       and left out here aborts the realm rather than going quietly missing, and the arity, the declared types
+       and the body are still the mixin's alone. */
+    idl_install_method(ctx, proto, "closePath",        g_id_m[CANVAS_PATH_M_CLOSE_PATH]);
+    idl_install_method(ctx, proto, "moveTo",           g_id_m[CANVAS_PATH_M_MOVE_TO]);
+    idl_install_method(ctx, proto, "lineTo",           g_id_m[CANVAS_PATH_M_LINE_TO]);
+    idl_install_method(ctx, proto, "quadraticCurveTo", g_id_m[CANVAS_PATH_M_QUADRATIC_CURVE_TO]);
+    idl_install_method(ctx, proto, "bezierCurveTo",    g_id_m[CANVAS_PATH_M_BEZIER_CURVE_TO]);
+    idl_install_method(ctx, proto, "arcTo",            g_id_m[CANVAS_PATH_M_ARC_TO]);
+    idl_install_method(ctx, proto, "rect",             g_id_m[CANVAS_PATH_M_RECT]);
+    idl_install_method(ctx, proto, "arc",              g_id_m[CANVAS_PATH_M_ARC]);
+    idl_install_method(ctx, proto, "ellipse",          g_id_m[CANVAS_PATH_M_ELLIPSE]);
+#if APICLIENT_DEV
+    /* Every name the mixin declares, placed. A loop and therefore a `#if` block: a DCHECK's condition must be
+       side-effect-free and these reads allocate — and the cursor is declared INSIDE it, because a declaration
+       outside is a variable the release build carries and uses nowhere. */
+    {
+        int i;
+
+        for (i = 0; i < CANVAS_PATH_M_COUNT; i++) {
+            JSValue m = JS_GetPropertyStr(ctx, proto, CANVAS_PATH_M_NAMES[i]);
+            bool placed = JS_IsFunction(ctx, m);
+
+            JS_FreeValue(ctx, m);
+            DCHECKF(placed, "§4.12.5.1.6 declares `%s` and Path2D.prototype does not carry it — the mixin's "
+                            "member list grew and this includer's install did not, which "
+                            "core/canvas/canvas_path_members.h says is the one thing a shared list cannot "
+                            "prevent by itself", CANVAS_PATH_M_NAMES[i]);
+        }
     }
+#endif
 
     global = JS_GetGlobalObject(ctx);
     DCHECK(g_id_ctor >= 0, "Path2D's interface object was built before path_2d_init declared its constructor");
@@ -412,5 +348,5 @@ void path_2d_free(void)
        agent's Path2D a class registered in a runtime that no longer exists. See core/agent_state.h. */
     g_class = 0;
     g_id_ctor = -1;
-    for (i = 0; i < P2D_MEMBER_COUNT; i++) g_id_m[i] = -1;
+    for (i = 0; i < CANVAS_PATH_M_COUNT; i++) g_id_m[i] = -1;
 }

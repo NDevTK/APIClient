@@ -1,4 +1,5 @@
-/* HTML §4.12.5.1.6 "Building paths" — the CanvasPath mixin's path and its ten operations. See canvas_path.h
+/* HTML §4.12.5.1.6 "Building paths" — the CanvasPath mixin's path, the nine operations it is built with, and
+   the members every includer places (declared in canvas_path_members.h). See canvas_path.h
    for the representation and for why nothing here needs a device. */
 #include <math.h>
 #include <stdbool.h>
@@ -7,6 +8,8 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/canvas/canvas_path.h"
+#include "core/canvas/canvas_path_members.h"
+#include "core/idl_args.h"
 
 /* ---- the array ------------------------------------------------------------------------------------------ */
 
@@ -377,5 +380,129 @@ int canvas_path_add_all(JSContext *ctx, JSValueConst dst, JSValueConst src)
     cp_set(ctx, dst, CANVAS_PATH_START_X, canvas_path_header(ctx, src, CANVAS_PATH_START_X));
     cp_set(ctx, dst, CANVAS_PATH_START_Y, canvas_path_header(ctx, src, CANVAS_PATH_START_Y));
     cp_set(ctx, dst, CANVAS_PATH_NSUB, canvas_path_header(ctx, dst, CANVAS_PATH_NSUB) + nsub);
+    return 0;
+}
+
+/* ---- §4.12.5.1.6's MEMBERS ------------------------------------------------------------------------------- */
+
+/* See canvas_path.h for why the list, the names, the arities, the types and the dispatch live with the MIXIN
+   and not with whichever interface includes it first. */
+const char *const CANVAS_PATH_M_NAMES[CANVAS_PATH_M_COUNT] = {
+    "closePath", "moveTo", "lineTo", "quadraticCurveTo", "bezierCurveTo", "arcTo", "rect", "arc", "ellipse"
+};
+
+const int CANVAS_PATH_M_ARGC[CANVAS_PATH_M_COUNT] = { 0, 2, 2, 4, 6, 5, 4, 6, 8 };
+
+/* Two tables rather than one per member, because every position of every member is an `unrestricted double`
+   except `arc`'s and `ellipse`'s trailing `optional boolean counterclockwise = false`. */
+static const IdlArgType CP_DOUBLES[8] = {
+    IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE,
+    IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE
+};
+static const IdlArgType CP_ARC_ARGS[6] = {
+    IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE,
+    IDL_UNRESTRICTED_DOUBLE, IDL_BOOLEAN
+};
+static const IdlArgType CP_ELLIPSE_ARGS[8] = {
+    IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE,
+    IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE, IDL_UNRESTRICTED_DOUBLE, IDL_BOOLEAN
+};
+
+const IdlArgType *canvas_path_member_types(int magic)
+{
+    DCHECK(magic >= 0 && magic < CANVAS_PATH_M_COUNT,
+           "a CanvasPath member's declared types were asked for a magic outside the mixin's own list");
+    if (CANVAS_PATH_M_ARGC[magic] == 0) return NULL;   /* `closePath()` declares no position */
+    if (magic == CANVAS_PATH_M_ARC) return CP_ARC_ARGS;
+    if (magic == CANVAS_PATH_M_ELLIPSE) return CP_ELLIPSE_ARGS;
+    return CP_DOUBLES;
+}
+
+int canvas_path_member_optional_from(int magic)
+{
+    DCHECK(magic >= 0 && magic < CANVAS_PATH_M_COUNT,
+           "a CanvasPath member's optional cursor was asked for a magic outside the mixin's own list");
+    /* `arc` and `ellipse` end in `optional boolean counterclockwise = false`; every other position of every
+       other member is required, so Web IDL §3.6 throws for a short call before any body below is reached. */
+    if (magic == CANVAS_PATH_M_ARC || magic == CANVAS_PATH_M_ELLIPSE) return CANVAS_PATH_M_ARGC[magic] - 1;
+    return -1;
+}
+
+/* ONE DECLARED `unrestricted double` POSITION, READ — THROUGH `idl_number_of` AND NOT THROUGH A SECOND COPY OF
+ * IT. This was a static in the first includer that spelled the Number arm and the unknown-example arm itself,
+ * and `core/idl_args.h`'s `idl_number_of` is the engine's canonical answer to exactly that question with
+ * several other callers — so the copy is DELETED rather than kept beside it (CLAUDE.md
+ * §A-superseded-system-is-DELETED-in-the-same-diff). It is also strictly wider: a non-Number example converts
+ * through §3.2's own arithmetic there, where the copy answered NaN for it.
+ *
+ * WHAT THE CALLER OWES IS THE NO-EXAMPLE ANSWER, which `idl_number_of` deliberately leaves to it —
+ * "there is no number to fall back to, choosing one would INVENT a value the code never computed, and what
+ * that absence means differs per member". Here it is NaN and never 0: the origin is a point a page really
+ * draws at, so a 0 would be a plausible datum, while §4.12.5.1.6 opens every one of these members with "If
+ * any of the arguments are infinite or NaN, then return" — the algorithm's own answer for a position it has no
+ * number for.
+ *
+ * NAMED RESIDUAL. WHAT IS NOT COVERED: a coordinate that is unknown external input is recorded in the op
+ * stream as its concrete EXAMPLE rather than as itself, and one carrying no example is not recorded at all —
+ * so the path's bytes stop carrying the source identity that reached them, even though no fork is lost here,
+ * since a stored coordinate is branched on by nothing in this component. WHAT THE NEXT DIFF BUILDS: the
+ * point-recording ops — moveTo, lineTo, quadraticCurveTo and bezierCurveTo, which perform NO arithmetic at all
+ * and merely append what they were given — take the JSValue and store it in the op stream verbatim, the array
+ * already being a JSValue store; the four that COMPUTE (arcTo's tangent circle, ellipse's parametric points,
+ * rect's corners) keep a double contract, because an affine of an unknown is a concolic and not a number and
+ * that is a concolic-arithmetic question rather than a path one. HOW ITS ABSENCE WOULD SHOW: the day anything
+ * READS a path back — §4.12.5.1.13's `isPointInPath`, which returns a boolean a page branches on — that
+ * branch would be DECIDED by an example where the coordinate it rests on was never known. */
+static double cp_coord(JSContext *ctx, JSValueConst v)
+{
+    double d = 0;
+
+    if (idl_number_of(ctx, IDL_UNRESTRICTED_DOUBLE, v, &d)) return d;
+    return NAN;
+}
+
+int canvas_path_member(JSContext *ctx, JSValueConst path, int magic, int argc, JSValueConst *argv)
+{
+    double a[8];
+    int i, want;
+
+    DCHECK(magic >= 0 && magic < CANVAS_PATH_M_COUNT,
+           "a CanvasPath member ran with a magic outside the mixin's own list");
+    DCHECK(JS_IsArray(path),
+           "a CanvasPath member was handed something that is not a path array — the includer resolves its own "
+           "path and canvas_path_new is the only thing that mints one");
+    want = CANVAS_PATH_M_ARGC[magic];
+    if (magic == CANVAS_PATH_M_ARC || magic == CANVAS_PATH_M_ELLIPSE) want--;
+    DCHECK(argc >= want, "a CanvasPath member ran with fewer arguments than its required positions — Web IDL "
+                         "§3.6's overload resolution throws before a body is reached");
+    for (i = 0; i < want; i++) a[i] = cp_coord(ctx, argv[i]);
+
+    switch ((CanvasPathMember)magic) {
+    case CANVAS_PATH_M_CLOSE_PATH:
+        return canvas_path_close_path(ctx, path);
+    case CANVAS_PATH_M_MOVE_TO:
+        return canvas_path_move_to(ctx, path, a[0], a[1]);
+    case CANVAS_PATH_M_LINE_TO:
+        return canvas_path_line_to(ctx, path, a[0], a[1]);
+    case CANVAS_PATH_M_QUADRATIC_CURVE_TO:
+        return canvas_path_quadratic_curve_to(ctx, path, a[0], a[1], a[2], a[3]);
+    case CANVAS_PATH_M_BEZIER_CURVE_TO:
+        return canvas_path_bezier_curve_to(ctx, path, a[0], a[1], a[2], a[3], a[4], a[5]);
+    case CANVAS_PATH_M_ARC_TO:
+        return canvas_path_arc_to(ctx, path, a[0], a[1], a[2], a[3], a[4]);
+    case CANVAS_PATH_M_RECT:
+        return canvas_path_rect(ctx, path, a[0], a[1], a[2], a[3]);
+    case CANVAS_PATH_M_ARC:
+        return canvas_path_arc(ctx, path, a[0], a[1], a[2], a[3], a[4],
+                               argc > 5 && JS_ToBool(ctx, argv[5]));
+    case CANVAS_PATH_M_ELLIPSE:
+        return canvas_path_ellipse(ctx, path, a[0], a[1], a[2], a[3], a[4], a[5], a[6],
+                                   argc > 7 && JS_ToBool(ctx, argv[7]));
+    case CANVAS_PATH_M_COUNT:
+        break;
+    }
+    /* The operand is this component's own enum over a closed set the DCHECK above has already narrowed, so the
+       arm is unreachable by construction and is a guard rather than an unbuilt capability. */
+    DFAIL("a CanvasPath member dispatched on a magic the mixin's own member list does not contain");
     return 0;
 }

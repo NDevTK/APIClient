@@ -1,4 +1,7 @@
-/* HTML §4.12.5.1.6 "Building paths" — the `CanvasPath` mixin's PATH, and the ten operations that build one.
+/* HTML §4.12.5.1.6 "Building paths" — the `CanvasPath` mixin's PATH and the NINE operations this component
+ * builds one with. Its Web IDL MEMBER surface is core/canvas/canvas_path_members.h, which says why that is a
+ * second header and not a second component: this one is includable by a layer that has no realm, and a
+ * declared position's type is not.
  *
  * A PATH IS NOT A DEVICE. §4.12.5.1.6 defines one entirely as data — "A path has a list of zero or more
  * subpaths. Each subpath consists of a list of one or more points, connected by straight or curved line
@@ -89,7 +92,12 @@ int canvas_path_op_width(CanvasPathOp op);
    allocation failure, which the caller propagates. */
 JSValue canvas_path_new(JSContext *ctx);
 
-/* §4.12.5.1.6's ten operations. Each takes the path array the including interface holds.
+/* §4.12.5.1.6's operations. Each takes the path array the including interface holds.
+   THIS SENTENCE AND THIS FILE'S OPENING BOTH SAID `ten`, WHICH IS THE ONE ERROR A READER CATCHES WITH NO TREE
+   AND NO FETCH, because both halves are in the sentence: §4.12.5.1.6 declares TEN members and the list below
+   is NINE of them. `roundRect` is the tenth and is a named residual at each includer's install — so the count
+   was a claim about the SECTION standing where a claim about this COMPONENT belonged, and it is the LIST that
+   is kept rather than a corrected number, which is what stops the next member landing beside a stale digit.
    THE RETURN IS 0 OR -1 WITH AN EXCEPTION PENDING, never a JSValue, because every one of them is `undefined`
    in the IDL and the only thing a caller can do with the answer is propagate it. The three that can throw are
    the three the standard says throw: arcTo and ellipse raise an "IndexSizeError" DOMException for a negative
