@@ -3506,14 +3506,31 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            about:srcdoc … return sourceOrigin" — so a srcdoc child is same-origin with its creator and takes the
            arm above, UNLESS its element carries `sandbox`: §7.1.5's sandboxed origin browsing context flag
            "forces content into an opaque origin", step 1 runs before step 3, and an opaque origin is same origin
-           with nothing. So `<iframe sandbox srcdoc="…">` is a second INSTANCE with a document body this
+           with nothing.
+           AND IT IS ANOTHER AGENT CLUSTER AND NOT MERELY ANOTHER ORIGIN, WHICH IS THE STEP A READER CHECKING
+           THIS WILL GET WRONG: §8.1.2.2 "Integration with the JavaScript agent cluster formalism" keys a
+           cluster on a SITE — "An agent cluster key is a site or tuple origin" — so that algorithm alone reads
+           as a sandboxed child sharing its parent's, and this engine's origin-keyed instance as the stricter of
+           the two. They AGREE here: §7.1.1.1 "Sites"' obtain a site returns an opaque origin UNCHANGED ("If
+           origin is an opaque origin, then return origin") and its same site answers false for any two distinct
+           opaque origins, so the group's agent cluster map holds no entry under this child's key.
+           So `<iframe sandbox srcdoc="…">` is a second INSTANCE with a document body this
            instance is holding, and the notice below has no field for it — the peer would provision a navigable
            at `about:srcdoc` with nothing to parse.
-           BUILD: §7.4.5's document resource as a field of this notice, beside the policy container and the
-           top-level creation URL it already carries and for the same reason — the bytes are an input of the
-           OPERATION and the peer cannot derive them from anything it holds. It goes BEFORE the policy, which
-           is the record's remainder, and it is a document rather than a URL, so it needs the escape the fields
-           split on rather than a raw field of its own.
+           BUILD: TWO FIELDS AND NOT ONE, and the second decides whether the first is worth having. §7.4.5's
+           DOCUMENT RESOURCE is the bytes; §7.4's ABOUT BASE URL is the other operand of the SAME algorithm —
+           create navigation params from a srcdoc resource returns navigation params whose about base URL is
+           "entry's document state's about base URL" — and §2.4.3 "Document base URLs"' fallback base URL step
+           1 makes it required for precisely this document, "Assert: document's about base URL is non-null".
+           core/dom/document.c HOLDS that assert, so a peer handed the resource ALONE does not show an empty
+           frame: it ABORTS THERE, under a message naming whoever created the Document as at fault — this
+           defect relocated into a file that did not cause it rather than closed. NEITHER IS DERIVABLE FROM
+           WHAT THIS RECORD CARRIES: the top-level creation URL beside them is §8.1.3.1's, which for a nested
+           frame is the TOP document's and never this one's, and the creator's ADDRESS is not its BASE URL the
+           moment it carries `<base href>`, which is what the same-origin arm above passes document_base_url
+           for. Both go BEFORE the policy, which is the record's remainder; the resource is a DOCUMENT rather
+           than a URL, so it crosses in the escape the fields split on (base64 over the engine's own codec, as
+           core/frame/remote_object.c's identity fields do) rather than as a raw field.
            HOW ITS ABSENCE SHOWS: `<iframe sandbox srcdoc="<script>…">` presents a frame whose document is
            EMPTY and whose scripts never ran, while the identical markup without `sandbox` runs — and nothing in
            the run names the sandbox attribute, because the two frames differ only in which arm of this
@@ -3525,10 +3542,12 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                   "fresh OPAQUE origin, so the frame is a document of another agent cluster and another "
                   "INSTANCE. The notice below carries this navigable's address, origin, parent, container "
                   "policy, ancestor origins, sandboxing flags and its creator's whole policy container, and it "
-                  "does NOT carry the document's own BYTES, which is the one field a srcdoc peer cannot derive "
-                  "from anything it holds. Add §7.4.5's resource to the notice — before the policy, which is "
-                  "the record's remainder — and give the receiving host the same reader it has for the "
-                  "container");
+                  "does NOT carry the document's own BYTES, nor §7.4's ABOUT BASE URL — TWO facts a srcdoc "
+                  "peer cannot derive and not one. Add §7.4.5's resource AND that base URL, before the policy, "
+                  "which is the record's remainder, with the readers this host already has for the container. "
+                  "The resource alone does not close this: it moves the abort into the peer's own §2.4.3 step "
+                  "1 assert, which names this document as at fault for a field the record still would not "
+                  "carry");
         /* THE NOTICE, and every field of it is load-bearing. The CHILD is the name the host provisions an
            instance under; the CREATOR names who made it, which is what the host routes replies through and what
            a browser would decide policy from; the URL is the child's initial address; the ORIGIN is the
