@@ -6795,6 +6795,23 @@ function coldRoundTripStages(bin, kind) {
   return [onHost(v1, STAGE_HOST.NATIVE), onHost(v2, STAGE_HOST.NATIVE)];
 }
 
+/* WHAT A STAMP'S `dirty`/`unasked` PAIR SAYS, IN ONE PLACE, BECAUSE BOTH STAMP SITES SAY IT. The wasm install
+   gate below turns this answer into a DECISION — `null` installs, anything else refuses — and the native link
+   below puts it in the line that names the binary. The words are ONE fact, and two spellings of one fact are two
+   chances to disagree: the hand-copied-list defect this file warns about at NATIVE_DIALECT, in the diagnostic a
+   reader acts on rather than in a flag list.
+   THE THREE ANSWERS ARE KEPT APART FOR gate_revision.mjs's OWN STATED REASON: a tree that could not be ASKED
+   has an empty `dirty`, so folding `unasked` into it would publish the strongest claim a build can make — this
+   artifact is a build of a clean revision — out of the one state in which it knows nothing. `null` means asked
+   and nothing differs, and it is the only value either caller may read as clean. */
+function coneReading(rev) {
+  return rev.dirty.length   ? rev.dirty.length + " dirty path(s) in the compiled cone: "
+                              + rev.dirty.map((d) => d.trim()).join(", ")
+       : rev.unasked.length ? rev.unasked.length + " path(s) this tree could not be asked about: "
+                              + rev.unasked.map((d) => d.trim()).join(", ")
+       : null;
+}
+
 function nativeProgram(kind, dev) {
   /* THE ASSERTION REGIME IS A PARAMETER OF THE TARGET AND NOT A CONSTANT, and it is REQUIRED AT EVERY CALL
      SITE rather than defaulted. A default would let a caller that never stated it masquerade as one with
@@ -6857,6 +6874,17 @@ function nativeProgram(kind, dev) {
     "-Werror=implicit-function-declaration",
     "-I" + QJS, "-I" + HOST, "-I" + join(HOST, "browser"), "-I" + LEXBOR_INC,
   ];
+  /* THE WORD THIS PROGRAM'S STAMP WILL NAME, READ OFF THE FLAG LIST THAT IS ABOUT TO COMPILE IT AND NOT OFF
+     `dev`. The difference is not pedantry: `dev` decides the `-DAPICLIENT_DEV=` token in the array above, so
+     reading `dev` a SECOND time at the stamp would be two independent readings of one parameter — the pair that
+     drifts the day somebody edits that interpolation — whereas reading the LIST makes the flag the single
+     source and the stamp its consequence. A stamp that disagrees with the flags is worse than no stamp at all:
+     it is a scored-looking answer to the one question that decides whether an ABSENT ABORT from this binary is
+     evidence of anything. It is the same move `WASM_REGIME` makes on CFLAGS, through the same helper.
+     TAKEN HERE RATHER THAN AT THE STAMP, for regimeOf's own stated reason: it THROWS, and the stamp is written
+     after the link, so a program that cannot say what regime compiled it would otherwise put the whole compile
+     between the defect and the diagnosis. */
+  const NATIVE_REGIME = regimeOf(NATIVE_DIALECT, "the native program " + target);
   /* THE SANITIZER RUNTIME, RESOLVED BEFORE THE COMPILE SO ITS ABSENCE IS A NAMED VERDICT RATHER THAN A RAW
      LINKER ERROR. `none` asks nothing and is unchanged: the DEFAULT build's verdict host takes this arm, so
      this whole mechanism is unreachable from it. */
@@ -6909,7 +6937,38 @@ function nativeProgram(kind, dev) {
     return { bin: null, stage: { label: "native link (" + target + ")", verdict: "FAILED — " + why,
                                  code: cc.status || 1, kind: STAGE_KIND.DEFECT } };
   }
-  console.log("[build] OK -> " + bin + " (both entries: the fixture, and `--abi` over the shipped qjs_* ABI)");
+  /* THE ARTIFACT RECORDS THE REVISION IT WAS BUILT FROM, THROUGH THE SAME HELPER THE WASM LINK CALLS. Until it
+     did, this binary was the one artifact of this build that could not say which tree made it, and the cost is
+     MEASURED rather than feared: CLAUDE.md §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES records FOUR separate lanes
+     declining to take a measurement on the ground that "the artifact carries no build stamp" — and the artifact
+     the wasm driver loads was stamped the whole time. What they had looked at was THIS program. Two artifacts of
+     one build, one stamped and one not, is the shape that produces that: an instrument answering about one gets
+     read as answering about the pipeline. So this is not tidying, it is the reason a whole class of readings got
+     refused.
+     ON THE SUCCESS PATH, AND STRUCTURALLY RATHER THAN BY REMEMBERING: every arm above that has no binary
+     RETURNS, so this line cannot be reached without `cc.status === 0`, and the wasm site's own reason applies
+     unchanged — stamping after a failed link marks whatever binary a PREVIOUS build left as belonging to this
+     revision, which is a number about nothing with the stamp itself doing the lying.
+     THE CONE IS WHAT THIS LINK ACTUALLY COMPILED, AND IT IS WIDER THAN THE WASM STAMP'S BY `engine/lexbor`
+     DELIBERATELY. The archive handed to clang above is compiled from engine/lexbor/source, and every host object
+     is compiled against its headers (`-I` + LEXBOR_INC in NATIVE_DIALECT), so a dirty file there is a file this
+     program CONTAINS. That is not a hypothetical at this site: the paragraph above LEXBOR_NATIVE records a
+     stale archive against edited headers producing "a lexbor no revision contains", found three frames from the
+     write inside free(), and a cone omitting engine/lexbor would have reported that build clean. The wasm
+     stamp's cone omits it while linking lexbor too — that is a finding about THAT call, and it is NOT a reason
+     to narrow this one to match it.
+     AND A DIRTY CONE IS RECORDED HERE RATHER THAN REFUSED, which is the opposite call from the wasm install
+     gate and is FORCED rather than chosen: clang has already written `bin` by the time this line runs, so there
+     is no previous artifact left for a refusal to preserve, and refusing would leave exactly the unstamped
+     binary this call exists to end — an absent record where a dirty one is the honest statement. A refusal
+     becomes meaningful here the day this link writes its output to a staging path and renames it on success,
+     and not before. */
+  const rev = stampArtifact(bin, ["engine/host", "engine/qjs", "engine/lexbor"], NATIVE_REGIME);
+  /* THE REGIME IS IN THE LINE THAT NAMES THE BINARY, for the reason the wasm install line gives about itself: a
+     green line from a program with its invariants compiled out is a SMALLER claim than one from a program with
+     them armed, and two claims of different size may not share a spelling. */
+  console.log("[build] OK -> " + bin + " (head " + rev.head + ", " + (coneReading(rev) || "clean cone") + ", "
+              + NATIVE_REGIME + " asserts; both entries: the fixture, and `--abi` over the shipped qjs_* ABI)");
   return { bin, stage: { label: "native link (" + target + ")", verdict: "PASS", code: 0, kind: null } };
 }
 
@@ -7541,11 +7600,9 @@ if (ABI_LINK.code === 0) {
      would be false of one of them. It is derived from the flag list that compiled these objects, never from
      argv: see `regimeOf`. */
   const rev = stampArtifact(stageArtifact, ["engine/host", "engine/qjs"], WASM_REGIME);
-  const why = rev.dirty.length ? rev.dirty.length + " dirty path(s) in the compiled cone: "
-                                 + rev.dirty.map((d) => d.trim()).join(", ")
-            : rev.unasked.length ? rev.unasked.length + " path(s) this tree could not be asked about: "
-                                 + rev.unasked.map((d) => d.trim()).join(", ")
-            : null;
+  /* THE SAME READING THE NATIVE LINK PRINTS, through `coneReading` rather than restated here — see its own
+     header for why one fact may not have two spellings when one of them is a DECISION. */
+  const why = coneReading(rev);
   if (why === null) {
     for (const f of ["qjs.mjs", "qjs.wasm", "qjs.mjs" + ".build.json"])
       if (existsSync(join(ABI_STAGE, f))) renameSync(join(ABI_STAGE, f), join(EXT_QJS, f));

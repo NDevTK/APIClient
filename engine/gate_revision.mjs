@@ -441,6 +441,25 @@ export function stampArtifact(artifact, cone, assertRegime) {
                     `describes an artifact whose silence means nothing, and every driver reading it would ` +
                     `file an absent abort as a scored absence.`);
   const rev = gateRevision(cone);
+  /* NAMED RESIDUAL — THIS RECORD NAMES A REVISION AND NOT THE BYTES, SO THE PAIRING IT ASSERTS IS UNFALSIFIABLE
+     BY WHOEVER READS IT. The stamp is a separate FILE from the artifact, so any copy, install or partial write
+     can leave one newer than the other, and nothing in either file binds the two: a reader holding `head <sha>,
+     clean cone` has a true statement about a TREE and no way to establish that THESE bytes are what that tree
+     produced.
+     WHAT IS NOT COVERED: every consumer of this record, both callers included. The nearest thing to a binding
+     today is an MTIME comparison in testing/artifact_stamp.js, which belongs to one caller rather than to the
+     artifact and which answers "the stamp is not older than the artifact" — a different and weaker question than
+     "the stamp describes these bytes".
+     WHAT THE NEXT DIFF BUILDS: a digest of the artifact's own bytes in this record, and the decision it has to
+     make first is what "the artifact" IS. The wasm is a PAIR — `qjs.mjs` and the `qjs.wasm` beside it, which is
+     where the program actually is — while the native link is one file, so a single field digesting `artifact`
+     alone would answer for the whole native program and for HALF the wasm one, which is one field serving two
+     shapes. It is not landed with the native stamp because the mtime comparison would then be a second and
+     weaker pairing mechanism standing beside it, in a file that diff does not touch, and
+     §A-superseded-system-is-DELETED wants the two to move together.
+     HOW ITS ABSENCE WOULD SHOW: a driver reporting a revision for bytes some other build produced — a stamp and
+     an artifact copied or installed apart, every field of the record true, the pair wrong, and no reader able to
+     say so from the two files alone. */
   writeFileSync(stampPath(artifact), JSON.stringify(
     /* `unasked` IS STAMPED BESIDE `dirty` FOR THE SAME REASON THE VERDICT PRINTS THEM APART. A build whose
        tree could not be asked has an empty `dirty`, and a later reader comparing only that field would read
