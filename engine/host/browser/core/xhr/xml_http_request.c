@@ -2814,7 +2814,29 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
            BUILDS: the chunk seam itself, in spec order — a reply record whose body GROWS (core/fetch/fetch.c
            asserts today that a record does NOT already carry one), a park the delivery RESUMES without
            RETIRING (solver/pending_index.h: a record "leaves the outstanding set for good" when answered, and
-           is "keyed at most once"), and only then this stage looping back to the wait. HOW ITS ABSENCE SHOWS:
+           is "keyed at most once"), and only then this stage looping back to the wait.
+           AND THAT CLAUSE IS SHORT BY THE MEMBER UNDERNEATH ALL THREE, WHICH IS IN THE TRUSTED ZONE AND NOT IN
+           THIS ENGINE — RECORDED HERE RATHER THAN REPAIRED, BECAUSE A NEXT-DIFF CLAUSE IS READ ONCE, BY
+           SOMEBODY WHO HAS ALREADY DECIDED TO DO THE WORK. Its three members are the right three and they are
+           all ENGINE-SIDE, so a lane that builds them has a receiver for a chunk and no producer that can
+           reach it: `extension/bridge.js`'s `engineServiceFetch` walks the pending list SEQUENTIALLY and
+           AWAITS `eng.fetched` per line, which awaits `safeFetch`, which awaits `_readBody`'s reader loop —
+           and that loop breaks only on `step.done`. A body with no end therefore never returns, the service
+           round never resolves, and `hostSchedule` restores `state = "hot"` only in that round's `.then`, so
+           the instance leaves the rankable set for the rest of the session and CANNOT STEP. Chunks delivered
+           into linear memory by a landed ABI entry would be interpreted by nobody.
+           SO THE LANDING ORDER IS NOT THE DEPENDENCY ORDER, and the member with a consumer TODAY is the one
+           that is not in this list: a door that can carry a body whose arrival outlives one round. It is a
+           live defect on its own, reached with no EventSource anywhere — an ordinary `fetch()` or a `send()`
+           to an endpoint that holds its body open freezes that document's frontier — and the shape it needs
+           is `engine/host/wpt_runner.c`, already driving this same ABI: a `g_inflight` table that
+           ISSUES without blocking the step loop and refuses to re-issue a `(method, url)` still in flight.
+           THAT SECOND HALF IS WHY THE ENGINE OWES NO THIRD STATE ON ITS JOIN. `engine_pending_fetches` skips
+           an entry only once it carries a value or a refusal, so a request whose bytes are still arriving is
+           RE-LISTED every round BY DESIGN; a host that dedups its own in-flight set answers that correctly,
+           and one that does not would re-issue the request instead. A lane reading this list alone would go
+           looking for a STREAMING arm on the join, which is a second answer to a question the host already
+           owns. HOW ITS ABSENCE SHOWS:
            a page counting its own `progress` events, or accumulating in `onprogress`, sees exactly one before
            end-of-body for a reply of any size, where a browser fires one per ~50ms of arrival. */
         d->state = XHR_LOADING;

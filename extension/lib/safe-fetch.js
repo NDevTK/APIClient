@@ -2605,7 +2605,30 @@ async function _readBody(resp, sink, gated) {
   /* NO BOUND, DELIBERATELY — no chunk cap, no total-size cap, no read count, no timeout. CLAUDE.md §NO
      BOUNDS: a bound here truncates a reply, and a truncated reply is a WRONG answer about a server rather
      than a smaller one, which every gate below and the engine's learning both then read as what was served.
-     The floor is the platform's own memory, which is where a floor belongs. */
+     The floor is the platform's own memory, which is where a floor belongs.
+     AND WHAT IS UNBOUNDED IS THE WAIT AND NOT ONLY THE SIZE, WHICH IS A FACT ABOUT THIS FUNCTION'S CALLER
+     RATHER THAN ABOUT THIS LOOP, AND IS THE HALF A LANE WIRING `onChunk` UP DOES NOT SEE FROM HERE. This loop
+     is CORRECT and the sentence above is not weakened: a deadline could only truncate a reply that was merely
+     slow. What the argument does not say is that the loop's completion is what a SERVICE ROUND is awaiting —
+     `bridge.js`'s `engineServiceFetch` walks the engine's pending list SEQUENTIALLY and awaits `eng.fetched`
+     per line, each of which awaits `safeFetch`, which awaits this. A body the server never ends therefore
+     never resolves that round, and `hostSchedule` restores an instance's `hot` state only in that round's
+     own `.then` — so the document leaves the rankable set for the rest of the session and its engine never
+     steps again. Its flows are not outranked and not paged: they are unreachable, and where it is the only
+     live engine the scheduler waits on `Promise.race` over that same unresolved round.
+     THE SINK IS THEREFORE NECESSARY AND NOT SUFFICIENT, AND THAT ORDERING IS THE POINT. Releasing each chunk
+     as it arrives gives a consumer the bytes in time; it does not give the consumer a TURN in which to read
+     them, because the turn is what the await is holding. A lane that wires this sink to the engine and stops
+     has built a producer whose reader cannot run, and for a body that ends — which is every finite chunked
+     reply and what a fixture serves — it is whole and correct, so the two populations must be reported apart.
+     WHAT THE DOOR OWES, AND THE PRECEDENT IS IN THIS TREE RATHER THAN IN AN ARGUMENT:
+     `engine/host/wpt_runner.c` drives the same ABI with a `g_inflight` table — it ISSUES without blocking its
+     and refuses to re-issue a `(method, url)` already in flight. The second half is load-bearing here: the
+     engine RE-LISTS a request that carries neither a value nor a refusal on every round, by design, so a
+     door that leaves a streaming request running must dedup its own in-flight set or it will issue the same
+     request again each round.
+     RETIREMENT: this record goes when a request whose body outlives one service round is issued without that
+     round awaiting it, because the stall is then unspellable rather than described. */
   for (;;) {
     step = await reader.read();
     if (step.done) break;

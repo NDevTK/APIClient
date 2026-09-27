@@ -362,7 +362,40 @@ void event_source_parser_interpret(const char *bytes, size_t n,
  * before a byte of this file's input is read.
  *
  * HOW ITS ABSENCE WOULD SHOW: a page whose `EventSource` addresses a real streaming endpoint fires no `message`
- * event ever, while its flow stays parked on a reply that never completes — the flow is outranked and paged,
- * which is correct scheduling and is indistinguishable, from outside, from a server that said nothing. Against
- * a FINITE `text/event-stream` reply — which is what a fixture and most probes serve — this path is exact, and
- * that is the difference to watch: events for a body that ends, silence for one that does not. */
+ * event ever. Against a FINITE `text/event-stream` reply — which is what a fixture and most probes serve — this
+ * path is exact, and that is the difference to watch: events for a body that ends, silence for one that does not.
+ *
+ * AND THE SECOND HALF OF THAT CLAUSE WAS A COMFORT CLAIM ABOUT A MECHANISM'S REACH, MEASURED FALSE, AND IT IS
+ * REWRITTEN RATHER THAN DELETED BECAUSE IT IS THE READING A LANE RE-DERIVES FROM THE SCHEDULER'S OWN PROMISES.
+ * It read: the flow `stays parked on a reply that never completes — the flow is outranked and paged, which is
+ * correct scheduling and is indistinguishable, from outside, from a server that said nothing`. Every word of
+ * that describes what the WFQ would do to a flow the frontier could still rank, and nothing ranks this one.
+ * A never-ending body is awaited INSIDE the trusted zone's service round: `extension/bridge.js`'s
+ * `engineServiceFetch` walks the pending list SEQUENTIALLY and awaits `eng.fetched` per line, `safeFetch`
+ * awaits `_readBody`, and that loop breaks only on `step.done`. The round therefore never resolves, and
+ * `hostSchedule`'s dispatch arm sets `state = "fetching"` and restores `"hot"` only in that round's `.then` —
+ * so the instance leaves the rankable set FOR THE REST OF THE SESSION. Nothing is outranked, nothing is paged,
+ * and no flow of that document is reached again. Where it is the only live engine the arm above it filters an
+ * empty hot set and waits on `Promise.race(pending.map(e => e._readyP))`, which is that same unresolved round.
+ * No deadline stands anywhere on that path: `opts.signal` reaches `fetch` at one line of the chokepoint and no
+ * caller in the trusted zone states one, which is correct by §NO BOUNDS — a deadline could only truncate a
+ * reply that was merely slow — and is what makes the stall unbounded rather than merely long.
+ *   THE DEFECT SHAPE, WHICH OUTLIVES THIS COMPONENT: A ROUND IS THE WRONG UNIT TO CARRY A BODY THAT HAS NO END.
+ * The comfort clause is the one CLAUDE.md §THE-SYMBOLIC/TRUST-BOUNDARY already records as measured false for a
+ * FORK tail, in nearly these words, and it fails here for a nearer reason — not that the demotion and the pager
+ * fail to reach the population, but that the population is never ranked at all. A reassurance whose
+ * justification names a mechanism is a claim that the mechanism REACHES the case, and the mechanism here is
+ * downstream of a door that has stopped answering.
+ *   AND IT IS NOT REACHED THROUGH THIS COMPONENT, WHICH IS WHY IT IS A FINDING AND NOT THIS FILE'S BUG. Nothing
+ * installs the `EventSource` interface, so no park of this kind exists to stall on; an ordinary `fetch()` or
+ * `XMLHttpRequest` to an endpoint that holds its body open reaches it with no EventSource anywhere, which is
+ * what makes it a live product defect rather than a consequence of this component's absence.
+ *   THE HOST THAT DOES NOT HAVE IT IS THE PRECEDENT FOR THE ONE THAT DOES, AND IT IS IN THIS TREE.
+ * `engine/host/wpt_runner.c` drives the same ABI and keeps a `g_inflight` table: it ISSUES without blocking the
+ * step loop, and it refuses to re-issue a `(method, url)` already in flight. Both halves are what the service
+ * round lacks, and the second is why the engine needs no new arm on its own join — `engine_pending_fetches`
+ * skips an entry only once it carries a value or a refusal, so a request whose bytes are still arriving is
+ * RE-LISTED by design, and a host that dedups its own in-flight set answers that correctly without the engine
+ * being taught a third state.
+ * RETIREMENT: this record goes when the trusted zone's door carries a body whose arrival outlives one service
+ * round, because the stall is then unspellable rather than described. */

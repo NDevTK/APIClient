@@ -242,6 +242,25 @@ typedef struct {
  * RETIREMENT: this record goes when a reply record in this tree can be spelled with NO BODY AT ALL, because
  * the two halves are then two types rather than one seam described at two sites.
  *
+ * AND BOTH OF THOSE MEMBERS SIT ON A THIRD THAT IS IN THE TRUSTED ZONE, SO THE COUNT ABOVE IS A COUNT OF THE
+ * ENGINE'S HALVES AND NOT OF THE TRANSPORT. It is kept as written because the split it draws is right and is
+ * about the STANDARD; what it cannot see from inside this engine is that neither half has a producer that can
+ * reach it. A body arrives through the trusted zone's SERVICE ROUND, and that round AWAITS it:
+ * `extension/bridge.js`'s `engineServiceFetch` walks the pending list sequentially and awaits `eng.fetched`
+ * per line, `safeFetch` awaits `_readBody`, and that reader loop breaks only when the stream ends. A body with
+ * no end never resolves the round, and `hostSchedule` returns an instance to its rankable `hot` state only in
+ * that round's own `.then` — so the document stops being stepped at all. Chunks placed in linear memory by a
+ * landed ABI entry would be read by nobody, which is the producer-with-no-reader shape with the reader's TURN
+ * missing rather than the reader.
+ *   SO THE LANDING ORDER INVERTS THE DEPENDENCY ORDER, WHICH IS THE ONE THING THIS ORDERING RECORD OWES ITS
+ * READER. The member to land FIRST is the one no residual in this engine names, because it has a consumer
+ * already: a door that can carry a body whose arrival outlives one round. It is a live defect reached with no
+ * EventSource in the picture — an ordinary `fetch()` or `send()` to an endpoint that holds its body open
+ * freezes that document's frontier — and `engine/host/wpt_runner.c` drives this same ABI with the shape it
+ * needs, a `g_inflight` table that issues without blocking its step loop and will not re-issue a
+ * `(method, url)` still in flight. That second half is why the engine owes no third state on its own join.
+ * RETIREMENT: this record goes when that door exists, because the ordering is then spent.
+ *
  * `bytes`/`n` are the reply's BODY BYTES, undecoded — this runs §9.2.6's decode itself, because "The UTF-8
  * decode algorithm strips one leading UTF-8 Byte Order Mark (BOM), if any" is a step of THIS algorithm and a
  * caller that decoded first would strip the BOM twice or not at all. `n` may be zero; `bytes` may be NULL only
