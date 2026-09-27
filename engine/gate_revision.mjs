@@ -615,9 +615,28 @@ export function gateRevision(cone, artifact = null) {
      now answers. MEASURED at de7485b6: `git status --porcelain -- engine/qjs` is 0 lines on a clean tree, so
      folding it in does not manufacture a dirty cone; and a `engine/qjs/test262` gitlink that DOES drift shows
      up here as one line, which is the honest answer — the corpus differing from what this revision records is
-     a real difference, and only the MTIME walk above had a reason to skip it. */
+     a real difference, and only the MTIME walk above had a reason to skip it.
+     AND THE PREDICATE THAT SELECTED THE RETIRED HALF IS GONE WITH IT. `const wantsQjs = cone.includes(QJS_PATH)`
+     outlived the filter-and-re-ask it gated: it decided whether the SUBMODULE was asked about itself, and once
+     `engine/qjs` became ordinary tracked content there was no second question for it to select. It was a write
+     with no reader in the machinery every stamp's honesty rests on, and unreachable by construction rather than
+     merely ungreppable — a local `const` in a function whose returned record does not carry it, so no seam of
+     any spelling could have read it. Deleting a dead path is a behaviour change owed the same scrutiny as
+     writing one, so: had it run, it would have selected a re-ask of a path that is no longer a gitlink, which is
+     the three-moving-parts mechanism the paragraph above records as deleted. `QJS_PATH` itself STAYS — it has
+     three other readers, in the ls-tree audit and in two diagnostics.
+     THE ONE GITLINK LEFT UNDER THE CONE IS `engine/qjs/test262`, AND IT NEEDS NO PREDICATE, which is the reason
+     this note exists rather than only the deletion: a reader who sees a gitlink inside `engine/qjs` will
+     re-derive exactly this flag for it. The single pathspec already reports its drift as one line, which the
+     paragraph above states is the honest answer.
+     ITS ORIGIN IS NOT ESTABLISHABLE FROM THIS CHECKOUT and that is the finding rather than a gap in the
+     reading: the repository is shallow, and `git log -S wantsQjs -- engine/gate_revision.mjs` answers a commit
+     that is ITSELF one of the two entries in `.git/shallow`, with a subject about a CSS box-generation entry. A
+     pickaxe at a graft boundary reports every pre-existing line as introduced by the graft. The purpose above is
+     read off this file's own CONTENT, never off its ancestry.
+     RETIREMENT: this note goes when `git status --porcelain -- engine/qjs` can no longer answer about a gitlink
+     at all, because the question a reader would re-derive the flag for has then stopped existing. */
   const dirty = dirtyIn(ROOT, cone);
-  const wantsQjs = cone.includes(QJS_PATH);
   const stamp = artifact ? readStamp(artifact) : null;
   return checkedRevision({
     head: ask(ROOT, "rev-parse", "HEAD"),
