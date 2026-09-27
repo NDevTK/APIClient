@@ -896,8 +896,19 @@ void worker_global_scope_free(JSRuntime *rt)
  *             reader reaches for, so a wrong one recruits rather than merely misleading. Both were repaired by
  *             one fetch of the chapter's own heading list, which is what settles a number and what reading
  *             either site could not.
- *       (vi)  THE WORKER'S EVENT LOOP — step 12's onComplete list again, step 15 of its eighteen: "Event
- *             loop: Run the responsible event loop specified by inside settings until it is destroyed."
+ *       (vi)  THE WORKER'S EVENT LOOP — step 12's onComplete list again, step 15 of its eighteen. HTML
+ *             §10.2.4 "Processing model": "Event loop: Run the responsible event loop specified by inside
+ *             settings until it is destroyed."
+ *             THE STANDARD IS NAMED IN FRONT OF THE QUOTATION AND WAS NOT, WHICH COST THIS SITE ITS COVERAGE
+ *             THE FIRST TIME PROSE WAS INSERTED ABOVE IT. engine/citegen.mjs anchors a quotation on the
+ *             NEAREST PRECEDING citation, and this one carried none of its own — it resolved on (v)'s, nine
+ *             lines up — so the §9.2 repair record added to (v) became its anchor, the anchor named no
+ *             standard, and the quotation left the compared population for the unjudgeable queue. MEASURED as
+ *             a same-path pair over this one file: quotations compared 55 before and 54 after, unjudgeable 0
+ *             and then 1, with the file's single finding identical on both sides — so the loss was exactly
+ *             this line and nothing else. A quotation resolving on a neighbour is judged only while nobody
+ *             writes between them, which is the shielding CLAUDE.md §AN-UN-ANCHORED-CITATION-IS-SHIELDED
+ *             names, arriving through an EDIT rather than through an author leaving the standard out.
  *             THIS LIST DID NOT NAME IT, AND THE OMISSION IS THE KIND A READER EXECUTES RATHER THAN READS.
  *             (i)-(v) build an agent, a settings object, a fetched script, ONE RUN of it and an entangled
  *             pair; a lane that lands those five and then the constructor gets a `Worker` whose
