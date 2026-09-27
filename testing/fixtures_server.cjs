@@ -29,6 +29,21 @@ const LOCK = path.resolve(__dirname, "fixtures.lock");
    finding about the engine. That is §A-FIELD-A-CONSUMER-DEFAULTS with the artifact in the field's place — a
    reader with no writer — and §AND-A-`NEVER`-OVER-A-LOG-CORPUS, whose population was chosen by a redirect.
 
+   AND THE SENTENCE ABOVE IS THAT SAME RULE VIOLATED BY ITS OWN AUTHOR ONE COMMIT LATER, WHICH IS WHY THE
+   CORRECTION LIVES HERE RATHER THAN IN A REWRITE OF IT. `/api/ answered 0` is TRUE OF THE FILE THAT WAS READ
+   and was published as if it were a fact about the WITNESS. A SIBLING tracked log — `testing/fixtures.log`,
+   886 lines, also written by nothing in this repository, also a one-off stdout redirect, from a WINDOWS machine
+   two months LATER — holds 55 hits each of `/api/h/1` through `/api/h/6` and `/api/h/done`. The witness had
+   fired, repeatedly, and the population that said otherwise was chosen by which of two stale files happened to
+   be greped. That is the recency-and-selection defect the paragraph above NAMES, committed in the act of
+   naming it, and the direction is the expensive one: an absence read off one file argues for building a
+   mechanism that already worked.
+   SO THE SIBLING IS KEPT, DELIBERATELY, AND IS NOT A SECOND INSTANCE TO TIDY AWAY. It is the only surviving
+   evidence that this channel has ever fired, it is cited by nothing, and the machine that produced it is gone —
+   so deleting it would destroy an unrecoverable record to remove a hazard that a sentence closes. Read it as
+   what it is: ONE run, one afternoon, one machine, and never as a statement about this checkout. The durable
+   repair is the per-run stamped file below, which cannot be mistaken for either.
+
    SO THE SERVER WRITES IT, THE PATH IS PORT-SCOPED, AND THE FILE IS TRUNCATED AND STAMPED AT STARTUP.
    Port-scoped because two servers on two ports are two subjects and a shared file interleaves them into one
    that answers about neither. TRUNCATED because the question a reader asks of this file is always `did it fire
