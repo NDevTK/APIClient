@@ -25,6 +25,114 @@ import { probeTables } from "./probe_rows.mjs";
 import { lexborSourceId, lexborNativeArchive } from "./lexbor_source.mjs";
 import { childCpuSeconds, childCpuDelta, cpuText } from "./gate_cpu.mjs";
 
+/* THE INSTANT A SOURCE-DERIVED FACT IS TAKEN AT, AND WHY IT IS THE REVISION'S AND NOT THE READER'S.
+ *
+ * Three readers below derive a contract from engine/host's own C — `censusRowSet` takes a census's required
+ * row set from the composer's own format string, `hostDefine` reads a tuning constant, `forkCensusName` reads
+ * a census's reserved key — and they READ rather than restate for CLAUDE.md §AN-AUDITOR-DERIVES-THE-RULE's
+ * reason: the hand-kept copy this file used to hold went stale ELEVEN rows over two censuses, by two lanes'
+ * counts. That argument is untouched and none of it is being undone here.
+ *
+ * WHAT NONE OF THEM STATED IS *WHEN* THEY READ, AND IN A SHARED CHECKOUT THAT IS THE WHOLE CONTRACT. Every
+ * one was a lazy read of the working tree first evaluated by a POST-RUN reader — `coldFields()` is reached
+ * from `lastTwo` and from `hungCauseCensus` and from nowhere else — so the required set was taken half an hour
+ * after the compiler read the same file. Measured: a thirty-minute build compiled solver/result.c, a peer's
+ * row arrived in the working tree while it ran, and the reader then demanded `classicParseShared` of an
+ * artifact it had itself just built without it. The build died at its LAST stage, having already completed a
+ * full native smoke, under a message telling its reader that a renamed field must be renamed here — so the
+ * cheapest hypothesis available is that something is wrong with the reader's OWN diff, and the field the
+ * message names belongs to a peer. This is §A-CROSS-BOUNDARY-DIFF inside the build tool: build.mjs is
+ * INTERPRETED FROM THE TREE and therefore live on WRITE, the artifact is live only after a compile, and the
+ * two halves of one contract were being deployed at different instants.
+ *
+ * SO THE FACT IS TAKEN WHERE THE BUILD TAKES ITS REVISION, WHICH IS THE INSTANT EVERY OTHER NUMBER HERE IS
+ * ALREADY ABOUT. `revAtStart()` is evaluated before the first compiler runs and every verdict this file
+ * prints is a statement about that revision; a field contract taken at a DIFFERENT instant is a second,
+ * differently-timed contract, and the day the two disagree the build reports a defect in the tree. Frozen and
+ * in-tree are then ONE contract and not two: a frozen snapshot's tree cannot move, so the freeze reads exactly
+ * what a late read would have read and this mechanism is invisible there — which is the
+ * §A-superseded-system-is-DELETED test, no second path to keep in step with the first.
+ *
+ * IT READS THE WORKING TREE AND DELIBERATELY NOT `git show <rev>:<path>`. The compiler compiles the WORKING
+ * TREE, so on a DIRTY cone — a state this file supports and stamps, and the state a lane landing a diff is
+ * always in — committed content is the wrong bytes; and a reader that preferred one and fell back to the other
+ * would be two contracts keyed on dirtiness, with the fallback landing in exactly the case it is most often
+ * used in. There is no branch here at all: one read, of the bytes the compiler gets, at an instant this file
+ * chooses.
+ *
+ * THE RESIDUAL WINDOW IS THE BUILD'S OWN AND IS ALREADY REPORTED. Between this freeze and the compiler's read
+ * of one file sit the lexbor archive and every object before it, so a tree that moves in that window leaves an
+ * artifact the frozen set does not describe. That is not a new hole and it is not this contract's: it is the
+ * same window `revisionMoved` asks about at the end of every build, over the same cone, and a build whose tree
+ * moved prints `[rev] THE TREE MOVED UNDER THIS BUILD`. What the freeze makes impossible is the case that was
+ * costing whole builds — a row ADDED after it is simply not in the required set, so the reader asks the
+ * artifact only for what the artifact was built to answer. A row RENAMED inside that window still THROWS,
+ * because the artifact then genuinely disagrees with the revision this build claims to be of; `hostSourceMoved`
+ * is read into that throw so the reader is sent to the movement instead of to their own diff. Nothing here
+ * turns a refusal into a warning: a set that disagrees with its artifact over a tree that did NOT move is the
+ * same loud failure it has always been, and the throw now says which of the two it is.
+ *
+ * AND A FIRST READ AFTER THE FREEZE IS REFUSED RATHER THAN SERVED. A pre-read keyed on a LIST of files would be
+ * the hand-kept second copy this whole mechanism exists to end, one level up in the instrument; so the set is
+ * the registry below and the registry is populated by the fact declarations themselves, which is
+ * `censusRowSet`'s own argument applied to its own callers. A derivation added later and left unregistered
+ * would otherwise be taken late and silently — the defect returning under a new name — and instead it stops
+ * the build at its own line and names what to do. */
+const SOURCE_FACTS = [];
+const HOST_SOURCE = new Map();
+let SOURCES_FROZEN = false;
+/* A FACT DERIVED FROM engine/host's SOURCES, MEMOIZED AND REGISTERED BY ITS OWN DECLARATION. No `why` is
+   passed: the derivation beneath already carries one and throws with it, and a second copy of the reason here
+   is the thing this file is largest about. Declared at module scope BY EVERY CALLER, including the four whose
+   reading happens inside a stage — a fact reachable only from inside a function is a fact the freeze cannot
+   take, and `hostSource` refuses it rather than serving it late. */
+function sourceFact(derive) {
+  let value, taken = false;
+  const get = () => { if (!taken) { value = derive(); taken = true; } return value; };
+  SOURCE_FACTS.push(get);
+  return get;
+}
+/* ONE READ OF ONE HOST SOURCE PER BUILD. Cached so two derivations over one file cannot disagree about what
+   that file says, which they could while each read it at its own instant — and so that `hostSourceMoved` has
+   the bytes to compare against rather than a digest of something nobody kept. */
+function hostSource(file, why) {
+  const had = HOST_SOURCE.get(file);
+  if (had !== undefined) return had;
+  if (SOURCES_FROZEN)
+    throw new Error(`[build] engine/host/${file} was first read AFTER this build froze its source-derived ` +
+                    `facts — ${why}. A contract taken after the compiler has run is a fact about a tree that ` +
+                    `is not the one that was compiled: in a shared checkout a peer's edit lands in between and ` +
+                    `the reader then demands of the artifact a row the artifact was never built to write. ` +
+                    `Declare this derivation at module scope with \`sourceFact\` so it is taken beside the ` +
+                    `revision, at \`freezeHostSources\`, before the first compiler runs.`);
+  const src = readFileSync(join(HOST, file), "utf8");
+  HOST_SOURCE.set(file, src);
+  return src;
+}
+/* TAKEN BESIDE THE REVISION, BEFORE THE FIRST COMPILER RUNS — called once, at the top level, next to the line
+   that prints which revision this build is of. Evaluating every fact here also moves a DERIVATION failure — a
+   composer renamed, a `#define` gone — from the end of a thirty-minute build to its first second, which is the
+   same fact arriving at the only moment it is cheap to receive. */
+function freezeHostSources() {
+  for (const get of SOURCE_FACTS) get();
+  SOURCES_FROZEN = true;
+  return HOST_SOURCE.size;
+}
+/* WHICH OF THE FROZEN SOURCES HAS SINCE MOVED, read into the field-contract throw so that a disagreement
+   between a required set and an artifact is not reported as the reader's defect when it is the tree's. Returns
+   the paths, or an EMPTY array — a positive empty, read as "the sources these contracts came from are still on
+   disk as they were", never as a question nobody asked. A file that has been DELETED reads as moved, which is
+   what it is. */
+function hostSourceMoved() {
+  const moved = [];
+  for (const [file, was] of HOST_SOURCE) {
+    let now;
+    try { now = readFileSync(join(HOST, file), "utf8"); } catch { now = null; }
+    if (now !== was) moved.push(file);
+  }
+  return moved;
+}
+
 /* A RUN THAT NEVER RETURNS IS NOT A VERDICT, AND A WALL CLOCK CANNOT SAY WHY. Every program this file
    launches gets ONE budget and ONE backstop, and they measure DIFFERENT THINGS through DIFFERENT SIGNALS so
    that they can never collapse into one verdict. Declared here because the native targets run ~300 lines
@@ -259,8 +367,7 @@ const loadNow = () => {
    MEMOIZED BECAUSE IT IS A FILE READ AND THE ANSWER CANNOT CHANGE UNDER ONE BUILD — and never evaluated at
    module load, for `wfqFields`' reason: `HOST` is a `const` far below this line, so a top-level derivation
    here would reach it in its temporal dead zone and `node --check` would pass on it. */
-let g_coldFields = null;
-const coldFields = () => (g_coldFields ??= censusRowSet(
+const coldFields = sourceFact(() => censusRowSet(
   "solver/result.c", "char *result_cold_json(void)", "\n}\n",
   ["stepUnits", "stepUnitRuns", "stepUnitOverruns", "outOfProgramsAtTheLadderUnits", "programCursors",
    "programsAhead", "epDoors", "epReach", "epAddressClass"],
@@ -584,20 +691,14 @@ function forkReading(t) {
      comparison would false-throw on the artifact rather than on the census. Its absence shows as a dropped or
      double-counted row surviving into this reading in a RELEASE build, where decide_fork_json's own
      `sum == g_fork_total` DCHECK is compiled out and nothing else is looking. */
-  const slots = hostDefine("solver/decide.c", "DECIDE_FORK_KEYS",
-                           "the @FORKAT reader checks that a census reporting an eviction is one whose " +
-                           "predicate table is actually full, which is the condition Space-Saving's bound " +
-                           "holds under");
+  const slots = forkKeySlots();
   if (spill > 0 && pred.length !== slots)
     throw new Error(`[build] the @FORKAT census reports ${spill} unattributable fork(s) with ${pred.length} ` +
                     `predicate row(s) in a table of ${slots} — a row is only ever displaced out of a FULL ` +
                     `table and rows are never released, so this pair cannot both be true. Space-Saving's ` +
                     `bound on an excluded site holds over a full table and nothing else, and the reading ` +
                     `below quotes it.`);
-  const siteSlots = hostDefine("solver/decide.c", "DECIDE_SITE_KEYS",
-                               "the @FORKAT reader checks that an unnamed-fork-site table reporting an " +
-                               "eviction is actually full, which is the condition Space-Saving's bound holds " +
-                               "under — the same check the predicate table gets, over its own size");
+  const siteSlots = forkSiteKeySlots();
   if (siteSpill > 0 && site.length !== siteSlots)
     throw new Error(`[build] the @FORKAT census reports ${siteSpill} unattributable fork(s) at unnamed ` +
                     `sites with ${site.length} site row(s) in a table of ${siteSlots} — a row is only ever ` +
@@ -722,9 +823,7 @@ function probeWork(out) {
   const w = [];
   for (const m of out.matchAll(/^@HWORK (\{.*\})$/gm)) { try { w.push(JSON.parse(m[1])); } catch { /* truncated tail */ } }
   if (!w.length) return w;
-  const fields = censusComposerFields("test_forced.c", 'printf("@HWORK {', '}\\n"',
-    "`standingText` states how far a run had got when its probe table was composed, and that is the one " +
-    "number deciding which of a 0 row's two readings the WHOLE table has").numeric;
+  const fields = hworkFields();
   for (const r of w) for (const f of fields)
     if (typeof r[f] !== "number")
       throw new Error(`[build] an @HWORK record has no numeric \`${f}\` — this reader takes its field list ` +
@@ -999,8 +1098,7 @@ const causeName = (raw) => {
    module load, which is the shape that has already left an instrument throwing for every lane in this shared
    tree: `HOST` is a `const` far below this line, so a top-level derivation here would reach it in its temporal
    dead zone and `node --check` would pass on it. */
-let g_wfqFields = null;
-const wfqFields = () => (g_wfqFields ??= censusComposerFields(
+const wfqFields = sourceFact(() => censusComposerFields(
   "solver/result.c", "char *result_wfq_json(void)", "\n}\n",
   "the @WFQ reader states which rows it requires of a census that claims an order, and it takes that set " +
   "from the composer rather than from a list beside it").numeric);
@@ -1011,7 +1109,7 @@ const wfqFields = () => (g_wfqFields ??= censusComposerFields(
    absent census field as undefined, and caught the same way. `HOST` is initialised long before any stage calls
    this. */
 function hostDefine(file, name, why) {
-  const m = readFileSync(join(HOST, file), "utf8")
+  const m = hostSource(file, why)
     .match(new RegExp(`^#define\\s+${name}\\s+\\(?\\(?(?:\\(int64_t\\))?\\s*(\\d+)`, "m"));
   if (!m) throw new Error(`[build] cannot read \`${name}\` from engine/host/${file} — ${why}, and it will not ` +
                           `substitute a remembered value for one it cannot find.`);
@@ -1041,7 +1139,7 @@ function hostDefine(file, name, why) {
    `\"` and `\":%`, so a key that needed an escape would simply not be found, and not-found is this function's
    loud arm rather than its quiet one. */
 function censusComposerFields(file, from, to, why) {
-  const src = readFileSync(join(HOST, file), "utf8");
+  const src = hostSource(file, why);
   const open = src.indexOf(from);
   if (open < 0)
     throw new Error(`[build] cannot find ${JSON.stringify(from)} in engine/host/${file} — ${why}, and this ` +
@@ -1131,7 +1229,7 @@ function censusRowSet(file, from, to, objects, why) {
    learned something the other would keep not knowing it. */
 function forkCensusName(sym, why) {
   const file = "solver/decide.c";
-  const m = readFileSync(join(HOST, file), "utf8")
+  const m = hostSource(file, why)
     .match(new RegExp(`static\\s+const\\s+char\\s+${sym}\\s*\\[\\s*\\]\\s*=\\s*"([^"\\\\]*)"\\s*;`));
   if (!m)
     throw new Error(`[build] cannot read \`${sym}\` from engine/host/${file} as an unescaped literal — ` +
@@ -1139,36 +1237,63 @@ function forkCensusName(sym, why) {
                     `not half-decode an escaped one.`);
   return m[1];
 }
-const forkOverflowKey = () =>
+const forkOverflowKey = sourceFact(() =>
   forkCensusName("OVERFLOW_KEY",
                  "the @FORKAT reader tells decide.c's overflow BUCKET from a real predicate by that exact " +
                  "name, and without it the largest row of that table is reported as the hot predicate even " +
-                 "when it is the row the table could not hold");
-const forkLightestKey = () =>
+                 "when it is the row the table could not hold"));
+const forkLightestKey = sourceFact(() =>
   forkCensusName("LIGHTEST_KEY",
                  "the @FORKAT reader tells decide.c's own BOUND — the most any site the table is not holding " +
                  "can have taken — from the rows by that exact name, and without it that bound is summed into " +
                  "the forks as mass no fork produced and every percentage is taken against the wrong " +
-                 "denominator");
+                 "denominator"));
 /* AND THE SAME PAIR FOR THE UNNAMED-FORK-SITE TABLE, READ RATHER THAN COPIED FOR THE SAME REASON. A bound is
    a statement about ONE table (Space-Saving's guarantee is about the table that did the evicting), so the two
    tables have two spills and two bounds and neither pair can answer the other's question. */
-const forkSiteOverflowKey = () =>
+const forkSiteOverflowKey = sourceFact(() =>
   forkCensusName("SITE_OVERFLOW_KEY",
                  "the @FORKAT reader tells the unnamed-fork-site table's overflow BUCKET from the shapes it " +
                  "could name by that exact name — it is prose opening on `(` exactly as a mechanism row is, " +
                  "so without it the mass that table could not attribute is reported as one of this tree's " +
-                 "own call sites");
-const forkSiteLightestKey = () =>
+                 "own call sites"));
+const forkSiteLightestKey = sourceFact(() =>
   forkCensusName("SITE_LIGHTEST_KEY",
                  "the @FORKAT reader tells the unnamed-fork-site table's BOUND from the rows by that exact " +
-                 "name, and without it that bound is summed into the forks as mass no fork produced");
+                 "name, and without it that bound is summed into the forks as mass no fork produced"));
 /* flow.c's FLOW_AGE_QUANTUM, read from the two files that define its factors rather than copied. */
-const ageQuantum = () =>
+const ageQuantum = sourceFact(() =>
   hostDefine("solver/engine.h", "ENGINE_QUANTUM_MS",
              "the @WFQ reader prices the aging term from flow.c's FLOW_AGE_QUANTUM factors") * 1000 /
   hostDefine("solver/flow.c", "FLOW_SILENCE_US",
-             "the @WFQ reader prices the aging term from flow.c's FLOW_AGE_QUANTUM factors");
+             "the @WFQ reader prices the aging term from flow.c's FLOW_AGE_QUANTUM factors"));
+/* AND THE FOUR THAT WERE READ FROM INSIDE A STAGE, DECLARED HERE FOR THE ONE REASON THE FREEZE HAS. Each of
+   these was a `hostDefine`/`censusComposerFields` call in the body of a reader, so it was taken when that
+   reader ran — after the compile, which is the defect `sourceFact` exists to end. Declared at module scope they
+   are registered, and the freeze takes them with everything else; their readers now CALL them. They sit with
+   the other source-derived facts rather than beside their callers because the freeze is over all of them and
+   because a reader looking for "what does this build derive from the engine's sources" has one place to look.
+   USED ABOVE THEIR DECLARATION, WHICH IS SOUND AND IS THIS FILE'S EXISTING SHAPE: a `const` at module scope is
+   in its temporal dead zone only until this line is evaluated, and every caller runs from a stage, long after
+   it — the same reason `coldFields` may reference `HOST` from three hundred lines above where `HOST` is
+   declared. */
+const forkKeySlots = sourceFact(() =>
+  hostDefine("solver/decide.c", "DECIDE_FORK_KEYS",
+             "the @FORKAT reader checks that a census reporting an eviction is one whose predicate table is " +
+             "actually full, which is the condition Space-Saving's bound holds under"));
+const forkSiteKeySlots = sourceFact(() =>
+  hostDefine("solver/decide.c", "DECIDE_SITE_KEYS",
+             "the @FORKAT reader checks that an unnamed-fork-site table reporting an eviction is actually " +
+             "full, which is the condition Space-Saving's bound holds under — the same check the predicate " +
+             "table gets, over its own size"));
+const progressEvery = sourceFact(() =>
+  hostDefine("solver/engine.c", "ENGINE_PROGRESS_EVERY",
+             "hungCause states its window as an absolute span of engine_work_done and the census cadence is " +
+             "what converts censuses to work units"));
+const hworkFields = sourceFact(() =>
+  censusComposerFields("test_forced.c", 'printf("@HWORK {', '}\\n"',
+    "`standingText` states how far a run had got when its probe table was composed, and that is the one " +
+    "number deciding which of a 0 row's two readings the WHOLE table has").numeric);
 
 /* WHICH OF TWO READINGS A FRONT-OF-QUEUE SENTENCE ABOUT THE UNFRAMED POPULATION HAS — the one thing the rest
    of this reading cannot say, and the question solver/flow.c's job-split residual states and deliberately
@@ -3257,10 +3382,40 @@ const OCENSUS_FIELDS = ["_orphansDriven", "_orphansAsked", "_sessionForks"];
    differs: it is what a reader who hits this throw has to go and open. */
 function censusFields(v, marker, fields, composer) {
   for (const f of fields)
-    if (typeof v[f] !== "number")
+    if (typeof v[f] !== "number") {
+      /* WHICH OF THE TWO THIS IS, SAID IN THE THROW, BECAUSE THE READER CANNOT TELL AND THE CHEAP GUESS IS
+         THE WRONG ONE. A required set and an artifact can disagree because the artifact's composer really
+         stopped writing a row — the defect this contract exists for — or because the tree moved between the
+         instant the set was taken and now, which is a fact about the CHECKOUT and not about anybody's diff.
+         The message used to state only the first, so a lane meeting it read "a renamed field must be renamed
+         here" over a field name a PEER had introduced and went looking in their own change. The freeze at
+         `sourceFact` removes the common movement case outright; this says which case the survivor is, and it
+         says the NEGATIVE as loudly as the positive — "the tree did not move" is what stops a real
+         disagreement being waved past as somebody else's edit. */
+      const moved = hostSourceMoved();
       throw new Error(`[build] the ${marker} census has no numeric \`${f}\` — this reader compares ` +
                       `${fields.join(", ")} and ${composer} is what decides they exist; a renamed ` +
-                      `field must be renamed here rather than silently compared as undefined.`);
+                      `field must be renamed here rather than silently compared as undefined.` +
+                      (moved.length
+                        ? ` AND THE HOST SOURCES THIS BUILD DERIVED ITS CONTRACTS FROM HAVE MOVED ON DISK ` +
+                          `SINCE IT TOOK THEM: ${moved.join(", ")}. The artifact was therefore compiled from ` +
+                          `content that no revision this build names describes, so this disagreement is very ` +
+                          `likely that movement rather than a defect in the diff under test — read the ` +
+                          `\`[rev]\` block and rebuild before acting on it.`
+                        : HOST_SOURCE.size
+                        ? ` The host sources these contracts were derived from are BYTE-IDENTICAL to what ` +
+                          `this build read at its revision, so the tree did NOT move under it and this is the ` +
+                          `artifact disagreeing with its own composer.`
+                        /* THE THIRD STATE, WHICH IS NEITHER OF THE OTHER TWO AND MUST NOT BORROW EITHER'S
+                           WORDS. An empty freeze makes `hostSourceMoved` answer `[]` for the reason an
+                           unasked question answers nothing, and rendering that as "byte-identical" would be
+                           this file's own defaulted-field defect committed in the one message a reader is
+                           sent to. Unreachable from the stages, which all run after `freezeHostSources`;
+                           written because the arm above is a CLAIM and a claim needs its absent case. */
+                        : ` This build had not taken its source-derived contracts when this reader ran, so ` +
+                          `whether the tree moved under it is not a question this message can answer — see ` +
+                          `\`freezeHostSources\`.`));
+    }
   return v;
 }
 /* A MARKER'S WHOLE STREAM, SPLIT AT THE POINTS ITS PRODUCER RESTARTS THE COUNT — the shape a reader needs when
@@ -3411,13 +3566,11 @@ function coldRoundTrip(v1, v2, store) {
    rather than computing two histograms every census of every run for nobody. They are named here and read by
    `cowStateReading`, which states its own contract because the pair is NOT a partition: two key sets that
    must be IDENTICAL and per-key `made <= asks` has no total to be a partition of. */
-let g_heapFields = null;
-const heapFields = () => (g_heapFields ??= censusRowSet(
+const heapFields = sourceFact(() => censusRowSet(
   "solver/result.c", "char *result_heap_json(JSContext *ctx)", "\n}\n", ["childRealmRefSites"],
   "the @HEAP reader states which rows it requires of the runtime's memory census, and it takes that set " +
   "from the composer rather than from a list beside it"));
-let g_swapFields = null;
-const swapFields = () => (g_swapFields ??= censusRowSet(
+const swapFields = sourceFact(() => censusRowSet(
   "solver/result.c", "char *result_swap_json(void)", "\n}\n",
   ["cowStateAsks", "cowStateMade", "cowHostRecAsksBySite"],
   "the @SWAP reader states which rows it requires of the delta-swap census, and it takes that set from the " +
@@ -4290,9 +4443,7 @@ function hungCauseCensus(out) {
      context switches, and twenty censuses is twenty thousand units of forks+flows+jobs+switches, four orders of
      magnitude above that. It is clamped to half the run so a SHORT run never reads a window longer than it has
      evidence for, which is exactly the old behaviour and is therefore the floor rather than a new risk. */
-  const PROGRESS_EVERY = hostDefine("solver/engine.c", "ENGINE_PROGRESS_EVERY",
-    "hungCause states its window as an absolute span of engine_work_done and the census cadence is what " +
-    "converts censuses to work units");
+  const PROGRESS_EVERY = progressEvery();
   const HUNG_WINDOW_CENSUSES = 20;
   const n = s.length;
   const width = Math.min(HUNG_WINDOW_CENSUSES, Math.max(1, Math.floor(n / 2)));
@@ -5619,6 +5770,26 @@ function report(stages, findings) {
   if (moved) console.error("[rev] THE TREE MOVED UNDER THIS BUILD — " + moved + ". The stages below measured " +
                            "the sources as they were read, which no revision now describes.");
   else console.log("[rev] the tree did not move under this build");
+  /* AND BY CONTENT, OVER THE SOURCES THIS BUILD'S CONTRACTS WERE DERIVED FROM — the finer question, and the one
+     the line above structurally cannot answer. `revisionMoved` compares HEAD and the `git status` PORCELAIN,
+     and porcelain is a status code and a path: MEASURED on a scratch repository, ` M f.c` is BYTE-IDENTICAL
+     across a content edit to a file that was ALREADY dirty, and no commit happened, so an edit to an
+     uncommitted engine/host source under this build reads as "the tree did not move". That is the state a lane
+     landing a diff is always in, and it is the state `sourceFact`'s freeze exists for, so the throw at
+     `censusFields` sends its reader to this block and this block has to be able to answer it — two lines that
+     disagree in one report are worse than one that is silent. Reported HERE and not inside `revisionMoved`
+     because the bytes being compared are the ones THIS file froze; gate_revision.mjs holds no contracts and
+     has nothing to compare against. The `else` is guarded on a non-empty freeze so a target that reports
+     before one cannot claim an identity it never took. */
+  const srcMoved = hostSourceMoved();
+  if (srcMoved.length)
+    console.error("[rev] AND THE HOST SOURCES THIS BUILD DERIVED ITS CONTRACTS FROM MOVED BY CONTENT — " +
+                  srcMoved.join(", ") + ". The field sets the readings below are checked against were taken at " +
+                  "the revision this block names, and the artifact may have been compiled from other bytes: a " +
+                  "census that disagrees with its composer is that movement before it is a defect.");
+  else if (HOST_SOURCE.size)
+    console.log("[rev] the " + HOST_SOURCE.size + " host source(s) this build's contracts were derived from " +
+                "are byte-identical to what it read at that revision");
   console.log("[build] ── stages ──");
   /* THE KIND IS IN THE ROW, WHICH IS THE LINE A READER ACTUALLY SEES PER STAGE. Both audits already band their
      own populations apart in their own bodies and it did not help while this table printed one undifferentiated
@@ -6075,6 +6246,14 @@ if (LIST_INCLUDE_ROOTS) {
    full disk — still names the tree it was reading. The block is printed again in the summary because that is
    the end a reader pastes. */
 for (const l of revisionLines(revAtStart())) console.log(l);
+/* AND THE SOURCE-DERIVED CONTRACTS ARE TAKEN HERE, AT THAT SAME REVISION AND BEFORE THE FIRST COMPILER RUNS —
+   see `sourceFact` for what a late one cost. This line is the whole of the freeze's placement argument: the
+   revision above is what every number this build prints is a statement about, so a contract taken anywhere
+   else is a second contract with its own instant. Printed rather than silent because a fact taken at an
+   unnamed instant is exactly what this ends, and a reader holding the `[rev]` block can now see that the
+   field sets belong to it. */
+console.log("[rev] the source-derived field contracts were taken at that revision — " + freezeHostSources() +
+            " host source(s) read before the first compiler runs");
 
 /* THE NATIVE SMOKE TARGET, and the sanitized builds that are only possible on it.
  *
