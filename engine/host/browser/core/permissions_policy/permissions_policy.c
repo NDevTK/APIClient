@@ -184,6 +184,41 @@ static bool pp_allowlist_matches(const PpAllowlist *a, const Origin *origin)
        an opaque origin the serialization `null`, which is not a URL and would parse into something that is. */
     if (origin_is_opaque(origin))
         return false;
+    /* STEPS 3 AND 4 TOGETHER DECIDE A DELEGATED SANDBOXED FRAME, AND THIS BUILD ANSWERS `false` WHERE EVERY
+       SHIPPING BROWSER GRANTS. That is DECIDED rather than broken, and it is recorded here so the next reader
+       does not close it with an opaque-origin carve-out, which would be a capability answer nobody measured.
+       Step 4 is reached only once neither named origin has matched, and for a child whose origin is opaque that
+       is the ordinary case rather than an edge: Permissions Policy §7.2 "The permissionsPolicy object"'s "to get
+       the declared origin for an element" answers "if node's sandbox attribute is set and does not contain the
+       allow-same-origin keyword then return a new opaque origin"; §9.4 "Process permissions policy attributes"
+       hands that to §9.3 "Parse policy directive" as the target origin; and §9.3 stores it as the allowlist's
+       src-origin for a directive that named no target, "otherwise if targetlist is empty and target origin is
+       given, let allowlist's src-origin be target origin". A NEW opaque origin is not the loaded Document's
+       opaque origin, and HTML §7.1.1 "Origins" makes opaque origins same origin-domain by IDENTITY alone — "if A
+       and B are the same opaque origin, then return true" — so step 3 cannot match however the embedder wrote the
+       attribute, step 4 refuses, and §9.7 "Define an inherited policy for feature in container at origin" returns
+       disabled for a frame whose embedder DID delegate. It needs no run to establish: `origin_opaque_new` mints a
+       fresh nonce per call and `origin_same_origin_domain`'s first step compares nonces, so the two are distinct
+       BY CONSTRUCTION.
+       WHAT A REAL BROWSER ANSWERS IS THE OPPOSITE AND IS MEASURED IN THIS TREE RATHER THAN REASONED ABOUT.
+       renderer-host.js records 3 runs of 3 in real Chrome, each reading beside an invented sibling capability so
+       a false is separable from a getter that is not there, and taking THE ACT and not only the getter: a
+       sandboxed opaque-origin child under a cross-origin-isolated top level reads allowsFeature TRUE and the
+       shared-memory serialization GRANTED with a bare `allow="cross-origin-isolated"`, which is exactly the cell
+       the paragraph above refuses. WHY Chrome answers so is NOT established here — this file's claim is only that
+       the letter and the platform disagree, and that this build is on the letter's side.
+       THE `*` SPELLING NEEDS NO CARVE-OUT AND IS WORTH NAMING RATHER THAN BEING REDISCOVERED: step 1 answers it
+       with no origin comparison at all, so `allow="<feature> *"` on such an element is granted by this build and
+       by Chrome alike, and renderer-host.js's own table measured that cell GRANTED too. It is also a WIDER
+       written delegation — every origin rather than the frame's own — so it is a trade and not a correction, and
+       naming it is not a recommendation to make it.
+       AND THE `srcdoc` AXIS IS DOMINATED RATHER THAN INDEPENDENT, which matters because a reader varying it
+       expects an answer from it: §7.2's steps are ORDERED and its sandbox-attribute arm precedes its `srcdoc`
+       arm, so an element carrying both takes the sandbox arm and `srcdoc` is never consulted.
+       core/dom/document.c's `doc_declared_origin` performs them in that order.
+       RETIREMENT: this record goes when step 4 is no longer reachable for an origin a container policy NAMED —
+       an upstream change deriving the declared origin from the frame's own opaque origin instead of minting a new
+       one — because the letter and the platform then agree and there is nothing left for a reader to decide. */
     /* Step 5: "Let url be the result of calling the url parser on the serialization of origin." */
     {
         const char *s = origin_serialized(origin);
