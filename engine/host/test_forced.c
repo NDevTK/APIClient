@@ -2756,6 +2756,75 @@ static const char *HTML =
     " uasc.scrollIntoView(false); var uap1 = document.scrollingElement.scrollTop;"
     " uapos = 'start' + uap0 + '-end' + uap1; }"
     "fetch('/api/scrollpos?v=' + uapos);"
+    /* Pointer Events 4 §4 "Extensions to the Element interface" — the one of its three members this engine
+       installs, beside the CSSOM VIEW §6 rows above because it is the same shape, a `partial interface
+       Element` whose members core/dom/element.c hangs on the prototype it has just built.
+       core/events/pointer_capture.h states why `setPointerCapture` and `releasePointerCapture` are absent and
+       what installing either was measured to cost; these four rows are what a run can assert while that
+       holds, and EVERY ONE OF THEM IS ALSO TRUE AFTER THE DIFF THAT LANDS THE OTHER TWO, which is deliberate:
+       a row that passes only while a member is missing is a ratchet against the landing rather than a check.
+       THE FIRST ROW IS THE ANSWER AND THE CONVERSION TOGETHER, AND THE SECOND HALF IS WHY IT IS ONE ROW.
+       Pointer Events 4 §4 defines the member as returning "true if the pending pointer capture target
+       override for pointerId is set to the element on which this method is invoked, and false otherwise", and
+       an element that has just been created has never captured a pointer — so `false` is what a real browser
+       answers for it too, and what it still answers once Pointer Events 4 §3.2.9 "maybe send pointerdown
+       event" exists, because this element is handed no pointer event either way. `v` is the SEPARATE positive
+       statement that Web IDL §3.2.4.5 "long" ran at the declared position: an object whose `valueOf` the
+       conversion must call, whose side effect is the only evidence the TYPE was applied rather than the
+       argument ignored. A row asserting `false` alone would pass for a member that never consulted its own
+       declaration, which is the whole of what this component's one installed member IS. */
+    "var pca = document.createElement('i'); bpar.appendChild(pca); var pcans = ''; var pcv = '';"
+    "pcans += (pca.hasPointerCapture(1) === false) ? 'f' : 'F';"
+    "pcans += (pca.hasPointerCapture({ valueOf: function () { pcv = 'v'; return 7; } }) === false) ? 'f' : 'F';"
+    "pcans += pcv;"
+    "fetch('/api/pchas?v=' + (pcans === 'ffv' ? 'ispchas' : 'arm' + pcans));"
+    /* THE SECOND ROW IS THE THROW ARMS, AND THE RECEIVER ONES ARE THE REASON IT EXISTS RATHER THAN DECORATION.
+       Web IDL §3.7.7 "Operations" asks the receiver's implementation check BEFORE the argument conversion, so
+       a foreign receiver is a TypeError with none of the page's code having run; the body then reaches
+       `element_of_value` only for a receiver the declared predicate admitted, which is exactly what its
+       `DCHECK` asserts the two agree about. IF THAT ORDER EVER BREAKS, THAT `DCHECK` IS A PAGE-HELD ABORT
+       SWITCH: `Element.prototype.hasPointerCapture` is reachable from any page, and a FORCING solver calls
+       members with unusual receivers constantly, so the distance between a TypeError this page catches and a
+       `@WHY` that ends the run is one declaration. `n` is the primitive receiver and `o` the plain object; `a`
+       is Web IDL §3.6 "Overload resolution algorithm" refusing a call shorter than the one REQUIRED position
+       Pointer Events 4 §4 declares. All three are the ENGINE computing a refusal, not the absence of one. */
+    "var pcb = '';"
+    "try { Element.prototype.hasPointerCapture.call(null, 1); pcb += 'N'; }"
+    " catch (e) { pcb += (e instanceof TypeError) ? 'n' : 'W'; }"
+    "try { Element.prototype.hasPointerCapture.call({}, 1); pcb += 'O'; }"
+    " catch (e) { pcb += (e instanceof TypeError) ? 'o' : 'W'; }"
+    "try { pca.hasPointerCapture(); pcb += 'A'; }"
+    " catch (e) { pcb += (e instanceof TypeError) ? 'a' : 'W'; }"
+    "fetch('/api/pcbrand?v=' + (pcb === 'noa' ? 'ispcbrand' : 'arm' + pcb));"
+    /* THE THIRD ROW IS AN INVARIANT OVER WHICH MEMBERS EXIST, AND IT IS NORMATIVE RATHER THAN A PREFERENCE OF
+       THIS FILE'S. Pointer Events 4 §8.3 "Releasing pointer capture" step 2 is "If hasPointerCapture is false
+       for the Element with the specified pointerId, then terminate these steps" — so `releasePointerCapture`
+       READS this member, and a tree carrying the release side without the read side would be a §8.3 with no
+       step 2 to run. `g` is that invariant holding: either the release side is absent, or the read side is
+       installed too. True today, true after the diff that lands both, false only for the incoherent middle
+       state — so it asserts a pairing without forbidding anything the next diff does. The corpus's most
+       defensive real site depends on exactly this pairing, reaching its release call only when this member
+       answers, which is the shape core/events/pointer_capture.h's ledger reads off it. */
+    "var pcg = (('releasePointerCapture' in pca) ? ('hasPointerCapture' in pca) : true) ? 'g' : 'G';"
+    "fetch('/api/pcgate?v=' + (pcg === 'g' ? 'ispcgate' : 'arm' + pcg));"
+    /* THE FOURTH ROW ASSERTS NOTHING AND IS EMITTED UNCONDITIONALLY, which is what the `/api/scrollpos` row
+       above already does and for the same reason: an ABSENT record and a token are different facts, and this
+       one's question is one no run today can answer either way. What it DOES is REACH the two absent members
+       on the day they exist, with a pointerId THIS PAGE supplied — so a landing that puts a `DCHECK` on that
+       argument turns this line into a `@WHY` rather than into an exception the page catches. A page-supplied
+       `pointerId` is INPUT, and Pointer Events 4 §8.2 "Setting pointer capture"' own step 1 answer for one
+       that matches no active pointer is a "NotFoundError" DOMException. `-` is the member absent, `n` that
+       refusal, `s` a call that returned, `T` a TypeError and `W` anything else. */
+    "var pcr = '';"
+    "if (typeof pca.setPointerCapture === 'function') {"
+    " try { pca.setPointerCapture(0); pcr += 's'; }"
+    " catch (e) { pcr += (e && e.name === 'NotFoundError') ? 'n' : ((e instanceof TypeError) ? 'T' : 'W'); }"
+    "} else { pcr += '-'; }"
+    "if (typeof pca.releasePointerCapture === 'function') {"
+    " try { pca.releasePointerCapture(0); pcr += 's'; }"
+    " catch (e) { pcr += (e && e.name === 'NotFoundError') ? 'n' : ((e instanceof TypeError) ? 'T' : 'W'); }"
+    "} else { pcr += '-'; }"
+    "fetch('/api/pcreach?v=pc' + pcr);"
     /* HTML §8.11.1 "The ImageData interface" — and the FOURTH row is the reason this exists. Web IDL §3.6's
        distinguishing argument index for its two constructors is position 0, where the shorter entry declares
        `unsigned long sw` and the longer one `ImageDataArray data`, and the entry chosen THERE decides what

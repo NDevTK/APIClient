@@ -27,13 +27,22 @@ static int g_id_has_capture = -1;
  *     pointers, then throw a "NotFoundError" DOMException". core/html/user_activation.h states from its own
  *     side that this agent "dispatches no trusted `keydown`/`mousedown`/`pointerdown`/`pointerup`/`touchend`",
  *     so nothing has ever produced a pointer event and the active pointer set is empty.
- *   Pointer Events 4 §8.3 "Releasing pointer capture" step 3, which CLEARS and never sets, behind the same
- *     refusal at its own step 1.
+ *   Pointer Events 4 §8.3 "Releasing pointer capture" step 3, which CLEARS and never sets, behind a refusal
+ *     at its own step 1 that is NARROWER than §8.2's rather than "the same": it throws only when the
+ *     pointerId matches no active pointer "and these steps are not being invoked as a result of the implicit
+ *     release of pointer capture", so the §8.5 invocations below reach step 3 with no live pointer at all.
+ *     A reader who builds §8.3 from §8.2's step 1 refuses the implicit release, which is the only way a
+ *     capture is given up — the arm count is in the header and it is two here and FOUR in §8.2.
  *   Pointer Events 4 §8.4 "Implicit pointer capture", whose trigger is "just before the invocation of any
  *     pointerdown listeners" — those are fired by Pointer Events 4 §3.2.9 "maybe send pointerdown event",
  *     which is not built.
  *   Pointer Events 4 §8.5 "Implicit release of pointer capture", which clears after a pointerup or
- *     pointercancel this agent likewise does not fire.
+ *     pointercancel this agent likewise does not fire — and ALSO on two triggers that are not pointer events
+ *     at all, which is where the state's hygiene at REMOVAL lives rather than in a section of its own: "When
+ *     the pending pointer capture target override is no longer connected [DOM], the pending pointer capture
+ *     target override node SHOULD be cleared", and a successful pointer lock, which §8.5 specifies by
+ *     running §8.3's steps. Both are SHOULD rather than MUST, and the first is the reason a set-then-remove
+ *     sequence leaves no dangling override; neither is reachable while the override is unset for every key.
  * So false is Pointer Events 4 §4's own answer evaluated against the state this engine HAS — the same answer
  * a real browser gives for an element that has never captured a pointer — and it holds for EVERY key at once,
  * which is a statement about the ENGINE rather than about a pointerId. The member therefore never reads its
@@ -61,9 +70,12 @@ static int g_id_has_capture = -1;
  * capture" promotes it to the pointer capture target override; this answers for the empty map rather than
  * from one, so it cannot distinguish two pointerIds. WHAT THE NEXT DIFF BUILDS: Pointer Events 4 §3.2.9
  * "maybe send pointerdown event", which is what puts a pointer in the active pointer set that Pointer Events
- * 4 §8.2 step 2 takes its pointer FROM — and Pointer Events 4 §8.2, Pointer Events 4 §8.3, Pointer Events 4
- * §3.1.3.2 and the keyed map land WITH it and never before it, since each of the other three is unreachable
- * while that set is empty. HOW ITS ABSENCE WOULD SHOW: a run in which a page's `pointerdown` handler calls
+ * 4 §8.2 step 2 takes its pointer FROM — and Pointer Events 4 §8.2 WITH ALL FOUR OF ITS REFUSAL ARMS,
+ * Pointer Events 4 §8.3 WITH BOTH OF ITS, Pointer Events 4 §3.1.3.2 and the keyed map land WITH it and never
+ * before it, since each of the other three is unreachable while that set is empty. The arm counts are in this
+ * component's header, enumerated from the fetched steps, because a clause naming ONE arm of a multi-arm
+ * refusal asks for a WRONG answer rather than a partial one.
+ * HOW ITS ABSENCE WOULD SHOW: a run in which a page's `pointerdown` handler calls
  * `setPointerCapture` and a subsequent `hasPointerCapture` on the same element answers false — which is
  * exactly the observation Pointer Events 4 §4's own Note names, "This method will return true immediately
  * after a call to setPointerCapture(), even though that element will not yet have received a

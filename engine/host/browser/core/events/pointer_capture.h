@@ -16,7 +16,8 @@
  * and the three are NOT one landing, because only one of them is TOTAL. Pointer Events 4 §8.2 "Setting
  * pointer capture" step 1 is "If the pointerId provided as the method's argument does not match any of the
  * active pointers, then throw a "NotFoundError" DOMException", and Pointer Events 4 §8.3 "Releasing pointer
- * capture" step 1 says the same. This agent has no active pointers at all —
+ * capture" step 1 throws the same exception for a NARROWER condition — see the arm count below, which is the
+ * one thing in this header a next diff must not read short. This agent has no active pointers at all —
  * core/html/user_activation.h states from its own side that it "dispatches no trusted
  * `keydown`/`mousedown`/`pointerdown`/`pointerup`/`touchend`" — so those two throw on their FIRST STEP for
  * every call a page can make, and installing them only renames the exception a drag handler dies on.
@@ -24,6 +25,26 @@
  * pending pointer capture target override for pointerId is set to the element on which this method is
  * invoked, and false otherwise". It is answerable against the state this engine has, so it is the landing and
  * the other two stay honestly absent.
+ *
+ * AND THE REFUSAL IS FOUR ARMS IN Pointer Events 4 §8.2 AND TWO IN Pointer Events 4 §8.3, NOT THE ONE OF EACH
+ * THE PARAGRAPH ABOVE USED TO NAME — it read `Pointer Events 4 §8.3 "Releasing pointer capture" step 1 says
+ * the same`, and §8.3's step 1 is a CONJUNCTION §8.2 has no counterpart for. Read off the fetched step lists:
+ *   Pointer Events 4 §8.2 has SIX steps and THREE of them throw. Step 1's "NotFoundError"; step 3's
+ *     "InvalidStateError" for an element that "is not connected"; step 4's "InvalidStateError" for a node
+ *     document that "has a locked element"; step 5's "terminate these steps" for a pointer "not in the active
+ *     buttons state", which Pointer Events 4 §4's own prose calls failing "silently"; and step 6, the WRITE.
+ *   Pointer Events 4 §8.3 has THREE steps and ONE throw. Step 1's "NotFoundError", conditioned on "and these
+ *     steps are not being invoked as a result of the implicit release of pointer capture"; step 2's "terminate
+ *     these steps" when hasPointerCapture is false, which is THIS member and is therefore always the case
+ *     here; and step 3, the CLEAR.
+ * THAT SECOND CONJUNCT IS THE ARM THE RETIRED SENTENCE ERASED AND IT IS THE ONE A NEXT DIFF NEEDS. Pointer
+ * Events 4 §8.5 "Implicit release of pointer capture" runs §8.3's steps after a pointerup or pointercancel,
+ * and again when "a pointer lock [PointerLock] is successfully applied on an element" — neither of those is a
+ * page call and neither carries a live-pointer requirement — so a §8.3 whose step 1 refused unconditionally
+ * would refuse the implicit release, which is the only way a capture is ever given up. A refusal landed one
+ * arm short is a different engine rather than a narrower one.
+ * RETIREMENT: this record goes when Pointer Events 4 §8.2 and §8.3 are built and each arm above is a SITE, so
+ * the count is read off the code rather than off this paragraph.
  *
  * THAT IS A NARROWER CLAIM THAN "THE MEMBERS NEED THE SOURCE FIRST", WHICH IS WHAT THIS PROJECT USED TO SAY,
  * AND THE DIFFERENCE IS THE WHOLE DIFF. pointer_event.c's residual reads that "every call of Pointer Events 4
@@ -54,6 +75,33 @@
  * names (`a.setPointerCapture && …`, `` `releasePointerCapture` in a && … ``); the single presence test of
  * hasPointerCapture is nested inside one of them, so it stays unreachable while releasePointerCapture is
  * absent. Re-derive that before adding either sibling — it is the reason the sibling landing is not free.
+ *
+ * AND IT WAS RE-DERIVED BEFORE THE SIBLINGS WERE DECLINED A SECOND TIME, WHICH TURNED UP A GUARD SPELLING NO
+ * SWEEP FOR `&&` OR `in` CAN SEE. The corpus is fetched rather than committed, so the DERIVATION is what is
+ * handed over — `NODE_USE_ENV_PROXY=1 SITES=apps.tsv node testing/corpus/fetch.mjs`, then for each of the
+ * three identifiers every occurrence's enclosing expression READ rather than matched, since a question about
+ * control flow is answered by reading control flow and a presence test has as many spellings as English. The
+ * durable part is the SHAPE, and it is FOUR spellings rather than the two named above: `a.X && a.X(id)`,
+ * `` `X` in a && a.X(id) ``, ``typeof a.X === `function` && a.X(id)``, and `a.X?.(id)` — the last an OPTIONAL
+ * CALL, which is a guard by effect and matches no pattern a reader would write for one, and whose absent arm
+ * CONTINUES exactly as a presence test's does.
+ * AND THE LEDGER IS ASYMMETRIC IN THE DIRECTION THAT DECIDES IT. Installing either sibling buys at most ONE
+ * fidelity gain — a `"setPointerCapture" in HTMLElement.prototype` ternary whose true arm a real browser takes
+ * and this engine does not — against UNCAUGHT flow-enders at the sites whose guard's false arm runs TODAY: an
+ * optional call standing as a `pointerdown` handler's last statement, an `&&` inside the test of an `if` whose
+ * other comma operand is that handler's real work, and two `in` tests in front of the pointerup and
+ * pointercancel registration of a press hook. Every other site is a bare call, where the change is a
+ * TypeError renamed to a NotFoundError and the flow ends either way; one more is inside a `try`/`catch` and
+ * one more is already gated by hasPointerCapture, which is this member answering false. NOTHING IMPROVES AND
+ * THREE HANDLERS DIE, so the sibling landing is not merely un-free, it is negative.
+ * AND WHAT MAKES THEM SURVIVABLE IS Pointer Events 4 §3.2.9 AND NOTHING SHORT OF IT, which is a reading of
+ * those sites rather than a restatement of the residual: at every one of them the argument is a live
+ * `e.pointerId` inside a pointer handler, so Pointer Events 4 §8.2's step 1 stops refusing exactly when that
+ * pointer is in the active pointer set — which is what §3.2.9 puts it there. pointer_capture.c's residual
+ * names that diff, and this reading CONFIRMS it rather than correcting it.
+ * RETIREMENT: this record goes when the guard-shape question is answered for a MEMBER on an arbitrary receiver
+ * by an instrument, the way engine/js_guard_shape.mjs answers it for a global (whose receiver set is the three
+ * global spellings and cannot reach an element), so the spellings are a verdict list rather than a sentence.
  *
  * WHAT DOES NOT FOLLOW: THE ANSWER IS CONCRETE AND MUST NOT FORK. false is not a guess about a pointerId
  * this engine does not know; it is the answer for EVERY pointerId, because the pending pointer capture target

@@ -41,9 +41,22 @@
  * WHAT THAT NUMBER WAS REALLY DECIDING IS WHETHER §4 IS WORTH BUILDING AT ALL, AND IT POINTED THE WRONG WAY.
  * MEASURED over a corpus fetched with `NODE_USE_ENV_PROXY=1 SITES=apps.tsv node testing/corpus/fetch.mjs`,
  * every grep carrying an invented spelling beside it as the control because a zero from a misspelled pattern
- * reads exactly like an absence: `setPointerCapture` is reached across EIGHT distinct apps, and all but one
- * of its occurrences is a BARE call — `target.setPointerCapture(e.pointerId)` as the first statement of a
- * `pointerdown` handler. AN UNGUARDED ABSENCE DOES NOT DEGRADE TO SILENCE, which is the whole of why this
+ * reads exactly like an absence: `setPointerCapture` is reached across EIGHT distinct apps, and the DOMINANT
+ * idiom is a BARE call — `target.setPointerCapture(e.pointerId)` as the first statement of a `pointerdown`
+ * handler.
+ * THIS SENTENCE READ `all but one of its occurrences is a BARE call`, AND THE ABSOLUTE IS WITHDRAWN WHILE THE
+ * SHAPE STANDS — rewritten rather than deleted because "dominant" is what a reader re-derives and "all but
+ * one" is what a reader QUOTES, and an absolute invites the one cheap refutation that discards the true part
+ * with the false. Re-derived over a corpus whose own `run.json` dates it EARLIER than the one this paragraph
+ * was written from, which is why the figures differ at all (the derivation, never the figure:
+ * `NODE_USE_ENV_PROXY=1 SITES=apps.tsv node testing/corpus/fetch.mjs`, then every occurrence's enclosing
+ * expression READ rather than matched), the EIGHT apps reproduced exactly and the non-bare occurrences are
+ * several rather than one: two are the identifier inside a STRING, and the rest are presence tests in FOUR
+ * distinct spellings — `&&`, `in`, `typeof … === \`function\``, and an OPTIONAL CALL `a.X?.(id)` that is a
+ * guard by effect and matches no pattern anyone would write for one. core/events/pointer_capture.h carries the
+ * reading and the site-by-site ledger; what is UNCHANGED is the clause below, which this reading confirms:
+ * the guarded sites are the minority and installing either member there is WORSE than the absence.
+ * AN UNGUARDED ABSENCE DOES NOT DEGRADE TO SILENCE, which is the whole of why this
  * matters: it throws on the line that opens every drag interaction, in the same drag libraries whose pointer
  * branch this interface exists to unlock, so the guard is flipped true and the branch behind it dies one
  * statement in. Re-derive that figure rather than quoting it — it is a fact about whichever bundles answered
