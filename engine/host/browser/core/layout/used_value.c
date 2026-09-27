@@ -4626,26 +4626,36 @@ CssPx used_value_abs_offset_px(lxb_dom_element_t *el, bool vertical)
     return uv_abs_solve(el, uv_sized(el, box, vertical).len, vertical).before;
 }
 
-/* CSS 2.2 §9.4.3 "Relative positioning"' USED TRANSLATION ON ONE AXIS — the signed distance §9.4.3 shifts a
-   relatively positioned box by, which is the used `left` horizontally and the used `top` vertically because
-   the section states the direction in its own words: "'Left' moves the boxes to the right" and "'Top' moves
-   the boxes down".
-   IT IS A PAIR AND NOT TWO PROPERTIES, WHICH IS THE WHOLE REASON THIS IS AN ENTRY. §9.4.3 says "the used
-   values are always: left = -right" and states the four cases over BOTH members at once, so neither member
-   is readable without the other and a per-property `used_value_px` row could not answer either one — which
-   is what core/css/css_computed_value.c's CSSOM §9 inset arm names as the second of the three things it is
-   waiting on. A caller wanting the trailing member has the negation of this answer and not a second solve.
-   THE TWO AXES ARE NOT THE SAME RULE AND THE DIFFERENCE IS THE OVER-CONSTRAINED CASE. Horizontally §9.4.3
-   defers to the CONTAINING BLOCK's `direction`: "If the 'direction' property of the containing block is
-   'ltr', the value of 'left' wins and 'right' becomes -'left'. If 'direction' of the containing block is
-   'rtl', 'right' wins and 'left' is ignored." Vertically it names no direction at all — "If neither is
-   'auto', 'bottom' is ignored" — so the leading member wins unconditionally. A shared arm that consulted
-   `direction` on both axes would move a box UP for `top`/`bottom` under `direction: rtl`, which no user
-   agent does and which the section does not say.
-   §9.4.3's TRANSLATION IS NOT A SIZE, so nothing here floors at zero: §9.3.2's `<length>` and `<percentage>`
-   entries both end "Negative values are allowed", and a `css_px_max` copied from the limit resolver above
-   would silently delete every leftward and upward shift on the web. */
-static CssPx uv_rel_offset_resolve(lxb_dom_element_t *el, CssLength len, bool vertical)
+/* THE SAME SOLVE READ AT ITS OTHER END — see used_value.h. */
+CssPx used_value_abs_offset_trailing_px(lxb_dom_element_t *el, bool vertical)
+{
+    UvBox box;
+    char nbuf[160];
+
+    DCHECK(el != NULL, "§10.3.7's used trailing offset was asked for with no element");
+    box = uv_box_kind(el);
+    DCHECKF(box == UV_BOX_ABS,
+           "%s: CSS 2.1 §10.3.7 and §10.6.4 are the only sections that SOLVE an offset, and they are stated "
+           "over an absolutely positioned box. A relatively positioned box's `right` is CSS 2.1 §9.4.3's PAIR "
+           "and a statically positioned one's does not apply at all — core/css/css_computed_value.c's CSSOM "
+           "§9 inset arm is where both of those are decided",
+           box_subject(el, nbuf, sizeof nbuf));
+    return uv_abs_solve(el, uv_sized(el, box, vertical).len, vertical).after;
+}
+
+/* ONE DECLARED INSET AGAINST ITS AXIS'S BASIS — see used_value.h for the contract and for why a sticky
+   percentage is not this entry's to answer. THIS BANNER USED TO BE §9.4.3's PAIR ARGUMENT, which describes
+   `used_value_rel_offset_px` below and not this function; it is kept where it belongs, in used_value.h, and
+   the two paragraphs that are about THIS derivation are the two below. A note binds to its neighbour by
+   ADJACENCY and by nothing else, so a note describing the function after next reads as authoritative about
+   the one it sits over.
+   THE BASIS DIFFERS BY AXIS AND NOT BY MEMBER, which is what the `vertical` parameter is and why there is no
+   `trailing` one: css-position-3 §3.1's `<percentage>` arm gives `left` and `right` the containing block's
+   WIDTH and `top` and `bottom` its HEIGHT, and says nothing anywhere about which end of an axis a member is.
+   AN INSET IS NOT A SIZE, so nothing here floors at zero: §3.1's `<length>` and `<percentage>` entries both
+   end "Negative values are allowed", and a `css_px_max` copied from the limit resolver above would silently
+   delete every leftward and upward shift on the web. */
+CssPx used_value_inset_length_px(lxb_dom_element_t *el, CssLength len, bool vertical)
 {
     CssPx basis;
     char  nbuf[160];
@@ -4724,16 +4734,16 @@ CssPx used_value_rel_offset_px(lxb_dom_element_t *el, bool vertical)
     /* "If 'left' is 'auto', its used value is minus the value of 'right' (i.e., the boxes move to the left by
        the value of 'right')." — vertically, "If one of them is 'auto', it becomes the negative of the
        other." */
-    if (lead_auto) return css_px_sub(css_px(0.0), uv_rel_offset_resolve(el, trail, vertical));
+    if (lead_auto) return css_px_sub(css_px(0.0), used_value_inset_length_px(el, trail, vertical));
     /* "If 'right' is specified as 'auto', its used value is minus the value of 'left'" — which is a statement
        about the TRAILING member, so the leading one this entry answers is that value unchanged. */
-    if (trail_auto) return uv_rel_offset_resolve(el, lead, vertical);
+    if (trail_auto) return used_value_inset_length_px(el, lead, vertical);
     /* OVER-CONSTRAINED: "If neither 'left' nor 'right' is 'auto', the position is over-constrained, and one of
        them has to be ignored." The horizontal arm reads the CONTAINING BLOCK's `direction` and the vertical
-       arm has no such sentence — see the note above `uv_rel_offset_resolve`. */
+       arm has no such sentence — see the note above `used_value_inset_length_px`. */
     if (!vertical && used_value_containing_block_is_rtl(el))
-        return css_px_sub(css_px(0.0), uv_rel_offset_resolve(el, trail, vertical));
-    return uv_rel_offset_resolve(el, lead, vertical);
+        return css_px_sub(css_px(0.0), used_value_inset_length_px(el, trail, vertical));
+    return used_value_inset_length_px(el, lead, vertical);
 }
 
 

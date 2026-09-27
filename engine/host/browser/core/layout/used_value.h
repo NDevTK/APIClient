@@ -496,6 +496,16 @@ UsedValueAbsCb used_value_abs_containing_block(lxb_dom_element_t *el, lxb_dom_el
    day CSSOM §9's inset arm reports a resolved `right`, it is a second view over the same solve. */
 CssPx used_value_abs_offset_px(lxb_dom_element_t *el, bool vertical);
 
+/* THE SAME SOLVE'S TRAILING OFFSET — the used `right` (or `bottom`), which is the entry above's own predicted
+   second view ("the day CSSOM §9's inset arm reports a resolved `right`, it is a second view over the same
+   solve") rather than a second solve. `UvAbs` carries `before` and `after` because §10.3.7's and §10.6.4's one
+   constraint equation has five terms and solves for whichever is `auto`, so both offsets come out of one run
+   and the pair cannot disagree about where the box is.
+   IT IS A SIBLING ENTRY AND NOT A `trailing` PARAMETER ON THE ONE ABOVE, because that entry's two callers in
+   core/layout/flow_position.c place a box from its LEADING pair and a bool they would all pass false for is a
+   question none of them has. */
+CssPx used_value_abs_offset_trailing_px(lxb_dom_element_t *el, bool vertical);
+
 /* CSS 2.2 §9.4.3 "Relative positioning"' USED TRANSLATION ON ONE AXIS — the signed distance a relatively
    positioned box is shifted by AFTER normal flow has placed it, which is the used `left` horizontally and the
    used `top` vertically because §9.4.3 states the sign in its own words ("'Left' moves the boxes to the
@@ -520,6 +530,25 @@ CssPx used_value_abs_offset_px(lxb_dom_element_t *el, bool vertical);
    caller decides which section places the box, exactly as core/layout/flow_position.c already decides it for
    `absolute` and `fixed`, and this entry refuses rather than answering zero for a box it is not about. */
 CssPx used_value_rel_offset_px(lxb_dom_element_t *el, bool vertical);
+
+/* ONE DECLARED INSET RESOLVED TO PIXELS AGAINST ITS OWN AXIS'S BASIS — css-position-3 §3.1 "Box Insets: the
+   top, right, bottom, left, inset-block-start, inset-inline-start, inset-block-end, and inset-inline-end
+   properties"' `<percentage>` arm, which names the basis per AXIS and not per member: "The inset is a
+   percentage relative to the containing block's size in the corresponding axis (e.g. width for left or right,
+   height for top and bottom)."
+   `len` IS THE CALLER'S BECAUSE THE CALLER HAS ALREADY ASKED IT A QUESTION. Every caller must separate `auto`
+   from a `<length-percentage>` first — §3.1's `Value:` line is `auto | <length-percentage>` and the two take
+   different sections entirely — so it holds the `CssLength`, and taking it here spends one cascade walk per
+   member where a name would spend two.
+   IT IS NOT THE USED VALUE IN EVERY CONFIGURATION AND THE DIFFERENCE IS §3.5.2's: where the inset-modified
+   containing block size in an axis goes BELOW ZERO, "the weaker inset in the affected axis is reduced
+   (possibly becoming negative) to bring that size up to zero", so the weaker member's used value is not its
+   own length. Its callers name which of those they are in.
+   A STICKY BOX IS NOT A CALLER FOR A PERCENTAGE. §3.1's same arm gives it a different basis in its own
+   sentence — "For sticky positioned boxes, the inset is instead relative to the relevant scrollport's size" —
+   and this entry reads §10.1's containing block, so a sticky percentage answered here would be resolved
+   against the wrong rectangle. */
+CssPx used_value_inset_length_px(lxb_dom_element_t *el, CssLength len, bool vertical);
 
 /* css-position-3 §2.1 "Containing Blocks of Positioned Boxes"' OPEN LIST OF PROPERTIES, AS ONE FACT WITH TWO
    READERS. §2.1's two Notes name what can make a box establish an absolute or a fixed positioning containing

@@ -12,6 +12,7 @@
 #include "core/css/css_computed_value.h"
 #include "core/css/css_defaulting.h"
 #include "core/css/css_length.h"
+#include "core/css/css_logical.h"
 #include "core/css/css_pending_substitution.h"
 #include "core/css/css_property_applies.h"
 #include "core/css/css_shorthand.h"
@@ -2202,6 +2203,129 @@ static JSValue css_resolved_shorthand(JSContext *ctx, lxb_dom_element_t *el, con
     return out;
 }
 
+/* CSSOM §9 "Resolved Values"' INSET ENTRY, past the two conjuncts its caller has already asked. §9's third is
+   "and the property is not over-constrained", and it needs no branch of its own — which is a DERIVATION and
+   not an omission. The conjunct exists to keep a SOLVE's rewriting of an inset off the page: css-position-3
+   §3.3 "Relative Positioning" ignores the end side's computed value when neither member is `auto`, and
+   §3.5.2 "Resolving Overconstrained Insets" reduces "the weaker inset in the affected axis" when an
+   inset-modified containing block goes below zero. Both rewrite a member that was DECLARED, and neither can
+   touch one that is `auto` — §3.3's case is "If neither is auto" and §3.5.2's weaker inset is the `auto` one
+   when exactly one is. So answering a declared inset from its OWN length, and asking a solve only for an
+   `auto` one, discharges the conjunct for every configuration at once rather than testing it per member.
+   THE SPLIT IS ON §3.1's `Value:` LINE, `auto | <length-percentage>`, and it is written as a positive list of
+   the three length shapes rather than as `!= auto`. `position` and the insets both take the cascade's
+   as-specified arm, which validates no keyword grammar, so a page's `top: bogus` and `position: bogus` reach
+   here as a keyword and a scheme this section does not name — and those bytes are the PAGE's, so no assert may
+   stand on either. Both take §9's own "otherwise" arm, which is the answer a static element gets and which
+   fabricates nothing. */
+static JSValue css_resolved_inset(JSContext *ctx, lxb_dom_element_t *el, const char *name)
+{
+    /* The four physical members, each with the two facts a derivation needs from it. `vertical` is
+       css-position-3 §3.1's percentage AXIS and `trailing` is §3.3's END SIDE; they are independent, which is
+       why this is a table and not a pair of parities over one index. */
+    static const struct { const char *name; bool vertical; bool trailing; } PHYS[] = {
+        { "top",    true,  false },
+        { "right",  false, true  },
+        { "bottom", true,  true  },
+        { "left",   false, false },
+    };
+    const char *phys = name;
+    CssLogicalGroup group;
+    bool physical = true;
+    int side = -1;
+    unsigned i;
+    CssLength len;
+    char *pos;
+
+    group = css_logical_group_of(name, &physical);
+    DCHECK(group == CSS_LOGICAL_GROUP_INSET,
+           "CSSOM §9 \"Resolved Values\"' inset arm was reached for a property css-logical-1 §4 does not put "
+           "in the `inset` group, and the two lists are one: §9's used-if-positioned entry names the same "
+           "eight longhands as that group's `Logical property group: inset` line. css_resolved_kind and "
+           "core/css/css_logical.c have come apart");
+    /* css-writing-modes-4 §6.4 "Abstract-to-Physical Mappings", which core/css/css_logical.c holds. §7.4
+       makes the ELEMENT whose writing mode governs the box's own for its own insets — §3.1 says the inset is
+       "with respect to the box's own writing mode" in its own words — so `el` is the element asked about. */
+    if (!physical) {
+        phys = css_logical_partner_of(el, name);
+        DCHECK(phys != NULL,
+               "css-logical-1 §4's pairing answered no partner for a flow-relative inset, and the group "
+               "question one line up has already said this property is in the `inset` group — the two read "
+               "the same table and only one of them found the row");
+    }
+    for (i = 0; i < sizeof(PHYS) / sizeof(PHYS[0]); i++)
+        if (phys != NULL && strcmp(PHYS[i].name, phys) == 0) side = (int)i;
+    /* THE RELEASE ARM IS §9's OWN "OTHERWISE", STATED RATHER THAN FALLEN INTO: the assert above is dev-only,
+       so a build with it compiled out has to leave this somewhere defined, and the computed value is the one
+       answer that is right for every property whose scheme §9.3.1 does not name. */
+    if (side < 0) return css_resolved_computed(ctx, el, name);
+
+    len = css_computed_length(el, phys);
+    /* A DECLARED INSET — §3.1's `<length-percentage>`, in any of the three shapes a `CssLength` carries one
+       as. Its used value is its own length resolved against the axis basis in every configuration the two
+       rewriting rules above do not reach, and where they DO reach it §9's third conjunct is what sends the
+       page here instead of to the solve. A STICKY box is the one member of §9.3.1's positioned set that this
+       cannot answer for a percentage, and it is refused below rather than resolved against the wrong
+       rectangle. */
+    if (len.kind == CSS_LENGTH_ABSOLUTE || len.kind == CSS_LENGTH_PERCENTAGE ||
+        len.kind == CSS_LENGTH_CALCULATED) {
+        pos = css_computed_value(el, "position");
+        if (css_cv_is(pos, "sticky") && len.kind != CSS_LENGTH_ABSOLUTE) {
+            free(pos);
+            DFAIL("css-position-3 §3.1 \"Box Insets: the top, right, bottom, left, inset-block-start, "
+                  "inset-inline-start, inset-block-end, and inset-inline-end properties\"' `<percentage>` arm "
+                  "gives a STICKY box a different basis from every other positioned box, in its own sentence: "
+                  "\"For sticky positioned boxes, the inset is instead relative to the relevant scrollport's "
+                  "size.\" core/layout/used_value.h answers §10.1's CONTAINING BLOCK and nothing in this tree "
+                  "answers a SCROLLPORT's size, so resolving here would report a percentage of the wrong "
+                  "rectangle — which is a plausible number and therefore worse than no answer. BUILD the "
+                  "scrollport extent beside core/layout/scroll_container.h, whose own subject is the box that "
+                  "establishes one, and give `used_value_inset_length_px` the basis rather than letting it "
+                  "pick: §3.1 states the basis per POSITIONING SCHEME and that entry currently reads only the "
+                  "axis. An ABSOLUTE length needs no basis at all and is answered above this line");
+            return css_resolved_computed(ctx, el, name);
+        }
+        free(pos);
+        return css_resolved_px(ctx, used_value_inset_length_px(el, len, PHYS[side].vertical));
+    }
+    /* §3.1's `auto` — "Represents an unconstrained inset; the exact meaning depends on the positioning
+       scheme", which is the dispatch below and is why it is a dispatch rather than a value. */
+    if (!(len.kind == CSS_LENGTH_KEYWORD && strcmp(len.keyword, "auto") == 0))
+        return css_resolved_computed(ctx, el, name);
+
+    pos = css_computed_value(el, "position");
+    /* css-position-3 §3.3 "Relative Positioning"' three rules, which core/layout/used_value.h answers as a
+       PAIR because §3.3 states them over both members at once ("opposing used values in a given axis must be
+       negations of each other"). The entry answers the LEADING member and §3.3's own sentence makes the
+       trailing one its negation — "If only one is auto, its used value becomes the negation of the other" —
+       so the negation here is that sentence and not this file's convention.
+       THE ENTRY'S OVER-CONSTRAINED ARM IS UNREACHABLE FROM HERE, which is what makes asking it safe: it reads
+       CSS 2.2 §9.4.3's `direction` rather than §3.3's writing-mode-relative end side, and those differ in a
+       vertical writing mode — but that arm is "If neither is auto" and this call is made only when THIS
+       member is. */
+    if (css_cv_is(pos, "relative")) {
+        CssPx lead = used_value_rel_offset_px(el, PHYS[side].vertical);
+
+        free(pos);
+        return css_resolved_px(ctx, PHYS[side].trailing ? css_px_sub(css_px(0.0), lead) : lead);
+    }
+    /* CSS 2.1 §10.3.7's and §10.6.4's constraint equation, which css-position-3 §5 "Old Absolute Positioning
+       Layout Model" is this engine's model of and which solves for whichever of the five terms is `auto`. */
+    if (css_cv_is(pos, "absolute") || css_cv_is(pos, "fixed")) {
+        free(pos);
+        return css_resolved_px(ctx, PHYS[side].trailing
+                                        ? used_value_abs_offset_trailing_px(el, PHYS[side].vertical)
+                                        : used_value_abs_offset_px(el, PHYS[side].vertical));
+    }
+    /* A STICKY box's `auto` inset, and any `position` §9.3.1 does not name. §3.1 calls `auto` "an
+       unconstrained inset", and for a sticky box that is what it stays: the side is simply not one the box is
+       stuck to, so there is no number to report and the resolved value is the keyword §9's "otherwise" arm
+       hands back. That is a POSITIVE statement about the box rather than a missing value, which is why it is
+       not a crash. */
+    free(pos);
+    return css_resolved_computed(ctx, el, name);
+}
+
 JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *name)
 {
     const char *const *lh;
@@ -2232,27 +2356,13 @@ JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *na
         /* "If the property applies to a positioned element and the resolved value of the display property is
            not none or contents, and the property is not over-constrained, then the resolved value is the used
            value. Otherwise the resolved value is the computed value." The first conjunct IS "positioned" —
-           CSS 2.1 §9.3.2's `Applies to:` line for the insets is "positioned elements" — so it is asked
+           css-position-3 §3.1's `Applies to:` line for the insets is "positioned elements" — so it is asked
            through the same entry as every other applies-to line rather than re-derived here from `position`,
            which is what this branch used to do. A STATICALLY positioned element is the common case and is
-           answered. */
+           answered. The THIRD conjunct is discharged inside the entry below rather than tested here; see its
+           banner for why that is a derivation and not a shortcut. */
         if (!css_property_applies(el, name) || !resolved_display_generates_a_box(el)) break;
-        DFAIL("CSSOM §9 makes an inset property's resolved value the USED value for a POSITIONED element that "
-              "generates a box, and this element is one. THE CONTAINING BLOCK IS NO LONGER THE BLOCKER — "
-              "core/layout/used_value.c answers §10.1's width now, which is what a percentage inset resolves "
-              "against — and what is left is three things this component has not been asked for. (1) The four "
-              "insets are not among the ten PHYSICAL BOX-MODEL LENGTHS `used_value_px` carries; adding them is "
-              "adding a group, not a case. (2) CSS 2.1 §9.4.3 makes a RELATIVELY positioned box's `left` and "
-              "`right` a PAIR rather than two values — both `auto` makes both 0, one `auto` makes it the "
-              "negation of the other — so the entry has to be asked about the pair. (3) The over-constrained "
-              "case of that pair, and §9's own THIRD conjunct which is stated over it, both turn on the "
-              "containing block's `direction` — which is NO LONGER MISSING: this file models it and "
-              "core/layout/used_value.h answers it for a containing block with §10.1's root-element exception "
-              "folded in, so that half is a call rather than a gap. An "
-              "ABSOLUTELY positioned box is a fourth thing again: §10.3.7 solves its insets from the same "
-              "constraint equation as its width, against the PADDING EDGE of its nearest positioned ancestor, "
-              "which used_value.c's §10.1 fourth case crashes for and names in full");
-        break;
+        return css_resolved_inset(ctx, el, name);
     case CSS_RESOLVED_USED: {
         /* "The resolved value is the used value" — unconditionally, with no `Applies to:` conjunct and no
            `display` escape, which is why this arm asks neither. The DERIVATION is `css_used_color` above and
