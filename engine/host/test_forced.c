@@ -17639,12 +17639,23 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "orphan-ccode", orphan_ccode, "orphanCharCode", SESS_EXPLORE, orphan_why },
         { "orphan-update", orphan_update, "orphanUpdate", SESS_EXPLORE, orphan_why },
         { "orphan-clamp", orphan_clamp, "orphanClamp", SESS_EXPLORE, orphan_why },
-        /* THE TWO DATE ROWS DECLARE THEIR 0 ENTAILED BY `orphan`, which the seven above them do not and which
-           is free here: if no body was driven at all these two are 0 for that reason and for no reason of
-           their own, so summing them as two findings would be one fact counted twice. `orphan_why` still
-           carries the split between the schedule, the take and the row. */
-        { "orphan-date1", orphan_date1, "orphanDate", SESS_EXPLORE, orphan_why, .gate = "orphan" },
-        { "orphan-datef", orphan_datef, "orphanDate", SESS_EXPLORE, orphan_why, .gate = "orphan" },
+        /* THE ENTAILMENT IS BETWEEN THE TWO DATE ROWS AND IS ONE-DIRECTIONAL, BECAUSE IT IS A FACT ABOUT
+           THIS BODY'S ORDER. `orphanDate` constructs BOTH `Date`s first and then emits `date1` and `datef`
+           as two unconditional statements in that order, so `datef` cannot be answered by a run that did
+           not answer `date1`, and the converse is REACHABLE: a body that aborts between the two fetches, or
+           whose `'' + u` reaches a `toString` over an unknown year, emits the first and not the second. So
+           `datef` is gated on `date1` and `date1` is gated on NOTHING — its 0 is a finding of its own.
+           THIS READ `.gate = "orphan"` ON BOTH ROWS AND IS REWRITTEN RATHER THAN DELETED, because the
+           argument for it is the one a reader re-derives: it said that if no body was driven at all these
+           two are 0 for that reason and for no reason of their own, so summing them would be one fact
+           counted twice. That is sound about the PREMISE and false about the row that establishes it —
+           `orphan` is `orphanNeverCalled`, a DIFFERENT BODY, so `orphan == 0` never established "no body was
+           driven at all" and the take could hand over one body and not the other. It was not a latent
+           mis-declaration either: the entailment assert in probes_report ABORTED the native smoke on it,
+           naming both rows, on the first build that drove enough orphans to tell them apart.
+           `orphan_why` still carries the split between the schedule, the take and the row. */
+        { "orphan-date1", orphan_date1, "orphanDate", SESS_EXPLORE, orphan_why },
+        { "orphan-datef", orphan_datef, "orphanDate", SESS_EXPLORE, orphan_why, .gate = "orphan-date1" },
         /* §29.4.5's THREE ARMS AND THEIR REACH ROW. The key is each row's own endpoint, so a 0 is already a
            localisation; `xk-reach` is keyed on the same statement and stands first because it is what says
            whether the three below it are about §29.4.5 or about how far the run got. */
