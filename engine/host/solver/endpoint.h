@@ -697,6 +697,37 @@ char   *endpoint_door_hist_json(void);
    lose the class. */
 char   *endpoint_reach_hist_json(void);
 
+/* …AND THE SAME SURFACE PARTITIONED BY THE BAR ITSELF, as a malloc'd JSON OBJECT (caller frees) — one row per
+   member of `ENDPOINT_RAZOR_CLASSES`, zeroes included, summing to the same `emitted` figure
+   endpoint_surface_census reports, with the identity asserted at the composer where both sides are in one
+   hand. Every value comes off `endpoint_razor_class_of`, which is the UNION CLAUDE.md
+   §What-the-tool-produces' bar names, so this is the one census row that states the bar rather than one of
+   its operands.
+   IT EXISTS BECAUSE THE TWO ROWS ABOVE ARE MARGINALS AND A UNION IS A STATEMENT ABOUT PER-ROW MEMBERSHIP.
+   `endpoint_address_hist_json` counts addresses the run had not determined and `endpoint_reach_hist_json`
+   counts what a MARKUP parse reaches, and NEITHER carries the other's fact for any row — so a census reader
+   holding both had no way to reach the bar and the nearest thing to one was keyed on the DOOR. That is not a
+   coarsening anybody could perform afterwards: a row is `runtime-only` if EITHER operand says so, and a
+   marginal tells you how many rows each operand accounts for and nothing about their overlap.
+   IT IS A FOURTH WALK OVER `g_eps` AND NOT A SUM OF THE TWO TABLES, for the reason endpoint.c gives for the
+   third — the walks carry the SAME `is_asset` skip precisely so that one of them drifting is a LOUD identity
+   failure, and a table summed from another is true by construction of it and blind to the walk it is
+   supposed to be checking. A sum would additionally be ARITHMETICALLY WRONG here rather than merely weak,
+   because the two operands OVERLAP: a `reply-chunk` row whose address the run had not determined is counted
+   by both marginals and is ONE row of this partition.
+   IT IS A CROSS-CHECK AGAINST THE PER-ROW COLUMN AND NEVER A SUM WITH IT. The emitted @H array carries
+   `razorClass` on every row from the same `endpoint_razor_class_of`, and this census is the same union at the
+   population grain — so a reader holding both holds ONE observation twice (CLAUDE.md §EVIDENCE-INFLATION),
+   and the two are worth having because they are taken at two INSTANTS over a GAUGE: `epEmitted` falls when an
+   asset verdict lands between two censuses, so a disagreement is a real finding about which records each
+   document was describing rather than an error in either.
+   IT IS A FLOOR AND A DIAGNOSTIC, in the words both rows above already carry: `runtime-only` is 0 by
+   construction on a document that composed every address out of constants, and that 0 is a REFUSAL TO CLAIM
+   the bar rather than a smaller version of it; `unproven` claims nothing whatever about a parse, for the
+   reason `endpoint_address_hist_json`'s `concrete` does not. Its DENOMINATOR is `epEmitted` on the same
+   census line and is not this row's to omit. */
+char   *endpoint_razor_hist_json(void);
+
 /* Record one learned endpoint (deduped by method+url). `url` may be concolic (shape) or concrete. Headers are
    MERGED into a same-identity endpoint: a header seen with a concrete value supersedes the same header seen
    only as a shape, which is the rule the param values already follow. `body` is NULL where the request has

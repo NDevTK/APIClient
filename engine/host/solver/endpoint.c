@@ -2791,6 +2791,69 @@ char *endpoint_address_hist_json(void) {
     return json_buf_take(&b);
 }
 
+/* THE SAME SURFACE PARTITIONED BY THE BAR RATHER THAN BY ONE OF ITS OPERANDS — see endpoint.h for what each
+   class claims, for why the honest field is a FLOOR, and for why a union is not a coarsening of the two
+   marginals above it. `endpoint_razor_class_of` is the whole of the keying: `runtime-only` where the run had
+   not determined the address OR the door's bytes are not the served document's, `unproven` otherwise.
+   A FOURTH WALK OVER `g_eps` AND NOT A SUM OF THE TWO TABLES, which is this file's rule for the second and
+   the third and is not merely a preference here: the two operands OVERLAP, so a row that is `unknown` AND
+   `EPB_OFF_DOCUMENT` is counted once by each marginal and is ONE row of this partition — a sum would be
+   arithmetically wrong and not just weak. The `is_asset` skip is spelled identically to the three walks above
+   precisely so that one of them drifting is a LOUD identity failure rather than a quiet agreement.
+   THE `addr_class` RANGE IS RE-ASSERTED AND THE `door` IS DELIBERATELY NOT. A corrupt `addr_class` would fall
+   through `endpoint_razor_class_of`'s first arm into `unproven`, which is an UNDER-claim published as a floor
+   and is the one direction a floor may not be wrong in — so the same operand the walk above asserts is
+   asserted here, where this walk reads it. `door` is left to `endpoint_door_bytes`, whose own `CHECK_FAILF` is
+   fatal in EVERY build rather than dev-only, and this walk never subscripts an array by `door`: a second
+   assert here would be a weaker copy of a stronger check, standing where nothing indexes.
+   IT IS A CROSS-CHECK AGAINST THE PER-ROW `razorClass` COLUMN AND NEVER A SUM WITH IT. Both come off this one
+   predicate, so they are ONE observation at two grains, and they are worth having together only because they
+   are read at two INSTANTS over a GAUGE — `epEmitted` FALLS when an asset verdict lands between a census and
+   the emission, so a difference names which records each document was describing and is not an error in
+   either. Adding them would double-count the whole surface. */
+char *endpoint_razor_hist_json(void) {
+    JsonBuf b = { 0 };
+    long n[EPZ_COUNT];
+    long minted, assets, emitted, pre_program, sum = 0;
+    int c, i;
+
+    memset(n, 0, sizeof n);
+    for (i = 0; i < g_eps_n; i++) {
+        if (g_eps[i].is_asset) continue;
+        DCHECKF(g_eps[i].addr_class >= 0 && g_eps[i].addr_class < EPA_COUNT,
+                "an @H record reached the razor census carrying the address class %d, which is none of "
+                "endpoint.h's ENDPOINT_ADDRESS_CLASSES — `endpoint_razor_class_of` reads that field as its "
+                "FIRST arm and anything outside the list falls through it into `unproven`, so a corrupt value "
+                "here is not a wrong count but an UNDER-CLAIM published as a floor, which is the one "
+                "direction this row may not be wrong in", g_eps[i].addr_class);
+        n[endpoint_razor_class_of(g_eps[i].door, g_eps[i].addr_class)]++;
+    }
+    endpoint_surface_census(&minted, &assets, &emitted, &pre_program);
+
+    /* EVERY CLASS IS EMITTED INCLUDING THE ZEROES, for the reason the three walks above give and with the
+       sharpest form of it at the class that matters: a `runtime-only` that is ABSENT and a `runtime-only`
+       that read 0 are the two facts this row exists to keep apart. The first is an instrument that stopped
+       writing the class; the second is the product's own bar answering, and CLAUDE.md
+       §What-the-tool-produces calls that 0 a REFUSAL TO CLAIM the capability on this document rather than a
+       smaller version of it. */
+    json_buf_raw(&b, "{");
+    for (c = 0; c < EPZ_COUNT; c++) {
+        if (c) json_buf_raw(&b, ",");
+        json_buf_str(&b, endpoint_razor_class_token(c));
+        json_buf_raw(&b, ":");
+        edge_num(&b, n[c]);
+        sum += n[c];
+    }
+    json_buf_raw(&b, "}");
+    DCHECKF(sum == emitted,
+            "the @H surface's per-razor-class counts sum to %ld against the %ld rows it emits — the two "
+            "classes are a PARTITION of the emitted surface and this walk carries the same `is_asset` skip "
+            "the three censuses beside it do, so a difference is one of those walks having stopped describing "
+            "the population the others count, and the BAR a reader reads off this row would be a share of a "
+            "number that is not the surface's size", sum, emitted);
+    return json_buf_take(&b);
+}
+
 /* THE STAGE ARMS THE PARTITION IS MADE OF, SUMMED ONCE FOR THE IDENTITY AND WRITTEN ONCE FOR THE DOCUMENT —
    two edges, one walk each, and the arithmetic in one place. */
 static long edge_stage_sum(const EndpointEdge *e) {

@@ -2448,10 +2448,11 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    `is_asset` on a record that is already in `g_eps`, and the verdict arrives with the REPLY while the record
    was minted at the REQUEST. So a census composed between those two instants counts the record in `epEmitted`
    and the next one does not, and `epEmitted` FALLS by one with nothing wrong. `epPreProgram` is raised inside
-   that same emitted arm and falls with it; `epDoors`, `epReach` and `epAddressClass` partition `epEmitted` —
-   the first two are that walk at two grains and the third is a second walk over the same skip — so all five
-   are GAUGES. `epMinted` and `epAssets` are the monotone halves — records are never
-   removed and `is_asset` is never cleared — and they stay LIFETIME.
+   that same emitted arm and falls with it; `epDoors`, `epReach`, `epAddressClass` and `epRazorClass`
+   partition `epEmitted` — the first two are that walk at two grains, the third is a second walk over the same
+   skip, and the fourth is the UNION of the third with the door list's bytes column and so is a fourth walk
+   rather than a sum of any of them — so all six are GAUGES. `epMinted` and `epAssets` are the monotone
+   halves — records are never removed and `is_asset` is never cleared — and they stay LIFETIME.
    THE SHAPE IS `epEmitted = epMinted - epAssets` WITH BOTH TERMS RISING, which is the tell for any row of this
    kind: a difference of two monotone counts is not monotone, and it reads exactly like a count until the day
    an asset verdict lands between two samples. CLAUDE.md §A-GAUGE-AND-A-LIFETIME-COUNTER's free check — the
@@ -2485,7 +2486,7 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    @kind lifetime: classicCompileAgain classicCompileAgainBytes classicCompileOwnDecode
    @kind lifetime: classicCompileResumed classicParseShared
    @kind lifetime: epMinted epAssets
-   @kind gauge: epEmitted epPreProgram epDoors epReach epAddressClass
+   @kind gauge: epEmitted epPreProgram epDoors epReach epAddressClass epRazorClass
    @kind lifetime: epAsks epAskPreProgram epAskSuppressed epAskMerged epAskMinted epAskMergedPreProgram
    @kind lifetime: netProgQueuedLife netProgFetchAsksLife netProgFetchQueuedLife
    @kind lifetime: netProgXhrAsksLife netProgXhrQueuedLife
@@ -2621,6 +2622,13 @@ char *result_cold_json(void) {
        `beyond` a parse and clears nothing at this bar. solver/endpoint.h states what each class claims, why
        the honest field is a FLOOR under the bar, and the identity it is asserted against. */
     char *acls;
+    /* …AND THE UNION OF THAT ROW AND THE DOOR'S BYTES COLUMN, WHICH IS THE BAR ITSELF AND NOT AN OPERAND OF
+       IT. The three rows above are the bar's RAW MATERIAL at three grains and none of them states it: a union
+       is a claim about per-row MEMBERSHIP, so no marginal carries it and a reader holding `epReach` and
+       `epAddressClass` could reach the bar only by adding two overlapping floors. solver/endpoint.h states
+       what each class claims, why it is a FOURTH walk rather than a sum of the two tables, and why it is a
+       CROSS-CHECK against the emitted array's per-row `razorClass` and never a sum with it. */
+    char *razor;
 
     cold_census(&c);
     engine_step_unit_runs(&r);
@@ -2929,7 +2937,8 @@ char *result_cold_json(void) {
     doors = endpoint_door_hist_json();
     reach = endpoint_reach_hist_json();
     acls  = endpoint_address_hist_json();
-    if (!cursors || !ahead || !edge || !xedge || !rungs || !doors || !reach || !acls) {
+    razor = endpoint_razor_hist_json();
+    if (!cursors || !ahead || !edge || !xedge || !rungs || !doors || !reach || !acls || !razor) {
         free(cursors);
         free(ahead);
         free(edge);
@@ -2938,6 +2947,7 @@ char *result_cold_json(void) {
         free(doors);
         free(reach);
         free(acls);
+        free(razor);
         cold_census_release(&c);
         return NULL;
     }
@@ -3485,6 +3495,25 @@ char *result_cold_json(void) {
                     version of it. Its denominator is `epEmitted` four rows up and travels on this line, and
                     solver/endpoint.c asserts the sum where both halves are in one hand. */
                  "\"epAddressClass\":%s,"
+                 /* …AND THE BAR ITSELF, WHICH IS THE ONE ROW ON THIS LINE THAT IS NOT ONE OF ITS OPERANDS.
+                    `epDoors`, `epReach` and `epAddressClass` are what the bar is COMPOSED FROM and a census
+                    reader holding them had to compose it — which is not a coarsening anybody can perform,
+                    because a union is a statement about per-row MEMBERSHIP and two marginals carry no overlap
+                    between them. The nearest thing to the bar a reader could reach for was keyed on the DOOR,
+                    and a literal chunk URL through `module-import` is `beyond` a markup parse and scores ZERO
+                    at this bar — so the assembly available was not a weaker answer but a different question.
+                    IT IS A CROSS-CHECK AGAINST THE EMITTED ARRAY'S `razorClass` AND NEVER A SUM WITH IT. Both
+                    come off `endpoint_razor_class_of`, so they are ONE observation at two grains (CLAUDE.md
+                    §EVIDENCE-INFLATION), and they are worth holding together only because they are taken at
+                    two INSTANTS over a GAUGE: `epEmitted` FALLS when an asset verdict lands between this
+                    census and the emission, so a disagreement names which records each document was
+                    describing and is a finding rather than an error in either. Added together they
+                    double-count the whole surface.
+                    A FLOOR AND A DIAGNOSTIC, in the words the two rows above carry: `runtime-only` 0 against a
+                    nonzero `epEmitted` is a REFUSAL TO CLAIM the bar on this document, and `unproven` claims
+                    nothing whatever about a parse. Its denominator is `epEmitted` five rows up and travels on
+                    this line; solver/endpoint.c asserts the sum where both halves are in one hand. */
+                 "\"epRazorClass\":%s,"
                  "\"epAsks\":%ld,\"epAskPreProgram\":%ld,\"epAskSuppressed\":%ld,"
                  /* AND THE ONE CUT INSIDE THE MERGED ARM — endpoint.h states what it is and what its four-state
                     zero can mean. It is NOT summed with the three arms beside it: they partition the door's
@@ -3576,7 +3605,7 @@ char *result_cold_json(void) {
                  c.out_of_programs,
                  c.out_of_programs_unrun, c.out_of_programs_framed, c.out_of_programs_at_the_ladder,
                  ladder, hist, cursors, ahead,
-                 ep_minted, ep_assets, ep_emitted, ep_pre_program, doors, reach, acls,
+                 ep_minted, ep_assets, ep_emitted, ep_pre_program, doors, reach, acls, razor,
                  ep_asks, ep_ask_pre, ep_ask_sup, ep_ask_merged, ep_ask_minted, ep_ask_merged_pre,
                  edge, xedge, rungs);
     free(cursors);
@@ -3587,6 +3616,7 @@ char *result_cold_json(void) {
     free(doors);
     free(reach);
     free(acls);
+    free(razor);
     cold_census_release(&c);
     return out;
 }

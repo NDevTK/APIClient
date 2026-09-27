@@ -370,7 +370,7 @@ const loadNow = () => {
 const coldFields = sourceFact(() => censusRowSet(
   "solver/result.c", "char *result_cold_json(void)", "\n}\n",
   ["stepUnits", "stepUnitRuns", "stepUnitOverruns", "outOfProgramsAtTheLadderUnits", "programCursors",
-   "programsAhead", "epDoors", "epReach", "epAddressClass"],
+   "programsAhead", "epDoors", "epReach", "epAddressClass", "epRazorClass"],
   "the @COLD reader states which rows it requires of the frontier census, and it takes that set from the " +
   "composer rather than from a list beside it"));
 /* THE POPULATION SPLITS ARE PARTITIONS AND THE PARTITION IS THE CONTRACT, checked here for the reason
@@ -2708,9 +2708,20 @@ function endpointDoorReading(b) {
    §AN-AUDITOR-DERIVES-THE-RULE.
    THREE CLASSES AND THE MIDDLE ONE IS THE POINT. `either` is the doors a parser-inserted element and a
    script-created one reach alike — `link-element`, `image-element`, `form-submit` — which the engine's header
-   refuses to guess at, so `beyond` is a FLOOR under the razor and `beyond + either` is its ceiling. A single
-   number would be one of those two guesses, and both are wrong in a direction this project has already paid
-   for: the retired `epEmitted - epPreProgram` subtraction over-credited a `<head>` exactly this way.
+   refuses to guess at, so `beyond` is a FLOOR under THE MARKUP QUESTION and `beyond + either` is its ceiling.
+   A single number would be one of those two guesses, and both are wrong in a direction this project has
+   already paid for: the retired `epEmitted - epPreProgram` subtraction over-credited a `<head>` exactly this
+   way.
+   THIS BANNER SAID `A FLOOR UNDER THE RAZOR` AND THE LINE BELOW SAID `@H razor:`, AND BOTH WERE THIS FILE
+   CALLING A DOOR COUNT THE PRODUCT'S BAR — kept in their own words because a reader holding a row named
+   `beyond` re-derives them, which is the same reason solver/endpoint.h keeps its own retired sentence one
+   grain down. The bar is "an address, a key or a value that NO PARSE of the served bytes can state", the
+   engine composes it per row in `endpoint_razor_class_of` out of `addressClass` and the door list's FOURTH
+   column, and THIS row is keyed on the THIRD — what a MARKUP parse reaches. The two disagree on real rows in
+   both directions: a literal chunk URL through `module-import` is `beyond` here and scores ZERO at the bar,
+   and `/api/{location.hash}` through `fetch` clears the bar outright. So this line is the MARKUP DIAGNOSTIC
+   and `endpointRazorClassReading` is the bar; the cost of the old label was not a reading but a person shown
+   a `razor` row composed from a count of doors.
    THE DENOMINATOR IS ON THE LINE AND IS NOT OPTIONAL. `beyond: 0` says nothing without the surface it is 0
    OF — CLAUDE.md §a-coverage-figure-states-what-it-is-a-fraction-of — and `censusHistRows` has already
    checked that these three sum to `epEmitted`, so the fraction is over the population it partitions.
@@ -2724,14 +2735,14 @@ function endpointReachReading(b) {
   if (beyond === null || either === null || markup === null)
     throw new Error(`[build] the @COLD census's \`epReach\` names [${rows.map((r) => r[0]).join(", ")}] and ` +
                     "not the three classes endpoint.h's ENDPOINT_REACHES declares — this reading is the " +
-                    "product's own razor and it is composed of those three by name, so a renamed class would " +
+                    "MARKUP diagnostic and it is composed of those three by name, so a renamed class would " +
                     "be rendered as a 0 the engine never reported.");
   const total = b.epEmitted;
   /* AN EMPTY SURFACE IS A SENTENCE AND NOT A ZERO, for `endpointDoorReading`'s reason and with a sharper one:
-     `0 of 0 beyond the markup` reads as the razor ANSWERING when the run learned no address at all, and those
+     `0 of 0 beyond the markup` reads as the row ANSWERING when the run learned no address at all, and those
      are the two facts CLAUDE.md §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES says must never render alike. */
-  if (total === 0) return `@H razor: the surface emitted no endpoint, so there is nothing to claim`;
-  return `@H razor: ${beyond} of ${total} address(es) beyond a markup parse` +
+  if (total === 0) return `@H markup reach: the surface emitted no endpoint, so there is nothing to claim`;
+  return `@H markup reach: ${beyond} of ${total} address(es) beyond a markup parse` +
          ` (${either} through a door that cannot say which, ${markup} markup)` +
          ` — a DIAGNOSTIC and never a target; ${beyond === 0 ? "0 is a REFUSAL TO CLAIM the capability on " +
          "this document, not a smaller version of it" : "read WITHIN this run, never across two"}`;
@@ -2775,6 +2786,47 @@ function endpointAddressClassReading(b) {
          ` value: a determined address may still be one no parse reaches (a pinned source re-read, a reply's` +
          ` own chunk address), and this line will not guess. ${unknown === 0 ? "0 is a REFUSAL TO CLAIM the " +
          "bar on this document, not a smaller version of it" : "read WITHIN this run, never across two"}`;
+}
+
+/* …AND THE BAR ITSELF, WHICH IS THE ONE ENDPOINT ROW ON THE VERDICT THAT IS NOT ONE OF ITS OPERANDS. The three
+   readings above are what the bar is COMPOSED FROM — a door count, that count summed by what a markup parse
+   reaches, and a second walk over whether the run had determined the address — and a reader holding all three
+   still could not state the bar, because a union is a claim about per-row MEMBERSHIP and two marginals carry
+   no overlap between them. This one is `epRazorClass`, which solver/endpoint.c keys on `endpoint_razor_class_of`
+   in a FOURTH walk over the same array with the same `is_asset` skip; a sum of the two marginals would be
+   arithmetically wrong and not merely weak, since a `reply-chunk` row whose address the run had not determined
+   is counted by both of them and is ONE row of this partition.
+   IT IS A SECOND DOCUMENT'S READING OF ONE OBSERVATION AND NOT A FOURTH OBSERVATION. `endpointRazorClass` on
+   the emitted @H array comes off the SAME predicate, so a reader holding both holds one fact at two grains
+   (CLAUDE.md §EVIDENCE-INFLATION) — and they are worth holding together only because they are taken at two
+   INSTANTS over a GAUGE: `epEmitted` FALLS when an asset verdict lands between the census and the emission, so
+   a disagreement names which records each document was describing rather than an error in either. It is never
+   summed with the per-row column, which would double-count the whole surface.
+   THE NAMED-CLASS CHECK IS THE POINT OF READING IT HERE AT ALL, for `endpointAddressClassReading`'s reason:
+   `censusHistRows` checks shape, numerics and the sum against `epEmitted` and says NOTHING about key names, so
+   a renamed class would arrive as a row this line never looks at and be rendered as a 0 the engine never
+   reported. That check lives in these three readings and in no shared helper.
+   AN EMPTY SURFACE IS A SENTENCE AND NOT `0 of 0`, for the reason both siblings give and with the sharpest form
+   of it here: `0 of 0` at the product's own bar reads as the bar ANSWERING on a document the run learned no
+   address from, and CLAUDE.md §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES is that an absence and a zero may never
+   render alike. */
+function endpointRazorClassReading(b) {
+  const rows = censusHistRows(b, "epRazorClass", "epEmitted", "endpoint.h's ENDPOINT_RAZOR_CLASSES list");
+  const at = (k) => { const r = rows.find((x) => x[0] === k); return r ? r[1] : null; };
+  const runtime = at("runtime-only"), unproven = at("unproven");
+  if (runtime === null || unproven === null)
+    throw new Error(`[build] the @COLD census's \`epRazorClass\` names [${rows.map((r) => r[0]).join(", ")}] ` +
+                    "and not the two classes endpoint.h's ENDPOINT_RAZOR_CLASSES declares — this reading is " +
+                    "the product's OWN BAR and is composed of those two by name, so a renamed class would be " +
+                    "rendered as a 0 the engine never reported.");
+  const total = b.epEmitted;
+  if (total === 0) return `@H bar: the surface emitted no endpoint, so there is nothing to claim`;
+  return `@H bar: ${runtime} of ${total} address(es) NO parse of the served bytes could state` +
+         ` (${unproven} this line will not claim either way)` +
+         ` — the UNION of "the run had not determined it" and "the bytes are not the served document's",` +
+         ` composed per row by the engine and never assembled from the two rows above.` +
+         ` ${runtime === 0 ? "0 is a REFUSAL TO CLAIM the bar on this document, not a smaller version of it"
+                           : "read WITHIN this run, never across two"}`;
 }
 
 function stepUnitReading(b) {
@@ -4750,7 +4802,15 @@ function hungCauseCensus(out) {
                /* AND THE HARD BAR BESIDE THE MARKUP ONE, WHICH IS A SECOND OBSERVATION AND NOT
                   A COARSENING OF EITHER ROW ABOVE — see `endpointAddressClassReading` for why
                   no door implies it and for why it is published as a FLOOR. */
-               "; " + endpointAddressClassReading(b);
+               "; " + endpointAddressClassReading(b) +
+               /* …AND THE BAR ITSELF LAST, WHICH IS THE UNION OF THAT ROW AND THE DOOR LIST'S BYTES COLUMN
+                  and is the only one of the four that is not an operand of it. It is rendered BESIDE the three
+                  rather than in place of them because they are its raw material at three grains and each
+                  answers a question of its own, and it is rendered AFTER them because a reader who has just
+                  been handed two floors is the reader most likely to add them — see
+                  `endpointRazorClassReading` for why no marginal carries the overlap and why the census row
+                  is a cross-check against the emitted array's own column and never a sum with it. */
+               "; " + endpointRazorClassReading(b);
   /* AND WHICH OF THE STILL-0 ROWS WERE EVER ANYTHING ELSE, which is the distinction `flipped.length === 0`
      cannot draw and which decides what "still advancing" is worth. Measured across six builds: the rows that
      reached 1 in the last window were, every time, the ten members of ONE family (the @S search rows), while
