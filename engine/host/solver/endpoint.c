@@ -2767,27 +2767,35 @@ char *endpoint_address_hist_json(void) {
        out of a DOOR COUNT — which is the assembly that retirement clause asks to be made impossible. What the
        clause was right about is the MECHANISM, and it decides the fix's shape: a union is a statement about
        per-row MEMBERSHIP, so no marginal carries it and a SUM of these two tables means neither.
-       NAMED RESIDUAL. NOT COVERED: this census publishes the union's TWO OPERANDS and the union itself nowhere,
-       so an @COLD reader has no row stating the bar and the nearest thing to one is keyed on the DOOR.
-       WHAT THE NEXT DIFF BUILDS: `endpoint_razor_hist_json` — a FOURTH walk over `g_eps` keyed on
-       `endpoint_razor_class_of` and never a sum of the two tables, spelled with the same `is_asset` skip for the
-       reason this file gives for the third, two arms over `ENDPOINT_RAZOR_CLASSES` with the zeroes, its sum
-       asserted against `emitted`, a `DCHECKF` on the raw `addr_class` range (the walk above asserts one on the
-       same operand) and NONE on `door` (`endpoint_door_bytes`'s own `CHECK` is fatal in every build) — spliced by
-       solver/result.c as `epRazorClass`, declared a GAUGE beside `epReach` on that file's @kind line, AND named
-       in engine/build.mjs's `coldFields()` object list with a `censusHistRows` reading, IN ONE COMMIT.
-       THAT LAST CLAUSE IS THE SCOPE AND IT IS MEASURED RATHER THAN ESTIMATED: `censusRowSet` compares the object
-       rows it is GIVEN against the ones it derives from this composer's own format string and THROWS on either
-       difference, and `censusComposerFields` takes that source through `hostSource`, which is
-       `readFileSync(join(HOST, file))` — THE WORKING TREE. So a `%s` row added there without that list reddens
-       every lane's build from the moment it is WRITTEN, before it is committed: the in-between state CLAUDE.md
-       §A-CROSS-BOUNDARY-DIFF forbids, at the machine-checked hop a scope list drawn from what components are
-       FOR always misses.
-       HOW ITS ABSENCE WOULD SHOW: a build's verdict line prints `@H razor:` over a count of doors, and the
-       popup's two census-grain rows tell a person their floors OVERLAP and may not be added — a reader handed
-       the bar's raw material at the one grain where this file already composes the answer per row.
-       RETIREMENT: this record goes when the @COLD line carries that composed class, because two marginals are
-       then not the only thing a census reader can reach for. */
+       THE RESIDUAL IS RETIRED AND ITS ARGUMENT IS KEPT, WHICH IS THE WHOLE OF WHY THIS PARAGRAPH IS STILL
+       HERE. Its NOT-COVERED clause read "this census publishes the union's TWO OPERANDS and the union itself
+       nowhere, so an @COLD reader has no row stating the bar and the nearest thing to one is keyed on the
+       DOOR", and `endpoint_razor_hist_json` below is the fourth walk it named — spliced by solver/result.c as
+       `epRazorClass`, declared a GAUGE beside `epReach`, and read by engine/build.mjs's
+       `endpointRazorClassReading`, all in the one commit its scope clause said it had to be. What a reader
+       holding two marginals re-derives is not the gap, which is closed; it is the ARGUMENT, which is that a
+       union is a claim about per-row MEMBERSHIP and can therefore be assembled from neither table nor from
+       both — and a reader who re-derives THAT will propose the sum, which is why it is not deleted with the
+       clause it justified.
+       AND THE SUM IS WRONG ARITHMETICALLY AND NOT MERELY WEAKLY, WHICH THE RETIRED CLAUSE NEVER SAID AND IS
+       THE SHARPER REASON: the two operands OVERLAP, so a `reply-chunk` row whose address the run had not
+       determined is counted by this walk AND by `endpoint_reach_hist_json`'s and is ONE row of the razor
+       partition. A reader adding the two floors gets a number larger than the surface.
+       ITS SCOPE CLAUSE WAS THE HALF THAT HELD AND IT HELD EXACTLY, which is worth recording because it is the
+       clause CLAUDE.md rates as the least reliable kind: `censusRowSet` compares the object rows it is GIVEN
+       against the ones it derives from this composer's own format string and THROWS on either difference, and
+       `censusComposerFields` takes that source through `hostSource`, a `readFileSync(join(HOST, file))` of THE
+       WORKING TREE — so a `%s` row written without the matching `coldFields()` entry reddens every lane's
+       build from the moment it is WRITTEN, before it is committed. MEASURED by slicing that derivation out and
+       running it at both revisions rather than by reasoning about it: at the parent it answers "list has,
+       composer lacks: [epRazorClass]", and at the landing it agrees in both directions. That is the in-between
+       state §A-CROSS-BOUNDARY-DIFF forbids, and the control is ARMED rather than assumed.
+       WHAT IS STILL OPEN IS ONE LABEL IN THE TRUSTED ZONE AND IT IS NOT THIS FILE'S. extension/popup.js renders
+       `m.cold.epReach` under a row labelled `razor`, which is the same defect this landing repaired in
+       engine/build.mjs's verdict line — a person shown the word `razor` over a count of doors — and it now has
+       `epRazorClass` on the same census line to render instead. It is left alone deliberately: it is a second
+       subject in a second zone, and §A-CROSS-BOUNDARY-DIFF's live-on-write half applies to that file and not to
+       this one. */
     return json_buf_take(&b);
 }
 
