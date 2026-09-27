@@ -93,12 +93,48 @@
  *         REFUSED. The grant tracks the ORIGIN, so isolation is one of TWO routes to the transport and not
  *         the gate on it.
  *         THE VERDICT IS UNCHANGED AND ONLY ITS REASON MOVES: THIS REALM HAS NEITHER ROUTE. Its origin is
- *         OPAQUE, so it is not the extension origin and cannot inherit that grant; and an opaque origin is
- *         same-origin with nothing, so it is never isolated either — `crossOriginIsolated === false` there
- *         under the manifest's COOP at `same-origin-allow-popups` AND at `same-origin`, with the frame's
- *         sandbox attribute as shipped, widened with allow-same-origin, and removed entirely. That origin is
- *         stated by the CSP `sandbox` directive of manifest.sandbox.pages, which is the security boundary
- *         itself, so the only edit that could buy this realm the transport is the one that removes it.
+ *         OPAQUE, so it is not the extension origin and cannot inherit that grant; and — REFUTED, see the next
+ *         paragraph — "an opaque origin is same-origin with nothing, so it is never isolated either —
+ *         `crossOriginIsolated === false` there under the manifest's COOP at `same-origin-allow-popups` AND at
+ *         `same-origin`, with the frame's sandbox attribute as shipped, widened with allow-same-origin, and
+ *         removed entirely. That origin is stated by the CSP `sandbox` directive of manifest.sandbox.pages,
+ *         which is the security boundary itself, so the only edit that could buy this realm the transport is
+ *         the one that removes it."
+ *         THE SECOND HALF OF THAT IS FALSE AND IS REWRITTEN RATHER THAN DELETED, BECAUSE THE READINGS IT CITES
+ *         ARE REAL AND A READER WILL RE-DERIVE THE CONCLUSION FROM THEM. It conflates SAME-ORIGIN-NESS with
+ *         ISOLATION MODE. HTML §8.1.2.2 "Integration with the JavaScript agent cluster formalism"'s "obtain a
+ *         similar-origin window agent" mints a cluster and then "set agentCluster's cross-origin isolation
+ *         mode to group's cross-origin isolation mode" — a copy off the BROWSING CONTEXT GROUP with no origin
+ *         test in it at all, and §7.3.2.3 "Groupings of browsing contexts" is where the mode lives. So an
+ *         opaque-origin nested document inherits its group's mode whatever its origin.
+ *         AND THE READINGS COULD NOT HAVE SEEN IT, WHICH IS THE METHOD ERROR RATHER THAN THE SENTENCE. HTML
+ *         §7.2.2.6 "Script settings for Window objects" makes the capability a CONJUNCTION — "return true if
+ *         both of the following hold and false otherwise: realm's agent cluster's cross-origin isolation mode
+ *         is "concrete", and window's associated document is allowed to use the cross-origin isolated
+ *         feature" — and every case measured varied COOP and the `sandbox` attribute, which are inputs to the
+ *         FIRST conjunct only. The SECOND is a permissions policy whose default allowlist is 'self' (HTML §2.2
+ *         "Policy-controlled features", and this build's own PERMISSIONS_POLICY_FEATURES row), so for an
+ *         opaque-origin child it is Disabled unless the EMBEDDER DELEGATES it — which no value of COOP or
+ *         `sandbox` substitutes for and which nothing in this extension did.
+ *         MEASURED WITH THAT AXIS VARIED, in real Chrome, 3 runs of 3 agreeing on every cell, each reading
+ *         beside an invented sibling capability and with THE ACT rather than a getter: a child carrying BOTH
+ *         of renderer.html's sources of opacity, under a top-level COOP `same-origin` + COEP `require-corp`,
+ *         reads `crossOriginIsolated === true` and the act GRANTED with `allow="cross-origin-isolated"` and
+ *         false/refused without it. So this realm IS isolable and the edit that buys it removes no boundary:
+ *         renderer-host.js's `allow` delegation (landed; measured on the real frame as allowsFeature false ->
+ *         TRUE, the act still refused at the shipped COOP) plus a manifest COOP of `same-origin`, which HTML
+ *         §7.1.3 "Cross-origin opener policies" makes the only route to `same-origin-plus-COEP` and therefore
+ *         to a group mode at all — "same-origin-plus-COEP cannot be directly set via the
+ *         Cross-Origin-Opener-Policy header but results from a combination of setting both
+ *         Cross-Origin-Opener-Policy: same-origin and a Cross-Origin-Embedder-Policy header whose value is
+ *         compatible with cross-origin isolation".
+ *         SO THIS BRANCH'S ABSENCE IS NOW A MANIFEST DECISION RATHER THAN A PROPERTY OF THE REALM, and the
+ *         ordered work behind the flip is three things and not one: the COOP flip, `-pthread`/`-sSHARED_MEMORY`
+ *         on the wasm link so this engine's own linear memory is shared (renderer.html records it as
+ *         `[object ArrayBuffer]` today, which is a watchdog with nothing to store into), and the address of
+ *         the main thread's own thread-local request byte exported for that thread to write. renderer.html's
+ *         act-based DCHECK is what fires on the day the first lands, and it fires in the realm that would host
+ *         the thing that has become buildable.
  *         AND THE REFUTATION WAS ALREADY IN THIS PARAGRAPH, UNSUBTRACTED FOR AS LONG AS THE RETIRED SENTENCE
  *         STOOD. The identical watchdog runs END TO END in the offscreen document at BOTH
  *         COOP values (worker created, memory transferred, Atomics.wait returned, its store read back on the
@@ -106,11 +142,26 @@
  *         this file had already recorded a transfer succeeding WITHOUT isolation, in the same paragraph as
  *         the sentence concluding isolation was the gate, and nobody subtracted them. A paragraph read for
  *         its conclusion rather than for its own observations is where a counterexample sits unread.
- *         That is also still the point: the flip provisions the transport where the engine is not, and it is
+ *         That is also still the point ABOUT THE OFFSCREEN, and no longer the whole of it: this clause used to
+ *         end `the flip provisions the transport where the engine is not`, and with the `allow` delegation
+ *         landed the flip provisions it where the engine IS as well — the offscreen's head start is now that it
+ *         needed no delegation, not that it is the only document a flip can reach. The flip is also
  *         not free — measured under `same-origin` a live verify's `window.open` still navigated and the sink's
  *         proof relay still fired, but the openee's `window.opener` was null (HTML §7.1.3 "Cross-origin opener
  *         policies": under "same-origin" an auxiliary browsing context "will appear closed to the opener"),
  *         which is the handle a postMessage delivery arm would need.
+ *         AND THAT COST IS RETIRED WHILE A DIFFERENT ONE AT THE SAME CALL IS NOT, WHICH IS WHY NAMING THE
+ *         OPENER UNDERSTATES IT. CLAUDE.md §AND-THE-POC-RUNS-IN-THE-ENGINE'S-OWN-BROWSER retires the opener as
+ *         a price, and nothing in extension/ reads `window.opener` at all. What survives is the RETURN VALUE:
+ *         poc-sandbox.html classifies the delivery by that value's IDENTITY — undefined / null / a WindowProxy
+ *         — and HTML §7.1.3.2 "Browsing context group switches due to opener policy"'s "check if popup COOP
+ *         values require a browsing context group switch" returns FALSE for a `same-origin-allow-popups` opener
+ *         against an `unsafe-none` response (its second step is that exemption by name) and TRUE for a
+ *         `same-origin` one. Measured 3 of 3, with the opened document's own request on a CONSTANT path as the
+ *         load witness: the classification goes `delivered` -> `no-navigable` while the witness fires in BOTH,
+ *         so a delivery that happened would be reported as never delivered. The manifest's COOP value is
+ *         therefore doing the job its name states rather than standing in for an engine gap, and the flip owes
+ *         an outcome oracle that does not ride the returned handle FIRST.
  *         SO THE REQUIREMENT IS EITHER ROUTE IN THE ENGINE'S OWN REALM, AND NO GETTER STATES IT. A CAPABILITY
  *         IS CONFIRMED BY ATTEMPTING THE ACT AND A GETTER IS A TRIPWIRE IN FRONT OF IT: `crossOriginIsolated`
  *         names the STANDARD's gate, which is not the one the runtime keys on alone, and `typeof

@@ -477,13 +477,53 @@
        browser, one policy — so what the grant tracks is the EXTENSION ORIGIN and not the isolation, and
        `crossOriginIsolated` is one of TWO routes to the transport rather than the gate on it.
        WHY THIS REALM HAS NEITHER ROUTE, AND WHY NO POLICY VALUE BUYS ONE. Its origin is OPAQUE, so it is not
-       the extension origin and cannot inherit that grant; and an opaque origin is same-origin with nothing, so
-       its agent cluster is never isolated either. MEASURED on real Chrome, one browser per case with the
-       IndexedDB cleared, every reading taken beside an INVENTED sibling so a false is separable from a getter
-       that is not there, and an uncloneable value posted first so the clone check is shown ARMED:
+       the extension origin and cannot inherit that grant; and — REFUTED, see below — "an opaque origin is
+       same-origin with nothing, so its agent cluster is never isolated either".
+       THAT SECOND CLAUSE IS FALSE AND IS REWRITTEN RATHER THAN DELETED, BECAUSE IT IS THE READING A READER
+       RE-DERIVES FROM THE FIRST. It conflates SAME-ORIGIN-NESS with ISOLATION MODE, and the two are set by
+       different algorithms. HTML §8.1.2.2 "Integration with the JavaScript agent cluster formalism"'s
+       "obtain a similar-origin window agent" mints a cluster and then "set agentCluster's cross-origin
+       isolation mode to group's cross-origin isolation mode" — a copy off the BROWSING CONTEXT GROUP, with no
+       origin test anywhere in it, and §7.3.2.3 "Groupings of browsing contexts" puts the mode on the group.
+       So an opaque-origin nested document inherits the mode of the group it is in, whatever its origin.
+       AND THE MEASUREMENT BELOW ESTABLISHED NOTHING ABOUT IT, WHICH IS THE METHOD ERROR AND NOT THE SENTENCE.
+       HTML §7.2.2.6 "Script settings for Window objects" makes the capability a CONJUNCTION — "return true if
+       both of the following hold and false otherwise: realm's agent cluster's cross-origin isolation mode is
+       "concrete", and window's associated document is allowed to use the cross-origin isolated feature" — and
+       the readings below vary COOP and the `sandbox` attribute, which are inputs to the FIRST conjunct only.
+       The second is a PERMISSIONS POLICY whose default allowlist is 'self' (HTML §2.2 "Policy-controlled
+       features"), so for this opaque-origin frame it is Disabled unless the embedder DELEGATES it with an
+       `allow` attribute — which nothing in this extension did, and which no value of COOP or `sandbox` can
+       substitute for. The `allow` axis was never varied, so every cell below has one conjunct unmet for a
+       reason the run could not see.
+       MEASURED WITH THAT AXIS VARIED, in real Chrome, 3 runs of 3 agreeing on every cell, each reading beside
+       an INVENTED sibling capability so a false is separable from a getter that is not there, and with THE ACT
+       (`sharedMemoryRecord`'s own shape) and not only the getter: for a child carrying BOTH this document's
+       sources of opacity — a `sandbox` attribute AND a CSP `sandbox` directive, which is exactly this frame —
+       under a top-level COOP `same-origin` + COEP `require-corp`,
+           no `allow`                         -> allowsFeature false, crossOriginIsolated false, act refused
+           `allow="cross-origin-isolated"`    -> allowsFeature TRUE,  crossOriginIsolated TRUE,  act GRANTED
+           `allow="cross-origin-isolated *"`  -> allowsFeature TRUE,  crossOriginIsolated TRUE,  act GRANTED
+           `allow="cross-origin-isolated 'self'"` -> allowsFeature false, crossOriginIsolated false, act refused
+       so this realm IS isolable and the edit that buys it removes no boundary: it is renderer-host.js's
+       `allow` delegation (landed, and measured on THIS frame: allowsFeature false -> TRUE with the act still
+       refused at the shipped COOP) plus a manifest COOP of `same-origin`, which HTML §7.1.3 "Cross-origin
+       opener policies" makes the only way to reach `same-origin-plus-COEP` and therefore a group mode at all.
+       WHAT THE FLIP COSTS IS MEASURED AND IS NOT THE OPENER. The clause below is right that a `same-origin`
+       opener severs `window.opener`, and nothing in extension/ reads it. What it misses is that
+       poc-sandbox.html classifies §LIVE-VERIFY's delivery by the IDENTITY of `window.open`'s RETURN VALUE, and
+       under a browsing-context-group switch that call answers null while the document loads and runs anyway —
+       measured 3 of 3 with the opened document's own request on a constant path as the witness: `delivered`
+       becomes `no-navigable` and the witness fires in both. So an outcome oracle that does not ride the
+       returned handle is owed BEFORE the flip, and that is a trusted-zone gap rather than an engine one.
+       THE ORIGINAL READINGS ARE KEPT BELOW UNALTERED, because they are correct about the cells they cover and
+       are what a reader compares the widened factorial against.
+       MEASURED on real Chrome, one browser per case with the IndexedDB cleared, every reading taken beside an
+       INVENTED sibling so a false is separable from a getter that is not there, and an uncloneable value
+       posted first so the clone check is shown ARMED:
            node testing/harness.js restart <port>
            node testing/harness.js goto <any page>
-           node testing/harness.js offscreen 'self.__r = await self.rendererLaunch(group + "\0" + origin)'
+           node testing/harness.js offscreen `self.__r = await self.rendererLaunch(group + "\0" + origin)`
          then, evaluated IN this frame: self.origin | self.crossOriginIsolated | typeof SharedArrayBuffer |
            new Worker(blob).postMessage(new WebAssembly.Memory({initial:1,maximum:1,shared:true})) |
            performance.now() sampled 30000 times, reading the MINIMUM NONZERO delta
@@ -498,10 +538,21 @@
        restricts strictly less than any value of one — and at `same-origin` such a frame still reads
        `self.origin === "null"` and `crossOriginIsolated === false`. renderer.html is in
        `manifest.sandbox.pages`, and that listing's CSP `sandbox` directive states the opaque origin on its own
-       — which is the boundary itself, so the only edit that could buy this realm the transport is the one that
-       removes the boundary. The offscreen's own end-to-end watchdog is therefore not a cheaper route but a
-       DIFFERENT DOCUMENT: the transport is provisioned where the engine is not, at both COOP values, and it is
-       already provisioned there BEFORE any flip.
+       — which is the boundary itself, so this sentence USED TO BE that the only edit which could buy this
+       realm the transport is the one removing the boundary, and it is REFUTED ABOVE.
+       The offscreen's own end-to-end watchdog is therefore
+       not a cheaper route but a DIFFERENT DOCUMENT: the transport is provisioned where the engine is not, at
+       both COOP values, and it is already provisioned there BEFORE any flip.
+       AND THE ATTRIBUTE CLAUSE IS RIGHT ABOUT OPACITY AND WRONG ABOUT WHAT FOLLOWS, WHICH THE SAME WIDENED
+       FACTORIAL SEPARATES: the `sandbox` attribute is indeed not what makes this origin opaque, and it IS what
+       makes the delegation land. Measured, opacity held constant by the CSP directive in every cell — with the
+       CSP directive as the ONLY source of opacity and NO `sandbox` attribute on the element, the identical
+       `allow` value delegates NOTHING (allowsFeature false, act refused), because Permissions Policy §9.3
+       "Parse policy directive" stores the element's DECLARED ORIGIN as the allowlist's `src`, which with no
+       attribute is the URL's origin (the extension's) and not this document's, and §4.7 "Allowlists" then
+       reaches its "if origin is an opaque origin, return false". With BOTH — which is this element — it
+       delegates. So "widening or dropping it is not a route either" is true of the ORIGIN and false of the
+       CAPABILITY, and dropping the attribute would now COST the delegation.
        THE FAILURE IS GOOD NEWS AND THE MESSAGE SAYS SO — the shape of quantum.c's clock check. An absence
        stated in prose is one nobody re-measures; asserted on the browser's OWN gate it ends by crashing, in
        the realm that would host the thing that has become buildable.
@@ -511,7 +562,7 @@
        alone to both routes was CORRECT and is not the defect: the measurement above is exactly a case of the
        capability arriving WITHOUT the flag, and an assert watching one of two routes is silent on the one the
        sibling document takes. What was wrong is that both routes are GETTERS, and the message standing over
-       them said so in its own words — "the constructor being present is a tripwire and not the capability".
+       them said so in its own words — `the constructor being present is a tripwire and not the capability`.
        A getter that is not the capability is not a stricter test of it, it is a DIFFERENT test: this one fired
        where the capability was absent, and would have stayed silent in a realm that held the capability with
        neither getter set. THE FILE STATED THE RULE CORRECTLY IN THE SENTENCE ABOVE THE LINE THAT BROKE IT.

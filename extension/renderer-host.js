@@ -334,6 +334,60 @@
        `allow-popups`/`allow-popups-to-escape-sandbox`/`allow-modals` as well (poc-sandbox.html needs them), and
        the effective flag set is the UNION of both restrictions, so this attribute is what takes them away. */
     f.setAttribute("sandbox", "allow-scripts");
+    /* AND THE PERMISSIONS POLICY IS DELEGATED, BECAUSE THE CAPABILITY IS A CONJUNCTION AND THIS IS THE HALF
+       THIS ELEMENT OWNS. HTML §7.2.2.6 "Script settings for Window objects" defines the window's
+       cross-origin isolated capability as "true if both of the following hold and false otherwise: realm's
+       agent cluster's cross-origin isolation mode is "concrete", and window's associated document is allowed
+       to use the cross-origin isolated feature". HTML §2.2 "Policy-controlled features" gives that feature a
+       DEFAULT ALLOWLIST OF 'self', and this frame's origin is opaque, so Permissions Policy §9.7 "Define an
+       inherited policy for feature in container at origin" takes its final `otherwise return disabled` arm
+       for it unless a container policy names it — which is what this attribute is.
+       IT IS SET BEFORE THE ADDRESS AND BEFORE INSERTION for the same reason the `sandbox` attribute above is:
+       §9.4 "Process permissions policy attributes" reads the element's `allow` attribute when the container
+       policy is constructed, which is when the load begins.
+       MEASURED IN REAL CHROME RATHER THAN REASONED, one variable at a time, every reading taken beside an
+       INVENTED sibling capability (`crossOriginIsolatedZmqx`, absent in every cell) so a `false` is separable
+       from a getter that is not there, and with THE ACT and not only the getter — one `structuredClone` of a
+       shared `WebAssembly.Memory`'s buffer, armed first by an uncloneable value the serializer must refuse,
+       the shape renderer.html's own `sharedMemoryRecord` uses. On a served top-level page at COOP
+       `same-origin` + COEP `require-corp`, for a child whose origin is opaque, 3 runs of 3 agreeing on every
+       cell:
+         sandbox attribute, NO `allow`               -> allowsFeature false, crossOriginIsolated false, ACT refused
+         sandbox attribute, `allow` (bare, so 'src') -> allowsFeature TRUE,  crossOriginIsolated TRUE,  ACT GRANTED
+         sandbox attribute, `allow ... *`            -> allowsFeature TRUE,  crossOriginIsolated TRUE,  ACT GRANTED
+         sandbox attribute, `allow ... 'self'`       -> allowsFeature false, crossOriginIsolated false, ACT refused
+       The `'self'` row is what makes this a measurement of the ALLOWLIST rather than of the attribute's mere
+       presence: 'self' is the EMBEDDER's origin, which an opaque child is not, so §4.7 "Allowlists" finds no
+       match; the bare form stores the element's declared origin as `src` and that one does.
+       AND THE DECIDING INPUT IS THIS ATTRIBUTE AND NOT THE OPACITY, which the same measurement separates and
+       which matters because this document's opacity is stated TWICE — by the attribute above and by the CSP
+       `sandbox` directive `manifest.sandbox.pages` installs. With the CSP directive as the ONLY source of
+       opacity and no `sandbox` attribute on the element, the identical `allow` value delegates NOTHING
+       (allowsFeature false, ACT refused): the declared origin is then the URL's, which is the extension
+       origin, and §4.7's `if origin is an opaque origin, return false` is reached. Both together — which is
+       exactly this element — delegate. So the attribute above is load-bearing for THIS line and not only for
+       the boundary.
+       WHAT THIS BUYS TODAY IS NOTHING AND THAT IS THE MEASURED STATE, because conjunct 1 is unmet: HTML §7.1.3
+       "Cross-origin opener policies" says the `same-origin-plus-COEP` value that sets a group's cross-origin
+       isolation mode "cannot be directly set via the Cross-Origin-Opener-Policy header but results from a
+       combination of setting both Cross-Origin-Opener-Policy: same-origin and a Cross-Origin-Embedder-Policy
+       header whose value is compatible with cross-origin isolation", and manifest.json ships
+       `same-origin-allow-popups`. Measured on THIS frame, in real Chrome, with the extension loaded off the
+       tree: before this line allowsFeature was FALSE and the act REFUSED; after it allowsFeature is TRUE and
+       the act is still REFUSED, with `crossOriginIsolated` false in both. HOW ITS ABSENCE WOULD SHOW: a
+       reader who flips the manifest COOP to `same-origin` expecting this frame to become isolated, and finds
+       it is not, because the half no COOP value can supply was never delegated.
+       AND THE FLIP IS NOT THIS DIFF'S TO MAKE. It is an outward behaviour change for every extension page and
+       it has a measured cost: poc-sandbox.html classifies §LIVE-VERIFY's delivery by the IDENTITY of
+       `window.open`'s return value, and at COOP `same-origin` a cross-origin auxiliary requires a browsing
+       context group switch (HTML §7.1.3.2 "Browsing context group switches due to opener policy" — "check if
+       popup COOP values require a browsing context group switch" returns FALSE for a
+       `same-origin-allow-popups` opener against an `unsafe-none` response and TRUE for a `same-origin` one),
+       so that call answers null while the document loads and runs anyway. Measured 3 of 3 with the opened
+       document's own request to a constant path as the witness: `delivered` becomes `no-navigable` and the
+       load witness fires in both. That is a delivery the card would report as never delivered, and the fix
+       that must precede the flip is an outcome oracle that does not ride the returned handle. */
+    f.setAttribute("allow", "cross-origin-isolated");
     /* THE ROUTING ID LEADS THE TITLE because the cluster key's own separator is a NUL, which every console and
        every element inspector renders as nothing at all — so a document holding several renderers showed a
        list of titles that ran two halves together and could not be told apart by eye. The id is the one name
