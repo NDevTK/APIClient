@@ -1001,6 +1001,36 @@ static void fork_key_count(const char *key, ForkRowKind kind)
  * an operand is named. R uncalled functions driven as orphans is ONE shape that fits 6 + 2R, and naming it is
  * a hypothesis rather than a reading. So the prediction that this row falls to a constant in R is true of a
  * straight-line repeat and false of a per-flow one, and the integers alone do not say which was measured.
+ * AND THE SENTENCE ABOVE IS FALSE OF THE ONE FLOW POPULATION A REAL PAGE IS MADE OF, WHICH IS A CORRECTION TO
+ * ITS INFERENCE AND NOT TO ITS EVIDENCE — KEPT IN ITS OWN WORDS BECAUSE BOTH FACTS IT CITES ARE TRUE AND A
+ * READER WHO RE-DERIVES THE RULE FROM THEM WILL RE-ADD IT. `PinBlob` does carry the chain and `decide_enter`
+ * does clear it, and neither says anything whatever about a FORK. dec_fork_here calls concolic_pins_suspend
+ * and hands that blob to engine_prepare_fork; concolic_pins_suspend's own comment says it serves a fork as
+ * well as a park ("the sibling starts from what the parent had at the branch AND the parent goes on holding
+ * it"); every one of engine.c's five engine_sibling_assemble call sites passes it and both paths through
+ * engine_prepare_fork forward it; engine_sibling_assemble sets `started` AND `pin_blob` on the sibling; and
+ * flow_switch_in's `started` arm calls concolic_pins_resume. So REFINEMENT CROSSES EVERY FORK: a question the
+ * parent pinned before the branch is refined in both arms and in every descendant of either, so what a name
+ * buys is not confined to one flow's own prefix.
+ * AND THE WORKED EXAMPLE IS THE SAME ERROR ONE LEVEL DOWN, WHICH IS WHY THIS IS RECORDED AS A METHOD FAILURE
+ * RATHER THAN A SLIP. An orphan drive is not a fresh flow: engine.c mints it with engine_sibling_assemble and
+ * concolic_pins_suspend under the row "(a function the page never called was driven — no predicate was
+ * asked)", so R orphan drives inherit the driving flow's constraint and 6 + 2R is not explained by an empty
+ * one either. The shape that fits it is still unnamed and naming it is still a hypothesis; what is settled is
+ * that an empty constraint is not the mechanism.
+ * WHAT GENUINELY STARTS EMPTY IS THREE POPULATIONS AND A FORK IS NONE OF THEM: a flow no installer marked
+ * `started`, which is flow_switch_in's other arm and decide_enter's whole caller set; and the two sites that
+ * install concolic_pins_blob_empty DELIBERATELY and say why — cold.c's 'f'/'c' arms and solve.c's @S
+ * re-injection, both of which REPLAY the document from the baseline and re-derive every pin as they go. In a
+ * session reporting `resumed: 0` the second and third contribute nothing at all, so essentially every member
+ * of the frontier the pooled points above were taken on is a forked sibling holding its parent's chain.
+ * SO THE COST OF AN UNNAMED OPERAND WAS NEVER BOUNDED BY A PER-FLOW CONSTRAINT, AND THE REASON IT RE-FORKS IS
+ * THE ONE fork_site_name'S RESIDUAL ALREADY GIVES AND NO OTHER: there is no identity, so
+ * concolic_branch_decided answers -1 WITHIN one flow exactly as it does across two. That is what the
+ * repetition control in this banner measures — the SPELLABLE predicate rows are FLAT in the same three
+ * documents the site row grows in — and it is a statement about NAMING and not about flow boundaries.
+ * RETIREMENT: this record goes when a fork's inheritance of its parent's constraint is ASSERTED where the blob
+ * is handed over, so a reader asks the code what crosses a fork rather than asking a paragraph.
  * SO THE `Linear per repetition and exponential per distinct unnamed read` CONCLUSION IS SPLIT RATHER THAN
  * DELETED: exponential per distinct unnamed read is consistent with its own points and with the mechanism,
  * and LINEAR PER REPETITION IS CONSISTENT WITH NEITHER. Nothing in
