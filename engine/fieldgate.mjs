@@ -6381,6 +6381,34 @@ if (platformDecided.length) {
      (4) A SELF-RECURSIVE PARAMETER IS NOT A SEAM RECORD. Thirty-eight of the decided receivers pass their own
          name back into their function and nearly all are ordinary consumers of an emission — one at nineteen
          of nineteen names, three at four of four. A tree walk and `fn(rec.part)` are one construct.
+   AND THE WEAKEST ROW OF THIS BAND IS A FOREIGN AST NODE, WHICH IS RECORDED HERE BECAUSE THE FINDING TRAVELLED
+   AS AN ACCUSATION AND IS NOT ONE. Measured at 3a819306, first row of this band and therefore the weakest by its
+   own sort: `testing/static_surface.mjs:1577` `n` reads 24 names and this comparison explains FOUR of them by a
+   popup record and TWO by an engine emission, so the corpus-local candidate wins 4-2 and the receiver is
+   DECIDED — and by content it is the parameter of `walk(ast, (n) => …)` over a `@babel/parser` AST, a node
+   nothing in this corpus constructs, whose `type`, `kind`, `declarations`, `id`, `local` and `left` are
+   @babel/types' and not any seam's. The REASON printed for that row is therefore false.
+   WHAT IT IS NOT IS THE idlgen DEFECT §the-LEXICAL-EXTENT RECORDS, AND THE DIFFERENCE IS THE WHOLE POINT. That
+   one put three `|| []` over a foreign node into DEFAULTED, which ACCUSES — "an auditor that accuses correct
+   code is the one direction §Architecture rates as unrecoverable". This band accuses nobody: it is a decided
+   NEGATIVE, its header says `decided, not passed`, and at that revision the receiver appears in no accusing
+   band at all — DEFAULTED held two rows and both were `req.url` in a swallowing try/catch, and the two FINDING
+   categories the verdict failed on contained none of these names. A relay carrying it as an accusation would
+   send its reader to copy the idlgen repair, which is a repair for the opposite direction.
+   WHAT IT COSTS IS ONE UNDERSTATED UNAUDITED COUNT, WHICH IS THE HONEST SIZE OF IT. `AMBIGUOUS ANCHOR` — where
+   `engine/js_guard_shape.mjs`'s babel receivers land, and they land there only because they read ONE OR TWO
+   shared names and tie rather than because anything recognises babel — is counted in the verdict's UNAUDITED
+   figure; a row decided here is not. So a receiver whose identity is in truth undecided is reported as decided,
+   and the count of what this scan cannot read is low by one. That is §a-coverage-figure's direction and it is
+   worth fixing; it is not a wrong number anybody is acting on.
+   AND THE FIX IS THE UPSTREAM CONSTRUCT THE CLAUSE BELOW ALREADY NAMES, NEVER A THRESHOLD — paragraph (2) above
+   measured the threshold and it traded one correct decision for each wrong one it took. The construct is the
+   DECIDED FOREIGN arm extended through a corpus-declared walker: that band already decides a receiver `a module
+   OUTSIDE this corpus produced, either by handing it to a callback or by returning it`, and what it cannot
+   follow is a foreign value handed to a callback by an INTERMEDIATE function this corpus declares — `walk` is
+   declared at that same file and takes the AST as its own first argument. A widening in the coverage-gaining
+   direction is priced in false decisions before it lands, over the whole corpus, which is why it is named here
+   rather than done in a diff whose subject was a census row.
    RETIREMENT: this record goes when no receiver reaches this comparison whose winning candidate explains fewer
    of its reads than it leaves unexplained — which is a construct deciding those receivers upstream, not a
    threshold here, since every threshold tried above cost a correct answer for each wrong one it took. */
