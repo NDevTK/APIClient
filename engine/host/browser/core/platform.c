@@ -1073,7 +1073,10 @@ static const PlatformComponent PLATFORM[] = {
        THIS ROW USED TO SIT AFTER `file_picker` — a THEMATIC placement, stating no constraint at all — and
        that is recorded because a reader who groups this row by its standard rather than by what reads it will
        move it back. Nothing between the two positions is a dependency in either direction: core/crypto's four
-       files include only core/* and solver/*, and no row above `navigator` reads a crypto slot.
+       files include only headers under core/ and solver/, and no row above `navigator` reads a crypto
+       slot. Those two subtrees are written without a trailing wildcard deliberately: the sequence a
+       wildcard makes after a slash is what `-Wcomment` fires on inside a block comment, so the warning
+       is removed by construction rather than by a flag.
        RETIREMENT: this record goes when core/realm.h can refuse a declaration order in which an install reads
        a per-realm value whose writer is declared later, because the order is then true by construction. */
     { "crypto",              d_crypto,              NULL,        r_crypto },
