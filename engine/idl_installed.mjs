@@ -435,16 +435,49 @@ const STRING_RE = /^\s*"((?:[^"\\]|\\.)*)"\s*$/;
    stream queue entry and pull-into descriptor fields as
    `static const char *const Q_BUFFER = "buffer";` and writes them thirty times, and this read a #define and an
    initialised table and not that — so thirty constructs reported UNRESOLVED, which is the audit's own gap report
-   naming the form it had not learned. Only `const char *` declarations are read: an initialised pointer to char
-   IS a name and nothing else is one. Two declarations of the same identifier in one file resolve to nothing,
+   naming the form it had not learned.
+   THIS SAID "Only `const char *` declarations are read: an initialised pointer to char IS a name and nothing
+   else is one", AND THAT SENTENCE IS REWRITTEN RATHER THAN DELETED BECAUSE IT WAS A CHOICE AND NOT AN
+   OVERSIGHT — a reader who re-derives the rule from the pointer form will re-narrow it the same way. C spells
+   an initialised
+   string constant TWO ways and the array is the commoner one: `static const char TIMER_SET_TIMEOUT_NAME[] =
+   "setTimeout";`. Refusing it did not merely lose four constructs, it put ONE FACT ON BOTH LEDGERS — the four
+   were reported UNRESOLVED (a statement about this run) and the four members they install were reported ABSENT
+   on Window (a statement about the engine) — which is the one shape the findings/blind-spot split cannot catch,
+   because the ABSENT predicate asks THIS AUDIT'S OWN RESOLVED SET and a name it could not read is missing from
+   that set exactly as a name nobody installs is. Measured at 1a9cb17d in a frozen snapshot, the audit's OWN
+   totals on both sides: UNRESOLVED 4 -> 0, Window's ABSENT row 50 -> 46, the Web IDL §3.7.6/§3.7.7 [Global]
+   placements this run could ATTRIBUTE 160 -> 164, declaring pairs 686 -> 682 and all-interface pairs 3477 ->
+   3473 — the four being `setTimeout`, `setInterval`, `requestAnimationFrame` and `requestIdleCallback`, every
+   one of which a page reaches.
+   AND THE DISTINCT COUNT MOVED 497 -> 496 AND NOT 497 -> 493, WHICH IS WORTH THE LINE BECAUSE THE OBVIOUS
+   ARITHMETIC IS WRONG AND THE TOOL REFUTED IT: three of the four are STILL absent on WorkerGlobalScope and
+   DedicatedWorkerGlobalScope, correctly, because the install this now reads is the per-DOCUMENT column's and a
+   worker realm does not run it — so the DISTINCT set loses only `requestIdleCallback`, which Window alone
+   declares. A distinct-member count is a union over interfaces and is therefore the ONE total here that a
+   per-row repair does not move by the number of rows it repaired; the declaring and pair counts do, exactly.
+   THE ATTRIBUTED-PLACEMENT RISE IS THE DISCRIMINATOR AND NOT THE FALLING FINDING COUNT.
+   CLAUDE.md §A-FINDING-TOTAL-FALLS: a total falls both when defects are fixed and when the instrument stops looking, and
+   those are told apart by what happened to COVERAGE — a blinding drives findings and coverage down together,
+   and here findings fell by one while the placements this run could attribute rose by exactly the four blind
+   spots it closed, with the audited set (282 interfaces, 153 from rows + 129 derived), the complete-row count
+   (160), the reader refusals (0) and the dictionary totals (95/104/15) all byte-identical across the pair.
+   THE BRACKET MUST BE EMPTY, and that is the one narrowing that stays. A SIZED array need not hold a C string
+   at all — `const char X[10] = "setTimeout"` is a well-formed declaration of ten bytes with NO terminator — so
+   its initialiser is a byte sequence and not a name, and reading one would credit a member whose install passes
+   the C compiler and hands quickjs a pointer that runs off the end. The unsized form cannot be that.
+   Two declarations of the same identifier in one file resolve to nothing, in EITHER spelling and across the two,
    which is the same answer a doubly-declared table gives, because neither can be decided. */
 const CHAR_CONST_RE =
-  /(?:^|[;{}])\s*(?:static\s+)?const\s+char\s*\*\s*(?:const\s+)?([A-Za-z_]\w*)\s*=\s*((?:"(?:[^"\\]|\\.)*"\s*)+);/gm;
+  /(?:^|[;{}])\s*(?:static\s+)?const\s+char\s*(?:\*\s*(?:const\s+)?([A-Za-z_]\w*)|([A-Za-z_]\w*)\s*\[\s*\])\s*=\s*((?:"(?:[^"\\]|\\.)*"\s*)+);/gm;
 
 function collectCharConsts(masked, into) {
   CHAR_CONST_RE.lastIndex = 0;
   let m;
-  while ((m = CHAR_CONST_RE.exec(masked))) into.set(m[1], into.has(m[1]) ? null : m[2].trim());
+  while ((m = CHAR_CONST_RE.exec(masked))) {
+    const name = m[1] || m[2];
+    into.set(name, into.has(name) ? null : m[3].trim());
+  }
 }
 
 /* ---- integer constants, for the SELECTOR a shared installer subsets its names by --------------------------- */

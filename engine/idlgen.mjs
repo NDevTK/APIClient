@@ -69,6 +69,36 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const hostArg = process.argv.indexOf("--host");
 const HOST = hostArg >= 0 && process.argv[hostArg + 1] ? resolve(process.argv[hostArg + 1]) : join(HERE, "host");
 const BROWSER = join(HOST, "browser");
+/* AND EVERY NEGATIVE CLAIM THIS RUN MAKES IS NEGATIVE OVER THAT ROOT, SO IT IS PRINTED WITH ONE.
+   CLAUDE.md §AND-A-NEGATIVE-FINDING'S-POPULATION-CAN-BE-A-CORPUS-GLOB: the unit of RELAY is the row and the
+   unit of SCOPE is the banner, so a row saying `ABSENT N — … btoa, atob …` travels stripped of the one
+   sentence that makes it
+   true, and the receiver cannot recover the scope from the row they were handed. Measured: that exact pair
+   reached a lane as `the audit reports members ABSENT that this engine installs`, which is what the row SAYS and
+   is not what the row MEANS.
+ *
+ * NAMED RESIDUAL — WHAT THIS ROOT DOES NOT COVER, AND IT IS A FALSE ABSENCE AND NOT A NARROWER ANSWER.
+ * NOT COVERED: a member whose ONLY install construct lies outside this root. A realm's global is finished by the
+ * JS engine's own intrinsics as well as by this tree, so such a member SHIPS and is charged as an ABSENT
+ * FINDING — a statement about the ENGINE — where the honest verdict is a BLIND SPOT, a statement about this run.
+ * WHAT THE NEXT DIFF BUILDS, IN THIS ORDER, AND THE OBSTACLE IS NAMED BECAUSE IT IS THE PART A READER WILL NOT
+ * PREDICT: (1) a `core/platform.c` PLATFORM_WITNESS row per such name — that table already carries Window
+ * MEMBERS and not only interface objects (its probe's own comment names `setTimeout` as one), and its probe is a
+ * `JS_HasProperty` over the finished global, so a row IS the host tree's own assertion that the name is present;
+ * the obstacle is that the row's `component` column is `DCHECKF`ed against `platform_has_row`, and the JS
+ * engine's intrinsics are no platform row, so the diff owes that column an answer before it owes anything here.
+ * (2) this audit READING that table, so a witnessed name is known-present and BANDED rather than charged. In
+ * that order: (2) alone reads a table with no row for the case and moves nothing.
+ * HOW ITS ABSENCE WOULD SHOW: an ABSENT row for a name the finished realm answers — observed off the global,
+ * never off any count printed here, because every count printed here is over this root.
+ * AND THE WIDENING A READER REACHES FOR FIRST IS REFUTED BY MEASUREMENT AND IS INERT INTO THE BARGAIN. Measured
+ * at 1a9cb17d in a frozen snapshot, walking the engine's other compiled root as a second tree took BLIND SPOTS
+ * from 0 to 462 and ABSENT from 496 to 705 distinct (interface-member pairs 3473 to 7646), and added two finding
+ * categories about ECMAScript builtins that are not Web IDL at all — while
+ * removing NOT ONE false absence, because `JS_SetPropertyFunctionList(ctx, ctx->global_obj, …)` names a target
+ * that `idl_interface_tag`, a Web IDL §3.7.1 interface object, quickjs's per-realm class-prototype slot and
+ * `idl_global_object` all fail to reach, so the install is not read as an install and the row stands unchanged. */
+const ROOT_SAID = HOST.startsWith(HERE + "/") ? HOST.slice(HERE.length - "engine".length) : HOST;
 
 const REGEN = process.argv.includes("--regen");
 
@@ -1531,11 +1561,13 @@ for (const [iface, paths] of AUDITED) {
    IDL cannot carry — and no reading of the corpus can see it, so this label states BOTH actions rather than
    picking the commoner one. Naming the declaration as an equal outcome is what stops a reader working the list
    off by writing members the spec forbids. */
-defect(`ABSENT members (distinct; ${pairsAbsent} interface-member pairs a page cannot reach) — each is ` +
-       `EITHER a member to implement in its real component OR, where the spec's prose states the member has ` +
-       `no steps or excludes it under a condition this user agent does not meet, an idl_members_excluded ` +
-       `declaration to make at the component's prototype build; this audit cannot tell those two apart and ` +
-       `does not claim to`, distinctAbsent.size);
+defect(`ABSENT members (distinct; ${pairsAbsent} interface-member pairs a page cannot reach) — ABSENT means ` +
+       `NO INSTALL CONSTRUCT UNDER ${ROOT_SAID} PUTS THE NAME ON THE INTERFACE, so a member the program ` +
+       `installs from outside that tree is charged here and not banded (see the residual at this run's root); ` +
+       `and each is EITHER a member to implement in its real component OR, where the spec's prose states the ` +
+       `member has no steps or excludes it under a condition this user agent does not meet, an ` +
+       `idl_members_excluded declaration to make at the component's prototype build; this audit cannot tell ` +
+       `those two apart and does not claim to`, distinctAbsent.size);
 defect(`js_noop-STUB members (distinct; ${pairsNoop} interface-member pairs)`, distinctNoop.size);
 /* THE TWO CONSTRUCTOR CATEGORIES, EACH WITH THE SET IT IS A FRACTION OF IN ITS OWN LABEL. They are separate
    because the WORK is separate, not because the count looks better split: HTML §3.2.3's are one shared
@@ -1756,10 +1788,12 @@ for (const n of strayUnproven) {
    invariant of the arithmetic. Printing all three is what lets a reader see which it got. */
 const declaringTotal = gapRows.reduce((n, r) => n + r.own, 0);
 if (totalMissing)
-  console.log(`[idl-audit] ${distinct.size} distinct spec members this engine does not install ` +
-              `(${declaringTotal} counting each interface that DECLARES one, and ${totalMissing} across all ` +
-              `interfaces, since an inherited gap is absent on each) — see the ABSENT category in the ` +
-              `verdict for the two outcomes that population holds; never a stub either way.`);
+  console.log(`[idl-audit] ${distinct.size} distinct spec members no install construct under ${ROOT_SAID} ` +
+              `installs (${declaringTotal} counting each interface that DECLARES one, and ${totalMissing} ` +
+              `across all interfaces, since an inherited gap is absent on each) — the root is stated because ` +
+              `that is what "does not install" is negative over, and a row of this count travels without it; ` +
+              `see the ABSENT category in the verdict for the two outcomes that population holds; never a ` +
+              `stub either way.`);
 /* THE INTERFACES THAT NEVER REACHED THE AUDIT, reported in the same breath as the members that did, because a
    surface the run silently declined to look at is indistinguishable in the total from one it looked at and
    found complete. The three lists are the three answers, and only the first is an acceptable steady state. */
