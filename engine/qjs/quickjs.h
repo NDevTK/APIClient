@@ -2893,6 +2893,27 @@ JS_EXTERN JSValue *JS_FlowNew(JSContext *ctx, const char *src, size_t len, const
    reads them across every stint — so a host that offers `pcompile` is promising those bytes outlive it. */
 JS_EXTERN int JS_FlowNewStep(JSContext *ctx, const char *src, size_t len, const char *filename, int eval_flags,
                              JSValue **pframe, void **pcompile);
+/* THE TWO HALVES OF THAT ENTRY, SEPARATELY, BECAUSE ONLY ONE OF THEM IS PER-FLOW. A parsed program's bytecode is
+   a fact about the SOURCE BYTES and its frame is a fact about ONE ACTIVATION: JS_FlowInstantiate dups what it
+   needs and writes nothing to the closure or its bytecode, so ONE closure instantiates into any number of
+   independent frames — which is what a concolic fork already rests on, since a cloned frame dups `cur_func` and
+   the sibling runs the SAME bytecode as its parent. JS_FlowNewStep is the composition of these two and not a
+   third implementation of either.
+     WHAT THEY ARE FOR: a host that wants N flows crossing one document's script sequence to PARSE that sequence
+   once rather than once each. It holds the closure from JS_FlowCompileStep and instantiates it per flow. Holding
+   one is a promise about the REALM and nothing else lets the holder off it — JS_FlowInstantiate asserts that the
+   closure's bytecode realm IS the ctx it is building the frame in, because JS_CallInternal takes the running
+   realm from the BYTECODE and a frame built over a foreign closure would run its body against the compiling
+   realm's global and intrinsics. The NAME and the eval FLAGS are baked into the bytecode too (the module map
+   key, the base a relative `import()` resolves against, whether the source was an inline script), so a holder
+   reuses a closure only for a program that agrees on all three.
+     JS_FlowCompileStep answers 1 (*pfn holds the closure, which the CALLER now owns and must free), 0
+   (SUSPENDED — *pcompile holds the parse, call again with the same arguments) or -1 (the parse failed; the
+   exception is pending). JS_FlowInstantiate answers a frame handle, or NULL with the exception pending; it does
+   NOT consume `fn`. */
+JS_EXTERN int JS_FlowCompileStep(JSContext *ctx, const char *src, size_t len, const char *filename,
+                                 int eval_flags, JSValue *pfn, void **pcompile);
+JS_EXTERN JSValue *JS_FlowInstantiate(JSContext *ctx, JSValueConst fn);
 /* Release a compile the host is never going to finish — the flow it belonged to is being freed with its
    program still half-parsed. It is a no-op on a NULL slot, so a teardown may call it unconditionally. */
 JS_EXTERN void JS_FlowCompileDrop(JSContext *ctx, void **pcompile);

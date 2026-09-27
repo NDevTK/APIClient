@@ -52065,37 +52065,26 @@ static _Thread_local JSEvalCompile **g_eval_compile_slot = NULL;
    back-edge, via the preempt hook) and resume it later — the substrate for value-ordered interleaving. */
 static JSValue JS_FlowCompileSource(JSContext *ctx, const char *src, size_t len,
                                     const char *filename, int eval_flags);
-/* START OR CONTINUE A FLOW'S COMPILE. Answers 1 (the flow is built, *pframe set), 0 (the compile HANDED THE
-   THREAD BACK — *pcompile holds it, call again with the same arguments) or -1 (the compile failed, the
-   exception is pending).
-   THIS IS THE ONE ENTRY AND JS_FlowNew IS A WRAPPER OVER IT, not a second implementation to fall back to: a
-   caller that passes no `pcompile` is a host with no frontier to be fair between, and it gets the same parse
-   through the same driver with the seam unarmed — which is JSFlowControlHooks.budget's own arrangement ("a
-   NULL budget is a host that declines this edge") and is js_parse_descent's relationship to
-   js_parse_descent_at one level down.
-   WHY THE COMPILE NEEDED A SEAM AT ALL, since it is the span this engine had no way to rest in: quickjs.h
-   declares four raise kinds and the first three come from the interpreter's dispatch, so a parse raised
-   nothing and polled nothing for a length the PAGE chose — solver/rest_unit.h's bound (1) names exactly that
-   quantity as the one that must never appear in a step's cost. The parse's own dispatch is the raise source
-   now (js_parse_want_yield), and the park is the descent's frame stack staying exactly where it is: chunks
-   are allocated once and never moved, so a resume is a continuation and not a reconstruction.
-   IT IS AN IN-RAM PARK AND THAT IS THE WHOLE OF IT, WHICH IS A DESIGN STATEMENT AND NOT A GAP. The state
-   cannot be serialised — the frame stack is a graph of raw pointers into chunk allocations, plus a
-   JSFunctionDef chain — which is exactly the live-graph serialization the cold tier forbids. It does not need
-   to be: a compile is RE-DERIVABLE from the row's own bytes, so a flow paged out mid-parse loses its parse and
-   the recipe that replays the document re-compiles it, which is §the-re-derivable-category and not a
-   truncation. The host therefore DROPS a suspended compile when it releases the flow (JS_FlowCompileDrop)
-   rather than refusing the park. What would make it serialisable — indices into a flat arena instead of
-   pointers, and the top_break list keyed by frame index — is a change to the frame stack's REPRESENTATION,
-   buys only the ability to resume a half-parsed program in a later session, and is not owed by this seam. */
-int JS_FlowNewStep(JSContext *ctx, const char *src, size_t len, const char *filename, int eval_flags,
-                   JSValue **pframe, void **pcompile) {
+/* THE PARSE, ON ITS OWN — the half of a flow's construction a caller can HOLD. Answers 1 (*pfn is the compiled
+   program's closure, owned by the caller), 0 (the parse HANDED THE THREAD BACK — *pcompile holds it, call again
+   with the same arguments) or -1 (the parse failed, the exception is pending).
+   WHY THE TWO HALVES ARE TWO ENTRIES. A parsed program's bytecode is a fact about the SOURCE BYTES; its frame
+   is a fact about ONE ACTIVATION, and only the second is per-flow. async_func_init DUPS `func_obj` into the
+   frame and writes nothing whatever to the closure or to its bytecode, so one closure instantiates into any
+   number of independent frames — which is not a new claim about this engine but the one a concolic fork already
+   rests on, since clone_susp_frame dups `cur_func` and a sibling therefore runs the SAME JSFunctionBytecode as
+   its parent. Until this split the two halves were welded inside one entry that freed the closure on its way
+   out, so no caller could hold one: N flows crossing one document's script sequence parsed every later program
+   of that sequence once EACH. That is the repeat solver/dyn_body.h's `dyn_body_note_parsed` exists to measure,
+   and this pair is the seam a fix for it needs — it is NOT the fix, which is a host decision and is named as a
+   residual at JS_FlowNewStep below. */
+int JS_FlowCompileStep(JSContext *ctx, const char *src, size_t len, const char *filename, int eval_flags,
+                       JSValue *pfn, void **pcompile) {
     JSEvalCompile *carrier = NULL;
     JSValue fn;
-    JSAsyncFunctionState *s;
 
-    DCHECK(pframe != NULL, "a flow compile was started with nowhere to put the flow it builds");
-    *pframe = NULL;
+    DCHECK(pfn != NULL, "a flow compile was started with nowhere to put the program it parses");
+    *pfn = JS_UNDEFINED;
     if (pcompile != NULL && *pcompile != NULL) {
         carrier = (JSEvalCompile *)*pcompile;
         *pcompile = NULL;
@@ -52118,16 +52107,103 @@ int JS_FlowNewStep(JSContext *ctx, const char *src, size_t len, const char *file
     }
     DCHECK(carrier == NULL, "a compile that finished left a parked parse behind it");
     if (JS_IsException(fn)) return -1;   /* compile error: the exception is already pending */
-    DCHECK(tramp_body_is_plain(fn),
-           "JS_FlowNew compiled a global program and got back something that is not a trampolinable bytecode "
-           "function — async_func_init is about to make a preemptible frame out of it, so a closure that is "
-           "not a plain body would be parked and rebuilt as a shape the resume path cannot restore");
-    s = js_mallocz(ctx, sizeof(*s));
-    if (!s) { JS_FreeValue(ctx, fn); return -1; }
-    if (async_func_init(ctx, s, fn, ctx->global_obj, 0, NULL)) { js_free(ctx, s); JS_FreeValue(ctx, fn); return -1; }
-    JS_FreeValue(ctx, fn);
-    *pframe = (JSValue *)s;   /* opaque handle */
+    *pfn = fn;
     return 1;
+}
+
+/* THE INSTANTIATION, ON ITS OWN — a preemptible frame over a closure THE CALLER KEEPS. It dups what it needs, so
+   the caller still owns `fn` afterwards and may instantiate it again; NULL means it failed with the exception
+   pending.
+   ITS REALM IS ASSERTED, AND THAT ASSERT IS THE WHOLE REASON THIS IS AN ENTRY RATHER THAN A HELPER. The frame is
+   built with THIS ctx's global as its receiver, and JS_CallInternal then takes the running realm from the
+   BYTECODE (`ctx = b->realm`) rather than from the frame — so a frame built here over a closure compiled in
+   another realm would execute its body against that other realm's global, class_proto and intrinsics while
+   every caller believed it was running this document's program. That is CLAUDE.md §A-PER-REALM-FACT at its
+   sharpest, and it is unreachable today only because the one caller compiles and instantiates with one `ctx` in
+   one expression. A caller that HOLDS a closure can reach it, and that is exactly the caller this entry exists
+   for, so the invariant is asserted HERE — where both operands are in one hand — instead of being left as a
+   rule the next reader has to re-derive. Both its operands are this codebase's own: a ctx it chose and a
+   bytecode it compiled, never the page's bytes. */
+JSValue *JS_FlowInstantiate(JSContext *ctx, JSValueConst fn) {
+    JSAsyncFunctionState *s;
+
+    DCHECK(tramp_body_is_plain(fn),
+           "a flow frame was asked for over something that is not a trampolinable bytecode function — "
+           "async_func_init is about to make a preemptible frame out of it, so a closure that is not a plain "
+           "body would be parked and rebuilt as a shape the resume path cannot restore");
+    /* AND IT RE-ASKS THE SHAPE RATHER THAN TRUSTING THE LINE ABOVE IT, which is the difference between two
+       asserts and one assert plus an ordering nobody can see. `u.func.function_bytecode` on a callee that is
+       not a bytecode function reads past a JSCFunctionDataRecord — measured elsewhere in this file as an ASan
+       heap-buffer-overflow 8 bytes after a 72-byte region — so the shape is this read's PRECONDITION and not a
+       neighbouring opinion about it. Spelled here, an edit that reorders, guards or deletes the assert above
+       cannot turn this one into that overflow; it is a precondition rather than a second question, which is why
+       the two still carry two messages. */
+    DCHECK(tramp_body_is_plain(fn)
+               && JS_VALUE_GET_OBJ(fn)->u.func.function_bytecode->realm == ctx,
+           "a flow frame was asked for over a program compiled in ANOTHER realm — JS_CallInternal takes the "
+           "running realm from the bytecode, so this frame would run its body against the compiling realm's "
+           "global and intrinsics while its receiver came from this one");
+    s = js_mallocz(ctx, sizeof(*s));
+    if (!s) return NULL;
+    if (async_func_init(ctx, s, fn, ctx->global_obj, 0, NULL)) { js_free(ctx, s); return NULL; }
+    return (JSValue *)s;   /* opaque handle */
+}
+
+/* START OR CONTINUE A FLOW'S COMPILE. Answers 1 (the flow is built, *pframe set), 0 (the compile HANDED THE
+   THREAD BACK — *pcompile holds it, call again with the same arguments) or -1 (the compile failed, the
+   exception is pending).
+   IT IS THE COMPOSITION OF THE TWO ENTRIES ABOVE AND NOT A THIRD IMPLEMENTATION OF EITHER, which is the same
+   relationship JS_FlowNew has to this one. THIS PARAGRAPH USED TO READ `THIS IS THE ONE ENTRY AND JS_FlowNew IS
+   A WRAPPER OVER IT`, and that is rewritten rather than deleted because the argument under it still holds and a
+   reader who re-derives it will re-state it about the wrong function: the ONE entry for the PARSE is
+   JS_FlowCompileStep now, and what makes this a composition rather than a fallback is that both halves are
+   reached through this line by every caller in the tree, so neither is a capability waiting for its first
+   consumer and there is no second parse to fall back to. A caller that passes no `pcompile` is a host with no
+   frontier to be fair between, and it gets the same parse through the same driver with the seam unarmed —
+   which is JSFlowControlHooks.budget's own arrangement ("a NULL budget is a host that declines this edge") and
+   is js_parse_descent's relationship to js_parse_descent_at one level down.
+   WHY THE COMPILE NEEDED A SEAM AT ALL, since it is the span this engine had no way to rest in: quickjs.h
+   declares four raise kinds and the first three come from the interpreter's dispatch, so a parse raised
+   nothing and polled nothing for a length the PAGE chose — solver/rest_unit.h's bound (1) names exactly that
+   quantity as the one that must never appear in a step's cost. The parse's own dispatch is the raise source
+   now (js_parse_want_yield), and the park is the descent's frame stack staying exactly where it is: chunks
+   are allocated once and never moved, so a resume is a continuation and not a reconstruction.
+   IT IS AN IN-RAM PARK AND THAT IS THE WHOLE OF IT, WHICH IS A DESIGN STATEMENT AND NOT A GAP. The state
+   cannot be serialised — the frame stack is a graph of raw pointers into chunk allocations, plus a
+   JSFunctionDef chain — which is exactly the live-graph serialization the cold tier forbids. It does not need
+   to be: a compile is RE-DERIVABLE from the row's own bytes, so a flow paged out mid-parse loses its parse and
+   the recipe that replays the document re-compiles it, which is §the-re-derivable-category and not a
+   truncation. The host therefore DROPS a suspended compile when it releases the flow (JS_FlowCompileDrop)
+   rather than refusing the park. What would make it serialisable — indices into a flat arena instead of
+   pointers, and the top_break list keyed by frame index — is a change to the frame stack's REPRESENTATION,
+   buys only the ability to resume a half-parsed program in a later session, and is not owed by this seam.
+   NAMED RESIDUAL — WHAT IS NOT COVERED: nothing here SHARES a parse. This entry compiles once per call and
+   frees the closure on its way out, so a second flow reaching the same program's bytes parses them again and
+   solver/dyn_body.h's repeat census reads exactly what it read before this seam existed.
+   WHAT THE NEXT DIFF BUILDS: the HOST half, at solver/engine.c's compile site, holding the closure on the
+   `DynBody` — which is already the identity `dyn_body_note_parsed` keys the repeat on, so the cache and the
+   census agree by construction instead of being a second answer that can drift. Three things that site must
+   settle and this one cannot, because each is a fact about a ROW rather than about a parse: the compile's REALM
+   (asserted above, and per-document here — solver/world.c's `world_doc_realm` is keyed on the document handle),
+   the program's NAME (`flow_dyn_url` when the row is external, else the document's base URL — it is baked into
+   the bytecode as the module map key and as the base a relative `import()` resolves against), and its FLAGS
+   (`JS_EVAL_FLAG_INLINE_SCRIPT` iff the row is an address-free page script). A held closure may be reused only
+   where all three AGREE with the row asking for it, and that is an assert rather than an argument.
+   HOW ITS ABSENCE WOULD SHOW: `classicCompileAgain` standing near `classicCompiles` on any document whose
+   frontier forks — the reading solver/result.c already publishes, which is what this residual is measured by
+   and why it needs no fresh instrument. */
+int JS_FlowNewStep(JSContext *ctx, const char *src, size_t len, const char *filename, int eval_flags,
+                   JSValue **pframe, void **pcompile) {
+    JSValue fn;
+    int cr;
+
+    DCHECK(pframe != NULL, "a flow compile was started with nowhere to put the flow it builds");
+    *pframe = NULL;
+    cr = JS_FlowCompileStep(ctx, src, len, filename, eval_flags, &fn, pcompile);
+    if (cr <= 0) return cr;   /* SUSPENDED (*pcompile holds it) or failed (the exception is pending) */
+    *pframe = JS_FlowInstantiate(ctx, fn);
+    JS_FreeValue(ctx, fn);
+    return *pframe != NULL ? 1 : -1;
 }
 
 /* THROW AWAY A COMPILE NOBODY WILL FINISH — the flow that started it is being freed with its program still
