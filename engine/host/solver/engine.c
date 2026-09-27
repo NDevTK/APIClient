@@ -12663,7 +12663,11 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        being EXACTLY the parses begun and not ended (g_classic_compile_resumed derives it). A violation is
        therefore not an off-by-one to tolerate: it is a stint that continued a parse this process never parked,
        which means `f->compile` was made non-NULL by some route other than the compile block's own park arm —
-       the third-site defect JS_FlowNewStep's own suspend assert names on the other side of the seam.
+       the third-site defect the PARSE ENTRY's own suspend assert names on the other side of the seam —
+       quickjs.c's JS_FlowCompileStep, which is where that assert lives now that the parse and the
+       instantiation are two entries; this line said JS_FlowNewStep, and a name is corrected rather than
+       made positional because a reader checking this sentence greps for the assert and JS_FlowNewStep no
+       longer holds one.
        BOTH ROWS ARE TAKEN AT THE COPY-OUT ABOVE, one of them from the arm histogram, so this compares two
        readings of one instant; the pair's own paragraph there is why that matters more here than for the
        overrun containment, whose slack is unbounded by construction and whose sign therefore cannot flip. */
