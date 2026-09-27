@@ -27,9 +27,11 @@
 // THE SIGNATURE, AND IT IS STRUCTURAL RATHER THAN A HEURISTIC. A runaway block ends at the next terminator, and
 // to reach it the scan passes through the NEXT COMMENT'S OPENER — so the runaway block's body contains an
 // opener, which nothing nests in JavaScript. Restricted to an opener at a LINE START, which is this tree's own
-// convention for writing one (MEASURED at 4764ab99d45575d25ad8b77f527e8552adb7232d: 5499 block openers at a
-// line start against 343 mid-line), the check answers ZERO over all 281 tracked `.js`/`.mjs` files — so a
-// non-zero is a CHANGE and the change is the signal, which is the property CLAUDE.md
+// convention for writing one, the check answers ZERO. MEASURED at 4764ab99d45575d25ad8b77f527e8552adb7232d
+// and stated as of that revision rather than as of now, because the population GROWS: 281 tracked `.js`/`.mjs`
+// files, 0 findings, and 5499 block openers at a line start against 343 mid-line. The live figure is the one
+// this gate PRINTS on every run and the one to read; what the dated pair buys is that a non-zero is a CHANGE
+// and the change is the signal, which is the property CLAUDE.md
 // §A-VERDICT-THAT-IS-RED-ON-EVERY-RUN says a gate needs to stay off the furniture pile. WITHOUT the line-start
 // restriction it answers ONE, and that one is a false accusation: a URL glob inside a JSDoc paragraph in
 // `extension/lib/protocol-parsers.js`, which is prose and not an opener.
