@@ -214,9 +214,30 @@ typedef struct {
        candidates included. The gate reading was the only one the record could make and it was the wrong one.
        A COUNT OF FLOW FINISHES, and the key says so. engine.c reaches solve_flow_end from two MUTUALLY
        EXCLUSIVE lines — the deferred-paint completion and the ordinary finish, which yields to the first when
-       a picture is owed — and each is followed by flow_finish, so a candidate flow ends exactly once and this
-       is therefore also a count of distinct candidates that have ended. That is what makes the assert at the
-       raise an invariant rather than a decoration.
+       a picture is owed — and each is followed by flow_finish, so a candidate FLOW ends exactly once.
+       AND THE NEXT CLAUSE USED TO INFER `and this is therefore also a count of distinct candidates that have
+       ended`, WHICH IS FALSE AND IS THE WHOLE OF WHY THE ASSERT AT THE RAISE WAS WRONG. It is kept in its own
+       words because the inference is the one a reader re-derives: a flow ending exactly once really does
+       follow from those two lines, and `therefore a count of candidates` smuggles in ONE FLOW PER CANDIDATE,
+       which this engine does not have. A candidate SESSION IS A TREE OF FLOWS. engine.c's fork copies
+       `cand_src`, `cand_payload`, `cand_sink`, `cand_fired` and `cand_resumed` to the sibling whenever the
+       parent has them — deliberately, with its own assert saying a field added to that identity is an
+       obligation there — and solve_seed_candidates says in its own words that a candidate replays at cursor 0
+       and forks "normally the moment the cursor runs past what the detecting flow knew, which is where this
+       candidate's own exploration begins". So N arms of ONE seed each reach solve_flow_end and each raise this
+       count, while `tried` was raised ONCE.
+       SO THIS FIELD AND `tried` ARE TWO ACCOUNTING UNITS AND NOT TWO READINGS OF ONE: `tried` counts SEEDS
+       (two doors, once each) and this counts FLOW FINISHES (one per arm). The engine makes the same conflation
+       one component over and it is visible there too — `if (f->cand_src) g_finished_cands++` counts FLOWS into
+       a counter named for candidates. An implication between two units is not a weak invariant, it is a
+       category error, and it was UNFALSIFIABLE for as long as this field was unwritten: the assert could not
+       fire because the operand was allocator memory. Initialising the field ARMED it, and the first dev build
+       that reached a candidate's second arm died on it — which is the forcing function working and the assert
+       being wrong at the same time.
+       WHAT STANDS AT THE RAISE INSTEAD IS THE HALF THAT IS ABOUT ONE UNIT: `tried > 0`. Every arm's ancestor
+       was seeded on this same entry, so a raise against a search with no seed at all is still the unseeded
+       arrival the old message named first, and it is still impossible. What is NOT assertable here is anything
+       comparing the two counts, and saying so is the point.
        A LIFETIME COUNT AND NOT A GAUGE: it says what has HAPPENED, cannot fall, and two samples of one
        session may be differenced — which is also why it can stand in one implication with `tried`.
        PER SESSION, BECAUSE `tried` IS, AND THE IMPLICATION IS WHAT FIXES THE SCOPE RATHER THAN A PREFERENCE.
@@ -937,15 +958,26 @@ static Cand *sink_search(const char *src, int sink, int *created) {
        file had never written. A list is thirty-five obligations a reader discharges by hand, it grows with the
        struct, and NOTHING FAILS WHEN ONE IS MISSED — which is why it is gone rather than lengthened by one.
        MEASURED AT 9ccc3bc9, IN TWO STAGES OF ONE BUILD THAT DISAGREE, which is the whole argument:
-         the native smoke emitted 18 `candEnds` values, 12 reading 0 and SIX reading 3, six of the eighteen
-         rows carrying `candEnds` GREATER than `tried` — and NO abort anywhere in that log, because the check
-         is at the WRITER (solve_flow_end) and the garbage is read at the EMIT, so a search none of whose
-         candidates has ended is never asked the question at all;
+         the native smoke emitted 18 `candEnds` values, 12 reading 0 and SIX reading 3 — a value no flow of
+         those searches had raised, since `3` recurred at every affected row, which is one allocator slot
+         replicated across realloc'd entries rather than six independent accidents. NO abort anywhere in that
+         log, because the check is at the WRITER (solve_flow_end) and the garbage is read at the EMIT, so a
+         search none of whose candidates has ended is never asked the question at all;
          the COLD-PARK session, which is where candidate flows END, hit it on its first one. That stage's log
          carries exactly ONE `@WHY` and it is its terminal line — `cond:"e->ends < e->tried"` at solve.c:3039
          — the session DIED ON SIGABRT and the build FAILED on it. `3 < 1` is false, so a HEALTHY engine
          aborted; a garbage value that had landed BELOW `tried` would instead have stayed SILENT on a
          genuinely broken invariant. Both directions, one unwritten field.
+       AND THE SAME ASSERT FIRED AGAIN AT THE COMMIT THAT WROTE THE FIELD, WITH `ends` CORRECTLY ZERO, WHICH IS
+       A SECOND DEFECT AND NOT A FAILED FIX. Measured at 12a8b0a, stamp `assertRegime dev` and `dirty: []`: the
+       emitted rows carrying `candEnds` above their own `tried` went to ZERO with the witness armed — the
+       initialisation WORKED — and the cold-park session died on the same line anyway. That separates the two:
+       the rows were the unwritten operand, and the abort is the INVARIANT ITSELF being false, a candidate
+       session being a tree of flows while `tried` counts seeds. The second was invisible while the first was
+       live, which is the shape CLAUDE.md names — a defect downstream of another inherits its symptom the day
+       that one is fixed, and a counter that recovers without the capability is a SECOND defect rather than a
+       failed fix. Reading them as one defect seen from two sides was wrong and was written down here; see the
+       field's declaration for what replaced the check.
        A COMPOUND LITERAL ASSIGNED WHOLESALE IS C's OWN ANSWER and not a mechanism this file invents: every
        member the initializer does not name is zero-initialised BY THE LANGUAGE, so the compiler writes all
        thirty-five and an omission is UNSPELLABLE rather than audited. The spelling follows the one already in
@@ -3064,27 +3096,51 @@ void solve_flow_end(Flow *f) {
            switch-out for the reason observe_runway gives about its own sampling: engine.c routes no solve-side
            switch-out seam, and inventing one for a report counter's benefit would be a second door into the
            candidate state.
-           STRICTLY LESS BEFORE THE INCREMENT, WHICH IS THE WHOLE OF WHY THIS IS AN INVARIANT AND NOT A TALLY.
-           Both doors into a candidate raise `tried` before the flow can ever be picked (solve_seed_candidates
-           at the creation, solve_resume_candidate during the cold rebuild), a withdrawn record never reaches
-           this line as a candidate at all because the same refusal drops `cand_src`, and each of engine.c's
-           two finish lines is followed by flow_finish — so an end whose candidate was never seeded, or a
-           second end of one flow, is the only way this can fail.
-           THAT ENUMERATION WAS SHORT BY ONE WHEN IT WAS WRITTEN AND THE MISSING MEMBER WAS THE OPERAND, which
-           is recorded rather than repaired silently because the enumeration is the part a reader ACTS on. Both
-           named members are facts about the CANDIDATE; `ends` was not stated at sink_search, so the third way
-           this could fail was that the left-hand side had never been written at all — and a dev-asserts run
-           emitted six rows with `candEnds` above `tried` while this assert's message occurred 0 times in it,
-           because the check is HERE and the garbage is read at the EMIT. An enumeration of the ways an assert
-           can fail is not complete until it has asked where each of its own operands comes from, which is the
-           one question that cannot be answered from the candidate. Both operands are now written by this file
-           and the two named members are the whole of it. */
-        DCHECK(e->ends < e->tried,
-               "an @S candidate flow ended for a search with no unfinished candidate left to end — both doors "
-               "raise `tried` before a candidate flow can be picked and engine.c's two finish lines are "
-               "mutually exclusive and each followed by flow_finish, so this is either a candidate that "
-               "reached this seam without being seeded or one flow finishing twice, and `candEnds` would "
-               "report more candidates ended than this search has ever had");
+           THE CHECK HERE USED TO BE `e->ends < e->tried` AND IT WAS A CATEGORY ERROR, WHICH IS RECORDED AT
+           LENGTH AT THE FIELD'S DECLARATION AND IN SHORT HERE BECAUSE THIS IS WHERE IT FIRED. `tried` counts
+           SEEDS and `ends` counts FLOW FINISHES, and a candidate session is a TREE of flows: engine.c's fork
+           copies the whole candidate identity to every sibling, and solve_seed_candidates says a candidate
+           forks normally past its recorded cursor because that is where its own exploration begins. So N arms
+           of ONE seed each reach this line, and the implication is false at the SECOND arm — by design, not by
+           accident.
+           ITS ENUMERATION WAS SHORT TWICE, AND THAT IS THE PART TO CARRY RATHER THAN THE ARITHMETIC. It named
+           an end that was never seeded and one flow finishing twice. The first miss was its own left-hand
+           OPERAND, unwritten at sink_search, which made the check unfalsifiable — six emitted rows carried
+           `candEnds` above `tried` while this message occurred 0 times in that run, because the check is HERE
+           and the garbage is read at the EMIT. The second miss is a FORKED ARM, which is neither named member:
+           two distinct flows each finishing once, both belonging to one seed. An enumeration of the ways an
+           assert can fail is not complete until it has asked where each operand comes from AND how many
+           objects can produce the event it counts — and the second question is the one a per-flow seam cannot
+           answer from the flow in front of it.
+           SO WHAT IS ASSERTED IS THE HALF THAT LIVES IN ONE UNIT. Every arm's ancestor was seeded on this same
+           entry — both doors raise `tried` before a flow can be picked, and a withdrawn record never reaches
+           this line at all because the same refusal drops `cand_src` — so a raise against a search with NO
+           seed is the unseeded arrival the old message named first, and it remains impossible. Nothing
+           comparing the two counts is assertable here, and the field's declaration says what that costs the
+           report.
+           AND IT IS A DCHECKF SO A FIRE NAMES ITS OWN ARM, which is what the retired check could not do: the
+           values are what separate an unseeded arrival from a search whose seeds are all accounted for, and a
+           reader meeting a bare `@WHY` at this line had to guess between them from a log that had not got far
+           enough to emit a row. `cand_verifying` is in the list because solve_flow_begin sets it on every
+           switch-in and this function clears it, so a 0 here is a flow that has already been through this
+           seam — the double-finish arm, separated from the others for free and with no new state.
+           THE NUMBERS COME FIRST AND THE PAGE'S OWN STRING LAST, WHICH IS THE ORDER AND NOT A STYLE. The
+           composer truncates at a bounded body and appends a marker, and `src` is a SOURCE IDENTITY derived
+           from the analysed document — its length is the page's to choose and not this file's to bound. With
+           the string first, a long enough source identity would push the diagnostic values off the end of the
+           record and the assert would print everything except the reason it exists; with them first, a
+           truncation can only ever eat the page's bytes. An unbounded operand goes at the END of any composed
+           record whose fixed part is the part being read. */
+        DCHECKF(e->tried > 0,
+                "an @S candidate flow ended for a search that has seeded none — `tried` is raised by both "
+                "doors BEFORE a flow can be picked (solve_seed_candidates at the creation, "
+                "solve_resume_candidate during the cold rebuild) and a withdrawn record never reaches this "
+                "line because the same refusal drops `cand_src`, so this flow carries a candidate identity "
+                "that came from neither door. tried=%d ends=%d resumed=%d withdrawn=%d seeded=%d "
+                "payloads=%d turns=%d verifying=%d sink=%s src=\"%s\"",
+                e->tried, e->ends, e->resumed, e->resumed_withdrawn, e->seeded, e->npl, e->turns,
+                f->cand_verifying,
+                f->cand_sink ? f->cand_sink : "(null)", e->src ? e->src : "(null)");
         e->ends++;
     }
     f->cand_verifying = 0;
@@ -3317,12 +3373,28 @@ char *solve_json_array(JSContext *ctx) {
         /* …AND HOW MANY OF THEM HAVE ENDED, WHICH IS WHAT MAKES EVERY ZERO BELOW READABLE AS A QUESTION ABOUT
            A PATH OR ABOUT THE SCHEDULE. `tried` is the ASK and `turns` is the service; this is the only fact
            here about a candidate's own TERMINATION, and the three are read together:
-             `candEnds:0`   beside any zero below — those candidates are STILL LIVE and have not got there
-                            yet. Nothing in front of the source has been shown to turn anything away, and the
-                            work is thread rather than a gate to find.
-             `candEnds:N`   beside `tried:N` and a zero below — every candidate this search has ever had ran
-                            to its own end without reaching that point. THEN, and only then, the readings
-                            below are about a path.
+             `candEnds:0`   beside any zero below — NO FLOW of this search has ended, so nothing it has run
+                            got there and nothing in front of the source has been shown to turn anything
+                            away. The work is thread rather than a gate to find. This arm is sound and is the
+                            load-bearing one.
+             `candEnds:N`   at least one flow of this search ended without reaching that point, AND NOTHING
+                            MORE. The clause that stood here read `beside tried:N — every candidate this
+                            search has ever had ran to its own end`, and it is kept as the reading a reader
+                            re-derives because the arithmetic invites it and it is FALSE: this counts FLOW
+                            FINISHES and `tried` counts SEEDS, a candidate session is a TREE of flows
+                            (engine.c's fork copies the whole candidate identity), so N ends against N seeds
+                            can be one candidate that forked N times with every other seed's arms still
+                            running. Reading it as `all ended` sends a reader to hunt a gate in front of a
+                            source that nothing has been turned away from, which is the confident-wrong
+                            direction this whole entry exists to remove.
+                            RESIDUAL — WHAT IS NOT COVERED: no reading here can say that a search's candidates
+                            are ALL finished, because the pair carries no count of what is still LIVE. WHAT
+                            THE NEXT DIFF BUILDS: a per-search live-arm count, raised where the fork copies
+                            the candidate identity and lowered at this seam, which with `candEnds` gives
+                            `live == 0` as the arm the retired clause was reaching for. HOW ITS ABSENCE SHOWS:
+                            a reader holding `candEnds` equal to `tried` cannot distinguish a search whose
+                            every candidate is done from one candidate that forked as many times as the search
+                            has seeds, and the report renders those two identically.
            UNCONDITIONAL, AND 0 IS THE LOAD-BEARING VALUE: it is the state this engine is in, so an omission
            here would be the defect rather than a statement. Not a rung and not a credit — nothing about the
            WFQ moves at the write.
@@ -3335,10 +3407,16 @@ char *solve_json_array(JSContext *ctx) {
            reading `candEnds` above `tried` outright. The `candEnds:N` arm is the one that would have cost
            something — it tells a reader the readings below are about a PATH, so a garbage value landing on
            `tried` would have sent them to hunt a gate in front of a source nothing had been turned away from.
-           WHAT A READER CHECKS BEFORE EITHER ARM, AND IT COSTS NOTHING: `candEnds` may not exceed `tried`. That
-           is the same implication the assert at the raise makes, it is an identity rather than a reach total so
-           it survives an interleaving, and a row that breaks it is a statement about this file and not about
-           the search it names. */
+           AND THE CLAUSE THAT STOOD HERE TOLD A READER TO CHECK THE WRONG THING, WHICH IS RECORDED BECAUSE IT
+           IS THE CHEAP CHECK ANYBODY WOULD REACH FOR. It read `candEnds may not exceed tried … the same
+           implication the assert at the raise makes`, and BOTH halves went: the assert no longer makes it, and
+           it is not true — `candEnds` counts FLOW FINISHES and `tried` counts SEEDS, so a candidate that forks
+           legitimately drives this above `tried` and a row doing so is a statement about the SEARCH and not
+           about this file. It was a sound reading only while `ends` was garbage, which is the one era in which
+           an excess really did mean a defect, and it is exactly the era it was written in.
+           WHAT A READER CAN STILL CHECK FOR NOTHING IS ONE-SIDED: a NONZERO `candEnds` beside `tried:0` is
+           impossible, because both doors raise `tried` before a flow can be picked and every arm's ancestor
+           came through one of them — that is the implication the assert at the raise makes now, in one unit. */
         json_buf_raw(&b, ","); json_buf_key(&b, "candEnds");
         snprintf(t, sizeof t, "%d", g_pending[i].ends); json_buf_raw(&b, t);
         /* …AND THE TWO OBSERVATION COUNTS, WHICH ARE WHAT SPLIT `turns:N,reached:0,survived:0` INTO THE THREE
