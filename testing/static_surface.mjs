@@ -286,6 +286,28 @@
  *     and conclude it is worthless, which is the same misreading the band as a whole invites — the worth of a
  *     partition is that two mechanisms can be told apart, and the honest measure is whether every row lands
  *     in exactly one class with none forced.
+ * (d) A CALLEE'S OWN STRAIGHT-LINE WRITES, WHICH THE SECOND FIELD ON `a call result` MEASURED AND NAMED.
+ *     NOT COVERED: the door channel's inline arm crosses the callee boundary only for a function whose WHOLE
+ *     BODY IS ONE RETURNED EXPRESSION, so a body that assigns a local and returns it is refused and its call
+ *     site stays a hole — and the census beside the band says what those callees do instead: of the calls
+ *     whose callee it resolves to one definition in the same file, ZERO return text this fold can settle, and
+ *     the rest return either an expression naming a PARAMETER or a LOCAL the body assembled. Reading three of
+ *     the second kind in the mirror found each to be an alias of a parameter one write earlier (`let e=r; …
+ *     return e`), so this is ONE mechanism and not two.
+ *     WHAT THE NEXT DIFF BUILDS: widen `returnExprFnOf` past the one-statement rule for a body whose
+ *     statements are a straight line — no branch, no loop, no `try` — by folding each plain assignment to a
+ *     declared local in order into the env the return is folded with, refusing on any conditional write to a
+ *     name the return reads, on `arguments`, and on an `async` or generator function exactly as that helper
+ *     already does. The arity and argument tests stay the caller's, so a parameter the call site did not
+ *     settle still holes; what changes is that the returned LOCAL stops being one.
+ *     HOW ITS ABSENCE WOULD SHOW: the second field's block reports resolved callees whose return is not text
+ *     while its credited count stands at zero, and the band goes on reporting those call sites as `a call
+ *     result` — so a reader sees a definition named in this file's own output and no row anywhere saying what
+ *     it returns.
+ *     WHAT IT MAY NOT BE PRICED BY: a body that assigns and returns is a body whose value depends on the
+ *     statements before the return, which is exactly the reason the one-statement rule exists — so this is a
+ *     widening that must be paid for in FALSE COMPLETES and measured as one, built as a classifier and run
+ *     over the whole population before it lands, with the rows it newly settles read at their coordinates.
  *
  * WHAT COMPLETES THE COMPARISON, NAMED SO IT CAN BE RUN RATHER THAN RE-DERIVED. This file is one half. The
  * other half is not "the engine's endpoint count", which answers a different question: `solver/result.c`
@@ -728,6 +750,10 @@ function holeClass(node, env) {
     case "MemberExpression": case "OptionalMemberExpression":
       return node.computed ? "a computed property read" : "a property read";
     case "CallExpression": case "OptionalCallExpression": case "NewExpression":
+      /* THE SECOND FIELD IS SEEDED HERE AND THE CLASS DOES NOT MOVE. A Set keyed on the NODE is what makes the
+         census a count of call SITES rather than of folds: the manifest enumeration folds one call once per
+         candidate, so a tally would have counted the same site dozens of times and read as a population. */
+      if (env && env.callHoles) env.callHoles.add(node);
       return "a call result";
     case "BinaryExpression": case "LogicalExpression": case "UnaryExpression":
       return "an operator this fold does not evaluate";
@@ -746,6 +772,150 @@ const holeSig = (r) => {
   const w = [...new Set(WHY(r))].sort();
   return w.length ? w.join(" + ") : "a class this fold did not attach";
 };
+
+/* ── THE SECOND FIELD ON `a call result`: IS THE CALLEE'S OWN DEFINITION IN THIS FILE'S TEXT ──────────────
+   WHAT THIS ANSWERS AND WHY THE BAND CANNOT. The WHY band says WHERE THE FOLD GAVE UP, and its largest class is
+   `a call result`. THAT CLASS IS NOT "EVERY CALL" AND THIS FILE'S FIRST DRAFT OF THIS COMMENT SAID IT WAS: the
+   door channel's inline arm DOES cross the callee boundary, and where it succeeds the hole is attributed INSIDE
+   the callee at its own origin, so such a row never carries `a call result` at all. The class is therefore
+   EXACTLY THE POPULATION THAT ARM REFUSED — a body of more than one statement, a mismatched arity, an argument
+   that did not settle, a member callee whose slot no scope-correct resolution can join — and this census is a
+   second field on THAT, not on calls in general. The distinction is not pedantry: the first framing would have
+   had a reader believe the baseline crosses no function boundary, which UNDERSTATES it, and understating the
+   baseline is the direction that flatters the engine. A reader cannot tell from a refusal reason whether the
+   address is in the bundle's text anyway, and that is the only question the razor turns on. So this asks a PROPERTY each row can be tested for
+   by hand: does the callee resolve to ONE definition in this file, and does that definition's return fold to
+   text from this file alone. A reader checks a row by opening the coordinate printed beside it.
+   IT IS A SECOND FIELD AND NEVER A RELOCATION. `a call result` stays in the band and the band's buckets go on
+   summing to `shape + opaque` for their channel; this census is printed beside them with its OWN unit. Turning
+   the class into sub-classes instead would have moved the number and left its old meaning unread, which is the
+   defect CLAUDE.md names for a relocated metric.
+   ITS UNIT IS A CALL EXPRESSION AND NOT A ROW OR AN ADDRESS, and the three are not subtractable. One door row
+   can carry several call holes and one call node can be a hole in several rows (a `.src` write and a `fetch`
+   reading the same helper), so this census's total is neither the band's `a call result` figure nor any door
+   count. It is deduplicated BY NODE IDENTITY within a file, which is what makes it immune to the manifest
+   enumeration folding one call once per candidate.
+   WHAT IT DELIBERATELY DOES NOT CLAIM, AND WHICH WAY IT ERRS. `its return folds to text from this file alone`
+   is a property OF THE DEFINITION and never a verdict about what an extractor would recover: a real
+   interprocedural fold would additionally have to establish that no other definition can be entered through
+   that callee, and the once-declared/never-reassigned conditions `binds`, `fnDeclOf` and `slotOf` already
+   carry are what stands in for that here. Where this is wrong it is wrong by ADMITTING TOO MUCH — a call
+   whose fold was discarded speculatively is still counted, and a definition whose return folds is credited
+   even where a run would return by another path — and that direction OVERSTATES what a parse could reach,
+   which is the conservative direction for this file's own bar: it is UNDERSTATING the baseline that would
+   flatter the engine, and CLAUDE.md names that as the one result this project must not manufacture. */
+const CALLEE_IN_FILE = "its return folds to text from this file alone";
+/* THE TWO VERDICTS THAT MEAN THE CALLEE WAS RESOLVED TO ONE DEFINITION IN THIS FILE, which is the population
+   whose coordinates are printed. A ZERO IN THE FIRST IS THE HEADLINE AND IS THEREFORE THE CLAIM MOST IN NEED
+   OF CHECKING, and a zero with nothing beside it gives a reader nothing to falsify — so the rows of the SECOND
+   are printed too. They are the stronger statement of the pair: a definition IS in this file's text and its
+   return is NOT text, which anybody can refute by opening one coordinate. */
+const CALLEE_NOT_TEXT = "its return does not fold from this file's text";
+const CALLEE_VERDICTS = [
+  CALLEE_IN_FILE,
+  "its return does not fold from this file's text",
+  "its definition returns nothing this pass can read",
+  "the callee resolves to a value that is not a function",
+  "the callee is a name this file never binds",
+  "the callee is a name this pass will not settle",
+  "the callee is a property this pass cannot settle",
+  "the callee is a computed property read",
+  "the callee is not a name at all",
+  "it constructs an object rather than returning a value",
+];
+const spellCallee = (c) => {
+  if (!c) return "?";
+  if (c.type === "Identifier") return c.name;
+  if ((c.type === "MemberExpression" || c.type === "OptionalMemberExpression") && !c.computed)
+    return (c.object.type === "Identifier" ? c.object.name : "?") + "." +
+           (c.property.type === "Identifier" ? c.property.name : "?");
+  return "<" + c.type + ">";
+};
+/* THE RETURNS OF THIS FUNCTION AND NOT OF THE ONES INSIDE IT. A nested function's `return` says nothing about
+   what the outer call evaluates to, so the walk carries its own function-nesting depth rather than collecting
+   every `ReturnStatement` in the subtree — which would have credited a helper with a URL that belongs to a
+   closure it merely returns. A concise arrow body IS the return and has no statement to find. */
+function ownReturns(fn) {
+  if (!fn || !fn.body) return null;
+  if (fn.body.type !== "BlockStatement") return [{ argument: fn.body }];
+  const out = []; let d = 0;
+  walk(fn.body, (n) => {
+    if (FN_LIKE.has(n.type)) d++;
+    else if (d === 0 && n.type === "ReturnStatement") out.push(n);
+  }, (n) => { if (FN_LIKE.has(n.type)) d--; });
+  return out;
+}
+/* WHETHER A RESOLVED CALLEE'S RETURN DEPENDS ON WHAT THE CALLER PASSED — the one bit that sorts the rows this
+   census resolves into TWO DIFFERENT next diffs, and the reason a reader must not read them as one lump.
+   `return o.p + MAP[e] + ".chunk.js"` holes on the PARAMETER `e`, and that shape is the bundler chunk
+   function this file's MANIFEST channel already enumerates — so the address IS in the text, per candidate,
+   under another unit. `return x` where `x` is a local the body assembled holes on nothing the caller can
+   supply, and no amount of call-site information settles it; what would is a fold over the callee's own
+   straight-line writes.
+   IT IS RESOLVED THROUGH `paramOf` AND NEVER BY NAME, so a name that SHADOWS a parameter inside the body is
+   not counted as one. That also makes it UNDER-count: `paramOf` excludes a parameter the body rewrites and
+   every parameter of a function that reads `arguments`, so a return depending on one of those reads as
+   caller-independent. The direction is deliberate — under-counting parameter dependence OVER-states how much
+   recall is left for a stronger parse to take, and it is OVER-stating the baseline that is the safe error
+   here, because understating it is what would flatter the engine.
+   IT IS A FACT ABOUT THE RETURN EXPRESSION AND NOT ABOUT TRANSITIVE DEPENDENCE, WHICH THIS COMMENT FIRST GOT
+   WRONG BY CALLING THE OTHER SIDE "SETTLED BY NO CALL-SITE INFORMATION". Reading three of the rows it puts on
+   that side refuted it: each returns a LOCAL that is an alias of a parameter one assignment earlier — `let
+   e=r; ... return e`, `let t; try{t=new URL(e)}... return t`, `var i=e.split("?")[0]; return "".concat(i,…)`
+   — so the caller's value IS reachable, one straight-line write away. The claim would have read as "nothing can
+   be done here", which is the direction that flatters the engine, and it was wrong on 3 of 3 rows opened.
+   WHAT THE BIT THEREFORE MEANS is narrower and still worth having: whether the caller's value is reachable
+   WITHOUT a fold over the callee's own writes. Both sides reduce to ONE next diff — that fold — and the bit
+   says which of them it is needed FOR. */
+function returnUsesOwnParam(fn, rets, env) {
+  if (!env || !env.paramOf) return false;
+  let hit = false;
+  for (const r of rets) {
+    if (!r.argument) continue;
+    walk(r.argument, (n) => {
+      if (hit || n.type !== "Identifier") return;
+      const ps = env.paramOf.get(n);
+      if (ps && ps.fn === fn) hit = true;
+    });
+  }
+  return hit;
+}
+/* EVERY RETURN MUST FOLD, NOT THE FIRST ONE. A helper with `return "/a"` on one path and `return u` on another
+   evaluates to text only on one of them, so crediting it from its first return would have claimed an address
+   the call need not produce. A BARE `return;` is the same refusal spelled shorter: the call can evaluate to
+   `undefined`, which is not text. */
+function calleeVerdict(call, binds, env) {
+  const no = (v) => ({ verdict: v, text: null });
+  if (call.type === "NewExpression") return no("it constructs an object rather than returning a value");
+  const c = call.callee;
+  if (!c) return no("the callee is not a name at all");
+  let fn = null;
+  if (c.type === "Identifier") {
+    const b = binds.get(c), fd = env.fnDeclOf.get(c);
+    if (fd) fn = fd;
+    else if (b && b.node && FN_LIKE.has(b.node.type)) fn = b.node;
+    else if (b) return no("the callee resolves to a value that is not a function");
+    else if (env.freeRef.has(c)) return no("the callee is a name this file never binds");
+    else return no("the callee is a name this pass will not settle");
+  } else if (c.type === "MemberExpression" || c.type === "OptionalMemberExpression") {
+    if (c.computed) return no("the callee is a computed property read");
+    const v = env.slotOf.get(c);
+    if (v && FN_LIKE.has(v.type)) fn = v;
+    else if (v) return no("the callee resolves to a value that is not a function");
+    else return no("the callee is a property this pass cannot settle");
+  } else return no("the callee is not a name at all");
+  const rets = ownReturns(fn);
+  if (!rets || !rets.length) return no("its definition returns nothing this pass can read");
+  const dep = () => ({ verdict: CALLEE_NOT_TEXT, text: null, param: returnUsesOwnParam(fn, rets, env) });
+  let first = null;
+  for (const r of rets) {
+    if (!r.argument) return dep();
+    const got = fold(r.argument, binds, 0, env);
+    if (got.holes !== 0) return dep();
+    if (first === null) first = got.text;
+  }
+  return { verdict: CALLEE_IN_FILE, text: first, param: false };
+}
 
 function fold(node, binds, depth, env) {
   if (node == null) return H(null, env);
@@ -1730,7 +1900,8 @@ function readFile(src, filename) {
                      manifest: { rows: [], refusedTwoApplications: 0 },
                      spell: new Map(), spellOther: { globalComputedDynamic: 0 },
                      inline: { settled: 0, refused: new Map() }, recvDoor: { admitted: 0, declined: 0 },
-                     sole: { settled: 0, unsettled: 0, refused: new Map() }, mutFloor: { demoted: 0, rows: [] } };
+                     sole: { settled: 0, unsettled: 0, refused: new Map() }, mutFloor: { demoted: 0, rows: [] },
+                     callResult: { verdict: new Map(), rows: [] } };
 
   const { binds, fnDeclOf, slotOf, count: bindCount, freeRef, paramOf, callSiteOf, whyNoCall, roleOfFn, cbVia } = collectBinds(ast);
   /* THE ENUMERATING FOLD'S FIXED HALF, built once per file: which binding a reference resolves to and which
@@ -1763,7 +1934,7 @@ function readFile(src, filename) {
      are and never WHERE, and where is the whole of what makes the residual above answerable. */
   const mutFloor = { demoted: 0, rows: [] };
   const envDoor = { ...envBase, vars: new Map(), app: null, fn: null, candidate: null,
-                    inline: inlineBudget, sole: soleBudget, mutFloor };
+                    inline: inlineBudget, sole: soleBudget, mutFloor, callHoles: new Set() };
   const sites = [];
   const pathish = new Set();
   const blind = [];
@@ -2107,11 +2278,32 @@ function readFile(src, filename) {
     if (/^https?:\/\/[^\s]+$/.test(v) || /^\/[A-Za-z0-9_][^\s"'<>]*$/.test(v)) pathish.add(v);
   });
 
+  /* ── THE `a call result` SECOND FIELD, RUN ONCE PER FILE AFTER EVERY FOLD IS DONE ────────────────────────
+     THE CENSUS ENV CARRIES NO `callHoles`, AND THAT IS LOAD-BEARING RATHER THAN TIDY: the folds below fold a
+     callee's RETURN, which can hole at a call of its own, and a recording env would add to the very Set this
+     loop is iterating. It also carries its own throwaway budgets so the closure, inline and mutable-fold
+     PRICES this file prints stay figures about the door channel and not about this census. */
+  const callResult = { verdict: new Map(), rows: [] };
+  {
+    const cenv = { ...envBase, vars: new Map(), app: null, fn: null, candidate: null,
+                   inline: { seen: new Set(), settled: 0, refused: new Map() },
+                   sole: { seen: new Set(), settled: 0, unsettled: 0, refused: new Map() },
+                   mutFloor: { demoted: 0, rows: [] } };
+    for (const call of envDoor.callHoles) {
+      const v = calleeVerdict(call, binds, cenv);
+      callResult.verdict.set(v.verdict, (callResult.verdict.get(v.verdict) || 0) + 1);
+      if (v.verdict === CALLEE_IN_FILE || v.verdict === CALLEE_NOT_TEXT)
+        callResult.rows.push({ v: v.verdict, param: !!v.param, file: filename,
+                               line: call.loc ? call.loc.start.line : 0,
+                               callee: spellCallee(call.callee), text: v.text });
+    }
+  }
+
   return { parsed: true, error: null, sites, pathish, blind, xhrOpenSkippedNonLiteralMethod, globalDoor,
            manifest, spell, spellOther,
            inline: { settled: inlineBudget.settled, refused: inlineBudget.refused }, recvDoor,
            sole: { settled: soleBudget.settled, unsettled: soleBudget.unsettled, refused: soleBudget.refused },
-           mutFloor };
+           mutFloor, callResult };
 }
 
 /* ── THE ARMED CONTROL ────────────────────────────────────────────────────────────────────────────────────
@@ -2312,6 +2504,44 @@ const SELFTEST_WHY = new Map([
   [`fetch([1])`,                            `a node kind this fold has no arm for`],
   [`const u=new URL("https://h.example/a");fetch(u)`, `a mutation nothing in the text records`],
 ]);
+/* THE SECOND FIELD'S OWN CONTROLS, ONE PER VERDICT AND ASSERTED TWO-SIDED. CLAUDE.md
+   §A-CONTROL-ARMS-ONLY-ON-A-SITE-THE-INSTRUMENT-CAN-JUDGE: a verdict nobody has watched fire cannot be told
+   apart from a verdict that is dead, and this census's rows are read as a partition of the band's largest
+   class — so a dead verdict would silently move that mass into whichever verdict still spoke. The forward
+   direction says every verdict this file DECLARES has been produced; the reverse says every verdict produced
+   has been declared, which is the only check that sees a verdict added to `calleeVerdict` and not to the list.
+   EACH CONTROL IS ASSERTED BY MEMBERSHIP RATHER THAN BY EQUALITY, because one door argument can carry several
+   call holes and pinning the whole set would make the control a claim about how many rather than about which. */
+const SELFTEST_CALLEE = new Map([
+  /* THESE TWO ROWS READ `function g(){return "/a/b"}fetch(g())` AND `function g(){return u}fetch(g())` AND
+     BOTH PRODUCED AN EMPTY VERDICT SET, which is recorded here rather than quietly swapped because the reason
+     is the whole of what this census is FOR. A one-statement body with matching arity is a shape the door
+     channel's INLINE ARM ALREADY CROSSES, so the fold enters the callee and the hole is attributed INSIDE it
+     at its own origin — `fetch(g())` on `return u` reports `a global this file never assigns` and never
+     `a call result`. The band's `a call result` class is therefore EXACTLY the population that arm REFUSED,
+     and a control drawn from the population it accepts arms nothing. Each row below is a shape the inline
+     refuses by its own stated reason (a body of more than one statement; an argument that does not settle). */
+  [`function g(){var x=1;return "/a/b"}fetch(g())`,  `its return folds to text from this file alone`],
+  [`function g(a){return u}fetch(g(u))`,             `its return does not fold from this file's text`],
+  [`function g(){}fetch(g())`,                  `its definition returns nothing this pass can read`],
+  [`var g="/a";fetch(g())`,                     `the callee resolves to a value that is not a function`],
+  [`fetch(g())`,                                `the callee is a name this file never binds`],
+  [`var g=function(){return "/a"};var g=function(){return "/b"};fetch(g())`,
+                                                `the callee is a name this pass will not settle`],
+  [`fetch(o.f())`,                              `the callee is a property this pass cannot settle`],
+  [`fetch(o[k]())`,                             `the callee is a computed property read`],
+  [`fetch(h()())`,                              `the callee is not a name at all`],
+  [`fetch(new Q())`,                            `it constructs an object rather than returning a value`],
+]);
+/* THE PARAMETER BIT ARMED IN BOTH DIRECTIONS AND AT BOTH ENDS. A bit whose only control is a positive one
+   cannot tell "no resolved callee in this corpus uses a parameter" from "the test is stuck on", and this bit
+   decides which of two next diffs a reader is looking at — so both values are asserted to have been produced.
+   The two sources differ in exactly one character of the return expression, which is what makes the pair a
+   control on the BIT rather than on two unrelated shapes. */
+const SELFTEST_CALLEE_PARAM = new Map([
+  [`function g(a){return u+a}fetch(g(u))`, true],
+  [`function g(a){return u}fetch(g(u))`,   false],
+]);
 const SELFTEST_GUARDED = new Set([`if(a){fetch("/g")}`]);
 /* THE REACH BAND'S OWN CONTROLS — source to the pair the row must carry. It is armed in BOTH directions and
    at BOTH ends, which is the discipline CLAUDE.md §A-CONTROL-ARMS-ONLY-ON-A-SITE-THE-INSTRUMENT-CAN-JUDGE
@@ -2483,6 +2713,43 @@ function selftest() {
       die(`SELF-TEST FAILED: a control produced the hole class "${k}", which this file does not declare. ` +
           `The declared list has drifted from what \`holeClass\` can emit, so the band would print a name ` +
           `no reader can look up and the two-sided check is the only thing that sees it.`);
+  /* ── THE SECOND FIELD ON `a call result`, EACH VERDICT SHOWN FIRING ──────────────────────────────────────── */
+  const calleeSeen = new Set();
+  for (const [src, want] of SELFTEST_CALLEE) {
+    const r = readFile(src, "<selftest>");
+    if (!r.parsed) die(`SELF-TEST: the parser refused \`${src}\` — ${r.error}`);
+    const got = new Set(r.callResult.verdict.keys());
+    for (const v of got) calleeSeen.add(v);
+    if (!got.has(want))
+      die(`SELF-TEST FAILED on the call-result second field for \`${src}\`\n  want ${JSON.stringify(want)}\n` +
+          `  got  ${JSON.stringify([...got])}\nThe verdict this control exists to arm was not produced, so its ` +
+          `bucket is a count nobody has watched rise and a zero in it says nothing about the corpus.`);
+  }
+  for (const v of CALLEE_VERDICTS)
+    if (!calleeSeen.has(v))
+      die(`SELF-TEST FAILED: no control produces the call-result verdict "${v}", so its bucket is unarmed.`);
+  const paramSeen = new Set();
+  for (const [src, want] of SELFTEST_CALLEE_PARAM) {
+    const r = readFile(src, "<selftest>");
+    if (!r.parsed) die(`SELF-TEST: the parser refused \`${src}\` — ${r.error}`);
+    const got = r.callResult.rows.filter((x) => x.v === CALLEE_NOT_TEXT).map((x) => x.param);
+    if (!got.length)
+      die(`SELF-TEST FAILED: the parameter-bit control \`${src}\` resolved no callee, so the bit that sorts ` +
+          `this census's rows into two different next diffs is unarmed in one direction.`);
+    for (const b of got) paramSeen.add(b);
+    if (!got.includes(want))
+      die(`SELF-TEST FAILED on the parameter bit for \`${src}\`\n  want ${want}\n  got  ${JSON.stringify(got)}\n` +
+          `The split this census prints would then name the wrong population as already covered by the manifest.`);
+  }
+  for (const b of [true, false])
+    if (!paramSeen.has(b))
+      die(`SELF-TEST FAILED: no control produces parameter-dependence ${b}, so that side of the split is a ` +
+          `count nobody has watched rise.`);
+  for (const v of calleeSeen)
+    if (!CALLEE_VERDICTS.includes(v))
+      die(`SELF-TEST FAILED: a control produced the call-result verdict "${v}", which this file does not ` +
+          `declare. The declared list has drifted from what \`calleeVerdict\` can emit, so the census would ` +
+          `print a name no reader can look up and the two-sided check is the only thing that sees it.`);
   const wantSoleRefusals = [
     "no call site: it is referenced 2 times — a shared helper",
     "no call site: its one reference is not a callee",
@@ -2721,7 +2988,9 @@ function selftest() {
            reachRows: SELFTEST_REACH.size, spellRows: spWant.length, spellColumns: SPELLINGS.length + 2,
            spellNames: ENTRY_NAMES.size, derivationRefusals: 3,
            soleReasons: wantSoleRefusals.length, soleSettled, soleUnsettled, mutDemoted,
-           whyClasses: HOLE_CLASSES.length, whyControls: SELFTEST_WHY.size };
+           whyClasses: HOLE_CLASSES.length, whyControls: SELFTEST_WHY.size,
+           calleeVerdicts: CALLEE_VERDICTS.length, calleeControls: SELFTEST_CALLEE.size,
+           calleeParamControls: SELFTEST_CALLEE_PARAM.size };
 }
 
 /* ── THE RUN ──────────────────────────────────────────────────────────────────────────────────────────── */
@@ -2788,6 +3057,7 @@ function main(argv) {
       globalDoor: { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 },
       inline: { settled: 0, refused: new Map() }, recvDoor: { admitted: 0, declined: 0 },
       sole: { settled: 0, unsettled: 0, refused: new Map() }, mutFloor: { demoted: 0, rows: [] },
+      callResult: { verdict: new Map(), rows: [] },
       sig: { data: new Map(), program: new Map(), blind: new Map() },
       manifest: { sites: 0, addressSites: 0, candidates: 0, dropped: 0, fragments: 0, refusedTwoApplications: 0, multi: 0 },
       manifestUrls: new Set(), manifestRows: [],
@@ -2828,6 +3098,8 @@ function main(argv) {
     for (const [k, v] of r.sole.refused) b.sole.refused.set(k, (b.sole.refused.get(k) || 0) + v);
     b.mutFloor.demoted += r.mutFloor.demoted;
     for (const row of r.mutFloor.rows) b.mutFloor.rows.push(row);
+    for (const [k, v] of r.callResult.verdict) b.callResult.verdict.set(k, (b.callResult.verdict.get(k) || 0) + v);
+    for (const row of r.callResult.rows) b.callResult.rows.push(row);
     /* THE BAND'S BUCKETS. Only an INCOMPLETE row has a signature, so this counts exactly the population the
        razor is about and the assertion below can say so. */
     for (const x of r.sites) if (x.sig) { const m = b.sig[x.cls]; m.set(x.sig, (m.get(x.sig) || 0) + 1); }
@@ -2927,6 +3199,7 @@ function main(argv) {
     globalDoor: { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 },
     inline: { settled: 0, refused: new Map() }, recvDoor: { admitted: 0, declined: 0 },
     sole: { settled: 0, unsettled: 0, refused: new Map() }, mutFloor: { demoted: 0, rows: [] },
+    callResult: { verdict: new Map(), rows: [] },
     sig: { data: new Map(), program: new Map(), blind: new Map() },
     manifest: { sites: 0, addressSites: 0, candidates: 0, dropped: 0, fragments: 0, refusedTwoApplications: 0, multi: 0 }, manifestDistinctUrls: 0,
     /* THE SPELLING BAND'S OWN TOTALS. `spellSites` is a presence count over SITES and never a sum of
@@ -2961,6 +3234,8 @@ function main(argv) {
     for (const [k, v] of b.sole.refused) tot.sole.refused.set(k, (tot.sole.refused.get(k) || 0) + v);
     tot.mutFloor.demoted += b.mutFloor.demoted;
     for (const row of b.mutFloor.rows) tot.mutFloor.rows.push(row);
+    for (const [k, v] of b.callResult.verdict) tot.callResult.verdict.set(k, (tot.callResult.verdict.get(k) || 0) + v);
+    for (const row of b.callResult.rows) tot.callResult.rows.push(row);
     for (const k of ["data", "program", "blind"])
       for (const [sg, v] of b.sig[k]) tot.sig[k].set(sg, (tot.sig[k].get(sg) || 0) + v);
     tot.spellOther.globalComputedDynamic += b.spellOther.globalComputedDynamic;
@@ -3060,6 +3335,9 @@ function main(argv) {
               `whether its innermost enclosing function is async`);
   console.log(`         plus the WHY band: all ${st.whyClasses} hole class(es) shown firing from ${st.whyControls} control(s), ` +
               `checked BOTH ways so a class the classifier emits cannot go undeclared`);
+  console.log(`         plus the call-result second field: all ${st.calleeVerdicts} verdict(s) shown firing from ` +
+              `${st.calleeControls} control(s) checked BOTH ways, and both sides of the parameter split from ` +
+              `${st.calleeParamControls} more — so a ZERO in the credited bucket is a fact about the corpus`);
   console.log(`         plus the unique-call-site closure: all ${st.soleReasons} refusal reason(s) shown FIRING, ` +
               `${st.soleSettled} parameter(s) settled and ${st.soleUnsettled} crossed to an opaque argument, and ` +
               `${st.mutDemoted} mutable-fold demotion(s) — so neither price is a zero nobody has armed`);
@@ -3247,6 +3525,54 @@ function main(argv) {
     console.log(`    [${row.chan}] ${row.file}:${row.line}  ${row.url.slice(0, 120)}`);
   if (tot.mutFloor.rows.length > 12) console.log(`    ... and ${tot.mutFloor.rows.length - 12} more`);
   console.log(``);
+
+  console.log(``);
+  console.log(`AND WHETHER A CALL-RESULT HOLE IS IN THE BUNDLE'S TEXT AT ALL — the SECOND FIELD on the band's`);
+  console.log(`  largest class, and its UNIT IS A CALL EXPRESSION rather than a door row or an address, so it`);
+  console.log(`  is not subtractable from either: one row can carry several call holes and one call can be a`);
+  console.log(`  hole in several rows. \`a call result\` IS NOT EVERY CALL: the door channel's inline arm crosses`);
+  console.log(`  the callee boundary already, and where it succeeds the hole is attributed INSIDE the callee, so the`);
+  console.log(`  class is EXACTLY the population that arm REFUSED. This asks the question a refusal reason cannot —`);
+  console.log(`  does the callee resolve to ONE definition here whose return folds to text from this file alone. It`);
+  console.log(`  RESOLVES NOTHING and moves no total; the band's buckets are byte-identical beside it.`);
+  console.log(`  WHICH WAY IT ERRS: by admitting too much. A speculatively-discarded fold is still counted and`);
+  console.log(`  a definition is credited from its returns rather than from a path a run would take, so this`);
+  console.log(`  OVERSTATES what a parse could reach — the conservative direction here, because understating`);
+  console.log(`  the baseline is what would flatter the engine.`);
+  {
+    const rows = [...tot.callResult.verdict].sort((a, b) => b[1] - a[1]);
+    const total = rows.reduce((a, b) => a + b[1], 0);
+    console.log(`  ${total} distinct call expression(s) whose result the fold made a hole, in ${rows.length} verdict(s):`);
+    for (const [v, n] of rows) console.log(`    ${String(n).padStart(5)}   ${v}`);
+    /* THE CREDITED COUNT IS A SCORED ZERO AND NOT A SILENT ONE. The selftest carries a control for this
+       verdict — a two-statement body returning a literal, which is a shape the inline arm refuses by its own
+       stated reason — and DIES if it never fires, so a 0 here is a fact about the corpus rather than a
+       classifier that stopped classifying. */
+    const credited = tot.callResult.rows.filter((r) => r.v === CALLEE_IN_FILE);
+    const resolved = tot.callResult.rows.filter((r) => r.v === CALLEE_NOT_TEXT);
+    console.log(`  OF THOSE, ${credited.length + resolved.length} had their callee resolved to ONE definition in the same file,`);
+    console.log(`  and ${credited.length} of them return text this file can fold. Both figures are shown firing by a control.`);
+    console.log(`  AND THE ROWS A READER CAN CHECK — a claim about the bundle, settled by opening the coordinate.`);
+    for (const row of credited.slice(0, 12))
+      console.log(`    [in the text]  ${row.file}:${row.line}  ${row.callee}() -> ${String(row.text).slice(0, 90)}`);
+    if (credited.length > 12) console.log(`    ... and ${credited.length - 12} more in the text`);
+    const dep = resolved.filter((r) => r.param), own = resolved.filter((r) => !r.param);
+    console.log(`  AND THE RESOLVED ONES SPLIT ON WHETHER THE RETURN EXPRESSION NAMES A PARAMETER: ${dep.length} do and`);
+    console.log(`  ${own.length} do not. The first is the bundler chunk-function shape this file's MANIFEST channel already`);
+    console.log(`  enumerates, so that address is in the text per candidate under another unit. THE SECOND IS NOT`);
+    console.log(`  CALLER-INDEPENDENT and this block used to say it was: three of its rows opened in the mirror each`);
+    console.log(`  return a LOCAL that is an alias of a parameter one write earlier, so both sides reduce to ONE next`);
+    console.log(`  diff — a fold over the callee's own straight-line writes — and the bit says which side needs it.`);
+    console.log(`  It is resolved through the scope pass rather than by name, and UNDER-counts parameter dependence.`);
+    for (const row of dep.slice(0, 8))
+      console.log(`    [resolved, return uses a parameter]  ${row.file}:${row.line}  ${row.callee}()`);
+    if (dep.length > 8) console.log(`    ... and ${dep.length - 8} more using a parameter`);
+    for (const row of own.slice(0, 8))
+      console.log(`    [resolved, return uses no parameter]  ${row.file}:${row.line}  ${row.callee}()`);
+    if (own.length > 8) console.log(`    ... and ${own.length - 8} more using no parameter`);
+  }
+  console.log(``);
+
 
   console.log(``);
   console.log(`HOW A REAL BUNDLE SPELLS THE NAMES THE ENGINE'S COMPILER-SIDE ROWS COUNT — the population a`);
