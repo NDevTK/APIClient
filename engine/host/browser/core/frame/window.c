@@ -51,6 +51,7 @@
 #include "core/html/focus.h"
 #include "core/dom/selection.h"
 #include "core/events/event_target.h"
+#include "core/events/report_exception.h"
 #include "core/dom/collections.h"
 #include "core/dom/node.h"
 #include "core/idl_args.h"
@@ -102,6 +103,134 @@ static JSValue js_win_is_secure_context(JSContext *ctx, JSValueConst this_val, i
            "that one");
     return JS_NewBool(ctx, secure_context_is(ctx));
 }
+
+/* ---- HTML §8.1.4.6 "Runtime script errors"' `reportError` ---------------------------------------------------
+ *
+ * "The reportError(e) method steps are to report an exception e for this" — the whole of the member, stated at
+ * §8.1.4.6 while its IDL sits at §8.2 "The WindowOrWorkerGlobalScope mixin" as `undefined reportError(any e)`.
+ * So this component builds NO algorithm. core/events/report_exception.h's report_exception_run IS §8.1.4.6's
+ * report an exception, it has eleven callers already, and a second implementation of it here could disagree with
+ * every one of them about step 6's error reporting mode, about the ErrorEvent's `cancelable`, or about which
+ * step writes §8.1.4.6 step 7.3's developer console.
+ *
+ * IT IS A STEP MACHINE BECAUSE STEP 6.2 FIRES AN EVENT, and firing one runs the page's `error` listeners, which
+ * may loop, await, fork and park to the cold tier. A plain C member would be the drive-to-completion §NO BOUNDS
+ * forbids; this parks at §8.1.4.6's own rest points and inside the DOM §2.9 dispatch, and resumes at the
+ * listener it was on. That is also why the member is installed through idl_install_step_method rather than
+ * declared as a pool member: `any` HAS a conversion and NONE OF ITS ARMS CAN REACH THE PAGE'S CODE, which is
+ * the property the args machine is for and is not the same claim. Web IDL §3.2.1 "any" is eight arms, each a
+ * type test on V followed by a value-preserving mapping — the Object one is "If V is an Object, then return an
+ * IDL object value that references V" — so there is no `valueOf`, no `toString` and no [[Get]] anywhere in it
+ * to park on, and the whole of this member's suspension is the algorithm's own. (This said `§3.2.19 "any"` and
+ * `the one Web IDL type with NO conversion`, which was the wrong NUMBER — §3.2.19 is "Callback function types"
+ * — under the wrong CLAIM, and engine/citegen.mjs's title channel is what reported the number. The claim it
+ * could not report: a reader who believed it would conclude an `any` argument needs no machine at all.)
+ *
+ * `e` IS PAGE INPUT AND NOTHING HERE ASSERTS ANYTHING ABOUT IT. A page may report a revoked Proxy, a Symbol, or
+ * an object whose `toString` throws; §8.1.4.6 step 2 carries every one of them to errorInfo[error] unexamined,
+ * and the message/filename/lineno/colno beside it are "implementation-defined values derived from exception"
+ * that report_exception_position computes off the backtrace. A DCHECK over the value would hand the page an
+ * abort switch for a member whose entire purpose is to be handed whatever a `catch` caught.
+ *
+ * ITS RECEIVER IS WEB IDL §3.7.7's, WHICH IS WHY THE MEMBER IS THIS COMPONENT'S AND NOT report_exception.c's.
+ * Web IDL §3.7.7 "Operations"' create-an-operation-function runs "Let jsValue be the this value, if it is not
+ * null or undefined, or realm's global object otherwise" and then "If jsValue does not implement the interface
+ * target, throw a TypeError" — and `target` for a mixin member is the INCLUDING interface, because Web IDL §2.3
+ * "Interface mixins" makes a mixin's members that interface's own: "all objects implementing an interface I
+ * (identified by the first identifier) must additionally include the members of interface mixin M (identified
+ * by the second identifier)". In this realm that interface is `Window`, so the brand is this component's and the receiver step
+ * is too — window_proxy_this_navigable is the same three lines §8.2's `isSecureContext` runs just above, and
+ * routing to it is what keeps ONE answer to "which navigable is this receiver" rather than a second right one.
+ * A worker realm's `reportError` has a different `target` AND a different blocker; see the residual at the
+ * install for both. */
+#define WRE_STAGES(X)                                                                                         \
+    X(WRE_REPORT, "HTML §8.1.4.6 Runtime script errors' reportError method step 1 (report an exception e for "  \
+                  "this), whose own cursor is the ReportExceptionWork record this machine holds and not this " \
+                  "stage")
+enum { WRE_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const WRE_STEPS[] = { WRE_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    JSStepHdr hdr;              /* FIRST — the driver writes the def and the operand bounds through it */
+    uint8_t   started;
+    ReportExceptionWork rep;    /* §8.1.4.6, as a request, held by the machine that asks for it */
+} JSWinReportError;
+
+static int g_report_error_stepid = -1;   /* declared once per agent — see window_init */
+
+static void js_win_report_error_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    report_exception_work_visit(ctx, &((JSWinReportError *)st)->rep, v);
+}
+
+static JSValue js_win_report_error_fini(JSContext *ctx, void *st, bool take_result)
+{
+    (void)take_result;
+    /* §8.1.4.6 step 6.1's FLAG, if the report was abandoned holding it. Not a reference, so no declaration
+       names it and the visit above is what releases the record's references. */
+    report_exception_work_unlock(ctx, &((JSWinReportError *)st)->rep);
+    /* §8.2's IDL is `undefined reportError(any e)` and §8.1.4.6's one step returns nothing, so the method has
+       no completion value: a report that fired listeners and one that skipped step 6 entirely because the
+       global was already in error reporting mode must be indistinguishable to the page. */
+    return JS_UNDEFINED;
+}
+
+static int js_win_report_error_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSWinReportError *s = st;
+    int r;
+
+    DCHECK(s->hdr.stage == WRE_REPORT,
+           "§8.1.4.6's reportError resumed into a stage it does not have — this machine is ONE step of the "
+           "standard and delegates the whole of report an exception to the record it holds, which keeps its own");
+    if (!s->started) {
+        JSValueConst nav;
+
+        JS_FreeValue(ctx, cb_result);   /* nothing has been asked for yet, so this entry's answer is nobody's */
+        cb_result = JS_UNDEFINED;
+        /* WEB IDL §3.7.7's OPENING STEPS, IN ORDER, BEFORE ANY OF §8.1.4.6 RUNS. The resolution and the
+           TypeError are one call because the standard states them as one sequence over one `jsValue`, and
+           because splitting them is how a receiver comes to be answered by two tests that disagree. A missing
+           receiver — `reportError(e)` written bare, which is how a bundle spells it — is Web IDL §3.7.7's "or realm's
+           global object otherwise" arm and reaches this realm's own navigable. */
+        nav = window_proxy_this_navigable(ctx, s->hdr.this_val);
+        if (JS_IsUninitialized(nav))
+            return JS_STEP_ABRUPT;   /* Web IDL §3.7.7's TypeError, live in the context */
+        /* AND THE SAME EDGE §8.2's `isSecureContext` IS WAITING ON, wanted here for a different reason: that
+           member answers ABOUT a realm, and this one PERFORMS an algorithm FOR a global. §8.1.4.6's report an
+           exception takes its global as a parameter ("for a particular global object global") and
+           report_exception_run derives it from `ctx` instead, which is the DEFINING realm — so a receiver
+           naming another navigable would report for the wrong global and fire the wrong document's `error`
+           listeners, which is a wrong answer with a plausible shape rather than a narrower one. Reached only
+           by an explicit retarget: `frames[0].reportError(e)` goes through the CHILD's own function object,
+           whose realm IS the child, so both halves already agree there. */
+        DCHECK(JS_VALUE_GET_PTR(nav) == JS_VALUE_GET_PTR(document_window_proxy(ctx)),
+               "HTML §8.1.4.6 Runtime script errors' reportError was invoked with ANOTHER navigable as its "
+               "receiver — its one step is \"report an exception e for this\", and core/events/"
+               "report_exception.h's report_exception_run takes no global and reads the DEFINING realm's, so "
+               "give report_exception_run the `global` parameter §8.1.4.6 already states and hand it this "
+               "receiver's active document's global");
+        /* EVERY OWNED FIELD PLACED BEFORE THE FIRST THING THAT CAN FAIL — the failure path tears this state
+           down through `fini` and the visit, which give back exactly what the state holds and nothing else. */
+        report_exception_work_start(&s->rep);
+        s->started = 1;
+    }
+    /* §8.1.4.6's ONE STEP. `e` is step_arg 0 and is BORROWED, which is what report_exception_run asks for: the
+       driver owns this machine's arguments for its whole life, so the record dups whatever it keeps. An absent
+       argument reads `undefined` — a page that calls `reportError()` reports the value `undefined`, which is
+       what §8.2's `any e` being required means at this level and what a browser does. */
+    r = report_exception_run(ctx, &s->rep, step_arg(&s->hdr, 0), cb_result, out_cb, out_argc);
+    if (r)
+        return r;   /* parked inside the `error` event's own dispatch, or at one of §8.1.4.6's rest points */
+    return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef js_win_report_error_def = {
+    sizeof(JSWinReportError), js_win_report_error_step, js_win_report_error_fini, 0,
+    .visit = js_win_report_error_visit,
+    .algorithm = "HTML §8.1.4.6 Runtime script errors' reportError",
+    .steps = WRE_STEPS
+};
 
 /* §7.2.2.1 `close()`. THE METHOD IS ONE ALGORITHM AND THIS IS ONE OF ITS TWO SPELLINGS — `window.close()` here
    and `w.close()` through the WindowProxy are the same six steps on the same navigable, and each carried a body
@@ -878,6 +1007,18 @@ void window_init(JSContext *ctx)
        which body runs and not which number it was handed. `blur` is declared by core/html/focus.c now — see
        focus_install_window_members for why §6.6.6's two Window members have to be one list. */
     g_id_stop  = idl_method_id(ctx, NULL, 0, js_win_stop, 0);
+    /* §8.1.4.6's `reportError` IS NOT A POOL MEMBER, so it is registered rather than declared — Web IDL
+       §3.2.1 "any"'s conversion runs none of the page's code, so the args machine has nothing to park on, and
+       a machine of its own that can park inside step 6.2's dispatch. DECLARED HERE AND INSTALLED PER REALM like
+       every entry above it: JS_RegisterStepDef hands out an index into THIS runtime's own tail, so registering
+       inside the install would mint a second index for the second realm. */
+    DCHECK(g_report_error_stepid < 0,
+           "window_init ran twice — §8.1.4.6's reportError machine is registered once per AGENT, and a second "
+           "registration would leave every realm built under the first one naming an index into a table entry "
+           "this agent did not write");
+    g_report_error_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_win_report_error_def);
+    CHECK(g_report_error_stepid >= 0,
+          "HTML §8.1.4.6 Runtime script errors' reportError machine could not be registered with this runtime");
     /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. It declared NOTHING, and its row
        had an EMPTY RELEASE COLUMN, which is the pair of silences that list reads as agreement: a component
        holding everything and giving none of it back is character-for-character the report a component holding
@@ -904,6 +1045,9 @@ void window_init(JSContext *ctx)
                    "HTML §7.2.2.1 Opening and closing windows' `close` declaration");
     agent_state_id("window", &g_id_stop,
                    "HTML §7.2.2.1 Opening and closing windows' `stop` declaration");
+    agent_state_id("window", &g_report_error_stepid,
+                   "HTML §8.1.4.6 Runtime script errors' `reportError` machine, as a step definition "
+                   "registered with this runtime");
 }
 
 void window_install(JSContext *ctx, JSValueConst global, const char *url)
@@ -1046,6 +1190,43 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
        `self.origin` over `location.origin` for exactly the reason this one exists: they are facts about the
        ENVIRONMENT and not about whatever URL the Document happens to be showing. */
     idl_install_accessor(ctx, g, "isSecureContext", js_win_is_secure_context, 0, -1);
+    /* §8.1.4.6's `reportError`, ON THE OBJECT WEB IDL §3.7.3's CONDITIONAL PICKS AND NOT ON THE ONE THIS
+       FILE HAPPENS TO HOLD. It is a §8.2 mixin member, so Web IDL §2.3 makes it `Window`'s here and
+       `WorkerGlobalScope`'s in a worker realm, and Web IDL §3.7.3's [Global] conditional then sends it to two
+       different objects — the global for the [Global] interface, the interface prototype object for the one
+       that is not. idl_global_member_target IS that conditional; answering it here with `g` would be right for
+       this realm and wrong for every other, which is what asking the REALM KIND instead always is.
+       LENGTH 1, WHICH WEB IDL §3.7.7 COMPUTES AND DOES NOT READ OFF THE DECLARATION: "Let length be the length of the
+       shortest argument list in the entries in S" over the effective overload set at argument count 0, and
+       `undefined reportError(any e)` has one required position, exactly as DOM §2.7's `dispatchEvent(Event
+       event)` does. */
+    {
+        JSValue rx_target = idl_global_member_target(ctx, global, "reportError");
+
+        idl_install_step_method(ctx, rx_target, "reportError", 1, g_report_error_stepid);
+        JS_FreeValue(ctx, rx_target);
+    }
+    /* NAMED RESIDUAL — §8.2's `reportError` ON A WORKER GLOBAL, WHICH THIS INSTALL REACHES AND MUST NOT.
+       NOT COVERED: this line runs in a Window realm only, because it is core/frame/window.c's, so the member
+       is absent from the two realms whose global object implements `WorkerGlobalScope` and
+       `DedicatedWorkerGlobalScope` — which core/workers/worker_global_scope.c builds and engine/host/
+       test_forced.c drives. THE BLOCKER IS NOT THE OBJECT AND NOT THE BRAND: idl_global_member_target above
+       answers Web IDL §3.7.3's not-[Global] arm for a worker realm already, and §8.2's members reach it through
+       `WorkerGlobalScope`, which is not [Global]. It is §8.1.4.6 STEP 7.2, whose condition is "If global
+       implements DedicatedWorkerGlobalScope" and whose body core/events/report_exception.c states as a
+       producer assertion rather than as code — so a worker realm that reported an exception nothing cancelled
+       would reach that assertion on its FIRST call, and installing the member here would be the partially-built
+       interface §NO STUBS forbids: a worker bundle's `if (self.reportError)` flips TRUE and the branch it takes
+       is one no realm in this build can finish.
+       NEXT DIFF: report_exception.c's own step-7.2 entry, which names both halves — step 5's `omitError`
+       parameter that report_exception_run does not take, and step 7.2's global task at the worker's owner —
+       and THEN one line in core/workers/worker_global_scope.c's realm install, resolved through
+       idl_global_member_target exactly as this one is. Not this file, and not before that entry: the member is
+       the LAST of that work and not the first.
+       HOW ITS ABSENCE WOULD SHOW: in a realm whose global object implements `DedicatedWorkerGlobalScope`,
+       `typeof reportError` reads `"undefined"` where a browser reads `"function"`, and the name stands in
+       engine/idlgen.mjs's ABSENT list for BOTH worker interfaces while having left Window's — one member, three
+       placements, and the census is where the split is readable. */
     /* §7.1.2's `originAgentCluster` and §8.2's `crossOriginIsolated` — two answers about THIS AGENT'S
        CLUSTER, installed by the component that computes it (core/frame/agent_cluster.c) rather than written out
        here as two booleans, because §7.1.1.2's `document.domain` setter and HR-TIME §4's clock resolution read
@@ -1112,6 +1293,12 @@ void window_free(JSRuntime *rt)
        pre-init value is -1 and not 0, because entry 0 is a real member (see the declarations above). */
     g_id_opener_set = g_id_name_set = g_id_status_set = -1;
     g_id_close = g_id_stop = -1;
+    /* AND §8.1.4.6's MACHINE, for the reason the five pool entries above are given back and the one
+       core/events/report_exception.c states at its own flow definition: JS_RegisterStepDef hands out an index
+       into the runtime's own tail, so an id kept across a teardown names a table the next agent has not built
+       — and window_init's own DCHECK is what turns a forgotten reset into a crash rather than into a realm
+       whose `reportError` is an index into somebody else's table. */
+    g_report_error_stepid = -1;
     /* §7.2.2.5's BarProp, which has no row of its own because this release is what reaches it. */
     bar_prop_free(rt);
     g_window_rt = NULL;

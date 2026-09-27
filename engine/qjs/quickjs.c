@@ -82407,8 +82407,31 @@ const char *JS_DiagCString(JSContext *ctx, JSValueConst v, char **powned)
     size_t need;
 
     *powned = NULL;
-    if (!JS_IsObject(v))
-        return JS_ToCString(ctx, v);   /* a primitive's conversion invokes nothing */
+    if (!JS_IsObject(v)) {
+        const char *prim = JS_ToCString(ctx, v);   /* a primitive's conversion invokes nothing */
+
+        /* …AND YET IT CAN FAIL, WHICH IS A DIFFERENT CLAIM FROM THE ONE THE LINE ABOVE MAKES AND WAS READ AS
+           THE SAME ONE. "Invokes nothing" is about USER CODE and is true of every primitive; a SYMBOL is the
+           one primitive whose ToString THROWS ("cannot convert symbol to string", the only arm of
+           JS_ToStringInternal's JS_TAG_SYMBOL case a caller without JS_TO_STRING_IS_PROPERTY_KEY can reach),
+           and this path returned NULL with that TypeError STILL LIVE IN THE CONTEXT.
+           THE OBJECT PATH BELOW ALREADY CLEARS ONE — `JS_FreeValue(ctx, JS_GetException(ctx))` — so this
+           function disagreed with itself about its own contract, and the half that was silent is the half a
+           caller cannot see: every caller reads the NULL and none of them looks at the context.
+           WHAT IT COSTS IS NOT A MESSAGE, IT IS THE CALLER'S ALGORITHM. This function's reason for existing is
+           that "a host reporting what went wrong must not depend on the code that went wrong", and its one
+           browser-side caller is HTML §8.1.4.6 Runtime script errors' extract error information — which goes
+           on to FIRE an `error` event, so the page's listeners ran with a stray throw standing, and the
+           TypeError then leaked out as the completion of whatever had reported. `<script>throw Symbol()</script>`
+           reaches it through §8.1.4.4's report of an abrupt classic script and §8.2's `reportError` reaches it
+           in one call, so it is a page-held wrong answer either way and never an invariant to assert on.
+           NULL IS THE HONEST ANSWER AND NOT A NARROWING: §8.1.4.6 says message, filename, lineno and colno are
+           "implementation-defined values derived from exception", so the caller's own no-string fallback is
+           conformant, and a symbol description would be a better diagnostic rather than a required one. */
+        if (!prim)
+            JS_FreeValue(ctx, JS_GetException(ctx));
+        return prim;
+    }
 
     n = JS_DiagGetData(ctx, v, "name");
     if (!JS_IsString(n)) {

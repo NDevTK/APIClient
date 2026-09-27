@@ -1167,9 +1167,30 @@ void worker_global_scope_free(JSRuntime *rt)
  *     realm test: §3.3.7 [Exposed] step 1 refuses the Window-only member at the door in a worker realm and
  *     sends the other to §3.7.3's prototype. (Read the getter before believing either half of this sentence;
  *     the pair was first written here with BOTH getters called receiver-bound and one of them is not.)
- *     `reportError`,
  *     `btoa`, `atob`, `createImageBitmap`, `scheduler`, `caches`, `trustedTypes` and `fonts` are installed for
  *     NO realm today, so they are ordinary absences and owe this entry nothing at all.
+ *     AND `reportError` WAS IN THAT LIST AND HAS LEFT IT, WHICH MOVES IT OUT OF THIS ENTRY IN THE DIRECTION THE
+ *     LIST CANNOT EXPRESS — the sentence is kept above with the name struck from it rather than rewritten in
+ *     place, because `installed for NO realm today` is what a reader re-derives from an ABSENT count and it is
+ *     the reasoning that made the name ordinary. core/frame/window.c installs it for a Window realm now,
+ *     through idl_global_member_target exactly as this entry prescribes, so the OBJECT question is settled
+ *     here too: §8.2's members reach §3.7.3's not-[Global] arm through `WorkerGlobalScope` and this file's
+ *     `wgs_p` is what that call already answers. WHAT BLOCKS IT IS NOT THIS ENTRY AND NOT A COLUMN MOVE.
+ *     HTML §8.1.4.6 Runtime script errors STEP 7.2 is "If global implements DedicatedWorkerGlobalScope, queue
+ *     a global task on the DOM manipulation task source …", and core/events/report_exception.c states that
+ *     step as a PRODUCER ASSERTION rather than as code — over the path `DedicatedWorkerGlobalScope`, which is
+ *     a §3.8 global property reference this file defines. So a worker realm reporting an exception nothing
+ *     cancelled meets that assertion on its FIRST call, and installing the member here ahead of step 7.2 is
+ *     the partially-built interface §NO STUBS forbids: a worker bundle's `if (self.reportError)` flips TRUE
+ *     onto a branch no realm in this build can finish, abandoning the fallback that works today.
+ *     NEXT DIFF FOR IT: report_exception.c's own step-7.2 entry — step 5's `omitError` parameter that
+ *     report_exception_run does not take, and step 7.2's global task at the worker's owner — and THEN one line
+ *     here. It is the LAST of that work and not the first, and it is ordered outside HTML §10.2.4's run a
+ *     worker rather than behind it, because the member needs no worker EVENT LOOP and no `url`.
+ *     HOW ITS ABSENCE SHOWS, distinctly from the names still in the list above: `typeof reportError` reads
+ *     `"undefined"` in a realm whose global object implements `DedicatedWorkerGlobalScope` while reading
+ *     `"function"` in a Window realm of the same agent, so engine/idlgen.mjs charges ONE member ABSENT on
+ *     these two interfaces and on neither of Window's rows — one declaration, three placements, split.
  *     ABSENCE SHOWS AS: `typeof setTimeout` is `"undefined"` in a worker realm, so the very first line of most
  *     bundled worker code throws — and, in the auditor rather than the engine, as the ABSENT counts idlgen
  *     prints against these two interfaces, which were ZERO before this component existed because an interface

@@ -918,6 +918,99 @@ static const char *HTML =
     " ? 'CQCONDOK' : 'CQCONDBAD:' + cq3));"
     "fetch('/api/csscontainerText2?v=' + (cqr[0].cssText.indexOf"
     "('@container card (min-width: 400px) {') === 0 ? 'CQCSSTEXTOK' : 'CQCSSTEXTBAD:' + cqr[0].cssText));"
+    /* HTML §8.1.4.6 "Runtime script errors"' `reportError`. SIX ROWS, AND EVERY ONE OF THEM ANSWERS OUT OF A
+       VALUE THE ENGINE COMPUTES — the member's own Web IDL §3.7.7 descriptor, the ErrorEvent step 2 builds,
+       the flag step 6 sets, and Web IDL §3.7.7's receiver steps. They are in THIS <script> rather than a new
+       one on purpose:
+       a new program shifts every later program's index, and the reachability of a row added at the END of the
+       document is the one property a newly-added row has not got.
+       THEY RUN BEFORE `globalThis.onerror` IS ASSIGNED, which is a later <script>'s first line. That matters:
+       §8.1.8.1's special error event handling makes an `onerror` returning true a CANCEL, so a handler
+       installed above these rows would decide step 7 for them and row 4's count would be a fact about that
+       handler instead of about step 6's flag. */
+    "var reLog = [], reSeen = 0;"
+    "var reH = function(ev){ reSeen += 1; reLog.push(ev); ev.preventDefault(); };"
+    "addEventListener('error', reH);"
+    /* (1) WEB IDL §3.7.7 "Operations"' OWN DESCRIPTOR, which is the half no `typeof` can see. Its define step
+       is "Let desc be the PropertyDescriptor{[[Value]]: method, [[Writable]]: modifiable, [[Enumerable]]:
+       true, [[Configurable]]: modifiable}" with `modifiable` true for an operation that is not unforgeable,
+       and `length` is computed rather than declared — "Let length be the length of the shortest argument list
+       in the entries in S" over the effective overload set at argument count 0, which for `undefined
+       reportError(any e)` is 1. IT IS AN OWN PROPERTY OF THE GLOBAL AND NOT AN INHERITED ONE, because
+       §3.7.3's [Global] conditional sends a `Window` member to §3.8's instance arm — a build that put it on a
+       prototype would satisfy every `typeof` beside this and fail this line. */
+    "var reD = Object.getOwnPropertyDescriptor(globalThis, 'reportError');"
+    "fetch('/api/reporterrordesc?v=' + (typeof reportError === 'function' && reportError.length === 1 &&"
+    " reportError.name === 'reportError' && reD !== undefined && reD.writable === true &&"
+    " reD.enumerable === true && reD.configurable === true && typeof reD.value === 'function'"
+    " ? 'isREDESC' : 'wrong'));"
+    /* (2) THE REPORT IS OBSERVED, which is the only row here that proves the member does anything at all:
+       step 6.2 fires `error` at the global "using ErrorEvent, with the cancelable attribute initialized to
+       true, and additional attributes initialized according to errorInfo". `error` is step 2's
+       "Set attributes[error] to exception", so it must be the IDENTICAL value the page handed in — not a
+       copy, not a string of it. And the method itself answers `undefined`: §8.2 declares
+       `undefined reportError(any e)`, so a report that fired listeners and one that skipped step 6 entirely
+       must be indistinguishable to the page. */
+    "var reErr = new TypeError('reportError-fixture');"
+    "var reRet = reportError(reErr);"
+    "var reEv = reLog[0];"
+    "fetch('/api/reporterrorfire?v=' + (reSeen === 1 && reRet === undefined && reEv instanceof ErrorEvent &&"
+    " reEv.type === 'error' && reEv.cancelable === true && reEv.error === reErr &&"
+    " reEv.defaultPrevented === true && reEv.target === globalThis ? 'isREFIRE' : 'wrong'));"
+    /* (3) STEP 2's OTHER FOUR, which are "implementation-defined values derived from exception" and are
+       therefore the engine COMPUTING rather than the standard dictating — so what this row can assert is
+       their IDL types, which §8.1.4.6's own ErrorEvent block fixes as `DOMString message`,
+       `USVString filename`, `unsigned long lineno` and `unsigned long colno`. The message is derived WITHOUT
+       running the page's `toString`, which is why row 6 can report a value whose `toString` throws. */
+    "fetch('/api/reporterrorinfo?v=' + (typeof reEv.message === 'string' && reEv.message.length > 0 &&"
+    " typeof reEv.filename === 'string' && typeof reEv.lineno === 'number' &&"
+    " typeof reEv.colno === 'number' && (reEv.lineno | 0) === reEv.lineno ? 'isREINFO' : 'wrong'));"
+    /* (4) STEP 6's `in error reporting mode`, which is the ONE piece of state this algorithm keeps and the one
+       thing a re-entrant report is decided by: "If global is not in error reporting mode" encloses the whole
+       of steps 6.1-6.3, so a `reportError` called from INSIDE an `error` listener performs NO second fire and
+       arrives at step 7 with notHandled still step 1's true. A build that set no flag would recurse here and
+       a build that keyed the flag on this component instead of on the GLOBAL would answer the same for a
+       second document's report. The inner call also returns `undefined`, which is how step 6 being SKIPPED
+       stays indistinguishable from step 6 running. */
+    "var reInner = 0, reInnerRet = 'unset';"
+    "var reH2 = function(ev){ reInner += 1; if (reInner === 1) { reInnerRet ="
+    " reportError(new RangeError('reentrant')); } ev.preventDefault(); };"
+    "removeEventListener('error', reH); addEventListener('error', reH2);"
+    "reportError(new TypeError('outer'));"
+    "fetch('/api/reporterrormode?v=' + (reInner === 1 && reInnerRet === undefined"
+    " ? 'isREMODE' : 'wrong:' + reInner));"
+    /* (5) WEB IDL §3.7.7's RECEIVER STEPS, both arms. "Let jsValue be the this value, if it is not null or
+       undefined, or realm's global object otherwise" is why the bare `reportError(e)` every bundle writes
+       reaches this realm's own global; "If jsValue does not implement the interface target, throw a
+       TypeError" is why a plain object is refused. The refusal is a THROW and not an answer, because a page
+       distinguishes the two — and it must be a TypeError rather than an abort, since the receiver is page
+       input like any other argument. `undefined` and `null` are the two spellings of §3.7.7's fallback arm
+       and both are exercised, because a build testing only `undefined` would pass with `null` refused. */
+    "var reTE = 'nothrow', reBare = 0, reNull = 0;"
+    "try { Reflect.apply(reportError, {}, [new TypeError('foreign')]); }"
+    " catch (e) { reTE = (e instanceof TypeError) ? 'TypeError' : ('other:' + e); }"
+    "reInner = 0; Reflect.apply(reportError, undefined, [new TypeError('bare')]); reBare = reInner;"
+    "reInner = 0; Reflect.apply(reportError, null, [new TypeError('nul')]); reNull = reInner;"
+    "fetch('/api/reporterrorthis?v=' + (reTE === 'TypeError' && reBare === 1 && reNull === 1"
+    " ? 'isRETHIS' : 'wrong:' + reTE + ':' + reBare + ':' + reNull));"
+    /* (6) `any` CARRIES THE VALUE UNEXAMINED, which is the row that says nothing in this engine asserts
+       anything about what a page reports. Web IDL §3.2.1 "any"'s Object arm is "If V is an Object, then
+       return an IDL object value that references V" — a reference, so step 2's errorInfo[error] is the same
+       object — and its Symbol arm converts to a symbol, so a Symbol is a reportable value too. Neither may
+       reach the page's `toString`: the message is derived from the value's shape, so an object whose
+       `toString` throws must still produce a string message rather than take the report down with it. */
+    "var reLog2 = [];"
+    "var reH3 = function(ev){ reLog2.push(ev); ev.preventDefault(); };"
+    "removeEventListener('error', reH2); addEventListener('error', reH3);"
+    "var reHostile = { toString: function(){ throw new Error('nope'); },"
+    " get message(){ throw new Error('nope'); } };"
+    "var reSym = Symbol('reported');"
+    "reportError(reHostile); reportError(reSym); reportError(undefined);"
+    "fetch('/api/reporterrorany?v=' + (reLog2.length === 3 && reLog2[0].error === reHostile &&"
+    " reLog2[1].error === reSym && reLog2[2].error === undefined &&"
+    " typeof reLog2[0].message === 'string' && typeof reLog2[1].message === 'string'"
+    " ? 'isREANY' : 'wrong:' + reLog2.length));"
+    "removeEventListener('error', reH3);"
     "</script>"
     "<script>var cfg = { admin: state.admin };"
     "var delObj = { k: 'keepVAL' };"   /* a shared BASELINE object; a forked flow will DELETE its k -> must revert per-flow */
