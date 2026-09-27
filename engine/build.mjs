@@ -4418,8 +4418,52 @@ function hungCauseCensus(out) {
            `that stage the absence is expected rather than a finding. The evidence is the tail: ` +
            `${lines.length} line(s), last was ${JSON.stringify((lines[lines.length - 1] || "").slice(0, 120))}.`;
   }
-  if (s.length < 2) return `only ${s.length} @COLD census line(s) — too few to say why. The run reached ` +
-                           `engine_sched_begin's first census and then stopped producing them.`;
+  /* EXACTLY ONE CENSUS IS AN ANSWER AND ITS PRODUCER SAYS SO, which is why this arm no longer declines. It
+     read "only 1 @COLD census line(s) — too few to say why", and solver/engine.c's `engine_census_emit` states
+     the opposite in its own banner: "THE FIRST SAMPLE IS UNCONDITIONAL AND THAT IS LOAD-BEARING … EXACTLY ONE
+     is a frontier that has not moved ENGINE_PROGRESS_EVERY units nor minted a candidate since — a wedged run,
+     said POSITIVELY, with the numbers it wedged at". The producer made that sample unconditional IN ORDER to
+     carry this state, and this reader was throwing the line away and calling the run unexplainable — which is
+     the same defect as the word below, one arm over: a verdict saying less than the evidence in its hand.
+     AND IT IS THE POPULATION A HUNG-CAUSE VERDICT IS MOST NEEDED FOR. One census means under
+     ENGINE_PROGRESS_EVERY further units of forks+flows+jobs+switches since the first, and CLAUDE.md §Testing
+     records real runs whose WHOLE work total is ~1003 units, in the low mode a wall-denominated slice puts
+     builds into. A run that did almost nothing is exactly the run a reader is trying to explain, so it is not
+     a boundary curiosity — it is the short-run arm of this function, reached through the same non-pass outcome
+     as every other.
+     WHAT IT STILL CANNOT SAY IS THE PAIR, AND THAT IS STATED RATHER THAN IMPLIED. Every arm below reads a
+     DIFFERENCE across a window; one census has no pair, so there is no trajectory, no difference and no
+     landmark here, and the readings that are functions of ONE census are the whole of what this state
+     supports. `stepCostReading` is not among them and is not faked from one sample.
+     AND THE ROWS ARE VALIDATED AND THE PARTITIONS CHECKED FIRST, for `censusFields`' own reason: every reading
+     below indexes the census BY NAME, so a row the composer stopped writing would be read as undefined by all
+     of them at once — the one state this file refuses to compose a verdict out of.
+     AND THIS GUARD IS WHAT A TRUNCATED READ OF THIS FUNCTION'S HEAD MISSES, WHICH IS WORTH ONE LINE BECAUSE IT
+     HAS ALREADY COST A REPORT. It sits about eleven lines below `function hungCauseCensus(`, one arm past the
+     no-census arm, so a reader who prints the head of this function and stops has the window arithmetic
+     (`a = s[n - 1 - width]`, which is `s[-1]` at n === 1) and NOT the return that makes it unreachable — and
+     the arithmetic alone reads as a `TypeError` waiting for the shortest run. It was reported as exactly that,
+     and the claim was FALSE AT BIRTH: `git show <rev>:engine/build.mjs | grep -c -F 's.length < 2'` answers 2
+     at every revision the claim was made against. The finding was the METHOD, not the code — an absence
+     published from a truncated read of the right command — and CLAUDE.md §A-BRIEF-WRITTEN-OUT-OF-A-CRASH
+     wants it recorded where the next reader will re-derive it, which is here rather than in a transcript. */
+  if (s.length < 2) {
+    const one = censusFields(s[0], "@COLD", coldFields(), "solver/result.c's result_cold_json");
+    coldPartition(one, "finished", ["finishedFlows", "finishedCands"], "engine_frontier_census");
+    coldPartition(one, "sold", ["soldFlows", "soldCands"], "engine_frontier_census");
+    return `a WEDGED FRONTIER (this stage printed EXACTLY ONE @COLD census, and solver/engine.c's ` +
+           `engine_census_emit makes the first sample unconditional so that this is a POSITIVE statement and ` +
+           `not a hole: the frontier has not moved ${progressEvery()} units of engine_work_done nor minted a ` +
+           `candidate since that sample was taken. live ${one.live}, framed ${one.framed}, blocked ` +
+           `${one.blocked}, owed ${one.owed}, finished ${one.finished} (exploration ${one.finishedFlows}, @S ` +
+           `candidate sessions ${one.finishedCands}), sold ${one.sold}. There is no SECOND census, so nothing ` +
+           `here is a trajectory: no difference across a window, and no landmark, because a landmark is the ` +
+           `last census at which a counter ROSE and one sample has no pair to rise across. Everything that ` +
+           `follows is a reading of that one census alone: ` +
+           stepUnitReading(one) + "; " + stepUnitRunReading(one) + "; " + stepUnitOverrunReading(one) + "; " +
+           ladderUnitReading(one) + "; " + programCursorReading(one) + "; " + programsAheadReading(one) +
+           "; " + endpointDoorReading(one) + "; " + endpointReachReading(one) + ")";
+  }
   /* THE WINDOW IS AN ABSOLUTE SPAN OF THE ENGINE'S OWN WORK, NEVER A FRACTION OF THE RUN — and the fraction is
      the defect this whole function was quoted for. It read `a = s[floor((n-1)/2)]`, so the LEFT EDGE of the
      comparison was set by where the CPU budget happened to run out: a run that reached 60 censuses asked about
@@ -4476,7 +4520,33 @@ function hungCauseCensus(out) {
      exploration flow has ever reached its end — so `retire never` is unreachable on such a document and the
      total's landmark says nothing about coverage. These two say which half moved and when. */
   const lastRetireFlow = lastRise("finishedFlows"), lastRetireCand = lastRise("finishedCands");
-  const mark = (i, tot) => (i < 0 ? "never" : `${i}/${tot}`);
+  /* A LANDMARK ABSENT FROM A WINDOW NAMES THE WINDOW, which is CLAUDE.md
+     §AND-THE-KIND-THAT-DEFEATS-EVERY-RULE-ABOVE-IS-A-LANDMARK-PRINTED-AS-A-WORD and this line was its
+     instance. `lastRise` reads CONSECUTIVE PAIRS from k=1 and never reads s[0] as a VALUE, so -1 means "no
+     pair of these censuses rose" — and the word printed for it was `never`, which the banner above reads as
+     the stronger of the two statements it says take different work, "this run retired nothing at all".
+     MEASURED by driving this exact arithmetic rather than by reading it: a series already at `finished: 5` at
+     s[0] and flat prints `never`; a run with ONE census and `finished: 5` prints `never` for five flows
+     retired; and the control `0 → 5 → 5` prints `1/3`, so the function does speak and the word was the defect.
+     AND THE STRONGER STATEMENT IS DECIDABLE, WHICH IS WHY THIS IS NOT A LONGER SENTENCE BUT A SECOND WORD.
+     These counters are LIFETIME totals that only climb — the producer's claim, and the reason this function
+     may difference two samples at all — so "never left zero" is `final === 0` and needs no series. The two
+     states the banner names are therefore two words that cannot be read as each other: `none/total` is the
+     strong one and `flat/total` is the honest weak one, each carrying the window it is absent from.
+     THE BANNER'S SENTENCE IS KEPT RATHER THAN REWRITTEN, because a reader who re-derives "never-moved is a
+     stronger statement than silent-across-the-window" re-derives the same wrong word; what was wrong was
+     never the intent, it was that `lastRise` cannot answer it and the final value can.
+     TWO HELPERS AND NOT ONE WITH A FLAG, on §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS: a flip has no counter
+     and therefore no zero to read, so a shared helper would have to take an argument that is meaningless at
+     one of its call sites and the strong arm would silently never be available there.
+     THE FORM IS COMPACT BECAUSE THE MARK RIDES THE NAME and `causeName` cuts a name at 90 characters.
+     MEASURED over the seven arms at their real `candOnly` pairings: at this form the five arms that carry no
+     `candOnly` stay under the cut at n=37 and at n=203, exactly as they did with `never`. The two that DO
+     carry it were ALREADY over it with `never` — 101 and 112 characters — so that truncation is older than
+     this line and is not repaired here; it is reported rather than widened into. */
+  const markRise = (i, tot, final) =>
+    i >= 0 ? `${i}/${tot}` : final === 0 ? `none/${tot}` : `flat/${tot}`;
+  const markFlip = (i, tot) => (i >= 0 ? `${i}/${tot}` : `flat/${tot}`);
 
   /* THE FIXTURE'S OWN PROGRESS, over a window of the SAME absolute shape — its own stream and its own cadence
      (test_forced.c's PROBE_SAMPLE_EVERY), so it is counted in ITS samples and clamped the same way. */
@@ -4494,19 +4564,27 @@ function hungCauseCensus(out) {
      frontier that is mostly candidate sessions the total's landmark moves every census whatever the
      exploration is doing, so it reads healthy for a run that has retired no exploration flow at all. The
      total's own landmark stays in `span` beside the counts it belongs to. */
-  const landmarks = `; retire ${mark(lastRetireFlow, n)} flow, ${mark(lastRetireCand, n)} cand, ` +
-                    `flip ${mark(lastFlip, h.length)}`;
+  const landmarks = `; retire ${markRise(lastRetireFlow, n, b.finishedFlows)} flow, ` +
+                    `${markRise(lastRetireCand, n, b.finishedCands)} cand, ` +
+                    `flip ${markFlip(lastFlip, h.length)}`;
   const span = `over the last ${width} of ${n} censuses — an ABSOLUTE window of ${width * PROGRESS_EVERY} ` +
                `units of engine_work_done, not a fraction of the run: ` +
                `finished ${a.finished}→${b.finished} (exploration ${a.finishedFlows}→${b.finishedFlows}, ` +
                `@S candidate sessions ${a.finishedCands}→${b.finishedCands}), live ${a.live}→${b.live}, ` +
                `sold ${a.sold}→${b.sold} (exploration ${a.soldFlows}→${b.soldFlows}, candidate ` +
                `${a.soldCands}→${b.soldCands}), blocked ${b.blocked}, owed ${b.owed}. ` +
-               `Over the WHOLE run, finished last rose at census ${mark(lastRetire, n)} — its exploration half ` +
-               `at ${mark(lastRetireFlow, n)} and its candidate half at ${mark(lastRetireCand, n)} — and sold at ` +
-               `${mark(lastSale, n)}` +
-               (h.length ? `, and the probe table last flipped a row at sample ${mark(lastFlip, h.length)}` : ``) +
-               ` — those are the landmarks two runs of one revision are compared on, and `+
+               `Over the WHOLE run, finished's last rise is ${markRise(lastRetire, n, b.finished)} — its ` +
+               `exploration half ${markRise(lastRetireFlow, n, b.finishedFlows)} and its candidate half ` +
+               `${markRise(lastRetireCand, n, b.finishedCands)} — and sold's is ` +
+               `${markRise(lastSale, n, b.sold)}` +
+               (h.length ? `, and the probe table's last flip is ${markFlip(lastFlip, h.length)}` : ``) +
+               /* THE LEGEND ONCE, HERE, because a landmark is three words and a reader who meets only the
+                  compact form in the stage-table NAME has no way to tell which of them they are holding. It
+                  sits in `span` rather than beside each value for the reason the values are compact at all:
+                  the name is length-bounded and this parenthetical is not. */
+               ` — a landmark reads census/total, or flat/total where no consecutive pair of censuses rose (the ` +
+               `counter may have risen BEFORE the first sample, which a pair cannot see), or none/total where ` +
+               `it never left zero. Those are the landmarks two runs of one revision are compared on, and `+
                `blocked/owed/live above are readings of the LAST census alone; ` +
                /* AND WHAT THE MEMBERS THAT DID NOT RETIRE WERE DOING, on EVERY arm rather than on the one that
                   happens to name a cause. `span` is where it goes for that reason: the arms below disagree
