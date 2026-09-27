@@ -20,7 +20,12 @@
  * one thing in this header a next diff must not read short. This agent has no active pointers at all —
  * core/html/user_activation.h states from its own side that it "dispatches no trusted
  * `keydown`/`mousedown`/`pointerdown`/`pointerup`/`touchend`" — so those two throw on their FIRST STEP for
- * every call a page can make, and installing them only renames the exception a drag handler dies on.
+ * every call a page can make. `installing them ONLY RENAMES the exception a drag handler dies on` is what
+ * this sentence read, and it is true at the MAJORITY of sites and understated at three — the ledger below
+ * measures them: where a presence test's false arm runs today, the rename is a flow-ender appearing where
+ * there was none. It is kept in its own words because a reader who re-derives it from a bare call will
+ * re-derive it correctly; what it must not be read as is a reason the landing is HARMLESS, which is the
+ * direction an understatement here invites.
  * Pointer Events 4 §4's hasPointerCapture has NO throw clause: its whole definition is "returns true if the
  * pending pointer capture target override for pointerId is set to the element on which this method is
  * invoked, and false otherwise". It is answerable against the state this engine has, so it is the landing and
