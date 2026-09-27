@@ -2790,12 +2790,26 @@ char *endpoint_address_hist_json(void) {
        running it at both revisions rather than by reasoning about it: at the parent it answers "list has,
        composer lacks: [epRazorClass]", and at the landing it agrees in both directions. That is the in-between
        state §A-CROSS-BOUNDARY-DIFF forbids, and the control is ARMED rather than assumed.
-       WHAT IS STILL OPEN IS ONE LABEL IN THE TRUSTED ZONE AND IT IS NOT THIS FILE'S. extension/popup.js renders
-       `m.cold.epReach` under a row labelled `razor`, which is the same defect this landing repaired in
-       engine/build.mjs's verdict line — a person shown the word `razor` over a count of doors — and it now has
-       `epRazorClass` on the same census line to render instead. It is left alone deliberately: it is a second
-       subject in a second zone, and §A-CROSS-BOUNDARY-DIFF's live-on-write half applies to that file and not to
-       this one. */
+       AND THIS RECORD FIRST NAMED A DEFECT IN THE TRUSTED ZONE THAT IS NOT THERE, WHICH IS AN OVER-CLAIM BY
+       THE AUTHOR OF THE LANDING AND IS CORRECTED HERE RATHER THAN QUIETLY DROPPED. It read: "extension/popup.js
+       renders `m.cold.epReach` under a row labelled `razor`, which is the same defect this landing repaired in
+       engine/build.mjs's verdict line — a person shown the word `razor` over a count of doors". BOTH HALVES ARE
+       WRONG and one grep of that file refutes them, which is the whole hazard: §AN-OVER-CLAIM-IS-REFUTABLE says
+       a reader who runs the cheap check discards the true part with the false, and the true part here is the
+       retirement above it. Its label is `razor — what this engine reached that a markup parse could not`, so
+       the qualification engine/build.mjs's bare `@H razor:` lacked is IN the label; and the block directly
+       beneath it already states in its own words that the overlap sentence "is retired by this one and is kept
+       in the block above rather than deleted, because a reader holding two marginals re-derives exactly it".
+       That zone had already done this work at the per-row grain.
+       WHAT IS TRUE IS NARROWER AND IS NOT A DEFECT: that file's sentence "Neither producer composes the union
+       and neither does this" is now false in a SECOND way, because this census composes it too and not only
+       the emitter — and the paragraph that retires it is already there, so nothing is owed. Its rows stay
+       separate for a reason this row does not disturb: its denominator is `endpoints`, the emitted ARRAY's
+       length, while every row here is over `epEmitted`, a GAUGE taken at an instant, so the two are one
+       population at two moments and that view asserts no identity between them.
+       THE TELL THAT PRODUCED THE WRONG SENTENCE IS THE ONE CLAUDE.md ALREADY GIVES AND IT COSTS ONE GREP: the
+       claim was about ANOTHER FILE, written while reading this one, from what a row of that name WOULD be
+       called rather than from what the file says. */
     return json_buf_take(&b);
 }
 
