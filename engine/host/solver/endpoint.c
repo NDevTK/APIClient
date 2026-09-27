@@ -2752,17 +2752,24 @@ static void edge_stage_hist(JsonBuf *b, const EndpointEdge *e) {
    of this census used to hold its own kind list, and the row that made the case landed one commit before this
    one with a kind stated in no artifact at all: the author added it here and had no reason to open a driver
    two directories away. A declaration at the emitter is edited by the diff that adds the row.
-   IT IS CHECKED IN BOTH DIRECTIONS AND NEITHER SIDE IS DEFAULTED. `testing/census_rows.js` refuses a name
-   here that this composer no longer publishes — a kind statement about a renamed row is a sentence about
-   nothing that a consumer goes on printing — and refuses a row a consumer CARRIES with no kind stated here,
-   which is the moment an omission becomes a false statement rather than an absent one. It also refuses a
-   SECOND declaration for one composer and a row stated twice, because a reader that resolved either would
-   publish a shorter contract as a complete one.
-   IT IS NOT COMPLETE AND THE CONSUMER PRINTS HOW INCOMPLETE. A row nobody carries is not declared here,
-   because a kind nobody has determined must not be invented: a WRONG kind is worse than a missing one, since
-   it LICENSES the arithmetic a missing one merely fails to authorise. The reader counts what is left and the
-   driver prints that count, so the gap is a figure that shrinks as the work is done rather than a sentence
-   that rots.
+   IT IS A SET EQUALITY AND BOTH DIRECTIONS THROW. `testing/census_rows.js` refuses a name here that this
+   composer no longer publishes — a kind statement about a renamed row is a sentence about nothing that a
+   consumer goes on printing — and refuses a row this composer PUBLISHES that no line here states a kind for.
+   Neither side is defaulted and neither is guessed. It also refuses a SECOND declaration for one composer and
+   a row stated twice, because a reader that resolved either would publish a shorter contract as a complete
+   one.
+   THE CONSUMER-SIDE CHECK THAT USED TO STAND BESIDE THOSE IS GONE AND IS NOT TO BE RE-ADDED. That reader once
+   threw separately on a row a driver CARRIES with no kind stated here; with the equality above standing, the
+   declared set and the published set are ONE set, so the carried-and-published check it already makes decides
+   that case as well, and a second test for it would be a predicate whose two sides cannot disagree.
+   COMPLETENESS IS REQUIRED HERE AND IS NO LONGER COUNTED. A row nobody carries must be declared anyway, so
+   the kind is stated by whoever adds the row rather than by whoever later needs it. That reader used to return
+   the number of rows here with no kind and a driver printed it, on the ground that a kind nobody has
+   determined must not be invented: a WRONG kind is worse than a missing one, since it LICENSES the arithmetic
+   a missing one merely fails to authorise. That is still exactly right about the KIND and was never a reason
+   to leave the ROW unnamed — the figure's only reader was whoever re-read a driver's header line, so an
+   omission stayed an omission for as long as nobody did. The count is DELETED rather than kept beside the
+   refusal, because a count that can no longer be nonzero is dead reporting that reads as live.
    IT CHANGES NO EMITTED BYTE. This is comment text, so there is no half of it that goes live at an instant
    the other does not — a consumer reads it from SOURCE and is therefore right about an artifact of any age,
    including one whose stamp predates a row, where the kind is stated and the row is absent. Those are two
@@ -2899,17 +2906,24 @@ char *endpoint_fetch_edge_rows(void) {
    of this census used to hold its own kind list, and the row that made the case landed one commit before this
    one with a kind stated in no artifact at all: the author added it here and had no reason to open a driver
    two directories away. A declaration at the emitter is edited by the diff that adds the row.
-   IT IS CHECKED IN BOTH DIRECTIONS AND NEITHER SIDE IS DEFAULTED. `testing/census_rows.js` refuses a name
-   here that this composer no longer publishes — a kind statement about a renamed row is a sentence about
-   nothing that a consumer goes on printing — and refuses a row a consumer CARRIES with no kind stated here,
-   which is the moment an omission becomes a false statement rather than an absent one. It also refuses a
-   SECOND declaration for one composer and a row stated twice, because a reader that resolved either would
-   publish a shorter contract as a complete one.
-   IT IS NOT COMPLETE AND THE CONSUMER PRINTS HOW INCOMPLETE. A row nobody carries is not declared here,
-   because a kind nobody has determined must not be invented: a WRONG kind is worse than a missing one, since
-   it LICENSES the arithmetic a missing one merely fails to authorise. The reader counts what is left and the
-   driver prints that count, so the gap is a figure that shrinks as the work is done rather than a sentence
-   that rots.
+   IT IS A SET EQUALITY AND BOTH DIRECTIONS THROW. `testing/census_rows.js` refuses a name here that this
+   composer no longer publishes — a kind statement about a renamed row is a sentence about nothing that a
+   consumer goes on printing — and refuses a row this composer PUBLISHES that no line here states a kind for.
+   Neither side is defaulted and neither is guessed. It also refuses a SECOND declaration for one composer and
+   a row stated twice, because a reader that resolved either would publish a shorter contract as a complete
+   one.
+   THE CONSUMER-SIDE CHECK THAT USED TO STAND BESIDE THOSE IS GONE AND IS NOT TO BE RE-ADDED. That reader once
+   threw separately on a row a driver CARRIES with no kind stated here; with the equality above standing, the
+   declared set and the published set are ONE set, so the carried-and-published check it already makes decides
+   that case as well, and a second test for it would be a predicate whose two sides cannot disagree.
+   COMPLETENESS IS REQUIRED HERE AND IS NO LONGER COUNTED. A row nobody carries must be declared anyway, so
+   the kind is stated by whoever adds the row rather than by whoever later needs it. That reader used to return
+   the number of rows here with no kind and a driver printed it, on the ground that a kind nobody has
+   determined must not be invented: a WRONG kind is worse than a missing one, since it LICENSES the arithmetic
+   a missing one merely fails to authorise. That is still exactly right about the KIND and was never a reason
+   to leave the ROW unnamed — the figure's only reader was whoever re-read a driver's header line, so an
+   omission stayed an omission for as long as nobody did. The count is DELETED rather than kept beside the
+   refusal, because a count that can no longer be nonzero is dead reporting that reads as live.
    IT CHANGES NO EMITTED BYTE. This is comment text, so there is no half of it that goes live at an instant
    the other does not — a consumer reads it from SOURCE and is therefore right about an artifact of any age,
    including one whose stamp predates a row, where the kind is stated and the row is absent. Those are two

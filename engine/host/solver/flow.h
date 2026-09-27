@@ -2431,9 +2431,24 @@ typedef struct {
        `br_held_us + br_empty_us + br_retired_us == charged_us`. That total cannot move without one of its
        three parts moving, it is checkable on the emitted document, and it is asserted in flow_wfq_census where
        all four terms are in one hand.
-       LIFETIME COUNTERS BOTH, in microseconds, on the same footing as `br_us_sum` itself: their population is
+       NEITHER MAY BE DIFFERENCED, AND THIS SENTENCE USED TO SAY BOTH COULD. It read that "their population is
        every microsecond ever charged rather than whichever buckets happen to be standing, so unlike every
-       extremum on this line they MAY be differenced across two samples. */
+       extremum on this line they MAY be differenced across two samples", and the identity directly above
+       refutes it rather than supporting it. A bucket whose subtree WHOLLY DEPARTS is freed in `acct_unref`, its
+       entire receipt is folded into `br_retired_us` AT that free, and it leaves the walk `branch_take` folds
+       these over — so the populations that only ever grow are `br_retired_us` and `charged_us`, while
+       `br_us_sum`, `br_held_us` and `br_empty_us` all FALL by a bucket's whole receipt the moment its last arm
+       departs. That is what keeps `charged_us` monotone while its parts move in both directions, and it is why
+       the identity is a CHECK: the fall on one side and the rise on the other are the same microseconds.
+       THE ARITHMETIC THE OLD SENTENCE WAS FOR IS UNCHANGED, WHICH IS WHY IT READ AS SOUND. A live arm's share
+       may only be taken against a denominator drawn from the LIVE buckets — which is what `br_held_us` is for
+       and what `br_us_sum` is not — so the sentence was right about the denominator and wrong about the one
+       word that decides what a consumer may do with the row. The unit is what invited it: `MICROSECONDS` and
+       `LIFETIME` on the three lines below name the horizon of the PER-BUCKET quantity each row is folded from,
+       and a bucket's own receipt really is a lifetime counter OF THAT BUCKET, while the ROW is a sum over
+       whichever buckets this walk reached. A kind read off the unit is read off the wrong noun.
+       solver/result.c's kind declaration files all three as GAUGES on exactly that ground, and this now agrees
+       with it rather than contradicting it. */
     int64_t br_held_us;  /* LIFETIME MICROSECONDS: received by buckets holding at least one live member */
     int64_t br_empty_us; /* LIFETIME MICROSECONDS: received by buckets still taken and holding none */
     int64_t br_retired_us; /* LIFETIME MICROSECONDS received by buckets whose subtree has wholly departed */

@@ -1374,10 +1374,15 @@ async function main() {
      then plateaus, so a plateau in one is not a ceiling and it is not comparable across two runs of different
      length. This file's own banner says that in prose twelve paragraphs up while the line beneath it said
      LIFETIME; the producer now says MAXIMUM and this prints what the producer says.
-     AND HOW MUCH OF THE CENSUS HAS NO KIND YET IS PRINTED RATHER THAN ARGUED. The declaration is not complete
-     — a kind nobody has determined must not be invented, because a WRONG one licenses the arithmetic a
-     missing one merely fails to authorise — so the count of undeclared rows rides this line and shrinks as
-     the work is done, which is a figure a reader can act on where a sentence about it would rot. */
+     AND HOW MUCH OF THE CENSUS HAS NO KIND IS NO LONGER PRINTED, BECAUSE IT CAN NO LONGER BE ANYTHING BUT
+     ZERO. This line used to carry a count of the rows whose producers stated no kind, on the ground that a
+     kind nobody has determined must not be invented and that a figure shrinking as the work is done beats a
+     sentence that rots. Both halves of that were right and the count is still gone: `census_rows.js` REFUSES
+     an undeclared row now, so the clause could only ever print a zero, and a clause that can only print one
+     value is dead reporting that reads as live — CLAUDE.md §A-superseded-system-is-DELETED, where a
+     superseded system kept beside its replacement hides the replacement's gaps. What this driver prints
+     instead is nothing, which is the honest output: the producers are complete, and the fact that they are is
+     asserted at the reader rather than reported here. */
   const K = kindsOf(COLD_ROWS.concat(WFQ_ROWS));
   const show = (names) => names.map((n) => OUT_NAME[n] || n).join(",");
   console.log("# frontier.* — LIFETIME (may be differenced): " + show(K.byKind.lifetime) + "," +
@@ -1403,10 +1408,7 @@ async function main() {
                  never again, so they may be neither differenced nor read as a level — and `rowsAwaitingBytes`
                  in the gauge list is the live half they are read against. */
               " | CONSTANTS (written at seed, never again; neither differenced nor read as a level): " +
-              show(K.byKind.constant) +
-              " | " + K.undeclared + " row(s) of these censuses carry NO declared kind and are not carried" +
-              " here; that count is a floor on what a later reader may not do arithmetic on, and it shrinks" +
-              " as the producer states them");
+              show(K.byKind.constant));
 
   const { browser, extId } = await connect();
   try {

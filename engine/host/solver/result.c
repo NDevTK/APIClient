@@ -708,27 +708,28 @@ static char *errs_json_array(ErrsArray which) {
    of this census used to hold its own kind list, and the row that made the case landed one commit before this
    one with a kind stated in no artifact at all: the author added it here and had no reason to open a driver
    two directories away. A declaration at the emitter is edited by the diff that adds the row.
-   IT IS CHECKED IN BOTH DIRECTIONS AND NEITHER SIDE IS DEFAULTED. `testing/census_rows.js` refuses a name
-   here that this composer no longer publishes — a kind statement about a renamed row is a sentence about
-   nothing that a consumer goes on printing — and refuses a row a consumer CARRIES with no kind stated here,
-   which is the moment an omission becomes a false statement rather than an absent one. It also refuses a
-   SECOND declaration for one composer and a row stated twice, because a reader that resolved either would
-   publish a shorter contract as a complete one.
-   IT IS NOT COMPLETE AND THE CONSUMER PRINTS HOW INCOMPLETE. A row nobody carries is not declared here,
-   because a kind nobody has determined must not be invented: a WRONG kind is worse than a missing one, since
-   it LICENSES the arithmetic a missing one merely fails to authorise. The reader counts what is left and the
-   driver prints that count, so the gap is a figure that shrinks as the work is done rather than a sentence
-   that rots.
+   IT IS A SET EQUALITY AND BOTH DIRECTIONS THROW. `testing/census_rows.js` refuses a name here that this
+   composer no longer publishes — a kind statement about a renamed row is a sentence about nothing that a
+   consumer goes on printing — and refuses a row this composer PUBLISHES that no line here states a kind for.
+   Neither side is defaulted and neither is guessed. It also refuses a SECOND declaration for one composer and
+   a row stated twice, because a reader that resolved either would publish a shorter contract as a complete
+   one.
+   THE CONSUMER-SIDE CHECK THAT USED TO STAND BESIDE THOSE IS GONE AND IS NOT TO BE RE-ADDED. That reader once
+   threw separately on a row a driver CARRIES with no kind stated here; with the equality above standing, the
+   declared set and the published set are ONE set, so the carried-and-published check it already makes decides
+   that case as well, and a second test for it would be a predicate whose two sides cannot disagree.
+   COMPLETENESS IS REQUIRED HERE AND IS NO LONGER COUNTED. A row nobody carries must be declared anyway, so
+   the kind is stated by whoever adds the row rather than by whoever later needs it. That reader used to return
+   the number of rows here with no kind and a driver printed it, on the ground that a kind nobody has
+   determined must not be invented: a WRONG kind is worse than a missing one, since it LICENSES the arithmetic
+   a missing one merely fails to authorise. That is still exactly right about the KIND and was never a reason
+   to leave the ROW unnamed — the figure's only reader was whoever re-read a driver's header line, so an
+   omission stayed an omission for as long as nobody did. The count is DELETED rather than kept beside the
+   refusal, because a count that can no longer be nonzero is dead reporting that reads as live.
    IT CHANGES NO EMITTED BYTE. This is comment text, so there is no half of it that goes live at an instant
    the other does not — a consumer reads it from SOURCE and is therefore right about an artifact of any age,
    including one whose stamp predates a row, where the kind is stated and the row is absent. Those are two
    facts and they stay two.
-   NAMED RESIDUAL. NOT COVERED: the rows of this composer no consumer carries yet, which is most of them —
-   `testing/census_rows.js` counts them and the driver prints the count, so the figure is in the output rather
-   than in this sentence. WHAT THE NEXT DIFF BUILDS: a kind line for each, determined from the site that
-   raises it rather than from its name, until the reader's undeclared count is zero and completeness can be
-   REQUIRED here instead of counted. HOW ITS ABSENCE SHOWS: a driver that adds one of them to what it carries
-   meets a throw naming that row, which is this contract working rather than failing.
 
    @kinds-of wfq
    @kind gauge: members jobsReady jobsFramed jobsOwed jobWGap jobsReadyTask jobsReadyMicro memUnframed visZero
@@ -755,20 +756,21 @@ static char *errs_json_array(ErrsArray which) {
    words: an extremum's rule applies to them, neither may be DIFFERENCED, and both are read as ratios at one
    instant. A kind read off a key is therefore read off the WRONG NOUN, and this is the line where that would
    have licensed differencing eleven falling quantities.
-   AND THE BURN SPLIT IS THREE GAUGES AND TWO LIFETIME COUNTS, WHICH CORRECTS THE SENTENCE BESIDE IT RATHER
-   THAN RESTATING IT. That block says of `brHeldUsLife` and `brEmptyUsLife` that "their population is every
-   microsecond ever charged rather than whichever buckets happen to be standing, so unlike every extremum on
-   this line they MAY be differenced", and the identity the same file ASSERTS is `brUsLifeSum +
-   brRetiredUsLife == chargedUsLife`. A bucket whose subtree WHOLLY DEPARTS is freed, its receipt moves into
-   the retired total at that free, and it leaves the walk the other three are folded over — so the population
-   that is every microsecond ever charged is `chargedUsLife`, the population that only ever grows is
-   `brRetiredUsLife`, and `brUsLifeSum`, `brHeldUsLife` and `brEmptyUsLife` FALL by a bucket's whole receipt
-   the moment its last arm departs. The sentence is RIGHT about the arithmetic it is for — a live arm's share
-   may only be taken against a denominator drawn from the live buckets — and wrong about the one word that
-   decides what a consumer may do, which is why this declaration follows the asserted identity and not the
-   prose. It is recorded here rather than only there because THIS is the statement a consumer reads.
-   RETIREMENT: this correction goes when that sentence states the falling arm beside its own identity, so a
-   reader meeting the prose and a reader meeting the declaration are told the same thing.
+   AND THE BURN SPLIT IS THREE GAUGES AND TWO LIFETIME COUNTS, DETERMINED FROM THE ASSERTED IDENTITY RATHER
+   THAN FROM THE UNIT. `brUsLifeSum + brRetiredUsLife == chargedUsLife` is asserted where all four terms are in
+   one hand, and a bucket whose subtree WHOLLY DEPARTS is freed with its whole receipt folded into the retired
+   total at that free, leaving the walk the other three are accumulated over — so `chargedUsLife` is every
+   microsecond ever charged, `brRetiredUsLife` is the other population that only ever grows, and `brUsLifeSum`,
+   `brHeldUsLife` and `brEmptyUsLife` FALL by a bucket's entire receipt the moment its last arm departs. What
+   stays true of them is the arithmetic they exist for: a live arm's share may only be taken against a
+   denominator drawn from the LIVE buckets, which is what `brHeldUsLife` is and what `brUsLifeSum` is not.
+   THIS USED TO BE A CORRECTION OF solver/flow.h AND IS NOW AN AGREEMENT WITH IT, which is a change in that
+   file and not a change of mind here. Its own block stated of the same two rows that "unlike every extremum on
+   this line they MAY be differenced"; it now states the falling arm beside the identity, so the prose and this
+   declaration tell a reader the same thing and the correction's retirement condition is MET. The reason the
+   two disagreed at all is the one trap the paragraph above this names and is worth keeping: the rows carry a
+   `Life` suffix and a MICROSECONDS unit that name the horizon of the PER-BUCKET quantity each is folded from,
+   never the horizon of the ROW, so a kind read off either is read off the wrong noun.
    @kind maximum: vt
    @kind gauge: valMin valMax valTop valZero valArrived valUnplaced selfEmit unrun
    @kind gauge: neverPicked neverPickedGap neverPickedAtTop picksLive picksMax
@@ -2337,17 +2339,24 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    of this census used to hold its own kind list, and the row that made the case landed one commit before this
    one with a kind stated in no artifact at all: the author added it here and had no reason to open a driver
    two directories away. A declaration at the emitter is edited by the diff that adds the row.
-   IT IS CHECKED IN BOTH DIRECTIONS AND NEITHER SIDE IS DEFAULTED. `testing/census_rows.js` refuses a name
-   here that this composer no longer publishes — a kind statement about a renamed row is a sentence about
-   nothing that a consumer goes on printing — and refuses a row a consumer CARRIES with no kind stated here,
-   which is the moment an omission becomes a false statement rather than an absent one. It also refuses a
-   SECOND declaration for one composer and a row stated twice, because a reader that resolved either would
-   publish a shorter contract as a complete one.
-   IT IS NOT COMPLETE AND THE CONSUMER PRINTS HOW INCOMPLETE. A row nobody carries is not declared here,
-   because a kind nobody has determined must not be invented: a WRONG kind is worse than a missing one, since
-   it LICENSES the arithmetic a missing one merely fails to authorise. The reader counts what is left and the
-   driver prints that count, so the gap is a figure that shrinks as the work is done rather than a sentence
-   that rots.
+   IT IS A SET EQUALITY AND BOTH DIRECTIONS THROW. `testing/census_rows.js` refuses a name here that this
+   composer no longer publishes — a kind statement about a renamed row is a sentence about nothing that a
+   consumer goes on printing — and refuses a row this composer PUBLISHES that no line here states a kind for.
+   Neither side is defaulted and neither is guessed. It also refuses a SECOND declaration for one composer and
+   a row stated twice, because a reader that resolved either would publish a shorter contract as a complete
+   one.
+   THE CONSUMER-SIDE CHECK THAT USED TO STAND BESIDE THOSE IS GONE AND IS NOT TO BE RE-ADDED. That reader once
+   threw separately on a row a driver CARRIES with no kind stated here; with the equality above standing, the
+   declared set and the published set are ONE set, so the carried-and-published check it already makes decides
+   that case as well, and a second test for it would be a predicate whose two sides cannot disagree.
+   COMPLETENESS IS REQUIRED HERE AND IS NO LONGER COUNTED. A row nobody carries must be declared anyway, so
+   the kind is stated by whoever adds the row rather than by whoever later needs it. That reader used to return
+   the number of rows here with no kind and a driver printed it, on the ground that a kind nobody has
+   determined must not be invented: a WRONG kind is worse than a missing one, since it LICENSES the arithmetic
+   a missing one merely fails to authorise. That is still exactly right about the KIND and was never a reason
+   to leave the ROW unnamed — the figure's only reader was whoever re-read a driver's header line, so an
+   omission stayed an omission for as long as nobody did. The count is DELETED rather than kept beside the
+   refusal, because a count that can no longer be nonzero is dead reporting that reads as live.
    IT CHANGES NO EMITTED BYTE. This is comment text, so there is no half of it that goes live at an instant
    the other does not — a consumer reads it from SOURCE and is therefore right about an artifact of any age,
    including one whose stamp predates a row, where the kind is stated and the row is absent. Those are two
@@ -2356,10 +2365,6 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    exactly as a scalar does — a per-arm partition raised once per event may be differenced and a per-member
    walk may not, and a reader who differences the second reads a level as a rate whether it arrived as one
    number or as twenty.
-   NAMED RESIDUAL. NOT COVERED: the rows of this composer no consumer carries yet — `testing/census_rows.js`
-   counts them and the driver prints the count. WHAT THE NEXT DIFF BUILDS: a kind line for each, determined
-   from the site that raises it, until the undeclared count is zero and completeness can be REQUIRED here.
-   HOW ITS ABSENCE SHOWS: a driver adding one of them to what it carries meets a throw naming that row.
 
    THE @H SURFACE ROWS SPLIT ACROSS TWO KINDS AND USED TO BE DECLARED AS ONE, WHICH IS A CORRECTION AND NOT A
    REFINEMENT — a declared kind LICENSES arithmetic, so the wrong one is worse than a missing one and this one

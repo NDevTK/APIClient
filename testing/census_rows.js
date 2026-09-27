@@ -33,21 +33,30 @@
  * never fires. This file reads BOTH shapes, so those rows have a kind here even though nothing in this tree
  * can yet require their presence.
  *
- * THE CONTRACT IS TWO-SIDED AND BOTH SIDES THROW. A declared name the composer does not publish is a row that
- * has been renamed or dropped while a kind statement about it stands; a carried row with no declared kind is a
- * row a consumer is about to print under a kind statement that does not cover it. Neither is defaulted and
- * neither is guessed — CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS, where the default is the concealment. A second
- * declaration for one composer is REFUSED rather than resolved to the first, which is the cure for the hazard
- * CLAUDE.md records at exactly this shape: prose about a machine-read region that WRITES that region's
- * markers becomes one, the derived span collapses, and the contract silently empties. Prose here describes the
- * markers and does not write them, and the duplicate refusal is what makes that a backstop rather than the
- * mechanism.
+ * THE CONTRACT IS A SET EQUALITY AND EVERY SIDE OF IT THROWS. Declared-but-not-published is a row that has
+ * been renamed or dropped while a kind statement about it stands; published-but-not-declared is a row whose
+ * producer has stated nothing about what may be done with it. Neither is defaulted and neither is guessed —
+ * CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS, where the default is the concealment. A second declaration for one
+ * composer is REFUSED rather than resolved to the first, which is the cure for the hazard CLAUDE.md records at
+ * exactly this shape: prose about a machine-read region that WRITES that region's markers becomes one, the
+ * derived span collapses, and the contract silently empties. Prose here describes the markers and does not
+ * write them, and the duplicate refusal is what makes that a backstop rather than the mechanism.
  *
- * IT IS NOT COMPLETE AND IT SAYS SO IN ITS OWN OUTPUT. A composer row nobody has declared and nobody carries
- * is silent here, because a kind nobody has determined must not be invented — the wrong kind is worse than a
- * missing one, since it LICENSES the arithmetic the missing one merely fails to authorise. So `undeclared` is
- * returned beside the kinds and a consumer prints it, which makes the gap a figure that shrinks as the work is
- * done rather than a sentence that rots. CLAUDE.md: print the partition on the same line as the count.
+ * COMPLETENESS IS REQUIRED AND IS NO LONGER COUNTED, AND THE COUNT IS DELETED RATHER THAN KEPT BESIDE THE
+ * REFUSAL. This file used to return an `undeclared` count and a driver printed it, on the ground that a kind
+ * nobody has determined must not be invented — a WRONG kind is worse than a missing one, since it LICENSES the
+ * arithmetic a missing one merely fails to authorise. That argument is still exactly right about the KIND and
+ * was never a reason to leave the ROW unnamed: the figure's only reader was whoever re-read a header line, so
+ * an omission stayed an omission for as long as nobody did, and a count that shrinks as the work is done is
+ * read by exactly the population about to invalidate it. It is a THROW now. The count does not survive beside
+ * it, because a count that can no longer be nonzero is dead reporting that reads as live — CLAUDE.md
+ * §A-superseded-system-is-DELETED — and a consumer's header clause printing a permanent zero is the same
+ * statement in the same costume.
+ *
+ * WHAT THAT COSTS IS BORNE DELIBERATELY AND IS NOT A GAP. A composer row nobody carries must now be declared
+ * anyway, so the person adding a row states its kind whether or not any driver has yet asked for it. That is
+ * the whole of the price and it is paid by the one person who can pay it cheaply: they are already reading the
+ * site that raises the row, which is the only place the kind can be determined from.
  *
  * NO BUILD IS NEEDED AND THIS IS NOT A CROSS-BOUNDARY DIFF, which is established rather than assumed. The
  * declarations are C COMMENT TEXT: they change no emitted byte, so there is no half that goes live at a
@@ -64,7 +73,24 @@
  *
  * RETIREMENT: this file's derivation goes when a census states each row's kind in the DOCUMENT it emits, at
  * which point a consumer reads the kind off the same object it reads the number off and has nothing to parse.
- * The `undeclared` count goes when every row of both composers carries a declaration. */
+ * A SECOND CONDITION STOOD HERE AND HAS BEEN MET RATHER THAN DROPPED — the `undeclared` count was to go when
+ * every row of every composer carried a declaration, and it has gone. It is recorded as met rather than
+ * deleted because the argument a reader re-derives is the one that put the count there: a kind must not be
+ * invented, so an undeclared row cannot be given a default, so the reader has to do SOMETHING other than
+ * answer — and counting is the move that suggests itself. The paragraph above says why the refusal is that
+ * something, so a reader who re-derives the premise does not re-derive the count.
+ *
+ * NAMED RESIDUAL. NOT COVERED: the TEMPO of the refusal rather than its subject. This reader throws when a
+ * DRIVER runs it, and no stage of `engine/build.mjs` asks it anything — verified, not assumed: that file names
+ * this one nowhere — so the interval between a row landing with no kind and anybody meeting the refusal is
+ * whatever interval separates a commit from the next driver run, which nothing bounds. WHAT THE NEXT DIFF
+ * BUILDS: a build stage that CALLS this reader rather than re-deriving its rule, because a second
+ * implementation of the composer walk and the declaration walk is CLAUDE.md §AN-AUDITOR-DERIVES-THE-RULE's
+ * redundant copy and the copy that drifts is the one nobody runs against reality; what such a stage buys is
+ * tempo and never coverage, and saying so is part of proposing it. HOW ITS ABSENCE SHOWS: an undeclared row
+ * rides green through every build it is present for and refuses the first driver run afterwards, so the diff
+ * that meets the refusal is reliably not the diff that introduced it, and the reader who meets it is reliably
+ * not its author. */
 
 "use strict";
 
@@ -210,12 +236,21 @@ function kindDeclarationFromText(src, composer, label) {
   return kindOf;
 }
 
-/* THE JOIN, WHICH IS WHERE THE TWO-SIDED CHECK LIVES. A declared name the composer does not publish throws
-   here and names both sides, because a kind statement about a row that is no longer emitted is a sentence
-   about nothing that a consumer will go on printing. The other direction — a published row nobody declared —
-   is COUNTED and not thrown, because completeness is work in progress and a kind nobody has determined must
-   not be invented; a consumer that CARRIES such a row throws at `kindsOf` below, which is the moment the
-   omission becomes a false statement rather than an absent one. */
+/* THE JOIN, WHICH IS WHERE THE SET EQUALITY LIVES AND WHERE BOTH OF ITS DIRECTIONS THROW. A declared name the
+   composer does not publish is a kind statement about a row that is no longer emitted — a sentence about
+   nothing that a consumer will go on printing. A published row no line declares is the other direction, and it
+   is a REFUSAL rather than a count: the count it replaces could only be read by somebody re-reading a header,
+   which is nobody, while a throw is met by every consumer at once.
+   IT FIRES FOR EVERY COMPOSER AND NOT ONLY FOR THE ROWS A CONSUMER ASKED ABOUT, because `censusKinds` walks
+   all of them before any consumer selects a subset. That is deliberate and is the whole forcing function: a row
+   added to a census no driver carries still stops the next driver run, so the kind is stated by the person who
+   added the row rather than by whoever later needs it.
+   AND IT IS WHY `kindsOf` NO LONGER ASKS ITS OWN VERSION OF THIS QUESTION. That function used to throw on a
+   CARRIED row with no declared kind; with this refusal standing, the declared set and the published set are one
+   set, so its carried-and-published check already decides it and a carried-and-undeclared row cannot exist to
+   be caught. It was DELETED rather than kept as a backstop — CLAUDE.md §AN-ASSERT-WHOSE-TWO-SIDES-CANNOT-
+   DISAGREE: a check that cannot fail is not a weak check but a non-check that certifies what it never
+   examined. Its REMEDY sentence survives, in the message below, at the site that can actually fire. */
 function censusKindsFromText(src, key, spec, label) {
   const rows = composerRowsFromText(src, spec, label);
   const published = new Set([...rows.numeric, ...rows.object]);
@@ -226,8 +261,33 @@ function censusKindsFromText(src, key, spec, label) {
                     "], which " + JSON.stringify(spec.from) + " no longer publishes — the row has been " +
                     "renamed or dropped while a statement about what a reader may do with it still stands. " +
                     "Re-point the declaration at the row's new name, or drop it with the row.");
+  /* THE TWO MARKER LITERALS IN THE MESSAGE BELOW ARE SPLIT ACROSS A CONCATENATION ON PURPOSE AND ARE NOT A
+     TYPO. CLAUDE.md records the defect: prose that WRITES the delimiter a derivation scans for BECOMES one,
+     the derived span collapses, and the contract silently empties. Nothing scans this file today — the
+     declaration reader above is handed the C composer's source, never this — so the split is insurance against
+     the day somebody points a reader at `testing/` and not a present requirement. It costs two characters and
+     removes the only way this message could ever falsify the thing it is reporting on.
+     THE TEMPLATE NAMES ONE ROW AND NEVER THE WHOLE LIST, because a kind is determined per row: several rows
+     with no kind are several questions, and a template spelling them on one line would suggest filing them
+     under whichever kind the first one turned out to be. The full list is in the sentence above it. */
   const undeclared = [...published].filter((n) => !(n in kindOf));
-  return { key, kindOf, numeric: rows.numeric, object: rows.object, undeclared };
+  if (undeclared.length)
+    throw new Error(label + ": " + JSON.stringify(spec.from) + " publishes [" + undeclared.join(", ") + "] " +
+                    "and the `@kinds" + "-of " + key + "` block in that same file states no kind for " +
+                    (undeclared.length === 1 ? "it" : "them") + ". STATE THE KIND THERE — one line per kind, " +
+                    "`@kin" + "d <" + KINDS.join("|") + ">: " + undeclared[0] + "`, and a row per row — " +
+                    "DETERMINED FROM " +
+                    "THE SITE THAT RAISES THE ROW AND NEVER FROM ITS NAME: a key spelling `Life` is a lifetime " +
+                    "counter of its own BUCKET while the ROW may be an extremum or a sum over whichever " +
+                    "buckets a walk reached, so it can FALL, and a kind read off the key is read off the wrong " +
+                    "noun. The kind is stated at the emitter because the person adding a row is the person " +
+                    "who knows what may be done with it; a consumer two directories away has only the name. " +
+                    "THIS IS A REFUSAL AND NOT A COUNT, which is a decision and not an oversight: a figure " +
+                    "for how many rows had no kind was read by whoever re-read a driver's header line, so it " +
+                    "left an omission standing for as long as nobody did, and it is gone. Declaring the row " +
+                    "is the only way past this, because a kind nobody has determined must not be invented — a " +
+                    "WRONG kind licenses the arithmetic a missing one merely fails to authorise.");
+  return { key, kindOf, numeric: rows.numeric, object: rows.object };
 }
 
 let memo = null;
@@ -243,21 +303,29 @@ function censusKinds() {
 }
 
 /* WHAT A CONSUMER ASKS FOR: the kinds of the rows IT carries, over one or more composers, as lists a header
-   line can print. A carried row with no declared kind THROWS and names it — that row is about to be printed
-   under a kind statement that does not cover it, which is the defect this whole file exists to end arriving
-   one row over. A carried row the composers do not publish at all is a DIFFERENT fact and throws separately:
-   the first is a producer that has not stated a kind, the second is a driver asking for a row nobody emits. */
+   line can print. ONE THING IS REFUSED HERE AND IT IS NOT THE MISSING KIND — a carried row the composers do
+   not publish at all is a DRIVER asking for a row nobody emits, which is this function's own question, and it
+   would otherwise print `null` for ever while reading as an artifact too old to state the row.
+   THE MISSING KIND IS REFUSED ONE LEVEL UP AND THIS FUNCTION MUST NOT RE-ASK IT. `censusKindsFromText` now
+   makes the declared set and the published set ONE set per composer, so `carried ⊆ published` — the check
+   below — already entails `carried ⊆ declared`, and a second `if` testing the second would be a predicate
+   whose two sides cannot disagree. There WAS such a check here and it is deleted rather than demoted to a
+   backstop, because the transcript of a check that can never fire is the harm: it reads as the thing that
+   guarantees the property while the guarantee is entirely upstream, and it would go on reading that way if
+   the upstream refusal were ever weakened to a count again. Its remedy sentence moved to the refusal that
+   can fire.
+   SO THE PARTITION BELOW IS TOTAL BY CONSTRUCTION, which is worth stating because a reader is entitled to
+   ask: every carried name is published, every published name is declared, and every declared kind is one of
+   `KINDS` — so the four lists sum to `carried` and a name cannot fall out of all of them. */
 function kindsOf(carried, keys) {
   const all = censusKinds();
   const ks = keys || Object.keys(all);
   const kindOf = Object.create(null), published = new Set();
-  let undeclared = 0;
   for (const k of ks) {
     const c = all[k];
     if (!c) throw new Error("testing/census_rows.js: no composer `" + k + "` — " + Object.keys(all).join(", "));
     for (const n of Object.keys(c.kindOf)) kindOf[n] = c.kindOf[n];
     for (const n of [...c.numeric, ...c.object]) published.add(n);
-    undeclared += c.undeclared.length;
   }
   const absent = carried.filter((n) => !published.has(n));
   if (absent.length)
@@ -265,16 +333,9 @@ function kindsOf(carried, keys) {
                     "published by none of the composers [" + ks.join(", ") + "] — a driver asking for a row " +
                     "nobody emits would print `null` for it for ever and read as an artifact too old to " +
                     "state it, which is a different fact and one this cannot tell it from.");
-  const nokind = carried.filter((n) => !(n in kindOf));
-  if (nokind.length)
-    throw new Error("testing/census_rows.js: [" + nokind.join(", ") + "] is carried by a consumer and its " +
-                    "producer states no kind for it — the row is about to be printed under a kind statement " +
-                    "that does not cover it, and a reader who takes the nearest one differences a gauge. " +
-                    "State its kind at the composer that emits it, where the person adding the row is the " +
-                    "person stating what may be done with it.");
   const byKind = Object.create(null);
   for (const k of KINDS) byKind[k] = carried.filter((n) => kindOf[n] === k);
-  return { byKind, undeclared };
+  return { byKind };
 }
 
 module.exports = { KINDS, COMPOSERS, composerRowsFromText, kindDeclarationFromText, censusKindsFromText,
