@@ -447,7 +447,7 @@ static CssPx sa_descendants_extreme(lxb_dom_element_t *el, lxb_dom_element_t *ex
                run of inline-level children in a box of its own. So the parent being a block container IS the
                guarantee — the run is either on the element's own context or inside one of its anonymous block
                boxes, and both were folded when the walk reached it. */
-            if (block_flow_text_child_generates_box(parent, n) && !sa_is_block_container(parent) &&
+            if (block_flow_text_child_generates_box(n) && !sa_is_block_container(parent) &&
                 !sa_is_non_replaced_inline(parent))
                 DFAILF("text run's parent %s, walk root %s: "
                       "CSSOM VIEW §2's scrolling area takes the extreme over \"all of the element's "

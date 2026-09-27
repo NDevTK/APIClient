@@ -12,6 +12,7 @@
 #include "core/css/css_computed_value.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
+#include "core/layout/box_tree.h"
 #include "core/layout/table_box.h"
 
 static char *tb_computed(lxb_dom_element_t *el, const char *name)
@@ -142,8 +143,9 @@ typedef struct {
 
 /* The four characters core/layout/block_flow.c's §9.2.2.1 predicate reads, asked of the character data alone.
    It is not a second copy of that predicate: that one answers whether a run GENERATES A BOX, which is a joint
-   question about the data and the parent's inherited `white-space`, and this one is the data half §17.2.1
-   asks for separately once the box is known to exist. */
+   question about the data and the inherited `white-space` of the element the run is a child OF — which after
+   css-display-3 §2.5's splice is not the container this walk was asked about — and this one is the data half
+   §17.2.1 asks for separately once the box is known to exist. */
 static bool tb_text_is_all_whitespace(const lxb_dom_node_t *n)
 {
     const lxb_dom_character_data_t *cd = lxb_dom_interface_character_data((lxb_dom_node_t *) n);
@@ -162,7 +164,22 @@ static bool tb_text_is_all_whitespace(const lxb_dom_node_t *n)
 /* `parent`'s child boxes, in tree order, each with §17.2's classification of its computed `display`. Answers
    the count and stores a newly allocated array at `*out`, which the caller frees. A child that generates no
    box is not in it — which is CSS 2 §9.2's own answer and not this file's, so a `display: none` element, a
-   comment, a processing instruction, a doctype and a collapsed run of white space are all simply absent. */
+   comment, a processing instruction, a doctype and a collapsed run of white space are all simply absent.
+   THE CHILDREN ARE THE BOX TREE'S AND NOT THE DOM'S, which is css-display-3 §2.5 "Box Generation: the none
+   and contents keywords" and is why this steps core/layout/box_tree.h rather than `->next`: "For the
+   purposes of box generation and layout, the element must be treated as if it had been replaced in the
+   element tree by its contents". §2.5's own Note names THIS SECTION as what that is for — "anonymous box
+   generation rules will ignore the elided elements entirely, as if they did not exist in the box tree" — so
+   a `display: contents` row's cells are children of the TABLE box for §17.2.1's purposes, and the section's
+   "consecutive siblings" is consecutive in THAT sequence.
+   WHICH IS WHY THIS WALK MATERIALISES AN ARRAY AND IS THE REASON THAT IS NOT AN EXTRAVAGANCE: every rule of
+   §17.2.1 is stated over a child's NEIGHBOURS, and the four callers below read those off `v[i-1]`/`v[i+1]`
+   and `v[j]`. Not one of them steps a sibling itself, so the splice is asked exactly once per container and
+   no caller can be half-converted — which for a sequence whose step needs the CONTAINER in hand is the
+   difference between one conversion and four.
+   A `none` ELEMENT IS STILL YIELDED HERE and still skipped below: box_tree.h pierces §2.5's `contents` and
+   nothing else, because §2.5's other keyword is the opposite sentence and this walk keeps its own CSS 2
+   §9.2 arm for it. */
 static size_t tb_children(lxb_dom_element_t *parent, TbChild **out)
 {
     lxb_dom_node_t *n;
@@ -171,7 +188,7 @@ static size_t tb_children(lxb_dom_element_t *parent, TbChild **out)
     char nbuf[160], pbuf[160];
 
     *out = NULL;
-    for (n = lxb_dom_interface_node(parent)->first_child; n != NULL; n = n->next) {
+    for (n = box_tree_first_child(parent); n != NULL; n = box_tree_next_sibling(parent, n)) {
         TableBoxKind kind = TABLE_BOX_NOT_A_TABLE_BOX;
         bool ws = false;
 
@@ -179,39 +196,23 @@ static size_t tb_children(lxb_dom_element_t *parent, TbChild **out)
             lxb_dom_element_t *el = lxb_dom_interface_element(n);
             char *d = tb_computed(el, "display");
             bool none = strcmp(d, "none") == 0;
-            bool contents = strcmp(d, "contents") == 0;
 
             kind = table_box_kind(d);
             free(d);
             if (none) continue;
-            if (contents) {
-                DFAILF("%s, a child of the table box %s: "
-                       "this child's computed `display` is `contents`, so the ELEMENT tree and the BOX tree "
-                       "are no longer the same shape here and the children CSS 2.1 §17.2.1 Anonymous table "
-                       "objects must classify are this child's OWN children, spliced into this list at its "
-                       "position. css-display-3 §2.5 Box Generation: the none and contents keywords is where "
-                       "that splice is stated: \"For the purposes of box "
-                       "generation and layout, the element must be treated as if it had been replaced in the "
-                       "element tree by its contents (including both its source-document children and its "
-                       "pseudo-elements, such as ::before and ::after pseudo-elements, which are generated "
-                       "before/after the element's children as normal).\" THE SPLICE IS BUILT AND IS NOT THIS "
-                       "COMPONENT'S TO COPY: core/layout/box_tree.h is that sentence as a child sequence, so "
-                       "ROUTE `tb_children` to it. IT IS THE SHORTEST CONVERSION LEFT, because this walk "
-                       "MATERIALISES an array and its four callers read adjacency off THAT — §17.2.1's "
-                       "\"consecutive\" is then consecutive in the box-tree sequence with no caller stepping a "
-                       "sibling. WHAT IT OWES FIRST IS ONE ARGUMENT: the text arm hands `parent` to "
-                       "core/layout/block_flow.h's §9.2.2.1 white-space predicate, which reads an INHERITED "
-                       "`white-space`, and §2.5's Note keeps inheritance on the document tree — \"any semantics "
-                       "based on the document tree, such as selector-matching, event handling, and property "
-                       "inheritance, are not affected\" — so a spliced text node's value comes from the "
-                       "`contents` element it is a child OF and not from this container. The two are the same "
-                       "element only until the splice runs, and reading the wrong one collapses a preserved run "
-                       "to no box at all",
-                       box_subject(el, nbuf, sizeof nbuf), box_subject(parent, pbuf, sizeof pbuf));
-                continue;
-            }
+            /* NO `contents` ARM STANDS HERE AND ONE USED TO. It was a DFAILF naming this conversion, and what
+               replaces it is the SEQUENCE and not a second test: core/layout/box_tree.h never yields an element
+               whose computed `display` is `contents` — it replaces one by its contents, per css-display-3 §2.5 —
+               and its own step ASSERTS that of every node it is handed, so a re-added test here would be a
+               second answer to a question one component owns. `none` is not that question: §2.5's two keywords
+               are opposite sentences, box_tree.h pierces only the first, and the arm above is CSS 2 §9.2's. */
         } else if (n->type == LXB_DOM_NODE_TYPE_TEXT) {
-            if (!block_flow_text_child_generates_box(parent, n)) continue;
+            /* §9.2.2.1's white-space rule reads an INHERITED property, so the element it reads is this run's
+               own DOM parent and NOT `parent`: css-display-3 §2.5's Note keeps inheritance on the document tree,
+               so a run the sequence above spliced in inherits from the `contents` element it is a child of. The
+               predicate derives that itself and takes no element, which is why routing this walk could not hand
+               it the container by mistake — core/layout/block_flow.h states why the parameter is gone. */
+            if (!block_flow_text_child_generates_box(n)) continue;
             ws = tb_text_is_all_whitespace(n);
         } else if (n->type == LXB_DOM_NODE_TYPE_COMMENT ||
                    n->type == LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION ||

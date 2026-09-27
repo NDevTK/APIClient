@@ -122,12 +122,16 @@ bool block_flow_display_is_block_container(const char *display);
 
 /* CSS 2.2 §9.2.2.1 "Anonymous inline boxes"'s WHITE-SPACE RULE for one TEXT child of a block container:
    "White space content that would subsequently be collapsed away according to the 'white-space' property does
-   not generate any anonymous inline boxes." FALSE is that sentence — a run this element's computed
-   `white-space` collapses away, which is most of the character data in a pretty-printed document — and TRUE
-   is a run that generates an anonymous inline box.
-   IT CLASSIFIES AND DOES NOT MEASURE, which is the contract each caller then has to satisfy for itself. Both
-   of them go on to ask core/layout/line_box.h about the run and they ask it DIFFERENT questions: this file's
-   walk wants §10.6.3's distance down the line boxes it flows into, while CSSOM VIEW §2's scrolling area wants
+   not generate any anonymous inline boxes." FALSE is that sentence — a run the computed `white-space` of the
+   element it is a child of collapses away, which is most of the character data in a pretty-printed document —
+   and TRUE is a run that generates an anonymous inline box.
+   IT CLASSIFIES AND DOES NOT MEASURE, which is the contract each caller then has to satisfy for itself. THIS
+   SENTENCE USED TO SAY "BOTH OF THEM" AND THE CALLERS ARE NOT TWO — the count was exact when written and a
+   count is not what the paragraph needs, so it is dropped rather than raised: the callers are whatever
+   `git grep -cE 'block_flow_text_child_generates_box[[:space:]]*\('` answers, less its declaration and its
+   definition. The ones that MEASURE go on to ask core/layout/line_box.h about the run and they ask it
+   DIFFERENT questions: this file's walk wants §10.6.3's distance down the line boxes it flows into, while
+   CSSOM VIEW §2's scrolling area wants
    where the boxes ON those line boxes REACH. Folding either measurement into this predicate would put one
    caller's question inside the other's classification, and the classification is right for both.
    IT IS EXPORTED BECAUSE EVERY WALK OVER A BLOCK CONTAINER'S CHILDREN MUST ASK IT, and the scrolling area
@@ -135,7 +139,24 @@ bool block_flow_display_is_block_container(const char *display);
    (`bf_height_needs_content`), so its own text would be invisible to a caller that only measured heights, and
    a text run that overflows a declared-height box is exactly what `scrollHeight` is asked about. A second
    copy of §9.2.2.1 would be one rule with two answers about whether a page's white space is content. */
-bool block_flow_text_child_generates_box(lxb_dom_element_t *parent, const lxb_dom_node_t *text);
+/* IT TAKES NO ELEMENT, AND THAT IS css-display-3 §2.5 "Box Generation: the none and contents keywords"'s
+   NOTE RATHER THAN A TIDIER SIGNATURE. It used to take the block container as well, and the two spellings
+   of the element whose `white-space` decides — the container a walk is enumerating, and the text node's own
+   DOM parent — are the same element only until §2.5's splice runs: "As only the box tree is affected, any
+   semantics based on the document tree, such as selector-matching, event handling, and property
+   inheritance, are not affected." So a text node core/layout/box_tree.h's child sequence yields is a child
+   of the `contents` element it was spliced out of, inherits from THAT, and is a box-tree child of the
+   container — and a caller handing over the container reads a `white-space` the run does not have, which
+   collapses a PRESERVED run to no box at all and is a dropped glyph rather than a nicety.
+   THE PARAMETER WAS NOT MERELY DANGEROUS, IT WAS REDUNDANT, and that is a PROPERTY rather than a tally: NO
+   caller ever passed anything but the text node's own DOM parent, each having just established the relation
+   for itself — by the `for (c = n->first_child; ...; c = c->next)` walk it was standing in, by an assert on
+   that equality, or by deriving `n->parent` in the line above. The set is `git grep -nE
+   'block_flow_text_child_generates_box[[:space:]]*\('` less its declaration and its definition, and a count
+   is not written here because it is one a reader can take today and this sentence cannot. There is no caller
+   that knows better than the node does, which is why deriving it here makes the wrong argument UNSPELLABLE
+   at the walks core/layout/box_tree.h is still waiting for rather than a sentence each must remember. */
+bool block_flow_text_child_generates_box(const lxb_dom_node_t *text);
 
 /* THE CHARACTER HALF OF THE RULE ABOVE, ON ITS OWN: is every character of this text node one css-text-3 §4
    "White Space Processing Rules" gives to the `white-space` property — a space, a tab, a line feed or a

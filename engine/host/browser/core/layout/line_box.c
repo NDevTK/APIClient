@@ -490,7 +490,7 @@ static void lb_walk(LbRun *r, lxb_dom_element_t *el);
    the accumulator and not this walk is where a run split across two text nodes is joined. */
 static void lb_text(LbRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
 {
-    if (!block_flow_text_child_generates_box(parent, n)) return;
+    if (!block_flow_text_child_generates_box(n)) return;
     text_run_measure_add_text(r->m, parent, n);
 }
 

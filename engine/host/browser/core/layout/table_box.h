@@ -19,14 +19,32 @@
  * two, and it is a positive statement rather than an absence: the section GENERATES that box, and no element
  * in the tree names it.
  *
- * THE RANGE CONVENTION IS ONE RULE FOR BOTH KINDS. `[first, end)` is a half-open run over the box's DOM
- * parent's child list; `end` is the node of the NEXT SURVIVING SIBLING BOX, or NULL where the box is the last
- * one. A node inside the range that generates no box (a comment, a `display: none` element, a run of white
- * space §9.2.2.1 collapses away, a box §17.2.1's first stage removed) is not content of the box — it is
- * skipped by the same classification that built the range, so a consumer re-walking the range reaches exactly
- * the nodes this component saw. Writing `end` as `first->next` for an element instead would be a SECOND
- * convention whose only visible difference is trailing white space, which is the shape of a disagreement
- * nobody notices until it moves a cell.
+ * THE RANGE CONVENTION IS ONE RULE FOR BOTH KINDS. `[first, end)` is a half-open run over the BOX TREE's child
+ * sequence for the box's container — core/layout/box_tree.h, which is css-display-3 §2.5 "Box Generation: the
+ * none and contents keywords"' splice — and NOT over a DOM child list, WHICH IS WHAT THIS CONVENTION USED TO
+ * SAY: "the box's DOM parent's child list", and that was exact while §17.2.1's walk stepped `->next`;
+ * it is kept in its own words because the two lists are the same list for every document with no `contents`
+ * element in it, so a reader who re-derives the convention from one will re-derive the retired sentence. §2.5's
+ * own Note is why the splice is the right list for THIS section and not merely a list that also works:
+ * "anonymous box generation rules will ignore the elided elements entirely, as if they did not exist in the box
+ * tree". `end` is the node of the NEXT SURVIVING SIBLING BOX IN THAT SEQUENCE, or NULL where the box is the
+ * last one. A node inside the range that generates no box (a comment, a `display: none` element, a run of
+ * white space §9.2.2.1 collapses away, a box §17.2.1's first stage removed) is not content of the box — it is
+ * skipped by the same classification that built the range, so a consumer re-walking the range WITH
+ * `box_tree_next_sibling` reaches exactly the nodes this component saw, and one re-walking it with `->next`
+ * stops at the end of a spliced element's own children and reaches none of the boxes after it. Writing `end`
+ * as `first->next` for an element instead would be a SECOND convention whose only visible difference is
+ * trailing white space, which is the shape of a disagreement nobody notices until it moves a cell.
+ *
+ * NOT COVERED: a range states its two ENDPOINTS and not the CONTAINER whose sequence they are positions in,
+ * and `box_tree_next_sibling` needs that container in hand — so no consumer can step one of these ranges at
+ * all. For a cell that container is the row box, and for a row it is the row group box or the table box, which
+ * `TableBoxRow.group` distinguishes; neither struct carries it. WHAT THE NEXT DIFF BUILDS: the container
+ * beside the range, landed WITH the first consumer that walks one, because a field nothing reads is a field
+ * whose correctness nothing tests. HOW ITS ABSENCE WOULD SHOW: a consumer that needs the nodes of an
+ * ANONYMOUS box — the one case where no element names it and the range is the only statement of its extent —
+ * has to re-derive the container, and the obvious re-derivation is `first->parent`, which is the `contents`
+ * element rather than the box.
  *
  * §17.2's DISPLAY ORDER IS PART OF THE ANSWER AND NOT A RENDERING DETAIL. §17.5's first rule says the row boxes
  * "fill the table from top to bottom in the order they occur in the source document", and §17.2 states two

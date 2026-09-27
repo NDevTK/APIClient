@@ -395,7 +395,7 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
            nothing. core/layout/block_flow.h answers that for every walk over a block container's children, and
            asking it here rather than re-deriving it is what keeps this walk and §9.4.1's agreeing about what a
            document's white space is. */
-        if (block_flow_text_child_generates_box(parent, n)) text_run_measure_add_text(r->m, parent, n);
+        if (block_flow_text_child_generates_box(n)) text_run_measure_add_text(r->m, parent, n);
         return;
     case LXB_DOM_NODE_TYPE_COMMENT:
     case LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION:

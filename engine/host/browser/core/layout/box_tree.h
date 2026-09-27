@@ -35,7 +35,13 @@
  * inherited property, and a walk that reads a property OF THE CHILD'S PARENT — a text node's inherited
  * `white-space`, the element whose computed properties a run of characters has — must read that node's own
  * parent element and never the box it is now a child of. The two are the same element only where no splice has
- * run, which is every call site that exists at the moment this sequence is first consumed.
+ * run. THIS CLAUSE USED TO SAY "which is every call site that exists at the moment this sequence is first
+ * consumed", and it is rewritten rather than deleted because a reader who counts the converted walks will
+ * re-derive it: the SECOND consumer is core/layout/table_box.c's §17.2.1 walk, whose text arm reads exactly
+ * such a property, so the sentence stopped being true of every call site at the commit that routed it. What
+ * closed it there is not a careful caller but a SIGNATURE: core/layout/block_flow.h's §9.2.2.1 white-space
+ * predicate no longer TAKES the container, it derives the text node's own parent, so the wrong element is
+ * unspellable at this sequence's remaining consumers instead of being a sentence each of them must recall.
  *
  * NOT COVERED: §2.5's splice carries an element's PSEUDO-ELEMENTS as well as its source-document children, and
  * this sequence holds only the second — no `::before`/`::after` box generation exists in this engine for it to

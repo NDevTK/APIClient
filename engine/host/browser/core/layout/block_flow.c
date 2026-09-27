@@ -398,8 +398,16 @@ bool block_flow_text_is_all_document_white_space(const lxb_dom_node_t *n)
 /* CSS 2.2 §9.2.2.1 "Anonymous inline boxes": "White space content that would subsequently be collapsed away
    according to the 'white-space' property does not generate any anonymous inline boxes." So a run of white
    space is a box or is nothing, and which one it is is the INHERITED `white-space` of the element the
-   anonymous inline box would belong to — the parent, since an anonymous box inherits from the box it is
-   inside. §16.6's table gives the answer per value: `normal` and `nowrap` collapse a sequence of white space,
+   anonymous inline box would belong to — THE TEXT NODE'S OWN DOM PARENT.
+   THIS CLAUSE USED TO READ "the parent, SINCE AN ANONYMOUS BOX INHERITS FROM THE BOX IT IS INSIDE", and the
+   answer it gives is right while its reason is exactly backwards — it is kept in its own words because it is
+   the reason a reader re-derives, and re-deriving it is what would put the container back. css-display-3
+   §2.5 "Box Generation: the none and contents keywords" is the refutation: the BOX a spliced run is inside is
+   not the element it inherits from, because "as only the box tree is affected, any semantics based on the
+   document tree, such as selector-matching, event handling, and property inheritance, are not affected". So
+   the element is read off the node and never off the walk, and the two agree for every document with no
+   `display: contents` element in it — which is why the wrong reason survived giving right answers.
+   §16.6's table gives the answer per value: `normal` and `nowrap` collapse a sequence of white space,
    `pre`, `pre-wrap` and `pre-line` preserve it (css-text-3 adds `break-spaces`), and a preserved run is real
    inline content with a real line box.
    THIS PREDICATE ANSWERS §9.2.2.1 AND MEASURES NOTHING, which is the whole of its contract and was not always
@@ -408,20 +416,35 @@ bool block_flow_text_is_all_document_white_space(const lxb_dom_node_t *n)
    both — the run either generates an anonymous inline box or it does not. The measurement crash now lives in
    core/layout/line_box.c, at the walk that would have to place the glyphs, which is where the advance is
    actually the missing operand and where the ONE line reporting it can name what to build. */
-bool block_flow_text_child_generates_box(lxb_dom_element_t *parent, const lxb_dom_node_t *n)
+/* THE ELEMENT WHOSE `white-space` THIS READS IS THE TEXT NODE'S OWN DOM PARENT, DERIVED HERE AND NEVER PASSED
+   IN. core/layout/block_flow.h states the reason in full and it is css-display-3 §2.5
+   "Box Generation: the none and contents keywords"'s Note: the splice moves a node into another box's child
+   sequence and moves no inheritance with it, so the container a walk is enumerating and the element this run
+   inherits from are two different elements the moment a `display: contents` ancestor stands between them. */
+bool block_flow_text_child_generates_box(const lxb_dom_node_t *n)
 {
+    lxb_dom_element_t *style;
     char *ws;
     bool collapses;
 
-    DCHECK(parent != NULL && n != NULL && n->type == LXB_DOM_NODE_TYPE_TEXT,
-           "§9.2.2.1's white-space question was asked about something that is not a TEXT node inside an "
-           "element — the rule is about a run of character data and the property it reads is the containing "
-           "element's inherited `white-space`");
+    DCHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_TEXT,
+           "§9.2.2.1's white-space question was asked about something that is not a TEXT node — the rule is "
+           "about a run of character data and the property it reads is that run's containing element's "
+           "inherited `white-space`");
+    DCHECK(n != NULL && n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
+           "§9.2.2.1's white-space question was asked about a TEXT node with no ELEMENT parent. The property "
+           "it reads is INHERITED, and css-display-3 §2.5 \"Box Generation: the none and contents "
+           "keywords\"'s Note keeps inheritance on the document tree — "
+           "\"any semantics based on the document tree, such as selector-matching, event handling, and "
+           "property inheritance, are not affected\" — so the element this run inherits from is its own DOM "
+           "parent and there is no other answer to fall back to. A text node whose parent is a document or a "
+           "fragment is not a child any walk over a block container's content reaches");
 
     /* A run that is not entirely white space has content §9.2.2.1's sentence says nothing about collapsing
        away, so it generates a box whatever `white-space` says. */
     if (!block_flow_text_is_all_document_white_space(n)) return true;
-    ws = bf_computed(parent, "white-space");
+    style = lxb_dom_interface_element(n->parent);
+    ws = bf_computed(style, "white-space");
     collapses = strcmp(ws, "normal") == 0 || strcmp(ws, "nowrap") == 0;
     free(ws);
     /* THE COLLAPSED ARM IS §9.2.2.1's SENTENCE AND NOT A SHORTCUT PAST ONE, and it is exact only because of
@@ -556,13 +579,23 @@ BlockFlowChildKind block_flow_child_kind(lxb_dom_element_t *parent, lxb_dom_node
 {
     DCHECK(parent != NULL && n != NULL,
            "CSS 2 §9.2's box generation was asked about a child with no node, or with no block container for "
-           "it to be a child OF — the parent is not decoration here, §9.2.2.1's white-space rule reads its "
-           "inherited `white-space` to decide whether a run of character data is a box at all");
+           "it to be a child OF — the parent is not decoration here, §9.2.1's level and §9.7's three-property "
+           "order are answers about the box this child is a child of");
+    /* THIS MESSAGE USED TO NAME §9.2.2.1's WHITE-SPACE RULE AS THE REASON THE PARENT IS NEEDED, AND IT IS NOT
+       ONE ANY MORE: that rule reads an INHERITED property, so it reads the TEXT NODE'S OWN parent, which
+       core/layout/block_flow.h's predicate now derives for itself. The retired reason is recorded rather than
+       dropped because it is the one a reader re-derives from the container being in hand — and because it is
+       what the equality below is about to stop being able to assume. */
     DCHECK(n->parent == lxb_dom_interface_node(parent),
            "CSS 2 §9.2's box generation was asked about a node that is not a CHILD of the block container it "
-           "was asked with. Every answer here is stated over `parent`'s child list — §9.2.2.1's collapsing, "
-           "§9.2.1's level, §9.7's three-property order — so a node from elsewhere in the tree would be "
-           "classified against a formatting context it is not in");
+           "was asked with. §9.2.1's level and §9.7's three-property order are stated over the box this node "
+           "is a child of, so a node from elsewhere in the tree would be classified against a formatting "
+           "context it is not in. THIS EQUALITY IS WHAT css-display-3 §2.5 "
+           "\"Box Generation: the none and contents keywords\"'s SPLICE BREAKS, and it is the "
+           "signal that this walk is one of the four core/layout/box_tree.h is still waiting for: a box-tree "
+           "child of `parent` need not be a DOM child of it, so converting this walk RETIRES this assert "
+           "rather than satisfying it. §9.2.2.1's collapsing used to be named here as a third answer stated "
+           "over `parent`'s child list and is no longer one of them");
     switch (n->type) {
     case LXB_DOM_NODE_TYPE_ELEMENT:
         return bf_element_child(lxb_dom_interface_element(n));
@@ -570,8 +603,7 @@ BlockFlowChildKind block_flow_child_kind(lxb_dom_element_t *parent, lxb_dom_node
         /* §9.2.2.1's anonymous inline box is INLINE-level — the box that text generates is an inline box, not
            a block-level one, and calling it block-level here is what used to make a text run look like
            something §9.4.1's stack could place. */
-        return block_flow_text_child_generates_box(parent, n) ? BLOCK_FLOW_CHILD_INLINE
-                                                             : BLOCK_FLOW_CHILD_NO_BOX;
+        return block_flow_text_child_generates_box(n) ? BLOCK_FLOW_CHILD_INLINE : BLOCK_FLOW_CHILD_NO_BOX;
     case LXB_DOM_NODE_TYPE_COMMENT:
     case LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION:
     case LXB_DOM_NODE_TYPE_DOCUMENT_TYPE:
