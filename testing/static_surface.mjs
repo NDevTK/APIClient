@@ -269,6 +269,23 @@
  *     a false complete OVERSTATES it, and only one of those two is the direction this file is required to be
  *     wrong in. BUILD IT WHEN the floor's block names rows that reading the bundle shows are NOT mutated —
  *     which is a question the printed coordinates answer and this sentence cannot.
+ * (c) A PROMISE RESOLUTION VALUE IS NOT A REPLY, AND THE BAND DOES NOT DISTINGUISH THEM. NOT COVERED: the
+ *     `WHY` band classifies a parameter bound by `.then`/`.catch`/`.finally` as A PROMISE RESOLUTION VALUE
+ *     without asking what its receiver settles with, so a field out of a fetched body and a value out of an
+ *     app-internal promise land in ONE bucket — and the first is precisely the case §Learning-from-replies
+ *     calls the point of the tool, the value the engine has and no parse ever will. WHAT THE NEXT DIFF
+ *     BUILDS: trace the receiver, and where it is a call whose callee is a DATA-class door, or a member call
+ *     on such a call — `fetch(x).then(r => r.json()).then(f)` — the class becomes a reply body. The door map
+ *     is already the one place that says which callees are data doors, so this READS it rather than restating
+ *     it, and `collectBinds` stays free of any notion of a door: the spelling is recorded there and every
+ *     classification stays in `VALUE_SUPPLIERS`'s own layer. HOW ITS ABSENCE WOULD SHOW: the band's promise
+ *     bucket stands above zero while no bucket names a reply, so a reader cannot tell which of those rows the
+ *     engine's reply learning reaches and which are the page talking to itself.
+ *     WHAT IT MAY NOT BE PRICED BY, and this is why it is a residual rather than a gap: it RESOLVES NOTHING.
+ *     It splits one bucket into two. A reader who scores it by rows moved out of `opaque` will score it zero
+ *     and conclude it is worthless, which is the same misreading the band as a whole invites — the worth of a
+ *     partition is that two mechanisms can be told apart, and the honest measure is whether every row lands
+ *     in exactly one class with none forced.
  *
  * WHAT COMPLETES THE COMPARISON, NAMED SO IT CAN BE RUN RATHER THAN RE-DERIVED. This file is one half. The
  * other half is not "the engine's endpoint count", which answers a different question: `solver/result.c`
@@ -573,7 +590,7 @@ const MAX_DEPTH = 24;
    function relies on exactly that — `({names}[id] || id)` falls through to the id. Folding a miss to `""`
    would silently INVENT an address with a segment deleted from it, so a miss carries a HOLE as well as its
    marker: read past `||` it disappears, and read anywhere else it drops the candidate. */
-const MISS = () => ({ text: "{?}", holes: 1, miss: true });
+const MISS = () => ({ text: "{?}", holes: 1, miss: true, why: ["a map key the object does not carry"] });
 
 /* ── A URL OBJECT IS MUTABLE, AND READING ONE OUT OF A NAME IS WHERE THAT STOPS BEING SAFE ────────────────
    THIS EXISTS BECAUSE ITS ABSENCE PRODUCED A FALSE `folded` ROW AND THAT IS THE ONE FAILURE THIS FILE MAY
@@ -604,7 +621,9 @@ const MISS = () => ({ text: "{?}", holes: 1, miss: true });
 const deref = (r, env) => {
   if (!r.mut) return r;
   if (env && env.mutFloor) env.mutFloor.demoted++;
-  return { text: r.text + "{?}", holes: r.holes + 1 };
+  /* THE DEMOTION'S OWN HOLE IS A MUTATION NOTHING IN THE TEXT RECORDS, which is a mechanism of its own and
+     not one of the classes above — a URL object's setters and its searchParams leave no byte behind. */
+  return { text: r.text + "{?}", holes: r.holes + 1, why: WHY(r).concat(["a mutation nothing in the text records"]) };
 };
 
 /* ── WHAT AN ADDRESS LOOKS LIKE, IN ONE PLACE ─────────────────────────────────────────────────────────────
@@ -628,9 +647,109 @@ const looksLikeAddress = (v) => /^https?:\/\/[^\s]+$/.test(v) ||
                                 /^\/[A-Za-z0-9_][^\s"'<>]*$/.test(v) ||
                                 /^\.{1,2}\/[^\s"'<>]+$/.test(v);
 
+/* ── WHY AN ADDRESS IS INCOMPLETE — THE ONE CLASSIFICATION PLACE ─────────────────────────────────────────
+   WHAT THIS ANSWERS AND WHY IT IS A PARTITION RATHER THAN A WIDENING. `opaque` is correct and
+   uninformative: it cannot tell an address composed from a value ONLY A RUN HAS from an address composed
+   from a value a run has AND THE ENGINE ALREADY LEARNS. A reply body's fields are the second, and the
+   comparison this file is one half of wants the razor quoted as `what the engine reaches that no parse can,
+   with the mechanism named per row` rather than asserted in aggregate. So every hole carries the CLASS of
+   the thing that would have filled it, and the rows are bucketed by the SET of classes they carry.
+   IT MOVES NO ROW AND THAT IS BY CONSTRUCTION, SO IT MAY NOT BE PRICED BY WHAT IT RESOLVES. A partition
+   that moved a total would have become a second count of the same population, which is the shape two
+   classifications of one thing always drift into — the check is that every figure above is byte-identical
+   across the diff that adds this, and the band's own buckets are ASSERTED to sum to `shape + opaque`.
+   THE CLASS IS ATTACHED AT THE ORIGIN AND NEVER INFERRED AT THE ROW, which is the whole of its soundness.
+   A door written inside a `.then` callback whose address is `"/api/" + someGlobal` is NOT reply-derived, so
+   a band keyed on what LEXICALLY ENCLOSES the call would have said it was. The hole knows where the fold
+   gave up; the row does not.
+   WHAT IT DELIBERATELY DOES NOT CLAIM. `.then` is classified as A PROMISE RESOLUTION VALUE and never as a
+   REPLY, because the resolution value of `p.then(f)` is whatever `p` settles with and that is a fact about
+   `p` rather than about `then`. Upgrading it would need the receiver traced to a data-door call, which is a
+   real analysis and is the named residual below rather than a word chosen here. */
+const VALUE_SUPPLIERS = new Map([
+  /* A PLATFORM CALLEE WHOSE OWN SEMANTICS BIND ITS CALLBACK'S PARAMETER. The table names WHAT THE PARAMETER
+     IS, which is what the classification turns on, and cites no section because the class does not depend on
+     one — a claim that needed a citation would be a claim about behaviour this file implements, and this file
+     implements none of these.
+     `setTimeout` AND `setInterval` ARE DELIBERATELY ABSENT AND THAT IS PRECISION RATHER THAN AN OMISSION:
+     their callback receives the EXTRA ARGUMENTS THE CALLER PASSED, so the value is app-supplied or absent
+     and the platform states nothing about it. Listing them would have attributed a caller's own value to a
+     platform boundary, which is the direction that overstates what only a run can have. */
+  ["then",        "a promise resolution value"],
+  ["catch",       "a promise resolution value"],
+  ["finally",     "a promise resolution value"],
+  ["map",         "an array element"],
+  ["forEach",     "an array element"],
+  ["filter",      "an array element"],
+  ["find",        "an array element"],
+  ["findIndex",   "an array element"],
+  ["some",        "an array element"],
+  ["every",       "an array element"],
+  ["flatMap",     "an array element"],
+  ["reduce",      "an array element"],
+  ["sort",        "an array element"],
+  ["addEventListener", "an Event"],
+  ["requestAnimationFrame", "a platform timestamp"],
+  ["requestIdleCallback",   "a platform timestamp"],
+]);
+const HOLE_CLASSES = [
+  "a promise resolution value", "an array element", "an Event", "a platform timestamp",
+  "a callback parameter supplied by app code", "a callback parameter whose supplier this pass cannot name",
+  "a function parameter, no platform supplier",
+  "a global this file never assigns", "a name this pass refuses to settle",
+  "a property read", "a computed property read", "a map key the object does not carry",
+  "a call result", "an operator this fold does not evaluate", "a node kind this fold has no arm for",
+  "a mutation nothing in the text records",
+];
+/* THE CLASSIFIER. One function, called from every hole-producing return, so the classes cannot be stated in
+   two places and disagree. A class it cannot name is the LAST member of the list and is printed as such on
+   the clean day — an unattributed bucket is better than a forced classification, because a forced one is a
+   claim about a mechanism nobody established. */
+function holeClass(node, env) {
+  if (!node) return "a node kind this fold has no arm for";
+  switch (node.type) {
+    case "Identifier": {
+      const ps = env && env.paramOf ? env.paramOf.get(node) : null;
+      if (ps) {
+        if (env.cbVia && env.cbVia.has(ps.fn)) {
+          const via = env.cbVia.get(ps.fn);
+          if (!via) return "a callback parameter whose supplier this pass cannot name";
+          return VALUE_SUPPLIERS.get(via) || "a callback parameter supplied by app code";
+        }
+        /* EVERY OTHER PARAMETER IS CALLER-SUPPLIED AND IS ONE CLASS HERE ON PURPOSE. Which KIND of caller —
+           a shared helper, a method reached through a receiver, a function assigned to a property — is the
+           partition the closure's own refusal block already prints, and a second copy of it here would be
+           the two-classifications-of-one-thing shape that drifts. */
+        return "a function parameter, no platform supplier";
+      }
+      if (env && env.freeRef && env.freeRef.has(node)) return "a global this file never assigns";
+      return "a name this pass refuses to settle";
+    }
+    case "MemberExpression": case "OptionalMemberExpression":
+      return node.computed ? "a computed property read" : "a property read";
+    case "CallExpression": case "OptionalCallExpression": case "NewExpression":
+      return "a call result";
+    case "BinaryExpression": case "LogicalExpression": case "UnaryExpression":
+      return "an operator this fold does not evaluate";
+    default:
+      return "a node kind this fold has no arm for";
+  }
+}
+const H = (node, env) => ({ text: "{?}", holes: 1, why: [holeClass(node, env)] });
+const WHY = (r) => r.why || [];
+/* THE ROW'S SIGNATURE IS THE SORTED SET OF ITS HOLES' CLASSES, NOT A RANKED PICK. A ranking would have let
+   a row with one promise hole and four global holes read as a promise row, which is a convention nobody can
+   check; a set is a fact about the row. It also keeps the buckets summing exactly to `shape + opaque`,
+   because every hole has a class and every incomplete row has a hole — which is the one property that says
+   this is a partition and not a second count. */
+const holeSig = (r) => {
+  const w = [...new Set(WHY(r))].sort();
+  return w.length ? w.join(" + ") : "a class this fold did not attach";
+};
+
 function fold(node, binds, depth, env) {
-  if (node == null) return { text: "{?}", holes: 1 };
-  if (depth > MAX_DEPTH) return { text: "{?}", holes: 1 };
+  if (node == null) return H(null, env);
+  if (depth > MAX_DEPTH) return { text: "{?}", holes: 1, why: ["a node kind this fold has no arm for"] };
   if (env) {
     const r = foldEnvOnly(node, binds, depth, env);
     if (r) return r;
@@ -641,46 +760,49 @@ function fold(node, binds, depth, env) {
     case "NumericLiteral":
       return { text: String(node.value), holes: 0 };
     case "TemplateLiteral": {
-      let t = "", h = 0;
+      let t = "", h = 0, w = [];
       for (let i = 0; i < node.quasis.length; i++) {
         t += node.quasis[i].value.cooked ?? node.quasis[i].value.raw ?? "";
         if (i < node.expressions.length) {
           const r = fold(node.expressions[i], binds, depth + 1, env);
           t += r.holes ? r.text : r.text;
           h += r.holes;
+          w = w.concat(WHY(r));
         }
       }
-      return { text: t, holes: h };
+      return { text: t, holes: h, why: w };
     }
     case "BinaryExpression": {
-      if (node.operator !== "+") return { text: "{?}", holes: 1 };
+      if (node.operator !== "+") return H(node, env);
       const a = fold(node.left, binds, depth + 1, env), b = fold(node.right, binds, depth + 1, env);
-      return { text: a.text + b.text, holes: a.holes + b.holes };
+      return { text: a.text + b.text, holes: a.holes + b.holes, why: WHY(a).concat(WHY(b)) };
     }
     case "Identifier": {
       /* THE BINDING THIS REFERENCE MEANS, by node identity rather than by name — see `collectBinds`. */
       const b = binds.get(node);
       if (b && b.node) return deref(fold(b.node, binds, depth + 1, env), env);
-      return { text: "{?}", holes: 1 };
+      return H(node, env);
     }
     case "MemberExpression": {
       /* An object whose binding resolves to an object literal with literal keys — `const R={u:"/x"};
          fetch(R.u)`. */
       if (node.computed || node.object.type !== "Identifier" || node.property.type !== "Identifier")
-        return { text: "{?}", holes: 1 };
+        return H(node, env);
       const b = binds.get(node.object);
-      if (!b || !b.node || b.node.type !== "ObjectExpression") return { text: "{?}", holes: 1 };
+      if (!b || !b.node || b.node.type !== "ObjectExpression") return H(node, env);
       for (const p of b.node.properties) {
         if (p.type !== "ObjectProperty" || p.computed) continue;
         const k = p.key.type === "Identifier" ? p.key.name : (p.key.type === "StringLiteral" ? p.key.value : null);
         if (k === node.property.name) return deref(fold(p.value, binds, depth + 1, env), env);
       }
-      return { text: "{?}", holes: 1 };
+      return H(node, env);
     }
     case "ConditionalExpression": {
       const a = fold(node.consequent, binds, depth + 1, env), b = fold(node.alternate, binds, depth + 1, env);
       if (a.holes === 0 && b.holes === 0) return { text: a.text, holes: 0, alt: b.text };
-      return { text: "{?}", holes: 1 };
+      /* BOTH ARMS' CLASSES, because a ternary whose arms fail for two reasons carries two mechanisms and a
+         band that kept one would name whichever arm the fold happened to read first. */
+      return { text: "{?}", holes: 1, why: WHY(a).concat(WHY(b)) };
     }
     case "TSAsExpression":
     case "TSNonNullExpression":
@@ -690,10 +812,10 @@ function fold(node, binds, depth, env) {
     case "CallExpression":
     case "OptionalCallExpression": {
       const r = foldPlatformString(node, binds, depth, env);
-      return r || { text: "{?}", holes: 1 };
+      return r || H(node, env);
     }
     default:
-      return { text: "{?}", holes: 1 };
+      return H(node, env);
   }
 }
 
@@ -753,7 +875,8 @@ function foldPlatformString(node, binds, depth, env) {
     try {
       const u = new URL(ref.text, URL_UNKNOWN_BASE);
       if (u.origin !== new URL(URL_UNKNOWN_BASE).origin) return null;
-      return { text: "{?}" + u.pathname + u.search + u.hash, holes: 1, mut: true };
+      return { text: "{?}" + u.pathname + u.search + u.hash, holes: 1, mut: true,
+               why: [holeClass(args[1] || null, env)] };
     } catch { return null; }
   }
   /* `new Request(input)` — Fetch §2.2.5's own constructor, whose first argument is the address and which
@@ -971,7 +1094,8 @@ function foldEnvOnly(node, binds, depth, env) {
          address. `ConditionalExpression` below consumes `.cmp` and never `.text`, so the hole costs the
          manifest channel nothing — asserted by the manifest's own totals being byte-identical across this
          change. */
-      return { text: "{?}", holes: 1, cmp: node.operator[0] === "!" ? !eq : eq };
+      return { text: "{?}", holes: 1, cmp: node.operator[0] === "!" ? !eq : eq,
+               why: ["an operator this fold does not evaluate"] };
     }
     case "ConditionalExpression": {
       const t = fold(node.test, binds, depth + 1, env);
@@ -1163,6 +1287,12 @@ function collectBinds(ast) {
      a node kind that is a small fraction of the tree, so the question is asked once when that parent is
      entered rather than of every node on the way down. A method needs no parent, being its own node kind. */
   const roleOfFn = new Map();
+  /* WHICH CALLEE A CALLBACK WAS HANDED TO, recorded in the SAME STATEMENT as the role so the two cannot
+     drift into disagreeing about one function. The SPELLING is recorded here and CLASSIFIED nowhere near
+     here: `collectBinds` stays free of any notion of what a platform name means, and `VALUE_SUPPLIERS` is
+     the one place that decides. Two classifications of one thing is the shape that drifts; a spelling and
+     its classification in two layers is not. */
+  const cbVia = new Map();
   const role = (child, what) => { if (child && FN_LIKE.has(child.type) && !roleOfFn.has(child)) roleOfFn.set(child, what); };
 
   const declare = (scope, name, initNode, fnNode) => {
@@ -1262,9 +1392,24 @@ function collectBinds(ast) {
       case "ConditionalExpression": role(n.consequent, "a ternary arm"); role(n.alternate, "a ternary arm"); break;
       case "LogicalExpression": role(n.left, "a logical arm"); role(n.right, "a logical arm"); break;
       case "SequenceExpression": for (const e of n.expressions || []) role(e, "a sequence element"); break;
-      case "CallExpression": case "OptionalCallExpression": case "NewExpression":
-        for (const x of n.arguments || []) role(x, "a CALLBACK argument — its parameter is bound by the callee's own semantics");
+      case "CallExpression": case "OptionalCallExpression": case "NewExpression": {
+        const via = n.callee && n.callee.type === "Identifier" ? n.callee.name
+          : n.callee && (n.callee.type === "MemberExpression" || n.callee.type === "OptionalMemberExpression") &&
+            !n.callee.computed && n.callee.property.type === "Identifier" ? n.callee.property.name : null;
+        for (const x of n.arguments || []) {
+          const had = roleOfFn.has(x);
+          role(x, "a CALLBACK argument — its parameter is bound by the callee's own semantics");
+          /* MEMBERSHIP SAYS `THIS IS A CALLBACK` AND THE VALUE SAYS `AND THIS IS ITS SUPPLIER, OR I COULD
+             NOT SPELL ONE`. Two facts in one map because they are about one key and were set in one
+             statement; two maps could disagree about whether a function is a callback at all. A callee this
+             pass cannot spell — `t[k](fn)`, a call returning a call — is recorded with NO spelling rather
+             than left out, because leaving it out reads downstream as "an ordinary parameter its own caller
+             supplies", which is the flattering direction: it attributes to app code a value some platform or
+             library callee will in fact bind. */
+          if (!had && roleOfFn.has(x)) cbVia.set(x, via || null);
+        }
         break;
+      }
       default: break;
     }
     if (n.type === "ClassMethod" || n.type === "ClassPrivateMethod") roleOfFn.set(n, "a CLASS METHOD — reached through a receiver");
@@ -1425,7 +1570,7 @@ function collectBinds(ast) {
     const ps = paramSlot.get(r.d);
     if (ps && !usesArguments.has(ps.fn)) paramOf.set(n, ps);
   }
-  return { binds, fnDeclOf, slotOf, count, freeRef, paramOf, callSiteOf, whyNoCall, roleOfFn };
+  return { binds, fnDeclOf, slotOf, count, freeRef, paramOf, callSiteOf, whyNoCall, roleOfFn, cbVia };
 }
 
 /* ── THE CHUNK MANIFEST ───────────────────────────────────────────────────────────────────────────────────
@@ -1587,14 +1732,14 @@ function readFile(src, filename) {
                      inline: { settled: 0, refused: new Map() }, recvDoor: { admitted: 0, declined: 0 },
                      sole: { settled: 0, unsettled: 0, refused: new Map() }, mutFloor: { demoted: 0, rows: [] } };
 
-  const { binds, fnDeclOf, slotOf, count: bindCount, freeRef, paramOf, callSiteOf, whyNoCall, roleOfFn } = collectBinds(ast);
+  const { binds, fnDeclOf, slotOf, count: bindCount, freeRef, paramOf, callSiteOf, whyNoCall, roleOfFn, cbVia } = collectBinds(ast);
   /* THE ENUMERATING FOLD'S FIXED HALF, built once per file: which binding a reference resolves to and which
      slot a member read names. The per-row half — which application, which candidate — is added at the row. */
   /* `freeRef` IS PART OF THE FOLD'S ENV AND NOT ONLY THE DOOR MATCHER'S, because the coercion arms below
      ask the same question the global door asks — is this `URL`, this `Request`, this `String` the platform's
      one — and one answer read two ways is what keeps them from disagreeing. A fold with no env cannot answer
      it and REFUSES, which is the floor direction. */
-  const envBase = { fnDeclOf, slotOf, freeRef, paramOf, callSiteOf, whyNoCall, roleOfFn };
+  const envBase = { fnDeclOf, slotOf, freeRef, paramOf, callSiteOf, whyNoCall, roleOfFn, cbVia };
   const manifest = scanManifest(ast, binds, envBase, filename);
   /* THE DOOR CHANNEL'S OWN ENV, AND WHY THE DOOR CHANNEL HAS ONE AT ALL. `foldEnvOnly` was reached only
      with a manifest CANDIDATE, so every arm in it that needs no candidate was being withheld from the rows
@@ -1722,6 +1867,7 @@ function readFile(src, filename) {
       const r = a ? fold(a, binds, 0, envDoor) : { text: "{?}", holes: 1 };
       if (mutFloor.demoted > m0)
         mutFloor.rows.push({ chan: door.id, file: filename, line: n.loc ? n.loc.start.line : 0, url: r.text });
+      const sig = r.holes ? holeSig(r) : null;
       const literalChars = r.text.replace(/\{\?\}/g, "").length;
       let kind;
       if (a && a.type === "StringLiteral") kind = "literal";
@@ -1760,7 +1906,7 @@ function readFile(src, filename) {
         fnDepth: fnStack.length,
         innerAsync: fnStack.length > 0 ? !!fnStack[fnStack.length - 1].async : false,
         method: door.arg0Method ? args[0].value.toUpperCase() : (door.id === "sendBeacon" ? "POST" : "GET"),
-        line: n.loc ? n.loc.start.line : 0, file: filename,
+        line: n.loc ? n.loc.start.line : 0, file: filename, sig,
       });
     }
   }, (n) => {
@@ -1949,7 +2095,7 @@ function readFile(src, filename) {
       const kind = n.right.type === "StringLiteral" ? "literal"
         : r.holes === 0 ? "folded" : literalChars > 0 ? "shape" : "opaque";
       blind.push({ prop: L.property.name, kind, url: r.text, file: filename,
-                   line: n.loc ? n.loc.start.line : 0 });
+                   line: n.loc ? n.loc.start.line : 0, sig: r.holes ? holeSig(r) : null });
       return;
     }
     if (n.type !== "StringLiteral" || attached.has(n)) return;
@@ -2126,7 +2272,46 @@ const SELFTEST = [
   //  TWO HELPERS CALLING ONLY EACH OTHER are unreachable code and still a CYCLE in this graph, so the walk
   //  carries its own seen set rather than trusting the depth limit to end it.
   [`function f(u){g(u)}function g(v){f(v);fetch(v)}`,       ["fetch|data|opaque|{?}"]],
+  /* ── THE WHY BAND, EVERY CLASS ARMED SEPARATELY ─────────────────────────────────────────────────────────
+     ONE CONTROL PER CLASS AND NOT ONE PER BAND, for the reason this file's own diff is the evidence for:
+     arming one of four populations left three rows as counts nobody had watched fire, and a class that has
+     never spoken cannot be told from a class that is dead. These are the door rows' SIGNATURES, so each of
+     these sources must ALSO classify as an ordinary row in the table above — a control that stopped being a
+     door row would quietly leave the band measuring a smaller population. */
+  [`a.map(u=>fetch(u))`,                                    ["fetch|data|opaque|{?}"]],
+  [`el.addEventListener("x",u=>fetch(u))`,                  ["fetch|data|opaque|{?}"]],
+  [`requestAnimationFrame(u=>fetch(u))`,                    ["fetch|data|opaque|{?}"]],
+  [`hof(u=>fetch(u))`,                                      ["fetch|data|opaque|{?}"]],
+  [`t[k](u=>fetch(u))`,                                     ["fetch|data|opaque|{?}"]],
+  [`fetch(u[k])`,                                           ["fetch|data|opaque|{?}"]],
+  [`var k="b";var m={a:"/x"};fetch(m[k])`,                  ["fetch|data|opaque|{?}"]],
+  [`fetch(a-b)`,                                            ["fetch|data|opaque|{?}"]],
+  [`fetch([1])`,                                            ["fetch|data|opaque|{?}"]],
 ];
+/* THE SIGNATURE EACH CONTROL MUST PRODUCE. Kept in its own table rather than folded into the row string
+   above, because a signature is a claim about WHY a row is incomplete and the row string is a claim about
+   WHAT it recovered — one table asserting both would make a change to either look like a change to the
+   other. The assertion over these is TWO-SIDED: every class this file declares must be produced by some
+   control, AND every class any control produces must be declared, so the declared list cannot drift away
+   from what the classifier can actually emit. */
+const SELFTEST_WHY = new Map([
+  [`p.then(u=>fetch(u))`,                   `a promise resolution value`],
+  [`a.map(u=>fetch(u))`,                    `an array element`],
+  [`el.addEventListener("x",u=>fetch(u))`,  `an Event`],
+  [`requestAnimationFrame(u=>fetch(u))`,    `a platform timestamp`],
+  [`hof(u=>fetch(u))`,                      `a callback parameter supplied by app code`],
+  [`t[k](u=>fetch(u))`,                     `a callback parameter whose supplier this pass cannot name`],
+  [`function f(u){fetch(u)}f("/a");f("/b")`, `a function parameter, no platform supplier`],
+  [`fetch(u)`,                              `a global this file never assigns`],
+  [`var B="/a";var B="/b";fetch(B)`,        `a name this pass refuses to settle`],
+  [`fetch(u.v)`,                            `a property read`],
+  [`fetch(u[k])`,                           `a computed property read`],
+  [`var k="b";var m={a:"/x"};fetch(m[k])`,  `a map key the object does not carry`],
+  [`fetch(encodeURIComponent("/a/b"))`,     `a call result`],
+  [`fetch(a-b)`,                            `an operator this fold does not evaluate`],
+  [`fetch([1])`,                            `a node kind this fold has no arm for`],
+  [`const u=new URL("https://h.example/a");fetch(u)`, `a mutation nothing in the text records`],
+]);
 const SELFTEST_GUARDED = new Set([`if(a){fetch("/g")}`]);
 /* THE REACH BAND'S OWN CONTROLS — source to the pair the row must carry. It is armed in BOTH directions and
    at BOTH ends, which is the discipline CLAUDE.md §A-CONTROL-ARMS-ONLY-ON-A-SITE-THE-INSTRUMENT-CAN-JUDGE
@@ -2229,6 +2414,7 @@ function selftest() {
   let spoke = 0, reachSpoke = 0;
   const soleRefused = new Set();
   let soleSettled = 0, soleUnsettled = 0, mutDemoted = 0;
+  const whyClasses = new Set(), whySeenPer = new Map();
   for (const [src, want] of SELFTEST) {
     const r = readFile(src, "<selftest>");
     if (!r.parsed) die(`SELF-TEST: the parser refused \`${src}\` — ${r.error}`);
@@ -2239,6 +2425,8 @@ function selftest() {
           `below this point would be about a different question, so nothing is printed.`);
     for (const x of r.sites) { seenKind.add(x.kind); seenCls.add(x.cls); spoke++; }
     for (const k of r.sole.refused.keys()) soleRefused.add(k);
+    for (const x of r.sites) if (x.sig) { for (const c of x.sig.split(" + ")) whyClasses.add(c); if (!whySeenPer.has(src)) whySeenPer.set(src, x.sig); }
+    for (const x of r.blind) if (x.sig) for (const c of x.sig.split(" + ")) whyClasses.add(c);
     soleSettled += r.sole.settled; soleUnsettled += r.sole.unsettled; mutDemoted += r.mutFloor.demoted;
     /* THE BRANCH COLUMN IS ARMED HERE AND NOWHERE ELSE. It reads 0 over the corpus, and a column that has
        never spoken cannot tell "the corpus has none" from "the mechanism is dead" — which is exactly the
@@ -2272,6 +2460,29 @@ function selftest() {
      cannot be told apart from a refusal row that is dead, so every reason the closure can print is named here
      and the selftest DIES if one of them never spoke. The list is the reasons themselves rather than a count
      of them, because a count would be satisfied by any three of the eight. */
+  /* ── THE WHY BAND'S CLASSES, TWO-SIDED ───────────────────────────────────────────────────────────────────
+     The forward direction says every class this file DECLARES has been seen; the reverse says every class the
+     classifier can EMIT has been declared. Only the reverse catches a class added to `holeClass` and not to
+     the list, which is the drift that would leave the band printing a name no reader can look up. */
+  for (const [src, want] of SELFTEST_WHY) {
+    if (!whySeenPer.has(src))
+      die(`SELF-TEST FAILED: the why-band control \`${src}\` produced no door row with a signature, so the ` +
+          `class it is the only control for is unarmed.`);
+    const got = whySeenPer.get(src);
+    if (got !== want)
+      die(`SELF-TEST FAILED on the WHY band for \`${src}\`\n  want ${JSON.stringify(want)}\n` +
+          `  got  ${JSON.stringify(got)}\nThe class naming WHY an address is incomplete is not the one this ` +
+          `control exists to arm, so the band's buckets mean something other than what they print.`);
+  }
+  for (const k of HOLE_CLASSES)
+    if (!whyClasses.has(k))
+      die(`SELF-TEST FAILED: no control produces the hole class "${k}", so its bucket is a count nobody has ` +
+          `watched rise and a zero in it says nothing about the corpus.`);
+  for (const k of whyClasses)
+    if (!HOLE_CLASSES.includes(k))
+      die(`SELF-TEST FAILED: a control produced the hole class "${k}", which this file does not declare. ` +
+          `The declared list has drifted from what \`holeClass\` can emit, so the band would print a name ` +
+          `no reader can look up and the two-sided check is the only thing that sees it.`);
   const wantSoleRefusals = [
     "no call site: it is referenced 2 times — a shared helper",
     "no call site: its one reference is not a callee",
@@ -2509,7 +2720,8 @@ function selftest() {
            manifestRows: SELFTEST_MANIFEST.length + 1, manifestProduced: manifestSpoke, manifestAddrs,
            reachRows: SELFTEST_REACH.size, spellRows: spWant.length, spellColumns: SPELLINGS.length + 2,
            spellNames: ENTRY_NAMES.size, derivationRefusals: 3,
-           soleReasons: wantSoleRefusals.length, soleSettled, soleUnsettled, mutDemoted };
+           soleReasons: wantSoleRefusals.length, soleSettled, soleUnsettled, mutDemoted,
+           whyClasses: HOLE_CLASSES.length, whyControls: SELFTEST_WHY.size };
 }
 
 /* ── THE RUN ──────────────────────────────────────────────────────────────────────────────────────────── */
@@ -2576,6 +2788,7 @@ function main(argv) {
       globalDoor: { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 },
       inline: { settled: 0, refused: new Map() }, recvDoor: { admitted: 0, declined: 0 },
       sole: { settled: 0, unsettled: 0, refused: new Map() }, mutFloor: { demoted: 0, rows: [] },
+      sig: { data: new Map(), program: new Map(), blind: new Map() },
       manifest: { sites: 0, addressSites: 0, candidates: 0, dropped: 0, fragments: 0, refusedTwoApplications: 0, multi: 0 },
       manifestUrls: new Set(), manifestRows: [],
       spell: {}, spellOther: { globalComputedDynamic: 0 },
@@ -2615,6 +2828,10 @@ function main(argv) {
     for (const [k, v] of r.sole.refused) b.sole.refused.set(k, (b.sole.refused.get(k) || 0) + v);
     b.mutFloor.demoted += r.mutFloor.demoted;
     for (const row of r.mutFloor.rows) b.mutFloor.rows.push(row);
+    /* THE BAND'S BUCKETS. Only an INCOMPLETE row has a signature, so this counts exactly the population the
+       razor is about and the assertion below can say so. */
+    for (const x of r.sites) if (x.sig) { const m = b.sig[x.cls]; m.set(x.sig, (m.get(x.sig) || 0) + 1); }
+    for (const x of r.blind) if (x.sig) b.sig.blind.set(x.sig, (b.sig.blind.get(x.sig) || 0) + 1);
     b.spellOther.globalComputedDynamic += r.spellOther.globalComputedDynamic;
     for (const [nm, t] of r.spell) {
       if (!b.spell[nm]) b.spell[nm] = spellTally();
@@ -2710,6 +2927,7 @@ function main(argv) {
     globalDoor: { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 },
     inline: { settled: 0, refused: new Map() }, recvDoor: { admitted: 0, declined: 0 },
     sole: { settled: 0, unsettled: 0, refused: new Map() }, mutFloor: { demoted: 0, rows: [] },
+    sig: { data: new Map(), program: new Map(), blind: new Map() },
     manifest: { sites: 0, addressSites: 0, candidates: 0, dropped: 0, fragments: 0, refusedTwoApplications: 0, multi: 0 }, manifestDistinctUrls: 0,
     /* THE SPELLING BAND'S OWN TOTALS. `spellSites` is a presence count over SITES and never a sum of
        occurrences, because the landed rows it prices are read as a bit and a site is the unit at which one
@@ -2743,6 +2961,8 @@ function main(argv) {
     for (const [k, v] of b.sole.refused) tot.sole.refused.set(k, (tot.sole.refused.get(k) || 0) + v);
     tot.mutFloor.demoted += b.mutFloor.demoted;
     for (const row of b.mutFloor.rows) tot.mutFloor.rows.push(row);
+    for (const k of ["data", "program", "blind"])
+      for (const [sg, v] of b.sig[k]) tot.sig[k].set(sg, (tot.sig[k].get(sg) || 0) + v);
     tot.spellOther.globalComputedDynamic += b.spellOther.globalComputedDynamic;
     for (const nm of ENTRY_NAMES) {
       const t = b.spell[nm];
@@ -2838,6 +3058,8 @@ function main(argv) {
               `${st.manifestAddrs} address(es), the rest refused for a stated reason`);
   console.log(`         plus ${st.reachRows} REACH controls, each asserted for BOTH its function depth and ` +
               `whether its innermost enclosing function is async`);
+  console.log(`         plus the WHY band: all ${st.whyClasses} hole class(es) shown firing from ${st.whyControls} control(s), ` +
+              `checked BOTH ways so a class the classifier emits cannot go undeclared`);
   console.log(`         plus the unique-call-site closure: all ${st.soleReasons} refusal reason(s) shown FIRING, ` +
               `${st.soleSettled} parameter(s) settled and ${st.soleUnsettled} crossed to an opaque argument, and ` +
               `${st.mutDemoted} mutable-fold demotion(s) — so neither price is a zero nobody has armed`);
@@ -2974,6 +3196,46 @@ function main(argv) {
      and is reported as a SHAPE, so this count is the exact CEILING on what an escape analysis over the URL's
      binding could ever recover — and the rows carry their coordinates, so whether each URL is really mutated
      is answered by READING THE SOURCE rather than by believing a sentence in the header. */
+  /* ── WHY THE INCOMPLETE ROWS ARE INCOMPLETE ──────────────────────────────────────────────────────────────
+     A PARTITION OF THE RAZOR'S OWN POPULATION, AND IT RESOLVES NOTHING BY CONSTRUCTION. `opaque` is correct
+     and says only "a request happens here"; it cannot tell an address composed from a value ONLY A RUN HAS
+     from one composed from a value a run has AND THE ENGINE ALREADY LEARNS. A promise resolution value, an
+     array element and an Event are the second; a property nothing in the text writes is the first. So this
+     block may not be priced by how many rows it moves out of `opaque` — it moves none — and its worth is
+     that a reader can tell the two mechanisms apart per row rather than taking an aggregate on trust.
+     THE TOTALS ARE ASSERTED TO SUM, which is the one check that says a partition has not become a second
+     count of the same population: every hole carries a class, every incomplete row carries a hole, so the
+     buckets must equal `shape + opaque` for their channel exactly. The classes are attached at the hole's
+     ORIGIN and never inferred from what encloses the call — a door inside a `.then` callback whose address is
+     `"/api/" + someGlobal` is not promise-derived, and a band keyed on the lexical surroundings would have
+     said it was. */
+  const bandSum = (m) => [...m.values()].reduce((a, b) => a + b, 0);
+  for (const [k, want] of [["data", tot.data.shape + tot.data.opaque],
+                           ["program", tot.program.shape + tot.program.opaque],
+                           ["blind", tot.blind.shape + tot.blind.opaque]]) {
+    const got = bandSum(tot.sig[k]);
+    if (got !== want)
+      die(`the WHY band's ${k} buckets sum to ${got} and that channel reports ${want} incomplete row(s). ` +
+          `A partition whose parts do not sum to the population is a SECOND COUNT of it, so every figure ` +
+          `it is read beside would be about a different question. Nothing further is printed.`);
+  }
+  console.log(``);
+  console.log(`WHY THE INCOMPLETE ROWS ARE INCOMPLETE — the class of the value that would have finished each`);
+  console.log(`  address, taken at the HOLE'S OWN ORIGIN rather than from what lexically encloses the call. It`);
+  console.log(`  RESOLVES NOTHING and must not be priced by what it moves: it partitions the rows this file`);
+  console.log(`  already reports as shape or opaque, and the buckets are ASSERTED to sum to that population.`);
+  console.log(`  A row carrying holes of two kinds is listed under BOTH names joined, never ranked into one —`);
+  console.log(`  a ranking is a convention nobody can check and a set is a fact about the row.`);
+  console.log(`  WHAT THIS DOES NOT CLAIM: a promise resolution value is not a REPLY. The value \`p.then(f)\``);
+  console.log(`  receives is whatever \`p\` settles with, which is a fact about \`p\`; calling it a reply needs the`);
+  console.log(`  receiver traced to a data-door call, and that is a named residual and not a word chosen here.`);
+  for (const [k, label] of [["data", `DATA door`], ["program", `PROGRAM door`], ["blind", `blind spot`]]) {
+    const rows = [...tot.sig[k]].sort((a, b) => b[1] - a[1]);
+    console.log(`  ${label} — ${bandSum(tot.sig[k])} incomplete row(s) in ${rows.length} class(es):`);
+    for (const [sg, v] of rows) console.log(`    ${String(v).padStart(5)}   ${sg}`);
+  }
+  console.log(``);
+
   console.log(``);
   console.log(`THE MUTABLE-FOLD FLOOR AND WHAT IT COST — a constructed URL read through a NAME is demoted to a`);
   console.log(`  SHAPE, because a URL is mutable and a searchParams write leaves nothing in the text. Each row`);
