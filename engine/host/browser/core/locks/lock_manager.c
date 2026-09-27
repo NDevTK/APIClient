@@ -552,10 +552,17 @@ static void lk_release(JSContext *ctx, JSValueConst manager, JSValueConst lock)
     JSValue queue = lk_queue_of(ctx, manager, name);
     JSValue held = lk_get(ctx, manager, LKF_HELD);
 
-    /* "Remove lock from the manager's held lock set." A lock released twice would let the next request in
-       while the first callback still believes it holds the resource, so the removal is asserted to have found
-       something rather than being allowed to be a no-op. */
-    DCHECK(lk_remove(ctx, held, lock),
+    /* "Remove lock from the manager's held lock set." THE REMOVAL IS A STATEMENT AND THE ASSERT IS ABOUT ITS
+       ANSWER, which is not a style choice: a DCHECK condition is compiled out in release, so a removal
+       performed INSIDE one would never happen there — the lock would stay in the held set for ever and every
+       later request for that name would wait on a callback that had already returned. That is the
+       side-effect-in-a-condition §Offensive-programming forbids by name, and it is invisible in a dev build
+       because dev is exactly where the condition IS evaluated. */
+    bool was_held = lk_remove(ctx, held, lock);
+
+    /* A lock released twice would let the next request in while the first callback still believes it holds the
+       resource, so the removal is asserted to have FOUND something rather than being allowed to be a no-op. */
+    DCHECK(was_held,
            "Web Locks API §4.2 released a lock that is not in its manager's held lock set — the two callers are "
            "§2.4's settle "
            "(once per waiting promise) and §4.4's aborted-signal arm (which returns without settling), so a "
