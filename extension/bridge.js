@@ -342,36 +342,57 @@ function assertResultDocument(r) {
        the engine gained the first of these rows and this loop, which knew only about numbers, would have
        aborted the trusted zone on EVERY document the moment a build shipped it — a cross-boundary diff whose
        JS half is live on write and whose C half is live only after a build (CLAUDE.md §A-CROSS-BOUNDARY-DIFF).
-       AN EMPTY HISTOGRAM IS REFUSED WHERE ITS ARMS ARE AN `X()`-MACRO EXPANSION AND NOWHERE ELSE, because
-       "every arm is emitted including the zeroes, so `{}` is the composer having stopped listing them" — the
-       reason this refusal was written with, and the reason it still holds for seven of the eight tables on this
-       document — is a statement about a table whose keys COME FROM A FIXED LIST, and it is false of one whose
-       keys are DERIVED. `_cold`'s five walk solver/step_unit.h's STEP_UNITS ("Both arms are emitted, always,
-       zeroes included, and engine/build.mjs's `coldFields()` throws on either going absent"), `_swap`'s two walk
-       solver/cow.h's COW_STATE_KINDS (cow_state_hist_json loops cow_state_kind_count() and "HOLDS NO LIST OF ITS
-       OWN"), and solver/absent.c emits its members on every census — so `{}` in any of those is a broken relay
-       and is still refused. `_heap`'s ONE table is not like them: `childRealmRefSites` is keyed on the engine's
-       own `__func__` names of whichever sites hold a realm reference, and browser/core/frame/navigable.h states
-       that the set of them "is DERIVED" with "no list here or anywhere for a reader to keep in step", and that
-       the function "ANSWERS the number of rows written, 0 when no child realm is live". So `{}` there is that
-       census's POSITIVE statement THIS RUN HOLDS NO LIVE CHILD REALM — the same split `_forkAt` makes against
-       the first three one level up, and the one result.c refuses `[]` for in its own words at the composer.
-       WHAT IT COST WHILE IT WAS ONE QUESTION: this DCHECK runs inside assertResultDocument, which every partial
-       goes through, so the trusted zone DESTROYED THE RESULT DOCUMENT OF EVERY PAGE THAT NEVER CREATED A CHILD
-       NAVIGABLE. Measured 6 of 6 runs over two app pages: `runsTotal 0`, `docsAnswered 0`, an empty endpoint
-       surface, and a @WHY naming a row whose emptiness the engine's own header documents as an answer — for
-       runs the engine had completed. One predicate answering two questions, decided by the stricter one, with
-       the cost landing silently on the other (CLAUDE.md §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS), and its own
-       message named the premise it was violating by citing step_unit.h's list over a table not keyed on it.
-       NAMED RESIDUAL — WHAT IS NOT COVERED: the kind is read off the CENSUS and not off the row, because
-       nothing in the document says which kind a row is; and the shape check above still refuses `null`, which
-       navigable.h documents as the same table's answer for a build that carries no attribution — unreachable
-       only because that is a release engine, and a release packaging sets APICLIENT_DEV=false so this DCHECK
-       does not run, so a DEV extension loading a RELEASE wasm would abort here. WHAT THE NEXT DIFF BUILDS:
-       result.c stating each nested row's kind beside it, so this reader derives the question from the producer
-       rather than from the grouping. HOW ITS ABSENCE WOULD SHOW: a page whose run completes is reported with no
-       runs and no endpoints at all, and the @WHY names a census row the producer's header calls an answer. */
-    const ARMS_ARE_A_FIXED_LIST = k !== "_heap";
+       AN EMPTY HISTOGRAM IS NO LONGER REFUSED HERE AT ALL, AND THE ARGUMENT FOR REFUSING ONE IS KEPT RATHER
+       THAN DELETED BECAUSE IT IS SOUND AND A READER WILL RE-DERIVE IT. It read: where a table's arms are an
+       `X()`-macro expansion every arm is emitted including the zeroes, so `{}` is the composer having stopped
+       listing them — true of `_cold`'s five over solver/step_unit.h's STEP_UNITS, of the `cowStateAsks`/
+       `cowStateMade` pair over solver/cow.h's COW_STATE_KINDS, and of solver/absent.c's members; false of
+       `_heap`'s `childRealmRefSites`, whose keys browser/core/frame/navigable.h states are DERIVED and whose
+       `{}` is that census's positive statement THIS RUN HOLDS NO LIVE CHILD REALM. The refusal was therefore
+       written with an EXEMPTION keyed on the census name, and a hand enumeration of which tables are
+       macro-keyed as its justification.
+       THE ENUMERATION IS WHAT ROTTED, AND IT ROTTED IN THE SAME PREDICATE, AT THE ROW IT DID NOT COVER —
+       which is this paragraph's own NAMED RESIDUAL arriving a SECOND time rather than a fresh defect. The
+       clause above counted `_swap`'s TWO histograms and `seven of the eight tables on this document`, and
+       solver/result.c's `result_swap_json` now splices THREE: `cowHostRecAsksBySite` landed as "the third half
+       taken one level further down on the one row where the aggregate ran out of answers", and it is keyed on
+       CALL SITES rather than on any macro list. Its composer says so in its own words — "A SITE THAT HAS NEVER
+       BEEN REACHED IS ABSENT RATHER THAN 0, because this is a census of asks and a zero row would be a claim
+       about a call site's reachability that an ask count is not entitled to make; `{}` is the positive
+       statement that no component record was reached under a running flow at all."
+       WHAT IT COST, MEASURED, and it is the same cost as the first time because it is the same predicate: this
+       DCHECK runs inside assertResultDocument, which every partial goes through, so the trusted zone
+       DESTROYED THE RESULT DOCUMENT OF EVERY PAGE THAT NEVER REACHED A `hostRec` CAPTURE SITE UNDER A RUNNING
+       FLOW. Observed at an installed artifact against this file at `origin/main`: the scheduler read
+       `alive:false driving:false kicksRefused:3` with `diedOf` a @WHY naming an EMPTY `cowHostRecAsksBySite`,
+       after the renderer had been reserved and rooted for the document — so the page was seated and the zone
+       killed the run at its first census. It is a DEV-ONLY abort (extension/check.js gates DCHECK on
+       APICLIENT_DEV), which makes it worse for this project rather than better: §Testing makes the DCHECKs the
+       gate, so what it destroys is every dev measurement of every page while release proceeds in silence.
+       SO THE REFUSAL GOES INSTEAD OF BEING NARROWED, AND THE REASON IS THAT IT WAS ALWAYS THE THIRD COPY OF A
+       QUESTION TWO BETTER INSTRUMENTS ALREADY ASK WITH BOTH HALVES IN ONE HAND. Narrowing it means naming the
+       derived-key rows here, which is a second copy of a PRODUCER fact and is exactly how the enumeration
+       above came to be wrong twice. The two that survive take their field set FROM THE COMPOSER'S OWN FORMAT
+       STRING and therefore cannot rot the way a hand list does: engine/build.mjs's `cowHostRecSiteReading`
+       checks the empty object AS A CLAIM — "`{}` … is correct exactly when `cowStateAsks.hostRec` is 0, which
+       the same sum check decides, with no separate arm to get wrong" — which is strictly stronger than an
+       emptiness demand and cannot fire on a correct `{}`; its sibling `cowStateReading` requires the
+       macro-keyed pair's two key sets be IDENTICAL; `coldFields()` throws on either `_cold` arm going absent;
+       and solver/cow.c's `cow_host_rec_sites` DCHECKs the same partition over the COUNTERS. build.mjs's half
+       is also the one that survives a release build, where both C asserts are compiled out. A zone that
+       cannot see a producer's key-set rule may not be the place that enforces it, and the copy that ABORTS on
+       the producer's documented answer is the copy to remove — CLAUDE.md §THE-COROLLARY-IS-THE-MORE-USEFUL-
+       HALF, where the diff to prefer is the invariant that makes a silent failure loud rather than the
+       predicate rewritten at one site, and the invariant is not missing here: it is present three times.
+       WHAT REMAINS ASSERTED ON A HISTOGRAM IS EVERY VALUE IN IT, one level down, because those are numbers
+       this zone HOLDS rather than a rule about keys only the producer knows.
+       NAMED RESIDUAL — WHAT IS NOT COVERED: the shape check above still refuses `null`, which navigable.h
+       documents as `childRealmRefSites`' answer for a build that carries no attribution. It is unreachable
+       only because that is a release engine and a release packaging sets APICLIENT_DEV=false so this DCHECK
+       does not run, so a DEV extension loading a RELEASE wasm aborts here. WHAT THE NEXT DIFF BUILDS: the
+       shape check admitting `null` for that one row, taken from the producer rather than from a name here.
+       HOW ITS ABSENCE WOULD SHOW: a zone driving a release artifact reports no runs and no endpoints for
+       every page, and the @WHY names a row whose null the producer's header calls an answer. */
     for (const f of Object.keys(r[k])) {
       const v = r[k][f];
       const hist = v !== null && typeof v === "object" && !Array.isArray(v);
@@ -381,12 +402,6 @@ function assertResultDocument(r) {
              "table keyed on solver/step_unit.h's arms, and a NaN reaching a reader makes every comparison " +
              "against it false, which is the same silent failure asserted for the WFQ census one block up");
       if (!hist) continue;
-      DCHECK(!ARMS_ARE_A_FIXED_LIST || Object.keys(v).length > 0,
-             "the engine's " + k + " census carries an EMPTY `" + f + "` histogram — its arms are an " +
-             "`X()`-macro expansion (solver/step_unit.h's STEP_UNITS, solver/cow.h's COW_STATE_KINDS) and " +
-             "solver/result.c emits every one of them on every census, zeroes included, so an empty table is " +
-             "that composer having stopped listing them rather than a run in which no arm was ever taken. An " +
-             "absent bucket and a bucket that reads 0 are different facts and this zone will not average them");
       for (const a of Object.keys(v))
         DCHECK(typeof v[a] === "number" && Number.isFinite(v[a]),
                "the engine's " + k + " census carries a non-finite `" + f + "." + a + "` — a histogram row is " +
