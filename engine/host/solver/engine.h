@@ -1943,7 +1943,7 @@ typedef struct {
      * parse offered no raise point for its whole length, and its length is `body_n`, the page-chosen quantity
      * solver/rest_unit.h's bound (1) forbids in a step's cost. It is REWRITTEN RATHER THAN DELETED because
      * the derivation is still exactly right about the INTERPRETER and a reader will re-derive it. It is no
-     * longer right about the PARSE: JS_FlowNewStep polls the same hook from the parse's own production
+     * longer right about the PARSE: JS_FlowCompileStep polls the same hook from the parse's own production
      * dispatch and hands the parse back through `f->compile`, so a compile now RESTS.
      * AND THAT MOVED ONE ROW'S SUBJECT AND NOT THE OTHER'S, WHICH IS THE WHOLE OF WHAT A READER OF THIS PAIR
      * HAS TO KNOW. `classic_compiles` is ONE PER PROGRAM — raised at the stint that finishes a parse — and
@@ -2002,6 +2002,29 @@ typedef struct {
        cheap engine. Asserted against its own count at engine_step_unit_runs, which is what catches that. */
     int64_t classic_compile_again_bytes;
     long classic_compile_own_decode; /* …whose body ONE flow decoded for its own delivery: the floor's bound */
+    /* AND THE COMPLEMENT OF `classic_compiles`, WITHOUT WHICH THAT ROW FALLING IS UNATTRIBUTABLE — the classic
+     * programs started from a parse another timeline had already finished. A shared parse raises none of the
+     * four rows above: it parses no bytes, so it is not a compile, not a repeat, not a per-flow decode and not
+     * a stint. That is exactly what makes `classic_compiles` alone ambiguous once parses are shared — a
+     * document whose timelines share them reads as a document with fewer programs, which is the reading that
+     * cannot be told from an engine that STOPPED STARTING THEM. Read the two together:
+     *     classic_compiles + classic_parse_shared == the classic programs whose closure was obtained at all
+     * and that sum is what is comparable with a pre-sharing revision's `classic_compiles`, while neither half
+     * is. The mechanism itself, its key and why it is not a cache with an eviction policy are at
+     * solver/dyn_body.h; the repeat this row is the other side of is `classic_compile_again` above.
+     * IT IS A SUBSET OF NOTHING HERE and is not asserted against anything: it is raised in the arm where the
+     * parse does not happen, so it partitions the programs STARTED and not the parses performed, and adding it
+     * to either partition above would be adding answers about different events. What IS asserted at
+     * engine_step_unit_runs is the implication — a share requires that some parse finished — and the gauge
+     * `dyn_body_parses_held` against this row's own total.
+     * `classic_compile_again` STAYS NONZERO BY DESIGN and a reader must not take it as the sharing failing: a
+     * program whose parse FAILED holds nothing (an exception is one flow's completion, not a fact about the
+     * bytes), and a flow already mid-parse of a row that another flow finished in the meantime resumes its own
+     * parse to the end rather than abandoning it. Both really do parse bytes twice.
+     * RETIREMENT: this row goes when `classic_compiles` is no longer read as a count of programs started —
+     * that is, when the census publishes programs STARTED directly and the compile row is read only as a cost.
+     * `prog_starts` is that number for every kind at once, so it is not it. */
+    long classic_parse_shared;       /* classic programs started from a parse another flow had finished */
     /* AND HOW MANY OF THE STINTS CONTINUED A PARSE RATHER THAN BEGINNING ONE — the row without which
      * `compile-handed-the-thread-back` cannot say whether a parse handed back is a parse CARRIED FORWARD. The
      * stint population is already exact (the two arms above), and this partitions it on the one axis that

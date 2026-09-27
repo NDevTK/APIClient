@@ -51,6 +51,8 @@
 
 #include <stddef.h>
 
+#include "quickjs.h"   /* a HELD PARSE is a JSValue; see dyn_body_parse_hold below */
+
 /* OPAQUE, so that the text cannot be reached without going through the accessor and the refcount cannot be
    reached at all. It is also what makes the conversion enforceable: `free(f->dyn[k])` on a column of these is
    a type error rather than a heap corruption that only a fork would ever surface. */
@@ -134,6 +136,71 @@ int dyn_body_note_parsed(DynBody *b);
    reader must treat as unmeasured rather than as measured-zero. `dyn_body_new`'s bodies are a COPY the caller
    made and may be referenced by many rows, which is where the answer above has its force. */
 int dyn_body_is_own_decode(const DynBody *b);
+
+/* THE PARSE OF THESE BYTES, HELD SO THAT N TIMELINES CROSSING ONE DOCUMENT'S SCRIPT SEQUENCE PARSE IT ONCE
+   RATHER THAN ONCE EACH — the CONSUMER of the repeat the row above measures, and it lives on the body for
+   exactly the reason that row does: the body is the only thing in the engine that IS a program's source, so
+   the cache and the census key on ONE identity and cannot drift into two answers about one program. A cache
+   keyed on anything else — a document plus a script index, a hash of the text, a per-realm table — would be a
+   second statement of "these are the same program" beside `dyn_body_note_parsed`'s, free to disagree with it,
+   and CLAUDE.md §ONE-global rules the hash out by name because a minified bundle repeats one-line bodies and a
+   hash therefore names a SET.
+   WHY THE REPEAT EXISTS AT ALL, which is what says who the beneficiaries are: a fork inherits its parent's
+   program column and its cursor (`sib->dyn[i] = dyn_body_ref(parent->dyn[i])`, `sib->last_compiled =
+   parent->last_compiled`), so a sibling does not re-parse the program it branched INSIDE and parses every
+   LATER program of that sequence itself — against its parent's own body. An @S candidate session and a
+   cold-resumed replay re-run the document from the baseline and do the same. So the population is a
+   document's own script sequence crossed by many timelines, which is every real page under forced
+   multi-path execution.
+   THE KEY IS `(realm, name, flags)` AND NOT THE BODY, AND EVERY ONE OF THE THREE IS BAKED INTO THE BYTECODE.
+   `JS_CallInternal` takes the running realm from the BYTECODE (`ctx = b->realm`) and not from the frame, so a
+   frame built over a closure compiled in another realm runs its body against that realm's global, class_proto
+   and intrinsics — CLAUDE.md §A-PER-REALM-FACT, and quickjs's JS_FlowInstantiate asserts it on its own side.
+   The NAME is the program's ScriptOrModule name: the module-map key and the base a relative `import()`
+   resolves against. The FLAGS carry strictness and `JS_EVAL_FLAG_INLINE_SCRIPT`, which is what the solver
+   reads to decide whether a missing member of a server-rendered record is unknown INPUT or `undefined`
+   (solver/absent.h). A closure is therefore answered only to a caller whose three agree.
+   A DISAGREEMENT IS A `DCHECK` AND NOT A MISS, which is a claim about this engine rather than a convenience.
+   Every reference to one body names one realm by construction — a body is made where a program ARRIVES, and
+   `engine_queue_into`'s callers each queue into rows of ONE document — and its name and flags are derived
+   from the ROW, which a fork copies rather than recomputes. So two rows holding one body and disagreeing
+   about any of the three is a defect somewhere else, and it is one this file can see and nothing else can.
+   The RELEASE arm answers 0 and the caller parses the program itself, which is a defined wrong-nothing
+   answer rather than an undefined one: it costs one parse and truncates nothing.
+   THE OWNERSHIP CONTRACT, continuing the four sentences above:
+     - `dyn_body_parse_hold` takes ONE MORE reference on the closure and records the key it was compiled
+       under; the CALLER still owns the reference it passed.
+     - `dyn_body_parse_ref`  answers ONE MORE reference, which the caller frees; the body keeps its own.
+     - the body's LAST `dyn_body_unref` releases the closure, through the realm recorded beside it.
+   WHY THAT FREE PATH NEEDS NO `JSContext` ARGUMENT AND CANNOT DANGLE, which is the question this slot was
+   deferred on. The realm is stored because the KEY requires it, and a held closure keeps that realm ALIVE:
+   `JSFunctionBytecode` takes a counted reference on its realm (`b->realm = JS_DupContext(ctx)`), released
+   only when the bytecode is, so the pointer this file frees through is valid for exactly as long as there is
+   something to free. What would be left is a body outliving the RUNTIME, and that is caught before any free
+   can happen rather than argued about: a held closure is a live GC object, so `JS_FreeRuntime`'s own
+   `gc_obj_list` walk reports it and aborts, naming the bytecode and its realm. `dyn_body_parses_held` is
+   published so a host can assert the stronger statement at its teardown instead of waiting for that walk.
+   IT IS NOT A CACHE WITH AN EVICTION POLICY AND MUST NOT GROW ONE. A held closure lives exactly as long as
+   the body whose text it was compiled from, which is as long as some timeline holds that program — so the
+   set is bounded by the frontier's own membership and by nothing this file decides. There is no registry of
+   live bodies here and there must not be one (see `dyn_body_total_bytes`), so there is nothing to walk and
+   nothing to choose between. What a pager MAY do is drop one: a parse is RE-DERIVABLE from the text the body
+   is holding, which is CLAUDE.md §OOM's third category, so shedding it converts storage into recomputation
+   and truncates nothing — and that is the only shape a release here may ever take.
+   NOTHING HERE DECIDES ANY WORK (§NO BOUNDS). No source is refused for having been parsed, no arm is chosen
+   on the answer, and no program is skipped: the two arms of `dyn_body_parse_ref` differ only in whether the
+   caller spends the parse again. A FAILED parse holds nothing, because its result is an exception and an
+   exception is one flow's completion rather than a fact about the bytes — so a program with a SyntaxError is
+   re-parsed by every timeline that reaches it, and `dyn_body_note_parsed` goes on reporting each of those as
+   a repeat, which is the honest reading and not a gap. */
+int  dyn_body_parse_ref(const DynBody *b, JSContext *realm, const char *name, int flags, JSValue *pfn);
+void dyn_body_parse_hold(DynBody *b, JSContext *realm, const char *name, int flags, JSValueConst fn);
+/* HOW MANY BODIES ARE HOLDING ONE RIGHT NOW — a GAUGE and not a lifetime count, so it may not be differenced
+   across two censuses and its sum over a partition is a live population rather than a total of events. It is
+   published for the one comparison a reader of a shared-parse row can make without re-deriving the mechanism:
+   a body may hold at most one parse and a parse is held only by a body that finished one, so this can never
+   exceed the lifetime number of finished parses, which is what solver/engine.c asserts at its copy-out. */
+long dyn_body_parses_held(void);
 
 /* WHAT THE PROGRAM TEXT COSTS THE INSTANCE, ONCE — the sum of `len + 1` over every body alive right now.
    It is a SHARED row of the cold census (solver/cold.h) and not a per-flow one, for the reason that file

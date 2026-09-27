@@ -9837,7 +9837,7 @@ static long     g_over_seamless;   /* …and how many of those turns offered NOT
    names as the one that must never appear in a step's cost — `the one the ATTACKER chooses`.
    IT IS REWRITTEN RATHER THAN DELETED BECAUSE EVERY CLAUSE OF IT IS STILL EXACTLY RIGHT ABOUT THE
    INTERPRETER'S RAISE KINDS, so a reader who re-derives it from quickjs.h will re-add it. What it is no
-   longer right about is the PARSE: JS_FlowNewStep polls the same budget hook and the same preempt policy
+   longer right about is the PARSE: JS_FlowCompileStep polls the same budget hook and the same preempt policy
    from the parse's own production dispatch and hands the parse back through `f->compile`, so the span these
    rows were written about now RESTS. The rows stay and what they COUNT changed with it — see THE TWO ROWS
    ARE COUNTS OF DIFFERENT EVENTS below, which is the half that was not carried to the checks that read them.
@@ -9980,6 +9980,22 @@ static long g_classic_compile_resumed; /* compile STINTS that CONTINUED a parse 
 static long    g_classic_compile_again;        /* parses of bytes some flow had ALREADY parsed to completion */
 static int64_t g_classic_compile_again_bytes;  /* and how many source bytes those re-parses covered */
 static long    g_classic_compile_own_decode;   /* parses of a body one flow decoded for its own delivery */
+/* …AND THE PROGRAMS STARTED FROM A PARSE SOMEBODY ELSE HAD ALREADY FINISHED, which is the row WITHOUT WHICH
+   `g_classic_compiles` FALLING IS UNATTRIBUTABLE. A shared parse raises nothing above — it parses no bytes, so
+   it is not a compile, not a repeat and not a stint — and the three rows above therefore report a document
+   whose timelines share their parses as though it had fewer programs, which is EXACTLY the reading that cannot
+   be told from an engine that stopped starting them. THIS ROW IS THAT DISCRIMINATOR AND IT IS A POSITIVE ONE:
+   `classic_compiles + classic_parse_shared` is the number of classic programs whose closure was obtained at
+   all, so the pair is comparable with a pre-sharing revision's `classic_compiles` while neither half is.
+   IT IS NOT A SUBSET OF ANY ROW ABOVE and is not asserted against one: it is raised in the arm where the parse
+   does NOT happen, so it partitions the classic programs STARTED rather than the parses performed, and adding
+   it to `again` or `own_decode` would be adding two answers about different events.
+   WHAT IS ASSERTED AT THE COPY-OUT is the one implication a reader can check without re-deriving anything: a
+   parse can only be SHARED if some parse FINISHED, and the gauge of bodies currently holding one cannot exceed
+   the lifetime count of parses that finished. Both are in one hand there.
+   IT DECIDES NOTHING (§NO BOUNDS): no program is skipped on it, no arm is chosen on it and no source is refused
+   for having been parsed — see solver/dyn_body.h, which owns that argument for the mechanism itself. */
+static long    g_classic_parse_shared;         /* classic programs started from a parse another flow finished */
 /* AND THE WIDTH OF THE BYTE TOTAL, MADE A BUILD FAILURE RATHER THAN A SENTENCE, for the reason the pair below
    `g_step_us` gives and with one difference that makes it the more urgent of the two: the runtime check at
    engine_step_unit_runs is a `DCHECKF`, so it is COMPILED OUT in release — which is the build a real page is
@@ -11714,90 +11730,132 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 if (started) module_report_rejection(prog_ctx, ev);   /* §8.1.4.4 step 8 */
                 JS_FreeValue(prog_ctx, ev);
             } else {
-                /* THE COMPILE, BRACKETED — see g_classic_compiles. Both readings are in the slice's own
-                   measure (quantum_thread_us), so the comparison below is the same inequality
-                   quantum_expired() asks and not a second opinion about the budget.
-                   ONLY THE CLASSIC ARM IS BRACKETED, AND THAT IS THE POINT RATHER THAN AN OMISSION:
-                   JS_FlowEvalModule above compiles AND EVALUATES, so a bracket around it would time a
-                   compile and an execution together — which is the conflation these rows exist to end.
-                   A FAILED COMPILE IS COUNTED, because it PARSED the bytes and spent the time; the row is
-                   about what the span cost, never about what it produced. Nothing branches on either. */
-                /* …AND THE COMPILE CAN NOW GIVE THE THREAD BACK PART WAY THROUGH, which is what the third
-                   answer is. JS_FlowNewStep polls the SAME budget hook and the SAME preempt policy the
-                   interpreter's dispatch does, from the parse's own production dispatch, and hands the parse
-                   back through `f->compile`; the next stint continues it at the exact production. The row's
-                   program has NOT started, so nothing below this runs and the cursor does not move.
-                   WHY THE BRACKET STAYS AND WHAT IT NOW MEANS. It used to time a whole compile and the
-                   overrun row counted spans that could not have rested however the scheduler was ordered.
-                   It times one STINT now, and that is a sharper reading rather than a weaker one: a stint
-                   that meets the slice is a stint the seam DID NOT FIRE IN, so the row stops being a
-                   measurement of the page's source length and becomes a measurement of this seam.
-                   AND IT CHANGED THE ROW'S SUBJECT AND NOT ONLY ITS SHARPNESS, which is the half that was
-                   written here and never carried to the check that reads it. The numerator below is now PER
-                   STINT while `g_classic_compiles` a few lines down is PER PROGRAM, so `over <= compiles`
-                   stopped holding the instant this seam landed and the assert in engine_step_unit_runs went
-                   on stating it — measured, 15 against 14 on the native smoke, which is one program that
-                   took two overrunning stints rather than a counter raised somewhere else, and the assert's
-                   own text sent its reader looking for that second raise site. The denominator this
-                   numerator actually has is derived at the declaration (g_classic_compiles) out of the two
-                   arms every stint ends in; nothing extra is counted here, and a third accumulator beside
-                   these two would be the second answer that drifts. */
-                /* …AND WHICH OF THE TWO KINDS OF STINT THIS ONE IS, READ BEFORE THE CALL BECAUSE THE CALL
-                   CONSUMES THE ANSWER — see g_classic_compile_resumed. JS_FlowNewStep takes the carrier out
-                   of this slot (`*pcompile = NULL`) the moment it decides to continue a parse, so the field
-                   is NULL at every line below this one whichever kind of stint it was, and a read placed
-                   after the call would report every stint as a start. It is not a second copy of the
-                   predicate the compile itself branches on: the call is handed `&f->compile`, so this reads
-                   the same storage one statement earlier with nothing between the two that could write it.
-                   ABOVE THE TIMING BRACKET AND NOT INSIDE IT, so the span `g_classic_compile_over` is drawn
-                   from stays exactly the parse and nothing else — the bracket's own paragraph above is what
-                   makes that a reading of this seam rather than of the page's source length.
-                   UNCONDITIONALLY, AND NOT UNDER EITHER ARM BELOW: a resume is a fact about how this stint
-                   STARTED, so it is true of a stint that goes on to park again, one that finishes the parse
-                   and one whose parse ends in a SyntaxError alike. Raised under an arm it would partition the
-                   outcomes instead of the stints, and the subtraction at the declaration would then be a
-                   difference between two populations of different width. */
-                if (f->compile != NULL) g_classic_compile_resumed++;
-                int64_t t_comp0 = quantum_thread_us();
-                JSValue *newframe = NULL;
-                int cr = JS_FlowNewStep(prog_ctx, body, body_n, prog_name, src_flags, &newframe, &f->compile);
-                if (quantum_thread_us() - t_comp0 >= (int64_t)ENGINE_QUANTUM_MS * 1000)
-                    g_classic_compile_over++;
-                if (cr == 0) {
-                    /* PARKED MID-PARSE. No ENGINE_LEAVE_ROW and no cursor move: this row is still the row the
-                       flow is at, and the ladder re-enters here when the flow is next picked. */
-                    DCHECK(f->compile != NULL && newframe == NULL,
-                           "a compile answered SUSPENDED and left neither a parked parse nor a frame — the "
-                           "flow would stand at a row whose program is neither running nor being parsed");
-                    g_step_unit = STEP_UNIT_COMPILE_YIELDED;
-                    return 0;
-                }
-                DCHECK(f->compile == NULL,
-                       "a compile that finished left a parked parse behind it — the next step would resume a "
-                       "parse for a program that has already started");
-                f->frame = newframe;
-                /* A FAILED COMPILE IS STILL A COMPILE and a SUSPENDED one is not — see g_classic_compiles: the
-                   row is about what the span cost, and a stint that handed the thread back has not finished
-                   spending it. Counting a stint would make the denominator the number of times the scheduler
-                   looked at a parse rather than the number of programs parsed. */
-                g_classic_compiles++;
-                /* …AND WHETHER THESE BYTES HAD BEEN PARSED BEFORE, PARTITIONED OFF THAT TOTAL AT THIS EVENT
-                   rather than left to be inferred from a denominator that is not published — see
-                   g_classic_compile_again for the inference this replaces and solver/dyn_body.h for why the
-                   identity is the BODY. ON THIS LINE AND NOT ONE EARLIER: a stint that handed the thread back
-                   has parsed part of a program and finished none, so marking at the entry would report the
-                   SECOND stint of one parse as a repeat of its own first.
-                   THE MARK IS THE ROW'S OWN BODY AND THE COMPILE'S OWN BYTES, asserted rather than assumed,
-                   because the two are read at lines two hundred apart: `body` came off this row when the
-                   sequence arm read it and nothing between may have moved the cursor, so a disagreement here
-                   is a mark being made against a program that was not the one parsed — which would report a
-                   later parse of the OTHER row's bytes as a repeat and this one's as a first. */
+                /* THE ROW'S OWN BODY, TAKEN BEFORE ANYTHING IS SPENT ON IT, AND THE ASSERT THAT GUARDS THAT
+                   IDENTITY MOVED UP WITH IT. It used to stand two hundred lines below, after the parse, under
+                   a message about a MARK being recorded against the wrong row; the body is now read BEFORE the
+                   parse — the shared-parse question is asked of it — so the same disagreement would hand this
+                   row a closure compiled from another row's bytes, which is strictly worse than a mis-filed
+                   census mark. The claim is unchanged and its position is what makes it cover both: `body` came
+                   off this row when the sequence arm read it and nothing between may have moved the cursor. */
                 DCHECK(f->script_i < f->dyn_n && dyn_body_text(f->dyn[f->script_i]) == body,
-                       "a finished parse is about to be recorded against a row that is not the one it parsed "
-                       "— the cursor moved between the sequence arm's read and the compile, so the repeat "
-                       "census would mark one program's bytes for another's");
-                {
-                    DynBody *pb = f->dyn[f->script_i];
+                       "the row the cursor names is not the row whose bytes this compile is about — the cursor "
+                       "moved between the sequence arm's read and here, so this program would be started from "
+                       "another row's parse and the repeat census would mark one program's bytes for another's");
+                DynBody *pb = f->dyn[f->script_i];
+                /* HAS SOME FLOW OF THIS PROCESS ALREADY PARSED THESE BYTES UNDER THIS ROW'S OWN KEY — asked of
+                   EVERY classic row, with no kind, no spelling and no population carved out, because a cache
+                   that is only sometimes consulted is the dual-system shape CLAUDE.md §A-superseded-system-is-
+                   DELETED forbids: the half it is not asked about keeps the old cost with nothing saying so.
+                   IT IS NOT A SECOND WAY TO OBTAIN A PROGRAM. There is ONE parse in this engine
+                   (JS_FlowCompileStep) and ONE instantiation (JS_FlowInstantiate), and this line changes only
+                   HOW MANY TIMES the first is spent for one set of bytes — which is why the false arm below is
+                   the PRODUCER rather than a legacy body: delete the hold and the parse still has to happen,
+                   which is §C-stack's own test for routing against fallback.
+                   THE KEY IS THE ROW'S, NOT THE BODY'S, and all three parts of it are already computed above
+                   for the compile itself: `prog_ctx` (the document's realm — JS_CallInternal takes the running
+                   realm from the BYTECODE, so a frame over a foreign closure runs against the wrong global),
+                   `prog_name` (the ScriptOrModule name, which is the module-map key and the base a relative
+                   `import()` resolves against) and `src_flags` (strictness and JS_EVAL_FLAG_INLINE_SCRIPT).
+                   Nothing here recomputes any of them, so the cache cannot key on a fact the compile does not.
+                   `f->compile == NULL` IS WHEN THE QUESTION CAN BE ASKED AT ALL, AND IS NOT A CARVE-OUT. A
+                   non-NULL carrier is this flow's OWN parse of THIS row, suspended at an exact production; the
+                   flow is not beginning a program, it is continuing one, and taking a shared closure here would
+                   leave that carrier live under a row whose program has started — which the assert below this
+                   block and JS_FlowCompileStep's own suspend assert both exist to forbid. So the consult is
+                   unconditional over ROWS and asked once per row, at the one stint that begins it. */
+                JSValue held = JS_UNDEFINED;
+                int shared = (f->compile == NULL)
+                             && dyn_body_parse_ref(pb, prog_ctx, prog_name, src_flags, &held);
+                if (shared) {
+                    /* NO BRACKET AND NO COMPILE ROW IS RAISED HERE, WHICH IS WHAT KEEPS THE CENSUS'S OWN
+                       IDENTITIES EXACT. `g_classic_compiles` is ONE PER PROGRAM PARSED and this stint parses
+                       nothing; `g_classic_compile_over` times a parse and there is none to time; and the stint
+                       identity `compile STINTS == classic_compiles + arms[compile-handed-the-thread-back]`
+                       holds because a stint that never entered the parse is not a compile stint. The row that
+                       DOES rise is g_classic_parse_shared, and it is what makes a falling `classicCompiles`
+                       attributable — see its declaration. */
+                    f->frame = JS_FlowInstantiate(prog_ctx, held);
+                    JS_FreeValue(prog_ctx, held);
+                    g_classic_parse_shared++;
+                } else {
+                    /* THE COMPILE, BRACKETED — see g_classic_compiles. Both readings are in the slice's own
+                       measure (quantum_thread_us), so the comparison below is the same inequality
+                       quantum_expired() asks and not a second opinion about the budget.
+                       ONLY THE CLASSIC ARM IS BRACKETED, AND THAT IS THE POINT RATHER THAN AN OMISSION:
+                       JS_FlowEvalModule above compiles AND EVALUATES, so a bracket around it would time a
+                       compile and an execution together — which is the conflation these rows exist to end.
+                       A FAILED COMPILE IS COUNTED, because it PARSED the bytes and spent the time; the row is
+                       about what the span cost, never about what it produced. Nothing branches on either. */
+                    /* …AND THE COMPILE CAN NOW GIVE THE THREAD BACK PART WAY THROUGH, which is what the third
+                       answer is. JS_FlowCompileStep polls the SAME budget hook and the SAME preempt policy the
+                       interpreter's dispatch does, from the parse's own production dispatch, and hands the parse
+                       back through `f->compile`; the next stint continues it at the exact production. The row's
+                       program has NOT started, so nothing below this runs and the cursor does not move.
+                       WHY THE BRACKET STAYS AND WHAT IT NOW MEANS. It used to time a whole compile and the
+                       overrun row counted spans that could not have rested however the scheduler was ordered.
+                       It times one STINT now, and that is a sharper reading rather than a weaker one: a stint
+                       that meets the slice is a stint the seam DID NOT FIRE IN, so the row stops being a
+                       measurement of the page's source length and becomes a measurement of this seam.
+                       AND IT CHANGED THE ROW'S SUBJECT AND NOT ONLY ITS SHARPNESS, which is the half that was
+                       written here and never carried to the check that reads it. The numerator below is now PER
+                       STINT while `g_classic_compiles` a few lines down is PER PROGRAM, so `over <= compiles`
+                       stopped holding the instant this seam landed and the assert in engine_step_unit_runs went
+                       on stating it — measured, 15 against 14 on the native smoke, which is one program that
+                       took two overrunning stints rather than a counter raised somewhere else, and the assert's
+                       own text sent its reader looking for that second raise site. The denominator this
+                       numerator actually has is derived at the declaration (g_classic_compiles) out of the two
+                       arms every stint ends in; nothing extra is counted here, and a third accumulator beside
+                       these two would be the second answer that drifts. */
+                    /* …AND WHICH OF THE TWO KINDS OF STINT THIS ONE IS, READ BEFORE THE CALL BECAUSE THE CALL
+                       CONSUMES THE ANSWER — see g_classic_compile_resumed. JS_FlowCompileStep takes the carrier out
+                       of this slot (`*pcompile = NULL`) the moment it decides to continue a parse, so the field
+                       is NULL at every line below this one whichever kind of stint it was, and a read placed
+                       after the call would report every stint as a start. It is not a second copy of the
+                       predicate the compile itself branches on: the call is handed `&f->compile`, so this reads
+                       the same storage one statement earlier with nothing between the two that could write it.
+                       ABOVE THE TIMING BRACKET AND NOT INSIDE IT, so the span `g_classic_compile_over` is drawn
+                       from stays exactly the parse and nothing else — the bracket's own paragraph above is what
+                       makes that a reading of this seam rather than of the page's source length.
+                       UNCONDITIONALLY, AND NOT UNDER EITHER ARM BELOW: a resume is a fact about how this stint
+                       STARTED, so it is true of a stint that goes on to park again, one that finishes the parse
+                       and one whose parse ends in a SyntaxError alike. Raised under an arm it would partition the
+                       outcomes instead of the stints, and the subtraction at the declaration would then be a
+                       difference between two populations of different width. */
+                    if (f->compile != NULL) g_classic_compile_resumed++;
+                    int64_t t_comp0 = quantum_thread_us();
+                    JSValue fn = JS_UNDEFINED;
+                    int cr = JS_FlowCompileStep(prog_ctx, body, body_n, prog_name, src_flags, &fn, &f->compile);
+                    if (quantum_thread_us() - t_comp0 >= (int64_t)ENGINE_QUANTUM_MS * 1000)
+                        g_classic_compile_over++;
+                    if (cr == 0) {
+                        /* PARKED MID-PARSE. No ENGINE_LEAVE_ROW and no cursor move: this row is still the row the
+                           flow is at, and the ladder re-enters here when the flow is next picked. */
+                        DCHECK(f->compile != NULL && JS_IsUndefined(fn),
+                               "a compile answered SUSPENDED and left neither a parked parse nor a program — the "
+                               "flow would stand at a row whose program is neither running nor being parsed");
+                        g_step_unit = STEP_UNIT_COMPILE_YIELDED;
+                        return 0;
+                    }
+                    DCHECK(f->compile == NULL,
+                           "a compile that finished left a parked parse behind it — the next step would resume a "
+                           "parse for a program that has already started");
+                    /* A FAILED COMPILE IS STILL A COMPILE and a SUSPENDED one is not — see g_classic_compiles: the
+                       row is about what the span cost, and a stint that handed the thread back has not finished
+                       spending it. Counting a stint would make the denominator the number of times the scheduler
+                       looked at a parse rather than the number of programs parsed. */
+                    g_classic_compiles++;
+                    /* …AND WHETHER THESE BYTES HAD BEEN PARSED BEFORE, PARTITIONED OFF THAT TOTAL AT THIS EVENT
+                       rather than left to be inferred from a denominator that is not published — see
+                       g_classic_compile_again for the inference this replaces and solver/dyn_body.h for why the
+                       identity is the BODY. ON THIS LINE AND NOT ONE EARLIER: a stint that handed the thread back
+                       has parsed part of a program and finished none, so marking at the entry would report the
+                       SECOND stint of one parse as a repeat of its own first.
+                       AND THE ROW STAYS NONZERO BY DESIGN RATHER THAN BY OVERSIGHT NOW THAT A PARSE IS SHARED, for
+                       two populations this block is the only site that can see: a program whose parse FAILED holds
+                       nothing (its result is an exception, which is one flow's completion and not a fact about the
+                       bytes), and a flow already mid-parse of a row another flow finished in the meantime resumes
+                       its own parse to the end. Both really do parse bytes twice, so counting them is the census
+                       being right rather than the cache being half-consulted. */
                     if (dyn_body_note_parsed(pb)) {
                         g_classic_compile_again++;
                         g_classic_compile_again_bytes += (int64_t)dyn_body_len(pb);
@@ -11809,6 +11867,23 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        a sentence, and the upper end is loose by the number of DISTINCT such programs — which
                        is the honest direction and is why it is published rather than described. */
                     if (dyn_body_is_own_decode(pb)) g_classic_compile_own_decode++;
+                    if (cr > 0) {
+                        /* HELD FOR EVERY LATER TIMELINE THAT REACHES THESE BYTES — the whole of the fix, and it is
+                           one call because the identity it keys on is the one the repeat census already keys on
+                           (solver/dyn_body.h). The body takes its OWN reference, so this flow still owns `fn` and
+                           frees it below exactly as it did when the two halves were one entry. A second offer of
+                           one body's parse keeps the FIRST closure, for the reason dyn_body_parse_hold states:
+                           `entered` is a mutable bit ON the bytecode and it IS the orphan identity. */
+                        dyn_body_parse_hold(pb, prog_ctx, prog_name, src_flags, fn);
+                        f->frame = JS_FlowInstantiate(prog_ctx, fn);
+                        JS_FreeValue(prog_ctx, fn);
+                    } else {
+                        /* THE PARSE FAILED AND THE EXCEPTION IS PENDING — no program starts, which is what
+                           §4.12.1.1's "if el's result is null, then fire an event named error at el, and return"
+                           says, and nothing is held: see the paragraph above for why a SyntaxError is not a fact
+                           about the bytes that a later timeline may inherit. */
+                        f->frame = NULL;
+                    }
                 }
                 started = (f->frame != NULL);
                 /* §4.12.1.1's CLASSIC arm, steps 1-2, and the reason they are HERE and not around a call: the
@@ -12591,6 +12666,11 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
     out->classic_compile_again       = g_classic_compile_again;
     out->classic_compile_again_bytes = g_classic_compile_again_bytes;
     out->classic_compile_own_decode  = g_classic_compile_own_decode;
+    /* …AND THE SHARED-PARSE ROW, IN THE SAME READING AS THE TOTAL IT IS THE COMPLEMENT OF — the pair
+       `classic_compiles + classic_parse_shared` is what a reader compares against a pre-sharing revision's
+       compile count, so a copy taken one call later than `out->classic_compiles` would be a sum of two
+       instants and the implication asserted below would be about two readings. */
+    out->classic_parse_shared        = g_classic_parse_shared;
     /* …AND THE STINT PARTITION, IN THE SAME READING AS THE ARM IT IS SUBTRACTED FROM. The quantity a
        reader of this row wants is `arms[STEP_UNIT_COMPILE_YIELDED] - classic_compile_resumed` (see
        g_classic_compile_resumed), so a copy taken one call later than the arm histogram below would be a
@@ -12721,6 +12801,27 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        CHOSEN AGAINST (g_classic_compile_again_bytes). A body is at least one byte and the accumulator only
        climbs, so a total below its count — or negative — is the narrowing this row's declaration argues about,
        arriving as a number that reads as a cheap engine rather than as a broken one. */
+    /* AND THE SHARED-PARSE ROW'S OWN IMPLICATION, WHICH IS THE ONE CHECK A READER OF IT CAN MAKE WITHOUT
+       RE-DERIVING THE MECHANISM. A closure is held only by a body whose parse FINISHED (solver/dyn_body.c
+       asserts the mark and the hold are one event), so a share before any parse is a closure this process
+       never compiled — a body handing out a program nothing here parsed, which is the one way this row could
+       be reporting a document's programs as started when nothing started them. It is an IMPLICATION and not a
+       bound because the two count different events: one parse can be shared any number of times. */
+    DCHECKF(out->classic_parse_shared == 0 || out->classic_compiles > 0,
+            "solver/engine.c: %ld classic program(s) were started from a shared parse and NOT ONE parse "
+            "finished — a body holds a closure only at the stint that finished parsing its bytes, so a share "
+            "with no compile behind it is a program obtained from a parse this process never performed",
+            out->classic_parse_shared);
+    /* …AND THE GAUGE AGAINST THE LIFETIME EVENT THAT RAISES IT. A body holds AT MOST ONE parse and only ever a
+       parse it was marked for, so the number of bodies holding one right now cannot exceed the number of
+       parses that have ever finished. The two are read in one statement here, which is what makes comparing a
+       GAUGE with a lifetime total sound in this direction and only in this one — see solver/dyn_body.h's
+       `dyn_body_parses_held`, which states the kind so a reader cannot difference it across two censuses. */
+    DCHECKF(dyn_body_parses_held() <= out->classic_compiles,
+            "solver/engine.c: %ld program text(s) are holding a parse against %ld parse(s) ever finished — a "
+            "body is marked by the stint that finishes its parse and holds at most one closure, so more held "
+            "parses than finished ones is a closure held by a body nothing here compiled",
+            dyn_body_parses_held(), out->classic_compiles);
     DCHECKF(out->classic_compile_again_bytes >= (int64_t)out->classic_compile_again,
             "solver/engine.c: classic_compile_again_bytes %lld is below the %ld re-parse(s) it sums the "
             "lengths of — every body is at least one byte and this accumulator only climbs, so the total has "

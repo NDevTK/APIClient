@@ -52177,21 +52177,34 @@ JSValue *JS_FlowInstantiate(JSContext *ctx, JSValueConst fn) {
    rather than refusing the park. What would make it serialisable — indices into a flat arena instead of
    pointers, and the top_break list keyed by frame index — is a change to the frame stack's REPRESENTATION,
    buys only the ability to resume a half-parsed program in a later session, and is not owed by this seam.
-   NAMED RESIDUAL — WHAT IS NOT COVERED: nothing here SHARES a parse. This entry compiles once per call and
-   frees the closure on its way out, so a second flow reaching the same program's bytes parses them again and
-   solver/dyn_body.h's repeat census reads exactly what it read before this seam existed.
-   WHAT THE NEXT DIFF BUILDS: the HOST half, at solver/engine.c's compile site, holding the closure on the
-   `DynBody` — which is already the identity `dyn_body_note_parsed` keys the repeat on, so the cache and the
-   census agree by construction instead of being a second answer that can drift. Three things that site must
-   settle and this one cannot, because each is a fact about a ROW rather than about a parse: the compile's REALM
-   (asserted above, and per-document here — solver/world.c's `world_doc_realm` is keyed on the document handle),
-   the program's NAME (`flow_dyn_url` when the row is external, else the document's base URL — it is baked into
-   the bytecode as the module map key and as the base a relative `import()` resolves against), and its FLAGS
-   (`JS_EVAL_FLAG_INLINE_SCRIPT` iff the row is an address-free page script). A held closure may be reused only
-   where all three AGREE with the row asking for it, and that is an assert rather than an argument.
-   HOW ITS ABSENCE WOULD SHOW: `classicCompileAgain` standing near `classicCompiles` on any document whose
-   frontier forks — the reading solver/result.c already publishes, which is what this residual is measured by
-   and why it needs no fresh instrument. */
+   THE RESIDUAL THAT STOOD HERE IS SPENT, AND WHAT IT ASKED FOR WAS BUILT AT THE SITE IT NAMED. It said
+   nothing here SHARES a parse, that the next diff was the HOST half holding the closure on the `DynBody`, and
+   that three facts about a ROW rather than about a parse had to be settled there — the compile's REALM, the
+   program's NAME and its eval FLAGS — as an assert rather than an argument. solver/engine.c's compile site
+   holds it now and solver/dyn_body.{h,c} owns the slot, the key and the free path; all three facts are
+   asserted, in both directions, at the take and at the hold. The NOT-COVERED clause remains TRUE OF THIS
+   ENTRY and is not a gap: this composition still compiles once per call and still frees the closure on its
+   way out, which is what a host with no frontier to be fair between wants.
+   NAMED RESIDUAL — WHAT IS NOT COVERED: this entry's `pcompile` seam now has NO CALLER. The host that used to
+   reach the parse through here reaches JS_FlowCompileStep and JS_FlowInstantiate directly, because holding a
+   closure is the whole of what it needs and this entry frees one; the only caller left is JS_FlowNew, which
+   passes NULL. So the suspend arm of a composition is a capability with no consumer, which is exactly what
+   CLAUDE.md §A-superseded-system-is-DELETED forbids keeping.
+   WHAT THE NEXT DIFF BUILDS: this entry DELETED, with JS_FlowNew composing JS_FlowCompileStep and
+   JS_FlowInstantiate itself, and the durable reasoning ABOVE this residual MOVED to JS_FlowCompileStep rather
+   than deleted with the function — why a parse needed a rest point at all, why the park is IN-RAM only, and
+   what JS_FlowCompileDrop is the one obligation for are all statements about the PARSE and belong at the parse.
+   IT IS A QUICKJS-ONLY DIFF AND THAT IS WHY IT IS A SEPARATE ONE. The commit that orphaned this seam also
+   corrected every sentence outside this file that named this entry as the thing which polls the budget hook —
+   solver/engine.c twice, solver/engine.h, solver/result.c and solver/flow.h's `compile` field, each of which
+   named it because the compile site used to call it and now calls JS_FlowCompileStep — so nothing outside
+   engine/qjs refers to this symbol any more and the deletion has no host half to keep in step with. Combining
+   the two would have put a host-side measurement and a prose MOVE in one commit, verified by different means.
+   HOW ITS ABSENCE WOULD SHOW: within this file the only call is JS_FlowNew's, and it passes NULL — so a reader
+   who comes to change the suspend seam finds nothing that exercises it and no way to tell a working capability
+   from an unreachable one. Outside engine/qjs no site REFERS to the entry; the occurrences a grep still returns
+   there TALK ABOUT the old name rather than naming it (`this line said`, `it said`), which is what CLAUDE.md
+   §the-retired-argument-convention guarantees and why a bare `git grep -c` answers three rather than zero. */
 int JS_FlowNewStep(JSContext *ctx, const char *src, size_t len, const char *filename, int eval_flags,
                    JSValue **pframe, void **pcompile) {
     JSValue fn;

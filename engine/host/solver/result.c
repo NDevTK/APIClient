@@ -2473,7 +2473,7 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    @kind lifetime: unitMidProgram unitParked unitCheckpointOwed unframedStepsLifetime
    @kind lifetime: classicCompiles classicCompileOverruns finished
    @kind lifetime: classicCompileAgain classicCompileAgainBytes classicCompileOwnDecode
-   @kind lifetime: classicCompileResumed
+   @kind lifetime: classicCompileResumed classicParseShared
    @kind lifetime: epMinted epAssets
    @kind gauge: epEmitted epPreProgram epDoors epReach epAddressClass
    @kind lifetime: epAsks epAskPreProgram epAskSuppressed epAskMerged epAskMinted epAskMergedPreProgram
@@ -3216,7 +3216,7 @@ char *result_cold_json(void) {
                  "\"sliceOverrunAsks\":%llu,\"sliceOverrunSeamless\":%ld,"
                  /* AND WHICH PHASE OF A START STEP SPENT THE TIME, which no row above can say. A start is a
                     COMPILE and then an EXECUTION and only the second runs bytecode; the compile is O(a
-                    length the page chose), and it RESTS — JS_FlowNewStep hands the parse back part way
+                    length the page chose), and it RESTS — JS_FlowCompileStep hands the parse back part way
                     through, so one program is parsed over one or more STINTS. (This banner said the compile
                     had `no raise point in it at all` and that the overruns were `spans no ordering could
                     have rested`; both were true of the parse before that seam and are kept in their own
@@ -3244,6 +3244,17 @@ char *result_cold_json(void) {
                  "\"classicCompiles\":%ld,\"classicCompileOverruns\":%ld,"
                  "\"classicCompileAgain\":%ld,\"classicCompileAgainBytes\":%lld,"
                  "\"classicCompileOwnDecode\":%ld,"
+                 /* …AND THE PROGRAMS STARTED FROM A PARSE ANOTHER TIMELINE HAD ALREADY FINISHED, which is
+                    what makes a FALLING `classicCompiles` attributable at all. A shared parse parses no bytes,
+                    so it raises none of the four rows above, and a document whose timelines share their parses
+                    therefore reads as a document with fewer programs — the one reading that cannot be told from
+                    an engine that stopped starting them. READ THE PAIR: `classicCompiles + classicParseShared`
+                    is the classic programs whose closure was obtained at all, and that sum is what compares
+                    with a pre-sharing revision's compile count while neither half does. `classicCompileAgain`
+                    staying nonzero is NOT the sharing failing — a failed parse holds nothing, and a flow
+                    already mid-parse of a row somebody else finished resumes its own parse to the end. See
+                    solver/engine.h's `classic_parse_shared` and solver/dyn_body.h for the mechanism. */
+                 "\"classicParseShared\":%ld,"
                  /* …AND WHETHER A PARSE HANDED BACK WAS EVER CARRIED FORWARD, which is the partition
                     `stepUnitRuns[compile-handed-the-thread-back]` cannot make on its own and the one a small
                     `classicCompiles` needs before it means anything. Subtract this from that arm and what is
@@ -3493,6 +3504,7 @@ char *result_cold_json(void) {
                  r.classic_compiles, r.classic_compile_overruns,
                  r.classic_compile_again, (long long)r.classic_compile_again_bytes,
                  r.classic_compile_own_decode,
+                 r.classic_parse_shared,
                  r.classic_compile_resumed,
                  r.unit_mid_program, r.unit_parked, r.unit_checkpoint_owed,
                  r.unframed_steps,
