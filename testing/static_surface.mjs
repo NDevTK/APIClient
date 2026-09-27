@@ -191,6 +191,41 @@
  * filenames rather than labels — which is what the refused texts have to be read for, and is why this half
  * is stated as a shape rather than as a number.
  *
+ * THE OCCLUDING LEAF IS GONE AND WHAT REPLACES IT IS TWO RESIDUALS, EACH WITH A MEASURED SIZE AND NEITHER
+ * NAMING A SITE. `new URL(...)` was a LEAF of this fold, so the composition inside it was never folded at
+ * all — CLAUDE.md §AND-A-FINDING-CAN-OCCLUDE-ITS-OWN-SUCCESSOR's shape, where the outer node is one row AND
+ * removes the only route to what is under it. It is folded now, by the URL Standard's own resolution applied
+ * to two recovered strings, together with `String(x)`, `x.toString()`, `new Request(x)` and an
+ * INTERPROCEDURAL INLINE that crosses into a callee with the argument its call site supplies. What the
+ * widening COST is printed on every run beside what it bought, for the reason the global door's three
+ * numbers are: a widening whose refusals are unmeasured is a trade nobody made.
+ * (a) A CALLEE THAT REACHES ITS OBJECT AS A PARAMETER. The inline resolves a callee through the three
+ *     spellings `collectBinds` can prove — a binding declared once and never written, a function
+ *     declaration a reference resolves to, and a property written exactly once — and a MEMBER callee is the
+ *     dominant refusal by a wide margin. The cause is structural rather than incidental and is why this is a
+ *     residual and not a bug: a bundler hands its own runtime to every module as a PARAMETER, so a module's
+ *     read of `r.chunkUrl` and the runtime's single write of it resolve to two DIFFERENT bindings, and no
+ *     scope-correct slot map can join them. The manifest band reaches the same composition because it scans
+ *     the runtime's OWN scope, where both do resolve. WHAT THE NEXT DIFF BUILDS: a single-call-site closure
+ *     over the references `collectBinds` already resolves — for a function whose binding is referenced
+ *     EXACTLY ONCE and whose one reference stands in callee position, each parameter is determined by that
+ *     call's argument, which is sound for the same reason a once-written slot is and makes a parameter
+ *     foldable in precisely the cases where one call decides it. HOW ITS ABSENCE WOULD SHOW: the inline's
+ *     largest refusal row stays a member callee while a site's PROGRAM-door opaque count stands above zero
+ *     beside a nonzero manifest column — two channels over one composition, only one of them able to reach
+ *     it. DERIVE THE SIZE rather than reading a number here: the refusal rows under the inline's own price
+ *     block partition every call it declined, and the parameter population is the DATA door's ceiling table
+ *     read against `whyNoBind`.
+ * (b) A BOUND `URL` THAT NOTHING MUTATES. `deref` adds a hole wherever a `new URL` is read out of a name, a
+ *     slot or an object-literal property, because a `URL` is mutable and `searchParams.set` leaves no trace
+ *     in the text the fold reads. That is a FLOOR: a bound URL nothing ever mutates has a COMPLETE text and
+ *     is reported as a SHAPE, which understates what the parse recovered — the direction this file is
+ *     required to be wrong in. WHAT THE NEXT DIFF BUILDS: the same once-written question `collectBinds`
+ *     already answers for `obj.prop`, asked of the URL's own binding — a binding on which no member call and
+ *     no member write ever appears cannot have been mutated, so its hole drops and the row becomes `folded`.
+ *     HOW ITS ABSENCE WOULD SHOW: the DATA door's `shape` rows include ones whose text ends in `{?}` with no
+ *     literal byte after it, and the complete-from-text share reads lower than those rows support.
+ *
  * WHAT COMPLETES THE COMPARISON, NAMED SO IT CAN BE RUN RATHER THAN RE-DERIVED. This file is one half. The
  * other half is not "the engine's endpoint count", which answers a different question: `solver/result.c`
  * publishes `epEmitted` and `epPreProgram`, and its own comment says `epEmitted - epPreProgram` is "the most
@@ -304,6 +339,21 @@ const DOORS = [
   { id: "importScripts", cls: "program", engine: null,                                    kind: "callee-global",  name: "importScripts",    urlArg: 0 },
   { id: "new Worker",    cls: "program", engine: null,                                    kind: "new",            name: "Worker",           urlArg: 0 },
   { id: "new SharedWorker", cls: "program", engine: null,                                 kind: "new",            name: "SharedWorker",     urlArg: 0 },
+  /* A RECEIVER-QUALIFIED DOOR, AND THE ONE CASE THE `NEVER ON A RECEIVER` RULE DOES NOT REACH. That rule is
+     about a receiver whose spelling CARRIES NO INFORMATION — `api.fetch`, `this.fetch`, where the name to
+     the left is a minifier's local. `serviceWorker` is the opposite: it is a PLATFORM name, so a minifier
+     leaves it alone exactly as it leaves `fetch` alone, and it is the only thing that makes this door
+     readable at all. `register` ALONE is not a door and cannot be one — MEASURED on the corpus this landed
+     against, bare `.register(` outnumbers `navigator.serviceWorker.register(` by more than twenty to one,
+     because a dependency container, an i18n catalogue and a component registry all have one. Keying on the
+     property alone would report a number dominated by things that are not requests, which is the precision
+     failure the DOORS comment turns `.get(`/`.post(` away for.
+     IT IS A `PROGRAM` DOOR AND ITS `engine` IS NULL, so it is a FLOOR-WIDENING of the static side and not a
+     comparison: HTML §8.10 "Service workers"' script URL is a reply that becomes a PROGRAM, and no
+     `endpoint_record` caller in the engine reaches it, so this row is counted apart exactly as `new
+     WebSocket` and `new Worker` are. Reading it into the engine-comparable total would put an address on the
+     static side the engine was never asked for. */
+  { id: "serviceWorker.register", cls: "program", engine: null,                           kind: "member-call-on", name: "register", recv: "serviceWorker", urlArg: 0 },
 ];
 const DOOR_BY_NAME = new Map();
 for (const d of DOORS) {
@@ -434,10 +484,19 @@ const spellTally = () => {
    two families are disjoint today (`open`/`sendBeacon` against `fetch`/`importScripts`) and this is what
    keeps them so. */
 for (const d of DOORS) {
-  if (d.kind !== "member-call") continue;
+  if (d.kind !== "member-call" && d.kind !== "member-call-on") continue;
   if (DOOR_BY_NAME.has("callee-global:" + d.name) || DOOR_BY_NAME.has("new:" + d.name))
     die(`DOORS names ${d.name} as a member-call AND as a global-reachable door, so a call through the ` +
         `global object would match two rows and be counted under whichever is tested first.`);
+  /* AND A PROPERTY NAME MAY NOT BE BOTH AN UNQUALIFIED `member-call` AND A RECEIVER-QUALIFIED ONE, for the
+     same reason and with a sharper consequence: the unqualified row would match FIRST and swallow every
+     qualified site, so the receiver test that is the whole precision of the qualified row would silently
+     stop being made. A row whose receiver test never runs is not a narrower door, it is `register` as a bare
+     member call — the twenty-to-one population this table refuses by name. */
+  if (d.kind === "member-call-on" && DOOR_BY_NAME.has("member-call:" + d.name))
+    die(`DOORS names ${d.name} as both a receiver-qualified and an unqualified member-call door, so the ` +
+        `unqualified row would match first and the receiver test would never run.`);
+  if (d.kind === "member-call-on" && !d.recv) die(`the member-call-on door ${d.id} names no receiver`);
 }
 
 /* ── FOLDING ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -465,6 +524,29 @@ const MAX_DEPTH = 24;
    would silently INVENT an address with a segment deleted from it, so a miss carries a HOLE as well as its
    marker: read past `||` it disappears, and read anywhere else it drops the candidate. */
 const MISS = () => ({ text: "{?}", holes: 1, miss: true });
+
+/* ── A URL OBJECT IS MUTABLE, AND READING ONE OUT OF A NAME IS WHERE THAT STOPS BEING SAFE ────────────────
+   THIS EXISTS BECAUSE ITS ABSENCE PRODUCED A FALSE `folded` ROW AND THAT IS THE ONE FAILURE THIS FILE MAY
+   NOT HAVE. `new URL(x)` folds to an exact string, and a `URL` is not a string: `r.searchParams.set(...)`
+   MUTATES it in place, so a later `r.toString()` is the constructed address PLUS a query the parse never
+   read. Reporting the constructed address as COMPLETE is worse than reporting nothing — a control that
+   claims to resolve an address the program does not send makes the engine look worse than it is, which is
+   the mirror of the result this file's opening forbids and is equally dishonest.
+   MEASURED, at the corpus this landed against, and the shape rather than the site because a site rots: one
+   bundle wrote `let r = new URL(<literal>); r.searchParams.set(...) ×5; fetch(r.toString())`, and the row
+   read `folded` with a complete `https://…/watermark-track.svg` for a request that carries five query
+   parameters. It was found by reading the source at every newly-settled row rather than by any test here.
+   WHERE THE HOLE IS ADDED IS THE WHOLE PRECISION OF IT, and it is not "always". A construction that is the
+   DIRECT operand of its consumer — `fetch(new URL("/a", base))` — has never been bound to anything, so no
+   statement can have reached it and its fold is exact. Mutation needs a NAME to mutate through, so the hole
+   is added exactly where a name, a slot or an object-literal property is DEREFERENCED, which is the set of
+   places a value acquires one. That keeps the inline construction `folded` and makes the bound one a SHAPE,
+   which is the true reading of each.
+   IT IS A FLOOR AND NOT A CLAIM THAT MUTATION HAPPENED. A bound `URL` nothing mutates is reported as a
+   SHAPE where the text is in fact complete, which understates what the parse recovered — the direction
+   CLAUDE.md §A-SWEEP-IS-TRUSTED-BY-ITS-METHOD requires of this file, since the lower bound belongs to the
+   baseline. Proving the absence of mutation is a second slot analysis and is the named residual below. */
+const deref = (r) => r.mut ? { text: r.text + "{?}", holes: r.holes + 1 } : r;
 
 /* ── WHAT AN ADDRESS LOOKS LIKE, IN ONE PLACE ─────────────────────────────────────────────────────────────
    The base rate and the chunk manifest both have to decide whether a recovered string is an address, and two
@@ -519,7 +601,7 @@ function fold(node, binds, depth, env) {
     case "Identifier": {
       /* THE BINDING THIS REFERENCE MEANS, by node identity rather than by name — see `collectBinds`. */
       const b = binds.get(node);
-      if (b && b.node) return fold(b.node, binds, depth + 1, env);
+      if (b && b.node) return deref(fold(b.node, binds, depth + 1, env));
       return { text: "{?}", holes: 1 };
     }
     case "MemberExpression": {
@@ -532,7 +614,7 @@ function fold(node, binds, depth, env) {
       for (const p of b.node.properties) {
         if (p.type !== "ObjectProperty" || p.computed) continue;
         const k = p.key.type === "Identifier" ? p.key.name : (p.key.type === "StringLiteral" ? p.key.value : null);
-        if (k === node.property.name) return fold(p.value, binds, depth + 1, env);
+        if (k === node.property.name) return deref(fold(p.value, binds, depth + 1, env));
       }
       return { text: "{?}", holes: 1 };
     }
@@ -545,9 +627,96 @@ function fold(node, binds, depth, env) {
     case "TSNonNullExpression":
     case "ParenthesizedExpression":
       return fold(node.expression, binds, depth + 1, env);
+    case "NewExpression":
+    case "CallExpression":
+    case "OptionalCallExpression": {
+      const r = foldPlatformString(node, binds, depth, env);
+      return r || { text: "{?}", holes: 1 };
+    }
     default:
       return { text: "{?}", holes: 1 };
   }
+}
+
+/* ── THE PLATFORM'S OWN STRING-VALUED CONSTRUCTIONS ───────────────────────────────────────────────────────
+   WHY THIS EXISTS: `new URL(...)` WAS A LEAF, AND A LEAF OCCLUDES EVERYTHING BEHIND IT. The fold stopped at
+   any construction, so `new Worker(new URL(n.p + n.u(1298), n.b))` — webpack 5's worker spelling — was read
+   as OPAQUE with the chunk-id composition INSIDE it never folded at all. That is the shape CLAUDE.md
+   §AND-A-FINDING-CAN-OCCLUDE-ITS-OWN-SUCCESSOR names: the outer node is one row of a finding AND it removes
+   the only route to the composition underneath, so the address is not merely uncounted, it is unreachable BY
+   the row that should have led to it. MEASURED at the corpus this landed against and stated as a shape
+   rather than a frozen number, since a count over a corpus this repository does not carry cannot be
+   re-derived: `new URL` was the single largest argument construction at the PROGRAM door and every one of
+   them read OPAQUE, and `.toString()` was the largest at the DATA door.
+   THE NAME MUST BE THE PLATFORM'S, WHICH IS THE SAME TEST THE GLOBAL DOOR MAKES AND NOT A SECOND ONE.
+   `URL`, `Request` and `String` are read through `freeRef` — a reference that resolves to no binding this
+   file makes and whose name nothing assigns free — so a bundle that ships its own `URL` polyfill and binds
+   the name is REFUSED rather than folded through a constructor whose behaviour is not the standard's.
+   WHAT IS REFUSED AND WHY, because a coercion set that does not say what it turns away is read as complete:
+   `encodeURIComponent`, `encodeURI` and `.replace()` CHANGE the bytes, so folding them to their operand
+   would report an address the program never sends; `.concat()` cannot be told from `Array.prototype.concat`
+   by any parse, so admitting it would fold an array join into a URL; `.toString(radix)` is not identity and
+   is refused by its argument count. Each of those is a fold a stronger tool could make with a type it does
+   not have, and each is left as a hole. */
+const ABSOLUTE_URL = /^[A-Za-z][A-Za-z0-9+.\-]*:/;
+const URL_UNKNOWN_BASE = "https://static-surface.invalid/";
+function foldPlatformString(node, binds, depth, env) {
+  if (!env || !env.freeRef) return null;
+  const c = node.callee;
+  const isNew = node.type === "NewExpression";
+  const args = node.arguments || [];
+  const globalName = c && c.type === "Identifier" && env.freeRef.has(c) ? c.name : null;
+
+  /* `new URL(ref)` / `new URL(ref, base)` — THE URL STANDARD'S OWN RESOLUTION, APPLIED BY THE PARSE. This is
+     not a guess about a runtime value: resolving one string against another is a PURE FUNCTION of the two,
+     the same function a browser applies, and node's `URL` is that function. Where both operands are recovered
+     literally the answer is EXACT and the row is `folded`.
+     WHERE THE BASE IS UNKNOWN THE ANSWER IS A SUFFIX AND THE ROW IS A SHAPE, which is the strongest honest
+     thing a parse can say and is true rather than approximately true: resolution APPENDS a relative
+     reference's non-`..` portion verbatim to whatever the base's directory turns out to be, and removes
+     segments only from the BASE — so the resolved URL really does end in the bytes printed after the hole,
+     for a root-relative, directory-relative and `..`-climbing reference alike. A reference beginning `?` or
+     `#` is the one shape that is NOT a suffix — it keeps the base's own path — and is refused. */
+  if (isNew && globalName === "URL") {
+    if (!args.length || args.length > 2) return null;
+    const ref = fold(args[0], binds, depth + 1, env);
+    if (ref.holes !== 0) return null;
+    if (ABSOLUTE_URL.test(ref.text)) {
+      try { return { text: new URL(ref.text).href, holes: 0, mut: true }; } catch { return null; }
+    }
+    if (args.length === 2) {
+      const base = fold(args[1], binds, depth + 1, env);
+      if (base.holes === 0 && ABSOLUTE_URL.test(base.text)) {
+        try { return { text: new URL(ref.text, base.text).href, holes: 0, mut: true }; } catch { return null; }
+      }
+    }
+    if (ref.text.startsWith("?") || ref.text.startsWith("#") || ref.text === "") return null;
+    try {
+      const u = new URL(ref.text, URL_UNKNOWN_BASE);
+      if (u.origin !== new URL(URL_UNKNOWN_BASE).origin) return null;
+      return { text: "{?}" + u.pathname + u.search + u.hash, holes: 1, mut: true };
+    } catch { return null; }
+  }
+  /* `new Request(input)` — Fetch §2.2.5's own constructor, whose first argument is the address and which
+     resolves a relative one exactly as `fetch` does, so folding to the operand's text is the SAME convention
+     every `fetch("/api")` row in this file already uses. A `Request` handed another `Request` folds to
+     whatever that one folds to, which is the same answer one level in. */
+  if (isNew && globalName === "Request") {
+    if (args.length < 1) return null;
+    return fold(args[0], binds, depth + 1, env);
+  }
+  if (isNew) return null;
+  /* `String(x)` — identity on a string and the standard's coercion on anything else, and `x` only folds at
+     all when it is a literal or a composition of literals, so the recovered text IS what the call returns. */
+  if (globalName === "String" && args.length === 1) return fold(args[0], binds, depth + 1, env);
+  /* `x.toString()` WITH NO ARGUMENT — identity on a string, and the reason this arm matters is that it is how
+     a bundle spells the end of a `URL` builder: `fetch(u.toString())`. With an argument it is a radix and is
+     not identity, which the count test refuses. The receiver is not asked to be the platform's anything: it
+     has to FOLD, and the only things that fold are literals and compositions of them. */
+  if (args.length === 0 && c && (c.type === "MemberExpression" || c.type === "OptionalMemberExpression") &&
+      !c.computed && c.property.type === "Identifier" && c.property.name === "toString")
+    return fold(c.object, binds, depth + 1, env);
+  return null;
 }
 
 /* `obj.prop` AS ONE KEY, so a write and a read of the same slot are the same string and cannot drift. */
@@ -573,14 +742,39 @@ function objectLiteralOf(node, binds, env) {
   return null;
 }
 
-/* A SINGLE-PARAMETER FUNCTION WHOSE WHOLE BODY IS ONE RETURNED EXPRESSION, which is the only shape that can
-   be inlined without reasoning about statements. A function with more than one statement is REFUSED rather
-   than approximated by its last return: the statements before it may narrow the parameter, and a fold that
-   ignored them would enumerate addresses the function cannot actually return. */
-function singleParamFn(node, binds, env) {
+/* A FUNCTION WHOSE WHOLE BODY IS ONE RETURNED EXPRESSION, which is the only shape that can be inlined
+   without reasoning about statements. A function with more than one statement is REFUSED rather than
+   approximated by its last return: the statements before it may narrow the parameter, and a fold that
+   ignored them would enumerate addresses the function cannot actually return.
+   IT IS ONE HELPER FOR TWO CHANNELS AND THE ARITY TEST IS THE CALLER'S, which is what keeps the manifest's
+   enumeration and the door channel's inline from drifting into two definitions of "inlinable": the manifest
+   asks for ONE parameter because it binds a candidate to it, and the door channel asks for the arity its own
+   call site supplies. A second copy of this resolution would have been free to disagree about which of the
+   three ways a file spells the way to a function it trusts.
+   AN `async` OR GENERATOR FUNCTION IS REFUSED, AND THAT REFUSAL IS THIS HELPER'S AND NOT A CHANNEL'S. Its
+   call does not evaluate to the body's value — it evaluates to a Promise or an iterator — so inlining one
+   substitutes the string the body would eventually produce for an object whose text is `[object Promise]`.
+   That is not a shorter answer but a FABRICATED address, and it is the one failure mode an inline has that
+   cannot be read off the recovered text: the string looks exactly like an address because it IS the address
+   the program would have used one `await` later. Its price is printed on every run beside what the inline
+   buys, which is what makes this a trade rather than an assertion. */
+function returnExprFnOf(node, binds, env) {
   let fn = null;
   if (!node) return null;
-  if (node.type === "Identifier") {
+  /* `(0, f)(x)` IS `f(x)`, AND THIS IS NOT A WIDENING OF WHAT MAY BE ASSUMED. A sequence expression
+     evaluates to its LAST operand, which the language says and which is the whole of the claim; every
+     transpiler in this corpus emits the form deliberately, to strip a member call's `this` so that
+     `(0, ns.f)(x)` calls `f` with `this` undefined. Refusing it does not withhold an assumption, it refuses
+     to read a spelling — and the shape is common enough that its absence was the third-largest reason this
+     inline declined. */
+  if (node.type === "SequenceExpression" && node.expressions.length)
+    return returnExprFnOf(node.expressions[node.expressions.length - 1], binds, env);
+  /* A FUNCTION WRITTEN AT THE CALL — `(x => "/a/" + x)(1)`. There is no binding to resolve and therefore
+     nothing to be wrong about: the callee IS the function, so the resolution that the three spellings below
+     exist to perform has already happened. Its absence was a refusal to read the one callee shape that
+     needs no resolution at all. */
+  if (node.type === "FunctionExpression" || node.type === "ArrowFunctionExpression") fn = node;
+  else if (node.type === "Identifier") {
     const b = binds.get(node);
     if (b && b.node) fn = b.node;
     /* A FUNCTION DECLARATION IS ONE FUNCTION ONLY IF THIS REFERENCE RESOLVES TO IT, and `binds` cannot
@@ -597,13 +791,33 @@ function singleParamFn(node, binds, env) {
   if (!fn) return null;
   if (fn.type !== "FunctionDeclaration" && fn.type !== "FunctionExpression" &&
       fn.type !== "ArrowFunctionExpression") return null;
-  if (!fn.params || fn.params.length !== 1 || fn.params[0].type !== "Identifier") return null;
+  if (fn.async || fn.generator) return { fn, refused: "async" };
+  if (!fn.params) return null;
   if (fn.body.type === "BlockStatement") {
     if (fn.body.body.length !== 1) return null;
     const st = fn.body.body[0];
     if (st.type !== "ReturnStatement" || !st.argument) return null;
   }
-  return fn;
+  return { fn, refused: null };
+}
+const returnExprOf = (fn) => fn.body.type === "BlockStatement" ? fn.body.body[0].argument : fn.body;
+/* A NESTED FUNCTION INSIDE THE EXPRESSION BEING INLINED IS REFUSED, and the reason is the one thing a
+   name-keyed substitution can get wrong. `env.vars` maps a parameter NAME to a value, and a function written
+   inside the returned expression may BIND THAT NAME AGAIN — `x => (x => "/a/" + x)(1)` — after which the
+   outer value would be substituted into the inner body, which is an address no call site can produce. With
+   no function-like node in the expression there is nothing that can rebind the name: `let` and `var` cannot
+   appear in an expression, so the parameter is the only binder of its name in the whole subtree. That makes
+   the substitution correct BY CONSTRUCTION rather than by a scope walk this fold does not carry. */
+function hasNestedFunction(node) {
+  let found = false;
+  walk(node, (n) => { if (!found && FN_LIKE.has(n.type)) found = true; });
+  return found;
+}
+function singleParamFn(node, binds, env) {
+  const r = returnExprFnOf(node, binds, env);
+  if (!r || r.refused) return null;
+  if (r.fn.params.length !== 1 || r.fn.params[0].type !== "Identifier") return null;
+  return r.fn;
 }
 
 /* EVERYTHING THE ORDINARY CHANNEL MAY NOT DO, IN ONE PLACE, REACHED ONLY WITH AN `env`. Returning null hands
@@ -627,7 +841,7 @@ function foldEnvOnly(node, binds, depth, env) {
            additionally requires the OBJECT to resolve to a binding declared once in its own scope and never
            written, because a property of an object nobody can identify names nothing. */
         const m = env.slotOf.get(node);
-        if (m) return fold(m, binds, depth + 1, env);
+        if (m) return deref(fold(m, binds, depth + 1, env));
         return null;
       }
       const key = fold(node.property, binds, depth + 1, env);
@@ -639,7 +853,7 @@ function foldEnvOnly(node, binds, depth, env) {
         const k = q.key.type === "Identifier" ? q.key.name
                 : q.key.type === "StringLiteral" ? q.key.value
                 : q.key.type === "NumericLiteral" ? String(q.key.value) : null;
-        if (k === key.text) return fold(q.value, binds, depth + 1, env);
+        if (k === key.text) return deref(fold(q.value, binds, depth + 1, env));
       }
       return MISS();
     }
@@ -661,7 +875,14 @@ function foldEnvOnly(node, binds, depth, env) {
       const a = fold(node.left, binds, depth + 1, env), b = fold(node.right, binds, depth + 1, env);
       if (a.holes !== 0 || b.holes !== 0) return null;
       const eq = a.text === b.text;
-      return { text: "", holes: 0, cmp: node.operator[0] === "!" ? !eq : eq };
+      /* THE MARKER CARRIES A HOLE AND ITS ONLY READER NEVER READS ITS TEXT, which is what keeps this arm
+         from INVENTING an address the day a channel wider than the manifest folds with an env. A decided
+         comparison is a CONTROL-FLOW fact and not a byte of a URL; returning it hole-free made `"/a/" + (x
+         === y)` fold to `/a/` with nothing missing, and a row with no holes is reported as a COMPLETE
+         address. `ConditionalExpression` below consumes `.cmp` and never `.text`, so the hole costs the
+         manifest channel nothing — asserted by the manifest's own totals being byte-identical across this
+         change. */
+      return { text: "{?}", holes: 1, cmp: node.operator[0] === "!" ? !eq : eq };
     }
     case "ConditionalExpression": {
       const t = fold(node.test, binds, depth + 1, env);
@@ -674,12 +895,54 @@ function foldEnvOnly(node, binds, depth, env) {
          of it per row — a composition holding two applications is REFUSED by the scanner rather than guessed
          at, because two unknown parameters make the address set a product of two domains and nothing here
          has established the two are ever indexed together. */
-      if (node !== env.app) return null;
-      const fn = env.fn;
-      const inner = new Map(env.vars);
-      inner.set(fn.params[0].name, env.candidate);
-      return fold(fn.body.type === "BlockStatement" ? fn.body.body[0].argument : fn.body,
-                  binds, depth + 1, { ...env, vars: inner });
+      if (node === env.app) {
+        const fn = env.fn;
+        const inner = new Map(env.vars);
+        inner.set(fn.params[0].name, env.candidate);
+        return fold(returnExprOf(fn), binds, depth + 1, { ...env, vars: inner });
+      }
+      /* CROSSING THE FUNCTION BOUNDARY AT A CALL WHOSE ARGUMENTS THIS FOLD ALREADY SETTLED — the shape the
+         per-argument fold STOPPED at, and the largest thing it stopped at after a parameter. It is STRICTLY
+         SOUNDER than the manifest channel's enumeration above rather than a wider version of it: the
+         manifest binds a candidate DRAWN FROM THE FUNCTION'S OWN BODY, and this binds the value the call
+         site actually passes, so there is no "a value the bundler really can be called with" argument to
+         make — it is the value it IS called with.
+         THE ARITY IS EXACT AND NOT A MINIMUM. `f(a)` on a two-parameter function leaves the second
+         `undefined`, and a body that concatenates it would produce `/a/undefined`, which is a string the
+         program really does build and NOT an address anybody serves; refusing the shape is the floor
+         direction. `f(a, b)` on a one-parameter function is sound in the language and is refused too,
+         because admitting it buys a shape nothing in this corpus needed and widens what has to be argued.
+         THE VARS MAP IS FRESH AND NOT INHERITED, which is the one place a nested inline could invent. The
+         callee's body is a different scope, so a name it shares with the CALLER's parameter means whatever
+         that name means THERE — carrying the caller's binding inward would substitute a value the callee
+         never receives. Starting empty yields a HOLE in that case, which is the safe answer. */
+      if (!env.inline) return null;
+      const no = (k) => { env.inline.refused.set(k, (env.inline.refused.get(k) || 0) + 1); return null; };
+      const r = returnExprFnOf(node.callee, binds, env);
+      /* THE TWO FLOOR REASONS ARE COUNTED AND NOT DESCRIBED, because they are the size of what this inline
+         cannot see and a floor stated without one is read as a total. A minified member callee — `o.f(x)` —
+         is the dominant one BY CONSTRUCTION rather than by accident: a bundler passes its own runtime into
+         every module as a PARAMETER, so the slot map keyed on the object's binding cannot join a module's
+         read of `n.u` to the runtime's write of it, and no scope-correct resolution can. */
+      if (!r) return no("callee-unresolved:" + (node.callee ? node.callee.type : "none"));
+      if (r.refused) return no(r.refused);
+      const fn = r.fn;
+      if (env.inline.seen.has(fn)) return no("recursive");
+      if (node.arguments.length !== fn.params.length) return no("arity-mismatch");
+      if (!fn.params.every((p) => p.type === "Identifier")) return no("param-is-a-pattern");
+      const expr = returnExprOf(fn);
+      if (hasNestedFunction(expr)) return no("nested-fn");
+      const inner = new Map();
+      for (let i = 0; i < fn.params.length; i++) {
+        const av = fold(node.arguments[i], binds, depth + 1, env);
+        if (av.holes !== 0) return no("argument-not-settled");
+        inner.set(fn.params[i].name, av.text);
+      }
+      const seen = new Set(env.inline.seen); seen.add(fn);
+      const got = fold(expr, binds, depth + 1,
+                       { ...env, vars: inner, inline: { ...env.inline, seen } });
+      if (got.holes === 0) env.inline.settled++;
+      return got;
     }
     default:
       return null;
@@ -1077,19 +1340,42 @@ function readFile(src, filename) {
   if (!ast) return { parsed: false, error: String(err && err.message || err).slice(0, 160), sites: [], pathish: new Set(), blind: [], xhrOpenSkippedNonLiteralMethod: 0,
                      globalDoor: { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 },
                      manifest: { rows: [], refusedTwoApplications: 0 },
-                     spell: new Map(), spellOther: { globalComputedDynamic: 0 } };
+                     spell: new Map(), spellOther: { globalComputedDynamic: 0 },
+                     inline: { settled: 0, refused: new Map() }, recvDoor: { admitted: 0, declined: 0 } };
 
   const { binds, fnDeclOf, slotOf, count: bindCount, freeRef } = collectBinds(ast);
   /* THE ENUMERATING FOLD'S FIXED HALF, built once per file: which binding a reference resolves to and which
      slot a member read names. The per-row half — which application, which candidate — is added at the row. */
-  const envBase = { fnDeclOf, slotOf };
+  /* `freeRef` IS PART OF THE FOLD'S ENV AND NOT ONLY THE DOOR MATCHER'S, because the coercion arms below
+     ask the same question the global door asks — is this `URL`, this `Request`, this `String` the platform's
+     one — and one answer read two ways is what keeps them from disagreeing. A fold with no env cannot answer
+     it and REFUSES, which is the floor direction. */
+  const envBase = { fnDeclOf, slotOf, freeRef };
   const manifest = scanManifest(ast, binds, envBase, filename);
+  /* THE DOOR CHANNEL'S OWN ENV, AND WHY THE DOOR CHANNEL HAS ONE AT ALL. `foldEnvOnly` was reached only
+     with a manifest CANDIDATE, so every arm in it that needs no candidate was being withheld from the rows
+     this file's headline is about: a property written exactly once (`slotOf`), a map indexed by a literal
+     key, an `||` past a key the map does not carry, and a decided comparison. Each of those is a fold a
+     parse can make WITHOUT RUNNING ANYTHING and each already carries its soundness argument at its own arm —
+     the mode existed to keep the manifest band ADDITIVE to the totals other lanes were pricing, which is a
+     coordination reason and never a soundness one. CLAUDE.md's DOORS comment settles which of the two wins:
+     "a site the parse can reach and this file was missing is a defect in this file however small the count,
+     and the count moving an existing total is a fact to report as MOVED rather than a reason to leave the
+     hole open."
+     THE TWO CANDIDATE-DEPENDENT ARMS DECLINE THEMSELVES AND ARE NOT SWITCHED OFF BY A FLAG, which is what
+     keeps this ONE folder with one mode rather than two folders free to disagree: `vars` is EMPTY so the
+     parameter arm answers null for every name, and `app` is null so the manifest's inline arm answers null
+     for every call. What the door channel adds is `inline`, which is the OTHER direction of the same
+     boundary crossing and is priced by the three numbers it carries. */
+  const inlineBudget = { seen: new Set(), settled: 0, refused: new Map() };
+  const envDoor = { ...envBase, vars: new Map(), app: null, fn: null, candidate: null, inline: inlineBudget };
   const sites = [];
   const pathish = new Set();
   const blind = [];
   let xhrOpenSkippedNonLiteralMethod = 0;
   /* THE GLOBAL-REACHED DOOR'S OWN THREE NUMBERS, so the widening is read beside its price on every run. */
   const globalDoor = { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 };
+  const recvDoor = { admitted: 0, declined: 0 };
   /* A REFERENCE IS THE GLOBAL OBJECT ONLY IF IT RESOLVES TO NO BINDING AT ALL and nothing in the file
      assigns that name as a free one either. THIS USED TO ASK WHETHER THE FILE BINDS THE NAME ANYWHERE, and
      the argument is kept because a reader will re-derive it: a file that BINDS `window` can mean something
@@ -1127,6 +1413,24 @@ function readFile(src, filename) {
       return null;
     };
 
+    /* THE RECEIVER-QUALIFIED DOOR'S OWN TEST, AND ITS PRICE. The receiver is asked for the platform name the
+       door declares, read off its OWN property (`navigator.serviceWorker.register`) or off a bare identifier
+       of that name. A receiver reached some other way — `const sw = navigator.serviceWorker; sw.register(u)`
+       — is DECLINED and counted rather than resolved through `binds`, because a name bound to the platform
+       object and a name bound to a container are the same shape to this test and the count is what says how
+       much that costs. */
+    const receiverQualified = (c) => {
+      const d = DOOR_BY_NAME.get("member-call-on:" + c.property.name);
+      if (!d) return null;
+      const o = c.object;
+      const rn = o && o.type === "Identifier" ? o.name
+               : o && (o.type === "MemberExpression" || o.type === "OptionalMemberExpression") &&
+                 !o.computed && o.property.type === "Identifier" ? o.property.name : null;
+      if (rn === d.recv) { recvDoor.admitted++; return d; }
+      recvDoor.declined++;
+      return null;
+    };
+
     let door = null, args = null;
     if (n.type === "CallExpression" || n.type === "OptionalCallExpression") {
       const c = n.callee;
@@ -1135,6 +1439,7 @@ function readFile(src, filename) {
       else if (c && (c.type === "MemberExpression" || c.type === "OptionalMemberExpression") &&
                !c.computed && c.property.type === "Identifier")
                                                      door = DOOR_BY_NAME.get("member-call:" + c.property.name) ||
+                                                            receiverQualified(c) ||
                                                             globalReached(c.object, c.property.name, "callee-global");
       args = n.arguments;
     } else if (n.type === "NewExpression" && n.callee) {
@@ -1163,7 +1468,7 @@ function readFile(src, filename) {
 
     if (door && args) {
       const a = args[door.urlArg];
-      const r = a ? fold(a, binds, 0) : { text: "{?}", holes: 1 };
+      const r = a ? fold(a, binds, 0, envDoor) : { text: "{?}", holes: 1 };
       const literalChars = r.text.replace(/\{\?\}/g, "").length;
       let kind;
       if (a && a.type === "StringLiteral") kind = "literal";
@@ -1378,7 +1683,12 @@ function readFile(src, filename) {
       const L = n.left;
       if (!L || L.type !== "MemberExpression" || L.computed || L.property.type !== "Identifier") return;
       if (L.property.name !== "src" && L.property.name !== "href") return;
-      const r = fold(n.right, binds, 0);
+      /* THE SAME ENV AS THE DOORS, because the blind spot is the size a door ZERO is read against and a
+         blind spot measured by a WEAKER fold than the doors it explains would overstate itself — which is
+         the one direction a blind spot must not be wrong in, since a blind spot stated too large certifies
+         nothing while one stated too small is read as a clean bill. Its opaque share moving DOWN is the
+         honest consequence of the doors' own share moving down. */
+      const r = fold(n.right, binds, 0, envDoor);
       const literalChars = r.text.replace(/\{\?\}/g, "").length;
       const kind = n.right.type === "StringLiteral" ? "literal"
         : r.holes === 0 ? "folded" : literalChars > 0 ? "shape" : "opaque";
@@ -1396,7 +1706,8 @@ function readFile(src, filename) {
   });
 
   return { parsed: true, error: null, sites, pathish, blind, xhrOpenSkippedNonLiteralMethod, globalDoor,
-           manifest, spell, spellOther };
+           manifest, spell, spellOther,
+           inline: { settled: inlineBudget.settled, refused: inlineBudget.refused }, recvDoor };
 }
 
 /* ── THE ARMED CONTROL ────────────────────────────────────────────────────────────────────────────────────
@@ -1417,6 +1728,32 @@ const SELFTEST = [
   ["fetch(`/api/${r}/x`)",                                  ["fetch|data|shape|/api/{?}/x"]],
   [`fetch(u)`,                                              ["fetch|data|opaque|{?}"]],
   [`fetch(u.v)`,                                            ["fetch|data|opaque|{?}"]],
+  /* THE WIDENINGS THIS DIFF LANDED, ARMED — every one of them, because a fold that is never exercised is a
+     fold whose count is unarmed, and the URL arms are the ones whose WRONG answer would be an INVENTED
+     address rather than a missing one. The exact, the base-ignored, the suffix and the MUTABLE readings are
+     four different answers to `new URL` and each is stated, so a change that collapses two of them cannot
+     pass quietly. */
+  [`fetch(new URL("https://h.example/a/b"))`,               ["fetch|data|folded|https://h.example/a/b"]],
+  [`fetch(new URL("/a/b","https://h.example/x/y"))`,        ["fetch|data|folded|https://h.example/a/b"]],
+  [`fetch(new URL("https://o.example/z","https://h.example/x"))`, ["fetch|data|folded|https://o.example/z"]],
+  [`fetch(new URL("./w.js",import.meta.url))`,              ["fetch|data|shape|{?}/w.js"]],
+  [`fetch(new URL("../a/b.js",q))`,                         ["fetch|data|shape|{?}/a/b.js"]],
+  [`fetch(new URL("?x=1",q))`,                              ["fetch|data|opaque|{?}"]],
+  [`const u=new URL("https://h.example/a");fetch(u.toString())`, ["fetch|data|shape|https://h.example/a{?}"]],
+  [`const u=new URL("https://h.example/a");fetch(u)`,       ["fetch|data|shape|https://h.example/a{?}"]],
+  [`fetch(String("/a/b"))`,                                 ["fetch|data|folded|/a/b"]],
+  [`fetch(new Request("/a/b"))`,                            ["fetch|data|folded|/a/b"]],
+  [`fetch("/a/".concat("b"))`,                              ["fetch|data|opaque|{?}"]],  /* .concat is refused: Array.prototype.concat is the same shape */
+  [`fetch(encodeURIComponent("/a/b"))`,                     ["fetch|data|opaque|{?}"]],
+  [`const f=e=>"/api/"+e+"/x";fetch(f("v2"))`,              ["fetch|data|folded|/api/v2/x"]],
+  [`const g=()=>"/api/g";fetch(g())`,                       ["fetch|data|folded|/api/g"]],
+  [`const h=e=>"/api/"+e;fetch(h(q))`,                      ["fetch|data|opaque|{?}"]],
+  [`const i=async e=>"/api/"+e;fetch(i("v"))`,              ["fetch|data|opaque|{?}"]],
+  [`const j=e=>(e=>"/api/"+e)(1);fetch(j("v"))`,            ["fetch|data|opaque|{?}"]],
+  [`const k=(a,b)=>"/api/"+a;fetch(k("v"))`,                ["fetch|data|opaque|{?}"]],
+  [`var o={};o.p="/pub/";o.u=e=>e+".js";fetch(o.p+o.u("c"))`, ["fetch|data|folded|/pub/c.js"]],
+  [`navigator.serviceWorker.register("/sw.js")`,            ["serviceWorker.register|program|literal|/sw.js"]],
+  [`container.register("/sw.js")`,                          []],
   [`const R={u:"/a/b"};fetch(R.u)`,                          ["fetch|data|folded|/a/b"]],
   [`const P="/p";fetch(c?P:"/q")`,                          ["fetch|data|folded|/p"]],
   [`x.open("GET","/t")`,                                    ["xhr.open|data|literal|/t"]],
@@ -1889,6 +2226,7 @@ function main(argv) {
       argShape: {}, bindBuckets: { "1": 0, "2-5": 0, "6-20": 0, "21-100": 0, "101+": 0, "0": 0 }, oneCharNames: 0,
       blind: { sites: 0, literal: 0, folded: 0, shape: 0, opaque: 0, src: 0, href: 0 }, blindUrls: new Set(), xhrOpenSkipped: 0,
       globalDoor: { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 },
+      inline: { settled: 0, refused: new Map() }, recvDoor: { admitted: 0, declined: 0 },
       manifest: { sites: 0, addressSites: 0, candidates: 0, dropped: 0, fragments: 0, refusedTwoApplications: 0, multi: 0 },
       manifestUrls: new Set(), manifestRows: [],
       spell: {}, spellOther: { globalComputedDynamic: 0 },
@@ -1921,6 +2259,9 @@ function main(argv) {
     for (const v of r.pathish) b.pathish.add(v);
     b.xhrOpenSkipped += r.xhrOpenSkippedNonLiteralMethod;
     for (const k of Object.keys(b.globalDoor)) b.globalDoor[k] += r.globalDoor[k];
+    for (const k of Object.keys(b.recvDoor)) b.recvDoor[k] += r.recvDoor[k];
+    b.inline.settled += r.inline.settled;
+    for (const [k, v] of r.inline.refused) b.inline.refused.set(k, (b.inline.refused.get(k) || 0) + v);
     b.spellOther.globalComputedDynamic += r.spellOther.globalComputedDynamic;
     for (const [nm, t] of r.spell) {
       if (!b.spell[nm]) b.spell[nm] = spellTally();
@@ -2014,6 +2355,7 @@ function main(argv) {
     argShape: {}, bindBuckets: { "1": 0, "2-5": 0, "6-20": 0, "21-100": 0, "101+": 0, "0": 0 }, oneCharNames: 0,
     blind: { sites: 0, literal: 0, folded: 0, shape: 0, opaque: 0, src: 0, href: 0 }, blindDistinctUrls: 0, xhrOpenSkipped: 0,
     globalDoor: { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 },
+    inline: { settled: 0, refused: new Map() }, recvDoor: { admitted: 0, declined: 0 },
     manifest: { sites: 0, addressSites: 0, candidates: 0, dropped: 0, fragments: 0, refusedTwoApplications: 0, multi: 0 }, manifestDistinctUrls: 0,
     /* THE SPELLING BAND'S OWN TOTALS. `spellSites` is a presence count over SITES and never a sum of
        occurrences, because the landed rows it prices are read as a bit and a site is the unit at which one
@@ -2040,6 +2382,9 @@ function main(argv) {
     for (const k of Object.keys(tot.blind)) tot.blind[k] += b.blind[k];
     tot.xhrOpenSkipped += b.xhrOpenSkipped;
     for (const k of Object.keys(tot.globalDoor)) tot.globalDoor[k] += b.globalDoor[k];
+    for (const k of Object.keys(tot.recvDoor)) tot.recvDoor[k] += b.recvDoor[k];
+    tot.inline.settled += b.inline.settled;
+    for (const [k, v] of b.inline.refused) tot.inline.refused.set(k, (tot.inline.refused.get(k) || 0) + v);
     tot.spellOther.globalComputedDynamic += b.spellOther.globalComputedDynamic;
     for (const nm of ENTRY_NAMES) {
       const t = b.spell[nm];
@@ -2207,6 +2552,35 @@ function main(argv) {
   console.log(`  refused  ${tot.globalDoor.refusedBoundName}   that reference RESOLVES to a binding this file makes, so it is not the global`);
   console.log(`  declined ${tot.globalDoor.declinedNonGlobalReceiver}   a platform door name on a receiver that is not the global object — the library`);
   console.log(`           wrapper population the DOORS comment turns away, counted rather than described`);
+  console.log(``);
+  console.log(`THE RECEIVER-QUALIFIED DOOR AND ITS PRICE — \`navigator.serviceWorker.register(u)\` names a`);
+  console.log(`  script URL that becomes a PROGRAM, and it is the one door whose PROPERTY alone cannot be`);
+  console.log(`  keyed on: a dependency container, an i18n catalogue and a component registry all have a`);
+  console.log(`  \`register\`. So the receiver is tested for the platform name, and both halves are printed`);
+  console.log(`  because a widening whose precision cost is unmeasured is a trade nobody made. Its engine`);
+  console.log(`  column is null, so it is a FLOOR-WIDENING of the static side and not a comparison.`);
+  console.log(`  admitted ${tot.recvDoor.admitted}   inside the PROGRAM total above, counted apart from the engine-comparable doors`);
+  console.log(`  declined ${tot.recvDoor.declined}   a \`register\` on a receiver that is not the platform name — the population`);
+  console.log(`           keying on the property alone would have reported as requests`);
+  console.log(``);
+
+  /* ── THE INTERPROCEDURAL INLINE AND ITS PRICE ───────────────────────────────────────────────────────────
+     Printed beside the global door's three numbers because it is the same KIND of trade and is read the same
+     way: what a widening ADMITTED means nothing without what it DECLINED. `settled` is the number of calls
+     whose whole value this fold recovered by crossing into the callee with the argument the call site
+     supplies; the refusals are the shapes it would not cross, each for a reason stated at its own arm rather
+     than as a policy here. A refusal count that is LARGER than `settled` is the expected reading and not a
+     failure: the callee of a minified member call is a slot no parse can join to its writes, and saying so
+     with a size is what makes the settled figure an honest floor instead of a total. */
+  console.log(``);
+  console.log(`THE INTERPROCEDURAL INLINE AND WHAT IT DECLINED — the door channel crosses a function`);
+  console.log(`  boundary at a call whose ARGUMENTS this fold already settled, binding the value the call`);
+  console.log(`  site really passes rather than a candidate drawn from the callee. It is the direction the`);
+  console.log(`  chunk-manifest band crosses the same boundary in, and it is reported the same way: a`);
+  console.log(`  widening whose refusals are unmeasured is a trade nobody made.`);
+  console.log(`  settled ${tot.inline.settled}   call(s) whose whole value the inline recovered`);
+  for (const [k, v] of [...tot.inline.refused].sort((a, b) => b[1] - a[1]))
+    console.log(`  refused ${String(v).padStart(5)}   ${k === "async" ? "an `async` or generator callee — its call evaluates to a Promise and not to the body's value, so inlining one would fabricate an address that looks exactly like the real one" : k === "nested-fn" ? "a function written inside the expression being inlined, which could rebind the parameter's name and make the substitution name a value no call site passes" : k}`);
   console.log(``);
   console.log(`HOW A REAL BUNDLE SPELLS THE NAMES THE ENGINE'S COMPILER-SIDE ROWS COUNT — the population a`);
   console.log(`  MEMBER-NAME CHANNEL would add, measured before it is built. Two engine components raise a row`);
