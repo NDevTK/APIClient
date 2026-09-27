@@ -597,6 +597,27 @@ if [ $# -eq 0 ]; then
   # in makes the `cd` this script's, where `set -e` gates it — measured — and the snapshot now survives between
   # two such calls, so the sequence that used to force a caller into cd'ing once is no longer a reason to.
   echo "run it     engine/frozen_snapshot.sh $SHA $LANE <command...>"
+  # THE ACT THIS INVOCATION PERFORMED, AS ITS LAST LINE, BECAUSE THE TRAILING COMMAND IS OPTIONAL AND THE MODE
+  # THAT DOES NO WORK EXITS ZERO. Every discriminator this tree prescribes for a log that stopped early passes
+  # on this mode's log: the status agrees, the file is stable under `wc -c`, no stage is missing, and the last
+  # line used to be the `run it` hint above -- which is USAGE TEXT wearing the authority of a finished run.
+  # MEASURED: a reader met exactly that log, read it as a build that had produced nothing, and was one sentence
+  # from reporting a tooling failure when what had happened was that the work was never passed. That is the
+  # direction this project rates worst, because it accuses an INSTRUMENT rather than a reading, and the
+  # prescribed response to a broken gate is a diff aimed at a script that did precisely what it was told.
+  # IT IS THE LAST LINE AND IT IS SELF-SUFFICIENT, which is one requirement and not two: a reader or a tool
+  # that takes only the final line must learn the act from it, so the reasoning goes ABOVE and the `act` line
+  # carries no continuation. A `note` line that had to be read with it would put the discriminator one line up
+  # from where a `tail -1` looks, which is the defect with an extra step rather than a smaller one.
+  # ITS PRESENCE IS ALSO A COMPLETION MARKER, which is the second job the position buys: a log ending in an
+  # `act` line ran to the end of one of these two modes, and a log ending in anything else was cut, killed or
+  # refused. A line at the top would have named the act and said nothing about whether the run reached its end.
+  # ON STDOUT, beside `load` and `run it` rather than beside the `REFUSING:` lines, because it is a statement
+  # about a SUCCESSFUL act; every refusal in this script already names itself on stderr and exits non-zero.
+  echo "note       no command was passed, so no gate ran and nothing was measured. The exit 0 below is this"
+  echo "           script's own provisioning succeeding and is not a verdict; an empty log after the next"
+  echo "           line is this mode working rather than a run that died."
+  echo "act        PROVISIONED, RAN NOTHING"
   exit 0
 fi
 cd "$DIR"
@@ -611,4 +632,16 @@ set -e
 # was AIMED at; this one is what it MEASURED AGAINST, computed at the moment a reader is about to quote the
 # verdict, and the difference between the two is exactly the commits that landed while the gate ran.
 echo "distance   $(distance_from_branch)  [AT COMPLETION -- the verdict above belongs to $SHA and to nothing else]"
+# THE ACT, LAST AND SELF-SUFFICIENT -- see the `act` line in the no-command arm above for why the mode a reader
+# is in may not be left to inference, and why the reasoning sits above the line rather than after it. This arm's
+# hazard is the mirror of that one: its log is FULL, so nothing about it invites the question, and a reader who
+# never learns which mode produced a log cannot tell a provisioning that ran nothing from a gate that ran and
+# said little. Naming `$*` also states WHAT was measured, which no other line here does: the banner says which
+# revision the snapshot IS, and this says what was run against it.
+# THE STATUS IS QUOTED AND IS NOT BECOME. `"$@"`'s own code is captured above precisely so a closing line cannot
+# swallow it or turn into it, and that capture is what makes these echoes safe; carrying the number here means a
+# reader holding only the final line holds the act, the command and the verdict together.
+echo "note       exit $FROZEN_SNAPSHOT_STATUS is the command's own status and is this script's. Reaching the"
+echo "           line below is this run completing; a log with no \`act\` line did not get here."
+echo "act        PROVISIONED AND RAN: $* (exit $FROZEN_SNAPSHOT_STATUS)"
 exit "$FROZEN_SNAPSHOT_STATUS"
