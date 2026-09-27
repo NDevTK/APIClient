@@ -23,13 +23,35 @@
  * hostile to hold an abort switch and only has to ship no `requestAnimationFrame`.
  *
  * THE LADDER THE PAIR COMPLETES, whose LOWEST ZERO IS THE LOCALISATION:
- *     NAMED (this file)  ->  CALLED (the member's prologue)  ->  queued  ->  the RUNG ran (`stepUnitRuns`)
- *   named == 0                        the document hangs nothing off this rung. CORRECT SILENCE, and it is the
- *                                     state no instrument in this engine could express before this one.
- *   named > 0, the rung's runs == 0   the work was named and the rung never ran. THE FINDING.
- * THE RUNGS ARE NOT ASKED IN ISOLATION AND THE PAIR DOES NOT SAY WHICH ARM ANSWERED INSTEAD. `stepUnitRuns` is
- * a partition of every step, so the arms ABOVE a rung are on the same line and are what a reader compares it
- * against; that is a reading and not a row, and it belongs to whoever holds both numbers.
+ *     NAMED (this file) -> CALLED (the member's prologue) -> queued -> the rung was REACHED
+ *     (`stepReachedRenderingLife` / `…TimerLife` / `…IdleLife`) -> the RUNG ran (`stepUnitRuns`)
+ *   named == 0                           the document hangs nothing off this rung. CORRECT SILENCE, and it is
+ *                                        the state no instrument in this engine could express before this one.
+ *   named > 0, reached == 0              the ladder never gave the rung a turn. A fact about the arms ABOVE
+ *                                        this rung, and NOT about the rung's own component.
+ *   named > 0, reached > 0, runs == 0    the rung was reached and declined every time it was asked. A fact
+ *                                        about the page's own clock, and the one row of the three at which the
+ *                                        rung's component is worth opening.
+ * THE `REACHED` RUNG WAS MISSING AND ITS ABSENCE WAS LABELLED `THE FINDING`, WHICH SENT A READER WHERE THE
+ * DEFECT IS NOT — AND THIS BANNER HAD ALREADY SAID SO SEVEN LINES ABOVE. The retired row read `named > 0, the
+ * rung's runs == 0 — the work was named and the rung never ran. THE FINDING.`, and it is kept in its own words
+ * because a reader who re-derives a ladder from `named` and `stepUnitRuns` alone will re-add it. It is
+ * VERBATIM the sentence the refusal paragraph above calls `something false, with an address in it`: that
+ * paragraph refuses an owed-vs-asked pair taken AT the rung precisely because `the cause may be that the rung
+ * sits below an arm that never stopped answering, which is the LADDER's fact`, and then the ladder asserted
+ * that cause away. One banner, two statements, and the refusal was the correct one. HOW IT SHOWED: a nonzero
+ * `stepNamed…Life` against that rung's `stepUnitRuns` arm at 0 read as THE FINDING and sent a reader to the
+ * rung's own component, on a run whose descents had not reached the boundary at all.
+ * WHAT CLOSED IT WAS ALREADY BUILT AND PUBLISHED NOWHERE. solver/engine.c raises one arrival count per clock
+ * rung, at the arm and ahead of the gate — one for each of this file's three slots, which is why no list of
+ * rungs is copied here and why nothing in this component changed to close it. They were a dev-assert operand
+ * only, so no reader outside the process could hold one; solver/result.c publishes all three beside
+ * `stepUnitRuns` on the same census line.
+ * THE RUNGS ARE STILL NOT ASKED IN ISOLATION, AND WHICH ARM ANSWERED INSTEAD IS STILL A READING. `stepUnitRuns`
+ * is a PARTITION of every step, so `arms[k] == 0` says that arm never TOOK a dispatch and never says it was not
+ * reached, and the arms above a rung are what a reader compares it against off the same line. What has stopped
+ * being a reading is the SUFFIX SUM — how many descents got as far as the rung — which is the middle row above
+ * and is a row now rather than a sum over the arms at and below that rung, which a reader had to take by hand.
  *
  * ONE RUNG TAKES MANY NAMES AND THAT IS WHY THE DECLARATION IS A LIST. A single `entry` per rung was the shape
  * first proposed and it is wrong for two of the three: solver/engine.c's own rendering arm names

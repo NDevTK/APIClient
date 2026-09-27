@@ -12685,6 +12685,13 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        be a reading of another instant against the pair copied here, which is precisely the state that check
        would then be unable to catch — the same reason the two lines above give for themselves. */
     for (i = 0; i < STEP_UNIT_N; i++) out->arms[i] = g_step_unit_runs[i];
+    /* …AND THE CLOCK BOUNDARY'S THREE ARRIVAL COUNTS, TAKEN IN THE SAME READING AS THE HISTOGRAM THEY ARE
+       ASSERTED AGAINST — for the arm copy's reason one line up and with the sharper edge: all three identities
+       below read an arm of `arms`, so a copy taken one call later would compare a suffix sum of this instant
+       against a partition of another and the asserts would be unable to catch the state they exist for. */
+    out->clock_render_asks = g_clock_render_asks;
+    out->clock_timer_asks  = g_clock_timer_asks;
+    out->clock_idle_asks   = g_clock_idle_asks;
     /* …AND WHETHER THOSE TURNS OFFERED A SUSPEND POINT, TAKEN IN THE SAME READING AS THE POPULATION THEY
        ARE A PROPERTY OF — for the compile pair's reason two lines up. Both are raised inside the overrun
        branch itself, so a copy one call later would report a consultation total against an overrun count of
@@ -12975,6 +12982,29 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
                 "below all three",
                 g_clock_render_asks, below);
     }
+    /* AND THE CLOCK CHAIN'S OWN CONTAINMENT IN THE LADDER DESCENTS, WHICH IS THE ONE IDENTITY OF THIS TRIPLE
+       NOTHING ASSERTED AND THE ONE A READER OF THE DOCUMENT ACTUALLY DEPENDS ON. `unframed_steps` is published
+       on the same census line as these three, so a reader asks "how far down did the descents get" by reading
+       the two against each other — and that comparison is legitimate only if one is a subset of the other.
+       IT IS THE SAME ARGUMENT AS `g_orphan_asks <= g_unframed_steps` ABOVE, ONE RUNG FURTHER DOWN THE SAME
+       CHAIN, and the `if (!f->frame)` block's own entry comment already predicted it: both are raised per PASS
+       through that block, the rendering rung being an `else if` inside it, so an ask with no descent under it
+       is the chain having been reached from somewhere else — a second caller, or the triple hoisted out of the
+       block — which is exactly the routing this pair would otherwise report as a page finding.
+       A FLOOR AND NOT AN EQUALITY, AND THE GAP IS THE READING RATHER THAN SLACK: every arm above the rendering
+       rung that takes a descent — the deliveries, the checkpoint, the reply, the sequence, the task, the
+       lifecycle, the resume rung — is a descent that never reaches the chain, so `unframed_steps` above these
+       three with all three at 0 says the ladder was descended and stopped ABOVE the clock, which is a statement
+       about those arms and is read off `arms` beside it. Both are per-instance and released by nothing, so
+       unlike the orphan pair one rung up this one is not weakened by a restart. */
+    DCHECKF(g_clock_render_asks <= g_unframed_steps,
+            "solver/engine.c: the clock boundary was reached %ld time(s) against %ld descent(s) of the work "
+            "ladder — the rendering rung is an `else if` inside the `if (!f->frame)` block the descents are "
+            "counted at and both are raised per PASS through it, so an ask outside that population is the "
+            "chain having been reached from outside the block: a second caller, or the triple hoisted out of "
+            "it. Every reading that compares `stepReachedRenderingLife` with `unframedStepsLifetime` rests on "
+            "this containment",
+            g_clock_render_asks, g_unframed_steps);
 }
 
 /* TWO FACTS THE SCHEDULER HAS AND HAS NEVER SAID, and both of them are questions that were being ANSWERED BY

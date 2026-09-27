@@ -252,8 +252,15 @@ char *rung_entry_rows(void) {
    per-bundle figure. The names say `Named` rather than `Sites` so that nobody reads them as the second.
    NO CONTAINMENT WITH `stepUnitRuns` MAY BE ASSERTED IN EITHER DIRECTION, which is why there is no identity in
    this file over the pair the header is about. A rung may run MORE times than its names were resolved (one
-   `setInterval` call feeds the timer arm for ever) and it may run FEWER (the finding), and the two inequalities
-   are both ordinary. */
+   `setInterval` call feeds the timer arm for ever) and it may run FEWER, and the two inequalities are both
+   ordinary.
+   THAT SENTENCE READ `and it may run FEWER (the finding)`, AND THE PARENTHESIS IS RETIRED RATHER THAN DELETED
+   BECAUSE IT IS THE LABEL A READER RE-DERIVES FROM THIS PAIR ALONE. Running fewer is TWO states and not one:
+   the rung was REACHED and declined every time, or the ladder never gave it a turn — and only the first is a
+   fact about the rung. solver/engine.h's `clock_render_asks` triple is the arrival count that separates them,
+   published beside `stepUnitRuns`, and this file's own header now carries the three-row ladder. THE SENTENCE
+   AROUND IT IS UNCHANGED AND WAS NEVER THE DEFECT: it is about MAGNITUDES, where no containment holds in
+   either direction, and the claim that went wrong was the one-word LABEL on one of its two inequalities. */
 
 /* THE RESIDUAL THAT ASKED FOR THE `…PropLife` ROWS IS RETIRED, AND IT IS REWRITTEN RATHER THAN DELETED BECAUSE
    ITS REMEDY CLAUSE WAS WRONG IN TWO WAYS A READER WILL RE-DERIVE FROM ITS OWN REASONING. Its NOT-COVERED half

@@ -2066,6 +2066,52 @@ typedef struct {
     long unit_mid_program;      /* …the member held a live frame: inside a program, the trial still running */
     long unit_parked;           /* …the runtime held a parked continuation: suspended on an await or a reply */
     long unit_checkpoint_owed;  /* …the flow still owed its microtask checkpoint: its own reactions unrun */
+    /* HOW MANY DESCENTS REACHED THE CLOCK BOUNDARY — THE DISCRIMINATOR ITS THREE OUTCOME ARMS STRUCTURALLY
+     * CANNOT BE. `queue-rendering-opportunity`, `fire-due-timer` and `start-or-run-an-idle-period` are arms of
+     * `arms` above, raised only when their hook TAKES the step, so each is a census of an OUTCOME over a gated
+     * operation and a 0 there is two opposite things: the rung was reached and the clock legitimately had
+     * nothing due, or no descent ever got far enough to ask it. Those take opposite work — the first is a fact
+     * about the page's own timers and frames, the second a fact about the arms ABOVE this boundary — and
+     * §AN-INVARIANT-OVER-A-GATED-OPERATION says the ask is recorded upstream of every arm that may legitimately
+     * decline. solver/engine.c raises these AT the arm, ahead of the gate, and nothing here is relocated: the
+     * three outcome arms stay exactly where they were, because moving an observation changes what its number
+     * means and leaves the old meaning unread.
+     *
+     * THEY ARE SUFFIX SUMS, WHICH IS WHY THEY ANSWER WHAT `arms` CANNOT AT ANY VALUE. The three rungs are
+     * consecutive arms of ONE `else if` chain: `clock_render_asks` counts every descent that reached that chain
+     * at all, `clock_timer_asks` those the rendering rung did not take, `clock_idle_asks` those the timer rung
+     * did not take either. `arms` is a PARTITION of outcomes, so `arms[k] == 0` says THIS ARM NEVER TOOK A
+     * DISPATCH and never says the arm was not reached — an upper clock arm at 0 with a LOWER one nonzero is
+     * that rung correctly declining every descent it was handed, not a localisation. The cumulative quantity is
+     * the suffix sum, and these are it at the three points a clock rung can be asked.
+     *
+     * THE FOUR IDENTITIES ARE CHECKABLE FROM THE ROWS BESIDE THEM, WHICH IS WHY NO SUM IS PUBLISHED. A second
+     * spelling of one number in one document is the drift the record-field gate exists to catch, and every
+     * operand of all four already lands on the same census line:
+     *     clock_render_asks == the ELEVEN arms of `arms` at or below this boundary (solver/engine.c names them)
+     *     clock_timer_asks  == clock_render_asks - arms[STEP_UNIT_RENDERING]
+     *     clock_idle_asks   == clock_timer_asks  - arms[STEP_UNIT_TIMER]
+     *     clock_render_asks <= unframed_steps
+     * All four are asserted at engine_step_unit_runs, where every operand is in one hand. The last is what
+     * licenses reading these against `unframed_steps` in the document at all: both are raised per PASS through
+     * the same `if (!f->frame)` block — that block's own entry comment predicted this pair — so a descent that
+     * reached the chain is a descent that entered the block, and an ask above it is the chain having been
+     * reached from somewhere else.
+     *
+     * LIFETIME COUNTS, PER INSTANCE, RELEASED BY NOTHING — the same scope as `arms` and `unframed_steps`, which
+     * is what keeps the identities true across a session restart. They may be differenced and accumulated, they
+     * cannot decrease, and a sample below its predecessor is this engine and not the run. The scheduler's
+     * `g_orphan_asks` takes the OPPOSITE scope one rung up (engine_session_close clears it) and is the wrong
+     * precedent to copy here for exactly that reason.
+     * A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing branches on one, no arm is narrowed by one, and no rung
+     * is skipped because one is large.
+     * RETIREMENT: these three go with `unframed_steps` and on its own condition — when solver/step_unit.h
+     * declares each arm's side of `if (!f->frame)` AND of this boundary, the suffix sums are a sum over `arms`
+     * that cannot disagree with flow_step, and neither this triple nor solver/engine.c's hand-written
+     * eleven-unit list has anything left to carry. */
+    long clock_render_asks;  /* descents that reached the rendering rung: the clock boundary's arrival count */
+    long clock_timer_asks;   /* …of which the rendering rung declined: the timer rung's arrival count */
+    long clock_idle_asks;    /* …of which the timer rung declined too: the idle rung's arrival count */
 } EngineStepUnitRuns;
 void engine_step_unit_runs(EngineStepUnitRuns *out);
 

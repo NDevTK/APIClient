@@ -2471,6 +2471,7 @@ static char *cursor_hist_json(const long *counts, int n, const char *what)
    @kind lifetime: branchAsked branchRefined
    @kind lifetime: steps sliceUs sliceOverruns sliceOverrunAsks sliceOverrunSeamless stepUs schedUs
    @kind lifetime: unitMidProgram unitParked unitCheckpointOwed unframedStepsLifetime
+   @kind lifetime: stepReachedRenderingLife stepReachedTimerLife stepReachedIdleLife
    @kind lifetime: classicCompiles classicCompileOverruns finished
    @kind lifetime: classicCompileAgain classicCompileAgainBytes classicCompileOwnDecode
    @kind lifetime: classicCompileResumed classicParseShared
@@ -3294,6 +3295,45 @@ char *result_cold_json(void) {
                     asserted in the engine where both are in one hand. See solver/engine.h's
                     `unframed_steps`. */
                  "\"unframedStepsLifetime\":%ld,"
+                 /* …AND HOW FAR DOWN THAT LADDER THE DESCENTS GOT, WHICH IS THE ROW ABOVE ONE BOUNDARY
+                    FURTHER ON AND THE DISCRIMINATOR `stepUnitRuns`' THREE CLOCK ARMS STRUCTURALLY CANNOT BE.
+                    `queue-rendering-opportunity`, `fire-due-timer` and `start-or-run-an-idle-period` are
+                    raised only when their hook TAKES the step, so each is an OUTCOME over a gated operation
+                    and a 0 in one is two opposite things: the rung was reached and the clock legitimately had
+                    nothing due, or no descent ever got far enough to ask it. The first is a fact about the
+                    page's own timers and frames, the second about the arms ABOVE this boundary, and they take
+                    opposite work. These three are the ASK, raised at the arm ahead of the gate; no existing
+                    counter moved, because relocating one changes what its number means and leaves the old
+                    meaning unread.
+                    THEY ARE SUFFIX SUMS AND `stepUnitRuns` IS A PARTITION, WHICH IS THE WHOLE REASON A READER
+                    NEEDS THEM. The three rungs are consecutive arms of one `else if` chain, so
+                    `stepReachedRenderingLife` counts every descent that reached the chain, the next those the
+                    rendering rung did not take, the next those the timer rung did not take either. An arm of
+                    `stepUnitRuns` reading 0 says THAT ARM NEVER TOOK A DISPATCH and never says it was not
+                    reached — an upper clock arm at 0 with a LOWER one nonzero is that rung correctly declining
+                    every descent it was handed, which is the commonest shape on a document with timers and no
+                    rendering opportunity — so "the lowest 0 is the localisation" is FALSE of that histogram
+                    read row by row and TRUE of these, which are the cumulative quantity at the three points a
+                    clock rung can be asked.
+                    AND THE READING THAT NEEDED THEM: a frontier that never retires. `finished` at 0 with
+                    `stepReachedRenderingLife` at 0 says the retirement arm was never ASKED and the cause is
+                    upstream of this boundary; the same 0 with it LARGE says the boundary was reached and one
+                    of the ten arms ABOVE `finished` took every descent — it is the LAST of the eleven — which
+                    `stepUnitRuns` then names. Those two states were ONE string in the hung-cause verdict
+                    engine/build.mjs composes, which is the conflation this row exists to end; that verdict
+                    reads `finishedFlows` and has no way to ask this question until it reads a row like this.
+                    NO SUM IS PUBLISHED BESIDE THEM AND THAT IS DELIBERATE — a second spelling of one number in
+                    one document is the drift the record-field gate exists to catch, and every operand of all
+                    four identities is already on this line: `stepReachedRenderingLife` is the ELEVEN arms of
+                    `stepUnitRuns` at or below this boundary, the next two are it less
+                    `queue-rendering-opportunity` and less `fire-due-timer`, and all three are contained in
+                    `unframedStepsLifetime`. Asserted at engine_step_unit_runs where every operand is in one
+                    hand — the containment being the one that licenses reading them against that row at all.
+                    LIFETIME COUNTS, PER INSTANCE, RELEASED BY NOTHING: the `Life` in each key is the kind, so
+                    they may be differenced and accumulated and a sample below its predecessor is the engine
+                    and not the run. See solver/engine.h's `clock_render_asks`. */
+                 "\"stepReachedRenderingLife\":%ld,\"stepReachedTimerLife\":%ld,"
+                 "\"stepReachedIdleLife\":%ld,"
                  "\"outOfPrograms\":%ld,"
                  "\"outOfProgramsUnrun\":%ld,\"outOfProgramsFramed\":%ld,"
                  "\"outOfProgramsAtTheLadder\":%ld,"
@@ -3508,6 +3548,7 @@ char *result_cold_json(void) {
                  r.classic_compile_resumed,
                  r.unit_mid_program, r.unit_parked, r.unit_checkpoint_owed,
                  r.unframed_steps,
+                 r.clock_render_asks, r.clock_timer_asks, r.clock_idle_asks,
                  c.out_of_programs,
                  c.out_of_programs_unrun, c.out_of_programs_framed, c.out_of_programs_at_the_ladder,
                  ladder, hist, cursors, ahead,
