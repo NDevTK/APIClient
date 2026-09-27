@@ -664,6 +664,12 @@ async function main() {
 
   if (spawnError) {
     console.error(`\n[peergate] the child was never started: ${spawnError.message}`);
+    /* AND THE ROWS THIS GATE HAD ALREADY DECIDED ARE PRINTED, for the same reason the backstop arm prints
+       them: `origins`, `pna` and `orphans` are decided before the child is spawned or without it, and a run
+       that ends here used to discard three measured rows and show a reader one sentence. `decideFromWhatIsHeld`
+       is deliberately NOT called — a child that never started produced no `ended`, no `out` and no `err`, so
+       every row below it is genuinely undecidable and `NOT RUN` is the true mark rather than a shrug. */
+    printRows();
     process.exitCode = 2;
     return;
   }
@@ -710,146 +716,211 @@ async function main() {
        of a spinning instance without a reader having to go to `ps`. HOW ITS ABSENCE WOULD SHOW: a BACKSTOP
        line whose load average is high and whose `orphans` row names a process with minutes of CPU on it,
        with nothing on the BACKSTOP line itself connecting the two. */
+    /* AND EVERY ROW THAT CAN STILL BE DECIDED IS DECIDED FIRST, which is what the paragraph above was for
+       and what printing the table alone never did. See `decideFromWhatIsHeld`. */
+    decideFromWhatIsHeld();
     printRows();
+    /* THE FAILED LIST, BUT NEVER `report`'s VERDICT AND NEVER ITS EXIT CODE. Every declared row now has a
+       result, so the one thing W5's guard exists to refuse cannot happen here — and this is still not a run
+       whose checks decided the outcome: the HARNESS ended it, so the status stays 3 and the sentence says
+       which of the two a reader is holding. A `wrong` row below a BACKSTOP is a real observation about a run
+       this gate cut short, which is worth strictly more than a `NOT RUN` and strictly less than the same row
+       on a run that finished, and collapsing those three into one verdict is the shape this file is against. */
+    /* W5's GUARD ON THIS ARM TOO, WHICH IS WHAT MAKES THE PARAGRAPH ABOVE A MECHANISM RATHER THAN A CLAIM.
+       `report` already refuses a verdict unless every declared row produced a result; this arm never had that
+       guard, so "after `decideFromWhatIsHeld` there are no undecided rows" was a sentence and not a check —
+       and the next row added to the table without a decision in that function would have printed `NOT RUN`
+       here for ever, which is the exact state this landing exists to remove. A GATE THAT CANNOT ACCOUNT FOR
+       ITS OWN ROWS OUTRANKS THE HARNESS VERDICT: the status becomes `report`'s 4 and not this arm's 3,
+       because a reader must not be told which checks a run cut short when the gate does not know. */
+    const unmade = CHECKS.filter(([id]) => !results.has(id)).map(([id]) => id);
+    if (unmade.length) {
+      console.error(`\n[peergate] FAILED: ${unmade.length} declared check(s) produced no result even though ` +
+                    `this process was holding \`wire\`, \`err\`, \`out\` and the child's ending when its ` +
+                    `backstop fired (${unmade.join(', ')}). Every row is decidable from those four, so this ` +
+                    'is a failure of the gate — a check declared and never decided — and it is distinct from ' +
+                    'both the backstop above it and from anything the transport did.');
+      printFixtures(port);
+      process.exitCode = 4;
+      return;
+    }
+    const bad = CHECKS.filter(([id]) => results.get(id).verdict !== 'pass');
+    console.error(`\n[peergate] the BACKSTOP above ended this run, so the status is the HARNESS's and not ` +
+                  `these rows'. All ${CHECKS.length} were decided from what this process was holding when it ` +
+                  `fired, and ${bad.length} did not pass: ${
+                    bad.map(([id]) => `${id}:${results.get(id).verdict}`).join(' ') || '(none)'}. Each is an ` +
+                  'observation about a run this gate cut short — read it as that and not as a verdict on the ' +
+                  'transport, which is what the exit code below refuses to claim.');
     printFixtures(port);
     process.exitCode = 3;
     return;
   }
 
-  /* ── EXIT AND RESULT ───────────────────────────────────────────────────────────────────────────────────── */
-  const ending = ended.signal ? `on ${ended.signal}` : `with code ${ended.code}`;
-  record('exit', ended.signal === null && ended.code === 0 ? 'pass' : 'wrong', `trusted.mjs ended ${ending}`);
+  /* ── EVERY ROW THIS GATE CAN STILL DECIDE, ON EVERY PATH THAT ENDS THE RUN ───────────────────────────────
+     W5 SURVIVING W6 IN THE SENSE THAT ACTUALLY COSTS SOMETHING, WHICH THE ARM ABOVE DID NOT REACH. That arm
+     was already corrected once, for DISCARDING the rows it had: it used to return with the table unprinted,
+     and printing it was read as the fix. It is not — printing an undecided row is not deciding it, and every
+     check below this line is decided out of `wire`, `err`, `out` and `ended`, ALL FOUR OF WHICH THIS PROCESS
+     IS HOLDING at the moment the backstop fires. So the kill discarded no rows and answered none either.
+     MEASURED ON THE RUN THIS WAS WRITTEN FROM: twelve of fourteen rows read `NOT RUN`, and the wire already
+     held the seed document, both peer documents and the beacons — the seed's third instance exists, which it
+     can only if the page executed past its fourth `window.open`, so `onlist`, `offlist` and `len` had all
+     been requested and were sitting in `wire` unexamined. The gate reported that it had measured nothing
+     about the transport while holding the answer to three of the four crossing reads.
+     AND THE DIFFERENCE IS NOT COSMETIC, because those three rows are the ones that say WHICH HALF broke: a
+     `length` that answered against a `closed` that did not is §7.3.1.6 destroy-a-navigable under a held
+     reference, which this file's own fixture banner says is where that finding would be, and `NOT RUN ×4`
+     cannot express it. `NOT RUN` stays the mark for a check nothing could decide — the point is that after
+     this function runs there are none of those, so a `NOT RUN` in a future report is a statement that this
+     function did not run rather than a shrug.
+     IT IS A FUNCTION DECLARED BESIDE `printRows` AND CALLED BEFORE IT ON BOTH ARMS, which is the same shape
+     and for the same reason: two arms end this run, and a thing both of them need cannot live in one of
+     them. */
+  function decideFromWhatIsHeld() {
+    /* ── EXIT AND RESULT ───────────────────────────────────────────────────────────────────────────────────── */
+    /* AND THE SIGNAL NAMES ITS SENDER WHERE THIS GATE IS THE SENDER, because `on SIGTERM` is otherwise read
+       as a crash and this gate's own backstop is the commonest source of one. §Testing: a measurement a
+       harness can falsify is not a measurement, and the harness naming itself is the cheapest way a reader
+       tells the two apart without reconstructing the order of the lines above. */
+    const ending = ended.signal ? `on ${ended.signal}` : `with code ${ended.code}`;
+    record('exit', ended.signal === null && ended.code === 0 ? 'pass' : 'wrong',
+           `trusted.mjs ended ${ending}` +
+           (backstop ? ' — sent BY THIS GATE at its own backstop, so this row is the kill and not a crash; ' +
+                       'the engine\'s own aborts, if any, are on the stderr above the BACKSTOP line'
+                     : ''));
 
-  /* THE SEED'S RESULT DOCUMENT, READ WHERE THE ZONE PUTS IT AND NOT WHERE THE ENGINE PRINTS IT. The `--abi`
-     child writes `@RESULT <json>`; `trusted.mjs` takes that line apart at its own entry and re-emits the JSON
-     ALONE on its stdout, reserving stderr for everything it says in its own voice. So a reader that grepped
-     for the marker here would find nothing and report an ABSENT result for a session that produced one — the
-     defect of measuring what a harness prints instead of what the shipped path writes, one process further
-     out than usual. Everything else this process emits is stderr, so the last non-empty stdout line IS the
-     document. */
-  const resultLine = out.split('\n').map((l) => l.trim()).filter((l) => l !== '').pop();
-  if (resultLine === undefined) {
-    record('result', 'missing', 'trusted.mjs wrote nothing to stdout — it emits the seed\'s result document ' +
-                                'there and nothing else, so this session produced no document at all');
-  } else {
-    let parsed = null;
-    try { parsed = JSON.parse(resultLine); } catch (e) { parsed = null; }
-    if (parsed === null || !Array.isArray(parsed.fetchCallSites))
-      record('result', 'wrong',
-             `trusted.mjs's stdout is not a result document with a \`fetchCallSites\` array: ${
-               resultLine.slice(0, 120)}`);
+    /* THE SEED'S RESULT DOCUMENT, READ WHERE THE ZONE PUTS IT AND NOT WHERE THE ENGINE PRINTS IT. The `--abi`
+       child writes `@RESULT <json>`; `trusted.mjs` takes that line apart at its own entry and re-emits the JSON
+       ALONE on its stdout, reserving stderr for everything it says in its own voice. So a reader that grepped
+       for the marker here would find nothing and report an ABSENT result for a session that produced one — the
+       defect of measuring what a harness prints instead of what the shipped path writes, one process further
+       out than usual. Everything else this process emits is stderr, so the last non-empty stdout line IS the
+       document. */
+    const resultLine = out.split('\n').map((l) => l.trim()).filter((l) => l !== '').pop();
+    if (resultLine === undefined) {
+      record('result', 'missing', 'trusted.mjs wrote nothing to stdout — it emits the seed\'s result document ' +
+                                  'there and nothing else, so this session produced no document at all');
+    } else {
+      let parsed = null;
+      try { parsed = JSON.parse(resultLine); } catch (e) { parsed = null; }
+      if (parsed === null || !Array.isArray(parsed.fetchCallSites))
+        record('result', 'wrong',
+               `trusted.mjs's stdout is not a result document with a \`fetchCallSites\` array: ${
+                 resultLine.slice(0, 120)}`);
+      else
+        record('result', 'pass', `${resultLine.length} bytes, ${parsed.fetchCallSites.length} fetch call site(s)`);
+    }
+
+    /* ── THE WIRE ──────────────────────────────────────────────────────────────────────────────────────────── */
+    const asked = wire.slice(probeCount);
+    const at = (host) => asked.filter((r) => r.host === host);
+    const seedAsked = at(`${SEED_HOST}:${port}`);
+    const peerAsked = at(`${PEER_HOST}:${port}`);
+    const strayHosts = [...new Set(asked.map((r) => r.host))]
+      .filter((h) => h !== `${SEED_HOST}:${port}` && h !== `${PEER_HOST}:${port}`);
+
+    const seenSeed = seedAsked.some((r) => r.path === '/creator');
+    record('seedwire', seenSeed ? 'pass' : (asked.some((r) => r.path === '/creator') ? 'wrong' : 'missing'),
+           `Host fields seen: ${JSON.stringify([...new Set(asked.map((r) => r.host))])}`);
+
+    const peerPaths = [...new Set(peerAsked.map((r) => r.path))].sort();
+    const wantPeer = ['/peer', '/peer-closed'];
+    if (!peerAsked.length)
+      record('peerwire', 'missing', 'the peer authority was never asked for anything — no peer was provisioned');
+    else if (wantPeer.every((p) => peerPaths.includes(p)))
+      record('peerwire', 'pass', `${peerAsked.length} request(s) at ${PEER_HOST}:${port} for ${JSON.stringify(peerPaths)}`);
     else
-      record('result', 'pass', `${resultLine.length} bytes, ${parsed.fetchCallSites.length} fetch call site(s)`);
+      record('peerwire', 'wrong', `the peer authority was asked only for ${JSON.stringify(peerPaths)}`);
+
+    /* W1's WIRE HALF. The comparison is over the SET of paths and not over a count, deliberately: a page whose
+       flow forked may legitimately have its document loaded more than once and that is exploration rather than
+       a defect, while a path that is NEITHER peer document is work keeping an instance alive, which is the
+       thing this whole file exists to make impossible to be green underneath. A request at a THIRD authority is
+       the same failure wearing a different field and is reported here too. */
+    const extraPeerPaths = peerPaths.filter((p) => !wantPeer.includes(p));
+    /* "WAS IT ASKED FOR ANYTHING ELSE" IS UNDECIDABLE WHEN IT WAS ASKED FOR NOTHING, and answering it `pass`
+       anyway is a VACUOUS pass — the exact three-states-behind-one-answer shape this file is against, performed
+       by the very check that exists to prevent it. A run that provisioned no peer has not established that no
+       peer was held open by unfinished work; it has established nothing about peers at all. */
+    if (!peerAsked.length)
+      record('nohold', 'missing', 'the peer authority was never asked for anything, so there is no set of paths ' +
+                                  'for this check to be about');
+    else if (extraPeerPaths.length || strayHosts.length)
+      record('nohold', 'wrong',
+             `paths at the peer authority outside its two documents: ${JSON.stringify(extraPeerPaths)}; ` +
+             `requests at authorities this gate does not serve: ${JSON.stringify(strayHosts)}`);
+    else
+      record('nohold', 'pass', 'the peer authority was asked for its two documents and nothing else');
+
+    /* ── THE BEACONS, WHICH ARE THE PAGE'S OWN REPORT OF WHAT THE READS ANSWERED ────────────────────────────── */
+    const beacons = seedAsked.map((r) => r.path).filter((p) => p.startsWith('/beacon/'));
+    const beacon = (id, prefix, want) => {
+      const hits = beacons.filter((p) => p.startsWith(`/beacon/${prefix}-`));
+      if (!hits.length) return record(id, 'missing', `no /beacon/${prefix}-… request was ever made — the read ` +
+                                      'before it never came back, so the page never reached this line');
+      if (hits.includes(`/beacon/${prefix}-${want}`))
+        return record(id, 'pass', `/beacon/${prefix}-${want}`);
+      return record(id, 'wrong', `saw ${JSON.stringify(hits)}, required /beacon/${prefix}-${want}`);
+    };
+    /* THE CHECK ID AND THE BEACON PREFIX ARE TWO NAMES AND ARE PASSED SEPARATELY, because they answer to two
+       different readers — the table above and the page's own source — and `record` refuses an id the table does
+       not declare, so a rename on one side stops this gate rather than quietly measuring nothing. */
+    beacon('onlist', 'onlist', 'ok-true');
+    beacon('offlist', 'offlist', 'throw-SecurityError');
+    beacon('length', 'len', 'number-2');
+    beacon('closed', 'closed', 'boolean-true');
+
+    /* ── WHAT THE ZONE ITSELF SAID IT COULD NOT DO ─────────────────────────────────────────────────────────────
+       `trusted.mjs` reports a record it held for the whole session in two shapes — a document no instance was
+       ever provisioned for, and one an instance HELD AND THEN LEFT — and the second is the exact lifetime
+       failure this gate is about. Both are matched, because a gate that watched for only one of them would go
+       green on the other. */
+    const heldLine = /record\(s\) named a document/.test(err);
+    record('routed', heldLine ? 'wrong' : 'pass',
+           heldLine ? 'trusted.mjs reported held records; its own lines are above this verdict'
+                    : 'no held records reported');
+
+    const peerLines = [...err.matchAll(/peer instance \[([^\]]+)\] at (\S+) ended (with code \d+|on \w+)/g)];
+    if (!peerLines.length)
+      record('peers', 'missing', 'trusted.mjs reported no peer instance at all — none was provisioned');
+    else {
+      const bad = peerLines.filter((m) => m[3] !== 'with code 0');
+      record('peers', bad.length ? 'wrong' : 'pass',
+             peerLines.map((m) => `${m[1]} at ${m[2]} ended ${m[3]}`).join(' ; '));
+    }
+
+    /* ── THE PEER'S OWN FLOW BASE, READ OFF THE PEER'S OWN DOCUMENT ────────────────────────────────────────────
+       THREE VERDICTS AND NOT TWO, which is the rule this file already performs everywhere else: `missing` is
+       "no peer stated the row at all" and `wrong` is "every peer stated it and it is zero", and those take
+       OPPOSITE work. A zero is a TRANSPORT finding — the read was answered without the asker's world ever being
+       materialized in the peer, which is the one thing `length === 2` cannot rule out — while an absence is a
+       fact about what `trusted.mjs` could read out of a peer that printed no document, and sends the reader to
+       the peer's own `@WHY` above this verdict instead.
+       MATCHED ON `trusted.mjs`'s SEPARATE LINE and never by widening the `peers` pattern above: that pattern
+       carries ` at <url> ended `, this one does not, so the two cannot collide and a rename on either side
+       leaves the other reporting `missing` rather than quietly measuring nothing. */
+    const flowLines = [...err.matchAll(/peer instance \[([^\]]+)\] flow base: (.+)$/gm)];
+    const madeOf = (s) => { const m = /_worldSegmentsMade=(\d+)/.exec(s); return m ? Number(m[1]) : null; };
+    const stated = flowLines.map((m) => ({ tag: m[1], made: madeOf(m[2]), saw: m[2] }))
+                            .filter((r) => r.made !== null);
+    if (!flowLines.length)
+      record('peerflow', 'missing', 'trusted.mjs printed no per-peer flow-base line at all — either no peer ' +
+                                    'instance was provisioned, or that report is not being made');
+    else if (!stated.length)
+      record('peerflow', 'missing',
+             `no peer stated a \`_worldSegmentsMade\` count: ${
+               flowLines.map((m) => `[${m[1]}] ${m[2]}`).join(' ; ')}`);
+    else if (stated.some((r) => r.made >= 1))
+      record('peerflow', 'pass',
+             stated.map((r) => `[${r.tag}] ${r.saw}`).join(' ; '));
+    else
+      record('peerflow', 'wrong',
+             'every peer that stated the row reports ZERO foreign world segments materialized, so no asking ' +
+             'agent\'s world ever arrived in a peer process — the read was answered without one: ' +
+             stated.map((r) => `[${r.tag}] ${r.saw}`).join(' ; '));
   }
 
-  /* ── THE WIRE ──────────────────────────────────────────────────────────────────────────────────────────── */
-  const asked = wire.slice(probeCount);
-  const at = (host) => asked.filter((r) => r.host === host);
-  const seedAsked = at(`${SEED_HOST}:${port}`);
-  const peerAsked = at(`${PEER_HOST}:${port}`);
-  const strayHosts = [...new Set(asked.map((r) => r.host))]
-    .filter((h) => h !== `${SEED_HOST}:${port}` && h !== `${PEER_HOST}:${port}`);
-
-  const seenSeed = seedAsked.some((r) => r.path === '/creator');
-  record('seedwire', seenSeed ? 'pass' : (asked.some((r) => r.path === '/creator') ? 'wrong' : 'missing'),
-         `Host fields seen: ${JSON.stringify([...new Set(asked.map((r) => r.host))])}`);
-
-  const peerPaths = [...new Set(peerAsked.map((r) => r.path))].sort();
-  const wantPeer = ['/peer', '/peer-closed'];
-  if (!peerAsked.length)
-    record('peerwire', 'missing', 'the peer authority was never asked for anything — no peer was provisioned');
-  else if (wantPeer.every((p) => peerPaths.includes(p)))
-    record('peerwire', 'pass', `${peerAsked.length} request(s) at ${PEER_HOST}:${port} for ${JSON.stringify(peerPaths)}`);
-  else
-    record('peerwire', 'wrong', `the peer authority was asked only for ${JSON.stringify(peerPaths)}`);
-
-  /* W1's WIRE HALF. The comparison is over the SET of paths and not over a count, deliberately: a page whose
-     flow forked may legitimately have its document loaded more than once and that is exploration rather than
-     a defect, while a path that is NEITHER peer document is work keeping an instance alive, which is the
-     thing this whole file exists to make impossible to be green underneath. A request at a THIRD authority is
-     the same failure wearing a different field and is reported here too. */
-  const extraPeerPaths = peerPaths.filter((p) => !wantPeer.includes(p));
-  /* "WAS IT ASKED FOR ANYTHING ELSE" IS UNDECIDABLE WHEN IT WAS ASKED FOR NOTHING, and answering it `pass`
-     anyway is a VACUOUS pass — the exact three-states-behind-one-answer shape this file is against, performed
-     by the very check that exists to prevent it. A run that provisioned no peer has not established that no
-     peer was held open by unfinished work; it has established nothing about peers at all. */
-  if (!peerAsked.length)
-    record('nohold', 'missing', 'the peer authority was never asked for anything, so there is no set of paths ' +
-                                'for this check to be about');
-  else if (extraPeerPaths.length || strayHosts.length)
-    record('nohold', 'wrong',
-           `paths at the peer authority outside its two documents: ${JSON.stringify(extraPeerPaths)}; ` +
-           `requests at authorities this gate does not serve: ${JSON.stringify(strayHosts)}`);
-  else
-    record('nohold', 'pass', 'the peer authority was asked for its two documents and nothing else');
-
-  /* ── THE BEACONS, WHICH ARE THE PAGE'S OWN REPORT OF WHAT THE READS ANSWERED ────────────────────────────── */
-  const beacons = seedAsked.map((r) => r.path).filter((p) => p.startsWith('/beacon/'));
-  const beacon = (id, prefix, want) => {
-    const hits = beacons.filter((p) => p.startsWith(`/beacon/${prefix}-`));
-    if (!hits.length) return record(id, 'missing', `no /beacon/${prefix}-… request was ever made — the read ` +
-                                    'before it never came back, so the page never reached this line');
-    if (hits.includes(`/beacon/${prefix}-${want}`))
-      return record(id, 'pass', `/beacon/${prefix}-${want}`);
-    return record(id, 'wrong', `saw ${JSON.stringify(hits)}, required /beacon/${prefix}-${want}`);
-  };
-  /* THE CHECK ID AND THE BEACON PREFIX ARE TWO NAMES AND ARE PASSED SEPARATELY, because they answer to two
-     different readers — the table above and the page's own source — and `record` refuses an id the table does
-     not declare, so a rename on one side stops this gate rather than quietly measuring nothing. */
-  beacon('onlist', 'onlist', 'ok-true');
-  beacon('offlist', 'offlist', 'throw-SecurityError');
-  beacon('length', 'len', 'number-2');
-  beacon('closed', 'closed', 'boolean-true');
-
-  /* ── WHAT THE ZONE ITSELF SAID IT COULD NOT DO ─────────────────────────────────────────────────────────────
-     `trusted.mjs` reports a record it held for the whole session in two shapes — a document no instance was
-     ever provisioned for, and one an instance HELD AND THEN LEFT — and the second is the exact lifetime
-     failure this gate is about. Both are matched, because a gate that watched for only one of them would go
-     green on the other. */
-  const heldLine = /record\(s\) named a document/.test(err);
-  record('routed', heldLine ? 'wrong' : 'pass',
-         heldLine ? 'trusted.mjs reported held records; its own lines are above this verdict'
-                  : 'no held records reported');
-
-  const peerLines = [...err.matchAll(/peer instance \[([^\]]+)\] at (\S+) ended (with code \d+|on \w+)/g)];
-  if (!peerLines.length)
-    record('peers', 'missing', 'trusted.mjs reported no peer instance at all — none was provisioned');
-  else {
-    const bad = peerLines.filter((m) => m[3] !== 'with code 0');
-    record('peers', bad.length ? 'wrong' : 'pass',
-           peerLines.map((m) => `${m[1]} at ${m[2]} ended ${m[3]}`).join(' ; '));
-  }
-
-  /* ── THE PEER'S OWN FLOW BASE, READ OFF THE PEER'S OWN DOCUMENT ────────────────────────────────────────────
-     THREE VERDICTS AND NOT TWO, which is the rule this file already performs everywhere else: `missing` is
-     "no peer stated the row at all" and `wrong` is "every peer stated it and it is zero", and those take
-     OPPOSITE work. A zero is a TRANSPORT finding — the read was answered without the asker's world ever being
-     materialized in the peer, which is the one thing `length === 2` cannot rule out — while an absence is a
-     fact about what `trusted.mjs` could read out of a peer that printed no document, and sends the reader to
-     the peer's own `@WHY` above this verdict instead.
-     MATCHED ON `trusted.mjs`'s SEPARATE LINE and never by widening the `peers` pattern above: that pattern
-     carries ` at <url> ended `, this one does not, so the two cannot collide and a rename on either side
-     leaves the other reporting `missing` rather than quietly measuring nothing. */
-  const flowLines = [...err.matchAll(/peer instance \[([^\]]+)\] flow base: (.+)$/gm)];
-  const madeOf = (s) => { const m = /_worldSegmentsMade=(\d+)/.exec(s); return m ? Number(m[1]) : null; };
-  const stated = flowLines.map((m) => ({ tag: m[1], made: madeOf(m[2]), saw: m[2] }))
-                          .filter((r) => r.made !== null);
-  if (!flowLines.length)
-    record('peerflow', 'missing', 'trusted.mjs printed no per-peer flow-base line at all — either no peer ' +
-                                  'instance was provisioned, or that report is not being made');
-  else if (!stated.length)
-    record('peerflow', 'missing',
-           `no peer stated a \`_worldSegmentsMade\` count: ${
-             flowLines.map((m) => `[${m[1]}] ${m[2]}`).join(' ; ')}`);
-  else if (stated.some((r) => r.made >= 1))
-    record('peerflow', 'pass',
-           stated.map((r) => `[${r.tag}] ${r.saw}`).join(' ; '));
-  else
-    record('peerflow', 'wrong',
-           'every peer that stated the row reports ZERO foreign world segments materialized, so no asking ' +
-           'agent\'s world ever arrived in a peer process — the read was answered without one: ' +
-           stated.map((r) => `[${r.tag}] ${r.saw}`).join(' ; '));
-
+  decideFromWhatIsHeld();
   report(port);
 
   /* THE ROWS, AS THEIR OWN FUNCTION, BECAUSE TWO ARMS END THIS RUN AND ONLY ONE OF THEM USED TO PRINT
