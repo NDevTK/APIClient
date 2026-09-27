@@ -45,6 +45,31 @@ static long g_world_commit_rows;
    exactly ONE caller and engine.c increments its own `g_switches` on the line beside it, so this must equal
    the result document's `_switches` for the same instance, and a divergence names a second dispatch path. */
 static int64_t g_picks_total = 0;
+/* …AND THE HALF OF THAT TOTAL THE FRONTIER NO LONGER HOLDS — a LIFETIME COUNTER, and the arm that turns the
+   one above from a bare total into a PARTITION. The banner one line up already states the fact it is made of:
+   `Flow.picks` is a GAUGE the moment a member departs, so the sum over the members standing NOW can FALL, and
+   the difference between that sum and this instance's total is exactly what the departed members took with
+   them. That sentence was the READING flow.h prescribes — `(picks_lifetime - picks_live) / departures` is what
+   a departed member held on average — and NOTHING ESTABLISHED IT: the census asserted only that the gauge does
+   not EXCEED the counter, which is true of every distribution of that difference including one in which no
+   departed member ever held a dispatch at all. A reader dividing the subtraction by `departures` was dividing
+   by a denominator nobody had checked was the numerator's population, and the comment at that assert said the
+   difference WAS what the retired members took — described, in the register of something checked.
+   IT IS THE SAME MOVE `g_departures_teardown` IS, ONE QUANTITY OVER: a total over a population nobody had
+   partitioned, given the arm that accounts for what left, so the identity between the two halves can be
+   written down at all. What it does NOT do is publish a row — see flow.h's `picks_lifetime` for what remains.
+   RAISED AT flow_remove AND NOT BESIDE `g_departures`, WHICH IS A DIFFERENCE OF TWO LINES AND IS FORCED
+   RATHER THAN CHOSEN: the departure is counted after `free(f)`, and this reads `f->picks`, so the two arms of
+   one departure are credited at two lines of one block by necessity. An early return added between them is
+   what the identity at the end of flow_wfq_census then fires on, which is the whole reason it is an identity
+   and not a comment.
+   NOT RESET BY flow_registry_init, for `g_picks_total`'s reason and WITHOUT costing the identity: the drain
+   flow_registry_free performs goes through flow_remove for every member it holds, so a retired registry has
+   credited every one of them here and the identity re-reads `0 + total == total` at the next init.
+   IT DECIDES NOTHING AND MOVES NO RANK, for flow_credit_pick's reason — flow_weight does not read it, no fork
+   carries it (flow_fork_inherit ASSERTS a newborn arm's `picks` is 0 and says in as many words that it is the
+   one field the inheritance deliberately does not carry), and nothing anywhere branches on it. */
+static int64_t g_picks_departed = 0;
 /* …AND HOW MANY OF THOSE DISPATCHES REACHED A MEMBER WHOSE JAVASCRIPT EXECUTION CONTEXT STACK WAS EMPTY —
    the LIFETIME half of the census's `mem_unframed`, and the row that decides between the two readings the job
    split's residual below could state and deliberately would not choose between.
@@ -7454,14 +7479,32 @@ void flow_wfq_census(WfqCensus *out) {
     }
     /* THE CONSERVATION IDENTITY THE PICK ROWS ARE DEFINED BY, ASSERTED RATHER THAN LEFT TO A READER. CLAUDE.md:
        a quantity whose KIND you cannot name from its output is one you are not entitled to do arithmetic on,
-       and the identity that defines a counter is the one property of it a reader can actually check. Here it is
-       a one-sided inequality and the side it is one-sided on IS the statement: every live member's dispatches
-       were counted into the lifetime total when they happened, and the total additionally holds the dispatches
-       of every member that has since departed — so the gauge can never exceed the counter, and the DIFFERENCE
-       between them is exactly what the retired members took with them. Equality is the ordinary reading of a
-       frontier nothing has left; a gauge ABOVE the counter would mean `Flow.picks` had acquired a writer that
-       is not flow_credit_pick, which is precisely the way this instrument would come to describe a dispatch
-       nobody made. It costs one comparison of two integers already in hand. */
+       and the identity that defines a counter is the one property of it a reader can actually check.
+       IT WAS A ONE-SIDED INEQUALITY AND THE ARGUMENT FOR THAT IS RETIRED RATHER THAN DELETED, BECAUSE IT IS
+       THE ARGUMENT A READER RE-DERIVES FROM THE TWO ROWS ALONE. It read: "the side it is one-sided on IS the
+       statement … the gauge can never exceed the counter, and the DIFFERENCE between them is exactly what the
+       retired members took with them". The first clause is true and the second is a claim the inequality does
+       NOT make: `live <= lifetime` holds for every distribution of that difference, including one in which no
+       departed member ever held a dispatch and the shortfall is a member's `picks` written from somewhere
+       else. So the sentence a reader acts on — flow.h's `(picks_lifetime - picks_live) / departures` is what a
+       departed member held on average — was stated in the register of something checked and was checked by
+       nothing, which is the shape a reader trusts hardest.
+       IT IS EXACT NOW BECAUSE THE MISSING ARM EXISTS: every dispatch is credited to exactly one member at
+       flow_credit_pick, a member's count starts at 0 at flow_new and is carried by no fork, and flow_remove
+       moves it into `g_picks_departed` on the one line that can still read it — so the two halves PARTITION
+       the total and the reading above divides a numerator by its own population.
+       BOTH ASSERTS STAND AND THEY ARE NOT ONE COPY TWICE: the equality holds with a NEGATIVE departed total
+       and the inequality does not, so the pair is what separates a lost credit from a fabricated one, and each
+       message names a different next diff. Two comparisons of integers already in hand. */
+    DCHECKF(out->picks_live + g_picks_departed == out->picks_lifetime,
+            "solver/flow.c: the frontier's live members hold %lld dispatches and departed members took %lld, "
+            "against %lld the scheduler has ever made — every dispatch is credited to exactly one member at "
+            "flow_credit_pick, a member arrives holding none and no fork carries one, and flow_remove moves "
+            "the departing member's share into the second of these, so these two are a PARTITION of the third "
+            "and a difference is a dispatch credited to a member that left without going through flow_remove "
+            "or a `Flow.picks` with a second writer. Every reading of `(picksLifetime - picksLive)` as what "
+            "the departed members held is then a quotient over the wrong population",
+            (long long)out->picks_live, (long long)g_picks_departed, (long long)out->picks_lifetime);
     DCHECK(out->picks_live <= out->picks_lifetime,
            "the frontier's live members hold MORE dispatches between them than the scheduler has ever made — "
            "flow_credit_pick raises both in one statement and is the only writer of either, so a member's "
@@ -8277,6 +8320,11 @@ void flow_remove(JSContext *ctx, Flow *f) {
            family twice for work it has already been charged for. What is left is the node's LIFETIME: the
            owner mark comes down so a compression can walk past it, and the reference goes. This is the ONE
            exit a Flow has, which is what makes it the one place that can be said. */
+        /* AND THE DISPATCHES IT HOLDS, MOVED OUT OF THE GAUGE AND INTO THE COUNTER ON THE ONE LINE THAT CAN
+           STILL READ THEM. `f->picks` stops being reachable two statements below, so this may not stand beside
+           the `g_departures++` that counts the same event — see the banner at `g_picks_departed` for why that
+           is the identity's own tell rather than an untidiness, and for what the identity is. */
+        g_picks_departed += f->picks;
         acct_depart(f);
         free(f);
         g_flows[slot] = g_flows[--g_flows_n];   /* swap-remove; order is by weight, not position */

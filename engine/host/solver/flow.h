@@ -621,7 +621,9 @@ typedef struct Flow {
      * it — JS_FlowIsProgram / JS_FlowIsCall, two predicates over the one `base_kind` field — never inferred
      * from this slot being occupied, which is what `!JS_FlowIsCall` and `f->frame ?` both did. */
     void *frame;
-    /* THIS FLOW'S PROGRAM STILL BEING PARSED, NULL WHEN THERE IS NONE (quickjs.h's JS_FlowNewStep). The
+    /* THIS FLOW'S PROGRAM STILL BEING PARSED, NULL WHEN THERE IS NONE (quickjs.h's JS_FlowCompileStep,
+     * which is the entry this slot is handed to — it said JS_FlowNewStep, which composed the parse with an
+     * instantiation and is no longer what the compile site calls, because that site now HOLDS the closure). The
      * compile of the row at `script_i` is the one span in the engine that is O(a length the PAGE chose) and
      * used to have no suspend point in it at all; it has one now, and this is where a parse that gave the
      * thread back is kept until the flow is next given it. It is NOT a second frame: while it stands the
@@ -1921,14 +1923,35 @@ typedef struct {
        beside each other, and it is exactly right on a run that never tore down (which every run measured here
        was, teardown 0), so it is a claim that looks confirmed on the evidence nearest to hand. WITHIN one run at one census
        nothing here applies and the table stands exactly as written; this is about comparing two.
-       RETIREMENT: this record goes when the census publishes the dispatches departed members took with them
-       as a ROW rather than as that subtraction, so `picks_max` cannot be read as the distribution's maximum.
-       THE IDENTITY THAT DEFINES THEM, and it is checked in both directions rather than described: within the
-       census, `picks_live <= picks_lifetime` with the difference being exactly what departed members took away
-       (asserted at the end of flow_wfq_census); across the document, `picks_lifetime` must EQUAL the result's
-       `_switches`, because flow_credit_pick has exactly one caller and engine.c raises its own switch count on
-       the line beside it. A reader who cannot check a counter's identity is holding a digit, not a
-       measurement. */
+       RETIREMENT: this record goes when the census PUBLISHES the dispatches departed members took with them as
+       a ROW rather than as that subtraction, so `picks_max` cannot be read as the distribution's maximum. IT IS
+       NOT MET, AND THE QUANTITY NOW EXISTS — worth separating, because that condition was one sentence over two
+       halves and only the arithmetic half is closed. flow.c's `g_picks_departed` is the counter, raised at
+       flow_remove on the one line that can still read a departing member, and the identity below is asserted
+       over it. WHAT IS NOT COVERED: it is a dev-build assert operand, so no reader outside this process holds
+       it, and `(picksLifetime - picksLive) / departures` is still a subtraction a reader performs across two
+       rows of different KIND. WHAT THE NEXT DIFF BUILDS: one more row in the @WFQ composer that already writes
+       `picksLive`, `picksMax` and `picksLifetime` — solver/result.c's `result_wfq_json`, which is the one
+       function that spells those three keys — fed from the counter that exists rather than from a second walk.
+       HOW ITS ABSENCE SHOWS: a census reporting `departures` above zero with no row anywhere stating what those
+       members held, so a reader who wants the average subtracts a GAUGE from a LIFETIME COUNTER and takes the
+       quotient on trust, and `picks_max` beside it still reads as the distribution's maximum on exactly the runs
+       where the top member departed.
+       THE IDENTITY THAT DEFINES THEM, and it is asserted rather than described — WHICH IT WAS NOT, AND THAT IS
+       RECORDED HERE BECAUSE THE METHOD IS THE FINDING AND THE SENTENCE IS ONLY ITS SYMPTOM. It read: "checked in
+       both directions rather than described: within the census, `picks_live <= picks_lifetime` WITH THE
+       DIFFERENCE BEING EXACTLY WHAT DEPARTED MEMBERS TOOK AWAY (asserted at the end of flow_wfq_census)", and
+       the parenthetical covered the INEQUALITY alone. `live <= lifetime` is true of every distribution of that
+       difference, including one in which no departed member ever held a dispatch and the shortfall is a
+       `Flow.picks` written from somewhere else — so the clause that a reader ACTS on, three paragraphs up, was
+       stated in the register of something checked and was checked by nothing. An identity stated as asserted is
+       the one claim a reader does not re-derive.
+       WHAT STANDS NOW: within the census, `picks_live + <departed> == picks_lifetime` EXACTLY, with the
+       inequality KEPT BESIDE IT rather than subsumed, because the equality holds with a negative departed total
+       and the inequality does not — so the pair separates a lost credit from a fabricated one and each message
+       names a different next diff. Across the document, `picks_lifetime` must EQUAL the result's `_switches`,
+       because flow_credit_pick has exactly one caller and engine.c raises its own switch count on the line
+       beside it. A reader who cannot check a counter's identity is holding a digit, not a measurement. */
     int64_t picks_live;       /* GAUGE: dispatches held by the members standing now */
     int64_t picks_max;        /* GAUGE: the most any one of them holds */
     int64_t picks_lifetime;   /* LIFETIME: every dispatch this instance has made, departed members included */
