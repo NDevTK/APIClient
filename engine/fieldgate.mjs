@@ -2971,7 +2971,41 @@ function functionScopes(struct, code) {
     return out.length ? out : null;
   };
 
-  return { binderOf, paramSlot, localParamSlot, callArgsOf, iterOf, pushArgsOf, returnsOf,
+  /* §the CORPUS-DECLARED CALLEE — WHICH DECLARATION A BARE CALLEE NAMES, AND WHAT THAT DECLARATION HANDS THE
+     CALLBACK IT WAS GIVEN. `paramSlot` one rule up records the CALL a function literal is an argument of and
+     leaves the callee to be resolved by whoever has an authority for it: the IDL where the callee is a platform
+     member, an import SPECIFIER where it is a package. Where it is a name THIS CORPUS DECLARES there is a third
+     authority and it is the declaration's own body, which these two read. Both are lexical facts about ONE
+     span, asked at the place every other span fact here is asked, and neither follows a value anywhere.
+     EXACTLY ONE DECLARATION, to `returnsOf`'s standard and for its reason: two functions of one name leave the
+     answer undecided as two declarations of one binding do.
+     AND THE CALL MUST BE THE CALLBACK PARAMETER'S OWN BINDING, never a name that merely spells it. A nested
+     literal inside the body may bind the same spelling, and taking its call would answer about a DIFFERENT
+     function's parameter — the aliasing `fnName` refuses for a method shorthand, arriving one scope in rather
+     than one object over. `binderOf` decides it, so the test is the construct's and not a brace count's.
+     ONE CALL WITH TOO FEW ARGUMENTS LEAVES THE QUESTION UNDECIDED, which is `callArgsOf`'s rule at the other
+     end of the same call and the under-crediting direction this file takes everywhere. */
+  const fnSpanOf = (fnName) => {
+    identOnly("fnSpanOf", fnName);
+    const cand = spans.filter((x) => x.fnName === fnName);
+    return cand.length === 1 ? cand[0] : null;
+  };
+  const cbArgsIn = (span, name, idx) => {
+    identOnly("cbArgsIn", name);
+    const home = binderOf(name, span.open + 1);
+    const out = [];
+    for (const c of callSites(struct, name)) {
+      if (c.at <= span.open || c.at >= span.close) continue;
+      if (struct[c.at - 1] === ".") continue;         /* `o.name(…)` is some other object's member */
+      if (binderOf(name, c.at) !== home) continue;    /* a nested literal's own `name`, not this parameter */
+      if (!c.args) return null;                       /* an unbalanced call — the argument cannot be delimited */
+      const a = c.args[idx];
+      if (!a || !code.slice(a[0], a[1]).trim()) return null;  /* called with fewer arguments than this slot */
+      out.push({ text: code.slice(a[0], a[1]).replace(/\s+/g, " ").trim(), at: a[0] });
+    }
+    return out.length ? out : null;
+  };
+  return { binderOf, paramSlot, localParamSlot, callArgsOf, iterOf, pushArgsOf, returnsOf, fnSpanOf, cbArgsIn,
            declaredHere: (name) => bound.has(name),
            initOf: (name, off) => inits.get(`${binderOf(name, off)}\0${name}`) ?? null };
 }
@@ -3011,7 +3045,7 @@ function scanJS(file, src) {
      which reads are reads of one object. A receiver whose base is not a bare identifier (`a().b`) has no
      binder to ask about and keys under its text alone, exactly as before. */
   const { binderOf, initOf, paramSlot, localParamSlot, callArgsOf, iterOf, pushArgsOf, returnsOf,
-          declaredHere } = functionScopes(struct, code);
+          fnSpanOf, cbArgsIn, declaredHere } = functionScopes(struct, code);
   const keyOf = (recv, off) => {
     const base = /^[A-Za-z_$][\w$]*/.exec(recv);
     return base ? `${recv}@${binderOf(base[0], off)}` : recv;
@@ -3499,6 +3533,7 @@ function scanJS(file, src) {
      rather than re-reading the file is the same rule the revision guard states — a second read is a second
      instant, and a scan that answers about two of them answers about no revision. */
   return { file, src, code, localReads, localWrites, litShapes, memberAssigns, wholeDefaults, site, initOf, binderOf, paramSlot,
+           fnSpanOf, cbArgsIn,
            localParamSlot, callArgsOf, guardedBy, foreignImports, importOf, iterOf, pushArgsOf, returnsOf,
            asserted: (off) => assertSpans.some(([a, b]) => off >= a && off < b) };
 }
@@ -4414,6 +4449,12 @@ const ambiguous = [];   // {file, line, recv, reason, why}
 const TWO_RECORDS = "a receiver that an ENGINE EMISSION and a record this corpus CONSTRUCTS explain exactly" +
                     " as well as each other — the identity is a disagreement this cannot collapse, and" +
                     " anchoring to either would be deciding it by which authority was asked first";
+/* §the CORPUS-DECLARED CALLEE, stated as the question it makes unanswerable rather than as an answer. This is
+   the one reason in this band that is about an AUTHORITY and not about a tie: the two candidates do not
+   disagree here, they are both the wrong party to ask. */
+const HANDED_BY_CALLEE = "a receiver that is a CALLBACK PARAMETER a function THIS CORPUS DECLARES hands a value" +
+                         " to — what it holds is decided by that function's BODY and by the arguments its own" +
+                         " CALL SITES pass, and a ranking over shared field names reads neither of those";
 const ONE_FIELD = "a receiver reading exactly ONE field of an emitted record beside name(s) no producer writes" +
                   " — whether the object is that record is not decidable here, so neither is whether those" +
                   " names are the defect";
@@ -5183,6 +5224,34 @@ function originOfExpr(t0, off, scan, st, mode) {
   }
   return null;
 }
+/* §the CORPUS-DECLARED CALLEE, one level up: is THIS receiver a callback parameter that a function this corpus
+ * DECLARES hands a value to? Seven questions, every one answered from the text, and the answer is null wherever
+ * one of them is not — a bare-identifier callee (a member path is some other object's, which the arm at the
+ * foreign step refuses for its own reason), never a bare specifier (that arm has already answered), a home
+ * module this scan holds, exactly one declaration of that name, a NAMED parameter at the callback's own
+ * argument index (a pattern or a rest occupies the position and names nothing, so there is no call to look
+ * for), and that name CALLED inside the body with an argument at the receiver's own parameter index.
+ *
+ * WHAT IT ESTABLISHES IS AN ABSENCE OF AUTHORITY AND NOT A PRODUCER. It does not say whose the value is; the
+ * expression handed over is returned so a reader can see it, and resolving it is a question for §the ORIGIN of
+ * a value at the other end of the same call. What the seven answers do say is that the two candidates the shape
+ * ranking weighs are both the wrong party: the receiver holds whatever that callee hands over, which is a fact
+ * about the callee's body and about the arguments its own call sites pass, and the ranking reads neither. */
+function handedByCorpusCallee(ps, scan) {
+  if (!ps || !/^[A-Za-z_$][\w$]*$/.test(ps.callee)) return null;
+  const spec = scan.importOf.get(ps.callee);
+  if (spec && !/^[./]/.test(spec)) return null;
+  const home = spec ? scanByFile.get(resolveModule(scan.file, spec)) : scan;
+  if (!home) return null;
+  const span = home.fnSpanOf(ps.callee);
+  if (!span || !span.paramList) return null;
+  const cbName = span.paramList[ps.arg];
+  if (!cbName) return null;
+  const handed = home.cbArgsIn(span, cbName, ps.param);
+  if (!handed) return null;
+  return { callee: ps.callee, cbName, where: home.file, handed: handed.map((h) => h.text) };
+}
+
 /* Every answer must be the same answer, and every arm must have answered. */
 function agreeOrigin(answers) {
   if (!answers.length) return null;
@@ -5327,6 +5396,17 @@ for (const s of jsScans) {
     }
     /* ASKED AFTER THE IDL AND BEFORE THE SHAPE, in that order for one reason each: a receiver Web IDL can name
        is named by it, and a receiver it cannot must not be handed to an anchor that decides by name collision. */
+    /* §the CORPUS-DECLARED CALLEE IS READ HERE AND CONSUMED AT THE ANCHOR, and the split is the ordering rule
+       rather than a convenience. It is READ here because this is the one place the constructs that answer WHOSE
+       VALUE THIS IS are asked, in one order: the import-specifier arm and §the ORIGIN of a value must both
+       answer FIRST, because each NAMES a producer, and a refusal may never overrule a decision. It is CONSUMED
+       in the single branch where a record this corpus constructs OUT-EXPLAINS the emission, because that is the
+       decision it refuses and a refusal is asked exactly where the thing it refuses is done. That confinement
+       is the whole of what makes the price one-sided, and it is the band's own definition rather than a limit
+       chosen to make a number small: a receiver the C emission anchors keeps its anchor and every read of it
+       stays audited, so no audited read can be lost BY CONSTRUCTION; and a receiver no single emission explains
+       twice never reached an anchor, so there is nothing there to refuse. */
+    let handedBy = null;
     {
       const ps = rs.map((r) => s.paramSlot(recv, r.off)).find(Boolean);
       /* THE CALLEE MUST BE THE IMPORTED BINDING ITSELF, or a member path rooted at one — never a name that
@@ -5356,6 +5436,7 @@ for (const s of jsScans) {
                              why: `is produced by ${from}`, by: from });
         continue;
       }
+      handedBy = handedByCorpusCallee(ps, s);
     }
     let best = null, bestN = 0;
     for (const [id, shp] of shapes) {
@@ -5380,6 +5461,14 @@ for (const s of jsScans) {
       }
       if (jN >= bestN) {
         const row = { ...s.site(rs[0].off), recv, names: [...names], cShape: best, cN: bestN, jsShape: jBest, jsN: jN };
+        if (jN > bestN && handedBy) {
+          ambiguous.push({ ...s.site(rs[0].off), recv, reason: HANDED_BY_CALLEE,
+                           why: `is \`${handedBy.cbName}\`'s parameter inside \`${handedBy.callee}\` at ` +
+                                `${handedBy.where}, which hands it ${handedBy.handed.map((h) => `\`${h}\``).join(" and ")} ` +
+                                `— reads ${row.names.length}, of which the record at ${jBest} explains ${jN} and ` +
+                                `the emission at ${best} explains ${bestN}` });
+          continue;
+        }
         if (jN > bestN) {
           corpusDecided.push(row);
           /* THE IDENTITY LEAVES THIS GATE'S SUBJECT; THE FORM DOES NOT. Being a corpus-local record answers
@@ -6381,13 +6470,15 @@ if (platformDecided.length) {
      (4) A SELF-RECURSIVE PARAMETER IS NOT A SEAM RECORD. Thirty-eight of the decided receivers pass their own
          name back into their function and nearly all are ordinary consumers of an emission — one at nineteen
          of nineteen names, three at four of four. A tree walk and `fn(rec.part)` are one construct.
-   AND THE WEAKEST ROW OF THIS BAND IS A FOREIGN AST NODE, WHICH IS RECORDED HERE BECAUSE THE FINDING TRAVELLED
+   AND THE WEAKEST ROW OF THIS BAND WAS A FOREIGN AST NODE, WHICH IS RECORDED HERE BECAUSE THE FINDING TRAVELLED
    AS AN ACCUSATION AND IS NOT ONE. Measured at 3a819306, first row of this band and therefore the weakest by its
-   own sort: `testing/static_surface.mjs:1577` `n` reads 24 names and this comparison explains FOUR of them by a
-   popup record and TWO by an engine emission, so the corpus-local candidate wins 4-2 and the receiver is
+   own sort: `testing/static_surface.mjs` `n` read 24 names and this comparison explained FOUR of them by a
+   popup record and TWO by an engine emission, so the corpus-local candidate won 4-2 and the receiver was
    DECIDED — and by content it is the parameter of `walk(ast, (n) => …)` over a `@babel/parser` AST, a node
    nothing in this corpus constructs, whose `type`, `kind`, `declarations`, `id`, `local` and `left` are
-   @babel/types' and not any seam's. The REASON printed for that row is therefore false.
+   @babel/types' and not any seam's. The REASON printed for that row was therefore false. It is out of this
+   band now — §the CORPUS-DECLARED CALLEE refuses the anchor over it and it stands in AMBIGUOUS — and what
+   moved it is a REFUSAL rather than the decision the clause below used to name.
    WHAT IT IS NOT IS THE idlgen DEFECT §the-LEXICAL-EXTENT RECORDS, AND THE DIFFERENCE IS THE WHOLE POINT. That
    one put three `|| []` over a foreign node into DEFAULTED, which ACCUSES — "an auditor that accuses correct
    code is the one direction §Architecture rates as unrecoverable". This band accuses nobody: it is a decided
@@ -6400,18 +6491,64 @@ if (platformDecided.length) {
    shared names and tie rather than because anything recognises babel — is counted in the verdict's UNAUDITED
    figure; a row decided here is not. So a receiver whose identity is in truth undecided is reported as decided,
    and the count of what this scan cannot read is low by one. That is §a-coverage-figure's direction and it is
-   worth fixing; it is not a wrong number anybody is acting on.
-   AND THE FIX IS THE UPSTREAM CONSTRUCT THE CLAUSE BELOW ALREADY NAMES, NEVER A THRESHOLD — paragraph (2) above
-   measured the threshold and it traded one correct decision for each wrong one it took. The construct is the
-   DECIDED FOREIGN arm extended through a corpus-declared walker: that band already decides a receiver `a module
-   OUTSIDE this corpus produced, either by handing it to a callback or by returning it`, and what it cannot
-   follow is a foreign value handed to a callback by an INTERMEDIATE function this corpus declares — `walk` is
-   declared at that same file and takes the AST as its own first argument. A widening in the coverage-gaining
-   direction is priced in false decisions before it lands, over the whole corpus, which is why it is named here
-   rather than done in a diff whose subject was a census row.
-   RETIREMENT: this record goes when no receiver reaches this comparison whose winning candidate explains fewer
-   of its reads than it leaves unexplained — which is a construct deciding those receivers upstream, not a
-   threshold here, since every threshold tried above cost a correct answer for each wrong one it took. */
+   worth fixing; it is not a wrong number anybody is acting on. IT IS PAID NOW, and the payment reads like a
+   regression and is not: the unaudited figure went UP by exactly one, because the receiver it now counts is
+   one this scan genuinely cannot read and was reporting as read.
+   AND THE FIX IS AN UPSTREAM CONSTRUCT AND NEVER A THRESHOLD — paragraph (2) above measured the threshold and
+   it traded one correct decision for each wrong one it took. What stood here named the construct as the
+   DECIDED FOREIGN arm extended through a corpus-declared walker, on the ground that that band already decides
+   a receiver `a module OUTSIDE this corpus produced, either by handing it to a callback or by returning it`
+   and cannot follow a foreign value handed to a callback by an INTERMEDIATE function this corpus declares.
+   IT NAMED THE RIGHT CONSTRUCT AND THE WRONG OUTCOME, and the difference is the whole of what landed.
+   THE DECISION HALF DECIDES NOTHING, WHICH IS A MEASUREMENT AND NOT AN OPINION. Built as a classifier and run
+   over every receiver it would touch, in one frozen snapshot at a7b9de52, with this file's own selector
+   reproduced exactly before any breakdown of it was read — 89 of 89 corpus-local rows, and every band count
+   identical to the unpatched run of the same snapshot: the whole-corpus population of the construct is THIRTY
+   receiver groups, and the origin of the expression the callee hands its callback is NULL FOR THIRTY OF
+   THIRTY. Landing that half today would land an arm with no population at all.
+   WHY, PER CALLEE, BECAUSE THE SHAPE OF THE BLOCK OUTLIVES THE COUNT. TWELVE are `walk`, which hands its
+   callback `fr.node` — a member off a frame read out of a WORKLIST ARRAY by a computed index, whose elements
+   were PUSHED into it — so reaching that function's own parameter means following a MUTATION, and §the ORIGIN
+   of a value refuses every one of those in its own words: `nothing is followed through a promise, a closure, a
+   mutation or a path`. EIGHT hand a `for … of` variable over a TERNARY, for which there is no arm. SIX hand
+   one over a `.slice(…)` of a parameter, and TWO hand the callee's OWN parameter — the one shape the retired
+   clause was written for — and both of those bottom out on a parameter of the enclosing function, which is
+   §the ORIGIN of a value's OTHER residual and not this one. TWO more hand a `let` written from a lookup no arm
+   reads. SO THE BLOCKING PREREQUISITE BELONGS TO A DIFFERENT RECORD, which is the deliverable rather than an
+   excuse: for every one of the thirty the next link is that parameter arm, a ternary arm, or a mutation.
+   WHAT LANDED IS THE OTHER HALF OF THE SAME EVIDENCE — see §the CORPUS-DECLARED CALLEE, whose seven questions
+   are lexical and all answerable, and which establishes not WHOSE the value is but that NEITHER PARTY THIS
+   COMPARISON WEIGHS IS ENTITLED TO ANSWER. THE PRICE, as a before/after over ONE frozen corpus with the arm
+   NEUTERED as an armed control, and the control is what makes it evidence: the neutered run is BYTE-IDENTICAL
+   to the unpatched one outside its revision banner, so the arm is what moved the row and the accessors,
+   helper and constant beside it move nothing. DECIDED CORPUS-LOCAL 89 -> 88, AMBIGUOUS ANCHOR 86 -> 87,
+   UNAUDITED 144 -> 145, and every other column unmoved — read-with-no-writer 0, write-with-no-reader 0,
+   DEFAULTED 3, CONVERTED 1, REFUSED 12, DECIDED FOREIGN 132, DECIDED PLATFORM 212, DECIDED REMOTE-STATED 8 —
+   with the SUBJECT POPULATION identical at both ends (496 judged: 359 spelled, 327 derived, 236 both, 46
+   unreadable, 0 neither), because a pair whose subject count moves is not a pair whatever its findings say.
+   ONE row moved, it is the row above, and it was read by content rather than spot-checked.
+   AND THE CLAUSE THAT STOOD HERE WAS UNSATISFIABLE BY THE CONSTRUCT IT NAMED, WHICH IS ARITHMETIC OVER THIS
+   RECORD'S OWN TWO PARAGRAPHS AND NEEDED NO RUN AT ALL. It read: `this record goes when no receiver reaches
+   this comparison whose winning candidate explains fewer of its reads than it leaves unexplained — which is a
+   construct deciding those receivers upstream, not a threshold here, since every threshold tried above cost a
+   correct answer for each wrong one it took`. Its population is TWO and not one: paragraph (2) above states
+   that in its own words and calls the second of them `a CORRECT decision`, a host record whose consumer reads
+   ten names of which the composer states four. That second row is not a callback parameter at all, so the
+   construct named here could never reach it — and a condition quantified over a population containing a
+   decision this record DEFENDS is met only by removing that decision, which is exactly the trade paragraph (2)
+   measured and refused. The retired wording is kept because a reader re-deriving a condition from this band's
+   own weakest-first sort will write the same one again.
+   NAMED RESIDUAL — THE DECISION HALF. NOT COVERED: a receiver handed a value by a corpus-declared callee is
+   AMBIGUOUS even where that value has a readable producer, so a FOREIGN one is under-credited rather than
+   decided. WHAT THE NEXT DIFF BUILDS: §the ORIGIN of a value asked of the expression `handedByCorpusCallee`
+   already returns, resolved in the callee's OWN scope and at its own offset, with the callee's parameters
+   bound to THIS call site's arguments — the call site and not `callArgsOf`'s union, because a callback
+   parameter is a fact about one call. HOW ITS ABSENCE WOULD SHOW: a receiver standing in the AMBIGUOUS group
+   this arm names whose callee is handed nothing but values some package made.
+   RETIREMENT: this record goes when that resolution exists and a receiver reaches DECIDED FOREIGN through it,
+   because the refusal is then the residue of a decision rather than the whole of it. GREPPED WHEN THIS WAS
+   WRITTEN, so the condition is not born met: `originOfExpr` is called at no site holding a `handed` text, and
+   `handedByCorpusCallee` returns those texts to be PRINTED and to nothing else. */
 if (corpusDecided.length) {
   log(`── DECIDED CORPUS-LOCAL — ${corpusDecided.length} receiver(s) a record THIS CORPUS CONSTRUCTS explains ` +
       `better than any engine emission does. The producer is JavaScript, so the contract is not the serialized ` +
