@@ -455,14 +455,35 @@ void idl_indexed_install_iterable(JSContext *ctx, JSValueConst proto)
                                        "@@iterator an interface with an indexed getter is given, so there is "
                                        "nothing to install in its place");
     /* THE ACTUAL FUNCTION, not a lookalike: §3.7.9 step 1.1 states %Array.prototype.values%, and it works because the
-       object is array-like by construction. A private copy would be a second array iterator to keep in step. */
+       object is array-like by construction. A private copy would be a second array iterator to keep in step — AND
+       A PAGE WOULD REPLACE IT. A polyfill that patches these interfaces keys on IDENTITY: it tests
+       `proto[@@iterator] !== Array.prototype.values` and redefines when they differ, so a lookalike does not merely
+       duplicate the iterator, it hands such a page a DIFFERENT function from the one installed here and nothing in
+       the engine would say so. MEASURED in the mirrored corpus, which is why this is a hazard and not a worry.
+       RETIREMENT: this record goes when a check asserts that this operand IS the realm's own
+       %Array.prototype.values%, because the identity is then true by construction rather than by this paragraph. */
     {
         JSValue sym_ctor = JS_GetPropertyStr(ctx, global, "Symbol");
         JSValue it = JS_GetPropertyStr(ctx, sym_ctor, "iterator");
         JSAtom a = JS_ValueToAtom(ctx, it);
+        int r;
         CHECK(a != JS_ATOM_NULL, "@@iterator could not be reached");
-        JS_DefinePropertyValue(ctx, (JSValue)proto, a, JS_DupValue(ctx, values),
-                               JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+        /* enumerable:FALSE, because step 1.1 is `DefineMethodProperty(target, %Symbol.iterator%, ..., false)` and
+           that fourth argument IS the attribute — where step 1.2's `CreateDataPropertyOrThrow` below is
+           enumerable:TRUE. Two clauses, two attribute sets, and `Object.keys(proto)` can tell them apart. */
+        r = JS_DefinePropertyValue(ctx, (JSValue)proto, a, JS_DupValue(ctx, values),
+                                   JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+        /* THE STATUS IS READ RATHER THAN DISCARDED, and the define is its own statement so a release build still
+           performs it. A collection whose @@iterator is silently absent makes every `for (const x of coll)`
+           throw in the page — a wrong answer from a run with nothing in its errors, which reads as clean.
+           TWO ANSWERS, TWO INVARIANTS, WHICH IS WHY THIS IS NOT ONE ASSERT. -1 is an ALLOCATION failure, so it
+           is always fatal and spelled `>= 0`, which is what core/idl_args.c's §3.7.3 defines already say. 0 is a
+           REFUSAL — the object is not extensible, or already carries this key non-configurably — which is a claim
+           about a prototype THIS ENGINE has just built and not yet frozen, so it is a DCHECK. */
+        CHECK(r >= 0, "§3.7.9 step 1.1's @@iterator could not be defined on an interface prototype");
+        DCHECK(r == 1, "§3.7.9 step 1.1's @@iterator define was REFUSED rather than failing to allocate, so an "
+                       "interface prototype this realm had just created was already non-extensible or already "
+                       "carried a non-configurable %Symbol.iterator% — install it before anything seals it");
         JS_FreeAtom(ctx, a);
         JS_FreeValue(ctx, it);
         JS_FreeValue(ctx, sym_ctor);
@@ -481,7 +502,10 @@ void idl_indexed_install_iterable(JSContext *ctx, JSValueConst proto)
    WPT asserts is absent — so the interface that declares the iterable is the one that calls this. */
 void idl_indexed_install_value_iterator(JSContext *ctx, JSValueConst proto)
 {
-    static const char *const NAMES[] = { "values", "keys", "entries", "forEach" };
+    /* THE SPEC'S ORDER, AND IT IS OBSERVABLE: step 1.2's four substeps run entries, keys, values, forEach, and
+       ordinary-object creation order is what `Reflect.ownKeys`, `Object.keys` and `for...in` report. This array
+       read `values, keys, entries, forEach`, so the prototype answered a key order no browser answers. */
+    static const char *const NAMES[] = { "entries", "keys", "values", "forEach" };
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue arr = JS_GetPropertyStr(ctx, global, "Array");
     JSValue ap = JS_GetPropertyStr(ctx, arr, "prototype");
@@ -489,8 +513,24 @@ void idl_indexed_install_value_iterator(JSContext *ctx, JSValueConst proto)
 
     for (k = 0; k < sizeof(NAMES) / sizeof(NAMES[0]); k++) {
         JSValue f = JS_GetPropertyStr(ctx, ap, NAMES[k]);
+        int r;
         DCHECK(JS_IsFunction(ctx, f), "an Array.prototype iterator member named by §3.7.9 step 1.2 is missing");
-        JS_SetPropertyStr(ctx, (JSValue)proto, NAMES[k], f);
+        /* `CreateDataPropertyOrThrow`, WHICH IS A [[DefineOwnProperty]] AND NOT A [[Set]] — each of the four
+           substeps spells it, and the difference is not stylistic. A [[Set]] walks the prototype chain, so a
+           parent interface prototype carrying an accessor of one of these names would have its SETTER invoked and
+           this prototype would gain nothing, while an inherited non-writable data property would refuse in
+           silence. `Object.prototype` names none of the four, which is exactly why a [[Set]] was correct so far
+           and why the day it stopped being correct nothing here would have said so. It is also the ATTRIBUTES:
+           `CreateDataPropertyOrThrow` is enumerable:TRUE, which `JS_PROP_C_W_E` states and which a [[Set]]
+           creating a fresh own property merely happened to agree with. */
+        r = JS_DefinePropertyValueStr(ctx, (JSValue)proto, NAMES[k], f, JS_PROP_C_W_E);
+        /* The standard writes `Perform ! CreateDataPropertyOrThrow(...)`, and the `!` IS this assertion. Split as
+           step 1.1's is split, for step 1.1's reason: a prototype missing `forEach` is a page calling a member
+           the standard says it has, on a run whose errors name nothing. */
+        CHECK(r >= 0, "§3.7.9 step 1.2's value-iterator members could not be defined on an interface prototype");
+        DCHECKF(r == 1, "§3.7.9 step 1.2's `%s` define was REFUSED rather than failing to allocate — the "
+                        "interface prototype was already non-extensible or already carried that name "
+                        "non-configurably", NAMES[k]);
     }
     JS_FreeValue(ctx, ap);
     JS_FreeValue(ctx, arr);
