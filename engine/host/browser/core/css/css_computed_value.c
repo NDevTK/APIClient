@@ -2217,7 +2217,18 @@ static JSValue css_resolved_shorthand(JSContext *ctx, lxb_dom_element_t *el, con
    as-specified arm, which validates no keyword grammar, so a page's `top: bogus` and `position: bogus` reach
    here as a keyword and a scheme this section does not name — and those bytes are the PAGE's, so no assert may
    stand on either. Both take §9's own "otherwise" arm, which is the answer a static element gets and which
-   fabricates nothing. */
+   fabricates nothing.
+   AN INSET IS NOT A `used_value_px` ROW, AND THAT IS THE ONE RE-DERIVABLE WRONG REMEDY THE CRASH THIS REPLACED
+   LEFT BEHIND. It observed correctly that the four insets are not among the ten physical box-model lengths
+   that entry carries, and then read that as work to do — "adding them is adding a group, not a case". It is
+   not: `used_value_px` answers ONE property from ONE element, and neither inset section can be asked that way.
+   css-position-3 §3.3 states its rules over BOTH members of an axis at once ("opposing used values in a given
+   axis must be negations of each other"), so neither is readable without the other; CSS 2.1 §10.3.7 solves
+   five terms from one constraint equation, so an inset comes out of it beside the size and the two margins.
+   core/layout/used_value.h's two offset entries are that pair and that solve, and they argue the case at their
+   own declarations. Routing this arm through `used_value_px` would also be WRONG rather than merely awkward:
+   the solve rewrites an over-constrained inset, which is exactly what §9's third conjunct exists to keep off
+   the page. */
 static JSValue css_resolved_inset(JSContext *ctx, lxb_dom_element_t *el, const char *name)
 {
     /* The four physical members, each with the two facts a derivation needs from it. `vertical` is
