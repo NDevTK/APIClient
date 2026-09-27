@@ -583,8 +583,17 @@ char   *endpoint_door_hist_json(void);
 
 /* …AND THE SAME SURFACE PARTITIONED BY WHAT A PARSE OF THE DOCUMENT WOULD HAVE REACHED, as a malloc'd JSON
    OBJECT (caller frees) — one row per member of `ENDPOINT_REACHES`, zeroes included, summing to the same
-   `emitted` figure. This is CLAUDE.md §What-the-tool-produces' razor STATED, and
-   `endpoint_door_hist_json` is the raw material it is computed from.
+   `emitted` figure. IT IS THE PARTITION CLAUDE.md §What-the-tool-produces DEMOTED AND IT IS NOT THAT
+   SECTION'S BAR — this line read "CLAUDE.md §What-the-tool-produces' razor STATED" until the bar became a
+   column, and the retired sentence is kept because a reader holding a row named `beyond` re-derives it. The
+   bar is "AN ADDRESS, A KEY OR A VALUE NO PARSE OF THE SERVED BYTES CAN STATE", and `endpoint_razor_class_of`
+   composes it PER ROW out of `addressClass` and the door list's FOURTH column; this row is keyed on the THIRD,
+   which is what a MARKUP parse reaches — so `beyond` holds a literal chunk URL through `module-import`, which
+   that same section names by hand as scoring ZERO on the bar. ONE HEADER WAS GIVING TWO ANSWERS ABOUT WHICH
+   ROW IS THE RAZOR, which is the defect it already records one door over, and the cost was not a reading: the
+   residual below inherited the wrong answer and priced its own gap against the bar rather than against this
+   diagnostic. `endpoint_door_hist_json` is the raw material this row is computed from, and NEITHER OF THEM IS
+   THE BAR.
    IT IS ONE FACT AT TWO GRAINS AND NOT TWO FACTS, WHICH A READER COUNTING ZEROES MUST BE TOLD. Every count
    here is the sum of `endpoint_door_hist_json`'s counts for the doors of that class, so the two histograms do
    not corroborate each other and a reader holding both holds ONE observation — CLAUDE.md
@@ -599,19 +608,66 @@ char   *endpoint_door_hist_json(void);
    the sum identity is asserted at the composer, so a share read off this row is over the population the row
    is a partition of. A bare `beyond` count is the defect
    CLAUDE.md §a-coverage-figure-states-what-it-is-a-fraction-of is about.
-   NAMED RESIDUAL. NOT COVERED: whether the element behind an `EPR_EITHER` door was put there by the PARSER or
-   by a script. The three doors that class holds are reached by both and record neither, so every row through
-   them lands in `either` and the razor is published as a FLOOR with a ceiling rather than as a value — which
-   is CORRECT and is NARROWER than the question, since a router-built `<link>` really is beyond a parse and
-   this cannot say so. WHAT THE NEXT DIFF BUILDS: the element's own insertion recorded ON THE RECORD at the
-   mint, the way `pre_program` already is, so `endpoint_door_reach` becomes a function of the door AND that
-   flag for those three and of the door alone for the other nine. It is a fact the three markup recorders have
-   in hand and do not carry — core/html/html_form.c's step-1 comment says outright that "this engine has no
-   parser-inserted association to" unset, and core/html/html_link.c's only parser metadata is the CSP constant
-   its fetch states rather than a record of how the element arrived. HOW ITS ABSENCE SHOWS: a run whose
-   `either` is a large share of `epEmitted`, where the razor's floor and its ceiling are far apart and no row
-   published anywhere narrows them — a reader can then say what the engine reached AT LEAST and cannot say
-   what it reached. RETIREMENT: this record goes when that flag reaches this classifier. */
+   NOT A RESIDUAL BUT A DECISION, AND THE RESIDUAL THAT STOOD HERE IS RECORDED RATHER THAN DELETED BECAUSE
+   ITS REASONING IS WHAT A READER RE-DERIVES. `EPR_EITHER` says the three doors it holds are reached by a
+   parser-inserted element AND by a script-created one and that the door records neither, so every row through
+   them lands in `either`. THAT MUCH IS TRUE AND IS THE RIGHT ANSWER. What was wrong was the remedy the record
+   went on to name: "WHAT THE NEXT DIFF BUILDS: the element's own insertion recorded ON THE RECORD at the mint,
+   the way `pre_program` already is, so `endpoint_door_reach` becomes a function of the door AND that flag",
+   on the ground that "It is a fact the three markup recorders have in hand and do not carry".
+   THE MECHANISM HALF WAS FALSE AND ITS OWN TWO CITATIONS REFUTE IT IN THE SAME SENTENCE — it cited
+   core/html/html_form.c as saying "this engine has no parser-inserted association to" unset and
+   core/html/html_link.c as carrying no record of how the element arrived, which is a pair of recorders NOT
+   having the fact, offered as evidence that they have it. The SPEC reasoning above it was sound, which is the
+   split CLAUDE.md rates worst, so what a later reader must not inherit is the METHOD: the clause was reasoned
+   from WHAT THE RECORDERS PARSE rather than from what any algorithm WRITES, and reasoning that way produces
+   the same clause again.
+   AND THE FACT IT NAMED DOES NOT EXIST FOR TWO OF THE THREE DOORS, WHICH IS A QUESTION ABOUT THE STANDARD
+   AND NOT ABOUT THIS TREE. HTML §13.2.6.1 "Creating and inserting nodes"' create an element for a token
+   sets exactly two marks of this kind and neither is an element-insertion record: the FORM one, only where it
+   "associate[s] element with the form element pointed to by the form element pointer and set[s] element's
+   parser inserted flag", which §4.10.18.3 "Association of controls and forms" declares as "A
+   form-associated element has an associated parser inserted flag" — a flag on form-associated CONTROLS about
+   FORM OWNERSHIP, which `EPD_FORM_SUBMIT` (the `<form action>`) is not keyed on at all; and the SCRIPT one,
+   §4.12.1.1 "Processing model"'s "A script element has a parser document, which is either null or a
+   Document, initially null. It is set by the HTML parser and the XML parser on script elements they insert",
+   whose non-null case "script elements with non-null parser documents are known as parser-inserted" is the
+   mark core/html/html_script.h already carries. §4.2.4.3 "Fetching and processing a resource from a link
+   element"'s page and §4.8.4.3.5 "Updating the image data"'s page carry the phrase ZERO times each
+   (positive controls 37 and 30 on the same fetched bytes). So for `link-element` and `image-element` the clause
+   asked for a flag no standard defines, and building it would put an INVENTED datum under the one row that
+   states this product's own bar.
+   AND IT WOULD HAVE BEEN THE WRONG OPERAND EVEN IF IT EXISTED, WHICH IS THE SAME MISTAKE endpoint.c'S RETIRED
+   RESIDUAL ALREADY RECORDS ONE STEP LATER. `endpoint_razor_class_of` is the bar and reads `addressClass` and
+   `endpoint_door_bytes`; it does not read `endpoint_door_reach` at ALL, so narrowing `either` narrows the
+   DIAGNOSTIC this banner is about and moves the bar by nothing. The record priced its gap as "the razor is
+   published as a FLOOR with a ceiling" because the banner above it called this row the razor, which it no
+   longer does.
+   AND PARSER-INSERTED IS NOT WHAT THE BAR ASKS ANYWAY, WHICH THIS HEADER ALREADY SAYS ONE DOOR OVER:
+   `EPD_DOCUMENT_SCRIPT` records that "a `<script src>` a `document.write` put in the tree is parser-inserted
+   and is NOT in the served bytes", and §13.2.6.1 confirms the shape from the standard's side — the mark is
+   set on elements the parser INSERTS, which is why §4.12.1.1's flag needed a Fragment carve-out and why a
+   fragment-parsed element would read parser-inserted too. The mark is therefore decisive in ONE direction only
+   (stated NOT-parser-inserted proves beyond a parse) and undecidable in the other, so it could never have made
+   `either` a value.
+   AND THE LOSS THE RECORD CLAIMED IS ALREADY ABSENT AT TWO OF THE THREE DOORS. Its worked example was that "a
+   router-built `<link>` really is beyond a parse and this cannot say so", and core/html/html_link.c records
+   the `href`'s TAINT as the address where one exists — its own comment says "Lexbor would have ToString'd the
+   taint away" — so `address_class_of` answers `EPA_UNKNOWN` and the bar answers `runtime-only` for that row
+   today, with core/html/html_image.c doing the same for its undecided source set. The ambiguity `either` names
+   is real and is bounded to a diagnostic CLAUDE.md §netdiff says is never a target.
+   NAMED RESIDUAL, ON THE AXIS THE BAR ACTUALLY READS AND AT THE ONE DOOR WHERE IT IS OPEN. NOT COVERED: a
+   `<form action>` this run proved was composed out of an unknown reaches the bar as `concrete`.
+   core/html/html_form.c reads that attribute's taint five lines before it records the request and spends it on
+   the @S sink alone (`solve_url_sink`), then records `url_serialize`'d bytes — so the two sibling doors carry
+   the shape into `addressClass` and this one does not. WHAT THE NEXT DIFF BUILDS: the taint recorded as the
+   address at core/html/html_form.c's submission recorder where the action carries one, which is what
+   core/html/html_link.c already does at its own door and needs no new field here. HOW ITS ABSENCE SHOWS: a
+   document whose forms submit to script-composed actions publishes `form-submit` rows whose `razorClass` is
+   `unproven` while the same document's `link-element` rows prove `runtime-only` — an under-claim on the bar,
+   which is the direction nobody discovers by acting on it. RETIREMENT: this record goes when an address a
+   recorder holds a taint for cannot be recorded as a ToString of it, because the door has then no arm left in
+   which to lose the class. */
 char   *endpoint_reach_hist_json(void);
 
 /* Record one learned endpoint (deduped by method+url). `url` may be concolic (shape) or concrete. Headers are
