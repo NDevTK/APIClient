@@ -2639,10 +2639,24 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
          "return every tab to loading the LOGGED-OUT document");
   /* ── WHO NAMED THIS ADDRESS, WHICH IS THE WHOLE OF WHAT DECIDES WHETHER THE LOAD HAPPENS ────────────────
      CLAUDE.md §Attacker-sources puts a navigation's entire safety in the choice of address and its entire
-     remaining question in PROVENANCE: "an OBSERVED or DERIVED address is navigated freely, a FORCED one is
-     the deliberate per-origin widening, and one whose provenance is NOT ESTABLISHED crashes at the decision
-     rather than proceeding." A top-level navigation is a GET, which RFC 9110 §9.2.1 "Safe Methods"' safe set
-     contains, so the METHOD half is answered before this function is entered and there is nothing else left.
+     remaining question in PROVENANCE. A top-level navigation is a GET, which RFC 9110 §9.2.1 "Safe Methods"'
+     safe set contains, so the METHOD half is answered before this function is entered and there is nothing
+     else left.
+     A QUOTATION STOOD HERE AND IT WAS A PARAPHRASE INSIDE QUOTATION MARKS, WHICH BORROWS AN AUTHORITY THE
+     WORDS NEVER EARNED — kept in its own words because a reader re-derives it from that section. It read
+     "an OBSERVED or DERIVED address is navigated freely, a FORCED one is the deliberate per-origin widening,
+     and one whose provenance is NOT ESTABLISHED crashes at the decision rather than proceeding." The
+     SECTION is right, the third clause is right, and the STRING is in no revision of that file:
+     `git show origin/main:CLAUDE.md | grep -c` answers 0 for it against 1 for `deliberate per-origin
+     widening` as a control. THE DERIVED HALF IS ALSO FALSE OF THE DEFAULT ARMS, measured against the real
+     `_firingRefusal` with the facts the call below states: at an unconfigured origin a DERIVED navigation is
+     REFUSED `destination=value`, exactly as a FORCED one is, because §2.2.5's `document` destination is
+     neither script-like nor a subresource and the `value` arm wants a `witness=unpinned` this call correctly
+     states as `unstated`. What moved is the MODEL — §AND-THAT-ABSOLUTE-IS-RETIRED-BY-THE-PROJECT-OWNER made
+     the control per-signal and §THE-PER-ORIGIN-OPT-IN-GOVERNS-EGRESS drew the default at PROGRAM LOADS ONLY,
+     which a navigation is not — so the widening is what carries a navigation at every grade, and a person
+     whose route only the bundle names permits this origin rather than being told the grade decided it.
+     `engine/trusted.mjs`'s `navigate` carries the same correction, because it carried the same sentence.
      AND THE DECISION IS NOT MADE HERE ANY MORE, WHICH IS THE POINT RATHER THAN A DELEGATION. This function
      used to hold two things the chokepoint could not: a DCHECK enumerating the three tokens, and an arm that
      refused a FORCED address outright. Both were the correct policy and both were a SECOND COPY of it — the

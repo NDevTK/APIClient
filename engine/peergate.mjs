@@ -117,9 +117,19 @@ const PEER_HOST = 'localhost';
    instance is `abi_stalled()`'s DFAIL. The seed would abort before printing anything. A same-origin
    `window.open` instead reaches navigable.c's `child_in_this_agent` arm, becomes §7.4.5's load job for a
    navigable THIS instance holds, and asks the zone `document.fetch` with the load's own provenance — which
-   for an address the page's own code composed on a path that stood on no contradicted arm is `derived`, and a
-   `derived` navigation is one trusted.mjs performs. The bytes then come through the ONE chokepoint like every
-   other byte, which is also what makes the observation trustworthy: it is `safe-fetch.js` that fetched it.
+   for an address the page's own code composed on a path that stood on no contradicted arm is `derived`. The
+   bytes then come through the ONE chokepoint like every other byte, which is also what makes the observation
+   trustworthy: it is `safe-fetch.js` that fetched it.
+   THIS SENTENCE ENDED "and a `derived` navigation is one trusted.mjs performs", AND THAT CLAUSE IS RETIRED
+   BY MEASUREMENT RATHER THAN BY ANYBODY DISAGREEING WITH IT — kept in its own words because it is the
+   reading a reader re-derives from that file's own `navigate` banner, which says the same thing twice. Asked
+   of the real chokepoint with `navigate`'s own facts at the table that file states (`{}`), a DERIVED
+   navigation is REFUSED `destination=value`: the `provenance=observed` arm wants `observed` and the
+   `destination=value` arm wants `witness=unpinned`, where a navigation composes no witness mark at all. So a
+   `derived` navigation waits on the per-origin widening exactly as a `forced` one does, which is why the
+   child below is spawned with `--explore` for both of this fixture's authorities. Both sentences describe
+   the single-switch control this model replaced; the refusal `navigate` writes has named `--explore` the
+   whole time.
 
    AND THE OBSERVATIONS RIDE THE PATH RATHER THAN A QUERY STRING, because the whole address is what this
    server sees and the path is the half no consumer of a result document has to be asked about. */
@@ -160,14 +170,66 @@ const PEER_CLOSED_DOC = `<!doctype html><script>window.close();</script>`;
    beacon can never itself become a request this gate then has to explain. */
 const BEACON_DOC = `<!doctype html><title>beacon</title>`;
 
+/* ── WHAT THIS GATE PERMITS AT ITS OWN FIXTURE, STATED ROW BY ROW ────────────────────────────────────────────
+   CLAUDE.md §THE-PER-ORIGIN-OPT-IN-GOVERNS-EGRESS draws the default at PROGRAM LOADS ONLY, and this gate's
+   probe is not one: it is a `document` load, which Fetch §2.2.5 "Requests" makes neither script-like nor a
+   subresource, so `destination` reads `value` — this tool spending somebody else's server. Measured against
+   the real file rather than reasoned about: at the table `trusted.mjs` states (`{}`) the probe is REFUSED
+   `destination=value`, and the two default arms that could carry a `value` request cannot, because one wants
+   `provenance=observed` (the probe is `derived`) and the other wants `actor=page` (the probe is `tool`). So
+   SPEAKING AN EMPTY TABLE IS NOT ENOUGH HERE and a reader who lands one has moved the verdict from an
+   uncaught abort to a `pna` WRONG.
+   IT IS ONE ORIGIN AND ONE VALUE PER GATING ROW, WHICH IS THE NARROWEST THING THE SHAPE CAN SAY. The only
+   request this zone ever makes is the `/pna-probe` at the PEER authority, `_firingRefusal` keys the table on
+   that request URL's own `.origin`, and both authorities are EPHEMERAL LOOPBACK PORTS THIS PROCESS OPENED
+   — an origin that does not exist outside this run and serves nothing but literals in this file. This is not
+   `safeFetchWiden`, which would permit every value of every row: `actor=page`, `provenance=observed` and
+   `provenance=forced` stay unpermitted here, so a later diff that changed what this gate asks would be
+   REFUSED and named rather than quietly carried.
+   AND IT IS A LITERAL RATHER THAN DERIVED FROM THE PROBE'S OWN VECTOR, WHICH IS THE WHOLE OF WHY `pna` IS
+   STILL A CHECK. `safeFetchSignalVector` would hand back exactly these nine values for exactly these facts,
+   and a table built from it could not refuse the request it was built from — §AN-ASSERT-WHOSE-TWO-SIDES-
+   CANNOT-DISAGREE arriving in a permission table, wearing the shape of a derivation. Written out, the three
+   diffs that SHOULD redden this gate do: a signal added to the registry, an `of` that answers differently
+   for these facts, and an edit to the probe below. The direction is the safe one and the file says so at its
+   own door — "a signal a stored grant does not name is not permitted ... every existing grant NARROWS, the
+   refusal names the new row" — so the failure is `pna` WRONG naming the row, never a silent firing. */
+const PROBE_PERMITS = {
+  /* Fetch §2.2.5's `document` destination is neither script-like nor a subresource. */
+  destination: ['value'],
+  /* THIS GATE composed the address — see the `actor: 'tool'` beside the probe. */
+  actor: ['tool'],
+  /* The address is one this harness's own code composed; nothing pinned a value in it. */
+  provenance: ['derived'],
+  /* The document it is composed FROM is the seed, which this harness named itself. */
+  'doc-reach': ['observed'],
+  /* No cookie jar in this process, and the probe states `credentialed: false`. */
+  cookies: ['no'],
+  /* The probe passes no header list, so this zone adds no authority beyond the jar it does not have. */
+  'header-authority': ['none'],
+  /* A `/pna-probe` path holds no witness this engine determined. */
+  witness: ['unpinned'],
+  /* No signature parameter and no JWS in `http://localhost:<port>/pna-probe`. */
+  'url-authority': ['unknown'],
+  /* The one value this row has today; the chokepoint's own residual says why. */
+  lineage: ['unknown'],
+};
+
 /* ── THE CHOKEPOINT, IN A REALM OF ITS OWN ───────────────────────────────────────────────────────────────────
    Loaded exactly as `engine/trusted.mjs` loads it and for the same reason: this gate makes a CLAIM about
    `safe-fetch.js`'s private-network rule (that `127.0.0.1` -> `localhost` is allowed because both classify
    private), and a claim about a file is checked by running that file rather than by restating its rule here.
    A second copy of the rule would be the drift SECURITY.md's one-chokepoint design exists to prevent, and it
    would drift in the one direction that matters: this gate would go on passing after the real file stopped
-   allowing the pair, and would report a transport failure as a policy that had not changed. */
-function loadChokepoint() {
+   allowing the pair, and would report a transport failure as a policy that had not changed.
+   IT STATES THE TABLE BEFORE IT RETURNS, AND THE PEER ORIGIN IS AN ARGUMENT FOR THAT REASON RATHER THAN A
+   CONVENIENCE. This function used to hand back a zone that had never SPOKEN, and `_firingRefusal`'s DCHECK
+   fired on the first request of the first build that ever invoked this gate — before a single declared check
+   had produced a result, so W5's whole table was ABSENT rather than failing. A load that cannot return an
+   unstated zone makes that state impossible rather than leaving an ordering for the next reader to keep:
+   CLAUDE.md §Fix-the-ROOT is the rule, and the alternative — state it at the call site, one line later — is
+   the same window one statement narrower. */
+function loadChokepoint(peerOrigin) {
   const sandbox = { console, fetch, URL, TextDecoder, TextEncoder };
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
@@ -178,6 +240,21 @@ function loadChokepoint() {
     throw new Error('extension/lib/safe-fetch.js installed no `safeFetch` — this gate asks that file whether ' +
                     'the two loopback authorities may reach each other, and a load that installs nothing ' +
                     'leaves the question unasked rather than answered');
+  /* AND THE POLICY STATEMENT BESIDE IT, ASSERTED AT THE SAME DOOR AND FOR THE SHARPER REASON `trusted.mjs`
+     GIVES AT ITS OWN COPY OF THIS LIST: the chokepoint's absence is a gate with no network, and THIS name's
+     absence is a gate that reaches the network with the one decision CLAUDE.md puts at that chokepoint
+     silently missing. It is a load-time throw rather than a TypeError one call into the probe, and it is what
+     makes the statement below reachable at all — the name MOVED with the model (`safeFetchWidenStated` took a
+     list of origin strings), so a zone assembled from a stale copy of that file fails HERE, loudly. */
+  if (typeof sandbox.safeFetchEgressStated !== 'function')
+    throw new Error('extension/lib/safe-fetch.js installed no `safeFetchEgressStated` — this gate cannot ' +
+                    'SPEAK its per-origin egress table, so `_firingRefusal` would abort on the probe in a ' +
+                    'dev build and answer it from a table nobody stated in a release one');
+  /* THE STATEMENT ITSELF, ONCE, IN THE SHAPE THAT FILE TAKES — `{ origin: { signal: [values] } }`. `{}` and
+     not `[]` for the reason `trusted.mjs` gives: an empty ARRAY is the shape the previous single-switch
+     control persisted and the chokepoint refuses it by name, because a bare origin in it meant "permit
+     everything" including the signals that did not exist when it was written. */
+  sandbox.safeFetchEgressStated({ [peerOrigin]: PROBE_PERMITS });
   return sandbox;
 }
 
@@ -318,7 +395,11 @@ async function main() {
      destination or credential state is a different decision and this gate would then be answering about a
      request nobody makes. The probe's own path is `/pna-probe`, which is neither peer document, so `nohold`
      below excludes it BY NAME rather than by a count this line would have to keep in step with. */
-  const ZONE = loadChokepoint();
+  /* AND THE PEER AUTHORITY IS HANDED IN, BECAUSE THE TABLE IS KEYED ON THE ORIGIN THE PROBE'S OWN URL
+     SERIALIZES TO and the port is not known until this server is listening — see PROBE_PERMITS for what
+     the entry says and why it is one origin rather than both. The SEED authority is deliberately absent
+     from this zone's table: this process makes exactly one request and it is at the peer. */
+  const ZONE = loadChokepoint(peerOrigin);
   /* THE GRADE IS `derived`, WHICH IS THE ONE THE RUN BELOW ACTUALLY DEPENDS ON AND IS NOT A FORMALITY. That
      file reads the provenance BEFORE any byte moves and refuses a `forced` address at an unwidened origin, so
      a probe that stated a different grade — or, since `_provenanceOf` is a fatal `CHECK`, none at all — would
@@ -348,7 +429,45 @@ async function main() {
   const probeCount = wire.length;
 
   /* ── THE RUN ───────────────────────────────────────────────────────────────────────────────────────────── */
-  const child = spawn(process.execPath, [join(ENGINE, 'trusted.mjs'), seedUrl, bin],
+  /* AND THE CHILD IS AUTHORIZED FOR THE TWO AUTHORITIES OF THIS GATE'S OWN FIXTURE, WHICH IS A SECOND
+     STATEMENT BY A SECOND HOST AND NOT A SECOND POLICY. `trusted.mjs` states its own table (`{}`, a
+     command line being a sentence for one run) and `--explore <origin>` is the ONE spelling it offers for
+     adding to it, so this is that host's canonical door rather than a mechanism invented here.
+     IT IS REQUIRED AND THAT IS MEASURED RATHER THAN ARGUED, AND IT REFUTES A CLAIM BOTH THIS FILE AND
+     `trusted.mjs` CARRIED. This file's own fixture banner said "a `derived` navigation is one
+     trusted.mjs performs", and that file's `navigate` says twice that "an OBSERVED or DERIVED address is
+     navigated freely ... and only a FORCED one waits on the per-origin widening". Asked of the real
+     chokepoint with `navigate`'s own facts — `document`, `derived`, `pinned: 'unstated'`, `actor: 'page'`,
+     `docReach: 'observed'` — at an empty table the answer is REFUSED `destination=value`. No default arm
+     carries it: the `provenance=observed` arm wants `observed`, and the `destination=value` arm wants
+     `witness=unpinned` where a navigation composes no mark at all. Both sentences describe the
+     single-switch control this model replaced, and the refusal message `navigate` itself writes has been
+     saying "Pass `--explore <origin>` to widen it" the whole time — the CODE was right and the prose
+     above it was stale. The correction is recorded at both sites.
+     SO WITHOUT THESE TWO FLAGS THE CHILD REFUSES EVERY CROSSING READ AND EVERY BEACON. The two peer
+     documents are `window.open`s of literals the seed's own code composed (`derived`), and each
+     `/beacon/` address is composed from a value the run computed — which is how every observation in this
+     gate reaches the wire. A run without them records `onlist`, `offlist`, `length` and `closed` as
+     ABSENT, which is honest and measures no transport at all.
+     BOTH AUTHORITIES AND NOTHING WIDER, WHICH IS THE WHOLE OF THE WIDENING THIS GATE MAKES. They are the
+     two hosts of ONE ephemeral loopback port THIS PROCESS OPENED, serving nothing but literals in this
+     file, for one run — origins that do not exist outside it. `--explore` is COARSE (`safeFetchWiden`
+     permits every value of every gating row) and that is the only sentence this host's command line can
+     say; what bounds it here is the fixture rather than the flag, and `nohold` asserts AT THE WIRE that
+     the peer authority was asked for nothing but its two documents. A narrower per-signal statement
+     WOULD suffice — measured — and giving this host a per-signal flag is a mechanism of its own and is
+     not what this gate needs in order to run.
+     NAMED RESIDUAL. WHAT IS NOT COVERED: the widening is per ORIGIN and not per SIGNAL, so at these two
+     authorities a `forced` navigation would also fire — there is none in this fixture, and a third path
+     at the peer authority fails `nohold` whether it fired or not. WHAT THE NEXT DIFF BUILDS: a
+     `--explore-signal <origin> <signal>=<value>` on `trusted.mjs` routed to `safeFetchPermit`, which the
+     chokepoint already exports as the per-row door a surface writes through, and these two lines become
+     the nav vector this gate actually needs. HOW ITS ABSENCE WOULD SHOW: a person reading what this gate
+     permitted at its own fixture sees every value of every row permitted at both authorities, where the
+     run only ever asks for two vectors. */
+  const child = spawn(process.execPath,
+                      [join(ENGINE, 'trusted.mjs'), seedUrl, bin,
+                       '--explore', seedOrigin, '--explore', peerOrigin],
                       { stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '', err = '', spawnError = null;
   child.stdout.on('data', (d) => { out += d; progress(); });
@@ -389,11 +508,34 @@ async function main() {
 
   if (backstop) {
     console.error(`\n[peergate] BACKSTOP — this gate's own idle watchdog fired after ${
-      Math.round(backstop.idleMs / 1000)}s with no request and no output from the child, load average [${
+      Math.round(backstop.idleMs / 1000)}s with NO REQUEST AND NO OUTPUT from the child, load average [${
       backstop.load.map((n) => n.toFixed(2)).join(' ')}]. This is a verdict about the HARNESS and it is NOT ` +
-      'one of the checks below: nothing here says the engine is wrong, only that nothing moved. A kill leaves ' +
-      'an EMPTY tail where a crash leaves the output that preceded it — the child\'s stderr above this line ' +
-      'is the place to read which of the two happened.');
+      'one of the checks below. A kill leaves an EMPTY tail where a crash leaves the output that preceded ' +
+      'it — the child\'s stderr above this line is the place to read which of the two happened.\n' +
+      '[peergate] IT MEASURES SILENCE AND NOT PROGRESS, AND THIS SENTENCE USED TO SAY "only that nothing ' +
+      'moved" — which is a claim about the CHILD that this watchdog cannot make. It is rewritten rather ' +
+      'than deleted because a reader re-derives it from the word `idle`. What is timed is the absence of a ' +
+      'REQUEST and of a BYTE; a child spinning at a full core emits neither, so `nothing moved` is exactly ' +
+      'the reading this line must not offer. Read the child\'s own CPU before concluding anything from it.');
+    /* AND THE ROWS ARE PRINTED ANYWAY, WHICH IS W5 SURVIVING W6 RATHER THAN A SOFTENED VERDICT. This arm
+       used to return with the table unprinted, so a kill DISCARDED every check that had already produced a
+       result — `origins` and `pna` are both decided before the child is even spawned — and a reader got a
+       harness sentence where two measured rows existed. That is the shape W5 is written against (a driver
+       that died leaving the checks below it silently unmade while the file still looks complete), arriving
+       through W6 instead of through a reply. The EXIT CODE stays 3 and no verdict is composed: `printRows`
+       marks an unmade check `NOT RUN`, which is neither `pass` nor a failure, so nothing here can be read
+       as the gate having answered about peers.
+       NAMED RESIDUAL. WHAT IS NOT COVERED: the watchdog itself, which fires on a child that is CONSUMING A
+       FULL CORE. Its own W6 paragraph rests on a deadlocked pipe consuming no CPU — true of a deadlock and
+       false of a busy engine — so it kills a run that is working and reports it in the harness's voice, and
+       §Testing's rule is to measure the thing the invariant is about. WHAT THE NEXT DIFF BUILDS: the tick
+       reads the child\'s own consumed CPU (`/proc/<pid>/stat`\'s utime+stime, which is what the kernel
+       already accounts) and fires only where the child has burned no CPU across the window, leaving the
+       busy case to the RLIMIT_CPU the caller installs — which is where a bound on work belongs and is what
+       `engine/build.mjs` already wraps this gate in. HOW ITS ABSENCE WOULD SHOW: a BACKSTOP verdict whose
+       stderr tail is not empty and whose child had accumulated minutes of CPU time, on a box under load,
+       reported as a harness idle rather than as a budget the caller owns. */
+    printRows();
     printFixtures(port);
     process.exitCode = 3;
     return;
@@ -535,11 +677,12 @@ async function main() {
 
   report(port);
 
-  function report(p) {
-    /* W5's GUARD. The verdict is refused unless every declared check produced a result — a driver that died
-       between two of these would otherwise leave the ones below it silently unmade while this summary still
-       printed a total. */
-    const missingChecks = CHECKS.filter(([id]) => !results.has(id)).map(([id]) => id);
+  /* THE ROWS, AS THEIR OWN FUNCTION, BECAUSE TWO ARMS END THIS RUN AND ONLY ONE OF THEM USED TO PRINT
+     THEM. A verdict is `report`'s to compose and the TABLE is not — W5's mechanism is that every check
+     is DECLARED up front and that the reader can see which of them produced a result, and that is worth
+     exactly as much on a run this harness killed as on one that finished. `NOT RUN` is already the mark
+     for a check that made no observation, so the same loop says the right thing on both paths. */
+  function printRows() {
     console.error('\n[peergate] ' + '-'.repeat(96));
     for (const [id, why] of CHECKS) {
       const r = results.get(id);
@@ -547,6 +690,14 @@ async function main() {
       console.error(`[peergate] ${mark.padEnd(7)} ${id.padEnd(9)} ${r ? r.saw : ''}`);
       if (!r || r.verdict !== 'pass') console.error(`[peergate]                   ${why}`);
     }
+  }
+
+  function report(p) {
+    /* W5's GUARD. The verdict is refused unless every declared check produced a result — a driver that died
+       between two of these would otherwise leave the ones below it silently unmade while this summary still
+       printed a total. */
+    const missingChecks = CHECKS.filter(([id]) => !results.has(id)).map(([id]) => id);
+    printRows();
     if (missingChecks.length) {
       console.error(`\n[peergate] FAILED: ${missingChecks.length} declared check(s) never produced a result (${
         missingChecks.join(', ')}). A gate that reports a total over checks it did not make is the shape ` +

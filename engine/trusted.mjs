@@ -701,9 +701,25 @@ async function main() {
      of what separates them is which instance the bytes end up in.
      THE DECISION IS READ OFF THE RECORD AND IS NO LONGER A BLANKET REFUSAL. Every record that reaches this
      function states what the navigation is evidence of — the create notice, §7.1.3.2's swap, the load job's
-     own `document.fetch` and a route declaration — so an OBSERVED or DERIVED address is navigated freely
-     (§Attacker-sources: that IS the capability, reaching what a bundle NAMES and no link exposes) and only a
-     FORCED one waits on the per-origin widening.
+     own `document.fetch` and a route declaration — and the chokepoint answers each grade for itself.
+     THIS SENTENCE ENDED "so an OBSERVED or DERIVED address is navigated freely (§Attacker-sources: that IS
+     the capability, reaching what a bundle NAMES and no link exposes) and only a FORCED one waits on the
+     per-origin widening", AND THE DERIVED HALF OF THAT IS FALSE OF THE TABLE THIS HOST STATES. It is kept in
+     its own words because it is the reading a reader re-derives — from CLAUDE.md's own §Attacker-sources,
+     which really does say a DERIVED address "is navigated freely" — and because the next reader to believe
+     it will delete a caller's `--explore`. MEASURED against the real chokepoint with the very facts the ask
+     below states (`document`, `derived`, `pinned: 'unstated'`, `actor: 'page'`, `docReach: 'observed'`), at
+     the `{}` this host states: REFUSED `destination=value`. No default arm carries it — Fetch §2.2.5 makes a
+     navigation's destination `document`, which is neither script-like nor a subresource, so the two
+     destination arms cannot fire; the `provenance` arm wants `observed`; and the `destination=value` arm
+     wants `witness=unpinned`, which a navigation can never state because it is not a park and composes no
+     mark at all. So a DERIVED navigation waits on the widening exactly as a FORCED one does.
+     THE CODE WAS RIGHT AND ONLY THE PROSE WAS STALE, WHICH IS WHY NOTHING HERE CHANGES: the refusal this
+     function writes has named `--explore <origin>` the whole time. What moved underneath the sentence is
+     the MODEL — §AND-THAT-ABSOLUTE-IS-RETIRED-BY-THE-PROJECT-OWNER replaced a single forced/not-forced
+     switch with per-signal rows, and §THE-PER-ORIGIN-OPT-IN-GOVERNS-EGRESS then drew the default at PROGRAM
+     LOADS ONLY, which a navigation is not. The two CLAUDE.md sentences are in tension and the later one is
+     the one the chokepoint's arms implement.
      A LOAD THAT DID NOT LOAD IS A DOCUMENT TOO. `replyRecord` answers null for the chokepoint's status 0 — a
      blocked scheme, a private target, a refused read — and HTML still gives that navigable a Document: the
      empty byte sequence is the `about:blank`-shaped one the engine's own child_document builds. The ADDRESS
@@ -721,9 +737,17 @@ async function main() {
   async function navigate(url, fromDocUrl, what, provenance, fromReach) {
     const abs = new URL(url, fromDocUrl).href;
 
-    /* THE PROVENANCE IS THE WHOLE DECISION AND IT IS STATED BY THE CALLER, never derived here. §Attacker-
-       sources: "an OBSERVED or DERIVED address is navigated freely, a FORCED one is the deliberate per-origin
-       widening", and one whose provenance is NOT ESTABLISHED crashes at the decision rather than proceeding.
+    /* THE PROVENANCE IS THE WHOLE DECISION AND IT IS STATED BY THE CALLER, never derived here, and one whose
+       provenance is NOT ESTABLISHED crashes at the decision rather than proceeding.
+       THIS CARRIED A QUOTATION AND IT WAS A PARAPHRASE INSIDE QUOTATION MARKS, WHICH IS THE ONE FORM THAT
+       BORROWS AUTHORITY THE WORDS NEVER EARNED — kept here rather than deleted because the paragraph above
+       is what a reader re-derives it from. It read §Attacker-sources: "an OBSERVED or DERIVED address is
+       navigated freely, a FORCED one is the deliberate per-origin widening". The SECTION is right and the
+       STRING is in no revision of that file — `git show origin/main:CLAUDE.md | grep -c` answers 0 for it
+       against 1 for `deliberate per-origin widening` as a control — the real sentence being "An OBSERVED or
+       DERIVED address is one the app's own code computed from real inputs and a person could have reached,
+       and it is navigated freely". And the SUBSTANCE is false of this host's own table: see the paragraph
+       above for the measurement and for which of CLAUDE.md's two sentences the arms implement.
        `null` WAS A FOURTH ANSWER HERE — "the record does not state it" — AND IT IS GONE WITH THE RECORDS THAT
        COULD NOT STATE IT. It was an honest description of a gap and it had exactly the failure mode a
        tolerated absence has: `navigable.create`, `navigable.swap` and `document.fetch` all passed it, so the
@@ -1087,9 +1111,14 @@ async function main() {
          `null` here meant "the record does not state it", and §Attacker-sources makes an unestablished
          provenance a crash at the decision — so every cross-origin child navigable any page ever created was
          declined at every unwidened origin, which is every origin by default. The create notice now carries
-         the word, so a child a page's own code named on a path that stood on no contradicted arm is `derived`
-         and is navigated freely, which is the capability §What-the-tool-produces exists for; a FORCED one is
-         still the per-origin widening this zone reads as `--explore <origin>`. */
+         the word, so a child a page's own code named on a path that stood on no contradicted arm is `derived`,
+         which is the capability §What-the-tool-produces exists for.
+         THIS SAID `derived` IS NAVIGATED FREELY AND A `FORCED` ONE WAITS ON `--explore`, AND THE SPLIT IS
+         RETIRED — see `navigate` above for the measurement. BOTH grades wait on the widening at an
+         unconfigured origin, because no default arm carries a navigation: §2.2.5's `document` destination is
+         neither script-like nor a subresource, and the `value` arm wants a `witness=unpinned` a navigation
+         cannot state. The clause is kept because a reader re-derives it from CLAUDE.md's own sentence, and
+         because a caller that believes it deletes the `--explore` its own fixture needs. */
       const loaded = await navigate(f[3], e.docUrl, `navigable.create ${f[1]}`, f[15], e.docReach);
       if (loaded.declined) { e.ready.push(decline(loaded.declined)); return; }
       /* THE CHILD'S PRINCIPAL IS THE ORIGIN OF THE URL THIS ZONE FETCHED, derived here and never read off the
