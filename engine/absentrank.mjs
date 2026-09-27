@@ -1550,6 +1550,66 @@ say(`   notcode = occurrences a REAL PARSE says the program does not evaluate as
 say(`   ORDERED BY WHAT THE ABSENCE COSTS, NOT BY VOLUME: THROWS (every use of this name is unguarded, so it ` +
     `raises a ReferenceError and ends the flow) before mixed (both forms present — read the site) before ` +
     `detect-only (the corpus only ever feature-detects it, so absence is the answer a browser without it gives).`);
+say(`   down = WHAT A READER FOUND WHEN THEY OPENED THIS ROW'S SITES. The class above is a COST and this is a ` +
+    `VALUE, and CLAUDE.md §What-the-tool-produces asks for the second: what is GATED BEHIND the site. A ` +
+    `count of reads cannot express it and neither can a band — THROWS says a flow ends, not that anything ` +
+    `worth reaching was behind it. It ORDERS NOTHING; the sort stays class-first, so where it disagrees with ` +
+    `the order that is the finding. A BLANK IS NOT A VERDICT OF none — it is a row nobody has opened.`);
+say(`   THE FOUR TOKENS ARE B(anchored)'S OWN AND ARE DELIBERATELY NOT A SECOND VOCABULARY, but one of them ` +
+    `means MORE here than it does there, and that difference is the actionable content of this column. prog = ` +
+    `the branch reaches a PROGRAM this engine would otherwise never fetch. net = it composes a request or ` +
+    `submits a form nothing else on the page composes. none = it writes to the screen, the clipboard or a ` +
+    `device and composes no address. gain = the ABSENCE takes the arm that reaches further.`);
+say(`   AND FOR AN ABSENT GLOBAL, \`gain\` IS ALSO THE STATEMENT THAT INSTALLING WOULD BE A REGRESSION — which ` +
+    `is §NO-STUBS' own hazard MEASURED at the site instead of assumed. An absent MEMBER read returns ` +
+    `undefined, so B(anchored)'s \`gain\` only says which arm ran; an absent GLOBAL is what a page's presence ` +
+    `TEST answers, so installing the interface OBJECT flips that test and takes the page off the arm the ` +
+    `absence was selecting. Whether that arm was one this engine can RUN is not derivable from any count ` +
+    `here: it is a fact about the other arm's own machinery, so it is read and recorded rather than computed.`);
+say(`   THE GUARD-SHAPE COLUMN BELOW IS STRUCTURALLY BLIND TO THE SITE THAT DECIDES THIS, which is why the ` +
+    `reading cannot be inferred from \`fb\`/\`sil\`. That column classifies what lexically ENCLOSES a use, so a ` +
+    `presence test spelled as a MEMBER READ — \`globalThis.X\` passed as an option to something that then ` +
+    `asks its own \`supported()\` — reaches NO verdict at all and prints under \`?\`. It is not a use, it ` +
+    `cannot throw, and it is exactly the shape a transport-picking loop uses. So a row can read \`sil=1\` with ` +
+    `its whole install hazard sitting in an occurrence that column never judged.`);
+/* DOWNSTREAM FOR LIST A: what a reader found when they OPENED a row's sites.
+   It is the same kind of artifact as B(anchored)'s `down=` table and is held to the same discipline, which
+   that table's own header states: a READING is a measurement nothing regenerates, so it is the one thing in
+   this file that cannot be derived from an artifact, and that is exactly why it is bounded on both sides.
+   Here the two bounds are the two GENERATED populations a list-A row rests on: the name must still be in
+   platform_names.h, and this tree must still reach it on NO global. A name that gets BUILT therefore fails
+   LOUD instead of leaving a verdict standing about a row that no longer exists.
+   WHAT IS DELIBERATELY NOT A BOUND IS CORPUS MEMBERSHIP. A reading whose name today's corpus does not name is
+   not stale — it is a row absent from THIS fetch, and the corpus moves by design. Throwing on it would make
+   every recorded reading hostage to which sites answered in one hour.
+   IT DECIDES NO POPULATION, ADDS AND REMOVES NO ROW AND CHANGES NO COUNT, so it cannot report a smaller
+   absence however stale it gets — the same reason B(anchored)'s table is the one stated exception to this
+   file's no-pasted-list rule rather than an instance of the banned thing. */
+const READ_A = new Map([
+  ["WebTransport", ["gain",
+    "BOTH sites are a TRANSPORT FALLBACK and the absence takes the arm this engine can run. One is engine.io's "
+    + "`webtransport` transport, and its `createUri(\"https\")` is the BASE class's, so it composes the same "
+    + "host, port and `/engine.io` path the `polling` transport FIRST in the same "
+    + "`[\"polling\",\"websocket\",\"webtransport\"]` list composes over HTTP — no address is behind that branch "
+    + "that is not reached either way, and everything past its `ready` is engine.io framing over the stream. "
+    + "The other injects `globalThis.WebTransport` into a centrifuge transport loop that asks each candidate's "
+    + "own `supported()` and advances on false: its next arm is `http_stream` over `fetch` + `ReadableStream`, "
+    + "both of which this tree REACHES, while its `websocket` and `sse` arms need names it does not — so "
+    + "`http_stream` is the first arm in that loop this engine can complete, and it is reached ONLY because "
+    + "`webtransport` answers unsupported. Installing the interface object would stop the loop at a session "
+    + "this engine cannot open and take the page off the one transport in it that finishes."]],
+]);
+for (const [n, v] of READ_A) {
+  if (!PLATFORM.has(n))
+    die(`a recorded list-A reading names ${n} and browser/platform_names.h no longer carries it — the `
+        + `reading is about a row this section can no longer rank, so it is a claim about a different platform.`);
+  if (!ABSENT_GLOBAL.has(n))
+    die(`a recorded list-A reading names ${n} and this tree now REACHES it on a global — if it was BUILT the `
+        + `reading is spent and goes; a verdict may not outlive its own row.`);
+  if (!["prog", "net", "none", "gain"].includes(v[0]))
+    die(`a recorded list-A reading gives ${n} the verdict "${v[0]}", which is not one of the four this `
+        + `section's legend defines.`);
+}
 const rankA = [...ABSENT_GLOBAL].filter((n) => hits.has(n))
   .sort((a, b) => RANK[klass(a)] - RANK[klass(b)] || uses(b) - uses(a) || a.localeCompare(b));
 const nThrow = rankA.filter((n) => klass(n) === "THROWS").length;
@@ -1703,7 +1763,8 @@ say(`      node engine/absentrank.mjs --corpus <that path> --top 300`);
 }
 for (const n of rankA.slice(0, TOP))
   say(`   ${klass(n).padStart(12)}  ${String(uses(n)).padStart(4)}  qjs=${String(qjsHits(n)).padStart(3)}  ` +
-      `shadow=${String(shadowed(n)).padStart(3)}  notcode=${String(ncAll(n)).padStart(4)}  ${n.padEnd(24)} ` +
+      `shadow=${String(shadowed(n)).padStart(3)}  notcode=${String(ncAll(n)).padStart(4)}  ` +
+      `down=${((READ_A.get(n) || [""])[0]).padEnd(4)}  ${n.padEnd(24)} ` +
       `${gCol(n).padEnd(40)} ${shape(n) || emptyWhy(n)}`);
 /* AN INSTRUMENT THAT TRUNCATES SAYS SO, AND THIS ONE DID NOT — WHICH AMPUTATED A WHOLE CLASS RATHER THAN A
    TAIL. `--top` caps the rows PRINTED and the sort above is by CLASS FIRST, so the cut is not a random tail:
@@ -1729,6 +1790,30 @@ for (const n of rankA.slice(0, TOP))
         ` — raise --top to read them. This is a cut by CLASS, not a tail: the sort above is class-first, so a ` +
         `class can be omitted WHOLE and its absence from the list above is not evidence the corpus is silent about it.`);
   }
+}
+
+/* A COVERAGE FIGURE STATES WHAT IT IS A FRACTION OF, and this one is a fraction of the RANKED rows — a name
+   today's corpus does not name has no sites here to open. The notes print in full because the token is four
+   characters and the reading is the whole content, and the command that re-takes any row prints with them:
+   a reading nobody can re-take is a claim competing with a command. */
+{
+  const readA = rankA.filter((n) => READ_A.has(n));
+  const off = [...READ_A.keys()].filter((n) => !rankA.includes(n));
+  say(`   ${readA.length} of the ${rankA.length} ranked row(s) have had their sites OPENED AND READ; the rest ` +
+      `print a blank down= and are UNREAD rather than empty. Of those read, ` +
+      `${["prog", "net", "none", "gain"].map((v) => `${readA.filter((n) => READ_A.get(n)[0] === v).length} ${v}`)
+        .join(", ")} — which sums to the read count and is the whole of what the column asserts.`);
+  for (const n of readA)
+    say(`     down ${READ_A.get(n)[0].padEnd(4)} ${klass(n).padStart(11)} ${String(uses(n)).padStart(3)}  ` +
+        `${n.padEnd(24)} ${READ_A.get(n)[1]}`);
+  if (off.length)
+    say(`   ${off.length} recorded reading(s) name a name THIS corpus does not: ${off.join(", ")} — still ` +
+        `absent and still a platform name (both are asserted above), so the reading stands and simply has no ` +
+        `row to print against in this fetch.`);
+  say(`   TO RE-TAKE ANY ROW'S READING, OR TO TAKE ONE FOR A BLANK ROW, the sites are this row's own ` +
+      `occurrences and the guard shape of each is a separate question from what is behind it:`);
+  say(`     grep -rlE '\\b<name>\\b' <corpus>    # then OPEN each offset and read the enclosing function, `
+      + `and the OTHER arm of whatever selected it`);
 }
 
 console.log("");
