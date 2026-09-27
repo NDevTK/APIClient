@@ -80,22 +80,29 @@
  * WHAT IT DOES NOT ANSWER, STATED HERE BECAUSE THE BAND IS ONE HOP SHORT OF THE QUESTION A READER WANTS: it
  * says a call needs an invoker and never WHETHER THAT INVOKER IS ITSELF REACHED. A sync function called from
  * top level is reached and a sync function called only from an async one is not, and both land in `innerSync`.
- * The call graph is what separates them, this file builds none, and a bound-once fold is not one — so the
+ * The call graph is what separates them, this file builds none, and a scope-resolved fold is not one — so the
  * band is a NECESSARY-CONDITION reading and never a sufficient one. HOW ITS ABSENCE WOULD SHOW: a corpus
  * whose DATA door is almost all `innerSync` would read as needing no invoker while every one of those
  * functions sat behind an async caller. WHAT THE NEXT DIFF BUILDS: a reachability closure over the call graph
- * this file can already name — the bound-once function declarations it folds through — so `innerSync` splits
+ * this file can already name — the function declarations its scope pre-pass resolves — so `innerSync` splits
  * into "called from a body the program evaluates" and "called only from somewhere that itself needs an
  * invoker", which is the same fold already built for the chunk manifest pointed at callers instead of at
  * addresses.
  *
  * FOLDING IS DELIBERATELY CONSERVATIVE AND THE NUMBER IS THEREFORE A FLOOR FOR THE PARSE, WHICH IS THE
- * DIRECTION THAT COSTS THIS PROJECT RATHER THAN FLATTERS IT. An identifier is folded only where its name is
- * bound EXACTLY ONCE in the whole file and never assigned again, so no shadowing can make a fold wrong. A
- * real commercial extractor does interprocedural constant propagation and would fold MORE. Reporting a floor
- * for the side whose strength is inconvenient is the only honest direction: CLAUDE.md
- * §A-SWEEP-IS-TRUSTED-BY-ITS-METHOD says a static derivation over text is a lower bound wearing a total's
- * clothes, and here the lower bound belongs to the baseline rather than to the subject.
+ * DIRECTION THAT COSTS THIS PROJECT RATHER THAN FLATTERS IT. An identifier is folded only where the BINDING
+ * IT RESOLVES TO is declared once in its own scope and written never, so no shadowing can make a fold wrong
+ * — a reference names exactly one binding and that is the one folded. A real commercial extractor does
+ * interprocedural constant propagation and would fold MORE. Reporting a floor for the side whose strength is
+ * inconvenient is the only honest direction: CLAUDE.md §A-SWEEP-IS-TRUSTED-BY-ITS-METHOD says a static
+ * derivation over text is a lower bound wearing a total's clothes, and here the lower bound belongs to the
+ * baseline rather than to the subject.
+ * THIS SENTENCE USED TO SAY `bound EXACTLY ONCE in the whole file`, AND THE ARGUMENT IS KEPT AT
+ * `collectBinds` RATHER THAN HERE BECAUSE THAT IS WHERE A READER WILL RE-DERIVE IT. What the change buys is
+ * measured and not asserted: on the corpus this file was last run against, the DATA door's complete-from-text
+ * share moved 11.9% -> 15.1% and the chunk manifest's recovered address set 758 -> 2008, because a minified
+ * runtime binds one letter in a dozen nested functions that enclose neither its declarations nor its uses.
+ * Every one of those is an address a competent static tool states and this file was crediting to execution.
  *
  * A ZERO IN ANY ROW IS READ AGAINST THE BASE RATE PRINTED BESIDE IT. `pathish` counts distinct string
  * literals in the same programs that LOOK like addresses and are attached to no door — the population a
@@ -149,22 +156,40 @@
  * keeping, because the clause would otherwise be read as finished: the shape it describes is also the shape
  * of an i18n table, an enum and a label map, so before an address test was added the channel reported
  * `session`, `Users` and `0.001` as addresses and its figure was roughly double.
- * WHAT IS NOT COVERED NOW: a runtime whose chunk-URL FUNCTION or public-path OBJECT is named by an
- * identifier the FILE binds more than once. The bound-once discipline refuses those by design and is right
- * to, because without a scope graph a name bound twice could be folded across a shadow and a wrong fold
- * INVENTS an address. But the second binding is very often in a NESTED function that encloses neither the
- * write nor the read, so the refusal is stricter than the hazard: measured on one webpack-4 runtime, the
- * object and the chunk-URL function are each bound twice — once as a declaration at the runtime's own scope
- * and once as a `var` inside a nested function — and both uses sit at the outer scope, where a scope-correct
- * reader would settle them. WHAT THE NEXT DIFF BUILDS: one scope pre-pass producing the BINDER of every
- * Identifier by node identity, so the slot map and the function-declaration lookup key on (binder, name)
- * rather than on name. Node identity is what makes it cheap — the fold already receives the AST node, so
- * nothing has to be threaded through it — and it is strictly BOTH more precise and wider than the file-wide
- * count it replaces. HOW ITS ABSENCE WOULD SHOW: a site whose PROGRAM-door row reads 0, whose blind-spot
- * OPAQUE count beside it is nonzero, AND whose manifest column reads 0 — three columns the per-site PROGRAM
- * block prints adjacent for exactly this reading. Two sites on the corpus this ran against read that way
- * for the reason just measured; two more read that way and their cause is NOT established, which is stated
- * rather than guessed at.
+ * THAT RESIDUAL'S OWN SUCCESSOR — THE SCOPE PRE-PASS — IS BUILT, AND ITS REMEDY CLAUSE HELD, WHICH IS WORTH
+ * SAYING BECAUSE CLAUDE.md RATES A NEXT-DIFF CLAUSE AS THE HALF THAT USUALLY YIELDS. It asked for one scope
+ * pre-pass producing the BINDER of every Identifier by node identity, so the slot map and the
+ * function-declaration lookup key on the binding rather than on the name, and said it would be strictly both
+ * more precise and wider than the file-wide count it replaced. It is, and `collectBinds` holds the argument.
+ * Its HOW-ITS-ABSENCE-WOULD-SHOW clause was the reliable one again: it named a site whose PROGRAM-door row
+ * reads 0, whose blind-spot OPAQUE count beside it is nonzero, and whose manifest column reads 0 — and on the
+ * corpus this was last run against, the webpack site that read that way went from 0 recovered addresses to
+ * the whole image of its runtime's chunk-URL function. ONE site still reads that way and its cause is a
+ * DIFFERENT mechanism, established rather than guessed: it is a rollup bundle whose `.src` writes are
+ * third-party script injections (a consent SDK, a CDN snippet) and which emits no chunk-id manifest at all,
+ * so there is nothing there for this channel to recover and its zero is correct.
+ * WHAT IS NOT COVERED NOW, AND BOTH HALVES CARRY THE COMMAND THAT SIZED THEM RATHER THAN A SENTENCE.
+ * (a) A COMPOSITION HOLDING SEVERAL APPLICATIONS OF THE SAME ARGUMENT. The scanner refuses any composition
+ * with more than one application, because two unknown parameters make the address set a product of two
+ * domains — which is right in general and stricter than the hazard when every application is handed the SAME
+ * argument expression, since binding ONE candidate and folding ALL of them keeps the applications correlated
+ * exactly as folding two maps at one candidate already does. WHAT THE NEXT DIFF BUILDS: `env.app` becomes a
+ * SET, `foldEnvOnly`'s call arm inlines any member of it, and the scanner admits a multi-application
+ * composition only where the argument expressions are identical. HOW ITS ABSENCE WOULD SHOW: the refusal
+ * count printed under the manifest band stays the whole population rather than the uncorrelated remainder of
+ * it. The size is the reason this is a residual and not this diff: of the refusals on the corpus this was
+ * last run against, THIRTEEN shared one argument expression and 182 did not — derive it by counting, at the
+ * refusal, the compositions whose applications' single arguments are the same Identifier.
+ * (b) A COMPOSITION THAT RECOVERS A CHUNK NAME WITHOUT ITS PUBLIC PATH. Those are counted as FRAGMENTS and
+ * refused, and the count is LARGE — which reads as a recall hole and measurably is not. Dumping the refused
+ * texts, the population is i18n tables, enum labels and error strings (`height`, `Service accounts`, a
+ * framework's rate-limit warning), which is the precision test doing exactly the job the paragraph above
+ * describes; only a small minority are shaped like a bare chunk filename. WHAT THE NEXT DIFF BUILDS: nothing
+ * yet, because the fragment count is evidence the shape test is working and a widening here would have to
+ * establish which enclosing expression supplies the public path before it could join one. HOW ITS ABSENCE
+ * WOULD SHOW: a site whose manifest FRAGMENT count is nonzero while the fragments themselves are chunk
+ * filenames rather than labels — which is what the refused texts have to be read for, and is why this half
+ * is stated as a shape rather than as a number.
  *
  * WHAT COMPLETES THE COMPARISON, NAMED SO IT CAN BE RUN RATHER THAN RE-DERIVED. This file is one half. The
  * other half is not "the engine's endpoint count", which answers a different question: `solver/result.c`
@@ -192,6 +217,7 @@
  *   node testing/static_surface.mjs                                     # read one
  *   node testing/static_surface.mjs --json > out.json                   # ... as data
  *   node testing/static_surface.mjs --site excalidraw --examples 20     # ... and look at the rows
+ *   node testing/static_surface.mjs --site gitlab --manifest-urls       # ... and the manifest's own set
  */
 
 import { readFileSync, statSync, readdirSync } from "node:fs";
@@ -224,14 +250,18 @@ const die = (s) => { throw new Error(`[${TAG}] ${s}`); };
    of the global scope rather than an object whose identity is in question. So a member call whose object is
    PROVABLY the global object is looked up in the `callee-global` and `new` rows exactly as if the object had
    not been written, and the same holds for `new self.Worker`.
-   PROVABLY IS THE LOAD-BEARING WORD AND IT IS THE SAME DISCIPLINE `collectBinds` ALREADY APPLIES TO NAMES.
-   A name bound ZERO times in the whole file and assigned never cannot be anything but the global; a file
-   that BINDS it can mean something else by it, and the UMD wrapper `(function(window){ ... })(window)` and
-   the transpiler idiom `var self = this` both do. Such a site is REFUSED and the refusal carries a size
-   rather than a sentence, which is what `xhrOpenSkippedNonLiteralMethod` already does for the xhr.open
-   method exclusion. The
-   bound-once fold is sound because a name bound once cannot be shadowed; this is that argument one step
-   weaker in its premise and therefore one step stronger in its conclusion.
+   PROVABLY IS THE LOAD-BEARING WORD AND IT IS THE SAME DISCIPLINE `collectBinds` APPLIES TO A REFERENCE.
+   A reference that resolves to NO BINDING, in a file that never assigns that name as a free one either,
+   cannot be anything but the global; a reference that resolves to a binding can mean something else, and the
+   UMD wrapper `(function(window){ ... })(window)` and the transpiler idiom `var self = this` both do. Such a
+   site is REFUSED and the refusal carries a size rather than a sentence, which is what
+   `xhrOpenSkippedNonLiteralMethod` already does for the xhr.open method exclusion.
+   THIS USED TO ASK WHETHER THE FILE BINDS THE NAME ANYWHERE, AND THAT IS THE READING A READER RE-DERIVES, so
+   it is written down rather than deleted: a name bound ZERO times in the whole file and assigned never cannot
+   be anything but the global. True, and far narrower than the question — ONE UMD factory anywhere in a
+   megabyte of bundle refused every `window.X` in it. The scope pre-pass asks about the REFERENCE, which is
+   what `provably` always meant, and the price is printed on every run: the refusal count is what a reader
+   checks it against, and it is a count of references whose `window` really does resolve to something.
    THE THREE NUMBERS THAT PRICE THIS ARE PRINTED ON EVERY RUN AND NONE OF THEM IS ASSERTED HERE, because a
    widening that buys recall is only honest beside what it declines, and a figure over a corpus this
    repository does not carry cannot be checked by a reader who re-derives it. `globalDoor` reports what was
@@ -375,8 +405,18 @@ const ENTRY_DECL = declaredEntryNames();
 const ENTRY_NAMES = new Set(ENTRY_DECL.keys());
 /* THE SPELLINGS, EACH A PARTITION MEMBER EXCEPT THE LAST. `bareFree` is the one the landed rows already see;
    `bareBoundName` is a bare reference in a file that also binds the name somewhere, which the engine's
-   scope-correct resolver very probably DOES see and this file-wide pass cannot prove, so it is counted apart
-   rather than folded into either answer. `typeofBare` is not a partition member and is not summed: it says
+   scope-correct resolver very probably DOES see and THIS BAND'S OWN file-wide set cannot prove, so it is
+   counted apart rather than folded into either answer.
+   NAMED RESIDUAL — WHAT IS NOT COVERED: this band's binder set is FILE-WIDE, so `bareBoundName` holds every
+   bare reference in a file that binds the name ANYWHERE, including the overwhelming majority whose binding
+   is in some other function entirely. `collectBinds` now resolves references scope-correctly and could
+   decide each of them, which would move most of `bareBoundName` into `bareFree`. WHAT THE NEXT DIFF BUILDS:
+   this band reads `freeRef` for its bare-reference test instead of `spellBound`, keeping its own `notRef`
+   population (an object key and a member name bind nothing and must stay struck) — the two sets answer
+   different questions and only the binder half is replaceable. HOW ITS ABSENCE WOULD SHOW: the PROP-ONLY
+   bracket printed at the foot of the per-site table stays WIDE — a `(loose)` count above its `(tight)` one —
+   where a scope-correct reader would collapse the two, and the spread is the size of what is undecided.
+   `typeofBare` is not a partition member and is not summed: it says
    which of the two reads the landed row would have recorded, and every one of them is already inside
    `bareFree` or `bareBoundName`. */
 const SPELLINGS = ["bareFree", "bareBoundName", "qualified", "qualifiedBoundGlobal", "computedLiteral",
@@ -477,15 +517,17 @@ function fold(node, binds, depth, env) {
       return { text: a.text + b.text, holes: a.holes + b.holes };
     }
     case "Identifier": {
-      const b = binds.get(node.name);
+      /* THE BINDING THIS REFERENCE MEANS, by node identity rather than by name — see `collectBinds`. */
+      const b = binds.get(node);
       if (b && b.node) return fold(b.node, binds, depth + 1, env);
       return { text: "{?}", holes: 1 };
     }
     case "MemberExpression": {
-      /* An object bound once to an object literal with literal keys — `const R={u:"/x"}; fetch(R.u)`. */
+      /* An object whose binding resolves to an object literal with literal keys — `const R={u:"/x"};
+         fetch(R.u)`. */
       if (node.computed || node.object.type !== "Identifier" || node.property.type !== "Identifier")
         return { text: "{?}", holes: 1 };
-      const b = binds.get(node.object.name);
+      const b = binds.get(node.object);
       if (!b || !b.node || b.node.type !== "ObjectExpression") return { text: "{?}", holes: 1 };
       for (const p of b.node.properties) {
         if (p.type !== "ObjectProperty" || p.computed) continue;
@@ -516,16 +558,16 @@ function memberKey(node) {
 }
 
 /* AN OBJECT LITERAL, HOWEVER THE FILE SPELLS THE WAY TO IT: written inline, which is what a minified chunk
-   table is; bound once to a name; or assigned once to a property. */
+   table is; bound to a name whose binding resolves here; or assigned once to a property. */
 function objectLiteralOf(node, binds, env) {
   if (!node) return null;
   if (node.type === "ObjectExpression") return node;
   if (node.type === "Identifier") {
-    const b = binds.get(node.name);
+    const b = binds.get(node);
     return b && b.node && b.node.type === "ObjectExpression" ? b.node : null;
   }
   if (env) {
-    const m = env.memberOnce.get(memberKey(node));
+    const m = env.slotOf.get(node);
     if (m && m.type === "ObjectExpression") return m;
   }
   return null;
@@ -539,17 +581,17 @@ function singleParamFn(node, binds, env) {
   let fn = null;
   if (!node) return null;
   if (node.type === "Identifier") {
-    const b = binds.get(node.name);
+    const b = binds.get(node);
     if (b && b.node) fn = b.node;
-    /* A FUNCTION DECLARATION IS ONE FUNCTION ONLY IF ITS NAME IS BOUND ONCE, and `binds` cannot answer for
-       it: a declaration has no initializer, so `collectBinds` files it under the same "not foldable" set as
-       a parameter. Minified code reuses one letter for a dozen declarations and a dozen parameters, so
-       taking whichever declaration was recorded last would inline a DIFFERENT function and enumerate
-       addresses no call site can produce. The count is the same test `binds` makes, asked separately. */
-    else if (env && env.fnDecl.has(node.name) &&
-             env.count.get(node.name) === 1 && !env.reassigned.has(node.name)) fn = env.fnDecl.get(node.name);
+    /* A FUNCTION DECLARATION IS ONE FUNCTION ONLY IF THIS REFERENCE RESOLVES TO IT, and `binds` cannot
+       answer for it: a declaration has no initializer, so `collectBinds` files it under the same "not
+       foldable" set as a parameter. `fnDeclOf` is the same resolution asked separately, and it is asked of
+       the REFERENCE — minified code reuses one letter for a dozen declarations in a dozen scopes, and
+       inlining whichever of them a name-keyed map happened to hold would enumerate addresses no call site
+       can produce. */
+    else if (env && env.fnDeclOf.has(node)) fn = env.fnDeclOf.get(node);
   } else if (env) {
-    const m = env.memberOnce.get(memberKey(node));
+    const m = env.slotOf.get(node);
     if (m) fn = m;
   }
   if (!fn) return null;
@@ -581,10 +623,10 @@ function foldEnvOnly(node, binds, depth, env) {
       if (!node.computed) {
         /* A PROPERTY ASSIGNED EXACTLY ONCE IN THE FILE, which is where a bundler keeps its public path and
            its chunk-URL function: `o.p="/assets/webpack/"`, `p.u=id=>...`. The once-ness is the same argument
-           that makes a bound-once NAME foldable — a slot written in one place cannot be two things — and it
-           additionally requires the OBJECT to be a name this file binds once, because a property of an
-           object nobody can identify names nothing. */
-        const m = env.memberOnce.get(memberKey(node));
+           that makes a resolved NAME foldable — a slot written in one place cannot be two things — and it
+           additionally requires the OBJECT to resolve to a binding declared once in its own scope and never
+           written, because a property of an object nobody can identify names nothing. */
+        const m = env.slotOf.get(node);
         if (m) return fold(m, binds, depth + 1, env);
         return null;
       }
@@ -671,112 +713,213 @@ function walk(root, enter, leave) {
   }
 }
 
-/* WHICH NAMES MAY BE FOLDED. A name is foldable only if the WHOLE FILE binds it once and assigns it never.
-   That is stronger than scope-correctness and is chosen for it: without a scope graph, a name bound twice
-   could be folded across a shadow, and a fold that is wrong INVENTS an address — the one failure this file
-   may not have, because an invented static row would be scored as "the parse found it" against an engine
-   that did not. A name bound once cannot be shadowed by anything. */
-function collectBinds(ast) {
-  const count = new Map();   // name -> number of binding occurrences anywhere in the file
-  const init = new Map();    // name -> initializer node of its (single) binding
-  const assigned = new Set();
-  const fnDecls = new Map(); // name -> its FunctionDeclaration node
-  /* `assigned` IS NOT A SET OF ASSIGNMENTS AND THE NAME IS OLDER THAN THIS COMMENT. `bind` puts a name there
-     whenever it has NO initializer, so every function declaration and every parameter is in it — which is
-     right for `binds`, whose question is "may this name be folded", and WRONG for any question of the form
-     "does this name still mean what it was bound to". The webpack runtime is a FunctionDeclaration with its
-     public path assigned to a property of itself, so a slot test keyed on `assigned` refuses every real
-     instance of the shape it exists to read. `reassigned` is the narrow set: written by an assignment or an
-     update, and by nothing else. */
-  const reassigned = new Set();
-  const memberWrites = new Map(); // "obj.prop" -> { n, node }  every assignment to that slot
-  const memberOther = new Set();  // "obj.prop" slots reached some way this pass cannot account for
+/* WHICH BINDING A REFERENCE MEANS — A SCOPE PRE-PASS, KEYED BY NODE IDENTITY.
+   THIS USED TO BE A FILE-WIDE COUNT AND THE ARGUMENT FOR IT IS KEPT HERE BECAUSE A READER WILL RE-DERIVE IT.
+   It read: a name is foldable only if the WHOLE FILE binds it once and assigns it never; that is stronger
+   than scope-correctness and was chosen for it, since without a scope graph a name bound twice could be
+   folded across a shadow and a wrong fold INVENTS an address — the one failure this file may not have. Every
+   clause of that is true and the conclusion it licensed is not, because the premise it rests on is the
+   ABSENCE of a scope graph rather than any property of a name. A scope-correct binder is not a weaker test
+   than file-wide bound-once; it is the test the LANGUAGE makes. `const B="/a"` outside a function and
+   `const B="/b"` inside one are two bindings and a reference names exactly one of them, so resolving the
+   reference cannot fold across a shadow — there is no shadow left to fold across.
+   SO IT IS STRICTLY BOTH MORE PRECISE AND WIDER, AND THE WIDER HALF IS THE ONE THIS FILE EXISTS TO BUY. The
+   file-wide test refuses a name bound twice wherever the second binding is, and a minified bundle's runtime
+   binds one letter a dozen times in a dozen nested functions that enclose neither the declaration nor the
+   use. MEASURED on one webpack-4 runtime in the corpus this ran against: its chunk-URL function `t` and the
+   object `o` holding its public path are each declared at the runtime's own scope AND bound again by a
+   `var d,t,o=a[0]` inside one nested function, which also assigns `t` — so the file-wide test refused the
+   function for its bind count AND for a reassignment that writes a different binding entirely, and the whole
+   chunk manifest of that site was invisible. This is that site's residual built.
+   THE MAPS ARE KEYED BY THE REFERENCE NODE AND NOT BY ITS NAME, which is what makes the change cheap: the
+   fold already receives the AST node, so no scope has to be threaded through it and no call site grows an
+   argument. A lookup that misses is a refusal, exactly as a missing name was.
+   PLACEMENT IS DELIBERATELY THE WIDER OF TWO READINGS WHEREVER THE LANGUAGE HAS TWO. A `var` and a function
+   declaration are placed in the nearest FUNCTION scope; `let`, `const` and a class in the nearest BLOCK. A
+   function declaration inside a block is block-scoped in strict mode and hoisted to the function scope by
+   Annex B in sloppy mode, and this pass cannot always know which — so it takes the FUNCTION scope, which
+   makes two such declarations of one name collide and be REFUSED where block placement would have folded
+   each. Wider placement can only ever merge bindings, and merging refuses; narrower placement could split
+   one binding into two and fold. The direction is the one that declines.
+   A `with` BODY IS REFUSED OUTRIGHT because inside one a bare name may denote a PROPERTY of the object and no
+   lexical resolution answers for it. Direct `eval` can add a `var` to its enclosing function scope and this
+   pass cannot see it; that exposure is unchanged by this diff — the file-wide count could not see an eval'd
+   binding either, since it is not in the file's text at all — and it is declared here rather than left to be
+   inferred.
+   `count` SURVIVES AS A FILE-WIDE NAME COUNT AND ANSWERS A DIFFERENT QUESTION. The ceiling column prints
+   "times that name is bound in its own FILE" as a statement about what a minifier did, and that is a fact
+   about the text rather than about any one reference — so it is computed exactly as it was, over the same
+   over-binding pattern walk, and this diff moves it by nothing. */
+const FN_LIKE = new Set(["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression",
+                         "ObjectMethod", "ClassMethod", "ClassPrivateMethod"]);
+const VAR_SCOPES = new Set([...FN_LIKE, "Program", "StaticBlock"]);
+const BLOCK_SCOPES = new Set(["BlockStatement", "ForStatement", "ForInStatement", "ForOfStatement",
+                              "SwitchStatement", "CatchClause", "ClassDeclaration", "ClassExpression",
+                              "WithStatement"]);
+/* ASSERTED AGAINST @babel/types RATHER THAN TRUSTED, for the reason `FN_SCOPES` is: a Babel release that
+   renamed one of these would leave its bindings placed in an enclosing scope, which MERGES nothing and
+   SPLITS nothing visibly — it would quietly widen what folds, which is the direction that invents. */
+for (const t of [...VAR_SCOPES, ...BLOCK_SCOPES])
+  if (!(t in VISITOR_KEYS))
+    die(`the scope pre-pass names the node kind ${t}, which this @babel/types does not have — a binding it ` +
+        `should hold would be placed in an enclosing scope instead, which widens what this file folds ` +
+        `without saying so, and a fold that is wrong INVENTS an address.`);
 
-  const bind = (id, valueNode) => {
-    if (!id || id.type !== "Identifier") return;
-    count.set(id.name, (count.get(id.name) || 0) + 1);
-    if (valueNode) init.set(id.name, valueNode); else assigned.add(id.name);
+function collectBinds(ast) {
+  /* PHASE 1 — one walk: open and close scopes, place every declaration, and record every reference with the
+     scope it stands in. References cannot be resolved here because a bundle names a constant AFTER using it
+     at least as often as before, which is the same reason this file has always been two passes. */
+  let nextId = 0;
+  const mkScope = (parent, isVar, inWith) => ({ id: nextId++, parent, isVar, inWith, decls: new Map() });
+  const rootScope = mkScope(null, true, false);
+  let cur = rootScope;
+  const open = [];
+  const refs = [];            // { n: Identifier, s: scope }            every identifier, reference or not
+  const members = [];         // { n: MemberExpression, s: scope }      every `obj.prop` shape
+  const asgTargets = [];      // { n: Identifier, s: scope }            `x = v` and `x++`
+  const memberWrites = [];    // { obj, prop, value, plain, s }
+  const memberComputed = [];  // { obj, s }                            `obj[k] = v`, which may be any slot
+  const count = new Map();    // FILE-WIDE name -> binding occurrences; the ceiling column's own question
+
+  const declare = (scope, name, initNode, fnNode) => {
+    let d = scope.decls.get(name);
+    if (!d) { d = { n: 0, init: null, fn: null, reassigned: false }; scope.decls.set(name, d); }
+    d.n++;
+    if (initNode) d.init = initNode;
+    if (fnNode) d.fn = fnNode;
+    count.set(name, (count.get(name) || 0) + 1);
   };
-  const bindPattern = (pat) => {
+  const varScopeOf = (s) => { let x = s; while (x && !x.isVar) x = x.parent; return x || rootScope; };
+  /* A PATTERN BINDS EVERY IDENTIFIER UNDER IT AND NONE OF THEM GETS AN INITIALIZER, which over-binds — a
+     default value's own free names are counted too. That is the behaviour the ceiling column's number was
+     measured with and it is kept unchanged: over-binding adds occurrences, and an extra occurrence can only
+     make a name collide and be refused. */
+  const declPattern = (scope, pat) => {
     if (!pat) return;
-    if (pat.type === "Identifier") { bind(pat, null); return; }
-    walk(pat, (n) => { if (n.type === "Identifier") bind(n, null); });
+    if (pat.type === "Identifier") { declare(scope, pat.name, null, null); return; }
+    walk(pat, (n) => { if (n.type === "Identifier") declare(scope, n.name, null, null); });
   };
 
   walk(ast, (n) => {
+    /* DECLARATIONS THAT BELONG TO THE SCOPE THIS NODE SITS IN are placed BEFORE the node's own scope opens. */
     switch (n.type) {
-      case "VariableDeclarator":
-        if (n.id.type === "Identifier") bind(n.id, n.init || null);
-        else bindPattern(n.id);
-        break;
-      case "FunctionDeclaration":
-      case "ClassDeclaration":
-        if (n.id) bind(n.id, null);
-        if (n.type === "FunctionDeclaration" && n.id) fnDecls.set(n.id.name, n);
-        for (const p of n.params || []) bindPattern(p);
-        break;
-      case "FunctionExpression":
-      case "ArrowFunctionExpression":
-      case "ClassMethod":
-      case "ObjectMethod":
-        for (const p of n.params || []) bindPattern(p);
-        break;
-      case "CatchClause":
-        bindPattern(n.param);
-        break;
-      case "ImportSpecifier":
-      case "ImportDefaultSpecifier":
-      case "ImportNamespaceSpecifier":
-        bind(n.local, null);
-        break;
-      case "AssignmentExpression": {
-        if (n.left.type === "Identifier") { assigned.add(n.left.name); reassigned.add(n.left.name); }
-        /* EVERY WRITE TO AN `obj.prop` SLOT IS TALLIED, INCLUDING THE ONES THAT DISQUALIFY IT. A slot written
-           by `+=`, or through a COMPUTED property (`obj[k]=v`, which may be this very slot and this pass
-           cannot tell), is one whose single-assignment claim cannot be made — so it is poisoned by name
-           rather than left looking clean, which is the direction that refuses a fold instead of inventing
-           an address. */
-        const k = memberKey(n.left);
-        if (k) {
-          if (n.operator !== "=") memberOther.add(k);
-          else {
-            const cur = memberWrites.get(k);
-            if (cur) cur.n++; else memberWrites.set(k, { n: 1, node: n.right });
-          }
-        } else if (n.left.type === "MemberExpression" && n.left.computed &&
-                   n.left.object.type === "Identifier") {
-          memberOther.add(n.left.object.name + ".*");
+      case "VariableDeclaration": {
+        /* THE KIND IS ONLY LEGIBLE HERE, which is why this is handled at the declaration and not at the
+           declarator: `var` goes to the nearest function scope and `let`/`const` stay in this block. */
+        const target = n.kind === "var" ? varScopeOf(cur) : cur;
+        for (const d of n.declarations || []) {
+          if (!d || d.type !== "VariableDeclarator") continue;
+          if (d.id.type === "Identifier") declare(target, d.id.name, d.init || null, null);
+          else declPattern(target, d.id);
         }
         break;
       }
-      case "UpdateExpression":
-        if (n.argument.type === "Identifier") { assigned.add(n.argument.name); reassigned.add(n.argument.name); }
-        if (memberKey(n.argument)) memberOther.add(memberKey(n.argument));
+      case "FunctionDeclaration":
+        if (n.id) declare(varScopeOf(cur), n.id.name, null, n);
         break;
+      case "ClassDeclaration":
+        if (n.id) declare(cur, n.id.name, null, null);
+        break;
+      case "ImportSpecifier": case "ImportDefaultSpecifier": case "ImportNamespaceSpecifier":
+        declare(rootScope, n.local.name, null, null);
+        break;
+      case "AssignmentExpression": {
+        if (n.left.type === "Identifier") asgTargets.push({ n: n.left, s: cur });
+        const k = memberKey(n.left);
+        if (k) memberWrites.push({ obj: n.left.object, prop: n.left.property.name, value: n.right,
+                                   plain: n.operator === "=", s: cur });
+        else if ((n.left.type === "MemberExpression" || n.left.type === "OptionalMemberExpression") &&
+                 n.left.computed && n.left.object.type === "Identifier")
+          memberComputed.push({ obj: n.left.object, s: cur });
+        break;
+      }
+      case "UpdateExpression": {
+        if (n.argument.type === "Identifier") asgTargets.push({ n: n.argument, s: cur });
+        const k = memberKey(n.argument);
+        if (k) memberWrites.push({ obj: n.argument.object, prop: n.argument.property.name, value: null,
+                                   plain: false, s: cur });
+        break;
+      }
       default: break;
     }
-  });
+    /* THEN THE NODE'S OWN SCOPE, AND WHAT BINDS INSIDE IT. */
+    if (VAR_SCOPES.has(n.type) || BLOCK_SCOPES.has(n.type)) {
+      open.push(cur);
+      cur = mkScope(cur, VAR_SCOPES.has(n.type), cur.inWith || n.type === "WithStatement");
+      if (FN_LIKE.has(n.type)) {
+        /* A NAMED FUNCTION EXPRESSION'S OWN NAME IS VISIBLE INSIDE IT AND NOWHERE ELSE. */
+        if (n.type === "FunctionExpression" && n.id) declare(cur, n.id.name, null, n);
+        for (const p of n.params || []) declPattern(cur, p);
+      } else if (n.type === "CatchClause") declPattern(cur, n.param);
+      else if (n.type === "ClassExpression" && n.id) declare(cur, n.id.name, null, null);
+    }
+    if (n.type === "Identifier") refs.push({ n, s: cur });
+    else if (n.type === "MemberExpression" || n.type === "OptionalMemberExpression") members.push({ n, s: cur });
+  }, (n) => { if (VAR_SCOPES.has(n.type) || BLOCK_SCOPES.has(n.type)) cur = open.pop(); });
 
-  const binds = new Map();
-  for (const [name, c] of count)
-    if (c === 1 && !assigned.has(name) && init.has(name)) binds.set(name, { node: init.get(name) });
-  /* THE SLOTS A SINGLE ASSIGNMENT SETTLES. Three conditions and each one refuses a real corpus shape: the
-     slot is written exactly once with a plain `=`; the OBJECT is a name this file binds exactly once and
-     never reassigns, so the slot belongs to one object; and nothing in the file writes that object through a
-     COMPUTED property, which could be this slot under another spelling. */
-  const memberOnce = new Map();
-  for (const [k, v] of memberWrites) {
-    if (v.n !== 1) continue;
-    if (memberOther.has(k)) continue;
-    const objName = k.slice(0, k.indexOf("."));
-    if (count.get(objName) !== 1 || reassigned.has(objName)) continue;
-    if (memberOther.has(objName + ".*")) continue;
-    memberOnce.set(k, v.node);
+  /* PHASE 2 — resolution. A reference means the binding of the nearest enclosing scope that declares its
+     name, which is what the language says and is the whole of this pass's claim. */
+  const resolve = (scope, name) => {
+    for (let s = scope; s; s = s.parent) { const d = s.decls.get(name); if (d) return { scope: s, d }; }
+    return null;
+  };
+  /* A WRITE MARKS THE BINDING IT RESOLVES TO, NOT EVERY BINDING OF ITS NAME. That distinction is the whole
+     of the gitlab case: `t=o[s]` inside a nested function writes that function's own `var t` and says
+     nothing whatever about the `function t(e)` one scope out. */
+  const freeAssigned = new Set();
+  for (const { n, s } of asgTargets) {
+    if (s.inWith) { freeAssigned.add(n.name); continue; }
+    const r = resolve(s, n.name);
+    if (r) r.d.reassigned = true; else freeAssigned.add(n.name);
   }
-  /* `assigned` LEAVES WITH THE OTHER TWO because the global-object test needs it and cannot recompute it
-     without walking the file again: a name this file never BINDS but somewhere ASSIGNS is a name whose value
-     at the call site this pass has no claim on, global or not. */
-  return { binds, count, assigned, reassigned, fnDecl: fnDecls, memberOnce };
+
+  /* PHASE 3 — the node-keyed answers. */
+  const binds = new Map();     // reference node -> { node: its binding's initializer }
+  const fnDeclOf = new Map();  // reference node -> the FunctionDeclaration its binding IS
+  const freeRef = new Set();   // reference node that resolves to NO binding and whose name is never
+                               // assigned free either, so nothing in this file can have made it anything
+  for (const { n, s } of refs) {
+    if (s.inWith) continue;
+    const r = resolve(s, n.name);
+    if (!r) { if (!freeAssigned.has(n.name)) freeRef.add(n); continue; }
+    const d = r.d;
+    if (d.n !== 1 || d.reassigned) continue;
+    if (d.init) binds.set(n, { node: d.init });
+    else if (d.fn) fnDeclOf.set(n, d.fn);
+  }
+  /* THE SLOTS A SINGLE ASSIGNMENT SETTLES, KEYED ON THE OBJECT'S BINDING RATHER THAN ON ITS NAME. Three
+     conditions and each one still refuses a real corpus shape: the slot is written exactly once with a plain
+     `=`; the OBJECT resolves to a binding declared once in its own scope and never written, so the slot
+     belongs to one object; and nothing writes that object through a COMPUTED property, which could be this
+     slot under another spelling. What has changed is only WHICH `o` is being asked about. */
+  const slotKey = (objNode, s) => {
+    if (!objNode || objNode.type !== "Identifier" || s.inWith) return null;
+    const r = resolve(s, objNode.name);
+    if (!r || r.d.n !== 1 || r.d.reassigned) return null;
+    return r.scope.id + "\u0000" + objNode.name;
+  };
+  const slotWrites = new Map(), slotPoison = new Set();
+  for (const w of memberComputed) { const k = slotKey(w.obj, w.s); if (k) slotPoison.add(k + "\u0000*"); }
+  for (const w of memberWrites) {
+    const k = slotKey(w.obj, w.s);
+    if (!k) continue;
+    const sk = k + "\u0000" + w.prop;
+    if (!w.plain) { slotPoison.add(sk); continue; }
+    const had = slotWrites.get(sk);
+    if (had) had.n++; else slotWrites.set(sk, { n: 1, node: w.value });
+  }
+  const slotOf = new Map();    // `obj.prop` READ node -> the single value written to that slot
+  for (const { n, s } of members) {
+    if (n.computed || n.object.type !== "Identifier" || n.property.type !== "Identifier") continue;
+    const k = slotKey(n.object, s);
+    if (!k || slotPoison.has(k + "\u0000*")) continue;
+    const sk = k + "\u0000" + n.property.name;
+    if (slotPoison.has(sk)) continue;
+    const w = slotWrites.get(sk);
+    if (!w || w.n !== 1) continue;
+    slotOf.set(n, w.node);
+  }
+  return { binds, fnDeclOf, slotOf, count, freeRef };
 }
 
 /* ── THE CHUNK MANIFEST ───────────────────────────────────────────────────────────────────────────────────
@@ -936,10 +1079,10 @@ function readFile(src, filename) {
                      manifest: { rows: [], refusedTwoApplications: 0 },
                      spell: new Map(), spellOther: { globalComputedDynamic: 0 } };
 
-  const { binds, count: bindCount, assigned: bindAssigned, reassigned, fnDecl, memberOnce } = collectBinds(ast);
-  /* THE ENUMERATING FOLD'S FIXED HALF, built once per file: what a name and a slot resolve to. The per-row
-     half — which application, which candidate — is added at the row. */
-  const envBase = { memberOnce, fnDecl, count: bindCount, reassigned };
+  const { binds, fnDeclOf, slotOf, count: bindCount, freeRef } = collectBinds(ast);
+  /* THE ENUMERATING FOLD'S FIXED HALF, built once per file: which binding a reference resolves to and which
+     slot a member read names. The per-row half — which application, which candidate — is added at the row. */
+  const envBase = { fnDeclOf, slotOf };
   const manifest = scanManifest(ast, binds, envBase, filename);
   const sites = [];
   const pathish = new Set();
@@ -947,10 +1090,15 @@ function readFile(src, filename) {
   let xhrOpenSkippedNonLiteralMethod = 0;
   /* THE GLOBAL-REACHED DOOR'S OWN THREE NUMBERS, so the widening is read beside its price on every run. */
   const globalDoor = { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 0 };
-  /* A NAME IS THE GLOBAL OBJECT ONLY IF THIS FILE NEVER BINDS IT AND NEVER ASSIGNS IT. Anything else and
-     the object to the left is a value this pass cannot name, which is the case the DOORS comment refuses. */
-  const provenGlobal = (o) => !!o && o.type === "Identifier" && GLOBAL_OBJECTS.has(o.name) &&
-                              !(bindCount.get(o.name) > 0) && !bindAssigned.has(o.name);
+  /* A REFERENCE IS THE GLOBAL OBJECT ONLY IF IT RESOLVES TO NO BINDING AT ALL and nothing in the file
+     assigns that name as a free one either. THIS USED TO ASK WHETHER THE FILE BINDS THE NAME ANYWHERE, and
+     the argument is kept because a reader will re-derive it: a file that BINDS `window` can mean something
+     else by it, and the UMD wrapper `(function(window){...})(window)` and the transpiler idiom
+     `var self = this` both do. That is right about those two sites and wrong about every reference OUTSIDE
+     them — the wrapper's parameter shadows nothing beyond its own body, and `provably the global` is a
+     question about a REFERENCE rather than about a name. The scope pre-pass answers it for the reference,
+     which is what `PROVABLY IS THE LOAD-BEARING WORD` in the DOORS comment always meant. */
+  const provenGlobal = (o) => !!o && o.type === "Identifier" && GLOBAL_OBJECTS.has(o.name) && freeRef.has(o);
   const attached = new Set();          // node identity of URL args, so a door's own literal is not double-counted
   let guard = 0;
   const guardStack = [];
@@ -1303,8 +1451,25 @@ const SELFTEST = [
   // A GLOBAL NAME THIS FILE BINDS IS NOT THE GLOBAL OBJECT — the UMD wrapper, and every `var self=this`.
   [`function f(window){return window.fetch("/x")}`,         []],
   [`var self=this;self.fetch("/x")`,                        []],
-  // SHADOWING — the fold must REFUSE a name the file binds twice, because a wrong fold INVENTS an address.
-  [`const B="/a";function f(){const B="/b";return fetch(B)}`, ["fetch|data|opaque|{?}"]],
+  // SHADOWING — A REFERENCE IS RESOLVED, NEVER REFUSED FOR A BINDING SOMEWHERE ELSE. THIS ROW USED TO WANT
+  // `opaque|{?}` and the argument for that is kept because a reader will re-derive it: the fold must refuse
+  // a name the file binds twice, because folding ACROSS a shadow would INVENT an address. The premise is the
+  // absence of a scope graph and not any property of a name — there are two bindings here and this reference
+  // names exactly one of them, so the inner `const B="/b"` is the answer and `/b` is what a browser reads.
+  // These four are the widening's own armed control and the reason its direction can be checked rather than
+  // argued: the first two are the same file read from inside and from outside the shadow, and they must give
+  // DIFFERENT answers or the pass is keying on a name after all.
+  [`const B="/a";function f(){const B="/b";return fetch(B)}`, ["fetch|data|folded|/b"]],
+  [`const B="/a";fetch(B);function f(){const B="/b"}`,      ["fetch|data|folded|/a"]],
+  //  an inner shadow that is WRITTEN poisons ITS OWN binding and not the outer one
+  [`var B="/a";fetch(B);function f(){var B;B="/z"}`,        ["fetch|data|folded|/a"]],
+  //  ... and a write to the binding the reference actually resolves to still refuses it
+  [`var B="/a";fetch(B);B="/z"`,                            ["fetch|data|opaque|{?}"]],
+  //  TWO DECLARATIONS IN ONE SCOPE ARE STILL TWO, so the name settles nothing and the fold declines
+  [`var B="/a";var B="/b";fetch(B)`,                        ["fetch|data|opaque|{?}"]],
+  //  A `with` BODY IS REFUSED OUTRIGHT: a bare name in one may denote a PROPERTY of the object, and no
+  //  lexical resolution answers for it. Without this the pass would fold `B` and a browser might not.
+  [`var B="/a";with(o){fetch(B)}`,                          ["fetch|data|opaque|{?}"]],
   // THE REACH BAND, ARMED IN ALL THREE ARMS. Each of these has to CLASSIFY as an ordinary row too, so they
   // sit in this table rather than in a set of their own: a reach control that stopped being a door row would
   // silently leave the band measuring a smaller population.
@@ -1380,7 +1545,20 @@ const SELFTEST_MANIFEST = [
   /* A RELATIVE ADDRESS IS ONE, which is the third alternative the shape test adds for this channel. */
   [`function t(e){return "./chunks/"+{a:"a.HASH.js"}[e]}var b=t(e)`,
    { addresses: ["./chunks/a.HASH.js"], candidates: 1, dropped: 0, fragments: 0 }],
+  /* THE SHAPE A FILE-WIDE NAME COUNT REFUSED AND A SCOPE PRE-PASS SETTLES, which is the whole of what this
+     diff buys and is written from a real webpack-4 runtime rather than invented. The chunk-URL function `t`
+     and the object `o` holding the public path are declared at the runtime's own scope; ONE NESTED FUNCTION
+     binds `d,t,o` again as its own `var` and assigns `t` inside itself. That function encloses neither the
+     declarations nor the composition, so every reference outside it resolves to the outer binding — and a
+     count over the whole file saw `t` bound twice and written once and refused the site entirely. */
+  [`function t(e){return o.p+({a:"A"}[e]||e)+".chunk.js"}function o(){}o.p="/w/";` +
+   `function h(a){for(var d,t,o=a[0],s=0;s<o.length;s++)t=o[s],d=t;}s.src=t(e)`,
+   { addresses: ["/w/A.chunk.js"], candidates: 1, dropped: 0 }],
   /* NEGATIVES — each one a shape whose fold would INVENT an address, and each refused for a stated reason. */
+  //  two declarations of the chunk-URL function IN ONE SCOPE are two functions and neither is the answer
+  [`function t(e){return "/a/"+{x:"1"}[e]}function t(e){return "/b/"+{x:"2"}[e]}var b=t(e)`, null],
+  //  ... and a write to the binding the composition resolves to still refuses it
+  [`function t(e){return "/a/"+{x:"1"}[e]}t=0;var b=t(e)`,                              null],
   //  a slot written twice is not a slot this pass can read
   [`var p={};p.u=e=>1===e?"/a":"/b";p.u=e=>"/z";var b=p.p+p.u(e)`,                     null],
   //  a computed write to the object could be this very slot under another spelling
@@ -1510,6 +1688,12 @@ function selftest() {
     [`window.fetch("/api/a")`,                        { admitted: 1, refusedBoundName: 0, declinedNonGlobalReceiver: 0 }],
     [`new self.Worker("/w.js")`,                      { admitted: 1, refusedBoundName: 0, declinedNonGlobalReceiver: 0 }],
     [`function f(window){return window.fetch("/x")}`, { admitted: 0, refusedBoundName: 1, declinedNonGlobalReceiver: 0 }],
+    /* THE WIDENING THE SCOPE PRE-PASS BOUGHT, ARMED IN ONE FILE SO BOTH SIDES MUST SPEAK AT ONCE. The UMD
+       factory's parameter shadows `window` INSIDE it and nowhere else, so the reference in the wrapper is
+       refused and the one outside is admitted — and a file-wide test cannot produce this pair, because it
+       refused both. If a later diff keys the global test on a name again, this row is what fails. */
+    [`function f(window){return window.fetch("/x")};window.fetch("/y")`,
+                                                      { admitted: 1, refusedBoundName: 1, declinedNonGlobalReceiver: 0 }],
     [`api.fetch("/x")`,                               { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 1 }],
     [`new p.Worker("/w.js")`,                         { admitted: 0, refusedBoundName: 0, declinedNonGlobalReceiver: 1 }],
     /* A PROPERTY NAMING NO DOOR MUST TOUCH NO COUNTER AT ALL, or the declined figure becomes a count of
@@ -1651,6 +1835,7 @@ function main(argv) {
   const wantJson = argv.includes("--json");
   const onlySite = arg("--site", null);
   const nExamples = parseInt(arg("--examples", "0"), 10) || 0;
+  const wantManifestUrls = argv.includes("--manifest-urls");
 
   const st = selftest();
 
@@ -1750,6 +1935,15 @@ function main(argv) {
       b.manifest.fragments += m.fragments;
       if (m.addresses.length > 1) b.manifest.multi++;
       for (const u of m.addresses) b.manifestUrls.add(u);
+      /* THE RECOVERED SET ITSELF, ON ASK, BECAUSE THIS CHANNEL'S SOUNDNESS CLAIM IS OTHERWISE UNCHECKABLE
+         FROM ITS OWN OUTPUT. Every other number here is a count a reader can argue with; an ADDRESS SET is a
+         claim that these particular strings are addresses the bundle can load, and printing only its
+         cardinality is a contract that names a hazard and offers no exit. With this flag a reader can run the
+         runtime's own chunk-URL function over its own key domain and compare the two sets, which is what
+         established the channel is exact rather than merely plausible: on the corpus this was last run
+         against, one site's 1176 recovered addresses are BYTE-IDENTICAL to the image of that function, and 4
+         of them name files the fetcher independently mirrored. */
+      if (wantManifestUrls) for (const u of m.addresses) console.log(`MANIFEST-URL\t${id}\t${m.file}:${m.line}\t${u}`);
       if (nExamples) b.manifestRows.push(m);
     }
     for (const s of r.blind) {
@@ -1772,8 +1966,15 @@ function main(argv) {
       if (s.fnDepth === 0) c.topLevel++; else if (s.innerAsync) c.innerAsync++; else c.innerSync++;
       /* THE CEILING COLUMNS ARE DATA-DOOR ONLY AND ONLY OVER ROWS THE FOLD DID NOT SETTLE, because that is
          the population the "a better parser would get these" objection is about; counting settled rows in
-         it would answer a question nobody asked. */
-      if (s.cls === "data" && s.kind !== "literal") {
+         it would answer a question nobody asked.
+         THE TEST USED TO BE `kind !== "literal"`, WHICH IS THE SAME POPULATION ONLY WHILE `folded` IS SMALL.
+         A folded row IS settled — its whole text was recovered without running anything — so counting it
+         here asks how much better a stronger parser could do on rows this file ALREADY DID. That proxy was
+         written when the fold resolved a name only if the whole file bound it once, which on this corpus was
+         eight data-door rows; a scope-correct resolver settles twice that, and the gap grows with every
+         widening. The population is now the two UNSETTLED kinds by name, which is what the sentence above
+         always said it was. */
+      if (s.cls === "data" && (s.kind === "shape" || s.kind === "opaque")) {
         b.argShape[s.argShape] = (b.argShape[s.argShape] || 0) + 1;
         if (s.argBinds !== null) {
           const n = s.argBinds;
@@ -2003,7 +2204,7 @@ function main(argv) {
   console.log(`  they ARE the bare name. These three are one trade and are printed together: a recall figure`);
   console.log(`  alone would be a widening whose precision cost nobody measured.`);
   console.log(`  admitted ${tot.globalDoor.admitted}   already counted inside the DATA and PROGRAM totals above, not added to them`);
-  console.log(`  refused  ${tot.globalDoor.refusedBoundName}   the file BINDS or ASSIGNS that global name, so this pass cannot prove what it is`);
+  console.log(`  refused  ${tot.globalDoor.refusedBoundName}   that reference RESOLVES to a binding this file makes, so it is not the global`);
   console.log(`  declined ${tot.globalDoor.declinedNonGlobalReceiver}   a platform door name on a receiver that is not the global object — the library`);
   console.log(`           wrapper population the DOORS comment turns away, counted rather than described`);
   console.log(``);
@@ -2102,15 +2303,33 @@ function main(argv) {
   console.log(`  doors the engine's endpoint_record records: ${tot.engineDoorSites}; doors it does not: ${tot.nonEngineDoorSites}`);
   console.log(`  by door: ${Object.entries(tot.byDoor).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join("  ") || "(none)"}`);
   console.log(``);
-  const unsettled = tot.data.sites - tot.data.literal;
+  /* THE DENOMINATOR IS THE POPULATION THE COLUMNS BELOW ARE DRAWN FROM AND IT IS ASSERTED TO BE, because a
+     banner naming one number over rows tallied from another is the defect CLAUDE.md
+     §a-coverage-figure-states-what-it-is-a-fraction-of is about. It used to be `sites - literal`, which
+     counted the FOLDED rows the fold itself settled. */
+  const unsettled = tot.data.shape + tot.data.opaque;
+  { const inShapes = Object.values(tot.argShape).reduce((a, b) => a + b, 0);
+    if (inShapes !== unsettled)
+      die(`the stronger-parser band names ${unsettled} unsettled DATA-door site(s) and its argument-shape ` +
+          `rows tally ${inShapes}. One of the two is drawn from a different population than the banner ` +
+          `states, and every percentage under it would be a fraction of something unstated.`); }
   const idents = Object.values(tot.bindBuckets).reduce((a, x) => a + x, 0);
   console.log(`COULD A STRONGER PARSER HAVE DONE BETTER? — asked of the ${unsettled} DATA-door site(s) whose`);
-  console.log(`  URL is not one string literal. This file's fold is conservative ON PURPOSE, so its`);
-  console.log(`  opaque count is a FLOOR for the parse; these two rows bound how much of a floor.`);
+  console.log(`  URL this file's fold did NOT settle. Its fold is conservative ON PURPOSE, so its opaque`);
+  console.log(`  count is a FLOOR for the parse; these two rows bound how much of a floor.`);
   console.log(`  argument shape: ${Object.entries(tot.argShape).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join("  ")}`);
-  console.log(`  of the ${idents} whose URL is a bare NAME, times that name is bound in its own file:`);
+  console.log(`  of the ${idents} whose URL is a bare NAME, times that name is bound in its own FILE — which`);
+  console.log(`  is a fact about what the MINIFIER did and not about what a resolver can reach:`);
   for (const [k, v] of Object.entries(tot.bindBuckets))
-    if (v) console.log(`    ${String(k).padStart(7)} : ${String(v).padStart(4)}  ${k === "1" ? "<- any parser resolves this; THIS FILE ALREADY DOES" : k === "101+" ? "<- a minifier's reused register; no name-based resolution can touch it" : ""}`);
+    if (v) console.log(`    ${String(k).padStart(7)} : ${String(v).padStart(4)}  ${k === "1" ? "<- any parser resolves this; THIS FILE ALREADY DOES" : k === "101+" ? "<- a register reused across scopes; THIS FILE RESOLVES THESE TOO WHERE ONE SCOPE SETTLES THEM" : ""}`);
+  /* THE 101+ ROW USED TO READ `a minifier's reused register; no name-based resolution can touch it`, AND THE
+     DIFF THAT MADE THE FOLD SCOPE-CORRECT REFUTED IT. That annotation is kept here in its own words because
+     it is the reading a reader re-derives from the column: a bare `i` bound a hundred times in a bundle looks
+     unreachable to any resolver. It is not — a name bound once IN ITS OWN SCOPE is settled whatever the
+     file-wide count says, and this corpus's replit rows are four real API paths (`/api/v1/auth/sign-in` and
+     its siblings) held in a `let i` inside one arrow function, in files that bind `i` in the hundreds. So a
+     high count in this column is evidence about the MINIFIER and never about a ceiling, and the rows that
+     remain here are the ones no resolution settled rather than the ones no resolution could. */
   console.log(`  ${tot.oneCharNames} of ${idents} of those names are ONE CHARACTER long.`);
   console.log(``);
   console.log(`BASE RATE (not endpoints, never quote as such): ${tot.pathish} distinct address-shaped string`);
