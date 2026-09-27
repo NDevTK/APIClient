@@ -490,7 +490,7 @@ void viewport_scroll(JSContext *ctx, ScrollRequest x, ScrollRequest y, const cha
     CHECK(doc != NULL,
           "CSSOM VIEW §4's scroll() reached its clamp in a realm presenting NO DOCUMENT, which step 4's \"if "
           "there is no viewport\" is the step that should have answered: a viewport is the area a navigable "
-          "presents a document IN, so `viewport_exists` (HTML §7.3.1 \"Navigables\"' fully active) and the "
+          "presents a document IN, so `viewport_exists` (HTML §7.3.3 \"Fully active documents\") and the "
           "presence of a document element are one fact, and this is the two of them having come apart");
     /* STEPS 7 AND 8 — one step per axis, each a two-armed switch on §2's OVERFLOW DIRECTIONS ("a scrolling box
        of a viewport or element has two overflow directions, which are the block-end and inline-end directions

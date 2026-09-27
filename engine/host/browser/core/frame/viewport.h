@@ -105,7 +105,8 @@ void viewport_free(void);
 
 /* IS THERE A VIEWPORT — CSSOM VIEW §4's "or zero if there is no viewport", asked once here rather than by each
    member. A viewport is the viewing area a NAVIGABLE presents a document in, so a document that is no longer
-   being presented — HTML §7.3.1's not fully active, which is what a removed iframe's document becomes — has
+   being presented — HTML §7.3.3 "Fully active documents"' NOT fully active, which is what a removed iframe's
+   document becomes — has
    none, and `frame.contentWindow.innerWidth` after the removal is 0 rather than the size it used to be. */
 bool viewport_exists(JSContext *ctx);
 

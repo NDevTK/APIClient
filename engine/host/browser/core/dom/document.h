@@ -171,7 +171,8 @@ void document_page_showing_set(JSContext *ctx, bool showing);
    every navigable a forced-execution frontier ever created. */
 JSValueConst document_window_proxy(JSContext *ctx);
 
-/* HTML §7.3.1 "fully active" for THIS realm's Document — the guard a family of algorithms opens with, and the
+/* HTML §7.3.3 "Fully active documents" for THIS realm's Document — the guard a family of algorithms opens
+   with, and the
    reason a detached iframe's Observable pushes nothing. See the definition for why it is a walk and not a
    flag. */
 bool document_fully_active(JSContext *ctx);
@@ -331,7 +332,8 @@ JSContext *document_realm_of(const lxb_dom_node_t *n);
    over "the active document of a navigable" is asking. A realm can hold SEVERAL Documents: `createHTMLDocument`,
    a DOMParser parse and XHR's `responseXML` each build one, each gets a record, and each answers
    document_realm_of with the realm that created it — but none of them is that realm's active document, so none
-   of them has a §6.6.2 focused area, appears in §6.6.7's autofocus candidates, or is §7.3.1 fully active. NULL
+   of them has a §6.6.2 focused area, appears in §6.6.7's autofocus candidates, or is §7.3.3 "Fully active
+   documents"' fully active. NULL
    is the real answer for those, and it is what makes `implementation.createHTMLDocument("").hasFocus()` false.
    `doc` must be a DOCUMENT node; anything else answers NULL. */
 JSContext *document_active_realm_of(const lxb_dom_node_t *doc);
@@ -556,7 +558,8 @@ void document_meta_csp_inserted(lxb_dom_element_t *el);
  * 4. Return false."
  *
  * IT LIVES HERE AND NOT IN THE POLICY COMPONENT because steps 1 and 2 are DOCUMENT facts — a browsing context
- * and §7.3.1's fully active walk — and only step 3 is a question about the policy. The split is the standard's:
+ * and §7.3.3 "Fully active documents"' walk — and only step 3 is a question about the policy. The split is
+ * the standard's:
  * Permissions Policy §9 is written over a policy and two origins, and HTML is what turns a Document into them.
  *
  * ITS CALLERS ARE UNRELATED AND THAT IS THE POINT. HTML §7.2.2.6 "Script settings for Window objects" makes it

@@ -37,7 +37,8 @@ bool iframe_has_navigable(JSContext *ctx, JSValueConst wrapper);
 /* THIS FLOW'S CHILD NAVIGABLE for that element — its WindowProxy, or JS_UNDEFINED. Owned.
    IT IS NOT `contentWindow`. §4.8.5's attribute is an IDL ACCESSOR, and an engine walk that read it would be
    running a getter from a C activation — which has no flow base under it, so a body that loops drives to
-   completion. §7.3.3's named-access walk did exactly that and aborted three spec files. The navigable is a
+   completion. HTML §7.2.2.3 "Named access on the Window object"'s walk did exactly that and aborted three
+   spec files. The navigable is a
    slot on the wrapper; asking the component that owns the slot runs no page code by construction. */
 JSValue iframe_navigable(JSContext *ctx, JSValueConst wrapper);
 /* §4.8.5's create-a-child-navigable, run from the POST-CONNECTION half of core/dom/element.c's tree-steps

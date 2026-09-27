@@ -232,7 +232,8 @@ static bool coll_takes(int kind, const CollQuery *qy, const lxb_dom_node_t *c)
     if (kind == COLL_BY_CLASS)
         return coll_has_all_classes(lxb_dom_interface_element((lxb_dom_node_t *)c), name, nlen);
     if (kind == COLL_NAMED) {
-        /* HTML §7.3.3's NAMED ELEMENTS, which is two rules and not one: any HTML element whose `id` is the
+        /* HTML §7.2.2.3 "Named access on the Window object"' NAMED ELEMENTS, which is two rules and not one:
+           any HTML element whose `id` is the
            name, and `embed`/`form`/`img`/`object` whose `name` attribute is. The tag restriction is on the
            `name` half only — a `<div name=x>` is not a named element, a `<div id=x>` is. */
         lxb_dom_element_t *el = (lxb_dom_element_t *)c;

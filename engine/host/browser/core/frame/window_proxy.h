@@ -710,8 +710,9 @@ bool window_proxy_same_origin_domain_of(JSContext *ctx, JSValueConst proxy);
    checks, and they were one only while this predicate answered false for an opaque origin. */
 bool window_proxy_same_origin_with_top(JSContext *ctx);
 
-/* THE BROWSING CONTEXT'S NAME, as this flow sees it — "" when it has none. §7.3.3's named access on the Window
-   matches against it, so the walk that answers `window.myFrameName` needs to read it. BORROWED. */
+/* THE BROWSING CONTEXT'S NAME, as this flow sees it — "" when it has none. HTML §7.2.2.3 "Named access on the
+   Window object" matches against it, so the walk that answers `window.myFrameName` needs to read it.
+   BORROWED. */
 const char *window_proxy_name(JSValueConst proxy);
 
 /* §7.2.2.1's `name`, READ AND WRITTEN THROUGH THE ONE PLACE IT LIVES. A Window and its WindowProxy are two

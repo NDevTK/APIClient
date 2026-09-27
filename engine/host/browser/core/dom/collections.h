@@ -44,10 +44,25 @@ JSValue collections_by_name(JSContext *ctx, JSValueConst owner, const char *name
    a real query matching an element in no namespace, which is why it is not spelled as an empty string. */
 JSValue collections_by_tag_ns(JSContext *ctx, JSValueConst owner, const char *ns, const char *local);
 
-/* HTML §7.3.3's NAMED ELEMENTS, live over `owner`'s subtree: any HTML element whose `id` is `name`, plus
-   embed/form/img/object/iframe whose `name` attribute is. It is what named access on the Window answers with
-   when more than one element carries the name — the spec returns an HTMLCollection there, not the first match,
-   because a page reads `.length` off it. */
+/* HTML §7.2.2.3 "Named access on the Window object"' NAMED ELEMENTS, live over `owner`'s subtree: any
+   HTML element whose `id` is `name`, plus embed/form/img/object/iframe whose `name` attribute is. It is what named
+   access on the Window answers with when more than one element carries the name — the spec returns an
+   HTMLCollection there, not the first match, because a page reads `.length` off it.
+   THE NUMBER WAS §7.3.3, WHICH IS "Fully active documents" — a number that resolves to a real section about
+   something else, which is the citation failure that reads as authoritative because a reader who looks it up
+   finds a heading rather than an error. core/frame/window.c holds the whole argument at its own
+   §7.2.2.3 banner and records repairing it "AT FIVE SITES IN THIS FILE"; FIVE MORE stood in four OTHER files,
+   because the sweep was scoped to the file the defect was noticed in. A retirement that enumerates its sites
+   from a one-file grep certifies every survivor outside it — nobody re-sweeps a cluster somebody has just
+   fixed — so the population for a citation number is derived from the TREE and never from a path, and the
+   derivation is one command — `git grep -niE '§7\.3\.3[^0-9]' -- engine/host | grep -i named` — whose answer
+   includes one CORRECT site (window_proxy.c cites §7.3.3 for its real subject and names §7.1's named-target
+   walk in the same sentence) and is therefore read row by row rather than counted.
+   AND THE GLOB THAT COMMAND FIRST CARRIED CLOSED THIS COMMENT: a pathspec ending `[ch]' had a `*` before its
+   `/`, so the two bytes terminated the block and the rest of the sentence compiled as C. That is the same
+   defect CLAUDE.md §AND-A-CITATION-IS-NOT-ALWAYS-A-COMMENT records for a quoted title inside a `DCHECK`
+   string, arriving through a shell glob instead — and it is why `clang -fsyntax-only` is owed to a
+   citation diff exactly as it is to a logic one. It was caught by that check on the first run. */
 JSValue collections_named(JSContext *ctx, JSValueConst owner, const char *name);
 
 /* HTML §3.1.7 "DOM tree accessors"' `document.links` — `a`/`area` elements that HAVE an href.

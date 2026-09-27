@@ -388,7 +388,8 @@ static char *dec_b64(const char *b64, size_t *plen)
                invented. "null" is a real answer and resolves to a FRESH opaque origin here, which is correct:
                an opaque origin is same origin with nothing, and two Documents sharing ONE opaque origin share
                an agent cluster and so are never on two sides of this line.
-     NAME    — the BROWSING CONTEXT's name, which §7.3.3's named access matches against.
+     NAME    — the BROWSING CONTEXT's name, which HTML §7.2.2.3 "Named access on the Window object"' walk
+               matches against.
      PARENT  — the parent navigable's DOCUMENT NAME, and this is the field whose absence is invisible:
                window_proxy_for_document takes a parent, and a navigable minted from a bare name answers
                `parent === self` and reports itself a top-level traversable — so `w[0].parent === w` would be
