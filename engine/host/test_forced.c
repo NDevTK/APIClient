@@ -13649,12 +13649,27 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     long orphans_driven = 0, orphans_asked = 0;
     long orph_never = 0, orph_members = 0;
     long long orph_vis_max = 0;
-    static char orphan_why_[900];
+    /* AND THE DESCENT COUNT THE ASK IS A SUBSET OF, because `asked == 0` is TWO STATES and this clause named
+       only one of them. solver/engine.c raises `g_orphan_asks` inside engine_orphan_seed, which flow_step
+       reaches only from within its `if (!f->frame)` block, and raises `unframed_steps` at the one line that
+       ENTERS that block — so a zero ask under a zero descent is "nobody got there" and a zero ask under a
+       nonzero descent is "they got there and an arm ABOVE the rung took every descent". Those take opposite
+       work: the first is upstream of every arm of the ladder and is a question about the pick and the mint,
+       the second is a question about the ladder's own order. The containment is asserted in the engine where
+       both are in one hand, so this reader is not re-deriving a relation, it is reading the two halves of one
+       the engine already checks. */
+    EngineStepUnitRuns orph_lad;
+    static char orphan_why_[1400];
     const char *orphan_why;
     int orphan_k;
     engine_orphan_census(&orphans_driven, &orphans_asked);
+    /* SAFE AT THIS POSITION BY THE PRECEDENT OF ITS OWN SIBLINGS AND NOT BY ARGUMENT: this function already
+       asks the same accessor twice (see the remote-op and cross-world blocks below), so the asserts it carries
+       — the clock-boundary chain, the ask partition, the open-slice refusal — already run here on every
+       composition of this table. A third ask at the same point adds no reachable state. */
+    engine_step_unit_runs(&orph_lad);
     (void)probe_frontier_state(&orph_never, &orph_members, &orph_vis_max);
-    if (orphans_asked == 0)
+    if (orphans_asked == 0 && orph_lad.unframed_steps == 0)
         /* …AND WHERE THE FRONTIER STOOD WHEN IT DID NOT ASK, WHICH THIS SENTENCE PREDICTED AND DID NOT
            MEASURE. It ended "stay so until some flow finishes its own work" — a condition with no reading
            beside it, in a table whose whole subject is that a stated cause must be checkable. The frontier's
@@ -13666,17 +13681,48 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            member has finished anything at all and the ask is unreachable by arithmetic, and above 0 it was
            reachable and not reached, which are different findings taking different work. */
         orphan_k = snprintf(orphan_why_, sizeof orphan_why_,
-                 "NOT ASKED: no flow of this run has run out of work yet, so the frontier has never reached the "
-                 "question orphan-invoke answers (engine_orphan_census: asked=0, driven=0). That is the "
-                 "SCHEDULE — engine_orphan_seed is reached only by a DISPATCHED, unframed member with no "
-                 "program, job, delivery, checkpoint or lifecycle stage left; a timer, a rendering "
-                 "opportunity, an owed reply and a close request sit BELOW it and cannot hold one back from "
-                 "the ask — and it says nothing about "
-                 "the take, the drive or this endpoint. WHERE THE FRONTIER STANDS: %ld members, %ld of them "
-                 "never once handed the thread, and the furthest member has completed %lld units of work — a "
-                 "WEAKER condition than running out of work, so that last number is an UPPER BOUND on how "
-                 "close this run came to the ask. The seven orphan rows are 0 together for this one reason",
+                 "NOT ASKED AND THE LADDER WAS NEVER DESCENDED: no flow of this run has run out of work yet, so "
+                 "the frontier has never reached the question orphan-invoke answers (engine_orphan_census: "
+                 "asked=0, driven=0; unframed_steps=0). That is the SCHEDULE, and it is upstream of EVERY arm "
+                 "of flow_step's work ladder rather than of any one of them — no dispatch has entered the block "
+                 "those arms live in, so no arm can have held a member back and the question is about the pick "
+                 "and the mint. It says nothing about the take, the drive or this endpoint. THIS ARM IS THE "
+                 "DECISIVE ONE OF THE PAIR: `unframed_steps` is per-INSTANCE and the ask is per-SESSION, so a "
+                 "zero descent bounds every session there has been and a nonzero one is only a floor. WHERE THE "
+                 "FRONTIER STANDS: %ld members, %ld of them never once handed the thread, and the furthest "
+                 "member has completed %lld units of work — a WEAKER condition than running out of work, so "
+                 "that last number is an UPPER BOUND on how close this run came to the ask. The seven orphan "
+                 "rows are 0 together for this one reason",
                  orph_members, orph_never, orph_vis_max);
+    /* AND THE OTHER STATE THAT ZERO IS, WHICH THIS TABLE USED TO REPORT AS THE ONE ABOVE IT AND WHICH THE ONE
+       ABOVE IT USED TO DENY WAS POSSIBLE. The retired sentence read "a timer, a rendering opportunity, an owed
+       reply and a close request sit BELOW it and cannot hold one back from the ask", and it is recorded in its
+       own words because it was TRUE of one seed placement and is the reading a reader re-derives from the
+       rung's old seat. The owner's ordering moved the seed BELOW the three clock-driven sources, so two of the
+       four things that sentence cleared now stand ABOVE the rung and a third joined them — and the sentence
+       went on being EMITTED into every log, telling its reader that the one cause it could not be was the one
+       the reorder had just made live. A diagnostic that forecloses the true reading is worse than a silent
+       row: it sends the next reader to the pick and the mint when the answer is the ladder's own order.
+       NO RUNG IS ENUMERATED HERE, WHICH IS THE OTHER HALF OF THE REPAIR AND NOT A HEDGE. solver/result.c
+       records that a site outside solver/engine.c has now been wrong about that list TWICE, in opposite
+       directions, from two seed placements, and asks for exactly this: a site that names the DISCRIMINATOR and
+       leaves the list to the file the ladder is in. `stepUnitRuns` names the arm that took the descents and
+       engine.c's clock-arrival counters say whether the boundary was reached, so the list is READ rather than
+       remembered and this sentence cannot go stale against a reorder again. */
+    else if (orphans_asked == 0)
+        orphan_k = snprintf(orphan_why_, sizeof orphan_why_,
+                 "NOT ASKED THOUGH THE LADDER WAS DESCENDED %ld TIME(S): flows DID reach the block "
+                 "engine_orphan_seed's rung is in, and the rung was never reached — so an arm ABOVE it took "
+                 "every descent (engine_orphan_census: asked=0, driven=0). That is the LADDER'S ORDER and NOT "
+                 "the pick: the seed sits below the three clock-driven sources, so the arm that took them is "
+                 "named by `stepUnitRuns` in the result document and whether the clock boundary was reached at "
+                 "all is solver/engine.c's clock-arrival count. Read those before reading this as a fact about "
+                 "the take, the drive or this endpoint, and read the descent count as a FLOOR: it is "
+                 "per-INSTANCE where the ask is per-SESSION, so on a host that opens more than one session the "
+                 "descents it counts need not belong to the session whose ask is 0. WHERE THE FRONTIER STANDS: "
+                 "%ld members, %ld of them never once handed the thread, furthest member %lld completed units "
+                 "of work. The seven orphan rows are 0 together for this one reason",
+                 orph_lad.unframed_steps, orph_members, orph_never, orph_vis_max);
     else if (orphans_driven == 0)
         orphan_k = snprintf(orphan_why_, sizeof orphan_why_,
                  "ASKED %ld TIMES AND DROVE NOTHING: a flow did run out of work and no walk found an untaken "
@@ -13707,8 +13753,11 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        naming the state, which is the folded answer this whole clause exists to refuse. */
     DCHECK(orphan_k > 0 && (size_t)orphan_k < sizeof orphan_why_,
            "the shared orphan diagnostic did not fit its buffer and was CUT — the tail of every one of its "
-           "three branches is what separates the schedule from the take from this endpoint, so what survived "
-           "is seven rows at 0 with the distinction between them deleted; raise orphan_why_[] here");
+           "FOUR branches is what separates the schedule from the ladder's order from the take from this "
+           "endpoint, so what survived is seven rows at 0 with the distinction between them deleted; raise "
+           "orphan_why_[] here. THE COUNT IS FOUR AND NOT THREE because the not-asked state was split on the "
+           "ladder's own descent count, and a count written into a message is a thing the next split makes "
+           "wrong — so the branch it names is checked against the chain above rather than against this number");
     orphan_why = orphan_why_;
     /* FETCH-AWAIT-RESULT: `await fetch('/api/config')` delivered the reply and §6.4.3 json() parsed it,
        whose .region flowed into /api/user?region=us-west-2 as a CONCRETE example — a safe GET's result driving
@@ -17567,7 +17616,24 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            which of the schedule, the take and this drive the 0 belongs to, which no per-endpoint test can
            reach because the answer is not in the document at all. */
         { "orphan", orphan_driven, "orphanNeverCalled", SESS_EXPLORE, orphan_why },
-        { "orphan-gate", orphan_gate, "orphanNeverCalled", SESS_EXPLORE, orphan_why },
+        /* `orphan-gate` IS GATED ON `orphan` FOR THE SAME REASON `injected-script-el` IS GATED ON ITS OWN PAIR,
+           and the entailment is stronger here than the one the two date rows already declare: those two are a
+           DIFFERENT BODY from this one, so `orphan == 0` reaches them only through the premise that no body was
+           driven at all — which `orphan == 0` does not establish, since the take could hand over `orphanDate`
+           and not this function. These two are ONE BODY. `/api/orphan/report` is its FIRST statement and
+           UNCONDITIONAL; `/api/orphan/admin-only` is behind `role === 'admin'` INSIDE it. So `orphan-gate == 1`
+           means the body ran, and a body that ran emitted the report first — the document's own comment says so
+           in as many words ("a driven orphan that received `undefined` would emit the first and never the
+           second"), and an abort between the two emits NEITHER, which is what every row here already relies on.
+           `orphan == 0` therefore entails this row's 0 under every reading.
+           IT WAS UNDECLARED, WHICH IS EVIDENCE INFLATION AND NOT UNTIDINESS: a reader meeting the orphan rows
+           at 0 counted these two as two findings where the mechanism is one, and this file's own table declares
+           the WEAKER entailment two rows down while leaving the stronger one implicit. A count of signals is
+           the denominator of everything a reader concludes about how much is wrong, so the declaration is worth
+           more than the row — and it costs nothing, because the gate only ever suppresses a zero: where the
+           body DID run, `orphan` is 1, the gate is open, and this row reports the fork independently, which is
+           the one thing it exists to say. */
+        { "orphan-gate", orphan_gate, "orphanNeverCalled", SESS_EXPLORE, orphan_why, .gate = "orphan" },
         { "orphan-loop", orphan_loop, "orphanLoops", SESS_EXPLORE, orphan_why },
         { "orphan-ident", orphan_ident, "orphanIdentity", SESS_EXPLORE, orphan_why },
         { "orphan-ccode", orphan_ccode, "orphanCharCode", SESS_EXPLORE, orphan_why },
@@ -18599,12 +18665,47 @@ static int fixture_have_answers(void) {
        beside it are lifetime totals a reader may difference across samples, and differencing this one is
        meaningless. Its kind is not left to that comment — the consumer ASSERTS it constant across a session's
        samples, which is the only statement about a quantity's kind a reader can actually check. */
+    /* AND THE LADDER'S DESCENT COUNT, WHICH IS THE DISCRIMINATOR THE REMAINING TWO READINGS NEED AND WHICH THIS
+       STREAM DID NOT CARRY. Publishing the regime closed the FOURTH reading and left the SECOND and THIRD
+       folded into one zero: "no flow ever ran out of its own work" and "flows did, descended the ladder, and an
+       arm ABOVE the orphan rung took every descent". Those take opposite work — the first is a question about
+       the pick and the mint, the second about the ladder's own order — and no value of the pair beside it
+       separates them, which is §AND-AN-INVARIANT-OVER-A-GATED-OPERATION exactly: the ask is recorded at the
+       ASK and the DESCENT is what says whether anybody arrived to ask.
+       THE ASYMMETRY IS THE READING AND IS WHY THE ROW IS WORTH ITS BYTES: `unframed_steps` is per-INSTANCE and
+       nothing releases it, while `_orphansAsked` is released with the agent — so a ZERO here bounds every
+       session there has been and is DECISIVE, and a nonzero one is a FLOOR on this session's descents. That is
+       the same direction solver/engine.c's own containment assert is written in, and for the same reason.
+       IT IS THE RESULT DOCUMENT'S OWN SPELLING, for the reason the pair above it is: `result_json` publishes
+       this number as `unframedStepsLifetime` and states there that it is what makes `_orphansAsked == 0`
+       readable, so a reader who learns it off `@RESULT` reads it off this line and a rename breaks in one place
+       instead of drifting in two. One namespace, one spelling — and the consequence is that a query keyed on
+       the name now matches on BOTH streams, exactly as `_orphansDriven` already does.
+       NAMED RESIDUAL — WHAT IS NOT COVERED: build.mjs's `OCENSUS_FIELDS` does not list this name, so its
+       `censusFields` contract does not require it and a future emitter that drops it would be compared as
+       undefined rather than THROWING, which is the one guarantee that list exists to give. WHAT THE NEXT DIFF
+       BUILDS: the name added to `OCENSUS_FIELDS`. IT IS NOT THIS DIFF, AND THE REASON IS THE SEAM AND NOT
+       CAUTION: that list is read from the tree by every build the moment it is written, while this printf is
+       live only after a build — so adding the name now makes every lane's build throw against the installed
+       artifact, which does not emit it. Adding it to the C half alone is safe in the other direction, because
+       `censusFields` requires its names and does not forbid extras. HOW ITS ABSENCE SHOWS: a reader holding a
+       stdout whose `@OCENSUS` lines carry three keys where the document carries four cannot tell an emitter
+       that stopped writing this number from a build predating it. THE OBSERVATION THAT RETIRES IT, and WHO MAY
+       MAKE IT: grep the INSTALLED artifact for `unframedStepsLifetime` with an invented sibling beside it as
+       the control — present means the name may be required; the act that makes it present is a BUILD AND AN
+       INSTALL, which only the coordinator performs, so this is a request rather than a wait. */
     {
         long driven = 0, asked = 0;
+        EngineStepUnitRuns lad;
 
         engine_orphan_census(&driven, &asked);
-        printf("@OCENSUS {\"_orphansDriven\":%ld,\"_orphansAsked\":%ld,\"_sessionForks\":%d}\n",
-               driven, asked, engine_session_forks());
+        /* SAFE AT THIS POSITION BECAUSE `result_json` ABOVE ALREADY ASKED IT — this hook's own banner states it
+           runs at a step boundary with no flow switched in, and result_cold_json reaches the same accessor on
+           every sample, so the asserts it carries already run here. */
+        engine_step_unit_runs(&lad);
+        printf("@OCENSUS {\"_orphansDriven\":%ld,\"_orphansAsked\":%ld,\"_sessionForks\":%d,"
+               "\"unframedStepsLifetime\":%ld}\n",
+               driven, asked, engine_session_forks(), lad.unframed_steps);
     }
     free(js);
     return ok;
