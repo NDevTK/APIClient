@@ -116,6 +116,41 @@ typedef enum {
        holds is the single-precision one; a `double` member would answer 0.1. That is a number a page can read
        back and compare, not a rounding nobody sees. */
     IDL_FLOAT,
+    /* `double?` — §3.2.7 double under §3.2.20 Nullable types' rule, and the FIRST nullable NUMERIC row this
+       file has had: every other `_NULLABLE` here is a string, an enumeration, an object, a sequence or a
+       dictionary. Cookie Store API §3's `CookieInit` is what declares one, as `DOMHighResTimeStamp? expires =
+       null` — HR-TIME §5 The DOMHighResTimeStamp typedef writes `typedef double DOMHighResTimeStamp`, the
+       RESTRICTED type, so a non-finite value is still §3.2.7's TypeError and only NULL is added.
+       IT CANNOT BE IDL_DOUBLE WITH THE NULL READ IN THE BODY, and the reason is the same one IDL_ENUM_NULLABLE
+       states for its own row: ToNumber(null) is 0, which is a DOMHighResTimeStamp the IDL admits — the epoch —
+       so a nullable double declared as IDL_DOUBLE turns the IDL's OWN DEFAULT VALUE into a real timestamp. §7.2
+       "Set a cookie" step 13 branches on "If expires is non-null", and its step 14 reads `maxAge` only on the
+       other arm, so the two worlds are an Expires attribute and a Max-Age one rather than two spellings of one.
+       Nor can it be IDL_ANY with a test in the body: that is the shape the declared types exist to replace, and
+       here it would run ToNumber on the page's value from a plain C body — the `valueOf` this engine aborts on.
+       NAMED RESIDUAL — IT IS A DICTIONARY-MEMBER TYPE AND NOT YET AN ARGUMENT ONE. What is not covered: a
+       `double?` or `long long?` at a POSITIONAL argument, which the conversion's own closing DCHECK refuses by
+       name ("an IDL argument was declared with a type this machine does not convert") rather than converting
+       wrongly. Nothing in the platform declares one, so the arm would be code with no caller — which is why the
+       absence is a loud refusal instead of an arm. What the next diff builds: the `t == IDL_DOMSTRING_NULLABLE
+       || t == IDL_USVSTRING_NULLABLE` rewrite block's numeric twin, beside it in the argument loop, whose null
+       and undefined place JS_NULL and whose survivors take idl_numeric_nullable_inner's answer. How its absence
+       would show: a reader would OBSERVE that abort naming this type at the position that declared it, in a dev
+       build, at the first call — and in release the same position falls to ToString, so the number would cross
+       as a string. */
+    IDL_DOUBLE_NULLABLE,
+    /* `long long?` — §3.2.4.7 long long under §3.2.20's rule, and a SEPARATE ROW from the one above rather than
+       one nullable-number row with a width, for exactly the reason IDL_LONG and IDL_LONG_LONG are separate:
+       the INNER TYPE IS THE CONVERSION. §3.2.4.7 is the modulo-2^64 integer conversion and §3.2.7 is the
+       restricted double's non-finite refusal, and a value like 1e300 is LLONG-wrapped by one and a TypeError
+       under the other. `CookieInit`'s `long long? maxAge = null` is what declares it.
+       ITS NULL IS NOT ITS ZERO, WHICH IS THE WHOLE OF WHY THE ROW IS NEEDED AND IS OBSERVABLE: Cookie Store API
+       §7.3 "Delete a cookie" step 4 passes a maxAge of exactly 0 and §7.2 step 14 reads it as NON-NULL, so 0
+       means `Max-Age: 0` — RFC 6265 §5.2.2's earliest representable date, which is a DELETION — while null
+       means no Max-Age attribute at all and a session cookie. ToNumber(null) is 0, so declaring this IDL_LONG_LONG
+       would make `{maxAge: null}` delete the cookie it was asked to create. The residual at the row above
+       covers this one too: both are dictionary-member types and neither has an argument-position arm. */
+    IDL_LONG_LONG_NULLABLE,
     /* A CALLBACK FUNCTION type — §3.2.19. The conversion is a brand check and nothing more: a callable crosses
        as itself and anything else is a TypeError. Declared rather than checked in the body because an optional
        member that is absent must NOT be rejected, and every body that wrote that test by hand is a body that
@@ -511,6 +546,37 @@ typedef enum {
        has already had this position rewritten to the number, so the only value this row itself ever describes
        is a dictionary — a bag of member READS, each yielding another unknown. */
     IDL_UNRESTRICTED_DOUBLE_OR_DICT,
+    /* THE SAME §3.6 LENGTH-DIFFERING SPLIT AS THE ROW ABOVE — two entries that NEVER COEXIST AT ONE ARITY, so
+       no value is ever looked at — WHERE THE LONGER ENTRY'S TYPE AT THIS POSITION IS A USVString. Cookie Store
+       API §3.3 "The set() method" is what declares it:
+
+           Promise<undefined> set(USVString name, USVString value);
+           Promise<undefined> set(CookieInit options);
+
+       IT IS NOT IDL_USVSTRING_OR_DICT, AND THAT ROW'S NAME IS THE TRAP — the two differ in the one property
+       that decides whether a VALUE is ever consulted. Window's `postMessage` declares its dictionary position
+       `optional`, so §2.5.8 Overloading gives that entry a tuple at TWO arities and the two entries MEET at one;
+       §3.6 step 4 removes neither there, step 8 sets a distinguishing index, and step 12 reads the page's value
+       — which is why that row answers IDL_CONCOLIC_FORKS. BOTH of §3.3's entries declare EVERY argument
+       REQUIRED, so the effective overload set holds one tuple per entry, at arity 1 and at arity 2, and step 4
+       removes one AT EVERY ARITY: S never holds two entries, step 8 never runs, and there is no step 12 here at
+       all. Declaring the other row would resolve this position from the page's value at arity 1, where §3.6 has
+       already chosen the dictionary outright — so `cookieStore.set("x")` would be read as a cookie NAME where
+       §3.2.17 Dictionary types step 1 — "If jsDict is not an Object and jsDict is neither undefined nor null,
+       then throw a TypeError" — makes a String a TypeError. That is an observable divergence and no audit here
+       would see it.
+       THAT SENTENCE WAS FIRST QUOTED AS `If Type(esDict) is not Undefined, Null or Object, then throw a
+       TypeError`, WHICH IS AN EARLIER EDITION'S WORDING, and the correction is recorded because the retired
+       spelling is the one a reader reconstructs: Web IDL renamed its ES-prefixed variables to JS-prefixed ones,
+       so `esDict` reads exactly like a current name and the committed corpus — which spells it `jsdict` — is
+       what refused it. The CONCLUSION drawn from it is unchanged and was checked against the real text rather
+       than assumed: a String is not an Object and is neither undefined nor null, so step 1 throws either way.
+       A mis-transcription beside a correct clause is a typo and not a wrong argument, which is why only the
+       words moved here.
+       SO IT IS FILED AT IDL_CONCOLIC_UNASKED beside IDL_UNRESTRICTED_DOUBLE_OR_DICT and never with the unions:
+       the arity has rewritten this position to one entry's own type before any rule is asked, so the pair is
+       never the type of a value and a FORKS rule would be a second ask at a site with no second question. */
+    IDL_USVSTRING_OR_DICT_BY_ARITY,
     /* THE SAME §3.6 LENGTH-DIFFERING SPLIT WHERE THE DICTIONARY IS ON THE **LONGER** ENTRY, which is the mirror
        of the two rows above and is why it is its own row rather than one of them read backwards. Web Locks API
        §3.2 "LockManager class" is where the IDL that declares it is written:
@@ -994,6 +1060,11 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
        any rule is asked — the only value the row itself describes is the dictionary at the shorter arity, and a
        dictionary asks the value nothing. See IDL_UNRESTRICTED_DOUBLE_OR_DICT. */
     case IDL_UNRESTRICTED_DOUBLE_OR_DICT:
+    /* THE SAME ANSWER FOR THE SAME REASON WITH A USVString LONGER ARM — see IDL_USVSTRING_OR_DICT_BY_ARITY,
+       whose two entries never coexist at one arity either, so the argument count has already rewritten this
+       position before any rule is asked. It is NOT filed with IDL_USVSTRING_OR_DICT, whose entries DO meet and
+       whose arm is therefore a test of the value. */
+    case IDL_USVSTRING_OR_DICT_BY_ARITY:
     /* THE SAME ANSWER FOR THE SAME REASON, with the dictionary on the other entry: the arity has rewritten this
        position to one entry's own type before any rule is asked, so the pair is never the type of a value. */
     case IDL_CALLBACK_OR_DICT:

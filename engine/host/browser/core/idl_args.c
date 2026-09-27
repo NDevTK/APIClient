@@ -137,6 +137,18 @@ static bool idl_is_numeric(IdlArgType t)
     return idl_is_integer(t) || t == IDL_UNRESTRICTED_DOUBLE || t == IDL_DOUBLE || t == IDL_FLOAT;
 }
 
+/* §3.2.20 Nullable types — T? OVER A NUMERIC INNER TYPE: the INNER type, or IDL_ANY for a row that is not one.
+   It is a MAPPING rather than a predicate because every caller needs the inner type after a true answer, and
+   asking twice — once whether the row is nullable and once which type it wraps — is two answers to one question
+   that are free to disagree. A row added to idl_args.h without an arm here answers IDL_ANY and therefore crosses
+   unconverted, which the member loop's own assert is what turns loud. */
+static IdlArgType idl_numeric_nullable_inner(IdlArgType t)
+{
+    if (t == IDL_DOUBLE_NULLABLE) return IDL_DOUBLE;
+    if (t == IDL_LONG_LONG_NULLABLE) return IDL_LONG_LONG;
+    return IDL_ANY;
+}
+
 /* WEB IDL §3.2.5 "float"'s ROUNDING, AND ITS REFUSAL, over the double ToNumber produced. Steps 3 and 4 are the
    round-to-nearest-even the C cast performs on every target this engine builds for — IEEE 754 says the default
    rounding is roundTiesToEven and `-frounding-math` is not in the flags — so the cast IS the step rather than
@@ -1185,6 +1197,12 @@ static bool idl_type_is_dictionary(IdlArgType t)
               many dictionaries a member could reach. A row left out here is a dictionary position the ndict
               bound cannot count, which is the one direction that bound must not be wrong in. */
            t == IDL_ULONG_OR_DICT_BY_ENTRY ||
+           /* §3.3's position 0 CAN PRODUCE A DICTIONARY, which is the whole of what this predicate asks — and
+              it is load-bearing for the same reason IDL_ULONG_OR_DICT_BY_ENTRY's row is: the omitted-optional
+              guard runs BEFORE any split resolves, so a position that can be a dictionary must be here or an
+              `undefined` passed at the shorter arity places §3.6 step 15.4.2's "missing" where §3.2.17 gives
+              the all-defaults dictionary. */
+           t == IDL_USVSTRING_OR_DICT_BY_ARITY ||
            t == IDL_SEQUENCE_OBJECT_OR_DICT;
 }
 
@@ -1196,7 +1214,7 @@ static bool idl_type_is_dictionary(IdlArgType t)
 static bool idl_type_is_length_split(IdlArgType t)
 {
     return t == IDL_USVSTRING_OR_DICT || t == IDL_UNRESTRICTED_DOUBLE_OR_DICT ||
-           t == IDL_CALLBACK_OR_DICT;
+           t == IDL_CALLBACK_OR_DICT || t == IDL_USVSTRING_OR_DICT_BY_ARITY;
 }
 
 /* §3.6's SAME-LENGTH SPLIT — the other half of what `a member declaring two overload entries` can mean,
@@ -1271,6 +1289,10 @@ static IdlArgType idl_split_longer_type(IdlArgType t)
     switch (t) {
     case IDL_USVSTRING_OR_DICT:           return IDL_USVSTRING;
     case IDL_UNRESTRICTED_DOUBLE_OR_DICT: return IDL_UNRESTRICTED_DOUBLE;
+    /* THE SAME ANSWER AS IDL_USVSTRING_OR_DICT's, reached by a different algorithm — its two entries are
+       chosen between by the ARITY alone (see the row in idl_args.h), and what step 4 leaves standing at the
+       longer one is Cookie Store API §3.3's `USVString name`. */
+    case IDL_USVSTRING_OR_DICT_BY_ARITY:  return IDL_USVSTRING;
     /* THE ONE ROW WHOSE LONGER ENTRY DECLARES THE DICTIONARY. Its two neighbours answer the non-dictionary arm
        because that is what THEIR longer entries declare; this function's contract is the LONGER ENTRY'S TYPE
        and not "the arm that is not the dictionary", which the two of them made it possible to read it as. */
@@ -2877,6 +2899,27 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
                "enumeration. Every other type that answers FORKS is resolved at an ARGUMENT position by the "
                "conversion above, not here, so a member declared one reaches no arm and is placed "
                "unconverted. Give the type its arm in this loop, beside those two");
+        /* §3.2.20 Nullable types — T? OVER A NUMERIC INNER TYPE, rewritten BEFORE the arms rather than tested
+           inside the numeric one, which is how the ARGUMENT boundary spells `DOMString?` and `USVString?` one
+           block over. Two rewrites, and each is a step of §3.2.20 rather than a convenience:
+             - A NULL BECOMES THE IDL NULL AND NOTHING IS COERCED — step 2, "if V is null or undefined, then
+               return the IDL nullable type T? value null". IDL_ANY is how this loop spells "crosses as itself",
+               and the value being crossed IS null, so the member is placed holding it. ToNumber(null) is 0 and
+               that is a real number of every one of these types, which is the whole reason the row exists:
+               Cookie Store API §7.2 step 13 branches on `expires` being non-null and its §7.3 step 4 passes a
+               `maxAge` of 0 as a NON-null value, so folding null into 0 answers one world with the other's value.
+             - ANYTHING ELSE TAKES THE INNER TYPE'S OWN CONVERSION — step 3 — so the numeric arm below runs
+               §3.2 exactly as it does for the un-nullable row, and `{expires: NaN}` is still §3.2.7's TypeError.
+           STEP 2's `undefined` IS NOT ASKED HERE AND THAT IS NOT A NARROWING: on a dictionary member an absent
+           member is rewritten to IDL_ANY above — by the default arm for a member that declares one, and by the
+           absent arm for one that does not — so the only null this can see is the PAGE'S OWN, which is the same
+           sentence IDL_INTERFACE_NULLABLE's arm states for itself.
+           A CONCOLIC NEVER REACHES EITHER REWRITE: idl_concolic_rule answers CROSSES for both rows, so the
+           condition above already sent unknown external input to IDL_ANY — which is what IDL_DOUBLE and
+           IDL_LONG_LONG do with one today, so the nullable rows agree with their own inner types rather than
+           inventing a third answer. What that costs is recorded at the rows in idl_args.h. */
+        if (idl_numeric_nullable_inner(mt) != IDL_ANY)
+            mt = JS_IsNull(w->mv) ? IDL_ANY : idl_numeric_nullable_inner(mt);
         /* §3.2.25 over `(DOMString or sequence<DOMString>)` ON A DICTIONARY MEMBER — the same union the
            argument path resolves, resolved here so the arm's @@iterator read parks on the MEMBER it is
            on. It rewrites `mt` and the arms below convert what it chose; step 2's null is placed
@@ -4725,6 +4768,21 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         if (t == IDL_UNRESTRICTED_DOUBLE_OR_DICT) {
             DCHECK(m->dict_n > 0, "a member declared a number-or-dictionary overload split with no dictionary "
                                   "members — the dictionary is half of what that type states");
+            DCHECK(!step4_only_longer,
+                   "§3.6 steps 3-4 chose the LONGER entry and the position still carries the split type — the "
+                   "rewrite at the top of this loop is what performs that choice, so the two have come apart");
+            t = IDL_DICT;
+        }
+        /* THE SAME ARITY-ONLY RESOLUTION FOR THE ROW WHOSE LONGER ENTRY DECLARES A USVString — Cookie Store
+           API §3.3's `set`, whose two entries have lengths 1 and 2 with every argument REQUIRED, so steps 3-4
+           leave exactly one at every arity and there is no step 12 to run. Reaching here means the longer entry
+           was removed, so the surviving entry declares a dictionary at this position and §3.2.17 converts
+           whatever the page passed — including `cookieStore.set("x")`, whose String is not Undefined, Null or
+           an Object and is therefore step 1's TypeError rather than a cookie name. */
+        if (t == IDL_USVSTRING_OR_DICT_BY_ARITY) {
+            DCHECK(m->dict_n > 0, "a member declared a string-or-dictionary overload split resolved by ARITY "
+                                  "with no dictionary members — the dictionary is half of what that type "
+                                  "states");
             DCHECK(!step4_only_longer,
                    "§3.6 steps 3-4 chose the LONGER entry and the position still carries the split type — the "
                    "rewrite at the top of this loop is what performs that choice, so the two have come apart");

@@ -15,19 +15,20 @@
  * text a section owns is quoted. Measured: this exact run was the single finding the cookiestore index
  * surfaced when it was added, and nothing at the site was wrong.
  *
- * WHAT THIS COMPONENT IS AND IS NOT. It is §3.1's `get` and §3.2's `getAll` over §7.1 "Query cookies", §3.4
- * "The delete() method" over §7.3 "Delete a cookie" and §7.2 "Set a cookie", and the §6.1 Window member that
- * reaches them. It is NOT §3.3 "The set() method" — whose ALGORITHM is built and whose declared type is not —
- * and it is not the change-event half at all: §5.1 "The CookieChangeEvent interface", §7.4 "Process changes"
- * and the `onchange` handler are absent together, which is a SUBPROBLEM ORDER rather than an oversight. See the
- * named residuals in cookie_store.c for what each next diff builds; a page that calls `cookieStore.set` finds
- * it absent and throws at its own line, which is what §NO STUBS asks for.
- * THIS PARAGRAPH USED TO SAY §7.2 WAS UNBUILT AND THAT THE NEXT DIFF BUILT IT, AND IT IS REWRITTEN RATHER THAN
- * DELETED BECAUSE A READER WHO RE-DERIVES THE ORDER FROM `set` BEING ABSENT WILL RE-ADD IT. §7.2 is the
- * algorithm BOTH writers reach — §7.3 step 4 is "Return the results of running set a cookie with url, name,
- * value, null, domain, path, "strict", partitioned, and 0" — so it landed with the DELETE member, and what
- * remains for `set` is a declared type at its argument position rather than a storage algorithm. A reader who
- * reads "set is absent" as "nothing writes this store" would build §7.2 a second time.
+ * WHAT THIS COMPONENT IS AND IS NOT. It is the whole of §3's four METHODS — §3.1's `get` and §3.2's `getAll`
+ * over §7.1 "Query cookies", §3.3's `set` over §7.2 "Set a cookie" and §3.4's `delete` over §7.3 "Delete a
+ * cookie" — and the §6.1 Window member that reaches them. What it is NOT is the CHANGE-EVENT half: §5.1 "The
+ * CookieChangeEvent interface", §7.4 "Process changes" and the `onchange` handler are absent TOGETHER, which is
+ * a SUBPROBLEM ORDER rather than an oversight — installing the handler without §7.4 would flip a page's
+ * `"onchange" in cookieStore` true and abandon nothing, because `CookieStore : EventTarget` already answers
+ * `addEventListener("change", f)` and no change is dispatched to either. See the named residual in
+ * cookie_store.c for what the next diff builds.
+ * THIS PARAGRAPH TWICE SAID A WRITER WAS UNBUILT AND IS REWRITTEN RATHER THAN DELETED, BECAUSE A READER WHO
+ * RE-DERIVES THE SUBPROBLEM ORDER FROM THE QUERY HALF LANDING FIRST WILL RE-ADD EITHER CLAIM. It said §7.2 was
+ * unbuilt, and then that §3.3 was; §7.2 is the algorithm BOTH writers reach — §7.3 step 4 is "Return the
+ * results of running set a cookie with url, name, value, null, domain, path, "strict", partitioned, and 0" — so
+ * it landed with `delete`, and `set` followed one diff later once its argument position had a declared type.
+ * A reader who reads either sentence as "nothing writes this store" would build §7.2 a second time.
  * THIS SENTENCE USED TO NAME THE BLOCKER AS A REGISTRABLE-DOMAIN-SUFFIX PREDICATE THAT IS PRIVATE TO ANOTHER
  * COMPONENT, AND IT IS REWRITTEN RATHER THAN DELETED BECAUSE THE RETIRED HALF IS THE ONE A READER ACTS ON.
  * §7.2's step 12.3 does need that predicate, the predicate was private, and it is now

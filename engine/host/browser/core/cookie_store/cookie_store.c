@@ -1,6 +1,7 @@
-/* COOKIE STORE API §3 The CookieStore interface — §3.1's get and §3.2's getAll over §7.1 "Query cookies",
- * plus §3.4's delete over §7.3 "Delete a cookie" and §7.2 "Set a cookie", which is the algorithm both
- * writers reach. See cookie_store.h for which standard this is, where it moved to, and what is not here.
+/* COOKIE STORE API §3 The CookieStore interface — all four of its methods: §3.1's get and §3.2's getAll over
+ * §7.1 "Query cookies", §3.3's set over §7.2 "Set a cookie", and §3.4's delete over §7.3 "Delete a cookie",
+ * whose step 4 runs §7.2 as well. See cookie_store.h for which standard this is, where it moved to, and what
+ * is not here.
  *
  * WHY THE QUERY HALF LANDED ALONE, AND IT IS A SUBPROBLEM ORDER RATHER THAN A CONVENIENCE. §7.2 "Set a cookie"
  * step 12.3 refuses a Domain that "is not a registrable domain suffix of and is not equal to host". That
@@ -61,6 +62,7 @@ static JSClassID g_obj_slot = JS_INVALID_CLASS_ID;
 static int       g_id_get = -1;
 static int       g_id_get_all = -1;
 static int       g_id_delete = -1;
+static int       g_id_set = -1;
 
 /* Which member this invocation is — §3.1 and §3.2 differ in three steps and share every other, so they are one
    body and one magic rather than two copies of §7.1's caller. */
@@ -89,6 +91,29 @@ static const IdlDictMember COOKIE_STORE_DELETE_OPTIONS[] = {
     { "name",        IDL_USVSTRING,          true },
     { "partitioned", IDL_BOOLEAN,            false, NULL, 0, NULL, IDL_DEFAULT_FALSE },
     { "path",        IDL_USVSTRING,          false, NULL, 0, NULL, IDL_DEFAULT_STRING, "/" },
+};
+
+/* §3's `enum CookieSameSite { "strict", "lax", "none" };` — the three §7.2 step 22 switches on, so a fourth
+   string is Web IDL §3.2.18's TypeError at the declaration and never reaches that switch. */
+IDL_ENUM_VALUES(COOKIE_SAME_SITE, "strict", "lax", "none");
+
+/* §3's `dictionary CookieInit` — EIGHT members, two of them `required`, IN WEB IDL §3.2.17's LEXICOGRAPHIC READ
+   ORDER and not the IDL's printed order, for the reason COOKIE_STORE_DELETE_OPTIONS states above: step 4 reads
+   "in lexicographical order", and which getter of a page-supplied object runs first is observable. The IDL
+   writes name, value, expires, domain, path, sameSite, partitioned, maxAge; the order below is the read order.
+   Do not re-sort these to match the printed IDL.
+   `expires` AND `maxAge` ARE THE TWO NULLABLE NUMERICS, and their null is not their zero — see the rows in
+   core/idl_args.h, whose whole reason is §7.2 step 13's "If expires is non-null" and §7.3 step 4's maxAge of
+   exactly 0, which step 14 reads as NON-null and which is what makes a delete a delete. */
+static const IdlDictMember COOKIE_INIT[] = {
+    { "domain",      IDL_USVSTRING_NULLABLE,  false, NULL, 0, NULL, IDL_DEFAULT_NULL },
+    { "expires",     IDL_DOUBLE_NULLABLE,     false, NULL, 0, NULL, IDL_DEFAULT_NULL },
+    { "maxAge",      IDL_LONG_LONG_NULLABLE,  false, NULL, 0, NULL, IDL_DEFAULT_NULL },
+    { "name",        IDL_USVSTRING,           true },
+    { "partitioned", IDL_BOOLEAN,             false, NULL, 0, NULL, IDL_DEFAULT_FALSE },
+    { "path",        IDL_USVSTRING,           false, NULL, 0, NULL, IDL_DEFAULT_STRING, "/" },
+    { "sameSite",    IDL_ENUM,                false, COOKIE_SAME_SITE, 0, NULL, IDL_DEFAULT_STRING, "strict" },
+    { "value",       IDL_USVSTRING,           true },
 };
 
 /* WEB IDL §3.7.7's brand check, and it THROWS rather than asserting. A receiver is PAGE-SUPPLIED INPUT — the
@@ -181,7 +206,12 @@ typedef struct {
     const char *path;   size_t path_len;
     const char *same_site;                             /* one of CookieSameSite's three strings */
     bool        partitioned;
-    bool        have_max_age;   long long   max_age;   /* SECONDS, a delta */
+    /* SECONDS, a delta. `int64_t` IS §7.2's "64-bit signed integer" and is the type JS_ToInt64 writes; the
+       jar's own expiry-time is a `long long`, so the widening to it is explicit at the one place they meet.
+       On every target this engine builds for the two are both exactly 64-bit signed and the conversion is
+       value-preserving — they are nonetheless DISTINCT TYPES, which is what the compiler said when this field
+       was declared as the jar's and the address of it was handed to §3.2.4.7's conversion. */
+    bool        have_max_age;   int64_t     max_age;
 } CsCookie;
 
 /* §2.1 Cookie's "To normalize a cookie name or value given a string input: remove all U+0009 TAB and U+0020
@@ -390,7 +420,9 @@ static bool cs_set_cookie(JSContext *ctx, const UrlRecord *url, const CsCookie *
         } else {
             long long now = (long long)time(NULL);
 
-            attrs.expiry = c.max_age > LLONG_MAX - now ? LLONG_MAX : now + c.max_age;
+            long long delta = (long long)c.max_age;
+
+            attrs.expiry = delta > LLONG_MAX - now ? LLONG_MAX : now + delta;
         }
     }
     if (!c.path_len) {
@@ -644,6 +676,141 @@ static JSValue js_cs_query(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     }
 }
 
+/* §3.3 "The set() method", both entries. Their step lists are identical but for which nine values reach §7.2.
+ *
+ * WHICH ENTRY RAN IS READ OFF `argc` AND NOT OFF THE VALUE, which is the whole content of this member's declared
+ * type. §3.6 steps 3-4 remove one entry at EVERY arity this member can be called at — `set(CookieInit options)`
+ * has a tuple at arity 1 only and `set(USVString name, USVString value)` at arity 2 only — so there is no step
+ * 12 here and no value is ever consulted to choose. `argc` is min(maxarg, args), so a three-argument call is the
+ * two-string entry with its third argument ignored, exactly as §3.6 step 3 says. */
+static JSValue js_cs_set(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    JSValue m[8];
+    UrlRecord uri;
+    CsCookie c;
+    const char *name = NULL, *value = NULL, *domain = NULL, *path = NULL;
+    bool two_strings = argc >= 2;
+    bool ok;
+    int i;
+
+    (void)magic;
+    for (i = 0; i < 8; i++)
+        m[i] = JS_UNDEFINED;
+    if (!cs_brand(ctx, this_val))
+        return JS_EXCEPTION;
+    memset(&c, 0, sizeof c);
+    /* §3.3 STEPS 2 AND 3, asked of the AGENT's principal exactly as §3.1, §3.2 and §3.4 ask it. */
+    if (origin_is_opaque(window_proxy_origin(document_window_proxy(ctx))))
+        return JS_ThrowDOMException(ctx, "SecurityError",
+                                    "a document with an opaque origin has no cookies");
+    /* §3.3 STEP 4's `settings's creation URL`, which is §7.2's `url`. */
+    if (!cs_request_uri(ctx, &uri)) {
+        /* A cookie-averse document has no cookie store to write, which is js_cs_delete's arm and
+           js_cs_query's for the same reason and out of the same predicate: there is nothing to write rather
+           than a refusal to write, so §3.3 step 6.3 resolves with undefined having changed nothing. */
+        url_record_free(&uri);
+        return JS_UNDEFINED;
+    }
+    if (two_strings) {
+        /* §3.3's `set(name, value)` STEP 6.1: "set a cookie with url, name, value, null, null, "/", "strict",
+           false, and null." Every one of those six constants is the ALGORITHM'S and not a default anybody
+           declared — this entry has no dictionary at all — which is why they are written here rather than read. */
+        DCHECK(JS_IsString(argv[0]) || concolic_is(argv[0]),
+               "§3.3's two-argument entry reached its body with a non-string at position 0 — §3.6 steps 3-4 "
+               "removed the dictionary entry at this arity and the surviving entry declares USVString, so the "
+               "declaration has already converted it or crossed unknown external input as itself");
+        name = JS_ToCStringLen(ctx, &c.name_len, argv[0]);
+        value = JS_ToCStringLen(ctx, &c.value_len, argv[1]);
+        CHECK(name != NULL && value != NULL, "OOM reading the name and value arguments of a CookieStore set");
+        c.name = name;
+        c.value = value;
+        c.have_expires = false;
+        c.have_domain = false;
+        c.path = "/";
+        c.path_len = 1;
+        c.same_site = "strict";
+        c.partitioned = false;
+        c.have_max_age = false;
+    } else {
+        /* §3.3's `set(options)` STEP 6.1, over a CookieInit whose every member the declaration has placed:
+           `name` and `value` are REQUIRED so §3.2.17 threw without them, and the other six carry the IDL's own
+           defaults, so each is READ rather than invented here. */
+        JSValueConst arg = argv[0];
+
+        DCHECK(JS_IsObject(arg),
+               "§3.3's one-argument entry reached its body with something that is not an object — §3.6 steps "
+               "3-4 removed the two-string entry at this arity and §3.2.17 Dictionary types step 1 makes a "
+               "primitive that is not undefined or null a TypeError, so the value here is the dictionary this "
+               "declaration built");
+        m[0] = idl_dict_get(ctx, arg, "domain");
+        m[1] = idl_dict_get(ctx, arg, "expires");
+        m[2] = idl_dict_get(ctx, arg, "maxAge");
+        m[3] = idl_dict_get(ctx, arg, "name");
+        m[4] = idl_dict_get(ctx, arg, "partitioned");
+        m[5] = idl_dict_get(ctx, arg, "path");
+        m[6] = idl_dict_get(ctx, arg, "sameSite");
+        m[7] = idl_dict_get(ctx, arg, "value");
+        DCHECK(!JS_IsUndefined(m[3]) && !JS_IsUndefined(m[7]),
+               "a CookieInit reached this body with `name` or `value` absent — the IDL declares both "
+               "`required`, so Web IDL §3.2.17 step 4.1.3 throws a TypeError at the declaration and this body "
+               "is not reached at all");
+        DCHECK(!JS_IsUndefined(m[4]) && !JS_IsUndefined(m[5]) && !JS_IsUndefined(m[6]),
+               "a CookieInit reached this body with `partitioned`, `path` or `sameSite` absent — each carries a "
+               "declared default (`false`, `\"/\"` and `\"strict\"`), which §3.2.17 step 4.1.5 PLACES, so an "
+               "absence here is a declaration that did not state one rather than a page that omitted a member");
+        name = JS_ToCStringLen(ctx, &c.name_len, m[3]);
+        value = JS_ToCStringLen(ctx, &c.value_len, m[7]);
+        CHECK(name != NULL && value != NULL, "OOM reading the name and value members of a CookieInit");
+        c.name = name;
+        c.value = value;
+        /* `DOMHighResTimeStamp? expires` and `long long? maxAge`: NULL IS THE IDL NULL AND IS NOT ZERO, which
+           is what §7.2 steps 13 and 14 branch on — see the two nullable numeric rows in core/idl_args.h. The
+           declared type has already refused a non-finite `expires` (§3.2.7) and wrapped `maxAge` modulo 2^64
+           (§3.2.4.7), so neither is asked anything here beyond whether it is null. */
+        c.have_expires = !JS_IsNull(m[1]);
+        if (c.have_expires)
+            CHECK(JS_ToFloat64(ctx, &c.expires, m[1]) == 0,
+                  "a converted DOMHighResTimeStamp is not a number — §3.2.7's conversion places one or throws");
+        c.have_max_age = !JS_IsNull(m[2]);
+        if (c.have_max_age)
+            CHECK(JS_ToInt64(ctx, &c.max_age, m[2]) == 0,
+                  "a converted `long long` is not an integer — §3.2.4.7's conversion places one");
+        c.have_domain = !JS_IsNull(m[0]);
+        if (c.have_domain) {
+            domain = JS_ToCStringLen(ctx, &c.domain_len, m[0]);
+            CHECK(domain != NULL, "OOM reading the domain member of a CookieInit");
+            c.domain = domain;
+        }
+        path = JS_ToCStringLen(ctx, &c.path_len, m[5]);
+        CHECK(path != NULL, "OOM reading the path member of a CookieInit");
+        c.path = path;
+        c.partitioned = JS_ToBool(ctx, m[4]) != 0;
+        /* §3.2.18's enumeration has already refused anything outside CookieSameSite's three strings, so this
+           is one of them and cs_set_cookie's own assert over §7.2 step 22's switch says so. */
+        c.same_site = JS_ToCString(ctx, m[6]);
+        CHECK(c.same_site != NULL, "OOM reading the sameSite member of a CookieInit");
+    }
+    ok = cs_set_cookie(ctx, &uri, &c);
+    url_record_free(&uri);
+    JS_FreeCString(ctx, name);
+    JS_FreeCString(ctx, value);
+    if (!two_strings) {
+        if (c.have_domain)
+            JS_FreeCString(ctx, domain);
+        JS_FreeCString(ctx, path);
+        JS_FreeCString(ctx, c.same_site);
+    }
+    for (i = 0; i < 8; i++)
+        JS_FreeValue(ctx, m[i]);
+    /* §3.3 STEPS 6.2 AND 6.3: a failure is a TypeError on the promise and success resolves with undefined.
+       This member declares idl_returns_promise, so the throw becomes a REJECTED promise. */
+    if (!ok)
+        return JS_ThrowTypeError(ctx, "cookieStore.set could not write that cookie — Cookie Store API §7.2 "
+                                      "\"Set a cookie\" refused the name, value, domain, path or expiry it was "
+                                      "given");
+    return JS_UNDEFINED;
+}
+
 /* §3.4 "The delete() method", both entries. Their step lists are IDENTICAL but for which five values reach
  * §7.3, so this is one body for the reason js_cs_query is one for §3.1 and §3.2.
  *
@@ -781,64 +948,51 @@ static void cs_install_realm(JSContext *ctx)
     /* §3's interface and its Window member are both `[SecureContext]`, so Web IDL §3.3.13 REMOVES them in a
        non-secure realm rather than making them throw: `window.cookieStore ? … : document.cookie` takes the
        fallback there, which is the branch a bundle writes it to take, and `"cookieStore" in window` is false.
-       §3.3 set is ABSENT here and that is this component's stated narrowing, not an exposure decision — see
-       the file header.
-       NAMED RESIDUAL. NOT COVERED: §3.3 "The set() method", so a page can DELETE a cookie through this API and
-       cannot CREATE one through it; `document.cookie` remains the only writer that creates, and because both
-       reach ONE jar a cookie written there IS read back and deleted here. §7.2 "Set a cookie" itself IS built
-       (cs_set_cookie) — §7.3 step 4 runs it — so what is missing is the MEMBER and its argument position, not
-       the algorithm. NEXT DIFF: a declared type at §3.3's position 0 for a §3.6 length-differing split whose
-       two entries NEVER COEXIST AT ONE ARITY, plus nullable NUMERIC rows in core/idl_args.{c,h} for
-       `CookieInit`'s `DOMHighResTimeStamp? expires` and `long long? maxAge` — that file has no nullable numeric
-       row at all, and those two are a row each rather than one, because §3.2.7's restricted double and
-       §3.2.4.7's `long long` are two conversions.
+       §3.3 set, §3.4 delete, §3.1 get and §3.2 getAll are all here; what is not is the CHANGE-EVENT half, and
+       that is this component's stated narrowing rather than an exposure decision — see the file header.
 
-       THE CLAUSE THAT STOOD HERE NAMED `IDL_USVSTRING_OR_DICT` FOR THAT POSITION AND IT IS WRONG, RECORDED
-       RATHER THAN QUIETLY REPAIRED BECAUSE THE ROW IT NAMED IS THE ONE A READER REACHES FOR AND BECAUSE THE
-       SPEC HALF OF THE CLAUSE IS EXACTLY RIGHT. §3.3's two entries DO differ in length — `set(USVString name,
-       USVString value)` is 2 and `set(CookieInit options)` is 1 — and a split DOES have to be stated. What the
-       clause got wrong is which split. `IDL_USVSTRING_OR_DICT` is Window's `postMessage`, whose SHORTER entry
-       declares its dictionary position OPTIONAL, so §2.5.8 Overloading gives that entry tuples at TWO arities
-       and the two entries MEET at one — which is why that row is resolved by §3.6 step 12's test of the VALUE
-       and why idl_concolic_rule answers FORKS for it. BOTH of §3.3's entries declare every argument REQUIRED,
-       so the effective overload set has one tuple per entry, at arity 1 and at arity 2, and step 4 removes one
-       AT EVERY ARITY: S never holds two entries, step 8 never sets a distinguishing index, and no value is ever
-       looked at. Declaring that row would resolve position 0 from the page's value at arity 1, where §3.6 has
-       already chosen the dictionary outright — so `cookieStore.set("x")` would be read as a name where
-       §3.2.17 Dictionary types step 1 makes a String a TypeError. The shape it needs is
-       IDL_UNRESTRICTED_DOUBLE_OR_DICT's, whose own row says "THE TWO ENTRIES NEVER COEXIST AT ONE ARITY, so no
-       value is ever looked at", with a USVString longer arm instead of a number; that is a new row, filed at
-       IDL_CONCOLIC_UNASKED beside it, listed by idl_type_is_dictionary and idl_type_is_length_split, and
-       answering IDL_USVSTRING from idl_split_longer_type. HOW ITS ABSENCE WOULD SHOW: `cookieStore.set` is
-       undefined, so a page calling it throws a TypeError at its own line rather than at anything of this
-       engine's, and `node engine/idlgen.mjs` reports `set` and `onchange` as the members CookieStore does not
+       NAMED RESIDUAL. NOT COVERED: §5.1 "The CookieChangeEvent interface", §7.4 "Process changes" and the
+       `onchange` handler §3's IDL writes as `[Exposed=Window] attribute EventHandler onchange` — so a page may
+       now read, create and delete a cookie through this API and cannot be TOLD that one changed. NEXT DIFF:
+       §5.1's interface (a constructor, `changed` and `deleted` as FrozenArrays of CookieListItem, and a
+       CookieChangeEventInit) and §7.4's "fire a change event" over its "prepare lists from changes", whose step
+       3.3.1 sets a deleted item's `value` to undefined — then the accessor. `idl_interface_tag` names no
+       CookieChangeEvent today, so the interface is the first half and the handler is the last.
+       INSTALLING THE ACCESSOR ALONE IS THE SHAPE §NO STUBS FORBIDS TWICE OVER: it flips `"onchange" in
+       cookieStore` true and abandons nothing, because `CookieStore : EventTarget` already answers
+       `addEventListener("change", f)` and no change is ever dispatched to either — so a bundle that tests for
+       the handler would take a branch this engine cannot complete while the listener path it would otherwise
+       have used is equally silent. HOW ITS ABSENCE WOULD SHOW: a reader would observe `cookieStore.onchange`
+       undefined and `cookieStore.set(...)` resolving with no "change" event dispatched to a listener registered
+       through EventTarget, and `node engine/idlgen.mjs` reporting `onchange` as the member CookieStore does not
        install.
+       WHAT CHANGED ABOUT THIS RESIDUAL'S BLOCKER, recorded because the retired reason is the one a reader
+       re-derives: it used to be that there was nothing to notify about until this API could write. §7.4's
+       observable changes now have a producer here — cs_set_cookie reaches the store on both the create and the
+       delete path — so the blocker is no longer the absence of a writer, it is the absence of the EVENT.
 
-       THE PREVIOUS CLAUSE NAMED `cookie_jar_receive` AND THAT WAS ALSO THE WRONG ENTRY, KEPT FOR THE SAME
-       REASON: the route it named is the intuitive one and is a SECURITY divergence. That entry takes a
-       set-cookie-string and runs §5.2's parse over it, and §7.2 refuses U+003B (;) in the NAME and the VALUE
-       and in NOTHING ELSE — its own Note leaves open whether the restriction "should also apply to expires,
-       domain, path, and sameSite as well". So `path: "/;Domain=example"` spelled as a set-cookie-string is
-       split at that semicolon into a Domain attribute the page never wrote and step 12.3 never judged: the
-       round trip does not lose an attribute, it MANUFACTURES one past the check that clause exists to reach. It
-       drops one too, since §7.2 permits an empty cookie-name and §5.2's step 5 ignores a set-cookie-string
-       carrying one. §7.2's own last step but one names the right seam instead, handing §5.3 a request-uri, a
-       cookie-name, a cookie-value and a cookie-attribute-list with no string anywhere in it, and that is
-       `cookie_jar_store`'s signature — which is what cs_set_cookie step 24 calls. TWICE NOW THE SPEC HALF OF A
-       CLAUSE HERE WAS RIGHT AND ITS MECHANISM HALF YIELDED, which is the split CLAUDE.md measures: the section,
-       the step and the predicate checked out both times, and the part that was a claim about THIS TREE did not.
-
-       `onchange` IS NOT COVERED BY EITHER REASON ABOVE AND IS A DIFFERENT QUESTION. Neither is about an event
-       handler: §3's IDL writes `[Exposed=Window] attribute EventHandler onchange`, and what fires it is §7.4
-       "Process changes" dispatching a §5.1 "The CookieChangeEvent interface" event this tree does not have —
-       `idl_interface_tag` names no CookieChangeEvent. Installing the accessor without §7.4 is the shape §NO
-       STUBS forbids twice over: it flips `"onchange" in cookieStore` true and abandons nothing, because
-       `CookieStore : EventTarget` already answers `addEventListener("change", f)` and no change is ever
-       dispatched to either. NOW THAT THIS API CAN WRITE, ITS BLOCKER IS NO LONGER `there is nothing to
-       notify about` — §7.4's observable changes have a producer here for the first time, and what is left is the EVENT
-       INTERFACE and the dispatch. */
+       TWO RESIDUALS THAT STOOD HERE ARE DISCHARGED BY THE DIFFS THAT LANDED set AND delete, AND THEIR WRONG
+       CLAUSES ARE KEPT BECAUSE BOTH WERE WRONG IN THE SAME PLACE AND A READER WILL RE-DERIVE EITHER. The first
+       named `cookie_jar_receive` as §7.2's seam: that entry takes a set-cookie-string and runs §5.2's parse over
+       it, and §7.2 refuses U+003B (;) in the NAME and the VALUE and in NOTHING ELSE — its own Note leaves open
+       whether the restriction "should also apply to expires, domain, path, and sameSite as well" — so
+       `path: "/;Domain=example"` spelled as a set-cookie-string is split at that semicolon into a Domain
+       attribute the page never wrote and step 12.3 never judged. The round trip does not lose an attribute, it
+       MANUFACTURES one past the check that clause existed to reach, and drops one too, since §7.2 permits an
+       empty cookie-name and §5.2 step 5 ignores a set-cookie-string carrying one. §7.2's own step 24 names the
+       right seam, which is `cookie_jar_store`. The second named IDL_USVSTRING_OR_DICT for §3.3's position 0:
+       that row is Window's `postMessage`, whose SHORTER entry declares its dictionary position OPTIONAL, so its
+       two entries MEET at one arity and §3.6 step 12 reads the page's VALUE there. Both of §3.3's entries
+       declare every argument REQUIRED, so step 4 removes one at EVERY arity and no value is ever looked at;
+       declaring that row would have read `cookieStore.set("x")` as a cookie name where §3.2.17 step 1 makes a
+       String a TypeError. What it needed was IDL_USVSTRING_OR_DICT_BY_ARITY, which is the row this diff added.
+       THREE TIMES NOW THE SPEC HALF OF A CLAUSE HERE WAS EXACT AND ITS MECHANISM HALF YIELDED — the section, the
+       step, the predicate and the arities all checked out every time, and the part that was a claim about THIS
+       TREE did not. That is the split CLAUDE.md measures, and the rate at this one site is what makes it worth
+       writing down rather than the individual errors. */
     idl_install_method_exposed(ctx, proto, "get", g_id_get, IDL_SECURE_CONTEXT);
     idl_install_method_exposed(ctx, proto, "getAll", g_id_get_all, IDL_SECURE_CONTEXT);
+    idl_install_method_exposed(ctx, proto, "set", g_id_set, IDL_SECURE_CONTEXT);
     idl_install_method_exposed(ctx, proto, "delete", g_id_delete, IDL_SECURE_CONTEXT);
     JS_SetClassProto(ctx, g_cs_class, JS_DupValue(ctx, proto));
 
@@ -895,8 +1049,10 @@ void cookie_store_init(JSContext *ctx)
        §3.2.11 ByteString, §3.2.12 USVString" and core/fetch/headers.c cites §3.2.11 for ByteString's range
        refusal at eight sites — so the sibling diff settled it without a fetch. DOMString is §3.2.10. */
     static const IdlArgType QUERY_ARGS[1] = { IDL_STRING_OR_DICT };
+    static const IdlArgType SET_ARGS[2] = { IDL_USVSTRING_OR_DICT_BY_ARITY, IDL_USVSTRING };
     const int NOPT = (int)(sizeof(COOKIE_STORE_GET_OPTIONS) / sizeof(COOKIE_STORE_GET_OPTIONS[0]));
     const int NDEL = (int)(sizeof(COOKIE_STORE_DELETE_OPTIONS) / sizeof(COOKIE_STORE_DELETE_OPTIONS[0]));
+    const int NSET = (int)(sizeof(COOKIE_INIT) / sizeof(COOKIE_INIT[0]));
     JSClassDef d = { "CookieStore" };
 
     DCHECK(g_obj_slot == JS_INVALID_CLASS_ID, "cookie_store_init ran twice — the class and the slot are declared once per AGENT");
@@ -931,6 +1087,26 @@ void cookie_store_init(JSContext *ctx)
     g_id_delete = idl_method_id_dict(ctx, QUERY_ARGS, 1, COOKIE_STORE_DELETE_OPTIONS, NDEL, js_cs_delete, 0);
     idl_returns_promise();
 
+    /* §3.3's `set(USVString name, USVString value)` and `set(CookieInit options)` — a §3.6 LENGTH-DIFFERING
+       SPLIT AT POSITION 0 WHOSE TWO ENTRIES NEVER COEXIST AT ONE ARITY. Every argument of both entries is
+       REQUIRED, so Web IDL §2.5.8 Overloading gives the effective overload set one tuple per entry, at arity 2
+       and at arity 1, and §3.6 step 4 removes one at every arity: the position resolves from the ARGUMENT COUNT
+       and no value is ever looked at. That is IDL_USVSTRING_OR_DICT_BY_ARITY and NOT IDL_USVSTRING_OR_DICT,
+       whose entries DO meet at one arity because its shorter one declares the dictionary position optional —
+       declaring that row here would read `cookieStore.set("x")` as a name where §3.2.17 step 1 makes a String a
+       TypeError. The row in core/idl_args.h carries that argument in full.
+       THE TWO OPTIONAL INDICES ARE THE TWO ENTRIES' OWN AND MUST BOTH BE STATED. `idl_optional_from(1)` is the
+       SHORTER entry's "there are none" — one past its only position, which is `split_at + 1` and what
+       idl_args_seal asserts — and `idl_overload_split_optional_from(2)` is the LONGER entry's, whose two
+       positions are both required. Without the second, §3.6 step 15.3's optionality would be measured against
+       the shorter entry at arity 2 and `cookieStore.set("x", undefined)` would read position 1 as an ABSENT
+       optional where the surviving entry requires the string "undefined". §3.7.7 Operations' length is then
+       min(1, 2) = 1, which is the shortest tuple in the set. */
+    g_id_set = idl_method_id_dict(ctx, SET_ARGS, 2, COOKIE_INIT, NSET, js_cs_set, 0);
+    idl_optional_from(1);
+    idl_overload_split_optional_from(2);
+    idl_returns_promise();
+
     /* THE ATTACKER SOURCE, with the constraint that makes a PoC through it reproduce. The excluded set is RFC
        6265 §4.1.1's cookie-value production — a value cannot carry whitespace, a double quote, a comma, a
        semicolon or a backslash — and the delivery is a PLANT because a cookie is not carried by the victim's
@@ -942,6 +1118,7 @@ void cookie_store_init(JSContext *ctx)
     agent_state_realm_slot(CS_COMPONENT, &g_obj_slot, "§6.1's per-realm CookieStore slot, and the declaration latch");
     agent_state_id(CS_COMPONENT, &g_id_get, "Cookie Store API §3.1's get");
     agent_state_id(CS_COMPONENT, &g_id_get_all, "Cookie Store API §3.2's getAll");
+    agent_state_id(CS_COMPONENT, &g_id_set, "Cookie Store API §3.3's set");
     agent_state_id(CS_COMPONENT, &g_id_delete, "Cookie Store API §3.4's delete");
     agent_state_class(CS_COMPONENT, &g_cs_class, "Cookie Store API §3 CookieStore's per-realm slot and brand");
     realm_declare_intrinsic(cs_install_realm);
