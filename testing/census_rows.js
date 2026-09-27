@@ -338,5 +338,59 @@ function kindsOf(carried, keys) {
   return { byKind };
 }
 
+/* AND THE DIRECTION `kindsOf` CANNOT ASK: A ROW THE PRODUCER PUBLISHES THAT A CONSUMER TAKING THAT COMPOSER
+   WHOLE DOES NOT CARRY. `kindsOf` refuses `carried ⊄ published` — a driver asking for a row nobody emits — and
+   is silent the other way round, deliberately and correctly, because a consumer's CURATION is its own: this
+   file's banner says so in as many words, and `live-run.js` carries 56 of `result_cold_json`'s 124 rows by
+   design. A SUBSET IS NOT A DEFECT and cannot be made one in general.
+   WHAT IS A DEFECT IS A SUBSET NOBODY DECLARED. A consumer that takes a whole composer — because the producer
+   says its rows are ONE READING, as `rung_entry_rows`' three-per-rung ladder does — has a length that is
+   CHECKABLE, and until it says so nothing anywhere can tell a curated six from a missed nine. MEASURED at
+   56206ade: `rung_entry_rows` published NINE rows and `testing/live-run.js` named SIX, omitting exactly one
+   VARIANT across all three families, which is the signature of an emitter that grew and a hand list that did
+   not — while that list's own banner said `ALL SIX`. NOTHING IN THIS TREE COULD HAVE REPORTED IT: those rows
+   reach `_cold` through a splice that names no row, so `build.mjs`'s presence loop cannot require them
+   (`censusComposerFields`' own `\"name\":%` match cannot see an unnamed splice), and this file required their
+   KIND and never their carriage.
+   IT IS AN ASSERT AND NOT A DERIVATION OF THE LIST, WHICH IS A DECISION AND IS WHY THE NAMES STAY SPELLED AT
+   THE CONSUMER. Replacing the list with a call that returns the composer's rows reads as the stronger fix and
+   measurably is not: the names then appear in no construct anywhere, and `engine/fieldgate.mjs`'s holder band —
+   which is what keeps a spelled-and-computed-read row out of its WRITE-with-no-reader accusation — has nothing
+   left to see. MEASURED in a frozen snapshot at 56206ade, both arms: the derived form takes that accusation
+   from FOUR rows of this composer to NINE, which is §Architecture's prescribed remedy arguing for undoing the
+   fix. What was missing was never the list, it was the invariant CLAUDE.md
+   §AND-THE-COROLLARY-IS-THE-MORE-USEFUL-HALF prescribes — one added total covers every future spelling of the
+   question, where a rewritten predicate covers only the one somebody happened to find.
+   IT TAKES THE COMPOSER KEYS AND NEVER A REGION, so the consumer states WHICH COMPOSER it takes whole and this
+   file keeps the only statement of where that composer lives. A path and two literals repeated at the consumer
+   would be a second copy of `COMPOSERS`, which is the drift this whole file exists to end.
+   THE TEMPO IS THE ONE THIS FILE ALREADY HAS and is stated rather than implied: a throw at the next driver run,
+   naming the rows to add, with no build stage asking it — §AN-UNDECLARED-ROW rides green through every build it
+   is present for, so the reader who meets this refusal is reliably not its author. */
+function requireWhole(carried, keys) {
+  const all = censusKinds();
+  const have = new Set(carried);
+  for (const k of keys) {
+    const c = all[k];
+    if (!c)
+      throw new Error("testing/census_rows.js: no composer `" + k + "` for a consumer to take WHOLE — " +
+                      Object.keys(all).join(", ") + ". A composer named here and nowhere else is a claim " +
+                      "about a census that does not exist, and crediting it would assert completeness over " +
+                      "an empty row set — which passes for every consumer that ever carried nothing.");
+    const missing = [...c.numeric, ...c.object].filter((n) => !have.has(n));
+    if (missing.length)
+      throw new Error("testing/census_rows.js: the composer `" + k + "` publishes [" + missing.join(", ") +
+                      "] and the consumer that declares it TAKEN WHOLE does not carry " +
+                      (missing.length === 1 ? "it" : "them") + ". CARRY THE ROW, or stop declaring `" + k +
+                      "` whole — those are the two answers and a silent subset is neither. This refusal " +
+                      "exists because a hand-kept subset of one composer's rows cannot be told from a " +
+                      "complete list by anything: the rows are spliced into their document under no name, so " +
+                      "no presence loop can require them, and a driver's own banner claiming to carry all of " +
+                      "them is prose. A row whose producer says it is read WITH its siblings — a ladder, a " +
+                      "pair, a partition — is a row whose omission makes the siblings unreadable rather than " +
+                      "merely absent.");
+  }
+}
+
 module.exports = { KINDS, COMPOSERS, composerRowsFromText, kindDeclarationFromText, censusKindsFromText,
-                   censusKinds, kindsOf };
+                   censusKinds, kindsOf, requireWhole };

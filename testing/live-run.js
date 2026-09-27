@@ -37,7 +37,7 @@ const { absentPair } = require("./absent_census.js");
    first of those is this file's to answer. The curation is a driver's own and is deliberately a SUBSET
    (the `census()` banner refuses to take everything, in as many words); the KIND is a fact only the
    composer can state, and until this it was stated in no artifact at all. */
-const { kindsOf } = require("./census_rows.js");
+const { kindsOf, requireWhole } = require("./census_rows.js");
 
 const LOCK_FILE = process.env.HARNESS_LOCK
   ? path.resolve(process.env.HARNESS_LOCK) : path.join(__dirname, "harness.lock");
@@ -400,11 +400,21 @@ const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "u
 /* AND WHY THESE THREE LISTS ARE HAND-KEPT WHEN engine/build.mjs DERIVES ITS @COLD ROW SET, asked and answered
    here because it is the first question a reader of them has and the answer is not the one the shape suggests.
    `coldFields()` solves a DIFFERENT problem: it derives PRESENCE — which rows the composer publishes — from
-   `result_cold_json`'s own format string. These lists declare KIND — which rows may be DIFFERENCED — and no
-   artifact in this tree states a @COLD row's kind at all. extension/bridge.js's own named residual says so in
-   as many words and names the diff that would change it: result.c stating each nested row's kind beside it,
-   after which a consumer derives instead of listing. Until then a kind list is a fact only a reader of the
-   producer's header can state, and a derivation that guessed it from a name would be guessing.
+   `result_cold_json`'s own format string. These lists are this driver's CURATION — which rows it prints — and
+   nothing else; `census_rows.js` reads the KIND off the producer that emits each row and this file's own header
+   line is composed from that.
+   THE CLAIM THAT STOOD HERE IS RETIRED AND IS KEPT IN ITS OWN WORDS BECAUSE IT IS THE ONE A READER RE-DERIVES
+   FROM THESE LISTS' SHAPE. It said `These lists declare KIND — which rows may be DIFFERENCED — and no artifact
+   in this tree states a @COLD row's kind at all`, with a retirement naming the diff that would change it:
+   result.c stating each row's kind beside it, after which a consumer derives instead of listing. BOTH HALVES OF
+   THAT ARE MET — result.c carries an `@kinds-of cold` block, rung_entry.c and endpoint.c carry their own, and
+   `kindsOf` refuses an undeclared row outright — so a reader who finds the old sentence and concludes a kind
+   list is still owed here would be re-adding the second copy that mechanism ended.
+   WHAT IS STILL HAND-KEPT IS THE CURATION, WHICH IS THIS DRIVER'S OWN FACT AND MAY NOT BE DERIVED: `census()`
+   refuses to take everything in as many words, and a driver that took every row would be a second copy of the
+   popup. WHAT WAS SILENT UNTIL `requireWhole` IS THE ONE DIRECTION CURATION CANNOT EXCUSE — a composer whose
+   rows the producer says are ONE READING, carried in part. See COLD_WHOLE below for the measured drift that
+   put it there.
    AND THE DERIVATION COULD NOT REACH THE `epFetch*` ROWS EVEN FOR PRESENCE, WHICH IS WORTH KNOWING BEFORE
    ANYBODY REACHES FOR IT. They are composed by solver/endpoint.c and spliced into result_cold_json through a
    BARE `%s` that names no row, so `censusComposerFields`' `\"name\":%` match cannot see them — and neither can
@@ -417,8 +427,9 @@ const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "u
    five rows of the fifty-odd lifetime rows on this line; a suffix rule standing beside these lists would be
    two mechanisms answering one question with the partial one drifting, which is the second copy this file's
    own `absentPair` reader exists to avoid.
-   RETIREMENT: this note goes when result.c states each @COLD row's kind beside it and these three lists are
-   derived from that, because the question it answers can then be asked of the producer. */
+   RETIREMENT: this note goes when a row's CURATION can be stated at the producer too — a composer declaring
+   which of its rows are a reading a consumer may not take in part — because the only hand-kept fact left here
+   is then derivable and the question this note answers can be asked of the producer entire. */
 /* THE DENOMINATOR OF THE LADDER'S THREE INVOKER ARMS, FIRST ON THE LIST BECAUSE IT IS WHAT THEIR ZERO IS A
    FRACTION OF. `stepUnitRuns`' rendering, timer and idle arms are `else if`s inside flow_step, so REACHING ONE
    IS RUNNING and a zero there stood for two states that take opposite work: the document hangs nothing off that
@@ -434,17 +445,55 @@ const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "u
    read into the non-throwing form only for `typeof` (ECMAScript §13.5.3 "The typeof Operator" step 2.a), so a
    bundle that merely PROBES for a name raises that row and not its partner — which is what keeps a nonzero
    denominator from being read as work the document actually asked for. Read the pair, never either alone.
-   AN ARTIFACT OLDER THAN THESE ROWS PRINTS `-` FOR ALL SIX, this driver's absent-versus-zero rule: the
-   producer's absent form is the rows being ABSENT from `_cold` — a host whose realms install none of the three
-   components has no population — so `k in c` is false and this list yields `null`, with no arm that could turn
-   that into a 0. A ROW READING 0 AND A ROW READING `-` ARE DIFFERENT FACTS and only the first is about the run.
-   THEY ARE NUMBERS ON A LIST WHOSE OTHER TWO MEMBERS ARE HISTOGRAMS, which is safe because this list is a KIND
-   partition and nothing spreads it: `census()` copies every member of COLD_ROWS with one uniform `k in c` read.
-   All six are LIFETIME counts, which is the kind this list states, and the producer spells it into each name. */
-const COLD_STEP_UNITS = ["stepNamedRenderingLife", "stepNamedRenderingTypeofLife",
-                         "stepNamedTimerLife", "stepNamedTimerTypeofLife",
-                         "stepNamedIdleLife", "stepNamedIdleTypeofLife",
+   AND THE THIRD ROW PER RUNG IS THE PROPERTY SPELLING, WHICH IS NOT A SECOND READING OF THE PAIR AND MAY NOT
+   BE SUMMED INTO EITHER HALF OF IT. `window.requestIdleCallback` is a FIELD GET of the global, and the guard the
+   pair above is split on does not exist for one: ECMAScript §13.5.3 "The typeof Operator" step 2.a needs a
+   non-throwing read only for an unresolvable REFERENCE, so `typeof window.x` emits the same field get as
+   `window.x` and the producer raises a THIRD count rather than choosing an arm. Reporting it into the `…Life`
+   row would merge a population that is largely FEATURE DETECTION into the row read as work the document asked
+   for, on the rung where that matters most, since a name a bundle probes is by construction a name that is not
+   universally present. A reader who wants the union of the spellings adds two of these; nobody here is handed a
+   sum somebody else took, which is why the column is carried and not folded.
+   THE PROPERTY ROW IS ALSO WHERE A POLYFILL LIVES, which is what makes a rung's three-row ladder readable: a
+   bundle that assigns the global it probes writes the property spelling, so a rung whose `…Life` and
+   `…TypeofLife` both read 0 while `…PropLife` does not is a document that reached the rung's work through a
+   shim rather than one that named nothing.
+   AN ARTIFACT OLDER THAN THESE ROWS PRINTS `-` FOR EVERY ONE OF THEM, this driver's absent-versus-zero rule:
+   the producer's absent form is the rows being ABSENT from `_cold` — a host whose realms install none of the
+   three components has no population — so `k in c` is false and this list yields `null`, with no arm that could
+   turn that into a 0. A ROW READING 0 AND A ROW READING `-` ARE DIFFERENT FACTS and only the first is about the
+   run. THAT IS ALSO WHY NO PRESENCE ASSERT STANDS AT THE READ and its absence is not an omission: requiring
+   these rows of a record would convert an artifact older than them into a crash, which is the one distinction
+   this list is most careful about. What IS asserted is the ROW SET, at `requireWhole` below, which is a fact
+   this tree computes from its own source rather than one an engine stated.
+   THEY ARE NUMBERS ON A LIST WHOSE OTHER TWO MEMBERS ARE HISTOGRAMS, which is safe because nothing spreads it:
+   `census()` copies every member of COLD_ROWS with one uniform `k in c` read. Their KIND is not this list's
+   statement and is no longer guessed from the `Life` suffix — `census_rows.js` reads it off each producer's own
+   `@kinds-of` declaration, and this driver's header line prints what the producer says. */
+const COLD_STEP_UNITS = ["stepNamedRenderingLife", "stepNamedRenderingTypeofLife", "stepNamedRenderingPropLife",
+                         "stepNamedTimerLife", "stepNamedTimerTypeofLife", "stepNamedTimerPropLife",
+                         "stepNamedIdleLife", "stepNamedIdleTypeofLife", "stepNamedIdlePropLife",
                          "stepUnitRuns", "stepUnitOverruns"];
+/* AND WHICH COMPOSER THE NINE ROWS ABOVE ARE THE WHOLE OF, WHICH IS THE ONLY THING THAT MAKES THEIR NUMBER
+   CHECKABLE BY ANYTHING. `rung_entry_rows` publishes exactly the three-row ladder per rung and nothing else, and
+   its own emitter says the three are read together — "a document whose three rows for one rung all read zero
+   while that rung's runs are nonzero" is the finding, which is a statement about a TRIPLE and not about a row.
+   So this driver takes that composer WHOLE, declares that it does, and `census_rows.js` refuses the day the
+   composer grows a row this list does not carry.
+   MEASURED, WHICH IS WHY THE DECLARATION EXISTS AND IS NOT A TIDY-UP: at 56206ade this list named SIX of that
+   composer's NINE rows, omitting `stepNamedRenderingPropLife`, `stepNamedTimerPropLife` and
+   `stepNamedIdlePropLife` — one whole VARIANT across all three families, which is an emitter that grew and a
+   hand list that did not, never a curation anybody made. Nothing could have said so: the rows are spliced into
+   `_cold` under no name of their own, so `build.mjs`'s presence loop cannot require them, `census_rows.js`
+   required their KIND and not their carriage, and the banner above this list asserted `ALL SIX` in prose while
+   the producer emitted nine. The omission is stated here rather than only fixed, because the next reader of a
+   six-of-nine list has no way to tell it from a choice.
+   IT IS THE COMPOSER KEY AND NEVER THE REGION, so where `rung_entry_rows` lives stays stated in exactly one
+   place. A path and two literals repeated here would be the second copy `census_rows.js` exists to end — and
+   the names above stay SPELLED for a measured reason, recorded at `requireWhole`: a list replaced by a call
+   that returns the composer's rows is a list no static reader can see, and the record-field audit's
+   WRITE-with-no-reader accusation over this composer then rises from four rows to nine. */
+const COLD_WHOLE = ["rungEntry"];
 /* …AND THE REPLY DOOR'S ONE LEVEL, FILED WITH THE GAUGES AND NOT WITH ITS OWN THREE SIBLINGS, which is the
    whole reason this driver splits the two lists: `replyOutstanding` is the count of records the host may still
    be shown AT THE INSTANT the census was composed, so it may FALL and differencing it reads a level as a rate.
@@ -1419,6 +1468,12 @@ async function main() {
      superseded system kept beside its replacement hides the replacement's gaps. What this driver prints
      instead is nothing, which is the honest output: the producers are complete, and the fact that they are is
      asserted at the reader rather than reported here. */
+  /* AND THAT EVERY ROW OF A COMPOSER THIS DRIVER TAKES WHOLE IS ON THAT LIST, asked BEFORE the kinds because
+     it is the cheaper refusal and because a missing row would otherwise be reported as a kind partition with a
+     hole in it rather than as a row nobody carries. `kindsOf` asks the other direction — a carried row no
+     composer publishes — and the two together are the set equality; on its own it is satisfied by any subset,
+     which is correct for a curated list and silent for a ladder. See COLD_WHOLE. */
+  requireWhole(COLD_ROWS, COLD_WHOLE);
   const K = kindsOf(COLD_ROWS.concat(WFQ_ROWS));
   const show = (names) => names.map((n) => OUT_NAME[n] || n).join(",");
   console.log("# frontier.* — LIFETIME (may be differenced): " + show(K.byKind.lifetime) + "," +
