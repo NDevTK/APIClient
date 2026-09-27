@@ -2596,16 +2596,33 @@ char *endpoint_door_hist_json(void) {
 
 /* THE SAME SURFACE PARTITIONED BY WHAT A PARSE OF THE DOCUMENT WOULD HAVE REACHED — see endpoint.h for the
    three classes, for why there are three and not two, and for why the map is a column of the door list rather
-   than a table anywhere. This is CLAUDE.md §What-the-tool-produces' razor STATED as a row: `beyond` is the
-   addresses a markup parse does not reach, `either` is the population no door can decide, and `markup` is the
-   `<head>` counted back.
+   than a table anywhere. `beyond` is the addresses a MARKUP parse does not reach, `either` is the population
+   no door can decide, and `markup` is the `<head>` counted back.
+   THIS OPENING READ THAT THE ROW IS CLAUDE.md §What-the-tool-produces' RAZOR STATED, AND IT IS REWRITTEN
+   RATHER THAN DELETED BECAUSE A READER HOLDING A ROW NAMED `beyond` RE-DERIVES EXACTLY IT. endpoint.h records
+   that same sentence as retired at this function's own declaration: the bar became a COLUMN, composed by
+   `endpoint_razor_class_of` out of `addressClass` and the door list's FOURTH column, and this row is keyed on
+   the THIRD, which is what a markup parse reaches. They are not one question at two grains, because that
+   section names BY HAND a literal chunk URL through `module-import` as `beyond` and as scoring ZERO on the bar.
+   THE HEADER WAS REPAIRED AND THE TWO FILES THAT STATE THE CENSUS WERE NOT, which is the one-header-two-answers
+   defect endpoint.h already records one door over, arriving as the sweep a retirement leaves behind rather than
+   as a fresh claim: the argument was retired where it is DECLARED and stayed written down where it is
+   PUBLISHED, here and at solver/result.c's `epReach` row. That is CLAUDE.md §A-FIX-THAT-RETIRES-AN-ARGUMENT,
+   whose whole point is that such a fix's code delta is not its size.
+   AND THE COST WAS NOT A READING, WHICH IS WHY IT IS RECORDED RATHER THAN QUIETLY CORRECTED. Both emitters
+   that show a person a razor figure off this census compose it out of a DOOR COUNT: engine/build.mjs's
+   `endpointReachReading` takes this row and returns a line beginning `@H razor:`, and extension/popup.js reads
+   it into a row labelled `razor`. That assembly is the one CLAUDE.md §What-the-tool-produces' own retirement
+   clause asks to be made impossible, and this sentence was the tree INVITING it.
+   RETIREMENT: this record goes when this census publishes the COMPOSED bar beside this row, because a reader
+   holding `beyond` then has the bar itself in the same document and has nothing left to re-derive it from.
    IT IS A COARSENING OF THE ROW ABOVE AND NOT A SECOND OBSERVATION. Every count here is the sum of the door
    counts of its class, so a reader holding both histograms holds ONE fact at two grains and two zeroes here
    are one zero — CLAUDE.md §EVIDENCE-INFLATION, whose cure is that a derived row names its derivation where
    the number is rather than leaving a reader to find it by reading the producer. WHAT IT CARRIES THAT THE
    DOOR ROW DOES NOT is the map itself, which lived as incomplete prose in engine/build.mjs's verdict line and
-   in testing/static_surface.mjs and as data nowhere — so no output in this tree could state the razor at all,
-   and a coordinator who drove a real app had to read the emitted @H array by hand to find that it read ZERO.
+   in testing/static_surface.mjs and as data nowhere — so no output in this tree could state the MARKUP REACH
+   at all, and a coordinator who drove a real app had to read the emitted @H array by hand to find it read ZERO.
    A SECOND WALK AND NOT A SUM OVER `endpoint_door_hist_json`'s TABLE, which is deliberate and is this file's
    existing rule: that census and `endpoint_surface_census` are already two walks over `g_eps` spelled with
    the SAME `is_asset` skip precisely so that one of them drifting is a LOUD identity failure rather than a
@@ -2633,8 +2650,10 @@ char *endpoint_reach_hist_json(void) {
     /* EVERY CLASS IS EMITTED INCLUDING THE ZEROES, for the door census's reason and with a sharper one here:
        a `beyond` that is ABSENT and a `beyond` that read 0 are the two things this row exists to keep apart,
        and a table listing only its non-empty classes renders a run that learned nothing beyond the markup
-       identically to a run whose composer stopped writing the class. The first is the product's own razor
-       answering and is a REFUSAL TO CLAIM; the second is an instrument that stopped. */
+       identically to a run whose composer stopped writing the class. The first is THIS MARKUP DIAGNOSTIC
+       answering and is a REFUSAL TO CLAIM the reach it measures — never the product's own bar, which
+       `endpoint_razor_class_of` composes and which no count of doors reaches at any grain; the second is an
+       instrument that stopped. */
     json_buf_raw(&b, "{");
     for (r = 0; r < EPR_COUNT; r++) {
         if (r) json_buf_raw(&b, ",");
@@ -2648,8 +2667,8 @@ char *endpoint_reach_hist_json(void) {
             "the @H surface's per-reach counts sum to %ld against the %ld rows it emits — the three classes "
             "are a PARTITION of the emitted surface and this walk carries the same `is_asset` skip the census "
             "beside it does, so a difference is one of those walks having stopped describing the population "
-            "the other counts, and the razor a reader reads off this row would be a share of a number that "
-            "is not the surface's size", sum, emitted);
+            "the other counts, and the markup reach a reader reads off this row would be a share of a "
+            "number that is not the surface's size", sum, emitted);
     return json_buf_take(&b);
 }
 
@@ -2737,7 +2756,38 @@ char *endpoint_address_hist_json(void) {
        third marginal over a population the emitted array already answers per row, and a census cannot be the
        emitter CLAUDE.md's retirement condition asks for: this file's censuses reach a reader only through
        solver/result.c's @COLD line, while the razor figure a person is shown is composed in the trusted zone
-       off the emitted array. */
+       off the emitted array.
+       AND THAT LAST CLAUSE IS REFUTED, KEPT RATHER THAN DELETED BECAUSE IT IS WHAT A READER HOLDING THE NEW
+       PER-ROW COLUMN RE-DERIVES — it is the conclusion that leaves this census alone. Its premise was that the
+       razor figure A PERSON IS SHOWN is composed in the trusted zone off the emitted array, which was true when
+       it was written. MEASURED by reading the consumers rather than inferring from them: engine/build.mjs's
+       `endpointReachReading` calls `censusHistRows` on `epReach` and returns a line beginning `@H razor:`, and
+       extension/popup.js reads `m.cold.epReach` into a row labelled `razor` and `m.cold.epAddressClass` into one
+       labelled `hard bar`. THREE razor figures reach a person and TWO are composed off THIS CENSUS, one of them
+       out of a DOOR COUNT — which is the assembly that retirement clause asks to be made impossible. What the
+       clause was right about is the MECHANISM, and it decides the fix's shape: a union is a statement about
+       per-row MEMBERSHIP, so no marginal carries it and a SUM of these two tables means neither.
+       NAMED RESIDUAL. NOT COVERED: this census publishes the union's TWO OPERANDS and the union itself nowhere,
+       so an @COLD reader has no row stating the bar and the nearest thing to one is keyed on the DOOR.
+       WHAT THE NEXT DIFF BUILDS: `endpoint_razor_hist_json` — a FOURTH walk over `g_eps` keyed on
+       `endpoint_razor_class_of` and never a sum of the two tables, spelled with the same `is_asset` skip for the
+       reason this file gives for the third, two arms over `ENDPOINT_RAZOR_CLASSES` with the zeroes, its sum
+       asserted against `emitted`, a `DCHECKF` on the raw `addr_class` range (the walk above asserts one on the
+       same operand) and NONE on `door` (`endpoint_door_bytes`'s own `CHECK` is fatal in every build) — spliced by
+       solver/result.c as `epRazorClass`, declared a GAUGE beside `epReach` on that file's @kind line, AND named
+       in engine/build.mjs's `coldFields()` object list with a `censusHistRows` reading, IN ONE COMMIT.
+       THAT LAST CLAUSE IS THE SCOPE AND IT IS MEASURED RATHER THAN ESTIMATED: `censusRowSet` compares the object
+       rows it is GIVEN against the ones it derives from this composer's own format string and THROWS on either
+       difference, and `censusComposerFields` takes that source through `hostSource`, which is
+       `readFileSync(join(HOST, file))` — THE WORKING TREE. So a `%s` row added there without that list reddens
+       every lane's build from the moment it is WRITTEN, before it is committed: the in-between state CLAUDE.md
+       §A-CROSS-BOUNDARY-DIFF forbids, at the machine-checked hop a scope list drawn from what components are
+       FOR always misses.
+       HOW ITS ABSENCE WOULD SHOW: a build's verdict line prints `@H razor:` over a count of doors, and the
+       popup's two census-grain rows tell a person their floors OVERLAP and may not be added — a reader handed
+       the bar's raw material at the one grain where this file already composes the answer per row.
+       RETIREMENT: this record goes when the @COLD line carries that composed class, because two marginals are
+       then not the only thing a census reader can reach for. */
     return json_buf_take(&b);
 }
 

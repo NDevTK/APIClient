@@ -3403,19 +3403,34 @@ char *result_cold_json(void) {
                     mints that link POST-program. Each emitted ROW carries both, so the pair is answerable per
                     address and these totals are the check on that rather than the only statement of it. */
                  "\"epDoors\":%s,"
-                 /* …AND WHICH OF THOSE MECHANISMS A PARSE OF THE SERVED DOCUMENT WOULD HAVE REACHED, which
-                    is CLAUDE.md §What-the-tool-produces' razor STATED rather than left to a reader who knows
-                    solver/endpoint.h's door taxonomy by heart. The row above is the razor's RAW MATERIAL: it
+                 /* …AND WHICH OF THOSE MECHANISMS A MARKUP PARSE OF THE SERVED DOCUMENT WOULD HAVE REACHED,
+                    stated rather than left to a reader who knows solver/endpoint.h's door taxonomy by heart.
+                    THIS OPENING READ THAT THE ROW IS CLAUDE.md §What-the-tool-produces' RAZOR STATED, AND IT IS
+                    REWRITTEN RATHER THAN DELETED BECAUSE A READER HOLDING A ROW NAMED `beyond` RE-DERIVES
+                    EXACTLY IT. solver/endpoint.h records that sentence as retired: the bar became a COLUMN,
+                    composed by `endpoint_razor_class_of` out of `addressClass` and the door list's FOURTH
+                    column, and this row is keyed on the THIRD. That section names BY HAND a literal chunk URL
+                    through `module-import` as `beyond` and as scoring ZERO on the bar, so no count of doors
+                    answers it at any grain and this row is a DIAGNOSTIC of the markup question alone.
+                    THE COST OF LEAVING IT WAS NOT A READING: engine/build.mjs's `endpointReachReading` takes
+                    this row and returns a line beginning `@H razor:`, and extension/popup.js reads it into a
+                    row labelled `razor` — so BOTH emitters that show a person a razor figure off this census
+                    compose it out of a DOOR COUNT, which is the assembly CLAUDE.md's own retirement clause for
+                    that record asks to be made impossible.
+                    RETIREMENT: this record goes when this line publishes the COMPOSED bar beside this row,
+                    because a reader holding `beyond` then has the bar itself in the same document and has
+                    nothing left to re-derive it from.
+                    The row above is THIS ROW'S RAW MATERIAL: it
                     says WHICH mechanism composed each address and is silent about whether a `<script src>`
                     scan gets that address for free, so a reader holding `epDoors: {document-script: 28,
                     link-element: 17}` and nothing else still has to supply the map before they can say that
-                    the razor read ZERO on that document — which is what a coordinator driving a real app had
+                    the MARKUP REACH read ZERO on that document — which is what a coordinator driving a real app had
                     to do by hand, off the emitted @H array, with every histogram in this tree already
                     published.
                     THREE CLASSES BECAUSE TWO WOULD HAVE TO GUESS. `link-element`, `image-element` and
                     `form-submit` are reached by a parser-inserted element and by a script-created one alike
                     and the door does not record which, so `either` is the population NO door decides and
-                    `beyond` is a FLOOR under the razor rather than the razor's value. Folding `either` into
+                    `beyond` is a FLOOR under the MARKUP question rather than its value. Folding `either` into
                     `markup` under-credits a router-built `<link>`; folding it into `beyond` over-credits a
                     `<head>`, which is the exact over-credit `epEmitted - epPreProgram` is retired for and in
                     the same flattering direction.
