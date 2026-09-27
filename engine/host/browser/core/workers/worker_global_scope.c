@@ -78,6 +78,48 @@
  * member that would cross, and it is a named residual at the bottom of this file for exactly that reason —
  * there is no peer AGENT to post to, and this diff provisions none.
  *
+ * AND TWO OF THE FOUR NAMES TAKE THE OTHER ARM, WHICH THE RECORD ABOVE DERIVED FOR THE DEDICATED CASE AND LEFT
+ * A READER TO GENERALISE. That correction quotes §8.1.2.2's forwarding and then ONE of the two arms it selects
+ * between — "false for a DEDICATED worker", and the arm that arm reaches. The algorithm it forwards INTO has
+ * two, and the other one is where every remaining worker name in browser/platform_names.h lands. Obtain a
+ * worker/worklet agent takes `isTopLevel`, and its TRUE arm is "Set agentCluster to a new agent cluster"
+ * followed by "Set agentCluster's is origin-keyed to true"; only its FALSE arm asserts an owner and reads
+ * "Set agentCluster to the agent cluster which contains ownerAgent". So `isShared` true — a SHARED worker —
+ * mints a NEW origin-keyed cluster, and SECURITY.md keying one WASM instance on `(browsing-context group,
+ * origin)` makes that a SECOND INSTANCE, which is the transport the record above exists to say a DEDICATED
+ * worker does not need. A SERVICE worker is further still: §8.1.2.2 states "To obtain a service worker agent,
+ * return the result of obtaining a worker/worklet agent given null, true, and false", so it takes the TRUE arm
+ * AND passes no outside settings at all — there is no owner agent for it to share a cluster with, which is why
+ * the FALSE arm's "Assert: outside settings is not null" is not a step it could ever reach.
+ * SO THE FOUR NAMES ARE THREE SUBJECTS AND ONLY ONE OF THEM IS THIS DIRECTORY'S. `Worker` is in-heap and is
+ * what the ordered remainder below is about; `SharedWorker` needs a second instance and the
+ * SharedWorkerGlobalScope interface of HTML §10.2.1.3 "Shared workers and the SharedWorkerGlobalScope
+ * interface", which this build has nowhere; `ServiceWorker` and `ServiceWorkerContainer` need a second
+ * instance AND are declared outside HTML altogether, by a standard whose own registration model HTML
+ * §10.2.4 "Processing model" states no step of — so NO item of the ordered remainder unblocks either of them,
+ * however complete it gets. WHICH standard, and why no § of it is written here, is this record's last
+ * paragraph.
+ * THE MEASURED COST OF NOT SAYING SO, because this paragraph exists BECAUSE a reader generalised the arm: a
+ * brief scoped all four names as one subject on the strength of the banner above, called them collectively a
+ * missing door to "a worker agent", and justified the work by where `Navigator.serviceWorker` ranks in
+ * engine/absentrank.mjs's cost ordering — the ONE member of the four that is furthest from every item of the
+ * remainder, needing a second cluster and a second standard. The ordering conclusion it reached was right and
+ * its reason named the wrong member, which is the split CLAUDE.md rates worst: a reader who checks the
+ * conclusion finds it holds and inherits the method.
+ * THE TELL IS A PARAMETER RENAMED AS IT IS FORWARDED, and it is free: `isShared` goes in and `isTopLevel`
+ * comes out, so one bit carries two vocabularies and a reader of EITHER algorithm alone sees a name whose
+ * sense is settled in the other. Read the FORWARDING algorithm, never the one that names your case.
+ * NO SECTION NUMBER IS WRITTEN FOR THE SERVICE WORKERS STANDARD HERE, DELIBERATELY, AND THE REASON IS A
+ * FINDING RATHER THAN A STYLE CHOICE. That standard has no row in engine/specindex/ and no foreign row in
+ * engine/citegen.mjs's OTHER_SPECS, and its section numbers for these two interfaces are low ones HTML also
+ * carries — so a citation of them in THIS file, whose vote is HTML, would not be shielded but ACCUSED, and a
+ * quoted title beside it is exactly what the mismatch channel judges. A later reader adding the number to
+ * "complete" this citation manufactures the finding. The repair is a corpus or foreign row in that tool,
+ * measured over the WHOLE corpus and not over the standard being added, and it is not this component's.
+ * RETIREMENT: this record goes when browser/idl_exposure.h's generated rows carry the agent-cluster arm each
+ * [Global] name's agent takes, so a scope list over these names is READ FROM THE TABLE rather than derived
+ * from this paragraph — at which point grouping them by hand is not a mistake a reader can make.
+ *
  * WHICH REALM IT BUILDS INTO IS §3.3.7 [Exposed] STEP 1's OWN QUESTION, ASKED OF THE CORPUS. core/realm.h runs
  * every declared intrinsic for EVERY realm, Window realms included, and §3.8's define the global property
  * references opens with "Let interfaces be a list that contains every interface that is exposed in realm" — so
