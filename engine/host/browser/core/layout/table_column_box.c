@@ -12,6 +12,7 @@
 #include "core/css/css_computed_value.h"
 #include "core/html/integer_microsyntax.h"
 #include "core/layout/box_subject.h"
+#include "core/layout/box_tree.h"
 #include "core/layout/table_box.h"
 #include "core/layout/table_column_box.h"
 
@@ -20,33 +21,24 @@
    CLAUDE.md's sense — a page may write any digits it likes and this is what the algorithm does with them. */
 #define TCB_SPAN_MAX ((size_t) 1000)
 
-/* THE ONE PLACE THIS FILE READS A COMPUTED `display`, WHICH IS WHERE ITS BOX-TREE-SHAPE ASSUMPTION LIVES, and
-   the refusal below is here rather than at the four walks that call it for the reason the two passes are
-   written to share a branch at all: the banner over pass one says they "take the identical branch on the
-   identical child list", and a test written four times is that invariant held by hand.
-   A `contents` CHILD IS A WRONG ANSWER HERE AND NOT AN UNBUILT ONE, WHICH IS THE WHOLE REASON IT CRASHES.
-   Every other value this mapping does not name is a child that generates no column box, so skipping it is
-   rules 3 and 4 running: css-display-3 §2.5 "Box Generation: the none and contents keywords" gives `none`
-   "The element and its descendants generate no boxes or text sequences", so nothing inside one can be a column
-   box and the skip is exact. `contents` is the opposite — "The element itself does not generate any boxes,
-   but its children and pseudo-elements still generate boxes and text sequences as normal" — so the boxes
-   rules 3 and 4 must count may be INSIDE the skipped child, and skipping it undercounts `noccupied` and leaves
-   a grid column mapped to no box at all.
-   THE WALK STEPPED PAST IT RATHER THAN REFUSING, AND THAT IS THE DEFECT SHAPE WORTH KEEPING: a walk that
-   cannot express the splice must REFUSE a spliced child rather than step past it, because a step past is a
-   plausible box tree and a refusal is a named gap. table_column_box.h's own argument for being a component
-   says why the plausible answer is the expensive one — three algorithms read a different property off this
-   mapping, and a disagreement between them "is invisible, because every answer is a real box of the real
-   document" — and a silently short mapping is that same invisibility with no second walk needed to produce
-   it.
-   IT IS NOT THIS COMPONENT'S SPLICE TO BUILD, which is why the message names the box-tree step rather than a
-   local descent: core/layout/block_flow.c's child classification, core/layout/flex_item.c's flex-item
-   classification, core/layout/line_box.c's line walk and core/layout/table_box.c's anonymous-table walk each
-   meet this value at their own child walk and each names the same absent construction, so a fifth copy here
-   would be one box-tree rule with five answers about which children a box has.
-   RETIREMENT: this paragraph goes when the splice is built and this walk iterates it, because the contrast
-   between `none` and `contents` is then a property of the sequence handed to this walk rather than an argument
-   about a value it reads for itself. */
+/* THE ONE PLACE THIS FILE READS A COMPUTED `display`, WHICH IS NO LONGER WHERE A BOX-TREE-SHAPE ASSUMPTION
+   LIVES: the four walks below iterate core/layout/box_tree.h's sequence, which is css-display-3 §2.5 "Box
+   Generation: the none and contents keywords"' splice, so a `contents` child is invisible to this file and the
+   assert below is its contract held rather than this component's own gap.
+   THE DEFECT SHAPE THIS REPLACES IS THE PART WORTH KEEPING, because a reader who re-derives it will re-add a
+   local descent. The walks stepped `->next` and this mapping skipped a `contents` child as though §2.5 had
+   elided it: `none` is "The element and its descendants generate no boxes or text sequences", so skipping one
+   is rules 3 and 4 running, and `contents` is the opposite sentence — "The element itself does not generate any
+   boxes, but its children and pseudo-elements still generate boxes and text sequences as normal" — so the boxes
+   those rules must count were INSIDE the skipped child. That undercounted `noccupied` and left a grid column
+   mapped to no box at all, and it was invisible for table_column_box.h's own reason: three algorithms read a
+   different property off this mapping, and a disagreement between them "is invisible, because every answer is a
+   real box of the real document". A WALK THAT CANNOT EXPRESS THE SPLICE MUST REFUSE A SPLICED CHILD RATHER THAN
+   STEP PAST IT — a step past is a plausible box tree and a refusal is a named gap — and the refusal that stood
+   here was that rule, discharged now by a walk that CAN express it instead of by a crash.
+   THE REFUSAL IS STILL IN THIS FUNCTION AND NOT AT THE FOUR WALKS, for the reason the two passes are written to
+   share a branch at all: the banner over pass one says they "take the identical branch on the identical child
+   list", and a test written four times is that invariant held by hand. */
 static TableBoxKind tcb_kind_of(lxb_dom_element_t *el)
 {
     char *display = css_computed_value(el, "display");
@@ -55,28 +47,12 @@ static TableBoxKind tcb_kind_of(lxb_dom_element_t *el)
 
     DCHECK(display != NULL, "the cascade produced no computed `display` — the UA layer answers `inline` for "
                             "every element it does not name, so this cannot be unset");
-    if (strcmp(display, "contents") == 0) {
-        free(display);
-        DFAILF("%s: CSS 2.1 §17.5 \"Visual layout of table contents\"' rules 3 and 4 count this child's "
-               "column and column-group boxes off a child list it is not a member of yet. Its computed "
-               "`display` is `contents`, and css-display-3 §2.5 \"Box Generation: the none and contents "
-               "keywords\" states both halves of what that means: \"The element itself does not generate any "
-               "boxes, but its children and pseudo-elements still generate boxes and text sequences as "
-               "normal\", and \"For the purposes of box generation and layout, the element must be treated as "
-               "if it had been replaced in the element tree by its contents (including both its "
-               "source-document children and its pseudo-elements, such as ::before and ::after "
-               "pseudo-elements, which are generated before/after the element's children as normal).\" So "
-               "the boxes rules 3 and 4 must place are this child's OWN children, spliced into this list at "
-               "its position: a `contents` column group hands the table its `col` children directly, which "
-               "is rule 3's group-less column box this walk already has an arm for, and a `contents` child "
-               "of a column group hands that group its own. BUILD THE SPLICE §2.5 STATES AS THE THING "
-               "EVERY WALK OVER A BOX'S CHILDREN ITERATES: core/layout/block_flow.c, "
-               "core/layout/flex_item.c, core/layout/line_box.c and core/layout/table_box.c each meet this "
-               "value at their own child walk and each names the same construction, so it is one box-tree "
-               "step and not five",
-               box_subject(el, nbuf, sizeof nbuf));
-        return TABLE_BOX_NOT_A_TABLE_BOX;
-    }
+    DCHECKF(strcmp(display, "contents") != 0,
+            "%s: css-display-3 §2.5 \"Box Generation: the none and contents keywords\" replaces this child by "
+            "its contents, and core/layout/box_tree.h's sequence therefore never yields one — so this "
+            "classification cannot be handed one unless a walk in this file stepped a DOM child list instead of "
+            "that sequence. The four walks below are the whole population; find the one that did",
+            box_subject(el, nbuf, sizeof nbuf));
     kind = table_box_kind(display);
     free(display);
     return kind;
@@ -150,7 +126,7 @@ static void tcb_occupy(TableColumnBoxMap *map, size_t *x, size_t span,
 
 void table_column_boxes_build(lxb_dom_element_t *table, size_t ngrid, TableColumnBoxMap *out)
 {
-    lxb_dom_node_t *n, *c;
+    lxb_dom_node_t *c;
     size_t occupied = 0, x = 0;
 
     DCHECK(table != NULL && out != NULL,
@@ -164,8 +140,7 @@ void table_column_boxes_build(lxb_dom_element_t *table, size_t ngrid, TableColum
        The array cannot be sized until `noccupied` is known and `noccupied` is not a function of the grid, so
        the child list is walked twice rather than grown — the two passes take the identical branch on the
        identical child list, which is why the spans are re-read rather than stashed. */
-    n = lxb_dom_interface_node(table);
-    for (c = n->first_child; c != NULL; c = c->next) {
+    for (c = box_tree_first_child(table); c != NULL; c = box_tree_next_sibling(table, c)) {
         lxb_dom_element_t *el;
         TableBoxKind kind;
 
@@ -178,7 +153,7 @@ void table_column_boxes_build(lxb_dom_element_t *table, size_t ngrid, TableColum
             lxb_dom_node_t *m;
             size_t inner = 0;
 
-            for (m = c->first_child; m != NULL; m = m->next) {
+            for (m = box_tree_first_child(el); m != NULL; m = box_tree_next_sibling(el, m)) {
                 if (m->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
                 if (tcb_kind_of(lxb_dom_interface_element(m)) == TABLE_BOX_COLUMN)
                     inner += tcb_span_attr(lxb_dom_interface_element(m));
@@ -197,7 +172,7 @@ void table_column_boxes_build(lxb_dom_element_t *table, size_t ngrid, TableColum
           "being laid out");
 
     /* ---- PASS TWO: which boxes occupy which columns ------------------------------------------------------ */
-    for (c = n->first_child; c != NULL; c = c->next) {
+    for (c = box_tree_first_child(table); c != NULL; c = box_tree_next_sibling(table, c)) {
         lxb_dom_element_t *el;
         TableBoxKind kind;
 
@@ -215,7 +190,7 @@ void table_column_boxes_build(lxb_dom_element_t *table, size_t ngrid, TableColum
             lxb_dom_node_t *m;
             size_t before = x;
 
-            for (m = c->first_child; m != NULL; m = m->next) {
+            for (m = box_tree_first_child(el); m != NULL; m = box_tree_next_sibling(el, m)) {
                 lxb_dom_element_t *col;
 
                 if (m->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;

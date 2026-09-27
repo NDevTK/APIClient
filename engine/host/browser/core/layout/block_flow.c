@@ -455,15 +455,17 @@ static BlockFlowChildKind bf_element_child(lxb_dom_element_t *el)
               "`display: contents`: \"The element itself does not generate any boxes, but its children and "
               "pseudo-elements still generate boxes and text sequences as normal.\" So the box tree and the "
               "ELEMENT tree are no longer the same shape here, and the children this walk must place are the "
-              "child's children spliced into this list at its position. That splice is a BOX-TREE construction "
-              "step and it belongs to every walk over children rather than to this one: "
-              "core/layout/used_value.c's containing-block walk already steps OVER such an ancestor, and doing "
-              "the same here by hand would be a second copy of one rule. BUILD THE SPLICE §2.5 STATES — \"For "
-              "the purposes of box generation and layout, the element must be treated as if it had been "
-              "replaced in the element tree by its contents (including both its source-document children and "
-              "its pseudo-elements, such as ::before and ::after pseudo-elements, which are generated "
-              "before/after the element's children as normal).\" — as the thing this walk iterates, so a "
-              "`contents` element is invisible to every consumer at once");
+              "child's children spliced into this list at its position. THE SPLICE IS BUILT — "
+              "core/layout/box_tree.h is §2.5's \"the element must be treated as if it had been replaced in "
+              "the element tree by its contents\" as a child sequence — so what is owed here is ROUTING this "
+              "walk to it and NOT a second copy of the rule. ROUTING IT ALONE IS NOT ENOUGH AND THAT IS THIS "
+              "FILE's OWN COUPLING: the five walks over a container's content share this classification and "
+              "`bf_content_next`, and `block_flow_run_generates_box` reads a `BlockFlowRun`'s bounds as "
+              "SIBLINGS of the container — it answers TRUE for a bound whose parent is not the container, on "
+              "the ground that such a bound is a FRAGMENT of an inline box §9.2.1.1 broke, which a SPLICED "
+              "bound is not. So converting the iterator without the run type would put a spurious anonymous "
+              "block box on §9.4.1's stack for every run bounded inside a `contents` child, which is a "
+              "plausible box tree and not a crash. The run type and these walks are ONE landing");
     /* §9.7's SECOND arm. §9.3.1 states what it means for every caller of this classification at once —
        "Absolutely positioned boxes are taken out of the normal flow. This means they have no impact on the
        layout of later siblings" — and §10.6.3 says the same thing for the one walk in this file: "Only children

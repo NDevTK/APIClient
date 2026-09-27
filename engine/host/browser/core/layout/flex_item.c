@@ -229,10 +229,16 @@ FlexItemChildKind flex_item_child_kind(lxb_dom_element_t *container, lxb_dom_nod
                    "is not a flex item and its CHILDREN are — css-flexbox-1 §4's \"Each in-flow child of a "
                    "flex container becomes a flex item\" is stated over a child list this one is not yet, "
                    "because §2.5's splice has not run: \"the element must be treated as if it had been "
-                   "replaced in the element tree by its contents\". BUILD THAT SPLICE AS THE THING EVERY WALK "
-                   "ITERATES rather than an arm here — core/layout/block_flow.c's own classification names the "
-                   "identical absence over the identical sentence for a block container's list, so one splice "
-                   "answers both and two arms would be one rule with two implementations",
+                   "replaced in the element tree by its contents\". THAT SPLICE IS BUILT, as "
+                   "core/layout/box_tree.h's child sequence, so what is owed here is ROUTING and not an arm. "
+                   "WHAT THE ROUTING STILL OWES IS §4's TEXT SEQUENCE, WHOSE ANSWER IS NEITHER BOOLEAN: "
+                   "`fi_invisible_to_a_text_sequence` decides contiguity and a `contents` element is INVISIBLE "
+                   "to it only where its own children are — answering TRUE would join two runs across a "
+                   "box-generating child of the elided element, and answering FALSE splits a sequence §4 makes "
+                   "ONE — so `fi_text_sequence` must be delimited over the box-tree order in BOTH directions "
+                   "rather than over `->prev`/`->next`. The four walks that step this classification "
+                   "(core/layout/flex_line.c, core/layout/flex_intrinsic_size.c's two, "
+                   "core/layout/flex_cross_size.c) step `->next` themselves and are part of the same landing",
                    box_subject(el, nbuf, sizeof nbuf));
             return FLEX_ITEM_CHILD_NONE;
         }

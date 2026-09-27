@@ -194,12 +194,19 @@ static size_t tb_children(lxb_dom_element_t *parent, TbChild **out)
                        "generation and layout, the element must be treated as if it had been replaced in the "
                        "element tree by its contents (including both its source-document children and its "
                        "pseudo-elements, such as ::before and ::after pseudo-elements, which are generated "
-                       "before/after the element's children as normal).\" THE SPLICE IS NOT THIS COMPONENT'S "
-                       "TO BUILD BY HAND — core/layout/block_flow.c's own walk and core/layout/used_value.c's "
-                       "containing-block walk each meet the same value and each names the same splice, so a "
-                       "third copy here would be one box-tree rule with three answers about which children a "
-                       "container has. BUILD §2.5's splice as the child list every walk over a container "
-                       "iterates, and a `contents` element becomes invisible to all three at once",
+                       "before/after the element's children as normal).\" THE SPLICE IS BUILT AND IS NOT THIS "
+                       "COMPONENT'S TO COPY: core/layout/box_tree.h is that sentence as a child sequence, so "
+                       "ROUTE `tb_children` to it. IT IS THE SHORTEST CONVERSION LEFT, because this walk "
+                       "MATERIALISES an array and its four callers read adjacency off THAT — §17.2.1's "
+                       "\"consecutive\" is then consecutive in the box-tree sequence with no caller stepping a "
+                       "sibling. WHAT IT OWES FIRST IS ONE ARGUMENT: the text arm hands `parent` to "
+                       "core/layout/block_flow.h's §9.2.2.1 white-space predicate, which reads an INHERITED "
+                       "`white-space`, and §2.5's Note keeps inheritance on the document tree — \"any semantics "
+                       "based on the document tree, such as selector-matching, event handling, and property "
+                       "inheritance, are not affected\" — so a spliced text node's value comes from the "
+                       "`contents` element it is a child OF and not from this container. The two are the same "
+                       "element only until the splice runs, and reading the wrong one collapses a preserved run "
+                       "to no box at all",
                        box_subject(el, nbuf, sizeof nbuf), box_subject(parent, pbuf, sizeof pbuf));
                 continue;
             }

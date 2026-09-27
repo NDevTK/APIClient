@@ -545,13 +545,15 @@ static void lb_child(LbRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
         DFAIL("css-display-3 §2.5 \"Box Generation: the none and contents keywords\" gives this child "
               "`display: contents`: \"The element itself does not generate any boxes, but its children and "
               "pseudo-elements still generate boxes and text sequences as normal.\" So the boxes on this line "
-              "are the child's children spliced in at its position. That splice is a BOX-TREE construction "
-              "step belonging to every walk over children rather than to this one, and "
-              "core/layout/block_flow.c's own child walk names the same absence. BUILD THE SPLICE §2.5 STATES "
-              "— \"For the purposes of box generation and layout, the element must be treated as if it had "
-              "been replaced in the element tree by its contents (including both its source-document children "
-              "and its pseudo-elements, such as ::before and ::after pseudo-elements, which are generated "
-              "before/after the element's children as normal).\" — as the thing both walks iterate");
+              "are the child's children spliced in at its position. THE SPLICE IS BUILT — "
+              "core/layout/box_tree.h is §2.5's \"the element must be treated as if it had been replaced in "
+              "the element tree by its contents\" as a child sequence — so ROUTE this walk to it rather than "
+              "descending here. WHAT THE ROUTING MUST NOT DISTURB IS THE `parent` THIS WALK THREADS: "
+              "`lb_child` re-passes the element it descended into, so `parent` is already the node's OWN "
+              "parent at every depth, and that is what §2.5's Note requires — \"any semantics based on the "
+              "document tree, such as selector-matching, event handling, and property inheritance, are not "
+              "affected\" — so only the CONTAINER's child enumeration moves to the box tree while every "
+              "inherited property stays read off the node's document parent");
         return;
     }
     inline_block = strcmp(d, "inline-block") == 0;
