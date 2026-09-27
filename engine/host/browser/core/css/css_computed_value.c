@@ -2220,7 +2220,10 @@ static JSValue css_resolved_shorthand(JSContext *ctx, lxb_dom_element_t *el, con
    fabricates nothing.
    AN INSET IS NOT A `used_value_px` ROW, AND THAT IS THE ONE RE-DERIVABLE WRONG REMEDY THE CRASH THIS REPLACED
    LEFT BEHIND. It observed correctly that the four insets are not among the ten physical box-model lengths
-   that entry carries, and then read that as work to do — "adding them is adding a group, not a case". It is
+   that entry carries, and then read that as work to do — `adding them is adding a group, not a case`. That run
+   is THIS TREE'S OWN RETIRED PROSE and it is in backticks for that reason: a spelling being SHOWN goes outside
+   the quotation channel by construction, and in quotation marks it is judged against the nearest citation
+   above it, which is CSSOM §9 and does not contain it. It is
    not: `used_value_px` answers ONE property from ONE element, and neither inset section can be asked that way.
    css-position-3 §3.3 states its rules over BOTH members of an axis at once ("opposing used values in a given
    axis must be negations of each other"), so neither is readable without the other; CSS 2.1 §10.3.7 solves
