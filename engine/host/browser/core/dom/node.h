@@ -282,7 +282,19 @@ lxb_dom_node_t *node_template_content_host(const lxb_dom_node_t *n);
  *
  * THIS IS THE `parent`-NULL FORM. §4.4's step 4 ("if parent is non-null, then append copy to parent") is what
  * the walk does for every DESCENDANT; both callers of the entry are stated over a null parent and append the
- * copy where their own steps say to — cloneNode returns it, §5.5 appends it to the fragment. */
+ * copy where their own steps say to — cloneNode returns it, §5.5 appends it to the fragment.
+ *
+ * THE `document` ARGUMENT IS THE CALLER'S AND IT IS NOT DECORATION. §4.4 writes "To clone a node given a node
+ * node and an optional document document (default node's node document)", and the two callers that take the
+ * DEFAULT and the one that names its own are two different members: §4.4's cloneNode is stated over the
+ * default, and §4.5's importNode is "the result of cloning a node given node with DOCUMENT SET TO THIS" — the
+ * receiver, which is the whole of what makes an import a cross-document copy rather than a clone that happens
+ * to be handed back to another document. `clone_a_single_node` already builds into whatever document it is
+ * given (it interns the three names and every attribute into that document's own tables), so what was missing
+ * was never the copy and always the ARGUMENT: the entry hardcoded the default, so a caller that named a
+ * document had no way to say so and would have built the copy in the SOURCE's tables. NULL is the default and
+ * is written at every site that takes it, so a reader of §5.5's four calls sees which argument they are
+ * stated over rather than having to know that this entry has only one answer. */
 #define NODE_CLONE_ALGO_STAGES(X, P, W) \
     X(P##_ROOT,     W " → DOM §4.4 clone a node steps 1-2 (clone a single node: the root of the copy)") \
     X(P##_COPY,     W " → DOM §4.4 clone a node steps 2 and 4 (clone a single node; append copy to parent), " \
@@ -332,10 +344,14 @@ typedef struct NodeCloneState {
     int sp, scap;
 } NodeCloneState;
 
-/* Begin `clone a node` given `node` and `subtree`. `base` is where the caller declared the algorithm's stage
-   block and `after` is the caller's own stage it resumes at with `s->copy` filled in. Every field the walk
-   reads is placed here, before the first step that can allocate or throw. */
-void node_clone_start(JSStepHdr *hdr, NodeCloneState *s, lxb_dom_node_t *node, bool subtree, int base, int after);
+/* Begin `clone a node` given `node`, `document` and `subtree`. `document` is §4.4's own optional argument and
+   NULL means its declared default, node's node document — placed here rather than defaulted in the walk, so
+   the walk reads one field and step 1's assert is over the value the caller actually named. `base` is where the
+   caller declared the algorithm's stage block and `after` is the caller's own stage it resumes at with
+   `s->copy` filled in. Every field the walk reads is placed here, before the first step that can allocate or
+   throw. */
+void node_clone_start(JSStepHdr *hdr, NodeCloneState *s, lxb_dom_node_t *node,
+                      lxb_dom_document_t *document, bool subtree, int base, int after);
 /* ONE STAGE of it. JS_STEP_YIELD to rest, JS_STEP_ABRUPT having thrown; the finish sets `hdr->stage` to the
    caller's `after`, so a caller never tests for completion. */
 int  node_clone_run(JSContext *ctx, JSStepHdr *hdr, NodeCloneState *s, int base);

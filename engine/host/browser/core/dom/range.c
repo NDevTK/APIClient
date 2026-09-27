@@ -1087,7 +1087,11 @@ static int rx_run(JSContext *ctx, JSStepHdr *hdr, RxState *s, int move, int base
         f->frag = range_new_fragment(f->sn);                                  /* STEP 1 */
         if (f->sn == f->en && f->so == f->eo) { hdr->stage = RXS(RX_LEAVE); return JS_STEP_YIELD; }   /* STEP 2 */
         if (f->sn == f->en && node_is_chardata_kind(f->sn)) {                 /* STEP 4.1 */
-            node_clone_start(hdr, &s->nc, f->sn, false, RXS(RX_CLONE_ROOT), RXS(RX_ENTER_CLONED));
+            /* NULL IS §4.4's `document` DEFAULT AT ALL FOUR OF THIS FILE'S CLONES — "node's node document".
+               §5.5's steps say "a clone of originalStartNode" and "a clone of contained child with subtree set
+               to true" and name no document, so every copy an extraction makes belongs to the tree the range
+               is over; §4.5's importNode is the one member that names one. */
+            node_clone_start(hdr, &s->nc, f->sn, NULL, false, RXS(RX_CLONE_ROOT), RXS(RX_ENTER_CLONED));
             return JS_STEP_YIELD;
         }
         hdr->stage = RXS(RX_LOCATE);
@@ -1139,7 +1143,7 @@ static int rx_run(JSContext *ctx, JSStepHdr *hdr, RxState *s, int move, int base
 
     case RX_FIRST:
         if (f->first_pcc) {                                        /* STEPS 16.1 and 17.1: `a clone of` it */
-            node_clone_start(hdr, &s->nc, f->first_pcc, false, RXS(RX_CLONE_ROOT), RXS(RX_FIRST_CLONED));
+            node_clone_start(hdr, &s->nc, f->first_pcc, NULL, false, RXS(RX_CLONE_ROOT), RXS(RX_FIRST_CLONED));
             return JS_STEP_YIELD;
         }
         hdr->stage = RXS(RX_CONTAINED);
@@ -1182,7 +1186,7 @@ static int rx_run(JSContext *ctx, JSStepHdr *hdr, RxState *s, int move, int base
             /* CLONING THE CONTENTS instead says "a clone of contained child with subtree set to true", which is
                §4.4's algorithm and nothing this file may re-derive: a copy made here would carry neither the
                cloning steps HTML defines for the elements in that subtree nor their clonable shadow roots. */
-            node_clone_start(hdr, &s->nc, c, true, RXS(RX_CLONE_ROOT), RXS(RX_CONTAINED_CLONED));
+            node_clone_start(hdr, &s->nc, c, NULL, true, RXS(RX_CLONE_ROOT), RXS(RX_CONTAINED_CLONED));
         }
         return JS_STEP_YIELD;
 
@@ -1195,7 +1199,7 @@ static int rx_run(JSContext *ctx, JSStepHdr *hdr, RxState *s, int move, int base
 
     case RX_LAST:
         if (f->last_pcc) {                                         /* STEPS 19.1 and 20.1: `a clone of` it */
-            node_clone_start(hdr, &s->nc, f->last_pcc, false, RXS(RX_CLONE_ROOT), RXS(RX_LAST_CLONED));
+            node_clone_start(hdr, &s->nc, f->last_pcc, NULL, false, RXS(RX_CLONE_ROOT), RXS(RX_LAST_CLONED));
             return JS_STEP_YIELD;
         }
         hdr->stage = RXS(RX_LEAVE);

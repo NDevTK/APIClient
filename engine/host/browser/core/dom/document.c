@@ -2008,6 +2008,222 @@ static JSValue js_doc_adopt_node(JSContext *ctx, JSValueConst this_val, int argc
     return JS_DupValue(ctx, argv[0]);                                      /* STEP 4 */
 }
 
+/* §4.5's `[CEReactions, NewObject] Node importNode(Node node,
+ *  optional (boolean or ImportNodeOptions) options = false)` — SEVEN steps over DOM §4.4's `clone a node`, and
+ * the ONE thing that makes it a different member from §4.4's cloneNode is its step 7: "Return the result of
+ * cloning a node given node with DOCUMENT SET TO THIS, subtree set to subtree, and fallbackRegistry set to
+ * registry." A clone is stated over the algorithm's DEFAULT document — node's own — so the copy belongs to the
+ * tree the original belongs to; an import names the RECEIVER, which is the whole of the member.
+ *
+ * IT IS A MACHINE BECAUSE `clone a node` IS ONE. The walk is the page's subtree and it rests at every node
+ * (core/dom/node.h's NODE_CLONE_ALGO_STAGES), so this member declares that stage block inside its own, embeds
+ * the NodeCloneState and hands node_clone_run the base of it — exactly as §4.4's cloneNode and §5.5's extract
+ * do. A second copier here would be a second answer to `what is a copy of this node`, missing §4.4 step 3's
+ * cloning steps (HTML's for `script`, `template`, `input`, `textarea`, the nonce slot) and step 6's clonable
+ * shadow root, silently, per node.
+ *
+ * THE TWO REFUSALS ARE BOTH NotSupportedError AND THEY ARE NOT ONE ARM. Step 1 refuses a DOCUMENT or a SHADOW
+ * ROOT — two node kinds, one exception, and the pair is what separates this member from cloneNode, whose step 1
+ * refuses only the shadow root because §4.4 DEFINES what a document's copy is (clone_a_document builds it).
+ * Step 5.3 refuses a REGISTRY that is neither scoped nor this document's, which is a refusal about an argument
+ * and not about the node. Landing one of the two would be a WRONG answer rather than a partial one.
+ *
+ * EVERY REFUSAL IS THE SPEC'S OWN THROW AND NONE IS AN ASSERT. The node, the options and the registry are all
+ * PAGE-SUPPLIED, and this engine is a forcing solver that calls members with unusual arguments constantly: an
+ * assert on any of them would hand a page an abort switch. What is asserted here is only what this codebase
+ * computed — the receiver's record and the argument machine's own output. */
+#define DIN_STAGES(X) \
+    X(DIN_CHECK, "DOM §4.5 importNode steps 1-6 (refuse a document or a shadow root, then resolve `subtree` " \
+                 "and `registry` from the `(boolean or ImportNodeOptions)` union)") \
+    NODE_CLONE_ALGO_STAGES(X, DIN, "DOM §4.5 importNode step 7") \
+    X(DIN_RETURN, "DOM §4.5 importNode step 7 (return the `clone a node` result)")
+enum { IDL_STEP_STAGE_BASE(DIN_STAGES) DIN_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const DIN_STEPS[] = { DIN_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static void doc_import_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    node_clone_visit_state(ctx, st, v);
+}
+
+/* §4.5's importNode STEPS 3-5, AS ONE ANSWER — "Let registry be null", the boolean arm's `subtree`, and the
+   dictionary arm's three sub-steps. It answers `subtree` through `*psubtree` and the REFUSAL through its
+   return, which is the shape flatten_creation_options above already uses for the same reason: step 5.3's throw
+   and step 5.1's `subtree` are computed from one reading of one argument, and two entries over that argument
+   would be two readings that could disagree about which arm the union took.
+   THE REGISTRY IS COMPUTED ONLY TO BE REFUSED, WHICH IS A RESIDUAL AND IS NAMED AT THE CALL — see step 6 and
+   step 7 below. Returns true when the member may proceed, false with the exception pending. */
+static bool doc_import_options(JSContext *ctx, JSValueConst this_val, JSValueConst options, bool *psubtree)
+{
+    JSValue reg_v, registry, doc_reg;
+    bool same;
+
+    *psubtree = false;                                                 /* STEP 2: "Let subtree be false" */
+    /* STEP 4, "if options is a boolean, then set subtree to options". §3.2.25 Union types converted V to
+       EXACTLY ONE of the two member types and IDL_BOOL_OR_DICT places what it converted, so `JS_IsBool` is the
+       union's own OUTPUT and not a shape test performed a second time on the page's value.
+       AND THE OMITTED CALL IS THIS ARM, WHICH IS WHY THE DECLARATION STATES `= false` EXPLICITLY. §3.6 step
+       16.1 places a declared default for a position the page never reached, and this member's default is the
+       BOOLEAN `false` — where every other union-with-dictionary position in the platform's IDL defaults to
+       `{}` and therefore falls through to §3.2.17. `document.importNode(n)` is a SHALLOW import; an
+       all-defaults ImportNodeOptions would make it a deep one, because `selfOnly`'s own default is false and
+       step 5.1 NEGATES it. An explicit `null` is the other arm and is deep, which is §3.2.25 step 4 sending
+       null to the dictionary type and not a choice made here. */
+    if (JS_IsBool(options)) { *psubtree = JS_ToBool(ctx, options) != 0; return true; }
+    if (concolic_is(options)) {
+        DFAIL("DOM §4.5's importNode reached step 4 with UNKNOWN EXTERNAL INPUT that Web IDL §3.2.25 \"Union "
+              "types\" placed on the BOOLEAN arm of `(boolean or ImportNodeOptions)`, and step 4 reads that "
+              "boolean's VALUE: `true` is a deep import and `false` is one node, which are two different trees "
+              "and therefore two worlds. The union's ARM was already forked by the conversion "
+              "(IDL_BOOL_OR_DICT is IDL_CONCOLIC_FORKS); what is missing is the fork over the boolean's own "
+              "TRUTH, and it is missing for every member that declares this row — CSSOM VIEW §6's "
+              "scrollIntoView and HTML §4.12.4's togglePopover carry the same gap and say so. BUILD IT AT THE "
+              "CONVERSION, not here: idl_args.c's plain IDL_BOOLEAN position already asks step_tobool_run at "
+              "the BRANCH seam, keyed by the value's own branch identity, so `if (cfg.deep)` and "
+              "`importNode(n, cfg.deep)` are ONE gate and one constraint entry — a fork asked in this body "
+              "would file a second independent entry over one predicate. The arm that places the boolean is "
+              "the IDL_BOOL_OR_DICT branch of idl_dict_walk_run's position loop");
+        return false;
+    }
+    /* STEP 5, the dictionary arm. Its three sub-steps are SIBLINGS — 5.3 is not nested under 5.2 — so a
+       registry that stayed null from step 3 still reaches 5.3, where it passes because the condition is about a
+       non-null one. */
+    DCHECK(JS_IsObject(options),
+           "§3.2.25's union placed something at importNode's `options` that is neither the boolean it converted "
+           "nor the dictionary it built — the two member types are all the algorithm has, and a third value "
+           "means the position is no longer declared IDL_BOOL_OR_DICT");
+    /* STEP 5.1, "set subtree to the NEGATION of options[\"selfOnly\"]". The member is `boolean selfOnly =
+       false`, so an absent one is false and subtree is TRUE — the dictionary arm's default is a DEEP import,
+       which is the opposite of the boolean arm's. idl_dict_bool is the reader for a declared boolean because
+       §3.2.17's member loop asks step_tobool_run for it: an unknown `selfOnly` is FORKED at the conversion and
+       arrives here as a real truth value, so there is no second fork owed at this line. */
+    *psubtree = !idl_dict_bool(ctx, options, "selfOnly");
+    /* STEP 5.2, "if options[\"customElementRegistry\"] EXISTS, then set registry to it" — existence and not
+       object-ness, because the member's declared type admits a registry and nothing else, and §3.2.17 makes
+       `undefined` the absence (the member declares no default). */
+    reg_v = idl_dict_get(ctx, options, "customElementRegistry");
+    /* WEB IDL §3.2.15 Interface types ON THE MEMBER'S DECLARED TYPE, which is `CustomElementRegistry`. It runs
+       BEFORE any of the algorithm's own steps because a conversion does, so `{customElementRegistry: 5}` is a
+       TypeError and not step 5.3's NotSupportedError. It is performed HERE rather than in the declaration for
+       the reason §4.5's ElementCreationOptions and §4.9's ShadowRootInit state at their own declarations — the
+       member is declared IDL_ANY and the diff that gives an IdlDictMember its own `iface_is`/`iface_name` for
+       this interface is unwritten; core/dom/shadow_root.c carries the residual that names it once for all
+       three. Until it lands the ORDER is what differs from a browser's: a declared type throws inside
+       §3.2.17's member walk, before `selfOnly` — which sorts before this member — is read at all. */
+    if (!JS_IsUndefined(reg_v) && !custom_elements_is_registry(reg_v)) {
+        JS_FreeValue(ctx, reg_v);
+        JS_ThrowTypeError(ctx, "ImportNodeOptions's customElementRegistry is not a CustomElementRegistry");
+        return false;
+    }
+    registry = reg_v;                                                  /* STEP 5.2 (the reference moves) */
+    /* STEP 5.3. The two registries an import may name are a SCOPED one and THIS DOCUMENT'S; anything else is a
+       registry the receiver resolves nothing in. It is the RECEIVER's and not the running realm's — the same
+       reading flatten_creation_options' step 1 makes, and for the same reason: `otherDoc.importNode(n)` asks
+       about otherDoc's registry, so the question is per DOCUMENT and the by-node entry is the only one that
+       can say which. */
+    if (JS_IsObject(registry) && !custom_elements_registry_is_scoped(ctx, registry)) {
+        doc_reg = custom_elements_node_registry(ctx, this_val);
+        same = JS_VALUE_GET_PTR(doc_reg) == JS_VALUE_GET_PTR(registry);
+        JS_FreeValue(ctx, doc_reg);
+        if (!same) {
+            JS_FreeValue(ctx, registry);
+            JS_ThrowDOMException(ctx, "NotSupportedError",
+                                 "importNode was given a custom element registry that is neither scoped nor "
+                                 "this document's");
+            return false;
+        }
+    }
+    JS_FreeValue(ctx, registry);
+    return true;
+}
+
+static int js_doc_import_node(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                              JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    NodeCloneState *s = st;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+
+    STEP_DISPATCH(DIN_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(DIN_CHECK);
+    {
+        Document *d = doc_receiver(ctx, hdr->this_val);
+        lxb_dom_node_t *n;
+        bool subtree;
+
+        /* THE DECLARATION'S OWN `idl_this_iface` HAS ALREADY REFUSED A FOREIGN RECEIVER, at Web IDL §3.7.7
+           Operations' position — before the argument conversions, which is where a browser refuses it — so this
+           arm is honouring doc_receiver's contract rather than asking the brand a second time. What
+           doc_receiver still answers that the declaration cannot is WHICH Document: the record, which is where
+           the tree this import copies INTO lives. */
+        if (!d) return JS_STEP_ABRUPT;
+        DCHECK(argc == 2, "§4.5 declares `importNode(Node node, optional (boolean or ImportNodeOptions) "
+                          "options = false)` — two positions, with the default materialized by the argument "
+                          "machine — so a body seeing any other count is a declaration that grew without this");
+        n = node_of(argv[0]);
+        DCHECK(n != NULL, "importNode was handed something that is not a Node — the argument is an INTERFACE "
+                          "type and the declaration brands it, so a non-Node is a TypeError before this body "
+                          "runs");
+        /* STEP 1, BOTH KINDS, ONE EXCEPTION. A DOCUMENT is refused because an import puts the copy in THIS
+           document and §4.4's document arm puts it in a document of its own — the two cannot both hold, which
+           is why cloneNode answers for a document and this member does not. A SHADOW ROOT is refused because
+           it is created by `attach a shadow root` and by nothing else, so a copy of one would be a second root
+           for a host that already has one. Both are questions the standard answers, not invariants a page
+           violated, so both are throws. */
+        if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT || shadow_root_is(n)) {
+            JS_ThrowDOMException(ctx, "NotSupportedError",
+                                 n->type == LXB_DOM_NODE_TYPE_DOCUMENT
+                                     ? "a Document cannot be imported"
+                                     : "a shadow root cannot be imported");
+            return JS_STEP_ABRUPT;
+        }
+        if (!doc_import_options(ctx, hdr->this_val, argv[1], &subtree))   /* STEPS 2-5 */
+            return JS_STEP_ABRUPT;
+        /* STEP 7, `clone a node` GIVEN `document` SET TO THIS. That argument is the member.
+           WHAT IS NOT COVERED: step 6 ("if registry is null, then set registry to the result of looking up a
+           custom element registry given this") and step 7's `fallbackRegistry`. §4.4's `clone a single node`
+           element arm passes the registry to `create an element`, which is what decides the COPY's own custom
+           element registry — and node.c's clone threads no registry at all, so a copy's registry is derived
+           the way an ordinary insertion derives it rather than taken from this member's argument. It is
+           NARROWER than §4.5 and not wrong for what it does: the copy is created UNCUSTOMIZED and §4.13's
+           upgrade reaction runs when it is inserted, which is §4.13.3's answer for every copy this engine has
+           ever made — §4.4's cloneNode reaches the identical arm, so this member is not the site of the gap.
+           WHAT THE NEXT DIFF BUILDS: `registry` as a third argument of node_clone_start, carried on
+           NodeCloneState beside `doc`, read by clone_element_into and handed to the element creation — which
+           is the same one-argument shape this diff added for `document`, at the same entry, for the same
+           reason. HOW ITS ABSENCE WOULD SHOW: an element imported into a document whose registry defines its
+           local name, where the page asked for a SCOPED registry instead, resolves its definition out of the
+           document's set — so the definition a later upgrade finds is not the one the import named, observable
+           as the wrong constructor running on an inserted copy. */
+        node_clone_start(hdr, s, n, lxb_dom_interface_document(d->dom), subtree, DIN_ROOT, DIN_RETURN);
+        return JS_STEP_YIELD;
+    }
+
+    /* STEP 7's `clone a node`, WHOSE SIX REST POINTS ARE THIS MEMBER'S SIX STAGES — named individually for the
+       reason §4.4's cloneNode names them: a stage added to NODE_CLONE_ALGO_STAGES does not compile until it
+       has an arm here, where a negated test on the return stage would silently swallow it. */
+    STEP_ARM(DIN_ROOT);
+    STEP_ARM(DIN_COPY);
+    STEP_ARM(DIN_TEMPLATE);
+    STEP_ARM(DIN_CHILDREN);
+    STEP_ARM(DIN_SHADOW);
+    STEP_ARM(DIN_LEAVE);
+    return node_clone_run(ctx, hdr, s, DIN_ROOT);
+
+    STEP_ARM(DIN_RETURN);
+    DCHECK(s->copy != NULL, "`clone a node` finished without a copy — its step 7 is what sets the answer, and "
+                            "the caller is only ever resumed from there");
+    *presult = node_wrap(ctx, s->copy);
+    return JS_STEP_DONE;
+}
+
+static const IdlStepDecl DOC_IMPORT_NODE_STEP = {
+    /* No release: the level stack is node_clone_visit_state's, and the teardown discharges that one list. */
+    js_doc_import_node, sizeof(NodeCloneState), doc_import_visit, NULL,
+    "DOM §4.5 Document.importNode (over §4.4's `clone a node` concept)", DIN_STEPS
+};
+
 /* §4.5's `[SameObject] readonly attribute DOMImplementation implementation`. SameObject is the whole reason the
    object lives on the document's record: a page holds it and calls it later, and a fresh one per read would
    compare unequal to the one it kept. */
@@ -3426,7 +3642,7 @@ static int g_id_create_element = -1, g_id_create_text = -1, g_id_create_comment 
            g_id_create_fragment = -1, g_id_create_element_ns = -1, g_id_create_iterator = -1,
            g_id_create_walker = -1, g_id_create_range = -1, g_id_create_event = -1,
            g_id_create_cdata = -1, g_id_create_pi = -1, g_id_doc_ctor = -1, g_id_adopt_node = -1,
-           g_id_title_set = -1, g_id_dir_set = -1, g_id_location_set = -1, g_id_by_element_name = -1;
+           g_id_title_set = -1, g_id_dir_set = -1, g_id_location_set = -1, g_id_by_element_name = -1, g_id_import_node = -1;
 /* THE SAME FOUR TOUCH HANDLERS core/html/html_element.c excludes, and for the same reason — this interface
    includes the same `GlobalEventHandlers`, so §Touch Events Level 2's "this mixin must not be implemented"
    reaches it too. The list is stated HERE rather than shared from there because idl_members_excluded reads the
@@ -3497,6 +3713,36 @@ static void document_declare_members(JSContext *ctx)
     idl_this_iface(document_is, "Document");
     g_id_create_event = idl_method_id(ctx, IDL_1STR, 1, js_doc_create_event, 0);
     {
+        /* §4.5's `[CEReactions, NewObject] Node importNode(Node node,
+           optional (boolean or ImportNodeOptions) options = false)` — a STEP because §4.4's `clone a node` is
+           one: the walk rests at every node of the page's subtree.
+           THE UNION IS THE DECLARATION'S, and `= false` is stated with idl_arg_default because the DEFAULT IS
+           THE BOOLEAN ARM. Every other union-with-dictionary position in the platform's IDL defaults to `{}`
+           and is therefore expressed by letting §3.2.17 convert the position's `undefined`; this one is the
+           single exception in the whole corpus, and without the explicit default `document.importNode(n)`
+           would take the dictionary arm and deep-copy the subtree — `selfOnly`'s own default is false and
+           step 5.1 negates it. */
+        static const IdlArgType IMPORT_NODE[2] = { IDL_INTERFACE, IDL_BOOL_OR_DICT };
+        /* §4.5's `dictionary ImportNodeOptions { CustomElementRegistry customElementRegistry;
+           boolean selfOnly = false; }`, in the IDL's own order because that is the order Web IDL reads them
+           in. The registry crosses UNCONVERTED and is brand-tested by doc_import_options, for the reason
+           ElementCreationOptions' identical member states above and core/dom/shadow_root.c's residual names
+           once for all three. `selfOnly` is a declared boolean, so §3.2.17's member loop FORKS an unknown one
+           and the body reads a real truth value. */
+        static const IdlDictMember IMPORT_NODE_OPTIONS[] = {
+            { "customElementRegistry", IDL_ANY,     false, NULL, 0 },
+            { "selfOnly",              IDL_BOOLEAN, false, NULL, 0, NULL, IDL_DEFAULT_FALSE, NULL },
+        };
+        g_id_import_node = idl_method_id_step(ctx, IMPORT_NODE, 2, IMPORT_NODE_OPTIONS,
+                                              (int)(sizeof IMPORT_NODE_OPTIONS /
+                                                    sizeof IMPORT_NODE_OPTIONS[0]),
+                                              &DOC_IMPORT_NODE_STEP, 0);
+        idl_iface_brand(node_class_id());
+        idl_optional_from(1);
+        idl_arg_default(1, IDL_DEFAULT_FALSE, NULL);
+        idl_this_iface(document_is, "Document");
+    }
+    {
         /* §4.5's `[CEReactions] Node adoptNode(Node node)`. The argument is an INTERFACE type, so the
            declaration brands it and a non-Node is a TypeError before the member's step 1; the `[CEReactions]`
            half is the machine's own epilogue, which drains the adoptedCallback reactions adopt enqueued before
@@ -3533,6 +3779,7 @@ static void document_declare_members(JSContext *ctx)
     agent_state_id("document", &g_id_create_walker, "§4.5's createTreeWalker");
     agent_state_id("document", &g_id_create_range, "§4.5's createRange");
     agent_state_id("document", &g_id_create_event, "§4.5's createEvent");
+    agent_state_id("document", &g_id_import_node, "§4.5's importNode machine");
     agent_state_id("document", &g_id_adopt_node, "§4.5's adoptNode");
     agent_state_id("document", &g_id_title_set, "§3.1.7's `title` setter");
     agent_state_id("document", &g_id_dir_set, "§3.2.6.4's `dir` setter");
@@ -3556,10 +3803,19 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
             idl_install_accessor(ctx, proto, NAMES[k], js_doc_shortcut, (int)k, -1);
     }
     idl_install_method(ctx, proto, "createElementNS", g_id_create_element_ns);
-    /* §4.5's adoptNode. `importNode` is NOT beside it and is honestly ABSENT: it is stated over "clone a node"
-       with `document` set to the receiver and a `fallbackRegistry`, and node.c's clone machine
-       (node_clone_start) takes neither — so a page's own TypeError names the gap rather than a member that
-       clones into the wrong document. */
+    /* §4.5's importNode AND adoptNode, the two members stated over another document's node. They are NOT the
+       same operation and the difference is whether the original moves: an import COPIES (§4.4's `clone a
+       node`, so the source keeps its tree) and an adopt MOVES (§4.5's `adopt a node`, which rewrites the
+       node's own node document). A page reaching for one when it wants the other is the ordinary bug this
+       pair exists to make expressible, which is why both are here rather than one standing for both.
+       THE COMMENT THAT STOOD HERE CALLED importNode HONESTLY ABSENT, on the ground that node.c's clone machine
+       took neither §4.4's `document` argument nor its `fallbackRegistry`. The first half is what this diff
+       built — node_clone_start now takes the document, which is the one argument the member IS — and the
+       second half survives as the named residual at the member's own step 7 rather than as an absence: a
+       registry the clone does not thread makes a copy UNCUSTOMIZED, which is what §4.4's cloneNode already
+       produces and what §4.13's upgrade reaction answers on insertion. It is kept in its own words because a
+       reader who re-derives the absence from `fallbackRegistry` alone would conclude the member cannot land. */
+    idl_install_method(ctx, proto, "importNode", g_id_import_node);
     idl_install_method(ctx, proto, "adoptNode", g_id_adopt_node);
     /* §4.5's two ATTRIBUTE factories, declared beside the interface they build (attr.c) — "create an attribute"
        is §4.9.2's algorithm and belongs to the attribute component, not to a second copy of it here. */

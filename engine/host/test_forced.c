@@ -1242,6 +1242,70 @@ static const char *HTML =
     " + '&dp=' + encodeURIComponent(cdp.innerHTML)"
     " + '&det=' + (cdp.parentNode === null && cdp !== cw && !cdp.isConnected ? 'detached' : 'wrong')"
     " + '&orig=' + (cw.querySelector('b').getAttribute('k') === null ? 'untouched' : 'shared'));"
+    /* §4.5's importNode — the member `document.importNode(t.content, true)` is written with, and the one this
+       file could not exercise at all because it was ABSENT: a page reaching for it got a TypeError and stopped.
+       A SECOND DOCUMENT IS WHAT MAKES IT OBSERVABLE, and that is not fixture convenience — a same-document
+       import answers the byte-identical tree a clone answers, so a row over one document cannot tell the two
+       members apart and would pass with §4.4's `document` default still hardcoded. What each row asserts is a
+       value the engine COMPUTES: whose document the copy belongs to, what the copy's subtree serializes to, and
+       that the ORIGINAL is still standing where it was — which is the whole difference from adoptNode beside
+       it, since an adopt MOVES and an import COPIES. */
+    "var idoc = document.implementation.createHTMLDocument('imp');"
+    "var isrc = idoc.createElement('div'); isrc.setAttribute('id', 'isrcid');"
+    "var ipp = idoc.createElement('p'); ipp.setAttribute('class', 'a');"
+    "ipp.appendChild(idoc.createTextNode('x'));"
+    "var ibb = idoc.createElement('b'); ibb.appendChild(idoc.createTextNode('y')); ipp.appendChild(ibb);"
+    "isrc.appendChild(ipp);"
+    "var iii = idoc.createElement('i'); iii.appendChild(idoc.createTextNode('z')); isrc.appendChild(iii);"
+    "idoc.body.appendChild(isrc);"
+    "var ideep = document.importNode(isrc, true);"
+    "fetch('/api/importdeep?own=' + (ideep.ownerDocument === document ? 'impthisdoc' : 'wrong')"
+    " + '&kid=' + (ideep.firstChild && ideep.firstChild.ownerDocument === document ? 'impkidthis' : 'wrong')"
+    " + '&ser=' + encodeURIComponent(ideep.innerHTML)"
+    " + '&det=' + (ideep.parentNode === null && !ideep.isConnected ? 'impdetached' : 'wrong')"
+    " + '&src=' + (isrc.ownerDocument === idoc && isrc.parentNode === idoc.body ? 'impstayed' : 'impmoved'));"
+    /* THE THREE ARMS OF `optional (boolean or ImportNodeOptions) options = false`, WHICH DISAGREE, and the
+       reason the declaration states its default explicitly. An OMITTED argument is §3.6's declared default and
+       that default is the BOOLEAN `false` — a SHALLOW import; an explicit EMPTY DICTIONARY is the other arm,
+       whose `selfOnly` defaults to false and which step 5.1 NEGATES — a DEEP one; and `{selfOnly:true}` is
+       shallow again. Every other union-with-dictionary position in the platform's IDL defaults to `{}`, so an
+       engine that expressed this one the same way would answer DEEP for `document.importNode(n)`, which is the
+       commonest call there is. `no` and `dict` differing is the whole assertion. */
+    "var ish = document.importNode(isrc);"
+    "var idd = document.importNode(isrc, {});"
+    "var iso = document.importNode(isrc, { selfOnly: true });"
+    "var itt = document.importNode(isrc, true);"
+    "fetch('/api/importarm?no=' + ish.childNodes.length + '&dict=' + idd.childNodes.length"
+    " + '&self=' + iso.childNodes.length + '&bool=' + itt.childNodes.length"
+    " + '&attr=' + (ish.getAttribute('id') === 'isrcid' ? 'impattr' : 'wrong'));"
+    /* STEP 1's TWO REFUSALS, WHICH ARE ONE EXCEPTION OVER TWO NODE KINDS — a DOCUMENT and a SHADOW ROOT. They
+       are asserted together because landing one of a two-kind refusal is a WRONG answer and not a partial one:
+       a page's `catch (e) { e.name }` cannot tell a kind that is refused from a kind that is copied, so the
+       only way to state that both are refused is to read both names. The third probe is the declaration's own
+       §3.2.15 refusal of a `customElementRegistry` that is not one, which is a TypeError and not step 5.3's
+       NotSupportedError — a different exception at a different layer, and the pair says the ORDER is right. */
+    "var ierr = [];"
+    "try { document.importNode(document); ierr.push('nothrow'); } catch (e) { ierr.push(e.name); }"
+    "var ihost = document.createElement('div');"
+    "try { var isr = ihost.attachShadow({ mode: 'open' }); document.importNode(isr); ierr.push('nothrow'); }"
+    " catch (e) { ierr.push(e.name); }"
+    "try { document.importNode(isrc, { customElementRegistry: 5 }); ierr.push('nothrow'); }"
+    " catch (e) { ierr.push(e.name); }"
+    "fetch('/api/importthrow?v=' + ierr.join(','));"
+    /* STEP 5.3's ACCEPTING ARMS, WHICH ARE THE TWO REGISTRIES AN IMPORT MAY NAME: a SCOPED one — §4.13.4's
+       constructor sets `is scoped` to true — and THIS DOCUMENT'S OWN, which is what `window.customElements` is.
+       Both must pass and the import must still answer a copy.
+       WHAT THIS FIXTURE CANNOT REACH is the REFUSING arm, and saying so is part of the row rather than a gap in
+       it: a registry that is neither scoped nor this document's is another WINDOW's `customElements`, and a
+       `createHTMLDocument` document has no Window at all (its `defaultView` is null), so one realm cannot
+       produce one. The refusal is asserted by the code path it shares with §4.9's attachShadow and §4.5's
+       createElement, whose own rows reach the same predicate. */
+    "var iregs = [];"
+    "try { iregs.push(document.importNode(isrc, { customElementRegistry: new CustomElementRegistry() })"
+    "        .ownerDocument === document ? 'impscoped' : 'wrong'); } catch (e) { iregs.push(e.name); }"
+    "try { iregs.push(document.importNode(isrc, { customElementRegistry: window.customElements })"
+    "        .ownerDocument === document ? 'impown' : 'wrong'); } catch (e) { iregs.push(e.name); }"
+    "fetch('/api/importreg?v=' + iregs.join(','));"
     /* §4.10 a `<template>`'s children are on its CONTENT fragment, not under it, so a walk that follows
        first_child copies the template and none of its markup. Whatever this engine does, it should be stated by
        a test rather than discovered by a page. */
@@ -15800,6 +15864,17 @@ static int probes_eval(const char *js, Probe *out, int cap) {
                                  "%3C%2Ftemplate%3Ez%3C%2Ftemplate%3Eafter" },
         { "/api/serdeep",    "64" },   /* 64 open, 64 close, the text once — 128 suspensions in one walk */
         { "/api/clone",      "untouched" },   /* §4.4: shallow/deep, attributes, detached, original intact */
+        /* §4.5's importNode. `impstayed` is the row's LAST token and is the one that separates an import from
+           an adopt: the source is still in the document it came from, which an adopt would have moved. */
+        { "/api/importdeep", "impstayed" },
+        { "/api/importdeep", "%3Cp%20class%3D%22a%22%3Ex%3Cb%3Ey%3C%2Fb%3E%3C%2Fp%3E%3Ci%3Ez%3C%2Fi%3E" },
+        /* the three arms of `(boolean or ImportNodeOptions)`: omitted is 0 children, `{}` is 2, `{selfOnly:
+           true}` is 0, explicit `true` is 2. An engine that read the omitted call as the dictionary arm
+           answers `no=2` and every other digit the same, so the STRING is the claim and no single count is. */
+        { "/api/importarm",  "no=0&dict=2&self=0&bool=2&attr=impattr" },
+        /* step 1's two node kinds and the declaration's §3.2.15 refusal, in order */
+        { "/api/importthrow", "NotSupportedError,NotSupportedError,TypeError" },
+        { "/api/importreg",  "impscoped,impown" },
         { "/api/clonetpl",   "%3Ctemplate%3E%3Cb%3Etc%3C%2Fb%3E%3C%2Ftemplate%3E" },
         /* a template's TWO child lists. The clone copies both — 1 ordinary child in, 1 out, and it is the <u>.
            The serialisation shows only the content, which is §13.3 replacing the template with its contents. */

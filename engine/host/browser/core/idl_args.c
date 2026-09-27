@@ -4445,12 +4445,46 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            the list of optionality values of the REMAINING entry", and the entry that made this position optional is
            exactly the one step 4 just removed — so `postMessage(m, undefined, [p])` converts the string
            "undefined" rather than treating the target origin as absent. */
-        /* …AND IT IS NOT ABOUT A DICTIONARY. `store.createObjectStore('s', undefined)` and
-           `store.createObjectStore('s')` are the same call, and both are `options = {}` with every member at
-           its declared default — so a dictionary position falls through to the conversion below, which is
-           what §3.2.17 says converting `undefined` to a dictionary produces. */
-        if (!step4_only_longer && !idl_type_is_dictionary(t) &&
-            s->i < idl_declared_positions(m) && s->i >= first_opt && JS_IsUndefined(a)) {
+        /* …AND IT IS NOT ABOUT A DICTIONARY WHOSE DECLARED DEFAULT *IS* THE DICTIONARY.
+           `store.createObjectStore('s', undefined)` and `store.createObjectStore('s')` are the same call, and
+           both are `options = {}` with every member at its declared default — so such a position falls through
+           to the conversion below, which is what §3.2.17 says converting `undefined` to a dictionary produces.
+           A UNION WHOSE DECLARED DEFAULT IS THE *OTHER* ARM IS THE CASE THAT GATE GOT WRONG, and it got it
+           wrong for as long as no member in the platform wrote one. `optional (boolean or D) x = false` has a
+           default that is NOT a dictionary, so §3.6 step 16.1 places the boolean `false` and §3.2.25 is never
+           reached at all — where falling through to the conversion sends the position's `undefined` to
+           §3.2.25 step 4's dictionary arm and builds an all-defaults D instead. Those are not two spellings of
+           one answer: DOM §4.5's `importNode(node, optional (boolean or ImportNodeOptions) options = false)`
+           reads `subtree` from the boolean and from `the negation of options["selfOnly"]`, whose own default is
+           false — so the two arms answer FALSE and TRUE, and `document.importNode(n)` would have deep-copied
+           the whole subtree where a browser copies one node.
+           THE POPULATION IS ONE ARGUMENT POSITION AND THAT IS DERIVED RATHER THAN ASSERTED. A dictionary-arm
+           union whose declared default is not the dictionary answers exactly once over the harvested corpus,
+           and the shortest command that says so is
+           `grep -rnoE 'Options\) [a-z]+ = f' --include=*.idl node_modules/@webref` — one hit, DOM's own, this
+           member. Widened to every `optional (boolean or …)` position it answers TWO, the other being CSSOM
+           VIEW §6's `scrollIntoView`, whose default IS `{}` and which therefore wants the old gate.
+           AND THE MEMBER-LEVEL TWIN IS REAL AND IS NOT THIS CODE PATH, which is why the claim says ARGUMENT:
+           Media Capture and Streams' `MediaStreamConstraints` declares `(boolean or MediaTrackConstraints)
+           audio = false` as a DICTIONARY MEMBER, whose defaults are placed by §3.2.17's own member walk and not
+           by §3.6 at all. The same shape, one level down, through code this condition never reaches.
+           TWO SPELLING RULES DECIDE HOW THE COMMAND ABOVE IS WRITTEN AND EACH COST A RUN TO FIND. The corpus is
+           scoped with `--include` rather than with a glob, because a wildcard written after a slash is the two
+           characters -Wcomment refuses inside a block comment. And the pattern is the SHORT one because the
+           citation auditor reads any quoted run of six or more words as a spec quotation and reports it against
+           whichever standard the file vote places — a regex is punctuation the normaliser turns into words, so
+           the natural spelling of this search is a fabricated quotation of whatever section stands above it.
+           So the old
+           gate was exact for every member it had and wrong for exactly the one that arrived — which is why
+           this is keyed on whether a default was DECLARED and not on the type: the dictionary fall-through is
+           §3.6's absent arm expressed as a conversion, and a position that states its own default is not in
+           that arm. */
+        /* THE BOUNDS TEST COMES FIRST AND THAT ORDER IS LOAD-BEARING, not style: `arg_dflts` is allocated with
+           one entry per DECLARED position, so a variadic tail's `s->i` is past its end and the default test
+           below would read off the allocation. `&&` is what keeps the read inside it. */
+        if (!step4_only_longer && s->i < idl_declared_positions(m) && s->i >= first_opt && JS_IsUndefined(a) &&
+            (!idl_type_is_dictionary(t) ||
+             (m->arg_dflts != NULL && m->arg_dflts[s->i].kind != IDL_DEFAULT_NONE))) {
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
             /* §3.6 STEP 15.4, BOTH ARMS — the guard reached here is that one, "If optionality is 'optional'

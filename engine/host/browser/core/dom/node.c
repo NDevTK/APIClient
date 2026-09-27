@@ -3479,12 +3479,18 @@ static lxb_dom_node_t *clone_a_single_node(lxb_dom_document_t *doc, lxb_dom_node
     return copy;
 }
 
-void node_clone_start(JSStepHdr *hdr, NodeCloneState *s, lxb_dom_node_t *node, bool subtree, int base, int after)
+void node_clone_start(JSStepHdr *hdr, NodeCloneState *s, lxb_dom_node_t *node,
+                      lxb_dom_document_t *document, bool subtree, int base, int after)
 {
     DCHECK(node != NULL, "`clone a node` was started on no node");
     DCHECK(s->src == NULL, "a second `clone a node` was started while one was still walking — the state holds "
                            "ONE walk, and the caller resumes at its `after` stage with the copy in hand");
     s->src = node;
+    /* §4.4's `document` ARGUMENT, RESOLVED ONCE: "an optional document document (default node's node
+       document)". The default is placed here rather than read as a NULL by the walk, so `s->doc` is the
+       argument at every stage and nothing downstream has to know which of the two it was — which is also what
+       lets step 1's assert be stated over the argument instead of over the default's own spelling. */
+    s->doc = document ? document : node->owner_document;
     s->deep = subtree;
     s->after = after;
     hdr->stage = base + NODE_CLONE_PHASE_ROOT;
@@ -3500,10 +3506,13 @@ int node_clone_run(JSContext *ctx, JSStepHdr *hdr, NodeCloneState *s, int base)
     if (phase == NODE_CLONE_PHASE_ROOT) {
         lxb_dom_node_t *n = s->src;
 
-        /* STEP 1: "Assert: node is not a document or node is document." The `document` argument defaults to
-           node's node document, and lexbor makes a document its own owner_document, so the assert is about
-           this entry being the DEFAULTED one. */
-        DCHECK(n->type != LXB_DOM_NODE_TYPE_DOCUMENT || lxb_dom_interface_node(n->owner_document) == n,
+        /* STEP 1: "Assert: node is not a document or node is document." It is stated over `s->doc`, which is
+           the ARGUMENT — the caller's document or the default node_clone_start placed — and not over the
+           default's own spelling (`node(n->owner_document) == n`, which lexbor makes true of every document).
+           The two readings agree for the defaulted entry and part company for a caller that NAMES a document:
+           §4.5's importNode is such a caller and its own step 1 throws for a document node, so a document
+           reaching here with a foreign `document` is this engine's invariant and not a page's question. */
+        DCHECK(n->type != LXB_DOM_NODE_TYPE_DOCUMENT || lxb_dom_interface_document(n) == s->doc,
                "§4.4 step 1: a document is cloned only as its OWN `document` argument");
         if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT) {
             /* STEP 2 for a document, and the line that makes the rest of the walk build the copy's own tree:
@@ -3513,7 +3522,9 @@ int node_clone_run(JSContext *ctx, JSStepHdr *hdr, NodeCloneState *s, int base)
             s->copy = clone_a_document(lxb_dom_interface_document(n));
             s->doc = lxb_dom_interface_document(s->copy);
         } else {
-            s->doc = n->owner_document;      /* the argument's default: node's node document */
+            /* `s->doc` is already §4.4's `document` — node_clone_start resolved the default — so the copy is
+               built in the caller's document and not in the source's. That is the ONE line an import differs
+               from a clone in, and it is why this arm no longer names `owner_document` at all. */
             s->copy = clone_a_single_node(s->doc, n);
             dom_cow_note_created(s->copy);   /* the clone ROOT only — its descendants are reachable through it */
             pi_attrs_note_cloned(ctx, s->copy);   /* §4.4's switch copies target and data and NOT the map */
@@ -3691,7 +3702,10 @@ static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
             JS_ThrowDOMException(ctx, "NotSupportedError", "cloneNode on a ShadowRoot");
             return JS_STEP_ABRUPT;
         }
-        node_clone_start(hdr, s, n, deep, CN_ROOT, CN_RETURN);      /* STEP 2: `clone a node` given this */
+        /* STEP 2: `clone a node` given this. NULL is §4.4's `document` DEFAULT — "node's node document" —
+           which is what this member is stated over: cloneNode names no document, so a copy belongs to the
+           tree the original belongs to. §4.5's importNode is the member that names one. */
+        node_clone_start(hdr, s, n, NULL, deep, CN_ROOT, CN_RETURN);
         return JS_STEP_YIELD;
     }
 
