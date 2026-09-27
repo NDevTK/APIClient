@@ -1611,6 +1611,49 @@ async function main() {
                                        : `produced ${i.results} @RESULT snapshot(s), the last of them ` +
                                          `${i.result.length} bytes, which this zone does ` +
                                          'not merge into the seed\'s'));
+  /* AND THE PEER'S OWN FLOW BASE, WHICH IS THE ONE THING THE LINE ABOVE WAS NAMED AS NOT SAYING. Its
+     paragraph is right that MERGING two finding sets is a grammar this zone does not have, and that reason
+     does not reach a peer's OWN counters printed under its OWN tag: engine/route.mjs already prints exactly
+     these per engine because it holds both in one process, and this host holds both too — one of them is a
+     child process. So `i.result` was PARSED here and read by nothing, which is the write-with-no-reader half
+     of §A-FIELD-A-CONSUMER-DEFAULTS with the value sitting in a variable.
+     WHY THESE TWO ROWS AND NOT A DIGEST OF THE DOCUMENT. `_worldSegmentsMade` is solver/world.c's `g_seg_made`
+     and that file's `world_segment` DCHECKs `w.doc != g_doc` — a segment is materialized for a FOREIGN world
+     and for no other kind — so a nonzero count in a PEER is the arrival of another instance's world in this
+     one, which the asking agent cannot produce and which no local flow of the peer's own can. That is the
+     witness that the peer answered UNDER THE ASKING FLOW'S WORLD rather than out of its own baseline.
+     `_flows` is solver/flow.c's `g_flows_created` and is printed BESIDE it rather than asserted on, because
+     engine.c's `engine_perform` APPENDS the program to every live timeline instead of minting one — so a peer
+     with a single boot flow answers a read without `_flows` moving at all, and a reader who took that row for
+     the flow-base witness would be reading a number this transport does not raise.
+     AND AN UNREADABLE DOCUMENT IS SAID AND NEVER ASSERTED. §Offensive-programming: a DCHECK stands only on a
+     value this codebase computed, and SECURITY.md makes the engine UNTRUSTED — so a snapshot whose JSON this
+     zone cannot parse, or one that carries neither row, is REPORTED as unreadable with what was actually
+     seen. A throw here would hand an untrusted child an abort switch for the trusted zone, and a `|| 0` would
+     turn "the peer never told us" into the number that means "no foreign world ever arrived". */
+  for (const i of instances) {
+    if (i === root) continue;
+    let saw;
+    if (i.result === null) {
+      saw = 'UNREADABLE — this instance printed no @RESULT at all, so it stated no counters; an ABSENT ' +
+            'document and a document reporting zero are different facts and this is the first';
+    } else {
+      let doc = null;
+      try { doc = JSON.parse(i.result); } catch { doc = null; }
+      if (doc === null || typeof doc !== 'object')
+        saw = `UNREADABLE — this instance's last @RESULT (${i.result.length} bytes) is not JSON this zone ` +
+              'can parse, so the rows below were never stated rather than stated as zero';
+      else if (typeof doc._worldSegmentsMade !== 'number' || typeof doc._flows !== 'number')
+        saw = 'UNREADABLE — this instance\'s last @RESULT carries no `_worldSegmentsMade`/`_flows` pair ' +
+              '(solver/result.c emits both, so a document without them is a producer this zone does not know)';
+      else
+        saw = `_worldSegmentsMade=${doc._worldSegmentsMade} ` +
+              `_worldSegmentsForked=${typeof doc._worldSegmentsForked === 'number' ? doc._worldSegmentsForked : '?'} ` +
+              `_flows=${doc._flows} ` +
+              `_switches=${typeof doc._switches === 'number' ? doc._switches : '?'}`;
+    }
+    console.error(`[trusted] peer instance [${i.tag}] flow base: ${saw}`);
+  }
 
   /* AND THE DENOMINATION IS SAID OUT LOUD BESIDE THE FINDINGS, because every total in the document this
      process is about to print was taken under it, and CLAUDE.md's rule is that an instrument measuring a

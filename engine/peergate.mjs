@@ -218,6 +218,20 @@ const CHECKS = [
              'on a question nothing answered, which is a failure and not a note'],
   ['peers', 'every peer instance ended with status 0 — a peer that aborts prints its own `@WHY` above this ' +
             'gate\'s verdict, and that is the diagnosis rather than this line'],
+  /* THE FLOW BASE, WHICH THIS FILE'S OWN HEADER NAMED AS THE THING IT DID NOT MEASURE. `length` and `closed`
+     prove the answer came FROM the peer's document (W2) and are silent about WHAT RAN THERE — and CLAUDE.md's
+     requirement is not that the value be the peer's, it is that a peer ANSWER BY RUNNING A PROGRAM, on a flow
+     of its own frontier, under the ASKING flow's world. `_worldSegmentsMade` is the one row that can only be
+     raised by that: solver/world.c's `world_segment` DCHECKs `w.doc != g_doc`, so a segment is materialized for
+     a FOREIGN world and for nothing else, and the asking agent cannot raise a count inside a peer process at
+     all. It is read out of the PEER's own `@RESULT` — the artifact, not this harness — which `trusted.mjs` now
+     prints under that peer's tag. */
+  ['peerflow', 'a peer instance\'s OWN result document reports `_worldSegmentsMade` at least 1 — the asking ' +
+               'agent\'s world arrived in the peer process and a segment was materialized for it, which is ' +
+               'the witness that the read was performed as a PROGRAM on the peer\'s frontier under the ' +
+               'asker\'s timeline rather than answered out of anything either side already held. No local ' +
+               'flow of the peer can raise it (world_segment refuses a world of its own document) and neither ' +
+               'can this gate'],
 ];
 
 async function main() {
@@ -488,6 +502,36 @@ async function main() {
     record('peers', bad.length ? 'wrong' : 'pass',
            peerLines.map((m) => `${m[1]} at ${m[2]} ended ${m[3]}`).join(' ; '));
   }
+
+  /* ── THE PEER'S OWN FLOW BASE, READ OFF THE PEER'S OWN DOCUMENT ────────────────────────────────────────────
+     THREE VERDICTS AND NOT TWO, which is the rule this file already performs everywhere else: `missing` is
+     "no peer stated the row at all" and `wrong` is "every peer stated it and it is zero", and those take
+     OPPOSITE work. A zero is a TRANSPORT finding — the read was answered without the asker's world ever being
+     materialized in the peer, which is the one thing `length === 2` cannot rule out — while an absence is a
+     fact about what `trusted.mjs` could read out of a peer that printed no document, and sends the reader to
+     the peer's own `@WHY` above this verdict instead.
+     MATCHED ON `trusted.mjs`'s SEPARATE LINE and never by widening the `peers` pattern above: that pattern
+     carries ` at <url> ended `, this one does not, so the two cannot collide and a rename on either side
+     leaves the other reporting `missing` rather than quietly measuring nothing. */
+  const flowLines = [...err.matchAll(/peer instance \[([^\]]+)\] flow base: (.+)$/gm)];
+  const madeOf = (s) => { const m = /_worldSegmentsMade=(\d+)/.exec(s); return m ? Number(m[1]) : null; };
+  const stated = flowLines.map((m) => ({ tag: m[1], made: madeOf(m[2]), saw: m[2] }))
+                          .filter((r) => r.made !== null);
+  if (!flowLines.length)
+    record('peerflow', 'missing', 'trusted.mjs printed no per-peer flow-base line at all — either no peer ' +
+                                  'instance was provisioned, or that report is not being made');
+  else if (!stated.length)
+    record('peerflow', 'missing',
+           `no peer stated a \`_worldSegmentsMade\` count: ${
+             flowLines.map((m) => `[${m[1]}] ${m[2]}`).join(' ; ')}`);
+  else if (stated.some((r) => r.made >= 1))
+    record('peerflow', 'pass',
+           stated.map((r) => `[${r.tag}] ${r.saw}`).join(' ; '));
+  else
+    record('peerflow', 'wrong',
+           'every peer that stated the row reports ZERO foreign world segments materialized, so no asking ' +
+           'agent\'s world ever arrived in a peer process — the read was answered without one: ' +
+           stated.map((r) => `[${r.tag}] ${r.saw}`).join(' ; '));
 
   report(port);
 

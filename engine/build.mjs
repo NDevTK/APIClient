@@ -7580,9 +7580,18 @@ function runProgram(label, argv, hint) {
  * instance from the create notice, routes posts and a synchronous cross-origin `length` read between them,
  * and parks one of them on an outstanding read.
  *
- * IT IS THE ONLY THING IN THE TREE THAT PROVISIONS TWO INSTANCES, which §SECURITY makes the precondition for
- * believing any cross-instance mechanism has ever run — the world registry, the nearest-first ancestry, the
- * lazy segment materialization, the peer that answers by running a program. It stood BEHIND the smoke's exit,
+ * IT IS THE ONLY THING IN THE TREE THAT PROVISIONS TWO INSTANCES IN ONE PROCESS, and this sentence used to
+ * claim the whole of that without the last three words — rewritten rather than deleted, because a reader who
+ * re-derives it from the stage list will re-add it. `engine/peergate.mjs` provisions two as two OS PROCESSES,
+ * which is the shape §SECURITY actually names, and until the stage below existed nothing invoked it; the claim
+ * was therefore true of what a BUILD ran and false of the tree, which is the one direction §Testing rates as
+ * silent — the only reader of "nothing else does this" is somebody deciding whether to build a second one.
+ * WHAT §SECURITY MAKES THE PRECONDITION IS UNCHANGED AND IS WHY BOTH RUN: believing any cross-instance
+ * mechanism has ever run — the world registry, the nearest-first ancestry, the lazy segment materialization,
+ * the peer that answers by running a program. THE TWO-INSTANCE DRIVE stood BEHIND the smoke's exit — named
+ * rather than left as `It`, because the paragraph inserted above this one moved the tail away from its
+ * subject and a pronoun then resolves to whatever is nearest, which for a reader scanning this banner is
+ * now the cross-PROCESS gate and not the drive the sentence is about,
  * so the run that would first show a cross-instance regression is precisely the run that never asked: any
  * probe row 0, in any unrelated area of the fixture, and the seam went unexercised while the report named only
  * the smoke. That is §Testing's excluded test wearing a complete-looking total, and the fix is that neither
@@ -7690,6 +7699,43 @@ STAGES.push(onHost(ABI_LINK.code
                "Until this stage existed neither file was compiled, imported or run by anything."),
   /* THE SAME READING AS THE DRIVE ABOVE: the vehicle's own machinery, asked by nothing else, so it decides. */
   STAGE_HOST.WASM));
+/* AND THE SAME SEAM AS TWO OS PROCESSES, WHICH IS THE SHAPE SECURITY.md ACTUALLY NAMES AND WHICH NOTHING RAN.
+   `engine/peergate.mjs` was complete — a frozen two-authority fixture, a declared check table, a W5 guard that
+   refuses a verdict unless every declared check produced a result, and five named wrong-reasons it closes — and
+   `git grep peergate` answered THREE files, none of which INVOKES it: this one mentioned its hardcoded binary
+   default in a comment, `trusted.mjs` mentions the stdout contract it reads, and `safe-fetch.js` lists it as a
+   call site. So the NATIVE cross-process transport was §Testing's excluded test with the total still looking
+   complete, and the gate written against exactly that failure was itself outside the gate.
+   IT IS NOT A SECOND COPY OF THE DRIVE ABOVE, WHICH IS THE ONE THING TO CHECK BEFORE ADDING IT. That one puts
+   two emscripten instances in ONE process and plays the offscreen's part in-line; this one spawns
+   `engine/trusted.mjs`, which spawns the SHIPPED `qjs_*` ABI as a child `--abi` PROCESS per instance and talks
+   to it over pipes. The failures they can see are disjoint: a heap failure there, a LIFETIME failure here — a
+   provisioned peer that runs its scripts, drains, closes, and is gone before the creator's first
+   `otherW.length` arrives, which is what `qjs_set_referenced` exists for and which no in-process drive can
+   exhibit. Its own header records that route.mjs's fixture was COMPENSATING for that defect with a `/hold` the
+   peer parked on, and that this gate asserts AT THE WIRE that no third path was ever requested.
+   ON THE NATIVE HOST BECAUSE THAT IS THE PROGRAM IT DRIVES — a CPU-denominated slice and a real fork(), which
+   is the whole reason this gate exists beside the wasm one rather than instead of it.
+   AND A `DEFECT` HERE IS FIRST-PAST-THE-POST AND IS READ AS SUCH, which is why the hint says so rather than
+   leaving it to be discovered. This stage drives an ENGINE, so an abort anywhere in a document's boot lands
+   here ahead of every peer check — and the gate reports that honestly (`exit` WRONG, the beacons ABSENT, the
+   abort's own `@WHY` on stderr above the verdict) rather than as a transport finding. The discriminator is the
+   abort IDENTITY: one that also fires in the smoke or the native smoke above is upstream of this subject and
+   this stage is UNSCORED about peers, not red about them. */
+STAGES.push(onHost(NATIVE_BUILT.bin === null
+  ? skipped("native cross-process peer transport", "the native program did not link")
+  : runProgram("native cross-process peer transport", [join(ENGINE, "peergate.mjs"), NATIVE_BUILT.bin],
+               "this is the cross-instance seam as TWO OS PROCESSES over pipes: a cross-origin peer " +
+               "provisioned as a child of the shipped ABI, kept alive past its own drain by `referenced`, and " +
+               "answering two synchronous reads whose true values neither the asking agent nor the gate can " +
+               "produce locally (`length` 2 against a local 0, `closed` true against a local false). Read its " +
+               "check table: `pass`/`WRONG`/`ABSENT` are three verdicts and an ABSENT observation is never a " +
+               "FALSE one. A DEFECT whose abort identity also appears in the smoke above is UPSTREAM of this " +
+               "stage's subject and says nothing about peer provisioning in either direction."),
+  /* THE PROGRAM IT DRIVES IS THE NATIVE ONE, so its reading is the verdict host's. Nothing else in this tree
+     asks this question — route.mjs asks the IN-PROCESS one — so excusing it would delete the only cross-PROCESS
+     gate there is, which is §Testing's excluded test rather than a finding about anything. */
+  STAGE_HOST.NATIVE));
 /* THE RECORD-FIELD CONTRACT, which is the defect class §Architecture names and which nothing else here asks
    about: a name a consumer READS off a producer's record and no producer WRITES, a field a producer emits that
    nothing reads, a `||`/`??`/`?.`/swallowed-catch that turns either of those into a plausible datum instead of
