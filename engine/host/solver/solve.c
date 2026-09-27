@@ -227,10 +227,19 @@ typedef struct {
        AND AN IMPLICATION HOLDS OVER WRITTEN OPERANDS ONLY, which is not a truism here: this field was the one
        member of Cand sink_search did not state, so for as long as that stood the left-hand side was whatever a
        realloc'd slot held and the assert at the raise could neither fire on a broken invariant nor stay silent
-       on a sound one. See sink_search's line for the measurement.
-       RETIREMENT: this clause goes when `ends` and `tried` are raised through one accessor that cannot be
-       handed an unwritten operand, because the implication is then true by construction rather than by two
-       initialisers agreeing.
+       on a sound one. It did BOTH, in one build at 9ccc3bc9: the native smoke emitted six rows whose `candEnds`
+       exceeded their own `tried` with no abort at all, and the COLD-PARK session — which is where candidate
+       flows END — aborted on its first finish, `cond:"e->ends < e->tried"` as the terminal line of that stage's
+       log, SIGABRT, build FAILED. A HEALTHY engine, refused by a check standing on memory nobody had written.
+       RETIREMENT — MET, BY A CONSTRUCTION AND NOT BY THE ACCESSOR THIS CONDITION NAMED, which is why it is
+       rewritten rather than struck. It asked for `ends` and `tried` to be raised through one accessor that
+       cannot be handed an unwritten operand; what landed instead is sink_search's birth as a single compound
+       literal, so the language writes both operands and an unwritten one is UNSPELLABLE rather than guarded —
+       the same hazard closed one step earlier, and the clause's own words for why ("true by construction
+       rather than by two initialisers agreeing") are now literally the case, there being one initialiser. The
+       record stays because what a reader re-derives is the per-session SCOPE above it, which no construction
+       states. RETIREMENT: this clause goes when `ends` is raised through an accessor that also owns `tried`,
+       because the ORDER of the two would then be unspellable as well as their existence.
        RETIREMENT: this record's measured paragraph goes when a parked record in this tree cannot be emitted
        without a statement of whether its candidates are still live, because the gate reading is then
        unspellable rather than merely corrected here. */
@@ -920,112 +929,96 @@ static Cand *sink_search(const char *src, int sink, int *created) {
     for (int i = 0; i < g_pending_n; i++)
         if (g_pending[i].sink == sink && !strcmp(g_pending[i].src, src)) return &g_pending[i];
     if (g_pending_n >= g_pending_cap) { g_pending_cap = g_pending_cap ? g_pending_cap * 2 : 8; g_pending = realloc(g_pending, (size_t)g_pending_cap * sizeof(Cand)); CHECK(g_pending, "solve: OOM pending"); }
-    /* EVERY field, because the array is realloc'd and never zeroed: leaving `tried` as whatever the allocator
-       held made a sink look already-searched and it got no candidate at all. */
+    /* THE WHOLE SLOT AT ONCE, AND A PER-FIELD LIST IS THE WRONG PRIMITIVE RATHER THAN A LIST WITH A HOLE IN
+       IT. `g_pending` is realloc'd and never zeroed, so the grow above hands back a slot holding whatever the
+       allocator had, and the answer to that used to be thirty-five assignments under a header saying EVERY
+       field. It was wrong about one of them for as long as it stood: `ends` was never assigned, so `candEnds`
+       reported allocator memory and the `DCHECK(e->ends < e->tried)` at the raise stood on an operand this
+       file had never written. A list is thirty-five obligations a reader discharges by hand, it grows with the
+       struct, and NOTHING FAILS WHEN ONE IS MISSED — which is why it is gone rather than lengthened by one.
+       MEASURED AT 9ccc3bc9, IN TWO STAGES OF ONE BUILD THAT DISAGREE, which is the whole argument:
+         the native smoke emitted 18 `candEnds` values, 12 reading 0 and SIX reading 3, six of the eighteen
+         rows carrying `candEnds` GREATER than `tried` — and NO abort anywhere in that log, because the check
+         is at the WRITER (solve_flow_end) and the garbage is read at the EMIT, so a search none of whose
+         candidates has ended is never asked the question at all;
+         the COLD-PARK session, which is where candidate flows END, hit it on its first one. That stage's log
+         carries exactly ONE `@WHY` and it is its terminal line — `cond:"e->ends < e->tried"` at solve.c:3039
+         — the session DIED ON SIGABRT and the build FAILED on it. `3 < 1` is false, so a HEALTHY engine
+         aborted; a garbage value that had landed BELOW `tried` would instead have stayed SILENT on a
+         genuinely broken invariant. Both directions, one unwritten field.
+       A COMPOUND LITERAL ASSIGNED WHOLESALE IS C's OWN ANSWER and not a mechanism this file invents: every
+       member the initializer does not name is zero-initialised BY THE LANGUAGE, so the compiler writes all
+       thirty-five and an omission is UNSPELLABLE rather than audited. The spelling follows the one already in
+       this engine (idl_args.c's `g_gattr[g_gattr_n] = (IdlGlobalAttr){…}`, realm.c's `(JSClassDef){…}`) rather
+       than a file-scope blank, which keeps `strdup(src)` inside the same expression that writes the slot.
+       WHAT IS LEFT TO NAME IS EXACTLY THE MEMBERS WHOSE BLANK IS NOT 0, AND THERE IS A THIRD ONE THE LITERAL
+       CANNOT CARRY. `surv_at`/`surv_out` are -1 and are named here. `deliv`'s blank is ALL ONES —
+       solve_delivered_all is a `memset(d->ok, 1, sizeof d->ok)` — and 256 designators is not something anybody
+       should write, so the solve_delivered_all call is PART OF THIS BIRTH rather than a step after it, and the
+       DCHECK on solve_delivered_ok that follows it is what says so. Adding a fourth such member is the one
+       edit that must be made HERE.
+       AND `calloc`/`memset` AT THE GROW IS NOT THIS FIX, WHICH IS WHAT A READER WILL REACH FOR BECAUSE IT
+       LOOKS LIKE THE SAME ONE. Zeroing the array KEEPS THE LIST AND HIDES ITS HOLES: a field left out of it
+       would then read 0 instead of garbage, so the next omission is a plausible datum where this one was a
+       loud one — the §A-FIELD-A-CONSUMER-DEFAULTS direction, and strictly worse than what was measured above,
+       since the cold-park stage CRASHED and told us while a zeroed slot would have reported `candEnds:0` for
+       ever and been believed. The literal has no holes to hide, because the assignment writes every member;
+       that is the difference between the two and it is the whole of it. Zeroing also leaves `surv_at`/`surv_out`
+       exposed, their blank being -1, so every argument below would still be owed for them. Garbage is loud; a
+       plausible zero is not.
+       AND A GARBAGE NONZERO IN THIS STRUCT IS NEVER A MISREPORTED QUANTITY — the one argument the thirty-five
+       statements were all restating, kept here once instead of at each of them, because a reader who re-derives
+       it will re-introduce the list. Four kinds, and every one of their blanks is 0:
+         a LATCH (`reach_credited`, `escape_credited`, `opened`, `resumed`, `resumed_withdrawn`) spends a rung
+           this search has never been paid, or EXCUSES the very arrival add_pending's own assert exists to
+           catch — that function reads `resumed_withdrawn` as the positive statement that a withdrawal
+           accounts for an entry nothing has tried;
+         a RATCHET (`surv_run`/`surv_len`, `replay_pm`, `replay_arms`/`replay_of`) makes every real observation
+           compare against a maximum nothing reached, so it never moves again and reads as a candidate that
+           consumed none of its own path for the rest of the session;
+         an OBSERVATION-EVER-MADE flag (`substituted`, `sink_strings`, `ends`) states that a substitution
+           happened, or a sink ran, or a candidate finished, for a search that has never once held the thread;
+         a SIZE (`reinject_len`) read as "did this search have a recorded path at all" states that arms were
+           offered to candidates that were offered none.
+       WHAT THIS LINE DOES NOT DO IS LEARN THE ROOT, and that argument is not about zeroing so it survives
+       whole: this is find-or-create over (source, class) and its three callers reach the root by three
+       different routes. Detection reads it off the value that arrived (add_pending); a parked candidate coming
+       back from the cold tier takes it out of the record it was rebuilt from (solve_resume_candidate); the
+       third — a candidate arriving at its own sink — has no route to one at all and asserts that it CREATED
+       nothing, so the NULL this literal writes is one no reader can reach. Both CREATING callers state the
+       root before the entry is visible to anybody, which is exactly what emit_delivery's assert holds them
+       to. */
     e = &g_pending[g_pending_n++];
-    e->src = strdup(src);
+    *e = (Cand){
+        .src = strdup(src),
+        .sink = sink,
+        /* THE OFFSETS OF A RUN THAT DOES NOT EXIST YET — -1 and not 0, for the reason FilterObs gives about
+           its own pair: 0 is a real offset, so a zeroed pair states that a run this search has never observed
+           begins at the candidate's first byte. */
+        .surv_at = -1, .surv_out = -1,
+    };
     CHECK(e->src, "solve: OOM pending");
-    /* NOT LEARNED HERE, because this is find-or-create over (source, class) and its three callers reach the
-       root by three different routes. Detection reads it off the value that arrived (add_pending); a parked
-       candidate coming back from the cold tier takes it out of the record it was rebuilt from
-       (solve_resume_candidate); the third — a candidate arriving at its own sink — has no route to one at all
-       and asserts that it CREATED nothing, so the NULL this line writes is one no reader can reach. Both
-       CREATING callers state the root before the entry is visible to anybody, which is exactly what
-       emit_delivery's assert holds them to. */
-    e->root = NULL;
-    e->sink = sink;
-    e->tried = 0;
-    e->reached = 0;
-    /* SAME LINE AND SAME REASON AS THE FIELDS AROUND IT: the array is realloc'd and never zeroed, and a latch
-       left holding whatever the allocator had would silently spend a rung this search has never been paid. */
-    e->reach_credited = 0;
-    e->turns = 0;
-    e->fires = 0;
-    /* THE TWO OBSERVATION COUNTS TAKE THE SAME LINE AS EVERY FIELD AROUND THEM, and the reason is sharper for
-       these two than for a ratchet: the array is realloc'd and never zeroed, and BOTH of these are read as
-       "was this observation ever made". A garbage nonzero does not merely misreport a quantity — it states
-       that a substitution happened, or that a sink ran, for a search that has never once been given the
-       thread, which is the confident-wrong-instruction direction this pair exists to remove. */
-    e->substituted = 0;
-    e->sink_strings = 0;
-    /* AND THE TERMINATION COUNT, WHICH IS THE FIELD THE COMMENT AT THE HEAD OF THIS BLOCK WAS WRONG ABOUT FOR
-       AS LONG AS IT STOOD. That comment says EVERY field, because the array is realloc'd and never zeroed, and
-       thirty-four of thirty-five were stated here; this one was not, so `candEnds` reported whatever the
-       allocator held. MEASURED, in a dev-asserts native smoke run at 9ccc3bc9 (`solve.c` byte-identical at that
-       revision and at this one): 18 emitted `candEnds` values, 12 reading 0 and SIX reading 3, and six of the
-       eighteen rows carried `candEnds` GREATER than `tried` — the state the assert at the raise declares
-       impossible — with that assert's message occurring 0 times in the run and no `@WHY` anywhere in it.
-       THE ASSERT COULD NOT SEE IT, WHICH IS THE WHOLE SHAPE AND NOT A DETAIL OF THIS FILE: the check stands at
-       the WRITER (solve_flow_end) and the garbage is read by the EMITTER, so a search none of whose candidates
-       has ended is never asked the question at all. What it would have done on the day one ended is worse than
-       a wrong report — `3 < 1` is false, so a HEALTHY engine aborts, and the same garbage reading below `tried`
-       would have stayed silent on a genuinely broken invariant. A DCHECK on an unwritten operand is not a
-       check; this line is what makes it one.
-       0 AND NOT A CARRIED COUNT, AND THE COLD-RESUME DOOR OWES IT NOTHING. It stands in one implication with
-       `tried`, and `tried` is a count of candidate RUNS in THIS session — set to 0 by this same block and raised
-       only by this session's two doors (solve_seed_candidates, solve_resume_candidate), never restored from a park
-       document. So `ends` is per-session for the same reason, and a resumed candidate raises `tried` at a door
-       its run has not yet finished at: restoring a stored count there would state more finishes than this
-       session has had runs and would break the implication at the first rebuild, which is exactly the shape
-       measured above. Nothing persists this field — it occurs nowhere in cold.c — so there is no stored count
-       to carry even by accident, and that is a property to keep rather than a gap to close. */
-    e->ends = 0;
-    /* AND THE RUNWAY RATCHET TAKES THE SAME LINE FOR THE REASON THE SENTENCE ABOUT `surv_len` GIVES, which is
-       the sharper one of the two: a best-so-far left holding garbage does not merely misreport — it makes
-       every real observation compare against a maximum nothing ever reached, so the field never moves again
-       and reads as a candidate that consumed none of its path for the rest of the session. */
-    e->replay_pm = 0;
-    /* THE TWO NEW RUNGS TAKE THE SAME LINE AS THE OTHER FOUR, and the comment above this block is why: the
-       array is realloc'd and never zeroed, so a field left out here reads whatever the allocator held. For a
-       best-so-far ratchet that is not merely a wrong report — a garbage `surv_len` makes the first real
-       observation compare against a maximum nothing ever achieved and the rung never pays at all. */
-    e->surv_run = 0; e->surv_len = 0;
-    /* THE OFFSETS OF A RUN THAT DOES NOT EXIST YET — -1 and not 0, for the reason FilterObs gives about its
-       own pair: 0 is a real offset, so a zeroed pair states that a run this search has never observed begins
-       at the candidate's first byte. Same realloc'd-and-never-zeroed line as every field around it. */
-    e->surv_at = -1; e->surv_out = -1;
     /* EVERYTHING DELIVERS UNTIL SOMETHING CONTRADICTS IT — the sound-only direction (solve_filter.h): a search
        that has been told nothing keeps every arm, exactly as a branch whose domain permits both outcomes keeps
-       both. The array is realloc'd and never zeroed, so an omission here would read a constraint out of
-       whatever the allocator held and decline escapes at random.
+       both.
        THE PERMISSIVE FILL IS ALL THIS LINE CAN HONESTLY DO, and the narrowing is not deferred to a run alone:
        the root's carrier refuses some bytes outright and that is knowable without any run, but the root is not
        known HERE — this is find-or-create over (source, class), whose callers reach the root by routes of their
-       own, which is exactly what the `e->root = NULL` above says. cand_learn_root is where that fact arrives,
-       so cand_learn_root is where the declaration's half of this table is seeded. */
+       own, which is exactly what the literal's NULL root says. cand_learn_root is where that fact arrives, so
+       cand_learn_root is where the declaration's half of this table is seeded.
+       AND IT IS ASSERTED, BECAUSE THIS IS THE ONE MEMBER THE LITERAL ABOVE CANNOT STATE. Every other blank in
+       Cand is 0 and the assignment writes it; this table's blank is all ONES, so a missing fill is no longer
+       the loud garbage it used to be — it is an all-zero table, which refuses EVERY byte, withdraws every
+       candidate at both doors and reads as a search whose payloads were all contradicted. That is precisely
+       the plausible-datum direction the paragraph above refuses `calloc` for, so the one member that direction
+       can still reach gets a check rather than a sentence. Asked through solve_delivered_ok, which is the
+       predicate the two doors themselves ask, over the bytes a breakout is built from. */
     solve_delivered_all(&e->deliv);
-    e->deliv_seen = 0;
-    e->deliv_runs = 0;
-    e->wit = NULL; e->nwit = e->witcap = 0;
-    e->reinject = NULL;
-    /* AND ITS LENGTH ON THE SAME LINE AS THE POINTER, for the reason the ratchets above take: the array is
-       realloc'd and never zeroed, and this field is read as "did this search have a recorded path at all" —
-       so a garbage nonzero does not misreport a size, it states that arms were offered to candidates that
-       were offered none, which is the confident-wrong-instruction direction the pair exists to remove. */
-    e->reinject_len = 0;
-    /* AND THE PAIR ON THE SAME LINE AS THE RATCHET IT REPLACES THE READING OF, for that ratchet's own reason:
-       the array is realloc'd and never zeroed, and a best-so-far left holding garbage compares every real
-       observation against a maximum nothing reached, so the pair would never move again and would report a
-       replay that walked arms as one that walked none. `of` is additionally the "never observed" flag, so a
-       garbage nonzero there states that a reading was taken for a search that has never run. */
-    e->replay_arms = 0; e->replay_of = 0;
-    /* SAME LINE AND SAME REASON AS `reach_credited`: the array is realloc'd and never zeroed, and a latch left
-       holding whatever the allocator had spends a rung this search has never been paid. */
-    e->escaped = 0; e->escape_credited = 0;
-    e->pl = NULL; e->npl = e->plcap = 0; e->seeded = 0;
-    /* NOTHING HAS COME BACK FROM THE COLD TIER YET, on the same line as every field around it: the array is
-       realloc'd and never zeroed, and a garbage nonzero here does not merely misreport a quantity — it excuses
-       exactly the arrival the assert beside it exists to catch, which is the confident-wrong direction. */
-    e->resumed = 0;
-    /* SAME LINE AND SAME REASON AS THE FIELD ABOVE IT, and sharper: the array is realloc'd and never zeroed,
-       and add_pending reads this number as the positive statement that a withdrawal accounts for an entry
-       nothing has tried. A garbage nonzero here would EXCUSE the third-door arrival that assert exists to
-       catch, which is the confident-wrong direction rather than a misreported quantity. */
-    e->resumed_withdrawn = 0;
-    /* THE SEARCH IS NOT OPEN YET, AND THE SLOT EXISTING IS NOT THE SAME FACT — see add_pending. The array is
-       realloc'd and never zeroed, so a latch left holding whatever the allocator had would make a search read
-       as already opened and it would never get its probe. */
-    e->opened = 0;
+    DCHECK(solve_delivered_ok(&e->deliv, "<>\"'&"),
+           "a freshly opened @S search refused bytes a breakout is made of — the birth above writes every "
+           "member of Cand whose blank is 0 and this table's blank is all ONES, so an all-zero table here is a "
+           "missing solve_delivered_all rather than a narrowing: it would withdraw every candidate at both "
+           "doors and report a search whose every payload the root had contradicted");
     *created = 1;
     return e;
 }
@@ -1067,10 +1060,12 @@ static void push_breakout(Cand *e, const char *payload, int kind) {
         e->pl = realloc(e->pl, (size_t)e->plcap * sizeof(CandPayload));
         CHECK(e->pl, "solve: OOM recording a breakout for a sink search");
     }
-    e->pl[e->npl].bytes = strdup(payload);
+    /* AND THE SAME BIRTH FOR THE BREAKOUT ITSELF, for sink_search's reason: `pl` is realloc'd and never
+       zeroed, its three members happened to be stated, and a fourth added tomorrow would read whatever the
+       allocator held with nothing to say so. `surv` is the per-candidate half of the survival pair and its
+       blank is 0, so the literal names only the two this call computes. */
+    e->pl[e->npl] = (CandPayload){ .bytes = strdup(payload), .kind = kind };
     CHECK(e->pl[e->npl].bytes, "solve: OOM recording a breakout for a sink search");
-    e->pl[e->npl].kind = kind;
-    e->pl[e->npl].surv = 0;
     e->npl++;
 }
 
@@ -1485,8 +1480,18 @@ static void record_sink(int cls, const char *source, const char *poc) {
     for (int i = 0; i < g_sinks_n; i++) if (g_sinks[i].cls == cls && !strcmp(g_sinks[i].source, source)) return;
     if (g_sinks_n >= g_sinks_cap) { g_sinks_cap = g_sinks_cap ? g_sinks_cap * 2 : 8; g_sinks = realloc(g_sinks, (size_t)g_sinks_cap * sizeof(Finding)); CHECK(g_sinks, "solve: OOM @S store"); }
     Finding *f = &g_sinks[g_sinks_n++];
-    f->cls = cls; f->source = strdup(source ? source : "?"); f->poc = strdup(poc);
-    f->root = strdup(twin->root);
+    /* THE WHOLE SLOT AT ONCE, FOR sink_search's REASON AND NOT BECAUSE ANYTHING HERE WAS WRONG. `g_sinks` is
+       realloc'd and never zeroed exactly as the pending array is, and this record's four members were all
+       stated — which is luck rather than a property, since nothing failed when the pending array's thirty-fifth
+       was not. A member added to Finding tomorrow would read allocator memory and no check anywhere would
+       notice; a member added to this literal reads 0 unless it is named. Every blank here is 0 or NULL, so the
+       literal names only what is computed. */
+    *f = (Finding){
+        .cls = cls,
+        .source = strdup(source ? source : "?"),
+        .poc = strdup(poc),
+        .root = strdup(twin->root),
+    };
     /* THE THREE ALLOCATIONS OF THE ONE RECORD THAT MUST SURVIVE, and none of them was checked before. A NULL
        here is not a lost finding, it is a CORRUPT one: `solved` strcmps the source to decide whether to also
        emit the sink as a parked search, and solve_json_array writes the poc straight into the report. Every
