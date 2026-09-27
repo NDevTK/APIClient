@@ -175,6 +175,52 @@ static JSValue js_cce_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     return ev;
 }
 
+/* ---- §7.4's trusted mint ------------------------------------------------------------------------------------
+ *
+ * Which steps these are, why the type is not an argument and why the freeze happens here are in
+ * cookie_change_event.h. */
+
+JSValue cookie_change_event_new_to_fire(JSContext *ctx, JSValue changed, JSValue deleted)
+{
+    JSValue type, ev;
+
+    DCHECK(g_ready, "a CookieChangeEvent was minted before cookie_change_event_init declared the interface");
+    /* THE ASSERT STANDS ON WHAT THIS ENGINE COMPUTED AND NOT ON A PAGE'S BYTES: both lists are built by §7.4's
+       "prepare lists from changes" out of this store's own cookie-change set, so a value that is not a sequence
+       here is this codebase disagreeing with itself. Their CONTENTS are a server's or a page's and nothing is
+       asserted about them. */
+    DCHECK(JS_IsArray(changed) && JS_IsArray(deleted),
+           "§7.4's fire-a-change-event was handed something that is not a pair of lists — steps 1 and 2 of "
+           "\"prepare lists from changes\" are \"Let changedList be « »\" and \"Let deletedList be « »\"");
+    if (idl_freeze_array(ctx, changed) < 0 || idl_freeze_array(ctx, deleted) < 0) {
+        JS_FreeValue(ctx, changed);
+        JS_FreeValue(ctx, deleted);
+        return JS_EXCEPTION;
+    }
+    /* §7.4 step 1.4's `a change event named "change"`. */
+    type = JS_NewString(ctx, "change");
+    if (JS_IsException(type)) {
+        JS_FreeValue(ctx, changed);
+        JS_FreeValue(ctx, deleted);
+        return type;
+    }
+    /* Steps 1 and 3: create-an-Event, so TRUSTED, and neither `bubbles` nor `cancelable` set. `composed` is
+       false because §7.4 does not set it and DOM §2.5's create-an-Event leaves every flag unset. */
+    ev = event_new_derived(ctx, cce_proto(ctx), type, /*bubbles*/ false, /*cancelable*/ false,
+                           /*composed*/ false, /*trusted*/ true);
+    JS_FreeValue(ctx, type);
+    if (JS_IsException(ev)) {
+        JS_FreeValue(ctx, changed);
+        JS_FreeValue(ctx, deleted);
+        return ev;
+    }
+    if (cce_init_slots(ctx, ev, changed, deleted) < 0) {   /* CONSUMES both on every path */
+        JS_FreeValue(ctx, ev);
+        return JS_EXCEPTION;
+    }
+    return ev;
+}
+
 /* ---- install ------------------------------------------------------------------------------------------------ */
 
 static const JSCFunctionListEntry js_cce_proto[] = {

@@ -21,12 +21,13 @@
  * quoted, for the reason that header gives: front matter sits outside every numbered section, so a quotation of
  * it checked against §5.1 is truthfully not found there and stays a finding for ever at a comment that is right.
  *
- * WHAT THIS FILE IS AND IS NOT. It is the whole of §5.1 — the constructor, the two attributes and the
- * dictionary — and it is the FIRST of the two halves core/cookie_store/cookie_store.c's named residual names.
- * What it is NOT is §7.4 "Process changes": nothing in this engine FIRES one yet, so there is no
- * `..._new_to_fire` entry here and that is deliberate rather than missing. An entry with no caller is the
- * write-with-no-reader half of §A-FIELD-A-CONSUMER-DEFAULTS, and the two halves of that defect conceal each
- * other — so the firing constructor arrives in the diff that dispatches, which is the diff that can exercise it.
+ * WHAT THIS FILE IS. It is the whole of §5.1 — the constructor, the two attributes and the dictionary — plus
+ * the TRUSTED mint Cookie Store API §7.4 "Process changes"' `fire a change event` needs.
+ * THIS PARAGRAPH SAID THERE WAS NO `..._new_to_fire` ENTRY AND THAT NOTHING IN THIS ENGINE FIRED ONE, AND IT IS
+ * REWRITTEN RATHER THAN DELETED BECAUSE THE RULE IT STATED IS WHY THE ENTRY ARRIVED WHEN IT DID: an entry with
+ * no caller is the write-with-no-reader half of §A-FIELD-A-CONSUMER-DEFAULTS, and the two halves of that defect
+ * conceal each other, so the firing mint arrives in the diff that DISPATCHES. That diff is the one that landed
+ * §7.4 in core/cookie_store/process_changes.c, and `cookie_change_event_new_to_fire` below is its only caller.
  *
  * WHY §5.1 ALONE IS NOT A STUB, WHICH IS THE ONE ORDERING QUESTION THIS FILE HAS TO ANSWER. §NO-STUBS' hazard
  * is that installing a name flips a page's feature-detect TRUE and abandons a fallback that works today, so the
@@ -80,5 +81,23 @@ void cookie_change_event_install_protos(JSContext *ctx);
    class-proto slot and goes with that realm. Reached from core/events/event.c's event_free_subclasses, which is
    core/platform.c's `event` row. */
 void cookie_change_event_free(JSRuntime *rt);
+
+/* COOKIE STORE API §7.4 "Process changes"' `To fire a change event named type with changes at target` steps 1
+ * to 6 — everything that algorithm does before its step 7 dispatch, which is the caller's.
+ *
+ * The steps, and each is here: "Let event be the result of creating an Event using CookieChangeEvent" — DOM
+ * §2.5 "Constructing events"' create-an-Event, so isTrusted is TRUE, which the page-facing constructor's own
+ * mint deliberately is not; "Set event's type attribute to type", which §7.4 step 1.4 names as "change" and
+ * which is why this entry takes no type argument — that step is the only caller a Window's CookieStore has, and
+ * §5.2 "The ExtendableCookieChangeEvent interface"' `cookiechange` is a different interface; "Set event's
+ * bubbles and cancelable attributes to false"; and steps 5 and 6 setting the two attributes to the lists
+ * `prepare lists from changes` returned.
+ *
+ * `changed` AND `deleted` ARE CONSUMED on every path, and they arrive as PLAIN Arrays. Web IDL §3.2.27 "Frozen
+ * arrays — FrozenArray< T >"' create-a-frozen-array is applied HERE rather than by the caller, for the reason
+ * `[SameObject]` needs a stored object at all: what §5.1 requires of those two slots is this interface's
+ * contract, so a caller free to hand over an unfrozen array is a caller free to hand over a mutable one and
+ * make `e.changed.push(...)` work. Returns JS_EXCEPTION with the throw live. */
+JSValue cookie_change_event_new_to_fire(JSContext *ctx, JSValue changed, JSValue deleted);
 
 #endif

@@ -39,6 +39,7 @@
 #include "quickjs.h"
 #include "core/agent_state.h"
 #include "core/cookie_store/cookie_store.h"
+#include "core/cookie_store/process_changes.h"
 #include "core/dom/document.h"
 #include "core/events/event_target.h"
 #include "core/frame/window_proxy.h"
@@ -132,9 +133,9 @@ static bool cs_brand(JSContext *ctx, JSValueConst this_val)
 /* §3.1 step 4's `settings's creation URL`, as the REQUEST-URI RFC 6265 §5.4 is computed against. It is this
    realm's document address: `cookieStore` is a per-realm object, so `this`'s relevant settings object is the
    settings object of the realm this member was installed on, and a child navigable's store answers for the
-   child. Returns false for a document with no usable address; `*rec` is initialised either way and the caller
-   ALWAYS frees it. */
-static bool cs_request_uri(JSContext *ctx, UrlRecord *rec)
+   child. DECLARED, because §7.4 "Process changes"' step 1 asks the same question of every Window it walks —
+   see cookie_store.h, which also states why a `false` there is a positive answer rather than a failure. */
+bool cookie_store_request_uri(JSContext *ctx, UrlRecord *rec)
 {
     const char *url = document_url(ctx);
 
@@ -166,7 +167,7 @@ static bool cs_request_uri(JSContext *ctx, UrlRecord *rec)
  * fork a world in which a cookie the filter just matched does not match it. For the unfiltered `getAll()` the
  * name is a jar key this component enumerated out of the store's own property order. Both are values this
  * codebase computed, which is the line §Offensive-programming draws. */
-static JSValue cs_item(JSContext *ctx, JSValueConst pair)
+JSValue cookie_store_list_item(JSContext *ctx, JSValueConst pair)
 {
     JSValue item = JS_NewObject(ctx);
     JSValue name, value;
@@ -557,7 +558,7 @@ static JSValue js_cs_query(JSContext *ctx, JSValueConst this_val, int argc, JSVa
         return JS_ThrowDOMException(ctx, "SecurityError",
                                     "a document with an opaque origin has no cookies");
     }
-    if (!cs_request_uri(ctx, &uri)) {
+    if (!cookie_store_request_uri(ctx, &uri)) {
         /* A cookie-averse document has no cookie store to query. §7.1 step 1 computes a cookie-string for a
            request-uri, and there is none — the list is empty, which is what a document with no cookies has. */
         url_record_free(&uri);
@@ -647,7 +648,7 @@ static JSValue js_cs_query(JSContext *ctx, JSValueConst this_val, int argc, JSVa
             JS_FreeValue(ctx, nm);
             if (!same) { JS_FreeValue(ctx, pair); continue; }
         }
-        item = cs_item(ctx, pair);           /* STEP 3.3 */
+        item = cookie_store_list_item(ctx, pair);           /* STEP 3.3 */
         JS_FreeValue(ctx, pair);
         CHECK(JS_DefinePropertyValueUint32(ctx, out, kept, item, JS_PROP_C_W_E) >= 0,
               "§7.1 step 3.4 could not append a CookieListItem");
@@ -704,7 +705,7 @@ static JSValue js_cs_set(JSContext *ctx, JSValueConst this_val, int argc, JSValu
         return JS_ThrowDOMException(ctx, "SecurityError",
                                     "a document with an opaque origin has no cookies");
     /* §3.3 STEP 4's `settings's creation URL`, which is §7.2's `url`. */
-    if (!cs_request_uri(ctx, &uri)) {
+    if (!cookie_store_request_uri(ctx, &uri)) {
         /* A cookie-averse document has no cookie store to write, which is js_cs_delete's arm and
            js_cs_query's for the same reason and out of the same predicate: there is nothing to write rather
            than a refusal to write, so §3.3 step 6.3 resolves with undefined having changed nothing. */
@@ -849,7 +850,7 @@ static JSValue js_cs_delete(JSContext *ctx, JSValueConst this_val, int argc, JSV
         return JS_ThrowDOMException(ctx, "SecurityError",
                                     "a document with an opaque origin has no cookies");
     /* §3.4 STEP 4's `settings's creation URL`, which is also §7.2's `url` and §7.3's. */
-    if (!cs_request_uri(ctx, &uri)) {
+    if (!cookie_store_request_uri(ctx, &uri)) {
         /* A cookie-averse document has no cookie store to write, exactly as it has none to query — see
            js_cs_query's own arm, which answers the empty list for the same reason and out of the same
            predicate. §7.3 reaches no failure here: there is nothing to delete rather than a refusal to
@@ -922,12 +923,26 @@ static JSValue js_cs_delete(JSContext *ctx, JSValueConst this_val, int argc, JSV
     return JS_UNDEFINED;
 }
 
-/* §6.1 The Window interface's `[SameObject] readonly attribute CookieStore cookieStore` — THIS realm's. */
+/* §6.1 "The Window interface"' "A Window has an associated CookieStore" — THIS realm's. DECLARED, because §7.4
+   "Process changes"' step 1.4 dispatches "at window's CookieStore" and that is a second consumer of the same
+   fact; cookie_store.h states why this answers in a non-secure realm where the IDL member does not. */
+JSValue cookie_store_of_realm(JSContext *ctx)
+{
+    JSValue obj = realm_value_get(ctx, g_obj_slot);
+
+    DCHECK(JS_GetClassID(obj) == g_cs_class,
+           "§6.1's associated CookieStore of a realm is not a CookieStore — cs_install_realm mints it with the "
+           "class and sets the slot in one breath, so a realm holding anything else ran something that is not "
+           "that install");
+    return obj;
+}
+
+/* §6.1's `[SameObject] readonly attribute CookieStore cookieStore` — the IDL member, over the fact above. */
 static JSValue cs_get_cookie_store(JSContext *ctx, JSValueConst this_val, int magic)
 {
     (void)this_val;
     (void)magic;
-    return realm_value_get(ctx, g_obj_slot);
+    return cookie_store_of_realm(ctx);
 }
 
 static void cs_install_realm(JSContext *ctx)
@@ -951,37 +966,38 @@ static void cs_install_realm(JSContext *ctx)
        §3.3 set, §3.4 delete, §3.1 get and §3.2 getAll are all here; what is not is the CHANGE-EVENT half, and
        that is this component's stated narrowing rather than an exposure decision — see the file header.
 
-       NAMED RESIDUAL. NOT COVERED: §7.4 "Process changes" and the `onchange` handler §3's IDL writes as
-       `[Exposed=Window] attribute EventHandler onchange` — so a page may now read, create and delete a cookie
-       through this API, and may CONSTRUCT the event that says one changed, and still cannot be TOLD that one
-       did. NEXT DIFF: §7.4's "fire a change event" over its "prepare lists from changes", whose step 3.3.1 sets
-       a deleted item's `value` to undefined — then the accessor.
-       §5.1 "The CookieChangeEvent interface" WAS THE FIRST OF THESE THREE AND IS BUILT, in
-       core/events/cookie_change_event.c: the constructor, `changed` and `deleted` as frozen arrays of
-       CookieListItem, and a CookieChangeEventInit. This clause named it as absent and is rewritten rather than
-       deleted, because the SUBPROBLEM ORDER a reader re-derives from it is the durable half — the interface
-       first, the handler last — and a reader who re-derives it will re-add the clause. What is retired with it
-       is the sentence `idl_interface_tag` names no CookieChangeEvent today, which that component's own install
-       now makes false; `node engine/idlgen.mjs` answers `CookieChangeEvent: complete`.
-       WHAT §7.4 STILL NEEDS IS NOT AT THIS SITE, AND THAT IS THE ONE THING THIS RESIDUAL WAS WRONG ABOUT.
-       §2.2 "Cookie store" is where the standard puts the trigger — "When any of the following conditions occur
-       for a cookie store, perform the steps to process cookie changes", over three conditions, of which a
+       NAMED RESIDUAL. NOT COVERED: the `onchange` handler §3's IDL writes as `[Exposed=Window] attribute
+       EventHandler onchange` — so a page is now TOLD that a cookie changed, through the listener
+       `CookieStore : EventTarget` already answers, and cannot register that listener as a handler property.
+       NEXT DIFF: the accessor, over HTML §8.1.8.1 "Event handlers"' event handler IDL attribute machinery.
+       HOW ITS ABSENCE WOULD SHOW: a reader would observe `cookieStore.onchange` undefined while a listener
+       added with `cookieStore.addEventListener("change", f)` receives a CookieChangeEvent, and
+       `node engine/idlgen.mjs` reporting `onchange` as the one member CookieStore does not install.
+       ITS BLOCKER IS GONE AND THE RETIRED BLOCKER IS WRITTEN OUT HERE BECAUSE IT IS THE ONE A READER
+       RE-DERIVES. It read: installing the accessor alone is the shape §NO STUBS forbids twice over, because it
+       flips `"onchange" in cookieStore` true and abandons nothing — `CookieStore : EventTarget` already answers
+       `addEventListener("change", f)` and no change is ever dispatched to EITHER, so a bundle testing for the
+       handler takes a branch this engine cannot complete while the listener path it would otherwise have used is
+       equally silent. Every clause of that was true and §7.4 is now built, in
+       core/cookie_store/process_changes.c, so the handler's TRUE branch COMPLETES: a page that assigns one is
+       called. What keeps it a separate landing is only that it is a separate member — it is not half of the
+       dispatch, because the dispatch is already fully observable through EventTarget, so the two are not the
+       producer/consumer pair §A-FIELD-A-CONSUMER-DEFAULTS makes indivisible.
+       TWO CLAUSES OF THIS RESIDUAL ARE DISCHARGED AND BOTH ARE KEPT AS THE SUBPROBLEM ORDER A READER
+       RE-DERIVES — the interface first, the dispatch second, the handler last.
+       §5.1 "The CookieChangeEvent interface" was the first, in core/events/cookie_change_event.c: the
+       constructor, `changed` and `deleted` as frozen arrays of CookieListItem, and a CookieChangeEventInit.
+       §7.4 "Process changes" was the second, and WHAT IT NEEDED WAS NOT AT THIS SITE, which is the one thing
+       this residual was wrong about and the reason the correction is written out rather than summarised. §2.2
+       "Cookie store" is where the standard puts the trigger — "When any of the following conditions occur for a
+       cookie store, perform the steps to process cookie changes", over three conditions, of which a
        newly-created cookie being inserted is the only one this component can cause. `document.cookie` and a
        network Set-Cookie insert one too, and an expiry eviction is the jar's alone, so an observable-change
-       record placed HERE would answer for writes through this API and miss every other writer of the one store
-       §2.2 names. The producer belongs at core/loader/cookie_jar.c, which is the store.
-       INSTALLING THE ACCESSOR ALONE IS THE SHAPE §NO STUBS FORBIDS TWICE OVER: it flips `"onchange" in
-       cookieStore` true and abandons nothing, because `CookieStore : EventTarget` already answers
-       `addEventListener("change", f)` and no change is ever dispatched to either — so a bundle that tests for
-       the handler would take a branch this engine cannot complete while the listener path it would otherwise
-       have used is equally silent. HOW ITS ABSENCE WOULD SHOW: a reader would observe `cookieStore.onchange`
-       undefined and `cookieStore.set(...)` resolving with no "change" event dispatched to a listener registered
-       through EventTarget, and `node engine/idlgen.mjs` reporting `onchange` as the member CookieStore does not
-       install.
-       WHAT CHANGED ABOUT THIS RESIDUAL'S BLOCKER, recorded because the retired reason is the one a reader
-       re-derives: it used to be that there was nothing to notify about until this API could write. §7.4's
-       observable changes now have a producer here — cs_set_cookie reaches the store on both the create and the
-       delete path — so the blocker is no longer the absence of a writer, it is the absence of the EVENT.
+       record placed HERE would have answered for writes through this API and missed every other writer of the
+       one store §2.2 names. The producer is at core/loader/cookie_jar.c, which is the store, and §7.4 reaches it
+       through a one-claimant hook rather than the store reaching the interfaces.
+       AND THE BLOCKER BEFORE THAT ONE IS KEPT FOR THE SAME REASON: it used to be that there was nothing to
+       notify about until this API could write, which the diffs that landed §7.2 and §7.3 ended.
 
        TWO RESIDUALS THAT STOOD HERE ARE DISCHARGED BY THE DIFFS THAT LANDED set AND delete, AND THEIR WRONG
        CLAUSES ARE KEPT BECAUSE BOTH WERE WRONG IN THE SAME PLACE AND A READER WILL RE-DERIVE EITHER. The first
@@ -1133,6 +1149,12 @@ void cookie_store_init(JSContext *ctx)
     agent_state_id(CS_COMPONENT, &g_id_set, "Cookie Store API §3.3's set");
     agent_state_id(CS_COMPONENT, &g_id_delete, "Cookie Store API §3.4's delete");
     agent_state_class(CS_COMPONENT, &g_cs_class, "Cookie Store API §3 CookieStore's per-realm slot and brand");
+    /* §7.4 "Process changes" — a SUB-COMPONENT of this row rather than a row of its own, the way
+       core/events/cookie_change_event.c is one of `event`'s. It installs no member and declares nothing
+       per-realm; what it takes is core/loader/cookie_jar.h's one-claimant hook for §2.2 "Cookie store"'s
+       process-cookie-changes steps, and the jar row is declared BEFORE this one in core/platform.c, so the store
+       it claims against already exists. */
+    cookie_store_process_changes_init();
     realm_declare_intrinsic(cs_install_realm);
 }
 
@@ -1154,6 +1176,10 @@ void cookie_store_init(JSContext *ctx)
    release handing another component's claim back, or asserting a claimant already has — would HAVE to. */
 void cookie_store_free(void)
 {
+    /* FIRST, AND THAT IS THE ORDER THE PARAGRAPH ABOVE NAMES: this release READS its own latch and hands
+       §2.2's claim back to the store, so it is exactly the line that has to run before the undo — a claim left
+       standing would abort the NEXT agent of this process at the jar's one-claimant assert. */
+    cookie_store_process_changes_free();
     concolic_undeclare_sources(CS_COMPONENT);
     agent_state_undo(CS_COMPONENT);
 }

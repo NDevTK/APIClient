@@ -102,6 +102,12 @@
 static JSValue    g_jar;      /* key -> entry, both strings; see the header comment for the encoding */
 static JSRuntime *g_rt;
 static int        g_ready;
+/* Cookie Store API §7.4 "Process changes"' pending change set, and §2.2 "Cookie store"'s one claimant — see
+   the header for both. The set is a JS Array built with the store at the PRE-BOOT BASELINE, so every append is
+   an ordinary property write the per-flow COW delta captures: the arm that inserted a cookie is the only arm
+   whose §7.4 sees the change, and a flow that parks between the insertion and the dispatch parks with it. */
+static JSValue    g_changes;
+static CookieJarProcessChanges g_process_changes;
 
 #if APICLIENT_DEV
 /* THE TWO-SIDED HALF OF "AN INSTANCE IS ONE ORIGIN". Nothing in the algorithms below needs an agent-level host:
@@ -121,6 +127,75 @@ static JSValueConst cj_jar(void)
                     "and is declared with the platform, so a reader that finds none is running in an agent the "
                     "platform list never declared");
     return g_jar;
+}
+
+/* ---- COOKIE STORE API §2.2's TRIGGER AND §7.4's CHANGE SET -------------------------------------------------
+ *
+ * The classification, the three conditions and why the producer is in this file are all in cookie_jar.h. */
+
+/* ONE member of §7.4's change set — « key, entry, type », this store's own two codec strings plus the
+   classification. THE TWO STRINGS ARE THE RECORD'S OWN COPY AND NOT A LOOKUP: a DELETED change names a cookie
+   that is no longer in the store, so a filter resolving the key against the jar would find nothing to read for
+   exactly the half §2.2's second condition produces. */
+static void cj_record_change(JSContext *ctx, const char *key, size_t klen,
+                             const char *entry, size_t elen, CookieChangeType type)
+{
+    JSValue rec, k, e, len;
+    uint32_t n = 0;
+
+    DCHECK(g_ready, "a cookie change was recorded before cookie_jar_init built the store");
+    rec = JS_NewArray(ctx);
+    CHECK(!JS_IsException(rec), "OOM building a Cookie Store API §7.4 cookie change");
+    k = JS_NewStringLen(ctx, key, klen);
+    e = JS_NewStringLen(ctx, entry, elen);
+    CHECK(!JS_IsException(k) && !JS_IsException(e),
+          "OOM recording a cookie change's own key and entry, and a change nothing recorded is a page that "
+          "never learns its cookie moved");
+    CHECK(JS_DefinePropertyValueUint32(ctx, rec, 0, k, JS_PROP_C_W_E) >= 0 &&
+          JS_DefinePropertyValueUint32(ctx, rec, 1, e, JS_PROP_C_W_E) >= 0 &&
+          JS_DefinePropertyValueUint32(ctx, rec, 2, JS_NewInt32(ctx, (int)type), JS_PROP_C_W_E) >= 0,
+          "a cookie change refused its own key, entry and type");
+    len = JS_GetPropertyStr(ctx, g_changes, "length");
+    CHECK(JS_ToUint32(ctx, &n, len) >= 0, "§7.4's change set has no length");
+    JS_FreeValue(ctx, len);
+    CHECK(JS_DefinePropertyValueUint32(ctx, g_changes, n, rec, JS_PROP_C_W_E) >= 0,
+          "§7.4's change set refused a cookie change");
+}
+
+/* §2.2's "perform the steps to process cookie changes", at a moment one of its three conditions has occurred.
+   THE SET IS CLEARED WHETHER OR NOT ANYONE IS LISTENING, because it is what the CONDITION produced: a set that
+   outlived its condition would be re-offered to every Window at the next one, so a page that set two cookies
+   would see the first reported twice. The clear is `length = 0`, which is a property write like every other and
+   is therefore captured by the delta exactly as the appends were. */
+static void cj_process_changes(JSContext *ctx)
+{
+    JSValue len = JS_GetPropertyStr(ctx, g_changes, "length");
+    uint32_t n = 0;
+
+    CHECK(JS_ToUint32(ctx, &n, len) >= 0, "§7.4's change set has no length");
+    JS_FreeValue(ctx, len);
+    if (n == 0)
+        return;
+    /* A STORE WITH NO CLAIMANT IS NOT AN ERROR AND IS NOT A SILENT DROP EITHER: core/platform.c declares this
+       row BEFORE the component that owns §7.4, so a cookie received while the platform list is still being
+       walked has no §7.4 to run and the set is discarded here. Every later condition has one. */
+    if (g_process_changes)
+        g_process_changes(ctx);
+    CHECK(JS_SetPropertyStr(ctx, g_changes, "length", JS_NewInt32(ctx, 0)) >= 0,
+          "§7.4's change set refused to be emptied, and a set that outlives its condition reports one cookie "
+          "change twice");
+}
+
+void cookie_jar_set_process_changes(CookieJarProcessChanges run)
+{
+    /* ONE CLAIMANT, AND NULL IS THE RELEASE — core/events/event_target.h's seams state why the two are one
+       call: a second claim silently decides what every cookie change in this agent does. */
+    DCHECK(run == NULL || g_process_changes == NULL,
+           "a second component claimed Cookie Store API §2.2 \"Cookie store\"'s process-cookie-changes steps — "
+           "there is one store and one §7.4, and the second claim would replace the first with nothing to say so");
+    DCHECK(run != NULL || g_process_changes != NULL,
+           "§2.2's process-cookie-changes steps were released by a component that never claimed them");
+    g_process_changes = run;
 }
 
 /* ---- §5.1's subcomponent algorithms ------------------------------------------------------------------------ */
@@ -713,24 +788,50 @@ void cookie_jar_store(JSContext *ctx, const UrlRecord *uri, const char *name, si
        A WRITE THAT SURVIVES IS JS_SetProperty ON AN EXISTING KEY, which keeps the key's position in the
        store's property order — which is §5.3 step 11.3's "update the creation-time of the newly created cookie
        to match the creation-time of the old-cookie", since that order IS this store's creation-time. */
-    if (attrs->have_expiry && attrs->expiry <= (long long)time(NULL)) {
-        JS_DeleteProperty(ctx, jar, atom, 0);
-    } else {
+    {
         size_t elen;
-        char *entry = cj_entry(attrs->secure, host_only, attrs->expiry, attrs->have_expiry, value, value_len, &elen);
-        JSValue v = JS_NewStringLen(ctx, entry, elen);
+        char *entry = cj_entry(attrs->secure, host_only, attrs->expiry, attrs->have_expiry, value, value_len,
+                              &elen);
+        bool immediately_evicted = attrs->have_expiry && attrs->expiry <= (long long)time(NULL);
+
+        if (immediately_evicted) {
+            JS_DeleteProperty(ctx, jar, atom, 0);
+        } else {
+            JSValue v = JS_NewStringLen(ctx, entry, elen);
+
+            CHECK(!JS_IsException(v), "document.cookie: a cookie store entry could not be allocated");
+            /* An ordinary property write on the agent's one jar — which is exactly why the store is a JS object:
+               the heap COW captures it, so the arm that set this cookie is the only arm that reads it back. */
+            CHECK(JS_SetProperty(ctx, jar, atom, v) >= 0,
+                  "document.cookie: the cookie store refused a write, and nothing of the page's is on it");
+        }
+        /* COOKIE STORE API §2.2's FIRST CONDITION, "A newly-created cookie is inserted into the cookie store",
+           classified by §7.4's own bullets — see cookie_jar.h. §5.3's step 12 inserts the newly created cookie
+           on BOTH arms above and the eviction rule then removes it on the first, so the classification asks
+           only whether it survived: "A newly-created cookie which is not immediately evicted is considered
+           changed", "A newly-created cookie which is immediately evicted is considered deleted".
+           THE OLD COOKIE AT THIS KEY IS RECORDED AS NOTHING, on either arm, because §7.4 says so in its own
+           words: "A cookie which is removed due to an insertion of another cookie with the same name, domain,
+           and path is ignored." That is step 11.4's removal, and this store performs it as the one property
+           write landing on a key that already existed.
+           IT DOES NOT ASK WHETHER A COOKIE WAS ALREADY THERE, and that is the bullets' own shape rather than a
+           simplification: both of them are about the NEWLY-CREATED cookie, which step 12 creates whether or not
+           step 11 found an old one to replace. So `cookieStore.delete` of a name this store does not hold is a
+           `deleted` change carrying that name, which is what those two sentences say and is not a claim about
+           what any particular browser reports. */
+        cj_record_change(ctx, key, klen, entry, elen,
+                         immediately_evicted ? COOKIE_CHANGE_DELETED : COOKIE_CHANGE_CHANGED);
         free(entry);
-        CHECK(!JS_IsException(v), "document.cookie: a cookie store entry could not be allocated");
-        /* An ordinary property write on the agent's one jar — which is exactly why the store is a JS object:
-           the heap COW captures it, so the arm that set this cookie is the only arm that reads it back. */
-        CHECK(JS_SetProperty(ctx, jar, atom, v) >= 0,
-              "document.cookie: the cookie store refused a write, and nothing of the page's is on it");
     }
     JS_FreeAtom(ctx, atom);
     free(key);
     free(path);
     free(dom);
     free(host);
+    /* §2.2: "perform the steps to process cookie changes". AFTER the frees, because §7.4 runs the other
+       standard's whole step 1 — a walk of every Window of this agent — and nothing it does needs this call's
+       working storage. */
+    cj_process_changes(ctx);
 }
 
 /* ---- §5.4's COOKIE HEADER ---------------------------------------------------------------------------------- */
@@ -804,9 +905,14 @@ static CjHit *cj_collect(JSContext *ctx, const UrlRecord *uri, uint32_t *out_nhi
                cj_path_match(req_path, req_len, path, plen) &&
                (!secure || secure_ok);
         /* §5.3's eviction rule, at the one moment an expired cookie is known to exist. It is a property write
-           on the jar like any other, so it belongs to the flow that made the read and to no sibling. */
-        if (expired)
+           on the jar like any other, so it belongs to the flow that made the read and to no sibling.
+           COOKIE STORE API §2.2's SECOND CONDITION, "A user agent evicts expired cookies from the cookie
+           store", whose cookie §7.4 classifies under its last bullet: "A cookie which is otherwise evicted or
+           removed is considered deleted." */
+        if (expired) {
             JS_DeleteProperty(ctx, jar, tab[i].atom, 0);
+            cj_record_change(ctx, k, klen, e, elen, COOKIE_CHANGE_DELETED);
+        }
         if (!keep) {
             JS_FreeCString(ctx, k);
             JS_FreeCString(ctx, e);
@@ -834,6 +940,14 @@ static CjHit *cj_collect(JSContext *ctx, const UrlRecord *uri, uint32_t *out_nhi
         while (j > 0 && hits[j - 1].plen < h.plen) { hits[j] = hits[j - 1]; j--; }
         hits[j] = h;
     }
+    /* §2.2: "perform the steps to process cookie changes", for whichever expired cookies the walk above
+       evicted. ONE trigger for the batch, because the condition §2.2 names is "evicts expired cookieS" — the
+       eviction rule is one sentence about every expired cookie in the store, not one occurrence per cookie.
+       IT IS SAFE HERE AND THAT IS WORTH STATING, because §7.4 runs during what is otherwise a pure read: its
+       step 1.4 QUEUES a global task rather than dispatching one (core/events/event_target.h's queued reach), so
+       no listener body runs before this function returns and nothing re-enters this walk. What it does read is
+       §7.4's own change set, never the jar. */
+    cj_process_changes(ctx);
     *out_nhit = nhit;
     return hits;
 }
@@ -906,6 +1020,89 @@ JSValue cookie_jar_cookie_list(JSContext *ctx, const UrlRecord *uri)
     return list;
 }
 
+/* Cookie Store API §7.4's `observable changes for url` — RFC 6265 §5.4 step 1's requirements over §7.4's change
+   set rather than over the store. Why there is no expiry test, why the http-only requirement is vacuous here and
+   what the returned shape is are all in cookie_jar.h. */
+JSValue cookie_jar_observable_changes(JSContext *ctx, const UrlRecord *uri)
+{
+    JSValue out = JS_NewArray(ctx), len;
+    char *host, *req_path;
+    size_t hostlen, req_len;
+    bool host_is_name, secure_ok;
+    uint32_t i, n = 0, nout = 0;
+
+    CHECK(!JS_IsException(out), "OOM building §7.4's observable changes");
+    cj_assert_one_principal(uri);
+    host = cj_request_host(uri, &host_is_name);
+    hostlen = strlen(host);
+    req_path = url_serialize_path(uri);
+    CHECK(req_path != NULL, "OOM serializing a Window's address for §5.4 step 1's path-match");
+    req_len = strlen(req_path);
+    secure_ok = cj_secure_scheme(uri);
+
+    len = JS_GetPropertyStr(ctx, g_changes, "length");
+    CHECK(JS_ToUint32(ctx, &n, len) >= 0, "§7.4's change set has no length");
+    JS_FreeValue(ctx, len);
+    for (i = 0; i < n; i++) {
+        JSValue rec = JS_GetPropertyUint32(ctx, g_changes, i);
+        JSValue kv, ev, tv, pair, nameval, valueval;
+        size_t klen = 0, elen = 0;
+        const char *k, *e;
+        const char *name, *dom, *path, *value;
+        size_t nlen, dlen, plen, vlen;
+        bool secure, host_only, expired;
+        int32_t type = 0;
+
+        CHECK(JS_IsArray(rec), "a member of §7.4's change set is not a « key, entry, type » record — every "
+                               "member is written by cj_record_change");
+        kv = JS_GetPropertyUint32(ctx, rec, 0);
+        ev = JS_GetPropertyUint32(ctx, rec, 1);
+        tv = JS_GetPropertyUint32(ctx, rec, 2);
+        JS_FreeValue(ctx, rec);
+        k = JS_ToCStringLen(ctx, &klen, kv);
+        e = JS_ToCStringLen(ctx, &elen, ev);
+        CHECK(k != NULL && e != NULL && JS_ToInt32(ctx, &type, tv) >= 0,
+              "a cookie change could not be read back as the key, entry and type it was recorded with");
+        JS_FreeValue(ctx, kv);
+        JS_FreeValue(ctx, ev);
+        JS_FreeValue(ctx, tv);
+        DCHECK(type == COOKIE_CHANGE_CHANGED || type == COOKIE_CHANGE_DELETED,
+               "a cookie change carries a type that is neither of §7.4's two — the enumeration is this store's "
+               "own and cj_record_change is the only writer of it");
+        cj_key_parse(k, klen, &name, &nlen, &dom, &dlen, &path, &plen);
+        cj_entry_parse(e, elen, &secure, &host_only, &expired, &value, &vlen);
+        /* §5.4 STEP 1's REQUIREMENTS, and `expired` is deliberately not consulted — see cookie_jar.h. */
+        if (!((host_only ? (hostlen == dlen && memcmp(host, dom, dlen) == 0)
+                         : cj_domain_match(host, hostlen, dom, dlen, host_is_name)) &&
+              cj_path_match(req_path, req_len, path, plen) &&
+              (!secure || secure_ok))) {
+            JS_FreeCString(ctx, k);
+            JS_FreeCString(ctx, e);
+            continue;
+        }
+        pair = JS_NewArray(ctx);
+        CHECK(!JS_IsException(pair), "OOM building an observable change");
+        /* §5.3's stored fields, decoded where the standard that reads them decodes — §7.1's `create a
+           CookieListItem` runs UTF-8 decode without BOM on each of the two, and JS_NewStringLen is that
+           decode. Same answer, same reason, as cookie_jar_cookie_list's entries. */
+        nameval = JS_NewStringLen(ctx, name, nlen);
+        valueval = JS_NewStringLen(ctx, value, vlen);
+        CHECK(!JS_IsException(nameval) && !JS_IsException(valueval),
+              "OOM building an observable change's name and value");
+        CHECK(JS_DefinePropertyValueUint32(ctx, pair, 0, nameval, JS_PROP_C_W_E) >= 0 &&
+              JS_DefinePropertyValueUint32(ctx, pair, 1, valueval, JS_PROP_C_W_E) >= 0 &&
+              JS_DefinePropertyValueUint32(ctx, pair, 2, JS_NewInt32(ctx, type), JS_PROP_C_W_E) >= 0,
+              "an observable change refused its own name, value and type");
+        CHECK(JS_DefinePropertyValueUint32(ctx, out, nout++, pair, JS_PROP_C_W_E) >= 0,
+              "§7.4's observable changes refused an entry");
+        JS_FreeCString(ctx, k);
+        JS_FreeCString(ctx, e);
+    }
+    free(req_path);
+    free(host);
+    return out;
+}
+
 /* ---- the agent's declaration and teardown ------------------------------------------------------------------ */
 
 void cookie_jar_init(JSContext *ctx)
@@ -917,9 +1114,15 @@ void cookie_jar_init(JSContext *ctx)
        Object.prototype — §5.2's cookie-name is any run of bytes without "=" or ";", which includes both. */
     g_jar = JS_NewObjectProto(ctx, JS_NULL);
     CHECK(!JS_IsException(g_jar), "§5.3's cookie store could not be allocated");
+    /* §7.4's change set, built HERE for the reason the store is: a per-flow COW delta captures a property write
+       on an object that exists at the pre-boot baseline, and an array minted inside whichever flow first
+       inserted a cookie would be that flow's private creation. */
+    g_changes = JS_NewArray(ctx);
+    CHECK(!JS_IsException(g_changes), "Cookie Store API §7.4's change set could not be allocated");
     g_ready = 1;
     agent_state_flag("cookie_jar", &g_ready, "the declaration latch");
     agent_state_value("cookie_jar", &g_jar, "RFC 6265 §5.3's cookie store");
+    agent_state_value("cookie_jar", &g_changes, "Cookie Store API §7.4's pending cookie-change set");
     agent_state_ptr("cookie_jar", &g_rt, "the runtime §5.3's store was allocated in");
 #if APICLIENT_DEV
     agent_state_ptr("cookie_jar", &g_agent_host, "the agent host the dev-only same-host assertion compares");
@@ -933,6 +1136,12 @@ void cookie_jar_free(void)
     DCHECK(g_rt != NULL, "§5.3's store was built without recording the runtime that owns its strings");
     JS_FreeValueRT(g_rt, g_jar);
     g_jar = JS_UNDEFINED;
+    JS_FreeValueRT(g_rt, g_changes);
+    g_changes = JS_UNDEFINED;
+    /* NOT given back here. The claimant is a component whose OWN release calls
+       cookie_jar_set_process_changes(NULL) — core/events/event_target.h's seams are released the same way, and
+       a store that cleared the pointer itself would leave that component's release asserting against a claim it
+       really did make. */
     g_rt = NULL;
     g_ready = 0;
 #if APICLIENT_DEV

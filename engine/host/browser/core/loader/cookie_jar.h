@@ -147,4 +147,75 @@ JSValue cookie_jar_cookie_string(JSContext *ctx, const UrlRecord *uri);
    OWNED — the caller frees. */
 JSValue cookie_jar_cookie_list(JSContext *ctx, const UrlRecord *uri);
 
+/* ---- COOKIE STORE API §2.2 "Cookie store"'s TRIGGER, AND §7.4 "Process changes"' CHANGE SET ---------------- */
+
+/* §7.4 "Process changes"' `A cookie change` is "a cookie and a type (either changed or deleted)". The type is
+   that section's own four-bullet classification, and every bullet is a fact about what THIS STORE just did:
+     - "A cookie which is removed due to an insertion of another cookie with the same name, domain, and path is
+       ignored" — RFC 6265 §5.3 "Storage Model" step 11.4's removal, which in this store is one property write
+       landing on a key that already existed. Nothing is recorded for the cookie it replaced.
+     - "A newly-created cookie which is not immediately evicted is considered changed."
+     - "A newly-created cookie which is immediately evicted is considered deleted" — a stored cookie whose
+       expiry has already passed, which is the `expires=Thu, 01 Jan 1970` every page writes to delete one.
+     - "A cookie which is otherwise evicted or removed is considered deleted." */
+typedef enum {
+    COOKIE_CHANGE_CHANGED = 0,
+    COOKIE_CHANGE_DELETED = 1,
+} CookieChangeType;
+
+/* §2.2 "Cookie store"'s TRIGGER: "When any of the following conditions occur for a cookie store, perform the
+ * steps to process cookie changes." Its three conditions are conditions on THE STORE, which is the whole reason
+ * the producer is here rather than at whichever member wrote:
+ *   - "A newly-created cookie is inserted into the cookie store" — reached by HTML §3.1.4 "Resource metadata
+ *     management"'s `document.cookie` setter, by a network Set-Cookie, and by Cookie Store API §7.2 "Set a
+ *     cookie" alike. A record placed at any ONE of those would answer for that writer and miss every other
+ *     writer of the one store §2.2 names.
+ *   - "A user agent evicts expired cookies from the cookie store" — §5.3's "The user agent MUST evict all
+ *     expired cookies from the cookie store if, at any time, an expired cookie exists in the cookie store",
+ *     which this store performs at the two moments an expired cookie is known to exist.
+ *   - "A user agent removes excess cookies from the cookie store" — §5.3's "At any time, the user agent MAY
+ *     \"remove excess cookies\" from the cookie store if the number of cookies sharing a domain field exceeds
+ *     some implementation-defined upper bound (such as 50 cookies)". A MAY, and this user agent does not: there
+ *     is no per-domain and no store-wide count here, so the condition cannot occur and there is no site for it.
+ *     That is a complete implementation of a MAY rather than a gap — the same answer core/storage/storage.c
+ *     gives HTML §12.2.1 "The Storage interface"'s "implementation-defined manner" reorder.
+ *
+ * §7.4 IS THE OTHER STANDARD'S AND IS NOT PERFORMED HERE, WHICH IS WHY THIS IS A HOOK AND NOT A CALL. Its step
+ * 1 fires a `CookieChangeEvent` at a Window's `CookieStore`, and this file is RFC 6265's store: it knows nothing
+ * about either interface and must not learn, or the store becomes a component of one API that views it while
+ * `document.cookie` and the network write the same bytes through the same steps.
+ * ONE CLAIMANT, AND NULL IS THE RELEASE — core/events/event_target.h's own seams state why the two are one call.
+ * `run` is asked with the changes already recorded and has queued whatever it queues by the time it returns;
+ * this file CLEARS the set afterwards, because the set is what the CONDITION produced and a set that outlived
+ * its condition would be re-offered to every Window at the next one. */
+typedef void (*CookieJarProcessChanges)(JSContext *ctx);
+void cookie_jar_set_process_changes(CookieJarProcessChanges run);
+
+/* §7.4's `The observable changes for url` — "the set of cookie changes to cookies in a cookie store which meet
+ * the requirements in step 1 of Cookies § Retrieval Algorithm's steps to compute the `cookie-string from a
+ * given cookie store` with url as request-uri, for a `non-HTTP` API". Those requirements are RFC 6265 §5.4 "The
+ * Cookie Header" step 1's, applied by the same three predicates §5.4's own walk uses.
+ *
+ * NO EXPIRY TEST, WHICH IS THE ONE THING THIS FILTER MUST NOT COPY FROM THE §5.4 WALK BESIDE IT. Step 1's
+ * requirements are the host-only/domain-match pair, the path-match, the secure-only test and the http-only
+ * exclusion — and expiry is NOT among them: §5.3's eviction rule is a separate sentence, which the read-side
+ * walk applies inline because a LIVE read may not answer with a cookie that has expired. Apply it here and the
+ * deleted-by-expiry change is filtered out of its own notification, so §2.2's second condition would process an
+ * empty set for ever and its whole population would be unobservable.
+ * THE HTTP-ONLY REQUIREMENT IS VACUOUS IN THIS STORE RATHER THAN SKIPPED: §5.3 step 10 abandons an HttpOnly
+ * cookie arriving through a "non-HTTP" API, which is the only arrival this store has, so no stored cookie
+ * carries the flag and no cookie change can name one.
+ *
+ * THE SHAPE IS A JS ARRAY OF « name, value, type » — the two strings §7.4's "prepare lists from changes" hands
+ * to Cookie Store API §7.1 "Query cookies"' `create a CookieListItem`, and the `CookieChangeType` deciding
+ * which of that algorithm's two lists the item is appended to. It carries no more for cookie_jar_cookie_list's
+ * reason: §7.1 step 3 returns «[ "name" → name, "value" → value ]» and the five other stored fields are fields
+ * no member of that API may return. OWNED — the caller frees.
+ *
+ * `uri` IS THE REQUEST-URI AND IS ASSERTED TO BE THIS INSTANCE'S, through the same predicate every other public
+ * entry here routes to. §7.4 step 1 walks "every Window window", and every Window of THIS instance shares one
+ * origin — so a request-uri naming a second principal means the walk reached a peer instance's document, whose
+ * cookie changes belong to that instance's store. */
+JSValue cookie_jar_observable_changes(JSContext *ctx, const UrlRecord *uri);
+
 #endif

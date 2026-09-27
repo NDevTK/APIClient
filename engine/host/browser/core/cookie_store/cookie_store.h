@@ -17,11 +17,14 @@
  *
  * WHAT THIS COMPONENT IS AND IS NOT. It is the whole of §3's four METHODS — §3.1's `get` and §3.2's `getAll`
  * over §7.1 "Query cookies", §3.3's `set` over §7.2 "Set a cookie" and §3.4's `delete` over §7.3 "Delete a
- * cookie" — and the §6.1 Window member that reaches them. What it is NOT is the rest of the CHANGE-EVENT half:
- * §7.4 "Process changes" and the `onchange` handler. Those two are absent TOGETHER, which is a SUBPROBLEM ORDER
- * rather than an oversight — installing the handler without §7.4 would flip a page's `"onchange" in cookieStore`
- * true and abandon nothing, because `CookieStore : EventTarget` already answers `addEventListener("change", f)`
- * and no change is dispatched to either. See the named residual in cookie_store.c for what the next diff builds.
+ * cookie" — and the §6.1 Window member that reaches them. §7.4 "Process changes" is this component's too and is
+ * in process_changes.h, which states why it is its own file. What is NOT here is the `onchange` handler, which is
+ * ONE member and the last of this API's subproblems; see the named residual in cookie_store.c.
+ * THIS PARAGRAPH SAID §7.4 AND THE HANDLER WERE ABSENT TOGETHER AND THAT INSTALLING THE HANDLER WITHOUT §7.4
+ * WOULD FLIP A PAGE'S `"onchange" in cookieStore` TRUE AND ABANDON NOTHING, AND IT IS REWRITTEN RATHER THAN
+ * DELETED BECAUSE THE ORDER IT ARGUES IS THE DURABLE HALF. That argument was right and it is spent: §7.4
+ * dispatches now, so the handler's true branch completes and what keeps it a separate landing is that it is a
+ * separate member rather than a half of the dispatch.
  * THIS PARAGRAPH NAMED §5.1 "The CookieChangeEvent interface" AS ABSENT WITH THEM AND IS REWRITTEN RATHER THAN
  * DELETED, FOR THE REASON THE PARAGRAPH BELOW GIVES ABOUT ITS OWN TWICE-WRONG CLAIM: a reader who re-derives
  * the subproblem order from the query half landing first will group all three again. §5.1 is BUILT, in
@@ -59,10 +62,48 @@
 #define ENGINE_HOST_BROWSER_CORE_COOKIE_STORE_COOKIE_STORE_H
 
 #include "quickjs.h"
+#include "core/url/url.h"
 
-/* Declared ONCE PER AGENT; the per-realm install is declared from here through core/realm.h's one list. */
+/* Declared ONCE PER AGENT; the per-realm install is declared from here through core/realm.h's one list. It also
+   declares this component's §7.4 half — see process_changes.h, whose init and release this one reaches for the
+   reason core/events/event.c reaches every Event subclass's: one row in core/platform.c, one declaration pass. */
 void cookie_store_init(JSContext *ctx);
 /* Agent teardown: the class and the declared ids are the agent's. */
 void cookie_store_free(void);
+
+/* ---- THE THREE ALGORITHMS §7.4 "Process changes" SHARES WITH §3's MEMBERS ----------------------------------
+ *
+ * Each of these was private while §3's four methods were its only caller, and each is declared now because §7.4
+ * is a SECOND consumer of the same step rather than because a file wanted reaching into. That is the line
+ * core/loader/cookie_jar.h draws for `cookie_jar_default_path` — "two standards share one definition and this
+ * tree holds one implementation of it" — and the alternative at each is a second copy that can drift. */
+
+/* §3.1 "The get() method" step 4's `settings's creation URL`, as the REQUEST-URI RFC 6265 §5.4 "The Cookie
+ * Header" is computed against: THIS realm's document address. Returns false for a document with no usable
+ * address; `*rec` is initialised either way and the caller ALWAYS frees it.
+ *
+ * FALSE IS A POSITIVE ANSWER AND NOT A FAILURE, which is what §7.4's second consumer reads it for. RFC 6265's
+ * store is reached for http(s) alone — the same condition HTML §3.1.4 "Resource metadata management"'s
+ * cookie-averse test applies to `document.cookie` — so a Window sitting at `about:blank` has no request-host,
+ * §5.4 step 1's requirements are not evaluable for it, and its observable change set is empty by that rather
+ * than by a filter. §7.4 step 1 walks "every Window window" and this is how it skips one. */
+bool cookie_store_request_uri(JSContext *ctx, UrlRecord *rec);
+
+/* §7.1 "Query cookies"' `create a CookieListItem`, over one « name, value » pair of the jar's cookie-list — two
+ * members and no more, because step 3 returns «[ "name" → name, "value" → value ]» and that standard's own Note
+ * records that the wider item of earlier drafts is gone. The VALUE is wrapped at the concolic seam and the name
+ * is not; cookie_store.c's own comment at the body says which of the two an attacker writes and why. */
+JSValue cookie_store_list_item(JSContext *ctx, JSValueConst pair);
+
+/* §6.1 "The Window interface"' "A Window has an associated CookieStore, which is a CookieStore" — THIS realm's,
+ * which is the object §7.4 step 1.4 dispatches at. OWNED; the caller frees.
+ *
+ * IT EXISTS IN EVERY REALM THIS COMPONENT INSTALLED INTO, INCLUDING A NON-SECURE ONE, and that is not a gap in
+ * the [SecureContext] gate. §3's interface and §6.1's member are both `[SecureContext]`, so Web IDL §3.3.13
+ * "[SecureContext]" REMOVES the page's ROUTE to this object in a non-secure realm — `"cookieStore" in window` is
+ * false there. What it does not remove is §6.1's associated CookieStore, which that section states
+ * unconditionally, and §7.4 step 1 states no secure-context condition of its own. So a non-secure Window is
+ * dispatched at like any other, at an object no script in it can name. */
+JSValue cookie_store_of_realm(JSContext *ctx);
 
 #endif
