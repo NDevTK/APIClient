@@ -423,6 +423,27 @@ static const char *const LK_SETTLED_STEPS[] = { LK_SETTLED_STAGES(JS_STEP_STAGE_
 
 typedef struct { JSStepHdr hdr; } LkSettled;
 
+/* WHAT THIS MACHINE AND §4.3'S OWN: NOTHING BEYOND THE HEADER — which is why one function serves both of them
+   and why it visits nothing. Each state is the header alone, and every value either step touches is read
+   through JS_StepClosureData (the closure's, which outlives the state) or step_arg (the header's operands,
+   which tramp_step_state_clone dups itself on the line above the one where it calls this) — so a v->val here
+   would take a second reference to something this state never took a first one to, which is an over-count in
+   the clone and an over-free in the teardown.
+   THE TWO _Static_asserts BESIDE THE STRUCTS ARE WHAT KEEP THAT TRUE, rather than this paragraph: a JSValue
+   added to either state stops this file compiling AT that struct, instead of silently handing a forked arm a
+   reference nobody dup'd.
+   A NULL VISIT WAS THE ONE SPELLING OF THIS FACT THE RUNTIME REFUSES, AND RIGHTLY — a definition that names no
+   visit cannot be told apart from one whose author forgot to write it, so it is refused at the door
+   (js_step_def_check's CHECK, fatal in release as well as dev) rather than at the fork that would corrupt.
+   Both of these definitions were registered that way, so §3 aborted this agent's init in every regime on the
+   first build after it landed, before any document ran. */
+static void lk_hdr_only_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
+_Static_assert(sizeof(LkSettled) == sizeof(JSStepHdr),
+               "§2.4's settle state gained a field and lk_hdr_only_visit declares it owns none — a JSValue "
+               "here is one a deep fork would hand to two flows and both teardowns would free. Give this "
+               "machine a visit of its own naming the field, rather than widening the struct under the shared "
+               "one");
+
 static int lk_settled_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     LkSettled *s = st;
@@ -454,7 +475,7 @@ static int lk_settled_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
 }
 
 static const JSTrampStepDef lk_settled_def = {
-    sizeof(LkSettled), lk_settled_step, NULL, 0, .visit = NULL,
+    sizeof(LkSettled), lk_settled_step, NULL, 0, .visit = lk_hdr_only_visit,
     .algorithm = "Web Locks API §2.4 Locks' waiting-promise settle steps",
     .steps = LK_SETTLED_STEPS
 };
@@ -602,6 +623,13 @@ enum { LK_ABORT_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const LK_ABORT_STEPS[] = { LK_ABORT_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct { JSStepHdr hdr; } LkAbort;
+/* OWNS NOTHING BEYOND THE HEADER — see lk_hdr_only_visit, which this definition shares, for why that is a
+   declaration rather than an omission. */
+_Static_assert(sizeof(LkAbort) == sizeof(JSStepHdr),
+               "§4.3's abort state gained a field and lk_hdr_only_visit declares it owns none — a JSValue "
+               "here is one a deep fork would hand to two flows and both teardowns would free. Give this "
+               "machine a visit of its own naming the field, rather than widening the struct under the shared "
+               "one");
 
 static int lk_abort_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
@@ -633,7 +661,7 @@ static int lk_abort_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
 }
 
 static const JSTrampStepDef lk_abort_def = {
-    sizeof(LkAbort), lk_abort_step, NULL, 0, .visit = NULL,
+    sizeof(LkAbort), lk_abort_step, NULL, 0, .visit = lk_hdr_only_visit,
     .algorithm = "Web Locks API §4.3 Abort a request's signal to abort the request",
     .steps = LK_ABORT_STEPS
 };
