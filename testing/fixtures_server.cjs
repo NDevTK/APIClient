@@ -11,7 +11,33 @@ const path = require("path");
 
 const ROOT = path.resolve(__dirname, "fixtures");
 const PORT = parseInt(process.env.FIX_PORT || "8765", 10);
+/* TWO LOCK FILES, BECAUSE ONE FILE WAS ANSWERING TWO QUESTIONS AND THE STRICTER ONE WAS SILENTLY LOSING.
+   The well-known path is a DISCOVERY entry: testing/poc_multi_e2e.cjs reads `fix.port` out of it, so its whole
+   value is that a reader who does NOT know the port can find one. The per-server record is an ISOLATION fact:
+   two servers on two ports are two subjects. A single file cannot be both, and writing it unconditionally made
+   it neither — a second server on another port OVERWROTE the first's port with its own, so a reader following
+   the discovery entry was sent to the wrong server; and either server's SIGTERM then unlinked whatever lock was
+   there, so a reader could get ENOENT while a server was up. Both failures are silent and both read as the
+   OTHER component being wrong.
+   PORT-SCOPING THE WELL-KNOWN PATH IS THE FIX THAT LOOKS RIGHT AND IS CIRCULAR: a reader would need the port in
+   order to find the file that tells it the port. Recorded because that is the repair a reader re-derives from
+   the word `lock`. So the two questions get two files, each with one job and one lifetime:
+     fixtures.lock          the well-known DISCOVERY entry. Claimed only when absent or held by a DEAD pid, and
+                            released at exit only when it names THIS pid — a destructive step gated on a check's
+                            result rather than chained after one. A live claim is left alone and said out loud.
+     fixtures.<port>.lock   this server's own record, ours by construction, always written and always released.
+   A pid can be recycled, which a liveness probe cannot see; that is acceptable in a test instrument and is why
+   the probe decides only whether to CLAIM a path, never whether to serve anything. */
 const LOCK = path.resolve(__dirname, "fixtures.lock");
+const LOCK_PORT = path.resolve(__dirname, `fixtures.${PORT}.lock`);
+
+function lockHolderIfLive(file) {
+  let held;
+  try { held = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; }
+  if (!held || typeof held.pid !== "number") return null;
+  try { process.kill(held.pid, 0); } catch { return null; }
+  return held;
+}
 
 /* THE ACCESS LINE NEEDS A READER THAT IS NOT A REDIRECT SOMEBODY REMEMBERED, WHICH IS WHY THIS FILE EXISTS.
    CLAUDE.md §A-WITNESS-MAY-NOT-BE-COMPOSED-FROM-A-VALUE-THE-SUBJECT-CAN-MAKE-UNKNOWN judges a witness on two
@@ -326,17 +352,38 @@ const srv = http.createServer((req, res) => {
 
 srv.listen(PORT, "127.0.0.1", () => {
   const lock = { pid: process.pid, port: PORT, startedAt: Date.now() };
-  fs.writeFileSync(LOCK, JSON.stringify(lock, null, 2), "utf8");
+  fs.writeFileSync(LOCK_PORT, JSON.stringify(lock, null, 2), "utf8");
+  const wellKnownHeldBy = lockHolderIfLive(LOCK);
+  if (!wellKnownHeldBy) fs.writeFileSync(LOCK, JSON.stringify(lock, null, 2), "utf8");
   console.log(`fixtures server listening on http://127.0.0.1:${PORT}/`);
   console.log(DEFAULT_ROUTE_PRESENT
     ? `  GET / -> ${DEFAULT_ROUTE}`
     : `  GET / -> UNMAPPED: ${DEFAULT_ROUTE} is not in this checkout, so / answers 404`);
   console.log(`  GET ${HOLD_PATH} -> a body with NO END (wpt fetch/api/resources/infinite-slow-response.py)`);
-  console.log(`  lock: ${LOCK}`);
+  /* THE BANNER SAYS WHICH LOCKS THIS SERVER OWNS, NEVER WHICH LOCKS EXIST. Printing the well-known path
+     unconditionally put a line reading `lock: <path>` underneath a line saying another server held it, so one
+     banner contradicted itself and the wrong half was the one that looked like a fact. */
+  if (wellKnownHeldBy) {
+    console.log(`  lock: ${LOCK} is held by a LIVE server (pid ${wellKnownHeldBy.pid}, port ` +
+                `${wellKnownHeldBy.port}) — NOT claimed here. A reader with no port in hand is sent THERE, ` +
+                `not here; name this server by ${LOCK_PORT}.`);
+  } else {
+    console.log(`  lock: ${LOCK}  (well-known discovery entry, claimed by this server)`);
+  }
+  console.log(`  lock: ${LOCK_PORT}  (this server's own record)`);
   console.log(`  access log: ${ACCESS_LOG}  (truncated at this startup; two lines and no more means nothing was requested)`);
 });
 
-process.on("SIGTERM", () => { try { fs.unlinkSync(LOCK); } catch {} for (const f of [..._holding]) f();
+/* RELEASE IS GATED ON OWNERSHIP, NOT CHAINED AFTER A READ. The per-port record is ours by construction and
+   goes unconditionally; the well-known entry goes only if it still names THIS pid, so a server that correctly
+   declined to claim it cannot take another server's on the way out. */
+function releaseLocks() {
+  try { fs.unlinkSync(LOCK_PORT); } catch {}
+  let held;
+  try { held = JSON.parse(fs.readFileSync(LOCK, "utf8")); } catch { return; }
+  if (held && held.pid === process.pid) { try { fs.unlinkSync(LOCK); } catch {} }
+}
+process.on("SIGTERM", () => { releaseLocks(); for (const f of [..._holding]) f();
                                  srv.close(() => process.exit(0)); });
-process.on("SIGINT",  () => { try { fs.unlinkSync(LOCK); } catch {} for (const f of [..._holding]) f();
+process.on("SIGINT",  () => { releaseLocks(); for (const f of [..._holding]) f();
                                 srv.close(() => process.exit(0)); });
