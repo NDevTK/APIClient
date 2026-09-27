@@ -5790,6 +5790,17 @@ function report(stages, findings) {
   else if (HOST_SOURCE.size)
     console.log("[rev] the " + HOST_SOURCE.size + " host source(s) this build's contracts were derived from " +
                 "are byte-identical to what it read at that revision");
+  /* RESIDUAL: this answers BY CONTENT over the files this build's contracts were derived from, which is six of
+     them, and NOT over the cone. `revisionMoved` remains the only statement about the rest of engine/host and
+     it compares porcelain, so a content edit to an ALREADY-DIRTY source that no `sourceFact` reads is invisible
+     to both lines: this one never froze it, and that one sees the same ` M path` at both ends. WHAT THE NEXT
+     DIFF BUILDS: the content comparison in gate_revision.mjs, over its own cone, so the movement question is
+     answered once and by content rather than twice and by two different instruments — which is a real cost
+     decision and not a tidy-up, because the cone is 916 tracked C and H files and 41 MB, and a digest walk at
+     both ends of every build is a price this file has not been asked to pay. HOW ITS ABSENCE SHOWS: a build
+     whose cone was dirty at its start, whose engine/host sources were edited under it, and whose failing
+     reading does not involve one of the frozen six, prints `the tree did not move under this build` beside a
+     verdict about a program that no revision describes. */
   console.log("[build] ── stages ──");
   /* THE KIND IS IN THE ROW, WHICH IS THE LINE A READER ACTUALLY SEES PER STAGE. Both audits already band their
      own populations apart in their own bodies and it did not help while this table printed one undifferentiated
