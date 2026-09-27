@@ -317,4 +317,34 @@ JSValue  session_history_active_entry_url(JSContext *ctx);              /* OWNED
 JSValue  session_history_active_entry_navigation_state(JSContext *ctx); /* OWNED ArrayBuffer */
 uint32_t session_history_active_entry_step(JSContext *ctx);
 
+/* §7.4.1.2 "Document state"'s RESOURCE of the active entry's document state — "a resource, a string, POST
+ * resource or null, initially null", whose note says what the string arm is for: "a string is treated as HTML.
+ * It's used to store the source of an iframe srcdoc document".
+ *
+ * IT IS A FIELD OF THE ENTRY BECAUSE §7.4.5 "Populating a session history entry" READS IT OFF ONE, and that is
+ * the whole difference between a navigation and a re-population. §7.4.2.2 "Beginning navigation" takes a
+ * `documentResource` argument and lists it as the RESOURCE row of the new document state it builds; §7.4.5's
+ * attempt-to-populate then opens with "let documentResource be entry's document state's resource" and hands a
+ * STRING to create-navigation-params-from-a-SRCDOC-resource, whose response body row is "the UTF-8 encoding of
+ * documentResource". So a reload — §7.4.3, which
+ * re-populates the navigable's EXISTING entry and carries no documentResource of its own — has the markup only
+ * because the entry kept it, and the Document it is replacing does not hold the bytes it was parsed from.
+ * THE RESOURCE IS THE STRING AND THE BODY IS ITS ENCODING: they are one derivation apart, so what this field
+ * holds is §4.8.5's srcdoc TEXT and never the bytes that section builds out of it.
+ *
+ * WHY THE WRITE IS A SEPARATE CALL AND NOT AN ARGUMENT OF THE INSTALL. In the standard the entry exists BEFORE
+ * the populate, so navigate fills this field and populate reads it. Here the order is inverted — the load builds
+ * the Document and session_history_install_document mints the entry for it afterwards — so the load job carries
+ * the resource on its own argument vector (core/frame/navigable.c's NAV_LOAD_ARG_DOCUMENT_RESOURCE) and writes
+ * it onto the entry the install has just made, in the NEW realm, before any of that document's own scripts run.
+ * One value, one slot, one write: a copy on the creation record beside the copy on the job would be two
+ * derivations of one fact, which is the pair that drifts.
+ *
+ * `resource` is BORROWED and never null — §7.4.1.2's null is the field's initial value, which the document
+ * state is built with, so a caller with nothing to state calls nothing. The getter's answer is an OWNED string
+ * or JS_NULL, and the SLOT is the question: an empty string is `<iframe srcdoc="">`, which is a real
+ * destination, and the null is the absence that sends §7.4.5 to its other constructor. */
+void    session_history_set_active_entry_resource(JSContext *ctx, const char *resource);
+JSValue session_history_active_entry_resource(JSContext *ctx);
+
 #endif

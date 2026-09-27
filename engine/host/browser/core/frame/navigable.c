@@ -2086,8 +2086,40 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     /* §13.2.7 "The end", the realm the host builds around the finished tree, this document's own scripts, and
        §7.4.6.2's update the document — all of it inside nav_create_finish, which is where the five facts this
        frame determined before the suspension come back out of the record. */
-    nav_create_finish(ctx, s->create, proxy);
-    s->create = NULL;
+    {
+        JSContext *cctx = nav_create_finish(ctx, s->create, proxy);
+
+        s->create = NULL;
+        /* HTML §7.4.1.2 "Document state"'s RESOURCE ONTO THE ENTRY THE INSTALL HAS JUST MINTED — the field
+           §7.4.5 "Populating a session history entry" reads, written here because this engine's populate and
+           its entry are in the opposite ORDER from the standard's. §7.4.2.2 "Beginning navigation" lists the
+           resource as a row of the document state it builds BEFORE anything is populated, so the standard's
+           §7.4.5 finds the value already on the entry; here the load builds the Document first
+           and session_history_install_document mints the entry for it inside the realm builder above, so the
+           value has to be written from this side of that call. There is nowhere earlier it could go: the entry
+           does not exist until the realm does.
+           IT COMES OFF THIS JOB'S OWN SLOT AND NOT OFF THE CREATION RECORD, which is the same "an operation
+           takes its inputs with it" split the address and the about base URL take, read one step further: the
+           argument vector is what carried this value across the suspension, so a copy on NavCreateWork beside
+           it would be two derivations of one fact and the pair that drifts. The bytes are therefore the SAME
+           bytes the fetch stage handed the parse — a reload re-parses what this load parsed, rather than a
+           second reading of the attribute.
+           AND IT IS AHEAD OF EVERY SCRIPT OF THIS DOCUMENT. nav_create_finish SEEDS programs (it queues them
+           onto the frontier) and runs none of them, so nothing of the page can observe the entry between the
+           install and this line — which is what keeps the write at that realm's pre-boot BASELINE, where it
+           belongs to every flow rather than to whichever one forked first.
+           THE SLOT IS THE QUESTION AND NEVER THE STRING'S LENGTH: `<iframe srcdoc="">` carries a real empty
+           resource, which is the destination §4.8.5's arm used to answer with an empty frame. */
+        if (JS_IsString(step_arg(&s->hdr, NAV_LOAD_ARG_DOCUMENT_RESOURCE))) {
+            const char *entry_resource = JS_ToCString(ctx, step_arg(&s->hdr, NAV_LOAD_ARG_DOCUMENT_RESOURCE));
+
+            CHECK(entry_resource != NULL,
+                  "navigable: OOM taking §7.4.1.2's document resource off the load job for its session history "
+                  "entry");
+            session_history_set_active_entry_resource(cctx, entry_resource);
+            JS_FreeCString(ctx, entry_resource);
+        }
+    }
     return JS_STEP_DONE;
 }
 
@@ -2751,29 +2783,55 @@ static void nav_reload_enqueue(JSContext *ctx, const char *addr)
        members beside it — the page's own code, every time — so the fact that decides it is the same one every
        other running-code act asks. A reload of a document that only exists because a gate was forced is still
        a request no client makes, which is why this is the running path's answer and not the address's. */
-    /* §7.4.3's RELOAD OF AN IFRAME SRCDOC DOCUMENT HAS A RESOURCE AND THIS BUILD HOLDS NONE. The section
-       re-populates the navigable's EXISTING session history entry, and §7.4.5 reads the resource off "entry's
-       document state's resource" — a field of the ENTRY, which is where a srcdoc's markup lives for every later
-       navigation to it. This engine carries the resource on the LOAD JOB and nowhere else, so by the time a
-       reload composes a new job the bytes are gone and this destination would produce an EMPTY document where
-       a browser re-shows the frame's markup. That is a wrong answer rather than a narrower one, so it crashes:
-       BUILD §7.4.5's document state resource as a field of core/frame/session_history.c's entry, written by the
-       load that first carried one and read by every re-population of it — the same diff the history CARRY
-       above already needs under it. HOW ITS ABSENCE SHOWS, until then: the entry could not exist at all, since
-       nothing but this address reaches it. */
-    DCHECK(strncmp(addr, "about:srcdoc", sizeof "about:srcdoc" - 1) != 0,
-           "§7.4.3's reload was asked to re-populate a navigable whose active entry's URL is `about:srcdoc` — "
-           "§7.4.5 \"Populating a session history entry\" builds that destination's response out of ENTRY'S "
-           "DOCUMENT STATE'S RESOURCE, and this build carries a document resource on the load job only, so the "
-           "markup of the frame being reloaded is not anywhere this operation can reach. Reloading it without "
-           "one would show an empty document where the frame's own markup was");
-    navigable_load_enqueue(ctx, proxy, addr, origin_agent(),
-                           serialized_policy_container_of(document_policy(ctx)),
-                           strncmp(addr, "about:", 6) == 0 ? document_base_url(ctx) : NULL,
-                           /* §7.4.5's resource for a RELOAD is the entry's, which this build does not store —
-                              see the assert above, which is why null here is a statement rather than a gap. */
-                           NULL,
-                           engine_provenance_of_running_path());
+    /* §7.4.5 "Populating a session history entry"'s RESOURCE FOR A RELOAD IS THE ENTRY'S, AND THAT IS WHY IT IS
+       READ HERE RATHER THAN CARRIED. §7.4.3 "Reloading and traversing" takes no `documentResource` argument at
+       all — it re-populates the navigable's EXISTING session history entry — and §7.4.5's attempt-to-populate
+       opens with "let documentResource be entry's document
+       state's resource", handing a STRING to create navigation params from a SRCDOC resource and anything else
+       to the fetching constructor. So the resource is one of the few facts a reload may legitimately read off
+       the object it acts on, in exactly the sense §scheduler's "an operation that becomes a work item takes its
+       inputs with it" draws the line: the initiator, the base URL and the policy container are facts about the
+       OPERATION and are resolved above at this enqueue, and the resource is a fact about the ENTRY, which is
+       the one thing here that outlives the navigation that first carried one.
+       A CRASH USED TO STAND HERE and its argument is retired rather than deleted, because a reader who finds
+       the resource riding only the load job will re-derive it: it said §7.4.5 reads the markup off the entry,
+       that this build held no such field, and that reloading an `about:srcdoc` destination would therefore show
+       an EMPTY document where a browser re-shows the frame's markup — a wrong answer rather than a narrower
+       one. session_history.h's document-state resource is that field; the write is at the load's own creation
+       stage, where the entry first exists.
+       IT IS `JS_NULL` FOR EVERY OTHER DESTINATION and the SLOT is what says so, never the string's length: an
+       `about:blank` reload has no resource and takes §7.4.5's other arm, while `<iframe srcdoc="">` has a real
+       empty one. The PAIRING of a resource with the one address that may carry it stays navigable_load_enqueue's
+       own assert — the one place every load converges — and this call hands it the entry's URL and the entry's
+       resource together, so the two cannot come from different navigations.
+       NAMED RESIDUAL — §7.4.5's ABOUT BASE URL FOR A RELOAD IS ALSO THE ENTRY'S AND IS STILL READ OFF THE
+       DOCUMENT. WHAT IS NOT COVERED: §7.4.2.2 sets the new document state's about base URL to its
+       `initiatorBaseURLSnapshot`, and §7.4.5's srcdoc constructor takes its own about-base-URL row from that
+       same field of the entry — while the line below answers `document_base_url(ctx)`, which for a Document
+       that carries its own `<base href>` is §2.4.3 "Document base URLs"' document base URL step 2, "otherwise,
+       return the frozen base URL of the first base element in document that has an href attribute, in tree
+       order", rather than the initiator's snapshot the entry holds. The code is right for every `about:`
+       document without one — the same answer an `about:blank` reload already takes — so this is narrower than
+       the section rather than wrong about it. WHAT THE NEXT DIFF BUILDS: the about base URL as a second member of
+       core/frame/session_history.c's document state, written at the same creation stage this resource is and
+       read here beside it — which also ends the `about:` prefix test below, since the entry either holds one or
+       does not. HOW ITS ABSENCE WOULD SHOW: a reloaded `about:` document whose markup carries `<base href>`
+       resolves its relative URLs against a base that MOVES with each reload, because each one freezes that
+       element against the previous freeze's answer instead of against the initiator's. */
+    {
+        JSValue entry_resource = session_history_active_entry_resource(ctx);
+        const char *resource = JS_IsString(entry_resource) ? JS_ToCString(ctx, entry_resource) : NULL;
+
+        CHECK(!JS_IsString(entry_resource) || resource != NULL,
+              "navigable: OOM taking §7.4.1.2's resource off the entry §7.4.3's reload is re-populating");
+        navigable_load_enqueue(ctx, proxy, addr, origin_agent(),
+                               serialized_policy_container_of(document_policy(ctx)),
+                               strncmp(addr, "about:", 6) == 0 ? document_base_url(ctx) : NULL,
+                               resource,
+                               engine_provenance_of_running_path());
+        if (resource) JS_FreeCString(ctx, resource);
+        JS_FreeValue(ctx, entry_resource);
+    }
 }
 
 int navigable_reload_run(JSContext *ctx, NavigableReloadWork *w, JSValue in, JSValue **out_cb, int *out_argc)

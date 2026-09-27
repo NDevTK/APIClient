@@ -56,6 +56,18 @@ static JSClassID g_slot = JS_INVALID_CLASS_ID;
 #define SH_D_DOC     "document"     /* the world-registry document id; -1 for §7.4.1.2's null document */
 #define SH_D_ORIGIN  "origin"
 #define SH_D_EVER    "everPopulated"
+/* §7.4.1.2 "Document state"'s RESOURCE, verbatim: "a resource, a string, POST resource or null, initially
+   null", with the section's own note beside it — "a string is treated as HTML. It's used to store the source
+   of an iframe srcdoc document". THE TYPE LIST ADMITS A STRING and that is the arm this holds; the POST
+   RESOURCE arm is not held, because §4.10.22's form submission is its only producer and this build has none —
+   which is the same sentence session_history_is_fragment_navigation's own note makes about the first conjunct
+   of §7.4.2.2's same-document test, and a field whose second arm has no writer would be a second absence with
+   no meaning.
+   JS_NULL IS THE ABSENCE AND THE EMPTY STRING IS A DESTINATION. `<iframe srcdoc="">` specifies the attribute,
+   so §4.8.5's step 1 carries a real empty string and §7.4.5 takes its SRCDOC constructor over it; an absent
+   resource takes the fetching constructor instead. The two are therefore told apart by the SLOT (JS_IsString)
+   and never by the string's length, which is the rule core/frame/navigable.c states at the job's own slot. */
+#define SH_D_RESOURCE "resource"
 
 /* ---- the per-realm record ------------------------------------------------------------------------------------
  *
@@ -252,6 +264,11 @@ static JSValue sh_document_state_new(JSContext *ctx)
        about:-schemed entries this field exists for. */
     JS_SetPropertyStr(ctx, ds, SH_D_ORIGIN, JS_NewUint32(ctx, origin_id(origin)));
     JS_SetPropertyStr(ctx, ds, SH_D_EVER, JS_TRUE);
+    /* §7.4.1.2's RESOURCE AT ITS INITIAL VALUE, WRITTEN RATHER THAN LEFT OFF. The load that carried one fills
+       it through session_history_set_active_entry_resource the moment this entry exists; a slot never written
+       would answer `undefined`, which is a THIRD state neither reader can tell from the null — and the reader
+       that matters is §7.4.5's arm choice, where the two answers are two different constructors. */
+    JS_SetPropertyStr(ctx, ds, SH_D_RESOURCE, JS_NULL);
     return ds;
 }
 
@@ -1291,6 +1308,68 @@ uint32_t session_history_active_entry_step(JSContext *ctx)
 
     JS_FreeValue(ctx, e);
     return step;
+}
+
+/* §7.4.1.2 "Document state"'s RESOURCE OF THE ACTIVE ENTRY'S DOCUMENT STATE — the field §7.4.5 "Populating a
+ * session history entry"'s arm choice reads, and the one this engine's collapsed populate has to write from
+ * OUTSIDE the navigate that carried it (see the header).
+ *
+ * IT IS THE ENTRY'S AND NOT THE DOCUMENT'S, which is the whole reason the pair is here. §7.4.2.2 builds the
+ * document state listing the resource as one of its rows, and §7.4.5 reads it back off "entry's document
+ * state's resource", so the value belongs to the thing that OUTLIVES the load — a re-population has no
+ * navigate under it to be handed one, and a Document does not hold the markup it was parsed from.
+ *
+ * THE WRITE IS ONCE PER ENTRY AND THAT IS ASSERTED. An entry is minted by session_history_install_document with
+ * the field at §7.4.1.2's initial null, and the load that produced that Document is the one operation that has
+ * a resource to state; a second write would mean two loads claim one entry, which is the same impossible state
+ * that install's own one-Document-per-realm assert refuses from the other end.
+ * WHAT IS *NOT* ASSERTED HERE IS THE PAIRING WITH THE ADDRESS, deliberately: §7.4.5 reads a resource in exactly
+ * one constructor and that constructor states its own response URL, and core/frame/navigable.c already asks
+ * that question at navigable_load_enqueue — the ONE place every load converges, the reload included, since the
+ * reload hands that call the entry's URL and the entry's resource together. A second spelling of one predicate
+ * is the shape that drifts, and the two objects it would be asked of cannot disagree: the entry's field comes
+ * from the job whose address that assert has already judged.
+ * THE BYTES ARE THE PAGE'S and no assert stands on their CONTENT — a srcdoc's markup is whatever an author
+ * wrote, so the only invariant is the SLOT's type. */
+void session_history_set_active_entry_resource(JSContext *ctx, const char *resource)
+{
+    JSValue e = sh_active_entry(ctx), ds = JS_GetPropertyStr(ctx, e, SH_E_DOCSTATE), prior;
+
+    DCHECK(resource != NULL,
+           "§7.4.1.2's resource was set to a null POINTER, which is not §7.4.1.2's null — the absence is the "
+           "field's initial value and is what sh_document_state_new already wrote, so a caller with nothing to "
+           "state has nothing to call");
+    DCHECK(JS_IsObject(ds),
+           "a §7.4.1.1 entry answered for its DOCUMENT STATE with nothing — sh_entry_new gives every entry one "
+           "and the field has no other writer, so an entry without one was not built by this component");
+    prior = JS_GetPropertyStr(ctx, ds, SH_D_RESOURCE);
+    DCHECK(JS_IsNull(prior),
+           "§7.4.1.2's resource was written over a value that was already there — an entry is minted with the "
+           "field at the section's initial null and the load that built its Document is the one operation that "
+           "can state one, so a second write means two loads claim one entry");
+    JS_FreeValue(ctx, prior);
+    JS_SetPropertyStr(ctx, ds, SH_D_RESOURCE, JS_NewString(ctx, resource));
+    JS_FreeValue(ctx, ds);
+    JS_FreeValue(ctx, e);
+}
+
+JSValue session_history_active_entry_resource(JSContext *ctx)
+{
+    JSValue e = sh_active_entry(ctx), ds = JS_GetPropertyStr(ctx, e, SH_E_DOCSTATE), r;
+
+    DCHECK(JS_IsObject(ds),
+           "a §7.4.1.1 entry answered for its DOCUMENT STATE with nothing — see "
+           "session_history_set_active_entry_resource, which is the writer of the field being read here");
+    r = JS_GetPropertyStr(ctx, ds, SH_D_RESOURCE);
+    JS_FreeValue(ctx, ds);
+    JS_FreeValue(ctx, e);
+    /* THE TWO ARMS §7.4.1.2 ADMITS HERE, AND NOTHING ELSE. `undefined` would be the slot never written, which
+       sh_document_state_new makes impossible; anything else would be a writer outside this file. */
+    DCHECK(JS_IsString(r) || JS_IsNull(r),
+           "§7.4.1.2's resource held something that is neither a string nor the section's null — the field is "
+           "written at its initial value with the document state and by one setter in this file, and §7.4.5 "
+           "chooses between two whole constructors on which of the two it is");
+    return r;
 }
 
 /* §7.4.4's TWO HALVES — see session_history.h for where the split is and why it is there.
