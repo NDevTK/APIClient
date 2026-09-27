@@ -40,6 +40,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/events/event_target.h"
+#include "core/events/pointer_capture.h"
 #include "core/html/autofocus.h"
 #include "core/html/html_element.h"
 #include "core/html/custom_elements.h"
@@ -3242,6 +3243,9 @@ void element_init(JSContext *ctx)
     dom_cow_set_attr_hook(element_attr_changed);
     realm_declare_intrinsic(element_install_proto);
     element_view_init(ctx);   /* CSSOM VIEW §6's `partial interface Element`, installed on the prototype below */
+    /* Pointer Events 4 §4 "Extensions to the Element interface"'s `partial interface Element`, whose one
+       installable member core/events/pointer_capture.h names — and names the two it leaves absent. */
+    pointer_capture_init(ctx);
     custom_elements_init(ctx);
     html_script_init(ctx);    /* HTML §4.12.1.1's `already started` slot, which the fragment parse below writes */
     html_base_element_init(ctx);   /* §4.2.3's `href` setter, whose getter is not a reflection */
@@ -3363,6 +3367,9 @@ void element_install_proto(JSContext *ctx)
     /* CSSOM VIEW §6's `partial interface Element` — the scroll and client geometry. Per realm because its
        answers are per realm: a child navigable's viewport is a different size from the traversable's. */
     element_view_install(ctx, proto);
+    /* Pointer Events 4 §4's `partial interface Element` — per realm for the same reason §6's members are:
+       a C member runs in the realm that DEFINED it. */
+    pointer_capture_install(ctx, proto);
     /* GlobalEventHandlers is NOT on Element — the IDL mixes it into HTMLElement, which is where it is
        installed now that that interface exists. */
     JS_SetClassProto(ctx, g_element_class, proto);
