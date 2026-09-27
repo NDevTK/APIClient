@@ -4083,12 +4083,17 @@ function censusReading(out) {
                    + `own work, about the take, or about whether this bundle ships uncalled code. The `
                    + `conformance host begins non-forking and the shipped host begins forking, so this is the `
                    + `zero that changes meaning between the two streams a reader compares`
-                 : ` — NEVER ASKED. engine_orphan_seed sits at the last moment before the CLOCK may move, so it `
-              + `is reached only by a member that is DISPATCHED, unframed, and has no program, job, delivery, `
-              + `checkpoint or lifecycle stage left. (A timer, a rendering opportunity, an owed reply and a `
-              + `close request are BELOW it and cannot hold a member back from the ask; that list stood here `
-              + `after the rung moved and is corrected.) So no flow of this session has reached the end of `
-              + `its own work. That is the SCHEDULE and says nothing whatever about the take, the drive, or `
+                 : ` — NEVER ASKED. engine_orphan_seed sits BELOW the three clock-driven sources, so it is `
+              + `reached only by a member that is DISPATCHED, unframed, and has no program, job, delivery, `
+              + `checkpoint or lifecycle stage left AND no rendering opportunity, no due timer and no idle `
+              + `work. (An owed reply and a close request are still BELOW it and cannot hold a member back `
+              + `from the ask. This sentence has now been wrong about that list TWICE, in opposite `
+              + `directions, from two different seed placements — it said the clock was below the rung when `
+              + `the rung was above the clock, and the owner's ordering moved the rung; the list is here `
+              + `because a NEVER-ASKED diagnostic is unreadable without it, and solver/engine.c's `
+              + `clock-arrival counters are what make this one checkable rather than remembered.) So no flow `
+              + `of this session reached the end of the work the page arranged for it AND found the page's `
+              + `own clock idle. That is the SCHEDULE and says nothing whatever about the take, the drive, or `
               + `whether this bundle ships uncalled code — and @COLD's \`outOfProgramsAtTheLadder\` is what `
               + `separates "nobody is standing there" from "they are standing there", with `
               + `\`outOfProgramsAtTheLadderUnits\` beside it separating "and are not being picked" from `

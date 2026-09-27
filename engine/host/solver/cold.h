@@ -172,14 +172,23 @@ typedef struct {
        which.
        WHAT TURNS ON IT IS THE ORPHAN QUESTION, which is why this is the fact worth carrying rather than a
        per-bucket phase table. engine.c reaches engine_orphan_seed where a flow has no program, job, delivery,
-       checkpoint or lifecycle stage DUE at the current moment — the last rung before the clock may move — so
-       `0` orphan asks has two readings — no member has run out of PROGRAMS, or members have and are held by
-       one of the other four — and the census reported them identically. (That list used to end "timer,
-       rendering opportunity, outstanding reply or unmodelled close request", which was the seat the seed had
-       at the ladder's EXIT. Those three sit BELOW the two clock-driven sources and a rendering opportunity is
-       generated for ever on a document that has one, so that seat was reached only where the opportunity did
-       NOT fire and the reading it named was the wrong one to hold — which is why the numbers below were
-       measured against a row whose movement was a fact about the document rather than about the frontier.)
+       checkpoint or lifecycle stage DUE at the current moment AND no rendering opportunity, no due timer and
+       no idle work — so `0` orphan asks has two readings — no member has run out of PROGRAMS, or members have
+       and are held by one of the other SEVEN — and the census reported them identically.
+       THE LIST HAS NOW BEEN WRONG TWICE, IN OPPOSITE DIRECTIONS, AND BOTH TIMES FOR THE SAME REASON: a list of
+       rungs written down where the ladder is not. It first ended "timer, rendering opportunity, outstanding
+       reply or unmodelled close request", which was the seat the seed had at the ladder's EXIT; it then said
+       those three sit BELOW the two clock-driven sources, which was the seat the seed had between the lifecycle
+       arm and the clock. The project owner's ordering has since put the seed BELOW all three clock-driven
+       sources, so the timer and the rendering opportunity are holders again and only the outstanding reply and
+       the close request are beneath it.
+       AND THE ARGUMENT THAT MOVED IT THE FIRST TIME IS EXACTLY WHY THE NUMBERS BELOW ARE NOW WEAKER, which is
+       stated rather than discovered: a rendering opportunity is generated for ever on a document that has one,
+       so a seat below it is reached only where the opportunity did NOT fire, and a zero in this row is again
+       partly a fact about the DOCUMENT rather than about the frontier. That is the PRICE of serving the page's
+       own arranged work first, and solver/engine.c's clock-arrival counters are what separate the two readings
+       the row can no longer separate for itself. RETIREMENT: this record goes when this row is published beside
+       those arrival counts, because the pair then answers what this paragraph argues.
        Measured on the native smoke fixture: 129 members standing at
        the top bucket with `deepest 10`, i.e. every program the document has, against a run reporting zero
        orphan asks. Those two together are the second reading and say which of the four to open; either one

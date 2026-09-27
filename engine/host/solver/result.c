@@ -2092,12 +2092,17 @@ char *result_swap_json(void) {
    program left — so zero orphan asks reads identically for "nobody has run out of programs" and for "members
    have and something else is due", which are different files to open.
    THE SECOND HALF OF THAT SENTENCE USED TO ENUMERATE "a job, a timer, a lifecycle event, a rendering
-   opportunity or an owed reply", AND EVERY ONE OF THE LAST THREE IS NOW BELOW THE ORPHAN ARM — engine.c moved
-   the seed to the last moment before the CLOCK may move, so a timer, a rendering opportunity and an owed
-   reply are reached only after the ask has been made and cannot be what holds a member back from it. A list
-   of rungs written down where the ladder is not is the stale-claim failure with no grep to find it, which is
-   why the enumeration is gone from here rather than corrected: solver/cold.h owns the ladder's own list, and
-   the three `outOfPrograms*` rows beside this one are what answer the question without one.
+   opportunity or an owed reply", AND THEN USED TO SAY THE LAST THREE WERE ALL BELOW THE ORPHAN ARM — which
+   was true of one seed placement and is true of neither since, because the seed now sits BELOW the three
+   clock-driven sources and only the owed reply is beneath it. A TIMER AND A RENDERING OPPORTUNITY CAN AGAIN
+   HOLD A MEMBER BACK FROM THE ASK, which is the whole of what the owner's ordering decided.
+   THE ENUMERATION IS STILL GONE FROM HERE RATHER THAN CORRECTED A SECOND TIME, and the reason is now
+   evidenced rather than asserted: a list of rungs written down where the ladder is not is the stale-claim
+   failure with no grep to find it, and this site has now been wrong about that list TWICE, in opposite
+   directions, from two different seed placements. solver/cold.h owns the ladder's own list, and the three
+   `outOfPrograms*` rows beside this one are what answer the question without one.
+   RETIREMENT: this record goes when no site outside solver/engine.c enumerates a rung of that ladder, because
+   the failure it teaches is then unspellable rather than merely discouraged.
    AND THOSE THREE ARE WHY THE PAIRING IS NOT ENOUGH ON ITS OWN. Two of the things that hold a member with no
    row left are not rungs at all — it was never dispatched, or it is suspended in a live frame and the whole
    ladder sits below `if (!f->frame)` — so `outOfPrograms` alone names a population of which only one part is

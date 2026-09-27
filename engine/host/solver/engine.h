@@ -2372,22 +2372,32 @@ void engine_routed_census(long *delivered, long *refused, long *zero_delivery);
  * On a FRESH session (no residue, so the routing arm that consumes a take without seeding cannot fire):
  *     asked == 0                      no flow ever ran out of its own work, so the question was never
  *                                     reached — a scheduling result, and the one worth acting on. WHAT THAT
- *                                     CONDITION IS, NAMED so the row is checkable: flow_step asks the seed at
- *                                     the last moment BEFORE the clock may move, so "ran out of its own work"
- *                                     is "has no program, job, delivery, checkpoint or lifecycle stage due at
- *                                     the current moment" and NOT "has no frame, timer or reply left" — the
- *                                     second is the exit that declares a timeline OVER, it sits below a
- *                                     rendering opportunity that is generated for ever on a document that has
- *                                     one, and asking there made this row a fact about the DOCUMENT'S shape
- *                                     rather than about the frontier. A run in which it reads 0 while `live`
+ *                                     CONDITION IS, NAMED so the row is checkable: flow_step asks the seed
+ *                                     BELOW the three clock-driven sources, so "ran out of its own work" is
+ *                                     "has no program, job, delivery, checkpoint or lifecycle stage due, AND
+ *                                     no rendering opportunity, no due timer and no idle work" — and NOT "has
+ *                                     no frame, timer or reply left", which is the exit that declares a
+ *                                     timeline OVER.
+ *                                     THIS SAID "THE LAST MOMENT BEFORE THE CLOCK MAY MOVE", AND THAT IS THE
+ *                                     HALF THE OWNER'S ORDERING RETIRED. The reason it gave is intact and is
+ *                                     why the clock now runs first: a rendering opportunity is generated for
+ *                                     ever on a document that has one, so a row asked BELOW it is a fact
+ *                                     about the DOCUMENT'S shape rather than about the frontier — which is
+ *                                     exactly as true of this row now as it was of the exit then, and is the
+ *                                     PRICE of serving the page's own arranged work first rather than an
+ *                                     oversight. A zero here is therefore no longer "no flow ran out of its
+ *                                     own work": it is that, OR every flow that did had a frame or a timer
+ *                                     due, and solver/engine.c's clock-arrival counters are what separate
+ *                                     them. A run in which it reads 0 while `live`
  *                                     climbs is now a statement about the five conditions above the rung —
- *                                     frame, sequence, job, block, lifecycle — and, AHEAD OF ALL FIVE, about
+ *                                     frame, sequence, job, block, lifecycle — PLUS the three clock rungs,
+ *                                     and, AHEAD OF ALL EIGHT, about
  *                                     whether the members were DISPATCHED at all: every one of those is asked
  *                                     inside flow_step, so a member the pick never reaches asks nothing and
  *                                     appears in none of them. Read solver/cold.h's `stepUnits` `none` row
  *                                     (solver/step_unit.h's NONE, paired with @WFQ's `unrun`) FIRST, then
  *                                     `framed`, `outOfPrograms`
- *                                     and `blocked` for which arm holds the rest. Reasoning over the five
+ *                                     and `blocked` for which arm holds the rest. Reasoning over the eight
  *                                     without asking the zeroth is how this row gets read as a ladder defect
  *                                     when it is a pick-order one.
  *     asked > 0, driven == 0          the walk ran and the heap held no uncalled function — a fact about the

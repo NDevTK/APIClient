@@ -11145,99 +11145,46 @@ static int flow_step(JSContext *ctx, Flow *f) {
                      !pending_outstanding_kind(f->pending, FLOW_PENDING_DOCSCRIPT) &&
                      g_docdone_hook && g_docdone_hook(ctx)) {
                 g_step_unit = STEP_UNIT_LIFECYCLE; return 0; }
-            /* THE ORPHAN SURFACE, AT THE LAST MOMENT BEFORE THE CLOCK IS ALLOWED TO MOVE — and that boundary
-               is the whole of the fix, because the two questions either side of it are not one question.
-               EVERYTHING ABOVE THIS LINE IS DUE NOW: a program to run, a job to pump, an answered reply to
-               deliver, a checkpoint, a lifecycle stage the parse made due. EVERYTHING BELOW IT BECOMES due by
-               MOVING THE CLOCK — HTML §8.1.7.3 Processing model reaches a frame by WAITING, in the whole of its
-               in-parallel step 1: "Wait until at least one navigable whose active document's relevant agent's
-               event loop is eventLoop might have a rendering opportunity." §8.7 Timers' expiry is the other
-               moment, and this engine JUMPS to both because it has no real time. So a flow standing HERE has run
-               out of the work the page ARRANGED for it, which is the condition the take is about; a flow
-               standing at the exit at the bottom has additionally established that its timeline is OVER, which
-               on a document that renders is never.
-               IT WAS ASKED AT THAT EXIT, AND WHETHER THE EXIT IS REACHED WAS A PROPERTY OF THE DOCUMENT — which
-               is a WEAKER claim than the one that first stood on this line, and the weaker one is the true one.
-               core/rendering's opportunity answers 0 where its declaration latch is down, where no navigable
-               holds a fully-active document, where a timer is due first (and then the arm directly below it
-               runs that timer), or where event_loop_may_advance is false — which IS
-               `pending_outstanding(f->pending)`, the same predicate the OWED arm below returns on. On a
-               document that HAS a fully-active navigable and no outstanding reply, the arm fires, jumps the
-               clock a frame and returns 1, for ever: there is no terminating condition, so the exit below it is
-               reached by nobody and both halves of the orphan mechanism were code that compiled and could not
-               run. On a document that does NOT — an agent whose navigable set is empty at the moment of the
-               ask, which is what a small child navigable and the solvergate fixtures exercise — the arm answers
-               0 and everything below it is perfectly reachable.
-               THIS LINE FIRST SAID "on any agent that has a document", AND THAT ABSOLUTE WAS REFUTED BY TWO
-               MEASUREMENTS AT ONCE, from opposite directions: the close-request arm, which sits below the same
-               rendering arm, is REACHED on the solvergate fixtures; and the first build carrying this rung
-               drove an orphan in a child navigable while the smoke's own document went on reporting `asked`
-               0. Both are the same fact — the old placement's reachability depended on the shape of the
-               document rather than on the scheduler — and it is exactly the kind of clause §PUSH-BACK warns an
-               absolute invites, since one grep ends the reading and takes the true part with the false.
-               WHAT THE MOVE BUYS IS THAT THE ANSWER STOPS DEPENDING ON THE DOCUMENT. That is §scheduler's own
-               sentence — a justification RESTING ON A DRAIN is not a guarantee, and "on a frontier that grows it
-               is the same starvation with a reason attached" — and it is the SECOND time this one ladder has
-               had it: §8.1.4.7's notify arm was DELETED from below for exactly this reason and moved to a seam
-               that is reached. This is that correction for the surface §What-the-tool-produces calls the
-               headline.
-               AND WHAT STANDS ABOVE THIS RUNG IS THE WHOLE OF THE REMAINING PRECONDITION, so it is worth
-               stating as the conjunction it is rather than leaving each arm to imply it. THE ZEROTH CONJUNCT
-               IS NOT AN ARM AND IS THE ONE A READER OF THIS LADDER MISSES: the member has to be DISPATCHED at
-               all. Every condition below is asked inside flow_step, so a member the pick never reaches asks
+            /* THE FLOW'S OWN RECORDED DRIVE, WHICH IS THE HALF OF THE ORPHAN SURFACE THAT STAYS ABOVE THE
+               CLOCK. The line between it and the seed below the clock is WHOSE WORK THE STEP IS, and that is
+               the distinction this rung used to make against the ladder's EXIT and now makes against the
+               page's own arranged work.
+               A RESUME IS THIS FLOW'S OWN IDENTITY. The member was recorded in a previous session as the
+               drive of ONE body; it carries the path and the arms that made that body reachable, and until a
+               take hands it that body it can do nothing else and will never do anything else — it is a
+               member that can only ever answer "nothing". It is not periodic and it is not manufactured on
+               this step: it is the recipe §Time-travel writes, arriving to be consumed. So it is this flow's
+               own work in exactly the sense every arm above this line is, and it stays where the flow's own
+               work has always been. Below an unbounded source it could never build its call at all, and the
+               cold tier's whole round trip would be writing `fn` for a reader nothing can reach.
+               A SEED IS THE OPPOSITE AND IS NOW BELOW THE THREE CLOCK-DRIVEN SOURCES: it MANUFACTURES a
+               member on this step out of a body nothing asked for. That rung carries the whole of that
+               argument and what it retires.
+               AND THE EXIT'S `orphan_want` ASSERT DEPENDS ON THIS ARM BEING HERE rather than on it being
+               adjacent to the seed — it reads "engine_orphan_resume's rung … stands above every clock-driven
+               source", which is a claim about THIS line and is unchanged by the seed moving.
+               AND THE REFERENCED DOCUMENT IS SERVED TOO, which the ladder's exit could not do:
+               engine_set_referenced stops a last timeline FINISHING and says nothing about whether it may
+               drive uncalled code, so a peer-held instance used to be excluded from this surface by a gate
+               that was never about it.
+               WHAT STANDS ABOVE THIS RUNG IS THE WHOLE OF THE REMAINING PRECONDITION, so it is worth stating
+               as the conjunction it is rather than leaving each arm to imply it. THE ZEROTH CONJUNCT IS NOT
+               AN ARM AND IS THE ONE A READER OF THIS LADDER MISSES: the member has to be DISPATCHED at all.
+               Every condition below is asked inside flow_step, so a member the pick never reaches asks
                nothing, satisfies none of them, and is invisible in every one of them — and a frontier can be
                mostly such members while every arm here looks healthy. solver/cold.h's `step_units` histogram
-               carries them as its own row (solver/step_unit.h's `NONE`, "a member that has never been handed the
-               thread", which pairs with the @WFQ census's `unrun`); ask that BEFORE reading anything below as
-               the holder. Then, dispatched, a flow
-               reaches here with: no live frame at all (the `!f->frame` block is skipped otherwise, and a member
-               grinding inside a program never asks); NO PROGRAM OF ITS OWN SEQUENCE IT CAN RUN; no queued job;
-               not
-               blocked on a cross-instance read; and no document-lifecycle stage left. That last one TERMINATES and is not a
-               periodic source, which is worth knowing because it is grouped with the two clock-driven ones in
-               at least one reader's prose: core/dom/document.c's document_lifecycle_step advances a readiness
-               0 -> 1 -> 2, one stage per call, DCHECKs at BOTH stages that the readiness moved (its own message
-               calls a re-fire "a live-lock the scheduler cannot tell from progress"), and answers 0 once every
-               document of the agent is at 2.
-               AND THE SECOND CONJUNCT WAS SPELLED `no row left` AND MEANT `no program it can run`, WHICH IS
-               THE CORRECTION THIS RUNG TOOK FROM THE `seq_compiles` DIFF AND IS A WIDENING OF WHAT IS WRITTEN
-               HERE. The two were one condition while the sequence arm always either ran a row or returned at
-               it, so the available spelling was the cursor; they came apart the moment a flow standing on an
-               external script row stopped returning. What this rung is ABOUT is unchanged and is the sentence
-               below: a flow with a program still to run has NOT run out of the work the page arranged, and
-               driving an orphan in front of it would empty the precondition of its meaning. A flow parked on
-               bytes that have not come back HAS run out of that work — it can run nothing, and it will run
-               nothing until the host answers — so it is inside the precondition rather than an exception to
-               it, and `seq_compiles` is that sentence spelled correctly for the first time.
-               THE PART THAT WAS A REAL WIDENING IS SAID PLAINLY RATHER THAN ABSORBED: this rung is now asked
-               of a flow that HOLDS A ROW, which the text here used to exclude outright. What decided it is
-               this rung's own argument two paragraphs up — the old placement's answer depended on the SHAPE OF
-               THE DOCUMENT, and `no row left` re-creates exactly that, since whether a document ships external
-               scripts or keeps arranging subresource loads is a property of the document and not of the
-               scheduler. Reading it the other way would have left §What-the-tool-produces' headline surface
-               unreachable on every page that loads a bundle, which is nearly all of them.
-               WHAT IS NOT WIDENED IS THE SEQUENCE ARM ITSELF: a flow with a row it CAN run compiles it, this
-               rung is not asked on that step, and a page that keeps appending runnable rows still takes every
-               step. That is the ordering the task arm's residual names and it is not this rung's to fix.
-               DRIVING EARLY IS NOT DRIVING WRONGLY, WHICH IS WHAT THE OLD PLACEMENT WAS BUYING. Its objection
-               was that "nothing called this function" is a guess until the run is finished — and a run that
-               renders is never finished, so the guarantee bought nothing and cost the whole surface. What being
-               early costs is a drive of a body the page was about to call anyway: a SIBLING flow with concolic
-               arguments standing on the discovering flow's world and account, which the parent's own later real
-               call is unaffected by, and which §Solver settles outright — "Err toward MORE exploration (the WFQ
-               starves the unproductive arm)". A drive that learns nothing is outranked and paged; a surface
-               never served is lost for the session.
-               THE FLOW'S OWN DRIVE FIRST, THE FRONTIER'S WORK SECOND — see engine_orphan_resume for why the two
-               are separate functions. A resumed drive whose body a take handed back is work this flow IS and is
-               not periodic, so it belongs on this side of the boundary for the same reason the seed does; below
-               it, it could never build its call at all, and the cold tier's whole round trip was writing `fn`
-               for a reader nothing could reach.
-               AND THE REFERENCED DOCUMENT IS SERVED TOO, which the exit could not do: engine_set_referenced
-               stops a last timeline FINISHING and says nothing about whether it may drive uncalled code, so a
-               peer-held instance used to be excluded from this surface by a gate that was never about it. */
+               carries them as its own row (solver/step_unit.h's `NONE`, "a member that has never been handed
+               the thread", which pairs with the @WFQ census's `unrun`); ask that BEFORE reading anything
+               below as the holder. Then, dispatched, a flow reaches here with: no live frame at all (the
+               `!f->frame` block is skipped otherwise, and a member grinding inside a program never asks); NO
+               PROGRAM OF ITS OWN SEQUENCE IT CAN RUN; no queued job; not blocked on a cross-instance read;
+               and no document-lifecycle stage left. That last one TERMINATES and is not a periodic source,
+               which is worth knowing because it is grouped with the clock-driven ones in at least one
+               reader's prose: core/dom/document.c's document_lifecycle_step advances a readiness 0 -> 1 -> 2,
+               one stage per call, DCHECKs at BOTH stages that the readiness moved (its own message calls a
+               re-fire "a live-lock the scheduler cannot tell from progress"), and answers 0 once every
+               document of the agent is at 2. */
             else if ((orphan_step = engine_orphan_resume(ctx, f)) != 0) {
-                g_step_unit = engine_orphan_unit(orphan_step); return 0; }
-            else if ((orphan_step = engine_orphan_seed(ctx, f)) != 0) {
                 g_step_unit = engine_orphan_unit(orphan_step); return 0; }
             /* §8.1.7.3's IN-PARALLEL HALF, asked first of the two clock-driven sources because it is the one
                that can defer: it compares the next rendering opportunity with the earliest timer expiry and
@@ -11259,6 +11206,59 @@ static int flow_step(JSContext *ctx, Flow *f) {
                callback queued — because §5.1 step 6 and §5.2 step 3.4 both QUEUE a task rather than looping,
                and this rung being reached again IS that task being run. */
             else if (engine_clock_idle_asked(ctx)) { g_step_unit = STEP_UNIT_IDLE_PERIOD; return 0; }
+            /* THE FORCED SURFACE, BELOW EVERY SOURCE THE PAGE ITSELF ARRANGED — which is the project owner's
+               decision and is stated here as the rule rather than as an inference, because the reasoning it
+               replaces is sound and a reader who re-derives it will re-introduce the old order.
+               THE RULE: the three rungs above are work THE PAGE ARRANGED — a `setTimeout` the bundle
+               scheduled, a `requestAnimationFrame` it registered, a ResizeObserver it created — and a seed is
+               work THE ENGINE FORCES, out of a body nothing has asked for. §What-the-tool-produces is about
+               "what the bundle CAN do but didn't", and a boot-path `setTimeout(…, 0)` is something the bundle
+               DOES do. The page's own clock therefore runs in front of the engine's own forcing.
+               THE ARGUMENT THIS RETIRES IS REWRITTEN AND NOT DELETED. It read: "DRIVING EARLY IS NOT DRIVING
+               WRONGLY … What being early costs is a drive of a body the page was about to call anyway … and
+               which §Solver settles outright — 'Err toward MORE exploration (the WFQ starves the unproductive
+               arm)'. A drive that learns nothing is outranked and paged; a surface never served is lost for
+               the session." Every clause of that is TRUE and it is not what decides the order, because it
+               argues against the ladder's EXIT — where the flow has declared its timeline OVER, which on a
+               document that renders is never — and says nothing about the three rungs it was placed above.
+               Against THEM it is symmetric and therefore settles nothing: a rendering opportunity never
+               served is lost for the session in exactly the same words, and "err toward MORE exploration"
+               reads as an argument for the clock the moment you notice the clock's surface is the page's own
+               code rather than the engine's guess. What breaks the symmetry is not how much either surface
+               explores but WHOSE WORK IT IS, which is the rule above.
+               WHAT IS NOT CLAIMED, because it was measured and is smaller than it looks. The boundary the
+               clock triple now occupies had ZERO arrivals, and that is not a reading of its three outcome
+               rows — it is exact, from the partition: solver/step_unit.h is complete, the convergence point
+               asserts no recorded step is `none`, and at the native smoke's terminal census EVERY unit at or
+               below the old boundary read 0 while `steps` reconciled to the digit (1618 above the orphan
+               rungs + 30 at the seed = 1648). A dispatch that had reached the rendering rung and been
+               declined by all three hooks would have had to name one of the units below, and every one of
+               them is zero. So exactly 30 of 1648 dispatches (1.8%; 10 of 1750 on the wasm smoke) ever
+               reached this boundary at all, and this reorder hands the clock AT MOST those — the other 98.2%
+               are absorbed by the arms ABOVE the orphan rungs (`deliver-one-reply` 927, `run-a-task` 333,
+               `resume-program` 153, `start-ended-its-frame` 103). THE HOLDER OF THE CLOCK SURFACE IS
+               THEREFORE NOT THIS SEAM, and a reader who sees the three outcome rows still small after this
+               diff should read the histogram's head rather than this rung.
+               AND THE SYMMETRY IS MEASURED TOO, WHICH IS WHY THIS IS A PRIORITY CHOICE AND NOT A CAP. A seed
+               below an unbounded source would be a bound if the seed's own surface terminated and the clock's
+               did not; on both smokes it does not. All 30 asks TOOK (the clock's zero arrivals mean no ask
+               fell past this rung, so the memo and empty-walk arms fired never), because every closure the
+               run creates bumps the orphan generation and refills the walk. Two non-terminating sources, one
+               ladder, and the ordering is which of them the engine serves first. Nothing becomes unreachable:
+               this rung is reached whenever the three hooks decline — no fully-active navigable, or a frame
+               strictly ahead with a reply still in the air (`event_loop_may_advance`), with no due timer and
+               no idle work — which is measurably non-empty, since the close-request arm BELOW this one is
+               reached on the solvergate fixtures.
+               AND THE EXIT'S TWO INVARIANTS STILL HOLD BY POSITION, which is why the seed lands HERE and not
+               below the owed return: `g_orphan_claims_unmet` means what it says only if "reaching the exit
+               means the seed's rung answered 0 on this same pass", and the retirement arm's deleted
+               `flow_count() > 1` assert is unreachable-by-construction for the same reason. Both are claims
+               about this rung being above the exit, and it is.
+               RETIREMENT: this record goes when the clock triple's arrivals and this rung's are published
+               beside each other per run, because which surface the ladder is actually serving is then read
+               off the census instead of argued here. */
+            else if ((orphan_step = engine_orphan_seed(ctx, f)) != 0) {
+                g_step_unit = engine_orphan_unit(orphan_step); return 0; }
             /* ONLY HOST-OWED REPLIES REMAIN: no progress, and NOT finished.
              *
              * BELOW THE TWO CLOCK-DRIVEN SOURCES, which is the same sentence the lifecycle arm makes one rung
@@ -11379,10 +11379,16 @@ static int flow_step(JSContext *ctx, Flow *f) {
             /* AND THE ARRIVAL NOTHING PERFORMED — HTML §6.10.1 "Close requests"' potential close request,
                MODELLED. It is the weakest act of the ladder — work NOBODY did — and the last thing this flow
                tries before it declares itself finished. The drive ordering the note here used to give (`a
-               driven orphan can new CloseWatcher()`, so take the drive first) still holds and is now held by
-               POSITION rather than by adjacency: both orphan arms stand above the two clock-driven sources, so
-               a RESUMED drive has built its call several rungs before this one is asked, and a SEEDED drive is
-               a SIBLING whose watcher lands in the sibling's own delta and never in this flow's.
+               driven orphan can new CloseWatcher()`, so take the drive first) still holds and is still held by
+               POSITION rather than by adjacency — but the position is no longer the one this sentence named.
+               IT SAID "BOTH ORPHAN ARMS STAND ABOVE THE TWO CLOCK-DRIVEN SOURCES", and the SEED rung moved
+               below all three of them; what the ordering needs is only that both stand above THIS rung, and
+               both still do. A RESUMED drive has built its call several rungs before this one is asked, and a
+               SEEDED drive is a SIBLING whose watcher lands in the sibling's own delta and never in this
+               flow's — so neither half of the argument was ever about the clock, which is why the claim went
+               stale without the conclusion moving. RETIREMENT: this record goes when the ordering it depends on
+               is asserted rather than described, which for two rungs of one `else if` chain means the
+               boundary-sum assert in engine_frontier_census naming which side each is written on.
                See engine_close_request_fork for why this flow takes it rather than a sibling, for what ends it
                without a counter, and for why everything past it is graded FORCED. */
             else if (engine_close_request_fork(ctx, f)) {
@@ -11401,11 +11407,18 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    host has something for it. */
                 if (g_referenced) { g_step_unit = STEP_UNIT_AWAIT_PEER; return FLOW_STEP_OWED; }
                 /* …AND A RESUMED DRIVE THAT NEVER GOT ITS BODY BACK SAYS SO ON ITS WAY OUT. The seed is not
-                   called from this exit any more — it is a rung above the two clock-driven sources, where a
-                   flow has run out of the work the page ARRANGED rather than out of its timeline — and THAT is
-                   what makes this count mean what it says at THIS line: reaching the exit means the seed's rung
-                   answered 0 on this same pass, so the heap holds no untaken orphan and the body this recipe
-                   named is not coming. A claimant therefore does not leave while a take could still feed it,
+                   called from this exit any more — it is its own rung above it, where a flow has run out of the
+                   work the page ARRANGED rather than out of its timeline — and THAT is what makes this count
+                   mean what it says at THIS line: reaching the exit means the seed's rung answered 0 on this
+                   same pass, so the heap holds no untaken orphan and the body this recipe named is not coming.
+                   THIS SAID "A RUNG ABOVE THE TWO CLOCK-DRIVEN SOURCES", WHICH IS THE HALF THAT WENT STALE AND
+                   IS NOT THE HALF THIS COUNT NEEDS. The owner's ordering put the seed BELOW all three of them;
+                   what the count depends on is only that the seed stands above THIS EXIT, which it does, so the
+                   invariant is unchanged and only the coordinate was wrong. A record that names a rung's
+                   neighbour where it means its ANCESTOR is the stale-claim failure with the conclusion intact,
+                   which is the shape a reader trusts hardest — and the reason the boundary-sum assert in
+                   engine_frontier_census is over WHICH SIDE of the clock each arm is written on rather than
+                   over anybody's prose. A claimant therefore does not leave while a take could still feed it,
                    which is the invariant the old placement bought with a special case. Its absence is a
                    legitimate outcome and NOT a should-never-happen — §Time-travel has a resumed flow
                    re-deriving from CURRENT sources, and the code itself is one — so it is COUNTED rather than
@@ -12594,14 +12607,28 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
    `return` added between them, a reorder, or a second writer of STEP_UNIT_RENDERING or STEP_UNIT_TIMER. Every
    one of those silently changes what a zero on `queue-rendering-opportunity` means, and none of them changes
    anything a census could otherwise show.
-   AND THE READING IT LICENSES, stated here because it is not derivable from any single row: the nine units at
-   or below this boundary (RENDERING, TIMER, IDLE_PERIOD, AWAIT_FETCH_RECORD, AWAIT_OWED_REPLY, AWAIT_DECLINED,
-   CLOSE_REQUEST, AWAIT_PEER, FINISHED) are each written at exactly ONE site and every one of those sites is at
-   or below it, so their SUM is the number of dispatches that descended this far — and `g_clock_render_asks` is
-   that same number counted at the arm instead of at the exits. The two agreeing is the whole of why either may
-   be quoted. FINISHED is the last of the nine, so a frontier that never retires is read here first: `finished`
-   at zero with this sum at zero says the retirement arm was never ASKED, which is a fact about the arms above
-   this boundary, and `finished` at zero with this sum LARGE says it was asked and something below declined. */
+   AND THE READING IT LICENSES, stated here because it is not derivable from any single row, AND ASSERTED
+   BELOW RATHER THAN LEFT AS PROSE: the ELEVEN units at or below this boundary (RENDERING, TIMER, IDLE_PERIOD,
+   ORPHAN_SEED, ORPHAN_ROUTE, AWAIT_FETCH_RECORD, AWAIT_OWED_REPLY, AWAIT_DECLINED, CLOSE_REQUEST, AWAIT_PEER,
+   FINISHED) are each written at exactly ONE site and every one of those sites is at or below it, so their SUM
+   is the number of dispatches that descended this far — and `g_clock_render_asks` is that same number counted
+   at the arm instead of at the exits. The two agreeing is the whole of why either may be quoted, so the third
+   assert below is that agreement and no longer a sentence a reader has to take on trust. FINISHED is the last
+   of the eleven, so a frontier that never retires is read here first: `finished` at zero with this sum at zero
+   says the retirement arm was never ASKED, which is a fact about the arms above this boundary, and `finished`
+   at zero with this sum LARGE says it was asked and something below declined.
+   IT SAID NINE, AND THE TWO IT DID NOT NAME ARE THE ONES THIS SENTENCE'S OWN HAZARD PRODUCED. The seed rung
+   moved below the three clock-driven sources, so ORPHAN_SEED and ORPHAN_ROUTE — the two units
+   `engine_orphan_unit` can return from THAT rung, ORPHAN_RESUME being the one it returns from the rung that
+   stays ABOVE — descended with it. A LIST OF RUNGS WRITTEN WHERE THE LADDER IS NOT is the stale-claim failure
+   with no grep to find it, and that is precisely why the list is now the operand of an assert: a rung crossing
+   this boundary in either direction breaks the sum, names the figures, and cannot be made silently. The
+   PREVIOUS two asserts could not catch that move at all — they pin the clock triple's INTERNAL adjacency, so a
+   reorder that keeps RENDERING/TIMER/IDLE consecutive and moves something past all three leaves both of them
+   true. That is the hole this third one closes, and it is the hole the reorder went through.
+   RETIREMENT: this record goes when the eleven-unit list is DERIVED from the ladder rather than written here —
+   a marker on solver/step_unit.h's own list naming which side of the boundary each arm is written on — because
+   the enumeration then cannot disagree with the code that fills it. */
     DCHECKF(g_clock_timer_asks == g_clock_render_asks - g_step_unit_runs[STEP_UNIT_RENDERING],
             "the rendering rung was reached %ld times and took %ld, so the timer rung one arm below it must "
             "have been reached %ld times and was reached %ld — the two rungs are consecutive arms of one chain, "
@@ -12616,6 +12643,39 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
             "STEP_UNIT_TIMER",
             g_clock_timer_asks, g_step_unit_runs[STEP_UNIT_TIMER],
             g_clock_timer_asks - g_step_unit_runs[STEP_UNIT_TIMER], g_clock_idle_asks);
+    /* AND THE SUM THE BANNER ABOVE LICENSES, WHICH IS THE ONE CHECK THAT SEES A RUNG CROSS THE BOUNDARY. The
+       two asserts above pin the clock triple's INTERNAL adjacency and are blind to anything moving past all
+       three of it; this one is over the boundary itself, so it fires on exactly the move the two above cannot
+       see. Both sides have different writers — the eleven totals are raised at the convergence point AFTER
+       flow_step returns, `g_clock_render_asks` inside it at the arm — so it is a real check: a unit that
+       descends without joining the list reads SUM too small, one that rises without leaving it reads SUM too
+       large, a unit written at a second site above the boundary reads too large, and a rung asked twice per
+       step reads too small.
+       IT IS A SUM OF ELEVEN ROWS AND IS WRITTEN AS ONE, RATHER THAN AS ELEVEN CONTAINMENTS, because the claim
+       IS the partition: `a total that cannot move without one of its parts moving is a total you can reason
+       from`, and eleven separate floors would each hold while the set they are drawn from was wrong.
+       ORPHAN_RESUME IS DELIBERATELY ABSENT. `engine_orphan_unit` maps three outcomes and the rung below this
+       boundary can only produce two of them — engine_orphan_seed returns SEEDED or ROUTED and never RESUMED —
+       so the third belongs to the rung that stays ABOVE and including it would make the sum exceed the asks by
+       every resumed drive. That is a fact about which function returns what, so it is checkable at those two
+       functions and not here. */
+    {
+        long below = g_step_unit_runs[STEP_UNIT_RENDERING] + g_step_unit_runs[STEP_UNIT_TIMER] +
+                     g_step_unit_runs[STEP_UNIT_IDLE_PERIOD] + g_step_unit_runs[STEP_UNIT_ORPHAN_SEED] +
+                     g_step_unit_runs[STEP_UNIT_ORPHAN_ROUTE] + g_step_unit_runs[STEP_UNIT_AWAIT_FETCH_RECORD] +
+                     g_step_unit_runs[STEP_UNIT_AWAIT_OWED_REPLY] + g_step_unit_runs[STEP_UNIT_AWAIT_DECLINED] +
+                     g_step_unit_runs[STEP_UNIT_CLOSE_REQUEST] + g_step_unit_runs[STEP_UNIT_AWAIT_PEER] +
+                     g_step_unit_runs[STEP_UNIT_FINISHED];
+        DCHECKF(below == g_clock_render_asks,
+                "the clock boundary was reached %ld times and the eleven arms at or below it account for %ld — "
+                "every dispatch that arrives at the rendering rung leaves through exactly one of them, so a "
+                "difference is a rung that crossed this boundary without joining or leaving solver/engine.c's "
+                "eleven-unit list, a unit written at a second site on the other side of it, or the rendering "
+                "rung being asked more than once per step. The two asserts above cannot see any of those: they "
+                "pin RENDERING/TIMER/IDLE_PERIOD's adjacency to each other and say nothing about what stands "
+                "below all three",
+                g_clock_render_asks, below);
+    }
 }
 
 /* TWO FACTS THE SCHEDULER HAS AND HAS NEVER SAID, and both of them are questions that were being ANSWERED BY
