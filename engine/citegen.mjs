@@ -2493,6 +2493,27 @@ const OTHER_SPECS = [
      `encoded transform` IS NOT LISTED ON ITS OWN: nothing in this tree writes it without `WEBRTC` in front,
      and an anchor no citation produces is a claim about a spelling rather than about a document. */
   "geolocation api", "clipboard api", "webrtc encoded transform",
+  /* THE WEB LOCKS API, FOR THE ARM OF CLAUDE.md's MISSING-ROW RULE THAT **ACCUSES** RATHER THAN THE ONE THAT
+     GOES QUIET — which is the only reason a foreign row is owed here at all. That rule's benign half says an
+     unindexed standard's citations resolve to nothing and are counted-and-never-checked; its dangerous half
+     says that where the missing standard's NUMBERS COLLIDE with an indexed one's, the file vote hands them to
+     the indexed standard and the term and quotation channels then report a MISATTRIBUTION against a document
+     the citation never named. Web Locks is the collision in its sharpest form: it numbers its algorithms §4.1
+     to §4.5 and its API §3.1 to §3.3, and the Streams Standard — which has a §4.2, a §4.3 and a §2.6 that
+     DEFINES "release a lock" — is indexed. Measured before this row existed, over the two files of
+     core/locks: THREE MISATTRIBUTED and FOUR UNDECIDED-ON-A-DIAGNOSED-NUMBER, every one of them a Web Locks
+     algorithm reported as Streams, and 208 of 247 citations placed by a file vote.
+     `web locks api` IS THE ONLY SPELLING LISTED, and that is the position argument the four heads above
+     record rather than a length one: anchorTokens emits at most three TRAILING words, so `Web Locks API`
+     offers `web locks api`, `locks api` and `api` — the head `web locks` is never produced, and `api` alone
+     is the one-word hazard that note already refuses by name. So the component writes the full name at its
+     anchors and this row is the tail those anchors produce.
+     WHAT IT BUYS IS SILENCE AND NOT ANSWERS, which is what a foreign row is for. Indexing the standard would
+     buy answers, and CLAUDE.md is explicit that an index diff is measured over the WHOLE corpus and not over
+     the standard being added — indexing one makes it a neighbour of every other, and this tree has already
+     measured a row that retired findings in its own component while introducing them elsewhere. That is a
+     DIFFERENT diff, and it is the one to make when somebody wants the quotations in core/locks checked. */
+  "web locks api",
   "beacon", "referrer", "cors", "cookies",
   /* `mixed` STOOD HERE AND IS NOW AN ANCHOR OF ITS OWN ROW, retired rather than deleted for the reason the
      webcrypto note above gives. It is the entry worth keeping the shape of: it was the WRONG HALF of the

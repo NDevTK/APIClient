@@ -1615,6 +1615,21 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "onload",                "event_target" },
     { "document",              "document" },
     { "navigator",             "navigator" },
+    /* WEB LOCKS API §3.2's AND §3.3's INTERFACE OBJECTS, the one pair on this list whose IDL carries an
+       exposure condition on the INTERFACE rather than on a member: both are
+       `[SecureContext, Exposed=(Window,Worker)]`, so over plain http the correct realm has NEITHER name — which
+       is what a bundle's `"locks" in navigator && isSecureContext` is written to discover, and why the column
+       is stated rather than left unconditional.
+       THEIR COMPONENT COLUMN IS `navigator` AND NOT A ROW OF THEIR OWN, for the reason the CryptoKey row above
+       gives: Web Locks API §3.1 declares an `interface mixin` that `Navigator includes`, so the component is
+       declared from navigator_init and released from navigator_free, and this column names the PLATFORM row
+       that owns that pair.
+       THE ABSENT DIRECTION IS WHAT EARNS THEM, as it does for the PerformanceMeasure row below: a realm whose
+       install did not run has no `LockManager`, and `navigator.locks` then answers a value with no prototype
+       whose `request` is a TypeError one frame later — a member answering undefined where a ReferenceError
+       would have named the site. */
+    { "LockManager",           "navigator", IDL_SECURE_CONTEXT },
+    { "Lock",                  "navigator", IDL_SECURE_CONTEXT },
     { "location",              "location" },
     { "screen",                "screen" },
     { "history",               "history" },

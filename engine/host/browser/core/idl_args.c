@@ -1164,6 +1164,10 @@ static bool idl_type_is_dictionary(IdlArgType t)
     return t == IDL_DICT || t == IDL_DICT_OR_BOOL_FIRST || t == IDL_BOOL_OR_DICT ||
            t == IDL_STRING_OR_DICT ||
            t == IDL_USVSTRING_OR_DICT || t == IDL_UNRESTRICTED_DOUBLE_OR_DICT ||
+           /* THE LENGTH-DIFFERING SPLIT WHOSE DICTIONARY IS ON THE LONGER ENTRY. This predicate asks what a
+              position CAN produce, so which entry declares the dictionary changes nothing here — what it
+              changes is idl_split_longer_type, which is where the direction is stated. */
+           t == IDL_CALLBACK_OR_DICT ||
            /* `(BufferSource or D)` CAN PRODUCE A DICTIONARY, which is the whole of what this predicate asks.
               It changes nothing for the one position that declares it today — Web Cryptography API §14.3.9's
               `keyData` is REQUIRED, so §3.6 never hands it the `undefined` an omitted dictionary position
@@ -1191,7 +1195,8 @@ static bool idl_type_is_dictionary(IdlArgType t)
    position gets its type rewritten, and whose optionality list step 15.3 then reads. */
 static bool idl_type_is_length_split(IdlArgType t)
 {
-    return t == IDL_USVSTRING_OR_DICT || t == IDL_UNRESTRICTED_DOUBLE_OR_DICT;
+    return t == IDL_USVSTRING_OR_DICT || t == IDL_UNRESTRICTED_DOUBLE_OR_DICT ||
+           t == IDL_CALLBACK_OR_DICT;
 }
 
 /* §3.6's SAME-LENGTH SPLIT — the other half of what `a member declaring two overload entries` can mean,
@@ -1266,6 +1271,10 @@ static IdlArgType idl_split_longer_type(IdlArgType t)
     switch (t) {
     case IDL_USVSTRING_OR_DICT:           return IDL_USVSTRING;
     case IDL_UNRESTRICTED_DOUBLE_OR_DICT: return IDL_UNRESTRICTED_DOUBLE;
+    /* THE ONE ROW WHOSE LONGER ENTRY DECLARES THE DICTIONARY. Its two neighbours answer the non-dictionary arm
+       because that is what THEIR longer entries declare; this function's contract is the LONGER ENTRY'S TYPE
+       and not "the arm that is not the dictionary", which the two of them made it possible to read it as. */
+    case IDL_CALLBACK_OR_DICT:            return IDL_DICT;
     default: break;
     }
     DFAIL("§3.6 steps 3-4 removed the shorter overload entry at a position whose declared type names no LONGER "
@@ -4720,6 +4729,19 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                    "§3.6 steps 3-4 chose the LONGER entry and the position still carries the split type — the "
                    "rewrite at the top of this loop is what performs that choice, so the two have come apart");
             t = IDL_DICT;
+        }
+        /* THE SAME ARITY-ONLY RESOLUTION FOR THE ROW WHOSE DICTIONARY IS ON THE **LONGER** ENTRY, so what is
+           left when the longer one is gone is the shorter entry's CALLBACK rather than a dictionary — see
+           IDL_CALLBACK_OR_DICT. Reaching here means step 4 removed the longer entry, and §3.2.19's conversion is
+           then a brand check: a callable crosses as itself and anything else is the TypeError Web Locks API
+           §3.2.1's caller sees as a rejected promise. */
+        if (t == IDL_CALLBACK_OR_DICT) {
+            DCHECK(m->dict_n > 0, "a member declared a callback-or-dictionary overload split with no dictionary "
+                                  "members — the dictionary is the LONGER entry's half of what that type states");
+            DCHECK(!step4_only_longer,
+                   "§3.6 steps 3-4 chose the LONGER entry and the position still carries the split type — the "
+                   "rewrite at the top of this loop is what performs that choice, so the two have come apart");
+            t = IDL_CALLBACK;
         }
 
         /* §3.2.25 over `(DOMString or sequence<DOMString>)`, whose arm is decided by a READ of the page's value

@@ -511,6 +511,28 @@ typedef enum {
        has already had this position rewritten to the number, so the only value this row itself ever describes
        is a dictionary — a bag of member READS, each yielding another unknown. */
     IDL_UNRESTRICTED_DOUBLE_OR_DICT,
+    /* THE SAME §3.6 LENGTH-DIFFERING SPLIT WHERE THE DICTIONARY IS ON THE **LONGER** ENTRY, which is the mirror
+       of the two rows above and is why it is its own row rather than one of them read backwards. Web Locks API
+       §3.2 "LockManager class" is where the IDL that declares it is written:
+
+           Promise<any> request(DOMString name, LockGrantedCallback callback);
+           Promise<any> request(DOMString name, LockOptions options, LockGrantedCallback callback);
+
+       §3.6 steps 3-4 come first and are decided by the ARGUMENT COUNT alone: the type lists are TWO and THREE
+       long, so exactly one entry survives at every arity a page can call at and step 12 NEVER RUNS — the same
+       arithmetic as IDL_UNRESTRICTED_DOUBLE_OR_DICT and for the same reason, so no value at this position is
+       ever looked at to choose an entry. At arity 2 this position is the shorter entry's `LockGrantedCallback`;
+       at arity 3 it is the longer entry's `LockOptions`, and position 2 is then the callback.
+       WHICH WAY ROUND IT SITS IS THE WHOLE CONTENT, because idl_split_longer_type answers THE LONGER ENTRY'S
+       TYPE: for the two rows above that is the non-dictionary arm and here it is the DICTIONARY. A row written
+       as those two are would convert the page's OPTIONS OBJECT as a callback at arity 3 and refuse every
+       three-argument call, which is exactly the wrong-entry-wins defect idl_overload_split_optional_from exists
+       for, one field over.
+       ITS CONCOLIC RULE IS UNASKED, by IDL_UNRESTRICTED_DOUBLE_OR_DICT's own argument: by the time
+       idl_concolic_rule is consulted the arity has already rewritten this position to one entry's type, so the
+       only values this row itself ever describes are a callable (a brand check that reads nothing) and a
+       dictionary (a bag of member READS, each yielding another unknown). */
+    IDL_CALLBACK_OR_DICT,
     /* THE SAME §3.6 SPLIT WHERE NEITHER ENTRY IS LONGER — the position the two entries of HTML §9.4.4 Message
        ports' `MessagePort.postMessage` differ at:
 
@@ -972,6 +994,9 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
        any rule is asked — the only value the row itself describes is the dictionary at the shorter arity, and a
        dictionary asks the value nothing. See IDL_UNRESTRICTED_DOUBLE_OR_DICT. */
     case IDL_UNRESTRICTED_DOUBLE_OR_DICT:
+    /* THE SAME ANSWER FOR THE SAME REASON, with the dictionary on the other entry: the arity has rewritten this
+       position to one entry's own type before any rule is asked, so the pair is never the type of a value. */
+    case IDL_CALLBACK_OR_DICT:
     /* A POSITION BEHIND THE DISTINGUISHING INDEX resolves from the RECORD of the entry that survived, which
        was settled before this position was reached — so the conversion has already rewritten this position to
        that entry's own type before any rule is asked, and what is left is a number (CROSSES on its own row) or

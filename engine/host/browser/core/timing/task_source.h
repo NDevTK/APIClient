@@ -146,7 +146,13 @@ typedef enum {
     TASK_SOURCE_INTERSECTION_OBSERVER,
     /* Permissions §3.4 "Permissions task source" — "The permissions task source is a task source used to
        perform permissions-related tasks in this specification." */
-    TASK_SOURCE_PERMISSIONS
+    TASK_SOURCE_PERMISSIONS,
+    /* Web Locks API §2 "Concepts" — "The task source for steps enqueued below is the web-locks tasks source",
+       named in the same breath as that section's own lock task queue. It is a row here rather than one of
+       §8.1.7.4's generic five because the standard names it: what a source decides is the order its tasks take
+       against the page's OTHER tasks, and putting these on a generic one would order this feature against
+       unrelated ones by this file's decision instead of by anybody's standard. */
+    TASK_SOURCE_WEB_LOCKS
 } TaskSource;
 
 /* IS §8.1.7.1's ORDERING RULE ABOUT THIS WORK ITEM? Only a task has a source, so only a task can have one in
@@ -204,6 +210,7 @@ static inline const char *task_source_name(TaskSource s)
     case TASK_SOURCE_PERFORMANCE_TIMELINE:     return "performance-timeline";
     case TASK_SOURCE_INTERSECTION_OBSERVER:    return "intersection-observer";
     case TASK_SOURCE_PERMISSIONS:              return "permissions";
+    case TASK_SOURCE_WEB_LOCKS:                return "web-locks";
     }
     return "unknown";
 }

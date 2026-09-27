@@ -63,6 +63,7 @@
 #include "core/frame/navigator_beacon.h"
 #include "core/html/user_activation.h"
 #include "core/idl_args.h"
+#include "core/locks/lock_manager.h"
 #include "core/permissions/permissions.h"
 #include "core/realm.h"
 
@@ -451,6 +452,23 @@ static JSValue js_nav_permissions(JSContext *ctx, JSValueConst this_val, int mag
     return permissions_object(navigator_environment(this_val));
 }
 
+/* WEB LOCKS API §3.1 "Navigator Mixins": `[SecureContext] interface mixin NavigatorLocks { readonly attribute
+   LockManager locks; };` with `Navigator includes NavigatorLocks;`. Installed here for `permissions`' reason one
+   member up — Web IDL §3.7.3 "Interface prototype object" gives an `interface mixin` NO prototype of its own, so
+   an INCLUDER has to supply the object and this is it — and the VALUE comes from the component that keeps it.
+   `[SecureContext]` IS ON THE MIXIN, so the member is ABSENT over plain http rather than present and throwing:
+   a bundle's `"locks" in navigator && isSecureContext` is written to discover exactly that, and it is asked of
+   the MODELLED document's own address by the one gate core/idl_args.h states §3.3.7 step 2 in. */
+static JSValue js_nav_locks(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    (void)magic;
+    if (!nav_brand(ctx, this_val)) return JS_EXCEPTION;
+    /* THE ENVIRONMENT IS THE RECEIVER'S AND NOT `ctx`, for §6.4.4's reason two members up: §3.1's steps are "to
+       return this's relevant settings object's LockManager object", so which realm's object comes back depends
+       on whose realm reached the getter. */
+    return lock_manager_object(navigator_environment(this_val));
+}
+
 /* HTML §7.2.2 "The Window object"'s two Window members that name this object — that is where the IDL sits, and
    HTML §8.10.1 "The Navigator object" is where their steps do: "The navigator and clientInformation getter
    steps are to return this's associated Navigator." (§7.2.5 stood here for both and is "The History
@@ -658,6 +676,7 @@ static void navigator_install_realm(JSContext *ctx)
         idl_install_accessor_exposed(ctx, proto, NAV_NAME[i], js_nav_get, i, -1, NAV_EXPOSURE[i]);
     idl_install_accessor(ctx, proto, "userActivation", js_nav_user_activation, 0, -1);
     idl_install_accessor(ctx, proto, "permissions", js_nav_permissions, 0, -1);
+    idl_install_accessor_exposed(ctx, proto, "locks", js_nav_locks, 0, -1, IDL_SECURE_CONTEXT);
     idl_install_method(ctx, proto, "javaEnabled", g_id_java_enabled);
     /* BEACON §2.1's `partial interface Navigator` — the OBJECT is HTML's and the MEMBER is that standard's, so
        its component installs it on the prototype this realm just built. It takes the prototype rather than
@@ -746,6 +765,10 @@ void navigator_init(JSContext *ctx)
        HERE rather than in each host's list because a host that has a Navigator has `navigator.permissions`:
        a per-host line is the hand-copied list core/realm.h exists to abolish. */
     permissions_init(ctx);
+    /* WEB LOCKS API §3.1's MIXIN IS INCLUDED INTO THIS INTERFACE, so its whole component is declared here for
+       the reason Permissions' is: a host that has a Navigator has `navigator.locks`, and a per-host row would be
+       the hand-copied list core/realm.h exists to abolish. */
+    lock_manager_init(ctx);
 }
 
 void navigator_free(void)
@@ -768,4 +791,7 @@ void navigator_free(void)
     /* PERMISSIONS §6's component is declared from navigator_init, so it is released from here — a component
        released from a list its declaration is not on is a component some host frees and another leaks. */
     permissions_free();
+    /* WEB LOCKS is declared from navigator_init, so it is released from here — a component released from
+       somewhere other than where it was declared is a pair core/platform.c's release walk cannot check. */
+    lock_manager_free();
 }
