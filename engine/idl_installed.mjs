@@ -436,12 +436,22 @@ const STRING_RE = /^\s*"((?:[^"\\]|\\.)*)"\s*$/;
    `static const char *const Q_BUFFER = "buffer";` and writes them thirty times, and this read a #define and an
    initialised table and not that — so thirty constructs reported UNRESOLVED, which is the audit's own gap report
    naming the form it had not learned.
-   THIS SAID "Only `const char *` declarations are read: an initialised pointer to char IS a name and nothing
-   else is one", AND THAT SENTENCE IS REWRITTEN RATHER THAN DELETED BECAUSE IT WAS A CHOICE AND NOT AN
-   OVERSIGHT — a reader who re-derives the rule from the pointer form will re-narrow it the same way. C spells
-   an initialised
-   string constant TWO ways and the array is the commoner one: `static const char TIMER_SET_TIMEOUT_NAME[] =
-   "setTimeout";`. Refusing it did not merely lose four constructs, it put ONE FACT ON BOTH LEDGERS — the four
+   THE NARROWING THIS USED TO STATE IS REWRITTEN RATHER THAN DELETED BECAUSE IT WAS A CHOICE AND NOT AN
+   OVERSIGHT — a reader who re-derives the rule from the pointer form will re-narrow it the same way. It read:
+   only `const char *` declarations are read, an initialised pointer to char IS a name and nothing else is one.
+   AND IT WAS FIRST RETIRED IN DOUBLE QUOTES, WHICH MANUFACTURED A FABRICATION FINDING AGAINST THIS TREE'S OWN
+   PROSE — the quotation channel takes the NEAREST preceding anchor and this paragraph's is the `Streams §4.7.2`
+   two lines up, so a nineteen-word run of our own sentence was judged against Streams and reported
+   QUOTE-NOT-FOUND at word one. Setting retired prose off with `It read:` and NO surrounding double quotes is
+   what the tree does everywhere (81 occurrences across 49 files), and backticks are not an alternative for a
+   multi-line run: the code-span mask's single-backtick form admits exactly ONE newline, so a three-line span is
+   judged anyway. THE MEASUREMENT MISSED IT FOR A REASON WORTH MORE THAN THE TYPO — the `--since` run was taken
+   and THEN the paragraph was rewrapped, and the rewrap is the edit that introduced the quotes. A citation figure
+   belongs to the bytes that are COMMITTED and not to the bytes that were measured, so it is re-taken after the
+   last edit and never before it.
+   C spells an initialised string constant TWO ways and the array is the commoner one: `static const char
+   TIMER_SET_TIMEOUT_NAME[] = "setTimeout";`. Refusing it did not merely lose four constructs, it put ONE FACT
+   ON BOTH LEDGERS — the four
    were reported UNRESOLVED (a statement about this run) and the four members they install were reported ABSENT
    on Window (a statement about the engine) — which is the one shape the findings/blind-spot split cannot catch,
    because the ABSENT predicate asks THIS AUDIT'S OWN RESOLVED SET and a name it could not read is missing from
