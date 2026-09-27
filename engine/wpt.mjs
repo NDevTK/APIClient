@@ -1415,7 +1415,103 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       so the measured price of this row is ZERO new accusations.
                       NOTHING IS PREDICTED HERE ABOUT WHAT THESE FILES SCORE. Adding the fixture makes four
                       media-src documents SCORABLE; whether they pass is a fact about a run nobody has made. */
-                   "media"];
+                   "media",
+                   /* WEB LOCKS API — `navigator.locks`, the standard core/locks/lock_manager.c implements. It is
+                      the ONLY oracle in this tree for the four algorithms that component answers — and each
+                      citation here NAMES ITS STANDARD, because the citation auditor carries `web locks api` as a
+                      FOREIGN row and its own note says the component writes the full name at its anchors. A BARE
+                      NUMBER in a file this standard does not dominate falls to the file vote, and the Streams
+                      Standard — which is INDEXED, numbers sections 4.2 and 4.3, and DEFINES "release a lock" at
+                      2.6 — is what the vote would hand them to, reporting a misattribution against a document
+                      this row never named. Those three numbers are written WITHOUT a section sign for that exact
+                      reason: prose warning about an unanchored citation must not contain one.
+                      Web Locks API §2.2 "Lock Managers" is the manager state;
+                      Web Locks API §4.1 "Request a lock" is the request algorithm;
+                      Web Locks API §4.2 "Release a lock" is the release;
+                      Web Locks API §4.5 "Snapshot the lock state" is the query.
+                      Until this row nothing scored a line of any of them: the directory exists at the pinned
+                      revision and the cone excluded it, so all 29 of its testharness files sat outside the gate
+                      and the component had a gate that could not fail.
+                      IT COSTS 46 BLOBS AND 105539 BYTES, re-priceable with
+                        git -C engine/.work/wpt ls-tree -r -l <rev> -- web-locks | awk '{n++;b+=$4} END{print n,b}'
+                      IT MUST BE A WPT_PATHS ENTRY AND NOT A WPT_OWN_LEVEL ONE, and not for the usual reason:
+                      nothing else puts this standard on disk, so an own-level row would add no file and claim a
+                      directory that is not there. It has to be the SUBTREE rather than the level as well, because
+                      every test here loads a helper out of `web-locks/resources/` or `web-locks/bfcache/`, and the
+                      `bfcache/` and `crashtests/` children hold files a level-only claim would leave for the
+                      stray census to fail on.
+                      IT DRAGS NO NEW OWN LEVEL. `web-locks` is TOP LEVEL, so the only directory on the path to it
+                      is the corpus root, which every entry above already materializes.
+                      IT IS 29 TESTHARNESS FILES AND 40 RUNS — 22 non-tentative and 7 tentative, sourcefile.py
+                      collecting a tentative file as an ordinary test — 28 of them one run each, with
+                      `bfcache/contention.https.window.js` declaring TWELVE variants. The five `crashtests/`
+                      documents are in neither number: sourcefile.py calls a markup file under `crashtests/` a
+                      crashtest, and testKind below refuses one by flag AND by directory. Both figures were
+                      derived from the corpus's own authority over the pinned bytes rather than from a
+                      multiplier, and they are re-derived the same way once the cone is widened:
+                        python3 engine/wpt_classify.py engine/.work/wpt | grep '^web-locks/' |
+                          awk -F'\t' '{n++; r += (NF>1 ? NF-1 : 1)} END {print n" files "r" runs"}'
+                      EVERY DECLARED FIXTURE RESOLVES, checked before this entry landed rather than after. The
+                      NINE absolute paths its META lines and `<script src>` elements name — `/common/utils.js`,
+                      `/common/dispatcher/dispatcher.js`, `/common/get-host-info.sub.js`,
+                      `/resources/testharness.js`, `/resources/testharnessreport.js`, `/resources/idlharness.js`,
+                      `/storage/buckets/resources/util.js`,
+                      `/html/browsers/browsing-the-web/back-forward-cache/resources/helper.sub.js` and
+                      `/service-workers/service-worker/resources/test-helpers.sub.js` — are all on disk already.
+                      The three relative ones (`./helpers.js`, `helpers.js`, `resources/helpers.js`) resolve inside
+                      the subtree this entry supplies. `/resources/WebIDLParser.js` is on nobody's disk under that
+                      name and is NOT a purchase of this row: SERVER_REWRITES below already maps it to the webidl2
+                      library for the idlharness files this checkout already collects — which is why the rewrite
+                      is load-bearing before this row and unchanged by it. Every other figure in this entry is a
+                      count over the PINNED corpus and cannot move while WPT_REV does not.
+                      ITS `idlharness.https.any.js` WILL ASSERT THE WHOLE SURFACE rather than reporting the
+                      two-subtest floor, because `idl_test(['web-locks'], ['html'], …)` names two fixtures and the
+                      `interfaces` entry above has both `interfaces/web-locks.idl` and `interfaces/html.idl` on
+                      disk. That is a fact about the CHECKOUT and the one thing predicted here that is not a claim
+                      about a run.
+                      THE TWO EXPOSURE TESTS SCORE `IDL_SECURE_CONTEXT` FROM BOTH SIDES, which is why they are the
+                      pair to read first. `secure-context.https.any.js` carries the `https` flag, so testIsHttps
+                      below loads it over TLS, and it asserts `self.isSecureContext` with `navigator.locks`,
+                      `LockManager` and `Lock` all PRESENT; `non-secure-context.any.js` carries no flag, loads over
+                      `http`, and asserts all three ABSENT. An unconditional install passes the first and fails the
+                      second, so the negative is the load-bearing half.
+                      WHAT NEEDS AN AGENT THIS ENGINE DOES NOT PROVISION IS PREDICTED HERE, and only that, because
+                      an unpredicted red reads as a defect in the component while a predicted one names the
+                      absence. Established at origin/main WITH AN ARMED CONTROL: the shape
+                      `idl_install_interface_object_exposed(ctx, global, "LockManager", …)` answers at
+                      core/locks/lock_manager.c, and the same shape answers ZERO for `Worker`, `SharedWorker`,
+                      `ServiceWorker` and `ServiceWorkerContainer` — all four DECLARED in browser/idl_exposure.h,
+                      browser/idl_inheritance.h and browser/platform_names.h and INSTALLED nowhere, so a page has
+                      no door to a worker agent at all. That is §NO STUBS' honest absence, and it is why a
+                      dedicated worker global is unreachable although core/workers/worker_global_scope.c builds
+                      one. NINE files stand on it: `workers.https.html` (every test), `clientids.https.html` (it
+                      registers a service worker), `bfcache/contention.https.window.js` (8 of its 12 variants are
+                      `context=worker`, `nested-worker` or `shared-worker`), the five `bfcache/*.tentative.*`
+                      documents, and TWO SUBTESTS of `query.https.any.js`.
+                      THAT POPULATION IS SMALLER THAN THE `global=` LINES SUGGEST, because this gate runs ONE
+                      GLOBAL per `.any.js`: testKind below answers `"script"` for a multi-global file and generates
+                      no per-global run, and wpt_classify.py says the same thing in its own words. So the
+                      `global=` line on FIFTEEN of these files buys no worker-scoped RUN, and there is no such run
+                      to predict. That fifteen was counted rather than estimated, and is re-counted with
+                        grep -rlE '^// META: global=.*(dedicatedworker|sharedworker|serviceworker)' \
+                          engine/.work/wpt/web-locks | wc -l
+                      FIVE MORE NEED A CHILD NAVIGABLE WHOSE DOCUMENT RUNS, and they are NOT predicted in either
+                      direction, because which of them this engine already answers is a fact about a run nobody
+                      has made: `frames.https.html` and `query-ordering.https.html` load `resources/iframe.html`
+                      and talk to it, `opaque-origin.https.html` wants a sandboxed `srcdoc` whose origin is opaque,
+                      `non-fully-active.https.html` keeps a removed iframe's `navigator`, and
+                      `partitioned-web-locks.tentative.https.html` opens a pop-up and a cross-site frame.
+                      `storage-buckets.tentative.https.any.js` asks for `navigator.storageBuckets`, which greps to
+                      ZERO in this tree and is a different standard's absence.
+                      NOTHING IS PREDICTED ABOUT WHAT THE REMAINING ELEVEN SCORE. `acquire`, `held`, `ifAvailable`,
+                      `lock-attributes`, `mode-exclusive`, `mode-mixed`, `mode-shared`, `query-empty`,
+                      `resource-names`, `signal` and `steal` run in the window realm and ask about nothing but this
+                      component; whether they pass is what the run is for, and expect bad first numbers.
+                      THE PARTITION SUMS, WHICH IS THE ONE CHECK A READER CAN MAKE WITHOUT THE CORPUS: 9 needing a
+                      worker agent + 5 needing a child navigable + 2 exposure + 1 idlharness + 1 storage-buckets +
+                      11 window-realm = 29, the file count above. A later edit that moves a file between those
+                      bands and leaves the arithmetic open has contradicted itself in its own sentence. */
+                   "web-locks"];
 
 /* AND THE DIRECTORIES WHOSE OWN LEVEL CONE MODE HAS ALREADY PUT ON DISK. A cone-mode checkout materializes every
    file of every directory ON THE PATH to a listed one, so naming one helper's `resources` lands its standard's
