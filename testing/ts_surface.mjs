@@ -136,18 +136,20 @@
  * figure this prints is a fact about ONE FETCH at the instant its manifest names, and the instant is printed
  * with the numbers. With no corpus it THROWS and the throw carries the command that makes one.
  */
-import { readFileSync, existsSync, statSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, statSync, readdirSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { resolve, relative, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { parse as babelParse } from "@babel/parser";
 import ts from "typescript";
+import esbuild from "esbuild";
 import { corpusPrograms, essenceOf, PROGRAM, DOCUMENT } from "../engine/corpus_programs.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
 const STATIC_SURFACE = resolve(HERE, "static_surface.mjs");
+const CORPUS_FETCH = resolve(HERE, "corpus", "fetch.mjs");
 const TAG = "[ts_surface]";
 const die = (m) => { throw new Error(`${TAG} ${m}`); };
 
@@ -495,6 +497,332 @@ function selftest(doors, globals, methods) {
   return { rows: got.length, kinds: [...seen], skippedNonMethod: w.skippedNonMethod };
 }
 
+/* ── THE THIRD COLUMN: A BUNDLER THAT LINKS THE MODULE GRAPH, AND THE FOLDER THAT OWNS `+` ────────────────
+ * THE NAMED RESIDUAL ABOVE IS WHAT THIS SECTION BUILDS, AND THE FIRST THING TO SAY IS THAT ITS RECIPE WAS
+ * WRONG IN BOTH HALVES — MEASURED, NOT ARGUED, AND KEPT HERE IN ITS OWN WORDS BECAUSE A READER WHO
+ * RE-DERIVES IT FROM THE GAP IT NAMES WILL WRITE IT AGAIN.
+ * It said: `esbuild` "links the module graph AND constant-folds across it", so "bundle each site's entry with
+ * `bundle: true, minify: true`, then run THIS FILE'S OWN DOOR WALK over the OUTPUT".
+ *   (1) `esbuild` DOES NOT INLINE A CROSS-MODULE CONSTANT INTO A CONCATENATION. Probed directly:
+ *       `export const BASE = "/xfile"` + `fetch(BASE + "/v1/users")` bundles to `var t="/xfile";
+ *       fetch(t+"/v1/users")` at `minify:true` and at `minify:false`, single-use or not. What the bundler buys
+ *       is LINKING — the cross-file constant becomes a SAME-FILE binding — plus folding of `"/a" + "/b"` where
+ *       both sides are already literals. It substitutes a constant into a TEMPLATE placeholder and not into a
+ *       `+`. So the capability the residual attributes to the bundler is the bundler's HALF of it.
+ *   (2) RUNNING THIS FILE'S OWN DOOR WALK OVER THE OUTPUT MAKES THE ADVERSARY STRICTLY WEAKER, and that is the
+ *       half that would have been read as a result. `esbuild` emits every linked declaration as `var`, and
+ *       TypeScript's checker WIDENS `var x = "lit"` to `string` while giving `const x = "lit"` the literal type
+ *       `"lit"`. MEASURED end to end on this corpus: `ts_surface --corpus <the bundled output>` reports
+ *       `folded 0` where the same checker over the RAW corpus reports 1, and
+ *       `namedImportBindingsResolvedCrossFile` 0 where the raw corpus gives thousands. Obeying the clause
+ *       literally would have produced a third column that recovers NOTHING and reads as confirmation.
+ * SO THE COLUMN IS `esbuild` FOR THE LINK AND `static_surface.mjs` FOR THE FOLD, and that is not a compromise —
+ * it is the intersection the residual correctly says NEITHER of the two columns above holds. Our own folder
+ * joins `+` and resolves a binding by scope (its `collectBinds` hoists a `var` to its function scope, which is
+ * exactly the declaration form a bundler emits), and the bundler supplies the one thing that folder has never
+ * had: the declaration in ANOTHER FILE, moved into this one. The value recovery is therefore OURS, which makes
+ * the finding STRONGER rather than weaker: an address in this column is one no third-party tool was needed for,
+ * and this project's own parser would have stated it if anybody had linked the graph first.
+ *
+ * WHAT IT IS AND IS NOT, BECAUSE THE UNIT IS THE ONE THING A THIRD COLUMN CAN GET CATEGORICALLY WRONG.
+ * It is STATIC: `esbuild` executes nothing, so this stays a parse and the engine's column is still the one a
+ * build and a drive produce. Its ROW UNIT is the one this file's primary column already uses — ONE DISTINCT
+ * ADDRESS STRING PER SITE — so the three join on one key and the set differences are measurements. It is a
+ * PARTITION with the other two and never an ordering, for the same reason they are a partition with each other.
+ *
+ * THE ENTRY POINT IS DERIVED AND NEVER GUESSED, AND CHOOSING IT WRONGLY IS THE WHOLE OF THIS COLUMN'S RECALL.
+ * A bundler needs a root and a corpus is a flat set of files, so the root is composed from two facts the
+ * corpus already carries:
+ *   - WHAT THE DOCUMENT NAMES. `<script src>` and every `<link rel=preload|modulepreload>`, resolved against
+ *     the document's own final URL and looked up in the manifest's url -> savedPath index. The extraction
+ *     PATTERNS ARE DERIVED OUT OF `testing/corpus/fetch.mjs` and never retyped, for the reason the door table
+ *     is: that file owns what a document names, this is its second reader, and a copy here is the one that
+ *     would drift. A derived pattern that stops matching THROWS.
+ *   - WHAT NOTHING IMPORTS. A program no other program in the site statically or dynamically imports is a root
+ *     whether the document names it or not, so a bundle reached by a specifier the fetcher followed cannot fall
+ *     out of this column.
+ * AND THE TWO ARE THEN MINIMISED BY COVERAGE, WHICH IS A MEASURED DEFECT OF THIS COLUMN AND NOT AN
+ * OPTIMISATION. Taking every document-named program as its own entry re-bundles the shared graph once per
+ * entry: measured, one site's 96 preloaded chunks produced 9.8 MiB of output from 2.8 MiB of entries, one site
+ * produced 78 MiB, and one FAILED OUTRIGHT with V8's `Invalid string length`. A failed site is a site whose
+ * addresses are credited to execution unopposed, which is the flattering direction. So entries are ordered by
+ * the size of their own transitive reach and an entry already inside a chosen entry's graph is not bundled
+ * again — after which EVERY program of the site is asserted to be an input of some bundle, and any that is not
+ * is bundled alone rather than dropped.
+ *
+ * THE DEFECT THAT REMAINS IS `import()`, IT IS THE DOMINANT DOOR ON THIS CORPUS, AND ITS COST IS A NUMBER.
+ * `bundle: true` RESOLVES a dynamic import whose specifier is a literal and rewrites it into a chunk
+ * reference, so the `import()` door DISAPPEARS from the output: measured, 797 `import()` sites in the raw
+ * corpus become 357, and the 440 that go are 226 `literal` and 213 `folded` — the largest single population
+ * our own baseline states. Marking dynamic imports EXTERNAL preserves the door and was measured too: it costs
+ * 2266 MiB of bundled output against 83 MiB, because a chunk reached only dynamically is then a root of its own
+ * and re-bundles the whole static graph beneath it. NEITHER CONFIGURATION IS FREE, so the cost is paid where
+ * it can be RECONCILED instead of hidden: the specifier of every dynamic import `esbuild` RESOLVED is recorded
+ * as an address THIS COLUMN STATES, because resolving it is stating it. A specifier `esbuild` resolves is a
+ * string literal by construction, so that set should be inside our baseline's; a member of it that is NOT is a
+ * finding and is printed as one.
+ * RETIREMENT: this record goes when the `import()` door survives bundling with no duplication — a bundler pass
+ * that rewrites nothing, or a second walk over the pre-link text joined on the same address key — because the
+ * shortfall is then zero rather than reconciled.
+ */
+
+/* THE DOCUMENT-REFERENCE AND IMPORT-SPECIFIER PATTERNS, READ OUT OF `testing/corpus/fetch.mjs`'S OWN SOURCE.
+   Each is a one-line `const NAME = /.../flags;` there, and each is ARMED against a canonical string below, so
+   a pattern that has stopped matching what it is named for fails here rather than making this column quietly
+   blind to a whole site's entries. */
+export function bundlerRefsFromSource(src, where) {
+  const one = (name) => {
+    const m = new RegExp("^const " + name + " = (/.*/)([gimsuy]*);\\s*$", "m").exec(src);
+    if (!m) die(`${where} declares no one-line \`const ${name} = /…/\` this pass can read. That pattern is how ` +
+                `a site's ENTRY POINTS are found, and a bundler with no entry has no module graph — so this ` +
+                `column would go silently narrow, which is the direction that manufactures a razor point for ` +
+                `this project. Widen this reader rather than retyping the pattern here.`);
+    const body = m[1].slice(1, -1);
+    let re; try { re = new RegExp(body, m[2]); }
+    catch (e) { die(`${where}'s \`${name}\` did not compile as read (${e.message}).`); }
+    return re;
+  };
+  const R = {
+    TAG_SCRIPT: one("TAG_SCRIPT"), TAG_LINK: one("TAG_LINK"), LINK_REL: one("LINK_REL"),
+    LINK_HREF: one("LINK_HREF"), FROM_SPEC: one("FROM_SPEC"), DYNAMIC_IMPORT: one("DYNAMIC_IMPORT"),
+    BARE_IMPORT: one("BARE_IMPORT"),
+  };
+  /* ARMED, EACH ONE, ON A STRING WHOSE ANSWER THIS FILE CLAIMS. `pick` reads capture groups 1..3 because every
+     one of these patterns is a three-way quote alternation there; a pattern that changes shape breaks here. */
+  const pick1 = (re, s) => { re.lastIndex = 0; const m = re.exec(s); return m ? (m[1] ?? m[2] ?? m[3] ?? null) : null; };
+  const arm = (name, got, want) => { if (got !== want)
+    die(`${where}'s \`${name}\`, read out of its source, answered ${JSON.stringify(got)} where this pass ` +
+        `claims ${JSON.stringify(want)}. The derivation is live and its meaning has moved.`); };
+  arm("TAG_SCRIPT", pick1(R.TAG_SCRIPT, `<script type="module" src="/a.js"></script>`), "/a.js");
+  arm("LINK_REL", pick1(R.LINK_REL, `<link rel="modulepreload" href="/b.js">`), "modulepreload");
+  arm("LINK_HREF", pick1(R.LINK_HREF, `<link rel="modulepreload" href="/b.js">`), "/b.js");
+  arm("FROM_SPEC", pick1(R.FROM_SPEC, `import{a}from"./c.js";`), "./c.js");
+  arm("DYNAMIC_IMPORT", pick1(R.DYNAMIC_IMPORT, `import("./d.js")`), "./d.js");
+  arm("BARE_IMPORT", pick1(R.BARE_IMPORT, `import"./e.js";`), "./e.js");
+  R.TAG_LINK.lastIndex = 0;
+  if (!R.TAG_LINK.test(`<link rel="preload" as="script" href="/f.js">`))
+    die(`${where}'s \`TAG_LINK\` no longer matches a \`<link>\` tag.`);
+  return R;
+}
+
+/* ONE SITE'S MODULE GRAPH AND ITS ROOTS, OUT OF THE MANIFEST AND THE BYTES. Pure of esbuild, so the entry
+   derivation can be read and armed without building anything. */
+function siteGraph(corpusDir, siteRow, R) {
+  const urlToSaved = new Map();
+  const note = (u, p) => { if (u && p) urlToSaved.set(u, p); };
+  note(siteRow.url, siteRow.savedPath); note(siteRow.finalUrl, siteRow.savedPath);
+  for (const s of siteRow.resources || []) { note(s.url, s.savedPath); note(s.finalUrl, s.savedPath); }
+  const savedToUrl = new Map();
+  for (const [u, p] of urlToSaved) if (!savedToUrl.has(p)) savedToUrl.set(p, u);
+  const base = siteRow.finalUrl || siteRow.url;
+  /* THE PROGRAM SET IS THE SERVER'S `Content-Type` AND NEVER A FILENAME, which is the decision
+     `engine/corpus_programs.mjs` owns and whose whole header is about a bundle saved as
+     `ol-components.js_v_a3c7cc6d…`. This column inherits it through the manifest's own `essence`. */
+  const progSaved = new Set((siteRow.resources || [])
+    .filter((s) => s.savedPath && PROGRAM.has(s.essence || essenceOf(s.contentType)))
+    .map((s) => s.savedPath));
+  const resolveFrom = (spec, fromSaved) => {
+    const impUrl = savedToUrl.get(fromSaved) || base;
+    let abs; try { abs = new URL(spec, impUrl).href; } catch { return null; }
+    const sp = urlToSaved.get(abs);
+    return (sp && progSaved.has(sp) && existsSync(resolve(corpusDir, sp))) ? sp : null;
+  };
+  const imports = new Map(), importedBy = new Map();
+  for (const p of progSaved) {
+    let src; try { src = readFileSync(resolve(corpusDir, p), "utf8"); } catch { continue; }
+    const set = new Set();
+    for (const re of [R.FROM_SPEC, R.DYNAMIC_IMPORT, R.BARE_IMPORT]) {
+      re.lastIndex = 0;
+      for (const m of src.matchAll(re)) {
+        const spec = m[1] ?? m[2] ?? m[3] ?? ""; if (!spec) continue;
+        const t = resolveFrom(spec, p); if (t && t !== p) set.add(t);
+      }
+    }
+    imports.set(p, set);
+    for (const t of set) { if (!importedBy.has(t)) importedBy.set(t, new Set()); importedBy.get(t).add(p); }
+  }
+  const pick = (m) => (m ? (m[1] ?? m[2] ?? m[3] ?? "") : "");
+  let docRefs = 0; const docEntries = new Set();
+  if (siteRow.savedPath && existsSync(resolve(corpusDir, siteRow.savedPath))) {
+    const html = readFileSync(resolve(corpusDir, siteRow.savedPath), "utf8");
+    const refs = [];
+    R.TAG_SCRIPT.lastIndex = 0;
+    for (const m of html.matchAll(R.TAG_SCRIPT)) { const v = pick(m); if (v) refs.push(v); }
+    R.TAG_LINK.lastIndex = 0;
+    for (const m of html.matchAll(R.TAG_LINK)) {
+      const rel = pick(R.LINK_REL.exec(m[0])).trim().toLowerCase();
+      if (rel !== "preload" && rel !== "modulepreload") continue;
+      const h = pick(R.LINK_HREF.exec(m[0])); if (h) refs.push(h);
+    }
+    docRefs = refs.length;
+    for (const r of refs) { const sp = resolveFrom(r, siteRow.savedPath); if (sp) docEntries.add(sp); }
+  }
+  const orphan = [...progSaved].filter((p) => !importedBy.has(p) && !docEntries.has(p));
+  const reachOf = (p) => { const seen = new Set([p]), w = [p];
+    while (w.length) { const x = w.pop(); for (const t of imports.get(x) || []) if (!seen.has(t)) { seen.add(t); w.push(t); } }
+    return seen; };
+  const cand = [...new Set([...docEntries, ...orphan])].sort()
+    .map((p) => ({ p, n: reachOf(p).size, r: reachOf(p) })).sort((a, b) => b.n - a.n || (a.p < b.p ? -1 : 1));
+  const covered = new Set(), chosen = [];
+  for (const c of cand) { if (covered.has(c.p)) continue; chosen.push(c.p); for (const t of c.r) covered.add(t); }
+  /* NOTHING MAY FALL OUT: a program no chosen entry reaches is bundled on its own rather than dropped. */
+  const alone = [...progSaved].filter((p) => !covered.has(p)).sort();
+  for (const p of alone) { chosen.push(p); covered.add(p); }
+  return { progSaved, resolveFrom, docRefs, docEntries, orphan, chosen, alone, covered };
+}
+
+/* ── BUNDLE ONE CORPUS INTO A SECOND CORPUS, WHICH IS WHAT LETS THE FOLD BE `static_surface.mjs`'S ─────────
+   The output is written as a corpus with its own `provenance.json`, so the value recovery is done by RUNNING
+   the instrument that owns it — through `oursRows`, which already asserts its published `total.sites` against
+   the rows handed back. A fold re-implemented here would be the second copy §AN-AUDITOR-DERIVES-THE-RULE
+   forbids, and the copy that drifts is the one nobody runs against reality. */
+async function esbuildBundle(corpusDir, rows, outDir, R, minify) {
+  rmSync(outDir, { recursive: true, force: true });
+  mkdirSync(resolve(outDir, "mirror"), { recursive: true });
+  const per = [], man = [];
+  for (const siteRow of rows) {
+    const id = siteRow.id;
+    const g = siteGraph(corpusDir, siteRow, R);
+    const b = { site: id, programs: g.progSaved.size, docRefs: g.docRefs, docEntries: g.docEntries.size,
+                orphanEntries: g.orphan.length, bundledAlone: g.alone.length, entries: g.chosen.length,
+                specResolved: 0, specExternal: 0, dynResolved: [], outputs: 0, bytes: 0, failed: null };
+    if (!g.chosen.length) { per.push(b); continue; }
+    const plugin = { name: "corpus", setup(bld) {
+      bld.onResolve({ filter: /.*/ }, (a) => {
+        if (a.kind === "entry-point") return { path: a.path };
+        const rel0 = a.importer.startsWith(corpusDir) ? a.importer.slice(corpusDir.length + 1) : null;
+        const sp = rel0 ? g.resolveFrom(a.path, rel0) : null;
+        if (sp) {
+          b.specResolved++;
+          /* AN `import()` THE BUNDLER RESOLVES IS AN ADDRESS THE BUNDLER STATES, and the rewrite that follows
+             is what removes it from the output — so it is recorded HERE, where it is still a specifier. */
+          if (a.kind === "dynamic-import") b.dynResolved.push(a.path);
+          return { path: resolve(corpusDir, sp) };
+        }
+        b.specExternal++; return { path: a.path, external: true };
+      });
+      /* A LOADER IS FORCED FOR EVERY FILE, because this corpus is saved under the SERVER'S paths and a bundle
+         fetched with a query is saved as `ol-components.js_v_a3c7cc6d…`, whose extension is in no list
+         `esbuild` would recognise — it answers `No loader is configured for …` and the site fails. The
+         manifest already typed these bytes as a program; this is the same answer one layer on. */
+      bld.onLoad({ filter: /.*/ }, (a) => ({ contents: readFileSync(a.path), loader: "js" }));
+    } };
+    let out = null, meta = null;
+    try {
+      const r = await esbuild.build({ entryPoints: g.chosen.map((p) => resolve(corpusDir, p)), bundle: true,
+        minify, write: false, format: "esm", treeShaking: false, logLevel: "silent", plugins: [plugin],
+        outdir: "/esb", metafile: true });
+      out = r.outputFiles; meta = r.metafile;
+    } catch (e) { b.failed = String(e.message).slice(0, 300); per.push(b); continue; }
+    /* EVERY ENTRY IS ASSERTED TO BE IN THE PROGRAM AND TO HAVE PRODUCED AN OUTPUT. A toolchain that drops a
+       root it does not recognise makes this column quietly narrower, which is the direction that manufactures
+       a razor point for this project — it has already happened once in this file with `ts.createProgram`, so
+       it may not happen again in silence. */
+    const inputs = new Set(Object.keys(meta.inputs).map((k) => resolve(k)));
+    const entryOf = new Set(Object.values(meta.outputs).map((o) => o.entryPoint && resolve(o.entryPoint)));
+    for (const p of g.chosen) {
+      const abs = resolve(corpusDir, p);
+      if (!inputs.has(abs)) die(`the ${id} bundle does not hold its own entry ${p}: \`esbuild\` took it as a ` +
+        `root and its metafile does not list it as an input. A root the bundler drops is a genuine shipped ` +
+        `bundle this column never links, which makes it narrower without saying so.`);
+      if (!entryOf.has(abs)) die(`the ${id} entry ${p} produced no output file.`);
+    }
+    for (const p of g.progSaved)
+      if (!inputs.has(resolve(corpusDir, p)))
+        die(`the ${id} bundles do not hold ${p}, which the manifest types as a program and which the entry ` +
+            `derivation claimed was covered. A program in no bundle is text this column never reads.`);
+    let i = 0;
+    for (const f of out) {
+      const p = `${id}/b${i++}.js`;
+      mkdirSync(dirname(resolve(outDir, "mirror", p)), { recursive: true });
+      writeFileSync(resolve(outDir, "mirror", p), f.contents);
+      man.push({ id, url: `esbuild-bundle-of:${id}#${i}`, fetchedAt: siteRow.fetchedAt,
+        contentType: "application/javascript", essence: "application/javascript",
+        sha256: createHash("sha256").update(f.contents).digest("hex"), bytes: f.contents.length,
+        savedPath: p, resources: [] });
+      b.bytes += f.contents.length;
+    }
+    b.outputs = out.length;
+    per.push(b);
+  }
+  writeFileSync(resolve(outDir, "provenance.json"), JSON.stringify(man, null, 1));
+  return { per, outputs: man.length };
+}
+
+/* ── THE THIRD COLUMN'S SELFTEST, WHICH IS THE ONE CONTROL IN THIS FILE THAT MUST SHOW A FINDING ───────────
+   CLAUDE.md §A-CONTROL-ARMS-ONLY-ON-A-SITE: a probe whose control has never produced a finding is reporting on
+   its own probe. This column exists to state an address the other two cannot, so its control is not a verdict
+   that fires — it is a SET DIFFERENCE that is non-empty. The corpus is two files spelling the residual's own
+   example, and the assertion is two-sided: the address must be ABSENT from our baseline's reading of the raw
+   pair and PRESENT in its reading of the bundle. If the second half fails the column is broken; if the FIRST
+   half fails then our own baseline already crosses files and this whole column is redundant, which would be a
+   finding about `static_surface.mjs` rather than about this. */
+async function esbuildSelftest(R, tmp) {
+  const dir = resolve(tmp, "ctl"), out = resolve(tmp, "ctlb");
+  rmSync(dir, { recursive: true, force: true });
+  const site = resolve(dir, "mirror", "esbctl", "x.invalid");
+  mkdirSync(site, { recursive: true });
+  const files = {
+    "cfg.js": `export const BASE = "/xfile";\nexport const REG = "us";\n`,
+    "app.js": `import { BASE, REG } from "./cfg.js";\n` +
+              `fetch(BASE + "/v1/users");\n` +          // the residual's shape: NEITHER column above states it
+              `fetch("/direct/lit");\n` +               // a literal, which all three state
+              `fetch(\`\${BASE}/tpl/\${REG}\`);\n`,     // cross-file template: theirs states it, ours does not
+    "index.html": `<html><head><script type="module" src="/app.js"></script>` +
+                  `<link rel="modulepreload" href="/cfg.js"></head><body></body></html>\n`,
+  };
+  for (const [n, t] of Object.entries(files)) writeFileSync(resolve(site, n), t);
+  const sha = (p) => createHash("sha256").update(readFileSync(resolve(dir, "mirror", p))).digest("hex");
+  const res = (n) => ({ url: `https://x.invalid/${n}`, finalUrl: `https://x.invalid/${n}`, status: 200,
+    contentType: "application/javascript", essence: "application/javascript",
+    sha256: sha(`esbctl/x.invalid/${n}`), bytes: Buffer.byteLength(files[n]),
+    savedPath: `esbctl/x.invalid/${n}`, fetchedAt: "1970-01-01T00:00:00.000Z" });
+  writeFileSync(resolve(dir, "provenance.json"), JSON.stringify([{ id: "esbctl",
+    url: "https://x.invalid/", finalUrl: "https://x.invalid/", fetchedAt: "1970-01-01T00:00:00.000Z",
+    contentType: "text/html", essence: "text/html", sha256: sha("esbctl/x.invalid/index.html"),
+    bytes: Buffer.byteLength(files["index.html"]), savedPath: "esbctl/x.invalid/index.html",
+    resources: [res("app.js"), res("cfg.js")] }], null, 1));
+  const rows = JSON.parse(readFileSync(resolve(dir, "provenance.json"), "utf8"));
+  const g = siteGraph(resolve(dir, "mirror"), rows[0], R);
+  if (g.chosen.length !== 1 || !g.chosen[0].endsWith("app.js"))
+    die(`the third column's ENTRY DERIVATION did not reduce the control to its one document-named entry ` +
+        `(${JSON.stringify(g.chosen)}). The document names both files — one by \`<script src>\` and one by ` +
+        `\`modulepreload\` — and the second is imported by the first, so coverage must drop it.`);
+  const bu = await esbuildBundle(resolve(dir, "mirror"), rows, out, R, true);
+  if (bu.outputs !== 1) die(`the control bundled to ${bu.outputs} output file(s) rather than one.`);
+  const rawSet = completeByFile(oursRows(resolve(dir, "mirror"), null));
+  const bunSet = completeByFile(oursRows(resolve(out, "mirror"), null));
+  const raw = rawSet.get("esbctl") || new Set(), bun = bunSet.get("esbctl") || new Set();
+  const WANT = "/xfile/v1/users";
+  if (raw.has(WANT))
+    die(`our own baseline already states ${JSON.stringify(WANT)} from the UNBUNDLED control, which means it ` +
+        `crosses files now and this whole column is redundant. That is a finding about static_surface.mjs and ` +
+        `the thing to re-measure before reading anything below.`);
+  if (!bun.has(WANT))
+    die(`the third column did NOT state ${JSON.stringify(WANT)} from the bundle of a control that spells the ` +
+        `residual's own example. Its set was ${JSON.stringify([...bun])}. The column is broken, and a 0 below ` +
+        `would be a statement about this probe rather than about the corpus.`);
+  if (!raw.has("/direct/lit") || !bun.has("/direct/lit"))
+    die(`the control's plain literal is missing from one side, so the two readings are not of one program.`);
+  rmSync(dir, { recursive: true, force: true }); rmSync(out, { recursive: true, force: true });
+  return { rawStates: [...raw].sort(), bundledStates: [...bun].sort(), newlyStated: WANT };
+}
+
+/* THE COMPLETE-FROM-TEXT SET OUR BASELINE STATES, KEYED BY THE FIRST PATH SEGMENT — which is the site id in a
+   fetched corpus and in the bundled corpus this column writes. Shared by the OURS column and the third one so
+   the two cannot differ in how a row becomes an address. */
+function completeByFile(ours) {
+  const m = new Map();
+  for (const r of ours.examples) {
+    if (r.kind !== "literal" && r.kind !== "folded") continue;
+    if (r.holes !== 0) die(`static_surface row at ${r.file}:${r.line} is \`${r.kind}\` with ${r.holes} hole(s).`);
+    const id = r.file.split("/")[0];
+    if (!m.has(id)) m.set(id, new Set());
+    m.get(id).add(r.url);
+  }
+  return m;
+}
+
 const TS_OPTS = {
   allowJs: true, checkJs: false, noLib: true, noResolve: false,
   module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ESNext,
@@ -525,18 +853,35 @@ function oursRows(corpusDir, cached) {
   return out;
 }
 
-function main(argv) {
+async function main(argv) {
   const arg = (k, d) => { const i = argv.indexOf(k); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
   const corpusDir = resolve(arg("--corpus", "engine/.work/sitecorpus/mirror"));
   const cached = arg("--ours", null);
   const wantJson = argv.includes("--json");
   const nExamples = parseInt(arg("--examples", "0"), 10) || 0;
+  /* THE THIRD COLUMN WRITES A SECOND CORPUS, SO ITS OUTPUT PATH IS NAMED BY THE RUN AND NEVER BY ITS ROLE.
+     CLAUDE.md §AND-THE-SNAPSHOT-MUST-BE-AT-A-PATH-NOBODY-ELSE-WILL-CHOOSE: this is a shared checkout and a
+     scratch directory called `bundled` is a directory two agents write at once, which is the same defect as
+     measuring the working tree, reached through the place chosen to escape it. */
+  const wantEsb = !argv.includes("--no-esbuild");
+  const esbMinify = !argv.includes("--esb-no-minify");
+  const esbOut = resolve(arg("--esb-out",
+    `engine/.work/ts_surface-esbuild-${createHash("sha256").update(corpusDir).digest("hex").slice(0, 8)}-${process.pid}`));
+  const esbKeep = argv.includes("--esb-keep");
 
   const ssSrc = readFileSync(STATIC_SURFACE, "utf8");
   const doors = doorsFromSource(ssSrc, relative(ROOT, STATIC_SURFACE));
   const globals = globalObjectsFromSource(ssSrc, relative(ROOT, STATIC_SURFACE));
   const methods = httpMethodTestFromSource(ssSrc, relative(ROOT, STATIC_SURFACE));
   const st = selftest(doors, globals, methods);
+  /* THE THIRD COLUMN'S PATTERNS AND ITS ARMED CONTROL, BEFORE ANY CORPUS IS OPENED. Its control is a SET
+     DIFFERENCE that must be non-empty, which is the only shape of control a column whose purpose is to state
+     something the others cannot can have. */
+  let R = null, esbSt = null;
+  if (wantEsb) {
+    R = bundlerRefsFromSource(readFileSync(CORPUS_FETCH, "utf8"), relative(ROOT, CORPUS_FETCH));
+    esbSt = await esbuildSelftest(R, esbOut + "-selftest");
+  }
 
   let stat = null;
   try { stat = statSync(corpusDir); } catch { /* handled below */ }
@@ -598,18 +943,16 @@ function main(argv) {
      `literal` or `folded` carries no hole by that instrument's own construction, and this asserts it rather
      than trusting it — a hole leaking into this set would make an incomplete address look complete on OUR
      side, which is the direction that hides a finding. */
-  const oursComplete = new Map(), oursSites = new Map(), oursKind = new Map();
-  const bucketSet = (m, id) => { if (!m.has(id)) m.set(id, new Set()); return m.get(id); };
+  /* THE COMPLETE-FROM-TEXT SET COMES FROM `completeByFile`, WHICH THE THIRD COLUMN BELOW ALSO READS THROUGH,
+     so the two sides of every set difference in this file cannot differ in how a row becomes an address. Its
+     hole assertion is the one that used to stand here. */
+  const oursComplete = completeByFile(ours);
+  const oursSites = new Map(), oursKind = new Map();
   for (const r of ours.examples) {
     const id = r.file.split("/")[0];
     oursSites.set(id, (oursSites.get(id) || 0) + 1);
     if (!oursKind.has(id)) oursKind.set(id, { literal: 0, folded: 0, shape: 0, opaque: 0 });
     oursKind.get(id)[r.kind]++;
-    if (r.kind === "literal" || r.kind === "folded") {
-      if (r.holes !== 0) die(`static_surface row at ${r.file}:${r.line} is \`${r.kind}\` with ${r.holes} ` +
-                             `hole(s); the complete-from-text set would carry an incomplete address.`);
-      bucketSet(oursComplete, id).add(r.url);
-    }
   }
 
   /* THE ADVERSARY'S SIDE, PER SITE. */
@@ -725,6 +1068,50 @@ function main(argv) {
   }
   const ms = Date.now() - t0;
 
+  /* ── THE THIRD COLUMN: BUNDLE, THEN LET THE INSTRUMENT THAT OWNS THE FOLD READ THE OUTPUT ───────────── */
+  let esb = null;
+  if (wantEsb) {
+    const t1 = Date.now();
+    const bu = await esbuildBundle(corpusDir, rows, esbOut, R, esbMinify);
+    const esbRows = bu.outputs ? oursRows(resolve(esbOut, "mirror"), null) : { total: { sites: 0 }, examples: [] };
+    const complete = completeByFile(esbRows);
+    /* AN `import()` THE BUNDLER RESOLVED IS AN ADDRESS THE BUNDLER STATED, and the rewrite is what takes it
+       out of the output — so it is joined back in here, on the same address key. */
+    let dynAdded = 0;
+    for (const b of bu.per) {
+      if (!b.dynResolved.length) continue;
+      if (!complete.has(b.site)) complete.set(b.site, new Set());
+      const set = complete.get(b.site);
+      for (const spec of b.dynResolved) if (!set.has(spec)) { set.add(spec); dynAdded++; }
+    }
+    /* THE STRONGEST CALIBRATION THIS COLUMN HAS AND IT IS FREE: A PER-DOOR SITE COUNT, RAW AGAINST BUNDLED.
+       It answers two questions at once that no other number here can. A door whose count is IDENTICAL proves
+       the bundling neither DROPPED text (tree-shaking, dead-code elimination) nor DUPLICATED it — a chunk
+       appearing in two bundles would inflate every door it carries, and the entry minimisation above is the
+       only thing standing between this column and exactly that. A door whose count MOVES is the finding. */
+    const doorSites = (rowset) => { const m = {}; for (const r of rowset.examples) m[r.door] = (m[r.door] || 0) + 1; return m; };
+    const dOurs = doorSites(ours), dEsb = doorSites(esbRows);
+    const doorRecall = [];
+    for (const d of [...new Set([...Object.keys(dOurs), ...Object.keys(dEsb)])].sort())
+      doorRecall.push({ door: d, ours: dOurs[d] || 0, esb: dEsb[d] || 0, delta: (dEsb[d] || 0) - (dOurs[d] || 0) });
+    /* THE DENOMINATOR THE 0 BELOW IS A FRACTION OF, because CLAUDE.md §a-coverage-figure-states-what-it-is-a-
+       fraction-of applies hardest to a zero: a 0 over an empty opportunity is a statement about the corpus and
+       a 0 over a large one is a statement about the capability. The opportunity is a row our own baseline read
+       as INCOMPLETE (`shape` or `opaque`), at a door that SURVIVES bundling, at a site that still had a module
+       graph left to link — which is exactly the population linking could have converted and did not. */
+    const graphed = new Set(bu.per.filter((b) => b.specResolved > 0).map((b) => b.site));
+    const survivingDoors = new Set(doorRecall.filter((r) => r.delta === 0).map((r) => r.door));
+    let oppGraphed = 0, oppFlat = 0;
+    for (const r of ours.examples) {
+      if (r.kind !== "shape" && r.kind !== "opaque") continue;
+      if (!survivingDoors.has(r.door)) continue;
+      if (graphed.has(r.file.split("/")[0])) oppGraphed++; else oppFlat++;
+    }
+    esb = { per: bu.per, outputs: bu.outputs, complete, ms: Date.now() - t1, minify: esbMinify,
+            rows: esbRows.total, dynAdded, selftest: esbSt, out: relative(ROOT, esbOut),
+            doorRecall, oppGraphed, oppFlat, graphed: [...graphed].sort() };
+  }
+
   /* ── THE TWO SET DIFFERENCES, WHICH ARE THE WHOLE OUTPUT ────────────────────────────────────────────── */
   const theirsOnly = [], oursOnly = [];
   for (const b of per) {
@@ -732,6 +1119,23 @@ function main(argv) {
     const A = oursComplete.get(b.site) || new Set();
     for (const s of b.complete) if (!A.has(s)) theirsOnly.push({ site: b.site, url: s });
     for (const s of A) if (!b.complete.has(s)) oursOnly.push({ site: b.site, url: s });
+  }
+
+  /* THE DELIVERABLE OF THE THIRD COLUMN: an address a BUNDLER's link plus our own folder states, that our
+     own folder ALONE — which is what this project's razor is measured against — does not. Every member is a
+     razor point this project has been claiming wrongly. */
+  const esbOnly = [], esbAndNeither = [];
+  if (esb) {
+    const theirsBySite = new Map();
+    for (const b of per) if (!b.failed) theirsBySite.set(b.site, b.complete);
+    for (const [site, set] of esb.complete) {
+      const A = oursComplete.get(site) || new Set(), T = theirsBySite.get(site) || new Set();
+      for (const u of set) {
+        if (A.has(u)) continue;
+        esbOnly.push({ site, url: u });
+        if (!T.has(u)) esbAndNeither.push({ site, url: u });
+      }
+    }
   }
 
   const tot = { sites: 0, literal: 0, folded: 0, shape: 0, opaque: 0, absent: 0, programs: 0, parseFail: 0,
@@ -768,6 +1172,29 @@ function main(argv) {
       theirs: per.filter((b) => !b.failed).reduce((n, b) => n + b.complete.size, 0),
       theirsOnly: theirsOnly.length, oursOnly: oursOnly.length,
     },
+    esbuild: esb ? {
+      tool: `esbuild ${esbuild.version}`, minify: esb.minify, out: esb.out, ms: esb.ms,
+      link: "esbuild bundles the module graph; the FOLD is static_surface.mjs read over the OUTPUT",
+      bundles: esb.outputs, bundledSites: esb.per.filter((b) => b.outputs).length,
+      failedSites: esb.per.filter((b) => b.failed).map((b) => ({ site: b.site, failed: b.failed })),
+      sitesWithAModuleGraph: esb.per.filter((b) => b.specResolved > 0).length,
+      sitesWithADocumentEntry: esb.per.filter((b) => b.docEntries > 0).length,
+      specifiersResolvedCrossFile: esb.per.reduce((n, b) => n + b.specResolved, 0),
+      specifiersExternal: esb.per.reduce((n, b) => n + b.specExternal, 0),
+      dynamicImportsTheBundlerResolved: esb.per.reduce((n, b) => n + b.dynResolved.length, 0),
+      dynamicSpecifiersJoinedBackIn: esb.dynAdded,
+      bundledCorpus: { sites: esb.rows.sites, literal: esb.rows.literal, folded: esb.rows.folded,
+                       shape: esb.rows.shape, opaque: esb.rows.opaque, byDoor: esb.rows.byDoor },
+      addresses: { esb: [...esb.complete.values()].reduce((n, x) => n + x.size, 0),
+                   esbOnly: esbOnly.length, esbAndNeitherOther: esbAndNeither.length },
+      selftest: esb.selftest,
+      doorRecall: esb.doorRecall,
+      opportunity: { rowUnit: "one syntactic call site our baseline read as shape|opaque",
+                     atSitesWithAModuleGraph: esb.oppGraphed, atSitesWithout: esb.oppFlat },
+      sitesWithAModuleGraphNamed: esb.graphed,
+      perSite: esb.per,
+    } : undefined,
+    esbOnlyAddresses: esb && nExamples ? esbOnly.slice(0, nExamples) : undefined,
     theirsOnlyAddresses: nExamples ? theirsOnly.slice(0, nExamples) : undefined,
     oursOnlyAddresses: nExamples ? oursOnly.slice(0, nExamples) : undefined,
     foldedExamples: nExamples ? per.flatMap((b) => (b.rows || []).slice(0, nExamples)) : undefined,
@@ -775,6 +1202,7 @@ function main(argv) {
       oursSites: oursSites.get(b.site) || 0, oursComplete: (oursComplete.get(b.site) || new Set()).size,
       oursKind: oursKind.get(b.site) || null })),
   };
+  if (esb && !esbKeep) rmSync(esbOut, { recursive: true, force: true });
   if (wantJson) { console.log(JSON.stringify(out, null, 1)); return; }
 
   const pct = (n, d) => (d ? (100 * n / d).toFixed(1) : "0.0") + "%";
@@ -832,6 +1260,41 @@ function main(argv) {
   console.log(`      OURS AND NOT THEIRS: ${out.addresses.oursOnly}  ` +
               `(${pct(out.addresses.oursOnly, out.addresses.ours)} of ours) — the other half of the partition; ` +
               `one adversary agreeing is NOT "no parse can state this".`);
+  if (esb) {
+    const eA = out.esbuild.addresses;
+    console.log(``);
+    console.log(`A THIRD COLUMN — esbuild ${esbuild.version} LINKS THE MODULE GRAPH, static_surface.mjs FOLDS THE OUTPUT.`);
+    console.log(`The residual above named this gap and got its recipe wrong TWICE, both measured: esbuild does NOT`);
+    console.log(`inline a cross-module constant into a \`+\` (it links, ours joins), and running THIS file's own`);
+    console.log(`checker over the bundle folds NOTHING because esbuild emits \`var\` and TypeScript widens it.`);
+    console.log(`  entry points: ${out.esbuild.sitesWithADocumentEntry}/${esb.per.length} site(s) yielded one from ` +
+                `their own document; ${out.esbuild.bundledSites} site(s) bundled into ${out.esbuild.bundles} output file(s)` +
+                `${out.esbuild.failedSites.length ? `, ${out.esbuild.failedSites.length} FAILED` : ``}`);
+    console.log(`  module graph: ${out.esbuild.sitesWithAModuleGraph}/${esb.per.length} site(s) had one left to link — ` +
+                `${out.esbuild.specifiersResolvedCrossFile} specifier(s) resolved, ${out.esbuild.specifiersExternal} external`);
+    console.log(`  bundled corpus through static_surface.mjs: ${esb.rows.sites} site(s), literal ${esb.rows.literal}, ` +
+                `folded ${esb.rows.folded}, shape ${esb.rows.shape}, opaque ${esb.rows.opaque}`);
+    console.log(`  the \`import()\` DOOR DOES NOT SURVIVE BUNDLING: ${out.esbuild.dynamicImportsTheBundlerResolved} ` +
+                `dynamic import(s) the bundler RESOLVED are rewritten out of the output, so their specifiers are`);
+    console.log(`  joined back in on the address key (${out.esbuild.dynamicSpecifiersJoinedBackIn} new to this column's set) — ` +
+                `a specifier esbuild resolves is a literal, so it should be inside ours.`);
+    console.log(`  CONTROL ARMED AND FIRING: on a two-file control spelling the residual's own example, our baseline`);
+    console.log(`  states ${JSON.stringify(esb.selftest.rawStates)} unbundled and ` +
+                `${JSON.stringify(esb.selftest.bundledStates)} bundled — ${JSON.stringify(esb.selftest.newlyStated)} is`);
+    console.log(`  an address the bundled column states and the unbundled one cannot. A 0 below is therefore SCORED.`);
+    console.log(`  complete-from-text, esbuild+ours: ${eA.esb}`);
+    const moved = esb.doorRecall.filter((r) => r.delta !== 0);
+    console.log(`  DOOR RECALL, ours against this column, per door — the calibration that proves the bundling`);
+    console.log(`  neither dropped text nor DUPLICATED it (a chunk in two bundles inflates every door it carries):`);
+    console.log(`    IDENTICAL: ${esb.doorRecall.filter((r) => r.delta === 0).map((r) => `${r.door} ${r.ours}`).join(", ")}`);
+    for (const r of moved)
+      console.log(`    MOVED:     ${r.door} ${r.ours} -> ${r.esb} (${r.delta > 0 ? "+" : ""}${r.delta}) — the finding, not the background`);
+    console.log(`  OPPORTUNITY the 0 below is a fraction of: ${esb.oppGraphed} site(s) our baseline read as`);
+    console.log(`  \`shape\` or \`opaque\` at a surviving door AT A SITE THAT STILL HAD A GRAPH TO LINK, and ${esb.oppFlat} at`);
+    console.log(`  sites with none. Linking converted ZERO of the ${esb.oppGraphed}, which is what makes the 0 a measurement.`);
+    console.log(`  >>> ESBUILD+OURS AND NOT OURS ALONE: ${eA.esbOnly} — every one is a razor point this project has`);
+    console.log(`      been claiming wrongly; ${eA.esbAndNeitherOther} of them are stated by NEITHER other column.`);
+  }
   console.log(``);
   console.log(`PER SITE  ${"site".padEnd(14)} ${"progs".padStart(5)} ${"ourSt".padStart(5)} ${"thrSt".padStart(5)} ` +
               `${"ourAd".padStart(5)} ${"thrAd".padStart(5)} ${"only+".padStart(5)} ${"only-".padStart(5)} ${"fold".padStart(4)}`);
@@ -851,6 +1314,13 @@ function main(argv) {
     console.log(`OURS AND NOT THEIRS — first ${nExamples}:`);
     for (const r of oursOnly.slice(0, nExamples)) console.log(`  ${r.site.padEnd(14)} ${r.url.slice(0, 150)}`);
     console.log(``);
+    if (esb) {
+      console.log(``);
+      console.log(`ESBUILD+OURS AND NOT OURS ALONE — the third column's deliverable, first ${nExamples}:`);
+      if (!esbOnly.length) console.log(`  (empty — and an empty list is reported as empty. Two tools agreeing is not`);
+      if (!esbOnly.length) console.log(`   "no parse can state this" either, and this column's own control DID fire.)`);
+      for (const r of esbOnly.slice(0, nExamples)) console.log(`  ${r.site.padEnd(14)} ${r.url.slice(0, 150)}`);
+    }
     console.log(`THE ADVERSARY'S \`folded\` ROWS — a value its CHECKER recovered from a non-literal expression:`);
     for (const r of out.foldedExamples.slice(0, nExamples))
       console.log(`  [${r.door}] ${JSON.stringify(r.urls || r.url).slice(0, 110)}   ${r.file}:${r.line}`);
@@ -858,4 +1328,4 @@ function main(argv) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
-  main(process.argv.slice(2));
+  main(process.argv.slice(2)).catch((e) => { console.error(String(e && e.stack || e)); process.exit(1); });
