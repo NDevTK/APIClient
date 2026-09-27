@@ -184,7 +184,9 @@ static char *cj_root_path(void)
     return r;
 }
 
-static char *cj_default_path(const UrlRecord *u)
+/* §5.1.4's DEFAULT-PATH of a request-uri, and PUBLIC because a SECOND STANDARD names it — see the declaration
+   in cookie_jar.h for which one and why a copy beside that caller would be the wrong answer. OWNED. */
+char *cookie_jar_default_path(const UrlRecord *u)
 {
     char *p = url_serialize_path(u), *out;
     size_t n, last;
@@ -696,7 +698,7 @@ void cookie_jar_store(JSContext *ctx, const UrlRecord *uri, const char *name, si
         path[attrs->path_len] = 0;
         plen = attrs->path_len;
     } else {
-        path = cj_default_path(uri);
+        path = cookie_jar_default_path(uri);
         plen = strlen(path);
     }
 

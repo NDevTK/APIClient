@@ -107,6 +107,27 @@ typedef struct {
 void cookie_jar_store(JSContext *ctx, const UrlRecord *uri, const char *name, size_t name_len,
                       const char *value, size_t value_len, const CookieJarAttributes *attrs);
 
+/* §5.1.4's DEFAULT-PATH of `uri` — the path a cookie that states none is given, and what a SECOND STANDARD
+   reaches through Fetch. OWNED; the caller frees.
+ *
+ * WHY IT IS DECLARED AND NOT PRIVATE, WHICH IS THE SAME ARGUMENT core/url/registrable_domain.h MAKES. Cookie
+ * Store API §7.2 "Set a cookie" step 15 is "If path is the empty string, then set path to the serialized cookie
+ * default path of url", and `serialized cookie default path` is FETCH §3.1.3 "Cookie infrastructure"'s: "Let
+ * cloneURL be a clone of url. Set cloneURL's path to the cookie default path of cloneURL's path. Return the URL
+ * path serialization of cloneURL." That inner `cookie default path` is this algorithm, so two standards share
+ * one definition and this tree holds one implementation of it.
+ *
+ * AND ITS CALLER CANNOT LEAVE THE PATH ABSENT AND LET THE STORE FILL IT IN, which is the shape that makes this
+ * an export rather than a convenience. §5.3 step 7 already computes this for an attribute-list that states no
+ * Path — which is what `have_path` false means — so a caller with an EMPTY path could route there and never
+ * name the value. §7.2 cannot: its steps 16, 17 and 19 run AFTER step 15 and they READ the substituted path,
+ * refusing one that does not begin with U+002F, refusing a `__Host-` name whose path is not exactly U+002F, and
+ * refusing one whose UTF-8 encoding exceeds the maximum attribute value size. A caller that deferred the
+ * substitution would be running three of its own algorithm's refusals against a path it does not have.
+ *
+ * IT IS AT SHORTEST "/" AND NEVER EMPTY, which is what cj_path_match's own assert relies on. */
+char *cookie_jar_default_path(const UrlRecord *uri);
+
 /* §5.4's COOKIE-STRING for `uri` for a "non-HTTP" API — the cookies of this store that domain-match, path-match
    and pass the secure-only test, sorted by §5.4 step 2 and serialized `name=value` joined by "; ".
    Returns an OWNED JS string. */
