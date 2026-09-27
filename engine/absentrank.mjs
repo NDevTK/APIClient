@@ -396,8 +396,22 @@ const pub = (re, what) => {
    the widest claim the parse could have made and the one least related to what it needed. Anchored per
    quantity, a fourth total inserted tomorrow moves neither read. Both remain REQUIRED, so a rename of either
    phrase still throws rather than ranking a subset. */
-const PUB_DISTINCT = Number(pub(/(\d+) distinct spec members this engine does not install/,
-                                "its distinct absent-member total")[1]);
+/* AND IT BROKE A SECOND TIME, THE SAME WAY AND FOR THE SAME GOOD REASON, WHICH IS WHY THE ANCHOR IS NOW THE
+   QUANTITY'S OWN NAME AND NOTHING AFTER IT. This read required `distinct spec members THIS ENGINE DOES NOT
+   INSTALL`, and idlgen replaced that tail with `no install construct under <root> installs` in order to state
+   the ROOT the negative is over — a strictly better census, exactly as the third total was. The clause above
+   drew the right lesson and did not apply it far enough: `this engine does not install` is PROSE ABOUT the
+   quantity rather than the quantity's NAME, so it was the same widest-possible claim one phrase to the right.
+   `N distinct spec members` is what this file's own header says it parses, it is what names the number, and
+   it occurs EXACTLY ONCE in that output — measured, because an anchor that matched twice would silently read
+   whichever came first. It stays REQUIRED: a rename of THAT phrase still throws rather than ranking a subset.
+   THE COST OF THE SECOND BREAK IS WORTH RECORDING BECAUSE IT IS NOT THE ONE THE FIRST CLAUSE PRICES. A
+   calibration that throws is not a quiet shorter list and is the right failure — and it takes the WHOLE file
+   down, so for as long as it stood, the guard-shape split, every band and every rank this file publishes were
+   unobtainable by anybody. An instrument nobody can run reports nothing, and nothing is the one answer a
+   reader never questions. */
+const PUB_DISTINCT = Number(pub(/(\d+) distinct spec members/,
+                                "its distinct absent-member total (`N distinct spec members`)")[1]);
 const PUB_PAIRS = Number(pub(/(\d+) across all interfaces/,
                              "its interface-member-pair total (`N across all interfaces`)")[1]);
 /* TWO THINGS SILENCE THIS LINE AND THE MESSAGE NAMES BOTH, because one of them is not a format change and a
