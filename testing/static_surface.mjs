@@ -349,10 +349,16 @@ const DOORS = [
      property alone would report a number dominated by things that are not requests, which is the precision
      failure the DOORS comment turns `.get(`/`.post(` away for.
      IT IS A `PROGRAM` DOOR AND ITS `engine` IS NULL, so it is a FLOOR-WIDENING of the static side and not a
-     comparison: HTML §8.10 "Service workers"' script URL is a reply that becomes a PROGRAM, and no
-     `endpoint_record` caller in the engine reaches it, so this row is counted apart exactly as `new
-     WebSocket` and `new Worker` are. Reading it into the engine-comparable total would put an address on the
-     static side the engine was never asked for. */
+     comparison: Service Workers §3.4.3 "register(scriptURL, options)"' first argument is a script URL, which
+     is a reply that becomes a PROGRAM, and no `endpoint_record` caller in the engine reaches it — so this row
+     is counted apart exactly as `new WebSocket` and `new Worker` are. Reading it into the engine-comparable
+     total would put an address on the static side the engine was never asked for.
+     THIS CITED `HTML §8.10 "Service workers"` FOR ONE COMMIT AND THAT SECTION DOES NOT EXIST, which is
+     recorded rather than quietly corrected because the METHOD is the finding and the number was only its
+     symptom: it was written FROM MEMORY, and CLAUDE.md §A-CITED-NUMBER-CARRIES-AN-OBLIGATION rates a wrong
+     number as WORSE than none, since it reads as authoritative and sends a reader to a section that does not
+     say what the code claims. HTML §10 is "Web workers" and service workers are a SEPARATE STANDARD — the
+     one-fetch check this file's own header demands of every citation, not made. */
   { id: "serviceWorker.register", cls: "program", engine: null,                           kind: "member-call-on", name: "register", recv: "serviceWorker", urlArg: 0 },
 ];
 const DOOR_BY_NAME = new Map();
