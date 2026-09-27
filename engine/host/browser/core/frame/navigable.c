@@ -2346,6 +2346,42 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
            "constructor, create navigation params from a srcdoc resource, and that constructor states its own "
            "response's URL; a resource on any other address is a document body this load would hand to a frame "
            "whose origin, base URL and policy container were determined for somewhere else");
+    /* …AND §7.4.5's OTHER OPERAND OF THAT SAME CONSTRUCTOR, WHICH IS THE HALF NOTHING ASSERTED. create
+       navigation params from a srcdoc resource returns navigation params with TWO rows read off the entry and
+       not one: its response body is "the UTF-8 encoding of documentResource" and its about base URL is
+       "entry's document state's about base URL". §2.4.3 "Document base URLs"' fallback base URL makes the
+       second REQUIRED for exactly this Document — its first step is "if document is an iframe srcdoc
+       document", whose own steps are "Assert: document's about base URL is non-null" and "return document's
+       about base URL" — and core/dom/document.c states that assert from the other side. So a load carrying
+       the markup and no base URL does not show an EMPTY frame: it builds a Document that ABORTS the first time
+       anything in it resolves a relative URL, in a file that composed neither slot, under a message naming
+       whoever created the Document as at fault.
+       THE PAIR HOLDS TODAY BY TWO EXPRESSIONS HAPPENING TO AGREE, WHICH IS WHY IT IS ASSERTED RATHER THAN
+       DESCRIBED. All three callers spell the about base URL `strncmp(addr, "about:", 6) == 0 ?
+       document_base_url(ctx) : NULL`, and the assert above forces a resource's address to be `about:srcdoc`,
+       which starts with `about:` — so the consistency is a coincidence of two independent derivations, and a
+       fourth caller is all it takes to end it. The fourth is ALREADY NAMED, at this function's cross-instance
+       arm: that `DFAIL` says a peer handed §7.4.5's resource ALONE aborts in the peer's own §2.4.3, and a
+       peer's host routes the load it provisions back through THIS call — so the refusal lands here, where both
+       slots were composed, naming the field the notice would still not carry.
+       A DCHECK AND NOT A CHECK, because the asserted value is this codebase's own and a page cannot reach it:
+       `srcdoc` being specified forces the address, the address forces that ternary's live arm, and what the
+       arm answers is this engine's computation. What reaches it is a CALLER that stopped stating one.
+       RETIREMENT: this argument goes when the about base URL is read off ONE slot instead of re-derived per
+       caller. §7.4.1.2 "Document state" declares it as a row of the entry — "an about base URL, which is a
+       URL or null, initially null", "a snapshot of the initiator Document's document base URL" — and an entry
+       that holds it makes the two derivations one and this coincidence a construction. */
+    DCHECK(document_resource == NULL || about_base != NULL,
+           "a document load was enqueued with §7.4.2.2's DOCUMENT RESOURCE and NO ABOUT BASE URL — §7.4.5 "
+           "\"Populating a session history entry\"'s create navigation params from a srcdoc resource reads BOTH "
+           "off the entry, the response body being the UTF-8 encoding of the resource and the about base URL "
+           "being the entry's document state's, so a resource without one is half of one constructor's input. "
+           "§2.4.3 \"Document base URLs\"' fallback base URL asserts a non-null about base URL for an iframe "
+           "srcdoc document and core/dom/document.c holds that assert too, so this load would build a Document "
+           "that aborts THERE for a field this call had and did not pass. Pass §7.4.2.2's "
+           "initiatorBaseURLSnapshot: for a load this instance began it is the initiator's document base URL, "
+           "and for a child whose document BODY crossed from another INSTANCE it is the field that has to "
+           "cross beside the resource");
     /* JS_NULL AND NOT THE EMPTY STRING, because `<iframe srcdoc="">` is a real and DIFFERENT destination: the
        attribute is SPECIFIED, so §4.8.5's step 1 takes its arm and the frame shows an empty HTML document with
        this document's origin and base URL. An absent resource is the other constructor entirely. The step asks
@@ -3580,9 +3616,13 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            create navigation params from a srcdoc resource returns navigation params whose about base URL is
            "entry's document state's about base URL" — and §2.4.3 "Document base URLs"' fallback base URL step
            1 makes it required for precisely this document, "Assert: document's about base URL is non-null".
-           core/dom/document.c HOLDS that assert, so a peer handed the resource ALONE does not show an empty
-           frame: it ABORTS THERE, under a message naming whoever created the Document as at fault — this
-           defect relocated into a file that did not cause it rather than closed. NEITHER IS DERIVABLE FROM
+           core/dom/document.c HOLDS that assert. WHAT STOOD HERE SAID a peer handed the resource ALONE
+           ABORTS THERE, under a message naming whoever created the Document as at fault — this defect
+           relocated into a file that did not cause it rather than closed — and that is rewritten rather than
+           dropped, because it is the reasoning a reader re-derives from §2.4.3 alone. The refusal is
+           navigable_load_enqueue's now: a peer's host routes the load it provisions back through the one call
+           every load converges on, and that call asserts that §7.4.2.2's resource arrives with §7.4.5's
+           about base URL, so the relocation is closed BY CONSTRUCTION and what is still owed is the FIELD. NEITHER IS DERIVABLE FROM
            WHAT THIS RECORD CARRIES: the top-level creation URL beside them is §8.1.3.1's, which for a nested
            frame is the TOP document's and never this one's, and the creator's ADDRESS is not its BASE URL the
            moment it carries `<base href>`, which is what the same-origin arm above passes document_base_url
@@ -3603,9 +3643,12 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                   "does NOT carry the document's own BYTES, nor §7.4's ABOUT BASE URL — TWO facts a srcdoc "
                   "peer cannot derive and not one. Add §7.4.5's resource AND that base URL, before the policy, "
                   "which is the record's remainder, with the readers this host already has for the container. "
-                  "The resource alone does not close this: it moves the abort into the peer's own §2.4.3 step "
-                  "1 assert, which names this document as at fault for a field the record still would not "
-                  "carry");
+                  "The resource alone does not close this, and where it REFUSES is navigable_load_enqueue — "
+                  "the one call every load converges on, the load a peer's host provisions included — which "
+                  "asserts that §7.4.2.2's resource arrives with §7.4.5's about base URL. It used to reach the "
+                  "peer's own §2.4.3 assert instead, naming that document as at fault for a field this record "
+                  "would not carry; the file that composed both slots refuses it now, and the FIELD is still "
+                  "the thing to add");
         /* THE NOTICE, and every field of it is load-bearing. The CHILD is the name the host provisions an
            instance under; the CREATOR names who made it, which is what the host routes replies through and what
            a browser would decide policy from; the URL is the child's initial address; the ORIGIN is the
