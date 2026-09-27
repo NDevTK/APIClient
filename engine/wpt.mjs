@@ -1511,7 +1511,149 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       worker agent + 5 needing a child navigable + 2 exposure + 1 idlharness + 1 storage-buckets +
                       11 window-realm = 29, the file count above. A later edit that moves a file between those
                       bands and leaves the arithmetic open has contradicted itself in its own sentence. */
-                   "web-locks"];
+                   "web-locks",
+                   /* RESIZE OBSERVER §2.1 "ResizeObserver interface", RESIZE OBSERVER §2.3
+                      "ResizeObserverEntry" and the eight algorithms of RESIZE OBSERVER §3.4 "Algorithms",
+                      RESIZE OBSERVER §3.4.1 "Gather active resize observations at depth" through
+                      RESIZE OBSERVER §3.4.8 "Calculate box size, given target and observed box". Section numbers
+                      and titles read out of the fetched draft at drafts.csswg.org/resize-observer-1/, not
+                      recalled — and EVERY number here repeats its standard's name rather than leaning on the
+                      one before it, because engine/citegen.mjs carries `resize observer` as a FOREIGN row and its
+                      own note records what a bare number in this component becomes: it legitimately cites HTML,
+                      Web IDL, CSS 2.2, css-sizing and css-writing-modes, so the file vote read its numbers as
+                      DOM's, and DOM §4.3.1 is "Interface MutationObserver". `AUDITED_EXT` admits `.mjs`, so that
+                      applies to THIS file too and not only to the component.
+                      FIVE BUILT FILES ANSWER THOSE SECTIONS. core/resize_observer/resize_observer.c,
+                      resize_observer_entry.c and resize_observer_size.c install the three interfaces of
+                      RESIZE OBSERVER §2.1 and RESIZE OBSERVER §2.3 — `idl_interface_tag` answers for all three
+                      and `idl_define_global_property_reference` puts all three on the global, established at
+                      origin/main with `ZzNope` as the negative control at zero — and core/rendering/rendering.c
+                      drives the five seams of RESIZE OBSERVER §3.4 from HTML §8.1.7.3 "Processing model", whose
+                      step 16 that section's own fetched text opens as "Gather active resize observations at
+                      depth": `resize_observer_gather` at STEP 16.2.5, `_has_active` at 16.2.7,
+                      `_broadcast_begin` and `_loop_error_start` beside them. `grep '"resize-observer"'` over THIS
+                      FILE at origin/main answers ZERO against `"web-locks"` at one, so the area is in no list
+                      and all 35 of its testharness files sit outside the gate.
+                      WHAT DOES TOUCH IT IS ONE ROW OF SOMEBODY ELSE'S TABLE, which is the shape that makes an
+                      absence look covered and is why this is said rather than "nothing measures it": SEVEN
+                      checked-out documents construct a ResizeObserver — css/css-sizing/contain-intrinsic-size/
+                      auto-001 through -005 and -008, and css/css-overflow/resizer-no-size-change.tentative.html
+                      — and every one uses it as a MECHANISM it awaits rather than as a subject, so that the
+                      interface exists and that something is delivered is scored, while the members of
+                      RESIZE OBSERVER §2.1 and RESIZE OBSERVER §2.3, their property attributes, the three boxes
+                      of RESIZE OBSERVER §3.4.8, the flattened-tree depth of RESIZE OBSERVER §3.4.7 and the
+                      broadcast order of RESIZE OBSERVER §3.4.5 are scored by nothing.
+                      `interfaces/resize-observer.idl` IS checked out and is not the missing oracle:
+                      `resize-observer` appears in no checked-out `idl_test` argument at all, so it resolves types
+                      for other specs and asserts nothing about itself, exactly as `interfaces/pointerevents.idl`
+                      does one row above.
+                      IT COSTS 49 BLOBS AND 118820 BYTES, re-priceable with
+                        git -C engine/.work/wpt ls-tree -r -l <rev> -- resize-observer | awk '{n++;b+=$4} END{print n,b}'
+                      IT MUST BE A WPT_PATHS ENTRY AND NOT A WPT_OWN_LEVEL ONE, for the web-locks reason above:
+                      nothing else puts this standard on disk, so an own-level row would add no file and claim a
+                      directory that is not there. It has to be the SUBTREE as well, because 25 of the 35 load
+                      `resize-observer/resources/resizeTestHelper.js` and `observer-in-cross-origin-frame.sub.html`
+                      frames `resize-observer/resources/cross-origin-subframe.html`.
+                      IT DRAGS NO NEW OWN LEVEL. `resize-observer` is TOP LEVEL, so the only directory on the
+                      path to it is the corpus root, which every entry above already materializes.
+                      IT IS 35 TESTHARNESS FILES AND 35 RUNS — 34 documents and one `.window.js`, not one of them
+                      declaring a variant. Derived over the PINNED BYTES through the corpus's own authority rather
+                      than from a multiplier, against a private `git archive bf4714d resize-observer` root with
+                      BOTH controls armed: a `tools` symlink alone classifies ZERO lines (so `os.walk` does not
+                      descend it), and `intersection-observer` exported from bf4714d against the same directory
+                      copied off this disk classifies 143 lines BYTE-IDENTICALLY. This file's own `testKind` and
+                      sourcefile.py then agreed on all 35 with ZERO disagreements, which is the standard stated
+                      at `testKind` itself. Re-derive both figures the same way once the cone is widened:
+                        python3 engine/wpt_classify.py engine/.work/wpt | grep '^resize-observer/' |
+                          awk -F'\t' '{n++; r += (NF>1 ? NF-1 : 1)} END {print n" files "r" runs"}'
+                      THE FOURTEEN FILES THAT ARE NOT TESTS ARE NOT TESTS FOR FIVE STATED REASONS, so the stray
+                      census at the foot of this file stays where it is: META.yml and WEB_FEATURES.yml
+                      (`nameIsNonTest`), four files under `resources/` (a support path part), THREE REFTEST PAIRS
+                      — devicepixel, devicepixel2 and iframe-same-origin, each carrying `rel="match"` and
+                      therefore loading no harness — `multiple-observers-with-mutation-crash.html`, which
+                      `testKind` refuses by the `crash` type FLAG, and `create-pattern-data-url.js`, a `.js` with
+                      no `any`/`window`/`worker` meta flag.
+                      EVERY DECLARED FIXTURE RESOLVES, checked by this file's own `metaScripts` and
+                      `docScriptFixtures` sliced out and RUN rather than by eye. The FIVE distinct paths its
+                      `<script src>` elements and META lines name are `/resources/testharness.js` (34),
+                      `/resources/testharnessreport.js` (33), `resize-observer/resources/resizeTestHelper.js`
+                      (25, INSIDE this subtree), `/resources/idlharness.js` (1) and `/resources/WebIDLParser.js`
+                      (1, reached through SERVER_REWRITES like every other idlharness file this checkout already
+                      collects). Nothing is unresolved, nothing is absent upstream, and no test here declares a
+                      media fixture.
+                      ITS `idlharness.window.js` WILL ASSERT THE WHOLE SURFACE rather than reporting the
+                      two-subtest floor, because `idl_test` names `resize-observer`, `dom` and `geometry` and all
+                      three `.idl` files are present under the listed `interfaces`. That is a fact about the
+                      CHECKOUT and the one thing predicted here that is not a claim about a run.
+                      NOT ONE OF THE 35 CARRIES AN `https` FLAG, so `testIsHttps` loads every one over `http` and
+                      no member of this area is deleted from its realm by Web IDL §3.3.7 "[Exposed]"'s
+                      secure-context step. This area cannot reproduce the WebCryptoAPI measurement above.
+                      IT MOVES THE DENOMINATOR BY 35 RUNS and the total it moves to is NOT written here, because
+                      a figure for it is stale the moment the next row lands and the reader who wants it is the
+                      one about to invalidate it. The walk's own total is the derivation, run after widening:
+                        node engine/wpt.mjs 2>&1 | head -40
+                      WHAT STANDS ON AN ABSENT CAPABILITY IS PREDICTED, AND ONLY THAT. Each was established at
+                      origin/main with a control, because an unpredicted red reads as a defect in the component
+                      while a predicted one names the absence.
+                      THREE STAND ON AN SVG INTERFACE THIS ENGINE DECLARES NOWHERE. RESIZE OBSERVER §3.4.8's
+                      first arm is "If target is an SVGGraphicsElement that does not have an associated CSS
+                      layout box", and `ro_box_length`'s own comment records that the arm is unreachable in this
+                      build. Verified rather than quoted: `SVGSVGElement` answers ZERO files under core/ and
+                      `SVGGraphicsElement` answers exactly ONE — that comment — while `ResizeObserver` answers
+                      nine as the control, and NONE of the three is an `idl_interface_tag` name where
+                      ResizeObserver is. There is no SVG layout component either; core/canvas/svg_path_data.c is
+                      path data for a canvas. `svg.html`, `svg-with-css-box-001.html` and
+                      `svg-with-css-box-002.svg` are the three, and the last is itself an SVG DOCUMENT, so its
+                      own root element is the absence.
+                      THREE STAND ON A WRITING MODE LAYOUT REFUSES BY NAME, and this is the prediction with a
+                      MESSAGE rather than a score. `observe-012.html` sets `writingMode = "vertical-rl"` on the
+                      observed element's wrapper and `observe-013.html` and `observe-014.html` set `vertical-lr`
+                      on the target; `writing-mode` is inherited, so all three give the observed box a computed
+                      value that is not `horizontal-tb`. TWO asserts refuse it and the ORDER between them is
+                      stated by the component rather than guessed: core/layout/flow_position.c's
+                      `fp_require_horizontal_tb` is called unconditionally at the top of its entry and names
+                      css-writing-modes-4 §7.4 "Flow-Relative Mappings" as what to build, and
+                      `ro_axis_is_vertical`'s own DCHECKF says that file "crashes for exactly that value before
+                      any extent exists to measure" — so layout's is the one expected to fire. Either is a NAMED
+                      dev abort and neither is a wrong number.
+                      ONE STANDS ON MULTICOL FRAGMENTATION. `fragments.html` sets `column-width: 100px` and
+                      expects a box with two fragments, and `"column-width"` and `"column-count"` each answer
+                      ZERO files under engine/host/browser against `"flex-basis"` at five and `"ZzNoProp"` at
+                      zero — so no property this engine cascades fragments anything, and RESIZE OBSERVER §3.4.8
+                      measures the one box there is. The component reads core/dom/element_view.h's fragment kind,
+                      so this is an absent INPUT rather than an absent reader.
+                      ONE STANDS ON A SECOND WASM INSTANCE. `observer-in-cross-origin-frame.sub.html` frames
+                      `http://{{hosts[alt][]}}:{{ports[http][0]}}/…` with `sandbox="allow-scripts"` and talks to
+                      it by postMessage, which per CLAUDE.md §Security is a DIFFERENT-ORIGIN document and
+                      therefore a separate instance rather than a same-origin in-heap pair.
+                      TWO NEED A CHILD NAVIGABLE WHOSE DOCUMENT RUNS AND ARE NOT PREDICTED IN EITHER DIRECTION,
+                      because which of them this engine already answers is a fact about a run nobody has made and
+                      because that mechanism is another lane's live subject: `observe-007.html` appends an iframe
+                      and drives it through `iframe.contentWindow.postMessage`, and
+                      `callback-cross-realm-report-exception.html` holds a `srcdoc` iframe and two empty ones and
+                      reports an exception across their realms.
+                      NOTHING IS PREDICTED ABOUT WHAT THE REMAINING TWENTY-FIVE SCORE, and three of them are
+                      worth naming for WHAT TO READ rather than for an expected value. `observe-019.html` and
+                      `observe-020.html` are the only tests that assert over the `device-pixel-content-box` of
+                      RESIZE OBSERVER §2.1, and `ro_box_length`'s arm for it is `css_px_mul` of the content
+                      length with `css_px_env(CSS_ENV_DEVICE_PIXEL_RATIO, …)` — so that number crosses
+                      core/frame/viewport.h's ONE seam carrying the ratio as a fact BY CONSTRUCTION, whatever the
+                      element's width, where a fixed-`px` content box need carry none. What an `assert_equals`
+                      over a value with a domain does is what the run says. `observe-020.html`, `zoom.html` and
+                      `svg.html` additionally set `zoom`, which core/html/html_element_view.c lists in
+                      `HEV_UNREADABLE_ALWAYS` for CSSOM VIEW's extents and which nothing in THIS component
+                      reads, so this row predicts nothing about them either. `notify.html` declares `transform`
+                      on one observed element and observes a `position:absolute` box, and
+                      core/layout/used_value.c's positioning refusal is asked of the ANCESTORS of a `fixed` or
+                      `absolute` subject — neither element is the other's ancestor, so that crash is not
+                      predicted here.
+                      THE PARTITION SUMS, WHICH IS THE ONE CHECK A READER CAN MAKE WITHOUT THE CORPUS: 3 SVG + 3
+                      writing-mode + 1 multicol + 1 cross-origin + 2 child-navigable + 25 unpredicted = 35, the
+                      file count above, with `idlharness.window.js` inside the 25. A later edit that moves a file
+                      between those bands and leaves the arithmetic open has contradicted itself in its own
+                      sentence. Per §A-DIRECTORY-THAT-ABORTS a count arriving where there was no result is the
+                      first honest measurement of an area and never a regression to revert. */
+                   "resize-observer"];
 
 /* AND THE DIRECTORIES WHOSE OWN LEVEL CONE MODE HAS ALREADY PUT ON DISK. A cone-mode checkout materializes every
    file of every directory ON THE PATH to a listed one, so naming one helper's `resources` lands its standard's
