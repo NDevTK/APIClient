@@ -303,19 +303,23 @@
  * no input for a resolved-set, so the qjs column stands, list A stays a CEILING, and the RETIREMENT above is
  * NOT met — a retirement keyed on this file's DENOMINATOR is not discharged by a producer existing somewhere
  * else. Read the probe before building one; read this sentence before believing the join is done.
- * AND THE RANKING HALF OF THAT PAIR IS DEAD AT THIS REVISION, which is stated here because "the probe exists"
- * alone is an over-claim in the reassuring direction. testing/rank_globals.mjs is what consumes the probe's
- * `--absent` list, and `node testing/rank_globals.mjs` throws before it reads a byte: its CORPUS names
- * testing/corpus/mirror/gitlab, `git ls-files -- testing/corpus/mirror` answers 0, and its own refusal to
- * skip a group it cannot find is correct. Six of its seven groups are tracked libraries and the missing one
- * is its only APPLICATION. That is the repair THIS file already made for itself — the committed mirror is
- * gone and the corpus became a required `--corpus <dir>` naming a real drive's saved responses — applied to
- * one instrument and not to its sibling.
+ * AND THE RANKING HALF OF THAT PAIR WAS DEAD AND IS NOT — REWRITTEN RATHER THAN DELETED, BECAUSE A READER WHO
+ * FINDS A RANKING INSTRUMENT THAT CANNOT RUN RE-DERIVES THE DIAGNOSIS AND THE REPAIR IS THE INTERESTING HALF.
+ * It read: testing/rank_globals.mjs is what consumes the probe's `--absent` list, and
+ * `node testing/rank_globals.mjs` throws before it reads a byte — its CORPUS named a committed capture of
+ * somebody else's site, `git ls-files` over that path answered 0, and its own refusal to skip a group it
+ * cannot find was correct; six of its seven groups were tracked libraries and the missing one was its only
+ * APPLICATION. That was the repair THIS file had already made for itself, applied to one instrument and not
+ * to its sibling. IT IS APPLIED NOW: rank_globals takes the same required `--corpus <dir>`, throws the same
+ * message naming testing/corpus/fetch.mjs, and takes its site population through corpus_programs.mjs rather
+ * than through the filename test it used to apply — so a reader meets it as a command with an argument.
+ * WHAT IS STILL OPEN IS THIS FILE'S OWN HALF and it is the half the conjunction below is about: nothing here
+ * reads a run's answer, so list A stays a CEILING whatever rank_globals can now do.
  * RETIREMENT: this record goes when this file takes a resolved-set as an INPUT — the probe's own answer,
- * asserted against the artifact revision it was read at — and when rank_globals.mjs names its application
- * corpus the way this file names its own. A reader then meets the probe as an ARGUMENT to a command rather
- * than as a sentence somebody has to remember, which is what makes it un-re-derivable rather than merely
- * written down; until both are built, deleting this record restores the silence that dispatched three lanes.
+ * asserted against the artifact revision it was read at. A reader then meets the probe as an ARGUMENT to a
+ * command rather than as a sentence somebody has to remember, which is what makes it un-re-derivable rather
+ * than merely written down; until it is built, deleting this record restores the silence that dispatched
+ * three lanes.
  * RETIREMENT: this paragraph goes when list A's denominator is taken from what a built realm reports rather
  * than from a walk of engine/host/browser, at which point the qjs column goes with it.
  *

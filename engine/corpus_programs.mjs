@@ -16,6 +16,21 @@
  * driver is tracked and its output is not, for the reason testing/corpus/README.md records. This file is
  * therefore read by a corpus of TODAY'S bytes, and every figure drawn through it carries that instant.
  *
+ * SO THE INSTANT IS RETURNED, BECAUSE THE SENTENCE ABOVE WAS A CLAIM NOTHING IMPLEMENTED. `every figure
+ * drawn through it carries that instant` was true of what a figure IS and false of what a reader could SEE:
+ * this function returned a file list and its counts, no caller had an instant to print, and every consumer's
+ * corpus line named a directory whose bytes could have been fetched at any hour of any day. A path is not an
+ * identity -- a fresh drive writes a new corpus at the same `--out` -- so two runs a week apart printed the
+ * same provenance line over two different corpora, which is §A-MEASUREMENT-CAN-OUTLIVE-ITS-INSTRUMENT with
+ * the instrument present and its INPUT unidentifiable. The manifest states it per row and this already parses
+ * the manifest, so the window comes from the rows walked here and from no second file: `fetchedFrom` and
+ * `fetchedTo` are the earliest and latest `fetchedAt` the manifest carries, and `nFetchedAt` is how many rows
+ * carried one so a caller can say UNKNOWN rather than print a blank. A row with no instant is not defaulted
+ * to the run's: an absent instant and a known one are different facts.
+ * RETIREMENT: this record goes when no consumer of this function can print a corpus figure without the
+ * window beside it -- at which point the identity travels by construction and this paragraph is re-derivable
+ * from the callers.
+ *
  * IT JOINS ON CONTENT (sha256) AND NEVER ON PATH, AND THAT IS THE LOAD-BEARING CHOICE RATHER THAN A DETAIL.
  * Two separate traps sit on the path route and the second one bites:
  *   1. Re-deriving the saved name from a URL would be a SECOND COPY of a rule this tree deliberately keeps in
@@ -152,9 +167,26 @@ export function corpusPrograms(corpusDir, tag) {
     if (!essence.has(digest)) essence.set(digest, new Map());
     essence.get(digest).set(essenceOf(ct), where);
   };
+  /* THE FETCH WINDOW, over every row the manifest holds rather than only the rows whose bytes reached disk:
+     the question is WHEN THIS CORPUS WAS DRIVEN, and a declined row was declined in the same run as a saved
+     one. The comparison is LEXICAL and that rests on the writer rather than on ISO-8601 in general: every
+     instant here is `new Date().toISOString()` from testing/corpus/fetch.mjs, which is fixed-width and
+     Z-suffixed, so string order is time order. An offset-bearing form would NOT sort this way, which is why
+     the dependency is named rather than left as a property of the format. A row without the field is COUNTED
+     OUT rather than filled in, so a caller reports an unknown window as one instead of printing whatever the
+     other rows happened to say. */
+  let fetchedFrom = null, fetchedTo = null, nFetchedAt = 0;
+  const when = (t) => {
+    if (typeof t !== "string" || !t) return;
+    nFetchedAt++;
+    if (fetchedFrom === null || t < fetchedFrom) fetchedFrom = t;
+    if (fetchedTo === null || t > fetchedTo) fetchedTo = t;
+  };
   for (const site of manifest) {
     note(site.sha256, site.contentType, `document of ${site.id}`);
-    for (const r of site.resources || []) note(r.sha256, r.contentType, `${site.id} ${r.url || "(no url)"}`);
+    when(site.fetchedAt);
+    for (const r of site.resources || []) { note(r.sha256, r.contentType, `${site.id} ${r.url || "(no url)"}`); when(r.fetchedAt); }
+    for (const d of site.declined || []) when(d.fetchedAt);
   }
   if (!essence.size) die(`${manifestPath} records no sha256 for any document or resource, so nothing on disk ` +
                          `can be typed from it.`);
@@ -228,5 +260,6 @@ export function corpusPrograms(corpusDir, tag) {
     die(`${all.length} file(s) under ${corpusDir} and the manifest calls none of them a program or a ` +
         `document — a corpus with no programs in it ranks nothing.`);
 
-  return { files, bytes, onDisk: all.length, nProgram, nDocument, nExcluded, manifestRows: rows };
+  return { files, bytes, onDisk: all.length, nProgram, nDocument, nExcluded, manifestRows: rows,
+           fetchedFrom, fetchedTo, nFetchedAt };
 }
