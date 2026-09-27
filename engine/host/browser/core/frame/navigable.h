@@ -359,21 +359,33 @@ void navigable_evaluate_javascript_url(JSContext *ctx, const char *url);
  * `open(url, "_self", "noopener")`, a call that must answer with the WindowProxy of the navigable it just
  * navigated. One missing return value, three wrong answers, none of which looks like the others.
  *
- * THIS BUILD'S RULES PRODUCE TWO OF THE THREE. `new with no opener` is set by §7.3.1.7's opener-policy clause
- * — "if currentDocument's opener policy's value is 'same-origin' or 'same-origin-plus-COEP', and
- * currentDocument's origin is not same origin with its relevant settings object's top-level origin" — which
- * this build does not evaluate. That is a NAMED subproblem and not a silent omission: navigable_open crashes
- * where the clause belongs rather than quietly answering `new and unrestricted` for a COOP document, so the
- * value cannot be wrong without saying so. Step 17 handles all three regardless, because the arm is the
- * spec's and reading it off a value that cannot yet arrive costs nothing. */
+ * ALL THREE ARE PRODUCED. `new with no opener` is §7.3.1.7 step 8.3.4's third assignment — "if
+ * currentDocument's opener policy's value is `same-origin` or `same-origin-plus-COEP`, and currentDocument's
+ * origin is not same origin with currentDocument's relevant settings object's top-level origin" — and
+ * navigable_open evaluates it against §8.1.3.1 "Environments"' top-level origin of this navigable's own
+ * environment. The clause carries TWO further assignments that leave through other arguments (the create's
+ * name and its features' `noopener`), which is why that site asserts the three together rather than trusting
+ * this value alone; see it for what its own crash used to say and got wrong.
+ *
+ * THIS PARAGRAPH SAID THE RULES PRODUCED TWO OF THE THREE AND CALLED THE CLAUSE A NAMED SUBPROBLEM, which was
+ * true and is kept in outline because the reasoning that produced it is re-derivable and was wrong in a way a
+ * reader will repeat: it held that an origin-keyed agent has one document origin, so there was nothing here to
+ * compare against. The top-level origin is a field of an ENVIRONMENT rather than of the agent, and for the
+ * cross-origin child navigable this clause is entirely about it is the TOP's origin — a different record, and
+ * one this file was already reading for §7.3.2.1's inheritance.
+ * RETIREMENT: this record goes when a peer root's own mint asserts that the top-level origin it was handed is
+ * NOT this agent's on its child arm, because the distinction is then an exercised assertion rather than a
+ * paragraph here. */
 typedef enum {
     /* §7.3.1.7 step 2's INITIAL VALUE — the rules answered with a navigable that ALREADY EXISTED (steps 4-7:
        the empty name, `_self`, `_parent`, `_top`, or a find-by-target-name hit). §7.2.2.1 step 16 is its arm. */
     WINDOW_TYPE_EXISTING_OR_NONE = 0,
-    /* §7.3.1.7 step 8's third option — a new top-level traversable was created. §7.2.2.1 step 15 is its arm,
-       and in this engine step 15's navigate is already done by the create (see navigable_open). */
+    /* §7.3.1.7 step 8.3's third option, whose step 8.3.2 sets this — a new top-level traversable was created.
+       §7.2.2.1 step 15 is its arm, and in this engine step 15's navigate is already done by the create
+       inside navigable_open. */
     WINDOW_TYPE_NEW_AND_UNRESTRICTED,
-    /* §7.3.1.7 step 8's opener-policy clause. NOT PRODUCED BY THIS BUILD — see above. */
+    /* §7.3.1.7 step 8.3.4's opener-policy clause — a COOP document whose origin is not its
+       environment's top-level origin. §7.2.2.1 step 17 is its arm and returns null. */
     WINDOW_TYPE_NEW_WITH_NO_OPENER,
 } WindowType;
 

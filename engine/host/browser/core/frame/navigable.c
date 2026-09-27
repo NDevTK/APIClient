@@ -4105,6 +4105,9 @@ JSValue navigable_open(JSContext *ctx, const char *url, const char *target, cons
     const char *name = target ? target : "";
     const bool noopener = feat && feat->noopener;
     JSValue chosen;
+    /* §7.3.1.7 step 8.3.4.1's `noopener`, which these rules set on their OWN copy of the features and never
+       on the caller's — see the clause below for why the caller's variable must keep the page's value. */
+    WindowFeatures coop_severed = { 0 };
 
     DCHECK(out_window_type != NULL,
            "§7.3.1.7's rules for choosing a navigable were applied by a caller that does not read their SECOND "
@@ -4152,37 +4155,98 @@ JSValue navigable_open(JSContext *ctx, const char *url, const char *target, cons
        string. If name is not an ASCII case-insensitive match for `_blank`, then set targetName to name." —
        so every name that reached step 7 and found nothing NAMES the navigable it creates, `_foo` included,
        and only `_blank` creates an unnamed one. */
-    /* §7.3.1.7 step 8's THIRD OPTION: "Set windowType to `new and unrestricted`." */
+    /* §7.3.1.7 step 8.3.2: "Set windowType to `new and unrestricted`." */
     *out_window_type = WINDOW_TYPE_NEW_AND_UNRESTRICTED;
-    /* §7.3.1.7 step 8's OPENER-POLICY CLAUSE, WHICH IS NOT BUILT — and crashes here rather than answering
-       `new and unrestricted` for a document it does not apply to. "Let currentDocument be currentNavigable's
-       active document. If currentDocument's opener policy's value is `same-origin` or `same-origin-plus-COEP`,
-       and currentDocument's origin is not same origin with currentDocument's relevant settings object's
-       top-level origin: set noopener to true, set name to `_blank`, set windowType to `new with no
-       opener`." Three assignments, and every one of them changes what the caller does next — step 17's FIRST
-       clause returns null on that windowType, so a page whose popup handle this engine hands back would be
-       holding one real Chrome denies it.
-       THE CONDITION IS ASKED, NOT ASSUMED. Only the policy half is testable from here — this agent is
-       origin-keyed, so `currentDocument`'s origin IS the agent's and "not same origin with currentDocument's
-       relevant settings object's top-level origin" is the same cross-origin-nested-document shape §7.3.2.1's
-       inherited-opener-policy arm already
-       resolves through window_proxy_opener_policy. Guarding on the policy alone makes the crash fire for a
-       COOP document opening any window, which OVER-reports by exactly the same-origin-top case — and an
-       over-reporting crash on a page nobody can serve yet is the right side to be wrong on, because the other
-       side is a silent wrong windowType. */
+    /* HTML §7.3.1.7 "Navigable target names" STEP 8.3.4, verbatim: "If currentDocument's opener policy's value
+       is `same-origin` or `same-origin-plus-COEP`, and currentDocument's origin is not same origin with
+       currentDocument's relevant settings object's top-level origin:" — whose three sub-steps are 8.3.4.1 "Set
+       noopener to true", 8.3.4.2 "Set name to `_blank`" and 8.3.4.3 "Set windowType to `new with no opener`".
+       The section's own non-normative note says what they are FOR: "in the presence of an opener policy, nested
+       documents that are cross-origin with their top-level browsing context's active document always set
+       noopener to true."
+       AN ABSENT `Cross-Origin-Opener-Policy` HEADER TAKES NEITHER ARM, which is §7.1.3's own default and not a
+       shortcut here: an opener policy's value is `unsafe-none` initially, so a response that says nothing about
+       COOP reaches the create below exactly as it did before this clause existed.
+       THE HEADER'S BYTES ARE A SERVER'S AND NOTHING HERE ASSERTS ON THEM. `coop` is whatever §7.1.3.1's obtain
+       parsed out of the response, so a token this engine does not recognise is `unsafe-none` and the clause does
+       not fire — asserting on it would hand any site an abort switch. What IS asserted is the three assignments,
+       which are this codebase's own. Neither origin is asserted either: §7.1.1's same origin already refuses a
+       NULL operand at its own site (core/url/origin.c), and a second copy of that check here is a check whose
+       two sides cannot disagree.
+       EACH ASSIGNMENT GOES WHERE ITS OWN CONSUMER READS IT, and the three consumers are three different ones —
+       which is why a diff that made one of them and not the others would be a partial step rather than a
+       narrower one:
+         8.3.4.3 is the rules' SECOND RETURN VALUE, which §7.2.2.1 "Opening and closing windows" step 17 ("if
+           windowType is `new with no opener`, then return null") reads out of `out_window_type`. That step was
+           built before this clause could produce the value, which is why it needs nothing here.
+         8.3.4.2 is read by step 8.3.6 ("if name is not an ASCII case-insensitive match for `_blank`, then set
+           targetName to name"), so assigning `_blank` is what leaves targetName at step 8.3.5's empty string —
+           and the create below already maps `_blank` to a NULL name, which is an UNNAMED navigable.
+         8.3.4.1 is read by step 8.3.7 ("if noopener is true, then set chosen to the result of creating a new
+           top-level traversable given null, targetName, and currentNavigable") against step 8.3.8's otherwise
+           arm, which passes currentNavigable's active browsing context instead. navigable_create spells that
+           split as `feat->noopener`, so the flag travels in the features rather than as a second argument.
+       AND 8.3.4.1 TRAVELS ON A LOCAL COPY, WHICH IS THE ONE THING THIS CLAUSE MUST NOT GET WRONG. §7.2.2.1 step
+       12 passes `noopener` INTO these rules BY VALUE ("let targetNavigable and windowType be the result of
+       applying the rules for choosing a navigable given target, sourceDocument's node navigable, and
+       noopener"), and the rules hand back only `chosen` and `windowType` — so this assignment is local to THIS
+       algorithm and the caller's own variable keeps what the page's features string gave it. §7.2.2.1's steps
+       16.2 ("if noopener is false, then set targetNavigable's active browsing context's opener browsing
+       context…") and 18 both read that caller variable, so writing through the caller's `feat` would re-link
+       the opener this clause just severed AND change step 18's answer for a page that never asked for
+       `noopener`. Copying is therefore the spec's own scoping rather than defensiveness about a const pointer.
+       THIS BLOCK USED TO CRASH HERE, and it is worth saying what its crash got wrong rather than only that it
+       is gone, because both halves of what it told the next reader to do were wrong and a reader who re-derives
+       either will build them again.
+       IT SAID ONLY THE POLICY HALF WAS TESTABLE FROM HERE, on the ground that
+       `this agent is origin-keyed, so currentDocument's origin IS the agent's`, and guarded on the policy
+       alone for that reason, over-reporting by exactly the same-origin-top case. The premise is true and the
+       conclusion does not follow: an origin-keyed agent has ONE document origin, and §8.1.3.1
+       "Environments"' top-level origin is a field of the ENVIRONMENT, which
+       for a cross-origin child navigable is the TOP's origin and not this agent's. That is the whole population
+       the clause is about, the two records genuinely differ there, and the second one was already being read in
+       this file — navigable_create asks window_proxy_top_level_origin of this same proxy for §7.3.2.1's
+       inheritance, which is the identical phrase ("embedder's relevant settings object's top-level origin").
+       IT ALSO NAMED `realm_top_level_creation_url` AS THE TOP-LEVEL ORIGIN, and that accessor answers §8.1.3.1's
+       other field — the top-level creation URL. A URL cannot answer whose origin a Document has, which
+       window_proxy.c's own assert says in as many words, and building to the clause would have inverted this
+       one in whichever direction the builder picked a source origin for: §7.3.2.1 gives an AUXILIARY navigable
+       the top-level creation URL `about:blank`, so determine-the-origin over it with no source mints a fresh
+       opaque origin that is same origin with nothing (the clause then fires for every popup opened from a
+       popup), and with this agent as the source returns the agent's own origin (the clause then never fires at
+       all). Neither is the field, and the field was one call away.
+       RETIREMENT: the first record goes when a peer root's own mint asserts that the §8.1.3.1 top-level origin
+       it was handed is NOT this agent's on its child arm — the one arm where the two records must differ, since
+       a same-origin child shares this instance — because the distinction is then an exercised assertion instead
+       of this paragraph. The second goes when a `DFAIL`'s next-diff clause has the mechanisms it names resolved
+       against this tree by the audit that already reads these strings, so a clause naming an accessor that
+       answers a different question is a finding rather than a sentence nothing compares. */
     {
-        OpenerPolicyValue coop = window_proxy_opener_policy(document_window_proxy(ctx));
+        JSValueConst self_proxy = document_window_proxy(ctx);
+        OpenerPolicyValue coop = window_proxy_opener_policy(self_proxy);
 
-        DCHECK(coop != OPENER_POLICY_SAME_ORIGIN && coop != OPENER_POLICY_SAME_ORIGIN_PLUS_COEP,
-               "§7.3.1.7 step 8's OPENER-POLICY CLAUSE is reached and not built: this document's opener policy "
-               "is `same-origin` or `same-origin-plus-COEP`, so the clause must compare its origin against "
-               "§8.1.3.1's TOP-LEVEL ORIGIN and, when they differ, set noopener true, the name to `_blank` and "
-               "windowType to `new with no opener` — on which §7.2.2.1 step 17's first clause returns null. "
-               "Without it this call answers `new and unrestricted` and hands the page a handle to a popup it "
-               "must not be able to script. BUILD the comparison (realm_top_level_creation_url gives the "
-               "top-level origin; origin_same compares the records) and return WINDOW_TYPE_NEW_WITH_NO_OPENER "
-               "— step 17 already reads it");
+        if ((coop == OPENER_POLICY_SAME_ORIGIN || coop == OPENER_POLICY_SAME_ORIGIN_PLUS_COEP)
+            && !origin_same(origin_agent(), window_proxy_top_level_origin(self_proxy))) {
+            if (feat) coop_severed = *feat;   /* 8.3.4.1, on the rules' OWN copy — see above */
+            coop_severed.noopener = true;
+            feat = &coop_severed;
+            name = "_blank";                              /* 8.3.4.2 */
+            *out_window_type = WINDOW_TYPE_NEW_WITH_NO_OPENER;   /* 8.3.4.3 */
+        }
     }
+    /* THE THREE ASSIGNMENTS OF STEP 8.3.4 ARE ASSERTED TOGETHER, and the implication is ONE-DIRECTIONAL on
+       purpose: a page may set `noopener` in its own features string and target `_blank` without this clause
+       firing at all, so the converse is false and writing the biconditional would abort on
+       `open(u, "_blank", "noopener")`. What cannot be true is the windowType without the other two — that is
+       the partial step, and it is invisible at this site because the two halves leave through different
+       arguments of the create below. */
+    DCHECK(*out_window_type != WINDOW_TYPE_NEW_WITH_NO_OPENER
+               || (feat != NULL && feat->noopener && target_name_is(name, "_blank")),
+           "§7.3.1.7 step 8.3.4 set windowType to `new with no opener` and did not make its other two "
+           "assignments: 8.3.4.1's noopener decides whether navigable_create gives the new traversable an "
+           "OPENER at all (step 8.3.7 against 8.3.8) and 8.3.4.2's `_blank` is what leaves step 8.3.5's "
+           "targetName empty, so a windowType alone hands §7.2.2.1 step 17 a null return over a popup that is "
+           "still linked to this document and still carries its name");
     /* §7.1.5: an AUXILIARY navigable has NO EMBEDDER ELEMENT, so there is no iframe sandboxing flag set for
        it to inherit — its creation flags come from the popup sandboxing flag set, which navigable_create
        derives from this document's own active set through §7.3.1.7's propagate rule. */
