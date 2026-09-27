@@ -2210,10 +2210,10 @@ typedef struct {
      * loop arm, an orphan drive) or an @S CANDIDATE SESSION — solve.c's re-fire of one derived breakout,
      * which is a flow on the ONE frontier exactly as CLAUDE.md §THERE-IS-NO-GRIND requires and is NOT a
      * second executor. The two retire for OPPOSITE reasons and take OPPOSITE work: an exploration flow that
-     * ran to its end is coverage this document actually gained, while a candidate session that ran to its end
-     * is one derived payload that did NOT fire and was discarded, which is the search spending itself.
-     * Summed, "the engine retired 47 flows" and "the search discarded 47 candidates having proved nothing"
-     * are one number, and the reader cannot tell which it is holding.
+     * ran to its end is coverage this document actually gained, while a candidate MEMBER that ran to its end
+     * is search this document spent on a derived payload that did not fire.
+     * Summed, "the engine retired 47 flows" and "the search spent itself 47 times over" are one number, and
+     * the reader cannot tell which it is holding.
      *
      * THE LABEL IS `Flow.cand_src` AND IT IS A BINARY PARTITION BY CONSTRUCTION. One field, set at birth
      * (solve.c's seed, engine_sibling_assemble's copy, cold.c's 'c' record), never cleared, freed only at
@@ -2223,20 +2223,69 @@ typedef struct {
      * the substitution AND gets the mark, so a candidate/orphan/plain split would not be a partition at all
      * and its "sum" would over-count the members that are both.
      *
+     * BOTH ARMS COUNT MEMBERS AND NEITHER COUNTS SESSIONS, AND THE ROWS BELOW USED TO SAY OTHERWISE — kept
+     * in their own words there because a reader who re-derives ONE ROW PER CANDIDATE from the word CANDIDATE
+     * will write it again. `finished_cands` read "the @S candidate sessions: derived payloads that ran and did
+     * not fire" and `sold_cands` "the candidate sessions", and each is raised ONCE PER MEMBER: flow_finish is
+     * the one line a member ever completes on, engine_reclaim_tail the one line a member is ever sold on, and
+     * both read `Flow.cand_src` off the member in front of them. A CANDIDATE SESSION IS A TREE OF MEMBERS.
+     * engine_sibling_assemble copies `cand_src`, `cand_payload`, `cand_sink`, `cand_fired` and `cand_resumed`
+     * to every sibling of a parent that has them, with its own assert making a sixth field an obligation
+     * there; the copy is gated on the parent HAVING a substitution and on nothing else, so no arm of a
+     * candidate is refused a fork or leaves one without the label — and N arms of ONE seed therefore each
+     * reach flow_finish and each raise this count once. solver/solve.c records the same category error
+     * being removed from an assert one component over, where `Cand.ends` counted flow finishes and
+     * `Cand.tried` counted seeds; this is that unit wearing the other name in the EMITTED census, where a
+     * reader holding one document has nothing to read it against.
+     *
+     * THE PER-SESSION COUNT IS ALREADY EMITTED AND IS `_candidates` — solve.c's `g_cands_seeded`, raised once
+     * per candidate RUN seeded and zeroed by `solve_init`, which solver/result.c's own record establishes runs
+     * EXACTLY ONCE IN AN AGENT'S LIFE on all three hosts, read off the CALL and never off a host. These rows
+     * are lifetime totals of the same instance (neither is on engine_sched_begin's reset path), so the two
+     * span the same thing and may be read against each other. WHAT MUST NOT BE WRITTEN IS AN
+     * INEQUALITY BETWEEN THEM: arms legitimately outnumber seeds, so `finished_cands <= _candidates` is the
+     * wrong-unit implication solve.c has just finished deleting and a dev build would die on it at the first
+     * candidate's second arm. Read the other way it is an OBSERVATION and not an assert — a session cannot
+     * finish more times than it was seeded, so `finished_cands` standing ABOVE `_candidates` in one document
+     * is the excess being arms and can be nothing else.
+     *
+     * THE EMITTED KEY IS NOT RENAMED, AND THAT IS A CROSS-BOUNDARY DECISION RATHER THAN A PREFERENCE.
+     * `finishedCands` is composed by solver/result.c's result_cold_json into `qjs.wasm` and read by
+     * engine/build.mjs, which is INTERPRETED FROM THE TREE and therefore live on write; `coldFields()` derives
+     * its required set from that composer's own format string, so a rename leaves the reader demanding a key
+     * the shipped artifact does not emit and every run against an artifact older than the commit throws.
+     * CLAUDE.md §A-CROSS-BOUNDARY-DIFF: the halves land together or not at all, and the C half needs a build.
+     * It would also re-point every archived-log query at once. So the unit is stated at the declaration, at
+     * the raise, and in the consumer's own English, and the key is renamed by whoever lands the row below with
+     * a build behind it.
+     *
+     * WHAT IS NOT COVERED: no row anywhere says how many candidate SESSIONS have ended, which is the question
+     * `_candidates` is the denominator of and the one a reader asking "how many payloads were discarded" has.
+     * It is derivable from neither arm — a session ends when its LAST member ends, and nothing counts a seed's
+     * live members. THE NEXT DIFF builds that where the members are known, which is solve.c's per-`Cand`
+     * accounting and not this census: a live-member count per seed, decremented at the seam that already
+     * reaches `Cand.ends`, and the seed credited when it reaches zero. HOW ITS ABSENCE SHOWS: a reader holding
+     * a census can state how much search was spent in members and cannot state how many payloads were
+     * discarded, so every sentence a consumer composes about payloads discarded is a sentence about members.
+     * RETIREMENT: this record goes when that row is emitted beside `_candidates`, because the unit is then
+     * readable off the document rather than argued here.
+     *
      * THE TOTAL STAYS, AND THE PARTITION IS ASSERTED AGAINST IT — the same discipline solver/cold.h's
      * `step_units` keeps against `flows`. Each arm is incremented beside its total at the one site that
      * total is written at, so the identity is what a retirement path added later without a label breaks;
      * engine_frontier_census is where all three are read together and is where it fires. */
     long finished;          /* flows that ran to their end — `finished_flows + finished_cands`, asserted */
     long finished_flows;    /* …the EXPLORATION flows among them: coverage this document gained */
-    long finished_cands;    /* …and the @S candidate sessions: derived payloads that ran and did not fire */
+    long finished_cands;    /* …and the @S candidate MEMBERS among them: search spent on payloads that did
+                               not fire. MEMBERS AND NOT SESSIONS — see above; `_candidates` is the sessions */
     long sold;              /* flows this instance PAGED OUT — `sold_flows + sold_cands`, asserted; see
                                g_flows_sold */
     long sold_flows;        /* …the exploration flows among them */
-    long sold_cands;        /* …and the candidate sessions, which is the sharper half of the pair: a parked
-                               candidate comes back WITHOUT its ladder (solver/flow.h — `cand_surv` and
-                               `cand_rung` are readings of a re-execution and deliberately do not cross the
-                               tier), so paging one costs the search the distance it had measured. */
+    long sold_cands;        /* …and the candidate MEMBERS — not sessions, see above — which is the sharper
+                               half of the pair: a parked candidate comes back WITHOUT its ladder
+                               (solver/flow.h — `cand_surv` and `cand_rung` are readings of a re-execution and
+                               deliberately do not cross the tier), so paging one costs the search the
+                               distance it had measured. */
     long forks;             /* decide.c's fork total: how many times the decision seam split a flow */
     /* THESE TWO ARE OVER THE SAME MIXED POPULATION AND ARE DELIBERATELY NOT SPLIT, which is a different
        answer from the one above and rests on a different fact. They are MAXIMA, not sums, and a candidate

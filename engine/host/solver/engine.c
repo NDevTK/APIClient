@@ -10167,7 +10167,10 @@ static void engine_no_stray_completion(JSContext *ctx, const char *where, int de
 static long g_finished;
 /* …AND THE TWO POPULATIONS IT IS THE SUM OF — see EngineFrontierCensus for what each is and why the label is
    a binary partition. Both are written at the ONE line `g_finished` is, from `Flow.cand_src`, and the identity
-   between the three is asserted where they are read together. */
+   between the three is asserted where they are read together.
+   BOTH COUNT MEMBERS. `g_finished_cands` is not a count of candidate SESSIONS and its emitted key reads as if
+   it were — engine.h carries the mechanism (the fork copies the substitution to every sibling, so N arms of one
+   seed each raise it) and names solve.c's `_candidates` as the per-session count to read it against. */
 static long g_finished_flows, g_finished_cands;
 /* AND A THIRD MISREADING OF THE ROW BELOW, CROSS-RUN WHERE THE ONE UNDER IT IS WITHIN-RUN. `g_deepest` is a
    HIGH-WATER MARK: it SATURATES and then reads flat for every remaining census, and a flat tail is the exact
@@ -13258,8 +13261,13 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
     /* …AND WHICH OF THE FRONTIER'S TWO POPULATIONS RETIRED, read from the label at the instant the retirement
        happens rather than derived afterwards. `cand_src` is live here — flow_release at the bottom of this
        function is what frees it — and it is the WHOLE of the question (solver/engine.h). An exploration flow
-       finishing is coverage; a candidate session finishing is one derived payload that ran and did not fire,
-       which is the search discarding it. Summed they were one number and the two readings are opposite. */
+       finishing is coverage; a candidate MEMBER finishing is search spent on a derived payload that did not
+       fire. Summed they were one number and the two readings are opposite.
+       PER MEMBER, WHICH IS THE UNIT AND NOT A DETAIL OF WHERE THE LINE SITS. This function is the one place a
+       flow ever completes, so the candidate arm counts MEMBERS of candidate sessions and never the sessions:
+       engine_sibling_assemble copies `cand_src` to every sibling of a parent that has it, so one seed's N arms
+       each arrive here. The emitted key still reads `finishedCands`; engine.h says why it is not renamed here,
+       what to read it against, and why no inequality against a seed count may be asserted. */
     if (f->cand_src) g_finished_cands++; else g_finished_flows++;
     /* "all scripts, chunks, jobs and fetches are done" cannot be true with a continuation still parked — the
        loop above resumes one before it can answer that. Asserting it here is what keeps the park inside the
@@ -13675,7 +13683,9 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
        question (solver/engine.h) and `flow_release` below frees it, so a read placed beside the counter — where
        every other line of this sequence puts its accounting — would be a read of freed memory. It is the same
        sentence §scheduler makes about an operation that becomes a work item: the input is taken at the moment
-       it is still the flow's, never off the object afterwards. */
+       it is still the flow's, never off the object afterwards.
+       AND PER MEMBER, exactly as the retirement arm is: this sells ONE member, so the candidate arm counts
+       members of candidate sessions. engine.h carries the record. */
     { const int was_cand = tail->cand_src != NULL;
       engine_retract_flow(g_sess_ctx, tail);
       cold_park_flow(tail);

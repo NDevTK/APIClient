@@ -401,10 +401,29 @@ function coldPartition(c, total, parts, where) {
    its input and it can be handed a line off a log.
    A frontier holds exploration flows and @S candidate sessions, and on a document that finds anything the
    second are the great majority of the members — so a retirement total is dominated by the search's own
-   discards. An exploration flow that ran to its end is coverage this document GAINED; a candidate session that
-   ran to its end is one derived payload that ran and did NOT fire, which is the search spending itself and
-   buys coverage nothing. Stated at EVERY outcome, pass included, because the two are one number and take
-   opposite work.
+   spend. An exploration flow that ran to its end is coverage this document GAINED; a candidate MEMBER that
+   ran to its end is search spent on a derived payload that did not fire, which buys coverage nothing. Stated
+   at EVERY outcome, pass included, because the two are one number and take opposite work.
+
+   `finishedCands` COUNTS MEMBERS AND NOT SESSIONS, AND EVERY SENTENCE BELOW USED TO SAY SESSIONS — kept as a
+   record because the KEY still reads `Cands` and a reader who re-derives the unit from the key will write the
+   old sentences again. They read "EVERY retirement in this run was a candidate session", "${retCands} @S
+   candidate session(s)" and, riding the verdict's NAME where `causeName` cuts it and therefore in the one line
+   anybody reads, ", @S CANDIDATE DISCARD ONLY" — whose replacement holds that string's exact length for the
+   reason stated at the mark. solver/engine.c raises that counter at flow_finish, which is
+   the one line a member ever completes on, and engine_sibling_assemble copies the whole `cand_src` identity to
+   every sibling of a candidate — so N arms of ONE seed each raise it once and "44 payloads discarded" was 44
+   MEMBERS of some smaller number of payloads. solver/engine.h carries the mechanism and says why the key is
+   not renamed from here (it is composed into `qjs.wasm` and this file is live on write, so the halves cannot
+   land together without a build).
+
+   THE PER-SESSION DENOMINATOR IS NOT AVAILABLE TO THIS FUNCTION AND MAY NOT BE FAKED INTO IT. `_candidates`
+   is solve.c's per-seed count, and it is emitted on result_json's TOP LEVEL rather than on the @COLD census
+   this function is handed — so pairing them here would mean reading a field off an object that has never had
+   one, which `coldFields()` cannot require and a `??` would quietly turn into a plausible datum. The pairing
+   belongs to a reader holding BOTH documents. RETIREMENT: this note goes when a per-session ended count is
+   emitted on the @COLD census itself, because the sentence can then name sessions truthfully.
+
    THE PARTITION IS CHECKED HERE AND NOT ONLY AT THE VERDICT, because this is the reading that quotes the arms:
    a sentence composed from rows that do not sum to their total is a sentence about a frontier that was not
    there, and it would be printed at every outcome including the passes.
@@ -505,15 +524,16 @@ function retiredReading(c) {
      engine_reclaim_tail leaves by exactly three doors and each counts itself on the line it leaves by. */
   coldPartition(c, "pagedAsks", ["pagedUnarmed", "pagedFloor", "sold"], "engine_frontier_census");
   return `retired: ${c.finished} (${c.finishedFlows} exploration flow(s), ` +
-         `${c.finishedCands} @S candidate session(s))` +
+         `${c.finishedCands} @S candidate MEMBER(s))` +
          (c.finished === 0
            ? ` — nothing has retired in this run at all`
            : c.finishedFlows === 0
-             ? ` — EVERY retirement in this run was a candidate session, so what this document has done is ` +
-               `discard derived payloads that did not fire; not one exploration flow has reached its end and ` +
-               `no coverage was gained by any of it`
+             ? ` — EVERY retirement in this run was a member of a candidate session, so what this document ` +
+               `has done is spend search on derived payloads that did not fire; not one exploration flow has ` +
+               `reached its end and no coverage was gained by any of it`
              : c.finishedCands === 0
-               ? ` — all of it exploration, so no @S candidate has finished a re-fire in this run`
+               ? ` — all of it exploration, so not one member of a @S candidate session reached its end in ` +
+                 `this run`
                : ``) +
          (c.sold > 0
            ? `; sold ${c.sold} (${c.soldFlows} exploration, ${c.soldCands} candidate)` +
@@ -4547,7 +4567,7 @@ function hungCauseCensus(out) {
            `not a hole: the frontier has not moved ${progressEvery()} units of engine_work_done nor minted a ` +
            `candidate since that sample was taken. live ${one.live}, framed ${one.framed}, blocked ` +
            `${one.blocked}, owed ${one.owed}, finished ${one.finished} (exploration ${one.finishedFlows}, @S ` +
-           `candidate sessions ${one.finishedCands}), sold ${one.sold}. There is no SECOND census, so nothing ` +
+           `candidate MEMBERS ${one.finishedCands}), sold ${one.sold}. There is no SECOND census, so nothing ` +
            `here is a trajectory: no difference across a window, and no landmark, because a landmark is the ` +
            `last census at which a counter ROSE and one sample has no pair to rise across. Everything that ` +
            `follows is a reading of that one census alone: ` +
@@ -4661,7 +4681,7 @@ function hungCauseCensus(out) {
   const span = `over the last ${width} of ${n} censuses — an ABSOLUTE window of ${width * PROGRESS_EVERY} ` +
                `units of engine_work_done, not a fraction of the run: ` +
                `finished ${a.finished}→${b.finished} (exploration ${a.finishedFlows}→${b.finishedFlows}, ` +
-               `@S candidate sessions ${a.finishedCands}→${b.finishedCands}), live ${a.live}→${b.live}, ` +
+               `@S candidate MEMBERS ${a.finishedCands}→${b.finishedCands}), live ${a.live}→${b.live}, ` +
                `sold ${a.sold}→${b.sold} (exploration ${a.soldFlows}→${b.soldFlows}, candidate ` +
                `${a.soldCands}→${b.soldCands}), blocked ${b.blocked}, owed ${b.owed}. ` +
                `Over the WHOLE run, finished's last rise is ${markRise(lastRetire, n, b.finished)} — its ` +
@@ -4785,14 +4805,22 @@ function hungCauseCensus(out) {
   const retFlows = b.finishedFlows - a.finishedFlows, retCands = b.finishedCands - a.finishedCands;
   const whoRetired =
     retFlows === 0
-      ? `every one of the ${retCands} retirement(s) across this window was an @S CANDIDATE SESSION and not ` +
-        `one exploration flow reached its end, so what moved is the search discarding derived payloads that ` +
-        `did not fire — that gains this document no coverage, and more budget buys more discards`
+      ? `every one of the ${retCands} retirement(s) across this window was a MEMBER of an @S candidate ` +
+        `session and not one exploration flow reached its end, so what moved is the search spending itself ` +
+        `on derived payloads that did not fire — that gains this document no coverage, and more budget buys ` +
+        `more of the same spend`
       : retCands === 0
-        ? `all ${retFlows} of them were exploration flows, so no candidate re-fire finished in this window`
-        : `${retFlows} exploration flow(s) and ${retCands} @S candidate session(s) — coverage gained and ` +
+        ? `all ${retFlows} of them were exploration flows, so not one member of a candidate re-fire finished ` +
+          `in this window`
+        : `${retFlows} exploration flow(s) and ${retCands} @S candidate MEMBER(s) — coverage gained and ` +
           `search spent, which are different things and are worth different budget`;
-  const candOnly = retiring && retFlows === 0 ? `, @S CANDIDATE DISCARD ONLY` : ``;
+  /* THE MARK IS EXACTLY AS LONG AS THE ONE IT REPLACES, WHICH IS NOT A COINCIDENCE AND NOT TASTE. It said
+     `, @S CANDIDATE DISCARD ONLY` and rides the verdict's NAME, which `causeName` ends at 90 characters — and
+     the landmark banner above MEASURED the two arms carrying this mark as ALREADY over that cut at 101 and 112
+     characters. A longer mark makes a truncation somebody has already measured worse, so `MEMBERS` was chosen
+     over `SEARCH SPEND` at the same 27 characters: the unit is stated and the cut is left exactly where it
+     was, neither repaired here nor widened into. */
+  const candOnly = retiring && retFlows === 0 ? `, @S CANDIDATE MEMBERS ONLY` : ``;
   if (retiring && h.length >= 2 && flipped.length === 0)
     return `WORK THAT ADVANCES NO STATEMENT${candOnly}${landmarks} (${span}; ${hspan}; ${wfq.text}; ${cs}) — members retired steadily ` +
            `(${whoRetired}) and not ` +

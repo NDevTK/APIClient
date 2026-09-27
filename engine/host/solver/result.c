@@ -2093,10 +2093,19 @@ char *result_swap_json(void) {
 
    AND `finished` AND `sold` EACH CARRY THE TWO POPULATIONS THEY ARE THE SUM OF, because one counter over a
    frontier that is mostly @S candidate sessions answers neither question a reader has. An exploration flow
-   retiring is coverage this document gained; a candidate session retiring is one derived payload that ran and
-   did NOT fire, which is the search discarding it — and on a frontier where the candidates are the great
-   majority of the members, "the engine retired N flows" IS "the search discarded essentially nothing" with
-   nothing in the row to say so. The label is `Flow.cand_src` and it is a binary partition for the whole of a
+   retiring is coverage this document gained; a candidate MEMBER retiring is search spent on a derived payload
+   that did not fire — and on a frontier where the candidates are the great majority of the members, "the
+   engine retired N flows" IS "the search gained essentially nothing" with nothing in the row to say so.
+   `finishedCands` AND `soldCands` ARE COUNTS OF MEMBERS AND NOT OF SESSIONS, AND THIS PARAGRAPH USED TO SAY
+   `a candidate session retiring is one derived payload` — kept in its own words because the KEY reads `Cands`
+   and a reader who re-derives the unit from the key will write it again. solver/engine.c raises both at the
+   one line a member completes on and the one line a member is sold on, and engine_sibling_assemble copies the
+   whole candidate identity to every sibling, so N arms of ONE seed each raise them once; solver/engine.h
+   carries the mechanism, names this file's own top-level `_candidates` as the per-SESSION count, and says why
+   no inequality between the two may be asserted. The KEYS ARE NOT RENAMED FROM HERE: this composer's output is
+   in `qjs.wasm` and engine/build.mjs reads it live from the tree, so a rename lands a reader demanding a key
+   the shipped artifact does not emit (CLAUDE.md §A-CROSS-BOUNDARY-DIFF) and re-points every archived-log
+   query at once. The label is `Flow.cand_src` and it is a binary partition for the whole of a
    member's life (solver/engine.h says why it is two rows and not three), the totals STAY so the parts have
    something to be checked against, and engine_frontier_census asserts the identity at the one place all six
    are in one hand — the same discipline `stepUnits` keeps against `live` at the composition below.
