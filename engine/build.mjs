@@ -4625,7 +4625,26 @@ function hungCauseCensus(out) {
            `follows is a reading of that one census alone: ` +
            stepUnitReading(one) + "; " + stepUnitRunReading(one) + "; " + stepUnitOverrunReading(one) + "; " +
            ladderUnitReading(one) + "; " + programCursorReading(one) + "; " + programsAheadReading(one) +
-           "; " + endpointDoorReading(one) + "; " + endpointReachReading(one) + ")";
+           "; " + endpointDoorReading(one) + "; " + endpointReachReading(one) +
+           /* AND BOTH FLOORS BELONG HERE, WHICH THIS ARM OMITTED WHILE ITS OWN BANNER ARGUED FOR THEM. That
+              banner says the readings that are functions of ONE census are the whole of what this state
+              supports, and `endpointAddressClassReading` and `endpointRazorClassReading` are exactly that:
+              each reads one census' `epAddressClass`/`epRazorClass` against its `epEmitted`, computes no
+              difference, and says in its own rendered text "read WITHIN this run, never across two". So the
+              omission was not a consequence of having one sample; it was a list assembled by hand in one arm
+              and not the other.
+              THE DIRECTION IS THE FLATTERING ONE, WHICH IS WHY IT IS A DEFECT AND NOT AN UNTIDINESS. The two
+              readings this arm DID render are the DIAGNOSTIC and the WEAKER claim — solver/endpoint.h names a
+              reach class FOR THE PARSE and never for who ran, so every door a bundle parse can see maps to
+              `beyond`, and a reader hears "no static analyser could have got this" where the line says only
+              "a `<script src>` scan cannot state this". The two it omitted are the HARD BAR and the BAR: the
+              population that exists only at run time, which is what this product is judged by. A one-census
+              verdict therefore showed the two numbers that read as the razor and neither of the two that are
+              it — and a 0 in either is a REFUSAL TO CLAIM rather than a small answer, so its absence is not
+              even a conservative reading.
+              RETIREMENT: this record goes when both arms take their reading list from ONE declaration they
+              each read, so an arm cannot render a subset of it and no hand-kept list can drift again. */
+           "; " + endpointAddressClassReading(one) + "; " + endpointRazorClassReading(one) + ")";
   }
   /* THE WINDOW IS AN ABSOLUTE SPAN OF THE ENGINE'S OWN WORK, NEVER A FRACTION OF THE RUN — and the fraction is
      the defect this whole function was quoted for. It read `a = s[floor((n-1)/2)]`, so the LEFT EDGE of the
