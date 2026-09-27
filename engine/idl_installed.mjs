@@ -1989,15 +1989,51 @@ export function loadEnvironment(root) {
      so an ordinary assignment between two JSValues cannot manufacture a slot that is not one. */
   const SLOT_ARG = ["JS_SetClassProto", "JS_GetClassProto", "realm_value_set", "realm_value_get"];
   const slotBase = (e) => (stripCast(e || "").match(/^([A-Za-z_]\w*)/) || [])[1];
+  /* A SPELLING'S OWN IMPLEMENTATION IS THE FORWARDING, AND THE SLOT IT NAMES IS THE CALLER'S. This is the rule
+     the member axis already states at `forms.has(f.name) && fromParam(...)`: a site inside the shared helper a
+     form was DERIVED from is the one line that cannot resolve by construction, and reporting it would hide the
+     call sites that can, every one of which is read separately.
+     UNGUARDED IT IS ONE NODE FOR EVERY PER-REALM VALUE IN THE PROGRAM, which is a different failure from a
+     merely missed edge: `realm_value_set` expands to `realm_value_set_at`, whose body is
+     `JS_SetClassProto(ctx, slot, v)` with BOTH arguments parameters — so the slot node keyed `slot` collected
+     every value any file ever stored in any realm slot, and most of those are ENGINE RECORDS with no interface
+     anywhere near them. `realm_value_get_at`'s `return` then handed that union back to every reader BY NAME,
+     because the argument and @return edges are keyed on the function name with no path in them. The effect was
+     not a blur but a confident wrong answer: a per-realm record read as forty interface prototypes at once, so
+     a record field sharing an IDL member's name was CHARGED as that member installed as the wrong kind of
+     property, and one C line was charged five times over.
+     DERIVED FROM THE MACRO TABLE and never a hand-written name list — callTarget maps a spelling to the body it
+     expands to, so a spelling added to SLOT_ARG above is guarded by this same line. A spelling that IS its own
+     implementation has no forwarding body to skip, which is why those drop out rather than being listed.
+     MEASURED ACROSS THIS GUARD ON ONE TREE STATE, at 0883fbff with this file the only thing changed: the node
+     `core/realm.c::@class::slot` held FORTY interfaces and now holds none; 38 `@return` nodes and 189 locals
+     inherited that set, and the tags summed over every local named `rec` in the engine fell from 2200 to 2.
+     `wrongKind` 6 -> 0 and the undecidable-target blind spot 18 -> 0, both categories emptied, while the
+     counts this could have cost did not move at all — ABSENT 500 distinct over 3480 pairs, 160 [Global] member
+     placements, and the interfaces-install-every-member line byte-identical. The two-sided check that would
+     have caught a LOST prototype is already here and reads zero on both sides: tagChecks `unreached` 0 and
+     `contradicted` 0, which is the only reason the loss direction can be ruled out rather than argued.
+     NOT CLOSED HERE, and this is the part that is narrower than the rule rather than wrong: a slot argument
+     that is a parameter of an ORDINARY helper is still read as a slot node OF THAT HELPER'S FILE, so such a
+     helper unions its own file's callers into one node instead of resolving each caller. It is bounded by the
+     path, which is exactly what made the realm store a defect and leaves this a residual. The next diff
+     resolves that argument in the CALLER's scope, the way `interfacesOf` is already hoisted out of the per-file
+     loop so a SELECTED installer's target resolves in the caller's file and function. IT WOULD SHOW as an
+     interface whose row reads `complete` while the member is installed only on a sibling built through the same
+     helper — never as a refusal, because a union answers. Measured at the same revision, the three such
+     helpers in this corpus carry ZERO tags on those nodes, so the shape is live and its population is not. */
+  const SLOT_FORWARDING = new Set(SLOT_ARG.map((fn) => callTarget(fn)).filter((n) => !SLOT_ARG.includes(n)));
   const slotNames = new Map();
   for (const [path] of sources) {
     const set = new Set();
-    for (const f of fnsOf.get(path))
+    for (const f of fnsOf.get(path)) {
+      if (SLOT_FORWARDING.has(f.name)) continue;   /* its slot is the caller's — see SLOT_FORWARDING */
       for (const fn of SLOT_ARG)
         for (const site of callSites(f.body, fn)) {
           const c = slotBase(site.args[1]);
           if (c) set.add(c);
         }
+    }
     slotNames.set(path, set);
   }
 
@@ -2084,7 +2120,7 @@ export function loadEnvironment(root) {
          engine has two spellings of one mechanism, and reading only quickjs's left css_rule.c's fourteen §6.4
          prototypes and css_style_sheet.c's §6.1.1 StyleSheet.prototype — every one of them §3.7.3-tagged where
          it is built — unreachable from the interface objects built over them. */
-      for (const fn of ["JS_SetClassProto", "realm_value_set"])
+      for (const fn of SLOT_FORWARDING.has(f.name) ? [] : ["JS_SetClassProto", "realm_value_set"])
         for (const site of callSites(f.body, fn)) {
           const c = slotBase(site.args[1]);
           const v = stripDup(site.args[2] || "");
@@ -2108,7 +2144,7 @@ export function loadEnvironment(root) {
         const e = stripDup(expr);
         if (named(e)) return at(e, off);
         const cp = e.match(/^(?:JS_GetClassProto|realm_value_get)\s*\(\s*[^,]+,\s*([A-Za-z_]\w*)/);
-        if (cp) return classKey(path, cp[1]);
+        if (cp) return SLOT_FORWARDING.has(f.name) ? null : classKey(path, cp[1]);
         /* one realm, one global object — every JS_GetGlobalObject in the program answers with it, so the
            [Global] fact reaches the `global` every component installs on. */
         if (/^JS_GetGlobalObject\s*\(/.test(e)) return GLOBAL_OBJECT;
