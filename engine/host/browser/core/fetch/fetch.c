@@ -822,6 +822,17 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
          HOW ITS ABSENCE WOULD SHOW: a reply whose header list names a parseable `Content-Type` while its
          `computedType` is empty — a pair the sniff's final arm cannot produce, and the first thing a head-before-body
          producer would emit.
+         AND THAT PRODUCER HAS EXACTLY ONE CONSUMER, WHICH DECIDES WHICH LANDING MINTS THE VALUE AND IS WHY THE
+         CLAUSE ABOVE SAYS `nothing here` RATHER THAN `not yet`. The head-before-body producer is NOT part of
+         the chunk seam core/xhr/xml_http_request.c's XR_LOADING residual names: XHR sets XHR_HEADERS_RECEIVED
+         out of a reply it already holds WHOLE, so it needs a body that GROWS and never a head that arrives
+         FIRST. The only algorithm in this tree that cannot synthesize the head is HTML §9.2.2 "The EventSource
+         interface"' constructor step 15, which puts its refusal and its announce in `processResponse` — "if
+         res's status is not 200, or if res's `Content-Type` is not `text/event-stream`, then fail the
+         connection. Otherwise, announce the connection and interpret res's body line by line." — and an event
+         stream has no end of body to synthesize at. So a diff that builds this producer under XHR builds one
+         with no reader; it lands with that constructor, and core/eventsource/event_source_parser.h carries the
+         ordering and the two-member split.
        RETIREMENT: this record goes when a computed type reaches this entry as a value that cannot be spelled
        absent — the state and the string in one — because a default is then unwritable rather than forbidden. */
     CHECK(computed_type != NULL,

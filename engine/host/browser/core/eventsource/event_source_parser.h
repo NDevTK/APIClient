@@ -58,6 +58,25 @@
  * so a bundle's `if (window.EventSource)` is answered by whether an interface object is installed — and one
  * installed ahead of the connection sends that bundle down a branch nothing can complete and OUT of the
  * fallback branch this engine would otherwise execute, losing the endpoints on both sides.
+ *   AND THAT PARAGRAPH IS AN ARGUMENT WHERE CLAUDE.md ASKS FOR A MEASUREMENT, so here is the one it asks for:
+ * which member flips a real bundle's guard is a property of the PAGE'S guard and is read off a corpus, never
+ * off this reasoning. Taken over this project's mirrored bundles, `EventSource` is a MIXED row — the corpus
+ * both feature-detects it and uses it unguarded — and the two readings do not conflict because they are
+ * different populations: the ranking's `use` column counts `new X(`, `X.member`, `instanceof X` and `f(a,X)`
+ * ONLY, so a detect's `typeof X` is excluded from it by construction and a bare `class C extends X` and a
+ * `mt = X` parameter default are on no channel it has. THE STRUCTURAL FACT, WHICH IS WHAT DOES NOT ROT: the
+ * unguarded uses END THE FLOW TODAY, so the forcing function §NO STUBS relies on is already armed; and the
+ * detect sites' false arms RUN SOMETHING — one SPA's change-detection reads `typeof EventSource === "undefined"`
+ * and `return`s BEFORE its own `stopPolling()`, so an absent EventSource keeps that page POLLING, and a second
+ * selects a non-EventSource transport whenever the name is absent OR custom headers are wanted. An interface
+ * object installed ahead of the connection therefore does not merely fail to gain: it STOPS THE POLLING and
+ * abandons the other transport, which is the both-sides loss above with a mechanism under it.
+ *   THE DERIVATION AND NOT THE FIGURES, because a corpus moves and other people's bundles are not this
+ * project's to commit: `node engine/absentrank.mjs --corpus <the fetch driver's path> --top 300`, whose own
+ * banner names the driver that writes one, and then OPEN the detect sites and read the branch STRUCTURE —
+ * `if (x) {…}` and `if (x) {…} else {…}` are one grep apart and opposite answers about what an absence costs.
+ * RETIREMENT: this record goes when this component has a caller, with the ordering record above it, because
+ * what an absence costs is then a question about a page this engine can already execute either arm of.
  *
  * SO THE FIRST DIFF THAT GIVES THIS FILE A CALLER IS ONE LANDING AND NOT A SEQUENCE, and its members are
  * numbered as one because none of them has a consumer without the others: HTML §9.2.2 "The EventSource
@@ -194,6 +213,33 @@ typedef struct {
  * constructs one and §NO STUBS forbids installing the object before the connection can complete. A lane sent
  * at this component therefore lands the transport UNDER XHR first and reaches this file second.
  * RETIREMENT: this record goes when this component has a caller, because the ordering is then spent.
+ *
+ * AND `THE TRANSPORT` IS TWO MEMBERS, WHICH DECIDES WHICH OF THEM MAY LAND UNDER XHR AND WHICH MAY NOT. The
+ * record above is right that the transport is the prior landing and treats it as ONE seam, as do both
+ * residuals that name it from the other end. core/xhr/xml_http_request.c's XR_LOADING names its clauses as
+ * `a reply record whose body GROWS`, `a park the delivery RESUMES without RETIRING` and
+ * `and only then this stage looping back`; core/fetch/fetch.c's computed-type residual names its own as
+ * `the first thing a head-before-body producer would emit`.
+ * Those are two different halves, they are named at two sites, and neither site states the pair. Asked the
+ * consumer test one member at a time:
+ *   THE BODY HALF — a record whose body grows, and a park a delivery resumes without retiring. Its consumer
+ * is XHR's own XR_LOADING, which RUNS TODAY, so it lands there and this file waits on it.
+ *   THE HEAD HALF — a reply record delivered BEFORE its body, carrying the status and the header list and no
+ * computed type. Its only consumer is the constructor above, and XHR does NOT owe it: XR_RESPONSE sets
+ * XHR_HEADERS_RECEIVED out of a reply it already holds WHOLE, so XHR's timing for that state is observably
+ * wrong and is not BLOCKED. The head half therefore lands WITH the constructor, and a lane that lands it
+ * under XHR has built a producer with no reader.
+ *   WHY THIS CONSTRUCTOR CANNOT SYNTHESIZE THE HEAD AS XHR DOES, which is the half that is about the STANDARD
+ * rather than about this tree. Step 15 states BOTH callbacks — "with processResponseEndOfBody set to
+ * processEventSourceEndOfBody and processResponse set to the following steps given response res" — and puts
+ * the refusal and the announce in the SECOND of them: "if res's status is not 200, or if res's
+ * `Content-Type` is not `text/event-stream`, then fail the connection. Otherwise, announce the connection and
+ * interpret res's body line by line." An event stream has no end of body, so a constructor that announced
+ * where XHR synthesizes would announce NEVER; and a conforming 200 that sends its first event a minute later
+ * would stand at CONNECTING for that minute with `open` unfired. Fetch §4 "Fetching" declares both callbacks
+ * and is the section that says which of them the head is available at.
+ * RETIREMENT: this record goes when a reply record in this tree can be spelled with NO BODY AT ALL, because
+ * the two halves are then two types rather than one seam described at two sites.
  *
  * `bytes`/`n` are the reply's BODY BYTES, undecoded — this runs §9.2.6's decode itself, because "The UTF-8
  * decode algorithm strips one leading UTF-8 Byte Order Mark (BOM), if any" is a step of THIS algorithm and a
