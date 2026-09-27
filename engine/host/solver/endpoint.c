@@ -2661,6 +2661,26 @@ char *endpoint_address_hist_json(void) {
             "the census beside it does, so a difference is one of those walks having stopped describing the "
             "population the other counts, and the hard bar a reader reads off this row would be a share of a "
             "number that is not the surface's size", sum, emitted);
+    /* NAMED RESIDUAL — THE FLOOR endpoint.h DEFINES IS COMPUTED BY NOTHING, AND THIS CENSUS IS HALF OF IT.
+       NOT COVERED: that banner states the hard bar's floor over a surface as the UNION of this column's
+       `unknown` rows and the rows whose door is `EPR_BEYOND`, and no surface anywhere carries, FOR ANY ROW,
+       both of those facts at once. This walk and `endpoint_reach_hist_json`'s are MARGINALS over one array,
+       and a union is a statement about per-row MEMBERSHIP that no marginal carries — so the figure the header
+       names as the floor is not derivable by any reader, including the trusted zone, which composes the same
+       two marginals and deliberately holds no door-to-reach map (a classification that grows here and is
+       duplicated in a zone live on WRITE would abort it the day one more class ships).
+       WHAT THE NEXT DIFF BUILDS: a SCALAR count raised in THIS loop, where `g_eps[i].addr_class` and
+       `endpoint_door_reach(g_eps[i].door)` are both already in hand — the rows that are `unknown` OR
+       beyond-door, emitted beside `emitted` as its denominator. It is NOT a histogram keyed on the pair: the
+       decision against a cross-product is already recorded at the zone's door/mintedAt pair, and its reason —
+       a table of mostly zeroes whose two MARGINS are what a reader reads — reaches a TABLE and not a scalar.
+       It is also not the VERDICT this file declines to compose: folding `either` into a guess is a claim about
+       a door whose reach is undecided, and a union needs no such claim, since an `either` row enters it only
+       through its own `unknown`.
+       HOW ITS ABSENCE SHOWS: a reader scoring the bar over a surface can state two floors and not the one the
+       header defines, and cannot say whether the two sets overlap — so the union is quotable only as the range
+       [max(unknown, beyond), unknown + beyond]. Observably, the door any given `unknown` row came through is
+       INFERRED, from the marginals happening to agree plus the address's own text, and never read. */
     return json_buf_take(&b);
 }
 
