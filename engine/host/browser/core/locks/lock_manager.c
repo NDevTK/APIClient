@@ -1300,7 +1300,20 @@ static void lock_manager_install_realm(JSContext *ctx)
     slots = idl_slots_new(ctx);
     CHECK(!JS_IsException(slots), "the realm's LockManager internal-slot record could not be allocated");
     /* §3.2.2's clientId — "a unique context (frame or worker)". A version 4 UUID, whose shape is what §3.2.2's
-       own example shows; see the residual below for what it is NOT. */
+       own example shows; see the residual below for what it is NOT.
+       THE DRAW IS AT INSTALL, AND THAT CONSTRAINS THIS COMPONENT'S ROW IN core/platform.c. It is from THIS
+       realm's §10.1 stream (core/crypto/crypto.h's entry), so core/crypto's own per-realm install must already
+       have run — core/realm.h runs the installs in DECLARATION order, and this whole component is declared
+       under `navigator`, so the `crypto` row sits BEFORE the `navigator` row and states this as its reason.
+       It did not, and the read answered NULL in every realm including the agent's first.
+       IT IS NOT DEFERRED THE WAY §2.2's LOCK MANAGER RECORD IS, and the difference is what each would DO
+       rather than when it would do it. That deferral LOOKS UP a storage shed another intrinsic already built
+       at the pre-boot baseline; a deferred clientId would be MINTED inside whichever flow asked first,
+       captured into that flow's COW delta — so two arms of one fork would answer §3.2.2 with two clientIds
+       for ONE context, which is the hazard §3.1's LockManager object is built with the realm to avoid.
+       RETIREMENT: this record goes when core/realm.h can refuse a declaration order in which an install reads
+       a per-realm value whose writer is declared later, because this row's position is then not a thing a
+       reader of this file has to know. */
     crypto_random_bytes(ctx, u, sizeof u);
     u[6] = (uint8_t)((u[6] & 0x0f) | 0x40);
     u[8] = (uint8_t)((u[8] & 0x3f) | 0x80);

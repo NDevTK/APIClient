@@ -904,11 +904,24 @@ JSValue realm_value_get_at(JSContext *ctx, JSClassID slot, const char *at_file, 
     /* THE ADDRESS IS THE WHOLE OF THE REMEDY HERE. What went wrong is a missing SET, and the set is in some
        other component's per-realm install — so the reader's own file and line is what says which install to
        look for, and which realm kind (a worker's, a worklet's, a child navigable's) reached a component that
-       only ever installs into one of them. */
-    DCHECKF(!JS_IsNull(v), "%s:%d read a per-realm value in a realm that never ran the install that sets it — "
-                           "this read's own component is what names the slot, and the install that writes it "
-                           "is declared through realm_declare_intrinsic and run for every realm, so a realm "
-                           "that reached here without it is one whose builder does not run that component",
+       only ever installs into one of them.
+       TWO STATES REACH THIS ABORT AND THEY TAKE OPPOSITE WORK, SO IT NAMES BOTH AND THE DISCRIMINATOR.
+       IT USED TO NAME ONLY THE SECOND — "a realm that reached here without it is one whose builder does not
+       run that component" — and that clause is kept because it is the reading a reader re-derives from the
+       declaration mechanism alone: every builder DOES go through realm_install_intrinsics, so the sentence
+       sent its one reader hunting a second hand-picking child-realm builder for a defect that was one row's
+       POSITION in core/platform.c's column. An assert that names a remedy is read once, by somebody who has
+       already decided to do the work, so the wrong remedy is not doubted — it is executed. */
+    DCHECKF(!JS_IsNull(v), "%s:%d read a per-realm value whose install has not run in THIS realm — this read's "
+                           "own component is what names the slot, and the install that writes it is declared "
+                           "through realm_declare_intrinsic. WHICH OF TWO STATES THIS IS, THE STACK SAYS. If "
+                           "the read is from a per-realm INSTALL, the list is run in DECLARATION order and the "
+                           "writing component's row in core/platform.c's column sits AFTER the reading one's, "
+                           "so the reader runs first in every realm including the agent's own: move the "
+                           "WRITER'S ROW earlier and state the constraint there — no builder is wrong, and a "
+                           "component whose row cannot move asks its question from a MEMBER instead, where "
+                           "every install has already run. Only if the read is from a member, a per-document "
+                           "install or a host is this a realm whose builder does not run the declared list",
             at_file, at_line);
     return v;
 }

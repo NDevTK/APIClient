@@ -62,18 +62,34 @@ static void crypto_stream_take(JSContext *ctx, JSValueConst crypto_obj, CryptoSt
    SubtleCrypto member that reached for its own record — or built one lazily — would be a SECOND stream, and
    crypto.h states what that costs: two forked arms minting identical key material, which is invisible
    downstream of the key.
-   IT IS NOT A DCHECK THAT THE SLOT IS FILLED. core/realm.h runs the per-realm installs in DECLARATION order
-   and subtle_crypto_init is called from crypto_init, so §14's members exist only in a realm §10's install has
-   already finished — but a caller reaching this from some later-declared component is a state the assert
-   cannot be compiled out of, since the dereference below is load-bearing in release. */
+   IT IS NOT A DCHECK THAT THE SLOT IS FILLED, AND THE PREDICATE IS `JS_IsObject` BECAUSE AN UNSET SLOT READS
+   NULL. core/realm.c's realm_value_get is JS_GetClassProto, whose unwritten value is JS_NULL — that file's own
+   set entry asserts exactly that before it writes — so a draw before this realm's install renders as NULL and
+   NEVER as undefined.
+   THIS LINE READ `!JS_IsUndefined(obj)` AND THE RETIRED PREDICATE IS RECORDED RATHER THAN DELETED, because a
+   reader reasoning from "the slot is empty" reaches for undefined again. It could not fire on the one state
+   its own message names: in a dev build the abort came from core/realm.c's read entry instead, and in RELEASE
+   — where that DCHECK is compiled out — the draw fell through to JS_GetOpaque on a JS_NULL, answered NULL, and
+   died at the `s != NULL` CHECK below under a message about the object and its opaque having COME APART. A
+   fatal check that names the wrong one of two states is worse than no check at all, and the dereference below
+   is load-bearing in release, so the state cannot be compiled out — it has to be the state this line refuses.
+   AND THE ORDER IS A CONSTRAINT ON THE CALLER'S OWN ROW, IN THE DIRECTION OPPOSITE TO WHAT THIS PARAGRAPH
+   USED TO SAY. core/realm.h runs the per-realm installs in DECLARATION order, so a component whose INSTALL
+   draws must be declared AFTER core/platform.c's `crypto` row, while a component whose MEMBER draws is free —
+   every member runs after every install. This said that a caller from some LATER-declared component was the
+   state the assert could not be compiled out of, and later is the SAFE arm; the unsafe arm is EARLIER, which
+   is exactly what core/locks reached from under `navigator`. The inversion is what made the `crypto` row's own
+   position read as free to place thematically, so it is kept where it was written.
+   RETIREMENT: both records go when core/realm.h can refuse a declaration order in which an install reads a
+   per-realm value whose writer is declared later, because the caller's row is then not a thing to remember. */
 void crypto_random_bytes(JSContext *ctx, uint8_t *out, size_t n)
 {
     JSValue obj = realm_value_get(ctx, g_obj_slot);
     CryptoStream *s;
 
-    CHECK(!JS_IsUndefined(obj), "§10.1's draw was asked for before this realm's Crypto existed — the stream "
-                                "is built with the realm and a draw before that would be a second stream, "
-                                "which is the one thing crypto.h says must not happen");
+    CHECK(JS_IsObject(obj), "§10.1's draw was asked for before this realm's Crypto existed — the stream "
+                            "is built with the realm and a draw before that would be a second stream, "
+                            "which is the one thing crypto.h says must not happen");
     s = JS_GetOpaque(obj, g_crypto_class);
     CHECK(s != NULL, "this realm's Crypto carries no §10.1 draw position — crypto_install_realm sets the "
                      "opaque on the object it puts in the slot, so the two have come apart");

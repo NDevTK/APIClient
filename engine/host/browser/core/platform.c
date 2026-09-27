@@ -1050,6 +1050,27 @@ static const PlatformComponent PLATFORM[] = {
        including NavigateEvent is declared. It inherits nothing, so its own prototype needs no earlier row. */
     { "navigation_destination", d_nav_destination,   NULL,     r_nav_destination },
     { "window",              d_window,              i_window,    r_window },
+    /* WEB CRYPTOGRAPHY §10's Crypto and §14's SubtleCrypto. ONE ROW for both, because §10 declares §14 as its
+       own dependency the way Permissions declares PermissionStatus — a host that had one and not the other
+       would answer `crypto.subtle` with an object from another realm or with nothing. Neither has a document
+       half: §3.7 gives every realm its own interface prototype, `crypto` and `crypto.subtle` are both
+       `[SameObject]` PER REALM, and a nested navigable's `crypto` is its own — so both install through
+       core/realm.h.
+       IT IS BEFORE `navigator`, AND THAT POSITION IS A CONSTRAINT RATHER THAN A GROUPING. Web Locks §3.1's
+       whole component is declared under `navigator`, and §3.2.2's clientId is drawn AT INSTALL from this
+       realm's §10.1 stream — one stream per realm being what core/crypto/crypto.h argues a forked search
+       needs — so `lock_manager_install_realm` READS the per-realm value `crypto_install_realm` WRITES.
+       core/realm.h runs the per-realm installs in DECLARATION order, so this row declaring later put the
+       reader ahead of the writer in EVERY realm including the agent's first: the slot answered NULL and
+       core/realm.c's read entry aborted during platform_agent_init, before any document existed, in every
+       stage that brings up an agent.
+       THIS ROW USED TO SIT AFTER `file_picker` — a THEMATIC placement, stating no constraint at all — and
+       that is recorded because a reader who groups this row by its standard rather than by what reads it will
+       move it back. Nothing between the two positions is a dependency in either direction: core/crypto's four
+       files include only core/* and solver/*, and no row above `navigator` reads a crypto slot.
+       RETIREMENT: this record goes when core/realm.h can refuse a declaration order in which an install reads
+       a per-realm value whose writer is declared later, because the order is then true by construction. */
+    { "crypto",              d_crypto,              NULL,        r_crypto },
     /* §8.10.1's Navigator, and with it Permissions §6 (navigator.permissions), Storage §2 and File System §3
        (navigator.storage) and §6.4.4's UserActivation. This row is the one whose absence from one host's copy
        of the list left four standards uncollected by the gate that reports on them. */
@@ -1070,13 +1091,6 @@ static const PlatformComponent PLATFORM[] = {
        installs in declaration order. */
     { "file_system_access",  d_fs_access,           NULL,        r_fs_access },
     { "file_picker",         d_file_picker,         NULL,        r_file_picker },
-    /* WEB CRYPTOGRAPHY §10's Crypto and §14's SubtleCrypto. ONE ROW for both, because §10 declares §14 as its
-       own dependency the way Permissions declares PermissionStatus — a host that had one and not the other
-       would answer `crypto.subtle` with an object from another realm or with nothing. Neither has a document
-       half: §3.7 gives every realm its own interface prototype, `crypto` and `crypto.subtle` are both
-       `[SameObject]` PER REALM, and a nested navigable's `crypto` is its own — so both install through
-       core/realm.h. */
-    { "crypto",              d_crypto,              NULL,        r_crypto },
     /* WEB STORAGE — Storage §4's model, then HTML §12.2.1's interface over it, then §12.2.2's and
        §12.2.3's two Window getters, in that order because each reads the one before it. The model is
        first for a second reason its own file states: its shed, shelf, bucket and bottles are built HERE,
