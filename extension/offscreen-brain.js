@@ -1855,17 +1855,36 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
       // NAMED RESIDUAL — THE POST IS NOT PERFORMED YET AND THIS IS NOT THE ARM'S FINAL ANSWER.
       //   WHAT IS NOT COVERED: this arm states the delivery is performable and does not perform it, so a
       // `none` finding is reported with a reason rather than with a `pocJs`.
-      //   WHAT THE NEXT DIFF BUILDS: a two-statement delivery in this arm — `window.open(pageUrl, "_blank")`
-      // held in a local, then a `postMessage(payload, "*")` REPEATED over the session's own `waitMs`, because
-      // an opener cannot observe a cross-origin openee's load and a single post lands on the initial
-      // `about:blank` and is lost. Its handle is real rather than assumed: HTML §7.3.1.7 "Navigable target
-      // names"' rules for choosing a navigable set `windowType` to "new with no opener" only when the opening
-      // document's opener policy is "same-origin" or "same-origin-plus-COEP", and `manifest.json` ships
-      // `same-origin-allow-popups`, which is neither — so §7.2.2.1's step 17 `return null` does not fire and
-      // step 19 hands back the openee's WindowProxy. `poc-sandbox.html` states that same conjunction at its own
-      // site and is the sibling to read before building it. Landing it also retires that file's sentence
-      // calling a `handle:"none"` completion "a CONTRACT GAP in offscreen-brain.js's buildLiveDelivery — a
-      // delivery arm that grew a second statement", which this arm would then do deliberately.
+      //   WHAT THE NEXT DIFF BUILDS: the post from a document at a REGISTRABLE origin, which is the project
+      // owner's decision and is a different diff from the one this clause used to name. The retired text is
+      // kept in its own words below because its SPEC reasoning is exact and a reader will re-derive it from
+      // §7.2.2.1 alone, and because the manifest value it rests on is the thing that moved:
+      //     a two-statement delivery in this arm — `window.open(pageUrl, "_blank")` held in a local, then a
+      //      `postMessage(payload, "*")` REPEATED over the session's own `waitMs`, because an opener cannot
+      //      observe a cross-origin openee's load and a single post lands on the initial `about:blank` and is
+      //      lost. Its handle is real rather than assumed: HTML §7.3.1.7 "Navigable target names"' rules for
+      //      choosing a navigable set `windowType` to "new with no opener" only when the opening document's
+      //      opener policy is "same-origin" or "same-origin-plus-COEP", and `manifest.json` ships
+      //      `same-origin-allow-popups`, which is neither — so §7.2.2.1's step 17 `return null` does not fire
+      //      and step 19 hands back the openee's WindowProxy.
+      // THE MANIFEST NOW SHIPS `same-origin`, SO THAT HANDLE IS NULL AND THE RETIRED DIFF WOULD POST TO
+      // NOTHING. Both of §7.3.1.7's conjuncts hold for this zone's attacker document: its opener policy is the
+      // manifest's, and a `manifest.sandbox.pages` document's OPAQUE origin is never same origin with the
+      // extension top-level origin — which is the SECOND conjunct and held at every COOP value, so the flip is
+      // the whole of what changed. §7.2.2.1 step 17 therefore returns null for EVERY delivery, and a
+      // `postMessage` on that value is a TypeError rather than a delivery that fails to arrive.
+      // AND THE OPAQUE ORIGIN WAS NEVER THE RIGHT IDENTITY ANYWAY, WHICH IS WHY THE REPLACEMENT IS NOT A
+      // REPAIR OF THE HANDLE. This arm is the `none` verdict, so it is the one population an opaque identity
+      // satisfies — and the `forgeable` arm above it, which is the larger one, needs an origin a gate can
+      // accept and no sandboxed document can present one. One delivery serves both: the PoC runs in a document
+      // at a registrable origin the harness opens in the browser this extension is running in, with a BUTTON
+      // for the user activation `window.open` requires, and the payload EVALUATED there rather than served
+      // from there — so `event.origin` reads that document's real origin and nothing has to be hosted.
+      // WHAT THAT LEAVES FOR THIS FILE is the pair §Attacker-sources already names: this arm hands the
+      // delivery the identity the record demands (`none` accepts any, `forgeable` names a shape), and the
+      // opening and posting happen where a real origin exists. `poc-sandbox.html`'s handle classification is
+      // retired by the same decision rather than repaired, since it classifies by a value that is now
+      // unconditionally null.
       //   HOW ITS ABSENCE WOULD SHOW: an @S finding whose record carries `principalDemand:"none"` rendering a
       // `pocWhy` in the panel where every `address`-delivered finding beside it renders a runnable `pocJs`,
       // with the verify button reporting a mechanism it declined rather than a delivery that ran.

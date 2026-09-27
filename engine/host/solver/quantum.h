@@ -178,7 +178,12 @@
  *         for EVERY delivery rather than for the targets §7.1.3.2 would have selected. The premise is now
  *         latched in the trusted zone from a document ANNOUNCING ITSELF at the delivered address with the
  *         browser's own origin and frame (extension/offscreen-brain.js `_recordProbeDelivery`); the handle is
- *         reported as context and gates nothing. This half of the flip's cost is paid and the others are not.
+ *         reported as context and gates nothing. This half of the flip's cost is paid, AND THE FLIP HAS SINCE
+ *         BEEN MADE BY THE PROJECT OWNER — the manifest ships COOP `same-origin` beside COEP `require-corp`,
+ *         and extension/renderer-host.js delegates `allow="cross-origin-isolated"` to the engine's frame, which
+ *         HTML §7.2.2.6 "Script settings for Window objects" makes the second half of the capability's
+ *         conjunction and which no COOP value can supply. The clause that stood here said the OTHER costs were
+ *         unpaid and named them as one thing; they are two unlike ones and only one is outstanding.
  *         SO THE REQUIREMENT IS EITHER ROUTE IN THE ENGINE'S OWN REALM, AND NO GETTER STATES IT. A CAPABILITY
  *         IS CONFIRMED BY ATTEMPTING THE ACT AND A GETTER IS A TRIPWIRE IN FRONT OF IT: `crossOriginIsolated`
  *         names the STANDARD's gate, which is not the one the runtime keys on alone, and `typeof
@@ -187,8 +192,21 @@
  *         silently wrongly on the one where they do not. renderer.html PERFORMS the act once, outside any
  *         assert, records what it answered, and asserts on THAT; the two getters survive as recorded
  *         tripwires and are asserted in the ONE direction the standard guarantees, never in the direction a
- *         sibling document is already observed taking. So the day the act succeeds the crash names the
- *         watchdog to build; quantum.c #errors if this branch is ever linked WITH shared memory.
+ *         sibling document is already observed taking.
+ *         AND THE ACT NOW SUCCEEDS, WHICH RETIRES THE REMEDY THIS SENTENCE NAMED RATHER THAN DISCHARGING IT.
+ *         It read: So the day the act succeeds the crash names the watchdog to build. That crash would
+ *         have sent its reader to build a thread for a gap that is already shut: `133f190`'s dispatch-periodic
+ *         raise closed the population a watchdog would have closed — a stretch of bytecode raising nothing —
+ *         and the population still open, a C activation performing no dispatch, answers no poll however the
+ *         request was raised, so no raise mechanism reaches it. extension/renderer.html carries that split as a
+ *         named residual and its assert is now the other way up: it fires when a realm that STATES the
+ *         capability was REFUSED it, which is this extension's own configuration being wrong rather than a
+ *         capability arriving. The one outstanding item is the LINK, and it is not deferred in prose:
+ *         quantum.c #errors if this branch is ever linked WITH shared memory, so the day `-pthread` and
+ *         `-sSHARED_MEMORY` land, the build refuses until the thread that uses them exists. What the grant
+ *         makes buildable is not this file's subject at all — it is CLAUDE.md
+ *         §AN-INSTANCE-IS-AN-ORIGIN-KEYED-AGENT-CLUSTER's cross-WASM COW synchronisation, whose transport is
+ *         one shared linear memory between two instances.
  *         AND THE ACT IS SMALLER THAN THE SENTENCE HERE USED TO DEMAND, WHICH MATTERS BECAUSE THE OLD ONE IS
  *         UNSPELLABLE IN HALF THE REALMS THAT WOULD RUN IT. This paragraph told its reader to confirm with a
  *         real postMessage of a shared WebAssembly.Memory — a second agent, asynchrony, and a `Worker` a

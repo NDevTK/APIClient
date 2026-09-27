@@ -367,6 +367,8 @@
        origin, and §4.7's `if origin is an opaque origin, return false` is reached. Both together — which is
        exactly this element — delegate. So the attribute above is load-bearing for THIS line and not only for
        the boundary.
+       WHAT THIS BUYS IS THE SECOND CONJUNCT, AND THE FIRST ONE HAS NOW BEEN SHIPPED, SO THE SENTENCE THAT
+       STOOD HERE IS KEPT IN ITS OWN WORDS BECAUSE IT IS WHAT A READER RE-DERIVES FROM THIS LINE ALONE. It read:
        WHAT THIS BUYS TODAY IS NOTHING AND THAT IS THE MEASURED STATE, because conjunct 1 is unmet: HTML §7.1.3
        "Cross-origin opener policies" says the `same-origin-plus-COEP` value that sets a group's cross-origin
        isolation mode "cannot be directly set via the Cross-Origin-Opener-Policy header but results from a
@@ -377,8 +379,20 @@
        the act is still REFUSED, with `crossOriginIsolated` false in both. HOW ITS ABSENCE WOULD SHOW: a
        reader who flips the manifest COOP to `same-origin` expecting this frame to become isolated, and finds
        it is not, because the half no COOP value can supply was never delegated.
-       AND THE FLIP IS NOT THIS DIFF'S TO MAKE. It is an outward behaviour change for every extension page and
-       it has a measured cost: poc-sandbox.html classifies §LIVE-VERIFY's delivery by the IDENTITY of
+       EVERY CLAUSE OF THAT IS STILL TRUE OF THE §7.1.3 QUOTATION AND ITS LAST TWO SENTENCES ARE NOT TRUE OF THE
+       TREE: the manifest now ships `same-origin`, so conjunct 1 is met and this delegation is the reason
+       conjunct 2 is. Its `HOW ITS ABSENCE WOULD SHOW` clause is the one part that has become unfalsifiable
+       rather than false — a reader flipping the COOP and finding the frame not isolated is now the state this
+       line PREVENTS, so the observation it named would be this line having been removed.
+       THE TWO HALVES ARE ASSERTED WHERE THEY MEET RATHER THAN DESCRIBED HERE. renderer.html performs the
+       shared-memory act once and DCHECKs that a realm which STATES a cross-origin isolated capability was
+       granted it, naming all three inputs — this attribute, the manifest COOP and the manifest COEP — so a diff
+       that drops any one of them aborts in the realm that is the only one able to see it, instead of leaving a
+       paragraph here to go stale a second time.
+       AND THE FLIP WAS NOT THAT DIFF'S TO MAKE AND HAS SINCE BEEN MADE, BY THE PROJECT OWNER, WHICH LEAVES
+       THE COST RECORD BELOW AS THE REASON IT WAS SAFE RATHER THAN AS A REASON TO WAIT. It is an outward
+       behaviour change for every extension page and
+       it had a measured cost: poc-sandbox.html classifies §LIVE-VERIFY's delivery by the IDENTITY of
        `window.open`'s return value, and at COOP `same-origin` a cross-origin auxiliary requires a browsing
        context group switch (HTML §7.1.3.2 "Browsing context group switches due to opener policy" — "check if
        popup COOP values require a browsing context group switch" returns FALSE for a
@@ -401,8 +415,16 @@
        NOTHING about the target. So the flip arms it for EVERY delivery, not only for the targets §7.1.3.2
        would have selected. The premise now comes from a document ANNOUNCING ITSELF at the delivered address
        with the browser's own origin and frame (offscreen-brain.js `_recordProbeDelivery`), and the handle is
-       reported as context that gates nothing. This half of the flip's cost is paid; the wasm link's
-       `-pthread`/`-sSHARED_MEMORY` and the watchdog thread are not. */
+       reported as context that gates nothing. This half of the flip's cost is paid, and the OTHER TWO items
+       that sentence used to list are not one outstanding thing but two unlike ones — kept here because the
+       list read as a single blocker and a reader will re-derive it that way. The wasm link's
+       `-pthread`/`-sSHARED_MEMORY` is a SEPARATE landing the grant is a precondition for, and it cannot be
+       silently deferred: `engine/host/solver/quantum.c` #errors the day `__EMSCRIPTEN_SHARED_MEMORY__` is
+       defined. The WATCHDOG THREAD is retired as a reason — renderer.html's own residual records that
+       `133f190`'s dispatch-periodic raise closed the population a watchdog would have closed, and that the
+       population still open is one no raise mechanism reaches — so the flip's benefit is not the quantum's and
+       is not claimed here. What it makes buildable is CLAUDE.md §AN-INSTANCE-IS-AN-ORIGIN-KEYED-AGENT-CLUSTER's
+       cross-WASM COW synchronisation, whose transport is one shared linear memory between two instances. */
     f.setAttribute("allow", "cross-origin-isolated");
     /* THE ROUTING ID LEADS THE TITLE because the cluster key's own separator is a NUL, which every console and
        every element inspector renders as nothing at all — so a document holding several renderers showed a

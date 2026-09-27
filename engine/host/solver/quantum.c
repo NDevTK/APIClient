@@ -177,6 +177,19 @@ int64_t quantum_thread_us(void)
    since (extension/renderer.html holds the method): an extension-origin document transfers shared memory
    while reading `crossOriginIsolated === false`, so isolation is ONE OF TWO ROUTES and not the gate. This
    realm has neither, because an opaque origin is not the extension origin and is same-origin with nothing.
+   THAT LAST CLAUSE IS REFUTED AND THE STRING BELOW CARRIED IT ONTO EVERY STAGE LINE OF EVERY BUILD, WHICH IS
+   WHY IT IS CORRECTED HERE RATHER THAN ONLY IN quantum.h. It conflates same-origin-ness with a group's
+   ISOLATION MODE: HTML §8.1.2.2 "Integration with the JavaScript agent cluster formalism" copies the mode off
+   the BROWSING CONTEXT GROUP with no origin test in it, so an opaque-origin nested document inherits its
+   group's mode. What an opaque origin really costs is the PERMISSIONS POLICY half of §7.2.2.6 "Script settings
+   for Window objects"' conjunction, whose default allowlist is 'self' and which therefore has to be DELEGATED
+   — which extension/renderer-host.js now does with `allow="cross-origin-isolated"`, beside a manifest shipping
+   COOP `same-origin` and COEP `require-corp`. So the wording below no longer says this realm can never be
+   isolated; it says what remains true, which is that THIS LINK has no shared memory to hand a thread.
+   AND THE WORDING IS THE ONLY THING THAT MOVED. `quantum_measure_is_cpu` still answers 0 and the slice is
+   still wall-denominated on this host, because a grant is not a clock: what a shared memory would buy is a
+   thread that can raise the request, and extension/renderer.html's residual records that the population such a
+   thread would close was already closed by `133f190`'s dispatch-periodic raise.
    THE FIELD IS A DISPLAY LABEL AND NOT AN IDENTITY, so its wording is free to be corrected: every consumer
    checks its TYPE (a non-empty string) or compares it with ANOTHER ANNOUNCE OF THE SAME BINARY, and none
    matches on its content — `isCpu` is the typed field a reader branches on. What the wording may not carry
@@ -184,10 +197,10 @@ int64_t quantum_thread_us(void)
    interpolates this string into JSON unescaped. */
 const char *quantum_measure(void)
 {
-    return "wall (this host has NO cpu clock and NO asynchronous edge — the engine's realm is an opaque "
-           "origin, which is neither the extension origin nor ever isolated, and a shared-memory transfer "
-           "needs one of those two, so no watchdog thread can be handed the memory it would raise the "
-           "request through; see solver/quantum.h)";
+    return "wall (this host has NO cpu clock and NO asynchronous edge — this wasm link has no shared memory, "
+           "so no watchdog thread can be handed the memory it would raise the request through, and the slice "
+           "is bounded by the wall clock read at whichever back-edge, call or dispatch the flow next reaches; "
+           "see solver/quantum.h)";
 }
 
 int quantum_measure_is_cpu(void) { return 0; }
