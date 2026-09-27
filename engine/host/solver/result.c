@@ -789,6 +789,7 @@ static char *errs_json_array(ErrsArray which) {
    @kind lifetime: preemptAsksLifetime rivalMissGen rivalMissCur rivalMissBoth
    @kind lifetime: keyArmedLifetime keyStaleGenLifetime keyFirstSeenLifetime keyRunningLifetime
    @kind lifetime: epochRebuildLifetime epochResetsLifetime starvedPicks starvedPicksIdle
+   @kind lifetime: plateauAsked plateauHeld plateauRuns plateauHeldIdle
    @kind lifetime: arrivals departures creditsOfferedLifetime creditsPaidLifetime creditsDroppedLifetime
    @kind lifetime: workDone rankChanges
    @kind lifetime: keyIndexAskedLifetime keyIndexDifferedLifetime keyIndexDifferedTieLifetime
@@ -881,6 +882,29 @@ char *result_wfq_json(void) {
            "the branch engine.c credits flow_credit_pick in, so this cannot exceed unless one of the two has "
            "acquired a second writer; `starvedPicks / picksLifetime` is about to be published as a share "
            "above 1, which is the reading that says the two rows are counting different events again");
+    /* AND THE THREE IDENTITIES THAT MAKE THE PLATEAU DEPTH A DEPTH, checked where all four rows are in one
+       hand and immediately before the quotients are published. flow_pick raises the four in ONE evaluation,
+       each subset inside the `if` of its own population, so none of these can fail while that stays true —
+       which is why they are worth asserting rather than assuming: every reading these rows carry is a
+       QUOTIENT, and a quotient whose numerator exceeds its denominator is not a depth, it is two counters
+       somebody divided. A break in any of them is a second writer, and `plateauHeld / plateauRuns` is about to
+       be published as a mean below one — a stretch shorter than the retentions it is made of. */
+    DCHECK(flow_plateau_held() <= flow_plateau_asked(),
+           "the scheduler reports MORE dispatch scans on which the incumbent kept the thread over a level "
+           "never-run member than scans on which that comparison was makeable at all — the two are raised in "
+           "one evaluation in flow_pick, the second inside the first's own condition, so the population has "
+           "acquired a writer that is not that line and `plateauHeld / plateauAsked` is about to be published "
+           "as a share above 1");
+    DCHECK(flow_plateau_runs() <= flow_plateau_held(),
+           "the scheduler reports MORE maximal plateau stretches than the retentions they are made of — a run "
+           "is counted only on a scan that also raised a retention, so this is a second writer of one of them, "
+           "and `plateauHeld / plateauRuns` is about to be published as a mean DEPTH below one, which would "
+           "read as a queue rotating faster than it holds");
+    DCHECK(flow_plateau_held_idle() <= flow_plateau_held(),
+           "the scheduler reports MORE retentions in which the incumbent had nothing to continue than "
+           "retentions altogether — the subset is raised behind a further predicate inside the superset's own "
+           "`if`, so this is a second writer, and the remainder `plateauHeld - plateauHeldIdle` is about to be "
+           "published as a negative population of incumbents that were finishing work");
     /* AND THE IDENTITY THAT GIVES `scanRivalRuns` A DENOMINATOR AT ALL, checked here for the two above's
        reason: this is the one moment both halves are in one hand, and the quotient is about to be published.
        solver/engine.c raises `preemptAsksLifetime` at the TOP of its preempt policy and calls flow_rival_of —
@@ -1573,6 +1597,41 @@ char *result_wfq_json(void) {
                         parked continuation is a per-member fact for every member EXCEPT the one holding the
                         thread, whose park queue lives in the runtime for the duration of its turn. */
                      "\"starvedPicksIdle\":%ld,"
+                     /* AND HOW DEEP THE PLATEAU THOSE TWO ROWS SIT ON IS, WHICH IS THE COMPLEMENT OF
+                        BOTH OF THEM AND THE READING THAT DECIDES WHETHER THE ORDER IS WORKING AS SPECIFIED.
+                        The pair above counts the pick that DISPLACES the incumbent over a level never-run
+                        member; these count the pick that KEEPS it. §Attention's value yield blesses a
+                        retention ("a top-ranked flow runs on at ~zero switch cost") and §scheduler's optimism
+                        bonus claims it ENDS ("a never-run flow is never starved"), and the two resolve
+                        oppositely on exactly this population — so the only thing either can be wrong about is
+                        HOW LONG one lasts, which neither states and nothing was measuring.
+                        READ `plateauHeld / plateauRuns` AND NEVER `plateauHeld` ALONE. That quotient is the
+                        MEAN number of consecutive dispatch scans an incumbent held the thread while somebody
+                        untouched stood level with it. BOUNDED is the queue rotating, which is what solver's
+                        aging term is priced for — flow.h says a tied flow "hands over after ONE quantum" and
+                        engine.c asserts at the charge that a whole quantum moves the notch. `plateauRuns` at
+                        1 beside a large `plateauHeld` is ONE unbroken hold for the whole run, which is that
+                        guarantee being FALSE rather than the yield being cheap.
+                        `plateauAsked` IS THE REACHABILITY WITNESS AND THE OTHER THREE ARE UNREADABLE WITHOUT
+                        IT: a zero `plateauHeld` beside a zero ask is a scan population that never existed —
+                        no incumbent this scan weighed, or no never-dispatched member to stand level — and is
+                        satisfied identically by an order serving its frontier perfectly and by a dispatch
+                        loop that never ran. A zero ask beside a non-zero `picksLifetime` is its own finding:
+                        no dispatch ever faced a never-dispatched member, which is a frontier that drains.
+                        `plateauHeld / plateauAsked` is then how tied the frontier is AT THE LINE THAT
+                        DISPATCHES, which the three census GAUGES can only say of an instant.
+                        ALL FOUR ARE LIFETIME COUNTERS and may be differenced across two samples, which is
+                        what turns the depth into a rate over a window instead of an average over a session.
+                        `plateauHeldIdle` is an UPPER BOUND by TWO of the unit boundary's three clauses: an
+                        incumbent's parked continuations live in the RUNTIME for the duration of its turn and
+                        cannot be asked about from the pick at all, and the microtask clause is a queue WALK
+                        that this row — firing on nearly every scan of a tied frontier — may not pay in a
+                        release build. So a retention by an incumbent holding queued work is counted here as
+                        one with nothing to continue. solver/flow.c's residual names both and what closes
+                        them; until then read this against `jobsQueued`, which is the only thing that
+                        separates the two. */
+                     "\"plateauAsked\":%ld,\"plateauHeld\":%ld,"
+                     "\"plateauRuns\":%ld,\"plateauHeldIdle\":%ld,"
                      /* AND WHETHER THE ORDER PUBLISHED ABOVE IS DECIDING ANYTHING AT ALL — the frontier's
                         arrival and departure processes, which every row above presupposes and none of them
                         asks. Read `arrivals / picksLifetime`: MEMBERS MINTED PER DISPATCH. Below 1 the
@@ -1653,6 +1712,8 @@ char *result_wfq_json(void) {
                      w.epoch_away_live, w.epoch_away_walk,
                      flow_epoch_rebuild(), flow_epoch_resets(),
                      flow_starved_picks(), flow_starved_picks_idle(),
+                     flow_plateau_asked(), flow_plateau_held(),
+                     flow_plateau_runs(), flow_plateau_held_idle(),
                      (long long)w.arrivals, (long long)w.departures,
                      (long long)w.credit_calls, (long long)w.credit_paid, (long long)w.credit_dropped,
                      engine_work_done(), flow_rank_changes());

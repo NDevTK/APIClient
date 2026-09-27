@@ -1349,6 +1349,92 @@ long flow_epoch_resets(void) { return g_epoch_resets; }
 static long g_starved_picks_idle = 0;
 long flow_starved_picks_idle(void) { return g_starved_picks_idle; }
 
+/* HOW DEEP THE PLATEAU IS — THE COMPLEMENT OF `g_starved_picks`, AT THE SAME LINE, AND THE READING THAT SEPARATES
+   §Attention'S VALUE YIELD FROM §scheduler'S NEVER-STARVED GUARANTEE. `g_starved_picks` counts the pick that
+   DISPLACES the incumbent while a never-dispatched member stands level; these count the pick that KEEPS it in
+   the same state. flow_pick's banner named that question and said, until the diff that added these rows, that
+   it was "no longer counted anywhere" — that clause is rewritten at its own site rather than deleted, and it
+   is the one quantity that tells the two specifications apart, because they resolve OPPOSITELY on exactly this
+   population: §Attention blesses it ("a top-ranked flow runs on at ~zero switch cost") and §scheduler's
+   optimism bonus is supposed to make it end.
+   THEY ARE NOT A SECOND OPINION ON A STARVATION COUNT AND MUST NOT BE READ AS ONE. A single retention is
+   §Attention working as specified; what the specification claims is a BOUND on how long it lasts — flow.h's
+   aging term states it in its own words, "a flow tied with an unrun sibling on reward and bonus hands over
+   after ONE quantum, which is the queue rotating". That is a claim about the DEPTH of a stretch and not about
+   whether stretches occur, so a count of retentions can neither confirm nor refute it and the run count below
+   is what makes the quotient a depth.
+   WHY THE DEMOTION THAT ENDS A STRETCH IS NOT IN DOUBT AND THE DEPTH STILL IS: flow_age_running is called
+   unconditionally by the dispatch loop and its charges TELESCOPE across the quantum (engine.c carries the
+   previous turn's reading into the next turn's `t0`), so the incumbent's own silence accumulates the whole
+   slice exactly and its notch outruns a level waiter's by about two notches per quantum — engine.c asserts
+   that observability at the charge. What NOTHING states is how many SCANS fit inside the quantum that
+   demotion takes, and that number is the plateau's depth. A frontier standing at one weight makes it the
+   dominant event rather than a corner, so it is the difference between a queue that rotates and one that does
+   not, and it was being inferred from a specification instead of read.
+   RELEASE-LIVE, for `g_epoch_rebuild`'s reason and not by inheritance from `g_starved_picks`: these are four O(1)
+   statements over quantities this scan has already computed — no member is re-weighed and no walk is added —
+   and the artifact that drives a real page is the release one, so a dev-only spelling would put the reading in
+   the one build the product does not run in.
+   A LIFETIME COUNTER EACH, off the flows entirely for `g_picks_total`'s reason and reset by nothing for
+   `g_rank_changes`', so all four may be differenced across two samples of one instance.
+   See solver/flow.h for the reading, the two quotients and why the dilemma these rows are about dissolves;
+   flow_between_units for the boundary the idle subset is an upper bound on. */
+static long g_plateau_asked = 0;
+long flow_plateau_asked(void) { return g_plateau_asked; }
+
+/* …AND THE SUBSET OF `g_plateau_asked` IN WHICH THE INCUMBENT ACTUALLY KEPT IT. Contained in it by construction, being
+   raised inside its own `if`, and the pair is the share of makeable comparisons the tie-break decided in the
+   incumbent's favour. */
+static long g_plateau_held = 0;
+long flow_plateau_held(void) { return g_plateau_held; }
+
+/* …AND HOW MANY MAXIMAL STRETCHES THOSE RETENTIONS FORMED, WHICH IS THE DENOMINATOR THAT TURNS THE COUNT INTO
+   A DEPTH. `held / runs` is the MEAN number of consecutive scans an incumbent kept the thread while somebody
+   untouched stood level with it, and it is the reading all three rows exist for:
+     runs == 0 with a non-zero ask   the tie-break never favoured the incumbent while a never-run member was
+                                     level — §scheduler's guarantee is not under test on this run.
+     held / runs BOUNDED             the queue ROTATES: every stretch ends, which is the aging term doing what
+                                     flow.h prices it for, and the depth is what one quantum costs in scans.
+     runs == 1 with a large held     ONE unbroken hold for the whole run. That is the guarantee being FALSE
+                                     rather than the yield being cheap, and it is the only reading here that
+                                     asks for a diff.
+   IT IS A LIFETIME COUNT AND NOT A HIGH-WATER MARK, DELIBERATELY. A maximum stretch would answer the same
+   question and CLAUDE.md records what it costs: a max saturates, so its plateau is indistinguishable from a
+   ceiling and a short run reads the same low number at every revision. A run count and a hit count are both
+   sums over the same walk, so their quotient is a mean that may be differenced into a RATE over a window
+   rather than an average over a session.
+   THE STRETCH IS CLOSED BY ANY DISPATCH SCAN THAT DID NOT HOLD, including one that was not ASKED — a scan at
+   which nobody untouched stands level is a scan at which the incumbent is passing over nobody, so the stretch
+   is over whether or not the comparison was makeable. `g_plateau_open` below is that boundary and it is the
+   one piece of state here: it DECIDES NOTHING, bounds nothing, and no term of flow_weight and no pick reads
+   it. It is reset by nothing else, for the reason the counters are. */
+static long g_plateau_runs = 0;
+long flow_plateau_runs(void) { return g_plateau_runs; }
+static int g_plateau_open = 0;
+
+/* …AND THE SUBSET OF RETENTIONS IN WHICH THE INCUMBENT HAD NOTHING TO CONTINUE, which is the half of `held`
+   that §Attention's value yield does NOT bless: a member standing at the unit boundary has finished its trial,
+   so keeping the thread there is not necessary work.
+   NAMED RESIDUAL. NOT COVERED: TWO of the three clauses of engine.c's unit boundary, for two different
+   reasons, so this is an UPPER BOUND on "the incumbent had nothing to continue" rather than a measurement of
+   it. The PARK clause is unaskable from here at any price: a parked continuation is a per-member fact for
+   every member EXCEPT the one holding the thread, whose queue lives in the RUNTIME for the duration of its
+   turn — flow_holds_park asserts that it is not asked about it, and the member this row is about IS the
+   running one, the exact mirror of the population `g_starved_picks_idle` can reach. The MICROTASK clause is
+   askable and is not asked, deliberately, because flow_job_microtask walks the job queue taking and freeing a
+   JSValue per entry and this row fires on nearly every scan of a tied frontier — a per-scan walk in a release
+   build is the instrument that changes the run it measures, which is a worse defect than a bound that says it
+   is one. WHAT THE NEXT DIFF BUILDS: the runtime handle at the pick, which flow_holds_park's own assert
+   already names as the capability to build — engine.c asks JS_HasParkedFlow of the runtime and this file holds
+   no handle to it — together with an O(1) microtask predicate, a count carried on the flow rather than a walk
+   over its queue, which is what makes the second clause affordable at this frequency. Both close in the same
+   diff and both are needed: either alone leaves the bound. HOW ITS ABSENCE SHOWS: this row standing at or near
+   `plateauHeld` on a document whose `jobsQueued` is large, where the honest reading is that the incumbents
+   were holding queued continuations rather than idling — the two are indistinguishable from this row alone,
+   and `jobsQueued`/`jobsRun` beside it is the only thing that separates them today. */
+static long g_plateau_held_idle = 0;
+long flow_plateau_held_idle(void) { return g_plateau_held_idle; }
+
 /* A FLOW TAKES OR RELEASES THE THREAD — and a dispatch is where an account's coordinate STOPS being a reading
    of the frontier's clock and becomes a tag of its own. The two statements are ONE operation and in this order,
    because between them the clock would be defined by an account that is defined by the clock.
@@ -5544,6 +5630,13 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        RETIREMENT: this record goes when the ask no longer walks the frontier, or when no per-bucket quantity
        can be summed into flow_weight at all. */
     int seed_live = 0;
+    /* WHETHER THE SEED WAS A CANDIDATE AT ALL, WRITTEN AT THE ONE SITE THAT DECIDES IT AND NOT RE-DERIVED.
+       The fold below admits the incumbent only if it is still in the registry AND is not host-owed on a
+       runnable-only scan, and the plateau rows at the end of this function need exactly that population: the
+       question "did the incumbent keep the thread" is not askable about a seed the scan never weighed. Written
+       inside that `if` rather than recomputed beside the raise, because a second spelling of a two-clause
+       condition is the second copy that drifts, and the clause that would drift is the one nobody re-reads. */
+    int seed_weighed = 0;
 #if APICLIENT_DEV
     /* THE TWO SIDES OF THE ONE IDENTITY THAT MAKES THE ARMING COUNT A MEASUREMENT RATHER THAN A SUM OF ITS OWN
        SUMMANDS — snapshotted here and compared where the loop ends. See solver/flow.h's FlowKeyChecks. */
@@ -5804,6 +5897,7 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        exactly the eligible members and a reader differencing it across this diff is reading one quantity. */
     if (seed_live && !(runnable_only && flow_host_owed(seed))) {
         double w = flow_weight(seed); g_scan_weights[why]++;
+        seed_weighed = 1;
         if (seed->visits == 0 && flow_silence_notch(seed) == 0 && (!unrun || w >= unrun_w)) {
             unrun = seed; unrun_w = w;
         }
@@ -6350,12 +6444,19 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        even of the same event: this one was raised per SCAN and `picksLifetime` advances per SWITCH. With the
        displacement clause they are the same event, `starvedPicks <= picksLifetime` holds by construction,
        and result.c asserts it where both are in one hand.
-       WHAT IS NO LONGER COUNTED ANYWHERE, AND IS A DIFFERENT QUESTION RATHER THAN A LOSS: how often the
-       incumbent kept the thread while a never-run member stood level with it. That is §Attention's
-       value-yield doing exactly what it is specified to do — "a top-ranked flow runs on at ~zero switch
-       cost" — so it belongs to a reading about PLATEAU DEPTH and never to one about starvation, and
-       folding the two into one row is what cost this one its meaning; the rival scan, the host's best-weight read, the pager's tail
-       and the census ask other questions and a count over them would be a number about the instrument.
+       THE DIFFERENT QUESTION IS THE COMPLEMENT AND `g_plateau_held` COUNTS IT NOW: how often the
+       incumbent KEPT the thread while a never-run member stood level with it. This paragraph read "WHAT IS NO
+       LONGER COUNTED ANYWHERE" and the clause is rewritten rather than deleted, because the reasoning that put
+       it there is exactly right and is what a reader re-derives — the two questions must not share a row, and
+       folding them into one is what cost this one its meaning. What was wrong was only the ARITHMETIC of
+       leaving the complement unread: a retention is §Attention's value-yield doing exactly what it is
+       specified to do ("a top-ranked flow runs on at ~zero switch cost"), so it belongs to a reading about
+       PLATEAU DEPTH and never to one about starvation — and a DEPTH is the one thing neither specification
+       states, which is why it had to become rows rather than an argument. `g_plateau_asked`, `g_plateau_held`,
+       `g_plateau_runs` and `g_plateau_held_idle` are those rows,
+       raised in a separate evaluation under a separate condition so that nothing about this row's population
+       depends on theirs. The rival scan, the host's best-weight read, the pager's tail and the census still ask
+       other questions and a count over them would still be a number about the instrument.
        EXACT `==` AND NO EPSILON, this file's idiom: two members standing at one another read one value twice,
        and a tolerance would count members the pick can already tell apart.
        A LIFETIME COUNTER and the only kind a reader may difference — it is off the flows entirely, for
@@ -6368,6 +6469,41 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
     if (why == FLOW_SCAN_NEXT && best && best != seed && best->picks > 0 && never && never_w == bw) {
         g_starved_picks++;
         if (flow_between_units(best) && !flow_holds_park(best)) g_starved_picks_idle++;
+    }
+    /* …AND THE COMPLEMENT, IN ONE EVALUATION, SO THE THREE IDENTITIES ARE TRUE BY CONSTRUCTION RATHER THAN BY
+       FOUR WRITERS AGREEING. `held` is decided by the same `best`, `seed`, `never` and `bw` `g_starved_picks` was,
+       and every subset is raised inside the `if` of its own population, so `runs <= held <= asked` and
+       `held_idle <= held` cannot be violated by anything but a second writer — which is what result.c asserts.
+       `never != seed` IS PART OF THE QUESTION AND NOT A GUARD PAST A BROKEN INVARIANT. "A never-run member
+       stood LEVEL WITH the incumbent" presupposes a member that is not the incumbent: without the clause, a
+       seed with `picks == 0` becomes its own `never` through the fold's `>=`, compares equal to itself, and
+       every scan of that member's turn reads as a pass-over of somebody who is not there. The comment above
+       says the incumbent "necessarily has `picks > 0`" and that is an argument about engine.c's displacement
+       block rather than a property this function can see — `cur` is restored from `g_sess_cur` across a resume
+       — so the clause is cheap, is the question's own shape, and is what makes the row correct if that
+       argument ever stops holding.
+       CLOSED BY ANY DISPATCH SCAN THAT DID NOT HOLD, ASKED OR NOT, which is why the write to `g_plateau_open`
+       is unconditional inside the scan test rather than inside the ask: see its own banner. */
+    if (why == FLOW_SCAN_NEXT) {
+        int asked = seed_weighed && best && never && never != seed;
+        int held  = asked && best == seed && never_w == bw;
+        if (asked) g_plateau_asked++;
+        if (held) {
+            g_plateau_held++;
+            if (!g_plateau_open) g_plateau_runs++;
+            /* THE ONE CLAUSE OF THE UNIT BOUNDARY THAT IS O(1), AND THE FIELD READ RATHER THAN
+               flow_between_units — WHICH IS A COST DECISION AND IS WHY THIS RAISE IS NOT ITS SIBLING'S.
+               `g_starved_picks_idle` calls flow_between_units because it is raised only where the pick
+               DISPLACES, which is rare; this row fires on a RETENTION, which on a frontier standing at one
+               weight is nearly every scan. flow_between_units' second clause is flow_job_microtask, and that
+               WALKS the member's job queue taking and freeing a JSValue per entry — so calling it here would
+               put a queue walk with refcount traffic on the hot path of a release build, which is the
+               instrument that costs enough to shorten the run it is measuring. `frame` is a field read and is
+               the boundary's primary clause, the one every job arm of flow_step is under. The row is an UPPER
+               BOUND by the other two clauses and the residual at the counter says so. */
+            if (seed->frame == NULL) g_plateau_held_idle++;
+        }
+        g_plateau_open = held;
     }
     return best;
 }

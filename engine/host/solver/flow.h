@@ -3591,6 +3591,67 @@ long flow_epoch_resets(void);
    the direction an ordering question is actually asked in. */
 long flow_starved_picks_idle(void);
 
+/* HOW DEEP THE TIED PLATEAU IS — FOUR LIFETIME ROWS THAT SEPARATE §Attention'S VALUE YIELD FROM §scheduler'S
+   NEVER-STARVED GUARANTEE, WHICH RESOLVE OPPOSITELY ON ONE POPULATION AND WHICH NOTHING IN THIS FILE COULD
+   TELL APART. The two sentences are not in conflict and the dilemma dissolves on enumerating what each is
+   about, which is the thing to read first:
+     §Attention's yield is about an incumbent the order can SEE is top-ranked — "a top-ranked flow runs on at
+       ~zero switch cost". A RETENTION is that, and it is correct.
+     §scheduler's optimism bonus is about a member ranked BEHIND — "so a never-run flow is never starved".
+       A member TIED with the maximum is in neither population: nothing is ranked ahead of it, so there is no
+       starvation to cure, which is the argument `never_picked` above already makes in its own words and the
+       reason relaxing flow_pick's comparison would implement nothing.
+   SO THE ONLY THING EITHER SENTENCE CAN BE WRONG ABOUT IS HOW LONG A RETENTION LASTS, and that is the one
+   quantity neither of them states and no row here was measuring. flow_pick's own banner named it — "how often
+   the incumbent kept the thread while a never-run member stood level with it … belongs to a reading about
+   PLATEAU DEPTH" — and left it uncounted until the diff that added these four rows, which is where that
+   banner's own clause is rewritten.
+   WHAT THE SPECIFICATION PREDICTS, SO THAT THESE ROWS CAN REFUTE IT RATHER THAN ILLUSTRATE IT: the aging term
+   above claims in its own words that "a flow tied with an unrun sibling on reward and bonus hands over after
+   ONE quantum, which is the queue rotating". flow_age_running is called unconditionally by the dispatch loop
+   and its charges TELESCOPE (engine.c carries each turn's clock reading into the next turn's `t0`), so the
+   incumbent's own silence accumulates the whole slice and outruns a level waiter's notch — engine.c asserts
+   that observability at the charge. The prediction is therefore a BOUND ON DEPTH and not the existence of a
+   handover, and the quotient below is what scores it.
+   READ THEM AS TWO FRACTIONS AND NEVER A NUMERATOR ALONE:
+     `plateauHeld / plateauAsked`   how tied the frontier is at the line that dispatches — the share of
+                                    makeable comparisons the tie-break decided in the incumbent's favour. It
+                                    is the ORDER being tied and is not by itself a defect.
+     `plateauHeld / plateauRuns`    THE DEPTH, and the reading all four rows exist for. Bounded is the queue
+                                    rotating, which is the specification holding. `plateauRuns` at 1 beside a
+                                    large `plateauHeld` is ONE unbroken hold for the whole run, which is the
+                                    guarantee being FALSE and is the only reading here that asks for a diff.
+   `plateauAsked` IS THE REACHABILITY WITNESS AND NONE OF THE OTHER THREE MAY BE READ WITHOUT IT, the same
+   shape `index_asked` takes for the six `FlowIndexChecks` rows: a zero `plateauHeld` beside a zero ask is a scan
+   population that never existed — no incumbent the scan weighed, or no never-dispatched member to compare it
+   against — and is satisfied identically by a frontier the order is serving perfectly and by a dispatch loop
+   that never ran. A zero ask beside a non-zero `picksLifetime` is itself a finding: it says the frontier held
+   no never-dispatched member at any dispatch, which is a frontier that drains.
+   ALL FOUR ARE LIFETIME COUNTS, RELEASE-LIVE, and none decides anything: no term of flow_weight reads any of
+   them, no pick branches on them, nothing is bounded by them. `plateauHeldIdle` is an UPPER BOUND by TWO of
+   the unit boundary's three clauses — one unaskable of the running member at any price, one affordable only
+   as an O(1) predicate this file does not yet have, since the row fires on nearly every scan of a tied
+   frontier. See the residual at its counter in flow.c for both and for what closes them.
+   NAMED RESIDUAL. NOT COVERED: an automatic reading. `engine/build.mjs`'s @WFQ verdict is what turns this
+   census into a sentence — it is where "a FRONTIER ADVANCING WITHOUT RETIRING" comes from — and it says
+   nothing about the depth, so the two quotients above are computed on every census of every run and read only
+   by somebody who goes looking. WHAT THE NEXT DIFF BUILDS: that verdict clause. It is NOT built here and the
+   reason is the whole of why this is a residual rather than an omission: a verdict has to say whether a depth
+   is BOUNDED, that is a BAND, and no depth has ever been measured — so the band would be a number nobody
+   derived sitting in the one place a reader takes a number from, which is the proposed-narrowing defect with a
+   threshold in place of a rule. The first measured depth is what the band comes from and the clause lands with
+   it. HOW ITS ABSENCE SHOWS: a run whose verdict names a frontier that advances without retiring while the
+   document beside it carries `plateauRuns` at 1 and `plateauHeld` in the thousands — the verdict silent about
+   the one row that says whether the ordering is the cause.
+   RETIREMENT: these rows go when the depth is held by an assertion instead of a reading — an upper bound on
+   consecutive retentions derived from FLOW_AGE_QUANTUM and the slice, asserted where the charge meets the pick
+   as engine.c's own notch check already is — because the quotient is then a claim the build refuses to break
+   rather than a number somebody has to go and read. */
+long flow_plateau_asked(void);
+long flow_plateau_held(void);
+long flow_plateau_runs(void);
+long flow_plateau_held_idle(void);
+
 /* The highest-priority flow in the frontier, or NULL if empty — EVERY member, whether or not it can currently
    make progress. It answers the host's Level-1 question (this document's best weight) and the census's; the
    scheduler's own pick is flow_next_to_run below. Does not remove it. */
