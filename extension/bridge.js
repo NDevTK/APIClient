@@ -383,7 +383,28 @@ function assertResultDocument(r) {
        cannot see a producer's key-set rule may not be the place that enforces it, and the copy that ABORTS on
        the producer's documented answer is the copy to remove — CLAUDE.md §THE-COROLLARY-IS-THE-MORE-USEFUL-
        HALF, where the diff to prefer is the invariant that makes a silent failure loud rather than the
-       predicate rewritten at one site, and the invariant is not missing here: it is present three times.
+       predicate rewritten at one site.
+       AND `PRESENT THREE TIMES` IS AN OVER-CLAIM, WHICH THE COMMIT THAT REMOVED THE REFUSAL MADE AND WHICH IS
+       CORRECTED HERE RATHER THAN IN A REPORT, because the sentence above is the one a reader checks and an
+       absolute takes the true part of its paragraph down with the false. It is true of `_cold` and of both
+       `_swap` rows, named one paragraph up and each verified. It is NOT true of `_absent`:
+       `git grep -n '@ABSENT' -- engine/build.mjs` answers NOTHING, so that census has no document-side reader
+       at all, and solver/absent.c's own guards — its `_Static_assert` over the bucket names and its per-row
+       `reads`-equals-the-sum identity — are COUNTER-side and are compiled out in release exactly as cow.c's
+       are. So the removal is narrower than what stood here and the gap is named rather than papered over.
+       NAMED RESIDUAL — WHAT IS NOT COVERED: `_absent`'s per-member bucket tables (solver/absent.c's
+       `KEY_ENTRY`, whose four arms are a fixed list and whose count that file asserts at COMPILE time) no
+       longer have any check on this document that they are non-empty, in any build. Nothing is claimed about
+       whether one can BE empty: a member is on that census because it was read, so every route that puts a
+       row there raises a bucket, and the state may well be unreachable — which is a statement about
+       absent.c's own arms and not one this zone is entitled to make on a hand list of producer facts. WHAT
+       THE NEXT DIFF BUILDS: an `@ABSENT` reader in engine/build.mjs, taking its required row set from
+       `absent_json`'s own format string through `censusRowSet` exactly as `coldFields`, `heapFields` and
+       `swapFields` do, and stating the per-member partition identity the composer already computes. That is
+       where the other three live, it is the half that survives a release build, and a field set derived from
+       the composer cannot rot the way the enumeration above rotted. HOW ITS ABSENCE WOULD SHOW: a build's
+       @ABSENT line reports a member whose bucket table is `{}` while the member is on the census because a
+       read of it was recorded — two halves of one row disagreeing, with no reader anywhere joining them.
        WHAT REMAINS ASSERTED ON A HISTOGRAM IS EVERY VALUE IN IT, one level down, because those are numbers
        this zone HOLDS rather than a rule about keys only the producer knows.
        NAMED RESIDUAL — WHAT IS NOT COVERED: the shape check above still refuses `null`, which navigable.h
