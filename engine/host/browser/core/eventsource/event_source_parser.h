@@ -66,14 +66,15 @@
  * ONLY, so a detect's `typeof X` is excluded from it by construction and a bare `class C extends X` and a
  * `mt = X` parameter default are on no channel it has. THE STRUCTURAL FACT, WHICH IS WHAT DOES NOT ROT: the
  * unguarded uses END THE FLOW TODAY, so the forcing function §NO STUBS relies on is already armed; and the
- * detect sites' false arms RUN SOMETHING — one SPA's change-detection reads `typeof EventSource === "undefined"`
- * and `return`s BEFORE its own `stopPolling()`, so an absent EventSource keeps that page POLLING, and a second
+ * detect sites' false arms RUN SOMETHING — one SPA's change-detection tests the name and `return`s BEFORE its
+ * own `stopPolling()`, so an absent EventSource keeps that page POLLING, and a second
  * selects a non-EventSource transport whenever the name is absent OR custom headers are wanted. An interface
  * object installed ahead of the connection therefore does not merely fail to gain: it STOPS THE POLLING and
  * abandons the other transport, which is the both-sides loss above with a mechanism under it.
  *   THE DERIVATION AND NOT THE FIGURES, because a corpus moves and other people's bundles are not this
  * project's to commit: `node engine/absentrank.mjs --corpus <the fetch driver's path> --top 300`, whose own
- * banner names the driver that writes one, and then OPEN the detect sites and read the branch STRUCTURE —
+ * banner names the driver that writes one. A minified detect is spelled `typeof X>"u"` rather than against
+ * `"undefined"` — lexically the same test, and the string to grep for — so OPEN the sites and read the STRUCTURE:
  * `if (x) {…}` and `if (x) {…} else {…}` are one grep apart and opposite answers about what an absence costs.
  * RETIREMENT: this record goes when this component has a caller, with the ordering record above it, because
  * what an absence costs is then a question about a page this engine can already execute either arm of.
