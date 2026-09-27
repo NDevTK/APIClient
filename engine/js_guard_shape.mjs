@@ -158,11 +158,38 @@ const GLOBAL_RECEIVERS = new Set(["window", "self", "globalThis"]);
 /* Does this node DENOTE the global binding `name` in a position that cannot itself throw when it is absent?
    A bare identifier qualifies ONLY under `typeof`, which the caller below enforces by asking this of a
    `typeof` operand and of a member expression and never of a bare test. */
+/* `object` AND `property` ARE READ UNGUARDED, AND THE FILE ALREADY SAID SO TWO TOKENS LATER. Both were
+   optional-chained here while `n.object.name` and `n.property.name` on the very next operands were not, which
+   is one contract stated two ways in one expression — and the UNGUARDED spelling is the correct one: a
+   MemberExpression carries both by the grammar, and the `n.type` test in front of this conjunction is what
+   establishes it. The chain therefore guarded a state the parser cannot produce, and it guarded it in the
+   direction that ANSWERS FALSE: a node whose `property` were missing would have read as `not a global member`,
+   which the caller then reads as an UNGUARDED use — the same PLAUSIBLE DATUM CLAUDE.md §A-FIELD-A-CONSUMER-
+   DEFAULTS names, in a classifier whose own header holds its demoting verdicts to the stricter standard.
+   Unguarded, that state is a TypeError naming the field at the line that read it, which is what this file's
+   own last paragraph asks for — a construction whose controls disagree throws rather than returning a reader
+   that cannot speak. `!!n` stays: the callers below pass an operand that may be absent, which is a fact about
+   THIS module's own calls and not about the parser's output.
+   RETIREMENT: this record goes when the parser's node shape is asserted once where a node ENTERS this module,
+   so a reader here cannot re-derive a per-field guard for it. */
 const isGlobalMember = (n, name) =>
-  !!n && n.type === "MemberExpression" && n.object?.type === "Identifier"
+  !!n && n.type === "MemberExpression" && n.object.type === "Identifier"
   && GLOBAL_RECEIVERS.has(n.object.name)
-  && ((!n.computed && n.property?.type === "Identifier" && n.property.name === name)
-      || (n.computed && n.property?.type === "StringLiteral" && n.property.value === name));
+  && ((!n.computed && n.property.type === "Identifier" && n.property.name === name)
+      || (n.computed && stringValue(n.property) === name));
+/* AND THE COMPUTED KEY GOES THROUGH `stringValue`, WHICH IS THE BLINDNESS THE PARAGRAPH DIRECTLY BELOW
+   RECORDS HAVING FIXED ONE FUNCTION OVER AND LEFT STANDING IN THIS ONE. It says a minifier is free to emit a
+   substitution-free template literal wherever the source wrote a quoted string, that several bundles in this
+   corpus emit EVERY string that way, and that a reader asking only for `StringLiteral` is blind to a whole
+   emitter's output — then this line asked only for `StringLiteral`. So `typeof window[`X`] !== "undefined"`
+   read `throws` while `window["X"]` read `guarded-silent`: a guarded use reported as a flow-ender, one
+   backtick apart, which is CLAUDE.md §AND-THE-FORM-THAT-IS-IMMUNE-TO-REVIEW — a file stating a rule correctly
+   and violating it in the same paragraph, where the prose is what stops anybody checking the code.
+   THE DIRECTION IT MOVES IS THE DEMOTING ONE and this file's header holds those to the stricter standard, so
+   the shape is ARMED in the control table below rather than argued for here: `stringValue` is the same
+   predicate the two-delimiter controls already exercise, and a backtick key is now a control of its own.
+   RETIREMENT: this record goes when no reader in this file tests a node's `type` against a literal kind that
+   `stringValue` already decides, because the class is then closed by construction. */
 /* THE VALUE OF A STRING LITERAL IN EITHER SPELLING. A minifier is free to emit a substitution-free template
    literal wherever the source wrote a quoted string, and several bundles in this corpus emit EVERY string
    that way — so a reader that asks only for `StringLiteral` is blind to a whole emitter's output rather than
@@ -387,6 +414,12 @@ const ARM = [
   ["if('X' in window){new X(1)}",                     "guarded-silent"],
   ["if(window.X){new X(1)}",                          "guarded-silent"],
   ["if(globalThis['X']){new X(1)}",                   "guarded-silent"],
+  /* THE COMPUTED-KEY RECEIVER IN BOTH DELIMITERS, for the reason `stringValue` exists: a bundle that emits
+     every string as a substitution-free template literal writes the second of these and not the first, and a
+     reader that sees only the first reports its guarded uses as flow-enders. */
+  ["if(typeof window['X']!=='undefined'){new X(1)}",  "guarded-silent"],
+  ["if(typeof window[`X`]!=='undefined'){new X(1)}",  "guarded-silent"],
+  ["if(window[`X`]){new X(1)}",                       "guarded-silent"],
   ["if(typeof X==='function'){new X(1)}",             "guarded-silent"],
   ["if(typeof self.X!=='undefined'){new X(1)}",       "guarded-silent"],
   ["if(!(typeof X==='undefined')){new X(1)}",         "guarded-silent"],

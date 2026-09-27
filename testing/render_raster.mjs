@@ -291,6 +291,18 @@ function splitPending(line) {
          '(method, destination, initiator, provenance, pinned, credentials, url) — this host is splitting a ' +
          'record the engine joined differently, and guessing would attribute one request\'s address to ' +
          'another\'s method: ' + JSON.stringify(line.slice(0, 200)));
+  /* THE FIELD COUNT IS THE WHOLE OF THE SHAPE CHECK, AND `url` IS GUARANTEED BY IT — which is why the two
+     reads of `req.url` under a `try` below are DECIDED and not defaulted, and this is recorded here because a
+     gate row naming them cannot show a reader the paragraph that settles them. Those trys exist for the acts
+     that can throw — `new URL` on an address the page composed, and the `fetch` — and each catch YIELDS THE
+     RECORD'S DECLARED ABSENCE with a named reason (a decline, or Fetch §5.6's network error) rather than
+     substituting a value for a missing field, so neither is the `catch {}` CLAUDE.md §A-FIELD-A-CONSUMER-
+     DEFAULTS names beside `|| 0`. `url` is also read UNGUARDED in `decline` above, so its presence is already
+     load-bearing here on a path no catch covers. NO NON-EMPTY CHECK IS ADDED: engine_pending_split is the
+     authority on this grammar and asserts the SEPARATORS, not the field contents, and a JS side asserting
+     more than the producer does would be one contract stated two ways with the stricter copy here.
+     RETIREMENT: this record goes when that producer asserts each field's own extent, because the JS side's
+     count check is then the same statement and there is nothing left to say about which side is stricter. */
   return { method: f[0], destination: f[1], initiator: f[2], provenance: f[3],
            pinned: f[4], credentials: f[5], url: f[6] };
 }
