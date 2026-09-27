@@ -1653,7 +1653,131 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       between those bands and leaves the arithmetic open has contradicted itself in its own
                       sentence. Per §A-DIRECTORY-THAT-ABORTS a count arriving where there was no result is the
                       first honest measurement of an area and never a regression to revert. */
-                   "resize-observer"];
+                   "resize-observer",
+                   /* SELECTION API §3 "Selection interface", SELECTION API §4.1 "Extensions to Document
+                      interface", SELECTION API §4.2 "Extensions to Window interface" and SELECTION API §6.2
+                      "selectionchange event" — the three sections core/dom/selection.c opens with, plus the event
+                      its mutation response fires.
+                      THE NUMBERS WERE DERIVED FROM THE FETCHED SOURCE'S SECTION NESTING AND NOT READ OFF IT,
+                      which is said here because the obvious check answers ZERO and a reader who runs it would
+                      conclude they were invented. `curl https://w3c.github.io/selection-api/` returns the
+                      UNRENDERED ReSpec source: it carries `respecConfig` and NOT ONE numbered heading, because
+                      ReSpec assigns the numbers in the browser at render time. Walking its `<section>` opens and
+                      closes and counting siblings per depth gives 1 Background, 2 Definition, 3 Selection
+                      interface, 4 Extensions to Other Interfaces with 4.1/4.2/4.3, 5 Responding to DOM
+                      Mutations, 6 User Interactions with 6.1 selectstart event and 6.2 selectionchange event,
+                      7 Security and Privacy considerations, 8 Acknowledgements — which reproduces the three
+                      numbers this component already cites, independently, and is the whole of the evidence
+                      available for them. THAT IS ALSO WHY `selection api` IS A FOREIGN ROW in
+                      engine/citegen.mjs rather than an indexed one: CLAUDE.md's rule is that a standard whose
+                      maintained edition exists only as unrendered source has NO fetchable form an index can be
+                      built from, so its citations are counted and openly unchecked. Every number in this row
+                      therefore repeats its standard's name, because a bare one would fall to this file's
+                      dominant anchor and `AUDITED_EXT` admits `.mjs`.
+                      THE COMPONENT IS ALL BUT COMPLETE AND HAS NEVER BEEN ASKED A QUESTION.
+                      core/dom/selection.c installs TWENTY-FOUR members through `idl_install_accessor`/
+                      `idl_install_method` — `getRangeAt`, `addRange`, `removeRange`, `removeAllRanges`, `empty`,
+                      `getComposedRanges`, `collapse`, `setPosition`, `collapseToStart`, `collapseToEnd`,
+                      `extend`, `setBaseAndExtent`, `selectAllChildren`, `deleteFromDocument`, `containsNode`,
+                      `toString`, the eight readonly attributes and `getSelection` — and the ONE member of
+                      SELECTION API §3's interface it does not install is `modify()`, which is DECLARED absent
+                      rather than missing: `SELECTION_ABSENT[]` hands it to `idl_members_excluded`, and the
+                      reasoning sits at the exclusion, that its steps 10 and 11 set the focus to a location this
+                      engine has no layout to compute. `grep '"selection"'` over THIS FILE at origin/main answers
+                      ZERO against `"web-locks"` at one, so all 121 of the area's testharness files sit outside
+                      the gate and every one of those 24 members is scored by nothing.
+                      IT COSTS 193 BLOBS AND 448098 BYTES, re-priceable with
+                        git -C engine/.work/wpt ls-tree -r -l <rev> -- selection | awk '{n++;b+=$4} END{print n,b}'
+                      IT MUST BE A WPT_PATHS ENTRY AND NOT A WPT_OWN_LEVEL ONE, for the web-locks reason:
+                      nothing else puts this standard on disk. It has to be the SUBTREE as well — 34 of the 121
+                      load `selection/common.js`, `selection/addRange.js`, `selection/collapse.js`,
+                      `selection/extend.js`, `selection/selection-test-utils.js` or
+                      `selection/bidi/selection-modify-bidi-data.js`, and its `bidi`, `shadow-dom`,
+                      `contenteditable` and `textcontrols` children hold files a level-only claim would leave for
+                      the stray census to fail on.
+                      IT DRAGS NO NEW OWN LEVEL. `selection` is TOP LEVEL, so the only directory on the path to it
+                      is the corpus root, which every entry above already materializes.
+                      IT IS 121 TESTHARNESS FILES AND 131 RUNS. SEVEN files declare variants and they are the
+                      whole of the difference: `selection-range-after-textcontrol-removed.html` FOUR,
+                      `textcontrols/initial-selection-during-focus-event-propagation.html` THREE, and
+                      `contenteditable/initial-selection-on-focus.tentative.html`,
+                      `contenteditable/modifying-selection-with-non-primary-mouse-button.tentative.html`,
+                      `onselectstart-on-key-in-contenteditable.html`,
+                      `selection-range-in-shadow-after-the-shadow-removed.tentative.html` and
+                      `shadow-dom/tentative/Selection-getComposedRanges-dom-mutations-removal.html` TWO each.
+                      Derived over the PINNED BYTES through the corpus's own authority against a private
+                      `git archive bf4714d selection` root with BOTH controls armed — a `tools` symlink alone
+                      classifies ZERO lines, and `intersection-observer` exported from bf4714d against the same
+                      directory copied off this disk classifies 143 lines BYTE-IDENTICALLY — and re-derived with
+                        python3 engine/wpt_classify.py engine/.work/wpt | grep '^selection/' |
+                          awk -F'\t' '{n++; r += (NF>1 ? NF-1 : 1)} END {print n" files "r" runs"}'
+                      THE SEVENTY-TWO FILES THAT ARE NOT TESTS ARE NOT TESTS FOR FIVE STATED REASONS, so the
+                      stray census at the foot of this file stays at zero: 36 crashtests or print reftests (the
+                      `crashtests/` directory and the `crash` type flag, which `testKind` refuses by BOTH), 25
+                      documents that load no harness (the `caret/` reftests and `test-iframe.html`), 6 helper
+                      `.js` files with no `any`/`window`/`worker` meta flag, 4 `.yml`, and one `-manual`. Not one
+                      of them sits under a support path, which is why the helper `.js` files had to be counted at
+                      the NAME rather than by directory.
+                      TWO DECLARED FIXTURES DO NOT RESOLVE AND ARE DELIBERATELY NOT BOUGHT HERE, which is the
+                      css/support precedent one row up read from its own beginning: those 111 aborts NAMED the
+                      path and the widening followed as a decision of its own. The thirteen that DO resolve are
+                      `/resources/testharness.js` and `/resources/testharnessreport.js` (120 each),
+                      `/resources/testdriver.js` and `-vendor.js` (32), `selection/common.js` (30),
+                      `/resources/testdriver-actions.js` (27), `selection/addRange.js` (15),
+                      `selection/collapse.js` (4), `selection/extend.js` (3),
+                      `selection/bidi/selection-modify-bidi-data.js` and `selection/selection-test-utils.js` (2
+                      each), and `/resources/idlharness.js` with `/resources/WebIDLParser.js` through
+                      SERVER_REWRITES (1 each). The two that do not are
+                      `editing/include/editor-test-utils.js` (7 files) and `editing/include/tests.js` (1), and
+                      BOTH EXIST UPSTREAM at the pinned revision — this is a checkout gap and not the
+                      css-typed-om `comparisons.js` case, where the file is in no revision of the corpus.
+                      WHAT BUYING THEM WOULD COST, so the next reader takes the decision rather than rediscovering
+                      it: `editing/include` is 6 blobs and 618395 bytes, and it drags `editing`'s OWN LEVEL, which
+                      holds META.yml, README and `event.html` — and `event.html` LOADS `/resources/testharness.js`,
+                      so it is a test and `editing` would need a WPT_OWN_LEVEL entry beside the WPT_PATHS one.
+                      That is a decision about running the editing standard, which has no component here, and it
+                      belongs to whoever takes it.
+                      ITS `idlharness.window.js` WILL ASSERT THE WHOLE SURFACE rather than reporting the
+                      two-subtest floor: `idl_test` names `selection-api`, `html` and `dom` and all three `.idl`
+                      files are present under the listed `interfaces`. That is a fact about the CHECKOUT and the
+                      one thing predicted here that is not a claim about a run.
+                      NOT ONE OF THE 121 CARRIES AN `https` FLAG, so `testIsHttps` loads every one over `http`.
+                      SELECTION API declares no `[SecureContext]` member, so nothing is deleted from these realms
+                      by Web IDL §3.3.7 "[Exposed]"'s secure-context step and this area cannot reproduce the
+                      WebCryptoAPI measurement above.
+                      IT MOVES THE DENOMINATOR BY 131 RUNS and the total it moves to is NOT written here, for the
+                      reason the resize-observer row above gives. `node engine/wpt.mjs 2>&1 | head -40` is the
+                      derivation.
+                      WHAT STANDS ON AN ABSENT CAPABILITY IS PREDICTED, AND THE BANDS ARE DISJOINT IN A STATED
+                      ORDER, because a file that needs two absences must be counted once and the order is what
+                      makes the partition reproducible rather than a matter of taste. Each pattern is matched
+                      against the file's bytes, and the first band that matches owns the file:
+                        1  `editor-test-utils|editing/include`        8 — the fixture above, aborting by name
+                        2  `test_driver|testdriver`                  29 — synthetic input from an engine with no
+                                                                          device, the `fullscreen` and
+                                                                          `pointerevents` rows' subject
+                        3  `contenteditable|designMode`               9 — an editing host, which `contenteditable`
+                                                                          answering 2 files and `designMode` ONE
+                                                                          under engine/host/browser (against
+                                                                          `ZzNoAttr` at zero) says this engine
+                                                                          does not model
+                        4  `\.modify\(`                              10 — the declared exclusion above
+                        5  `<iframe|contentWindow|contentDocument`     4 — a child navigable whose document runs,
+                                                                          another lane's live subject, so what
+                                                                          these score is NOT predicted
+                        6  unpredicted remainder                     61
+                      THE PARTITION SUMS: 8 + 29 + 9 + 10 + 4 + 61 = 121, the file count above, with
+                      `idlharness.window.js` inside the 61. Bands 2 and 3 are wider than the earlier ones by
+                      total mention — 32 files name testdriver and 25 name an editing host — and the difference
+                      is the overlap the order resolves, which is why both numbers are given rather than one.
+                      NOTHING IS PREDICTED ABOUT WHAT THE SIXTY-ONE SCORE. They ask about the 24 installed
+                      members in the window realm: 18 of the 121 reach SELECTION API §3's `getComposedRanges`
+                      or a shadow root, which `shadow-dom` and `custom-elements` above already put a component
+                      behind, and the rest are range arithmetic, `selectstart`, and SELECTION API §6.2's
+                      scheduling. Expect bad first numbers; what each failure NAMES is the work queue, and per
+                      §A-DIRECTORY-THAT-ABORTS a count arriving where there was no result is the first honest
+                      measurement of an area and never a regression to revert. */
+                   "selection"];
 
 /* AND THE DIRECTORIES WHOSE OWN LEVEL CONE MODE HAS ALREADY PUT ON DISK. A cone-mode checkout materializes every
    file of every directory ON THE PATH to a listed one, so naming one helper's `resources` lands its standard's
