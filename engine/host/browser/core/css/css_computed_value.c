@@ -2323,7 +2323,20 @@ static JSValue css_resolved_inset(JSContext *ctx, lxb_dom_element_t *el, const c
            HOW ITS ABSENCE WOULD SHOW: a page reading BOTH opposing insets of an axis on a positioned box gets
            a pair that does not place the box — the two values and the element's own client rectangle on that
            axis do not reconcile against the containing block, where a browser's pair does. It is observed at
-           the pair and never at one member, because a single inset is a plausible length either way. */
+           the pair and never at one member, because a single inset is a plausible length either way.
+           AND ONE POPULATION FOLLOWS THE ORACLE OVER §9's LETTER, WHICH IS A DECISION AND NOT AN OVERSIGHT.
+           §9's third conjunct sends an over-constrained inset to the COMPUTED value, and css-position-3 §3.1's
+           `Computed value:` line is "the keyword auto or a computed <length-percentage> value" — a PERCENTAGE
+           SURVIVES it, which the static and display:none arms of this same entry rely on. So for a RELATIVELY
+           positioned box with both members of an axis declared — §3.3's own over-constrained case, "If neither
+           is auto" — §9 read literally answers `75%` for the end side where this line answers 75% OF THE
+           CONTAINING BLOCK. The WPT oracle pins the resolved form: cssom/support/getComputedStyle-insets.js's
+           "Percentages are absolutized into pixels" expects px for all four members of a relative box, and
+           getComputedStyle-insets-static.html expects the percentage preserved for a STATIC one — the same
+           helper, the two arms apart. A reader repairing this toward §9's letter would turn 72 passing subtests
+           of getComputedStyle-insets-relative.html red, which is why the choice is recorded here rather than
+           left to be re-derived. §3.5.2 above does NOT cover this case: its over-constraint is a NEGATIVE
+           inset-modified containing block, and §3.3's is simply both members being non-auto. */
         return css_resolved_px(ctx, used_value_inset_length_px(el, len, PHYS[side].vertical));
     }
     /* §3.1's `auto` — "Represents an unconstrained inset; the exact meaning depends on the positioning
