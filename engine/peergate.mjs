@@ -352,6 +352,36 @@ const CHECKS = [
               'observes no closed channel, prints no `@E`, holds this process\'s stderr pipe and burns a core ' +
               'with no payer until something else ends it. This row is the only place such a process is ' +
               'visible at all, and it states each one\'s consumed CPU beside it'],
+  /* NAMED RESIDUAL, AND ITS WITNESS ROWS ARE WRITTEN OUT HERE BECAUSE THE RUN THAT PRODUCED THEM LIVES IN A
+     FROZEN SNAPSHOT THAT IS DELETED THE MOMENT ITS LANE IS DONE. The row above reports the PROCESS; it is
+     silent about WHY an instance stops returning to its ABI loop, and that half is the engine's.
+     WHAT IS NOT COVERED: this gate can say that an instance outlived its zone and how much CPU it spent
+     doing it, and it cannot say which rung of the work ladder that instance was going round. The property
+     rather than the population: a `referenced` instance whose document has been DESTROYED owes nothing, is
+     blocked on nothing and may not finish — solver/engine.c\'s `g_referenced` arm turns the finish into
+     `FLOW_STEP_OWED`/`STEP_UNIT_AWAIT_PEER` precisely so there is somewhere for a later `windowproxy.get` to
+     arrive — and nothing in this gate can tell an instance RESTING in that state from one going round a rung
+     above it. The two are the same process from out here and they are opposite findings.
+     WHAT THE NEXT DIFF BUILDS: the per-instance census rows that separate them, read off the artifact the
+     zone already prints rather than composed here. On the run this row was written from the third instance
+     — the `/peer-closed` peer, identified by `destroyStep9Releases 1`, its document having run `close()` —
+     stood at `live 1, framed 1, blocked 0, owed 0, finished 0` with `renderingOpportunityAsks 2494` against
+     `renderingOpportunities 0`, `stepReachedRenderingLife 2494` against `stepNamedRenderingLife 0`, and
+     `outOfProgramsFramed 1`, while the two instances that DID reach `abi_line()` stood at 0 and 3 asks. It
+     wrote exactly ONE census and none after it, which is the WEDGED state `trusted.mjs`\'s own per-instance
+     report names — and that report never printed, because the zone was killed before it. So the diff is a
+     row saying whether a member is AT the referenced-await arm or above it, which is one bit the ladder
+     already has in hand and does not publish.
+     HOW ITS ABSENCE WOULD SHOW: a run whose `orphans` row names a process with minutes of CPU on it, beside
+     a peer whose census says its frontier owes nothing and is blocked on nothing — an instance that by every
+     published row has nothing to do and by the clock is doing it as fast as it can. A reader meeting that
+     pair today has to go to `ps` for the first half and can get no answer at all for the second.
+     AND ONE FIGURE ON THAT RUN IS NOT AMBIGUOUS AND IS WORTH MORE THAN THE REST: `_worldSegmentsMade` was 0
+     in ALL THREE instances, which is `peerflow`\'s subject — so no asking agent\'s world reached any peer
+     process, and that row would have read `wrong` rather than `missing` had anything decided it. Every
+     number above it is a FIRST census (`#1`) and therefore an opening reading rather than a terminal one;
+     this one is a zero at the only sample there was, which is the one shape an opening reading cannot
+     flatter. */
   ['peerflow', 'a peer instance\'s OWN result document reports `_worldSegmentsMade` at least 1 — the asking ' +
                'agent\'s world arrived in the peer process and a segment was materialized for it, which is ' +
                'the witness that the read was performed as a PROGRAM on the peer\'s frontier under the ' +
