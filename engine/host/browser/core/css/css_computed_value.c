@@ -362,11 +362,26 @@ static char *blockified(char *spec)
     return spec;
 }
 
-/* The element's BOX PARENT's `display` — the nearest ancestor element that GENERATES a box, because
-   `display: contents` generates none and a flex item's container is therefore the first ancestor past it. The
-   walk reads SPECIFIED values on purpose: blockification never makes a box a flex or grid container and never
-   stops one being one, so the question this walk asks has the same answer either way, and asking for the
-   computed value would recurse up the whole ancestor chain to answer it. OWNED, or NULL at the root. */
+/* The element's BOX PARENT's `display` — the nearest ancestor element that GENERATES a box, because `display:
+   contents` generates none and a flex item's container is therefore the first ancestor past it. The walk reads
+   SPECIFIED values on purpose: blockification never makes a box a flex or grid container and never stops one being
+   one, so the question this walk asks has the same answer either way, and asking for the computed value would
+   recurse up the whole ancestor chain to answer it. OWNED, or NULL at the root. THAT JUSTIFICATION IS ABOUT
+   BLOCKIFICATION AND IS NOW ONE OF TWO REASONS THE SPECIFIED VALUE COULD DIVERGE FROM THE COMPUTED ONE, which is
+   worth stating because the sentence above reads as covering both. css-display-3 §2.5's last sentence computes a
+   specified `contents` to `none` on Appendix B's population (`display_contents_computes_to_none` below), so for an
+   `<img>`, a `<select>`, a MathML element or a suppressed `svg` the two reads now DISAGREE: this walk skips past
+   such an ancestor as one that generates no box, where the truth is stronger — nothing in its subtree generates
+   one, so the element asking has no box for a box parent to be OF. THE WALK IS LEFT ALONE AND THE ANSWER IS
+   UNCHANGED BY THAT RULE, deliberately and not by omission: both consumers ask this only to find a FLEX OR GRID
+   CONTAINER, and each already refuses such a subtree by a second read that is not this one —
+   `uv_flex_item_container` (core/layout/used_value.c) asks the parent's OWN computed `display` beside this answer
+   precisely because "those are two reads that a spliced tree makes different values", and it now reads `none` there
+   where it read `contents` before, so it answers NULL either way. Teaching this walk the rule would change no
+   consumer's answer and would put css-display-3 §2.5's population behind a third predicate. RETIREMENT: this
+   paragraph goes when this walk's contract is asserted rather than described — a DCHECK at its exit that the value
+   it returns is the COMPUTED `display` of the element it read — because the divergence is then a crash at the one
+   site that could be wrong about it instead of a claim in a comment. */
 char *css_box_parent_display(const lxb_dom_node_t *n)
 {
     const lxb_dom_node_t *p;
@@ -391,6 +406,139 @@ static bool display_is_flex_or_grid_container(const char *d)
            css_cv_is(d, "grid") || css_cv_is(d, "inline-grid");
 }
 
+/* ONE ELEMENT'S LOCAL NAME, compared EXACTLY. An HTML element's local name is lower case for every element a
+   parser in this engine produces, and `createElementNS` is the one route that can give an HTML-namespace
+   element an upper-case one — which does not make it that HTML element, because HTML defines its elements BY
+   local name and `IMG` is not `img`. So the compare is a byte compare and not a case fold, which is also the
+   idiom core/css/css_presentational_hints.c already tests a tag with. AN ASSERT HERE WOULD BE A PAGE-HELD
+   ABORT SWITCH and is deliberately absent: a page chooses the name, so a spelling this predicate does not
+   recognise is INPUT and its answer is the not-a-member arm. */
+static bool cv_local_name_is(lxb_dom_element_t *el, const char *name)
+{
+    size_t len = 0, k = strlen(name);
+    const lxb_char_t *tag = lxb_dom_element_local_name(el, &len);
+
+    DCHECK(tag != NULL, "an element in the tree has no local name — every element a parser or a `createElement` "
+                        "produces is interned with one, so this is a node built by neither");
+    return len == k && memcmp(tag, name, k) == 0;
+}
+
+/* css-display-3 §2.5 "Box Generation: the none and contents keywords"' LAST SENTENCE, WHICH IS A COMPUTED-VALUE
+   RULE AND NOT A LAYOUT ONE: "This value computes to display: none on replaced elements and other elements whose
+   rendering is not entirely controlled by CSS; see Appendix B: Effects of display: contents on Unusual Elements for
+   details." It therefore belongs HERE, beside css-display-3 §2.7's blockification and css-display-3 §2.8's root
+   rule, and not at any of the walks that meet a `contents` child — those walks read the COMPUTED value, so once
+   this runs they see `none` and every one of them already answers `none` correctly without a second arm. WHY THIS
+   IS NOT THE SPLICE AND MUST NOT WAIT FOR IT. css-display-3 §2.5's OTHER sentence — "the element must be treated as
+   if it had been replaced in the element tree by its contents" — is a BOX-TREE construction step that
+   core/layout/block_flow.c, line_box.c, flex_item.c and table_box.c each name as absent. The two are independent in
+   one direction only: this rule REMOVES elements from the splice's population and is correct alone, while the
+   splice alone is WRONG for every element named below — a `<select style="display:contents">` would render its
+   `<option>`s, a `<canvas style="display:contents">` its fallback content, and a `<textarea
+   style="display:contents">` its text, where a browser shows nothing. So this lands FIRST. IT IS A NORMATIVE RULE
+   OVER A NON-NORMATIVE POPULATION, which is the whole of why the lists are transcribed rather than derived.
+   css-display-3 §2.5's sentence is in the specification's body, and Appendix B opens by calling itself currently
+   non-normative. So the OBLIGATION is settled and the MEMBERSHIP carries the appendix's own hedge, and a member
+   moving is a fact to re-fetch rather than one to re-reason. APPENDIX B'S HTML LIST HAS BEEN IN THIS TREE BEFORE
+   AND WAS CORRECTLY DELETED, which is recorded at core/layout/replaced_element.h, core/css/css_property_applies.h
+   and core/css/css_property_applies.c: it stood there as `css_element_may_be_replaced`, a stand-in for the
+   REPLACED ELEMENT of CSS 2.1 §3.1, and it is the wrong list for that question in both directions — it carries
+   `br`, `wbr`,
+   `meter`, `progress`, `select` and `textarea`, which HTML §15.4 "Replaced elements" does not name, and it calls
+   every `img` replaced, which HTML §15.4.2's third rule contradicts. Those three sites say the list "is not kept
+   beside it" because a superset predicate is the fallback a caller reaches for when the real one crashes, and all
+   three stay exactly true: they are about the REPLACED-ELEMENT question, and css_property_applies.h says in its own
+   words that "Appendix B's list is drawn up for `display: contents`" — which is this question and no other. A
+   reader who finds those notes and this list together is looking at one list serving the purpose it was written for
+   and at the deletion of the same list serving a purpose it was not. IT MUST NOT BE REACHED FOR AGAIN AS A
+   REPLACED-ELEMENT TEST, and `replaced_element_of` is what answers that. NO INSTRUMENT HERE CAN CHECK A QUOTATION
+   OF APPENDIX B, AND THE LISTS BELOW ARE PASTED FOR THAT REASON RATHER THAN PARAPHRASED. The committed index for
+   this standard (engine/specindex/cssdisplay3.json) holds its SIXTEEN NUMBERED SECTIONS and no appendix, so a run
+   quoted from Appendix B reaches the citation audit with the nearest NUMBERED section as its subject and is
+   compared against text that cannot contain it — which is why the appendix's own opening sentence is stated as
+   prose above instead of in quotation marks. Every list below is therefore verified by FETCHING, against the
+   document engine/specindex/cssdisplay3.json names in its own `base` field, and a reader re-deriving one spends a
+   `curl` rather than a grep. */
+static bool display_contents_computes_to_none(lxb_dom_element_t *el)
+{
+    /* Appendix B's HTML arm, transcribed from the draft's own `<dt>` run — SIXTEEN names sharing one
+       definition, "display: contents computes to display: none." The appendix's THREE OTHER HTML arms are all
+       the not-a-member answer and are why this list is not "form controls" or "replaced elements": `legend`
+       "reacts to display: contents normally", `button`, `details` and `fieldset` "don't have any special
+       behavior; display: contents simply removes their principal box, and their contents render as normal",
+       and "any other HTML element" behaves as normal. So a `<button style="display:contents">` RENDERS ITS
+       TEXT — it is a form control and it is not here, which is the one case an intuition about form controls
+       gets backwards, and css-display-3 §2.5's own Note ("Replaced elements and form controls are treated
+       specially") is the sentence that invites the intuition while deferring the population to this
+       appendix. */
+    static const char *const HTML_NONE[] = {
+        "br", "wbr", "meter", "progress", "canvas", "embed", "object", "audio",
+        "iframe", "img", "video", "frame", "frameset", "input", "textarea", "select",
+    };
+    /* Appendix B's SVG arm has the OPPOSITE DEFAULT to its HTML one — "any other SVG elements" computes to
+       `none` — so this is the list of elements `contents` behaves NORMALLY on and everything else in the
+       namespace is suppressed. It is three of the appendix's rows, and each is a CLOSED list the SVG 2 draft
+       states rather than a shape reasoned out here:
+         - "All other SVG container elements that are also renderable elements" — SVG 2's `container element` is
+           "`a`, `clipPath`, `defs`, `g`, `marker`, `mask`, `pattern`, `svg`, `switch` and `symbol`" and its
+           `renderable element` is "`a`, `circle`, `ellipse`, `foreignObject`, `g`, `image`, `line`, `path`,
+           `polygon`, `polyline`, `rect`, `svg`, `switch`, `text`, `textPath`, `tspan` and `use`", so the
+           intersection is `a`, `g`, `svg` and `switch`. `svg` is answered by the arm below it instead.
+         - "SVG text content child elements" — SVG 2: "In SVG the text content child elements are: `textPath`
+           and `tspan`."
+         - `use`.
+       `text` IS NOT ONE OF THEM AND THAT IS THE MEMBERSHIP MOST LIKELY TO BE GOT WRONG, because it is
+       renderable and reads as a container: SVG 2's container list does not carry it, so it falls to "any other
+       SVG elements" and computes to `none` — which is exactly what the appendix's own prose then says, "for
+       that reason, display: contents on text prevents the entire text element from being rendered". The list
+       and the prose AGREE, and a reader who reads only the prose will believe they contradict each other.
+       `foreignObject` is the mirror of it: renderable, not a container, so `none`.
+       A NAMED RESIDUAL, AND IT IS THE ONE ROW THAT IS NOT A TAG TEST. SVG 2 adds `symbol` to the renderable
+       elements only "that is the instance root of a use-element shadow tree", so a `symbol` inside such a tree
+       is container-and-renderable and hoists while every other `symbol` is a never-rendered container the
+       appendix says "cannot be un-boxed". WHAT IS NOT COVERED: this list has no `symbol`, so every `symbol`
+       computes to `none`. That is CORRECT for this engine and narrower than SVG 2, because no use-element
+       shadow tree is built here at all. WHAT THE NEXT DIFF BUILDS: SVG 2's `use` element shadow tree, and then
+       a `symbol` row conditioned on being its instance root rather than on its name. HOW ITS ABSENCE WOULD
+       SHOW: a document whose `<use>` references a `<symbol style="display:contents">` renders nothing where a
+       user agent renders the symbol's children hoisted into the instance. */
+    static const char *const SVG_NORMAL[] = { "a", "g", "switch", "textPath", "tspan", "use" };
+    const lxb_dom_node_t *n = lxb_dom_interface_node(el);
+    unsigned i;
+
+    switch (n->ns) {
+    case LXB_NS_HTML:
+        for (i = 0; i < sizeof HTML_NONE / sizeof HTML_NONE[0]; i++)
+            if (cv_local_name_is(el, HTML_NONE[i])) return true;
+        return false;
+    /* "For all MathML elements, display: contents computes to display: none." No arm and no exception. */
+    case LXB_NS_MATH:
+        return true;
+    case LXB_NS_SVG:
+        /* "An svg element that has CSS box layout (this includes all svg whose parent is an HTML element, as
+           well as document root elements)" computes to `none`. THE WORD IS "INCLUDES", SO THE PARENTHETICAL IS
+           NOT A CLOSED LIST, and what this reads is its complement: an `svg` whose parent is ITSELF an SVG
+           element is a nested one, which is container-and-renderable and therefore hoists. Every other parent
+           — an HTML element, a MathML element, the Document — leaves the element with CSS box layout. */
+        if (cv_local_name_is(el, "svg")) {
+            const lxb_dom_node_t *p = n->parent;
+
+            return !(p != NULL && p->type == LXB_DOM_NODE_TYPE_ELEMENT && p->ns == LXB_NS_SVG);
+        }
+        for (i = 0; i < sizeof SVG_NORMAL / sizeof SVG_NORMAL[0]; i++)
+            if (cv_local_name_is(el, SVG_NORMAL[i])) return false;
+        return true;
+    default:
+        /* NEITHER APPENDIX B NOR css-display-3 §2.5 REACHES AN ELEMENT IN ANY OTHER NAMESPACE, and the answer
+           is derived from css-display-3 §2.5's normative sentence rather than from the appendix's silence: the
+           rule is stated over "replaced elements and other elements whose rendering is not entirely
+           controlled by CSS", and an element of an XML vocabulary this engine gives no rendering of its own
+           is rendered by CSS alone. So `contents` behaves normally, which is also what the appendix's own
+           HTML default is. */
+        return false;
+    }
+}
+
 /* §2.7's and §2.8's computed `display` over a SPECIFIED one, with the two blockifiers the OUT-OF-FLOW
    properties supply taken as an argument rather than read here. It is one function and two callers because
    CSS 2.1 §10.3.7 "Absolutely positioned, non-replaced elements" needs the SAME rule with exactly those two
@@ -405,6 +553,21 @@ static char *display_blockified_if(lxb_dom_element_t *el, char *spec, bool out_o
     const lxb_dom_node_t *n = lxb_dom_interface_node(el);
     bool root = css_is_root_element(n), blockify;
 
+    /* css-display-3 §2.5's LAST SENTENCE, ASKED BEFORE css-display-3 §2.8's ROOT RULE, AND THE ORDER IS A READING
+       RATHER THAN A DEDUCTION. The two disagree about exactly one element: a `contents` DOCUMENT ROOT that Appendix
+       B suppresses, which css-display-3 §2.8 would make `block`. Appendix B's `svg` row is the text that addresses
+       the interaction — its parenthetical names "document root elements" by name, and it only says anything at all
+       if it wins — so it is read as the specific rule and css-display-3 §2.8's as the general one. THE OTHER
+       READING IS AVAILABLE AND ITS GROUND IS THAT css-display-3 §2.8 IS NORMATIVE WHILE APPENDIX B OPENS
+       "(currently) non-normative": on that reading a root `<svg style="display:contents">` or `<math
+       style="display:contents">` computes `block` instead of `none`. Neither is reachable from an HTML parse, whose
+       root is always `<html>` — an HTML element in none of the appendix's arms, so `<html>` takes
+       css-display-3 §2.8's rule either way and the ordering is observable only in a document built some other
+       way. */
+    if (strcmp(spec, "contents") == 0 && display_contents_computes_to_none(el)) {
+        free(spec);
+        return css_cv_strdup("none");
+    }
     /* §2.8: "Additionally, a display of contents computes to block on the root element." */
     if (root && strcmp(spec, "contents") == 0) { free(spec); return css_cv_strdup("block"); }
     /* §2.7: blockification "has no effect on display types that generate no box at all, such as none or
