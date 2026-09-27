@@ -505,8 +505,10 @@ static char *literal_tok(JSContext *ctx, JSValueConst v, ConcolicLit *pkind)
    NULL WHERE THE VALUE NAMES NO INTRINSIC, which is the answer every Object and Symbol gave unconditionally
    before this and is still the answer for a PAGE-created one. Such a value is named by its creation site plus
    the creating flow's count of prior mints — a fact about the executed prefix — which creation_name below
-   composes for a page-created CLOSURE and for a page-created REGEXP; see the named residual at literal_ident
-   for the classes that still have no site composer. */
+   composes for a page-created CLOSURE, a page-created REGEXP and a page-created ORDINARY OBJECT; see the named
+   residual at literal_ident for the classes that still have no site composer. (This named two while a third was
+   landing. The list is what a reader greps to find out whether their operand's class is named, so a short one
+   reads as a gap and sends somebody to build what is already here.) */
 static char *intrinsic_name(JSContext *ctx, JSValueConst v)
 {
     char buf[JS_INTRINSIC_NAME_MAX];
@@ -641,36 +643,56 @@ static char *literal_ident(JSContext *ctx, JSValueConst v)
            That is exactly the property a creation SITE lacks, which is why this arm could land while the
            residual below still stands. The two registries are disjoint by atom_type, so a value cannot be
            named twice and the order of these two arms decides nothing.
-           NAMED RESIDUAL — AN ORDINARY PAGE-CREATED OBJECT AND A PAGE-MINTED `Symbol("x")` ARE STILL
-           UNNAMED, so `var o = {}; o[k]` keeps both arms and its bare site row. THE MECHANISM IS BUILT AND
-           ITS REACH IS TWO CLASSES, which is the correction this paragraph carries rather than a plan: the
-           (site, ordinal) pair is composed by quickjs's JS_CreationName, the ordinal is minted at CREATION out
-           of the running flow's own counter (js_mint_creation_ord, driven by JSConcolicHooks.mint_ordinal,
-           this file's concolic_mint_ordinal_hook, riding the PinBlob like every other per-flow fact), and the
-           SITE composer is PER CLASS — JS_OrphanHash's body locator for a CLOSURE, the pattern's own code
-           units and flag word for a REGEXP.
-           WHAT IS NOT COVERED: a value of a class the engine has no site composer for. `{}`, `[]`, `new Map`,
-           `Object.create(null)` and `Symbol("x")` are every one of them unnamed, so a branch over one records
-           no constraint, claims no replay slot, and re-forks every time a flow reaches it.
-           WHAT THE NEXT DIFF BUILDS: a SITE composer for the ORDINARY-OBJECT class and a mint beside it, in
-           JS_CreationName and in JS_NewObjectFromShape's `case JS_CLASS_OBJECT:` arm. TWO THINGS A READER
-           RE-DERIVES RATHER THAN TAKING FROM THIS SENTENCE, because both were established by READING and
-           neither by running. (i) WHERE THE SITE COMES FROM: quickjs's JS_RunningSiteHash, which folds a body
-           locator with the BYTE OFFSET of the opcode the nearest BYTECODE frame is standing at. For an object
-           LITERAL that frame is the one executing the creating opcode, so the answer is 1:1 with the creating
-           expression; for an object built inside a C builtin on the page's behalf — every record `JSON.parse`
-           returns — the nearest bytecode frame is the CALL, so ONE site names as many objects as that call
-           made and the ordinal is doing all of the work. Neither case loses an arm; the second loses the
-           LOCALITY a site exists for, and a reader who expected 1:1 will otherwise read a census row as a
-           defect. (ii) WHERE IT IS STORED: `case JS_CLASS_OBJECT: break;` is the whole of that class's arm in
-           JS_NewObjectFromShape and no member of `JSObject::u` belongs to it, so a site and an ordinal fit in
-           space a plain object already has — which is NOT true of the REGEXP half that just landed, where the
-           union member was already at the union's width on a 32-bit build, and is the one respect in which the
-           cheaper-looking class is the cheaper one.
-           AND WHAT IT COSTS DECIDES THE SHAPE RATHER THAN BEING A DETAIL: JS_RunningSiteHash WALKS THE STACK,
-           and JS_NewObjectFromShape is this engine's hottest allocation. The site must be read AT CREATION —
-           at the ask the stack is somewhere else entirely — so there is no lazy form of it, and a diff that
-           takes one is choosing to name fewer classes rather than to name this one cheaply.
+           NAMED RESIDUAL — A PAGE-MINTED `Symbol("x")`, AN ARRAY AND A `new Map` ARE STILL UNNAMED. THE
+           MECHANISM IS BUILT AND ITS REACH IS THREE CLASSES: the (site, ordinal) pair is composed by quickjs's
+           JS_CreationName, the ordinal is minted at CREATION out of the running flow's own counter
+           (js_mint_creation_ord, driven by JSConcolicHooks.mint_ordinal, this file's
+           concolic_mint_ordinal_hook, riding the PinBlob like every other per-flow fact), and the SITE composer
+           is PER CLASS — JS_OrphanHash's body locator for a CLOSURE, the pattern's own code units and flag word
+           for a REGEXP, and the position of the page's own running code for an ORDINARY OBJECT.
+           THIS RESIDUAL USED TO NAME AN ORDINARY PAGE-CREATED OBJECT AS UNNAMED BESIDE A PAGE-MINTED SYMBOL,
+           AND THE OBJECT HALF IS BUILT — recorded rather than deleted because `{}` is the spelling a reader
+           reaches for when asking whether their operand is named, and a residual naming it sends them to build
+           what is here. A read of an unknown key off a page-created object now composes `fn` over
+           `ob@<site>#<ord>`, and its REPEAT is refined by concolic_branch_decided.
+           THE RETIRED SENTENCE IS PARAPHRASED AND NOT QUOTED, DELIBERATELY. A run of this tree's own prose in
+           quotation marks is judged by the quotation channel against the nearest citation ABOVE it, which here
+           is §20.4.2.4 and does not contain it — a fabrication reported against a sentence nobody claimed was
+           the standard's. The sibling cure is backticks, which put a shown spelling outside that channel by
+           construction; it is unavailable for this run, because the mask admits at most ONE newline and this
+           sentence spanned two lines and carried backticks of its own. Where a retired run will not fit on one
+           line, restating it is the repair and quoting it is not.
+           WHAT IS NOT COVERED: a value of a class the engine has no site composer for, which is now
+           `Symbol("x")`, `[]` and every exotic-state class (`new Map`, `new Set`, a Promise). A branch over one
+           records no constraint, claims no replay slot, and re-forks every time a flow reaches it. `{}` and
+           `Object.create(null)` are OUT of this list — both are JS_CLASS_OBJECT and both are named.
+           WHAT THE NEXT DIFF BUILDS: a site composer for `Symbol("x")`, which is the cheap one — a page-minted
+           symbol is JS_ATOM_TYPE_SYMBOL above JS_ATOM_END, disjoint by atom_type from the two registries above,
+           and its carrier is an atom struct rather than JSObject's union, so it costs no object a byte. The
+           ARRAY half is the expensive one and the reason is MEASURED rather than argued: `u.array` is
+           `{u1, u, count}` at 12/20 bytes and `JSRegExp` sets this union's width at 20/32, so a site and an
+           ordinal beside `count` take the array member to 24/32 and WIDEN every JSObject on a 32-bit build.
+           TWO THINGS ESTABLISHED BY READING AND NOT BY RUNNING, kept because a reader who expects 1:1 will
+           otherwise read a census row as a defect. (i) THE SITE IS quickjs's JS_RunningSiteHash, which folds a
+           body locator with the BYTE OFFSET of the opcode the nearest BYTECODE frame is standing at. For an
+           object LITERAL that frame is the one executing the creating opcode, so the answer is 1:1 with the
+           creating expression; for an object built inside a C builtin on the page's behalf — every record
+           `JSON.parse` returns — the nearest bytecode frame is the CALL, so ONE site names as many objects as
+           that call made and the ordinal is doing all of the work. Neither case loses an arm; the second loses
+           the LOCALITY a site exists for. (ii) IT IS STORED IN SPACE THE UNION ALREADY HAD, and that is now a
+           CONSTRUCTION rather than a reading: two `_Static_assert`s under `struct JSObject` compare the new
+           member against the member that sets the width and the member that sets the alignment, so a later
+           widening of it fails the build instead of quietly growing every object in the heap.
+           AND THE COST CLAUSE WAS RIGHT ABOUT THE WALK AND WRONG ABOUT WHAT THE WALK PAYS FOR, which is worth
+           the line because the wrong half is what made this class look unaffordable and left it until last. It
+           said JS_RunningSiteHash WALKS THE STACK and JS_NewObjectFromShape is this engine's hottest
+           allocation, and both are true: the site must be read AT CREATION, since at the ask the stack is
+           somewhere else entirely, so there is no lazy form of it. What it did not say is that the expensive
+           half is NOT paid per allocation — orphan_hash_body MEMOIZES into `b->locator` and returns that field
+           on every call after the first for a given body, so the filename fold and the body-text fold happen
+           once per BODY and never once per object. What a plain object pays is the walk (one hop from a
+           literal), one memoized field read, four FNV rounds over the byte offset, and a counter increment; and
+           an object made while NO page frame is standing pays the walk's first test and does not mint at all.
            HOW ITS ABSENCE WOULD SHOW: a rendered shape carrying `?` at an operand position, with a `~` site
            row climbing across a session while `replayHits` stays flat; at the sharpest,
            concolic_exotic_own_names' `c->ident == NULL` arm aborting on a record whose shape is otherwise
@@ -775,9 +797,10 @@ static char *literal_ident(JSContext *ctx, JSValueConst v)
            THE TAG IS ITS OWN for the reason `i` is not `k` and `Symbol.for` is not `i`: these are four name
            sources and a shared tag would let two of them compose one constraint key.
            AND `fn` IS THE SOURCE'S SPELLING RATHER THAN THE CLASS'S, WHICH IS A THING TO READ AND NOT TO
-           REPAIR. This one arm answers for every class JS_CreationName has a site composer for — a closure and
-           a RegExp today — and the CLASS rides the returned name (`fn@…#n`, `re@…#n`), which are disjoint by
-           construction, so no two classes can compose one key under this tag. The tag itself is NOT renamed to
+           REPAIR. This one arm answers for every class JS_CreationName has a site composer for — a closure, a
+           RegExp and a plain object today — and the CLASS rides the returned name (`fn@…#n`, `re@…#n`,
+           `ob@…#n`), which are disjoint by construction, so no two classes can compose one key under this
+           tag. The tag itself is NOT renamed to
            something class-neutral, and the reason is checkable: decide.c's decision vector stores the asked
            question as a CONTENT HASH of this exact string, and its own header says the park document carries
            that column across the cold tier — so renaming the tag would leave every parked flow's recorded arm
@@ -892,7 +915,8 @@ static char *derived_operand_shape(JSContext *ctx, JSValueConst v)
            this pair's invariant restated for the fourth kind of operand, and the reason both arms are in one
            diff. Moving the identity without the shape would put two such values under ONE shape and two
            identities, which is the coarser-shape state keyname_record's assert exists to catch. The spelling
-           carries its own per-class namespace (`fn@` for a closure, `re@` for a RegExp), so it cannot be read
+           carries its own per-class namespace (`fn@` for a closure, `re@` for a RegExp, `ob@` for a plain
+           object), so it cannot be read
            as an intrinsic's `%…%`, a registered symbol's `Symbol.for(…)`, a quoted String or a Number — and
            a class ADDED to JS_CreationName moves both halves of this pair at once, because both halves ask
            that one function rather than a list kept here. */
@@ -1874,8 +1898,11 @@ static uint32_t concolic_mint_ordinal_hook(JSContext *ctx) {
            "a flow's creation-ordinal counter reached its last value — the next mint would WRAP to 0, which "
            "this engine reads as 'no name', and the one after it would start re-issuing ordinals this flow "
            "has already spent, putting two values under one constraint key and losing an arm rather than a "
-           "fork. What this bounds is the number of closures ONE flow creates, so reaching it is a statement "
-           "about the width of this counter and never a reason to reset it");
+           "fork. What this bounds is the number of NAMEABLE VALUES one flow creates — it read 'the number of "
+           "closures' while the counter was spent only on closures and RegExps, and a plain object now spends "
+           "one too, so the population is every object the page makes and is larger by orders of magnitude. "
+           "Reaching it is a statement about the width of this counter and never a reason to reset it; what it "
+           "asks for is a 64-bit ordinal, which fits all three carriers without widening JSObject's union");
     return ++g_mint_ord;
 }
 /* THE PIN THIS FLOW HOLDS FOR `src`, AS THE VALUE IT IS — the two read sites ask for a JSValue and never for

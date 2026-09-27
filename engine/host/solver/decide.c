@@ -972,12 +972,22 @@ static void fork_key_count(const char *key, ForkRowKind kind)
  * concolic.c can spell an identity for a value derived from one, decide_key stops answering NULL for it, and
  * that fork moves out of this population into the predicate rows with a replay slot of its own.
  *
- * THAT MECHANISM NOW EXISTS AND ITS REACH IS ONE CLASS, so what is left of this residual is a SITE and not a
- * design. quickjs's JS_CreationName composes (site, ordinal) and concolic.c's creation_name spells it: the
- * ordinal is minted AT CREATION from the running flow's own counter (JSConcolicHooks.mint_ordinal), which is
- * the prefix quantity this paragraph asks for, and the site is JS_OrphanHash's body locator — so a page-created
- * CLOSURE is named and every other page-created value still is not, because no other value has that site. The
- * two remaining sites are named at concolic.c's literal_ident and neither is this file's to build.
+ * THAT MECHANISM NOW EXISTS AND ITS REACH IS FOUR NAME SOURCES, so what is left of this residual is a SITE for
+ * the classes still outside it and not a design. quickjs's JS_CreationName composes (site, ordinal) and
+ * concolic.c's creation_name spells it: the ordinal is minted AT CREATION from the running flow's own counter
+ * (JSConcolicHooks.mint_ordinal), which is the prefix quantity this paragraph asks for, and the SITE is per
+ * class — JS_OrphanHash's body locator for a CLOSURE, the pattern's own code units and flag word for a REGEXP,
+ * and JS_RunningSiteHash's position of the page's own running code for an ORDINARY OBJECT. Beside those three,
+ * an INTRINSIC is named by its realm slot (JS_IntrinsicName) and a REGISTERED symbol by its key
+ * (JS_SymbolRegistryKey), neither of which needs an ordinal.
+ * THIS READ "ITS REACH IS ONE CLASS … so a page-created CLOSURE is named and every other page-created value
+ * still is not", AND IT IS REWRITTEN RATHER THAN DELETED BECAUSE A COUNT OF WHAT IS NAMED IS WHAT A READER
+ * GREPS BEFORE BUILDING A NAMER. It was already short by the REGEXP half when it was read, and short by the
+ * intrinsic and the registered symbol from the paragraph below it, so a reader arriving here was told that the
+ * population this residual measures had no namer reaching it when four of them did. That is the direction this
+ * project rates worst: the only reader of a named absence is somebody about to go and fill it. What remains
+ * genuinely unnamed is `Symbol("x")`, `[]` and the exotic-state classes, enumerated with their three clauses at
+ * concolic.c's literal_ident, and none of it is this file's to build.
  *
  * AND THAT CLAUSE SAID "THE BUNDLE" ALONE, WHICH IS THE HALF THAT DOES NOT REACH THE MEASURED POPULATION.
  * `Array.prototype` is not created by the bundle; it is the realm's own class-proto slot, built at realm
@@ -988,6 +998,12 @@ static void fork_key_count(const char *key, ForkRowKind kind)
  * own definition, which is the one condition under which a position may name anything at all — and it needs
  * nothing else, because there is only ever one of it. A PAGE-CREATED object is named by its creation site and
  * that is NOT enough on its own, which is the next paragraph.
+ * BOTH HALVES OF THAT ARE NOW BUILT AND THE PARAGRAPH IS KEPT FOR ITS ARGUMENT, WHICH IS THE PART A READER
+ * RE-DERIVES: JS_IntrinsicName walks `class_proto`/`class_ctor` — the ONE array every realm goes through,
+ * rather than a hand-picked list of named slots, which is what leaves a component quietly unnameable in one
+ * realm — and the ordinary-object half is JS_RunningSiteHash plus the mint. What the paragraph must NOT be read
+ * as is a statement that either is outstanding; the population that is, is enumerated at concolic.c's
+ * literal_ident and nowhere else.
  *
  * A CREATION SITE ALONE IDENTIFIES A SET, AND THIS IS THE ONE FAILURE THE FUNCTION PRECEDENT DOES NOT HAVE —
  * so it is the one a reader who copies that precedent will rediscover. JS_OrphanHash names an uncalled

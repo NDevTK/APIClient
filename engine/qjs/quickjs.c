@@ -1422,6 +1422,104 @@ typedef struct JSRegExp {
     JSContext *realm;
 } JSRegExp;
 
+/* ── AN ORDINARY OBJECT'S CREATION NAME ──────────────────────────────────────────────────────────────────────
+ *
+ * THE THIRD CARRIER of the ONE creation-ordinal contract (`func.creation_ord` for a closure,
+ * `regexp.creation_ord` for a RegExp, this for a plain object), and the FIRST whose site is not a property of
+ * the value at all. A closure's site is its body and a RegExp's is the text the page wrote; a plain object has
+ * neither, so its site is WHERE THE PAGE'S OWN CODE WAS STANDING when it was made — JS_RunningSiteHash's
+ * answer, read AT the creation because at the ask the stack is somewhere else entirely.
+ *
+ * WHY THIS CLASS AND WHY IT IS THE ONE THAT MATTERED. An INTRINSIC is named by its realm slot (JS_IntrinsicName)
+ * and that reaches `Array.prototype`, which is where core-js writes its well-known-symbol store; it does not
+ * reach the store ITSELF, because `G = G || {}` — the ordinary spelling of every shared-store and hydration
+ * shim a minified bundle ships — makes that store a plain object the page created. A read off it under an
+ * unknown key had no identity, so the branch recorded no constraint, claimed no replay slot, and re-forked
+ * every time a flow reached it.
+ *
+ * NEITHER HALF IS AN ADDRESS AND NEITHER IS AN INDEX INTO A SET ANYBODY MUTATES, which is the requirement
+ * §Time-travel-resume states — reproducibility by the replay a resumed flow performs, rather than
+ * uniqueness-in-a-heap, which `js_malloc`/`js_free_rt` cannot give because they REUSE addresses and which no
+ * park carries. The site is folded out of the running body's locator and the byte offset of the opcode it
+ * stands at, both of which a replay of the same prefix reproduces; the ordinal is the creating flow's own count
+ * of prior mints, which is a fact about the EXECUTED PREFIX and is why a fork carries it as it carries every
+ * other prefix quantity.
+ *
+ * AND THE SITE ALONE WOULD NAME A SET, WHICH IS THE WHOLE REASON THE ORDINAL IS HERE. A body is 1:1 with its
+ * position and an object is 1:N: one `{}` inside a loop is ONE site and a thousand objects. Building the site
+ * half without the ordinal is WORSE than leaving the class unnamed — three iterations would share a name, so
+ * iteration 1's constraint would refine 2 and 3 and the arms would be LOST rather than duplicated.
+ *
+ * 0 IS "UNSTAMPED" AND IS NOT AN ORDINAL, exactly as it is for the two fields above: the three carry one
+ * counter under one contract, minted through js_mint_creation_ord, and a build whose host installs no mint hook
+ * writes 0 here and is byte-identical to one without this field. It is ALSO 0 for every plain object made while
+ * NO page frame is standing — the whole of host time and the initial parse — which is not a gap but the
+ * classification: such an object was not created by the page and has no page site to be named by. That is what
+ * makes the frame walk its own gate, and it is the cheap arm: the walk terminates at once when no bytecode
+ * frame is on the stack, so the setup path pays two pointer derefs and no mint.
+ *
+ * WHAT IT COSTS, AND THE HALF OF THAT COST WHICH WAS ARGUED RATHER THAN READ. JS_NewObjectFromShape is this
+ * engine's hottest allocation and JS_RunningSiteHash WALKS THE STACK, which is the reason this class was left
+ * until last. The walk is short — outward to the first frame with a bytecode body, one hop from an object
+ * literal — and the expensive-looking half of it is NOT paid per allocation: orphan_hash_body MEMOIZES into
+ * `b->locator` and returns that field on every call after the first for a given body, so the filename fold and
+ * the body-text fold happen once per body and never once per object. What is paid per plain object is the walk,
+ * one memoized field read, four FNV rounds over the byte offset, and a counter increment.
+ *
+ * NAMED RESIDUAL — THE SITE REPRODUCES WITHIN A BUILD AND NOT ACROSS ONE, AND THIS FIELD IS THE FIRST
+ * CONSUMER THAT CARRIES ONE PAST THE COLD TIER. JS_RunningSiteHash folds the BYTE OFFSET of the opcode rather
+ * than the line and column find_line_num would resolve, because the offset is O(1) where a pc2line walk is
+ * O(body) and this is the hottest allocation there is; its own residual says every consumer was session-scoped
+ * and nothing carried a site name across the cold tier. This name flows through concolic.c's literal_ident into
+ * a constraint identity and from there into decide.c's decision vector, which the park document carries — so a
+ * flow parked by one build and resumed by another asks a question no recorded arm matches.
+ * WHAT IS NOT COVERED: that pair, and no other. Within one build the name is exact, and across builds the
+ * mismatch DEGRADES TO THE STATE THIS FIELD REPLACED rather than answering wrongly — a question that does not
+ * match discards the recorded arm and the flow re-asks, which is what an unnamed operand already did, so a
+ * refinement is lost and never an arm. A hash collision between two sites is 2^-64 and is not this residual.
+ * WHAT THE NEXT DIFF BUILDS: find_line_num's line and column folded in place of the byte offset, inside
+ * JS_RunningSiteHash, paid for by memoizing the resolved position per (body, offset) so the pc2line walk is not
+ * per allocation — which is the same trade orphan_hash_body already makes one level up.
+ * HOW ITS ABSENCE WOULD SHOW: a resumed session on a bundle that did not change, whose `fn@` and `%…%` operand
+ * names match a residue's and whose `ob@` names share none of them, with the `~` site rows that had collapsed
+ * before the park standing again after it.
+ *
+ * AND THE ORDINAL'S WIDTH IS NOW SPENT BY A FAR LARGER POPULATION THAN IT WAS SIZED FOR, WHICH IS A SECOND
+ * RESIDUAL AND NOT A CAP. `creation_ord` is 32 bits and js_mint_creation_ord DCHECKs on reaching UINT32_MAX,
+ * where before this field the counter was spent only on closures and RegExps. WHAT IS NOT COVERED: a single
+ * flow that creates more than 2^32 - 1 nameable values, which aborts in dev at that assert and silently
+ * re-issues spent ordinals in release — two values under one constraint key, which loses an arm. WHAT THE NEXT
+ * DIFF BUILDS: a 64-bit ordinal, which FITS all three carriers without widening the union (`func` goes to
+ * 16/32 and `regexp` is already 20/32), plus the host hook's return type. HOW ITS ABSENCE WOULD SHOW: that
+ * DCHECK firing on a long-lived flow, which is a statement about the width of this counter and never a reason
+ * to reset it. */
+/* AND IT IS THE FIRST THING EVER TO PUT A NON-POINTER IN A PLAIN OBJECT'S UNION, WHICH IS A NAMED RESIDUAL AND
+ * NOT A DEFECT. Two readers of `u` are class-AGNOSTIC and were sound for this class only because a plain
+ * object's union was a NULL pointer. JS_ComputeMemoryUsage's `default` arm probes `p->u.opaque` and counts a
+ * heap block wherever it is nonzero — that one is CLOSED, by an explicit `case JS_CLASS_OBJECT:` arm there that
+ * says why. The other is JS_GetAnyOpaque, which returns `p->u.opaque` for any class with no guard at all, so a
+ * plain object handed to it now yields a garbage pointer where it used to yield NULL.
+ * WHAT IS NOT COVERED: that one reader, and no other. It is UNREACHABLE with a plain object BY CONSTRUCTION
+ * rather than by convention, which is why the code is correct as it stands: every one of its callers is a CLASS
+ * FINALIZER, reached through `rt->class_array[p->class_id].finalizer`, and JS_CLASS_OBJECT has no finalizer —
+ * free_object calls that slot and nothing else. So the guarantee rests on the dispatch and not on any caller
+ * remembering something.
+ * WHAT THE NEXT DIFF BUILDS: a DCHECK in JS_GetAnyOpaque that its receiver's class owns an opaque block at all.
+ * The cheap spelling of that is `class_id >= JS_CLASS_INIT_COUNT`, which is this function's actual contract —
+ * it is the collector's entry and every one of its callers registers its class at runtime — and it is a
+ * relationship rather than the list of union-owning classes a reader reaches for first.
+ * HOW ITS ABSENCE WOULD SHOW: a component that stops registering a finalizer and reads its record through this
+ * entry anyway, freeing a pointer folded out of a body locator — so a crash inside `free` on a plain object,
+ * naming no class, at a site that has nothing to do with the object that reached it. */
+typedef struct JSObjectCreation {
+    /* WHERE THE PAGE WAS STANDING — JS_RunningSiteHash's fold of the running body's locator with the byte
+       offset of the opcode it is at. 0 is not a reserved "no site": the ORDINAL says whether there is a name,
+       for the reason JS_RunningSiteHash returns a code rather than a sentinel hash — host time is a large and
+       meaningful population and a reserved value real sites can also fold to would seat it on top of them. */
+    uint64_t site;
+    uint32_t creation_ord;
+} JSObjectCreation;
+
 typedef struct JSProxyData {
     JSValue target;
     JSValue handler;
@@ -2027,9 +2125,32 @@ struct JSObject {
         } array;    /* 12/20 bytes */
         JSRegExp regexp;    /* JS_CLASS_REGEXP: 8/16 bytes */
         JSValue object_data;    /* for JS_SetObjectData(): 8/16/16 bytes */
+        /* JS_CLASS_OBJECT — the only class in this union whose member is NOT read by anything but its own
+           namer: mark_children skips gc_mark for JS_CLASS_OBJECT outright, JS_SetObjectData's switch
+           excludes it, JS_SetOpaque refuses every class below JS_CLASS_INIT_COUNT and
+           JS_SetOpaqueInternal is only ever handed an object of its own internal class. See JSObjectCreation. */
+        JSObjectCreation object;
     } u;
     /* byte sizes: 40/48/72 */
 };
+
+/* THE PLAIN-OBJECT CREATION NAME COSTS THIS HEAP NOTHING, MEASURED AND NOT INFERRED — which is the check
+   JSRegExp's own creation_ord note says is missing there, in its own words: "That is INFERRED FROM THE DECLARED
+   ORDER and not measured; `_Static_assert` on `sizeof(JSObject)` is what would measure it, and the stale
+   byte-size comments at the end of JSObject are why no number here is quoted as one."
+   A union member is free only if it is neither the WIDEST nor the most STRICTLY ALIGNED, and those are two
+   facts, so they are two assertions. Every quoted byte size above is stale, so neither of these names a number:
+   each compares the new member against the member that already sets the bound, which stays true as the union
+   moves. The failure they catch is silent and global — a JSObject that grew by eight bytes is every object in
+   every heap, paid by a field only the namer reads. */
+_Static_assert(sizeof(JSObjectCreation) <= sizeof(JSRegExp),
+               "a plain object's creation name is wider than the union member that already sets this union's "
+               "width, so adding it grew every JSObject in the heap — it was added on the claim that "
+               "JS_CLASS_OBJECT owns no union member and therefore costs nothing, and that claim is now false");
+_Static_assert(_Alignof(JSObjectCreation) <= _Alignof(JSValue),
+               "a plain object's creation name is more strictly aligned than the JSValue member that already "
+               "sets this union's alignment, so adding it padded every JSObject rather than reusing space the "
+               "object already had");
 
 typedef struct JSCallSiteData {
     JSValue filename;
@@ -3677,8 +3798,11 @@ void JS_SetJobRemoveHook(JSJobRemoveHook h) { g_job_remove_hook = h; }
 static _Thread_local JSConcolicHooks g_concolic;
 
 /* THE ORDINAL HALF OF A PAGE-CREATED VALUE'S NAME, ASKED IN ONE PLACE — the canonical spelling of a question
-   that now has TWO carriers (`func.creation_ord` for a closure, `regexp.creation_ord` for a RegExp) and one
-   contract. Two right answers to one question is the shape that drifts, and the thing that would drift here is
+   that now has THREE carriers (`func.creation_ord` for a closure, `regexp.creation_ord` for a RegExp,
+   `object.creation_ord` for a plain object) and one contract. (It read TWO until the third landed, and the
+   count is kept current rather than dropped because it is what a reader greps to find every carrier before
+   changing the contract — a low one reads as a shorter obligation than it is.) Two right answers to one
+   question is the shape that drifts, and the thing that would drift here is
    the ASSERT rather than the hook call: a second site that minted without it would silently unname every value
    it made from the moment a host's counter reached 0.
    THE ABORT NAMES NO CALL SITE AND IS RIGHT NOT TO, which is the one place this differs from
@@ -9190,6 +9314,26 @@ static JSValue JS_NewObjectFromShape(JSContext *ctx, JSShape *sh, JSClassID clas
 
     switch(class_id) {
     case JS_CLASS_OBJECT:
+        /* APIClient forced-exec: THIS OBJECT'S CREATION NAME, MINTED HERE BECAUSE HERE IS THE ONLY PLACE THE
+           SITE EXISTS. `js_malloc(ctx, sizeof(JSObject))` above is the SOLE allocator of a JSObject in this
+           engine, so this arm is every plain object the page or the host ever makes; and the site is WHERE THE
+           PAGE'S CODE IS STANDING, which is a fact about the stack at this instant and not about the value — at
+           the ask the stack is somewhere else entirely, so there is no lazy form of this. See JSObjectCreation
+           for what the two halves are, why neither is an address, and what the walk costs.
+           BOTH FIELDS ARE WRITTEN ON EVERY PATH, and that is not decoration: `p->u.opaque = NULL` above zeroes
+           only a POINTER's width, which covers `site` on a 64-bit build and leaves `creation_ord` holding
+           whatever js_malloc handed back — read as an ordinal, uninitialised garbage is a NAME.
+           THE WALK IS ITS OWN GATE AND IS THE CHEAP ARM. No page frame standing means host time or the initial
+           parse, where the object was not created by the page and has no page site to be named by; the walk
+           terminates at once there, so that path pays two pointer derefs and does NOT spend an ordinal. This is
+           a question about the ALLOCATION and it is one the allocator can answer, which is what separates it
+           from `doc_built` above — that bit was a claim about an extent's AUTHOR, which is why setting it here
+           answered the same for `window.gon={}` and for `new Event("go")` and why it is granted elsewhere now.
+           This asks only WHICH SITE MADE THIS, and no later fact can contradict the answer. */
+        p->u.object.site = 0;
+        p->u.object.creation_ord = 0;
+        if (JS_RunningSiteHash(ctx, &p->u.object.site))
+            p->u.object.creation_ord = js_mint_creation_ord(ctx);
         break;
     case JS_CLASS_ARRAY:
         {
@@ -11363,6 +11507,17 @@ void JS_ComputeMemoryUsage(JSRuntime *rt, JSMemoryUsage *s)
         case JS_CLASS_REGEXP:            /* u.regexp */
             compute_jsstring_size(p->u.regexp.pattern, hp);
             compute_jsstring_size(p->u.regexp.bytecode, hp);
+            break;
+        case JS_CLASS_OBJECT:            /* u.object — a creation name, NOT an opaque block */
+            /* APIClient forced-exec: NAMED HERE ONLY SO THE `default` ARM BELOW CANNOT SEE IT. That arm's own
+               comment says a class definition should carry an opaque block size and, lacking one, it probes
+               `p->u.opaque` and counts a block wherever that is nonzero — which was sound for a plain object
+               while its union was a NULL pointer and stopped being sound the moment JSObjectCreation moved in,
+               because a named object's `site` occupies those same bytes and is nonzero for every object the
+               page makes. Left in the default, this census would report one heap block per named object: a
+               number that is WRONG rather than missing, in a report whose whole purpose is to say where the
+               memory went. There is nothing to add here — the name is INSIDE the JSObject already counted by
+               `s->obj_size` below and allocates nothing of its own. */
             break;
 
         case JS_CLASS_FOR_IN_ITERATOR:   /* u.for_in_iterator */
@@ -24016,7 +24171,7 @@ static JSValue js_closure2(JSContext *ctx, JSValue func_obj,
        function object and never twice, which is the whole of what makes it an identity rather than a counter.
        THE REST OF THE ARGUMENT — why at creation and not at the first ask, why a host that installs no hook
        writes 0, and the assert that catches a hook answering it — IS AT js_mint_creation_ord AND NOT REPEATED
-       HERE. That function is the canonical spelling of this question and there are now two carriers of it, so
+       HERE. That function is the canonical spelling of this question and there are now three carriers of it, so
        a second copy of the contract beside one of them is the shape that drifts; what this comment owes is the
        reason the mint belongs at THIS line, which is the sentence above it. */
     p->u.func.creation_ord = js_mint_creation_ord(ctx);
@@ -112789,8 +112944,10 @@ static uint64_t regexp_site_hash(JSRegExp *re)
  * A caller that had to ask "is it a closure?" and then "is it a RegExp?" would be keeping a list of classes in
  * a file that cannot tell a bound function from a Proxy — the exact reason this function exists rather than
  * JS_OrphanHash. So there is ONE entry, it answers -1 for everything it has no site composer for, and the
- * CLASS NAMESPACE RIDES THE NAME: `fn@` for a closure, `re@` for a RegExp. Two names can never collide across
- * classes, which is what lets the solver spend this answer under one tag.
+ * CLASS NAMESPACE RIDES THE NAME: `fn@` for a closure, `re@` for a RegExp, `ob@` for a plain object. Two names
+ * can never collide across classes, which is what lets the solver spend this answer under one tag. (This read
+ * "a closure and a RegExp" while a third class was landing; the list is the thing a reader greps to find out
+ * which classes are named, so a stale one reads as a gap and sends somebody to build what is here.)
  *
  * WHY -1 IS AN ANSWER AND NOT A FAILURE, AND WHY THIS FUNCTION EXISTS AT ALL BESIDE JS_OrphanHash. That
  * function composes the same locator and is handed only what JS_OrphanTakeOne chose, so it DCHECKs on a value
@@ -112799,8 +112956,12 @@ static uint64_t regexp_site_hash(JSRegExp *re)
  * real bundles write, and an assert on it would hand any document an abort switch. `JS_IsFunction` cannot tell
  * those apart; the class table can, and that is the whole content of the guard below.
  *
- * WHAT IT COMPOSES: the body locator, which is the SITE, and the ordinal the host minted at creation, which is
- * WHICH OF THE VALUES MADE THERE. Neither is an address and neither is an index into a set anybody mutates:
+ * WHAT IT COMPOSES: the SITE, and the ordinal the host minted at creation, which is WHICH OF THE VALUES MADE
+ * THERE. The site is PER CLASS and is whatever about that class a replay reproduces — a body locator for a
+ * closure, the pattern's own code units and flag word for a RegExp, and for a plain object, which has neither,
+ * the position of the page's own running code at the instant it was made (see JSObjectCreation, whose residual
+ * is that this last one reproduces within a BUILD and not across one).
+ * NEITHER IS AN ADDRESS AND NEITHER IS AN INDEX INTO A SET ANYBODY MUTATES:
  * the locator is (script, line, column, body text) and the ordinal is a fact about the executed prefix of one
  * flow, so a replay reproduces both by reproducing the prefix. That is the requirement §Time-travel-resume
  * states — reproducibility by the replay — rather than uniqueness-in-a-heap, which an address would have and
@@ -112825,9 +112986,28 @@ int JS_CreationName(JSContext *ctx, JSValueConst v, char *buf, size_t buf_size)
            "boolean, so a caller with no buffer is asking a question it cannot receive the answer to");
     if (JS_VALUE_GET_TAG(v) != JS_TAG_OBJECT) return -1;
     p = JS_VALUE_GET_OBJ(v);
-    /* A REGEXP, WHOSE SITE IS THE TEXT THE PAGE WROTE — asked FIRST because the two class questions are
-       disjoint and the order therefore decides nothing, and read in this order only so the bytecode-body
-       question below keeps the shape it had.
+    /* AN ORDINARY OBJECT, WHOSE SITE IS WHERE THE PAGE WAS STANDING — asked FIRST because it is the class a
+       real bundle makes most of and because the three class questions are disjoint, so the order decides
+       nothing. Both halves were written at the allocation (JS_NewObjectFromShape's own arm), so this reads two
+       fields and walks nothing; the stack is not consulted here and could not be, being somewhere else by now.
+       AN OBJECT MADE OUTSIDE PAGE CODE ANSWERS ABSENT and is not asserted on. A plain object the HOST built —
+       during setup, during the initial parse, inside any host edge — has no page site, so its ordinal is 0 and
+       the answer is the same "no name" every class with no site composer gives. That is the whole of the gate,
+       and it is why this needs no class-by-class list of which allocations are the page's. */
+    if (p->class_id == JS_CLASS_OBJECT) {
+        if (p->u.object.creation_ord == 0) return -1;
+        n = snprintf(buf, buf_size, "ob@%016llx#%u",
+                     (unsigned long long)p->u.object.site,
+                     (unsigned)p->u.object.creation_ord);
+        goto sized;
+    }
+    /* A REGEXP, WHOSE SITE IS THE TEXT THE PAGE WROTE — asked SECOND, and this read "asked FIRST because the
+       two class questions are disjoint" until a third class landed above it. The correction is kept rather than
+       dropped because the CLAIM is what matters and it is unchanged: the class questions are disjoint, so the
+       ORDER here decides nothing and no arm can shadow another. What a positional word could not survive is an
+       arm being inserted, which is exactly what happened, so the reason is stated over the class and not over
+       the position (§AND-THE-FORM-THAT-SURVIVES-EVERY-SWEEP: a sentence about this codebase whose subject is a
+       POSITION rather than a NAME resolves for every reader and is right for none).
        A HALF-BUILT REGEXP ANSWERS ABSENT AND IS NOT ASSERTED ON. js_regexp_constructor_internal attaches the
        pattern and the bytecode a few lines after the allocation that minted the ordinal, and this function is
        handed every operand of every comparison a page makes — the same reason the whole of it answers rather
