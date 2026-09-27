@@ -8874,10 +8874,20 @@ uint32_t JS_ObjFlowGen(JSValueConst obj) {
     return JS_VALUE_GET_TAG(obj) == JS_TAG_OBJECT ? JS_VALUE_GET_OBJ(obj)->flow_gen : 0;
 }
 /* forced-exec TIME-TRAVEL record boundary — the ONE structured hook set the interpreter calls before it mutates
-   shared heap state (see JSTimeTravelHooks in quickjs.h). g_time_travel.prop_write covers a property write (and,
-   via the host's absent-slot recording, a creation); .cell_write covers a closure-cell (JSVarRef) write, which
-   bypasses the property path. Installed once by JS_SetTimeTravelHooks. */
-static _Thread_local JSTimeTravelHooks g_time_travel = { NULL, NULL, NULL };
+   shared heap state. WHICH HOOKS THERE ARE IS quickjs.h's JSTimeTravelHooks AND IS NOT RESTATED HERE, for the
+   reason the initializer below is `{ 0 }`: two of them are named as examples and that is all it is —
+   `prop_write` covers a property write (and, via the host's absent-slot recording, a creation) and `cell_write`
+   covers a closure-cell (JSVarRef) write, which bypasses the property path. Installed once by
+   JS_SetTimeTravelHooks, which assigns the WHOLE struct.
+   `{ 0 }` RATHER THAN A MEMBER LIST, AND THAT IS NOT A TIDY-UP. This read `{ NULL, NULL, NULL }` — correct in
+   VALUE, because C zero-initializes the remainder and every named value is the same one, so no member count and
+   no member order can make it wrong. What it was wrong about is the COUNT it states: three, for a struct of
+   twelve. run-test262.c records what reading such a count costs, in its own words: "JSFlowControlHooks is
+   {branch, fork, preempt} — THREE fields. A fourth initializer silently left `preempt` NULL, so the forced
+   back-edge preemption never armed and the engagement metric read a vacuous 0/0. […] Designated initializers so
+   the field can never drift again." `{ 0 }` states no count, so it cannot state a stale one,
+   and it is the spelling this tree already uses wherever a hook set means INSTALL NOTHING. */
+static _Thread_local JSTimeTravelHooks g_time_travel = { 0 };
 /* forced-exec @S JS-CONTEXT SINK (see JSEvalSinkFunc in quickjs.h) — the host's detector, told that a value was
    offered to a program evaluation. Installed by JS_SetEvalSinkHook; NULL = no host is listening. */
 static _Thread_local JSEvalSinkFunc *g_eval_sink;
@@ -33713,12 +33723,20 @@ static bool tramp_unwrap_iter_next(JSValueConst *piter, JSValueConst *pnext) {
         goto do_generic_callee;                                                                           \
     } while (0)
 
-/* forced-exec FLOW-CONTROL hooks (see JSFlowControlHooks in quickjs.h) — the scheduler's control over
-   interpreter execution: .branch (which arm to take when branching on a CONCOLIC value; the hook FORKS the
-   sibling by appending a decision vector, NEVER by rewinding OP_if, so a native builtin loop-back calls the SAME
-   hook — frame-agnostic by construction), .fork (build the hot sibling from a frame CLONE), .preempt (park the
-   running flow at a yield point). One struct, installed by JS_SetFlowControlHooks. */
-static _Thread_local JSFlowControlHooks g_flow_control = { NULL, NULL, NULL };
+/* forced-exec FLOW-CONTROL hooks — the scheduler's control over interpreter execution. WHICH HOOKS THERE ARE IS
+   quickjs.h's JSFlowControlHooks, which is the one place that cannot drift from itself; the three named here are
+   EXAMPLES AND NOT THE SET, and this sentence used to read as though they were. `branch` decides which arm to
+   take when branching on a CONCOLIC value — and it FORKS the sibling by appending a decision vector, NEVER by
+   rewinding OP_if, so a native builtin loop-back calls the SAME hook and the mechanism is frame-agnostic by
+   construction. `fork` builds the hot sibling from a frame CLONE. `preempt` parks the running flow at a yield
+   point. One struct, installed by JS_SetFlowControlHooks, which assigns the WHOLE struct.
+   THE ENUMERATION IS WHY THIS COMMENT IS REWRITTEN RATHER THAN LEFT ALONE, and the cost is measured rather than
+   feared: run-test262.c's own comment records, in its own words, "JSFlowControlHooks is {branch, fork, preempt}
+   — THREE fields. A fourth initializer silently left `preempt` NULL, so the forced back-edge preemption never
+   armed and the engagement metric read a vacuous 0/0." A comment that restates a struct's membership is a SECOND
+   COPY of it,
+   and the copy is the one that goes stale — this one already had, by three against six. */
+static _Thread_local JSFlowControlHooks g_flow_control = { 0 };
 /* The flow's BASE async activation, set by JS_FlowResume around the base run. A concolic branch may frame-
    snapshot-fork ONLY when the running activation IS this base and flat (tf_top==NULL); a branch in a NESTED
    async function call (its own gen_state) or a deep trampolined frame forks by decision-vector replay instead.
