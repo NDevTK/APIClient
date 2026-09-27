@@ -343,7 +343,7 @@ import { createHash } from "node:crypto";
 import { relative, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "@babel/parser";
-import { VISITOR_KEYS } from "@babel/types";
+import { NODE_FIELDS, VISITOR_KEYS } from "@babel/types";
 import { corpusPrograms, PROGRAM, DOCUMENT, essenceOf } from "../engine/corpus_programs.mjs";
 
 const TAG = "static_surface";
@@ -1015,7 +1015,7 @@ function foldPlatformString(node, binds, depth, env) {
   if (!env || !env.freeRef) return null;
   const c = node.callee;
   const isNew = node.type === "NewExpression";
-  const args = node.arguments || [];
+  const args = node.arguments;
   const globalName = c && c.type === "Identifier" && env.freeRef.has(c) ? c.name : null;
 
   /* `new URL(ref)` / `new URL(ref, base)` — THE URL STANDARD'S OWN RESOLUTION, APPLIED BY THE PARSE. This is
@@ -1160,10 +1160,52 @@ const returnExprOf = (fn) => fn.body.type === "BlockStatement" ? fn.body.body[0]
    no function-like node in the expression there is nothing that can rebind the name: `let` and `var` cannot
    appear in an expression, so the parameter is the only binder of its name in the whole subtree. That makes
    the substitution correct BY CONSTRUCTION rather than by a scope walk this fold does not carry. */
+/* ── THE ONE CHILD ENUMERATION, AND WHY A NODE KIND THIS @babel/types DOES NOT KNOW IS COUNTED ────────────
+   FOUR passes here descend an AST — `walk`, `applicationsIn`, `candidateDomain`'s `visit` and
+   `scanManifest`'s `descend` — and each used to spell its own `VISITOR_KEYS[n.type] || []`. That is four
+   copies of one fact, and the `|| []` is not a default but a SILENT LEAF: a node kind this @babel/types has
+   no keys for yields NO CHILDREN, so every address, key and value spelled under it is invisible to this
+   baseline and nothing anywhere says so. CLAUDE.md §a-static-sweep-reports-its-figure-as-a-FLOOR asks a
+   static derivation to report its figure AS a floor and to NAME what it could not see; a leaf nobody counts
+   is the one shape that cannot. And the direction is the one this project must not manufacture: a baseline
+   reading LESS than a parse can INFLATES what execution is credited with.
+   IT IS NOT A `die()`, AND THE REASON IS §WHOSE-BYTES-STATE-THE-VALUE. The subject is a STRANGER'S BUNDLE, so
+   an abort here would hand any page a switch that stops this instrument over every site at once. A refusal
+   that RECORDS the unreadable node and keeps walking is both the answer that rule prescribes and the better
+   measurement, because the count IS the floor.
+   WHAT CAN PUT A NODE HERE IS NOT A PAGE, WHICH IS WHY THE COUNT IS EXPECTED TO READ ZERO AND IS PRINTED
+   ANYWAY. The parse runs `plugins: []` with `errorRecovery: false`, so a file whose syntax this parser does
+   not implement THROWS and is counted as refused rather than reaching here. What reaches here is a VERSION
+   SKEW: `@babel/parser` and `@babel/types` are separate packages resolved independently, and a node kind the
+   parser emits in a release the types package has not caught up with is a leaf with nothing in the output to
+   say so. The figure prints on EVERY run including the clean day, for the reason the blind-spot band does.
+   AND AT ONE SITE THE LEAF IS A SOUNDNESS HAZARD RATHER THAN A FLOOR, which is why the counter is READ and
+   not merely written. `hasNestedFunction` below asks whether a subtree contains a function and a SUBSTITUTION
+   is decided by the answer; a leaf hides a function, the answer comes back `false`, and the fold substitutes
+   across a rebinding — which INVENTS an address, the one failure this file may not have. So that site reads
+   the counter and refuses, and its control is armed in `selftest` both ways. */
+const NO_CHILDREN = [];
+let childEnumerations = 0;               // nodes this run asked for children of — the floor's denominator
+let unreadableNodes = 0;                 // of those, the ones @babel/types has no VISITOR_KEYS for
+const unreadableKinds = new Map();       // that kind -> how many
+function childKeys(node) {
+  childEnumerations++;
+  const k = VISITOR_KEYS[node.type];
+  if (k) return k;
+  unreadableNodes++;
+  unreadableKinds.set(node.type, (unreadableKinds.get(node.type) || 0) + 1);
+  return NO_CHILDREN;
+}
+
 function hasNestedFunction(node) {
   let found = false;
+  const unreadableBefore = unreadableNodes;
   walk(node, (n) => { if (!found && FN_LIKE.has(n.type)) found = true; });
-  return found;
+  /* AN UNREADABLE NODE UNDER THIS SUBTREE IS ANSWERED `true`, WHICH IS THE DIRECTION THAT DECLINES. The
+     caller substitutes a parameter's value into this expression and is sound only because nothing in it can
+     rebind the name; a node whose children this file cannot enumerate could hold a function that does, and
+     answering `false` for it would fold across a rebinding and INVENT an address. Refusing costs one fold. */
+  return found || unreadableNodes !== unreadableBefore;
 }
 function singleParamFn(node, binds, env) {
   const r = returnExprFnOf(node, binds, env);
@@ -1198,7 +1240,7 @@ function foldEnvOnly(node, binds, depth, env) {
            other are unreachable code and still a cycle in this graph — so the walk carries its own seen set
            rather than relying on the depth limit to end it. */
         if (env.sole.seen.has(ps.fn)) return no("a cyclic call graph");
-        const as = call.arguments || [];
+        const as = call.arguments;
         /* A SPREAD MAKES POSITION MEANINGLESS: `f(...xs)` binds parameter i to an element nothing here
            can name, so the whole call is refused rather than any one position. */
         if (as.some((x) => x && (x.type === "SpreadElement" || x.type === "ArgumentPlaceholder")))
@@ -1344,7 +1386,7 @@ function walk(root, enter, leave) {
     if (!fr.entered) {
       fr.entered = true;
       enter(fr.node);
-      const keys = VISITOR_KEYS[fr.node.type] || [];
+      const keys = childKeys(fr.node);
       const kids = [];
       for (const k of keys) {
         const v = fr.node[k];
@@ -1410,6 +1452,52 @@ for (const t of [...VAR_SCOPES, ...BLOCK_SCOPES])
     die(`the scope pre-pass names the node kind ${t}, which this @babel/types does not have — a binding it ` +
         `should hold would be placed in an enclosing scope instead, which widens what this file folds ` +
         `without saying so, and a fold that is wrong INVENTS an address.`);
+
+/* ── THE CHILD LISTS THIS FILE READS WITH NO DEFAULT, ASSERTED ONCE AGAINST `NODE_FIELDS` ─────────────────
+   ELEVEN reads here used to be spelled `n.<field> || []`, and TEN of them were a default over a state that
+   CANNOT ARISE: for every pair below this @babel/types declares the field NON-OPTIONAL, and `@babel/parser`
+   emits it on every node of that kind — `new Foo` with no parens still carries `arguments: []`, `[,,]` still
+   carries `elements`, `class{get x(){}}` still carries `params`. CLAUDE.md §Fix-the-ROOT says to make an
+   impossible state impossible and then DELETE the now-dead workaround, and §A-FIELD-A-CONSUMER-DEFAULTS says
+   why the guard is the CONCEALMENT rather than the symptom: a `|| []` turns "this field is not here" into a
+   plausible EMPTY CHILD LIST, and an empty child list is a subtree this baseline silently does not read. A
+   baseline that reads less than a parse can INFLATES what execution is credited with, which is the one result
+   this file must not manufacture.
+   IT IS ONE ASSERTION AT LOAD AND NOT ONE PER NODE, which is §WHOSE-BYTES-STATE-THE-VALUE's line drawn where
+   it falls: a PAGE decides how many declarators a `VariableDeclaration` has, and @babel/types decides whether
+   the field exists at all. The second is a LIBRARY CONTRACT, so it is checked once — before a byte of
+   anybody's bundle is read, exactly as the `VISITOR_KEYS` check above it is — and no page can reach it.
+   THE `params` ROW IS DERIVED FROM `FN_LIKE` AND NOT RE-TYPED, so the two cannot drift; and
+   `ClassDeclaration`/`ClassExpression` are deliberately ABSENT, having no `params` field at all. That is what
+   the ELEVENTH default was really standing over — a `case` group that merged two class kinds with three
+   function kinds and asked one arm both "what binds its own name" and "what binds parameters". The group is
+   split at its site rather than defaulted, and the parameter question is keyed on `FN_LIKE` there for the same
+   reason it is keyed on it here: a hand-written `case` list of function kinds had already dropped all three
+   METHOD kinds. */
+const UNDEFENDED_CHILD_LISTS = [
+  ["VariableDeclaration", "declarations"],
+  ["ArrayExpression", "elements"],
+  ["ArrayPattern", "elements"],
+  ["ObjectPattern", "properties"],
+  ["SequenceExpression", "expressions"],
+  ["CallExpression", "arguments"],
+  ["OptionalCallExpression", "arguments"],
+  ["NewExpression", "arguments"],
+  ...[...FN_LIKE].map((t) => [t, "params"]),
+];
+for (const [t, f] of UNDEFENDED_CHILD_LISTS) {
+  const d = NODE_FIELDS[t] && NODE_FIELDS[t][f];
+  if (!d)
+    die(`this file reads ${t}.${f} with no default and this @babel/types declares no such field, so the read ` +
+        `would yield \`undefined\` and the whole child list under it would go unwalked — every address, key ` +
+        `and value spelled inside it invisible to this baseline, which reports a smaller floor for the parse ` +
+        `and credits the difference to execution.`);
+  if (d.optional)
+    die(`this file reads ${t}.${f} with no default and this @babel/types declares it OPTIONAL, so a node ` +
+        `lacking it would take that read to \`undefined\`. Either the field is genuinely optional now, in ` +
+        `which case its absence is a POSITIVE statement to read and never a hole to fill with \`[]\`, or this ` +
+        `pair is wrong; both are findings and neither is a guard at the read.`);
+}
 
 function collectBinds(ast) {
   /* PHASE 1 — one walk: open and close scopes, place every declaration, and record every reference with the
@@ -1491,7 +1579,7 @@ function collectBinds(ast) {
         /* THE KIND IS ONLY LEGIBLE HERE, which is why this is handled at the declaration and not at the
            declarator: `var` goes to the nearest function scope and `let`/`const` stay in this block. */
         const target = n.kind === "var" ? varScopeOf(cur) : cur;
-        for (const d of n.declarations || []) {
+        for (const d of n.declarations) {
           if (!d || d.type !== "VariableDeclarator") continue;
           if (d.id.type === "Identifier") {
             declare(target, d.id.name, d.init || null, null);
@@ -1558,15 +1646,15 @@ function collectBinds(ast) {
       case "ClassProperty": role(n.value, "a class field initialiser"); break;
       case "VariableDeclarator": role(n.init, "a variable initialiser"); break;
       case "ReturnStatement": role(n.argument, "a returned value"); break;
-      case "ArrayExpression": for (const e of n.elements || []) role(e, "an array element"); break;
+      case "ArrayExpression": for (const e of n.elements) role(e, "an array element"); break;
       case "ConditionalExpression": role(n.consequent, "a ternary arm"); role(n.alternate, "a ternary arm"); break;
       case "LogicalExpression": role(n.left, "a logical arm"); role(n.right, "a logical arm"); break;
-      case "SequenceExpression": for (const e of n.expressions || []) role(e, "a sequence element"); break;
+      case "SequenceExpression": for (const e of n.expressions) role(e, "a sequence element"); break;
       case "CallExpression": case "OptionalCallExpression": case "NewExpression": {
         const via = n.callee && n.callee.type === "Identifier" ? n.callee.name
           : n.callee && (n.callee.type === "MemberExpression" || n.callee.type === "OptionalMemberExpression") &&
             !n.callee.computed && n.callee.property.type === "Identifier" ? n.callee.property.name : null;
-        for (const x of n.arguments || []) {
+        for (const x of n.arguments) {
           const had = roleOfFn.has(x);
           role(x, "a CALLBACK argument — its parameter is bound by the callee's own semantics");
           /* MEMBERSHIP SAYS `THIS IS A CALLBACK` AND THE VALUE SAYS `AND THIS IS ITS SUPPLIER, OR I COULD
@@ -1592,7 +1680,7 @@ function collectBinds(ast) {
         fnStackCB.push(n);
         /* A NAMED FUNCTION EXPRESSION'S OWN NAME IS VISIBLE INSIDE IT AND NOWHERE ELSE. */
         if (n.type === "FunctionExpression" && n.id) { declare(cur, n.id.name, null, n); notRef.add(n.id); }
-        for (let i = 0; i < (n.params || []).length; i++) {
+        for (let i = 0; i < n.params.length; i++) {
           const q = n.params[i];
           declPattern(cur, q);
           /* THE PARAMETER SLOT IS RECORDED ONLY FOR A PLAIN IDENTIFIER. A pattern, a default and a rest each
@@ -1783,7 +1871,7 @@ function applicationsIn(node, binds, env, out) {
     const fn = singleParamFn(node.callee, binds, env);
     if (fn) out.push({ app: node, fn });
   }
-  for (const k of VISITOR_KEYS[node.type] || []) {
+  for (const k of childKeys(node)) {
     const v = node[k];
     if (Array.isArray(v)) { for (const c of v) applicationsIn(c, binds, env, out); }
     else applicationsIn(v, binds, env, out);
@@ -1814,7 +1902,7 @@ function candidateDomain(fn, binds, env) {
       if (n.left.type === "Identifier" && n.left.name === param) { const v = lit(n.right); if (v !== null) out.add(v); }
       if (n.right.type === "Identifier" && n.right.name === param) { const v = lit(n.left); if (v !== null) out.add(v); }
     }
-    for (const k of VISITOR_KEYS[n.type] || []) {
+    for (const k of childKeys(n)) {
       const v = n[k];
       if (Array.isArray(v)) { for (const c of v) visit(c); } else visit(v);
     }
@@ -1860,7 +1948,7 @@ function scanManifest(ast, binds, base, filename) {
         return;
       }
     }
-    for (const k of VISITOR_KEYS[node.type] || []) {
+    for (const k of childKeys(node)) {
       const v = node[k];
       if (Array.isArray(v)) { for (const c of v) descend(c); } else descend(v);
     }
@@ -2129,9 +2217,9 @@ function readFile(src, filename) {
       case "Identifier": bindName(p); return;
       case "AssignmentPattern": markPattern(p.left); return;
       case "RestElement": markPattern(p.argument); return;
-      case "ArrayPattern": for (const e of p.elements || []) markPattern(e); return;
+      case "ArrayPattern": for (const e of p.elements) markPattern(e); return;
       case "ObjectPattern":
-        for (const q of p.properties || []) {
+        for (const q of p.properties) {
           if (q.type === "ObjectProperty") { if (!q.computed && q.key) notRef.add(q.key); markPattern(q.value); }
           else if (q.type === "RestElement") markPattern(q.argument);
         }
@@ -2140,6 +2228,8 @@ function readFile(src, filename) {
     }
   };
   walk(ast, (n) => {
+    /* A FUNCTION-LIKE NODE'S PARAMETERS BIND, WHICHEVER OF THE SIX KINDS IT IS. */
+    if (FN_LIKE.has(n.type)) for (const p of n.params) markPattern(p);
     switch (n.type) {
       case "MemberExpression":
       case "OptionalMemberExpression": {
@@ -2175,7 +2265,7 @@ function readFile(src, filename) {
         else markPattern(n.id);
         /* THE ONE SHAPE NO REFERENCE POSITION WOULD SHOW. */
         if (n.id && n.id.type === "ObjectPattern" && provenGlobal(n.init)) {
-          for (const p of n.id.properties || []) {
+          for (const p of n.id.properties) {
             if (p.type !== "ObjectProperty" || p.computed) continue;
             const k = p.key;
             const nm = k && (k.type === "Identifier" ? k.name : k.type === "StringLiteral" ? k.value : null);
@@ -2184,13 +2274,21 @@ function readFile(src, filename) {
         }
         break;
       }
+      /* THIS ARM ANSWERS ONE QUESTION NOW — WHAT BINDS ITS OWN NAME — AND THE PARAMETER QUESTION IS KEYED
+         ON `FN_LIKE` ABOVE THE SWITCH. It used to answer both, and the `|| []` it needed to do so was
+         standing over `ClassDeclaration`/`ClassExpression`, which have no `params` field: the one legitimate
+         default of the eleven, and the thing that hid a real omission. A hand-written `case` list of function
+         kinds named three and left out `ObjectMethod`, `ClassMethod` and `ClassPrivateMethod`, so a method
+         PARAMETER named after a declared entry entered neither `notRef` nor `spellBound` — its own
+         declaration AND every shadowed use in the body were counted as BARE PLATFORM REFERENCES, while the
+         asserted control for the identical function form reads silent. `FN_LIKE` is the set the rest of this
+         file already means by "a function", so keying on it cannot drop a kind. */
       case "FunctionDeclaration":
       case "FunctionExpression":
       case "ClassDeclaration":
       case "ClassExpression":
       case "ArrowFunctionExpression":
         if (n.id) bindName(n.id);
-        for (const p of n.params || []) markPattern(p);
         break;
       case "CatchClause":
         markPattern(n.param);
@@ -2909,6 +3007,16 @@ function selftest() {
     /* A DEFAULT VALUE IS AN ORDINARY EXPRESSION AND THE PARAMETER BESIDE IT IS A BINDING, which is the one
        pattern position a blanket mark would have struck out. */
     [`function f(a = fetch()){}`,               { bareFree: 1 }],
+    /* A METHOD'S PARAMETERS BIND EXACTLY AS A FUNCTION'S DO, AND THESE THREE ROWS ARE WHY THAT MARK IS KEYED
+       ON `FN_LIKE` RATHER THAN ON A `case` LIST. The list named three function kinds and omitted all three
+       METHOD kinds, so a method parameter named after a declared entry was struck from neither population and
+       its shadowed use inside the body was counted as a BARE PLATFORM REFERENCE — the column that decides
+       whether a member-name channel is on the critical path, read UPWARD, while the identical function form
+       three rows above reads silent. Each of the six kinds now has a row: the three function forms above and
+       the three method forms here. */
+    [`({m(fetch){return fetch("/a")}})`,        { bareBoundName: 1 }],
+    [`class C{m(setTimeout){return setTimeout}}`, { bareBoundName: 1 }],
+    [`class C{#m(fetch){return fetch("/a")}}`,  { bareBoundName: 1 }],
   ];
   let spSpoke = 0;
   for (const [src, want] of spWant) {
@@ -2983,7 +3091,41 @@ function selftest() {
   if (reachSpoke !== SELFTEST_REACH.size)
     die(`SELF-TEST FAILED: ${reachSpoke} of ${SELFTEST_REACH.size} REACH controls were judged — a control ` +
         `whose source stopped producing a door row is a control that certifies nothing.`);
-  return { rows: SELFTEST.length, produced: spoke, blindRows: SELFTEST_BLIND.length, blindProduced: blindSpoke,
+  /* ── THE CHILD-ENUMERATION FLOOR, ARMED BOTH WAYS ────────────────────────────────────────────────────────
+     The figure this file prints for it is expected to read ZERO, and CLAUDE.md
+     §A-CONTROL-ARMS-ONLY-ON-A-SITE-THE-INSTRUMENT-CAN-JUDGE says a zero with no control under it is a fact
+     about the probe rather than about the corpus. So the counter is shown RISING on a node kind
+     @babel/types has no keys for, and `hasNestedFunction` is shown REFUSING for a subtree holding one —
+     which is the soundness half and the reason that counter is read rather than merely written.
+     THE NODE IS BUILT BY HAND BECAUSE NO PAGE CAN PRODUCE ONE, which is the whole of why the count is
+     expected to be zero: the parse runs `errorRecovery: false`, so a file this parser cannot read THROWS and
+     is counted as refused. What puts a kind here is a parser/types version skew and never anybody's bytes.
+     THE THIRD ASSERTION IS WHAT STOPS THE SECOND BEING VACUOUS: a refusal that fired for every subtree would
+     pass the check above and refuse every fold, so a readable function-free subtree is shown answering
+     `false` in the same breath. */
+  {
+    const KIND = "StaticSurfaceNoSuchNodeKind";
+    const before = unreadableNodes;
+    walk({ type: "ExpressionStatement", expression: { type: KIND } }, () => {});
+    if (unreadableNodes !== before + 1 || !unreadableKinds.has(KIND))
+      die(`SELF-TEST FAILED: a node kind this @babel/types has no VISITOR_KEYS for was descended into ` +
+          `without being counted, so the child-enumeration floor this file prints is a zero nobody has ` +
+          `armed — and every subtree under such a node is unread with nothing saying so.`);
+    if (!hasNestedFunction({ type: "ExpressionStatement", expression: { type: KIND } }))
+      die(`SELF-TEST FAILED: hasNestedFunction answered \`false\` for a subtree holding a node kind it ` +
+          `cannot enumerate the children of. A function hidden under one would then be folded across, and a ` +
+          `substitution over a rebound name INVENTS an address — the one failure this file may not have.`);
+    if (hasNestedFunction({ type: "StringLiteral", value: "/a" }))
+      die(`SELF-TEST FAILED: hasNestedFunction answered \`true\` for a readable, function-free subtree, so ` +
+          `its refusal cannot disagree with its acceptance and the check above certifies nothing.`);
+  }
+  /* AND THE COUNTERS ARE RESET HERE SO THE PRINTED FLOOR IS ABOUT THE CORPUS AND NOT ABOUT THIS SELFTEST,
+     whose controls deliberately make them rise. An instrument that counts itself into the population it
+     measures is CLAUDE.md §AND-AN-INSTRUMENT-THAT-READS-ITS-OWN-KIND-OF-FILE; the armed count is RETURNED
+     instead, so the arming is visible in the banner rather than summed into the subject. */
+  const childFloorArmed = unreadableNodes;
+  childEnumerations = 0; unreadableNodes = 0; unreadableKinds.clear();
+  return { childFloorArmed, rows: SELFTEST.length, produced: spoke, blindRows: SELFTEST_BLIND.length, blindProduced: blindSpoke,
            manifestRows: SELFTEST_MANIFEST.length + 1, manifestProduced: manifestSpoke, manifestAddrs,
            reachRows: SELFTEST_REACH.size, spellRows: spWant.length, spellColumns: SPELLINGS.length + 2,
            spellNames: ENTRY_NAMES.size, derivationRefusals: 3,
@@ -3356,6 +3498,18 @@ function main(argv) {
                 `${tot.missingSites.join(", ")} — a fact about the FETCH, not about the parse`);
   if (tot.ambiguousBlobs)
     console.log(`${tot.ambiguousBlobs} blob(s) are shared by more than one site and are attributed to one of them`);
+  /* THE CHILD-ENUMERATION FLOOR, PRINTED ON EVERY RUN INCLUDING THE CLEAN DAY — a leaf nobody counts is the
+     one shape a floor cannot be stated from, and a figure that appears only on the bad day is one nobody
+     learns to look for. The zero is SCORED: `selftest` shows the counter rising and `hasNestedFunction`
+     refusing, and the count of that arming is printed beside it so the two cannot be confused. */
+  console.log(`unwalked ${unreadableNodes} of ${childEnumerations} child enumeration(s) over ${cp.nProgram} ` +
+              `program(s)` +
+              (unreadableNodes ? `: ${[...unreadableKinds].map(([k, c]) => `${k}x${c}`).join(", ")} — each a ` +
+                 `LEAF whose whole subtree this baseline did not read, so every figure below is a FLOOR by at ` +
+                 `least that much`
+                            : ` — every node kind this parse produced had VISITOR_KEYS, so no subtree went ` +
+                              `unwalked and the figures below are not floored by this`) +
+              `   [${st.childFloorArmed} control(s) arm this counter, so the number is scored either way]`);
   const block = (name, k, why) => {
     console.log(``);
     console.log(`${name} — ${why}`);
