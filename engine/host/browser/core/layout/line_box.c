@@ -1018,13 +1018,18 @@ static size_t lb_fill(TextRunMeasure *m, lxb_dom_element_t *style, BlockFlowRun 
        produced for those was not an abort but a WIDTH: the containing block's, unshortened, which is a real
        number of the right kind for a line box that is not this wide. A plausible datum is indistinguishable
        from a measurement, so it is the concealment rather than the symptom.
-       IT WAS NOT UNREACHABLE EITHER, WHICH IS THE PART THAT MAKES IT A DEFECT AND NOT A FUTURE ONE.
-       core/layout/block_flow.c refuses §9.4.1's STACK for a container that has a float CHILD, and that refusal
-       is what has been keeping most of this population away from here — but it is a fact about one child list,
-       so `<body><div><span style="float:left">…</span></div><div><p>text</p></div></body>` passes it at every
-       step: neither `div` has a float child, and the `p`'s line boxes are laid out beside a float that is in
-       their own block formatting context. One component's blanket refusal was load-bearing for another
-       component's correctness, and neither file said so.
+       IT IS NOT MERELY REACHABLE, IT IS NOW THE ONLY REFUSAL LEFT FOR THIS POPULATION, and the retired reading
+       is kept because it is the one a reader re-derives from the two files' shapes. It said that
+       core/layout/block_flow.c's refusal of §9.4.1's STACK for a container with a float CHILD "is what has been
+       keeping most of this population away from here", that the refusal was a fact about one CHILD LIST where
+       this question is about a CONTEXT, and that `<body><div><span style="float:left">…</span></div><div><p>text
+       </p></div></body>` therefore passed it at every step — one component's blanket refusal load-bearing for
+       another's correctness, with neither file saying so. Every word of that was true and it is no longer: that
+       blanket refusal is GONE, replaced by §9.5.2's and §10.6.7's own two conditions, because CSS 2.2 §9.5
+       "Floats" states that a float changes no position on that stack ("as if the float did not exist"). So the
+       check below is not a second line of defence behind a wider one — it is the whole of the defence, and the
+       population it now meets is every formatting context in the tree that holds a float, not the remainder one
+       child-list test happened to let through.
        THE REFUSAL IS BROADER THAN THE SPEC'S OWN TEST AND THAT IS A NAMED RESIDUAL, NOT AN OVERSIGHT.
        NOT COVERED: this asks whether the context HOLDS a float, where §9.5 asks whether a line box is NEXT TO
        one — "a line box is next to a float when there exists a vertical position that satisfies all of these

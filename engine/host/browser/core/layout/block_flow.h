@@ -51,9 +51,20 @@
  *     the section fixes ("the margins will be 0"). That generation is a box-tree step and lives at the top of
  *     this walk, where the same list css-display-3 §2.5 "Box Generation: the none and contents keywords"'
  *     `contents` flattening will one day be spliced into.
- *   - A FLOAT in the formatting context is §9.5's own placement, and it is not enough to note that §10.6.3
- *     ignores floats: §9.5.2's `clear` on a LATER sibling introduces CLEARANCE, which §8.3.1 makes
- *     non-adjoining, so one float invalidates every collapse below it.
+ *   - A FLOAT in the formatting context does NOT stop this walk, and the sentence that stood here said it did.
+ *     It read that `it is not enough to note that §10.6.3 ignores floats`, which is the right caution and the
+ *     wrong conclusion: CSS 2.2 §9.5 "Floats" states this stack's answer in its own words — "Since a float
+ *     is not in the flow, non-positioned block boxes created before and after the float box flow vertically
+ *     as if the float did not exist" — so a float changes NEITHER a position on this stack NOR §10.6.3's
+ *     height, which ignores it by name. It is rewritten rather than dropped because the two things it named
+ *     as consequences are exactly the two that survive, and a reader who re-derives
+ *     `one float invalidates every collapse below it` from them will re-propose the blanket refusal:
+ *     §9.5.2's `clear` on a box of this stack introduces
+ *     CLEARANCE, which §8.3.1 makes non-adjoining and which is measured from the float's bottom outer edge; and
+ *     §10.6.7's own rule reaches a floating descendant's bottom margin edge for a container that ESTABLISHES a
+ *     formatting context and whose height is `auto`. Those two are refused at their own conditions in
+ *     block_flow.c, and the THIRD consequence — §9.4.2's line boxes shortened beside the float — is refused in
+ *     core/layout/line_box.c over the CONTEXT rather than here over a child list.
  *   - A FLEX or GRID container's height is its own spec's, not §10.6.3's walk, and a container whose children
  *     this walk placed would be a wrong number rather than an absent one.
  *   - A TABLE is CLASSIFIED and not measured, and the two halves are deliberately in different places. CSS 2.1

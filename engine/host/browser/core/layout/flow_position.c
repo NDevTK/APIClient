@@ -1068,16 +1068,23 @@ static FlowPoint fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_d
               "element earlier in the source document\" — so the whole of what this placement needs first is "
               "WHERE §9.4.1's AND §9.4.2's FLOW STANDS AT THE FLOAT'S OWN PLACE, which CSS 2.2 §9.5 "
               "\"Floats\" states in its own words as \"if there is a line box, the outer top of the floated box "
-              "is aligned with the top of the current line box\". EVERY ROUTE TO THAT NUMBER REFUSES TODAY, on "
-              "each arm the float's containing block can take: a container with inline content refuses in "
-              "core/layout/line_box.c, whose message begins \"CSS 2.2 §9.5 \\\"Floats\\\" takes this box out of "
-              "the line\", and one with a block-level box on its stack refuses in core/layout/block_flow.c, "
-              "whose message begins \"CSS 2 §9.5 \\\"Floats\\\" takes this child off §9.4.1's stack\". Grep those "
-              "two sentences before building anything here: this crash is reachable only through a chain that "
-              "hits one of them, so §9.5.1's placement is not the next member of the decomposition and a diff "
-              "that builds it lands code no run can execute. RETIREMENT: this paragraph goes when a float's "
-              "own flow position is ANSWERED rather than refused, since the ordering it corrects is then "
-              "visible in the tree",
+              "is aligned with the top of the current line box\". ONE OF THE TWO ROUTES TO THAT NUMBER NOW "
+              "ANSWERS, WHICH IS WHAT THE ORDERING NOTE THAT STOOD HERE WAS FOR AND IS RECORDED RATHER THAN "
+              "DELETED BECAUSE A READER WILL RE-DERIVE THE OLD STATE. It said EVERY route refused — a container "
+              "with inline content in core/layout/line_box.c and one with a block-level box on its stack in "
+              "core/layout/block_flow.c — and therefore that §9.5.1's placement was not the next member of the "
+              "decomposition, since a diff building it would land code no run could execute. THE BLOCK-LEVEL "
+              "HALF OF THAT IS SPENT: core/layout/block_flow.c no longer refuses §9.4.1's stack for a container "
+              "holding a float, because CSS 2.2 §9.5 says the stack is unchanged by one (\"non-positioned block "
+              "boxes created before and after the float box flow vertically as if the float did not exist\"), so "
+              "§9.4.1's positions and §10.6.3's height are ANSWERED beside a float and §9.5.1's rules 4, 5 and 6 "
+              "have the lower bound they are stated over. WHAT IS STILL REFUSED IS THE LINE-BOX HALF and it is "
+              "refused in TWO places in that one file, not one: `lb_child` for a float inside the run, and a "
+              "CONTEXT check for every other float that reaches these lines. So the remaining order is §9.5's "
+              "shortening BEFORE §9.5.1's placement for a float whose containing block has inline content, and "
+              "§9.5.1 FIRST for one whose containing block holds only block-level boxes — two entry points rather "
+              "than one blocked chain. RETIREMENT: this paragraph goes when a float's own flow position is "
+              "ANSWERED rather than refused, since the ordering it corrects is then visible in the tree",
               box_subject(el, nbuf, sizeof nbuf), box_subject_computed(el, "float", vbuf, sizeof vbuf));
     fp_require_horizontal_tb(el);
     /* §9.4's TWO NORMAL-FLOW FORMATTING CONTEXTS ARE ALTERNATIVES, and which one places a box is its own

@@ -1022,45 +1022,117 @@ lxb_dom_node_t *block_flow_next_block_box(lxb_dom_element_t *el, lxb_dom_node_t 
    it "a sibling of those anonymous boxes", so it IS on the stack and the walk below reaches it as an ordinary
    member of the box list. That is a capability this question would have taken away had it been asked over
    ancestry instead of over the child's own level. */
-/* §9.5's FLOAT, REFUSED BEFORE THE STACK IS WALKED AT ALL, and it names §9.4.1's OWN missing capability
-   rather than any other caller's — this is the line a reader of this crash can act on. It is asked over the
-   container's own children, which is exactly the population the per-child dispatch this replaces classified: a
-   float nested inside an inline box is carried along inside a run and refused by the FILL, under §9.4.2's
-   shortened line box, which is that consumer's own consequence and a different sentence.
-   CSS 2 §9.5 "Floats" positions this child, and §10.6.3's own parenthesis says a float is IGNORED when the
-   container's height is computed, so the float alone would not stop this walk. What stops it is what a float
-   does to its SIBLINGS: §9.5.2's `clear` on a later block-level box introduces CLEARANCE, §8.3.1 makes a
-   margin with clearance NON-ADJOINING ("no line boxes, no clearance, no padding and no border separate them"),
-   and §9.5.2 then shifts that box down past the float's bottom margin edge. One float therefore invalidates
-   every collapse and every offset below it in this formatting context. `clear` IS NOW A COMPUTED VALUE
-   core/css/css_computed_value.c derives — its `Computed value: as specified` row, with CSS 2.1 §9.5.2's
-   `both` restored to the parser, which CSS Page Floats 3's grammar had dropped — so the PROPERTY is no longer
-   what is missing and the PLACEMENT the clearance is measured against is. §10.6.7 wants the float
-   as well, for a container that establishes a formatting context: "if the element has any floating descendants
-   whose bottom margin edge is below the element's bottom content edge, then the height is increased to include
-   those edges". */
-static void bf_require_no_float_on_the_stack(lxb_dom_element_t *el)
+/* §9.5's FLOAT, REFUSED FOR THE TWO QUANTITIES IT CHANGES RATHER THAN FOR ITS PRESENCE, and each arm names
+   §9.4.1's OWN missing capability rather than another caller's — this is the line a reader of this crash can act on.
+   THE BLANKET REFUSAL THIS REPLACES IS WRITTEN OUT RATHER THAN DELETED, because a reader will re-derive it from
+   the word FLOAT and because another component was relying on it. It fired for every container holding a float
+   CHILD, on the ground that "there is no arm on this stack that is right by default", and it was wrong on BOTH
+   axes at once. TOO WIDE: CSS 2.2 §9.5 "Floats" states this stack's answer outright — "Since a float is not in
+   the flow, non-positioned block boxes created before and after the float box flow vertically as if the float
+   did not exist" — and CSS 2.2 §10.6.3 "Block-level non-replaced elements in normal flow when 'overflow'
+   computes to 'visible'" says the same of the height this walk returns, "Only children in the normal flow are
+   taken into account (i.e., floating boxes and absolutely positioned boxes are ignored, and relatively
+   positioned boxes are considered without their offset)". `bf_content_kind` above quotes the first of those and
+   ANSWERS for a container with a float; this refusal read the same sentence and refused anyway, so one file
+   disagreed with itself about one operand. TOO NARROW: it asked about a CHILD LIST where both surviving
+   quantities are scoped to a FORMATTING CONTEXT, which core/layout/line_box.c's own §9.5 residual had already
+   measured — a float in a sibling subtree passed it at every step. That record named this refusal as what had
+   been keeping most of its population away, so removing it ARMS line_box.c's context check rather than widening
+   a gap, and that file's record is rewritten in the same diff.
+   WHAT SURVIVES IS TWO SECTIONS, EACH ASKED OVER ITS OWN POPULATION.
+     - §9.5.2 "Controlling flow next to floats: the 'clear' property": "Values other than 'none' potentially
+       introduce clearance . Clearance inhibits margin collapsing and acts as spacing above the margin-top of an
+       element", and each value requires the box's top border edge "be below the bottom outer edge" of the float.
+       So a box on this stack with `clear` set both MOVES and stops being adjoining, and the distance is measured
+       from a box nothing here can place. `clear` IS A COMPUTED VALUE core/css/css_computed_value.c derives — its
+       `Computed value: as specified` row, with CSS 2.1 §9.5.2's `both` restored to the parser, which CSS Page
+       Floats 3's grammar had dropped — so the PROPERTY is not what is missing and the PLACEMENT is.
+     - §10.6.7 "'Auto' heights for block formatting context roots": "if the element has any floating descendants
+       whose bottom margin edge is below the element's bottom content edge, then the height is increased to
+       include those edges". Its own opening scopes it — "In certain cases (see, e.g., sections 10.6.4 and 10.6.6
+       above), the height of an element that establishes a block formatting context is computed as follows" — so
+       it is asked of `bf_establishes_block_formatting_context` and of an `auto` height, and therefore NOT of the
+       ROOT ELEMENT, which that predicate deliberately excludes (see its banner) and which takes §10.6.3's
+       float-ignoring walk instead.
+   THE THIRD CONSEQUENCE IS NOT REFUSED HERE AND MUST NOT BE, and it is the one a reader will look for: §9.4.2
+   shortens the LINE BOXES beside a float, which moves this container's §10.6.3 case 1 and its baseline. Both
+   reach core/layout/line_box.c, which refuses on the CONTEXT holding a float rather than on a child list, so a
+   check here would report THIS line for that file's gap.
+   IT IS `#if APICLIENT_DEV` for line_box.c's reason at its own context check: the float search is a SUBTREE WALK
+   and it exists only to feed an abort a release build does not have.
+   THE `clear` ARM CARRIES A NAMED RESIDUAL. NOT COVERED: §9.5.2's own two narrowings — "The 'clear' property does
+   not consider floats inside the element itself or in other block formatting contexts", and each of its values
+   is stated over floats "that resulted from elements earlier in the source document" — so this refuses a box
+   whose only candidate float is its own descendant or is later in source order, where a browser computes a
+   clearance of zero and this walk's untouched answer is already right. NEXT DIFF: §9.5.2's clearance itself over
+   §9.5.1's placement, which core/layout/flow_position.c's crash names and which needs the float's bottom outer
+   edge. HOW ITS ABSENCE SHOWS: this abort firing for a container in which no float precedes, in source order and
+   in the same formatting context, any box whose computed `clear` is set. */
+static void bf_require_float_does_not_reach_this_stack(lxb_dom_element_t *el, bool auto_h)
 {
-    lxb_dom_node_t *c;
-    char nbuf[160];
+#if APICLIENT_DEV
+    lxb_dom_element_t *fl;
+    lxb_dom_node_t *b, *cleared = NULL;
+    bool root_height;
+    char nbuf[160], fbuf[160], ebuf[160], vbuf[64];
 
-    for (c = lxb_dom_interface_node(el)->first_child; c != NULL; c = c->next)
-        if (block_flow_child_kind(el, c) == BLOCK_FLOW_CHILD_FLOAT)
-            DFAILF("CSS 2 §9.5 \"Floats\" takes this child off §9.4.1's stack and then changes where every box "
-                   "BELOW it sits: §9.5.2 \"Controlling flow next to floats: the 'clear' property\"' clearance "
-                   "makes a later block-level box's margin non-adjoining and shifts it past the float's bottom "
-                   "margin edge, and §10.6.7's own rule pulls this container's height down to a floating "
-                   "descendant's edge. So there is no arm on this stack that is right by default. BUILD "
-                   "§9.5.1 \"Positioning the float: the 'float' property\"'s placement — `clear` IS RECORDED "
-                   "NOW (core/css/css_computed_value.c's as-specified arm and css_shorthand_complete_for, with "
-                   "CSS 2.1 §9.5.2's `both` restored to lexbor's parser), so the PROPERTY is no longer the "
-                   "blocker and the float's POSITION is the whole of what is left: §9.5.2 measures clearance "
-                   "against the float's BOTTOM OUTER EDGE, which nothing here can compute. "
-                   "core/layout/line_box.c, core/layout/intrinsic_size.c and core/layout/flow_position.c each "
-                   "name §9.5.1 as the same absent capability under their own section's reason — FOUR "
-                   "consumers of ONE capability, and this list read THREE until flow_position.c's own crash "
-                   "was counted. %s",
-                   box_subject_node(c, nbuf, sizeof nbuf));
+    /* THE TWO ANTECEDENTS ARE ASKED BEFORE THE FLOAT IS LOOKED FOR, AND THE ORDER IS THE COST RATHER THAN THE
+       LOGIC — both conditions are conjunctions with the float, so either order refuses the same documents.
+       core/layout/block_flow.h prices the float search as a WALK OF THE WHOLE FORMATTING CONTEXT whenever the
+       answer is NULL, and `bf_layout` runs once per box, so paying it unconditionally here would be that walk
+       per box: quadratic in the document, in every DEV build, to prove an absence on the documents that have no
+       float. Both antecedents are cheap and both are FALSE for almost every container — `clear`'s initial value
+       is `none` (CSS 2.2 §9.5.2's own `Initial:` line) and §9.4.1's list holds few boxes — so the walk is
+       reached only where one of the two sections could actually apply. */
+    root_height = auto_h && bf_establishes_block_formatting_context(el);
+    for (b = block_flow_next_block_box(el, NULL); b != NULL; b = block_flow_next_block_box(el, b)) {
+        /* §9.5.2's `Applies to:` line is "block-level elements", so §9.2.1.1's ANONYMOUS block box has no
+           `clear` to read and is not one of these — which is why the walk is over the BOX LIST's element
+           members and the anonymous runs are skipped rather than asked. */
+        if (b->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        if (!bf_computed_is(lxb_dom_interface_element(b), "clear", "none")) { cleared = b; break; }
+    }
+    if (!root_height && cleared == NULL) return;
+    fl = block_flow_context_first_float(el);
+    if (fl == NULL) return;
+    if (root_height)
+        DFAILF("%s: CSS 2.2 §10.6.7 \"'Auto' heights for block formatting context roots\" increases this container's "
+               "own height to reach a float it holds — \"if the element has any floating descendants whose bottom "
+               "margin edge is below the element's bottom content edge, then the height is increased to include "
+               "those edges\" — and %s is such a descendant in this container's OWN formatting context, which "
+               "is the scope §10.6.7's next sentence states (\"Only floats that participate in this block "
+               "formatting context "
+               "are taken into account\"). The edge it wants is the float's BOTTOM MARGIN EDGE, which needs the "
+               "float "
+               "PLACED: BUILD §9.5.1 \"Positioning the float: the 'float' property\"' placement, which "
+               "core/layout/flow_position.c crashes for and whose own ordering note says what that placement needs "
+               "first. A box that does NOT establish a formatting context does not reach this line and must not — "
+               "§10.6.3's walk ignores floats by its own sentence, so its answer is already right",
+               box_subject(el, nbuf, sizeof nbuf), box_subject(fl, fbuf, sizeof fbuf));
+    /* `cleared` IS NON-NULL HERE BY THE RETURN ABOVE, so this abort is UNCONDITIONAL and is written as one: a
+       `DCHECKF(cleared == NULL, …)` at this line would be a condition no state of the program can satisfy,
+       which is a NON-check with a check's syntax rather than a weak guard. */
+    DFAILF("%s, computed `clear` `%s`, in %s: CSS 2.2 §9.5.2 \"Controlling flow next to floats: the 'clear' "
+           "property\" puts this box BELOW a float on the same stack — each of its three values \"Requires "
+           "that the top border edge of the box be below the bottom outer edge\" of an earlier float — and "
+           "%s is a float in this box's own formatting context. §9.5.2's next sentences are what make this "
+           "§9.4.1's problem and not only this box's: \"Values other than 'none' potentially introduce "
+           "clearance . Clearance inhibits margin collapsing and acts as spacing above the margin-top of an "
+           "element\", and CSS 2.1 §8.3.1 \"Collapsing margins\" agrees from the other end by excepting a "
+           "margin with clearance from its adjoining test — so one such box changes every collapse and every "
+           "offset below it on this stack. The clearance is measured from the float's BOTTOM OUTER EDGE: "
+           "BUILD §9.5.1 \"Positioning the float: the 'float' property\"' placement, which "
+           "core/layout/flow_position.c crashes for. `clear` itself is RECORDED "
+           "(core/css/css_computed_value.c's as-specified arm and css_shorthand_complete_for, with CSS 2.1 "
+           "§9.5.2's `both` restored to lexbor's parser), so the property is not the blocker",
+           box_subject_node(cleared, nbuf, sizeof nbuf),
+           box_subject_computed(cleared == NULL ? NULL : lxb_dom_interface_element(cleared),
+                                "clear", vbuf, sizeof vbuf),
+           box_subject(el, ebuf, sizeof ebuf), box_subject(fl, fbuf, sizeof fbuf));
+#else
+    (void) el;
+    (void) auto_h;
+#endif
 }
 
 static void bf_require_want_on_the_stack(lxb_dom_element_t *el, lxb_dom_element_t *want)
@@ -1358,7 +1430,10 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
        empty anonymous box would take a height off the stack and be reported to every consumer of the
        enumeration. */
     bf_require_want_on_the_stack(el, want);
-    bf_require_no_float_on_the_stack(el);
+    /* `auto_h` IS PASSED RATHER THAN RE-READ, because §10.6.7 is stated for an 'Auto' height and this frame has
+       already asked css-sizing-3 §3.2.1's behaves-as-auto for §8.3.1's third and fourth adjoining pairs above. A
+       second read would be a second answer to one question, free to disagree about a percentage height. */
+    bf_require_float_does_not_reach_this_stack(el, auto_h);
     brk = block_flow_next_block_box(el, NULL);
     for (;;) {
         lxb_dom_element_t *ce = NULL;
