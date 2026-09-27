@@ -2104,6 +2104,7 @@ function readFile(src, filename) {
       args = n.arguments;
     }
 
+    let arg0MethodValue = null;
     if (door && args) {
       if (door.minArgs && args.length < door.minArgs) door = null;
       /* `.open(` is XMLHttpRequest's only through a first argument that is an HTTP method. Without that
@@ -2111,12 +2112,34 @@ function readFile(src, filename) {
          is the precision failure that makes a static number meaningless. A non-literal first argument is
          NOT admitted: the method would then be unknown too, and a row whose method and address are both
          unknown says only "a call happened", which no comparison can use. That exclusion is a FLOOR and is
-         reported as `xhrOpenSkippedNonLiteralMethod`. */
+         reported as `xhrOpenSkippedNonLiteralMethod`.
+         A NO-SUBSTITUTION TEMPLATE IS THAT SAME LITERAL AND THIS TEST USED TO REFUSE IT, WHICH IS A RECALL
+         HOLE IN THE BASELINE §What-the-tool-produces SAYS THIS PROJECT MUST NOT HAVE — a hole here makes the
+         competitor look weak, which makes the engine look strong, and that is the one result the tree must
+         never manufacture. `` `GET` `` and `"GET"` are the same method by ECMAScript §13.2.8 Template
+         Literals: a TemplateLiteral with no substitutions has one TemplateCharacters part and its value is
+         that part's SV, so refusing it was a test of the QUOTE CHARACTER and never of the method. It was
+         found by a third instrument rather than by reading: `testing/ts_surface.mjs`'s bundler column reports
+         this door's site count rising from 22 to 38 when the same bytes are run through `esbuild`, whose
+         minifier normalises a no-substitution template to a string — and an independent AST scan of that
+         corpus reconciles the gap exactly, 22 StringLiteral methods against the 22 sites admitted here and 16
+         no-substitution templates against the 16 gained, distributed 8/6/2 over three sites, which is the
+         per-site delta to the digit. The cost of the hole was not an address: all 16 have an opaque URL. The
+         cost is that their URL argument was never examined at all, so the day one of them carries a foldable
+         address this door would have lost it with nothing to say so.
+         THE VALUE IS EXTRACTED ONCE AND THE TEST IS OVER THE VALUE, so a third admissible spelling is a line
+         here and not a second predicate — and `testing/ts_surface.mjs` DERIVES both the method set and the
+         admitted node types out of this block, so its own walk cannot drift from this one. */
       if (door && door.arg0Method) {
         const m = args[0];
-        if (!m || m.type !== "StringLiteral" || !/^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|TRACE)$/i.test(m.value)) {
+        const mv = !m ? null
+          : m.type === "StringLiteral" ? m.value
+          : (m.type === "TemplateLiteral" && m.expressions.length === 0 && m.quasis.length === 1)
+            ? m.quasis[0].value.cooked
+            : null;
+        if (mv == null || !/^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|TRACE)$/i.test(mv)) {
           door = null; xhrOpenSkippedNonLiteralMethod++;
-        }
+        } else arg0MethodValue = mv;
       }
     }
 
@@ -2164,7 +2187,14 @@ function readFile(src, filename) {
            callback. Both are properties of the TEXT and neither is a claim about any engine. */
         fnDepth: fnStack.length,
         innerAsync: fnStack.length > 0 ? !!fnStack[fnStack.length - 1].async : false,
-        method: door.arg0Method ? args[0].value.toUpperCase() : (door.id === "sendBeacon" ? "POST" : "GET"),
+        /* THE METHOD IS THE VALUE THE TEST ABOVE EXTRACTED AND NEVER A SECOND READ OF THE NODE. This line
+           used to be `args[0].value.toUpperCase()`, which is the SAME QUESTION asked a second way one
+           argument over: it works for a `StringLiteral` and reads `undefined` for the no-substitution
+           template that is the same method, so widening the test alone CRASHED here — §A-FIX-OF-THE-FORM-
+           "X-IS-NOT-HOW-TO-ASK-Q", found by the crash rather than by reading, which is the mechanism
+           working. One extraction, one value, and a third admissible spelling cannot split the two again. */
+        method: door.arg0Method ? String(arg0MethodValue).toUpperCase()
+                                : (door.id === "sendBeacon" ? "POST" : "GET"),
         line: n.loc ? n.loc.start.line : 0, file: filename, sig,
       });
     }

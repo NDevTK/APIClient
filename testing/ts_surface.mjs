@@ -212,14 +212,29 @@ export function doorsFromSource(src, where) {
    the one our baseline already publishes as `xhrOpenSkipped` — so the two sides apply one test and a
    disagreement is a finding rather than a silent difference in precision. */
 export function httpMethodTestFromSource(src, where) {
-  const m = /if \(!m \|\| m\.type !== "StringLiteral" \|\| !\/\^\(([A-Z|]+)\)\$\/i\.test\(m\.value\)\)/.exec(src);
+  const m = /!\/\^\(([A-Z|]+)\)\$\/i\.test\(mv\)/.exec(src);
   if (!m) die(`${where} states no HTTP-method test this pass can read for its \`arg0Method\` doors. That test ` +
               `is the whole precision of the \`.open(\` door: without it this file admits every library's ` +
               `two-argument \`open()\` and manufactures razor points out of strings that are not addresses.`);
   const names = m[1].split("|");
   if (names.length < 4) die(`${where}'s HTTP-method test resolved to only ${names.length} name(s) ` +
                             `(${JSON.stringify(names)}), which is too few to be the set it owns.`);
-  return new Set(names.map((x) => x.toUpperCase()));
+  /* THE ADMITTED NODE TYPES ARE DERIVED TOO, AND THAT IS NOT TIDINESS — THE TWO WALKS DISAGREEING ABOUT WHICH
+     SPELLINGS OF A METHOD COUNT IS EXACTLY WHAT PUT A 16-SITE HOLE IN BOTH OF THEM. Our baseline refused
+     `` `GET` `` because it is a TemplateLiteral and not a StringLiteral, and this file, having derived only the
+     NAME SET out of that block, refused it independently through its own `ts.isStringLiteral`. The hole was
+     found by the bundler column below — whose minifier normalises the quote — not by either walk, because both
+     had it. So the VALUE EXTRACTOR's admitted node types are read out of the same block as the names, and a
+     spelling added there is a spelling here on the next run. */
+  const ex = /const mv = !m \? null([\s\S]{0,600}?);\n/.exec(src);
+  if (!ex) die(`${where} states no \`const mv = \` first-argument value extractor this pass can read, so the ` +
+               `NODE TYPES its \`arg0Method\` test admits would be invented here rather than derived from the ` +
+               `file that owns them — which is how the two walks came to refuse a no-substitution template ` +
+               `independently and in agreement.`);
+  const types = new Set([...ex[1].matchAll(/m\.type === "([A-Za-z]+)"/g)].map((x) => x[1]));
+  if (!types.has("StringLiteral"))
+    die(`${where}'s first-argument extractor does not admit a \`StringLiteral\` method at all (${JSON.stringify([...types])}).`);
+  return { methods: new Set(names.map((x) => x.toUpperCase())), argTypes: types };
 }
 
 /* THE GLOBAL OBJECT'S OWN NAMES, so `window.fetch(u)` is the same door as `fetch(u)` on both sides. Read out
@@ -280,6 +295,19 @@ function tsVerdict(ck, arg) {
    difference in their site counts is a statement about door RECALL rather than about value recovery. */
 function walkDoors(sf, ck, doors, globals, methods, onSite) {
   let skippedNonMethod = 0, globalRecvNonMethod = 0;
+  /* THE METHOD SPELLINGS THIS WALK ADMITS ARE THE ONES OUR BASELINE'S OWN EXTRACTOR ADMITS, derived rather
+     than mirrored — see `httpMethodTestFromSource`. A `TemplateLiteral` with no substitutions is the same
+     literal as a string by ECMAScript §13.2.8 Template Literals, and TypeScript's AST spells it as its own
+     node kind, so admitting it is a lookup here and not a second judgement. */
+  const argTypes = (methods && methods.argTypes) || new Set(["StringLiteral"]);
+  const names = (methods && methods.methods) || methods;
+  const methodOf = (a) => {
+    if (!a) return null;
+    if (argTypes.has("StringLiteral") && ts.isStringLiteral(a)) return a.text;
+    if (argTypes.has("TemplateLiteral") && ts.isNoSubstitutionTemplateLiteral(a)) return a.text;
+    return null;
+  };
+  const isMethod = (a) => { const v = methodOf(a); return v !== null && names.has(v.toUpperCase()); };
   const byKindName = new Map();
   for (const d of doors) byKindName.set(d.kind + ":" + d.name, d);
   const nameOfCallee = (ex) => {
@@ -337,7 +365,7 @@ function walkDoors(sf, ck, doors, globals, methods, onSite) {
             for (const d of doors)
               if (d.arg0Method && d.name === c.name) {
                 const a0 = n.arguments && n.arguments[0];
-                if (!(a0 && ts.isStringLiteral(a0) && methods.has(a0.text.toUpperCase())) &&
+                if (!isMethod(a0) &&
                     (!d.minArgs || (n.arguments && n.arguments.length >= d.minArgs))) globalRecvNonMethod++;
               }
           }
@@ -368,8 +396,7 @@ function walkDoors(sf, ck, doors, globals, methods, onSite) {
       if (hit.minArgs && args.length < hit.minArgs) ok = false;
       /* `xhr.open`'s first argument is the METHOD and must be a literal, exactly as our baseline requires:
          without it the row's method is unknown and the site is not comparable. */
-      if (ok && hit.arg0Method &&
-          !(args[0] && ts.isStringLiteral(args[0]) && methods.has(args[0].text.toUpperCase()))) {
+      if (ok && hit.arg0Method && !isMethod(args[0])) {
         ok = false; skippedNonMethod++;
       }
       /* A SPREAD ARGUMENT DOES NOT REFUSE THE SITE, IT MAKES ITS ADDRESS UNKNOWABLE — and those are two
@@ -417,6 +444,9 @@ function selftest(doors, globals, methods) {
     `x.open(m, LOCAL);`,                   // refused: method not a literal
     `x.open("first", LOCAL);`,             // refused: a literal that is NOT an HTTP method — the measured
                                            //   false positive that produced this file's only `theirsOnly` row
+    "x.open(`GET`, LOCAL);",               // ADMITTED: a no-substitution template IS that method, and both
+                                           //   walks refused it independently until the bundler column below
+                                           //   found 16 real sites spelled that way
   ].join("\n");
   const files = new Map([["/st/a.js", A], ["/st/b.js", B]]);
   const cache = new Map();
@@ -488,8 +518,13 @@ function selftest(doors, globals, methods) {
   const workers = got.filter((g) => g.door === "new Worker");
   if (workers.length !== 1) die(`the door derivation did not reach \`new Worker\` exactly once (${workers.length}).`);
   const opens = got.filter((g) => g.door === "xhr.open");
-  if (opens.length !== 1) die(`\`xhr.open\`'s method refusal is not firing: ${opens.length} row(s) admitted ` +
-                              `where exactly one of the three \`.open(\` calls has a real HTTP method.`);
+  /* TWO ADMITTED OF FOUR: a `"GET"` string and a `` `GET` `` no-substitution template, which are the same
+     method; the other two are refused. THE TEMPLATE ARM IS ARMED HERE AND NOT ASSUMED, because both walks in
+     this comparison refused it for as long as nobody wrote this control — the hole was found by the bundler
+     column, whose minifier changes the quote, and the day either walk stops admitting it this fires. */
+  if (opens.length !== 2) die(`\`xhr.open\`'s method test is not admitting both literal spellings: ` +
+                              `${opens.length} row(s) admitted where exactly two of the four \`.open(\` calls ` +
+                              `carry a real HTTP method — one as "GET" and one as \`GET\`.`);
   if (w.skippedNonMethod !== 2)
     die(`the \`arg0Method\` refusal counted ${w.skippedNonMethod} skip(s) where the controls are two — a ` +
         `non-literal method and the literal \`"first"\` that is not an HTTP method. That second one is the ` +
