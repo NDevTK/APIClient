@@ -2296,10 +2296,34 @@ static JSValue css_resolved_inset(JSContext *ctx, lxb_dom_element_t *el, const c
                   "scrollport extent beside core/layout/scroll_container.h, whose own subject is the box that "
                   "establishes one, and give `used_value_inset_length_px` the basis rather than letting it "
                   "pick: §3.1 states the basis per POSITIONING SCHEME and that entry currently reads only the "
-                  "axis. An ABSOLUTE length needs no basis at all and is answered above this line");
+                  "axis. An ABSOLUTE length needs no basis at all and is answered above this line. THE RELEASE "
+                  "ARM BELOW IS §9's OWN \"OTHERWISE\" AND IS CHOSEN RATHER THAN FALLEN INTO: it reports the "
+                  "percentage AS SPECIFIED, which is a DEFINED answer a page reads as a string and which no "
+                  "other component of this algorithm consumes, so the pair of arms leaves no state behind — "
+                  "the alternative, a percentage of §10.1's rectangle, is a plausible NUMBER and would be read "
+                  "as a measurement");
             return css_resolved_computed(ctx, el, name);
         }
         free(pos);
+        /* NAMED RESIDUAL — WHAT IS NOT COVERED: css-position-3 §3.5.2 "Resolving Overconstrained Insets" is
+           stated over the one configuration in which a declared inset's answer is NOT its own length. "If the
+           inset-modified containing block size in any axis is less than zero, then the weaker inset in the
+           affected axis is reduced (possibly becoming negative) to bring that size up to zero", and then, in
+           the section's own use of this file's word, "If its self-alignment property in an axis is normal, then
+           the resolved value of its weaker inset in that axis is the value necessary to match that edge of its
+           inset-modified containing block to the corresponding edge of its margin box after layout." This line
+           answers the weaker member's own absolutized length instead, which is right for every axis whose
+           inset-modified containing block is NOT negative and is the whole population where it is.
+           WHAT THE NEXT DIFF BUILDS: the inset-modified containing block's extent — §10.1's rectangle less the
+           two resolved insets — as an entry beside `used_value_containing_block_width`, plus §3.5.2's weaker-
+           inset selection, which that section defines and which is not this file's to guess ("In the case that
+           only one inset is auto, that is the weaker inset … otherwise the weaker inset is the inset of the end
+           edge (where end is interpreted relative to the writing mode of the containing block)"). Then this
+           arm asks the weaker member for that post-layout edge match rather than for its own length.
+           HOW ITS ABSENCE WOULD SHOW: a page reading BOTH opposing insets of an axis on a positioned box gets
+           a pair that does not place the box — the two values and the element's own client rectangle on that
+           axis do not reconcile against the containing block, where a browser's pair does. It is observed at
+           the pair and never at one member, because a single inset is a plausible length either way. */
         return css_resolved_px(ctx, used_value_inset_length_px(el, len, PHYS[side].vertical));
     }
     /* §3.1's `auto` — "Represents an unconstrained inset; the exact meaning depends on the positioning
