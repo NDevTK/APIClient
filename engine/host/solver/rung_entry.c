@@ -40,6 +40,11 @@ typedef struct {
     const char *const *names;
     long named;          /* an ordinary reference: a read that throws when nothing binds it */
     long named_typeof;   /* the non-throwing form, which is `typeof x` and nothing else */
+    /* THE PROPERTY SPELLING OF THE SAME NAME, ON A RECEIVER THE SOURCE SPELLS AS THE GLOBAL — and a THIRD
+       count rather than a contribution to either above, because the guard the pair above is split on does not
+       exist here: `typeof window.x` and `window.x` are the same field get (see the header). A reader who wants
+       the union adds two of these; nobody is handed a sum somebody else took. */
+    long named_prop;
 } RungEntry;
 
 static RungEntry g_rungs[RUNG_SLOT_N];
@@ -88,6 +93,51 @@ void rung_entry_declare(StepUnit u, const char *const *names) {
         return;
     }
     g_rungs[slot].names = names;
+}
+
+/* THE NAMES THIS ENGINE BINDS TO A REALM'S OWN GLOBAL OBJECT, which is the whole of the receiver test the
+   property spelling gets and is a SOURCE-TEXT test. `window`, `self` and `frames` are HTML §7.2.2 "The Window
+   object"'s and browser/core/frame/window.c installs all three with the global itself as the value;
+   `globalThis` is ECMAScript §19.1 "Value Properties of the Global Object"'s and the interpreter installs it.
+   WHAT IS DELIBERATELY NOT HERE AND WHY EACH ABSENCE IS THE WITHHOLDING DIRECTION. `top` and `parent` are the
+   NAVIGABLE'S — §7.2.2.4 walks the parent chain, so a child realm's `parent.requestIdleCallback` is a read of
+   ANOTHER agent's global and is not this document naming its own rung's work. `global` is Node's and this
+   engine binds nothing to it, so `global.x` is an absent global and solver/absent.c's question rather than
+   this one. A page may reassign `self`, `frames` and `globalThis` — all three are writable — so this test
+   presumes the standard bindings; a bundle that rebinds one raises a row by one on a name it does not name,
+   which is the only direction in which this table can be wrong and is the reason the set is the narrow one.
+   AND IT IS A SECOND STATEMENT OF ONE SET, WHICH IS RECORDED RATHER THAN HIDDEN: testing/static_surface.mjs
+   holds `GLOBAL_OBJECTS` for the same purpose over a mirrored corpus, and the two differ today — it carries
+   `global` and not `frames`, which is correct for a pass that must refuse to guess and wrong for an engine
+   that knows what it installed. The residual at the foot of this file names what removes the copy. */
+static const char *const GLOBAL_SELF_NAMES[] = { "window", "self", "globalThis", "frames", NULL };
+
+static int base_is_global(const char *base) {
+    for (int i = 0; GLOBAL_SELF_NAMES[i]; i++)
+        if (strcmp(GLOBAL_SELF_NAMES[i], base) == 0) return 1;
+    return 0;
+}
+
+void rung_entry_compile_global_member(const char *base, const char *member) {
+    if (!base || !member) return;
+    /* THE RECEIVER FIRST, BECAUSE IT IS WHAT MAKES THIS A REFINEMENT RATHER THAN A LOUDER ROW. A wrapper's own
+       member, a bundler's `(0,o.requestIdleCallback)` re-export shim and an `api.fetch` each read a property of
+       a receiver that is NOT the global, and every one of them would raise a denominator this document does not
+       owe — the direction that manufactures a finding out of a correctly-silent rung. Their SHARE of the
+       property reads of these names is a fact about real bundles and is measured by
+       `node testing/static_surface.mjs`, never asserted here. */
+    if (!base_is_global(base)) return;
+    /* …and then exactly the walk its sibling performs, over the SAME tables, for the same reason: every
+       declared rung is offered the name and none is told which matched. */
+    for (int s = 0; s < RUNG_SLOT_N; s++) {
+        const char *const *n = g_rungs[s].names;
+        if (!n) continue;
+        for (int i = 0; n[i]; i++) {
+            if (strcmp(n[i], member) != 0) continue;
+            g_rungs[s].named_prop++;
+            break;
+        }
+    }
 }
 
 void rung_entry_compile_global_named(const char *name, int typeof_only) {
@@ -146,6 +196,9 @@ char *rung_entry_rows(void) {
         json_buf_raw(&b, ",");
         json_buf_key(&b, "stepNamedRenderingTypeofLife");
         rung_num(&b, g_rungs[RUNG_SLOT_RENDERING].named_typeof);
+        json_buf_raw(&b, ",");
+        json_buf_key(&b, "stepNamedRenderingPropLife");
+        rung_num(&b, g_rungs[RUNG_SLOT_RENDERING].named_prop);
         emitted++;
     }
     if (g_rungs[RUNG_SLOT_TIMER].names) {
@@ -155,6 +208,9 @@ char *rung_entry_rows(void) {
         json_buf_raw(&b, ",");
         json_buf_key(&b, "stepNamedTimerTypeofLife");
         rung_num(&b, g_rungs[RUNG_SLOT_TIMER].named_typeof);
+        json_buf_raw(&b, ",");
+        json_buf_key(&b, "stepNamedTimerPropLife");
+        rung_num(&b, g_rungs[RUNG_SLOT_TIMER].named_prop);
         emitted++;
     }
     if (g_rungs[RUNG_SLOT_IDLE_PERIOD].names) {
@@ -164,6 +220,9 @@ char *rung_entry_rows(void) {
         json_buf_raw(&b, ",");
         json_buf_key(&b, "stepNamedIdleTypeofLife");
         rung_num(&b, g_rungs[RUNG_SLOT_IDLE_PERIOD].named_typeof);
+        json_buf_raw(&b, ",");
+        json_buf_key(&b, "stepNamedIdlePropLife");
+        rung_num(&b, g_rungs[RUNG_SLOT_IDLE_PERIOD].named_prop);
         emitted++;
     }
     /* AND THE TWO SIDES IN ONE HAND, which is what the declaration's own membership assert cannot reach. That one
@@ -181,9 +240,9 @@ char *rung_entry_rows(void) {
 }
 
 /* @kinds-of rungEntry
-   @kind lifetime: stepNamedRenderingLife stepNamedRenderingTypeofLife
-   @kind lifetime: stepNamedTimerLife stepNamedTimerTypeofLife
-   @kind lifetime: stepNamedIdleLife stepNamedIdleTypeofLife
+   @kind lifetime: stepNamedRenderingLife stepNamedRenderingTypeofLife stepNamedRenderingPropLife
+   @kind lifetime: stepNamedTimerLife stepNamedTimerTypeofLife stepNamedTimerPropLife
+   @kind lifetime: stepNamedIdleLife stepNamedIdleTypeofLife stepNamedIdlePropLife
    EVERY ROW HERE IS A LIFETIME COUNT AND NONE IS A GAUGE — they may be differenced and accumulated, they cannot
    decrease, and a sample below its predecessor is this file and not the run. THE KIND IS STATED AT THE EMITTER
    because the person who adds a row is the person who knows what may be done with it, which is the rule
@@ -196,18 +255,62 @@ char *rung_entry_rows(void) {
    `setInterval` call feeds the timer arm for ever) and it may run FEWER (the finding), and the two inequalities
    are both ordinary. */
 
-/* A NAMED RESIDUAL — the code here is CORRECT for what it does and NARROWER than the question it answers.
-   WHAT IS NOT COVERED: ONE SPELLING. This counts the free identifier only, because that is what the compiler
-   resolves against the global object. A program that reaches the same work through a PROPERTY of the global —
-   `window.requestAnimationFrame`, `self[n]`, a parameter a bundle shadowed the name with — is a property read or
-   a local slot and reaches no global resolution at all, so it raises nothing here. The row is therefore a FLOOR
-   in the direction that WITHHOLDS a finding: a zero denominator against a zero numerator reads as the correct
-   silence above, on a document that may hang plenty off the rung. That population is not marginal for exactly
-   these rungs — a `requestAnimationFrame` polyfill is the ordinary place a real bundle writes the property
-   spelling, since the whole point of one is to assign the global it is probing.
-   WHAT THE NEXT DIFF BUILDS: a MEMBER-NAME channel at the field-get emitter, which is the one seam that sees
-   `window.requestAnimationFrame` and `navigator.sendBeacon` and `xhr.open` in a single place, reported through
-   this same hook's sibling and consumed here by the same tables. The names would not change.
-   HOW ITS ABSENCE WOULD SHOW: a reader meets a document whose row here reads zero while an independent parse of
-   the same served bytes attaches work to that rung, and the census still reads as the correct silence — the two
-   instruments disagree and nothing in either output says which spelling this one could not see. */
+/* THE RESIDUAL THAT ASKED FOR THE `…PropLife` ROWS IS RETIRED, AND IT IS REWRITTEN RATHER THAN DELETED BECAUSE
+   ITS REMEDY CLAUSE WAS WRONG IN TWO WAYS A READER WILL RE-DERIVE FROM ITS OWN REASONING. Its NOT-COVERED half
+   was exact and is what located the work: this file counted ONE SPELLING, the free identifier, so
+   `window.requestAnimationFrame` reached no global resolution and a zero denominator against a zero numerator
+   read as the correct silence on a document that hangs plenty off the rung — and a polyfill is the ordinary
+   place a bundle writes the property spelling, since the whole point of one is to assign the global it probes.
+   Its remedy half named `a MEMBER-NAME channel at the field-get emitter … consumed here by the same tables. The
+   names would not change`, and BOTH of those are false.
+   THE SEAM IS NOT THE FIELD-GET EMITTER. A property read is where the RECEIVER exists, and testing it there is
+   what a reader reaches for — but that is the interpreter, downstream of REACH, and reach is the one arm
+   §AN-INVARIANT-OVER-A-GATED-OPERATION says the ask must be recorded upstream of. A row raised there would
+   answer `a flow got to a property-spelled read`, which is the three-state zero the rows above exist to end,
+   arriving in the diff that was supposed to refine them. The seam is the SAME funnel the bare spelling uses:
+   at `<free identifier>.<member>` the compiler has already established that nothing binds the base, and the
+   member is the atom of the field get adjacent to it.
+   AND THE NAMES HAD TO CHANGE, WHICH IS THE HALF NO AMOUNT OF CARE ABOUT THE SEAM WOULD HAVE REACHED. The pair
+   above is split on a guard that does not exist for a property: ECMAScript §13.5.3 step 2.a needs a
+   non-throwing read only for an unresolvable REFERENCE, and a property of an object is `undefined` when absent,
+   so the unary parser patches nothing and `typeof window.x` emits the same field get as `window.x`. Reporting
+   into `…NamedIdleLife` would have merged a population that is largely FEATURE DETECTION into the row read as
+   uses — inverting the one distinction that split exists for, on the rung where it matters most, since a name a
+   bundle probes is by construction a name that is not universally present.
+
+   A NAMED RESIDUAL — the code here is CORRECT for what it does and NARROWER than the question it answers.
+   WHAT IS NOT COVERED: A COMPUTED MEMBER OF THE GLOBAL BELONGS TO NO NAME. `self[n]` and `window[k]` are an
+   array element and not a field get, and the key is a value rather than an atom, so no channel keyed on a
+   property NAME can attribute one — neither this one nor the bare-spelling rows, which makes it a floor under
+   BOTH columns rather than under one. The same holds for `window?.x`, whose optional-chain test stands between
+   the base and the field get so the two are no longer adjacent, and for a base that is not a bare identifier at
+   all (`Mi().requestIdleCallback`, `(0,o.requestIdleCallback)`) — a receiver a source spells as an expression is
+   refused here BY DESIGN, since admitting it is what would make this a louder instrument instead of a
+   refinement, and a receiver that a call RETURNS the global from is the one member of that set the refusal is
+   wrong about.
+   WHAT THE NEXT DIFF BUILDS: nothing in this file. The computed-key half is answerable only where the key's own
+   VALUE is in hand, which is the interpreter, so it is a row of a DIFFERENT kind on a different census and it
+   must not be summed into these — a reader who wants it asked upstream of reach is asking for something no
+   instrument can hold, because the key does not exist until something runs.
+   HOW ITS ABSENCE WOULD SHOW: a document whose three rows for one rung all read zero while that rung's runs are
+   nonzero — the pair the header calls THE FINDING, inverted, since a rung cannot run work nothing named. Read
+   as a defect in the rung it sends a reader to the rung's component; read as this residual it sends them to
+   whether the document reaches its entry through a computed key, and only the second is the question.
+   RETIREMENT: this residual goes when a row on this census states how many reads of a global self-name took a
+   COMPUTED key, because the floor is then a number a reader can weigh rather than a sentence they must believe.
+
+   AND A SECOND ONE, ABOUT THE RECEIVER TEST RATHER THAN THE MEMBER. WHAT IS NOT COVERED: `GLOBAL_SELF_NAMES` is
+   a SECOND STATEMENT of which names a realm binds to its own global — testing/static_surface.mjs states the same
+   set as `GLOBAL_OBJECTS` for the same purpose, and the two already differ, so this is a copy and not merely a
+   risk of one. The names are installed in browser/core/frame/window.c and by the interpreter's own intrinsics,
+   which is where the fact is, and neither of those tells either copy anything.
+   WHAT THE NEXT DIFF BUILDS: the set declared where it is installed, borrowed and never copied, exactly as a
+   rung's entry table is — a realm's global installer lending its own table at its per-realm install, so a realm
+   that binds a fourth self-reference gains the receiver test for it with no edit here and the mirrored-corpus
+   pass derives the set from that declaration the way it already derives the rung tables from theirs.
+   HOW ITS ABSENCE WOULD SHOW: a reader compares this channel's rows against a mirrored-corpus count of
+   property-spelled sites and finds this one lower by exactly the sites whose receiver is spelled with a name one
+   copy holds and the other does not — a disagreement whose size is a property of two lists rather than of any
+   program, and which neither output attributes to the lists.
+   RETIREMENT: this record goes when the receiver set reaching this file is borrowed from the component that
+   installs it, so no list here can be the one that drops a name. */

@@ -2621,6 +2621,35 @@ typedef struct JSConcolicHooks {
        would hold a parameter no reader consults, which is the shape §A-FIELD-A-CONSUMER-DEFAULTS names one
        argument over. A per-realm census of this fact is a different row and would take it back deliberately. */
     void (*global_named)(const char *name, int typeof_only);
+    /* …AND THE SAME FACT FOR THE PROPERTY SPELLING OF ONE NAME, WHICH IS THE ONE SHAPE THE MEMBER ABOVE IS
+       STRUCTURALLY BLIND TO. `window.requestIdleCallback` names the same entry as a bare
+       `requestIdleCallback` and reaches no global resolution at all: the member is a FIELD GET and only the
+       BASE is a free identifier. So this is reported from the SAME funnel rather than from the field-get
+       emitter — by the time a field get runs there is a receiver object and no compiler, and by the time the
+       parser emits one nothing has yet decided whether the base is bound. Here both are settled: the funnel
+       above has just established that nothing binds the base, and the member is the atom of the field get that
+       IMMEDIATELY FOLLOWS in the pre-resolution bytecode.
+       BOTH NAMES ARE REPORTED AND NEITHER IS JUDGED. Whether `base` denotes the global OBJECT is a fact about
+       which names a realm binds to itself, which is the embedder's and not this engine's: `window`, `self` and
+       `frames` are HTML §7.2.2's, `globalThis` is ECMAScript §19.1's, and `api.fetch` is a library's. A
+       consumer that tests `base` against its own set is asking a SOURCE-TEXT question, which is the only kind
+       available upstream of execution and is exactly as strong as a parse's — the receiver IDENTITY test that
+       a parse cannot make needs the object, so it lives downstream of reach and cannot serve a row whose whole
+       purpose is to be upstream of it.
+       THE `typeof` SPLIT DOES NOT EXIST ON THIS SPELLING AND THAT IS WHY THERE IS NO SECOND PARAMETER.
+       §13.5.3 step 2.a needs a non-throwing read only for an unresolvable REFERENCE; a property of an object
+       is `undefined` when absent and never throws, so the unary parser patches nothing and `typeof window.x`
+       emits the same ordinary field get as `window.x`. A host that summed this into the row it keeps for USES
+       would therefore merge a population that is largely feature detection into the population it reads as
+       reached, which is the one distinction the split above exists to preserve.
+       ADJACENCY IS THE WHOLE TEST AND IT IS A FLOOR IN THE WITHHOLDING DIRECTION. `window?.x` puts the
+       optional-chain test between the base and the field get, `window["x"]` is an array element, `self[n]` is
+       a computed key that denotes no name, and a base that is not a bare identifier is not a free reference at
+       all — none of those is reported, and every one of them can only cost a host a MISS.
+       Installed with `.global_named` or not at all: a host taking one spelling and not the other has a census
+       whose zero is a fact about which spelling the page happened to use, which is the defect both exist to
+       end. */
+    void (*global_member_named)(const char *base, const char *member);
     int (*rel)(JSContext *ctx, JSValue *sp, int op);
     /* `typeof v`. Returns the type STRING to use, or JS_UNINITIALIZED to run the real js_operator_typeof. An
        unknown value's type is unknown, and the engine must not answer it from the host object's REPRESENTATION

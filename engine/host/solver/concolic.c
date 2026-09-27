@@ -6123,6 +6123,21 @@ static JSConcolicHooks g_hooks = {
        solver/absent.c: the component that owns the door census is the component that knows which identifiers are
        door entry points, and this file would be a second list of them. */
     .global_named = compile_global_named_dispatch,
+    /* …AND THE PROPERTY SPELLING OF THE SAME FACT, INSTALLED DIRECTLY WHERE ITS SIBLING IS DISPATCHED, WHICH IS
+       A STATEMENT ABOUT HOW MANY COMPONENTS THE DENOMINATOR OF AND NOT A STYLE. The dispatch above exists
+       because "the compiler resolved this free identifier against the global object" is a fact TWO components
+       grade against two populations on two scopes; `<free identifier>.<member>` has ONE consumer, and a
+       dispatcher forwarding to one is a level of indirection that says a second exists. A second consumer is a
+       line here beside this one, exactly as `.global_named`'s third would be.
+       WHY solver/endpoint.c IS NOT THAT SECOND CONSUMER TODAY, since its own rows carry the same one-spelling
+       floor and its residual names this channel: whether a bundle spells a door's entry name ONLY as a property
+       is a property of real bundles rather than of this engine, so it is measured over a mirrored corpus by
+       `node testing/static_surface.mjs` and not argued here. That pass prints a PROP-ONLY column per declared
+       name; a name whose column is empty gains nothing from this channel and a name whose column is not is the
+       line to add. The figure is corpus-dependent and is therefore the command and never a number.
+       IT DECIDES NOTHING, like its sibling: a void report of a fact about SOURCE TEXT, raised at the same funnel
+       and changing no arm of any run. */
+    .global_member_named = rung_entry_compile_global_member,
     .lead = concolic_lead_hook };
 
 /* Concolic VALUE propagation stays installed across scheduling AND verification, because taint must flow

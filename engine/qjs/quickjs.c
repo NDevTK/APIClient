@@ -71947,11 +71947,40 @@ static inline void capture_var(JSFunctionDef *s, JSVarDef *vd)
     }
 }
 
+/* THE MEMBER OF `<free identifier>.<member>`, OR JS_ATOM_NULL — for JSConcolicHooks.global_member_named, whose
+   header states what the pair is for. It is read HERE rather than at the funnel that reports it because this is
+   the frame that owns the bytecode walk and therefore the only one holding `bc_len`: the funnel is handed a
+   `pos_next` and has no way to ask whether that position is inside the buffer, and a get_var that is the last
+   opcode of a body would read one byte past it. Whether the body can END in one is a claim about every emitter
+   in this file, which is not a claim to rest a read on.
+   ADJACENCY IS THE TEST, IN THE PRE-RESOLUTION BYTECODE. `window.x` emits the base's OP_scope_get_var and then
+   OP_get_field with nothing between them; a CALL rewrites that field op to OP_get_field2 IN PLACE, so both are
+   the same adjacency. What is deliberately not matched: OP_get_field_opt_chain, because `window?.x` emits the
+   optional-chain test between the two and the base is no longer adjacent to anything; OP_get_array_el, because
+   `window["x"]` and `self[n]` are a key and not a name, and a computed one denotes no name at all. Each is a
+   MISS and none can invent one, which is the direction a report whose use is that a nonzero reading is a claim
+   has to fail in.
+   THE ATOM IS BORROWED AND NOT DUPPED: it lives in `bc_buf`, which outlives this pass's walk, and the funnel
+   converts it into its own stack buffer exactly as it does the base's. */
+static JSAtom next_field_atom(const uint8_t *bc_buf, int bc_len, int pos)
+{
+    int op;
+
+    if (pos < 0 || pos >= bc_len)
+        return JS_ATOM_NULL;
+    op = bc_buf[pos];
+    if (op != OP_get_field && op != OP_get_field2)
+        return JS_ATOM_NULL;
+    if (pos + opcode_info[op].size > bc_len)
+        return JS_ATOM_NULL;
+    return get_u32(bc_buf + pos + 1);
+}
+
 /* return the position of the next opcode */
 static int resolve_scope_var(JSContext *ctx, JSFunctionDef *s,
                              JSAtom var_name, int scope_level, int op,
                              DynBuf *bc, uint8_t *bc_buf,
-                             LabelSlot *ls, int pos_next)
+                             LabelSlot *ls, int pos_next, JSAtom next_field)
 {
     int idx, var_idx, is_put;
     int label_done;
@@ -72422,10 +72451,28 @@ static int resolve_scope_var(JSContext *ctx, JSFunctionDef *s,
        instead would be a runtime-lifetime reference in a host that has no context at its teardown, so the
        leak report at JS_FreeRuntime would name it; `JS_AtomGetStr` allocates nothing and truncates at the
        buffer, and a truncated name can only cost the host a MISS. */
-    if ((op == OP_scope_get_var || op == OP_scope_get_var_undef) && g_concolic.global_named) {
+    if (op == OP_scope_get_var || op == OP_scope_get_var_undef) {
         char gn_buf[ATOM_GET_STR_BUF_SIZE];
-        g_concolic.global_named(JS_AtomGetStr(ctx, gn_buf, sizeof(gn_buf), var_name),
-                                op == OP_scope_get_var_undef);
+        if (g_concolic.global_named)
+            g_concolic.global_named(JS_AtomGetStr(ctx, gn_buf, sizeof(gn_buf), var_name),
+                                    op == OP_scope_get_var_undef);
+        /* AND THE PROPERTY SPELLING OF THE SAME ENTRY, WHICH IS A SECOND FACT ABOUT THE SAME OCCURRENCE AND NOT
+           A SECOND OCCURRENCE. `window.requestIdleCallback` raises the report above for `window` — which is
+           what the base IS, a free identifier resolved against the global object — and nothing at all for the
+           member, because a field get resolves no scope. The pair says what the source spells; whether `window`
+           denotes the global OBJECT is the embedder's fact and is not decided here (JSConcolicHooks says why at
+           the member).
+           THERE IS NO `typeof` ARGUMENT AND THERE CANNOT BE. The patch a few thousand lines up rewrites
+           OP_scope_get_var to OP_scope_get_var_undef only when the read IS the whole operand of `typeof`; in
+           `typeof window.x` the operand is the FIELD GET, so the base arrives here as an ordinary read and the
+           guard is invisible. That is not a gap in this report — a property of an object never throws for a
+           missing key, so §13.5.3 step 2.a has nothing to patch and the two spellings are the same bytecode.
+           A host must therefore not sum this into the population it keeps for uses. */
+        if (next_field != JS_ATOM_NULL && g_concolic.global_member_named) {
+            char mn_buf[ATOM_GET_STR_BUF_SIZE];
+            g_concolic.global_member_named(JS_AtomGetStr(ctx, gn_buf, sizeof(gn_buf), var_name),
+                                           JS_AtomGetStr(ctx, mn_buf, sizeof(mn_buf), next_field));
+        }
     }
 
     switch (op) {
@@ -73404,7 +73451,8 @@ static __exception int resolve_variables(JSContext *ctx, JSFunctionDef *s)
             var_name = get_u32(bc_buf + pos + 1);
             scope = get_u16(bc_buf + pos + 5);
             pos_next = resolve_scope_var(ctx, s, var_name, scope, op, &bc_out,
-                                         NULL, NULL, pos_next);
+                                         NULL, NULL, pos_next,
+                                         next_field_atom(bc_buf, bc_len, pos_next));
             JS_FreeAtom(ctx, var_name);
             break;
 
@@ -73417,8 +73465,10 @@ static __exception int resolve_variables(JSContext *ctx, JSFunctionDef *s)
                 scope = get_u16(bc_buf + pos + 9);
                 ls = &s->label_slots[label];
                 ls->ref_count--;  /* always remove label reference */
+                /* JS_ATOM_NULL: a `make_ref` is not a READ of the name, so the funnel's report is not raised
+                   for it at all and the member half has nothing to be adjacent to. */
                 pos_next = resolve_scope_var(ctx, s, var_name, scope, op, &bc_out,
-                                             bc_buf, ls, pos_next);
+                                             bc_buf, ls, pos_next, JS_ATOM_NULL);
                 JS_FreeAtom(ctx, var_name);
             }
             break;

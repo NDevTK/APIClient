@@ -953,10 +953,25 @@ void    endpoint_ask_census(long *asks, long *pre_program, long *suppressed, lon
    no row on the order's census is upstream of it either. The order answers WHY a call was not reached; the
    compiler answers WHETHER the program contains one. Those are two questions and the second is the one a zero
    here was being read as.
-   WHAT IS STILL OWED IS NARROWER AND IS THE NEW CONDITION: the compile row sees ONE SPELLING, the free
-   identifier, so `window.fetch(u)` and a parameter a bundle shadowed the name with reach no global resolution and
-   raise nothing. RETIREMENT: this record goes when a member-name channel at the field-get emitter reports those
-   spellings into the same rows, because the denominator is then a floor over no spelling at all. */
+   WHAT IS STILL OWED IS NARROWER: the compile row sees ONE SPELLING, the free identifier, so `window.fetch(u)`
+   and a parameter a bundle shadowed the name with reach no global resolution and raise nothing.
+   AND THE CONDITION THAT STOOD HERE NAMED A MECHANISM THAT IS NOW KNOWN TO BE WRONG TWICE OVER, SO IT IS
+   REWRITTEN RATHER THAN LEFT TO BE EXECUTED. It asked for `a member-name channel at the FIELD-GET EMITTER`
+   reporting `into the same rows`. The channel is built, for solver/rung_entry.c's rungs, and it is NEITHER of
+   those: it is raised at the SAME funnel as the row above, because a field get is where the RECEIVER exists and
+   that is the interpreter — downstream of REACH, which is the one arm this whole row is upstream of, so a
+   counter there answers `a flow got to a property-spelled read` and re-opens the three-state zero; and it has
+   rows of ITS OWN, because the `…TypeofLife` split cannot be reproduced for a property — §13.5.3 step 2.a needs
+   a non-throwing read only for an unresolvable REFERENCE, a property of an object is `undefined` when absent, so
+   `typeof window.fetch` emits the same field get as `window.fetch` and reporting into `…AskNamedLife` would
+   merge feature detection into the population read as uses.
+   WHETHER THIS FILE OWES THE CHANNEL AT ALL IS A MEASUREMENT AND NOT AN ARGUMENT, which is why the new condition
+   is a command. `node testing/static_surface.mjs` prints, per declared entry name over a mirrored corpus, the
+   count of sites that spell it ONLY as a property of the global — the one population on which this row answers
+   zero about a program that does spell the call. RETIREMENT: this record goes when that column is nonzero for an
+   entry name declared HERE and the sibling channel routes to this file, or when the row publishes that column's
+   own derivation beside itself; a relayed figure is not the condition, because it is a fact about which bundles
+   were mirrored on the day it was taken. */
 /* …AND THE FREE GLOBAL IDENTIFIER A PROGRAM MUST SPELL TO REACH IT — `entry`, stated by the edge beside its
    stage table for `first_stage`'s reason exactly: which name a component installs itself under is that
    component's own fact, and a table of them in this file would be the drifting second copy

@@ -82,6 +82,33 @@ void  rung_entry_declare(StepUnit u, const char *const *names);
    Operator" step 2.a answers an unresolvable reference without throwing). It records and decides nothing. */
 void  rung_entry_compile_global_named(const char *name, int typeof_only);
 
+/* THE COMPILER RESOLVED `<free identifier>.<member>` — JSConcolicHooks.global_member_named, the sibling of the
+   entry above and the same fact about the same occurrence rather than a second occurrence. The report above
+   sees `window.requestIdleCallback` as a resolution of `window` and says NOTHING about the member, because a
+   field get resolves no scope; this one carries both halves, and it is raised from the same funnel and not from
+   the field-get emitter — upstream of the field get there is no receiver, and downstream of it there is no
+   compiler.
+   WHY THE PAIR AND NOT ONE MORE `…Named…` ROW, WHICH IS WHAT THE RESIDUAL THAT ASKED FOR THIS SAID: the
+   `typeof` split does not exist on this spelling. A property of an object is `undefined` when absent and never
+   throws, so ECMAScript §13.5.3 step 2.a has nothing to patch and `typeof window.requestIdleCallback` emits
+   the same ordinary field get as the read does — the two arrive INDISTINGUISHABLE where the bare spelling
+   arrives already separated. Summing this into `…NamedIdleLife` would therefore put a population that is
+   largely FEATURE DETECTION into the row read as uses, which inverts the one distinction that split exists
+   for; it gets rows of its own, and a reader who wants the union adds two numbers rather than being handed a
+   sum somebody else took.
+   THE RECEIVER TEST IS THIS FILE'S AND IT IS A SOURCE-TEXT TEST, WHICH IS THE STRONGEST ONE AVAILABLE UPSTREAM
+   OF EXECUTION AND IS NO STRONGER THAN A PARSE'S. `base` is tested against the names a realm binds to its own
+   global; `api.fetch`, a bundler's `(0,o.requestIdleCallback)` re-export shim and a wrapper's own member are
+   refused by that test, and a channel without it would not refine the rows above — it would be a different and
+   far louder one. HOW MUCH louder is a property of real bundles rather than of this engine, so it is a command
+   and never a number here: `node testing/static_surface.mjs` prints, per declared entry name, the property reads
+   that ARE on the global against those that are not, and that figure moves with which bundles were mirrored on
+   the day it was taken. The IDENTITY test a
+   parse cannot make (is this receiver object the realm's global) needs an OBJECT, so it lives downstream of
+   reach, which is the one place a row whose whole purpose is to be upstream of reach may not put its question.
+   IT RECORDS AND DECIDES NOTHING, like its sibling. */
+void  rung_entry_compile_global_member(const char *base, const char *member);
+
 /* The rows on the heap (caller frees; NULL only on allocation failure). ROWS AND NOT A CENSUS OF THEIR OWN, for
    the reason solver/endpoint.h gives for the edge rows: they are spliced into `_cold` beside `stepUnitRuns`,
    each with a LEADING comma, because a reader compares WITHIN a census — and a nested census would have needed
