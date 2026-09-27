@@ -134,11 +134,12 @@ lxb_selectors_match_attribute(lxb_selectors_t *selectors,
  */
 static const lexbor_str_t *
 lxb_selectors_host_attr_value(lxb_selectors_t *selectors, const lxb_dom_node_t *node,
-                              const lxb_dom_attr_t *attr, lexbor_str_t *buf,
+                              const lxb_dom_attr_t *attr,
+                              const lxb_selectors_predicate_t *pred, lexbor_str_t *buf,
                               const lexbor_str_t *value)
 {
     if (selectors->host != NULL && selectors->host->attr_value_read != NULL) {
-        switch (selectors->host->attr_value_read(node, attr, buf,
+        switch (selectors->host->attr_value_read(node, attr, pred, buf,
                                                  selectors->host_ctx))
         {
             case LXB_SELECTORS_VALUE_HOST:
@@ -1431,6 +1432,7 @@ lxb_selectors_match(lxb_selectors_t *selectors, lxb_selectors_entry_t *entry,
 {
     lxb_dom_element_t *element;
     lexbor_str_t host_value;
+    lxb_selectors_predicate_t class_pred;
     const lexbor_str_t *host_trg;
 
     switch (entry->selector->type) {
@@ -1458,8 +1460,12 @@ lxb_selectors_match(lxb_selectors_t *selectors, lxb_selectors_entry_t *entry,
                So the value it reads is asked about exactly as `[class~=x]`'s would be -- and answered the
                same way, which is what makes `el.className = <host unknown>` decidable once the host knows
                what it wrote. */
+            class_pred.match = LXB_CSS_SELECTOR_MATCH_INCLUDE;
+            class_pred.operand = &entry->selector->name;
+            class_pred.insensitive = false;
             host_trg = lxb_selectors_host_attr_value(selectors, node,
-                                                     element->attr_class, &host_value,
+                                                     element->attr_class, &class_pred,
+                                                     &host_value,
                                                      element->attr_class->value);
             if (host_trg == NULL) {
                 return false;   /* undetermined: recorded on the scope, no-match in control flow */
@@ -1517,6 +1523,7 @@ lxb_selectors_match_id(lxb_selectors_t *selectors,
     const lexbor_str_t *trg, *src;
     lxb_dom_element_t *element;
     lexbor_str_t host_value;
+    lxb_selectors_predicate_t id_pred;
 
     element = lxb_dom_interface_element(node);
 
@@ -1527,7 +1534,12 @@ lxb_selectors_match_id(lxb_selectors_t *selectors,
     /* §6.7 "ID selectors" IS an attribute value test: "An ID selector represents an element instance that
        has an identifier that matches the identifier in the ID selector", and "In HTML all ID attributes are
        named id" -- so the value it reads is asked about like any other attribute's, and answered like one. */
-    trg = lxb_selectors_host_attr_value(selectors, node, element->attr_id,
+    /* §6.7's operator is an equality on the `id` attribute and its operand is the selector's own identifier;
+       it carries no §6.3 modifier, and the case rule it applies is its own below. */
+    id_pred.match = LXB_CSS_SELECTOR_MATCH_EQUAL;
+    id_pred.operand = &selector->name;
+    id_pred.insensitive = false;
+    trg = lxb_selectors_host_attr_value(selectors, node, element->attr_id, &id_pred,
                                         &host_value, element->attr_id->value);
     if (trg == NULL) {
         return false;   /* undetermined: recorded on the scope, no-match in control flow */
@@ -1603,6 +1615,7 @@ lxb_selectors_match_attribute(lxb_selectors_t *selectors,
     lxb_dom_element_t *element;
     const lexbor_str_t *trg, *src;
     lexbor_str_t host_value;
+    lxb_selectors_predicate_t attr_pred;
     const lxb_dom_attr_data_t *attr_data;
     const lxb_css_selector_attribute_t *attr;
 
@@ -1651,7 +1664,11 @@ lxb_selectors_match_attribute(lxb_selectors_t *selectors,
         || attr->match == LXB_CSS_SELECTOR_MATCH_EQUAL
         || attr->match == LXB_CSS_SELECTOR_MATCH_DASH)
     {
-        trg = lxb_selectors_host_attr_value(selectors, node, dom_attr, &host_value, trg);
+        attr_pred.match = attr->match;
+        attr_pred.operand = src;
+        attr_pred.insensitive = attr->modifier == LXB_CSS_SELECTOR_MODIFIER_I;
+        trg = lxb_selectors_host_attr_value(selectors, node, dom_attr, &attr_pred,
+                                            &host_value, trg);
         if (trg == NULL) {
             return false;   /* undetermined: recorded on the scope, no-match in control flow */
         }

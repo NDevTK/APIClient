@@ -105,6 +105,46 @@ lxb_selectors_value_t;
  * embedder that compiles such a selector and installs no table is a NULL call and not a wrong answer, which is
  * the point: a default of `false` would report every element as un-defined and nothing would say so.
  */
+/*
+ * WHICH TEST THE VALUE IS ABOUT -- the OPERATOR and the OPERAND, handed to the host beside the attribute.
+ *
+ * WHY THE ATTRIBUTE IS NOT ENOUGH, AND IT IS NOT A DIAGNOSTIC CONVENIENCE. A host that declines to state a
+ * value is reporting that this match has no two-valued answer, and a host that wants to EXPLORE both answers
+ * has to name the question it is exploring. `[att=dark]` and `[att=light]` are TWO questions over ONE value,
+ * and an embedder that can see only the attribute cannot tell them apart -- so it would file one question,
+ * answer it once, and then stand on two arms saying the attribute is both. The operand is what separates
+ * them and the operator is what makes `[att=dark]` and `[att^=dark]` two more.
+ *
+ * `operand` IS NEVER NULL HERE. §6.1's `[att]` reads no value and never asks, so every ask has an operand --
+ * see attr_value_read for the three shapes that ask and the ones that are decided by the operand alone.
+ *
+ * §6.6 "Class selectors" AND §6.7 "ID selectors" SYNTHESISE THEIRS, which is a statement about those two
+ * sections rather than an approximation: §6.6 defines `.x` as "equivalent to the ~= notation applied to the
+ * local class attribute (i.e. [class~=identifier])", so its operator IS `~=` and its operand IS the
+ * identifier; §6.7's is an equality on `id`. Neither carries a §6.3 modifier, so `insensitive` is false for
+ * both and the case rule each applies is its own.
+ *
+ * WHAT IS NOT COVERED: a compound asks once per simple selector that reads a value, so a host collecting
+ * these sees N predicates for `[a=x][b=y]` and the CONCLUSION carried on lxb_selectors_nested_t::unknown is
+ * one bit for the whole scope -- nothing here says which of the N reached it, and a scope that short-circuits
+ * abandons at the first. What the next diff builds: the undetermined predicate recorded ON the scope beside
+ * that bit, so the conclusion names its own cause rather than the host keeping the last ask it was handed.
+ * HOW ITS ABSENCE WOULD SHOW, as an observation: a host that reports the predicate it last declined on names
+ * a test the matcher had already abandoned, for a selector whose undetermined member is a later one.
+ */
+typedef struct {
+    /* WHICH §6.1/§6.2 OPERATOR, or §6.6/§6.7's synthesised one. A closed enumeration, so a host switching
+       over it needs no default arm that means "some operator I have not heard of". */
+    lxb_css_selector_match_t  match;
+    /* THE SELECTOR'S OWN OPERAND, BORROWED for the duration of the call -- it points into the compiled
+       selector, which nothing writes after it is built. */
+    const lexbor_str_t       *operand;
+    /* §6.3 "Case-sensitivity"'s `i`. It belongs to the PREDICATE and not to the value, because it changes
+       which values satisfy the test and therefore which question is being asked. */
+    bool                      insensitive;
+}
+lxb_selectors_predicate_t;
+
 typedef struct {
     /* DOM §4.9: "An element whose custom element state is "uncustomized" or "custom" is said to be defined." */
     bool (*defined)(const lxb_dom_node_t *node, void *ctx);
@@ -141,7 +181,8 @@ typedef struct {
      * element.
      */
     lxb_selectors_value_t (*attr_value_read)(const lxb_dom_node_t *node, const lxb_dom_attr_t *attr,
-                                             lexbor_str_t *out, void *ctx);
+                                             const lxb_selectors_predicate_t *pred, lexbor_str_t *out,
+                                             void *ctx);
 }
 lxb_selectors_host_cb_t;
 

@@ -61,7 +61,22 @@ void selector_list_destroy(JSContext *ctx, void *p);
    answer is UNDETERMINED ABORTS IN DEV at the site, naming the selector and what to build, and answers
    `false` in release — the defined wrong answer every build gave before the seam existed.
    WHAT THE NEXT DIFF BUILDS is an out-parameter for that third answer, which is (2) in the ordered list at
-   `host_attr_value_read` in the .c, and is why the abort is a placeholder rather than a verdict. */
+   `host_attr_value_read` in the .c, and is why the abort is a placeholder rather than a verdict.
+   THAT CLAUSE IS TRUE AND IT IS READ AS NAMING THE MISSING CAPABILITY, WHICH IT IS NOT — recorded here rather
+   than rewritten because the clause itself is right and only its WEIGHT is wrong, and a reader who deletes it
+   loses the signature fact. The out-parameter is a line; the tri-state it would carry is ALREADY BUILT, in
+   lexbor's own vocabulary, at all three layers — `lxb_selectors_value_t`'s third member for the ask,
+   `lxb_selectors_nested_t::unknown` for Kleene's rules over a scope, `lxb_selectors_t::unknown` for the
+   conclusion. MEASURED at 25a84d3, which is the point: none of those three is this diff's, so a reader who
+   sets out to "widen the type" finds the widening done and the abort still standing.
+   WHAT THE ABORT IS ACTUALLY STANDING IN FOR IS THE FORK, and the out-parameter has NO NEW CONSUMER without
+   it. Of the two callers, the cascade collector cannot fork at all (a plain C walk inside
+   `cssom_cascaded_value`, which solver/engine.c's `engine_prepare_fork` refuses by name) and `document.c`'s
+   selector walk CAN, being a step machine already. So the out-parameter's consumer is `step_fork_run`, whose
+   `over` is the unknown value and whose `op` is the PREDICATE — and a predicate is what neither `unknown` nor
+   this signature carries, which is what the record at `host_attr_value_read` now begins.
+   RETIREMENT: this note goes when the out-parameter lands WITH a consumer that forks on it, because the
+   weight it is correcting is then a fact about the tree rather than a reading of this clause. */
 bool selector_match_node(lxb_dom_node_t *node, const lxb_css_selector_list_t *list,
                          lxb_css_selector_specificity_t *out_spec);
 
