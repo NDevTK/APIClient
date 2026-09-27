@@ -29746,10 +29746,10 @@ static int abi_main(int argc, char **argv)
  * discriminator is the abort's own `at` — a file:line inside this function means the block ran whatever the
  * markers say. A witness establishes reachability only while something guarantees its channel outlives the
  * thing being witnessed. */
-static void second_agent_selftest(const char *origin, const char *top_level_url)
+static void second_agent_selftest(const char *origin)
 {
     JSRuntime *rt2;
-    JSContext *ctx2, *worker;
+    JSContext *ctx2;
     JSValue proto;
     JSPropertyDescriptor self_desc;
     JSAtom self_atom;
@@ -29764,22 +29764,48 @@ static void second_agent_selftest(const char *origin, const char *top_level_url)
     CHECK(JS_AddIntrinsicDOMException(ctx2) == 0,
           "the DOMException intrinsic failed to install in a second agent's first realm");
 
-    /* THE OWNER'S PRINCIPAL AND THE OWNER'S ADDRESS, because §8.1.2.2's obtain-a-worker/worklet-agent takes
-       the isTopLevel=false arm for a DEDICATED worker and reads `ownerAgent` out of the outside settings
-       object's realm — so this agent is the owner's cluster's, not a new origin's. The two booleans are
-       tf_agent_init's own answers and for its reason: this fixture's document comes from no response, so
-       there is no `Origin-Agent-Cluster` header to have sent and §7.1.3's initial opener policy applies. */
-    platform_agent_init(ctx2, origin, top_level_url, false, OPENER_POLICY_UNSAFE_NONE);
-
-    /* §10.2.4 step 5's customization — "create a new DedicatedWorkerGlobalScope object" — through the one
-       call every realm goes through, with the arguments §10.2.6.2 "Script settings for workers" states: the
-       top-level creation URL is null for a worker environment, and the fourth argument is §8.1.3.5 step
-       1.2.1's operand read off the OWNER rather than restated as a constant. */
-    worker = JS_NewContext(rt2);
-    CHECK(worker != NULL, "a second agent's WorkerGlobalScope realm could not be created");
-    CHECK(JS_AddIntrinsicDOMException(worker) == 0,
-          "the DOMException intrinsic failed to install in a second agent's worker realm");
-    realm_install_intrinsics(worker, NULL, "DedicatedWorkerGlobalScope", secure_context_is(ctx2));
+    /* THROUGH THE WORKER AGENT ENTRY, WHICH IS WHAT THIS BLOCK USED TO HAND-ASSEMBLE. It read
+       `platform_agent_init(ctx2, origin, top_level_url, false, OPENER_POLICY_UNSAFE_NONE)` followed by a
+       SECOND context in this runtime carrying the DedicatedWorkerGlobalScope realm — so the agent it built held
+       a WINDOW realm (that entry ends in one) and a worker realm beside it, which §8.1.2.1 "Integration with the
+       JavaScript agent formalism" does not define: it types an agent BY ITS GLOBAL, "Dedicated worker agent —
+       Contains a single DedicatedWorkerGlobalScope", and an agent with two globals of two kinds is no type at
+       all. It also ran §8.1.2.2's obtain-a-similar-origin-WINDOW-agent over this agent's cluster, which is the
+       wrong one of that section's two allocations: "The following defines the allocation of the agent clusters
+       of all other types of agents" introduces the one a worker takes.
+       THE RETIRED CLAIM IS KEPT BECAUSE A READER RE-DERIVES IT FROM THE ARM NAMES. This block's comment cited
+       §8.1.2.2 and used to say "takes the isTopLevel=false arm for a DEDICATED worker … so this agent is the owner's cluster's,
+       not a new origin's" — true of a dedicated worker obtained per §10.2.4 step 4 and NOT true of what the code
+       did or of what this fixture can do. That arm's first step is "Assert: outside settings is not null" and its
+       second reads `ownerAgent` out of that settings object's realm, so it needs an owner agent that is LIVE;
+       main's tail released the first agent before this function was called, so there is none, and the arm this
+       agent is entitled to is the one an owner-less agent takes.
+       SO `is_top_level` IS TRUE, AND THAT IS A STATEMENT ABOUT THIS FIXTURE RATHER THAN ABOUT ITS GLOBAL. The
+       remaining mismatch is a NAMED RESIDUAL below. `can_block` is TRUE, which is §8.1.2.2's own answer for the
+       dedicated and shared cases ("obtaining a worker/worklet agent given outside settings, isShared, and
+       true"), and it is what §8.1.2.1's create-an-agent then puts on the agent: "Only shared and dedicated
+       worker agents allow the use of JavaScript Atomics APIs to potentially block."
+       AND THE LAST ARGUMENT IS THE OWNER'S §8.1.3.5 ANSWER, WHICH CANNOT BE COMPUTED HERE AND IS NOT DEFAULTED.
+       It used to read `secure_context_is(ctx2)`, which asked THIS agent's own first realm — circular, and not
+       the owner the step names. §8.1.3.5 "Secure contexts" step 1.2.1 reads "global's owner set[0]'s relevant
+       settings object", and the agent that would be in this global's owner set is the one main brought up at
+       TF_TOP_URL and has already freed. Its answer is TRUE because that address's scheme is `https`, which
+       §8.1.3.5 step 2's potentially trustworthy test answers for, and stating it is the only thing available
+       once the owner is gone.
+       NAMED RESIDUAL — THIS AGENT'S ARM AND ITS GLOBAL DISAGREE.
+         NOT COVERED: `is_top_level` TRUE is the arm a SHARED or a SERVICE worker takes, and the global below is
+           a DedicatedWorkerGlobalScope, whose arm is FALSE. The pair is not a spec-expressible agent. The code
+           is correct for what it does — it asks whether a second agent can be DECLARED at all, which is this
+           function's whole subject — and narrower than §10.2.4 step 4, whose agent has an owner.
+         WHAT THE NEXT DIFF BUILDS: the concurrent arm core/platform.c's declaration refuses by name, after
+           which this fixture brings its worker agent up while the first agent is LIVE and passes FALSE — and
+           core/frame/agent_cluster.c's isTopLevel=FALSE arm stops being a crash and joins the owner's cluster.
+         HOW ITS ABSENCE WOULD SHOW: a reader asks which §8.1.2.2 arm a DedicatedWorkerGlobalScope agent of this
+           build takes and finds the answer is the one no dedicated worker takes, with no live owner anywhere in
+           the process for the other arm to read. */
+    platform_worker_agent_init(ctx2, origin, "DedicatedWorkerGlobalScope",
+                               /* is_top_level */ true, /* can_block */ true,
+                               /* owner_is_secure_context */ true);
 
     /* §10.2.1.1's `self`, READ OFF THE SHAPE AND NEVER THROUGH A `[[Get]]`.
        THIS WAS A `JS_GetPropertyStr` AND THE CLAIM BESIDE IT WAS THAT A MEMBER BODY ANSWERING IS "the only
@@ -29806,15 +29832,15 @@ static void second_agent_selftest(const char *origin, const char *top_level_url)
        and `JS_GetOwnSlotDesc` of the GLOBAL would answer 0 for a member that is correctly installed.
        worker_global_scope_proto also answers JS_UNDEFINED for a realm whose [Global] names are not a
        worker's, so asking it is itself the statement that this realm is one. */
-    proto = worker_global_scope_proto(worker);
+    proto = worker_global_scope_proto(ctx2);
     CHECK(!JS_IsUndefined(proto),
           "a second agent's realm was built as a DedicatedWorkerGlobalScope one and has no "
           "WorkerGlobalScope.prototype — the realm intrinsic that builds it is declared once per agent, so "
           "either that declaration did not happen in this agent or this realm's [Global] names are not a "
           "worker's after being built with a worker's");
-    self_atom = JS_NewAtom(worker, "self");
-    has_self = JS_GetOwnSlotDesc(worker, &self_desc, proto, self_atom);
-    JS_FreeAtom(worker, self_atom);
+    self_atom = JS_NewAtom(ctx2, "self");
+    has_self = JS_GetOwnSlotDesc(ctx2, &self_desc, proto, self_atom);
+    JS_FreeAtom(ctx2, self_atom);
     CHECK(has_self == 1,
           "§10.2.1.1's `self` is not an own property of a second agent's WorkerGlobalScope.prototype — the "
           "realm intrinsic installs it, so a prototype that exists without it is one this agent built "
@@ -29823,13 +29849,12 @@ static void second_agent_selftest(const char *origin, const char *top_level_url)
           "§10.2.1.1's `self` arrived on a second agent's WorkerGlobalScope.prototype as a DATA property — "
           "Web IDL §3.7.6 makes a readonly attribute an ACCESSOR, and a data property there is a member "
           "installed through something other than the attribute mint");
-    JS_FreeValue(worker, self_desc.value);
-    JS_FreeValue(worker, self_desc.getter);
-    JS_FreeValue(worker, self_desc.setter);
-    JS_FreeValue(worker, proto);
+    JS_FreeValue(ctx2, self_desc.value);
+    JS_FreeValue(ctx2, self_desc.getter);
+    JS_FreeValue(ctx2, self_desc.setter);
+    JS_FreeValue(ctx2, proto);
     printf("@A2REALM\n");
 
-    JS_FreeContext(worker);
     platform_agent_free();
     /* AND THE THREE AGENT-LEVEL RELEASES THAT ARE NOT ON core/platform.h's COLUMN, in main's own order.
        THESE WERE OMITTED AND THE OMISSION LEAKED A REALM, which is the boundary the comment on this teardown
@@ -30644,7 +30669,10 @@ int main(int argc, char **argv) {
        RETIREMENT: this record goes when a host cannot BEGIN a declaration cycle while one is sealed — an
        assert at the first declaration after a seal, which would have named this placement at the line that
        chose it instead of forty declarations later at a member that was stated correctly. */
-    second_agent_selftest(TF_ORIGIN, TF_TOP_URL);
+    /* THE PRINCIPAL ALONE. The ADDRESS went with the window agent entry this used to reach: a worker
+       environment has no TOP-LEVEL CREATION URL to be given (§10.2.6.2 "Script settings for workers" sets it
+       "to null"), so a parameter for one would be a fact this call could only state wrongly. */
+    second_agent_selftest(TF_ORIGIN);
     /* A HOLE IS NON-ZERO LIKE EVERY OTHER NON-PASS — see the verdict sentence above for why, and note that
        `h_ok` alone is no longer the whole answer: it is now the conjunction over the rows this run could ask,
        so a run with an unaskable row reaches here with `h_ok` TRUE and has not passed. */

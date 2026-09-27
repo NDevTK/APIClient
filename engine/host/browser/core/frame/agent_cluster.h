@@ -65,6 +65,47 @@
  * params) and an agent is not a thing that holds one. */
 void agent_cluster_obtain_window_agent(const Origin *origin, bool requests_oac);
 
+/* §8.1.2.2's OBTAIN A WORKER/WORKLET AGENT — THE SECOND OF THAT SECTION'S TWO ALLOCATION ALGORITHMS, and the
+ * one this engine did not have. HTML §8.1.2.2 "Integration with the JavaScript agent cluster formalism" splits
+ * the allocation by agent TYPE and says so in its own prose: "The following defines the allocation of the agent
+ * clusters of similar-origin window agents" before the entry above, and "The following defines the allocation
+ * of the agent clusters of all other types of agents" before this one. Every agent this browser brought up ran
+ * the FIRST, because there was one door; a worker agent allocated that way gets a cluster keyed as a WINDOW's,
+ * which is a different answer and not a narrower one.
+ *
+ * `is_top_level` IS §8.1.2.2's OWN ARGUMENT AND NOT A HOST'S INVENTION, and it is a parameter because the
+ * standard makes it one: "To obtain a worker/worklet agent, given an environment settings object or null
+ * outside settings, a boolean isTopLevel, and a boolean canBlock". Its three forwarders each STATE it —
+ * "To obtain a dedicated/shared worker agent, given an environment settings object outside settings and a
+ * boolean isShared, return the result of obtaining a worker/worklet agent given outside settings, isShared,
+ * and true", so the bit a DEDICATED worker takes is FALSE and a SHARED one TRUE; "To obtain a worklet agent,
+ * given an environment settings object outside settings, return the result of obtaining a worker/worklet agent
+ * given outside settings, false, and false"; and "To obtain a service worker agent, return the result of
+ * obtaining a worker/worklet agent given null, true, and false".
+ * THE TELL THAT ONE BIT CARRIES TWO VOCABULARIES IS IN THAT FORWARDING: `isShared` goes in and `isTopLevel`
+ * comes out, so a reader of either algorithm alone sees a name whose sense is settled in the other one. This
+ * entry takes the INNER name, because the inner algorithm is the one it implements.
+ *
+ * THE TRUE ARM IS BUILT AND THE FALSE ARM CRASHES, and which is which is not a judgement about difficulty.
+ * TRUE reads "Set agentCluster to a new agent cluster" then "Set agentCluster's is origin-keyed to true" — two
+ * steps over nothing outside this call, so it is computable here. FALSE reads "Assert: outside settings is not
+ * null", "Let ownerAgent be outside settings's realm's agent", "Set agentCluster to the agent cluster which
+ * contains ownerAgent" — so it needs a LIVE OWNER AGENT, which is exactly what core/platform.c's declaration
+ * refuses by name under the residual that states the concurrent arm. A `canBlock` argument is absent for the
+ * same reason the FALSE arm's `outside settings` is: §8.1.2.2 hands canBlock to §8.1.2.1's create-an-agent and
+ * never to the cluster, so it is stated where that algorithm's other members are (core/platform.c) and a
+ * parameter here would be a fact this function does not read.
+ *
+ * IT IS UNCONDITIONALLY ORIGIN-KEYED AND THAT IS AN OBSERVABLE, not a formality: the window algorithm computes
+ * `is origin-keyed` from the site, the group's isolation mode and the `Origin-Agent-Cluster` header, and for a
+ * tuple origin with mode `none` and no header it answers FALSE. §8.1.2.2's TRUE arm answers TRUE with no input
+ * at all, and its own note says why the difference does not reach `originAgentCluster`: "These workers can be
+ * considered to be origin-keyed. However, this is not exposed through any APIs (in the way that
+ * originAgentCluster exposes the origin-keyedness for windows)." What it DOES reach is every other reader of
+ * this cluster — §8.2's `crossOriginIsolated`, which HTML §8.2 "The WindowOrWorkerGlobalScope mixin" exposes on
+ * a worker global too, and HR-TIME §4's clock resolution behind it. */
+void agent_cluster_obtain_worker_agent(bool is_top_level);
+
 /* §7.1.2's IS ORIGIN-KEYED, which `originAgentCluster` returns and which §7.1.1.2's setter step 5 stops on.
    Asked of a cluster that was never allocated, this CRASHES rather than answering false. */
 bool agent_cluster_is_origin_keyed(void);

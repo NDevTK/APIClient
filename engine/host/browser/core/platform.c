@@ -122,9 +122,15 @@
    so that no host can hand over an incomplete value (see the paragraph there for why a hand-filled local was
    the defect and why `= {0}` is not the fix). They are one value HERE because the ninety-odd component rows
    below take one, and a row taking nine arguments would put a copy of the fact list on every one of them.
-   THERE IS EXACTLY ONE CONSTRUCTION OF EACH, in the entry whose parameter list it copies, six lines below that
-   parameter list — so a fact added to platform.h and not carried here is one function's diff and not three
-   files'. */
+   ONE CONSTRUCTION PER ENTRY, in the entry whose parameter list it copies and on the lines below that parameter
+   list — so a fact added to platform.h and not carried here is one function's diff and not three files'.
+   THAT USED TO READ "EXACTLY ONE CONSTRUCTION OF EACH", AND IT IS REWRITTEN RATHER THAN DELETED because the
+   reasoning behind it is right and a reader will re-derive it: what must not exist is a construction a HOST
+   fills, and what the count was really asserting is that no OTHER file can spell one. A `PlatformAgent` is now
+   built TWICE, by `platform_agent_init` and by `platform_worker_agent_init`, because §8.1.2.2 allocates a
+   window agent's cluster and a worker agent's by two different algorithms and the two entries hold two
+   different fact lists — which is the residual named at the second of them. Both are in THIS file, so the
+   property the sentence was protecting is unchanged; only the number was. */
 typedef struct {
     const char       *origin;          /* the agent's PRINCIPAL */
     const char       *top_level_url;   /* HTML §8.1.3.1's TOP-LEVEL CREATION URL of the first realm */
@@ -2106,29 +2112,15 @@ static void platform_check_agent_state(JSRuntime *rt, uint32_t minted_before, in
 #endif
 }
 
-void platform_agent_init(JSContext *ctx, const char *origin, const char *top_level_url, bool requests_oac,
-                         OpenerPolicyValue opener_policy)
+/* THE PROLOGUE EVERY AGENT SHARES, WHATEVER §8.1.2.2 ALGORITHM ALLOCATED ITS CLUSTER — and it is a function
+   rather than a paragraph in each entry for the reason the banner at the top of this file gives about the two
+   columns: a sequence a second entry has to remember is the hand-copied list this file exists to abolish, ONE
+   LEVEL UP. Everything here is true of an agent AS SUCH and reads no fact that tells a window agent from a
+   worker one, which is the test for belonging here: the two entries below differ in the CLUSTER their agent
+   joins, in whether they have a browsing context group at all, and in the [Global] kind of their first realm —
+   and in nothing this function does. */
+static void agent_prologue(JSContext *ctx, const char *origin)
 {
-    /* THE ONE CONSTRUCTION OF THIS VALUE IN THE PROGRAM — every fact this call was handed, and nothing that was
-       not handed to it. A fact added to platform.h's parameter list and forgotten here is an unused-parameter
-       in a nine-line function whose argument list is on the line above; a fact added to the STRUCT without a
-       parameter to fill it cannot be reached from any host at all. */
-    const PlatformAgent a = {
-        .origin        = origin,
-        .top_level_url = top_level_url,
-        .requests_oac  = requests_oac,
-        .opener_policy = opener_policy,
-    };
-    const PlatformAgent *agent = &a;
-    int i;
-    /* THE TWO ENDS OF THE MINT WINDOW — read immediately before the declare loop and again in
-       platform_check_agent_state immediately after it, because the identity those two bracket is about THIS
-       COLUMN and not about this process: solver/concolic.c mints a class id at its own bring-up, which one
-       host reaches before this call, and quickjs's predefined classes were never minted by anybody. Read here
-       rather than inside the check so that the interval is visible at the loop it is about. */
-    uint32_t minted_before;
-    int declared_before;
-
     DCHECK(ctx != NULL, "the platform was declared into no realm");
     /* THE DECLARATION PASS BUILDS THE BROWSER'S BASELINE, so it runs at the BASELINE STAMP — and that is a
        precondition of THIS call rather than of any one component, which is the whole reason it is asserted
@@ -2149,16 +2141,9 @@ void platform_agent_init(JSContext *ctx, const char *origin, const char *top_lev
            "is made of would be stamped as belonging to a flow, and cow.c's `JS_ObjFlowGen(obj) > fork_gen` "
            "then skips it in every delta, so a component holding shared state in a JS object silently stops "
            "sharing it across a fork; whatever this host did before this call left a generation raised");
-    DCHECK(agent->origin != NULL && *agent->origin,
+    DCHECK(origin != NULL && *origin,
            "an agent was brought up with no PRINCIPAL — §9.5's named bus is keyed by it and §7.2.1 decides "
            "remoteness by it, so an agent without one cannot answer either question");
-    /* realm_install_intrinsics asserts this too, and asserting it HERE as well is the point: the first realm's
-       intrinsics are the LAST thing this function does, so a host that passed nothing would otherwise be told
-       so from inside a call it did not make, forty declarations after the mistake. */
-    DCHECK(agent->top_level_url != NULL && *agent->top_level_url,
-           "an agent was brought up with no TOP-LEVEL CREATION URL — HTML §8.1.3.5 reads it to decide whether "
-           "the first realm is a SECURE CONTEXT, and Web IDL §3.3.13's members are installed or absent by that "
-           "answer, so this agent's platform surface is undecided");
     /* AT MOST ONE AGENT HAS DECLARED THIS PLATFORM, AND THAT IS A NARROWER CLAIM THAN THE ONE THAT STOOD HERE.
        The condition was `g_declared_in == NULL || g_declared_in != JS_GetRuntime(ctx)` under a message reading
        that a declaration is per JSRuntime. Both halves were wrong in the same direction, and the message is
@@ -2208,7 +2193,92 @@ void platform_agent_init(JSContext *ctx, const char *origin, const char *top_lev
        against — and it must exist before the first declaration that asserts it does. ONE adopt per agent is
        also what gives an opaque principal its IDENTITY: the host states "null", and the nonce minted here is
        what every document of this agent then shares. */
-    origin_agent_adopt(agent->origin);
+    origin_agent_adopt(origin);
+}
+
+/* THE DECLARATION COLUMN, AND THE IDENTITY THAT BRACKETS IT — likewise shared, and for a stronger reason than
+   the prologue: NOT ONE ROW OF THIS TABLE READS THE `PlatformAgent` IT IS HANDED. Every thunk above opens
+   `(void)a`, so what a component declares is a fact about the ENGINE and never about which kind of agent is
+   declaring it, and the derivation is one grep of this file for `a->`. A second entry with its own copy of this
+   loop would be a second answer to "what is this browser", which is the exact drift core/platform.h's banner
+   records three hosts having produced one level down. */
+static void agent_declare_column(JSContext *ctx, const PlatformAgent *agent)
+{
+    int i;
+    /* THE TWO ENDS OF THE MINT WINDOW — read immediately before the declare loop and again in
+       platform_check_agent_state immediately after it, because the identity those two bracket is about THIS
+       COLUMN and not about this process: solver/concolic.c mints a class id at its own bring-up, which one
+       host reaches before this call, and quickjs's predefined classes were never minted by anybody. Read here
+       rather than inside the check so that the interval is visible at the loop it is about. */
+    uint32_t minted_before;
+    int declared_before;
+
+    minted_before = JS_ClassIDsMinted(g_declared_in);
+    declared_before = agent_state_class_id_count();
+    for (i = 0; i < PLATFORM_N; i++)
+        if (PLATFORM[i].declare)
+            PLATFORM[i].declare(ctx, agent);
+    platform_check_agent_state(g_declared_in, minted_before, declared_before);
+}
+
+/* §8.1.2.1 "Integration with the JavaScript agent formalism"'s CREATE AN AGENT step 3's [[CanBlock]], which
+   §8.1.2.2 hands it and which nothing in this browser had ever stated. That section reads "To create an agent,
+   given a boolean canBlock:" and then "Let agent be a new agent whose [[CanBlock]] is canBlock", and it says
+   what the bit decides: "Only shared and dedicated worker agents allow the use of JavaScript Atomics APIs to
+   potentially block." AN AGENT IS A JSRuntime HERE, so quickjs's own per-runtime entry is the right shape and
+   no host argument carries it; `Atomics.wait` reads it and throws a TypeError where it is false.
+   IT WAS RIGHT BY LUCK FOR ONE AGENT KIND AND WRONG FOR THE OTHER, which is why stating it is a landing rather
+   than a formality: `JS_NewRuntime` allocates its runtime through `js_calloc`, so the field read FALSE with
+   nobody having said so — correct for a window agent, and the answer a dedicated or a shared worker agent must
+   not give.
+   STATED WITH THE CLUSTER AND NOT WITH THE DECLARATION COLUMN, because §8.1.2.2 is what calls create-an-agent:
+   the cluster allocation and this bit are two steps of one algorithm, and each entry below runs its own pair.
+   §8.1.2.1's OTHER TWO MEMBERS ARE NOT MISSING FROM THIS FUNCTION. Its step 4 is "Set agent's event loop to a
+   new event loop", and the `event_loop` row on the table above is declared once per agent by the column, so an
+   agent's loop EXISTS by the time this returns — what HTML §10.2.4 "Processing model"'s onComplete step 15 still
+   owes is RUNNING it — HTML §10.2.4 again: ("Event loop: Run the responsible event loop specified by inside settings until it is
+   destroyed."), which is a different verb. [[Signifier]] is a new unique internal value whose only stated
+   reader is §8.1.2.1's own realm-to-agent mapping, and this engine reaches an agent through its JSRuntime
+   instead, so there is nothing a signifier would answer that the runtime pointer does not. */
+static void agent_create_can_block(bool can_block)
+{
+    DCHECK(g_declared_in != NULL,
+           "§8.1.2.1's create-an-agent stated its [[CanBlock]] before this agent had declared the platform — "
+           "the bit belongs to the JSRuntime this agent IS, and agent_prologue is what records which runtime "
+           "that is");
+    JS_SetCanBlock(g_declared_in, can_block);
+}
+
+void platform_agent_init(JSContext *ctx, const char *origin, const char *top_level_url, bool requests_oac,
+                         OpenerPolicyValue opener_policy)
+{
+    /* THE ONE CONSTRUCTION OF THIS VALUE FOR A WINDOW AGENT — every fact this call was handed, and nothing that
+       was not handed to it. A fact added to platform.h's parameter list and forgotten here is an
+       unused-parameter in a short function whose argument list is on the line above; a fact added to the STRUCT
+       without a parameter to fill it cannot be reached from any host at all.
+       IT SAID "IN THE PROGRAM" UNTIL `platform_worker_agent_init` BELOW EXISTED, and the retired wording is kept
+       because the property it was asserting survives: a construction lives in the entry whose parameter list it
+       copies, and no file but this one can spell one. */
+    const PlatformAgent a = {
+        .origin        = origin,
+        .top_level_url = top_level_url,
+        .requests_oac  = requests_oac,
+        .opener_policy = opener_policy,
+    };
+    const PlatformAgent *agent = &a;
+    /* realm_install_intrinsics asserts this too, and asserting it HERE as well is the point: the first realm's
+       intrinsics are the LAST thing this function does, so a host that passed nothing would otherwise be told
+       so from inside a call it did not make, forty declarations after the mistake. */
+    DCHECK(agent->top_level_url != NULL && *agent->top_level_url,
+           "an agent was brought up with no TOP-LEVEL CREATION URL — HTML §8.1.3.5 reads it to decide whether "
+           "the first realm is a SECURE CONTEXT, and Web IDL §3.3.13's members are installed or absent by that "
+           "answer, so this agent's platform surface is undecided");
+    agent_prologue(ctx, agent->origin);
+    /* §8.1.2.1's create-an-agent, given FALSE — a similar-origin window agent is neither of the two types
+       §8.1.2.1 permits to block, whose whole list is "Only shared and dedicated worker agents allow the use of
+       JavaScript Atomics APIs to potentially block." So a page's `Atomics.wait` on this agent's thread throws a
+       TypeError, which is what a browser does. */
+    agent_create_can_block(false);
     /* AND THE BROWSING CONTEXT GROUP, BEFORE THE CLUSTER, BECAUSE §8.1.2.2 TAKES IT AS AN ARGUMENT. Its
        signature is "obtain a similar-origin window agent, given an origin, a BROWSING CONTEXT GROUP and a
        boolean requestsOAC", and its step 3 reads that group's cross-origin isolation mode — so a group created
@@ -2223,28 +2293,105 @@ void platform_agent_init(JSContext *ctx, const char *origin, const char *top_lev
        cluster this agent is in. Every host reaches it here, which is what stops one host answering a question
        about a cluster that was never allocated. */
     agent_cluster_obtain_window_agent(origin_agent(), agent->requests_oac);
-    minted_before = JS_ClassIDsMinted(g_declared_in);
-    declared_before = agent_state_class_id_count();
-    for (i = 0; i < PLATFORM_N; i++)
-        if (PLATFORM[i].declare)
-            PLATFORM[i].declare(ctx, agent);
-    platform_check_agent_state(g_declared_in, minted_before, declared_before);
+    agent_declare_column(ctx, agent);
     /* THE AGENT'S FIRST REALM IS A REALM. Every per-realm intrinsic the components above declared is built
        here, through the same one call a child navigable's realm makes — so the first document cannot get a
        different set from the rest, which is the whole failure mode this file and core/realm.h exist to end. */
-    /* AND IT IS A WINDOW REALM, WHICH IS THIS FILE'S STATEMENT TO MAKE AND NOT THE HOST'S. Web IDL §3.3.7
-       [Exposed] step 1 asks which [Global] interface a realm's global object implements, and every realm
-       `platform_agent_init` brings up is one the install column below gives `document`, `location`, `history`
-       and `navigator` — HTML §7.2.2's Window, by construction rather than by a host's choice. A field on
-       PlatformAgent would be a fact a host could state WRONGLY about a surface it does not assemble; the
-       component that assembles the surface is the one that knows. The day this engine grows a
-       WorkerGlobalScope it is a second entry beside this one, with its own install column, and not an
-       argument that makes this one answer two questions. */
+    /* AND IT IS A WINDOW REALM, WHICH IS THIS ENTRY'S STATEMENT TO MAKE AND NOT THE HOST'S. Web IDL §3.3.7
+       [Exposed] step 1 asks which [Global] interface a realm's global object implements, and every realm THIS
+       entry brings up is one the install column below gives `document`, `location`, `history` and `navigator` —
+       HTML §7.2.2's Window, by construction rather than by a host's choice. A field on PlatformAgent would be a
+       fact a host could state WRONGLY about a surface it does not assemble; the component that assembles the
+       surface is the one that knows.
+       THE CONDITION THIS PARAGRAPH SET HAS FIRED, AND THE SENTENCE IT SET IT IN IS REWRITTEN RATHER THAN DELETED
+       because a reader who re-derives the argument above will re-propose the thing it forbids. It used to read: "The day
+       this engine grows a WorkerGlobalScope it is a second entry beside this one, with its own install column,
+       and not an argument that makes this one answer two questions." core/workers/worker_global_scope.c is a row
+       on the table above, so that day came, and `platform_worker_agent_init` below is the second entry — which
+       is why the statement here narrowed from THIS FILE'S to THIS ENTRY'S rather than becoming a parameter. What
+       the prescription got exactly right is the part a reader is most likely to undo: the alternative was one
+       entry taking the [Global] kind as an argument, and that entry would also have had to take, or ignore, a
+       browsing context group, a `requestsOAC` and a top-level creation URL that a worker agent has not got —
+       three fields whose absent value is bit-identical to a real one, which is the defect the banner at the top
+       of this file records a hand-filled local producing. */
     /* AND `false` IS §8.1.3.5 STEP 1.2.1's OPERAND, WHICH A WINDOW ENVIRONMENT DOES NOT HAVE. The answer is
        read from a WorkerGlobalScope's §10.2.1.1 owner set, a Window has none, and core/realm.c asserts that a
        non-worker realm states exactly this value — so the argument is not a default here, it is the only
        thing this realm is entitled to say. */
     realm_install_intrinsics(ctx, agent->top_level_url, "Window", false);
+}
+
+/* THE SECOND ENTRY THE NOTE INSIDE `platform_agent_init` NAMED, WHOSE TRIGGER HAS FIRED. That note reads "The
+ * day this engine grows a WorkerGlobalScope it is a second entry beside this one, with its own install column,
+ * and not an argument that makes this one answer two questions", and core/workers/worker_global_scope.c is a row
+ * on the table above — so the condition is met and this is the entry it prescribed. Until it existed, a host
+ * that wanted a worker agent had to hand-assemble one out of the WINDOW entry and then build a worker realm
+ * beside the Window realm that entry had already made, which is the hand-copied host sequence this file and
+ * core/realm.h exist to abolish. HTML §8.1.2.1 "Integration with the JavaScript agent formalism" rules that
+ * shape out on its own: it types an agent BY ITS GLOBAL — "Dedicated worker agent — Contains a single
+ * DedicatedWorkerGlobalScope" — so an agent holding a Window AND a worker global is no agent type it defines.
+ *
+ * WHAT IT DOES NOT HAVE IS AS LOAD-BEARING AS WHAT IT DOES. There is no BROWSING CONTEXT GROUP: a group is a
+ * §7.3.2 browsing-context concept and a worker has no browsing context, so §7.3.2.3's
+ * create-a-new-browsing-context-group is a step no worker algorithm runs — and calling it here would hand the
+ * cluster below a group whose cross-origin isolation mode this agent has no business being keyed by. There is no
+ * `requests_oac`: §8.1.2.2's worker algorithm takes no requestsOAC, and §7.5.1 reads that header off a
+ * NAVIGATION response, which a worker script fetch is not. And there is no TOP-LEVEL CREATION URL, which is
+ * §10.2.6.2 "Script settings for workers" stating it outright rather than this file leaving a field out:
+ * "creation URL to worker global scope's url, top-level creation URL to null".
+ *
+ * THE INSTALL COLUMN IS NOT HERE AND ITS ABSENCE IS NOT THIS ENTRY'S GAP. `platform_document_install` places
+ * `document`, `location`, `history` and `navigator` — Window members — so a worker realm's per-realm surface is
+ * §10.2.1.1 "The WorkerGlobalScope common interface"'s, which core/workers/worker_global_scope.c installs
+ * through the realm-intrinsic column this entry ends in. A worker agent has no Document, so there is no second
+ * call for a host to make and no column for it to forget.
+ *
+ * NAMED RESIDUAL — THE `PlatformAgent` THIS ENTRY CONSTRUCTS CARRIES THREE FIELDS A WORKER AGENT HAS NOT GOT.
+ *   NOT COVERED: `top_level_url`, `requests_oac` and `opener_policy` are written below as the values
+ *     §10.2.6.2 and §8.1.2.2 give a worker environment, and a struct field is not a place to say "this agent
+ *     has none of this". That type is the WINDOW agent's fact bundle; a worker agent's is a different one.
+ *   WHAT THE NEXT DIFF BUILDS: a per-kind fact bundle, on the day a declare row reads one at all. None does
+ *     today, which is why this is a residual and not a defect — the three fields cross into a column whose
+ *     every thunk opens `(void)a`.
+ *   HOW ITS ABSENCE WOULD SHOW: a component's declaration starts reading an agent fact, and a reader of THIS
+ *     entry then has to decide what a worker agent's answer to a window agent's question is — at which point
+ *     one type is answering two questions. */
+void platform_worker_agent_init(JSContext *ctx, const char *origin, const char *global_interface,
+                                bool is_top_level, bool can_block, bool owner_is_secure_context)
+{
+    /* THE ONE CONSTRUCTION OF THIS VALUE FOR A WORKER AGENT, on the lines below the parameter list it copies,
+       for the reason the window entry's own note above gives. The three fields this parameter list does NOT hold
+       are the residual above, stated here rather than left to an initialiser to supply. */
+    const PlatformAgent a = {
+        .origin        = origin,
+        .top_level_url = NULL,                        /* §10.2.6.2: "top-level creation URL to null" */
+        .requests_oac  = false,                       /* §8.1.2.2's worker algorithm takes no requestsOAC */
+        .opener_policy = OPENER_POLICY_UNSAFE_NONE,   /* no browsing context group to give a mode to */
+    };
+    const PlatformAgent *agent = &a;
+
+    DCHECK(global_interface != NULL && *global_interface,
+           "a worker agent was brought up without naming the Web IDL §3.3.8 [Global] interface its one global "
+           "object implements — §8.1.2.1 types an agent by that global, so an agent without it is an agent of "
+           "no type, and core/realm.h's one call cannot decide which members its realm may hold");
+    agent_prologue(ctx, agent->origin);
+    /* §8.1.2.2's TWO STEPS IN ITS OWN ORDER: the cluster, then the agent that is added to it. `can_block` is
+       §8.1.2.2's third argument travelling to §8.1.2.1's create-an-agent untouched — TRUE from
+       obtain-a-dedicated/shared-worker-agent, FALSE from obtain-a-worklet-agent and from
+       obtain-a-service-worker-agent — which is why it is this entry's PARAMETER and not a value derived here
+       from `global_interface`: a service worker's global is a worker global and its canBlock is false, so the
+       [Global] kind does not decide it. */
+    agent_cluster_obtain_worker_agent(is_top_level);
+    agent_create_can_block(can_block);
+    agent_declare_column(ctx, agent);
+    /* AND THE AGENT'S FIRST REALM IS ITS ONLY ONE, through the same call the window entry ends in — so a worker
+       realm cannot be given a different set of per-realm intrinsics from a Window realm, which is what
+       core/realm.h exists for. The arguments are §10.2.6.2's and §8.1.3.5's, and realm_install_intrinsics
+       asserts the pair rather than trusting it: NULL for the top-level creation URL because a worker environment
+       has none, and the OWNER's secure-context answer because §8.1.3.5 "Secure contexts" step 1.2.1 reads it
+       from this global's §10.2.1.1 owner set — a fact about the agent that created this one, and therefore the
+       caller's to state rather than this file's to compute. */
+    realm_install_intrinsics(ctx, NULL, global_interface, owner_is_secure_context);
 }
 
 void platform_agent_free(void)

@@ -5,6 +5,7 @@
 #include "core/frame/browsing_context_group.h"
 #include "core/dom/document.h"   /* HTML §4.8.5's allowed-to-use, this capability's second conjunct */
 #include "core/idl_args.h"
+#include "core/realm.h"   /* Web IDL §3.3.8 [Global]: is this realm's global a WorkerGlobalScope */
 #include "core/url/origin.h"
 
 /* §7.3.2.3's CROSS-ORIGIN ISOLATION MODE for this browsing context group, and it is THREE-VALUED because its
@@ -78,6 +79,53 @@ void agent_cluster_obtain_window_agent(const Origin *origin, bool requests_oac)
     g_agent_obtained = true;
 }
 
+void agent_cluster_obtain_worker_agent(bool is_top_level)
+{
+    /* HTML §8.1.2.2 "Integration with the JavaScript agent cluster formalism"'s "To obtain a worker/worklet
+       agent, given an environment settings object or null outside settings, a boolean isTopLevel, and a boolean
+       canBlock, run these steps", to the depth that decides the one observable it produces:
+
+         1. Let agentCluster be null.
+         2. If isTopLevel is true: set agentCluster to a new agent cluster; set agentCluster's is origin-keyed
+            to true.
+         3. Otherwise: assert outside settings is not null; let ownerAgent be outside settings's realm's agent;
+            set agentCluster to the agent cluster which contains ownerAgent.
+         4. Let agent be the result of creating an agent given canBlock.
+         5. Add agent to agentCluster.
+
+       STEP 4 IS NOT THIS FILE'S AND IS NOT MISSING FROM IT: §8.1.2.1 "Integration with the JavaScript agent
+       formalism"'s create-an-agent states [[CanBlock]] and gives the agent its own event loop, and both of
+       those are per-AGENT rather than per-cluster — an agent is a JSRuntime in this engine, so core/platform.c
+       states the first through quickjs's own per-runtime entry and the `event_loop` row on its declaration
+       column is the second. Step 5 is the same statement as step 2's allocation here, because this instance
+       holds one cluster and the agent being added is the one being brought up. */
+    DCHECK(!g_agent_obtained,
+           "a worker/worklet agent's cluster was obtained twice in one instance — §8.1.2.2 allocates one per "
+           "agent, and this file holds the ONE cluster this instance is. A second agent of this instance runs "
+           "this after the first has been released, or it is the concurrent arm core/platform.c refuses");
+    if (!is_top_level)
+        /* THE FALSE ARM NEEDS A LIVE OWNER AGENT AND NOTHING IN THIS BUILD CAN HAVE ONE. Its first step is an
+           ASSERTION rather than a computation — "Assert: outside settings is not null" — so a caller reaching
+           it without an owner has violated §8.1.2.2's own precondition, and its second and third steps read
+           that owner's realm's agent and the cluster containing it. core/platform.c's declaration refuses a
+           second agent while a first is live, by name, under a residual that states what the next diff builds;
+           until that arm exists there is no owner for this one to read, and the two absences are ONE absence.
+           IT IS A DFAIL AND NOT A REFUSAL YIELDING A NEW CLUSTER, because a new cluster is the OTHER arm's
+           answer: handing it back here would put a dedicated worker in a cluster of its own, which is a
+           SharedArrayBuffer boundary §8.1.2.2's own note draws the other way ("A Window object and a dedicated
+           worker that it created" are listed as within the same agent cluster), and it would do so silently. */
+        DFAIL("§8.1.2.2's obtain-a-worker/worklet-agent was asked for its isTopLevel=FALSE arm — the cluster "
+              "containing the OWNER agent, which a DEDICATED worker and a WORKLET take. That arm reads `outside "
+              "settings`'s realm's agent, so it needs an owner agent that is LIVE, and core/platform.c's "
+              "declaration refuses a second agent while a first is live: `a second agent tried to declare the "
+              "platform while one is already live`. Build the concurrent arm that residual names — agent-state "
+              "slots reached through the runtime that declared them — and then this arm joins the owner's "
+              "cluster instead of being asked for one of its own");
+    /* Step 2, whose second half takes no input: "Set agentCluster's is origin-keyed to true." */
+    g_is_origin_keyed = true;
+    g_agent_obtained = true;
+}
+
 bool agent_cluster_is_origin_keyed(void)
 {
     /* §7.1.2: "The originAgentCluster getter steps are to return the surrounding agent's agent cluster's is
@@ -93,6 +141,37 @@ bool agent_cluster_is_origin_keyed(void)
 
 bool agent_cluster_cross_origin_isolated(JSContext *ctx)
 {
+    /* A WORKER ENVIRONMENT'S ANSWER IS ITS GLOBAL'S OWN FIELD AND NOT THIS CLUSTER'S MODE, which is §10.2.6.2
+       "Script settings for workers" stating a DIFFERENT algorithm from the Window one below: its field list
+       reads "The cross-origin isolated capability — Return worker global scope's cross-origin isolated
+       capability", where the Window's is a conjunction over this cluster and a Document. Asking the Window
+       algorithm of a worker realm is the one-question-two-answers defect one level down from the cluster
+       allocation itself, and it is not a wrong number in the abstract: HTML §10.2.1.1 "The WorkerGlobalScope
+       common interface" says "A WorkerGlobalScope object has an associated cross-origin isolated capability
+       boolean. It is initially false", so the answer is DECIDED, and the Window algorithm would instead read a
+       BROWSING CONTEXT GROUP that a worker agent does not have — which is an assert, not a false.
+       THE VALUE IS THE STANDARD'S OWN INITIAL ONE AND IS NOT A SLOT, and that is the design rather than a
+       shortcut: the only steps that ever move it are HTML §10.2.4 "Processing model"'s onComplete list — "Set worker
+       global scope's cross-origin isolated capability to true if agent's agent cluster's cross-origin isolation
+       mode is" concrete, and three narrowings after it — and none of them exists here, so a stored boolean would
+       be a field with no writer, which is the half of core/platform.h's defaulted-field rule that reads as a
+       measurement while nothing has measured anything. A CONSTANT the standard states is checkable; a slot only
+       this line ever writes is not.
+       NAMED RESIDUAL — WHAT IS NOT COVERED: an isolated worker. §10.2.4's onComplete step would set this TRUE
+         for a worker whose agent cluster's mode is `concrete`, and this arm answers FALSE for every worker
+         realm. The engine is CORRECT for what it builds — no run-a-worker exists, so no worker global has ever
+         had the step that moves it run over it — and NARROWER than §10.2.4.
+         WHAT THE NEXT DIFF BUILDS: §10.2.4's onComplete steps, at which point this arm reads a field on
+         §10.2.1.1's interface rather than returning its initial value, and the three narrowings after that step
+         (a non-shared worker whose OWNER's capability is false, an owner settings object whose capability is
+         false, and a response whose url's scheme is `data`) are what decide it.
+         HOW ITS ABSENCE WOULD SHOW: a worker realm reads `crossOriginIsolated === false` and takes HR-TIME §4's
+         100µs clock grid where a real browser in an isolated group hands its dedicated worker the 5µs one — an
+         observation a page makes by timing, in a document this engine cannot yet construct at all.
+       IT IS ASKED OF THE REALM AND NOT OF A HOST FLAG, so a Window realm and a worker realm of ONE agent answer
+       differently — which is the same reason the Window arm below takes `ctx`. */
+    if (realm_global_is_worker(ctx))
+        return false;
     /* HTML §7.2.2.6 "Script settings for Window objects"' set up a window environment settings object defines
        this environment field: "The cross-origin isolated capability — Return true if both of the following
        hold, and false otherwise: realm's agent cluster's cross-origin-isolation mode is `concrete`, and

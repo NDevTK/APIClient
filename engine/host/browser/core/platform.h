@@ -121,6 +121,43 @@
 void platform_agent_init(JSContext *ctx, const char *origin, const char *top_level_url, bool requests_oac,
                          OpenerPolicyValue opener_policy);
 
+/* THE AGENT HALF FOR AN AGENT THAT IS NOT A WINDOW'S — HTML §8.1.2.2 "Integration with the JavaScript agent
+ * cluster formalism"'s obtain-a-worker/worklet-agent, which is the OTHER of that section's two cluster
+ * allocations and the one this browser had no door for. The section splits them in its own prose: "The
+ * following defines the allocation of the agent clusters of similar-origin window agents" before the entry
+ * above, and "The following defines the allocation of the agent clusters of all other types of agents" before
+ * this one.
+ * IT IS A SECOND ENTRY AND NOT A PARAMETER ON THE FIRST, which is core/platform.c's own prescription at the
+ * line where that entry names its realm's kind, and the reason is the fact list rather than the realm: a
+ * worker agent has no browsing context group, no §7.5.1 `requestsOAC` and no top-level creation URL, so a
+ * single entry would carry three facts whose ABSENT value is bit-identical to a real one — which is exactly
+ * the hand-filled local the banner above records as the defect this argument list exists to end.
+ *
+ * `origin` is the agent's PRINCIPAL, as above. For a DEDICATED worker it is the OWNER's: §10.2.6.2 "Script
+ * settings for workers" makes the worker environment's origin "a unique opaque origin if worker global scope's
+ * url's scheme is" the string data, "otherwise outside settings's origin" — so the one worker that is a second
+ * PRINCIPAL, and therefore a second cluster key and a second instance, is the `data:` one. (The quotation stops
+ * one word short of the standard's own quoted literal: a nested quotation mark ends the run engine/citegen.mjs
+ * compares.)
+ * `global_interface` is the Web IDL §3.3.8 [Global] interface this agent's ONE global object implements, which
+ * §8.1.2.1 "Integration with the JavaScript agent formalism" makes the agent's TYPE rather than a property of
+ * it — "Dedicated worker agent — Contains a single DedicatedWorkerGlobalScope". It reaches core/realm.h's one
+ * call unchanged.
+ * `is_top_level` is §8.1.2.2's own second argument, forwarded to it by each of its three callers: TRUE from
+ * obtain-a-dedicated/shared-worker-agent when `isShared` is true, and from obtain-a-service-worker-agent; FALSE
+ * for a DEDICATED worker and from obtain-a-worklet-agent. TRUE mints a NEW origin-keyed cluster; FALSE joins the
+ * cluster containing the OWNER's agent, and that arm crashes by name until a second agent can be live while its
+ * owner is — see core/frame/agent_cluster.h.
+ * `can_block` is §8.1.2.2's THIRD argument, which it hands to §8.1.2.1's create-an-agent and which decides
+ * whether this agent's thread may block in `Atomics.wait`: TRUE for a dedicated or a shared worker, FALSE for a
+ * worklet and for a service worker. It is stated rather than derived from `global_interface` because a service
+ * worker's global IS a worker global and its answer is FALSE, so the [Global] kind does not decide it.
+ * `owner_is_secure_context` is §8.1.3.5 "Secure contexts" step 1.2.1's operand — the answer read from this
+ * global's §10.2.1.1 owner set, which is a fact about the agent that CREATED this one and therefore the
+ * caller's. core/realm.c asserts that exactly a worker realm states it. */
+void platform_worker_agent_init(JSContext *ctx, const char *origin, const char *global_interface,
+                                bool is_top_level, bool can_block, bool owner_is_secure_context);
+
 /* THE DOCUMENT HALF — every component's per-realm install, run once per document INCLUDING the first, so a
  * same-origin child navigable's window is the same window the top-level document got. A child whose `window`
  * is smaller is a different browser.
