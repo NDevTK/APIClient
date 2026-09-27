@@ -244,8 +244,21 @@ const COST = ["scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeig
    the comparator also calls maximal. A candidate set rests on the second and nothing measured it.
    READ THEM AS A PAIR. The ask is the reachability witness: a zero `differed` beside a zero ask is a fold
    that never ran, and beside a large ask it is the strongest available result — the surrogate picked the
-   SAME member every time. A nonzero `differed` is two members tied, which is this frontier's ordinary state
-   and not a defect; the disagreement that matters ABORTS in flow_pick and is on no row here.
+   SAME member every time. A nonzero `differed` is two members named apart, which is this frontier's ordinary
+   state and not a defect.
+   THIS READ `the disagreement that matters ABORTS in flow_pick and is on no row here`, AND IS REWRITTEN
+   RATHER THAN DELETED BECAUSE THAT IS THE READING A DRIVER RE-DERIVES FROM A ROW THAT ONLY EVER COUNTED
+   TIES. That abort is gone — it asked two spellings of one weight to agree bit for bit where flow.c's own
+   flow_index_margin declares them a derived distance apart, so it ended every run that reached a few thousand
+   members on a real page — and the disagreement it used to end a run on is now the PARTITION below:
+   `keyIndexDifferedTieLifetime` and `keyIndexDifferedStrictLifetime`, summing to `keyIndexDifferedLifetime`.
+   So a defect that used to be readable from one dying run's crash text is readable from every run's census,
+   and a reader who wants to know how OFTEN the surrogate names a worse member has a row instead of a count of
+   aborted sessions.
+   THE STRICT ARM IS A SHARE AND NEVER A QUANTITY. Large against the differed total, the single top key names
+   a member the comparator calls worse repeatedly; small beside a much larger tie count, the order is simply
+   tied and the design flow.c proves exact — a candidate set within a derived margin, re-compared through
+   flow_weight — answers it with no edit to the order at all.
    They are named here because result.c publishes them and `keyScope`'s derived check would throw otherwise —
    which is that check doing the one thing it exists for. An artifact older than these rows prints null for
    each, which is this stream's absent-versus-zero rule and is the honest answer: the run did not state them. */
@@ -264,6 +277,7 @@ const COST = ["scanNextRuns", "scanNextWeights", "scanRivalRuns", "scanRivalWeig
    reachability witness for both. */
 const KEYCHK = ["keyArmedLifetime", "keyStaleGenLifetime", "keyFirstSeenLifetime", "keyRunningLifetime",
                 "keyIndexAskedLifetime", "keyIndexDifferedLifetime",
+                "keyIndexDifferedTieLifetime", "keyIndexDifferedStrictLifetime",
                 "keyIndexBandMembersLifetime", "keyIndexBandWeighedLifetime"];
 
 /* WHAT THE ORDER IS MADE OF, WHICH EVERY ROW ABOVE PRESUPPOSES AND NONE OF THEM ASKS. The scopes above say

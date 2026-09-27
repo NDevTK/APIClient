@@ -3375,28 +3375,39 @@ FlowKeyChecks flow_key_checks(void);
 
    SO THE QUESTION IS ASKED OF THE RUN INSTEAD, WHICH IS WHAT THIS PROJECT DOES WITH A CLAIM NO ARGUMENT
    SETTLES.  flow_pick folds the surrogate over exactly the population and exactly the tie-break its own
-   comparison uses, and asserts that the member the surrogate picks carries the weight the comparator called
-   maximal.  THE ASSERT IS THE POINT AND IT CAN FAIL, and a long silence is the evidence that the surrogate IS
-   the order on real frontiers and the index may be built on it with this as its standing guard.
-   THIS READ `a fire is the proof that the re-composition above is REQUIRED before any index is built`, AND IS
-   REWRITTEN RATHER THAN DELETED BECAUSE IT IS THE READING A FIRE INVITES AND IT WAS WRITTEN BEFORE THE DESIGN
-   THAT REFUTES IT EXISTED.  A fire proves the SINGLE TOP KEY unusable and says nothing whatever about an
-   index, because flow_pick's band walk — a candidate set carrying flow_index_margin, needing no edit to
-   flow_weight — runs on the SAME scan and asserts that it returns the comparator's own extremum.  Measured
-   over every fire on record, three on the smoke fixture and one on a real application page: the band walk's
-   two assertions and the per-member margin bound were SILENT on the very scan that aborted, so the design
-   this header offers as the answer was observed working exactly where the single top key failed.  The
-   re-composition question survives — flow_pick's banner says what it decides, and it is TIE IDENTITY rather
-   than buildability — but it is no longer entailed by a fire.
-   RETIREMENT: this record goes when a fire here prints whether the band walk beneath it held, so a reader
-   cannot take the single top key's failure for the candidate set's.
+   comparison uses, and COUNTS what the two spellings did — whether they named one member, and where they did
+   not, which of the surrogate's two modes it was.
+   THIS READ `flow_pick … asserts that the member the surrogate picks carries the weight the comparator called
+   maximal.  THE ASSERT IS THE POINT AND IT CAN FAIL`, AND IS REWRITTEN RATHER THAN DELETED BECAUSE THAT IS
+   THE DESIGN A READER RE-DERIVES FROM THE PARAGRAPH ABOVE IT.  That equality is gone.  It asked the two
+   spellings to agree BIT FOR BIT while this header's own flow_index_margin DECLARES them free to stand a
+   derived distance apart, so it could not hold on any frontier large enough to present a candidate pair — it
+   was an EXPECTATION with a `DCHECK`'s costume, and its cost was a run's whole emitted surface discarded
+   after it had been earned.  Measured over the four real-page fires on record, every weight reproduced to the
+   bit from the operands the line printed: the pairs stood 1 to 4 ulps apart and the declared margin was 12 to
+   68 times that, so no fire ever refuted the surrogate, the margin or the order.
+   A FIRE ALSO PROVED THE SINGLE TOP KEY UNUSABLE AND SAID NOTHING WHATEVER ABOUT AN INDEX, which is the other
+   half of the retired reading and is why its removal costs no claim: flow_pick's band walk — a candidate set
+   carrying flow_index_margin, needing no edit to flow_weight — runs on the SAME scan and ASSERTS that it
+   returns the comparator's own extremum, and that assert stays.  Measured over every fire on record, three on
+   the smoke fixture and four on real application pages: the band walk's two assertions and the per-member
+   margin bound were SILENT on the very scan that aborted, which an abort being first-past-the-post makes a
+   witness rather than a coincidence — the design this header offers as the answer was observed working
+   exactly where the single top key failed.  The re-composition question survives — flow_pick's banner says
+   what it decides, and it is TIE IDENTITY rather than buildability — and it is now decided from ROWS over a
+   whole run instead of from the one pair that ended one.
+   RETIREMENT: this record goes when the TIE IDENTITY decision has been made by the project owner, because the
+   two rows below exist to inform exactly that and nothing in this file can discharge it.
 
    READ THE PAIR AND NEVER EITHER ALONE — the same shape as `armed` against its three exemptions.  `asked` is
    how many scans made the comparison at all, so it is the reachability witness without which a zero
    `differed` is satisfied identically by agreement and by a walk that never ran.  `differed` is the subset in
-   which the surrogate and the comparator named DIFFERENT MEMBERS and the assert still held, which is the
-   ordinary state when two members tie — informative, not a defect, and the row that says the check is
-   examining anything at all rather than comparing a pointer with itself.
+   which the surrogate and the comparator named DIFFERENT MEMBERS, which is the ordinary state when two
+   members tie — informative, not a defect, and the row that says the check is examining anything at all
+   rather than comparing a pointer with itself.  `differed_tie` and `differed_strict` PARTITION it by the one
+   pair that states the mode, and reading either of them without the total is reading a numerator: a strict
+   count that is a large SHARE of the differed total is the single top key naming a member the comparator calls
+   worse repeatedly, and the same count beside a far larger tie count is the order being tied.
    …AND THE PAIR BENEATH THEM IS WHAT THE ANSWER TO THAT QUESTION COSTS, WHICH IS A DIFFERENT QUESTION AGAIN
    AND THE ONE THAT DECIDES WHETHER AN INDEX IS WORTH HAVING AT ALL.  The two rows above say whether the key
    ORDERS.  Where it merely TIES — which flow.c's own abort separates by reading `sur_w` against the
@@ -3431,20 +3442,28 @@ FlowKeyChecks flow_key_checks(void);
    beside it and is a second question this pair does not answer.
    BOTH ARE LIFETIME COUNTS SUMMED OVER ASKS and may be differenced; neither is a gauge, neither is
    per-member, and neither may be read against `members`.  `index_asked` remains the reachability witness for
-   all four: a zero band beside a zero ask is a fold that never ran.
-   ALL FOUR ARE LIFETIME COUNTS, raised under APICLIENT_DEV, and none decides anything: no term of flow_weight
+   all five rows beneath it: a zero band, or a zero differed, beside a zero ask is a fold that never ran.
+   ALL SIX ARE LIFETIME COUNTS, raised under APICLIENT_DEV, and none decides anything: no term of flow_weight
    reads any of them, no pick branches on them, nothing is bounded by them.
    RETIREMENT: these rows go when the ask no longer walks the frontier — the index is then the thing being
    asked and its agreement with flow_weight is held at its own update site, so there is no fold left to
    count and no band left to price. */
 typedef struct {
     long index_asked;      /* scans that folded the surrogate and had a maximum to compare it against */
-    long index_differed;   /* …of those, the ones where the surrogate named a DIFFERENT member. IT IS RAISED
-                              BEFORE THE ABORT AND TESTS NO WEIGHT, so `of equal weight` — which this comment
-                              said — is true of every scan but the LAST one of a run that fires, where it
-                              counts the unequal pair the abort then dies on. It also does not separate the
-                              surrogate's TIE arm from its STRICT one, which is the partition the decision
-                              flow_pick poses actually rests on and the next diff here */
+    long index_differed;   /* …of those, the ones where the surrogate named a DIFFERENT member. IT TESTS NO
+                              WEIGHT, so `of equal weight` — which this comment said — is true of no scan in
+                              particular: the pair it counts may weigh the same or differ in the last bits,
+                              and since no abort stands here any more the run continues either way. The two
+                              rows below are what separates those, and they were this field's own next-diff
+                              clause */
+    long differed_tie;     /* …of THOSE, the ones where the surrogate reads the comparator's own member AT its
+                              own extremum — it lost a distinction the comparator makes rather than making a
+                              different one, which is the arm a margin-carrying candidate set answers with
+                              flow_weight untouched */
+    long differed_strict;  /* …and the ones where it reads that member on the LOSING side of its extremum — a
+                              real disagreement, which is the arm the TIE IDENTITY decision is about. The pair
+                              is read against `index_differed`, which it partitions, and flow_pick asserts the
+                              sum because the three are raised by two statements over one condition */
     long band_members;     /* members the derived-margin candidate set admitted, summed over those scans */
     long band_weighed;     /* …and the members that set was tested over — the denominator of the row above */
 } FlowIndexChecks;

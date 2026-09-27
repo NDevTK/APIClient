@@ -734,6 +734,8 @@ static char *errs_json_array(ErrsArray which) {
    @kind gauge: members jobsReady jobsFramed jobsOwed jobWGap jobsReadyTask jobsReadyMicro memUnframed visZero
    @kind lifetime: picksLifetime unframedPicksLifetime readyPicksLifetime
    @kind lifetime: taskHeldDelivLifetime taskHeldSeqLifetime taskArmOlderLifetime taskArmNoRowLifetime
+   @kind lifetime: keyIndexAskedLifetime keyIndexDifferedLifetime keyIndexDifferedTieLifetime
+   @kind lifetime: keyIndexDifferedStrictLifetime keyIndexBandMembersLifetime keyIndexBandWeighedLifetime
 */
 char *result_wfq_json(void) {
     WfqCensus w;
@@ -1345,14 +1347,42 @@ char *result_wfq_json(void) {
                         check examined anything at all rather than comparing a pointer with itself. A zero
                         there with a large ask is the strongest result available: the surrogate picked the
                         same member every time.
-                        A FIRE IS NOT ON THIS LINE AND CANNOT BE — the disagreement that matters ABORTS at
-                        flow_pick rather than being counted, because an index built over a key that returns a
-                        member the comparator calls worse has changed the answer, which solver/flow.h's
-                        FlowIndexChecks says is a decision to report rather than a rate to watch.
+                        THE DISAGREEMENT THAT MATTERS IS ON THIS LINE AND USED TO ABORT INSTEAD, WHICH IS
+                        REWRITTEN RATHER THAN DELETED BECAUSE THE RETIRED SENTENCE IS THE ONE A READER
+                        RE-DERIVES. It read `A FIRE IS NOT ON THIS LINE AND CANNOT BE — the disagreement that
+                        matters ABORTS at flow_pick rather than being counted`, and that abort is gone: it
+                        asked two spellings to agree BIT FOR BIT where solver/flow.c's flow_index_margin
+                        DECLARES them a derived distance apart, so it ended every run that reached a few
+                        thousand members on a real page for a divergence inside its own licence. The claim
+                        survives — an index returning a member the comparator calls worse HAS changed the
+                        answer — and it is a DECISION about tie identity rather than a rate to watch, so it is
+                        published as the partition on the row below instead of as a line that discards a run's
+                        emitted surface after it has been earned.
                         BOTH ARE LIFETIME COUNTS raised under APICLIENT_DEV, so two zeros are a question about
                         the BUILD before they are a question about the run — the same caveat the four rows
                         above carry and for the same reason. */
                      "\"keyIndexAskedLifetime\":%ld,\"keyIndexDifferedLifetime\":%ld,"
+                     /* …AND WHICH OF THE TWO MODES EACH OF THOSE DISAGREEMENTS WAS, WHICH THE ROW ABOVE SUMS
+                        AND CANNOT SEPARATE — and the two take DIFFERENT work, which is the whole reason they
+                        are apart. `keyIndexDifferedTieLifetime` is the surrogate reading the comparator's own
+                        member AT its own extremum: it LOST a distinction rather than making a different one,
+                        and solver/flow.c proves a margin-carrying candidate set answers that arm with
+                        flow_weight untouched. `keyIndexDifferedStrictLifetime` is the surrogate reading that
+                        member on the LOSING side: a real disagreement, and the arm the TIE IDENTITY decision
+                        solver/flow.h reserves for the project owner is about.
+                        THE MODE IS STATED BY ONE PAIR AND NOT ANOTHER, which is why this is a row and not a
+                        reading a driver could compose. It is `sur_w` against the SURROGATE's reading of the
+                        member the comparator returned — never against that member's WEIGHT, which crosses two
+                        axes at once and which solver/flow.c scores at four wrong modes out of four on the
+                        fires then on record.
+                        READ THEM AGAINST THE ROW ABOVE AND NEVER ALONE: they PARTITION it, solver/flow.c
+                        asserts the sum because the three counters are raised by two statements over one
+                        condition, and a strict count is a SHARE rather than a quantity — large against the
+                        total is the single top key naming a worse member repeatedly, and small beside a much
+                        larger tie count is the order being tied.
+                        BOTH ARE LIFETIME COUNTS raised under APICLIENT_DEV and may be differenced;
+                        `keyIndexAskedLifetime` is the reachability witness for both. */
+                     "\"keyIndexDifferedTieLifetime\":%ld,\"keyIndexDifferedStrictLifetime\":%ld,"
                      /* …AND WHAT THE ANSWER TO THAT QUESTION WOULD COST, WHICH THE PAIR ABOVE CANNOT SAY.
                         Where the surrogate merely TIES with the comparator rather than disagreeing with it,
                         the design that answers it edits flow_weight not at all: a CANDIDATE SET of every
@@ -1561,6 +1591,7 @@ char *result_wfq_json(void) {
                      (unsigned long long)rm.gen, (unsigned long long)rm.cur, (unsigned long long)rm.both,
                      kc.armed, kc.stale_gen, kc.first_seen, kc.running,
                      ic.index_asked, ic.index_differed,
+                     ic.differed_tie, ic.differed_strict,
                      ic.band_members, ic.band_weighed,
                      w.epoch_away_live, w.epoch_away_walk,
                      flow_epoch_rebuild(), flow_epoch_resets(),

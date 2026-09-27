@@ -5838,16 +5838,23 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        holds the whole argument and the three readings. Asked here rather than inside the loop because it is
        a claim about the SCAN'S ANSWER and not about a member, and after the seed fold because the seed is
        part of that answer.
-       IT COMPARES WEIGHTS AND NOT POINTERS, WHICH IS WHAT MAKES IT A CHECK RATHER THAN A TAUTOLOGY ON ONE
-       SIDE AND A FALSE ALARM ON THE OTHER. Two members standing at one weight are a state this frontier is
-       measured to be in most of the time — `neverPickedGap` 0.000 at every sample, 73-93% of members tied at
-       the top — so requiring the same POINTER would fire on every tie, which is the order working. What an
-       index must not do is return a member the comparator calls WORSE, and that is exactly this equality.
-       EXACT `==` AND NO EPSILON, this file's idiom: a tolerance here would accept the last-bit divergence
-       this check exists to detect, which would make it agree by construction with whatever it was pointed at.
-       THE EXTRA WEIGHING IS INSIDE THE DCHECK AND RAISES NO SCAN COUNTER, for flow_index_surrogate's reason;
-       it is O(1) per scan rather than per member, so it is in a different class from the per-member stamp
-       above and needs no separate argument about cost.
+       IT COUNTS AND NO LONGER ABORTS, AND THE RETIRED ARGUMENT IS WRITTEN OUT RATHER THAN DELETED BECAUSE
+       IT IS THE ONE A READER RE-DERIVES. What stood here was `DCHECKF(flow_weight(sur_best) == bw, …)`, on
+       the reasoning that it "COMPARES WEIGHTS AND NOT POINTERS, WHICH IS WHAT MAKES IT A CHECK RATHER THAN A
+       TAUTOLOGY ON ONE SIDE AND A FALSE ALARM ON THE OTHER. Two members standing at one weight are a state
+       this frontier is measured to be in most of the time — `neverPickedGap` 0.000 at every sample, 73-93% of
+       members tied at the top — so requiring the same POINTER would fire on every tie, which is the order
+       working. What an index must not do is return a member the comparator calls WORSE, and that is exactly
+       this equality", with `EXACT == AND NO EPSILON, this file's idiom`. Every clause of that is about
+       POINTERS against WEIGHTS and every clause of it is correct. What it does not reach is the axis the
+       paragraph below measures: the two WEIGHTS are two SPELLINGS this file DECLARES may differ by
+       flow_index_margin, so an equality between them asked for a resolution finer than the licence its own
+       neighbour grants, which is an EXPECTATION rather than the should-never-happen a `DCHECK` is for. AN
+       EPSILON IS STILL REFUSED AND WAS NEVER THE ANSWER — the answer is the band walk, which carries the
+       DERIVED margin instead of a tolerance and is asserted rather than believed.
+       THE EXTRA WEIGHING IS INSIDE THE DEV BLOCK AND RAISES NO SCAN COUNTER, for flow_index_surrogate's
+       reason; it is O(1) per scan rather than per member, so it is in a different class from the per-member
+       stamp above and needs no separate argument about cost.
        THE MESSAGE CARRIES THE OPERANDS OF BOTH MEMBERS, WHICH IS WHAT SEPARATES THE TWO FIRE MODES THIS
        CHECK HAS — and it carried four bare weights until a fire had to be diagnosed by SIMULATING the two
        expressions outside the engine, which is the §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES shape: the run held
@@ -5888,14 +5895,21 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        the surrogate can only read `best` at `sur_w` or on the losing side of it — TIE or STRICT, with no
        third arm — and a fold that dropped `best` from one of the two walks makes that false and fires.
        WHAT EVERY FIRE ON RECORD HAS IN COMMON IS THE PART NO MODE READING REACHES, AND IT IS ARITHMETIC
-       RATHER THAN A PROPERTY OF ANY FRONTIER. The surrogate is DECLARED free to stand flow_index_margin from
-       the comparator and the equality below asks it to resolve a gap orders of magnitude smaller than that
-       licence, so no frontier makes this hold and a fire is the declared margin reaching the ANSWER rather
-       than a defect in either spelling. THIS PARAGRAPH PUT THOSE TWO QUANTITIES AT `exactly ONE ULP` AND
-       `13.6 to 20.9 ulps` AND THEY ARE REWRITTEN RATHER THAN DELETED BECAUSE THE ABORT NOW PRINTS BOTH: a
-       reader re-derives them from ONE LINE, and a reader who instead re-derives them from a count of fires
-       writes a count again. Measured over four real-page fires the weights stand 1, 2, 2 and 4 ulps apart,
-       so `exactly ONE ULP` was a property of the fires then on record and not of the mechanism.
+       RATHER THAN A PROPERTY OF ANY FRONTIER, AND IT IS THE WHOLE OF WHY THE EQUALITY WENT. The surrogate is
+       DECLARED free to stand flow_index_margin from the comparator and that equality asked it to resolve a gap
+       orders of magnitude smaller than the licence, so no frontier makes it hold and a fire was the declared
+       margin reaching the ANSWER rather than a defect in either spelling. MEASURED AGAIN, over the four
+       real-page fires the archived corpus holds, each of the eight weights reproduced BIT-EXACTLY from the
+       operands the line printed by this file's own flow_weight composition: the pairs stand 1, 2, 2 and 4 ulps
+       apart at 3548, 2469, 1571 and 950 members while flow_index_margin declares 2.5e-13, 2.1e-14, 4.2e-14 and
+       3.0e-14 there — the gap is 2.9% to 8.5% of ONE margin and 1.5% to 4.3% of the SUM the band's containment
+       proof rests on, so every fire on record sat deep inside the licence and none of them refuted anything.
+       THIS PARAGRAPH PUT THOSE TWO QUANTITIES AT `exactly ONE ULP` AND `13.6 to 20.9 ulps` AND THEY ARE
+       REWRITTEN RATHER THAN DELETED BECAUSE A READER WHO RE-DERIVES THEM FROM A COUNT OF FIRES WRITES A COUNT
+       AGAIN. It said the abort PRINTS both, which was the repair before this one and is no longer available:
+       there is no line to read them off, so the figures are the paragraph above's and the rows below count
+       occurrences rather than magnitudes. Measured over four real-page fires the weights stand 1, 2, 2 and 4
+       ulps apart, so `exactly ONE ULP` was a property of the fires then on record and not of the mechanism.
        AND THE MECHANISM IS COMMENSURABILITY, WHICH IS EXACT AND IS WHY FRONTIER SIZE IS NOT THE VARIABLE:
        FLOW_AGE_QUANTUM is 3/250, flow_branch_bonus is `1/sub_born` and flow_optimism is `1/(1+visits)`, so a
        member silent `d` quanta longer than a sibling whose bonus terms exceed it by `d * FLOW_AGE_QUANTUM`
@@ -5917,13 +5931,21 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        BRANCH BUCKET. So the real page refutes the surrogate at the exact point its own argument is made and
        the fixture does not reach that point at all, which is §A-FIXTURE-BUILT-TO-EXERCISE-EVERY-MECHANISM
        arriving in this check: the two documents exercise two claims and only one of them is the claim.
-       RETIREMENT — MET, AND THE RECORD IS REWRITTEN RATHER THAN DELETED BECAUSE THE TWO-DOCUMENT SPLIT IS
-       WHAT A READER RE-DERIVES AND A PRINTED BIT CANNOT RE-CLASSIFY A FIRE ALREADY ON RECORD: the abort below
-       prints `sameFamily`, so no LATER fire is classified by inferring a shared account from two `val` fields.
-       RETIREMENT: this record goes when the two modes are counted over a run rather than read off the one
-       fire that ends it — a partition of `index_differed` into the surrogate's TIE and STRICT arms, summing
-       to it — because the anti-correlation above is then a row anybody can re-derive instead of a
-       measurement this paragraph carries.
+       AND THAT QUESTION IS ANSWERED BY THE CORPUS RATHER THAN BY THE NEXT FIRE, WHICH IS WHY THE BIT THAT
+       ANSWERED IT PER FIRE WENT WITH THE ABORT. A `sameFamily` operand was added so no later fire would be
+       classified by inferring a shared account from two `val` fields; with no fire there is no per-fire
+       classification, and the four real-page pairs on record are ALL within one account — identical `val` and
+       identical family notch on every one — so the real page refutes the surrogate at exactly the point
+       flow.h's own argument for it is made, and the fixture's cross-account pairs never reached that point.
+       WHAT IS LOST IS A PER-SCAN READING OF IT and it is named rather than papered over: no row separates a
+       within-account disagreement from a cross-account one, so a reader who wants that partition is adding a
+       THIRD row to the two below and not reading one that exists.
+       RETIREMENT — MET, AND THE RECORD IS REWRITTEN RATHER THAN DELETED BECAUSE THE ANTI-CORRELATION IS WHAT
+       A READER RE-DERIVES AND A ROW CANNOT RE-CLASSIFY A FIRE ALREADY ON RECORD. The two modes are counted
+       over the run below and published as `keyIndexDifferedTieLifetime` and `keyIndexDifferedStrictLifetime`,
+       summing to `keyIndexDifferedLifetime`, so the split is a row anybody can re-derive rather than a
+       measurement this paragraph carries — and the mode is no longer read off the one fire that ends a run,
+       because no fire ends one here.
        AND THE TWO ARMS ARE NOT TWO DESIGNS, WHICH THE SPLIT ABOVE INVITES A READER TO CONCLUDE AND WHICH THE
        BAND WALK BELOW REFUTES BY NOT READING THE MODE AT ALL. Scoping "a candidate set ... must therefore
        carry a MARGIN" to the TIE arm reads as saying the margin design fails on the strict one, and its
@@ -5932,7 +5954,7 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        which is what makes it the extremum. A strict disagreement says the surrogate's SINGLE TOP KEY names a
        member the comparator calls worse; it says nothing about whether the comparator's own member is inside
        the band, and it is — by the same inequality and with the same margin. So the candidate set answers
-       BOTH fire modes and the abort below is silent on neither.
+       BOTH modes, and the two rows below count each of them apart instead of ending the run on either.
        WHAT THAT LEAVES THE RE-COMPOSITION DECIDING IS THE THING THIS BANNER ALREADY NAMES TWO PARAGRAPHS
        DOWN, AND IT IS NOT WHETHER AN INDEX IS BUILDABLE: it is TIE IDENTITY — which members share the
        maximum, which on a frontier measured 73-93% tied at the top is most of what the order decides. The
@@ -5994,9 +6016,9 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
                 "the surrogate's own extremum is not extremal over a population that contains the member the "
                 "comparator returned — both folds admit `best` on the same gate and with the same direction "
                 "bit, so this is an identity, and a fire is `best` having been weighed by the comparator's "
-                "fold and dropped by the surrogate's. It also breaks what the abort below rests on for "
-                "READING a fire at all: with this false the surrogate's TIE and STRICT arms stop being the "
-                "only two and the mode that abort prints names nothing. sur_w=%.17g but the surrogate reads "
+                "fold and dropped by the surrogate's. It also breaks what the PARTITION below rests on: with "
+                "this false the surrogate's TIE and STRICT arms stop being the only two, and the two rows that "
+                "count them are a partition of a total they no longer cover. sur_w=%.17g but the surrogate reads "
                 "the comparator's own member at %.17g, over %d member(s) in direction worst=%d",
                 sur_w, sur_of_best, g_flows_n, (int)worst);
         /* …AND THE CANDIDATE SET THAT ANSWERS THE TIE MODE, WALKED RATHER THAN ARGUED — the design the abort
@@ -6118,57 +6140,71 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
                     "registry in the scan's order with the scan's strictness and folds the seed afterwards "
                     "non-strictly, so a member of equal weight winning here and losing there is one of those "
                     "three having come apart. It is NOT the surrogate disagreeing with the comparator — that "
-                    "is the abort below and it is a different claim. The band held %ld of %ld member(s) "
+                    "is the TIE/STRICT partition below, which is a different claim and is COUNTED rather than "
+                    "aborted on. The band held %ld of %ld member(s) "
                     "tested, edge=%.17g from sur_w=%.17g and 2*margin=%.17g; the band returned a member at "
                     "registry slot %d weighing %.17g and the scan returned slot %d weighing %.17g",
                     band, band_of, edge, sur_w, 2.0 * sur_mmax,
                     cand ? cand->reg_i : -1, cand ? cand_w : 0.0, best->reg_i, bw);
         }
-        DCHECKF(flow_weight(sur_best) == bw,
-                "an index over the member key would have returned a member this comparator calls WORSE — the "
-                "surrogate is `acct_family_val + flow_member_key - (family notch + carry) * FLOW_AGE_QUANTUM`, "
-                "which is flow_weight RE-ASSOCIATED, and a fire here is that re-association reaching the "
-                "ANSWER rather than the last bit. READ `sur_w` AGAINST `surrogate(best)` FIRST AND NEVER "
-                "AGAINST `bw`: those two are the SURROGATE on one member and the COMPARATOR on the other, so "
-                "they are equal only where the two spellings coincide on a member, which is a coincidence and "
-                "not a mode — scored over every fire on record that pair named the WRONG mode four times out "
-                "of four and the banner above carries the table. EQUAL is a surrogate TIE "
-                "the fold's tie-break resolved downward and is answerable by a candidate set that carries a "
-                "MARGIN and re-compares its survivors through flow_weight, with flow_weight untouched; a "
-                "`sur_w` the direction bit calls BETTER is a real disagreement and is the case that argues "
-                "for composing "
-                "flow_weight so its member half is a SUBEXPRESSION of it. Either way this is an ORDER "
-                "question and a decision rather than a diff, so this abort is a finding to report and not a "
-                "line to soften — and `WORSE` here means lower BY THIS COMPARATOR, never further from the "
-                "real number both spellings round. THERE IS NO THIRD ARM, and the identity above this abort "
-                "is what says so. The surrogate chose a member weighing %.17g "
-                "where the scan's maximum is %.17g, over %d member(s), with the surrogate reading %.17g "
-                "there and %.17g at the member the comparator returned — so the mode is %s. ITS "
-                "OPERANDS, in the order flow_weight sums them, and then the maximum's: "
-                "sur_best val=%.17g own_notch=%lld fam_notch=%lld carry=%d silence_notch=%lld "
-                "optimism=%.17g distance=%.17g branch=%.17g | best val=%.17g own_notch=%lld "
-                "fam_notch=%lld carry=%d silence_notch=%lld optimism=%.17g distance=%.17g "
-                "branch=%.17g — the notches are EXACT integers, so a divergence is in how the price "
-                "FLOW_AGE_QUANTUM was applied to them and where the reward was folded in, never in "
-                "the quantities themselves. AND THE THREE FIGURES THAT DECIDE WHETHER THIS FIRE IS "
-                "AN ORDER DISAGREEMENT AT ALL, WHICH THE BANNER CARRIED AS A MEASUREMENT INSTEAD OF "
-                "PRINTING: the two weights differ by %.17g and flow_index_margin DECLARES the "
-                "surrogate free to stand %.17g (sur_best) and %.17g (best) away, so a gap under "
-                "either is that licence reaching the ANSWER and a gap over BOTH is the one fire "
-                "here that is a DIFF. sameFamily=%d — flow.h states the surrogate's soundness "
-                "WITHIN a family account, so a 1 refutes it where its own argument is made",
-                flow_weight(sur_best), bw, g_flows_n, sur_w, sur_of_best,
-                sur_w == sur_of_best ? "a surrogate TIE" : "a STRICT surrogate disagreement",
-                acct_family_val(sur_best), (long long)flow_service_notch(sur_best),
-                (long long)flow_family_notch(sur_best), flow_silence_carry(sur_best),
-                (long long)flow_silence_notch(sur_best), flow_optimism(sur_best),
-                flow_distance(sur_best), flow_branch_bonus(sur_best),
-                acct_family_val(best), (long long)flow_service_notch(best),
-                (long long)flow_family_notch(best), flow_silence_carry(best),
-                (long long)flow_silence_notch(best), flow_optimism(best),
-                flow_distance(best), flow_branch_bonus(best),
-                flow_weight(sur_best) - bw, flow_index_margin(sur_best),
-                flow_index_margin(best), (int)(sur_best->family == best->family));
+        /* AND WHICH OF THE SURROGATE'S TWO MODES THIS SCAN WAS IN, COUNTED — WHICH IS THIS BLOCK'S OWN
+           NEXT-DIFF CLAUSE BUILT AND THE PLACE A `DCHECKF(flow_weight(sur_best) == bw, …)` STOOD, ABORTING
+           EVERY RUN THAT REACHED A FEW THOUSAND MEMBERS ON A REAL PAGE. The banner above holds the argument
+           and the measurement; what belongs at the site is why a COUNT replaces it and why nothing is
+           asserted in its place.
+           IT WAS GUARDING AN EXPECTATION AND ITS OWN MESSAGE SAID SO, which is the cheapest tell there is: it
+           ended `a gap under either is that licence reaching the ANSWER and a gap over BOTH is the one fire
+           here that is a DIFF`, so it conceded in as many words that the state it fired on is one the
+           declared margin permits. §Offensive-programming gives a `DCHECK` two meanings — an invariant the
+           design must guarantee, or a capability that should exist and does not — and a state the file itself
+           measures on every real frontier is neither.
+           THE DESIGN IT NAMED AS THE ANSWER IS THE BAND WALK DIRECTLY ABOVE, WHICH IS WHY THIS IS A DELETION
+           AND NOT A SOFTENING. An abort is first-past-the-post, so `cand == best` and the per-member margin
+           bound HELD on every one of the four real-page scans that died here — a four-site witness that a
+           margin-carrying candidate set returns the comparator's own member pointer for pointer where the
+           single top key cannot — and that walk reads no mode, so it answers both arms. Two seams over one
+           primitive, one asserting an equality no frontier satisfies and one asserting the claim the design
+           actually makes: §A-superseded-system-is-DELETED-in-the-same-diff says the superseded one goes
+           rather than standing beside it as a forcing function whose only effect is to discard a run's
+           emitted surface after it has been earned.
+           AND NO GAP BOUND IS ASSERTED IN ITS PLACE, WHICH IS A REFUSAL RATHER THAN AN OMISSION — the next
+           reader's first instinct is to relax the equality to the margin, and that assert CANNOT FIRE. The
+           sound statement is `0 <= bw - W(m*) <= M(best) + M(m*)`, and it is ENTAILED by two assertions this
+           same scan already makes: the per-member fold asks `|S(m) - W(m)| <= M(m)` of every member the order
+           weighs, and the identity above says the surrogate reads `best` at `sur_w` or on the losing side of
+           it, whence `W(m*) >= sur_w - M(m*) >= S(best) - M(m*) >= bw - M(best) - M(m*)`. A third spelling of
+           it could not fail without one of those failing first, which is the vacuous check
+           §AN-ASSERT-WHOSE-TWO-SIDES-CANNOT-DISAGREE forbids and which would read as a stronger guard than
+           either of the two doing the work.
+           WHAT THE ROWS ARE. They partition `index_differed` by the ONE pair that states the mode — `sur_w`
+           against the SURROGATE's reading of `best`, never against `bw`, which is the retired discriminator
+           the banner's table scores at four wrong modes out of four. THE SUM IS ASSERTED BECAUSE THE THREE
+           COUNTERS ARE RAISED BY TWO STATEMENTS OVER ONE CONDITION: the total where the two members are
+           compared and the arms here, so a narrowed test or a `continue` introduced into either makes the
+           published share a fraction of a different population.
+           NAMED RESIDUAL. NOT COVERED: TIE IDENTITY — which members SHARE the maximum, which the banner names
+           as the quantity a re-composed flow_weight would move and which these rows count DISAGREEMENTS about
+           rather than measuring. WHAT THE NEXT DIFF BUILDS: nothing in this file; an order that stops
+           resolving below the step it can express is an ORDER change and the project owner's, and these rows
+           are what it would be decided from rather than from the one fire that used to end a run. HOW ITS
+           ABSENCE SHOWS: a run whose strict arm is a large share of its differed total is one in which the
+           single top key names a member the comparator calls worse REPEATEDLY rather than once, which no
+           abort could ever have reported, because an abort reports its first and then there is no run. */
+        if (sur_best != best) {
+            if (sur_w == sur_of_best) g_index_checks.differed_tie++;
+            else                      g_index_checks.differed_strict++;
+            DCHECKF(g_index_checks.differed_tie + g_index_checks.differed_strict
+                        == g_index_checks.index_differed,
+                    "the surrogate's two fire modes no longer partition the scans in which it named a "
+                    "different member — the total is raised where the two members are compared and the arms "
+                    "are raised where the mode is read, over what must be one condition, so a difference is "
+                    "that condition having come apart in one of the two places and the share published "
+                    "against the total is a fraction of a different population. It is NOT the surrogate "
+                    "disagreeing with the comparator and it is not the band walk: those are the rows "
+                    "themselves and the abort above. tie=%ld strict=%ld differed=%ld",
+                    g_index_checks.differed_tie, g_index_checks.differed_strict,
+                    g_index_checks.index_differed);
+        }
     }
 #endif
     /* §scheduler'S SENTENCE, ASSERTED WHERE THE CHOICE IS MADE — "CPU-AGING so a monopolizer that burns CPU
