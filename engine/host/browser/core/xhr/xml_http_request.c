@@ -2836,7 +2836,20 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
            RE-LISTED every round BY DESIGN; a host that dedups its own in-flight set answers that correctly,
            and one that does not would re-issue the request instead. A lane reading this list alone would go
            looking for a STREAMING arm on the join, which is a second answer to a question the host already
-           owns. HOW ITS ABSENCE SHOWS:
+           owns.
+           AND THAT ROUND NO LONGER AWAITS THE BODY, WHICH RETIRES THE HALF OF THIS RECORD THAT IS ABOUT THE
+           TRUSTED ZONE'S DOOR AND NOT THE HALF ABOUT THIS ENGINE — the retired reasoning is kept above
+           verbatim because it is what a lane re-derives, and every clause of it was true when written.
+           `extension/bridge.js` ISSUES every park through an in-flight table (`engineIssue`) and DELIVERS it on
+           a later round, which is `wpt_runner.c`'s `g_inflight` shape and `engine/trusted.mjs`'s `answered` map
+           reached a third time: the three doors inside a service round — the pending seam, `xhr.send` and
+           `document.fetch` — return at once, so an instance stays rankable while a server holds a reply open.
+           WHAT IS STILL AWAITED IS ONE LEVEL UP AND IS NAMED AT ITS OWN SITE: `hostSchedule`'s `ops.admit()`
+           awaits a SEED's `navigationLoad`, so a seeded address that holds its body open freezes the LEVEL-1
+           LOOP rather than one instance, which is worse and is a subproblem of its own.
+           SO THE MEMBERS THIS RECORD ORDERS ARE NOW REACHABLE: a chunk placed in linear memory has a round that
+           can step the flow which reads it, and this list is a work queue rather than a producer with no turn.
+           HOW ITS ABSENCE SHOWS:
            a page counting its own `progress` events, or accumulating in `onprogress`, sees exactly one before
            end-of-body for a reply of any size, where a browser fires one per ~50ms of arrival. */
         d->state = XHR_LOADING;

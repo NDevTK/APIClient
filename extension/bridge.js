@@ -3091,6 +3091,15 @@ function engineReserve(cluster, docId, msg, cold, referenced) {
                 groupId: msg && msg.groupId, _resumed: null, referenced,
                 _coldLookup: null, _coldOther: null, _bundleId: null,
                 origin: (msg && msg.origin) || "", _cold: cold, _resolvers: [], _remoteAsked: new Set(),
+                /* THE DOOR'S OWN IN-FLIGHT SET — the requests this zone has ASKED FOR and not yet answered to
+                   the engine, keyed exactly as the seam that answers them is keyed. It is declared in the
+                   literal like every other field for the reason `_egress` states about itself, and it exists
+                   because the engine RE-LISTS a request that carries neither a value nor a refusal on every
+                   round by design (solver/engine.c's `skip` is `!u || PEND_HAVE_VALUE || declined`): a door
+                   that issues without waiting must therefore dedup, or one park becomes one request per
+                   round at somebody's server. `engine/host/wpt_runner.c` drives this same ABI with the same
+                   table and the same two keys — see `engineIssue`. */
+                _inflight: new Map(),
                 _epoch: self.frontierEpoch(), r: null, _readyP: null,
                 /* WHAT THIS ZONE'S EGRESS POLICY WAS ASKED FOR AND WHAT IT REFUSED, PER RULE — declared in the
                    literal like every other field on this record, so a reader of a run that refused nothing
@@ -4556,7 +4565,121 @@ function pendingRequest(line) {
      this splitter's own contract. */
   return { method: f[0], destination, initiator, provenance, pinned, credentials, url: f[6] };
 }
-async function engineServiceFetch(eng) {   // one round: answer every parked REQUEST, then the engine is hot again
+/* THE DOOR THAT DOES NOT AWAIT A BODY WITH NO END, WHICH IS THE WHOLE OF WHY THESE THREE FUNCTIONS EXIST.
+   A ROUND USED TO BE THE WAIT. `engineServiceFetch` walked the pending list SEQUENTIALLY and awaited
+   `eng.fetched` per line, each of which awaits `safeFetch`, which awaits `_readBody`, whose reader loop breaks
+   only on `step.done` — and `hostSchedule` restores an instance's rankable `hot` state only in that round's own
+   `.then`. So a response the server never ENDS took the document out of the rankable set FOR THE REST OF THE
+   SESSION: its flows were not outranked and not paged, they were unreachable, and where it was the only live
+   engine the loop waited on `Promise.race` over that same unresolved round. Reached with no EventSource
+   anywhere — nothing installs that interface — by an ordinary `fetch()` or `XMLHttpRequest.send()` to an
+   endpoint that holds its body open, which is one line of a page's own code.
+   IT IS NOT FIXED WITH A DEADLINE, AND THAT IS NOT A PREFERENCE. CLAUDE.md §NO BOUNDS: a bound decides work
+   will not happen, and a timeout here would trade the freeze for a TRUNCATION — a wrong answer about a server
+   rather than a smaller one, which every gate in `safe-fetch.js` and the engine's own learning then read as
+   what was served. `safe-fetch.js` states the same rule at `_readBody` and reaches `fetch` with a signal at
+   exactly one line that no caller in this zone states. A body with no end is a legitimate thing for a server
+   to serve; the defect is the DOOR, and the door is what changes.
+   THE SHAPE IS `engine/host/wpt_runner.c`'s AND IS NOT INVENTED HERE. That host drives this same ABI with a
+   `g_inflight` table: `wpt_issue_pending` ISSUES every park and returns how many it started WITHOUT waiting
+   ("It does not wait, and that is the whole of the change: the answer arrives at wpt_net_pump, on whichever
+   later slice boundary the bytes land"), and `wpt_request_asked` refuses to re-issue a `(method, url)` already
+   in flight. It keeps the record until the reply has been DELIVERED rather than until the bytes land, which is
+   load-bearing and is the one part easy to get wrong: a landed-but-undelivered request is still on the engine's
+   pending list, so a table that forgot it at the socket would re-issue it on the very next round.
+   AND THE ENGINE OWES NOTHING FOR THIS. A streaming arm on its join would be a second answer to a question
+   this host owns; the re-listing is the design, and a host that dedups answers it correctly.
+   AND THE SAME SHAPE IS ALREADY IN THIS LANGUAGE, IN THE OTHER HOST THAT LOADS `safe-fetch.js` VERBATIM.
+   `engine/trusted.mjs`'s `track`/`answered` pair is this table: a key means "AN ANSWER IS OWED AND HAS NOT BEEN
+   WRITTEN", and it is "released by the write that pays it, never by the work completing, because the child
+   re-announces the moment it is let go and an early release would have this zone fetch the same address twice
+   for one park" — the release rule above, reached independently. That file's own comment names this one as the
+   host that differed ("extension/bridge.js — the SHIPPED pump — holds no such memo and answers every line of
+   every bill"), which was true and is what this closes.
+   THE TWO KEYS ARE TWO KEYS FOR `wpt_runner.c`'s REASON, WORD FOR WORD: a network park is `(method, url)` and
+   a host request is its id. `trusted.mjs` makes the same split and tells its two kinds apart by a TAB, derived
+   from RFC 9110 §5.6.2 "Tokens" and URL Standard §4.4 "URL parsing"; these are PREFIXED instead, which is the
+   same distinction made by construction rather than by a property of the operands, for the reason this file
+   prefixes `cold:` and `seed:` onto a group id: two namespaces that can collide are one namespace, and an id
+   that spells itself like a method would otherwise be a dedup against the wrong request. */
+function engineIssue(eng, key, start, deliver) {
+  DCHECK(typeof key === "string" && key !== "",
+         "a request was issued with no in-flight key — the key is what refuses to re-issue a park the engine " +
+         "re-lists every round, so an unkeyed issue is one request per round at somebody's server");
+  DCHECK(typeof start === "function" && typeof deliver === "function",
+         "a request was issued with no starter or no deliverer — the pair is the whole contract: `start` is " +
+         "called exactly once and only when this key is not already in flight, and `deliver` is what a later " +
+         "round hands the answer to, so an issue missing either is a request nobody will ever answer");
+  if (eng._inflight.has(key)) return 0;
+  /* THE RECORD IS PUT IN THE MAP BEFORE THE CALL IS MADE, for the reason `_remoteAsked` is written above its
+     own await a few hundred lines down: the call below suspends, and an unanswered request is re-reported on
+     every round, so a round that started the ask and recorded it afterwards would let the NEXT round see the
+     same key unrecorded and issue it again. */
+  const rec = { landed: false, value: undefined, error: null, settled: null, deliver };
+  eng._inflight.set(key, rec);
+  /* `settled` NEVER REJECTS, AND THE ERROR IS CARRIED RATHER THAN THROWN HERE. This promise is what the round
+     below waits on when there is nothing else to do, so a rejecting one would be an unhandled rejection with
+     no round holding it. An invariant abort out of `eng.fetched` — every assert in the reply builders throws
+     through it — is recorded and RETHROWN at the delivery, inside the round, so it still travels to
+     `hostSchedule`'s own failure arm exactly as it did when the round awaited the call directly. */
+  rec.settled = start().then(
+    (v) => { rec.landed = true; rec.value = v; },
+    (e) => { rec.landed = true; rec.error = e; });
+  /* AND THE ROUND CAN WAIT ON IT, ASSERTED IN `hostSchedule`'s WAIT ARM'S OWN WORDS AND FOR ITS OWN REASON: an
+     outstanding request this round cannot wait on is one the loop spins on or abandons, and both are silent. It
+     can only fail if `start` threw SYNCHRONOUSLY, which none of the three callers can (each returns an `async`
+     function's promise) — so this asserts that contract where it is relied on rather than where it is kept. */
+  DCHECK(rec.settled && typeof rec.settled.then === "function",
+         "a request was issued whose starter did not answer a promise — the round waits on this when the " +
+         "frontier has nothing runnable, and a non-promise there resolves the wait immediately and turns the " +
+         "stall arm into the full-speed spin it exists to prevent");
+  return 1;
+}
+/* THE OTHER HALF, AND IT IS THE HALF THE ENGINE'S PARK IS ACTUALLY WAITING FOR. Answers how many registers it
+   filled, which is progress this host made and therefore not a stall — `wpt_net_pump`'s own return value and
+   for its reason. The record leaves the in-flight set HERE and not when the bytes landed, so a reply that has
+   arrived and not yet been handed over still refuses a re-issue of its own park. */
+async function engineDeliverLanded(eng) {
+  let n = 0;
+  for (const key of [...eng._inflight.keys()]) {
+    const rec = eng._inflight.get(key);
+    if (!rec.landed) continue;
+    eng._inflight.delete(key);
+    if (rec.error) throw rec.error;
+    await rec.deliver(rec.value);
+    n++;
+  }
+  return n;
+}
+/* ONE ROUND: issue what the engine is newly parked on, act on what it owes, deliver what has landed — and the
+   engine is rankable again the moment those three are done rather than when a stranger's server finishes
+   talking.
+   THE WAIT AT THE END IS NOT THE WAIT THAT WAS DELETED, AND THE DIFFERENCE IS THE ENGINE'S OWN STATEMENT.
+   `qjs_step` answered ENGINE_STEP_STALLED for this engine, which means its frontier holds nothing runnable at
+   all: there is no flow this round could be starving by suspending, and the alternative is a full-speed spin
+   through `macroYield` (a MessageChannel, so with no clamp under it) on a condition only a reply can change —
+   which is the shape this loop's own wait arm was added to end for a booting reservation. A STALL IS THE ONLY
+   STATE IN WHICH IT FIRES: an engine with runnable work returns from here immediately, which is the entire
+   defect this door exists to close, and it fires only when this round ALSO made no progress of its own.
+   IT IS AN INFINITE WAIT AND NEVER A DEADLINE, for `wpt_net_pump(ctx, 1)`'s reason at the same point in that
+   host's loop: §NO BOUNDS. A document whose every flow is parked on a body with no end waits, correctly, and
+   costs no other document anything — it is not in the hot set while it waits, so every other engine ranks and
+   steps past it. */
+async function engineServiceFetch(eng, stalled) {   // one round: issue, act, deliver — never await a body
+  DCHECK(typeof stalled === "boolean",
+         "a service round was driven without the engine's own stall statement — `qjs_step` answers " +
+         "ENGINE_STEP_STALLED for a frontier holding nothing runnable, and that is the ONLY state in which " +
+         "this round may wait on bytes; inferring it here would be a second answer to a question the engine " +
+         "already answered, and defaulting it either spins or freezes");
+  let did = await engineIssuePending(eng);
+  did += await engineServiceHostRequests(eng);
+  did += await engineDeliverLanded(eng);
+  if (stalled && did === 0 && eng._inflight.size > 0) {
+    await Promise.race([...eng._inflight.values()].map((r) => r.settled));
+    await engineDeliverLanded(eng);
+  }
+}
+async function engineIssuePending(eng) {   // ISSUE every parked REQUEST; the answer is delivered by a later round
   /* THE REPLY'S METADATA CROSSES AS TEXT AND CARRYING ITS TYPE — JSON, exactly as qjs_host_answer's answer
      does. A bare string could not say `null` for a network error without it being the four characters "null",
      and could not carry the URL list, the status or the headers at all. Its BODY crosses as BYTES beside it,
@@ -4583,78 +4706,107 @@ async function engineServiceFetch(eng) {   // one round: answer every parked REQ
      its method and credential state") was the only zone in the path that could not see it. The engine composed
      it, the splitter above CHECKed it, and then it stopped here: every park was fired, at every grade, and the
      check that validated the word was validating a field with no reader. */
+  /* HOW MANY REQUESTS THIS ROUND STARTED, which is `wpt_issue_pending`'s own return value and for its reason:
+     it is progress this host made, so the round above knows it has something outstanding to wait on rather
+     than a reason to spin. */
+  let issued = 0;
   for (const line of requests) {
     const { method, destination, provenance, pinned, credentials, url } = pendingRequest(line);
     /* THE ASK, RAISED BEFORE THE GATE AND NEVER AFTER IT. CLAUDE.md §AN-INVARIANT-OVER-A-GATED-OPERATION is
        exact about this: a census read off the OUTCOME of a gated operation cannot tell a request nobody made
        from one the gate correctly refused, and the whole point of the pair below is that those two are the
-       readings a person has to choose between. Raised here, `declined: {}` beside `asked: 47` is the positive
+       readings a person has to choose between. Raised AT THE CALL — which is now the starter a few lines down
+       rather than this line, and the paragraph beside it says why — `declined: {}` beside `asked: 47` is the positive
        statement THE POLICY REFUSED NOTHING — so a run with no API surface is a finding about the DRIVING —
        while `asked: 0` is the statement that this loop never ran, which is silent about the policy rather
        than clean about it. Those three states rendered as one number is what this row exists to end. */
-    eng._egress.asked++;
-    const answer = await eng.fetched(method, url, destination, provenance, pinned, credentials);
-    /* A DECLINE IS ITS OWN DELIVERY, AND DELIVERING NOTHING WAS ONLY HALF OF IT. The park was right — the
-       engine's register keys on (method, url), `provide` clears the entry, and leaving it there is the flow
-       STAYING PARKED, which is what §@S requires of a search not yet solved and what lets the request fire the
-       day the origin is widened. What silence could not do is tell the ENGINE anything, and two things follow
-       from that and both are defects. The engine re-lists an unanswered request on EVERY round, so a refusal
-       relayed as silence is re-offered and re-refused for the rest of the session — a spin rather than a park,
-       which is exactly what `bridge.js`'s XHR seam already records about declining by not answering. And the
-       page's `catch` arm is never explored: a declined request is an outcome NOTHING OBSERVED, so whether the
-       server would have answered 200, 500 or nothing at all is unconstrained, and §Solver-half says both
-       feasible arms run. A park suspends in front of both.
-       SO IT IS SAID OUT LOUD, ON ITS OWN METHOD. `Decline` carries the same PAIR `Provide` does — a refusal
-       answers the same question a reply answers — and the chokepoint's own words with it: the engine records
-       the refusal, stops listing the request, keeps one arm WAITING with no reply invented for it, and forks
-       the other to run the page's failure path with its path marked FORCED. `blocked-signal:cookies=yes` and
-       `blocked-destructive:logout` are different sentences to the person reading a frontier that will not
-       drain — the first names the ROW OF THEIR OWN CONTROL that holds it and would make this fire if they
-       ticked it, the second names a refusal nothing reopens — and both are addresses DERIVED IN FULL AND REPORTED, which §Attacker-sources says is
-       not a gap in the report but IS the report. */
-    if (answer !== null && answer.refusal) {
-      DCHECK(typeof answer.refusal.reason === "string" && answer.refusal.reason !== "",
-             "a declined request carries no reason — the reason is the only account a person gets of a park " +
-             "this zone will not pay, and an unnamed one leaves a frontier stalled with nothing to read");
-      DCHECK(answer.refusal.kind === "decline",
-             "a refusal graded `" + answer.refusal.kind + "` reached the decline seam — `network` is a " +
-             "refusal a real browser performing this same request also makes, so it is Fetch §5.6 \"Fetch " +
-             "methods\"' network error and belongs on `Provide` as the JSON `null`; relaying it here would " +
-             "leave the flow parked on a failure that IS a fact about the origin");
-      /* AND IT IS STILL SAID TO THE PERSON, NOT ONLY TO THE ENGINE. The refusal rides the engine's record now,
-         which is what makes the park and the fork possible — and nothing in this extension renders that record,
-         so relaying it only through the wire would store the one account anybody gets of a request this tool
-         chose not to make and show it to nobody. Two channels, two readers: the engine acts on the refusal,
-         this line is where a person reading a frontier that will not drain is told WHICH RULE holds it. */
-      console.warn("[bridge] " + method + " " + url + " — " + answer.refusal.reason +
-                   ". This zone DECLINED to make the request: the flow stays PARKED rather than being told " +
-                   "the server was unreachable, and one arm is forked to explore the page's failure path");
-      /* AND IT IS COUNTED, KEYED ON THE WHOLE TOKEN, WHICH IS WHY NOTHING HERE PARSES ONE. `safe-fetch.js`
-         composed `blocked-signal:<name>=<value>` out of the signal it walked and the value it read, so the
-         token IS the structured fact and a histogram over it is per-signal BY CONSTRUCTION — a signal added
-         to `_SIGNALS` appears here with nothing on this path edited, which is the property `cold` already has
-         and the reason `_firingRefusal` is exported rather than restated. Splitting the token to "read the
-         signal out of it" is the one thing forbidden: the chokepoint's own record says a consumer that
-         MATCHED `statusText` would be writing a second copy of that policy in a format nothing checks, and
-         `engine_decline` declines to match on it for exactly that reason.
-         THE CARDINALITY IS BOUNDED AND THAT IS A PROPERTY OF THE DECLINE FAMILY RATHER THAN OF THIS LINE. The
-         five arms that grade `decline` compose their tokens out of closed sets — the eleven `_SIGNALS` names
-         against their stated values, `_DESTRUCTIVE`'s word list, Fetch §2.2.5's destination words — so no
-         address and no origin can reach this map. The `network` family is not counted here and is not a hole
-         this row fills: those are refusals A REAL BROWSER ALSO MAKES, so `blocked-corb:` and
-         `blocked-cors-credentialed:` are facts about the origin rather than about this tool's policy, and two
-         of them carry an origin in the token.
-         IT IS A PLAIN INSERT AND NOT A DEFAULTED READ. `d[tok] || 0` would be the shape §A-FIELD-A-CONSUMER-
-         DEFAULTS bans one name over; a first occurrence is stated rather than filled in. */
-      const _tok = answer.refusal.reason;
-      if (!(_tok in eng._egress.declined)) eng._egress.declined[_tok] = 0;
-      eng._egress.declined[_tok]++;
-      await engineDecline(eng, method, url, answer.refusal.reason);
-      continue;
-    }
-    await engineProvide(eng, method, url, answer);
+    /* THE PAIR THE ENGINE PARKED ON IS THE DEDUP KEY, BECAUSE IT IS THE KEY THE ANSWER IS DELIVERED UNDER —
+       `engine_provide` and `engine_decline` are both keyed on it, and `engine_pending_fetches` dedups over it
+       for the same reason ("several flows park on the same request and engine_provide fills every entry naming
+       it"). The RAW address off the line and never the absolute one `fetched` resolves: the absolute URL is
+       what goes on the wire and the parked pair is what comes back. */
+    const key = "fetch\n" + method + "\n" + url;
+    /* AN ENTRY STAYS LISTED UNTIL IT IS ANSWERED, and this round visits the list at every slice rather than
+       once per answer — so without this the page's one `fetch` would become one REQUEST PER ROUND at the
+       server, which is `wpt_issue_pending`'s own sentence about the same list. */
+    if (eng._inflight.has(key)) continue;
+    /* THE ASK IS STILL RAISED AT THE CALL AND STILL EXACTLY ONCE PER REQUEST — inside the starter, which
+       `engineIssue` invokes only for a key that is not already in flight, so a re-listed request does not
+       count a second ask and the containment against the declined histogram is untouched. Raising it in this
+       loop instead would count one park once per round for as long as its bytes took to arrive, and a
+       `declined: {}` beside an inflated `asked` is no longer the positive statement the pair exists to make. */
+    issued += engineIssue(eng, key,
+      () => { eng._egress.asked++;
+              return eng.fetched(method, url, destination, provenance, pinned, credentials); },
+      (answer) => engineDeliverReply(eng, method, url, answer));
   }
-  await engineServiceHostRequests(eng);
+  return issued;
+}
+/* WHAT A LANDED ANSWER MEANS ON THE PENDING SEAM, which is the body of the old loop unchanged: this is the
+   `deliver` half of one issue and the arguments it closes over are the request's own, so the reply cannot be
+   handed over against a pair it was not fetched under. */
+async function engineDeliverReply(eng, method, url, answer) {
+  /* A DECLINE IS ITS OWN DELIVERY, AND DELIVERING NOTHING WAS ONLY HALF OF IT. The park was right — the
+     engine's register keys on (method, url), `provide` clears the entry, and leaving it there is the flow
+     STAYING PARKED, which is what §@S requires of a search not yet solved and what lets the request fire the
+     day the origin is widened. What silence could not do is tell the ENGINE anything, and two things follow
+     from that and both are defects. The engine re-lists an unanswered request on EVERY round, so a refusal
+     relayed as silence is re-offered and re-refused for the rest of the session — a spin rather than a park,
+     which is exactly what `bridge.js`'s XHR seam already records about declining by not answering. And the
+     page's `catch` arm is never explored: a declined request is an outcome NOTHING OBSERVED, so whether the
+     server would have answered 200, 500 or nothing at all is unconstrained, and §Solver-half says both
+     feasible arms run. A park suspends in front of both.
+     SO IT IS SAID OUT LOUD, ON ITS OWN METHOD. `Decline` carries the same PAIR `Provide` does — a refusal
+     answers the same question a reply answers — and the chokepoint's own words with it: the engine records
+     the refusal, stops listing the request, keeps one arm WAITING with no reply invented for it, and forks
+     the other to run the page's failure path with its path marked FORCED. `blocked-signal:cookies=yes` and
+     `blocked-destructive:logout` are different sentences to the person reading a frontier that will not
+     drain — the first names the ROW OF THEIR OWN CONTROL that holds it and would make this fire if they
+     ticked it, the second names a refusal nothing reopens — and both are addresses DERIVED IN FULL AND REPORTED, which §Attacker-sources says is
+     not a gap in the report but IS the report. */
+  if (answer !== null && answer.refusal) {
+    DCHECK(typeof answer.refusal.reason === "string" && answer.refusal.reason !== "",
+           "a declined request carries no reason — the reason is the only account a person gets of a park " +
+           "this zone will not pay, and an unnamed one leaves a frontier stalled with nothing to read");
+    DCHECK(answer.refusal.kind === "decline",
+           "a refusal graded `" + answer.refusal.kind + "` reached the decline seam — `network` is a " +
+           "refusal a real browser performing this same request also makes, so it is Fetch §5.6 \"Fetch " +
+           "methods\"' network error and belongs on `Provide` as the JSON `null`; relaying it here would " +
+           "leave the flow parked on a failure that IS a fact about the origin");
+    /* AND IT IS STILL SAID TO THE PERSON, NOT ONLY TO THE ENGINE. The refusal rides the engine's record now,
+       which is what makes the park and the fork possible — and nothing in this extension renders that record,
+       so relaying it only through the wire would store the one account anybody gets of a request this tool
+       chose not to make and show it to nobody. Two channels, two readers: the engine acts on the refusal,
+       this line is where a person reading a frontier that will not drain is told WHICH RULE holds it. */
+    console.warn("[bridge] " + method + " " + url + " — " + answer.refusal.reason +
+                 ". This zone DECLINED to make the request: the flow stays PARKED rather than being told " +
+                 "the server was unreachable, and one arm is forked to explore the page's failure path");
+    /* AND IT IS COUNTED, KEYED ON THE WHOLE TOKEN, WHICH IS WHY NOTHING HERE PARSES ONE. `safe-fetch.js`
+       composed `blocked-signal:<name>=<value>` out of the signal it walked and the value it read, so the
+       token IS the structured fact and a histogram over it is per-signal BY CONSTRUCTION — a signal added
+       to `_SIGNALS` appears here with nothing on this path edited, which is the property `cold` already has
+       and the reason `_firingRefusal` is exported rather than restated. Splitting the token to "read the
+       signal out of it" is the one thing forbidden: the chokepoint's own record says a consumer that
+       MATCHED `statusText` would be writing a second copy of that policy in a format nothing checks, and
+       `engine_decline` declines to match on it for exactly that reason.
+       THE CARDINALITY IS BOUNDED AND THAT IS A PROPERTY OF THE DECLINE FAMILY RATHER THAN OF THIS LINE. The
+       five arms that grade `decline` compose their tokens out of closed sets — the eleven `_SIGNALS` names
+       against their stated values, `_DESTRUCTIVE`'s word list, Fetch §2.2.5's destination words — so no
+       address and no origin can reach this map. The `network` family is not counted here and is not a hole
+       this row fills: those are refusals A REAL BROWSER ALSO MAKES, so `blocked-corb:` and
+       `blocked-cors-credentialed:` are facts about the origin rather than about this tool's policy, and two
+       of them carry an origin in the token.
+       IT IS A PLAIN INSERT AND NOT A DEFAULTED READ. `d[tok] || 0` would be the shape §A-FIELD-A-CONSUMER-
+       DEFAULTS bans one name over; a first occurrence is stated rather than filled in. */
+    const _tok = answer.refusal.reason;
+    if (!(_tok in eng._egress.declined)) eng._egress.declined[_tok] = 0;
+    eng._egress.declined[_tok]++;
+    await engineDecline(eng, method, url, answer.refusal.reason);
+    /* `return` AND NOT `continue`: this is one answer being delivered rather than one iteration of a walk over
+       the owed list, and the decline IS the whole delivery for this request. */
+    return;
+  }
+  await engineProvide(eng, method, url, answer);
 }
 /* EVERY OWED LIST CROSSES THE SAME WAY — newline-joined records, or "" for none — so it is SPLIT in one place
    that says so. IT NO LONGER MAKES THE CALL, and that is the typing: it used to take an ABI entry NAME and
@@ -5444,13 +5596,20 @@ async function hostNotice(eng, line) {
 // the routing and stamps the sender's origin. The asking flow is SUSPENDED mid-frame until the answer lands, so
 // this is pumped every round alongside the fetch replies; leaving one unanswered parks that flow indefinitely
 // (its siblings keep running, which is the point of suspending rather than blocking).
+/* AND IT ANSWERS HOW MANY REGISTERS IT FILLED, for `engineDeliverLanded`'s reason: the round above waits on
+   bytes only where it made no progress of its own, and a notice acted on or an operation carried to a peer is
+   progress this host made. A branch that answers nothing — an op this zone may not guess at — deliberately
+   counts none, which is what leaves the asking flow parked and visible. */
 async function engineServiceHostRequests(eng) {
+  let did = 0;
   // ONE-WAY NOTICES, and this zone OWES each of them an action — a notice it reads and discards is a document
   // nothing runs and a message nothing delivers, with every later read through them parked forever. They were
   // being read and discarded. Handled IN ORDER and one at a time: a page opens a window and posts to it in the
   // same turn, so the create must have finished provisioning before the post that names it is routed.
-  for (const line of owedList("GetHostNotices", (await eng.r.renderer.getHostNotices()).notices))
+  for (const line of owedList("GetHostNotices", (await eng.r.renderer.getHostNotices()).notices)) {
     await hostNotice(eng, line);
+    did++;
+  }
   // ONE BRANCH, AND ONLY BECAUSE THIS ZONE CAN GENUINELY ANSWER IT. The rule that deleted every other branch
   // stands: a loop that walks the owed requests is a place to be tempted into GUESSING an answer, which is what
   // answering `navigable.create` with "not created" was. `document.fetch` is not a guess — it is a network
@@ -5516,6 +5675,7 @@ async function engineServiceHostRequests(eng) {
          and recorded it afterwards would let the next round see the same id unrecorded and perform the peer's
          operation — a program, with the page's own side effects — a second time. */
       await holder.r.renderer.perform({ token, record: op });
+      did++;
       continue;
     }
     // XHR §3.5.6's fetch is the SECOND thing this zone can genuinely answer, and for the identical reason: it
@@ -5524,12 +5684,22 @@ async function engineServiceHostRequests(eng) {
     // credentials and cannot decide about a method it was never told. A flow parked on one is SUSPENDED at the
     // exact line the page wrote `send()` on, which is what a synchronous XMLHttpRequest is.
     if (op.startsWith("xhr.send\t")) {
-      const r = await eng.fetchedXhr(op.slice("xhr.send\t".length));
-      // 0 IS THE NORMAL COMPLETION. An answer is a completion record and not a value (ECMA-262 6.2.4): this
-      // zone fetched bytes rather than running another instance's program, so it has nothing to have thrown
-      // in. A relayed cross-agent operation answers with 1 and the thrown value, which is what lets the
-      // asking page's `try`/`catch` around it run.
-      await engineAnswer(eng, id, r.meta, r.bytes);
+      /* ISSUED AND NOT AWAITED, FOR THE PENDING SEAM'S REASON AND THROUGH THE SAME PRIMITIVE. `fetchedXhr`
+         reaches the same `safeFetch` and therefore the same `_readBody`, so a response the server never ends
+         held this round exactly as one on the other seam did — and `XMLHttpRequest.send()` is half of the
+         two-line reproduction of that freeze. The KEY IS THE REQUEST ID and not a `(method, url)` pair, which
+         is `wpt_runner.c`'s own split (`wpt_request_asked_id` beside `wpt_request_asked`): this answer is
+         delivered against `engine_host_answer`'s request id, and `engine_host_requests` deliberately does not
+         dedupe, so two identical questions from two flows are two questions with two ids.
+         THE FLOW STAYS SUSPENDED AT THE LINE THE PAGE WROTE `send()` ON EITHER WAY, which is what a
+         synchronous XMLHttpRequest is — what changes is that its SIBLINGS now get the thread while it waits. */
+      did += engineIssue(eng, "xhr\n" + id,
+        () => eng.fetchedXhr(op.slice("xhr.send\t".length)),
+        // 0 IS THE NORMAL COMPLETION. An answer is a completion record and not a value (ECMA-262 6.2.4): this
+        // zone fetched bytes rather than running another instance's program, so it has nothing to have thrown
+        // in. A relayed cross-agent operation answers with 1 and the thrown value, which is what lets the
+        // asking page's `try`/`catch` around it run.
+        (r) => engineAnswer(eng, id, r.meta, r.bytes));
       continue;
     }
     if (!op.startsWith("document.fetch\t")) continue;
@@ -5549,24 +5719,37 @@ async function engineServiceHostRequests(eng) {
            "solver/engine.h's three tokens, the address as an absolute serialization), so a record with one " +
            "tab is this zone and that job no longer sharing a grammar, and the address read out of it would " +
            "be a provenance token");
-    const r = await eng.fetchedDocument(fetchArgs.slice(fetchTab + 1), fetchArgs.slice(0, fetchTab));
-    // JSON, because the answer carries its TYPE across this seam: a null body is a load that did not load, and
-    // the string "null" is a one-word document. The BODY is not in that JSON — a Document is parsed from a
-    // BYTE SEQUENCE, and this seam carries one (HostAnswer's `array<uint8>?` body).
-    /* HTML §7.4.5 "Populating a session history entry"'s answer: the RESPONSE'S URL, its HEADER LIST as the HTTP field lines it delivered, and the
-       document as BYTES. It carried one extracted policy (`{csp}`) — see fetchedDocument. The field-line form
-       is the one a header list crosses this ABI in and is exactly what qjs_init takes, so a navigated Document
-       and a rooted one are built from the identical shape by the identical parse.
-       THE URL IS FETCH §2.2.6's RESPONSE URL AND NOT THE ADDRESS THE ENGINE ASKED FOR. Everything HTML §7.4.5
-       decides about the incoming Document — its origin, and therefore which agent cluster it belongs to at
-       all — is written over the response's URL, and a redirect is what makes the two different. Only this zone
-       saw the chain, so only this zone can state it. */
-    DCHECK(typeof r.url === "string" && r.url !== "",
-           "the document load answered no RESPONSE URL — fetchedDocument states one on every arm, including " +
-           "the ones where the load did not load, because §7.4.5 determines a Document's origin over it and a " +
-           "navigable whose load failed still gets a Document");
-    await engineAnswer(eng, id, { url: r.url, headers: responseFieldLines(r.headers) }, r.bytes);
+    /* ISSUED AND NOT AWAITED, FOR THE XHR SEAM'S REASON EXACTLY: a document load reaches the same `safeFetch`
+       and the same `_readBody`, so a server that holds a document's body open held this round — and a page
+       states one with `location.href` or an `iframe src`. Keyed on the REQUEST ID for the same reason that seam
+       is. The navigable that asked stays parked on its load, which is what a navigation in flight is; every
+       other flow in the document keeps running. */
+    did += engineIssue(eng, "doc\n" + id,
+      () => eng.fetchedDocument(fetchArgs.slice(fetchTab + 1), fetchArgs.slice(0, fetchTab)),
+      (r) => engineDeliverDocument(eng, id, r));
+    continue;
   }
+  return did;
+}
+/* THE DOCUMENT LOAD'S DELIVERY, which is the body of the branch above unchanged — a named function for the
+   reason `engineDeliverReply` is one: the answer is handed over against the id it was fetched under. */
+async function engineDeliverDocument(eng, id, r) {
+  // JSON, because the answer carries its TYPE across this seam: a null body is a load that did not load, and
+  // the string "null" is a one-word document. The BODY is not in that JSON — a Document is parsed from a
+  // BYTE SEQUENCE, and this seam carries one (HostAnswer's `array<uint8>?` body).
+  /* HTML §7.4.5 "Populating a session history entry"'s answer: the RESPONSE'S URL, its HEADER LIST as the HTTP field lines it delivered, and the
+     document as BYTES. It carried one extracted policy (`{csp}`) — see fetchedDocument. The field-line form
+     is the one a header list crosses this ABI in and is exactly what qjs_init takes, so a navigated Document
+     and a rooted one are built from the identical shape by the identical parse.
+     THE URL IS FETCH §2.2.6's RESPONSE URL AND NOT THE ADDRESS THE ENGINE ASKED FOR. Everything HTML §7.4.5
+     decides about the incoming Document — its origin, and therefore which agent cluster it belongs to at
+     all — is written over the response's URL, and a redirect is what makes the two different. Only this zone
+     saw the chain, so only this zone can state it. */
+  DCHECK(typeof r.url === "string" && r.url !== "",
+         "the document load answered no RESPONSE URL — fetchedDocument states one on every arm, including " +
+         "the ones where the load did not load, because §7.4.5 determines a Document's origin over it and a " +
+         "navigable whose load failed still gets a Document");
+  await engineAnswer(eng, id, { url: r.url, headers: responseFieldLines(r.headers) }, r.bytes);
 }
 /* THE SAME TWO CHANNELS FOR A SYNCHRONOUS ANSWER. Two of the requests this zone can genuinely answer carry a
    fetched BODY — XHR §3.5.6's fetch and HTML §7.4.5 "Populating a session history entry"'s document load —
@@ -5612,6 +5795,13 @@ async function engineFinalize(eng) {
      seam rather than posting into a closed port. Dropping them here is not dropping the ANSWER — the engine's own engine_host_answer already treats
      a request whose flow is gone as an answer nobody is waiting on. */
   for (const [token, to] of _remoteOps) if (to.asker === eng) _remoteOps.delete(token);
+  /* AND THE OUTSTANDING REQUESTS GO THE SAME WAY, FOR THE RENDEZVOUS MAP'S REASON: a reply delivered into a
+     torn-down instance is a call into a renderer this function has already removed. Dropping them is not
+     dropping an ANSWER — the flows that were parked on them went with the instance, and their addresses are in
+     the residue this finalize has just written, so a resumed recipe re-issues the request against CURRENT
+     sources, which is what §Time-travel-resume requires of one anyway. The promises still settle into records
+     nothing reads; they hold no frame and no port. */
+  eng._inflight.clear();
   /* A CRASHED INSTANCE IS NOT TORN DOWN, and this used to try. `qjs_teardown` is the engine walking its own
      gc_obj_list to report leaks — a FINDING about a runtime that ran — and an instance whose linear memory is
      the thing that aborted has no such finding to give. Across this boundary it is worse than pointless: the
@@ -6126,7 +6316,13 @@ async function hostSchedule(pool, ops) {
          and a boot is not a fetch — naming the reservation's provisioning promise after the reply round would
          be one name answering two different facts, which is how the wait arm above would come to be read as
          "wait for a body" by the next person to add a state to it. */
-      target._readyP = ops.serviceFetch(target).then(
+      /* AND THE ENGINE'S OWN STALL STATEMENT TRAVELS WITH THE ROUND, because the round is the only thing that
+         may wait on bytes and it may do so ONLY when this engine has nothing runnable. ENGINE_STEP_STALLED is
+         that statement — the step above answered it — and it is RELAYED rather than re-derived inside the
+         round, which could only ask the engine a second time and get a second answer. The round with a
+         runnable frontier returns at once, which is the whole of what stops one never-ending reply body from
+         taking a document out of this hot set for the rest of the session. */
+      target._readyP = ops.serviceFetch(target, st === 3).then(
         () => { target.state = "hot"; },
         (e) => {
           /* A THROW OUT OF A SERVICE ROUND IS AN INVARIANT FAILURE — every assert in the reply builders, the
@@ -6405,8 +6601,8 @@ const _hostOps = {
      destroy a renderer with a call outstanding, because the caller parked on that answer would never hear
      anything again. A Clear therefore does not interrupt a round — it marks the engine and the round removes
      the frame when it lands, on both arms, because a round that THREW has left the same iframe behind. */
-  serviceFetch: async (eng) => {
-    try { await engineServiceFetch(eng); await engineRecordFacts(eng); }
+  serviceFetch: async (eng, stalled) => {
+    try { await engineServiceFetch(eng, stalled); await engineRecordFacts(eng); }
     finally { if (eng._dropped) eng.r.destroy(); }
   },
   /* THE ROUND'S HALF OF THE CLEAR, and the only thing it does is give back the frame the Clear could not take.
@@ -6652,6 +6848,24 @@ const _hostOps = {
            read of the pool here would break: the engine that declared this route may be gone by now. */
         /* AND SO IS THE PROVENANCE, for the identical sentence: the engine that declared this route stated
            what its path made the address, and the load is decided from that word and not from the address. */
+        /* NAMED RESIDUAL — AND IT IS THE ONE DOOR OF THIS ZONE THAT STILL AWAITS A BODY WITH NO END, HELD HERE
+           RATHER THAN IN A ROUND, WHICH IS WORSE AND IS WHY IT IS SAID OUT LOUD RATHER THAN QUIETLY LEFT.
+           WHAT IS NOT COVERED: `engineIssue`'s table answers the three doors inside a service round — the
+           pending-fetch seam, `xhr.send` and `document.fetch` — so an engine no longer leaves the rankable set
+           because a server holds a reply open. THIS call is awaited by `hostSchedule`'s OWN `ops.admit()`, one
+           level above any round, so a declared route or an ambient seed whose document body never ends does not
+           freeze one instance, it freezes the LEVEL-1 LOOP: no engine is ranked, stepped or serviced again for
+           the rest of the session, including every instance that is perfectly healthy.
+           WHAT THE NEXT DIFF BUILDS: admission that takes the pool SEAT and issues the seed's load through the
+           same in-flight table, with the bytes arriving on a later round — which is a real design and not a
+           relocation, because `engineCreate` takes its document as a PARAMETER (`html`) and a seat whose bytes
+           have not landed is a fourth state this pool does not have; the seat, `_waiting`, the RAM-floor
+           accounting and `hostClusterOf`'s "a cluster being provisioned answers exactly as a provisioned one
+           does" all read that state. It is a subproblem in its own right and is NOT started here.
+           HOW ITS ABSENCE WOULD SHOW: a person navigating to an endpoint that holds its body open sees the
+           extension stop analysing EVERY tab, not only that one — the Level-1 census stops being written at
+           all (`_level1Record` runs in the round's `finally`, and no round begins), where the round-side freeze
+           this diff closes left every other document's census advancing normally. */
         const loaded = await navigationLoad(seed.url, seed.principalUrl, seed.principalUrl,
                                             seed.principalOrigin, seed.provenance, seed.reach);
         /* AND THE SAME THREE REFUSALS A SEEDED DOCUMENT ALWAYS OWES ITS READER, in the same order and for the

@@ -1,0 +1,92 @@
+<!doctype html><meta charset="utf-8"><title>a reply body with no end: the child-navigable door</title>
+<!-- CONFORMANCE FIXTURE (kept, not a regression test): every assertion below is a SPEC-DEFINED OBSERVABLE of
+     an unmodified page. Nothing here names a symbol, a file or a commit, and there is no stored expected
+     output anywhere — the document carries its own oracle, the way a test262 file does.
+
+     WHY THIS IS A THIRD DOCUMENT AND NOT A THIRD ARM OF THE holdopen_stream/holdopen_finite PAIR. Those two
+     differ in ONE variable and share their machinery; this one shares neither. A `fetch()` parks on the
+     `(method, url)` pair every other request in this engine parks on; a CHILD NAVIGABLE's load is
+     HTML §7.4.5 "Populating a session history entry"'s create-navigation-params-by-fetching, answered against a
+     request id, so an engine can answer one door and hold on the other. A pair whose arms differed in the door
+     would be two documents wearing one name.
+
+     WHAT IS UNDER TEST, AND IT IS SPEC-DEFINED RATHER THAN A PROPERTY OF THIS ENGINE. HTML §7.3.1.3 "Creating
+     child navigables" creates the navigable and navigates it afterwards, and nothing in §7.4 "Navigation"
+     suspends the PARENT while a child's body arrives — a page whose `<iframe>` is streaming goes on running,
+     which is what every progressive page on the web depends on. So the reading is taken in the PARENT, after
+     the child has been given an address whose body does not end.
+
+     THE CHILD IS `/infinite-slow-response` — WPT's own handler by its own name
+     (`fetch/api/resources/infinite-slow-response.py` in this checkout), which sends a complete head and then
+     keeps writing. Fetch §5.6 "Fetch methods" is the reason a complete head is enough to be an ordinary
+     response: the head is available the instant the request resolves, and reading the body is §5.3 "Body
+     mixin"'s separate step.
+
+     THE ORACLE IS THE FIXTURE SERVER'S ACCESS LOG, which is evidence from OUTSIDE the engine, and every witness
+     path is a CONSTANT for the reason the pair states: this engine's purpose is to make values unknown, so a
+     path composed from one is never a concrete string and a witness built that way goes silent in exact
+     proportion to how well the engine is working.
+
+     THE WITNESSES AFTER THE FRAME ARE `fetch()` AND NOT `new Image()`, WHICH IS MEASURED RATHER THAN CHOSEN. An
+     image load is dispatched by the browser AFTER the current task, so an `img` witness cannot be read out of a
+     task that does not return — measured in real headless Chrome against this server on a sibling document that
+     blocked its own task with a synchronous `XMLHttpRequest`: the markup `-parsed` image arrived and every
+     script-issued `img` witness after the block did not, while a `fetch()` issued on the same line DID. Nothing
+     in this document blocks its task, so both channels work here; the `fetch` channel is used anyway so that a
+     reader who adds a blocking case to this file does not silently lose the rows.
+
+     EXPECTED (spec-correct) access log: `/infinite-slow-response` requested and never completing, plus
+     holdopen-frame- parsed, script-ran, frame-attached, probe-called, probe-resolved, and the fetched path
+     /holdopen-frame-probe.txt. `-probe-rejected` ABSENT: a 404 is a REPLY and resolves `fetch()` (Fetch §5.6
+     rejects only on a network error). `-frame-load` is a SEPARATE reading and not the subject — the child's body
+     has no end, so HTML §7.4.5's load event for it never fires in a browser either, and its PRESENCE would be
+     the finding that this engine decided a body had ended.
+
+     MEASURED IN REAL HEADLESS CHROME 148, NO EXTENSION, AGAINST THIS CORPUS'S OWN fixtures_server.cjs: the list
+     above EXACTLY, for all three holdopen documents in one run of that server, with the `dest=` field this
+     server logs attributing the hold request per arm (`dest=empty` for the `fetch()`, `dest=iframe` for the
+     child navigable). That is the SERVER half and the BROWSER half of this mechanism confirmed end to end; it is
+     NOT a reading about this engine, which is a separate run.
+
+     THE ARMED CONTROL IS holdopen_finite.html, NOT A SECOND ARM HERE. What has to be shown before
+     `-probe-resolved`'s absence means anything is that a reply gets delivered and a parked flow gets resumed AT
+     ALL in this run, and that arm shows it with nothing streaming anywhere. A run in which the finite arm's
+     `-probe-resolved` is also absent has established nothing about this document, which CLAUDE.md
+     §A-CONTROL-ARMS-ONLY-ON-A-SITE is exactly about.
+     THE INVERSION TO WATCH FOR is `-probe-resolved` ABSENT with the finite arm's PRESENT: a document whose whole
+     frontier stopped being stepped because one child navigable's server was still talking.
+
+     WHICH HALF OF THE CITATIONS ABOVE IS MACHINE-CHECKED. `node engine/citegen.mjs` collects by extension and
+     its set admits neither `.html` nor the `.cjs` the server half is written in, so no whole-tree run reads
+     either file: the NUMBERS and TITLES here were verified by fetching the document this tree's committed
+     corpus names as its base, and a reader who edits one owes that fetch again. No instrument here will say so.
+-->
+
+<!-- WITNESS: the document PARSED. Markup rather than script, so this one is true even if no script runs. -->
+<img src="/holdopen-frame-parsed.png" alt="">
+
+<script>
+(function () {
+  "use strict";
+  fetch("/holdopen-frame-script-ran.png");
+
+  /* THE SUBJECT: a child navigable whose document body does not end. `src` is set from a LITERAL, and the
+     element is attached by script rather than written in markup so that `-frame-attached` below is a statement
+     about a line that RAN and not about a line that parsed. */
+  var f = document.createElement("iframe");
+  f.src = "/infinite-slow-response";
+  f.onload = function () { fetch("/holdopen-frame-frame-load.png"); };
+  document.body.appendChild(f);
+  fetch("/holdopen-frame-frame-attached.png");
+
+  /* THE READING: an ORDINARY request, issued after the child has its address. Its reply is finite and arrives
+     at once, so `-probe-resolved` says a reply was DELIVERED to this frontier and the flow parked on it was
+     RESUMED while the child's body was still arriving. */
+  fetch("/holdopen-frame-probe-called.png");
+  fetch("/holdopen-frame-probe.txt").then(function () {
+    fetch("/holdopen-frame-probe-resolved.png");
+  }, function () {
+    fetch("/holdopen-frame-probe-rejected.png");
+  });
+})();
+</script>

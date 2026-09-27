@@ -259,7 +259,19 @@ typedef struct {
  * freezes that document's frontier — and `engine/host/wpt_runner.c` drives this same ABI with the shape it
  * needs, a `g_inflight` table that issues without blocking its step loop and will not re-issue a
  * `(method, url)` still in flight. That second half is why the engine owes no third state on its own join.
- * RETIREMENT: this record goes when that door exists, because the ordering is then spent.
+ * AND THAT ROUND NO LONGER AWAITS THE BODY, WHICH RETIRES THE HALF OF THIS RECORD THAT IS ABOUT THE TRUSTED
+ * ZONE'S DOOR AND NOT THE HALF ABOUT THIS ENGINE — the retired reasoning is kept above verbatim because it is
+ * what a lane re-derives from the scheduler's own promises, and every clause of it was true when written.
+ * `extension/bridge.js` ISSUES every park through an in-flight table (`engineIssue`) and DELIVERS it on a later
+ * round, which is `wpt_runner.c`'s `g_inflight` shape and `engine/trusted.mjs`'s `answered` map reached a third
+ * time: the three doors inside a service round — the pending seam, `xhr.send` and `document.fetch` — return at
+ * once, so an instance stays rankable while a server holds a reply open and its other flows keep being stepped.
+ * WHAT IS STILL AWAITED IS ONE LEVEL UP AND IS NAMED AT ITS OWN SITE RATHER THAN HERE: `hostSchedule`'s own
+ * `ops.admit()` awaits a SEED's `navigationLoad`, so a seeded address that holds its body open freezes the
+ * LEVEL-1 LOOP rather than one instance, which is worse and is a subproblem of its own.
+ * RETIREMENT: this record goes when a body whose arrival outlives one round reaches this parser incrementally,
+ * because the ordering it states is then not merely reachable but SPENT — which the admission door above is the
+ * remaining reason it is not.
  *
  * `bytes`/`n` are the reply's BODY BYTES, undecoded — this runs §9.2.6's decode itself, because "The UTF-8
  * decode algorithm strips one leading UTF-8 Byte Order Mark (BOM), if any" is a step of THIS algorithm and a

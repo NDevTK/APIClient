@@ -390,6 +390,16 @@ void event_source_parser_interpret(const char *bytes, size_t n,
  * installs the `EventSource` interface, so no park of this kind exists to stall on; an ordinary `fetch()` or
  * `XMLHttpRequest` to an endpoint that holds its body open reaches it with no EventSource anywhere, which is
  * what makes it a live product defect rather than a consequence of this component's absence.
+ * AND THAT ROUND NO LONGER AWAITS THE BODY, WHICH RETIRES THE HALF OF THIS RECORD THAT IS ABOUT THE TRUSTED
+ * ZONE'S DOOR AND NOT THE HALF ABOUT THIS ENGINE — the retired reasoning is kept above verbatim because it is
+ * what a lane re-derives from the scheduler's own promises, and every clause of it was true when written.
+ * `extension/bridge.js` ISSUES every park through an in-flight table (`engineIssue`) and DELIVERS it on a later
+ * round, which is `wpt_runner.c`'s `g_inflight` shape and `engine/trusted.mjs`'s `answered` map reached a third
+ * time: the three doors inside a service round — the pending seam, `xhr.send` and `document.fetch` — return at
+ * once, so an instance stays rankable while a server holds a reply open and its other flows keep being stepped.
+ * WHAT IS STILL AWAITED IS ONE LEVEL UP AND IS NAMED AT ITS OWN SITE RATHER THAN HERE: `hostSchedule`'s own
+ * `ops.admit()` awaits a SEED's `navigationLoad`, so a seeded address that holds its body open freezes the
+ * LEVEL-1 LOOP rather than one instance, which is worse and is a subproblem of its own.
  *   THE HOST THAT DOES NOT HAVE IT IS THE PRECEDENT FOR THE ONE THAT DOES, AND IT IS IN THIS TREE.
  * `engine/host/wpt_runner.c` drives the same ABI and keeps a `g_inflight` table: it ISSUES without blocking the
  * step loop, and it refuses to re-issue a `(method, url)` already in flight. Both halves are what the service

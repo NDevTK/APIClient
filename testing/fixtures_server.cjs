@@ -188,6 +188,46 @@ function foldPairs(pairs) {
   return out;
 }
 
+/* A BODY THE SERVER NEVER ENDS — WPT'S OWN `infinite-slow-response`, BY ITS OWN NAME AND IN ITS OWN SHAPE.
+ *
+ * WHY A ROUTE OF THIS SERVER'S AND NOT A PIPE. CLAUDE.md: never coin a system when an established one exists,
+ * and the established one here is a HANDLER rather than a pipe. wptserve's `trickle` pipe is the nearest thing
+ * and cannot express this: its own docstring is "Send the response in parts, with time delays" and every
+ * spelling of it sends "the remainder of the file", so it always ENDS. What WPT uses for a body with no end is
+ * a handler, and the handler is in this checkout —
+ * `engine/.work/wpt/fetch/api/resources/infinite-slow-response.py` — whose whole body is:
+ *   response.headers.set(b"Content-type", b"text/plain"); response.write_status_headers()
+ *   response.writer.write(b"." * 2048)                 # "Writing an initial 2k so browsers realise it's there"
+ *   while True: if not response.writer.write(b"."): break; ...; time.sleep(0.01)
+ * The name, the content type, the 2048-byte opening chunk and the 10ms cadence below are that file's, so a
+ * reader who knows the corpus needs to learn nothing here. Its `stateKey`/`abortKey` stash parameters are NOT
+ * built: they exist so a WPT test can ask the server whether the connection is still open, and the oracle for
+ * the fixtures that use this route is this server's own ACCESS LOG, which answers that question already.
+ *
+ * NO DEADLINE, NO BYTE CAP AND NO CONNECTION LIMIT, WHICH IS THE WHOLE POINT RATHER THAN AN OVERSIGHT. The
+ * subject under test is a reply whose arrival OUTLIVES a service round, and a route that quietly ended after N
+ * bytes or N seconds would test a SLOW reply — a different population, and the one every arm of the mechanism
+ * already handles. CLAUDE.md §NO BOUNDS is the same rule one zone over.
+ *
+ * IT IS STILL SHUT DOWN, AND THAT IS NOT A BOUND: the writers are held in a set so this SHARED process can
+ * still exit for the lanes using it, and a client that goes away closes its own socket. Neither ends a body for
+ * a client that is still reading, which is the only thing the bound would have done. */
+const HOLD_PATH = "/infinite-slow-response";
+const _holding = new Set();
+function holdOpen(req, res) {
+  /* THE HEAD IS COMPLETE AND THE BODY IS NOT, which is what makes this route the subject: `safeFetch` has its
+     status, its header map and its landed URL the instant `fetch` resolves, so every gate in that file has
+     already run and the only thing outstanding is `_readBody`'s reader loop. No `content-length`, so Node
+     frames this chunked (RFC 9112 §7.1), which is what a real streaming endpoint does. */
+  res.writeHead(200, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
+  res.write(".".repeat(2048));
+  const t = setInterval(() => { res.write("."); }, 10);
+  const stop = () => { clearInterval(t); _holding.delete(stop); };
+  _holding.add(stop);
+  res.on("close", stop);
+  res.on("error", stop);
+}
+
 function refuse501(res, why) {
   res.writeHead(501, { "content-type": "text/plain; charset=utf-8" });
   res.end("fixtures_server: " + why + "\n");
@@ -214,6 +254,11 @@ const srv = http.createServer((req, res) => {
                    "serving 200 for a request that asked for something else");
     return;
   }
+  /* THE HOLD ROUTE IS ANSWERED BEFORE THE DISK IS CONSULTED, because it names no file — reaching the lookup
+     below would answer it 404, and a 404 for this route reads as the SUBJECT not making the request rather than
+     as a route that was never provisioned, which is the reading the default route above already had to state
+     out loud. It is after the pipe check so a `?pipe=` on it is still refused rather than ignored. */
+  if (url === HOLD_PATH) { holdOpen(req, res); return; }
   const fp = path.join(ROOT, url);
   if (!fp.startsWith(ROOT) || !fs.existsSync(fp) || !fs.statSync(fp).isFile()) {
     res.writeHead(404); res.end("404"); return;
@@ -234,8 +279,11 @@ srv.listen(PORT, "127.0.0.1", () => {
   console.log(DEFAULT_ROUTE_PRESENT
     ? `  GET / -> ${DEFAULT_ROUTE}`
     : `  GET / -> UNMAPPED: ${DEFAULT_ROUTE} is not in this checkout, so / answers 404`);
+  console.log(`  GET ${HOLD_PATH} -> a body with NO END (wpt fetch/api/resources/infinite-slow-response.py)`);
   console.log(`  lock: ${LOCK}`);
 });
 
-process.on("SIGTERM", () => { try { fs.unlinkSync(LOCK); } catch {} srv.close(() => process.exit(0)); });
-process.on("SIGINT",  () => { try { fs.unlinkSync(LOCK); } catch {} srv.close(() => process.exit(0)); });
+process.on("SIGTERM", () => { try { fs.unlinkSync(LOCK); } catch {} for (const f of [..._holding]) f();
+                                 srv.close(() => process.exit(0)); });
+process.on("SIGINT",  () => { try { fs.unlinkSync(LOCK); } catch {} for (const f of [..._holding]) f();
+                                srv.close(() => process.exit(0)); });

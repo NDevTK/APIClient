@@ -2627,8 +2627,23 @@ async function _readBody(resp, sink, gated) {
      engine RE-LISTS a request that carries neither a value nor a refusal on every round, by design, so a
      door that leaves a streaming request running must dedup its own in-flight set or it will issue the same
      request again each round.
-     RETIREMENT: this record goes when a request whose body outlives one service round is issued without that
-     round awaiting it, because the stall is then unspellable rather than described. */
+     AND THAT ROUND NO LONGER AWAITS THIS LOOP, WHICH RETIRES THE PARAGRAPH ABOVE FOR EVERY DOOR INSIDE A
+     SERVICE ROUND — kept verbatim because it is the reading a lane wiring `onChunk` up re-derives from the
+     scheduler's own promises, and every clause of it was true when written. `bridge.js` ISSUES every park
+     through an in-flight table (`engineIssue`) and DELIVERS it on a later round, which is the shape
+     `engine/host/wpt_runner.c`'s `g_inflight` and `engine/trusted.mjs`'s `answered` map already had: the
+     pending seam, `xhr.send` and `document.fetch` all return at once, so an instance stays rankable while a
+     server holds a reply open and the flows that are not parked on it keep being stepped. A body with no end is
+     still read by this loop for as long as the server talks, which is correct and is why no deadline was the
+     answer.
+     WHAT IS STILL AWAITED IS ONE LEVEL UP AND IS NAMED AT ITS OWN SITE RATHER THAN HERE: `hostSchedule`'s own
+     `ops.admit()` awaits a SEED's `navigationLoad`, so a seeded address that holds its body open freezes the
+     LEVEL-1 LOOP rather than one instance, which is worse and is a subproblem of its own.
+     AND THE SINK IS STILL NECESSARY-AND-NOT-SUFFICIENT, ONE STEP ALONG: a consumer now has a TURN in which to
+     read a chunk, and what it still has no way to receive is the HEAD — `computedType` is the sniff's, so a
+     head delivered before its body cannot carry one, which is the paragraph above this one and is unchanged.
+     RETIREMENT: this record goes when a chunk released here reaches a consumer that acts on it before the body
+     ends, because the ordering this paragraph exists to state is then spent rather than merely unblocked. */
   for (;;) {
     step = await reader.read();
     if (step.done) break;

@@ -1,0 +1,101 @@
+<!doctype html><meta charset="utf-8"><title>a reply body with no end: the streaming arm</title>
+<!-- CONFORMANCE FIXTURE (kept, not a regression test): every assertion below is a SPEC-DEFINED OBSERVABLE of
+     an unmodified page. Nothing here names a symbol, a file or a commit, and there is no stored expected
+     output anywhere — the document carries its own oracle, the way a test262 file does.
+
+     WHAT THE PAIR IS FOR. holdopen_stream.html and holdopen_finite.html run the SAME MACHINERY and the ONE REAL
+     VARIABLE is the ADDRESS of the first `fetch()`: this arm asks for a body the server never ends, the other
+     asks for an ordinary finite one. Everything after that line is the same document twice. Check it, do not
+     believe it:
+
+         cd testing/fixtures && norm() { sed -n '/^<img /,$p' "$1" \
+             | sed -E 's|/holdopen-[a-z]+-|/holdopen-ARM-|g' \
+             | sed -e 's|"/infinite-slow-response"|"HOLD"|' -e 's|"/holdopen-ARM-hold.txt"|"HOLD"|'; }
+           diff <(norm holdopen_stream.html) <(norm holdopen_finite.html)
+
+     must print nothing. A pair whose arms drifted is one document measured twice.
+     THE NORMALISER MAPS A SHAPE AND NEVER A WORD, which is not a nicety: the arm word of one file occurs in the
+     SHARED PROSE of both (`Its reply is finite`), so a `s/finite/ARM/g` rewrites a sentence neither arm differs
+     on and the diff then reports a drift that is an artifact of the check. Mapping `/holdopen-<word>-` by its
+     shape touches only the witness paths, which is the only place either arm's name is allowed to appear.
+
+     WHAT IS UNDER TEST, AND IT IS NOT A CONFORMANCE QUESTION ABOUT `fetch`. Fetch §5.6 "Fetch methods" resolves
+     `fetch()`'s promise when the RESPONSE's head is available — "resolve p with a new Response object" — and
+     §5.3 "Body mixin" makes reading the body a separate step, so a server that sends a complete head and then
+     keeps writing is serving a perfectly ordinary response for as long as it likes. WPT's own
+     `fetch/api/resources/infinite-slow-response.py` is that server, and `/infinite-slow-response` here is that
+     handler by its own name. What this pair measures is whether THIS ENGINE GOES ON RUNNING while such a body
+     is arriving: a page that asks for one has done nothing unusual, and every other flow in the document is
+     owed the thread.
+
+     THE ORACLE IS THE FIXTURE SERVER'S ACCESS LOG, which is evidence from OUTSIDE the engine: each witness
+     requests one distinctive path, and the server logs every request line before it resolves a file. The
+     witness paths do not exist on disk and answer 404 — the REQUEST is the record, not the reply.
+
+     EVERY WITNESS PATH IS A CONSTANT, which is not a style choice. This engine's whole purpose is to make
+     values unknown, and a request whose path was COMPUTED from an unknown is not a concrete string, so it is
+     never sent — a witness built that way goes silent in exact proportion to how well the engine is working.
+
+     THE SUBJECT IS AN ABSENCE, SO IT IS BRACKETED AT BOTH ENDS AND THE BRACKETS ARE TWO DIFFERENT QUESTIONS.
+     `-parsed` is MARKUP, so it is true even if no script runs; `-script-ran` says the script reached its first
+     statement; `-hold-called` fires immediately before the request whose body has no end; `-probe-called` fires
+     immediately before a SECOND, ordinary request. Those four say the document did everything it was written to
+     do. What the run is actually being asked is whether `-probe-resolved` appears, and it cannot appear unless
+     the engine was STEPPED after the never-ending body began arriving: a reply has to be delivered to the
+     frontier AND the flow parked on it has to be resumed to run that reaction.
+
+     `-hold-resolved` IS A SEPARATE READING AND IS NOT THE SUBJECT. Fetch §5.6 resolves on the HEAD, so a
+     browser fires it while the body is still coming; an engine whose door reads the whole body before it
+     answers cannot fire it at all. So it is recorded and it is NOT what either verdict turns on — the two
+     readings must not be reported as one.
+
+     EXPECTED (spec-correct) access log for this arm: `/infinite-slow-response` requested and never completing,
+     plus holdopen-stream- parsed, script-ran, hold-called, hold-resolved, probe-called, probe-resolved, and the
+     fetched path /holdopen-stream-probe.txt. `-probe-rejected` and `-hold-rejected` ABSENT: nothing here is a
+     network error and nothing is refused, so a rejection is a different finding from the one this pair is about.
+     MEASURED IN REAL HEADLESS CHROME 148, NO EXTENSION, AGAINST THIS CORPUS'S OWN fixtures_server.cjs: the list
+     above EXACTLY, for all three holdopen documents in one run of that server, with the `dest=` field this
+     server logs attributing the hold request per arm (`dest=empty` for the `fetch()`, `dest=iframe` for the
+     child navigable). That is the SERVER half and the BROWSER half of this mechanism confirmed end to end; it is
+     NOT a reading about this engine, which is a separate run.
+     THE INVERSION TO WATCH FOR is `-probe-resolved` ABSENT while the finite arm's `-probe-resolved` is PRESENT:
+     that is a frontier that stopped being stepped because a server was still talking, which is the defect this
+     pair exists to name. `-probe-resolved` absent in BOTH arms is not that finding — it is a document that
+     never got its replies at all, and the finite arm is the armed control that tells the two apart.
+
+     WHICH HALF OF THE CITATIONS ABOVE IS MACHINE-CHECKED. `node engine/citegen.mjs` collects by extension and
+     its set admits neither `.html` nor the `.cjs` the server half is written in, so no whole-tree run reads
+     either file: the NUMBERS and TITLES here were verified by fetching the document this tree's committed
+     corpus names as its base, and a reader who edits one owes that fetch again. No instrument here will say so.
+-->
+
+<!-- WITNESS: the document PARSED. Markup rather than script, so this one is true even if no script runs —
+     which is what separates "never ran" from "ran and was not stepped again". -->
+<img src="/holdopen-stream-parsed.png" alt="">
+
+<script>
+(function () {
+  "use strict";
+  new Image().src = "/holdopen-stream-script-ran.png";
+
+  /* THE SUBJECT: a reply whose HEAD is complete and whose BODY does not end. The address is a LITERAL and is
+     the one line this arm and its sibling differ on. */
+  new Image().src = "/holdopen-stream-hold-called.png";
+  fetch("/infinite-slow-response").then(function () {
+    new Image().src = "/holdopen-stream-hold-resolved.png";
+  }, function () {
+    new Image().src = "/holdopen-stream-hold-rejected.png";
+  });
+
+  /* THE READING: an ORDINARY request, issued after it. Its reply is finite and arrives at once, so
+     `-probe-resolved` says a reply was DELIVERED to this frontier and the flow parked on it was RESUMED — which
+     is the whole of what "the engine is still being stepped" means from outside. It is deliberately NOT the
+     first request: the point is that it is behind the one whose body has no end. */
+  new Image().src = "/holdopen-stream-probe-called.png";
+  fetch("/holdopen-stream-probe.txt").then(function () {
+    new Image().src = "/holdopen-stream-probe-resolved.png";
+  }, function () {
+    new Image().src = "/holdopen-stream-probe-rejected.png";
+  });
+})();
+</script>
