@@ -3869,25 +3869,74 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          supplied the `false` — so the fact was carried by a coercion rather than by this site, and the
          egress surface's `cookies` row, which it grades `certain`, rested on a value nobody had stated. It
          is a literal below now, and the door `DCHECK`s that every caller states one. */
-      /* AND `unstated` FOR THE WITNESS MARK, WHICH IS A STATEMENT ABOUT THIS ACT AND NOT A GUESS ABOUT ITS
-         PATH. The engine composes `pinned`/`unpinned` at a PARK, off the parking flow's own
-         `flow_path_pinned`; an `xhr.send` record is not a park and carries
-         `engine_provenance_of_running_path`'s word alone. `unpinned` here would be FALSE exactly where it
-         matters — a flow that pinned a witness has `path_forced` set by the nesting, so precisely the records
-         that say `forced` are the ones whose address may hold our bytes — and `pinned` would be a wrong
-         sentence the other way. safe-fetch.js's `_pinnedOf` carries the residual and what retires it. */
+      /* AND THE WITNESS MARK, RELAYED OFF THE RECORD RATHER THAN STATED HERE — THE DIFF safe-fetch.js's
+         `_pinnedOf` RESIDUAL NAMED, ARRIVING. `xhr_request_op` writes a `pinned` key now, taken from
+         `engine_pinned_of_running_path` on the same line as the grade beside it, so this seam no longer has to
+         say that the fact does not travel: it says what the engine said.
+         THE CLAUSE THIS REPLACES IS KEPT BECAUSE ITS REASONING IS SOUND AND A READER WILL RE-DERIVE IT. It
+         read: "the engine composes `pinned`/`unpinned` at a PARK, off the parking flow's own
+         `flow_path_pinned`; an `xhr.send` record is not a park and carries `engine_provenance_of_running_path`'s
+         word alone. `unpinned` here would be FALSE exactly where it matters — a flow that pinned a witness has
+         `path_forced` set by the nesting, so precisely the records that say `forced` are the ones whose address
+         may hold our bytes — and `pinned` would be a wrong sentence the other way." Every word of that was true
+         of a record with no mark on it, and what changed is the RECORD and not the argument: the engine's own
+         `flow_path_pinned` is what answers now, at the instant the request is created, so neither wrong
+         sentence has to be written.
+         `in` AND NEVER A `||`, FOR `endpointFactHistogram`'s REASON ONE FUNCTION-SCOPE UP AND FOR ONE MORE
+         THAT IS THIS SEAM'S OWN. An ABSENT key is an artifact older than the key and is a fact about the
+         BUILD — this zone is interpreted from the tree and the engine is live only after a build, so the two
+         halves of this landing deploy at different instants by construction — while a PRESENT one is a fact
+         about the address. And the default a `||` would supply is the WORST of the three words: `unpinned` is
+         what safe-fetch.js's value arm FIRES on, so a build older than the key would spend acts on every XHR
+         address the analysed page composes, which is precisely the widening a person has not granted.
+         `unstated` STAYS THIS ZONE'S WORD AND THE ENGINE NEVER SPELLS IT, which is what keeps `_pinnedOf`'s
+         third-word paragraph true: the engine states the two words it can compute, and the word for "this act
+         does not carry the fact" is composed HERE, by the reader that found no mark.
+         AND THE ASSERT SITS INSIDE THE PRESENT ARM, WHICH IS NOT A STYLE CHOICE — A FIRST DRAFT OF THIS SEAM
+         PUT IT AFTER THE COMPOSITION AND IT FIRED ON THE ABSENCE THE COMPOSITION HAD JUST HANDLED. Written as
+         `var m = "pinned" in q ? q.pinned : "unstated"` with a vocabulary assert beneath it, the assert admits
+         the engine's two words and `unstated` is neither, so the ONE state this zone composes for an artifact
+         older than the key is the state the assert refuses — and this zone is interpreted from the tree while
+         the engine is live only after a build, so that assert fires in the half that IS live, on the first XHR
+         the SHIPPED engine produces, which is CLAUDE.md §A-CROSS-BOUNDARY-DIFF's worst-of-three state reached
+         by the very check added to make the contract explicit. The tell was in the assert's own message: it
+         names a MAPPING DISAGREEMENT (`states the witness mark X, which is neither token engine.h declares`)
+         and in the absent case X is `undefined`, so the sentence describes a branch the assert is not in —
+         one predicate answering two questions, one line under the ternary that had already told them apart.
+         So the two questions stay two: the `in` test answers IS THERE A MARK and the assert answers IS IT A
+         MARK THIS READER KNOWS, and the second is asked only where the first said yes. This is
+         `endpointFactHistogram`'s own shape and the borrowing is deliberate rather than incidental. */
+      var _xhrPinned;
+      if (!("pinned" in q)) {
+        _xhrPinned = "unstated";
+      } else {
+        DCHECK(q.pinned === PINNED_YES || q.pinned === PINNED_NO,
+               "the engine's xhr.send record states the witness mark `" + q.pinned + "`, which is neither " +
+               "token solver/engine.h declares — `xhr_request_op` writes one through `engine_pinned_token`, " +
+               "whose fall-through is fatal in release, so anything else here is that mapping and this " +
+               "reader having parted. The firing decision is made from this field and `unpinned` is the word " +
+               "it FIRES on, so a mark nothing can be read as may not be relayed as one");
+        _xhrPinned = q.pinned;
+      }
       /* AND THE DOCUMENT'S OWN REACH GRADE BESIDE IT, for the reason `fetched` states in full one function
          up: an XHR is a request the page made, so the engine grades it `observed` whatever this zone did to
          reach the page — and the chokepoint's default arm asks both. */
-      /* AND `page` FOR THE ACTOR, WHICH IS TRUE AND IS NOT ENOUGH TO MAKE THIS FIRE. Every request an
-         XMLHttpRequest makes is made by RUNNING THE PAGE'S CODE — the same population as the `fetch()` relay
-         one function up, and the owner's rule does not distinguish them. What keeps this refused is the
-         WITNESS mark above, which is honestly `unstated` because this record's provenance is a variable that
-         can be `forced`; so the arm that admits the page's `fetch()` cannot admit its XHR until
-         `engine_pinned_of_running_path()` puts a real mark on this record. safe-fetch.js carries that as the
-         residual on the arm itself, and this is the site it is about. */
+      /* AND `page` FOR THE ACTOR, WHICH IS TRUE AND IS NOW ENOUGH — TOGETHER WITH THE MARK ABOVE — TO MAKE
+         THIS FIRE. Every request an XMLHttpRequest makes is made by RUNNING THE PAGE'S CODE, which is the same
+         population as the `fetch()` relay one function up, and the owner's rule does not distinguish them; the
+         witness mark is what decides it, and this seam states a real one now. So an XHR whose path pinned
+         nothing, to an origin a person permitted for that row, FIRES where it was refused before, and one whose
+         path pinned a witness is refused exactly as such a `fetch()` is.
+         THE CLAUSE THIS REPLACES IS KEPT BECAUSE IT NAMES THE COST OF THE OTHER ANSWER. It read: "What keeps
+         this refused is the WITNESS mark above, which is honestly `unstated` because this record's provenance
+         is a variable that can be `forced`; so the arm that admits the page's `fetch()` cannot admit its XHR
+         until `engine_pinned_of_running_path()` puts a real mark on this record." Both halves were true, and
+         the second is the diff that has landed — so what the arm refused was never the XHR but the ABSENCE of
+         the fact about it, which is the distinction that makes this a mark arriving rather than a permission
+         widening. safe-fetch.js's value arm enumerates both doors it admits now, and a person reading what
+         they permitted sees two rows rather than one. */
       const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, destination: "",
-                                            provenance: q.provenance, pinned: "unstated",
+                                            provenance: q.provenance, pinned: _xhrPinned,
                                             docReach: msg.provenance, actor: "page",
                                             credentialed: false,
                                             credentials: q.credentials, headers: q.headers });
@@ -4654,6 +4703,18 @@ const ROUTE_SEED_NOTICE = "document.seed";
 const PROVENANCE_OBSERVED = "observed";
 const PROVENANCE_DERIVED = "derived";
 const PROVENANCE_FORCED = "forced";
+/* AND THE WITNESS MARK'S TWO WORDS BESIDE THEM — solver/engine.h's `PENDING_PINNED_*`, the SECOND field a
+   request carries about itself and never a fourth provenance word, because the provenance says what a REPLY IS
+   WORTH and this says whether the ACT MAY BE SPENT. Named here for the trio's reason above: the `xhr.send`
+   relay asserts this vocabulary off a record now rather than stating a literal, and a string literal at an
+   assert is a vocabulary with no name.
+   THE THIRD WORD IS DELIBERATELY NOT HERE. `unstated` is extension/lib/safe-fetch.js's — what a READER
+   composes for an act whose record carries no mark, which is how an artifact older than the key reads as a
+   fact about the BUILD — so it is that file's `_PINNED_MARKS` that enumerates all three, and the engine never
+   spells it. Naming it here would put the zone's own word in the engine's vocabulary block and invite a
+   producer to state it. */
+const PINNED_YES = "pinned";
+const PINNED_NO = "unpinned";
 
 /* WHAT THIS ZONE OWES A ONE-WAY NOTICE. Two ops today, and each is an ACTION only this zone can take —
    SECURITY.md makes the offscreen the only zone that knows which instance holds which document.

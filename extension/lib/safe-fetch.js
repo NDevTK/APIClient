@@ -738,10 +738,16 @@ function safeFetchReachJoin(outer, own) {
         "other composes to nothing while every caller reads it as a grade");
   return _REACH_RANK[outer] >= _REACH_RANK[own] ? outer : own;
 }
-/* …AND THE NARROWER FACT THE ENGINE STATES BESIDE IT — solver/engine.h's `pinned`/`unpinned`, composed at the
-   park from solver/flow.h's `path_pinned`. It says whether the parking flow had DETERMINED some source's value
-   on an arm nothing observed before it built this address, so that everything the page computed afterwards may
-   carry a witness THE ENGINE picked rather than one the document or the server supplied.
+/* …AND THE NARROWER FACT THE ENGINE STATES BESIDE IT — solver/engine.h's `pinned`/`unpinned`, composed from
+   solver/flow.h's `path_pinned` at the PARK for a request that parks and at the ACT for one the page's code
+   made without parking (`engine_pinned_of_running_path`). It says whether the flow had DETERMINED some
+   source's value on an arm nothing observed before it built this address, so that everything the page computed
+   afterwards may carry a witness THE ENGINE picked rather than one the document or the server supplied.
+   TWO COMPOSITION POINTS AND ONE FACT, WHICH IS WHAT KEEPS THEM FROM BEING TWO RULES: both read
+   `flow_path_pinned` of the flow whose path the address was built on, and the only thing that differs is WHEN
+   that flow is asked — at the park for a work item, at the act for a request composed and handed over on one
+   turn. §scheduler's "an operation that becomes a work item takes its inputs with it" is why neither may be
+   re-asked later, and both sites say so at their own line.
    A `CHECK` FOR `_provenanceOf`'s REASON EXACTLY, and it is the sharper of the two: an ABSENT mark and an
    INVENTED one both read as `not pinned`, which is this function's PERMISSIVE arm, and the arm it feeds is the
    one that SPENDS AN ACT. A provenance read wrongly mislabels a reply; this read wrongly fires a request.
@@ -752,12 +758,21 @@ function safeFetchReachJoin(outer, own) {
    before this request existed", and `unpinned` is the positive statement that it had not — under which every
    byte of the address came from the document, the server, or the bundle's own text. */
 /* THE THIRD WORD IS THIS ZONE'S AND NOT THE ENGINE'S, AND IT IS A STATEMENT ABOUT THE ACT RATHER THAN A HOLE.
-   `pinned` and `unpinned` are solver/engine.h's and ride the PENDING-FETCH line. `unstated` is what an act
-   that does not come off that line says: the engine composes a witness mark at the PARK, and an XHR record or
-   a navigation notice is not a park — those carry `engine_provenance_of_running_path`'s word and no mark
-   beside it. Writing `unpinned` there would be a FALSE claim (a flow that pinned a witness has `path_forced`
-   set by the nesting, so exactly those acts can be `forced` and carry our bytes) and writing `pinned` would be
-   a wrong sentence in the other direction. So the honest third answer is that the act does not carry the fact.
+   `pinned` and `unpinned` are solver/engine.h's; `unstated` is what a reader of an act carrying NO MARK
+   composes for itself. Writing `unpinned` there would be a FALSE claim (a flow that pinned a witness has
+   `path_forced` set by the nesting, so exactly those acts can be `forced` and carry our bytes) and writing
+   `pinned` would be a wrong sentence in the other direction. So the honest third answer is that the act does
+   not carry the fact.
+   WHICH ACTS CARRY ONE IS A FACT ABOUT THE ENGINE AND MOVES, AND THIS PARAGRAPH USED TO NAME IT AS A FACT
+   ABOUT THE PARK LINE — kept in its own words because the reasoning is sound and a reader will re-derive it.
+   It read: "`pinned` and `unpinned` are solver/engine.h's and ride the PENDING-FETCH line. `unstated` is what
+   an act that does not come off that line says: the engine composes a witness mark at the PARK, and an XHR
+   record or a navigation notice is not a park — those carry `engine_provenance_of_running_path`'s word and no
+   mark beside it." The PARK half is still true and the "does not come off that line" half is not: an
+   `xhr.send` record carries a mark now, composed at the act by `engine_pinned_of_running_path`, which is the
+   same fact about the path that is STANDING rather than the one that is parking. So the question is not which
+   LINE an act rides but whether the RECORD IT ARRIVES ON CARRIES A MARK, and the residual below names the two
+   notices that still do not.
    AND THE PARK TEST IN THE SENTENCE ABOVE IS THE INTUITIVE READING AND IS NOT THE ONE THE CALLERS OBEY,
    WHICH IS WRITTEN DOWN HERE BECAUSE IT HAS NOW COST A READING. Read literally, `an act that does not come
    off that line says unstated` condemns THREE of this file's own callers: `trusted.mjs`'s seed, the peer
@@ -770,9 +785,17 @@ function safeFetchReachJoin(outer, own) {
    whose provenance is a VARIABLE, or the literal `forced`, may be exactly such an act, and its zone cannot
    say. `bridge.js`'s navigation relay states that rule in its own words at its own site — `unstated`
    BECAUSE THIS PROVENANCE IS A VARIABLE — which is the consumer being right where the declaration was
-   loose. MEASURED over every hand-stated mark in this tree, ten sites and no exception: the four that state
-   `unpinned` all state a literal non-forced provenance beside it, and every one that states `unstated`
-   states a provenance that is a variable or is `forced` outright.
+   loose. MEASURED over every hand-stated mark in this tree, with no exception: every site that states
+   `unpinned` states a literal non-forced provenance beside it, and every one that states `unstated` states a
+   provenance that is a variable or is `forced` outright.
+   THE DERIVATION AND NOT THE FIGURES, BECAUSE THE FIGURES THAT STOOD HERE WENT WRONG IN BOTH WAYS A COUNT
+   CAN. `git grep -nE "pinned[[:space:]]*:[[:space:]]*['\"]" -- .` is the population — hand-stated marks, both
+   quote styles, tree-wide — and a mark this file RELAYS off a record is not one of them, which is why the
+   count falls every time a seam stops guessing. It read "ten sites ... the four that state `unpinned`": the
+   ten was exact and the four was THREE, a subtotal contradicting its own list in a sentence whose author had
+   both halves in front of them, which is CLAUDE.md §AND-WHERE-A-SENTENCE-CARRIES-BOTH-A-COUNT-AND-THE-LIST
+   with the enumeration one command away. And the ten went stale by the very landing this paragraph records,
+   since the XHR relay left the population the day it began relaying. A derivation cannot do either.
    THE READING IT COSTS IS THE EXPENSIVE ONE AND IS WHY THIS IS A CORRECTION RATHER THAN A TIDY-UP: a reader
    who takes the park test concludes the discovery sweep's `unpinned` is a FALSE claim to be repaired, and
    repairing it would move a true statement to the word for an act that does not carry the fact — after
@@ -780,15 +803,19 @@ function safeFetchReachJoin(outer, own) {
    would appear to be separable by the `witness` row and an egress arm could be built on the difference.
    IT IS NOT A DEFAULT AND MUST NOT BECOME ONE: an ABSENT `opts.pinned` still aborts. `unstated` has to be
    TYPED by a caller that means it, which is what makes it greppable, countable, and retirable.
-   NAMED RESIDUAL — TWO SEAMS STATE IT. What is not covered: the XHR relay and the navigation load reach the
-   value arm with a `forced` provenance and no witness mark, so what the policy is told about those acts is
-   that the fact does not travel. What the next diff builds: `engine_pinned_of_running_path()` beside
-   `engine_prov_of_running_path` (solver/engine.c), written into the five records and notices that already
-   carry that function's word — `xml_http_request.c`'s request op, `navigable.c`'s three, `route_seed.c` — and
-   relayed by their readers here. How its absence would show: a person auditing what they permitted at an
-   origin finds `witness=unstated` doing the work on a document whose data requests are built out of pinned
-   values, so the row cannot separate an address that may carry this engine's own witness from one the
-   bundle's text spells.
+   NAMED RESIDUAL — TWO SEAMS STILL STATE IT, AND THEY ARE NOT THE TWO THIS RESIDUAL WAS WRITTEN ABOUT. The
+   XHR half is BUILT: `engine_pinned_of_running_path` (solver/engine.c) stands beside
+   `engine_prov_of_running_path`, `xml_http_request.c`'s request op takes both on one line and writes a
+   `pinned` key, and `bridge.js`'s `xhr.send` relay passes what it finds there. What is not covered: the
+   NAVIGATION load (core/frame/navigable.c's three notices) and the ROUTE DECLARATION (solver/route_seed.c)
+   reach this function with a provenance that may be `forced` and no witness mark, so what the policy is told
+   about those two acts is still that the fact does not travel. What the next diff builds: the same mark
+   written into those four notices and relayed by their readers here — `bridge.js`'s navigation relay and its
+   route-declaration hypothetical, which are the two sites left stating a literal `unstated` off an engine
+   word. How its absence would show, as an OBSERVATION and never as an instance: a person auditing what they
+   permitted at an origin finds `witness=unstated` on the DOCUMENT rows of a run whose `fetch()` and XHR rows
+   at the same host carry `pinned` or `unpinned`, so the two seams that could state the fact are the two that
+   do not.
    AND THE CLAUSE THIS RESIDUAL USED TO CARRY IS RETIRED BY THE DIFF THAT MADE THE WITNESS A SIGNAL, WHICH IS
    WHY IT IS REWRITTEN HERE RATHER THAN LEFT STANDING. It read "It changes no firing outcome at any setting of
    this table — both words refuse and the same widening reopens both". That was true while one per-origin
@@ -796,7 +823,21 @@ function safeFetchReachJoin(outer, own) {
    `unpinned` are two rows a person permits separately, and an origin permitted for one and not the other
    fires the discovery sweep (which states `unpinned`) while refusing the XHR relay (which states `unstated`)
    — a difference in OUTCOME and not only in the sentence. The residual is therefore larger than it was, not
-   smaller, and the direction is the safe one: an act that cannot state the fact needs its own permission. */
+   smaller, and the direction is the safe one: an act that cannot state the fact needs its own permission.
+   AND THAT PARAGRAPH'S OWN WORKED EXAMPLE IS THE THING THIS LANDING SPENT, WHICH IS SAID HERE RATHER THAN BY
+   EDITING IT BECAUSE ITS ARGUMENT IS UNTOUCHED AND ONLY ITS INSTANCE MOVED. "Refusing the XHR relay (which
+   states `unstated`)" was the difference-in-outcome it named, and the XHR relay states a real mark now — so
+   the example is spent while the rule it illustrates stands exactly: `unstated` and `unpinned` are still two
+   rows a person permits separately, and an origin permitted for one and not the other still fires the
+   discovery sweep while refusing everything that cannot state the fact. What is left to illustrate it is the
+   two seams named in the residual above, and they are DOCUMENT acts — which is why the paragraph below prices
+   the remainder as a sentence rather than as an outcome, and why "larger than it was" was true of the
+   residual as that diff left it and is no longer true of the residual as this one does.
+   AND THE TWO REMAINING SEAMS ARE A SPECIFICITY RESIDUAL AND NOT A FIRING ONE, WHICH IS THE DIFFERENCE THIS
+   LANDING MADE AND IS WORTH STATING SO THE NEXT READER PRICES IT HONESTLY. Both are `document` acts, and
+   `document` is not in this row's `value` bucket at all, so no setting of this table fires either one on the
+   strength of a witness mark — what they cost is the sentence a person reads, where the XHR's cost was an
+   OUTCOME. The direction is still the safe one and the work is smaller than it was. */
 var _PINNED_MARKS = ["pinned", "unpinned", "unstated"];
 function _pinnedOf(opts) {
   CHECK(_PINNED_MARKS.indexOf(opts.pinned) >= 0,
@@ -1258,10 +1299,13 @@ var _SIGNALS = [
      `url-authority`, where the informative value is the presence. */
   { name: "header-authority", gates: true, certainty: "certain", values: ["none", "unknown"],
     of: function (f) { return f.headers ? "unknown" : "none"; } },
-  /* solver/engine.h's WITNESS MARK — whether the parking flow had DETERMINED some source's value on an arm
-     nothing observed before it built this address, so the address may carry a witness THE ENGINE picked.
-     `unstated` is this zone's third word for an act that does not come off a pending line at all; see
-     `_pinnedOf` for why writing `unpinned` there would be false exactly where it matters. */
+  /* solver/engine.h's WITNESS MARK — whether the flow had DETERMINED some source's value on an arm nothing
+     observed before it built this address, so the address may carry a witness THE ENGINE picked. Composed at
+     the PARK off the parking flow's `flow_path_pinned`, or at the ACT off the standing one's
+     (`engine_pinned_of_running_path`) for a request the page's code made without parking.
+     `unstated` is this zone's third word for an act whose record carries NO MARK — a navigation notice or a
+     route declaration today, and an artifact older than the key on any seam; see `_pinnedOf` for why writing
+     `unpinned` there would be false exactly where it matters. */
   { name: "witness", gates: true, certainty: "stated", values: _PINNED_MARKS,
     of: function (f) { return f.pinned; } },
   /* AUTHORITY IN THE ADDRESS — see `_urlAuthorityMarker`. `partial`, and the grade is the whole warning:
@@ -1686,22 +1730,35 @@ var _DEFAULT_ARMS = [
      WHAT IT RE-GRADES IS ENUMERATED RATHER THAN LEFT TO BE FOUND, because a permission whose reach the
      person cannot state is not a control — the same obligation the subresource arm above discharges. Of the
      destinations §2.2.5 leaves in this row's `value` bucket, the only ones any caller can reach with a
-     witness mark of `unpinned` AND an actor of `page` are the EMPTY STRING's: the analysed page's own
-     `fetch()`, relayed off the engine's pending line. A navigation is `document` and states `unstated`; the
-     seed and the residue re-fetch state `tool`; the sweep and the peer gate state `tool`. So what this arm
-     admits today is exactly the analysed document's own `fetch()` on a path that pinned nothing, and
-     nothing else.
-     NAMED RESIDUAL, AND IT IS `_pinnedOf`'s MADE LOAD-BEARING RATHER THAN A NEW ONE. WHAT IS NOT COVERED:
-     the analysed page's own XHR, which is the SAME population as the `fetch()` above by the owner's rule and
-     does not fire, because `bridge.js`'s `xhr.send` relay states `witness: unstated` — correctly, since that
-     record's provenance is a variable that can be `forced` and the zone cannot say whether the address holds
-     this engine's bytes. WHAT THE NEXT DIFF BUILDS: `engine_pinned_of_running_path()` written into the XHR
-     request op, which is the diff `_pinnedOf`'s own residual already names and which was a question about a
-     person's audit of a widened origin until this arm landed; it is now the difference between answering a
-     page's `fetch()` and answering the same page's XHR. HOW ITS ABSENCE WOULD SHOW, as an OBSERVATION and
-     never as an instance: a run whose log carries a `blocked-signal:witness=unstated` refusal for an address
-     the analysed document reached through `XMLHttpRequest`, on a document whose `fetch()`es to the same host
-     are answered on the lines around it.
+     witness mark of `unpinned` AND an actor of `page` are the EMPTY STRING's, and there are TWO of them: the
+     analysed page's own `fetch()`, relayed off the engine's pending line, and the analysed page's own XHR,
+     relayed off the `xhr.send` record. A navigation is `document` and states `unstated`; the seed and the
+     residue re-fetch state `tool`; the sweep and the peer gate state `tool`. So what this arm admits today is
+     exactly the analysed document's own data requests — through either door — on a path that pinned nothing,
+     and nothing else.
+     THE SECOND OF THE TWO IS NEW AND IS A WIDENING A PERSON IS OWED THE WORD FOR. This enumeration read "the
+     EMPTY STRING's: the analysed page's own `fetch()`" and named the XHR one clause further down as a seam
+     that could not reach the arm, which was true while the record carried no mark; the mark is written now, so
+     a page's `XMLHttpRequest` to an origin permitted for this row FIRES where it was refused on
+     `witness=unstated` before. It is the SAME POPULATION by the owner's own rule — both are requests the
+     analysed page's code made — which is the argument the residual below was built on, and the outcome is now
+     what that argument always said it should be. What it does NOT widen: an XHR on a path that pinned a
+     witness states `pinned` and is refused here exactly as a `fetch()` on such a path is.
+     THE RESIDUAL THAT STOOD HERE IS BUILT, AND IT IS REWRITTEN RATHER THAN DELETED BECAUSE ITS ARGUMENT IS
+     WHAT THE ENUMERATION ABOVE NOW RESTS ON. It read: "WHAT IS NOT COVERED: the analysed page's own XHR, which
+     is the SAME population as the `fetch()` above by the owner's rule and does not fire, because
+     `bridge.js`'s `xhr.send` relay states `witness: unstated` — correctly, since that record's provenance is a
+     variable that can be `forced` and the zone cannot say whether the address holds this engine's bytes. WHAT
+     THE NEXT DIFF BUILDS: `engine_pinned_of_running_path()` written into the XHR request op". That function
+     exists, the op writes the mark, and the relay passes it — so the clause is spent and the population it
+     named is in the enumeration above rather than in a residual beneath it.
+     ITS ABSENCE-CLAUSE IS THE PART TO KEEP, INVERTED, BECAUSE IT IS THE WITNESS THAT THIS LANDED: the
+     observation it named was "a run whose log carries a `blocked-signal:witness=unstated` refusal for an
+     address the analysed document reached through `XMLHttpRequest`, on a document whose `fetch()`es to the
+     same host are answered on the lines around it". That refusal is now unreachable for an XHR from a build
+     that carries the key, so the same log line is what a WRONGLY-BUILT relay would still produce — an
+     `unstated` on an XHR row means the artifact predates the `pinned` key, which is a fact about the BUILD,
+     and `bridge.js`'s `in` test is what makes it that rather than a firing.
      AND WHAT FIRES HERE IS UNCREDENTIALED, WHICH IS STATED SO THAT NOBODY READS THIS ARM AS THE WHOLE OF THE
      OWNER'S SENTENCE. Their words were "same-origin and credentialed exactly as a browser is" (CLAUDE.md
      §THE-PER-ORIGIN-OPT-IN-GOVERNS-EGRESS; this quoted them as "like a browser", which is a PARAPHRASE IN
@@ -2242,9 +2299,11 @@ function _isPrivateHost(host) {
 //               request IS matters as much as what its reply is WORTH, and Fetch
 //               §2.2.5's DESTINATION is what separates them. See `_firingRefusal`.
 //   opts.pinned:
-//               `pinned` / `unpinned` verbatim from the engine's pending line
-//               (solver/engine.h's PENDING_PINNED_*), or `unstated` where the act is
-//               not a park and the engine composed no mark for it. It says whether
+//               `pinned` / `unpinned` verbatim from the engine (solver/engine.h's
+//               PENDING_PINNED_*) — off the PENDING LINE for a request that parked, or
+//               off the RECORD for one the page's code made without parking
+//               (`engine_pinned_of_running_path`) — or `unstated` where the act's record
+//               carries no mark at all. It says whether
 //               this request's ADDRESS may rest on a value the parking flow itself
 //               DETERMINED on an arm nothing observed — which is a different question
 //               from what the reply is worth, and the one that decides whether a DATA

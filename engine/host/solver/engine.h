@@ -1344,6 +1344,43 @@ int engine_prov_of_running_path(void);
  * (a release build falling through would print whatever the compiler left in the register). */
 const char *engine_provenance_token(int prov);
 
+/* …AND THE SAME TWO WORDS FOR THE WITNESS MARK, FOR AN ACT THAT IS NOT A PARK. `PENDING_PINNED_*` above is
+ * composed at a park off the parking flow's own `flow_path_pinned`; this is the SAME fact about the path that
+ * is STANDING, for every request this engine builds by RUNNING THE PAGE'S CODE — core/xhr/xml_http_request.c's
+ * §3.5.6 "The send() method" request is the caller it was written for, which had no witness mark at all while
+ * the pending line beside it carried one, and the trusted zone's firing decision was told the fact does not
+ * travel for a population of requests that is exactly what a forced arm produces.
+ *
+ * IT READS THE FLOW ITSELF rather than taking one, for `engine_prov_of_running_path`'s reason word for word: a
+ * caller that passed a flow could pass a different one, and the fact wanted is about the path standing HERE.
+ *
+ * THE FLOW-LESS ANSWER IS `unpinned` AND IT IS NOT A CHOICE — IT IS FORCED BY THE NESTING, WHICH IS WORTH
+ * STATING BECAUSE THE NEXT READER WILL REACH FOR THE OTHER WORD AND BE RIGHT TO. `pinned` is the SAFE word
+ * everywhere else this field is composed: it is a MAY-REST-ON, and a deduped set states `pinned` if ANY
+ * member's path did, because under-claiming HERE fires an act where under-claiming a provenance merely grades
+ * a reply. Reasoning from that alone gives `pinned` for an act with no path standing, and that pair is
+ * ILLEGAL: `engine_prov_of_running_path` answers `derived` on the same state, `path_pinned` is strictly
+ * nested inside `path_forced`, and extension/lib/safe-fetch.js's `_firingRefusal` CHECKs exactly that pair —
+ * fatal in RELEASE. So the two accessors' flow-less arms are one decision and not two, and the witness's is
+ * decided by the provenance's. What makes that safe is that the state is a BROKEN INVARIANT at every caller
+ * rather than a case: each one composes a request by running the page's code, the DCHECK below names it, and
+ * `unpinned` alone fires nothing — safe-fetch.js's value arm additionally wants an actor of `page` and an
+ * origin a person widened for that row.
+ *
+ * THE ENGINE STATES AND THE ZONE DECIDES, and the zone's THIRD word stays the zone's: `unstated` is what a
+ * reader of a record carrying no mark composes for itself, which is how an artifact older than the key reads
+ * as a fact about the BUILD instead of making a key absent. Nothing here ever spells it. */
+int engine_pinned_of_running_path(void);
+
+/* THE WITNESS MARK'S WIRE SPELLING — `engine_provenance_token`'s sibling, exported for the same reason and
+ * added when the same premise died. This mapping stood as an inline ternary at the two places the pending
+ * line's own join writes the field, on the argument that a static with one caller stays a static; a THIRD
+ * site had to ask it the moment a request that is not a park carried the mark, and two files spelling one
+ * two-word vocabulary is the copy that drifts in the direction that costs — a record this engine calls
+ * `unpinned` and another file calls `pinned` is read as whichever the consumer saw first, and the consumer is
+ * a firing decision. Fatal and never a DCHECK for `engine_provenance_token`'s reason exactly. */
+const char *engine_pinned_token(int pinned);
+
 /* WHAT THE BYTES ARE FOR, WHICH IS A DIFFERENT QUESTION FROM WHO ASKED — Fetch §2.2.5 "Requests"' DESTINATION,
  * stated verbatim off the request record the park carried (core/fetch/fetch.h) and never derived here.
  * THE TWO FIELDS ARE NOT TWO SPELLINGS OF ONE FACT, and reading them as one is what left a live hole. The

@@ -3921,6 +3921,49 @@ const char *engine_provenance_of_running_path(void)
     return engine_provenance_token(engine_prov_of_running_path());
 }
 
+/* See engine.h. THE WITNESS MARK'S WIRE SPELLING, in the one place the bit becomes the token the line carries.
+   The two writes below used to spell this inline; they route here now, so the vocabulary engine.h declares
+   cannot be said two ways by two files. */
+const char *engine_pinned_token(int pinned)
+{
+    switch (pinned) {
+    case 0: return PENDING_PINNED_NO;
+    case 1: return PENDING_PINNED_YES;
+    }
+    /* A `CHECK`, NOT A DCHECK, for engine_provenance_token's reason exactly: the firing decision a trusted zone
+       makes reads this field, and a release build that fell through here would put whatever the compiler left
+       in the register into a line that decides whether an act is spent.
+       AND THAT IS A PROMOTION FOR THE TWO SITES THIS REPLACED, STATED RATHER THAN SLIPPED IN. Both spelled
+       `x ? PENDING_PINNED_YES : PENDING_PINNED_NO`, so a third value was SILENTLY `pinned` in release — which
+       happens to refuse, and is therefore a conservative wrong answer rather than a loud one. It is fatal here
+       instead, on the same ground `pending_pinned_compose` asserts the bit at the other end of the same
+       contract: the mark comes from `flow_path_pinned`, which is written in exactly one place as a constant, so
+       a third value is not an unusual input but memory this field does not own — and what happens next is a
+       security decision made from a token chosen by whatever was in it. The invariant is as strong as the
+       provenance's beside it, and this is the direction §Offensive-programming names for one that must hold in
+       production. */
+    CHECK_FAILF("engine: a request's witness mark is %d, which is neither bit engine.h defines — the trusted "
+                "zone's firing decision reads this field", pinned);
+}
+
+/* See engine.h, which states why the flow-less arm is NOT free to be the safe word. It is `0` here because
+   engine_prov_of_running_path answers `derived` on the same state and `path_pinned` is strictly nested inside
+   `path_forced`: a `1` would compose a pair safe-fetch.js's `_firingRefusal` kills the fetch path on, in
+   release, where this DCHECK is not there to have named the caller first. */
+int engine_pinned_of_running_path(void)
+{
+    const Flow *f = flow_running();
+
+    DCHECK(f != NULL,
+           "a request built by running the page's code asked whether its address may rest on a witness this "
+           "engine chose, with no flow standing — the witness is a fact about ONE path, so there is no path "
+           "here to have chosen one, and every caller of this reaches it while the page's own code is what is "
+           "happening (core/xhr/xml_http_request.c's §3.5.6 send is the first). An arrival here is a route "
+           "that composed a request outside a flow and would be told `unpinned`, which is the word that lets "
+           "a widened origin SPEND the act");
+    return f != NULL && flow_path_pinned(f);
+}
+
 /* …AND THE SAME TRIP BACK, for a token already written into the join. Length-delimited because the caller
    holds a field of a line and not a NUL-terminated string. */
 static int prov_of_token(const char *tok, size_t n) {
@@ -4062,7 +4105,7 @@ const char *engine_pending_fetches(void) {
                out of bytes that pin could not have reached, so asking `flow_path_pinned(f)` on this walk would
                file every request a flow ever made under the witnesses it ended up holding. */
             int pinned_v = (int)pending_get_int(pe, PEND_PINNED);
-            const char *pinned = pinned_v ? PENDING_PINNED_YES : PENDING_PINNED_NO;
+            const char *pinned = engine_pinned_token(pinned_v);
             size_t il = strlen(ini), pl = strlen(prov), nl = strlen(pinned);
             /* …AND A REQUEST THE ZONE HAS ALREADY REFUSED IS NOT ON THIS LIST, WHICH IS WHAT KEEPS A DECLINE A
                FORK RATHER THAN A SPIN. An unanswered entry is re-joined on EVERY step, so a zone that declined
@@ -4294,7 +4337,7 @@ const char *engine_pending_fetches(void) {
                                                                     cred_of_token(c, cl));
                         join_set_field(&join, &n_out, &cap, c_at, c_len, fetch_credentials_token(mo_cred));
                         join_set_field(&join, &n_out, &cap, n_at, n_len,
-                                       mo_pinned ? PENDING_PINNED_YES : PENDING_PINNED_NO);
+                                       engine_pinned_token(mo_pinned));
                         join_set_field(&join, &n_out, &cap, p_at, p_len, engine_provenance_token(mo_prov));
                         join_set_field(&join, &n_out, &cap, i_at, i_len,
                                        mo_parser ? PENDING_INITIATOR_PARSER : PENDING_INITIATOR_SCRIPT);

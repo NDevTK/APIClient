@@ -158,6 +158,19 @@ typedef struct {
        PROV_OBSERVED, the STRONGEST of the three — so an ungraded request would report as one a real client
        made, which is the fabrication §@H names. */
     int8_t   request_prov;
+    /* …AND WHETHER THAT REQUEST'S ADDRESS MAY REST ON A WITNESS THIS ENGINE CHOSE, taken at the SAME line and
+       for the SAME reason — solver/flow.h's `path_pinned`, through solver/engine.h's
+       `engine_pinned_of_running_path`. A SECOND field and never a fourth word on the one above: the provenance
+       says what a REPLY IS WORTH and this says whether the ACT MAY BE SPENT, and CLAUDE.md
+       §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS is what one token carrying both would be.
+       ASKED BESIDE THE PROVENANCE AND NEVER SEPARATELY, WHICH IS THE WHOLE OF WHY IT IS A FIELD. The two are
+       strictly nested (`pinned` implies `forced`) and the consumer CHECKs that pair — fatally, in release — so
+       two reads of the running path at two instants are two rules free to compose a pair no park can hold. One
+       line reads both, this stores the answer, and every consumer below takes it from here.
+       -1 FOR THE SENTINEL, for the field above's reason and not merely for symmetry: `calloc` leaves 0, and 0
+       is `unpinned`, which is the word that lets a widened origin SPEND the act. An ungraded request would be
+       fired rather than refused. */
+    int8_t   request_pinned;
 } XhrData;
 
 static JSClassID g_xhr_class;
@@ -689,6 +702,7 @@ static void xhr_reset_request(JSContext *ctx, XhrData *d)
     xhr_set(ctx, d, &d->request_body, JS_NULL);
     d->request_body_is_shape = 0;   /* the arm goes with the body it describes */
     d->request_prov = -1;           /* …and the grade goes with the request it is about */
+    d->request_pinned = -1;         /* …as does the witness mark composed beside it */
     d->upload_listener = 0;
     /* "Set this's response to a network error", which is the initial value of every response field. */
     d->network_error = 1;
@@ -1838,6 +1852,20 @@ static int xhr_request_prov(const XhrData *d)
     return d->request_prov;
 }
 
+/* …AND THE WITNESS MARK BESIDE IT, read back for the provenance's reason and asserted for the SHARPER of the
+   two: the value a miss would supply is 0, which is `unpinned`, and `unpinned` is what safe-fetch.js's value
+   arm FIRES on. A provenance read wrongly mislabels a reply; this read wrongly spends an act. */
+static int xhr_request_pinned(const XhrData *d)
+{
+    DCHECKF(d->request_pinned >= 0,
+            "an XMLHttpRequest was asked whether its address may rest on a witness this engine chose before "
+            "XHR §3.5.6 \"The send() method\" step 6 composed a request — the mark is taken on the same line "
+            "as the grade beside it, so a -1 here is a route that reached the trusted zone without passing "
+            "it. request_pinned=%d",
+            (int)d->request_pinned);
+    return d->request_pinned;
+}
+
 /* Take the host's reply onto the record. A null reply — or none at all — leaves the response a network error,
    which is what §5.5's network error is on the Fetch side too. */
 static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
@@ -2168,6 +2196,12 @@ static char *xhr_request_op(JSContext *ctx, XhrData *d)
     json_buf_str(&b, fetch_credentials_token(xhr_credentials_mode(d)));
     json_buf_raw(&b, ","); json_buf_key(&b, "provenance");
     json_buf_str(&b, engine_provenance_token(xhr_request_prov(d)));
+    json_buf_raw(&b, ","); json_buf_key(&b, "pinned");
+    /* …AND WHETHER THE ADDRESS MAY REST ON A WITNESS THIS ENGINE CHOSE, through the ONE forward mapping
+       (solver/engine.h's `engine_pinned_token`) rather than a ternary of this file's own — the same move the
+       credentials line above records, for the same reason: a seam that spells a vocabulary inline is the only
+       place in the engine that can say it, and it says it in a dialect. */
+    json_buf_str(&b, engine_pinned_token(xhr_request_pinned(d)));
     json_buf_raw(&b, ","); json_buf_key(&b, "headers"); json_buf_raw(&b, "[");
     for (i = 0; i < n; i++) {
         JSValue pair = JS_GetPropertyUint32(ctx, d->author_headers, i);
@@ -2597,6 +2631,33 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
            reads back off the object it acts on is read at the wrong TIME" with a network round trip in the
            middle. Every consumer below takes it from the record. */
         d->request_prov = (int8_t)engine_prov_of_running_path();
+        /* …AND THE NARROWER FACT ABOUT THE SAME PATH, ON THIS LINE BECAUSE IT IS THE SAME INSTANT. Whether the
+           trusted zone may SPEND this act is a different question from what its reply is worth (CLAUDE.md
+           §A-REQUEST-CARRIES-THE-PROVENANCE decides the first "from the provenance the request declares
+           BESIDE its method and credential state"), and this seam carried the second and not the first — so a
+           request the page's own code made reached the chokepoint with the witness mark UNSTATED, and the one
+           arm that answers the analysed document's own data requests cannot fire on an act that does not
+           carry the fact. */
+        d->request_pinned = (int8_t)engine_pinned_of_running_path();
+        /* THE NESTING, ASSERTED WHERE BOTH HALVES ARE IN ONE HAND AND NOWHERE ELSE THEY COULD BE. solver/flow.h
+           declares `path_pinned` strictly inside `path_forced`; the park asserts the pair it composes and
+           safe-fetch.js's `_firingRefusal` CHECKs the pair it consumes — fatal in release — and this is the
+           third party that composes one, out of two reads of the running path. It is not vacuous: the two
+           accessors agree only because these two lines are adjacent, so it fails the day a read moves or the
+           flow-less arms stop being one decision, which is exactly the regression that would kill the fetch
+           path in a build with no DCHECKs in it.
+           IT IS WRITTEN IN THE TOKEN VOCABULARY AND NOT THE NUMERIC ONE, which is a fact about this component
+           rather than a preference: `PROV_*` is solver/pending.h's and this file includes no solver-internal
+           header, so the only spelling of a grade it can say is the one solver/engine.h exports — which is also
+           the spelling the chokepoint's own CHECK compares, so the two ends of the contract are asserted in one
+           language. */
+        DCHECKF(!d->request_pinned ||
+                !strcmp(engine_provenance_token(d->request_prov), PENDING_PROVENANCE_FORCED),
+                "an XMLHttpRequest composed a (provenance, witness) pair no park can hold — provenance `%s` "
+                "with the witness mark SET, where solver/flow.h declares the mark strictly inside the "
+                "forced-path bit. Both come from the running path on adjacent lines, so a disagreement is one "
+                "of the two accessors having stopped answering about the same flow",
+                engine_provenance_token(d->request_prov));
         /* §3.5.6 step 6's request record, onto the @H surface, before §4.1 chooses who answers it. */
         xhr_record_endpoint(ctx, d);
         /* Fetch §4.1: main fetch decides WHO answers. A request this agent answers itself — a port §2.9 blocks,
@@ -3495,6 +3556,7 @@ static int js_xhr_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     d->state = XHR_UNSENT;
     d->network_error = 1;   /* §3: "response — a response, initially a network error" */
     d->request_prov = -1;   /* no request has been composed — see the field */
+    d->request_pinned = -1; /* …nor a witness mark for one */
     JS_SetOpaque(obj, d);
     *presult = obj;
     return 0;
