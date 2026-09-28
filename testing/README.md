@@ -82,6 +82,65 @@ carries `_astRun` (the run outcome), `_astResults` (present only when an engine 
 arrived — its ABSENCE is the statement that none did), and `_resolverErrors` (absent means the
 engine recorded no page error, which is why nothing may default it to `[]`).
 
+## The served fixtures
+
+`testing/fixtures/` is ignored WHOLE and its instruments are re-included BY NAME, each with the
+argument for keeping it written beside the negation in `.gitignore`. That file is the index; there
+is no other, and nothing anywhere directory-scans this folder. Derive the set with a command rather
+than reading a figure here, because a figure rots and the command does not:
+
+```
+git ls-files testing/fixtures/                              # the set
+git check-ignore -v --no-index testing/fixtures/<name>      # the entry that argues for it
+node testing/fixtures_server.cjs &                          # serves the directory; FIX_PORT, default 8765
+node testing/harness.js restart
+node testing/harness.js goto http://127.0.0.1:8765/<name>
+```
+
+**NO DRIVER NAMES ANY OF THEM, AND THE TWO THAT LOOK DRIVEN ARE NOT.** Every document here is driven
+BY HAND, with a URL argument, by whoever is asking its question, and each states what it predicts in
+its own prose. The derivation is one command and it is the one to re-run rather than to believe:
+
+```
+for f in $(git ls-files testing/fixtures/); do b=$(basename $f);
+  git grep -l -F "$b" . ':!testing/fixtures' ':!.gitignore'; done | sort -u
+```
+
+It answers five files and EVERY hit is prose. `wjp_absent.html` in `engine/host/solver/flow.c`,
+`flow.h` and `result.c` and in `live-run.js` is quoted MEASUREMENTS naming their subject, plus one
+drive command inside a comment; `scrstat_status_error.html` in `fixtures_server.cjs` is a comment
+explaining which request header that document reads. The text at each hit TALKS ABOUT the document
+rather than running it. So "which fixtures are named by something" is not a question that separates
+one of these from another, and an instrument keyed on naming answers a question nobody has.
+
+**THE DIRECTORY IS NAMED WHERE A BASENAME IS NOT, WHICH IS THE ROUTE THE COMMAND ABOVE CANNOT
+SEE.** `engine/pagecensus.mjs` takes a document URL and knows nothing about any on-disk layout, and
+its own usage line names this directory as a tracked subject that exists:
+`(cd testing/fixtures && python3 -m http.server <port>) &`. That is a second drive route and it is
+still a HAND drive — it selects nothing, it is handed a URL. **THE TWO SERVERS ARE NOT
+INTERCHANGEABLE**: `python3 -m http.server` writes no access log, serves no `<file>.headers` sidecar
+and honours no `?pipe=status(...)`, so a fixture whose oracle is the access line, whose arm is a
+header-delivered policy, or whose subject is a chosen status must be served by
+`testing/fixtures_server.cjs` and reads as its own opposite under the other one.
+
+**THE ORACLE FOR A SERVED FIXTURE IS THE SERVER'S OWN ACCESS LOG** — `testing/fixtures_access.<port>.log`,
+which `fixtures_server.cjs` truncates and stamps at startup and writes BEFORE it decides a status, so
+a 404 path is recorded exactly as a 200 one is, a count is a count for THIS run, and an empty file
+still carries its header (`the server ran and nothing asked it for anything` is thereby separable from
+`no server ever ran`). That is a reader OUTSIDE the engine, which is what a witness needs; a console
+line is not one, because the renderer deliberately does not tee its stdout.
+
+**A WITNESS PATH IN ONE OF THESE DOCUMENTS IS A CONSTANT.** This engine's whole purpose is to make
+values unknown, so a path composed from a computed value is not a concrete string and is never sent —
+a witness built that way goes silent in exact proportion to how well the engine is working.
+
+`testing/fixtures/GATE` does not exist and cannot yet. `engine/gate_collect.mjs`'s claim mechanism —
+the thing that makes an uncollected file a NAMED FAILURE rather than a silent exclusion — requires the
+runner a claim names to EXIST, and no runner enumerates this directory; `collectFixtures` walks
+`engine/tests`. Two tracked scripts do compose fixture URLs from a variable, `testing/moat_survey.sh`
+and `testing/scale_survey.sh`, and every name in their arrays is absent from the directory, so the one
+shape a collector would have to cover currently covers nothing.
+
 ## Rules that are not style
 
 * **One targeted minimal test at a time.** Never a bulk sweep against live sites.
