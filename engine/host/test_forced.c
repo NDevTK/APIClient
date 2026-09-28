@@ -28459,7 +28459,8 @@ typedef struct {
     size_t first_seq_texts; /* TEXT nodes §4 wraps in the FIRST anonymous item */
 } FlexSpliceCount;
 
-static FlexSpliceCount flex_splice_count(JSContext *ctx, const char *html, const char *span_display)
+static FlexSpliceCount flex_splice_count(JSContext *ctx, const char *html, const char *span_declared,
+                                         const char *span_computed)
 {
     lxb_html_document_t *dom = bp_scratch_document(ctx, html);
     lxb_dom_element_t   *body;
@@ -28486,17 +28487,38 @@ static FlexSpliceCount flex_splice_count(JSContext *ctx, const char *html, const
        "This has no effect on display types that generate no box at all, such as none or contents" — so §4's
        own blockification of a flex item leaves it as the attribute wrote it. Were it blockified away, both
        documents below would measure an ordinary inline box and agree for a reason that has nothing to do with
-       the splice, which is the unarmed control this assertion exists to refuse. */
+       the splice, which is the unarmed control this assertion exists to refuse.
+       AND THAT PARAGRAPH IS THE WHOLE OF §2.7 FOR ONE ARM OF THIS PAIR AND HALF OF IT FOR THE OTHER, WHICH IS
+       WHY THIS FUNCTION TAKES TWO KEYWORDS WHERE IT USED TO TAKE ONE. The same section states the transform
+       this pair's CONTROL takes — "A parent with a grid or flex display value blockifies the box's display
+       type" — and the control's span IS a child of `display:flex`, so its DECLARED `inline` COMPUTES to
+       `block`. The exemption quoted above is what makes `contents` the one keyword of the two for which the
+       declared and computed values coincide; asserting the declared keyword against the computed value is
+       therefore right for the spliced document by accident and wrong for the control by construction, and a
+       single parameter cannot tell the two facts apart. THE ROW'S NUMBERS ARE UNCHANGED BY IT, which is why
+       the control is still a control rather than a second variable: a `block` span generates exactly the one
+       box an `inline` span generates, so `members`, `items` and `first_seq_texts` are what §4 gives a
+       container whose three children are text, a box-generating element and text — the splice remains the one
+       thing that varies. THIS ASSERT FIRED, ON THE CONTROL, AND IT WAS RIGHT TO: the engine had computed
+       `block` and this file had demanded `inline`, which is the arming check refusing a document whose own
+       markup it had described wrongly rather than an engine that had lost a keyword. */
     first = lxb_dom_interface_node(body)->first_child;
     CHECK(first != NULL && first->next != NULL && first->next->type == LXB_DOM_NODE_TYPE_ELEMENT,
           "the markup this file wrote for css-flexbox-1 §4 did not parse into text followed by an element — "
           "the second DOM child of the container is what carries the one keyword this pair varies");
     display = css_computed_value(lxb_dom_interface_element(first->next), "display");
-    CHECKF(display != NULL && strcmp(display, span_display) == 0,
-           "the element this file declared `display:%s` on computed `%s`. The two documents this pair "
-           "measures differ in that keyword and in nothing else, so a third value here means the row below is "
-           "not the measurement its own name claims",
-           span_display, display != NULL ? display : "(none)");
+    CHECKF(display != NULL && strcmp(display, span_computed) == 0,
+           "the element this file declared `display:%s` on computed `%s`, where "
+           "css-display-3 §2.7 \"Automatic Box Type Transformations\" makes it `%s`. The two documents this "
+           "pair measures differ in the "
+           "DECLARED keyword and in nothing else, so a third value here means the row below is not the "
+           "measurement its own name claims. THE TWO ARGUMENTS ARE TWO FACTS AND THEY COINCIDE FOR ONE "
+           "KEYWORD ONLY — §2.7 exempts `contents` (\"This has no effect on display types that generate no "
+           "box at all, such as none or contents\") and blockifies everything else a flex container parents "
+           "(\"A parent with a grid or flex display value blockifies the box's display type\") — so a "
+           "caller that passed one string for both would be asserting the exemption over an arm that does not "
+           "take it",
+           span_declared, display != NULL ? display : "(none)", span_computed);
     free(display);
 
     /* §2.5's SPLICED SEQUENCE, WALKED — "the element must be treated as if it had been replaced in the element
@@ -28589,16 +28611,21 @@ static void flex_contents_splice_selftest(JSContext *ctx)
     static const char INLINE_[] =
         "<!DOCTYPE html><html><body style=\"display:flex\">"
         "A<span style=\"display:inline\">B<i>x</i>C</span>D</body></html>";
-    FlexSpliceCount spliced = flex_splice_count(ctx, SPLICED, "contents");
-    FlexSpliceCount plain   = flex_splice_count(ctx, INLINE_, "inline");
+    /* DECLARED, THEN COMPUTED. They are one string for `contents` because css-display-3 §2.7 "Automatic Box
+       Type Transformations" exempts it and two for `inline` because that same section blockifies a flex
+       container's child — see `flex_splice_count`'s own assert for why one argument could not say both. */
+    FlexSpliceCount spliced = flex_splice_count(ctx, SPLICED, "contents", "contents");
+    FlexSpliceCount plain   = flex_splice_count(ctx, INLINE_, "inline", "block");
 
     CHECKF(plain.members == 3 && plain.items == 3 && plain.first_seq_texts == 1,
            "the CONTROL document reported members=%zu items=%zu first_seq_texts=%zu where 3/3/1 is what "
-           "css-flexbox-1 §4 \"Flex Items\" gives a flex container whose three children are text, an inline "
-           "element and text: \"Each in-flow child of a flex container becomes a flex item, and each child "
-           "text sequence is wrapped in an anonymous block container flex item.\" This document has NO "
-           "css-display-3 §2.5 splice in it at all, so a wrong number here is about the classification or the "
-           "walk and not about the splice — which is what makes it the control",
+           "css-flexbox-1 §4 \"Flex Items\" gives a flex container whose three children are text, a "
+           "box-generating element and text — `inline` as this markup declares it and `block` as "
+           "css-display-3 §2.7 computes it, and §4 counts it once either way because its sentence is over "
+           "in-flow CHILDREN and not over a display value: \"Each in-flow child of a flex container becomes a "
+           "flex item, and each child text sequence is wrapped in an anonymous block container flex item.\" "
+           "This document has NO css-display-3 §2.5 splice in it at all, so a wrong number here is about the "
+           "classification or the walk and not about the splice — which is what makes it the control",
            plain.members, plain.items, plain.first_seq_texts);
     CHECKF(spliced.members == 5,
            "the SPLICED document's box-tree child sequence holds %zu members where css-display-3 §2.5 \"Box "
