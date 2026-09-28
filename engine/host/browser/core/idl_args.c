@@ -655,7 +655,11 @@ void idl_set_tree_steps(const IdlTreeSteps *ops)
    indexed identically — two parallel block lists would be two chances to grow one and not the other. */
 typedef struct { IdlMember m[IDL_POOL_CHUNK]; JSTrampStepDef d[IDL_POOL_CHUNK]; } IdlChunk;
 static IdlChunk **g_chunks;
-static int        g_nchunks;
+static int        g_nchunks;   /* BLOCKS ALLOCATED — a ceiling on what the pool could hold, never on what it HAS */
+/* MEMBERS DECLARED. It is moved up here, beside the blocks, because the two are the pool's two sizes and the
+   accessors below have to use the right one: a block is allocated whole, so `g_nchunks` covers indices no
+   declaration ever made, and `g_n` is the only number that answers "did anybody declare this". */
+static int        g_n;
 
 /* Ensure the pool holds index `i`, allocating whole blocks. Called only from the declare path; every reader
    below asks for an index that path has already made. */
@@ -671,14 +675,37 @@ static void idl_pool_reserve(int i)
         g_nchunks++;
     }
 }
+/* THE GUARD BELOW USED TO TEST `i / IDL_POOL_CHUNK < g_nchunks`, WHICH IS A DIFFERENT NUMBER FROM THE ONE ITS
+   OWN MESSAGE NAMES, AND THE GAP BETWEEN THEM IS EXACTLY THE POPULATION THE CHECK EXISTS FOR. A block is
+   allocated WHOLE, so `g_nchunks * IDL_POOL_CHUNK` is the pool's CAPACITY and `g_n` is what anybody declared;
+   every index in between is a slot the pool owns and no declaration ever filled. `idx = g_n++` makes every id
+   this file ever hands out strictly less than `g_n`, so the tighter test cannot refuse a caller that asked
+   correctly — it is free, and it is the whole of the difference.
+   WHO STANDS IN THE GAP: a FILE-SCOPE STATIC holding an id ACROSS AN AGENT. `idl_args_pool_free` puts `g_n`
+   back to 0 and frees the blocks, so the next agent re-declares from index 0 and its pool is SHORTER for as
+   long as it is still declaring — and a static that survived carries an index from the first agent's platform
+   into the second's. Under the old predicate the blocks were often already big enough, so the read was ADMITTED
+   and answered a member of whatever the new agent had grown into that slot; under this one it aborts, naming
+   the file to register.
+   core/fetch/body.c had written that failure down at its own site before this was fixed — "g_body_text_stepid
+   keeps an index into a member pool ... and body_install's own DCHECK on it PASSES, installing whatever member
+   the next agent's pool has grown into that slot under `textStream`" — so the defect was OBSERVED by one
+   component and left as a property of the guard rather than repaired in it.
+   THIS IS THE MISSING INVARIANT AND NOT N REWRITTEN CALLERS. 14 files hold an `idl_*_id` result in a
+   file-scope static and register nothing with core/agent_state.h; one added total covers every one of them and
+   every future spelling of the same mistake, where a per-file repair covers only the ones somebody found. */
 static IdlMember *idl_member(int i)
 {
-    DCHECK(i >= 0 && i / IDL_POOL_CHUNK < g_nchunks, "an IDL member was read at an index the pool never made");
+    DCHECK(i >= 0 && i < g_n, "an IDL member was read at an index the pool never made — see the guard above: a "
+                              "carried id from a previous agent lands here, and the file it came from owes "
+                              "core/agent_state.h a line");
     return &g_chunks[i / IDL_POOL_CHUNK]->m[i % IDL_POOL_CHUNK];
 }
 static JSTrampStepDef *idl_def(int i)
 {
-    DCHECK(i >= 0 && i / IDL_POOL_CHUNK < g_nchunks, "an IDL definition was read at an index the pool never made");
+    DCHECK(i >= 0 && i < g_n, "an IDL definition was read at an index the pool never made — see the guard above: "
+                              "a carried id from a previous agent lands here, and the file it came from owes "
+                              "core/agent_state.h a line");
     return &g_chunks[i / IDL_POOL_CHUNK]->d[i % IDL_POOL_CHUNK];
 }
 /* STEP ID -> POOL INDEX. A member's DECLARE returns what JS_RegisterStepDef gave it, which is the RUNTIME's id
@@ -705,7 +732,6 @@ static void idl_map_step(int stepid, int idx) {
 static int idl_member_of_step(int stepid) {
     return (stepid >= 0 && stepid < g_step2mem_cap) ? g_step2mem[stepid] : -1;
 }
-static int            g_n;
 static JSRuntime     *g_rt;
 static bool           g_sealed;   /* the first document's install is done — see idl_declared_before_seal */
 static int            g_sealed_at; /* how many members existed then: a member minted after this is a new one */

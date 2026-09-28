@@ -1126,8 +1126,18 @@ int body_declare(JSContext *ctx, JSClassID class_id, BodyState *(*of)(JSValueCon
            WHAT A CARRIED COUNTER COSTS, WHICH IS WHY THIS IS NOT BOOKKEEPING. g_body_iface_n is the handle
            the next include is given. Left set, a second agent's Request comes back as handle 2, so the
            `handle == 0` arm above never runs again: g_body_text_stepid keeps an index into a member pool
-           idl_args_free has already put back at 0, and body_install's own DCHECK on it PASSES, installing
-           whatever member the next agent's pool has grown into that slot under `textStream`. The third
+           idl_args_pool_free has already put back at 0 (idl_args_free gives back the interned atoms and leaves
+           the count standing — naming that one was naming the wrong of two releases).
+           THIS PARAGRAPH USED TO END "and body_install's own DCHECK on it PASSES, installing whatever member
+           the next agent's pool has grown into that slot under `textStream`", AND THAT SENTENCE IS RETIRED BY
+           A CONSTRUCTION RATHER THAN BY ANYBODY DISAGREEING WITH IT. It was exactly right and it was the only
+           place in this tree that had written the failure down: core/idl_args.c's `idl_member` guarded
+           `i / IDL_POOL_CHUNK < g_nchunks`, which is the pool's CAPACITY, while its own message claimed to
+           test "an index the pool never made" — so a carried id landed in the gap between the blocks the pool
+           OWNS and the members anybody DECLARED, and was admitted. That guard now tests `i < g_n` and the
+           read ABORTS, naming the file that owes core/agent_state.h a line. The wording is kept because a
+           reader who re-derives it from a capacity test will re-add it; what changed is the guard, not the
+           reasoning. The third
            agent in one process reaches 4 and the table-full DCHECK above fires, naming a platform that has
            two including interfaces in it. */
         agent_state_flag("request", &g_body_iface_n,

@@ -358,7 +358,9 @@ void dom_implementation_init(JSContext *ctx)
        file is the pair core/agent_state.h was written against: the registry could ask about the class and
        could not ask about the rest, so a sixth member added to this init with no matching line in that list
        was a state nothing anywhere could report. An id from idl_method_id is an INDEX INTO core/idl_args.c's
-       member pool and idl_args_free puts that pool's count back at 0, so a carried one names a member of a
+       member pool and idl_args_pool_free puts that pool's count back at 0 (idl_args_free gives back the INTERNED
+       ATOMS and leaves the count standing — two releases, and only the second one resets), so a carried one
+       names a member of a
        pool that no longer exists; the latch is what this file's own install reads to decide the prototype was
        built. With these declared the reset is agent_state_undo at `document`'s last line and nothing else, so
        a seventh member owes that release nothing new. */

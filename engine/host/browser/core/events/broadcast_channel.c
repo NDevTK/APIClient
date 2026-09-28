@@ -430,8 +430,9 @@ void broadcast_channel_init(JSContext *ctx)
     agent_state_id("broadcast_channel", &g_deliver_stepid, "§9.5's delivery task machine");
     /* AND §9.5's TWO METHOD POOL ENTRIES, WHICH ARE AGENT STATE FOR THE SAME REASON THE MACHINES ABOVE ARE
        AND WERE DECLARED TO NOBODY. An id from idl_method_id is an INDEX INTO core/idl_args.c's member pool,
-       and idl_args_free puts that pool's count back at 0 — so a carried index names a member of a pool that
-       no longer exists, and once the next agent has declared far enough it names a DIFFERENT member, which
+       and idl_args_pool_free puts that pool's count back at 0 — idl_args_free gives back the INTERNED ATOMS
+       and leaves the count standing, so naming it here was naming the wrong one of two releases — so a carried
+       index names a member of a pool that no longer exists, and once the next agent has declared far enough it names a DIFFERENT member, which
        broadcast_channel_install_realm would then install under `postMessage`. */
     agent_state_id("broadcast_channel", &g_id_post, "§9.5's `postMessage(any message)` pool entry");
     agent_state_id("broadcast_channel", &g_id_close, "§9.5's `close()` pool entry");

@@ -112,11 +112,21 @@ void pointer_capture_init(JSContext *ctx)
     g_id_has_capture = idl_method_id(ctx, PC_1LONG, 1, js_pc_has_capture, 0);
     /* AND THE ID IS AGENT STATE, WHICH THE ASSERT ABOVE ASSUMES AND NOTHING WAS MAKING TRUE. A file-scope
        static survives an agent; `idl_method_id` returns an INDEX INTO core/idl_args.c's member pool, and
-       `idl_args_free` puts that pool's count back at 0 — so a carried index names a member of a pool that no
-       longer exists, and once the next agent has declared far enough it names a DIFFERENT member, which
+       `idl_args_pool_free` puts that pool's count back at 0 — so a carried index names a member of a pool that
+       no longer exists, and once the next agent has declared far enough it names a DIFFERENT member, which
        pointer_capture_install would then install under `hasPointerCapture`. Registering the slot is what puts
        it back at -1 when the agent is released, so the `< 0` precondition is true for the SECOND agent by
        construction rather than by there only ever having been one.
+       AND THIS COMMENT NAMED `idl_args_free` UNTIL THE COUNT WAS GREPED, WHICH IS RECORDED HERE BECAUSE THE
+       WRONG NAME IS THE INTUITIVE ONE AND HAS NOW BEEN WRITTEN FOUR TIMES. `g_n = 0` is in
+       `idl_args_pool_free` and in nothing else; `idl_args_free` gives back what the pool INTERNED and runs
+       BEFORE `JS_FreeRuntime`, where `idl_args_pool_free` runs after — so a reader who takes the shorter name
+       places the danger window on the wrong side of the runtime's death, which is the one ordering fact this
+       paragraph exists to state. The confusion had already been caught ONCE, at core/idl_async_iter.h, and
+       recorded only there; it then recurred at core/dom/dom_implementation.c, core/events/broadcast_channel.c,
+       core/fetch/body.c and HERE, in commit 07c7ae92861851d43bc221fa0b4b9a4e00e2c144, which is this file's own
+       registration. A record filed only where it was fixed does not reach the sibling that spells the same
+       question the same wrong way.
        MEASURED: without this line a build's own two-agent and cold-park/cold-resume stages aborted at that
        assert — four stage processes, one identity — and the assert was RIGHT: `pointer_capture_init` really
        had run twice with the first agent's index still in the static. The defect was never the crash. */
