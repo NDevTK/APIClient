@@ -57,12 +57,47 @@
  * collapse through it — three facts a single number cannot carry.
  *
  * WHAT IS ON THE LINE IS WHAT THE ELEMENT TREE HOLDS, and that is this engine's model rather than an omission
- * this component makes: it builds NO PSEUDO-ELEMENT BOXES anywhere, which core/css/css_style_declaration.c
- * enforces at the one surface a page can see it from — `getComputedStyle(el, "::before")` THROWS a
- * NotSupportedError rather than answering the originating element's values. So a `content` declaration puts no
- * box on this line for the same reason it puts none in §9.4.1's stack, and the day css-content-3's generated
- * content exists it becomes a box every walk over children sees at once. Reading a `content` declaration HERE
- * would be one component disagreeing with that model rather than fixing it.
+ * this component makes: it builds NO PSEUDO-ELEMENT BOXES anywhere, and core/layout/box_tree.h's named
+ * residual is where that gap is recorded, because css-display-3 §2.5's splice is the sequence such a box would
+ * have to enter before any line could hold one. So a `content` declaration puts no box on this line for the
+ * same reason it puts none in §9.4.1's stack, and reading one HERE would be one component disagreeing with
+ * that model rather than fixing it.
+ * THIS PARAGRAPH USED TO NAME THE ENFORCEMENT SURFACE AS `getComputedStyle(el, "::before")` THROWING A
+ * `NotSupportedError`, AND THE RETIRED WORDING IS KEPT BECAUSE A READER WHO GREPS THIS ENGINE FOR A
+ * PSEUDO-ELEMENT SURFACE RE-DERIVES IT. It was wrong in BOTH registers at once, which is why neither half
+ * could have caught the other. About THIS TREE: no such throw stands — `NotSupportedError` occurs exactly
+ * twice in core/css/css_style_declaration.c and BOTH hits are prose recording the removal, which is what a
+ * grep for a removed construct always answers in this codebase. About the STANDARD, the half no grep of this
+ * tree could reach: CSSOM §7.2 "Extensions to the Window Interface" is SIX steps and contains no throw at any
+ * of them, so the refusal that clause named was a behaviour that member invented and a page could not have
+ * told from a real one. WHAT STANDS THERE NOW IS AN ABORT RATHER THAN A REFUSAL A PAGE CAN SEE: §7.2 step 3
+ * is a `DFAIL`, so a dev build crashes at it and a release build falls through to the ELEMENT's own style.
+ * The observation is that crash's own text, never a `try`/`catch` around a member call.
+ * AND THE `content` CLAUSE ENUMERATED WHERE THE GAP IS A PROPERTY — the same shape core/layout/box_tree.h's
+ * residual carried, and that residual now records its own retirement in its own words. It read `the day
+ * css-content-3's generated content exists it becomes a box`, which makes the missing population look like it
+ * waits on ONE property, and that property is not what gates the member this component would meet first.
+ *   - ::before AND ::after ARE EMPTY BY CONSTRUCTION, so no `content` support at this component could put one
+ *     on a line. css-content-3 §1 "Inserting and Replacing Content: the content property" gives the initial
+ *     value `normal` and says of it "For ::before and ::after, this computes to none"; nothing moves it off
+ *     `normal`, because the property does not PARSE — grep lexbor's `source/lexbor/css/property/const.h` for
+ *     `LXB_CSS_PROPERTY_CONTENT`, with `LXB_CSS_PROPERTY_COLOR` as the armed control that shows the question
+ *     reaches an answer at all.
+ *   - ::marker IS THE MEMBER THAT ENUMERATION HID, AND IT REACHES THE BOX TREE WITHOUT REACHING THIS LINE.
+ *     css-content-3 §1 leaves ITS content at `normal` rather than `none`, and css-display-3 §2.3 "Generating
+ *     Marker Boxes: the list-item keyword" generates it from the display value ALONE, which the UA rule table
+ *     in core/css/css_style_declaration.c already computes for every `li` — so a marker is reachable with no
+ *     author declaration anywhere, and WHOSE gap that is belongs to core/layout/box_tree.h's residual and is
+ *     read there rather than restated here. THIS component's answer is a different one, and it rests on a
+ *     SECOND unparsed property rather than on a judgement made here: css-lists-3 §3.5 "Positioning
+ *     Markers: The list-style-position property" puts the marker on the line only at `inside` ("The ::marker
+ *     is an inline element at the start of the list item's contents"), its initial value is `outside`, and
+ *     `LXB_CSS_PROPERTY_LIST_STYLE_POSITION` is absent from that same lexbor header against the same armed
+ *     control — so `inside` is unreachable. At `outside` §3.5 states no answer to hold this component to: the
+ *     marker box "may affect the height of the principal block box and/or the height of its first line box,
+ *     and in some cases may cause the creation of a new line box; this interaction is also not defined."
+ *   So this component owes the marker NOTHING TODAY, and that is derived rather than assumed: the first thing
+ *   that would change it is `list-style-position` parsing, never `content`.
  *
  * NOTHING IS STORED, for core/layout/used_value.h's reason: a layout is per-flow state, so a cached line box
  * is shared state solver/dom_cow.h does not swap and a stale one is another flow's geometry. Every answer is

@@ -5949,18 +5949,51 @@ static JSValue js_get_computed_style(JSContext *ctx, JSValueConst this_val, int 
        invented-value defect one layer up from the throw this replaces. RELEASE FALLS THROUGH to the
        element's own style, which is what every other unbuilt arm in this component does
        (core/css/css_computed_value.c's inset arm is the same shape) — a dev build cannot reach it, and
-       release adds no capability. */
+       release adds no capability.
+       3.1'S REMEDY CLAUSE USED TO READ `this engine has no parser for` IT AND `BUILD 3.1 FIRST, AS ITS OWN
+       COMPONENT BESIDE THE SELECTOR MATCHER`, AND THE RETIRED WORDING IS KEPT BECAUSE A READER WHO GREPS
+       core/css AND core/dom FOR A PSEUDO-ELEMENT PARSE RE-DERIVES IT. It named a MECHANISM as absent that
+       this tree contains and REACHES, which is the one thing a crash's next-diff clause is least checked
+       about — a `DFAIL`'s spec half is a claim about a document anyone can fetch, and its remedy half is a
+       claim about this codebase, read once by somebody who has already decided to do the work. The claim it
+       is wrong about is `no parser`; the claim it is right about is that NOTHING HANDS A CALLER A TYPE, and
+       those are one RETURN apart rather than one component apart. The derivation, all of it in-tree:
+         - THE SYNTAX STAGE IS PRESENT AND REACHED. core/dom/selector_match.c's `selector_list_compile` calls
+           `lxb_css_selectors_parse`, whose `::` route reaches `lxb_css_selectors_state_pseudo_element` in
+           engine/lexbor/source/lexbor/css/selectors/state.c from THREE call sites; that function resolves
+           the name through `lxb_css_selector_pseudo_element_by_name` to an
+           `lxb_css_selector_pseudo_element_id_t` — which IS §7.2's `type` — and then refuses it.
+           engine/lexbor is ORDINARY TRACKED CONTENT of this repository, not a gitlink, so no `git grep`
+           flag and no submodule checkout stands between a reader and any of it (`git ls-files -s` names one
+           gitlink in this tree and it is engine/qjs/test262).
+         - THE REFUSAL COVERS THE WHOLE POPULATION, which is why no pseudo-element spelling escapes it and
+           why the assignment below it is dead code rather than a narrow gap. That function's switch carries
+           TWELVE `case LXB_CSS_SELECTOR_PSEUDO_ELEMENT_` labels, each logging `not supported` and returning
+           `lxb_css_parser_unexpected_status`; the static hash table `by_name` draws from,
+           `lxb_css_selectors_pseudo_element_shs` in selectors/pseudo_res.h, has exactly TWELVE non-NULL
+           rows and does NOT carry the `#undef` sentinel. Twelve against twelve is the proof: the `default:`
+           arm that assigns `selector->u.pseudo.type = pseudo->id` is UNREACHABLE for every name a selector
+           can spell. `lxb_css_selectors_components_end` then removes and destroys the list, so `::before`
+           parses to Selectors 4 §17.1's `failure` and `lxb_css_selectors_parse` answers NULL.
+       So the next-diff clause below states what must EXIST AFTERWARD — a `<pseudo-element-selector>` parse
+       that ANSWERS that id — and deliberately does not say where, because the refusal is in vendored lexbor
+       and whether the answer is a delta there or a caller-side parse beside the matcher is a decision the
+       diff that makes it gets to argue, not one this crash may presume. */
     if (pseudo && *pseudo == ':')
         DFAIL("CSSOM §7.2 Extensions to the Window Interface's getComputedStyle entered step 3 — its "
               "`pseudoElt` is provided, is not the empty string, and starts with a colon — and BOTH of that "
               "step's substeps are unbuilt here. 3.1 is \"Parse pseudoElt as a <pseudo-element-selector>, and "
-              "let type be the result\", which this engine has no parser for: core/dom/selector_match.c owns "
-              "the agent's one selector matcher and answers about ELEMENTS, and nothing in core/css parses a "
-              "pseudo-element selector into a type. 3.3 is \"Otherwise let obj be the given pseudo-element of "
-              "elt\", and there is no pseudo-element box in this engine to be given — core/layout names "
-              "pseudo-elements only inside the spec sentences it quotes and builds one nowhere. BUILD 3.1 "
-              "FIRST, as its own component beside the "
-              "selector matcher, because it is what makes 3.2's \"If type is failure, or is a ::slotted() or "
+              "let type be the result\", and NOTHING IN THIS TREE HANDS A CALLER THAT TYPE — but what is "
+              "missing is a RETURN and not a parser, which the comment above this crash derives: the syntax "
+              "stage is reached through core/dom/selector_match.c's selector_list_compile and computes the "
+              "id, and engine/lexbor/source/lexbor/css/selectors/state.c then REFUSES every one of the twelve "
+              "names its own lookup table can return, so the parse answers Selectors 4 §17.1's `failure` "
+              "instead. 3.3 is \"Otherwise let obj be the given pseudo-element of "
+              "elt\", and there is no pseudo-element box in this engine to be given — "
+              "core/layout/box_tree.h's named residual is where that gap is recorded, and 3.3 is the only "
+              "substep that needs it. WHAT THE NEXT DIFF MAKES EXIST is a <pseudo-element-selector> parse "
+              "that ANSWERS that id rather than discarding it, because that is what makes 3.2's \"If type is "
+              "failure, or is a ::slotted() or "
               "::part() pseudo-element, let obj be null\" answerable — and that arm needs no boxes at all: it "
               "is a computed block whose declarations are EMPTY, which step 5's \"If obj is not null\" is what "
               "produces. Only then does 3.3 need the box tree. WHAT MUST NOT HAPPEN IS THE THROW THAT STOOD "
